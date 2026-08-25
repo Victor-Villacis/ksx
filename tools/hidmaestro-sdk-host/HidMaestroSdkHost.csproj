@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The SDK-lane elevated host: Switch Pro and Xbox Series ride the
+       hash-pinned official HIDMaestro.Core.dll, PadForge-style, behind the
+       same authenticated one-use pipe the candidate host uses.
+
+       Deliberately a SECOND executable rather than a mode of
+       ksx-hidmaestro-host.exe: that host is NativeAOT, which cannot load
+       managed assemblies, and keeping it byte-stable preserves its S1.5e
+       build-twice observation. This one is ordinary self-contained .NET.
+
+       The referenced SDK assemblies are NOT in the repository. They are
+       fetched by fetch-sdk.ps1 from the pinned official v1.6.1 release
+       (archive and per-file SHA-256 verified) into sdk-dist/, which is
+       gitignored. publish.ps1 refuses to build if the pins do not match. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <AssemblyName>ksx-hidmaestro-sdk-host</AssemblyName>
+    <RootNamespace>Ksx.HidMaestroSdkHost</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="SdkHostSession.cs" />
+    <Compile Include="SdkStateMapper.cs" />
+    <!-- Shared, byte-identical with the candidate host: the wire protocol,
+         the frame stream, the launch grammar and the authenticated pipe. -->
+    <Compile Include="..\hidmaestro-probe\HostProtocolCodec.cs" Link="Shared\HostProtocolCodec.cs" />
+    <Compile Include="..\hidmaestro-fake-host\PipeFrameStream.cs" Link="Shared\PipeFrameStream.cs" />
+    <Compile Include="..\hidmaestro-host\LaunchArguments.cs" Link="Shared\LaunchArguments.cs" />
+    <Compile Include="..\hidmaestro-host\PipeClient.cs" Link="Shared\PipeClient.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The pinned official SDK, fetched by fetch-sdk.ps1. HintPath only:
+         never a ProjectReference, never NuGet — the exact release bytes are
+         the dependency, verified before every publish. -->
+    <Reference Include="HIDMaestro.Core">
+      <HintPath>sdk-dist\HIDMaestro.Core.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The SDK's two managed companions, pinned by the same fetch. Some SDK
+         surfaces (WGI classification, HMUsbAudio) touch WinRT projections;
+         bundling them keeps a lazy load from becoming a missing-file crash. -->
+    <Content Include="sdk-dist\Microsoft.Windows.SDK.NET.dll" CopyToOutputDirectory="PreserveNewest" Link="Microsoft.Windows.SDK.NET.dll" />
+    <Content Include="sdk-dist\WinRT.Runtime.dll" CopyToOutputDirectory="PreserveNewest" Link="WinRT.Runtime.dll" />
+  </ItemGroup>
+
+</Project>

@@ -11,9 +11,14 @@ public sealed class HMController : IDisposable
     private readonly RuntimeOwnedDeviceSet _ownedDevice;
     private readonly RuntimePlainHidLifecycle _lifecycle;
     private readonly RuntimeOwnedSharedMemoryIO _sharedState;
-    private readonly RuntimeDualSenseInputEncoder _inputEncoder = new();
+    // Exactly one encoder is constructed, chosen by the profile's frozen wire
+    // shape; the other stays null for the life of the controller.
+    private readonly RuntimeDualSenseInputEncoder? _dualSenseEncoder;
+    private readonly RuntimeXboxSeriesInputEncoder? _xboxSeriesEncoder;
+    private readonly RuntimeSwitchProInputEncoder? _switchProEncoder;
+    private readonly RuntimeInputWireShape _wireShape;
     private readonly RawDualSenseFeedbackAdapter _feedbackAdapter = new();
-    private readonly byte[] _inputReport = new byte[RuntimeDualSenseInputEncoder.EncodedReportSize];
+    private readonly byte[] _inputReport;
     private RawDualSenseFeedbackResult _latestFeedback;
     private bool _disposeRequested;
     private bool _disposed;
@@ -30,6 +35,30 @@ public sealed class HMController : IDisposable
         _ownedDevice = ownedDevice ?? throw new ArgumentNullException(nameof(ownedDevice));
         _lifecycle = lifecycle ?? throw new ArgumentNullException(nameof(lifecycle));
         _sharedState = sharedState ?? throw new ArgumentNullException(nameof(sharedState));
+
+        if (!RuntimeInputWireShape.TryGet(profile.Id, out _wireShape))
+        {
+            throw new NotSupportedException(
+                $"No candidate input encoder is bound to profile '{profile.Id}'.");
+        }
+
+        switch (_wireShape.ProfileId)
+        {
+            case RuntimeInputWireShape.DualSenseProfileId:
+                _dualSenseEncoder = new RuntimeDualSenseInputEncoder();
+                break;
+            case RuntimeInputWireShape.XboxSeriesProfileId:
+                _xboxSeriesEncoder = new RuntimeXboxSeriesInputEncoder();
+                break;
+            case RuntimeInputWireShape.SwitchProProfileId:
+                _switchProEncoder = new RuntimeSwitchProInputEncoder();
+                break;
+            default:
+                throw new NotSupportedException(
+                    $"No candidate input encoder is bound to profile '{_wireShape.ProfileId}'.");
+        }
+
+        _inputReport = new byte[_wireShape.FullWireLength];
     }
 
     public HMProfile Profile { get; }
@@ -46,8 +75,20 @@ public sealed class HMController : IDisposable
         lock (_gate)
         {
             ThrowIfUnavailable();
-            _inputEncoder.Encode(in state, _inputReport);
-            _sharedState.SubmitFullWireInput(_inputReport);
+            if (_dualSenseEncoder is not null)
+            {
+                _dualSenseEncoder.Encode(in state, _inputReport);
+            }
+            else if (_xboxSeriesEncoder is not null)
+            {
+                _xboxSeriesEncoder.Encode(in state, _inputReport);
+            }
+            else
+            {
+                _switchProEncoder!.Encode(in state, _inputReport);
+            }
+
+            _sharedState.SubmitFullWireInput(_inputReport, in _wireShape);
         }
     }
 
@@ -119,7 +160,7 @@ public sealed class HMController : IDisposable
                 throw error is RuntimeRecoveryRequiredException
                     ? error
                     : new RuntimeRecoveryRequiredException(
-                        "The exact-owned DualSense controller requires teardown recovery.",
+                        $"The exact-owned {_wireShape.ProfileId} controller requires teardown recovery.",
                         new RuntimeExactRecovery(_lifecycle, _ownedDevice, _sharedState),
                         error);
             }

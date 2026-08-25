@@ -16,7 +16,7 @@
 //! v7 — **every zone wears its own IDENTITY** (requirement: "I can see G is mapped
 //! to A but I can't see the A xbox button"). The vendored art is a line
 //! drawing with no letters on it, so the zone renders the control's name
-//! itself: a persona-aware glyph in the canonical colours (A green, B red,
+//! itself: a persona-aware glyph in the canonical colors (A green, B red,
 //! X blue, Y amber; ✕ blue, ○ red, △ green, □ pink), LB/RB/LT/RT and
 //! view/menu/guide as text chips, arrows for the dpad and the stick wedges.
 //!
@@ -51,17 +51,20 @@
 //! geometry (`studio-ui/art/extents.mjs` — the PadForge lesson: derive layout
 //! from art with a script, never trace by eye) plus hand placement for the
 //! shoulders and the small center buttons — which `build.mjs` now also draws
-//! into the recolored art at the same coordinates. The tables
-//! are mirrored in `studio-ui/src/MapIsland.ts` (client re-derivation per
-//! poll — the established applyStatus pattern); `zone_tables_cover_every_
-//! mappable_function` pins this side.
+//! into the recolored art at the same coordinates. A Rust-owned generated
+//! handoff carries the tables through `studio-ui/tokens/zones.json` into
+//! `studio-ui/src/zones.gen.ts` for the client re-derivation per poll (the
+//! established applyStatus pattern); `zone_tables_cover_every_mappable_
+//! function` pins the art against the domain vocabulary.
 
 use forma_ir::parser::IrModule;
 use forma_ir::slot::{SlotData, SlotValue};
 use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 
-use crate::render::{art_for, body_prefix, daemon_command, with_icon_links, EmbeddedPage};
-use crate::snapshot::{MacroStepView, MacroView, MapPayload, MapperSlot};
+use crate::render::{
+    art_for, body_prefix, daemon_command, with_icon_links, EmbeddedPage, PERSONALITY_CSS,
+};
+use crate::snapshot::{MacroStepView, MacroView, MapPayload, MapperSlot, ShelfKeyRow, ShelfView};
 
 /// List slot names (binding-derived, compiler 0.2.0). The zones list appears
 /// TWICE — once inside each stage show (xbox / ds4) — so the second
@@ -95,6 +98,7 @@ const LIST_SLOT_MACRO_GROUPS: &str = "list:macroGroups:array";
 const LIST_SLOT_MACRO_COLS: &str = "list:macroCols:array";
 const LIST_SLOT_MACRO_ROWS: &str = "list:macroRows:array";
 const LIST_SLOT_MACRO_CELLS: &str = "list:macroCells:array";
+const LIST_SLOT_INVENTORY: &str = "list:inventoryKeys:array";
 
 #[cfg(test)]
 const ISLAND_COMPONENT: &str = "MapIsland";
@@ -152,7 +156,7 @@ pub(crate) struct Zone {
     /// art ("A", "✕", "LB", "▲", "menu").
     pub label: &'static str,
     /// Identity palette class suffix (`id-<idk>` in studio.css): the Xbox face
-    /// colours `xa`/`xb`/`xx`/`xy`, the Sony glyphs `pc`/`po`/`pt`/`psq`,
+    /// colors `xa`/`xb`/`xx`/`xy`, the Sony glyphs `pc`/`po`/`pt`/`psq`,
     /// `dir` (dpad + stick arrows), `hub` (L3/R3), `txt` (view/menu/guide,
     /// share/options/PS), `sh` (shoulders).
     pub idk: &'static str,
@@ -195,7 +199,7 @@ const fn zone(
 /// function`): face buttons sized to the drawn circles, and the four
 /// stick-direction wedges RING the stick with the L3/R3 click zone as the
 /// 8×10 center hub — adjacent, never covering it.
-pub(crate) const ZONE_XBOX: [Zone; 25] = [
+pub(crate) const ZONE_XBOX: &[Zone] = &[
     // Shoulders (not drawn in the icon art): slim chips stacked trigger-over-
     // bumper like the real pad, anchored just above the body's top plateau
     // (stage x ≈ 32..68) — .z-bumper drops a connector line onto the body.
@@ -204,7 +208,7 @@ pub(crate) const ZONE_XBOX: [Zone; 25] = [
     zone("rb", "RB", "sh", [66.0, 10.9, 11.0, 5.2], "bumper"),
     zone("rt", "RT", "sh", [69.0, 4.6, 10.0, 5.2], "trigger"),
     // Face cluster (diamond — boxes trimmed to the drawn Ø7.3×9.1 circles so
-    // the diagonal neighbours stay disjoint). Canonical Xbox colours.
+    // the diagonal neighbours stay disjoint). Canonical Xbox colors.
     zone("Y", "Y", "xy", [75.2, 31.1, 7.2, 8.4], "round"),
     zone("B", "B", "xb", [82.0, 39.6, 7.2, 8.4], "round"),
     zone("A", "A", "xa", [75.3, 48.3, 7.2, 8.4], "round"),
@@ -238,7 +242,7 @@ pub(crate) const ZONE_XBOX: [Zone; 25] = [
 /// Sony labels, XInput functions). Same disjoint-rect rules as [`ZONE_XBOX`]:
 /// stick wedges ring the L3/R3 hub, dpad arrow boxes sit on the drawn arrows
 /// pushed slightly outward so the diagonal pairs never intersect.
-pub(crate) const ZONE_DS4: [Zone; 25] = [
+pub(crate) const ZONE_DS4: &[Zone] = &[
     // Shoulders: same trigger-over-bumper stack as ZONE_XBOX, anchored on the
     // DS4 body's raised humps (stage x ≈ 19 / 81, where L1/R1 really sit).
     zone("lt", "L2", "sh", [17.0, 4.6, 9.5, 5.2], "trigger"),
@@ -246,7 +250,7 @@ pub(crate) const ZONE_DS4: [Zone; 25] = [
     zone("rb", "R1", "sh", [80.5, 10.9, 10.5, 5.2], "bumper"),
     zone("rt", "R2", "sh", [83.0, 4.6, 9.5, 5.2], "trigger"),
     // Face cluster (✕○△□ mapped onto A/B/Y/X), trimmed to the Ø6.9×9.2
-    // drawn circles. Sony glyph colours.
+    // drawn circles. Sony glyph colors.
     zone("Y", "△", "pt", [81.2, 29.2, 7.0, 9.0], "round"),
     zone("B", "○", "po", [88.4, 38.8, 7.0, 9.0], "round"),
     zone("A", "✕", "pc", [81.3, 48.1, 7.0, 9.0], "round"),
@@ -274,11 +278,22 @@ pub(crate) const ZONE_DS4: [Zone; 25] = [
     zone("rx.max", "→", "dir", [72.85, 56.8, 5.5, 7.0], "chip"),
 ];
 
-pub(crate) fn zones_for(persona: &str) -> &'static [Zone; 25] {
+/// The zone table a persona draws with.
+///
+/// Returns a SLICE, not a fixed-size array: the control vocabulary grows in
+/// M11-M19 (`docs/UNIVERSAL-IO.md`), and a `[Zone; 25]` return type made every
+/// caller a place the count had to be repeated. Nothing here derives from
+/// `ksx_core::preset::mappable_functions()` and nothing should — a `Zone`
+/// carries persona ART (label, geometry, kind), which this crate owns and
+/// ksx-core has no business knowing. The two are tied together by
+/// `zone_tables_cover_every_mappable_function` instead, which is a test, not a
+/// dependency: ksx-studio links ksx-core only as a dev-dependency and that
+/// boundary is deliberate (`docs/M9-DECISION.md` §6).
+pub(crate) fn zones_for(persona: &str) -> &'static [Zone] {
     if art_for(persona) == crate::render::ART_DS4 {
-        &ZONE_DS4
+        ZONE_DS4
     } else {
-        &ZONE_XBOX
+        ZONE_XBOX
     }
 }
 
@@ -301,7 +316,7 @@ fn selected_slot(payload: &MapPayload) -> Option<&MapperSlot> {
 /// (docs/INPUT-TRANSFORMS.md §1a: `A = ["S", "Enter"]`, press either), and
 /// A multi-bind preset uses it; the page had been folding the list
 /// into one tag and the writer had been replacing it.
-fn keys_of(slot: &MapperSlot, function: &str) -> Vec<String> {
+pub(crate) fn keys_of(slot: &MapperSlot, function: &str) -> Vec<String> {
     slot.bindings.get(function).cloned().unwrap_or_default()
 }
 
@@ -312,7 +327,7 @@ const KEY_SEP: &str = " · ";
 
 /// "G", "S · Enter", or "—" for unbound — every key, for the tooltip/aria
 /// text and the legend's own reading.
-fn key_tag(slot: &MapperSlot, function: &str) -> String {
+pub(crate) fn key_tag(slot: &MapperSlot, function: &str) -> String {
     let keys = keys_of(slot, function);
     if keys.is_empty() {
         "—".to_owned()
@@ -373,7 +388,7 @@ const SHARE_MAX: usize = 3;
 /// is one key that drives both, whether or not either control has others. (It
 /// used to compare the joined tags, which quietly stopped noticing the moment
 /// a control held more than one key.)
-fn shared_labels(slot: &MapperSlot) -> Vec<Vec<String>> {
+pub(crate) fn shared_labels(slot: &MapperSlot) -> Vec<Vec<String>> {
     let zones = zones_for(&slot.persona);
     let keys: Vec<Vec<String>> = zones.iter().map(|z| keys_of(slot, z.fn_name)).collect();
     keys.iter()
@@ -386,7 +401,7 @@ fn shared_labels(slot: &MapperSlot) -> Vec<Vec<String>> {
                 .iter()
                 .enumerate()
                 .filter(|(j, _)| *j != i && keys[*j].iter().any(|k| mine.iter().any(|m| m == k)))
-                .map(|(_, z)| legend_label(z))
+                .map(|(_, z)| legend_label_for_persona(&slot.persona, z))
                 .collect()
         })
         .collect()
@@ -396,7 +411,7 @@ fn shared_labels(slot: &MapperSlot) -> Vec<Vec<String>> {
 /// driving eight controls cannot blow the row apart. Empty = not shared (the
 /// CSS hides it through the row's `l-shared` class, never `:empty`, which
 /// cannot work on an SSR text slot).
-fn share_text(names: &[String]) -> String {
+pub(crate) fn share_text(names: &[String]) -> String {
     if names.is_empty() {
         return String::new();
     }
@@ -492,8 +507,138 @@ fn legend_group(z: &Zone) -> &'static str {
 
 /// Group + identity as one string — the row's tooltip/aria text and what a
 /// shared-key badge calls a co-bound control.
-fn legend_label(z: &Zone) -> String {
+pub(crate) fn legend_label(z: &Zone) -> String {
     format!("{}{}", legend_group(z), z.label)
+}
+
+/// Group + identity using the words printed on the requested controller.
+///
+/// Switch Pro intentionally reuses the Xbox hit geometry and DualSense reuses
+/// the DS4 geometry, but those shared shapes do not make their shoulder and
+/// system-button legends interchangeable. Keep the small vocabulary delta
+/// here instead of cloning two 25-row geometry tables and letting them drift.
+pub(crate) fn legend_label_for_persona(persona: &str, z: &Zone) -> String {
+    let lower = persona.to_ascii_lowercase();
+    let label = if lower.contains("switchpro") || lower.contains("switch pro") {
+        match z.fn_name {
+            "lt" => "ZL",
+            "lb" => "L",
+            "rb" => "R",
+            "rt" => "ZR",
+            "back" => "Capture",
+            "start" => "Plus",
+            "guide" => "Home",
+            _ => z.label,
+        }
+    } else if lower.contains("dualsense") || lower.contains("ds5") || lower.contains("ps5") {
+        match z.fn_name {
+            "back" => "Create",
+            _ => z.label,
+        }
+    } else {
+        z.label
+    };
+    format!("{}{}", legend_group(z), label)
+}
+
+/// Mirrors MapIsland.ts `identityLabel`: the control in the words the
+/// selected persona wears, with macro triggers and unknown extension
+/// functions humanized the same way.
+fn identity_label(persona: &str, fn_name: &str) -> String {
+    if let Some(name) = fn_name.strip_prefix("macro.") {
+        return format!("the “{name}” macro trigger");
+    }
+    zones_for(persona)
+        .iter()
+        .find(|z| z.fn_name == fn_name)
+        .map_or_else(
+            || fn_name.to_owned(),
+            |z| legend_label_for_persona(persona, z),
+        )
+}
+
+/// **The keyboard shelf, for every slot** (`MapPayload::shelf`): the selected
+/// slot's binding table inverted to key → controls, with the summary sentence
+/// and each row's display strings composed HERE and nowhere else. The island
+/// renders these rows verbatim and `map.ts` merely points the shelf at the
+/// client's selected slot, so the SSR paint, the poll and a client-side slot
+/// switch all show the same bytes (docs/SURFACES.md §1; the parity suite is
+/// the gate, and it caught the imperative predecessor of this function).
+///
+/// Every slot rather than only `payload.selected`, because slot switching is
+/// client-side between polls and a shelf that could only follow the server's
+/// selection would go stale for exactly the click it exists to serve.
+pub(crate) fn shelf_views(
+    mapper: &crate::snapshot::MapperSnapshot,
+) -> std::collections::BTreeMap<String, ShelfView> {
+    let mut shelf = std::collections::BTreeMap::new();
+    for slot in &mapper.slots {
+        // `bindings` is a BTreeMap, so controls arrive alphabetically and the
+        // per-key control list inherits that stable order.
+        let mut by_key: Vec<(String, Vec<String>)> = Vec::new();
+        for (control, keys) in &slot.bindings {
+            for key in keys {
+                match by_key.iter_mut().find(|(k, _)| k == key) {
+                    Some((_, controls)) => {
+                        if !controls.iter().any(|c| c == control) {
+                            controls.push(control.clone());
+                        }
+                    }
+                    None => by_key.push((key.clone(), vec![control.clone()])),
+                }
+            }
+        }
+        by_key.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+        let summary = match by_key.len() {
+            0 => "No bound keys yet".to_owned(),
+            1 => "1 physical key bound".to_owned(),
+            n => format!("{n} physical keys bound"),
+        };
+        let keys = by_key
+            .into_iter()
+            .map(|(key, controls)| {
+                let named: Vec<String> = controls
+                    .iter()
+                    .map(|c| identity_label(&slot.persona, c))
+                    .collect();
+                ShelfKeyRow {
+                    title: format!("{key} drives {}", named.join(", ")),
+                    use_label: if controls.len() == 1 {
+                        named[0].clone()
+                    } else {
+                        format!("{} controls", controls.len())
+                    },
+                    controls: controls.join("|"),
+                    key,
+                }
+            })
+            .collect();
+        shelf.insert(slot.number.to_string(), ShelfView { summary, keys });
+    }
+    shelf
+}
+
+/// The selected slot's shelf rows as the list slot's array value.
+fn inventory_rows(payload: &MapPayload, selected: Option<&MapperSlot>) -> SlotValue {
+    let rows = selected
+        .and_then(|slot| payload.shelf.get(&slot.number.to_string()))
+        .map(|view| view.keys.as_slice())
+        .unwrap_or(&[]);
+    SlotValue::array(
+        rows.iter()
+            .map(|row| {
+                SlotValue::object(vec![
+                    ("key".to_owned(), SlotValue::Text(row.key.clone())),
+                    ("controls".to_owned(), SlotValue::Text(row.controls.clone())),
+                    ("title".to_owned(), SlotValue::Text(row.title.clone())),
+                    (
+                        "use_label".to_owned(),
+                        SlotValue::Text(row.use_label.clone()),
+                    ),
+                ])
+            })
+            .collect(),
+    )
 }
 
 /// Mirrors MapIsland.ts `legendRowsFor`: the bindings legend below the
@@ -830,6 +975,10 @@ fn slot_tabs(payload: &MapPayload, selected: Option<&MapperSlot>) -> SlotValue {
                         "cls".to_owned(),
                         SlotValue::Text(if active { "tab active" } else { "tab" }.to_owned()),
                     ),
+                    (
+                        "current".to_owned(),
+                        SlotValue::Text(if active { "page" } else { "false" }.to_owned()),
+                    ),
                     // v14: the management table's columns. Same array, second
                     // reader — no new payload, no new verb.
                     (
@@ -912,7 +1061,7 @@ fn reason_line(payload: &MapPayload) -> String {
              changed."
                 .to_owned()
         } else {
-            "Controls are temporarily read-only. Close and reopen ksx, then try again.".to_owned()
+            "Mapping is temporarily read-only. Close and reopen ksx, then try again.".to_owned()
         };
     }
     if payload.session.running {
@@ -1024,14 +1173,17 @@ pub(crate) const TURBO_MAX_HZ: u32 = 30;
 
 /// 60 Hz frames → ms, rounded to nearest ONCE — `ksx_core::StepDuration::ms`.
 /// Rounded once so three frames is 50 ms and not 3 × 17 = 51.
-fn frames_ms(frames: u32) -> u32 {
-    (frames.saturating_mul(1000) + 30) / 60
+pub(crate) fn frames_ms(frames: u32) -> u32 {
+    // Saturating on BOTH terms: the studio now hands this unsaved
+    // browser drafts on every act, so a frame count near u32::MAX must
+    // clamp rather than panic the request.
+    frames.saturating_mul(1000).saturating_add(30) / 60
 }
 
 /// The duration a step ASKS for, in ms. `None` when the file says both units
 /// or neither — which is a fault, not a number to guess (`MacroStepFile::
 /// duration`), and is reported as one.
-fn requested_ms(step: &MacroStepView) -> Option<u32> {
+pub(crate) fn requested_ms(step: &MacroStepView) -> Option<u32> {
     match (step.ms, step.frames) {
         (Some(ms), None) => Some(ms),
         (None, Some(frames)) => Some(frames_ms(frames)),
@@ -1041,7 +1193,7 @@ fn requested_ms(step: &MacroStepView) -> Option<u32> {
 
 /// What the engine would actually hold this step for: below the floor is
 /// RAISED unless the author opted out (`MacroStep::effective_ms`).
-fn effective_ms(step: &MacroStepView) -> u32 {
+pub(crate) fn effective_ms(step: &MacroStepView) -> u32 {
     match requested_ms(step) {
         Some(ms) if step.allow_short || ms >= MIN_STEP_MS => ms,
         Some(_) => MIN_STEP_MS,
@@ -1051,7 +1203,7 @@ fn effective_ms(step: &MacroStepView) -> u32 {
 
 /// "50 ms" / "3 fr · 50 ms" / "—" — the row's own duration, in the unit it was
 /// authored in (a sequence written in frames must still read in frames).
-fn duration_text(step: &MacroStepView) -> String {
+pub(crate) fn duration_text(step: &MacroStepView) -> String {
     match (step.ms, step.frames) {
         (Some(ms), None) => format!("{ms} ms"),
         (None, Some(frames)) => format!("{frames} fr · {} ms", frames_ms(frames)),
@@ -1060,7 +1212,7 @@ fn duration_text(step: &MacroStepView) -> String {
 }
 
 /// Is this step below the sampling floor at all? (Both spellings, one rule.)
-fn step_is_short(step: &MacroStepView) -> bool {
+pub(crate) fn step_is_short(step: &MacroStepView) -> bool {
     requested_ms(step).is_some_and(|ms| ms < MIN_STEP_MS)
 }
 
@@ -1069,7 +1221,7 @@ fn step_is_short(step: &MacroStepView) -> bool {
 /// difference the client alone can have: the client also remembers a unit the
 /// AUTHOR picked for a step whose value has not been retyped yet, and an SSR
 /// paint has no author to remember.
-fn dur_value(step: &MacroStepView) -> String {
+pub(crate) fn dur_value(step: &MacroStepView) -> String {
     match (step.ms, step.frames) {
         (_, Some(frames)) if step.ms.is_none() => frames.to_string(),
         (Some(ms), _) => ms.to_string(),
@@ -1084,7 +1236,7 @@ fn dur_value(step: &MacroStepView) -> String {
 /// a select inside a list item cannot be given its value by an attribute
 /// binding (map.ts would have to write every one of them by hand after every
 /// poll), and a button's label is its own readout.
-fn unit_tag(step: &MacroStepView) -> String {
+pub(crate) fn unit_tag(step: &MacroStepView) -> String {
     if step.frames.is_some() && step.ms.is_none() {
         "fr".to_owned()
     } else {
@@ -1092,7 +1244,7 @@ fn unit_tag(step: &MacroStepView) -> String {
     }
 }
 
-fn unit_title(step: &MacroStepView, i: usize) -> String {
+pub(crate) fn unit_title(step: &MacroStepView, i: usize) -> String {
     if unit_tag(step) == "fr" {
         format!(
             "step {} is authored in FRAMES — click to switch it to ms (the length is converted, \
@@ -1112,7 +1264,7 @@ fn unit_title(step: &MacroStepView, i: usize) -> String {
 /// duration, because a truncated warning is a warning nobody reads. The rule
 /// it is short for is stated once, in full, in the card's own note; the whole
 /// sentence rides the row's `title` ([`step_warning_long`]).
-fn step_warning(step: &MacroStepView) -> String {
+pub(crate) fn step_warning(step: &MacroStepView) -> String {
     match (step.ms, step.frames) {
         (Some(_), Some(_)) => "two units".to_owned(),
         (None, None) => "no duration".to_owned(),
@@ -1144,7 +1296,7 @@ fn step_warning(step: &MacroStepView) -> String {
 /// The same flag, in full — never a silent acceptance and never a silent
 /// rewrite (§1c "the sampling rule, enforced": both outcomes are advisories,
 /// and neither is ever quiet). Empty = nothing to say.
-fn step_warning_long(step: &MacroStepView) -> String {
+pub(crate) fn step_warning_long(step: &MacroStepView) -> String {
     match (step.ms, step.frames) {
         (Some(_), Some(_)) => {
             "uses both milliseconds and frames — choose exactly one timing method".to_owned()
@@ -1219,7 +1371,10 @@ pub(crate) const MACRO_RING_LINE: &str =
 
 /// A macro's run length at the durations the engine will use.
 fn total_ms(mac: &MacroView) -> u32 {
-    mac.steps.iter().map(effective_ms).sum()
+    mac.steps
+        .iter()
+        .map(effective_ms)
+        .fold(0u32, u32::saturating_add)
 }
 
 /// The macro the page paints: the payload's `macro_selected` if the preset has
@@ -1351,7 +1506,7 @@ const SSR_RATE_HZ: f64 = 60.0;
 
 /// `macro.<name>` — the function name the `map` verb takes for a TRIGGER.
 /// Same spelling `ksx_config::macro_function_name` writes into the file.
-fn macro_function(name: &str) -> String {
+pub(crate) fn macro_function(name: &str) -> String {
     format!("macro.{name}")
 }
 
@@ -1397,10 +1552,10 @@ fn macro_tabs(payload: &MapPayload, current: Option<&MacroView>) -> SlotValue {
 
 /// Percent-encode a macro name for the tab's href. Names come from a file and
 /// are otherwise unconstrained, so this is not optional.
-fn urlencode_value(text: &str) -> String {
+pub(crate) fn urlencode_value(text: &str) -> String {
     let mut out = String::new();
     let mut utf8 = [0u8; 4];
-    for c in text.chars().take(120) {
+    for c in text.chars() {
         for byte in c.encode_utf8(&mut utf8).bytes() {
             match byte {
                 b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
@@ -1431,10 +1586,10 @@ fn macro_cols(slot: Option<&MapperSlot>) -> SlotValue {
                 SlotValue::object(vec![
                     ("fn".to_owned(), SlotValue::Text(c.token)),
                     ("id".to_owned(), SlotValue::Text(c.glyph)),
-                    // UNIFORM colour, deliberately: the grid header carries one
+                    // UNIFORM color, deliberately: the grid header carries one
                     // of these per control at column width, and a row of
-                    // coloured discs that narrow is noise rather than
-                    // information. The identity colours earn their place on the
+                    // colored discs that narrow is noise rather than
+                    // information. The identity colors earn their place on the
                     // controller art, where they map to physical buttons, and in
                     // the legend beside it — here the column is NAMED, not
                     // badged. `card`/`diag` are TYPE, not palette: the cardinals
@@ -1490,7 +1645,7 @@ fn macro_groups(slot: Option<&MapperSlot>) -> SlotValue {
 /// control) — so the row holding the MOST bindings looked like the row holding
 /// two. "D-pad and LS ↘" is one control, said on two mechanisms, and "and" is
 /// the joiner [`macro_motion_line`] already uses for exactly this list.
-fn held_label(zones: &[Zone], hold: &[String], held: &Held) -> String {
+fn held_label(persona: &str, zones: &[Zone], hold: &[String], held: &Held) -> String {
     match held {
         Held::Diagonal {
             diag, mechanisms, ..
@@ -1508,7 +1663,7 @@ fn held_label(zones: &[Zone], hold: &[String], held: &Held) -> String {
             zones
                 .iter()
                 .find(|z| z.fn_name.eq_ignore_ascii_case(f))
-                .map_or_else(|| f.clone(), legend_label)
+                .map_or_else(|| f.clone(), |z| legend_label_for_persona(persona, z))
         }
     }
 }
@@ -1520,15 +1675,23 @@ fn held_label(zones: &[Zone], hold: &[String], held: &Held) -> String {
 /// and [`hold_expand`] says, beside it, exactly which two names the file
 /// carries. Nothing is hidden and nothing has to be decoded from lit cells
 /// twelve columns apart.
-fn hold_text(slot: Option<&MapperSlot>, hold: &[String]) -> String {
+pub(crate) fn hold_text(slot: Option<&MapperSlot>, hold: &[String]) -> String {
+    hold_text_for_persona(slot.map_or("xbox360", |s| s.persona.as_str()), hold)
+}
+
+/// What one macro step holds, using an explicit persona even when the mapper
+/// projection itself is unavailable. Macro tables can still be readable when
+/// one malformed direct binding prevents `MapperSlot` conversion; falling back
+/// to Xbox labels in that case would repaint PlayStation/Switch authoring as a
+/// different controller.
+pub(crate) fn hold_text_for_persona(persona: &str, hold: &[String]) -> String {
     if hold.is_empty() {
         return "(nothing — neutral gap)".to_owned();
     }
-    let persona = slot.map_or("xbox360", |s| s.persona.as_str());
     let zones = zones_for(persona);
     fold(hold)
         .iter()
-        .map(|h| held_label(zones, hold, h))
+        .map(|h| held_label(persona, zones, hold, h))
         .collect::<Vec<_>>()
         .join(" + ")
 }
@@ -1540,7 +1703,7 @@ fn hold_text(slot: Option<&MapperSlot>, hold: &[String]) -> String {
 /// storage says "two holds"; this line says both at once, on the row itself, so
 /// nobody has to open the TOML to find out what a pick wrote. Empty when the
 /// step holds no diagonal.
-fn hold_expand(hold: &[String]) -> String {
+pub(crate) fn hold_expand(hold: &[String]) -> String {
     fold(hold)
         .iter()
         .filter_map(|h| match h {
@@ -1571,11 +1734,21 @@ fn hold_expand(hold: &[String]) -> String {
 /// place on the card that cannot be truncated. So the title carries it too, and
 /// the narrow-width drop of the span becomes a deliberate layout choice rather
 /// than the quiet loss of the only statement of what a pick wrote.
-fn row_title(slot: Option<&MapperSlot>, step: &MacroStepView, i: usize) -> String {
+pub(crate) fn row_title(slot: Option<&MapperSlot>, step: &MacroStepView, i: usize) -> String {
+    row_title_for_persona(
+        slot.map_or("xbox360", |mapper| mapper.persona.as_str()),
+        step,
+        i,
+    )
+}
+
+/// Row hover copy with an explicit persona, for editors that can still read a
+/// macro after direct mapper conversion has failed.
+pub(crate) fn row_title_for_persona(persona: &str, step: &MacroStepView, i: usize) -> String {
     let base = format!(
         "step {} holds {} for {} (the engine runs it for {} ms)",
         i + 1,
-        hold_text(slot, &step.hold),
+        hold_text_for_persona(persona, &step.hold),
         duration_text(step),
         effective_ms(step)
     );
@@ -1587,7 +1760,7 @@ fn row_title(slot: Option<&MapperSlot>, step: &MacroStepView, i: usize) -> Strin
     }
 }
 
-fn hold_expand_cls(hold: &[String]) -> &'static str {
+pub(crate) fn hold_expand_cls(hold: &[String]) -> &'static str {
     if hold_expand(hold).is_empty() {
         "macexp off"
     } else {
@@ -1598,7 +1771,7 @@ fn hold_expand_cls(hold: &[String]) -> &'static str {
 /// The hold readout's own class, over PRESENTED controls rather than stored
 /// ones: a diagonal is one control, so `↓ + →` no longer reads as two.
 /// The accent is for a row that really does hold several things at once.
-fn hold_cls(hold: &[String]) -> &'static str {
+pub(crate) fn hold_cls(hold: &[String]) -> &'static str {
     match fold(hold).len() {
         0 => "machold none",
         1 => "machold",
@@ -1739,8 +1912,82 @@ fn macro_rows(
     )
 }
 
+/// Every column's state for ONE step, in column order, with the "written, but
+/// not at full deflection" flag beside it.
+///
+/// THE DIAGONAL LENS LIVES HERE, once. `/map` and `/nocturne` draw different
+/// grids out of the same answer, because the rule that folds `ly.min + lx.max`
+/// into a single `↘` — and still ticks the two cardinals underneath it — is the
+/// one piece of this editor that must never have two versions to disagree.
+pub(crate) fn step_cell_states(
+    step: &MacroStepView,
+    columns: &[MacroColumn],
+) -> Vec<(CellState, bool)> {
+    let view = fold(&step.hold);
+    // Which diagonal (if any) each held entry was folded into, and which
+    // (mechanism, diagonal) pairs are lit.
+    let mut member_of: Vec<Option<Diag>> = vec![None; step.hold.len()];
+    let mut lit: Vec<(Mechanism, Diag, bool)> = Vec::new();
+    for held in &view {
+        if let Held::Diagonal {
+            diag,
+            mechanisms,
+            members,
+            exact,
+        } = held
+        {
+            for &m in members {
+                member_of[m] = Some(*diag);
+            }
+            for &mechanism in mechanisms {
+                lit.push((mechanism, *diag, *exact));
+            }
+        }
+    }
+    columns
+        .iter()
+        .map(|column| {
+            let state = match parse_diag_token(&column.token) {
+                Some((mechanism, diag)) => lit
+                    .iter()
+                    .find(|(m, d, _)| *m == mechanism && *d == diag)
+                    .map_or(CellState::Off, |_| CellState::On),
+                // A direction column matches by WHERE IT POINTS, not by
+                // spelling: `ly.-16384` is the down half of this pad's left
+                // stick however the file spells it.
+                None => match pointing(&column.token) {
+                    Some(want) => step
+                        .hold
+                        .iter()
+                        .position(|f| points_same_way(f, want))
+                        .map_or(CellState::Off, |at| match member_of[at] {
+                            Some(diag) => CellState::Part(diag),
+                            None => CellState::On,
+                        }),
+                    None => {
+                        if step
+                            .hold
+                            .iter()
+                            .any(|f| f.eq_ignore_ascii_case(&column.token))
+                        {
+                            CellState::On
+                        } else {
+                            CellState::Off
+                        }
+                    }
+                },
+            };
+            let approx = matches!(state, CellState::On)
+                && lit
+                    .iter()
+                    .any(|(m, d, exact)| !exact && diag_token(*m, *d) == column.token);
+            (state, approx)
+        })
+        .collect()
+}
+
 /// What one column says about one step.
-enum CellState {
+pub(crate) enum CellState {
     /// Not held.
     Off,
     /// Held, and this column is the whole of it.
@@ -1776,62 +2023,8 @@ fn macro_cells(
     let zones = zones_for(persona);
     let mut cells = Vec::with_capacity(mac.steps.len() * columns.len());
     for (i, step) in mac.steps.iter().enumerate() {
-        let view = fold(&step.hold);
-        // Which diagonal (if any) each held entry was folded into, and which
-        // (mechanism, diagonal) pairs are lit.
-        let mut member_of: Vec<Option<Diag>> = vec![None; step.hold.len()];
-        let mut lit: Vec<(Mechanism, Diag, bool)> = Vec::new();
-        for held in &view {
-            if let Held::Diagonal {
-                diag,
-                mechanisms,
-                members,
-                exact,
-            } = held
-            {
-                for &m in members {
-                    member_of[m] = Some(*diag);
-                }
-                for &mechanism in mechanisms {
-                    lit.push((mechanism, *diag, *exact));
-                }
-            }
-        }
-        for column in &columns {
-            let state = match parse_diag_token(&column.token) {
-                Some((mechanism, diag)) => lit
-                    .iter()
-                    .find(|(m, d, _)| *m == mechanism && *d == diag)
-                    .map_or(CellState::Off, |_| CellState::On),
-                // A direction column matches by WHERE IT POINTS, not by
-                // spelling: `ly.-16384` is the down half of this pad's left
-                // stick however the file spells it.
-                None => match pointing(&column.token) {
-                    Some(want) => step
-                        .hold
-                        .iter()
-                        .position(|f| points_same_way(f, want))
-                        .map_or(CellState::Off, |at| match member_of[at] {
-                            Some(diag) => CellState::Part(diag),
-                            None => CellState::On,
-                        }),
-                    None => {
-                        if step
-                            .hold
-                            .iter()
-                            .any(|f| f.eq_ignore_ascii_case(&column.token))
-                        {
-                            CellState::On
-                        } else {
-                            CellState::Off
-                        }
-                    }
-                },
-            };
-            let approx = matches!(state, CellState::On)
-                && lit
-                    .iter()
-                    .any(|(m, d, exact)| !exact && diag_token(*m, *d) == column.token);
+        let states = step_cell_states(step, &columns);
+        for (column, (state, approx)) in columns.iter().zip(states) {
             let mut cls = String::from("maccell");
             match state {
                 CellState::On => cls.push_str(" on"),
@@ -1847,7 +2040,7 @@ fn macro_cells(
             if selected == Some(i) {
                 cls.push_str(" inrow");
             }
-            let name = column_name(zones, column);
+            let name = column_name(persona, zones, column);
             let title = match &state {
                 CellState::On if approx => format!(
                     "step {} holds {name} — as written, not at full deflection ({})",
@@ -1893,14 +2086,14 @@ fn macro_cells(
 /// left stick just as `ly.min` is, and a grid that only lit the canonical
 /// spelling would leave a hand-written step looking unheld. Mirrored in
 /// MapIsland.ts `pointsSameWay`.
-fn points_same_way(function: &str, want: Pointing) -> bool {
+pub(crate) fn points_same_way(function: &str, want: Pointing) -> bool {
     pointing(function).is_some_and(|p| {
         p.mechanism == want.mechanism && p.vertical == want.vertical && p.positive == want.positive
     })
 }
 
 /// `diag:<mech>:<diag>` back into its two halves, or `None` for a function name.
-fn parse_diag_token(token: &str) -> Option<(Mechanism, Diag)> {
+pub(crate) fn parse_diag_token(token: &str) -> Option<(Mechanism, Diag)> {
     let rest = token.strip_prefix("diag:")?;
     let (mech, diag) = rest.split_once(':')?;
     let mechanism = Mechanism::ALL.into_iter().find(|m| m.token() == mech)?;
@@ -1910,7 +2103,7 @@ fn parse_diag_token(token: &str) -> Option<(Mechanism, Diag)> {
 
 /// What a column is called in a sentence — "D-pad ↘ (down-right)", "LS ↓",
 /// "✕ (A)".
-fn column_name(zones: &[Zone], column: &MacroColumn) -> String {
+pub(crate) fn column_name(persona: &str, zones: &[Zone], column: &MacroColumn) -> String {
     match parse_diag_token(&column.token) {
         Some((mechanism, diag)) => {
             format!("{}{} ({})", mechanism.group(), diag.glyph(), diag.words())
@@ -1922,7 +2115,7 @@ fn column_name(zones: &[Zone], column: &MacroColumn) -> String {
                 .find(|z| z.fn_name.eq_ignore_ascii_case(&column.token))
                 .map_or_else(
                     || column.token.clone(),
-                    |z| format!("{} ({})", legend_label(z), z.fn_name),
+                    |z| format!("{} ({})", legend_label_for_persona(persona, z), z.fn_name),
                 ),
         },
     }
@@ -1954,7 +2147,7 @@ fn toml_str(text: &str) -> String {
 /// the key that starts it. When there is no trigger yet the row is COMMENTED
 /// OUT rather than filled with a placeholder, because a pasted
 /// `macro.x = "<KEY>"` would not load.
-fn macro_toml(mac: &MacroView) -> String {
+pub(crate) fn macro_toml(mac: &MacroView) -> String {
     let mut out = format!("[macros.{}]\n", mac.name);
     if mac.on_release != "finish" {
         out.push_str(&format!("on_release = {}\n", toml_str(&mac.on_release)));
@@ -2016,7 +2209,7 @@ fn macro_toml(mac: &MacroView) -> String {
 }
 
 /// Which keys start this macro, in words.
-fn macro_trigger_line(mac: Option<&MacroView>) -> String {
+pub(crate) fn macro_trigger_line(mac: Option<&MacroView>) -> String {
     let Some(mac) = mac else {
         return String::new();
     };
@@ -2057,9 +2250,10 @@ pub(crate) enum Mechanism {
 impl Mechanism {
     /// Canonical order — the order a coalesced diagonal lists its mechanisms in
     /// and the order the grid draws its direction groups in.
-    const ALL: [Mechanism; 3] = [Mechanism::Dpad, Mechanism::LeftStick, Mechanism::RightStick];
+    pub(crate) const ALL: [Mechanism; 3] =
+        [Mechanism::Dpad, Mechanism::LeftStick, Mechanism::RightStick];
 
-    fn of(function: &str) -> Option<Self> {
+    pub(crate) fn of(function: &str) -> Option<Self> {
         let f = function.to_ascii_lowercase();
         if f.starts_with("dpad.") {
             Some(Mechanism::Dpad)
@@ -2072,7 +2266,7 @@ impl Mechanism {
         }
     }
 
-    const fn describe(self) -> &'static str {
+    pub(crate) const fn describe(self) -> &'static str {
         match self {
             Mechanism::Dpad => "the dpad",
             Mechanism::LeftStick => "the left stick (lx/ly)",
@@ -2082,7 +2276,7 @@ impl Mechanism {
 
     /// The prefix a flat list needs to keep three identical arrow runs apart —
     /// the same one [`legend_group`] writes.
-    const fn group(self) -> &'static str {
+    pub(crate) const fn group(self) -> &'static str {
         match self {
             Mechanism::Dpad => "D-pad ",
             Mechanism::LeftStick => "LS ",
@@ -2100,7 +2294,7 @@ impl Mechanism {
     }
 
     /// The half of a diagonal cell token that names the mechanism.
-    const fn token(self) -> &'static str {
+    pub(crate) const fn token(self) -> &'static str {
         match self {
             Mechanism::Dpad => "dpad",
             Mechanism::LeftStick => "ls",
@@ -2110,7 +2304,7 @@ impl Mechanism {
 
     /// The canonical function name for one polarity of one axis of this
     /// mechanism — what picking a direction WRITES.
-    const fn function(self, vertical: bool, positive: bool) -> &'static str {
+    pub(crate) const fn function(self, vertical: bool, positive: bool) -> &'static str {
         match (self, vertical, positive) {
             (Mechanism::Dpad, true, true) => "dpad.up",
             (Mechanism::Dpad, true, false) => "dpad.down",
@@ -2160,11 +2354,12 @@ pub(crate) enum Diag {
 }
 
 impl Diag {
-    const ALL: [Diag; 4] = [Diag::UpLeft, Diag::UpRight, Diag::DownLeft, Diag::DownRight];
+    pub(crate) const ALL: [Diag; 4] =
+        [Diag::UpLeft, Diag::UpRight, Diag::DownLeft, Diag::DownRight];
 
     /// ARROW is the glyph. Screens speak arrows in this genre — SF6's input
     /// history, every Capcom move list, every arcade instruction card.
-    const fn glyph(self) -> &'static str {
+    pub(crate) const fn glyph(self) -> &'static str {
         match self {
             Diag::UpLeft => "↖",
             Diag::UpRight => "↗",
@@ -2177,7 +2372,7 @@ impl Diag {
     /// never the label. It is how the input is written in text (Dustloop,
     /// SuperCombo) and it is already in a cab owner's `mame.ini`
     /// (`-joystick_map` uses the numpad mapping).
-    const fn numpad(self) -> u8 {
+    pub(crate) const fn numpad(self) -> u8 {
         match self {
             Diag::UpLeft => 7,
             Diag::UpRight => 9,
@@ -2189,7 +2384,7 @@ impl Diag {
     /// The name, in words. COMPASS, not forward/back — ksx offers the mirrored
     /// spelling of every motion because player 2 is not an edge case, and
     /// "down-forward" is only true for a character facing right.
-    const fn words(self) -> &'static str {
+    pub(crate) const fn words(self) -> &'static str {
         match self {
             Diag::UpLeft => "up-left",
             Diag::UpRight => "up-right",
@@ -2210,7 +2405,7 @@ impl Diag {
     }
 
     /// `(up, right)`.
-    const fn halves(self) -> (bool, bool) {
+    pub(crate) const fn halves(self) -> (bool, bool) {
         match self {
             Diag::UpLeft => (true, false),
             Diag::UpRight => (true, true),
@@ -2228,7 +2423,7 @@ impl Diag {
         }
     }
 
-    const fn token(self) -> &'static str {
+    pub(crate) const fn token(self) -> &'static str {
         match self {
             Diag::UpLeft => "ul",
             Diag::UpRight => "ur",
@@ -2271,13 +2466,13 @@ const fn cardinal_numpad(vertical: bool, positive: bool) -> u8 {
 /// Mirror of `ksx_core::socd::Pointing`, over a FUNCTION NAME.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Pointing {
-    mechanism: Mechanism,
-    vertical: bool,
+    pub(crate) mechanism: Mechanism,
+    pub(crate) vertical: bool,
     /// Right for a horizontal control, UP for a vertical one.
-    positive: bool,
+    pub(crate) positive: bool,
     /// Is this the canonical extreme (`min`/`max`), or a hand-written partial
     /// deflection like `ly.-16384`?
-    exact: bool,
+    pub(crate) exact: bool,
 }
 
 /// Where this function name points, or `None` when it points nowhere.
@@ -2285,7 +2480,7 @@ pub(crate) struct Pointing {
 /// A CENTRED AXIS IS NEVER A DIRECTION (`lx.0`) — the same rule
 /// `ksx_core::socd::pointing` and `ksx_config::validate` state, which is why it
 /// is never half of a diagonal either.
-fn pointing(function: &str) -> Option<Pointing> {
+pub(crate) fn pointing(function: &str) -> Option<Pointing> {
     let lower = function.to_ascii_lowercase();
     let (base, rest) = lower.split_once('.')?;
     match base {
@@ -2440,7 +2635,7 @@ pub(crate) fn fold(hold: &[String]) -> Vec<Held> {
 /// The cell token for a diagonal column. Contains a `:`, which no function name
 /// ever does, so a diagonal pick can never be mistaken for one — the client
 /// EXPANDS it to the pair before anything is stored.
-fn diag_token(mechanism: Mechanism, diag: Diag) -> String {
+pub(crate) fn diag_token(mechanism: Mechanism, diag: Diag) -> String {
     format!("diag:{}:{}", mechanism.token(), diag.token())
 }
 
@@ -2483,21 +2678,16 @@ const RING: [RingPos; 8] = [
     RingPos::Diagonal(Diag::UpRight),
 ];
 
-/// 25 zones → 37 columns: the twelve cardinal-only direction zones become three
-/// rings of eight. Pinned against the tables by `the_grid_is_three_rings`.
-#[cfg(test)]
-const MACRO_COLUMN_COUNT: usize = 37;
-
 /// One grid column: what it is called, what a click on it means, and which
 /// band it sits under.
-struct MacroColumn {
+pub(crate) struct MacroColumn {
     /// The cell token — a function name, or `diag:<mech>:<diag>`.
-    token: String,
-    glyph: String,
+    pub(crate) token: String,
+    pub(crate) glyph: String,
     /// `maccolid`, plus `card` / `diag` for the two direction kinds.
-    idcls: &'static str,
-    title: String,
-    band: &'static str,
+    pub(crate) idcls: &'static str,
+    pub(crate) title: String,
+    pub(crate) band: &'static str,
 }
 
 /// Which band a control sits under. The band is not decoration — it fixes a
@@ -2520,16 +2710,17 @@ fn band_of(fn_name: &str) -> &'static str {
 /// 25 zones → 37 columns. The twelve cardinal-only direction zones become three
 /// rings of eight, so the four diagonals are things you can point at instead of
 /// things you have to know how to build.
-fn macro_columns(persona: &str) -> Vec<MacroColumn> {
+pub(crate) fn macro_columns(persona: &str) -> Vec<MacroColumn> {
     let mut out: Vec<MacroColumn> = Vec::new();
     let mut rung: Vec<Mechanism> = Vec::new();
     for z in zones_for(persona).iter() {
         let Some(mechanism) = Mechanism::of(z.fn_name) else {
+            let label = legend_label_for_persona(persona, z);
             out.push(MacroColumn {
                 token: z.fn_name.to_owned(),
-                glyph: z.label.to_owned(),
+                glyph: label.clone(),
                 idcls: "maccolid",
-                title: format!("{} ({})", legend_label(z), z.fn_name),
+                title: format!("{label} ({})", z.fn_name),
                 band: band_of(z.fn_name),
             });
             continue;
@@ -2592,7 +2783,7 @@ fn macro_columns(persona: &str) -> Vec<MacroColumn> {
 /// Every mechanism THIS SLOT's own bound direction keys drive. An inert `None`
 /// row does not count: a placeholder is a function the preset lists, not a
 /// direction the player can produce (same rule as `driven_mechanisms` there).
-fn driven_mechanisms(slot: Option<&MapperSlot>) -> Vec<Mechanism> {
+pub(crate) fn driven_mechanisms(slot: Option<&MapperSlot>) -> Vec<Mechanism> {
     let mut out: Vec<Mechanism> = Vec::new();
     let Some(slot) = slot else {
         return out;
@@ -2615,7 +2806,7 @@ fn driven_mechanisms(slot: Option<&MapperSlot>) -> Vec<Mechanism> {
 
 /// The sentence above the motion buttons: which mechanism they will write, and
 /// why that is the one.
-fn macro_motion_line(slot: Option<&MapperSlot>) -> String {
+pub(crate) fn macro_motion_line(slot: Option<&MapperSlot>) -> String {
     let driven = driven_mechanisms(slot);
     let pick = driven.first().copied().unwrap_or(Mechanism::Dpad);
     let tail = "Each one appends its steps to the macro below — the MIDDLE step of a \
@@ -2704,7 +2895,7 @@ fn preset_name(payload: &MapPayload, selected: Option<&MapperSlot>) -> String {
 /// The three policies, as the file holds them right now — the READABLE half of
 /// the three selects beside them (those are draft controls and are hidden
 /// without JavaScript, this line never is).
-fn macro_policy_line(mac: Option<&MacroView>) -> String {
+pub(crate) fn macro_policy_line(mac: Option<&MacroView>) -> String {
     match mac {
         Some(mac) => {
             let release = if mac.on_release == "abort" {
@@ -2783,8 +2974,11 @@ fn turbo_math(mac: Option<&MacroView>) -> String {
 }
 
 /// The macro's whole run at the durations the engine will really use.
-fn macro_total_ms(mac: &MacroView) -> u32 {
-    mac.steps.iter().map(effective_ms).sum()
+pub(crate) fn macro_total_ms(mac: &MacroView) -> u32 {
+    mac.steps
+        .iter()
+        .map(effective_ms)
+        .fold(0u32, u32::saturating_add)
 }
 
 /// The neutral window between two turbo runs, and WHY it is that number.
@@ -2858,6 +3052,9 @@ fn scalar_slots(
     serde_json::json!({
         "rootCls": if selected.is_some() { "studio mapper" } else { "studio mapper mapper-empty" },
         "slotLine": slot_line,
+        "shelfSummary": selected
+            .and_then(|s| payload.shelf.get(&s.number.to_string()))
+            .map_or("No bound keys yet", |view| view.summary.as_str()),
         "sourceLine": if selected.is_none() {
             if payload.mapper.generated_at == "(unavailable)" {
                 "This controller layout needs attention in Setup".to_owned()
@@ -3142,6 +3339,7 @@ fn build_slots(module: &IrModule, payload: &MapPayload, flash: Option<&str>) -> 
         (LIST_SLOT_MACRO_COLS, macro_cols(selected)),
         (LIST_SLOT_MACRO_ROWS, macro_rows(mac, selected, None)),
         (LIST_SLOT_MACRO_CELLS, macro_cells(mac, selected, None)),
+        (LIST_SLOT_INVENTORY, inventory_rows(payload, selected)),
     ] {
         if let Some(id) = named_slot_ids(module, name).into_iter().next() {
             slots.set(id, value);
@@ -3157,12 +3355,6 @@ fn build_slots(module: &IrModule, payload: &MapPayload, flash: Option<&str>) -> 
     }
     slots
 }
-
-/// Same anti-flash CSS as the status page (render.rs PERSONALITY_CSS).
-/// Kept byte-identical to it; `tests/contrast.rs` pins both against the
-/// `--bg`/`--text` tokens in studio.css so the copies cannot drift apart.
-const PERSONALITY_CSS: &str = "body{background:#120c1c;color:#f0ebe0;margin:0}\
-@media (prefers-color-scheme:light){body{background:#f6f3ee;color:#1c1428}}";
 
 /// Render `/map` for one payload. The `selected` inside the payload drives
 /// the SSR slot pick; the client keeps its own selection after hydration.
@@ -3201,7 +3393,9 @@ mod tests {
     use super::*;
     use crate::control::{LearnView, SessionView};
     use crate::snapshot::{MacroSnapshot, MapperSnapshot};
+    use serde::Serialize;
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
 
     fn step(
         hold: &[&str],
@@ -3262,12 +3456,13 @@ mod tests {
             backup: Some("2026-08-05 14:32:07 UTC".to_owned()),
             session_backup: true,
             turbo,
+            toggle: Default::default(),
             macros_off: false,
         }
     }
 
     pub(super) fn sample() -> MapPayload {
-        MapPayload {
+        let mut payload = MapPayload {
             mapper: MapperSnapshot {
                 generated_at: "2026-08-05 12:00:00 UTC".into(),
                 source: "slots of profile \"Example Launcher\" (games.toml)".into(),
@@ -3285,6 +3480,7 @@ mod tests {
                 line: "idle".into(),
                 profile: None,
                 origin: ksx_api::SessionOrigin::Unknown,
+                active: None,
             },
             learn: LearnView {
                 ok: true,
@@ -3295,7 +3491,13 @@ mod tests {
             macros: MacroSnapshot::read("Panel P1", vec![hadouken()]),
             macro_selected: String::new(),
             target: "saved".to_owned(),
-        }
+            shelf: Default::default(),
+        };
+        // The same single composition site production uses (server/map.rs's
+        // collect) — a sample without it would pin an emptier page than the
+        // server ever serves.
+        payload.shelf = shelf_views(&payload.mapper);
+        payload
     }
 
     fn page() -> EmbeddedPage {
@@ -3358,44 +3560,181 @@ mod tests {
         Some(rest[open..end].to_owned())
     }
 
-    /// Both tables cover exactly the 25 mappable functions, once each — a
-    /// zone the preset vocabulary cannot store, or a function without a
-    /// zone, is a build error here, not a dead click in the browser.
+    /// The committed Rust-to-TypeScript handoff. Struct field order is output
+    /// order under serde, so the pretty JSON is deterministic without relying
+    /// on map-key ordering.
+    #[derive(Serialize)]
+    struct ZoneTokens<'a> {
+        version: u8,
+        functions: Vec<String>,
+        xbox: Vec<ZoneToken<'a>>,
+        ds4: Vec<ZoneToken<'a>>,
+    }
+
+    #[derive(Serialize)]
+    struct ZoneToken<'a> {
+        function: &'a str,
+        label: &'a str,
+        palette: &'a str,
+        rect: [f32; 4],
+        kind: &'a str,
+    }
+
+    fn zone_token(zone: &Zone) -> ZoneToken<'_> {
+        ZoneToken {
+            function: zone.fn_name,
+            label: zone.label,
+            palette: zone.idk,
+            rect: [zone.cx, zone.cy, zone.w, zone.h],
+            kind: zone.kind,
+        }
+    }
+
+    /// The no-JS picker had a deliberate human order before generation. Known
+    /// controls keep it by TYPE, not by their serialized spelling; anything a
+    /// future roster adds falls through and is appended canonically without an
+    /// array edit here.
+    fn function_picker_rank(binding: ksx_core::Binding) -> u8 {
+        use ksx_core::{Axis, Binding, DpadDirection, Trigger, XButton, AXIS_MAX, AXIS_MIN};
+
+        match binding {
+            Binding::Button(XButton::A) => 0,
+            Binding::Button(XButton::B) => 1,
+            Binding::Button(XButton::X) => 2,
+            Binding::Button(XButton::Y) => 3,
+            Binding::Button(XButton::LeftBumper) => 4,
+            Binding::Button(XButton::RightBumper) => 5,
+            Binding::Trigger(Trigger::Left) => 6,
+            Binding::Trigger(Trigger::Right) => 7,
+            Binding::Button(XButton::Back) => 8,
+            Binding::Button(XButton::Start) => 9,
+            Binding::Button(XButton::Guide) => 10,
+            Binding::Button(XButton::LeftThumb) => 11,
+            Binding::Button(XButton::RightThumb) => 12,
+            Binding::Dpad(DpadDirection::Up) => 13,
+            Binding::Dpad(DpadDirection::Down) => 14,
+            Binding::Dpad(DpadDirection::Left) => 15,
+            Binding::Dpad(DpadDirection::Right) => 16,
+            Binding::Axis {
+                axis: Axis::X,
+                value: AXIS_MIN,
+            } => 17,
+            Binding::Axis {
+                axis: Axis::X,
+                value: AXIS_MAX,
+            } => 18,
+            Binding::Axis {
+                axis: Axis::Y,
+                value: AXIS_MIN,
+            } => 19,
+            Binding::Axis {
+                axis: Axis::Y,
+                value: AXIS_MAX,
+            } => 20,
+            Binding::Axis {
+                axis: Axis::Rx,
+                value: AXIS_MIN,
+            } => 21,
+            Binding::Axis {
+                axis: Axis::Rx,
+                value: AXIS_MAX,
+            } => 22,
+            Binding::Axis {
+                axis: Axis::Ry,
+                value: AXIS_MIN,
+            } => 23,
+            Binding::Axis {
+                axis: Axis::Ry,
+                value: AXIS_MAX,
+            } => 24,
+            _ => u8::MAX,
+        }
+    }
+
+    fn generated_zone_tokens_json() -> String {
+        let mut functions: Vec<(ksx_core::Binding, String)> =
+            ksx_core::preset::mappable_functions()
+                .iter()
+                .copied()
+                .map(|binding| (binding, ksx_config::function_name(&binding)))
+                .collect();
+        functions.sort_by(|(left, left_name), (right, right_name)| {
+            function_picker_rank(*left)
+                .cmp(&function_picker_rank(*right))
+                .then_with(|| left_name.cmp(right_name))
+        });
+
+        let tokens = ZoneTokens {
+            version: 1,
+            functions: functions.into_iter().map(|(_, name)| name).collect(),
+            xbox: ZONE_XBOX.iter().map(zone_token).collect(),
+            ds4: ZONE_DS4.iter().map(zone_token).collect(),
+        };
+        let mut json = serde_json::to_string_pretty(&tokens).expect("zone tokens serialize");
+        json.push('\n');
+        json
+    }
+
+    fn zone_tokens_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../studio-ui/tokens/zones.json")
+    }
+
+    /// The broken version hand-copied three TypeScript arrays. This gate makes
+    /// any vocabulary, spelling or art-table change fail until the one
+    /// committed handoff is explicitly regenerated.
+    #[test]
+    fn generated_zone_tokens_json_is_current() {
+        let path = zone_tokens_path();
+        let actual = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "could not read generated zone tokens at {}: {error}; run tools/studio-env/build-assets.ps1",
+                path.display()
+            )
+        });
+        assert_eq!(
+            actual,
+            generated_zone_tokens_json(),
+            "generated zone tokens are stale; run tools/studio-env/build-assets.ps1"
+        );
+    }
+
+    /// Explicit source-tree writer for the committed language-boundary file.
+    /// Ignored so an ordinary test run can only VERIFY generated source, never
+    /// modify the checkout underneath a concurrent Studio build.
+    #[test]
+    #[ignore = "writes studio-ui/tokens/zones.json"]
+    fn write_generated_zone_tokens_json() {
+        let path = zone_tokens_path();
+        std::fs::write(&path, generated_zone_tokens_json())
+            .unwrap_or_else(|error| panic!("could not write {}: {error}", path.display()));
+    }
+
     #[test]
     fn zone_tables_cover_every_mappable_function() {
-        const FUNCTIONS: [&str; 25] = [
-            "A",
-            "B",
-            "X",
-            "Y",
-            "lb",
-            "rb",
-            "lt",
-            "rt",
-            "back",
-            "start",
-            "guide",
-            "lthumb",
-            "rthumb",
-            "dpad.up",
-            "dpad.down",
-            "dpad.left",
-            "dpad.right",
-            "lx.min",
-            "lx.max",
-            "ly.min",
-            "ly.max",
-            "rx.min",
-            "rx.max",
-            "ry.min",
-            "ry.max",
-        ];
-        for table in [&ZONE_XBOX, &ZONE_DS4] {
-            let mut names: Vec<&str> = table.iter().map(|z| z.fn_name).collect();
+        // No literal list any more. ksx-core owns the SET of mappable functions,
+        // ksx-config owns their SPELLINGS, and this crate owns the ART — so the
+        // pin lives here and derives from the other two rather than any of the
+        // three transcribing the others. Both are dev-dependencies: the runtime
+        // boundary (`docs/M9-DECISION.md` §6) is untouched.
+        let mut want: Vec<String> = ksx_core::preset::mappable_functions()
+            .iter()
+            .map(ksx_config::function_name)
+            .collect();
+        want.sort_unstable();
+        for table in [ZONE_XBOX, ZONE_DS4] {
+            let mut names: Vec<String> = table.iter().map(|z| z.fn_name.to_owned()).collect();
             names.sort_unstable();
-            let mut want = FUNCTIONS.to_vec();
-            want.sort_unstable();
-            assert_eq!(names, want);
+            assert_eq!(
+                names, want,
+                "the zone table must cover exactly the vocabulary"
+            );
+            // Sorted-set equality alone would accept a duplicated zone paired
+            // with a missing one, so pin the count independently.
+            assert_eq!(
+                table.len(),
+                ksx_core::preset::MAPPABLE_COUNT,
+                "one zone per function, no duplicates"
+            );
             // Every zone stays inside the stage.
             for z in table.iter() {
                 assert!(
@@ -3430,6 +3769,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn shared_geometry_still_speaks_each_controller_persona() {
+        let xbox = |function: &str| {
+            ZONE_XBOX
+                .iter()
+                .find(|zone| zone.fn_name == function)
+                .expect("Xbox zone")
+        };
+        let sony = |function: &str| {
+            ZONE_DS4
+                .iter()
+                .find(|zone| zone.fn_name == function)
+                .expect("PlayStation zone")
+        };
+
+        assert_eq!(legend_label_for_persona("switchpro", xbox("lt")), "ZL");
+        assert_eq!(legend_label_for_persona("Switch Pro", xbox("lb")), "L");
+        assert_eq!(
+            legend_label_for_persona("switchpro", xbox("back")),
+            "Capture"
+        );
+        assert_eq!(legend_label_for_persona("switchpro", xbox("start")), "Plus");
+        assert_eq!(legend_label_for_persona("switchpro", xbox("guide")), "Home");
+        assert_eq!(
+            legend_label_for_persona("dualsense", sony("back")),
+            "Create"
+        );
+        assert_eq!(legend_label_for_persona("dualsense", sony("lt")), "L2");
+        assert_eq!(
+            hold_text_for_persona(
+                "switchpro",
+                &["lt".to_owned(), "back".to_owned(), "A".to_owned()]
+            ),
+            "ZL + Capture + A"
+        );
+    }
+
     /// Pins the mapper IR's slot layout: scalars by name, the two list slot
     /// names, the show count, and the single MapIsland island.
     #[test]
@@ -3459,6 +3835,7 @@ mod tests {
             array_slots,
             [
                 LIST_SLOT_TABS,
+                LIST_SLOT_INVENTORY,
                 LIST_SLOT_ZONES,
                 LIST_SLOT_ZONES_2,
                 LIST_SLOT_LEGEND,
@@ -3681,7 +4058,7 @@ mod tests {
     }
 
     /// FEATURE 1, Xbox. The vendored art is a line drawing with no letters on
-    /// it, so every zone must say what it IS — in the canonical colours, and
+    /// it, so every zone must say what it IS — in the canonical colors, and
     /// whether or not anything is bound to it. Requirement: "I can see G is mapped
     /// to A but I can't see the A xbox button".
     #[test]
@@ -3923,6 +4300,22 @@ mod tests {
             "Sony start label: {}",
             out.html
         );
+        assert!(
+            out.html
+                .contains(r#"<nav class="tabs" aria-label="Controllers">"#),
+            "the controller switcher is labeled navigation: {}",
+            out.html
+        );
+        assert!(
+            out.html.contains(r#"aria-current="page""#),
+            "the selected controller is announced: {}",
+            out.html
+        );
+        assert!(
+            !out.html.contains(r#"role="tablist""#),
+            "plain links must not claim incomplete tab semantics: {}",
+            out.html
+        );
     }
 
     /// No helper: read-only with a consumer remedy, while the technical
@@ -3934,7 +4327,7 @@ mod tests {
         payload.learn = LearnView::unavailable("no daemon control channel");
         let out = render_map(&page(), &payload, None);
         assert!(
-            out.html.contains("Controls are temporarily read-only"),
+            out.html.contains("Mapping is temporarily read-only"),
             "{}",
             out.html
         );
@@ -4123,7 +4516,7 @@ mod tests {
         let out = render_map(&page(), &payload, None);
 
         assert!(
-            out.html.contains("Controls need the background helper"),
+            out.html.contains("Mapping needs the background helper"),
             "the recovery headline is missing: {}",
             out.html
         );
@@ -4138,7 +4531,7 @@ mod tests {
         // Unmissable means BEFORE the content it is about.
         let banner = out
             .html
-            .find("Controls need the background helper")
+            .find("Mapping needs the background helper")
             .expect("banner present");
         let stage = out.html.find("stagecard").expect("stage present");
         assert!(
@@ -4968,15 +5361,63 @@ mod tests {
     /// diagonal is a column you can point at.
     #[test]
     fn the_grid_is_three_rings() {
+        // Stated as PROPERTIES, with no literal count, glyph run or band list
+        // left: M11 grows the control vocabulary (`docs/UNIVERSAL-IO.md` §3),
+        // and every literal here was a place the new size would have to be
+        // re-typed. The oracle is the ZONE TABLE, which is an independent path
+        // from `macro_columns` — deriving the expectation from the output
+        // itself would make this vacuous.
+
+        // P0 — `zones_for` is TOTAL: an unknown persona still draws a pad.
+        assert_eq!(
+            zones_for("something nobody has shipped").len(),
+            ZONE_XBOX.len(),
+            "an unrecognised persona must fall back, not render an empty stage"
+        );
+
+        // ksx-core's mechanism vocabulary, for the independent check in P4.
+        let as_core = |m: Mechanism| match m {
+            Mechanism::Dpad => ksx_core::DirMechanism::Dpad,
+            Mechanism::LeftStick => ksx_core::DirMechanism::LeftStick,
+            Mechanism::RightStick => ksx_core::DirMechanism::RightStick,
+        };
+
+        let mut all_tokens: Vec<Vec<String>> = Vec::new();
+        let mut all_bands: Vec<Vec<String>> = Vec::new();
+
         for persona in ["xbox360", "playstation"] {
+            let zones = zones_for(persona);
             let columns = macro_columns(persona);
+
+            // Mechanisms in ZONE-TABLE first-appearance order.
+            let mut mechs: Vec<Mechanism> = Vec::new();
+            for z in zones {
+                if let Some(m) = Mechanism::of(z.fn_name) {
+                    if !mechs.contains(&m) {
+                        mechs.push(m);
+                    }
+                }
+            }
+            let non_dir = zones
+                .iter()
+                .filter(|z| Mechanism::of(z.fn_name).is_none())
+                .count();
+
+            // P1 — the count, derived: every non-direction zone keeps its
+            // column, and each mechanism's cardinals become a full ring.
+            assert_eq!(
+                mechs.len(),
+                Mechanism::ALL.len(),
+                "{persona}: a mechanism has no zones"
+            );
             assert_eq!(
                 columns.len(),
-                MACRO_COLUMN_COUNT,
-                "{persona}: 25 zones → 37 columns"
+                non_dir + mechs.len() * RING.len(),
+                "{persona}: non-direction zones plus one ring per mechanism"
             );
-            // Every mappable function still has exactly one column…
-            for z in zones_for(persona).iter() {
+
+            // P2 — one column per zone.
+            for z in zones {
                 assert_eq!(
                     columns.iter().filter(|c| c.token == z.fn_name).count(),
                     1,
@@ -4984,13 +5425,18 @@ mod tests {
                     z.fn_name
                 );
             }
-            // …plus twelve new picks nobody has had before.
+
+            // P3 — the diagonals nobody could point at before.
             let diagonals: Vec<&str> = columns
                 .iter()
                 .filter(|c| c.token.starts_with("diag:"))
                 .map(|c| c.token.as_str())
                 .collect();
-            assert_eq!(diagonals.len(), 12, "{persona}: {diagonals:?}");
+            assert_eq!(
+                diagonals.len(),
+                mechs.len() * Diag::ALL.len(),
+                "{persona}: {diagonals:?}"
+            );
             for mechanism in Mechanism::ALL {
                 for diag in Diag::ALL {
                     assert!(
@@ -4999,20 +5445,73 @@ mod tests {
                     );
                 }
             }
-            // RING ORDER — ↑ ↖ ← ↙ ↓ ↘ → ↗ — is what makes a motion a shape.
-            let glyphs: Vec<&str> = columns
-                .iter()
-                .filter(|c| c.idcls.starts_with("maccolid ") || c.token.starts_with("diag:"))
-                .map(|c| c.glyph.as_str())
-                .collect();
-            assert_eq!(
-                glyphs,
-                ["↑", "↖", "←", "↙", "↓", "↘", "→", "↗"].repeat(3),
-                "{persona}"
-            );
-            // The band, and the fact it exists for: three identical rings.
-            let bands = macro_groups(Some(&slot(1, persona, "p")));
-            let SlotValue::Array(bands) = bands else {
+
+            // P4 — RING ORDER, and where each position actually POINTS.
+            //
+            // Checking the token against `Mechanism::function` would be a
+            // tautology: `macro_columns` builds it with that very call.
+            // MEASURED — swapping two of its arms leaves both this test and the
+            // literal-glyph one it replaced green. So the cardinal claim is
+            // routed through an INDEPENDENT oracle instead: the token is parsed
+            // by the file format and handed to `ksx_core::socd::pointing`, "the
+            // one function" for where a binding points, which is the same
+            // definition SOCD and the diagonal lens are built on.
+            for m in &mechs {
+                let idx: Vec<usize> = columns
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.band == m.band() && c.idcls.starts_with("maccolid "))
+                    .map(|(i, _)| i)
+                    .collect();
+                assert_eq!(
+                    idx.len(),
+                    RING.len(),
+                    "{persona}: {m:?}'s ring is not one full turn"
+                );
+                assert!(
+                    idx.windows(2).all(|w| w[1] == w[0] + 1),
+                    "{persona}: {m:?}'s ring is interleaved with another band"
+                );
+                for (k, pos) in RING.iter().enumerate() {
+                    let c = &columns[idx[k]];
+                    let (glyph, token) = match pos {
+                        RingPos::Cardinal { vertical, positive } => (
+                            cardinal_glyph(*vertical, *positive).to_owned(),
+                            m.function(*vertical, *positive).to_owned(),
+                        ),
+                        RingPos::Diagonal(d) => (d.glyph().to_owned(), diag_token(*m, *d)),
+                    };
+                    assert_eq!(c.glyph, glyph, "{persona}: {m:?} ring position {k}");
+                    assert_eq!(
+                        c.token, token,
+                        "{persona}: {m:?} ring position {k} drives the wrong control"
+                    );
+                    if let RingPos::Cardinal { vertical, positive } = pos {
+                        let binding = ksx_config::parse_function(&c.token).unwrap_or_else(|e| {
+                            panic!("{persona}: {} is unparseable: {e}", c.token)
+                        });
+                        let points = ksx_core::socd::pointing(binding)
+                            .unwrap_or_else(|| panic!("{persona}: {} points nowhere", c.token));
+                        assert_eq!(
+                            points.mechanism,
+                            as_core(*m),
+                            "{persona}: {} is not a {m:?} control",
+                            c.token
+                        );
+                        assert_eq!(
+                            (points.vertical, points.positive),
+                            (*vertical, *positive),
+                            "{persona}: {m:?} position {k} draws {glyph} but {} points elsewhere",
+                            c.token
+                        );
+                    }
+                }
+            }
+
+            // P5 — the bands. `macro_groups` is built FROM `macro_columns`, so
+            // comparing it to a de-duplicated run of the columns is the honest
+            // check; the content is in the two asserts under it.
+            let SlotValue::Array(bands) = macro_groups(Some(&slot(1, persona, "p"))) else {
                 panic!("bands are a list")
             };
             let labels: Vec<String> = bands
@@ -5025,21 +5524,7 @@ mod tests {
                     other => panic!("{other:?}"),
                 })
                 .collect();
-            assert_eq!(
-                labels,
-                [
-                    "SHOULDERS",
-                    "FACE",
-                    "SYSTEM",
-                    "LEFT STICK",
-                    "D-PAD",
-                    "RIGHT STICK"
-                ],
-                "{persona}"
-            );
-            // Spans sum to the column count, or the header would not line up
-            // with the matrix under it.
-            let spans: usize = bands
+            let spans: Vec<usize> = bands
                 .iter()
                 .map(|b| match b {
                     SlotValue::Object(fields) => match &fields[1].1 {
@@ -5051,9 +5536,80 @@ mod tests {
                     },
                     other => panic!("{other:?}"),
                 })
-                .sum();
-            assert_eq!(spans, MACRO_COLUMN_COUNT, "{persona}");
+                .collect();
+
+            let mut runs: Vec<(&str, usize)> = Vec::new();
+            for c in &columns {
+                match runs.last_mut() {
+                    Some((b, n)) if *b == c.band => *n += 1,
+                    _ => runs.push((c.band, 1)),
+                }
+            }
+
+            // The band ORDER is a design decision, not a derived property, and it
+            // does not grow when the vocabulary does — so it stays pinned by a
+            // literal. M11 is about removing literals that track the vocabulary
+            // SIZE; dropping this one only cost the ability to catch a reordered
+            // zone table, which is measured: swapping two band groups leaves the
+            // run-derived comparison below green.
+            assert_eq!(
+                labels,
+                [
+                    "SHOULDERS",
+                    "FACE",
+                    "SYSTEM",
+                    "LEFT STICK",
+                    "D-PAD",
+                    "RIGHT STICK"
+                ],
+                "{persona}: the header bands changed order"
+            );
+            assert_eq!(
+                labels,
+                runs.iter()
+                    .map(|(b, _)| (*b).to_owned())
+                    .collect::<Vec<_>>(),
+                "{persona}: the header does not describe the columns under it"
+            );
+            assert_eq!(
+                runs.iter()
+                    .map(|(b, _)| *b)
+                    .collect::<std::collections::HashSet<_>>()
+                    .len(),
+                runs.len(),
+                "{persona}: a band appears in two runs — one header cannot span it"
+            );
+            assert_eq!(
+                runs.iter()
+                    .map(|(b, _)| *b)
+                    .filter(|b| Mechanism::ALL.iter().any(|m| m.band() == *b))
+                    .collect::<Vec<_>>(),
+                mechs.iter().map(|m| m.band()).collect::<Vec<_>>(),
+                "{persona}: the grid's mechanism order left the zone table's"
+            );
+
+            // P6 — per-band spans, not merely their sum: a band split in two
+            // still totals correctly.
+            assert_eq!(
+                spans,
+                runs.iter().map(|(_, n)| *n).collect::<Vec<_>>(),
+                "{persona}"
+            );
+            assert_eq!(spans.iter().sum::<usize>(), columns.len(), "{persona}");
+
+            all_tokens.push(columns.iter().map(|c| c.token.clone()).collect());
+            all_bands.push(labels);
         }
+
+        // P7 — a function added to one zone table only.
+        let (mut a, mut b) = (all_tokens[0].clone(), all_tokens[1].clone());
+        a.sort();
+        b.sort();
+        assert_eq!(a, b, "the two personas do not offer the same controls");
+        assert_eq!(
+            all_bands[0], all_bands[1],
+            "the two personas band differently"
+        );
     }
 
     /// THE ROUND TRIP, which is the whole promise: a step nobody made through
@@ -5227,7 +5783,7 @@ mod tests {
         // The digits are a LOOKUP KEY, not a label: no numpad digit reaches the
         // glyph row. Every direction header is one arrow and nothing else — a
         // second line of digits under only 24 of 37 columns would make the
-        // header ragged and re-introduce exactly the ornament the coloured
+        // header ragged and re-introduce exactly the ornament the colored
         // discs were stripped for. (`L3`/`R3` are the controls' own names.)
         for column in macro_columns("xbox360") {
             if Mechanism::of(&column.token).is_none() && !column.token.starts_with("diag:") {
@@ -5325,10 +5881,12 @@ mod tests {
         let out = render_map(&page(), &sample(), None);
         let html = &out.html;
 
-        // 4 steps × 37 columns, every cell addressable as `step|token`.
+        // 4 steps × every column, each cell addressable as `step|token`. The
+        // width is derived, not written down; `the_grid_is_three_rings` P7
+        // proves both personas expose the same columns, so naming one is safe.
         assert_eq!(
             html.matches(r#"class="maccell"#).count(),
-            4 * MACRO_COLUMN_COUNT,
+            4 * macro_columns("xbox360").len(),
             "one cell per (step, column): {html}"
         );
         assert!(html.contains(r#"data-cell="0|dpad.down""#), "{html}");
@@ -5377,7 +5935,7 @@ mod tests {
             "the authored unit survives: {html}"
         );
         // Columns: the persona's identity GLYPHS, but UNIFORM — no `id-*`
-        // accent class reaches a grid header, so the coloured discs the art and
+        // accent class reaches a grid header, so the colored discs the art and
         // the legend wear cannot follow the glyph in here (a header row of them
         // at column width is noise, not information).
         assert!(html.contains(r#"class="maccolid""#), "{html}");
@@ -6170,7 +6728,7 @@ mod tests {
         );
         assert_eq!(
             out.html.matches(r#"class="maccell"#).count(),
-            MACRO_COLUMN_COUNT,
+            macro_columns("xbox360").len(),
             "one step = one row of cells: {}",
             out.html
         );

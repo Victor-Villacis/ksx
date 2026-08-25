@@ -308,8 +308,8 @@ Assert-Check 'lock.compiler-extension-closure' `
      $lock.staticRejectPolicy.sourceGeneratorExecutionAuthorized -eq $false -and
      $lock.staticRejectPolicy.workloadResolverEnabled -eq $false) `
     'All compiler-extension inputs are fail-closed and source-generator execution is unauthorized.'
-Assert-Check 'lock.staged-count' ($lock.sourceCandidate.stagedInputFileCount -eq 241) `
-    'Twelve candidate, one retained, and 228 profiles are staged.'
+Assert-Check 'lock.staged-count' ($lock.sourceCandidate.stagedInputFileCount -eq 244) `
+    'Fifteen candidate, one retained, and 228 profiles are staged.'
 Assert-Check 'lock.upstream-bom-canonicalization' `
     ($lock.canonicalization -ceq
         'workspace-authored text is strict UTF-8 without BOM, replaces CRLF with LF, and rejects bare CR; pinned upstream profile text is strict UTF-8, preserves an existing BOM, replaces CRLF with LF, and rejects bare CR; framed trees hash ordinal relative path, NUL, selected bytes, NUL' -and
@@ -319,7 +319,7 @@ Assert-Check 'lock.upstream-bom-canonicalization' `
     'The canonical source contract preserves the one exact upstream profile BOM.'
 Assert-Check 'lock.candidate-tree' `
     ($lock.sourceCandidate.normalizedTreeSha256 -ceq
-        '4AC8E4AAD314BC44BE9EC629AD85CCAD3739DA85406857520E6E6B9FCFC88393') `
+        'C5B1B3223762BDDC33FE5BCCBCD0962A6C62757B8238AA7DE9D1F38E39F0408F') `
     'S1.5d candidate tree is exact.'
 $artifactExpectationPropertyNames = @(
     $lock.artifactExpectation.PSObject.Properties | ForEach-Object { [string]$_.Name })
@@ -629,7 +629,7 @@ foreach ($literal in @(
     "@('100644', '100755')", '.NETCoreApp,Version=v10.0/win-x64',
     'System.Reflection.Metadata.MetadataUpdater.IsSupported',
     '-noAutoResponse', '--depth=1', '--no-tags', 'Assert-NoReparsePoints',
-    'Stage-ExactCandidate', '$expectedPaths.Count -ne 241', 'Get-FramedTreeSha256',
+    'Stage-ExactCandidate', '$expectedPaths.Count -ne 244', 'Get-FramedTreeSha256',
     '$actualUtf8BomPaths',
     "-ByteMode Raw", "-ByteMode Normalized", 'Invoke-CandidateBuild',
     "-Name 'ksx-hm-s15e-build-a'", "-Name 'ksx-hm-s15e-build-b'",
@@ -952,7 +952,7 @@ foreach ($literal in @(
     'instrument operating-system sockets',
     'AddressOfEntryPoint == 0', 'EntryPointTokenOrRelativeVirtualAddress == 0',
     'zero native import modules and symbols',
-    'do not upload the DLL or PDB', '241 input files', 'quiescent, hash-bound'
+    'do not upload the DLL or PDB', '244 input files', 'quiescent, hash-bound'
 )) {
     Assert-Check ('readme.anchor.' + $readmeAnchorIndex) `
         (Has-Literal $readme $literal) 'README preserves the observation-only truth boundary.'

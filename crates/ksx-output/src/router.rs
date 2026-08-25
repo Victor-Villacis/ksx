@@ -415,7 +415,10 @@ mod tests {
     }
 
     #[test]
-    fn a_lazy_production_router_refuses_before_opening_either_driver() {
+    fn a_lazy_production_router_opens_nothing_until_a_persona_is_plugged() {
+        // 2026-08-20 flip: with every persona pluggable there is no refusal
+        // to observe, so laziness is pinned directly — construction opens
+        // nothing, and plugging a ViGEm persona opens only ViGEm.
         let vigem_builds = Arc::new(AtomicUsize::new(0));
         let counter = vigem_builds.clone();
         let mut r = RoutedBackend::standard_lazy(Box::new(move || {
@@ -423,13 +426,13 @@ mod tests {
             Ok(Box::new(MockBackend::new()) as Box<dyn VirtualPadBackend>)
         }));
 
-        let err = r.plug_persona(Persona::SwitchPro).unwrap_err();
-        assert!(matches!(
-            err,
-            OutputError::PersonaNotImplemented(Persona::SwitchPro)
-        ));
         assert_eq!(vigem_builds.load(Ordering::Relaxed), 0);
         assert!(!r.vigem_started());
+        assert!(!r.hidmaestro_started());
+
+        r.plug_persona(Persona::Xbox360).unwrap();
+        assert_eq!(vigem_builds.load(Ordering::Relaxed), 1);
+        assert!(r.vigem_started());
         assert!(!r.hidmaestro_started());
     }
 
@@ -490,24 +493,19 @@ mod tests {
     /// on a box where HIDMaestro is installed the probe says yes, and the pad
     /// still cannot be created. A gate that flips with an install would offer a
     /// persona that plugs no better than before.
+    // (The gated-persona no-probe refusal test retires with its subjects —
+    // retro leg flip 2026-08-20. It returns verbatim with the next gated
+    // persona; git history holds the shape.)
+
     #[test]
-    fn the_production_router_refuses_unbuildable_personas_without_probing() {
+    fn the_cabinet_personas_never_touch_the_hidmaestro_side() {
+        // 2026-08-20 flip: no unbuildable persona remains, so the pinned
+        // property narrows to its second half — the cabinet's own personas
+        // never touch the HIDMaestro side.
         let mut r = RoutedBackend::standard(Box::new(MockBackend::new()));
-        for persona in [Persona::SwitchPro, Persona::XboxSeries] {
-            let err = r.plug_persona(persona).unwrap_err();
-            assert!(
-                matches!(err, OutputError::PersonaNotImplemented(p) if p == persona),
-                "{persona}: {err}"
-            );
-            assert!(!err.is_hidmaestro_missing(), "{persona}: {err}");
-            assert!(err.is_not_implemented(), "{persona}: {err}");
-        }
-        // Nothing was constructed, so nothing was probed — the refusal is the
-        // same on a machine with HIDMaestro installed as on one without.
-        assert!(!r.hidmaestro_started());
-        // ...and the cabinet's own personas are untouched.
         assert!(r.plug_persona(Persona::Xbox360).is_ok());
         assert!(r.plug_persona(Persona::PlayStation).is_ok());
+        assert!(!r.hidmaestro_started());
     }
 
     #[test]

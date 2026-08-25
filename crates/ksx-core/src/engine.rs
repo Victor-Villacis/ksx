@@ -1,17 +1,20 @@
 //! The translation engine: `KeyEvent`s in, `PadDelta`s out.
 //!
-//! KSX compiles every native preset into a dense dispatch table. All output
-//! categories use `Binding` equality for many-key aggregation, so a control
-//! releases only when every key driving that exact endpoint is up.
+//! KSX compiles every native preset into a dense dispatch table. Digital
+//! categories aggregate by [`PadControl`] equality, so a control releases only
+//! when every holder driving that endpoint is up. The four stick axes carry a
+//! magnitude as well, so they resolve through [`SlotRuntime::resolve`] instead
+//! of aggregating — one rule, stated in `docs/UNIVERSAL-IO.md` §2.
 
 use std::collections::HashMap;
 
 use smallvec::SmallVec;
 
+use crate::control::PadControl;
 use crate::device::{DeviceId, KeyEvent};
 use crate::key::Key;
 use crate::macros::{Interrupt, OnRelease, Repeat, Retrigger};
-use crate::pad::{Axis, PadState, Trigger, AXIS_CENTER};
+use crate::pad::{Axis, PadState, Trigger, XButtons, AXIS_CENTER};
 use crate::preset::{Binding, Chord, Preset};
 use crate::slot::{SlotSpec, MAX_SLOTS};
 
@@ -88,9 +91,9 @@ struct ChordRt {
 ///
 /// A macro STEP is an ordinary holder: `holder_bindings[first_holder + i]` is
 /// step `i`'s `hold` set, and the step is "held" exactly while the macro is on
-/// it. That is the whole integration — the all-keys-up rule, the opposite-axis
-/// snap, the releases-before-presses order and the one-batch discipline are the
-/// chord machinery, unchanged, so a macro can never strand a button that a
+/// it. That is the whole integration — the all-keys-up rule, the analog
+/// resolver, the releases-before-presses order and the one-batch discipline are
+/// the chord machinery, unchanged, so a macro can never strand a button that a
 /// chord could not.
 struct MacroRt {
     /// **Absolute** end-of-step offsets from the macro's start, in ms, with the
@@ -239,7 +242,7 @@ impl Timers {
 /// One auto-firing endpoint (docs/INPUT-TRANSFORMS.md §3).
 ///
 /// A turbo endpoint is a HOLDER like any other — it presses and releases
-/// through `apply_scan`, joins the all-keys-up and opposite-axis tables, and
+/// through `apply_scan`, joins the all-keys-up and analog holder tables, and
 /// batches its deltas with everything else. What makes it turbo is only that
 /// its held bit is `running && on` instead of "a key is down": the sources say
 /// whether the player is asking for the button at all, and the phase says what
@@ -268,6 +271,60 @@ struct TurboRt {
     on: bool,
 }
 
+/// One latched endpoint (docs/INPUT-TRANSFORMS.md §2 catalog item 8:
+/// toggle-hold / sticky hold).
+///
+/// A latch is a HOLDER like any other — it presses and releases through
+/// `apply_scan`, joins the all-keys-up and analog holder tables, and batches
+/// its deltas with everything else. What makes it a latch is only that its
+/// held bit is `latched` instead of "a key is down": the sources FLIP it on
+/// their rising edge and are otherwise out of the picture, which is what lets
+/// the player let go while the endpoint stays held.
+///
+/// Deliberately timer-free: unlike turbo there is no phase to schedule, so
+/// `Timers`/`TimerKind` are untouched and a latch costs the tick path nothing.
+#[derive(Clone, Debug)]
+struct ToggleRt {
+    /// The endpoint this latches. Its only driver among binding rows — the
+    /// keys and chords that used to press it directly were rewired into
+    /// `sources` at build time (or, when the endpoint also has a rate, this
+    /// latch itself became the turbo's source: §3a's toggle-turbo).
+    binding: Binding,
+    /// Holders whose RISING edge flips the latch: dense keys and chords.
+    /// Macro steps are never sources — a macro owns its own timeline.
+    sources: SmallVec<[u32; 4]>,
+    /// Was any source driving at the last sync? The edge detector: Windows
+    /// autorepeat re-sends key-down without moving the key SET, so `driving`
+    /// stays true across repeats and the latch flips exactly once per press —
+    /// the same reason macros read `edge` (see `handle_at`).
+    source_was: bool,
+    latched: bool,
+}
+
+/// One opposing control under an ORDER-AWARE SOCD policy
+/// (docs/INPUT-TRANSFORMS.md §2.6: last-input / first-input).
+///
+/// The static policies (neutral, up-priority) are generated chords and never
+/// build one of these. This is the order memory a chord cannot express: which
+/// side rose more recently. Its whole OUTPUT is bits in the same `consumed`
+/// mask chord consumption writes, so suppression, resumption, all-keys-up and
+/// the one-batch release discipline are the existing machinery untouched.
+#[derive(Clone, Debug)]
+struct SocdRt {
+    /// Dense key ids driving the NEGATIVE half (left/down) — keys driving
+    /// only that half; a self-opposing key belongs to neither side.
+    neg: SmallVec<[u32; 2]>,
+    /// ...and the POSITIVE half (right/up).
+    pos: SmallVec<[u32; 2]>,
+    /// Was each side driving at the last sync? The edge detectors — sides
+    /// rise when the GROUP goes from silent to driving, so autorepeat and a
+    /// second key on an already-driving side are not new presses.
+    neg_was: bool,
+    pos_was: bool,
+    /// When both sides are held, which one wins. Meaningful only then.
+    pos_wins: bool,
+}
+
 struct SlotRuntime {
     number: u8,
     /// Index into `Engine::devices`.
@@ -277,11 +334,33 @@ struct SlotRuntime {
     /// (`keyboard`, else `mouse`). Events from the slot's *other* device only
     /// update that key's own heldness — a chord never spans two devices.
     chord_device: Option<u8>,
-    /// Endpoint -> ids of every HOLDER driving it (all-keys-up rule). Ids
-    /// below `chord_base` are dense keys; ids at or above it are chords.
-    endpoint_keys: HashMap<Binding, SmallVec<[u32; 4]>>,
-    /// Flat axis entries for the opposite-axis scan on release (same id space).
+    /// DIGITAL endpoint -> ids of every HOLDER driving it (all-keys-up rule).
+    /// Ids below `chord_base` are dense keys; ids at or above it are chords.
+    ///
+    /// Axes are deliberately ABSENT. Their holder table is `axis_entries`,
+    /// which keys on `(axis, value)` rather than on the endpoint alone, and the
+    /// two cannot be merged: the toggle and turbo rewiring below drops a holder
+    /// from an endpoint with `keys.retain(|k| !sources.contains(k))`, which is
+    /// right for a button but would strip a key's OTHER axis demand — the
+    /// self-opposing key described on [`SocdRt::neg`].
+    endpoint_keys: HashMap<PadControl, SmallVec<[u32; 4]>>,
+    /// Flat ANALOG holder table: every `(axis, value, holder)` this slot can
+    /// drive, in the same id space. `resolve` scans it on every axis edge.
     axis_entries: Vec<(Axis, i16, u32)>,
+    /// Per-axis memory of which SIGN rose most recently (`-1`, `0`, `+1`),
+    /// indexed by [`axis_slot`]. This is the entire recency input the resolver
+    /// needs: magnitude arbitrates WITHIN a sign, so ordering only ever has to
+    /// break sign against sign. Four bytes, no allocation, and — unlike a
+    /// holder-indexed array — it exists on non-stateful slots too, which is
+    /// where the axis suites run.
+    ///
+    /// Zero is a sign of its own and NOT a weak positive. `lx.0` is an
+    /// authorable binding (`ksx_config::parse_function`) whose entire meaning
+    /// is "centre this axis"; bucketing it with the positives would make it
+    /// lose `max()` to any held positive holder while still beating every
+    /// negative one, so the same binding would centre a left lean and do
+    /// nothing to a right one.
+    axis_sign_last: [i8; 4],
     current: PadState,
     last_emitted: PadState,
 
@@ -335,9 +414,40 @@ struct SlotRuntime {
     /// that dense keys.
     turbo_base: u32,
 
-    /// `false` ⇒ no chords, macros or turbo: this slot takes the pre-chord code
-    /// path end to end, exactly as it did before any of them existed.
+    // ---- toggle runtime ----------------------------------------------------
+    /// Latched endpoints; EMPTY for a slot with none.
+    toggle: Vec<ToggleRt>,
+    /// First toggle holder id (`turbo_base` + turbo count). Holders at or
+    /// above it are latches; the full ordering is dense keys < chords <
+    /// macro steps < turbo < toggle, written down once in [`Self::holder_now`].
+    toggle_base: u32,
+
+    // ---- order-aware SOCD runtime ------------------------------------------
+    /// One entry per opposing control; EMPTY unless the slot's policy is
+    /// last-input or first-input (the static policies are chords).
+    socd: Vec<SocdRt>,
+    /// `true` = last-input (the riser wins), `false` = first-input (the
+    /// incumbent wins). Meaningless while `socd` is empty.
+    socd_last: bool,
+    /// Every key in any side, deduped — joins the scan like `chord_keys`, so
+    /// a suppression change is applied in the same batch as its cause.
+    socd_keys: SmallVec<[u32; 8]>,
+
+    /// `false` ⇒ no chords, macros, turbo or toggles: this slot takes the
+    /// pre-chord code path end to end, exactly as it did before any of them
+    /// existed.
     stateful: bool,
+}
+
+/// Dense `0..4` index for an [`Axis`]. The discriminants are wire bit flags
+/// (1/2/4/8), so they cannot index an array directly.
+const fn axis_slot(axis: Axis) -> usize {
+    match axis {
+        Axis::X => 0,
+        Axis::Y => 1,
+        Axis::Rx => 2,
+        Axis::Ry => 3,
+    }
 }
 
 impl SlotRuntime {
@@ -350,19 +460,26 @@ impl SlotRuntime {
         }
     }
 
-    fn press(&mut self, binding: Binding) {
-        match binding {
-            Binding::Button(b) => self.current.buttons |= b.flag(),
-            Binding::Trigger(Trigger::Left) => self.current.lt = u8::MAX,
-            Binding::Trigger(Trigger::Right) => self.current.rt = u8::MAX,
-            Binding::Axis { axis, value } => *self.axis_field(axis) = value,
-            Binding::Dpad(d) => self.current.buttons |= d.flag(),
-            // A consume-only chord drives no endpoint — its entire effect is
-            // the suppression of its constituents (docs/INPUT-TRANSFORMS.md
-            // §2.6). Unreachable in practice: `build` never registers it as a
-            // holder binding.
-            Binding::Consume => {}
-        }
+    /// A holder's demand ROSE. Stamps the axis sign the resolver arbitrates
+    /// with, then resolves the endpoint over the post-event holder set — the
+    /// very same call [`Self::release`] makes, which is the whole point.
+    fn press(&mut self, binding: Binding, down: &[u64]) {
+        // A consume-only chord drives no endpoint — its entire effect is the
+        // suppression of its constituents (docs/INPUT-TRANSFORMS.md §2.6).
+        // Unreachable in practice: `build` never registers it as a holder
+        // binding.
+        let Some(control) = PadControl::of(binding) else {
+            return;
+        };
+        let demand = match binding {
+            Binding::Axis { axis, value } => {
+                self.axis_sign_last[axis_slot(axis)] = value.signum() as i8;
+                value
+            }
+            // Digital: presence is the entire signal and the number is unread.
+            _ => 0,
+        };
+        self.resolve(control, Some(demand), down);
     }
 
     /// Is this holder currently driving its bindings?
@@ -378,48 +495,110 @@ impl SlotRuntime {
         bit(&self.held, id)
     }
 
-    /// `down` is the event device's key bitset, already updated for the
-    /// triggering release.
+    /// A holder's demand FELL. `down` is the event device's key bitset,
+    /// already updated for the triggering release.
     fn release(&mut self, binding: Binding, down: &[u64]) {
-        // All-keys-up rule: the endpoint stays active while ANY holder mapped
-        // to it (on this device) is still held.
-        if let Some(keys) = self.endpoint_keys.get(&binding) {
-            if keys.iter().any(|&k| self.holds(k, down)) {
-                return;
+        let Some(control) = PadControl::of(binding) else {
+            return;
+        };
+        self.resolve(control, None, down);
+    }
+
+    /// The one rule (`docs/UNIVERSAL-IO.md` §2).
+    ///
+    /// > A digital control is the OR of its holders. An analog control takes
+    /// > the sign of the most recent rising demand on that axis and, among
+    /// > currently held holders of that sign, the largest magnitude; a control
+    /// > with no holder is neutral. Press and release run the same function
+    /// > over the post-event holder set.
+    ///
+    /// This subsumes the old `opposite_snap`, which only ever consulted holders
+    /// of the OPPOSITE sign and so centred an axis whose surviving holders were
+    /// all same-sign — the ladder bug. Running the identical function on both
+    /// edges is what makes that unrepresentable rather than merely fixed.
+    ///
+    /// `rising` is the demand of the holder whose edge caused this call, and
+    /// `None` on release. It is SEEDED rather than looked up because on the
+    /// non-stateful path `down` is the event *device's* bitset only (see
+    /// [`Engine::handle_at`]) while holder ids are global, so a slot bound to
+    /// both a keyboard and a mouse cannot always see its own press through
+    /// [`Self::holds`]. That asymmetry predates this function — `holds` has
+    /// always had it on the release path — and is deliberately not widened
+    /// here.
+    fn resolve(&mut self, control: PadControl, rising: Option<i16>, down: &[u64]) {
+        if let PadControl::Axis(axis) = control {
+            // The largest magnitude per SIGN, carried as the extreme VALUE so a
+            // custom-valued binding keeps its own number rather than snapping to
+            // a hardcoded extreme. Zero is its own sign: a demand for centre,
+            // not a weak positive.
+            let (mut neg, mut pos): (Option<i16>, Option<i16>) = (None, None);
+            let mut zero = false;
+            let mut bucket = |v: i16| match v.signum() {
+                -1 => neg = Some(neg.map_or(v, |b: i16| b.min(v))),
+                1 => pos = Some(pos.map_or(v, |b: i16| b.max(v))),
+                _ => zero = true,
+            };
+            if let Some(v) = rising {
+                bucket(v);
             }
+            for &(a, v, k) in &self.axis_entries {
+                if a == axis && self.holds(k, down) {
+                    bucket(v);
+                }
+            }
+            // The most recent sign wins outright while it still has a holder.
+            // That is what makes SOCD's "last press wins" fall out for free, and
+            // it is load-bearing: AXIS_MIN and AXIS_MAX are ±32767, an EXACT
+            // magnitude tie that no comparison of deflections could break.
+            let value = match self.axis_sign_last[axis_slot(axis)] {
+                -1 if neg.is_some() => neg.unwrap_or(AXIS_CENTER),
+                1 if pos.is_some() => pos.unwrap_or(AXIS_CENTER),
+                0 if zero => AXIS_CENTER,
+                // Its last holder is gone. Fall back to the largest deflection
+                // still held; a centre demand has magnitude 0 and so yields to
+                // any real one, which is why `zero` is not consulted here.
+                _ => match (neg, pos) {
+                    (None, None) => AXIS_CENTER,
+                    (Some(n), None) => n,
+                    (None, Some(p)) => p,
+                    (Some(n), Some(p)) => {
+                        if p.unsigned_abs() >= n.unsigned_abs() {
+                            p
+                        } else {
+                            n
+                        }
+                    }
+                },
+            };
+            *self.axis_field(axis) = value;
+            return;
         }
 
-        match binding {
-            Binding::Button(b) => self.current.buttons &= !b.flag(),
-            Binding::Trigger(Trigger::Left) => self.current.lt = 0,
-            Binding::Trigger(Trigger::Right) => self.current.rt = 0,
-            Binding::Axis { axis, value } => {
-                let snap = self.opposite_snap(axis, value, down);
-                *self.axis_field(axis) = snap.unwrap_or(AXIS_CENTER);
-            }
-            Binding::Dpad(d) => self.current.buttons &= !d.flag(),
-            Binding::Consume => {}
+        // Digital: ON while the causing holder is rising, or while ANY holder
+        // mapped to this endpoint is still held (the all-keys-up rule,
+        // unchanged). Writing a bit that is already set is a no-op that
+        // `collect_deltas` diffs away, so this is observationally identical to
+        // the early-return shape it replaces.
+        let on = rising.is_some()
+            || self
+                .endpoint_keys
+                .get(&control)
+                .is_some_and(|ks| ks.iter().any(|&k| self.holds(k, down)));
+        match control {
+            PadControl::Button(b) => self.set_buttons(b.flag(), on),
+            PadControl::Dpad(d) => self.set_buttons(d.flag(), on),
+            PadControl::Trigger(Trigger::Left) => self.current.lt = if on { u8::MAX } else { 0 },
+            PadControl::Trigger(Trigger::Right) => self.current.rt = if on { u8::MAX } else { 0 },
+            PadControl::Axis(_) => unreachable!("the analog arm returns above"),
         }
     }
 
-    /// Opposite-axis snap: releasing an axis binding while an opposite-sign
-    /// binding on the same axis is held snaps to the held binding's OWN bound
-    /// value instead of hardcoding Min/Max, so custom-valued opposites work.
-    /// Several held opposite bindings resolve deterministically to the largest deflection
-    /// (max `|value|`; build order breaks exact ties).
-    fn opposite_snap(&self, axis: Axis, released: i16, down: &[u64]) -> Option<i16> {
-        let mut best: Option<i16> = None;
-        for &(a, v, k) in &self.axis_entries {
-            let opposite = (released < 0 && v > 0) || (released > 0 && v < 0);
-            if a != axis || !opposite || !self.holds(k, down) {
-                continue;
-            }
-            best = Some(match best {
-                Some(b) if b.unsigned_abs() >= v.unsigned_abs() => b,
-                _ => v,
-            });
+    fn set_buttons(&mut self, flag: XButtons, on: bool) {
+        if on {
+            self.current.buttons |= flag;
+        } else {
+            self.current.buttons &= !flag;
         }
-        best
     }
 
     // ---- chords ------------------------------------------------------------
@@ -454,6 +633,17 @@ impl SlotRuntime {
         timers: &mut Timers,
     ) {
         self.recompute_chords(down);
+        // Order-aware SOCD adds its suppression to the mask chords just
+        // wrote, BEFORE anything reads it: a user's chord over the pair has
+        // already consumed its keys (so neither side is "driving" and the
+        // chord wins), and the latch/turbo passes below see the settled mask.
+        self.sync_socd(down);
+        // After consumption, before turbo: a latch's sources are dense keys
+        // and chords, both settled by now — and a latch can itself be a turbo
+        // SOURCE (§3a's toggle-turbo), so it must have its final answer before
+        // `sync_turbo` asks. Whatever flips is `mark`ed and joins the same
+        // delta batch as the key press that caused it.
+        self.sync_toggle(down);
         // After consumption, before the scan is built: a turbo endpoint's
         // sources are dense keys and chords, and both have their final answer
         // by now. Whatever this starts or stops is `mark`ed and therefore joins
@@ -469,8 +659,16 @@ impl SlotRuntime {
             for i in 0..self.chord_keys.len() {
                 self.scan.push(self.chord_keys[i]);
             }
-            if let Some(k) = event_key {
+            // SOCD keys rescan every pass for the same reason chord keys do:
+            // this event may have moved their suppression, not their bit.
+            for i in 0..self.socd_keys.len() {
+                let k = self.socd_keys[i];
                 if !self.chord_keys.contains(&k) {
+                    self.scan.push(k);
+                }
+            }
+            if let Some(k) = event_key {
+                if !self.chord_keys.contains(&k) && !self.socd_keys.contains(&k) {
                     self.scan.push(k);
                 }
             }
@@ -480,6 +678,64 @@ impl SlotRuntime {
             self.drain_macro_dirty();
         }
         self.apply_scan(down);
+    }
+
+    /// Order-aware SOCD (docs/INPUT-TRANSFORMS.md §2.6): when both sides of a
+    /// control are held, suppress the losing side's keys by writing the same
+    /// `consumed` bits a chord would — one suppression mechanism, two writers.
+    ///
+    /// WHO WINS is the only difference between the two modes, and it is one
+    /// bit of memory per control: last-input hands the control to whichever
+    /// side rose most recently; first-input leaves it with the side that was
+    /// already driving. Releasing the winner hands the control to the other
+    /// side in the same batch (its keys stop being suppressed and resume in
+    /// `apply_scan`) — the resume-on-release rule chords already follow.
+    ///
+    /// A side is DRIVING while any of its keys is down and not consumed by a
+    /// chord: a hand-written chord over the pair outranks the policy at
+    /// runtime exactly as it shadows generation for the static modes.
+    fn sync_socd(&mut self, down: &[u64]) {
+        if self.socd.is_empty() {
+            return;
+        }
+        if self.chords.is_empty() {
+            // `recompute_chords` early-returned, so the mask is ours to reset.
+            self.consumed.iter_mut().for_each(|w| *w = 0);
+        }
+        for i in 0..self.socd.len() {
+            let neg_now = self.socd[i]
+                .neg
+                .iter()
+                .any(|&k| bit(down, k) && !bit(&self.consumed, k));
+            let pos_now = self.socd[i]
+                .pos
+                .iter()
+                .any(|&k| bit(down, k) && !bit(&self.consumed, k));
+            let p = &mut self.socd[i];
+            if neg_now && pos_now {
+                match (p.neg_was, p.pos_was) {
+                    // One side was already driving and the other just rose:
+                    // the ONLY moment the two modes disagree. The riser wins
+                    // under last-input; the incumbent keeps it under
+                    // first-input.
+                    (true, false) => p.pos_wins = self.socd_last,
+                    (false, true) => p.pos_wins = !self.socd_last,
+                    // Both rose at once (a full resync can do this): there is
+                    // no order to honor, so the NEGATIVE side wins — a fixed
+                    // answer, not a file-order accident, and the same one both
+                    // modes give so the tie cannot distinguish them.
+                    (false, false) => p.pos_wins = false,
+                    // Both were already held: the winner stands.
+                    (true, true) => {}
+                }
+                for j in 0..if p.pos_wins { p.neg.len() } else { p.pos.len() } {
+                    let k = if p.pos_wins { p.neg[j] } else { p.pos[j] };
+                    set_bit(&mut self.consumed, k, true);
+                }
+            }
+            p.neg_was = neg_now;
+            p.pos_was = pos_now;
+        }
     }
 
     /// Apply only what a macro transition moved — the tick path, where no key
@@ -575,7 +831,9 @@ impl SlotRuntime {
     /// lets `sync_turbo` ask about a source BEFORE `apply_scan` has written its
     /// bit and still get the same answer.
     fn holder_now(&self, h: u32, down: &[u64]) -> bool {
-        if h >= self.turbo_base {
+        if h >= self.toggle_base {
+            self.toggle[(h - self.toggle_base) as usize].latched
+        } else if h >= self.turbo_base {
             let t = &self.turbo[(h - self.turbo_base) as usize];
             t.running && t.on
         } else if h >= self.macro_base {
@@ -611,7 +869,7 @@ impl SlotRuntime {
                 for b in 0..self.holder_bindings[h as usize].len() {
                     let binding = self.holder_bindings[h as usize][b];
                     if now {
-                        self.press(binding);
+                        self.press(binding, down);
                     } else {
                         self.release(binding, down);
                     }
@@ -620,7 +878,7 @@ impl SlotRuntime {
         }
     }
 
-    /// Back to "nothing held": chord and macro state included.
+    /// Back to "nothing held": chord, macro, turbo and latch state included.
     fn clear_chord_state(&mut self) {
         for chord in &mut self.chords {
             chord.active = false;
@@ -633,6 +891,18 @@ impl SlotRuntime {
             t.running = false;
             t.on = false;
         }
+        for t in &mut self.toggle {
+            t.latched = false;
+            t.source_was = false;
+        }
+        for p in &mut self.socd {
+            p.neg_was = false;
+            p.pos_was = false;
+            p.pos_wins = false;
+        }
+        // The resolver's recency memory is holder state like any other: a
+        // session reset must not leave an axis leaning on a sign nobody holds.
+        self.axis_sign_last = [0; 4];
         self.macro_dirty.clear();
         self.held.iter_mut().for_each(|w| *w = 0);
         self.prev_held.iter_mut().for_each(|w| *w = 0);
@@ -960,6 +1230,57 @@ impl SlotRuntime {
         }
         moved
     }
+
+    // ---- toggle --------------------------------------------------------
+    //
+    // docs/INPUT-TRANSFORMS.md §2 item 8. Like the macro and turbo
+    // transitions, nothing here touches `current`: a flip moves the `latched`
+    // bit and `mark`s the holder, and `apply_scan` does the pressing — so a
+    // latch cannot invent a release path of its own.
+
+    /// Flip every latch whose sources ROSE since the last sync.
+    ///
+    /// Called after chord consumption is settled and before `sync_turbo`, so
+    /// a latch that gates a turbo (§3a toggle-turbo) has its final answer
+    /// before the clock asks — and a press that satisfies a guard and the
+    /// flip it causes land in one delta batch.
+    ///
+    /// A latch deliberately survives all-keys-up — press once, WALK AWAY,
+    /// the endpoint stays held; that is the accessibility case the catalog
+    /// item names. The exits still clear it: [`Self::cancel_all_toggle`] runs
+    /// on session stop, device yank and the escape gesture, and a hot swap
+    /// starts fresh tables (latches off) with the neutral deltas released.
+    fn sync_toggle(&mut self, down: &[u64]) {
+        for t in 0..self.toggle.len() {
+            let driving = (0..self.toggle[t].sources.len())
+                .any(|i| self.holder_now(self.toggle[t].sources[i], down));
+            if driving && !self.toggle[t].source_was {
+                self.toggle[t].latched = !self.toggle[t].latched;
+                self.mark(self.toggle_base + t as u32);
+            }
+            self.toggle[t].source_was = driving;
+        }
+    }
+
+    /// Release every latch of this slot — the exits' primitive, exactly as
+    /// [`Self::cancel_all_turbo`] is: a latched button on a pad the player
+    /// has just been disconnected from is the stuck-input failure this
+    /// project refuses to ship.
+    fn cancel_all_toggle(&mut self) -> bool {
+        let mut moved = false;
+        for t in 0..self.toggle.len() {
+            if !self.toggle[t].latched && !self.toggle[t].source_was {
+                continue;
+            }
+            if self.toggle[t].latched {
+                self.mark(self.toggle_base + t as u32);
+                moved = true;
+            }
+            self.toggle[t].latched = false;
+            self.toggle[t].source_was = false;
+        }
+        moved
+    }
 }
 
 fn bit(words: &[u64], k: u32) -> bool {
@@ -1053,7 +1374,7 @@ impl EngineTables {
         for (si, rs) in slots.iter().enumerate() {
             let keyboard = rs.spec.keyboard.as_ref().map(|d| intern(&mut devices, d));
             let mouse = rs.spec.mouse.as_ref().map(|d| intern(&mut devices, d));
-            let mut endpoint_keys: HashMap<Binding, SmallVec<[u32; 4]>> = HashMap::new();
+            let mut endpoint_keys: HashMap<PadControl, SmallVec<[u32; 4]>> = HashMap::new();
             let mut axis_entries = Vec::new();
 
             for &(key, binding) in &rs.preset.entries {
@@ -1068,9 +1389,10 @@ impl EngineTables {
                     slot: si as u8,
                     binding,
                 });
-                endpoint_keys.entry(binding).or_default().push(dense);
                 if let Binding::Axis { axis, value } = binding {
                     axis_entries.push((axis, value, dense));
+                } else if let Some(control) = PadControl::of(binding) {
+                    endpoint_keys.entry(control).or_default().push(dense);
                 }
             }
 
@@ -1157,6 +1479,7 @@ impl EngineTables {
                 chord_device: keyboard.or(mouse),
                 endpoint_keys,
                 axis_entries,
+                axis_sign_last: [0; 4],
                 current: PadState::default(),
                 last_emitted: PadState::default(),
                 chords: chord_rts,
@@ -1194,6 +1517,62 @@ impl EngineTables {
                     })
                     .collect(),
                 turbo_base: 0,
+                // Latch rows whose endpoint nothing drives are kept (indices
+                // must line up with holder ids) and never run, exactly like a
+                // turbo row on an unbound function. A duplicate endpoint
+                // behaves as one row; validation names both cases.
+                toggle: {
+                    let mut seen: Vec<Binding> = Vec::new();
+                    rs.preset
+                        .toggle
+                        .iter()
+                        .filter(|b| **b != Binding::Consume)
+                        .filter(|b| {
+                            if seen.contains(b) {
+                                false
+                            } else {
+                                seen.push(**b);
+                                true
+                            }
+                        })
+                        .map(|&binding| ToggleRt {
+                            binding,
+                            sources: SmallVec::new(),
+                            source_was: false,
+                            latched: false,
+                        })
+                        .collect()
+                },
+                toggle_base: 0,
+                // Order-aware SOCD (§2.6): the static policies arrived here
+                // as generated chords already ON the preset; only last-input
+                // and first-input build order memory. Sides come from the
+                // preset's own entries, so every key here is interned already
+                // — `intern_key` is only re-asked to say which id.
+                socd: if rs.spec.socd.is_runtime() {
+                    crate::socd::opposing_sides(&rs.preset)
+                        .into_iter()
+                        .map(|sides| SocdRt {
+                            neg: sides
+                                .neg
+                                .iter()
+                                .map(|&k| intern_key(&mut index, &mut targets, k))
+                                .collect(),
+                            pos: sides
+                                .pos
+                                .iter()
+                                .map(|&k| intern_key(&mut index, &mut targets, k))
+                                .collect(),
+                            neg_was: false,
+                            pos_was: false,
+                            pos_wins: false,
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+                socd_last: matches!(rs.spec.socd, crate::Socd::LastInput),
+                socd_keys: SmallVec::new(),
                 stateful: false,
             });
         }
@@ -1201,8 +1580,11 @@ impl EngineTables {
         let words = targets.len().div_ceil(64).max(1);
         let down = vec![0u64; words * devices.len()];
         for slot in &mut runtimes {
-            slot.stateful =
-                !slot.chords.is_empty() || !slot.macros.is_empty() || !slot.turbo.is_empty();
+            slot.stateful = !slot.chords.is_empty()
+                || !slot.macros.is_empty()
+                || !slot.turbo.is_empty()
+                || !slot.toggle.is_empty()
+                || !slot.socd.is_empty();
         }
         let has_state = runtimes.iter().any(|s| s.stateful);
         let macro_count: usize = runtimes.iter().map(|s| s.macros.len()).sum();
@@ -1227,9 +1609,11 @@ impl EngineTables {
                     runtimes[si].macros[m].first_holder = macro_base + steps;
                     steps += runtimes[si].macros[m].ends.len() as u32;
                 }
-                // Turbo endpoints are holders too, one each, laid out last.
+                // Turbo endpoints are holders too, one each; latches follow
+                // them, laid out last.
                 let turbo_base = macro_base + steps;
-                let holders = (turbo_base + runtimes[si].turbo.len() as u32) as usize;
+                let toggle_base = turbo_base + runtimes[si].turbo.len() as u32;
+                let holders = (toggle_base + runtimes[si].toggle.len() as u32) as usize;
                 let mut holder_bindings: Vec<SmallVec<[Binding; 2]>> =
                     vec![SmallVec::new(); holders];
                 for &(key, binding) in &rs.preset.entries {
@@ -1237,6 +1621,17 @@ impl EngineTables {
                         continue;
                     }
                     holder_bindings[index[&key] as usize].push(binding);
+                }
+                // Every key on either side of an SOCD control, deduped — the
+                // scan companions to `chord_keys`, for the same reason: an
+                // event can move their SUPPRESSION without moving their bit.
+                let mut socd_keys: SmallVec<[u32; 8]> = SmallVec::new();
+                for pair in &runtimes[si].socd {
+                    for &k in pair.neg.iter().chain(pair.pos.iter()) {
+                        if !socd_keys.contains(&k) {
+                            socd_keys.push(k);
+                        }
+                    }
                 }
                 let mut chord_keys: SmallVec<[u32; 8]> = SmallVec::new();
                 for c in 0..runtimes[si].chords.len() {
@@ -1254,7 +1649,7 @@ impl EngineTables {
                         }
                     }
                 }
-                // Chords join the all-keys-up and opposite-axis tables as
+                // Chords join the all-keys-up and analog holder tables as
                 // ordinary holders, so "released only when nothing drives it"
                 // covers a chord exactly like a key.
                 for c in 0..runtimes[si].chords.len() {
@@ -1263,17 +1658,18 @@ impl EngineTables {
                     if binding == Binding::Consume {
                         continue;
                     }
-                    runtimes[si]
-                        .endpoint_keys
-                        .entry(binding)
-                        .or_default()
-                        .push(id);
                     if let Binding::Axis { axis, value } = binding {
                         runtimes[si].axis_entries.push((axis, value, id));
+                    } else if let Some(control) = PadControl::of(binding) {
+                        runtimes[si]
+                            .endpoint_keys
+                            .entry(control)
+                            .or_default()
+                            .push(id);
                     }
                 }
                 // A macro step drives its `hold` set, and joins the all-keys-up
-                // and opposite-axis tables like any other holder: an endpoint a
+                // and analog holder tables like any other holder: an endpoint a
                 // macro and a key both drive stays down while either holds it,
                 // and a step handing an endpoint to the next step never emits
                 // an intermediate release.
@@ -1287,17 +1683,65 @@ impl EngineTables {
                             }
                             if !holder_bindings[id as usize].contains(&binding) {
                                 holder_bindings[id as usize].push(binding);
-                                runtimes[si]
-                                    .endpoint_keys
-                                    .entry(binding)
-                                    .or_default()
-                                    .push(id);
                                 if let Binding::Axis { axis, value } = binding {
                                     runtimes[si].axis_entries.push((axis, value, id));
+                                } else if let Some(control) = PadControl::of(binding) {
+                                    runtimes[si]
+                                        .endpoint_keys
+                                        .entry(control)
+                                        .or_default()
+                                        .push(id);
                                 }
                             }
                         }
                     }
+                }
+
+                // Toggle (docs/INPUT-TRANSFORMS.md §2 item 8) — rewired FIRST,
+                // and the order is the design: the endpoint stops being driven
+                // directly by its keys and chords and starts being driven by
+                // one holder whose bit is a LATCH, with those keys and chords
+                // becoming the sources that flip it. When the same endpoint
+                // also has a turbo rate, the turbo pass below then finds the
+                // LATCH holding the endpoint and takes it as its source — which
+                // is exactly §3a's toggle-turbo ("press once, it auto-fires
+                // until pressed again") falling out of the wiring instead of
+                // being a second turbo mode.
+                //
+                // Only holders below `macro_base` are rewired, for turbo's
+                // reason: a macro step drives its endpoints flat.
+                for t in 0..runtimes[si].toggle.len() {
+                    let id = toggle_base + t as u32;
+                    let binding = runtimes[si].toggle[t].binding;
+                    let mut sources: SmallVec<[u32; 4]> = SmallVec::new();
+                    for h in 0..macro_base {
+                        let holds = &mut holder_bindings[h as usize];
+                        if let Some(p) = holds.iter().position(|b| *b == binding) {
+                            holds.remove(p);
+                            sources.push(h);
+                        }
+                    }
+                    // A latch on a function nothing binds latches nothing: the
+                    // row stays (indices must line up with the holder ids) and
+                    // never runs. Validation names it.
+                    if !sources.is_empty() {
+                        holder_bindings[id as usize].push(binding);
+                        // The analog retain is narrower than the digital one on
+                        // purpose: it drops only the exact `(axis, value)` pair
+                        // these sources drove, leaving a source key's OTHER
+                        // demand on the same axis intact.
+                        if let Binding::Axis { axis, value } = binding {
+                            runtimes[si].axis_entries.retain(|&(a, v, k)| {
+                                !(a == axis && v == value && sources.contains(&k))
+                            });
+                            runtimes[si].axis_entries.push((axis, value, id));
+                        } else if let Some(control) = PadControl::of(binding) {
+                            let keys = runtimes[si].endpoint_keys.entry(control).or_default();
+                            keys.retain(|k| !sources.contains(k));
+                            keys.push(id);
+                        }
+                    }
+                    runtimes[si].toggle[t].sources = sources;
                 }
 
                 // Turbo (docs/INPUT-TRANSFORMS.md §3). The rewiring is the whole
@@ -1307,16 +1751,18 @@ impl EngineTables {
                 // merely gate that phase's clock. Doing it here, once, is why
                 // the hot path never asks "is this binding turbo".
                 //
-                // Only holders below `macro_base` are rewired: a macro step
-                // that holds the same endpoint keeps driving it flat for the
-                // step's duration, because a sequence already owns a timeline
-                // and running it through a second clock would make it
-                // unreproducible.
+                // Only holders below `macro_base` are rewired — plus the
+                // latches above, which is the toggle-turbo composition: a
+                // latched endpoint with a rate is driven by the turbo, whose
+                // clock the LATCH gates. A macro step that holds the same
+                // endpoint keeps driving it flat for the step's duration,
+                // because a sequence already owns a timeline and running it
+                // through a second clock would make it unreproducible.
                 for t in 0..runtimes[si].turbo.len() {
                     let id = turbo_base + t as u32;
                     let binding = runtimes[si].turbo[t].binding;
                     let mut sources: SmallVec<[u32; 4]> = SmallVec::new();
-                    for h in 0..macro_base {
+                    for h in (0..macro_base).chain(toggle_base..holders as u32) {
                         let holds = &mut holder_bindings[h as usize];
                         if let Some(p) = holds.iter().position(|b| *b == binding) {
                             holds.remove(p);
@@ -1328,14 +1774,17 @@ impl EngineTables {
                     // and never runs. Validation names it.
                     if !sources.is_empty() {
                         holder_bindings[id as usize].push(binding);
-                        let keys = runtimes[si].endpoint_keys.entry(binding).or_default();
-                        keys.retain(|k| !sources.contains(k));
-                        keys.push(id);
+                        // Narrower analog retain, for the reason given on the
+                        // toggle pass above.
                         if let Binding::Axis { axis, value } = binding {
                             runtimes[si].axis_entries.retain(|&(a, v, k)| {
                                 !(a == axis && v == value && sources.contains(&k))
                             });
                             runtimes[si].axis_entries.push((axis, value, id));
+                        } else if let Some(control) = PadControl::of(binding) {
+                            let keys = runtimes[si].endpoint_keys.entry(control).or_default();
+                            keys.retain(|k| !sources.contains(k));
+                            keys.push(id);
                         }
                     }
                     runtimes[si].turbo[t].sources = sources;
@@ -1370,6 +1819,13 @@ impl EngineTables {
                 for t in &runtimes[si].turbo {
                     touches.extend(t.sources.iter().copied().filter(|h| *h < chord_base));
                 }
+                // The same rule for a key rewired into a LATCH. (A turbo whose
+                // source is the latch itself is covered here too: its holder
+                // id is ≥ chord_base and filtered out above, while the keys
+                // that flip the latch land through this loop.)
+                for t in &runtimes[si].toggle {
+                    touches.extend(t.sources.iter().copied().filter(|h| *h < chord_base));
+                }
                 touches.sort_unstable();
                 touches.dedup();
                 for key in touches {
@@ -1381,26 +1837,31 @@ impl EngineTables {
                 slot.chord_base = chord_base;
                 slot.macro_base = macro_base;
                 slot.turbo_base = turbo_base;
-                // One entry per step plus one per turbo endpoint is the worst
-                // case (`mark` dedupes), so the hot path can never reallocate
-                // this either.
-                slot.macro_dirty = Vec::with_capacity(steps as usize + slot.turbo.len());
+                slot.toggle_base = toggle_base;
+                // One entry per step plus one per turbo endpoint plus one per
+                // latch is the worst case (`mark` dedupes), so the hot path
+                // can never reallocate this either.
+                slot.macro_dirty =
+                    Vec::with_capacity(steps as usize + slot.turbo.len() + slot.toggle.len());
                 // Big enough for BOTH scan shapes, so `scan.push` in the hot
                 // path can never reallocate.
                 let scan_cap = all_holders
                     .len()
                     .max(
                         chord_keys.len()
+                            + socd_keys.len()
                             + 1
                             + slot.chords.len()
                             + steps as usize
-                            + slot.turbo.len(),
+                            + slot.turbo.len()
+                            + slot.toggle.len(),
                     )
                     .max(1);
                 slot.scan = Vec::with_capacity(scan_cap);
                 slot.holder_bindings = holder_bindings;
                 slot.all_holders = all_holders;
                 slot.chord_keys = chord_keys;
+                slot.socd_keys = socd_keys;
                 slot.held = vec![0u64; hwords];
                 slot.prev_held = vec![0u64; hwords];
                 slot.consumed = vec![0u64; words];
@@ -1437,13 +1898,20 @@ impl EngineTables {
 /// - **Fan-out**: an event is translated for *every* slot whose keyboard or
 ///   mouse matches the event's device — no early break. One physical keyboard
 ///   (an I-PAC4) legitimately drives up to 4 pads with disjoint presets.
-/// - **All-keys-up**: a function releases only when *every* key mapped to it in
-///   that slot's preset is up on the event's device. Aggregation is by
-///   `Binding` equality, consistently across every output category.
-/// - **Opposite-axis snap**: releasing a key bound to axis value `v` while a
-///   key bound to the same axis with an opposite-sign value is still held snaps
-///   the axis to the *held binding's own value* — not hardcoded ±32767. This is
-///   KSX's native custom-axis rule; document any test that depends on it.
+/// - **All-keys-up**: a DIGITAL function releases only when *every* key mapped
+///   to it in that slot's preset is up on the event's device. Aggregation is by
+///   [`PadControl`] equality. The four stick axes do not aggregate this way —
+///   they resolve; see the next bullet.
+/// - **The analog resolver** (`docs/UNIVERSAL-IO.md` §2): an axis takes the
+///   sign of the most recent rising demand on it and, among currently-held
+///   holders of that sign, the largest magnitude; with no holder it is neutral.
+///   Zero is a sign of its own — `lx.0` means "centre", not "a weak positive".
+///   The winning holder's OWN value reaches the pad, never a hardcoded ±32767,
+///   which is what makes custom axis values work. Press and release run the
+///   identical function over the post-event holder set. This replaces the older
+///   opposite-axis snap, which consulted only opposite-sign holders and so
+///   centred an axis whose surviving holders were all same-sign. It is KSX's
+///   native custom-axis rule; document any test that depends on it.
 /// - **Chords with consumption** (docs/INPUT-TRANSFORMS.md §1b): a
 ///   [`Chord`] applies only while its guard holds, and while it applies its
 ///   constituents are SUPPRESSED — their unguarded entries stop driving
@@ -1606,7 +2074,7 @@ impl Engine {
     /// Translate one key event into pad-state deltas.
     ///
     /// Applies the full contract above: fan-out to all matching slots,
-    /// per-device key-state tracking, all-keys-up release, opposite-axis snap,
+    /// per-device key-state tracking, all-keys-up release, the analog resolver,
     /// then state diffing. Events from devices assigned to no slot, and
     /// entries keyed `Key::None`, produce no deltas. Repeated key-down of an
     /// already-down key must not produce a delta (diff idempotence).
@@ -1671,7 +2139,7 @@ impl Engine {
                 continue;
             }
             if ev.down {
-                slot.press(t.binding);
+                slot.press(t.binding, down);
             } else {
                 slot.release(t.binding, down);
             }
@@ -1770,6 +2238,7 @@ impl Engine {
                 }
                 slot.cancel_all_macros(si as u8, &mut self.timers);
                 slot.cancel_all_turbo(si as u8, &mut self.timers);
+                slot.cancel_all_toggle();
                 slot.sync(down, None, true, si as u8, now, &mut self.timers);
             }
         }
@@ -1853,7 +2322,7 @@ impl Engine {
     /// through [`Engine::release_device`] and [`Engine::swap_tables`].
     pub fn cancel_macros(&mut self) -> Deltas {
         let mut deltas = Deltas::new();
-        if !self.has_macros && !self.has_turbo {
+        if !self.has_macros && !self.has_turbo && !self.has_state {
             return deltas;
         }
         for si in 0..self.slots.len() {
@@ -1862,6 +2331,9 @@ impl Engine {
             // auto-fire that keeps firing into a game the player just escaped
             // from is the stuck-input failure this project refuses to ship.
             self.slots[si].cancel_all_turbo(si as u8, &mut self.timers);
+            // Latches too: press-once-walk-away is the feature, and this door
+            // is where the walk-away ends.
+            self.slots[si].cancel_all_toggle();
         }
         self.apply_macro_moves(&mut deltas);
         deltas

@@ -6,10 +6,10 @@ name: Release
 #
 #     git tag v0.2.0 && git push origin v0.2.0
 #
-# and that is the entire release. There is no GitHub Release to create by hand
-# first: creating one in the web UI works only *because* it creates a tag, so
-# the UI step is optional polish, never a requirement. `docs/RELEASING.md` is
-# the runbook; this comment is the contract.
+# starts the exact-candidate build. There is no GitHub Release to create by hand
+# first: after the build, the `production` environment holds publication while
+# a reviewer tests that run's installer and either approves or rejects it.
+# `docs/RELEASING.md` is the runbook; this comment is the executable contract.
 #
 # `v*` matches every ksx repo the owner already releases this way, which is the
 # reason it is `v*` and not something cleverer. The version part is not free
@@ -39,8 +39,83 @@ on:
 # Read by default; the one job that writes says so itself.
 permissions:
   contents: read
+  # Inspect the production environment before constructing a candidate.
+  actions: read
+
+# Only one release candidate may be in flight. This serializes the protected
+# approval boundary as well as publication, eliminating the race where two
+# approved tags could both decide they were Latest before either was visible.
+# A release tag is evidence, so a redelivery waits instead of cancelling it.
+concurrency:
+  group: release-promotion
+  cancel-in-progress: false
+  # Preserve every immutable candidate when several tags arrive. GitHub's
+  # default single-pending mode replaces an older queued run with the newest.
+  queue: max
 
 jobs:
+  # A tag on an unmerged branch can otherwise build and publish perfectly valid
+  # bytes no customer was meant to receive. Equality—not ancestry—is the rule:
+  # the candidate commit must be the exact current origin/main tip.
+  preflight:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - name: Prove the tag commit is exactly origin/main HEAD
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          if ($LASTEXITCODE -ne 0) { throw 'could not fetch origin/main for release preflight' }
+          $tagCommit = (git rev-parse 'HEAD^{commit}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'the release tag does not resolve to a commit' }
+          $mainCommit = (git rev-parse 'refs/remotes/origin/main^{commit}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'origin/main does not resolve to a commit' }
+          Write-Host "tag commit   $tagCommit"
+          Write-Host "origin/main  $mainCommit"
+          if ($tagCommit -cne $mainCommit) {
+            throw "release tag $env:GITHUB_REF_NAME points to $tagCommit, but origin/main HEAD is $mainCommit"
+          }
+      - name: Validate the immutable tag and tree version before CI
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:TAG -notmatch '^v([0-9]+\.[0-9]+\.[0-9]+)$') {
+            throw "immutable release tag '$($env:TAG)' is not v<major>.<minor>.<patch>"
+          }
+          $version = $Matches[1]
+          $iss = Get-Content -LiteralPath packaging/ksx.iss -Raw
+          $cargo = Get-Content -LiteralPath Cargo.toml -Raw
+          if ($iss -notmatch '(?m)^#define\s+AppVersion\s+"([^"]+)"') {
+            throw 'packaging/ksx.iss has no AppVersion'
+          }
+          $issVersion = $Matches[1]
+          if ($cargo -notmatch '(?s)\[workspace\.package\][^\[]*?version\s*=\s*"([^"]+)"') {
+            throw 'Cargo.toml has no workspace package version'
+          }
+          $cargoVersion = $Matches[1]
+          if ($issVersion -cne $version -or $cargoVersion -cne $version) {
+            throw "immutable tag $($env:TAG), ksx.iss $issVersion, and Cargo.toml $cargoVersion disagree; increment and cut a new tag after fixing the tree"
+          }
+      # GITHUB_TOKEN can inspect the structural ruleset but GitHub deliberately
+      # hides the complete bypass-actor list from read-only callers. The
+      # release run therefore proves every workflow-visible control here; the
+      # maintainer-only no-bypass audit is a separate documented command.
+      - name: Prove workflow-visible production promotion controls
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVAL_CONFIGURED: ${{ vars.KSX_PRODUCTION_APPROVAL_CONFIGURED }}
+        run: |
+          & tools/release/assert-promotion-controls.ps1 `
+            -Repository $env:GITHUB_REPOSITORY `
+            -ApprovalConfigured $env:APPROVAL_CONFIGURED `
+            -RequireStudioPipelineChecks
+
   # The whole gate, not a subset: fmt, clippy, the four feature combinations,
   # the test suite, then the release build and the installer. `ci.yml` is
   # `workflow_call`-able for exactly this, so a release cannot ship a binary
@@ -50,6 +125,7 @@ jobs:
   # build-installer.yml's "Version agreement" step, which runs before the build
   # so a mistyped tag costs seconds instead of ten minutes.
   ci:
+    needs: preflight
     uses: ./.github/workflows/ci.yml
     with:
       release_tag: ${{ github.ref_name }}
@@ -57,6 +133,11 @@ jobs:
   publish:
     needs: ci
     runs-on: windows-latest
+    # The tag run has now produced the candidate. GitHub holds this job here
+    # while a reviewer installs and exercises THAT run's setup.exe. Approval
+    # promotes those exact artifact bytes; this job never rebuilds them.
+    environment:
+      name: production
     permissions:
       # `gh release create` writes to this repository, and nothing else here
       # does. The built-in GITHUB_TOKEN, no PAT, no third-party action, no
@@ -68,17 +149,50 @@ jobs:
       # cheaper than discovering the answer on a pushed tag.
       actions: read
     steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Recheck workflow-visible production promotion controls
+        shell: pwsh
+        env:
+          APPROVAL_CONFIGURED: ${{ vars.KSX_PRODUCTION_APPROVAL_CONFIGURED }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          & tools/release/assert-promotion-controls.ps1 `
+            -Repository $env:GITHUB_REPOSITORY `
+            -ApprovalConfigured $env:APPROVAL_CONFIGURED `
+            -RequireStudioPipelineChecks
       # For packaging/release-notes.md. The release body's prose lives in the
       # repository, reviewable and diffable, rather than inside a YAML string.
-      - uses: actions/checkout@v5
+      - name: Prove the remote tag did not move while QA waited
+        shell: pwsh
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rows = @(git ls-remote --tags origin "refs/tags/$($env:TAG)" "refs/tags/$($env:TAG)^{}")
+          if ($LASTEXITCODE -ne 0 -or $rows.Count -eq 0) {
+            throw "release tag $($env:TAG) no longer exists on origin"
+          }
+          $peeled = @($rows | Where-Object { $_ -match '\^\{\}\s*$' })
+          $selected = if ($peeled.Count -eq 1) { $peeled[0] } elseif ($rows.Count -eq 1) { $rows[0] } else {
+            throw "origin returned an ambiguous identity for release tag $($env:TAG)"
+          }
+          $remoteCommit = ($selected -split '\s+')[0]
+          if ($remoteCommit -cne $env:EXPECTED_COMMIT) {
+            throw "release tag $($env:TAG) moved to $remoteCommit while QA expected $($env:EXPECTED_COMMIT)"
+          }
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ksx-windows-installer
           path: dist
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ksx-windows-portable
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ksx-windows-candidate-manifest
           path: dist
 
       # The hash in the release body is the one the build computed. This step
@@ -92,15 +206,64 @@ jobs:
           SETUP_SHA256: ${{ needs.ci.outputs.setup_sha256 }}
           PORTABLE_NAME: ${{ needs.ci.outputs.portable_name }}
           PORTABLE_SHA256: ${{ needs.ci.outputs.portable_sha256 }}
+          MANIFEST_NAME: ${{ needs.ci.outputs.manifest_name }}
+          MANIFEST_SHA256: ${{ needs.ci.outputs.manifest_sha256 }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+          EXPECTED_REF: ${{ github.ref }}
+          EXPECTED_RUN_ID: ${{ github.run_id }}
+          EXPECTED_RUN_ATTEMPT: ${{ github.run_attempt }}
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          EXPECTED_TAG: ${{ github.ref_name }}
         run: |
+          $ErrorActionPreference = 'Stop'
           if (-not $env:SETUP_NAME) { throw 'the build job reported no installer name' }
           if (-not $env:SETUP_SHA256) { throw 'the build job reported no installer hash' }
           if (-not $env:PORTABLE_NAME) { throw 'the build job reported no portable ZIP name' }
           if (-not $env:PORTABLE_SHA256) { throw 'the build job reported no portable ZIP hash' }
+          if (-not $env:MANIFEST_NAME) { throw 'the build job reported no candidate manifest name' }
+          if (-not $env:MANIFEST_SHA256) { throw 'the build job reported no candidate manifest hash' }
           $setup = Join-Path 'dist' $env:SETUP_NAME
           $portable = Join-Path 'dist' $env:PORTABLE_NAME
+          $manifestPath = Join-Path 'dist' $env:MANIFEST_NAME
           if (-not (Test-Path $setup)) { throw "$setup is not in the downloaded artifacts" }
           if (-not (Test-Path $portable)) { throw "$portable is not in the downloaded artifacts" }
+          if (-not (Test-Path $manifestPath)) { throw "$manifestPath is not in the downloaded artifacts" }
+          $downloaded = @(Get-ChildItem -LiteralPath dist -File)
+          $expectedNames = @($env:SETUP_NAME, $env:PORTABLE_NAME, $env:MANIFEST_NAME)
+          $unexpected = @($downloaded | Where-Object Name -notin $expectedNames)
+          if ($downloaded.Count -ne 3 -or $unexpected.Count -ne 0) {
+            throw "the candidate download did not contain exactly its three declared files: $($downloaded.Name -join ', ')"
+          }
+
+          $manifestHash = (Get-FileHash $manifestPath -Algorithm SHA256).Hash
+          if ($manifestHash -cne $env:MANIFEST_SHA256) {
+            throw "the downloaded manifest hashes $manifestHash but was built as $($env:MANIFEST_SHA256) - NOT publishing"
+          }
+          try {
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          } catch {
+            throw "the exact-candidate manifest is not valid JSON: $_"
+          }
+          $toolchainSpec = Get-Content -LiteralPath 'rust-toolchain.toml' -Raw
+          if ($toolchainSpec -notmatch '(?m)^channel\s*=\s*"([^"]+)"') {
+            throw 'the release tree has no pinned Rust toolchain channel'
+          }
+          $expectedToolchain = $Matches[1]
+          if ($manifest.schema -ne 1 -or
+              [string]$manifest.source.repository -cne $env:EXPECTED_REPOSITORY -or
+              [string]$manifest.source.commit -cne $env:EXPECTED_COMMIT -or
+              [string]$manifest.source.ref -cne $env:EXPECTED_REF -or
+              [string]$manifest.run.id -cne $env:EXPECTED_RUN_ID -or
+              [int]$manifest.run.attempt -ne [int]$env:EXPECTED_RUN_ATTEMPT -or
+              [string]$manifest.release.tag -cne $env:EXPECTED_TAG -or
+              [string]$manifest.release.version -cne ($env:EXPECTED_TAG -replace '^v', '') -or
+              [string]$manifest.toolchain.channel -cne $expectedToolchain -or
+              -not ([string]$manifest.toolchain.active).StartsWith(
+                $expectedToolchain,
+                [StringComparison]::Ordinal)) {
+            throw 'the candidate manifest does not identify this exact repository/tag commit/ref/run/attempt/toolchain'
+          }
+
           $h = (Get-FileHash $setup -Algorithm SHA256).Hash
           if ($h -ne $env:SETUP_SHA256) {
             throw "the downloaded installer hashes $h but was built as $($env:SETUP_SHA256) - NOT publishing"
@@ -109,8 +272,19 @@ jobs:
           if ($portableHash -ne $env:PORTABLE_SHA256) {
             throw "the downloaded portable ZIP hashes $portableHash but was built as $($env:PORTABLE_SHA256) - NOT publishing"
           }
+          $setupItem = Get-Item -LiteralPath $setup
+          $portableItem = Get-Item -LiteralPath $portable
+          if ([string]$manifest.artifacts.installer.filename -cne $setupItem.Name -or
+              [long]$manifest.artifacts.installer.size -ne [long]$setupItem.Length -or
+              [string]$manifest.artifacts.installer.sha256 -cne $h -or
+              [string]$manifest.artifacts.portable.filename -cne $portableItem.Name -or
+              [long]$manifest.artifacts.portable.size -ne [long]$portableItem.Length -or
+              [string]$manifest.artifacts.portable.sha256 -cne $portableHash) {
+            throw 'the downloaded candidate bytes do not match the filenames, sizes, and hashes in their manifest - NOT publishing'
+          }
           Write-Host "verified $($env:SETUP_NAME)  SHA256 $h"
           Write-Host "verified $($env:PORTABLE_NAME)  SHA256 $portableHash"
+          Write-Host "verified $($env:MANIFEST_NAME)  SHA256 $manifestHash"
 
       # Placeholders in, prose out. Every `{{NAME}}` in the template must be
       # substituted here; `crates/ksx-app/tests/installer.rs` fails if the
@@ -124,6 +298,9 @@ jobs:
           SETUP_NAME: ${{ needs.ci.outputs.setup_name }}
           SETUP_SHA256: ${{ needs.ci.outputs.setup_sha256 }}
           PORTABLE_NAME: ${{ needs.ci.outputs.portable_name }}
+          PORTABLE_SHA256: ${{ needs.ci.outputs.portable_sha256 }}
+          MANIFEST_NAME: ${{ needs.ci.outputs.manifest_name }}
+          MANIFEST_SHA256: ${{ needs.ci.outputs.manifest_sha256 }}
         run: |
           $notes = Get-Content 'packaging/release-notes.md' -Raw
           # The note at the top of the template is addressed to whoever edits
@@ -136,6 +313,9 @@ jobs:
           $notes = $notes.Replace('{{SETUP_NAME}}', $env:SETUP_NAME)
           $notes = $notes.Replace('{{SETUP_SHA256}}', $env:SETUP_SHA256)
           $notes = $notes.Replace('{{PORTABLE_NAME}}', $env:PORTABLE_NAME)
+          $notes = $notes.Replace('{{PORTABLE_SHA256}}', $env:PORTABLE_SHA256)
+          $notes = $notes.Replace('{{MANIFEST_NAME}}', $env:MANIFEST_NAME)
+          $notes = $notes.Replace('{{MANIFEST_SHA256}}', $env:MANIFEST_SHA256)
           $notes = $notes.Replace('{{COMMIT}}', $env:GITHUB_SHA)
           if ($notes -match '\{\{([A-Z_]+)\}\}') {
             throw "packaging/release-notes.md still holds an unsubstituted placeholder: {{$($Matches[1])}}"
@@ -151,20 +331,108 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           SETUP_NAME: ${{ needs.ci.outputs.setup_name }}
+          SETUP_SHA256: ${{ needs.ci.outputs.setup_sha256 }}
           PORTABLE_NAME: ${{ needs.ci.outputs.portable_name }}
+          PORTABLE_SHA256: ${{ needs.ci.outputs.portable_sha256 }}
+          MANIFEST_NAME: ${{ needs.ci.outputs.manifest_name }}
+          MANIFEST_SHA256: ${{ needs.ci.outputs.manifest_sha256 }}
         run: |
           # THE ASSETS. The installer first, because it is the file
           # docs/FIRST-RUN.md §1 moment 1 means; the portable ZIP second, for
           # people who want no Start-menu entry. The ZIP keeps every executable
           # beside the product and third-party license material.
-          $assets = @("dist/$($env:SETUP_NAME)", "dist/$($env:PORTABLE_NAME)")
+          $assets = @("dist/$($env:SETUP_NAME)", "dist/$($env:PORTABLE_NAME)", "dist/$($env:MANIFEST_NAME)")
           $version = $env:TAG -replace '^v', ''
+          $candidateVersion = [version]$version
+          $listed = gh api --paginate --slurp "repos/$($env:GITHUB_REPOSITORY)/releases?per_page=100"
+          if ($LASTEXITCODE -ne 0) { throw 'existing releases could not be inspected' }
+          $pages = $listed | ConvertFrom-Json
+          $existing = @(foreach ($page in @($pages)) {
+            foreach ($release in @($page)) { $release }
+          })
+          $newer = @($existing | Where-Object { -not [bool]$_.draft } | ForEach-Object {
+            $text = ([string]$_.tag_name) -replace '^v', ''
+            $parsed = $null
+            if ([version]::TryParse($text, [ref]$parsed) -and $parsed -gt $candidateVersion) {
+              $_.tag_name
+            }
+          })
+          $latestFlag = if ($newer.Count -eq 0) { '--latest' } else { '--latest=false' }
+          if ($newer.Count -gt 0) {
+            Write-Host "A newer release already exists ($($newer -join ', ')); publishing $($env:TAG) without moving Latest backward."
+          }
           $cmd = @(
             'release', 'create', $env:TAG,
             '--title', "ksx $version",
             '--notes-file', 'notes.md',
             '--verify-tag',
-            '--latest'
+            '--draft',
+            '--latest=false'
           ) + $assets
+
+          # A redelivered workflow may find a private partial draft left by an
+          # interrupted upload. Global release concurrency makes it safe to
+          # delete only that draft release and recreate it. Never delete the
+          # immutable tag; a published release is an audit stop, not a retry.
+          $existingJson = gh release view $env:TAG --json isDraft 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $existingRelease = $existingJson | ConvertFrom-Json
+            if (-not [bool]$existingRelease.isDraft) {
+              throw "release $($env:TAG) is already published; refusing to alter immutable evidence"
+            }
+            gh release delete $env:TAG --yes
+            if ($LASTEXITCODE -ne 0) {
+              throw "the prior private draft for $($env:TAG) could not be removed for a clean retry"
+            }
+          }
+
           gh @cmd
           if ($LASTEXITCODE -ne 0) { throw "gh release create failed with $LASTEXITCODE" }
+
+          # `gh release create` uploads assets after creating the release. Keep
+          # that release private as a draft until GitHub reports exactly all
+          # three expected names, byte sizes, and GitHub-computed digests. A failed upload therefore
+          # leaves inspectable draft evidence, never a partial public release.
+          $remoteJson = gh release view $env:TAG --json isDraft,assets
+          if ($LASTEXITCODE -ne 0) { throw 'the uploaded draft could not be inspected' }
+          $remote = $remoteJson | ConvertFrom-Json
+          $remoteAssets = @($remote.assets)
+          $expected = @{
+            $env:SETUP_NAME = @{
+              size = [long](Get-Item -LiteralPath "dist/$($env:SETUP_NAME)").Length
+              digest = "sha256:$($env:SETUP_SHA256.ToLowerInvariant())"
+            }
+            $env:PORTABLE_NAME = @{
+              size = [long](Get-Item -LiteralPath "dist/$($env:PORTABLE_NAME)").Length
+              digest = "sha256:$($env:PORTABLE_SHA256.ToLowerInvariant())"
+            }
+            $env:MANIFEST_NAME = @{
+              size = [long](Get-Item -LiteralPath "dist/$($env:MANIFEST_NAME)").Length
+              digest = "sha256:$($env:MANIFEST_SHA256.ToLowerInvariant())"
+            }
+          }
+          if (-not [bool]$remote.isDraft -or $remoteAssets.Count -ne $expected.Count) {
+            throw 'release upload did not leave one private draft with exactly three assets'
+          }
+          foreach ($entry in $expected.GetEnumerator()) {
+            $matches = @($remoteAssets | Where-Object {
+              [string]$_.name -ceq [string]$entry.Key -and
+                [long]$_.size -eq [long]$entry.Value.size -and
+                [string]$_.digest -ieq [string]$entry.Value.digest
+            })
+            if ($matches.Count -ne 1) {
+              throw "draft asset '$($entry.Key)' is missing, duplicated, or has the wrong size/digest"
+            }
+          }
+
+          gh release edit $env:TAG --draft=false $latestFlag
+          if ($LASTEXITCODE -ne 0) {
+            throw 'the complete verified draft could not be published; it remains a draft'
+          }
+          $publishedJson = gh release view $env:TAG --json isDraft,isImmutable,assets
+          if ($LASTEXITCODE -ne 0) { throw 'the published release postcondition could not be inspected' }
+          $published = $publishedJson | ConvertFrom-Json
+          if ([bool]$published.isDraft -or -not [bool]$published.isImmutable -or
+              @($published.assets).Count -ne 3) {
+            throw 'GitHub did not report the published release as immutable and complete'
+          }

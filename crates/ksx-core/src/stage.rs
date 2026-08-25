@@ -68,7 +68,8 @@ use crate::engine::ResolvedSlot;
 use crate::persona::Persona;
 use crate::preset::Preset;
 use crate::selector::DeviceSelector;
-use crate::slot::{SlotSpec, MAX_SLOTS, MAX_XINPUT_SLOTS};
+use crate::slot::{SlotSpec, MAX_HIDMAESTRO_PADS, MAX_SLOTS, MAX_XINPUT_SLOTS};
+use crate::socd::Socd;
 
 /// The capture backend a staged device will use once the setup is committed.
 ///
@@ -141,6 +142,12 @@ pub struct StagedSlot {
     /// The bindings accumulated so far, carrying their own name — which is the
     /// name of the preset file a save will write.
     pub preset: Preset,
+    /// What this slot does with simultaneous opposing directions — the same
+    /// [`Socd`] a saved `[[slot]]` carries, staged here so a setup can answer
+    /// the question BEFORE anything is written and [`StagedSetup::commit`]
+    /// carries the answer into the one [`CommitSpec`] both exits read.
+    /// Defaults to [`Socd::Off`], exactly as [`SlotSpec::new`] does.
+    pub socd: Socd,
 }
 
 /// A setup being explored. In memory only; **nothing here can write**.
@@ -220,6 +227,20 @@ pub enum StageRefusal {
         /// How many staged slots would be on an XInput persona.
         after: usize,
     },
+    /// Staging this would put a ninth slot on the HIDMaestro host.
+    #[error(
+        "that would make {after} staged slots use a HIDMaestro persona, and the elevated \
+         HIDMaestro host carries at most {MAX_HIDMAESTRO_PADS} live pads. Give slot {number} \
+         persona '{}' or '{}' (ViGEmBus, outside that pool), or remove one of the other \
+         {after}. Nothing has been written, so changing your mind costs nothing",
+        Persona::Xbox360,
+        Persona::PlayStation
+    )]
+    TooManyHidMaestroPads {
+        number: u8,
+        /// How many staged slots would be on a HIDMaestro persona.
+        after: usize,
+    },
     /// An alias that could never resolve back to its own `[[device]]` entry.
     #[error("\"{alias}\" cannot name this device: {problem}")]
     BadAlias {
@@ -294,6 +315,23 @@ pub enum StageRefusal {
          newer staged choice was left unchanged"
     )]
     DeviceChanged { expected: String, current: String },
+    /// A reorder that does not name exactly the staged slots, once each. A
+    /// whole-order write that dropped or invented a slot would silently
+    /// delete a controller, so it is refused whole instead.
+    #[error(
+        "the new order must name every staged slot exactly once — staged slots: [{staged}], the \
+         order sent: [{given}]. Nothing has been changed"
+    )]
+    BadReorder { staged: String, given: String },
+}
+
+/// The numbers as the refusal prints them.
+fn join_numbers(numbers: &[u8]) -> String {
+    numbers
+        .iter()
+        .map(u8::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 impl StageRefusal {
@@ -309,6 +347,7 @@ impl StageRefusal {
             Self::PersonaNotImplemented { .. } => "persona-not-implemented",
             Self::PersonaCapacity { .. } => "persona-capacity",
             Self::TooManyXinputSlots { .. } => "too-many-xinput-slots",
+            Self::TooManyHidMaestroPads { .. } => "too-many-hidmaestro-pads",
             Self::BadAlias { .. } => "bad-alias",
             Self::PresetNameClash { .. } => "preset-name-clash",
             Self::UnnamedPreset { .. } => "unnamed-preset",
@@ -317,6 +356,7 @@ impl StageRefusal {
             Self::NoDevice { .. } => "no-device",
             Self::NoSlots => "no-slots",
             Self::DeviceChanged { .. } => "staged-device-changed",
+            Self::BadReorder { .. } => "bad-reorder",
         }
     }
 }
@@ -473,10 +513,12 @@ impl StagedSetup {
             number,
             persona,
             preset,
+            socd: Socd::default(),
         });
         next.slots.sort_by_key(|s| s.number);
         next.check_persona_capacity(number, persona)?;
         next.check_xinput_ceiling(number)?;
+        next.check_hidmaestro_pool(number)?;
         Ok(next)
     }
 
@@ -501,6 +543,7 @@ impl StagedSetup {
         slot.persona = persona;
         next.check_persona_capacity(number, persona)?;
         next.check_xinput_ceiling(number)?;
+        next.check_hidmaestro_pool(number)?;
         Ok(next)
     }
 
@@ -531,6 +574,58 @@ impl StagedSetup {
         }
         let mut next = self.clone();
         next.slots.retain(|s| s.number != number);
+        Ok(next)
+    }
+
+    /// Set what a staged slot does with simultaneous opposing directions —
+    /// the same choice `ksx slot assign --socd` writes onto a saved slot,
+    /// made while the setup is still free to change.
+    pub fn set_socd(&self, number: u8, socd: Socd) -> Result<Self, StageRefusal> {
+        check_slot_number(number)?;
+        let mut next = self.clone();
+        let slot = next
+            .slots
+            .iter_mut()
+            .find(|s| s.number == number)
+            .ok_or(StageRefusal::NoSuchSlot { number })?;
+        slot.socd = socd;
+        Ok(next)
+    }
+
+    /// **Reorder the staged controllers.** `order` is the CURRENT slot numbers
+    /// in the desired new sequence — a whole-order write, the same
+    /// whole-value rule `set_bindings` follows, so a drag that raced a poll
+    /// carries its entire intent rather than a delta computed against a value
+    /// that moved.
+    ///
+    /// The result is renumbered contiguously 1..=n: dropping P3 onto P1 makes
+    /// it P1 and shifts the rest down, which is what "player 2" then MEANS —
+    /// each controller keeps its persona, its bindings and its SOCD answer,
+    /// and only the number (the XInput position, the preset a layout refers
+    /// to by player) changes. Renumbering never re-instantiates a layout.
+    pub fn reorder_slots(&self, order: &[u8]) -> Result<Self, StageRefusal> {
+        let mut staged: Vec<u8> = self.slots.iter().map(|s| s.number).collect();
+        let mut given: Vec<u8> = order.to_vec();
+        staged.sort_unstable();
+        given.sort_unstable();
+        if staged != given {
+            return Err(StageRefusal::BadReorder {
+                staged: join_numbers(&staged),
+                given: join_numbers(order),
+            });
+        }
+        let mut next = self.clone();
+        next.slots = order
+            .iter()
+            .enumerate()
+            .map(|(index, number)| {
+                let slot = self.slot(*number).expect("membership checked above");
+                StagedSlot {
+                    number: u8::try_from(index + 1).expect("bounded by MAX_SLOTS"),
+                    ..slot.clone()
+                }
+            })
+            .collect();
         Ok(next)
     }
 
@@ -595,7 +690,8 @@ impl StagedSetup {
                 staged.preset.name.clone(),
             )
             .map_err(|err| StageRefusal::BadSlot { given: err.0 })?
-            .with_persona(staged.persona);
+            .with_persona(staged.persona)
+            .with_socd(staged.socd);
             slots.push(ResolvedSlot {
                 spec,
                 preset: staged.preset.clone(),
@@ -648,6 +744,23 @@ impl StagedSetup {
         let after = self.xinput_slots();
         if after > usize::from(MAX_XINPUT_SLOTS) {
             return Err(StageRefusal::TooManyXinputSlots { number, after });
+        }
+        Ok(())
+    }
+
+    /// Refuse a state where a ninth slot would sit on the HIDMaestro host.
+    ///
+    /// The elevated SDK host carries [`MAX_HIDMAESTRO_PADS`] live pads; a
+    /// configuration past that would validate, save, and then die at the
+    /// ninth plug of startup — after eight pads were already live.
+    fn check_hidmaestro_pool(&self, number: u8) -> Result<(), StageRefusal> {
+        let after = self
+            .slots
+            .iter()
+            .filter(|s| s.persona.backend() == crate::PadBackend::HidMaestro)
+            .count();
+        if after > usize::from(MAX_HIDMAESTRO_PADS) {
+            return Err(StageRefusal::TooManyHidMaestroPads { number, after });
         }
         Ok(())
     }
@@ -745,6 +858,7 @@ mod tests {
             chords: Vec::new(),
             macros: Default::default(),
             turbo: Vec::new(),
+            toggle: Vec::new(),
             protected: false,
         }
     }
@@ -755,6 +869,88 @@ mod tests {
             .unwrap()
             .add_slot(1, Persona::Xbox360, preset("Player 1"))
             .unwrap()
+    }
+
+    /// SOCD answered in the stage travels into the ONE CommitSpec both exits
+    /// read — the property that makes staging it meaningful at all. Fails
+    /// against a commit that rebuilt SlotSpec without carrying it (which is
+    /// exactly what commit did before staged SOCD existed).
+    #[test]
+    fn a_staged_socd_answer_reaches_the_commit_spec() {
+        let setup = staged()
+            .set_socd(1, Socd::UpPriority)
+            .expect("slot 1 is staged")
+            .set_blocking(Blocking::BoundKeys);
+        assert_eq!(setup.slot(1).unwrap().socd, Socd::UpPriority);
+        let spec = setup.commit().expect("complete setup commits");
+        assert_eq!(spec.slots[0].spec.socd, Socd::UpPriority);
+
+        // Unanswered stays the same default a saved slot starts on.
+        let default = staged().set_blocking(Blocking::BoundKeys);
+        assert_eq!(default.slot(1).unwrap().socd, Socd::Off);
+        assert_eq!(default.commit().unwrap().slots[0].spec.socd, Socd::Off);
+
+        let missing = staged().set_socd(9, Socd::Neutral).unwrap_err();
+        assert_eq!(missing.code(), "no-such-slot");
+    }
+
+    /// Reordering renumbers contiguously and keeps every controller WHOLE —
+    /// persona, bindings and SOCD move with their controller, only the number
+    /// changes. Fails against a reorder that re-instantiated layouts (the
+    /// bindings would revert) or that dropped SOCD (a leverless panel's
+    /// cleaner silently off after a drag).
+    #[test]
+    fn reordering_renumbers_contiguously_and_moves_controllers_whole() {
+        let setup = staged()
+            .add_slot(2, Persona::PlayStation, preset("Player 2"))
+            .unwrap()
+            .add_slot(3, Persona::Xbox360, preset("Player 3"))
+            .unwrap()
+            .set_socd(3, Socd::Neutral)
+            .unwrap();
+
+        let reordered = setup.reorder_slots(&[3, 1, 2]).expect("a real permutation");
+        let slots = reordered.slots();
+        assert_eq!(
+            slots.iter().map(|s| s.number).collect::<Vec<_>>(),
+            [1, 2, 3],
+            "renumbered contiguously"
+        );
+        assert_eq!(slots[0].preset.name, "Player 3");
+        assert_eq!(
+            slots[0].socd,
+            Socd::Neutral,
+            "SOCD moved with its controller"
+        );
+        assert_eq!(slots[1].preset.name, "Player 1");
+        assert_eq!(slots[2].persona, Persona::PlayStation);
+        assert_eq!(slots[2].preset.name, "Player 2");
+    }
+
+    /// A whole-order write that does not name exactly the staged slots is
+    /// refused whole — a dropped number would silently delete a controller,
+    /// an invented one would stage a ghost.
+    #[test]
+    fn a_reorder_that_is_not_a_permutation_is_refused_whole() {
+        let setup = staged()
+            .add_slot(2, Persona::PlayStation, preset("Player 2"))
+            .unwrap();
+        for bad in [&[1_u8][..], &[1, 2, 3], &[1, 1], &[2, 7]] {
+            let refusal = setup.reorder_slots(bad).unwrap_err();
+            assert_eq!(refusal.code(), "bad-reorder", "{bad:?}");
+            // ...and the caller still holds what they had.
+            assert_eq!(setup.slots().len(), 2);
+        }
+        // Sparse numbering compacts: {1,3} reordered as [3,1] becomes {1,2}.
+        let sparse = staged()
+            .add_slot(3, Persona::PlayStation, preset("Player 3"))
+            .unwrap();
+        let compact = sparse.reorder_slots(&[3, 1]).unwrap();
+        assert_eq!(
+            compact.slots().iter().map(|s| s.number).collect::<Vec<_>>(),
+            [1, 2]
+        );
+        assert_eq!(compact.slots()[0].preset.name, "Player 3");
     }
 
     /// **The moment §2 exists for.** Pick PS4, look at it, change to Xbox 360,
@@ -856,57 +1052,54 @@ mod tests {
         );
     }
 
-    /// The two unfinished HIDMaestro personas are refused in `Persona::gap()`'s own
-    /// words — including the half that closes off the wrong fix.
-    ///
-    /// Breaks against a stage that accepted them: the user picks DualSense, the
-    /// screen says ready, and the pad never appears — with a driver install as
-    /// the obvious and useless next step.
+    /// Every shipping persona is stageable (2026-08-20 hardware session flip;
+    /// the refusal machinery stays live behind `Persona::gap()` for the next
+    /// gated persona, exercised by the gap unit tests in `persona.rs`).
     #[test]
-    fn a_persona_this_build_cannot_plug_is_refused_with_a_way_out() {
-        for (persona, instead) in [
-            (Persona::SwitchPro, Persona::Xbox360),
-            (Persona::XboxSeries, Persona::Xbox360),
-        ] {
-            let refused = staged().add_slot(2, persona, preset("P2")).unwrap_err();
-            assert_eq!(refused.code(), "persona-not-implemented", "{persona}");
-            let message = refused.to_string();
-            assert!(
-                message.contains("has not yet completed its independent production runtime"),
-                "the gap verbatim: {message}"
-            );
-            assert!(message.contains("BINARY"), "{message}");
-            assert!(message.contains(instead.as_str()), "{message}");
-            // The same gate on the other door.
-            assert_eq!(
-                staged().set_persona(1, persona).unwrap_err().code(),
-                "persona-not-implemented"
-            );
+    fn every_shipping_persona_stages() {
+        for persona in Persona::ALL.iter().copied() {
+            let result = staged().add_slot(2, persona, preset("P2"));
+            result.unwrap_or_else(|refused| panic!("{persona} must stage: {refused}"));
         }
-        staged()
-            .add_slot(2, Persona::DualSense, preset("P2"))
-            .expect("the production DualSense path is accepted");
     }
 
+    /// The elevated SDK host carries [`MAX_HIDMAESTRO_PADS`] live pads, and
+    /// the stage refuses the ninth before it can reach the host — where the
+    /// runtime refusal would arrive only after eight pads were already live.
+    /// Non-XInput personas throughout: Xbox Series would trip the four-seat
+    /// XInput ceiling first and this test is about the POOL.
     #[test]
-    fn a_second_dualsense_is_refused_before_it_can_reach_the_single_host() {
-        let one = staged()
-            .add_slot(2, Persona::DualSense, preset("P2"))
-            .unwrap();
-        let err = one
-            .add_slot(3, Persona::DualSense, preset("P3"))
+    fn a_ninth_hidmaestro_pad_is_refused_before_it_can_reach_the_host() {
+        let mut setup = staged();
+        for n in 2u8..=9 {
+            let persona = if n % 2 == 0 {
+                Persona::DualSense
+            } else {
+                Persona::SwitchPro
+            };
+            setup = setup.add_slot(n, persona, preset("P")).unwrap_or_else(|e| {
+                panic!("pad {} of {MAX_HIDMAESTRO_PADS} must stage: {e}", n - 1)
+            });
+        }
+        let refused = setup
+            .add_slot(10, Persona::DualSense, preset("P10"))
             .unwrap_err();
-        assert_eq!(err.code(), "persona-capacity");
-        assert!(err.to_string().contains("at most 1"), "{err}");
-        assert_eq!(one.persona_slots(Persona::DualSense), 1);
+        assert_eq!(refused.code(), "too-many-hidmaestro-pads");
+        let message = refused.to_string();
+        assert!(message.contains("at most 8"), "{message}");
+        assert!(message.contains("xbox360"), "{message}");
 
-        let with_other = one.add_slot(3, Persona::PlayStation, preset("P3")).unwrap();
+        // The same gate on the other door: repainting a ViGEm slot onto the
+        // full pool is the ninth pad too.
+        let with_other = setup
+            .add_slot(10, Persona::PlayStation, preset("P10"))
+            .unwrap();
         assert_eq!(
             with_other
-                .set_persona(3, Persona::DualSense)
+                .set_persona(10, Persona::DualSense)
                 .unwrap_err()
                 .code(),
-            "persona-capacity"
+            "too-many-hidmaestro-pads"
         );
     }
 
@@ -1009,6 +1202,7 @@ mod tests {
             chords: Vec::new(),
             macros: Default::default(),
             turbo: Vec::new(),
+            toggle: Vec::new(),
             protected: false,
         };
         let setup = StagedSetup::new()

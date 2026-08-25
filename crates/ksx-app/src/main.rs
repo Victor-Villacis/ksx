@@ -15,9 +15,9 @@
 // nothing else — argument definitions, the `match` below, and the exit codes.
 // If you are adding logic rather than a flag, it does not go in this file.
 use ksx_backend::{
-    autostart, config_io, daemon, device_edit, device_scan, devices, doctor, install, logging,
-    macro_cli, macro_trace, map, mapping, monitor, pads, play, preset_cli, run, session, setup,
-    slot_cli, winusb,
+    autostart, config_io, daemon, device_edit, device_scan, devices, doctor, input_test_cli,
+    install, logging, macro_cli, macro_trace, map, mapping, monitor, pads, panel,
+    panel_programming, play, preset_cli, run, session, setup, slot_cli, stage_cli, winusb,
 };
 // `console` is here rather than above because `ksx cabinet` is its only caller
 // in this file: the daemon detaches its own console from inside the backend.
@@ -705,6 +705,16 @@ enum Command {
             conflicts_with_all = ["restore", "list_backups", "clear_all"]
         )]
         turbo_hz: Option<u32>,
+        /// Toggle-hold for this control: press once = held until pressed
+        /// again (`--toggle true`), `--toggle false` clears it, absent leaves
+        /// it alone. Composes with --turbo-hz: a latched control with a rate
+        /// auto-fires while latched
+        #[arg(
+            long,
+            value_name = "true|false",
+            conflicts_with_all = ["restore", "list_backups", "clear_all"]
+        )]
+        toggle: Option<bool>,
         /// Bind anyway when the key is already used by ANOTHER SLOT's preset
         /// (cross-slot fan-out). Removes nothing, edits no other preset — a
         /// same-preset duplicate is a multi-bind and never needs this
@@ -880,6 +890,44 @@ enum Command {
         #[command(subcommand)]
         command: SessionCommand,
     },
+    /// Measure the simultaneous keyboard signals KSX can actually observe
+    ///
+    /// This is a bounded, read-only test of one exact keyboard or keyboard-mode
+    /// encoder. It reports decoded Windows signals — held, seen, peak and
+    /// dropped transitions — and does NOT claim to measure physical switches
+    /// or USB rollover: two terminals emitting the same key are indistinguishable,
+    /// and Raw Input does not expose an ErrorRollOver report.
+    ///
+    /// `start` opens one daemon-owned observation and returns immediately with
+    /// its generation. Hold the desired chord at the panel, then use `poll`;
+    /// the peak remains in the snapshot after release. `cancel --generation N`
+    /// stops only that attempt, so a stale shell cannot cancel a newer test.
+    ///
+    /// Learn owns the same physical observer and therefore excludes this test.
+    /// Play and persistent encoder maintenance share its machine-wide lease,
+    /// including standalone processes. The daemon refuses rather than listening
+    /// to a different source or silently shortening the requested duration.
+    /// Every action is one typed control-pipe request; no mapping, hardware
+    /// chart or EEPROM byte changes.
+    ///
+    /// Exit codes: 0 = the daemon answered successfully, 1 = refused / pipe or
+    /// protocol error, 2 = no daemon control channel.
+    InputTest {
+        #[command(subcommand)]
+        command: InputTestCommand,
+    },
+    /// The staged setup a visit is deciding on (view / adopt / reorder / socd)
+    ///
+    /// The DAEMON holds the stage (docs/FIRST-RUN.md §2); every verb here is
+    /// one pipe request, the same lines Studio sends — nothing is validated
+    /// or written by this surface itself.
+    ///
+    /// Exit codes: 0 = done, 1 = the daemon refused (the reason is printed in
+    /// its own words), 2 = no daemon control channel.
+    Stage {
+        #[command(subcommand)]
+        command: StageCommand,
+    },
     /// Export / import the configuration as JSON (TOML stays canonical)
     ///
     /// TOML is the canonical format because it carries COMMENTS, and ksx
@@ -956,6 +1004,22 @@ enum Command {
     Device {
         #[command(subcommand)]
         command: DeviceCommand,
+    },
+    /// Inspect, back up, and program a supported arcade-panel encoder
+    ///
+    /// `status` remains strictly passive. `chart` is the explicit complete
+    /// hardware read, and can save a lossless local backup. `program` and
+    /// `restore` are two-step transactions: without `--yes` they print a pure
+    /// byte-for-byte plan; applying requires both `--yes` and the desired hash
+    /// printed by that plan. Every apply re-reads the board, rejects stale
+    /// state, saves the current raw image, writes, and verifies full readback.
+    ///
+    /// A saved backup is the durable way home. KSX never accepts raw EEPROM
+    /// bytes from this surface: edits name physical terminals and keyboard
+    /// actions, while the backend preserves every byte the edit did not own.
+    Panel {
+        #[command(subcommand)]
+        command: PanelCommand,
     },
     /// Open ksx: start the daemon if needed, then show Studio in its own window
     ///
@@ -1160,6 +1224,105 @@ enum SessionCommand {
 }
 
 #[derive(Subcommand)]
+enum InputTestCommand {
+    /// Begin one bounded observation for an exact canonical selector
+    Start {
+        /// Canonical selector from `ksx device scan` (not a label or substring)
+        #[arg(value_name = "SELECTOR")]
+        selector: String,
+        /// Total wall-clock observation budget in milliseconds (daemon: 1000..=60000)
+        #[arg(
+            long,
+            value_name = "MS",
+            default_value_t = input_test_cli::DEFAULT_DURATION_MS,
+            value_parser = clap::value_parser!(u64)
+                .range(input_test_cli::MIN_DURATION_MS..=input_test_cli::MAX_DURATION_MS)
+        )]
+        duration_ms: u64,
+        /// Print the daemon's exact response as one JSON object
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read the current or most recently completed observation snapshot
+    Poll {
+        /// Print the daemon's exact response as one JSON object
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop an observation without discarding its peak/seen snapshot
+    Cancel {
+        /// Stop only this generation (the number returned by `start`)
+        #[arg(long, value_name = "N")]
+        generation: u64,
+        /// Print the daemon's exact response as one JSON object
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum StageCommand {
+    /// The staged setup as it stands (a read; changes nothing)
+    View {
+        /// Print the raw pipe response (one JSON object) on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Adopt the saved configuration into an EMPTY stage
+    ///
+    /// Builds the draft from config.toml and its presets — or, with --game,
+    /// from that games.toml profile (its slots, its per-game personas and
+    /// SOCD, its own freeze/split answer). Refused over a non-empty stage:
+    /// adoption never overwrites edits, so start over first if you mean to.
+    Adopt {
+        /// Adopt this games.toml profile instead of config.toml
+        #[arg(long, value_name = "TITLE")]
+        game: Option<String>,
+        /// Print the raw pipe response (one JSON object) on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reorder the staged controllers (whole order, renumbered 1..n)
+    ///
+    /// Name every CURRENT slot number exactly once, in the new sequence:
+    /// `ksx stage reorder 3 1 2` makes today's P3 the new P1. Each controller
+    /// keeps its layout, persona and SOCD; only the numbers change.
+    Reorder {
+        /// The current slot numbers, in the desired new order
+        #[arg(required = true, value_name = "SLOT")]
+        numbers: Vec<u8>,
+        /// Print the raw pipe response (one JSON object) on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set a staged controller's simultaneous-opposite-directions rule
+    Socd {
+        /// The staged slot number
+        #[arg(value_name = "SLOT")]
+        slot: u8,
+        /// off | neutral | up-priority | last-input | first-input (ksx_core::Socd's own names)
+        #[arg(value_name = "POLICY")]
+        socd: String,
+        /// Print the raw pipe response (one JSON object) on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Apply the draft's bindings to the running session, pads untouched
+    ///
+    /// Binding-only differences go into the live engine in place: pads stay
+    /// plugged, keyboards stay captured, a game in progress notices nothing
+    /// but the new bindings. A draft that differs STRUCTURALLY — controllers
+    /// added or removed, personas, devices, blocking — is refused with the
+    /// difference named, because replacing a running session is `stage play`'s
+    /// job and yours to confirm. Nothing is written to disk either way.
+    Apply {
+        /// Print the raw pipe response (one JSON object) on stdout
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum ConfigCommand {
     /// Write config / games / presets as one JSON document (stdout by default)
     ///
@@ -1320,6 +1483,317 @@ enum DeviceCommand {
         #[arg(long)]
         force: bool,
         /// What was removed, as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PanelKeyAssignment {
+    terminal: String,
+    key: String,
+}
+
+impl std::str::FromStr for PanelKeyAssignment {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (terminal, key) = value.split_once('=').ok_or_else(|| {
+            "expected TERMINAL=KEY (for example 1sw4=J; TERMINAL= clears it)".to_owned()
+        })?;
+        let terminal = terminal.trim();
+        if terminal.is_empty() {
+            return Err("the terminal before '=' must not be empty".to_owned());
+        }
+        Ok(Self {
+            terminal: terminal.to_ascii_lowercase(),
+            key: key.trim().to_owned(),
+        })
+    }
+}
+
+fn parse_panel_sha256(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(
+            "expected exactly 64 hexadecimal characters from `ksx panel chart` or a printed plan"
+                .to_owned(),
+        );
+    }
+    Ok(value.to_ascii_uppercase())
+}
+
+fn parse_panel_contract_value(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("expected a non-empty value copied from the reviewed panel plan".to_owned());
+    }
+    Ok(value.to_owned())
+}
+
+fn panel_terminal_edits(
+    normal: Vec<PanelKeyAssignment>,
+    shifted: Vec<PanelKeyAssignment>,
+    use_as_shift: Vec<String>,
+    not_shift: Vec<String>,
+    allow_shared_key: Vec<String>,
+) -> anyhow::Result<Vec<panel_programming::PanelTerminalEdit>> {
+    use std::collections::BTreeMap;
+
+    let mut edits: BTreeMap<String, panel_programming::PanelTerminalEdit> = BTreeMap::new();
+    for assignment in normal {
+        let row = edits.entry(assignment.terminal.clone()).or_insert_with(|| {
+            panel_programming::PanelTerminalEdit {
+                terminal_id: assignment.terminal.clone(),
+                ..Default::default()
+            }
+        });
+        if row.normal_key.replace(assignment.key).is_some() {
+            anyhow::bail!(
+                "terminal '{}' has more than one --set assignment; name each terminal once per layer",
+                row.terminal_id
+            );
+        }
+    }
+    for assignment in shifted {
+        let row = edits.entry(assignment.terminal.clone()).or_insert_with(|| {
+            panel_programming::PanelTerminalEdit {
+                terminal_id: assignment.terminal.clone(),
+                ..Default::default()
+            }
+        });
+        if row.shifted_key.replace(assignment.key).is_some() {
+            anyhow::bail!(
+                "terminal '{}' has more than one --set-shifted assignment; name each terminal once per layer",
+                row.terminal_id
+            );
+        }
+    }
+    for (terminal, enabled, flag) in use_as_shift
+        .into_iter()
+        .map(|terminal| (terminal, true, "--use-as-shift"))
+        .chain(
+            not_shift
+                .into_iter()
+                .map(|terminal| (terminal, false, "--not-shift")),
+        )
+    {
+        let terminal = terminal.trim().to_ascii_lowercase();
+        if terminal.is_empty() {
+            anyhow::bail!("{flag} requires a non-empty terminal id");
+        }
+        let row =
+            edits
+                .entry(terminal.clone())
+                .or_insert_with(|| panel_programming::PanelTerminalEdit {
+                    terminal_id: terminal,
+                    ..Default::default()
+                });
+        if row.is_shift.replace(enabled).is_some() {
+            anyhow::bail!(
+                "terminal '{}' has more than one shift-role edit; use only one of --use-as-shift or --not-shift for it",
+                row.terminal_id
+            );
+        }
+    }
+    for terminal in allow_shared_key {
+        let terminal = terminal.trim().to_ascii_lowercase();
+        if terminal.is_empty() {
+            anyhow::bail!("--allow-shared-key requires a non-empty terminal id");
+        }
+        let Some(row) = edits.get_mut(&terminal) else {
+            anyhow::bail!(
+                "--allow-shared-key terminal '{terminal}' must also appear in --set or --set-shifted"
+            );
+        };
+        row.allow_shared_key = true;
+    }
+    Ok(edits.into_values().collect())
+}
+
+#[derive(Subcommand, Debug, PartialEq)]
+enum PanelCommand {
+    /// Show every candidate board and its passive HID metadata
+    Status {
+        /// An exact board/interface id, stable usb: selector, alias, or unique substring
+        #[arg(long)]
+        device: Option<String>,
+        /// The typed PanelStatusView as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read and decode the complete encoder chart
+    ///
+    /// This is an explicit report transaction, unlike passive `status`. It
+    /// changes no encoder byte. Add `--backup` to save the raw image as an
+    /// immutable restore point before editing the chart.
+    Chart {
+        /// Exact board/interface id, stable usb: selector, alias, or unique substring
+        #[arg(long)]
+        device: Option<String>,
+        /// Save this exact raw image as a durable local restore point
+        #[arg(long)]
+        backup: bool,
+        /// The typed PanelChartView as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// List immutable raw-image backups for one encoder
+    Backups {
+        /// Exact board/interface id, stable usb: selector, alias, or unique substring
+        #[arg(long)]
+        device: Option<String>,
+        /// The typed PanelBackupsView as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Plan or apply semantic terminal assignments
+    ///
+    /// The default is a non-mutating plan: it reads the current chart, but
+    /// nothing is written and no backup is made.
+    /// Review its terminal/byte diff, then re-run the same command with `--yes`
+    /// plus the desired hash, board fingerprint, and protocol profile copied
+    /// from that plan, together with `--supervised`. Apply first re-reads the
+    /// chart and refuses if any reviewed fact is stale, saves a lossless
+    /// backup, writes persistent encoder memory, and verifies every byte by
+    /// readback.
+    Program {
+        /// Exact board/interface id, stable usb: selector, alias, or unique substring
+        #[arg(long)]
+        device: Option<String>,
+        /// SHA-256 of the chart these edits were made against
+        #[arg(long, value_name = "HASH", value_parser = parse_panel_sha256)]
+        base_sha256: String,
+        /// Assign a collision-free normal key to all four players' terminals
+        #[arg(
+            long,
+            conflicts_with_all = ["blank", "set", "set_shifted", "use_as_shift", "not_shift"],
+            required_unless_present_any = ["blank", "set", "set_shifted", "use_as_shift", "not_shift"]
+        )]
+        canonical_four_player: bool,
+        /// Clear every supported normal and shifted assignment while
+        /// preserving firmware-owned, macro, configuration and opaque bytes
+        #[arg(
+            long,
+            conflicts_with_all = ["set", "set_shifted", "use_as_shift", "not_shift"]
+        )]
+        blank: bool,
+        /// Set a terminal's normal key: TERMINAL=KEY; use TERMINAL= to clear it
+        #[arg(long, value_name = "TERMINAL=KEY")]
+        set: Vec<PanelKeyAssignment>,
+        /// Set its shifted-layer key: TERMINAL=KEY; use TERMINAL= to clear it
+        #[arg(long, value_name = "TERMINAL=KEY")]
+        set_shifted: Vec<PanelKeyAssignment>,
+        /// Mark a terminal as the encoder's shift control
+        #[arg(long, value_name = "TERMINAL")]
+        use_as_shift: Vec<String>,
+        /// Remove the shift-control role from a terminal
+        #[arg(long, value_name = "TERMINAL")]
+        not_shift: Vec<String>,
+        /// Explicitly allow this edited terminal to share its assigned key
+        /// with another terminal named in the same reviewed edit set
+        #[arg(
+            long,
+            value_name = "TERMINAL",
+            conflicts_with_all = ["canonical_four_player", "blank"]
+        )]
+        allow_shared_key: Vec<String>,
+        /// Desired SHA-256 printed by the plan; accepted only with --yes
+        #[arg(
+            long,
+            value_name = "HASH",
+            value_parser = parse_panel_sha256,
+            requires = "yes"
+        )]
+        expected_desired_sha256: Option<String>,
+        /// Exact board fingerprint printed by the reviewed plan; accepted only with --yes
+        #[arg(
+            long,
+            value_name = "FINGERPRINT",
+            value_parser = parse_panel_contract_value,
+            requires = "yes"
+        )]
+        expected_board_fingerprint: Option<String>,
+        /// Exact protocol profile printed by the reviewed plan; accepted only with --yes
+        #[arg(
+            long,
+            value_name = "PROFILE",
+            value_parser = parse_panel_contract_value,
+            requires = "yes"
+        )]
+        expected_protocol_profile: Option<String>,
+        /// Acknowledge this as a supervised persistent hardware write
+        #[arg(long, requires = "yes")]
+        supervised: bool,
+        /// Apply the reviewed plan to persistent hardware memory
+        #[arg(
+            long,
+            requires_all = [
+                "expected_desired_sha256",
+                "expected_board_fingerprint",
+                "expected_protocol_profile",
+                "supervised"
+            ]
+        )]
+        yes: bool,
+        /// The typed plan or verified outcome as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Plan or restore one immutable raw-image backup
+    ///
+    /// The default reads the current chart, prints the exact reverse diff, and
+    /// changes nothing. Applying requires the reviewed identity, profile, and
+    /// desired hash; it also backs up the current chart before restoring, then
+    /// verifies the complete readback.
+    Restore {
+        /// Backup id from `ksx panel backups`
+        backup_id: String,
+        /// Exact board/interface id, stable usb: selector, alias, or unique substring
+        #[arg(long)]
+        device: Option<String>,
+        /// SHA-256 of the currently connected chart
+        #[arg(long, value_name = "HASH", value_parser = parse_panel_sha256)]
+        current_sha256: String,
+        /// Desired SHA-256 printed by the restore plan; accepted only with --yes
+        #[arg(
+            long,
+            value_name = "HASH",
+            value_parser = parse_panel_sha256,
+            requires = "yes"
+        )]
+        expected_desired_sha256: Option<String>,
+        /// Exact board fingerprint printed by the reviewed restore plan; accepted only with --yes
+        #[arg(
+            long,
+            value_name = "FINGERPRINT",
+            value_parser = parse_panel_contract_value,
+            requires = "yes"
+        )]
+        expected_board_fingerprint: Option<String>,
+        /// Exact protocol profile printed by the reviewed restore plan; accepted only with --yes
+        #[arg(
+            long,
+            value_name = "PROFILE",
+            value_parser = parse_panel_contract_value,
+            requires = "yes"
+        )]
+        expected_protocol_profile: Option<String>,
+        /// Acknowledge this as a supervised persistent hardware restore
+        #[arg(long, requires = "yes")]
+        supervised: bool,
+        /// Restore persistent hardware memory from the reviewed backup
+        #[arg(
+            long,
+            requires_all = [
+                "expected_desired_sha256",
+                "expected_board_fingerprint",
+                "expected_protocol_profile",
+                "supervised"
+            ]
+        )]
+        yes: bool,
+        /// The typed plan or verified outcome as JSON
         #[arg(long)]
         json: bool,
     },
@@ -1616,13 +2090,16 @@ enum SlotCommand {
         #[arg(long, value_name = "NAME", value_parser = parse_persona)]
         persona: Option<ksx_core::Persona>,
         /// What opposite directions on this slot's stick do: off, neutral,
-        /// up-priority
+        /// up-priority, last-input, first-input
         ///
         /// A joystick can report left and right at once; a game cannot act on
         /// both. `neutral` cancels the pair to centre. `up-priority` cancels
         /// left+right but lets up beat down, which is the fighting-game
         /// standard - it turns down-back into up-back as a JUMP rather than a
-        /// crouch. `off` reports exactly what the keys say.
+        /// crouch. `last-input` follows whichever direction was pressed most
+        /// recently and hands back on release ("snap tap", the leverless
+        /// standard); `first-input` holds the first press until it is
+        /// released. `off` reports exactly what the keys say.
         ///
         /// Omit it to leave the slot's SOCD exactly as it is. This never
         /// defaults to `off`, because that would quietly switch a fighting
@@ -1663,6 +2140,12 @@ impl From<AutostartMode> for ksx_platform::autostart::TaskMode {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Internal pre-Clap worker: one otherwise unbounded HidD output call in a
+    // process the parent can terminate. It must run before logging so a
+    // 64-frame chart transaction does not create 64 unrelated log sessions.
+    if let Some(exit_code) = ksx_platform::hid_report::maybe_run_output_report_worker() {
+        std::process::exit(exit_code);
+    }
     // Logging first, and for **every** command — not just the daemon. A
     // `ksx run` started by the cabinet's logon task has no console either, and
     // the whole point of the file sink is that something is left behind when a
@@ -1894,6 +2377,7 @@ fn main() -> anyhow::Result<()> {
             key,
             clear: _,
             turbo_hz,
+            toggle,
             force,
             move_from,
             when,
@@ -1923,6 +2407,7 @@ fn main() -> anyhow::Result<()> {
                     when,
                     unless,
                     turbo_hz,
+                    toggle,
                 },
             },
             json,
@@ -1979,6 +2464,38 @@ fn main() -> anyhow::Result<()> {
             SessionCommand::Resume { json } => session::run(session::Verb::Resume, json),
             SessionCommand::Reload { json } => session::run(session::Verb::Reload, json),
             SessionCommand::Quit { json } => session::run(session::Verb::Quit, json),
+        },
+        Command::InputTest { command } => match command {
+            InputTestCommand::Start {
+                selector,
+                duration_ms,
+                json,
+            } => input_test_cli::run(
+                input_test_cli::Verb::Start {
+                    selector,
+                    duration_ms,
+                },
+                json,
+            ),
+            InputTestCommand::Poll { json } => {
+                input_test_cli::run(input_test_cli::Verb::Poll, json)
+            }
+            InputTestCommand::Cancel { generation, json } => {
+                input_test_cli::run(input_test_cli::Verb::Cancel { generation }, json)
+            }
+        },
+        Command::Stage { command } => match command {
+            StageCommand::View { json } => stage_cli::run(stage_cli::Verb::View, json),
+            StageCommand::Adopt { game, json } => {
+                stage_cli::run(stage_cli::Verb::Adopt { game }, json)
+            }
+            StageCommand::Reorder { numbers, json } => {
+                stage_cli::run(stage_cli::Verb::Reorder { numbers }, json)
+            }
+            StageCommand::Socd { slot, socd, json } => {
+                stage_cli::run(stage_cli::Verb::Socd { slot, socd }, json)
+            }
+            StageCommand::Apply { json } => stage_cli::run(stage_cli::Verb::Apply, json),
         },
         Command::Config { command } => match command {
             ConfigCommand::Export {
@@ -2047,6 +2564,86 @@ fn main() -> anyhow::Result<()> {
             DeviceCommand::Remove { alias, force, json } => {
                 device_edit::remove(device_edit::RemoveSpec { alias, force }, json)
             }
+        },
+        Command::Panel { command } => match command {
+            PanelCommand::Status { device, json } => panel::run(device, json),
+            PanelCommand::Chart {
+                device,
+                backup,
+                json,
+            } => panel_programming::run_chart_cli(
+                panel_programming::PanelChartSpec { device, backup },
+                json,
+            ),
+            PanelCommand::Backups { device, json } => panel_programming::run_backups_cli(
+                panel_programming::PanelBackupsSpec { device },
+                json,
+            ),
+            PanelCommand::Program {
+                device,
+                base_sha256,
+                canonical_four_player,
+                blank,
+                set,
+                set_shifted,
+                use_as_shift,
+                not_shift,
+                allow_shared_key,
+                expected_desired_sha256,
+                expected_board_fingerprint,
+                expected_protocol_profile,
+                supervised,
+                yes,
+                json,
+            } => panel_programming::run_program_cli(
+                panel_programming::PanelProgramSpec {
+                    device,
+                    expected_base_sha256: base_sha256,
+                    layout: if canonical_four_player {
+                        "canonical-four-player".to_owned()
+                    } else if blank {
+                        "blank".to_owned()
+                    } else {
+                        "custom".to_owned()
+                    },
+                    edits: panel_terminal_edits(
+                        set,
+                        set_shifted,
+                        use_as_shift,
+                        not_shift,
+                        allow_shared_key,
+                    )?,
+                },
+                expected_desired_sha256,
+                expected_board_fingerprint,
+                expected_protocol_profile,
+                supervised,
+                yes,
+                json,
+            ),
+            PanelCommand::Restore {
+                backup_id,
+                device,
+                current_sha256,
+                expected_desired_sha256,
+                expected_board_fingerprint,
+                expected_protocol_profile,
+                supervised,
+                yes,
+                json,
+            } => panel_programming::run_restore_cli(
+                panel_programming::PanelRestoreSpec {
+                    device,
+                    backup_id,
+                    expected_current_sha256: current_sha256,
+                },
+                expected_desired_sha256,
+                expected_board_fingerprint,
+                expected_protocol_profile,
+                supervised,
+                yes,
+                json,
+            ),
         },
         Command::Winusb { command } => match command {
             WinusbCommand::Status { json } => winusb::run(winusb::Options {
@@ -2736,6 +3333,405 @@ mod tests {
     }
 
     #[test]
+    fn panel_status_parses_selector_json_and_has_no_consent_flag() {
+        let cli = Cli::try_parse_from([
+            "ksx",
+            "panel",
+            "status",
+            "--device",
+            "usb:d209:0430:00",
+            "--json",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Panel {
+                command: PanelCommand::Status { device, json },
+            } => {
+                assert_eq!(device.as_deref(), Some("usb:d209:0430:00"));
+                assert!(json);
+            }
+            _ => panic!("parsed to the wrong subcommand"),
+        }
+        assert!(Cli::try_parse_from(["ksx", "panel", "status", "--yes"]).is_err());
+    }
+
+    /// The output worker is an internal process boundary, not a public CLI
+    /// verb. It must dispatch before either logging or Clap so every five-byte
+    /// report does not initialize another product session and the fixed worker
+    /// spelling never leaks into user-facing command help.
+    #[test]
+    fn hid_output_worker_dispatches_before_logging_and_clap() {
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        let worker = source
+            .find("maybe_run_output_report_worker()")
+            .expect("pre-Clap HID output worker dispatch");
+        let logging = source.find("logging::init(").expect("logging setup");
+        let clap = source.find("Cli::parse()").expect("Clap dispatch");
+        assert!(worker < logging && logging < clap);
+        assert!(!Cli::command()
+            .get_subcommands()
+            .any(|command| command.get_name().contains("hid-output-worker")));
+    }
+
+    #[test]
+    fn panel_chart_and_backups_keep_reads_separate_from_consent() {
+        let chart = Cli::try_parse_from([
+            "ksx", "panel", "chart", "--device", "cabinet", "--backup", "--json",
+        ])
+        .unwrap();
+        match chart.command {
+            Command::Panel {
+                command:
+                    PanelCommand::Chart {
+                        device,
+                        backup,
+                        json,
+                    },
+            } => {
+                assert_eq!(device.as_deref(), Some("cabinet"));
+                assert!(backup && json);
+            }
+            _ => panic!("parsed to the wrong subcommand"),
+        }
+        assert!(Cli::try_parse_from(["ksx", "panel", "chart", "--yes"]).is_err());
+
+        let backups =
+            Cli::try_parse_from(["ksx", "panel", "backups", "--device", "cabinet", "--json"])
+                .unwrap();
+        match backups.command {
+            Command::Panel {
+                command: PanelCommand::Backups { device, json },
+            } => {
+                assert_eq!(device.as_deref(), Some("cabinet"));
+                assert!(json);
+            }
+            _ => panic!("parsed to the wrong subcommand"),
+        }
+        assert!(Cli::try_parse_from(["ksx", "panel", "backups", "--yes"]).is_err());
+    }
+
+    #[test]
+    fn panel_program_is_a_plan_until_identity_profile_and_consent_are_present() {
+        let base = "a".repeat(64);
+        let cli = Cli::try_parse_from(vec![
+            "ksx".to_owned(),
+            "panel".to_owned(),
+            "program".to_owned(),
+            "--device".to_owned(),
+            "cabinet".to_owned(),
+            "--base-sha256".to_owned(),
+            base.clone(),
+            "--set".to_owned(),
+            "1SW4=J".to_owned(),
+            "--set-shifted".to_owned(),
+            "1sw4=Escape".to_owned(),
+            "--use-as-shift".to_owned(),
+            "1start".to_owned(),
+            "--allow-shared-key".to_owned(),
+            "1sw4".to_owned(),
+            "--json".to_owned(),
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Panel {
+                command:
+                    PanelCommand::Program {
+                        device,
+                        base_sha256,
+                        canonical_four_player,
+                        set,
+                        set_shifted,
+                        use_as_shift,
+                        allow_shared_key,
+                        expected_desired_sha256,
+                        expected_board_fingerprint,
+                        expected_protocol_profile,
+                        supervised,
+                        yes,
+                        json,
+                        ..
+                    },
+            } => {
+                assert_eq!(device.as_deref(), Some("cabinet"));
+                assert_eq!(base_sha256, base.to_ascii_uppercase());
+                assert!(!canonical_four_player && !yes);
+                assert_eq!(expected_desired_sha256, None);
+                assert_eq!(expected_board_fingerprint, None);
+                assert_eq!(expected_protocol_profile, None);
+                assert!(!supervised);
+                assert_eq!(set[0].terminal, "1sw4");
+                assert_eq!(set[0].key, "J");
+                assert_eq!(set_shifted[0].key, "Escape");
+                assert_eq!(use_as_shift, ["1start"]);
+                assert_eq!(allow_shared_key, ["1sw4"]);
+                assert!(json);
+            }
+            _ => panic!("parsed to the wrong subcommand"),
+        }
+
+        let base_args = [
+            "ksx",
+            "panel",
+            "program",
+            "--base-sha256",
+            base.as_str(),
+            "--canonical-four-player",
+        ];
+        let mut yes_without_hash = base_args.to_vec();
+        yes_without_hash.push("--yes");
+        assert!(Cli::try_parse_from(yes_without_hash).is_err());
+
+        let desired = "b".repeat(64);
+        let fingerprint = "D209:0430:bcd0056:MI_02:fixture";
+        let profile = "ipac4-pac256-v1";
+        let mut hash_without_yes = base_args.to_vec();
+        hash_without_yes.extend(["--expected-desired-sha256", desired.as_str()]);
+        assert!(Cli::try_parse_from(hash_without_yes).is_err());
+
+        let mut missing_supervision = base_args.to_vec();
+        missing_supervision.extend([
+            "--yes",
+            "--expected-desired-sha256",
+            desired.as_str(),
+            "--expected-board-fingerprint",
+            fingerprint,
+            "--expected-protocol-profile",
+            profile,
+        ]);
+        assert!(Cli::try_parse_from(missing_supervision).is_err());
+
+        let mut confirmed = base_args.to_vec();
+        confirmed.extend([
+            "--yes",
+            "--expected-desired-sha256",
+            desired.as_str(),
+            "--expected-board-fingerprint",
+            fingerprint,
+            "--expected-protocol-profile",
+            profile,
+            "--supervised",
+        ]);
+        let confirmed = Cli::try_parse_from(confirmed).unwrap();
+        match confirmed.command {
+            Command::Panel {
+                command:
+                    PanelCommand::Program {
+                        expected_board_fingerprint,
+                        expected_protocol_profile,
+                        supervised,
+                        yes,
+                        ..
+                    },
+            } => {
+                assert_eq!(expected_board_fingerprint.as_deref(), Some(fingerprint));
+                assert_eq!(expected_protocol_profile.as_deref(), Some(profile));
+                assert!(supervised && yes);
+            }
+            _ => panic!("parsed to the wrong subcommand"),
+        }
+    }
+
+    #[test]
+    fn panel_program_requires_one_layout_and_never_mixes_canonical_with_edits() {
+        let hash = "1".repeat(64);
+        assert!(
+            Cli::try_parse_from(["ksx", "panel", "program", "--base-sha256", hash.as_str(),])
+                .is_err()
+        );
+        assert!(Cli::try_parse_from([
+            "ksx",
+            "panel",
+            "program",
+            "--base-sha256",
+            hash.as_str(),
+            "--canonical-four-player",
+            "--set",
+            "1sw4=J",
+        ])
+        .is_err());
+        let blank = Cli::try_parse_from([
+            "ksx",
+            "panel",
+            "program",
+            "--base-sha256",
+            hash.as_str(),
+            "--blank",
+        ])
+        .unwrap();
+        assert!(matches!(
+            blank.command,
+            Command::Panel {
+                command: PanelCommand::Program {
+                    blank: true,
+                    canonical_four_player: false,
+                    ..
+                }
+            }
+        ));
+        assert!(Cli::try_parse_from([
+            "ksx",
+            "panel",
+            "program",
+            "--base-sha256",
+            hash.as_str(),
+            "--blank",
+            "--set",
+            "1sw4=J",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "ksx",
+            "panel",
+            "program",
+            "--base-sha256",
+            "not-a-hash",
+            "--canonical-four-player",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn semantic_terminal_arguments_merge_planes_and_preserve_clear() {
+        let edits = panel_terminal_edits(
+            vec!["1SW4=".parse().unwrap()],
+            vec!["1sw4=Escape".parse().unwrap()],
+            vec!["1START".to_owned()],
+            Vec::new(),
+            vec!["1sw4".to_owned()],
+        )
+        .unwrap();
+        assert_eq!(edits.len(), 2);
+        assert_eq!(edits[0].terminal_id, "1start");
+        assert_eq!(edits[0].is_shift, Some(true));
+        assert_eq!(edits[1].terminal_id, "1sw4");
+        assert_eq!(edits[1].normal_key.as_deref(), Some(""));
+        assert_eq!(edits[1].shifted_key.as_deref(), Some("Escape"));
+        assert!(edits[1].allow_shared_key);
+
+        assert!(panel_terminal_edits(
+            vec!["1sw4=J".parse().unwrap(), "1SW4=K".parse().unwrap()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .is_err());
+        assert!(panel_terminal_edits(
+            Vec::new(),
+            Vec::new(),
+            vec!["1start".to_owned()],
+            vec!["1START".to_owned()],
+            Vec::new(),
+        )
+        .is_err());
+        assert!(panel_terminal_edits(
+            vec!["1sw4=J".parse().unwrap()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec!["2sw4".to_owned()],
+        )
+        .is_err());
+        assert!("1sw4".parse::<PanelKeyAssignment>().is_err());
+        assert!("=J".parse::<PanelKeyAssignment>().is_err());
+    }
+
+    #[test]
+    fn panel_restore_is_also_plan_first_and_hash_bound() {
+        let current = "c".repeat(64);
+        let plan = Cli::try_parse_from([
+            "ksx",
+            "panel",
+            "restore",
+            "backup-20260823",
+            "--device",
+            "cabinet",
+            "--current-sha256",
+            current.as_str(),
+            "--json",
+        ])
+        .unwrap();
+        match plan.command {
+            Command::Panel {
+                command:
+                    PanelCommand::Restore {
+                        backup_id,
+                        device,
+                        current_sha256,
+                        expected_desired_sha256,
+                        expected_board_fingerprint,
+                        expected_protocol_profile,
+                        supervised,
+                        yes,
+                        json,
+                    },
+            } => {
+                assert_eq!(backup_id, "backup-20260823");
+                assert_eq!(device.as_deref(), Some("cabinet"));
+                assert_eq!(current_sha256, current.to_ascii_uppercase());
+                assert_eq!(expected_desired_sha256, None);
+                assert_eq!(expected_board_fingerprint, None);
+                assert_eq!(expected_protocol_profile, None);
+                assert!(!supervised);
+                assert!(!yes);
+                assert!(json);
+            }
+            _ => panic!("parsed to the wrong subcommand"),
+        }
+
+        assert!(Cli::try_parse_from([
+            "ksx",
+            "panel",
+            "restore",
+            "backup-20260823",
+            "--current-sha256",
+            current.as_str(),
+            "--yes",
+        ])
+        .is_err());
+
+        let desired = "d".repeat(64);
+        let confirmed = Cli::try_parse_from([
+            "ksx",
+            "panel",
+            "restore",
+            "backup-20260823",
+            "--current-sha256",
+            current.as_str(),
+            "--yes",
+            "--expected-desired-sha256",
+            desired.as_str(),
+            "--expected-board-fingerprint",
+            "D209:0430:bcd0056:MI_02:fixture",
+            "--expected-protocol-profile",
+            "ipac4-pac256-v1",
+            "--supervised",
+        ]);
+        assert!(confirmed.is_ok());
+    }
+
+    #[test]
+    fn panel_program_help_explains_the_review_apply_recovery_flow() {
+        let mut command = Cli::command();
+        let panel = command.find_subcommand_mut("panel").unwrap();
+        let program = panel.find_subcommand_mut("program").unwrap();
+        let help = program.render_long_help().to_string();
+        let flat = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        for needle in [
+            "default is a non-mutating plan",
+            "--expected-desired-sha256",
+            "--expected-board-fingerprint",
+            "--expected-protocol-profile",
+            "--supervised",
+            "saves a lossless backup",
+            "persistent encoder memory",
+            "verifies every byte",
+        ] {
+            assert!(flat.contains(needle), "missing '{needle}' in:\n{help}");
+        }
+    }
+
+    #[test]
     fn winusb_claim_and_release_take_a_device_and_default_to_not_acting() {
         let cli = Cli::try_parse_from(["ksx", "winusb", "claim", "MI_00"]).unwrap();
         match cli.command {
@@ -3046,6 +4042,7 @@ mod tests {
                 key,
                 clear,
                 turbo_hz: _,
+                toggle: _,
                 force,
                 move_from,
                 when,
@@ -3456,6 +4453,96 @@ mod tests {
             "2 = no daemon control channel",
             "predates `ksx session`",
             "`quit` alone treats this as exit 0",
+        ] {
+            assert!(flat.contains(needle), "missing '{needle}' in:\n{help}");
+        }
+    }
+
+    #[test]
+    fn input_test_actions_parse_with_backend_owned_bounds_and_generation() {
+        let cli = Cli::try_parse_from(["ksx", "input-test", "start", "usb:d209:0430:00", "--json"])
+            .unwrap();
+        match cli.command {
+            Command::InputTest {
+                command:
+                    InputTestCommand::Start {
+                        selector,
+                        duration_ms,
+                        json,
+                    },
+            } => {
+                assert_eq!(selector, "usb:d209:0430:00");
+                assert_eq!(duration_ms, input_test_cli::DEFAULT_DURATION_MS);
+                assert!(json);
+            }
+            _ => panic!("parsed to the wrong subcommand"),
+        }
+
+        for duration in [
+            input_test_cli::MIN_DURATION_MS,
+            input_test_cli::MAX_DURATION_MS,
+        ] {
+            assert!(Cli::try_parse_from([
+                "ksx".to_owned(),
+                "input-test".to_owned(),
+                "start".to_owned(),
+                "usb:d209:0430:00".to_owned(),
+                "--duration-ms".to_owned(),
+                duration.to_string(),
+            ])
+            .is_ok());
+        }
+        for duration in [
+            input_test_cli::MIN_DURATION_MS - 1,
+            input_test_cli::MAX_DURATION_MS + 1,
+        ] {
+            assert!(Cli::try_parse_from([
+                "ksx".to_owned(),
+                "input-test".to_owned(),
+                "start".to_owned(),
+                "usb:d209:0430:00".to_owned(),
+                "--duration-ms".to_owned(),
+                duration.to_string(),
+            ])
+            .is_err());
+        }
+        assert!(Cli::try_parse_from(["ksx", "input-test", "start"]).is_err());
+        assert!(Cli::try_parse_from(["ksx", "input-test", "poll", "--json"]).is_ok());
+
+        let cli =
+            Cli::try_parse_from(["ksx", "input-test", "cancel", "--generation", "42"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::InputTest {
+                command: InputTestCommand::Cancel {
+                    generation: 42,
+                    json: false,
+                }
+            }
+        ));
+        assert!(
+            Cli::try_parse_from(["ksx", "input-test", "cancel"]).is_err(),
+            "a new client must not expose the unscoped legacy cancel spelling"
+        );
+    }
+
+    #[test]
+    fn input_test_help_states_the_measurement_and_exclusion_contract() {
+        let mut cmd = Cli::command();
+        let input_test = cmd.find_subcommand_mut("input-test").unwrap();
+        let help = input_test.render_long_help().to_string();
+        let flat = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        for needle in [
+            "decoded Windows signals",
+            "does NOT claim to measure physical switches or USB rollover",
+            "two terminals emitting the same key are indistinguishable",
+            "Raw Input does not expose an ErrorRollOver report",
+            "Learn owns the same physical observer",
+            "machine-wide lease",
+            "standalone processes",
+            "one typed control-pipe request",
+            "no mapping, hardware chart or EEPROM byte changes",
+            "2 = no daemon control channel",
         ] {
             assert!(flat.contains(needle), "missing '{needle}' in:\n{help}");
         }

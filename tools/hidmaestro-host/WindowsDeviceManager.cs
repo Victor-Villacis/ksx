@@ -18,7 +18,14 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
     private const string OwnershipName = "KSXRuntimeOwner";
     private const string OwnershipValue = "ksx-hidmaestro-host-v1";
     private const string ExpectedInfSha256 = "187D5B06625CEECC0E1B43C0FA8DDA5F6DAB6A9962F79B037BBAD419F1084704";
-    private const string ExpectedDriverSha256 = "D68EF6C311E295C6599634BF8E74A7FB18BA915DB809F4CD7DD040111EA40A5C";
+    // SHA-256 the SDK's installer writes over its five UNSIGNED payload
+    // resources (HKLM\SOFTWARE\HIDMaestro\InstalledManifestSha256).
+    // Deterministic per SDK version — unlike the installed driver DLL's bytes,
+    // which InstallDriver() re-signs with an install-time-generated test
+    // certificate (measured 2026-08-20: signing appends ~1.4 KB and the cert's
+    // NotBefore is the install second minus a day). An earlier revision pinned
+    // the installed DLL bytes and therefore refused every legitimate install.
+    private const string ExpectedManifestSha256 = "2f5c0313b3ea6fa79179a501648d9ff1b4330fbc4d1ab23294be14885edb2d8c";
     private const string HardwareId = @"root\VID_054C&PID_0CE6";
     private const uint CrSuccess = 0;
     private const uint CrNoSuchDevnode = 0x0000000D;
@@ -34,7 +41,11 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
     {
         string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
             @"System32\DriverStore\FileRepository");
-        string[] packages = Directory.EnumerateFileSystemEntries(
+        // Directories only: the Driver Store keeps a "<package>.ini" sidecar
+        // FILE beside every package directory whose name matches the same
+        // prefix; EnumerateFileSystemEntries counted it and made "exactly one
+        // package" see two on every staged machine (measured 2026-08-20).
+        string[] packages = Directory.EnumerateDirectories(
             root,
             "hidmaestro.inf_amd64_*",
             SearchOption.TopDirectoryOnly).ToArray();
@@ -52,17 +63,50 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
             throw new HidMaestroPackageUnavailableException(
                 "The HIDMaestro Driver Store package is incomplete.");
         string infHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(inf)));
-        string driverHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(dll)));
-        if (!infHash.Equals(ExpectedInfSha256, StringComparison.Ordinal)
-            || !driverHash.Equals(ExpectedDriverSha256, StringComparison.Ordinal))
+        if (!infHash.Equals(ExpectedInfSha256, StringComparison.Ordinal))
             throw new HidMaestroPackageUnavailableException(
-                "The HIDMaestro Driver Store package does not match pinned v1.6.1 bytes.");
-        using RegistryKey? service = Registry.LocalMachine.OpenSubKey(
-            @"SYSTEM\CurrentControlSet\Services\HIDMaestro", writable: false);
-        if (service is null)
+                "The HIDMaestro Driver Store package INF does not match pinned v1.6.1 bytes.");
+        // The DLL's presence was proven above; its bytes are not compared —
+        // they are re-signed per install. Version identity comes from the
+        // SDK's own installed-payload manifest instead.
+        using RegistryKey? manifestKey = Registry.LocalMachine.OpenSubKey(
+            @"SOFTWARE\HIDMaestro", writable: false);
+        string? manifest = manifestKey?.GetValue("InstalledManifestSha256") as string;
+        if (manifest is null
+            || !manifest.Equals(ExpectedManifestSha256, StringComparison.OrdinalIgnoreCase))
             throw new HidMaestroPackageUnavailableException(
-                "The pinned HIDMaestro v1.6.1 service registration is missing.");
+                "The installed HIDMaestro payload manifest does not match pinned v1.6.1.");
+        // The HIDMaestro service key is deliberately NOT required here: the
+        // UMDF service materialises when the FIRST root\HIDMaestro devnode
+        // binds the INF, so requiring it would refuse the very install whose
+        // first controller creation is about to create it.
         return new RuntimePreinstalledPackageProof(ExpectedInfSha256);
+    }
+
+    /// <summary>
+    /// Re-derives the pinned Driver Store package's INF path for the
+    /// registration-time bind, re-proving byte identity fail-closed. The
+    /// package proof deliberately stays an identity (not a path): re-walking
+    /// here means a package swapped between proof and registration is refused
+    /// rather than silently bound.
+    /// </summary>
+    private static string PinnedPackageInfPath()
+    {
+        string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            @"System32\DriverStore\FileRepository");
+        string[] packages = Directory.EnumerateDirectories(
+            root,
+            "hidmaestro.inf_amd64_*",
+            SearchOption.TopDirectoryOnly).ToArray();
+        if (packages.Length != 1)
+            throw new InvalidOperationException(
+                "Exactly one pinned HIDMaestro v1.6.1 Driver Store package is required for binding.");
+        string inf = Path.Combine(packages[0], "hidmaestro.inf");
+        string infHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(inf)));
+        if (!infHash.Equals(ExpectedInfSha256, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "The HIDMaestro Driver Store package INF changed between proof and binding.");
+        return inf;
     }
 
     public RuntimeDeviceRegistration RegisterPlainHidDualSense(RuntimePreinstalledPackageProof proof)
@@ -90,6 +134,17 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
                 using RegistryKey config = Registry.LocalMachine.OpenSubKey(ControllerKey, writable: true)
                     ?? throw new InvalidOperationException("The exact controller configuration disappeared.");
                 config.SetValue("DeviceInstanceId", parent, RegistryValueKind.String);
+                // Bind the pinned package to the fresh root devnode.
+                // DIF_REGISTERDEVICE only CREATES the node — nothing installs
+                // a driver on it, and a driverless root devnode never
+                // enumerates the HID child (measured 2026-08-20: zero PnP
+                // sections in setupapi.dev.log across three attempts while
+                // ProveExactParentBound burned its full wait each time).
+                // Upstream v1.6.1 makes this exact call after registration
+                // (DeviceNodeCreator.cs), warning in its own words that a
+                // failure here means "downstream waits will time out".
+                if (!UpdateDriverForPlugAndPlayDevicesW(0, HardwareId, PinnedPackageInfPath(), 0, out _))
+                    throw Last("The pinned HIDMaestro package could not be bound to the exact DualSense root.");
                 _ownedParent = parent;
                 return new RuntimeDeviceRegistration(parent);
             }
@@ -105,23 +160,92 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
     public void ProveExactParentBound(RuntimeDeviceRegistration registration)
     {
         ValidateParent(registration);
-        DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+        // 12 s, deliberately INSIDE the Rust client's CREATE_TIMEOUT (15 s):
+        // the host must answer with a definite Created/Fault before the
+        // client's transport deadline, or a slow first bind reads as a torn
+        // lane instead of a named refusal (measured 2026-08-20: the previous
+        // 15 s wait raced CREATE_TIMEOUT to a photo finish — 15.2 s walls —
+        // and the client always left ~0.1 s before the host's fault arrived).
+        DateTime deadline = DateTime.UtcNow.AddSeconds(12);
         while (true)
         {
             IReadOnlyList<string> children = DirectChildren(registration.ParentInstanceId);
-            if (children.Count > 0)
+            bool proven = false;
+            bool pending = children.Count == 0;
+            foreach (string child in children)
             {
-                foreach (string child in children)
+                switch (ChildIdentity(child))
                 {
-                    if (!child.StartsWith(@"HID\VID_054C&PID_0CE6", StringComparison.OrdinalIgnoreCase))
-                        throw new InvalidOperationException("The exact root acquired an unexpected child device.");
+                    case ChildKind.ExactDualSense:
+                        proven = true;
+                        break;
+                    case ChildKind.Foreign:
+                        throw new InvalidOperationException(
+                            $"The exact root acquired an unexpected child device: {child}.");
+                    case ChildKind.NotYetIdentifiable:
+                        pending = true;
+                        break;
                 }
-                return;
             }
+            if (proven && !pending) return;
             if (DateTime.UtcNow >= deadline)
                 throw new TimeoutException("The preinstalled HIDMaestro package did not bind the exact DualSense root.");
             Thread.Sleep(50);
         }
+    }
+
+    private enum ChildKind
+    {
+        ExactDualSense,
+        Foreign,
+        NotYetIdentifiable,
+    }
+
+    private static bool ChildIsExactDualSense(string childInstanceId) =>
+        ChildIdentity(childInstanceId) == ChildKind.ExactDualSense;
+
+    /// <summary>
+    /// A child under the owned root is the exact DualSense iff its HARDWARE ID
+    /// list carries the driver-reported identity. Measured 2026-08-20 on a
+    /// live pad: the child's INSTANCE path spells <c>HID\HIDCLASS\…</c> (it is
+    /// derived from the root-enumerated parent, never from VID/PID), while its
+    /// <c>HardwareID</c> multi-sz leads with <c>HID\VID_xxxx&amp;PID_yyyy</c> —
+    /// the earlier instance-prefix check refused every legitimate child. A
+    /// child can also surface in the devnode tree before PnP finishes writing
+    /// its Enum mirror; an unreadable identity means "still materialising",
+    /// never "foreign", so the bound-wait keeps waiting instead of refusing a
+    /// pad that is mid-birth.
+    /// </summary>
+    /// <summary>
+    /// The retained root is ours iff its `HardwareID` multi-sz carries the
+    /// exact identity this host writes at registration (measured live:
+    /// `root\VID_054C&amp;PID_0CE6 ; root\HIDMaestro`).
+    /// </summary>
+    private static bool ParentIsExactRoot(string parentInstanceId)
+    {
+        using RegistryKey? key = Registry.LocalMachine.OpenSubKey(
+            $@"SYSTEM\CurrentControlSet\Enum\{parentInstanceId}", writable: false);
+        if (key?.GetValue("HardwareID") is not string[] ids) return false;
+        foreach (string id in ids)
+        {
+            if (id.Equals(HardwareId, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    private static ChildKind ChildIdentity(string childInstanceId)
+    {
+        using RegistryKey? key = Registry.LocalMachine.OpenSubKey(
+            $@"SYSTEM\CurrentControlSet\Enum\{childInstanceId}", writable: false);
+        if (key?.GetValue("HardwareID") is not string[] ids || ids.Length == 0)
+            return ChildKind.NotYetIdentifiable;
+        foreach (string id in ids)
+        {
+            if (id.StartsWith(@"HID\VID_054C&PID_0CE6", StringComparison.OrdinalIgnoreCase))
+                return ChildKind.ExactDualSense;
+        }
+        return ChildKind.Foreign;
     }
 
     public IReadOnlyList<string> ReadExactChildInstanceIds(RuntimeDeviceRegistration registration)
@@ -134,8 +258,10 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
             _ownedChildren.Clear();
             foreach (string child in children)
             {
-                if (!child.StartsWith(@"HID\VID_054C&PID_0CE6", StringComparison.OrdinalIgnoreCase)
-                    || !_ownedChildren.Add(child))
+                // Hardware-id identity, not instance-path spelling — the
+                // measured child instance is `HID\HIDCLASS\…` (see
+                // ChildIsExactDualSense).
+                if (!ChildIsExactDualSense(child) || !_ownedChildren.Add(child))
                     throw new InvalidOperationException("The exact HIDMaestro child set is not valid.");
             }
         }
@@ -206,9 +332,17 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
 
         if (!string.IsNullOrWhiteSpace(parent))
         {
-            string expectedPrefix = HardwareId + "\\";
-            if (!parent.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
+            // Hardware-id identity, not instance-path spelling: PnP names the
+            // root devnode `ROOT\HIDCLASS\NNNN` (measured 2026-08-20, three
+            // times), so a `root\VID_…`-prefix check on the INSTANCE id
+            // refused every legitimate residue and DEADLOCKED recovery — the
+            // same defect as the child checks, in its third home. A devnode
+            // that no longer exists needs no identity proof to forget.
+            if (CM_Locate_DevNodeW(out _, parent, 0) == CrSuccess
+                && !ParentIsExactRoot(parent))
+            {
                 throw new InvalidOperationException("The retained KSX HIDMaestro device identity is not exact.");
+            }
             TryUninstall(parent);
         }
         DeleteOwnedConfiguration();
@@ -308,4 +442,6 @@ internal sealed class WindowsDeviceManager : IRuntimeExactDeviceManager
     [DllImport("cfgmgr32.dll")] private static extern uint CM_Get_Sibling(out uint sibling, uint node, uint flags);
     [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)] private static extern uint CM_Get_Device_IDW(uint node, [Out] char[] id, uint length, uint flags);
     [DllImport("cfgmgr32.dll")] private static extern uint CM_Uninstall_DevNode(uint node, uint flags);
+    [DllImport("newdev.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)] private static extern bool UpdateDriverForPlugAndPlayDevicesW(nint parent, string hardwareId, string infPath, uint flags, [MarshalAs(UnmanagedType.Bool)] out bool rebootRequired);
 }

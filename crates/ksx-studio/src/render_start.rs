@@ -81,12 +81,14 @@ const ISLAND_COMPONENT: &str = "StartIsland";
 
 /// How many `createShow` pairs this page has. Name-addressable since compiler
 /// 0.3.1, so this is a staleness tripwire rather than a mapping.
-const SHOW_COUNT: usize = 32;
+const SHOW_COUNT: usize = 35;
 
 /// Bare-named slots the island renders and the seam deliberately never fills.
-/// EMPTY, and that is the claim.
+/// Fragment location is browser-owned: HTTP never receives `#keyboard` or
+/// `#controller`, so authored defaults seed SSR and the client updates these
+/// two attributes from `window.location.hash`.
 #[cfg(test)]
-const CLIENT_ONLY_SLOTS: [&str; 0] = [];
+const CLIENT_ONLY_SLOTS: [&str; 2] = ["journeyKeyboardCurrent", "journeyControllerCurrent"];
 
 /// Anonymous (`attr:`/`text:`) slots this page compiles to. EMPTY, and it is
 /// enforced by construction: `StartIsland.ts` does no string concatenation
@@ -121,23 +123,32 @@ fn scalar_slots(payload: &StartPayload, flash: Option<&str>) -> serde_json::Valu
         "autostartDetail": payload.autostart.detail,
         "autostartButton": payload.autostart.button,
         "autostartStaleDetail": payload.autostart.stale_detail,
-        "autostartError": payload.autostart.error,
+        // Reuse the card's non-form explanation branch for a readable but
+        // deliberately immutable managed-development view. The API still says
+        // `readable: true`; this scalar only decides what that branch says.
+        "autostartError": if payload.autostart.read_only {
+            &payload.autostart.detail
+        } else {
+            &payload.autostart.error
+        },
         "autostartEnable": if payload.autostart.enable { "yes" } else { "no" },
         "controllerLine": lines.controller_line,
         "xinputLine": lines.xinput_line,
         "blockingLine": lines.blocking_line,
         "presetLine": lines.preset_line,
         "mapperLine": lines.mapper_line,
-        // The driver banner. The heading and the class are this page's
-        // (`StartLines`); the two sentences are `ksx_api::PadBusView`'s, taken
+        // The output banner. The heading and the class are this page's
+        // (`StartLines`); the two sentences are the persona-derived
+        // `ksx_api::ControllerOutputsView`'s, taken
         // verbatim off the view for the same reason `escapeLine` below is
         // taken off the staged view — they are composed beside the type that
         // decided them, and a page that paraphrased would be re-judging.
         "busHeading": lines.bus_heading,
         "busCls": lines.bus_cls,
-        "busLine": payload.pad_bus.line,
-        "busRemedy": payload.pad_bus.remedy,
-        "readyLine": lines.ready_line,
+        "busLine": payload.controller_outputs.line,
+        "busRemedy": payload.controller_outputs.remedy,
+        "saveStatus": lines.save_status,
+        "playStatus": lines.play_status,
         "playLine": lines.play_line,
         "guideLine": lines.guide_line,
         "escapeLine": lines.escape_line,
@@ -150,6 +161,18 @@ fn scalar_slots(payload: &StartPayload, flash: Option<&str>) -> serde_json::Valu
         // first-run user's files.
         "nextPreset": payload.staged.next_preset.clone().unwrap_or_default(),
         "flashLine": flash.unwrap_or(""),
+        "journeyKeyboardCls": payload.journey.keyboard.cls,
+        "journeyKeyboardBadge": payload.journey.keyboard.badge,
+        "journeyKeyboardDetail": payload.journey.keyboard.detail,
+        "journeyControllerCls": payload.journey.controller.cls,
+        "journeyControllerBadge": payload.journey.controller.badge,
+        "journeyControllerDetail": payload.journey.controller.detail,
+        "journeyMappingCls": payload.journey.mapping.cls,
+        "journeyMappingBadge": payload.journey.mapping.badge,
+        "journeyMappingDetail": payload.journey.mapping.detail,
+        "journeyPlayCls": payload.journey.play.cls,
+        "journeyPlayBadge": payload.journey.play.badge,
+        "journeyPlayDetail": payload.journey.play.detail,
     })
 }
 
@@ -379,10 +402,17 @@ fn show_values(payload: &StartPayload, flash: Option<&str>) -> [(&'static str, b
         ("show:capturePrepare", f.capture_prepare),
         ("show:captureRelease", f.capture_release),
         ("show:captureBlocked", f.capture_blocked),
-        ("show:autostartReadable", payload.autostart.readable),
-        ("show:autostartUnreadable", !payload.autostart.readable),
+        (
+            "show:autostartReadable",
+            payload.autostart.readable && !payload.autostart.read_only,
+        ),
+        (
+            "show:autostartUnreadable",
+            !payload.autostart.readable || payload.autostart.read_only,
+        ),
         ("show:autostartStale", payload.autostart.stale),
         ("show:hasBoards", f.has_boards),
+        ("show:hasBoards#2", f.has_boards),
         ("show:hasExperimental", f.has_experimental),
         ("show:noBoards", f.no_boards),
         ("show:hasOther", f.has_other),
@@ -393,8 +423,10 @@ fn show_values(payload: &StartPayload, flash: Option<&str>) -> [(&'static str, b
         ("show:hasGaps", f.has_gaps),
         ("show:canLayout", f.can_layout),
         ("show:blockingAnswered", f.blocking_answered),
-        ("show:ready", f.ready),
-        ("show:notReady", f.not_ready),
+        ("show:canSave", f.can_save),
+        ("show:cannotSave", f.cannot_save),
+        ("show:canPlay", f.can_play),
+        ("show:cannotPlay", f.cannot_play),
         ("show:canDiscard", f.can_discard),
         ("show:sessionLive", f.session_live),
         ("show:flashOk", flash.is_some() && !flash_err),
@@ -610,7 +642,35 @@ mod tests {
         }
     }
 
+    /// A machine with every prerequisite the stage asks for. HIDMaestro stays
+    /// `verified-on-play` even in this healthy fixture: an installed package is
+    /// not a controller endpoint that has already started.
+    fn healthy_outputs(staged: &StagedSetupView) -> ksx_api::ControllerOutputsView {
+        let rows = ksx_api::ControllerOutputsView::requirements(staged)
+            .into_iter()
+            .map(|requirement| {
+                let backend = requirement.backend.clone();
+                match backend.as_str() {
+                    "vigem" => ksx_api::ControllerOutputView::vigem(
+                        requirement,
+                        ksx_api::vigem_output_codes::HEALTHY,
+                        Some("1.22.0.0".into()),
+                    ),
+                    "hidmaestro" => {
+                        ksx_api::ControllerOutputView::hidmaestro(requirement, true, false, None)
+                    }
+                    other => ksx_api::ControllerOutputView::unreadable(
+                        requirement,
+                        format!("no fixture for {other}"),
+                    ),
+                }
+            })
+            .collect();
+        ksx_api::ControllerOutputsView::from_required(rows)
+    }
+
     fn payload(staged: StagedSetupView) -> StartPayload {
+        let controller_outputs = healthy_outputs(&staged);
         StartPayload {
             staged,
             scan: scan(),
@@ -620,18 +680,14 @@ mod tests {
                 line: "idle — daemon reachable".into(),
                 profile: None,
                 origin: ksx_api::SessionOrigin::Unknown,
+                active: None,
             },
-            // A machine whose driver is fine. Stated rather than defaulted:
-            // `PadBusView::default()` is the UNREADABLE view (deliberately —
-            // see its Default impl), so every fixture here would otherwise be
-            // rendering the "could not be checked" banner, and the tests that
-            // care about that banner would prove nothing.
-            pad_bus: ksx_api::PadBusView::from_doctor(
-                ksx_api::pad_bus_codes::HEALTHY,
-                Some("1.22.0.0".into()),
-            ),
+            // Stated rather than defaulted: an uncollected output view is
+            // UNKNOWN, so tests about some other banner must not pass because
+            // the fixture accidentally supplied a second failure.
+            controller_outputs,
             // A machine whose scheduler ANSWERED, and said "nothing
-            // registered". Stated for the same reason `pad_bus` above is: the
+            // registered". Stated for the same reason the output view above is: the
             // default is `None`, which is the read-REFUSED view, so every
             // fixture would otherwise render "could not be read" and
             // `a_read_that_failed_never_renders_as_an_absence` would be
@@ -766,6 +822,10 @@ mod tests {
             .collect();
 
         let scalars = scalar_slots(&StartPayload::default(), None);
+        assert!(
+            !names.contains(&"readyLine"),
+            "the legacy ready_line API alias must not become a duplicate rendered paragraph"
+        );
         for key in scalars.as_object().unwrap().keys() {
             assert!(
                 names.contains(&key.as_str()),
@@ -882,9 +942,18 @@ mod tests {
             !p.rows.prepared.is_empty(),
             "the claimed fixture must reach the held-keyboard list"
         );
-        assert!(
-            !p.rows.gaps.is_empty(),
-            "the roster carries un-pluggable personas"
+        // Retro leg flip 2026-08-20: every persona plugs, so the gap list is
+        // empty — asserted EXACTLY (an exact pin caught a dropped row when
+        // the list was populated, and catches a phantom row now).
+        assert_eq!(
+            p.rows
+                .gaps
+                .iter()
+                .map(|g| g.label.as_str())
+                .collect::<Vec<_>>(),
+            Vec::<&str>::new(),
+            "{:?}",
+            p.rows.gaps
         );
         // The reference scan has one ordinary keyboard and one board that
         // cannot be picked. Populate the opt-in arbitrary-HID list here too:
@@ -911,6 +980,11 @@ mod tests {
             let SlotValue::Array(rows) = &value else {
                 panic!("{list_slot} is not an array");
             };
+            // Retro leg flip: `gapRows` is legitimately empty while every
+            // persona plugs — it refills with the next gated persona.
+            if signal == "gapRows" && rows.is_empty() {
+                continue;
+            }
             let first = rows.first().unwrap_or_else(|| {
                 panic!("the fixture must populate {signal}, or this proves nothing")
             });
@@ -1259,7 +1333,7 @@ mod tests {
         );
         assert!(
             out.html.contains(r#"href="/map?target=stage&amp;slot=1""#)
-                && out.html.contains("Choose controls"),
+                && out.html.contains("Map controls"),
             "the link must target the staged mapper: {}",
             out.html
         );
@@ -1408,11 +1482,10 @@ mod tests {
     /// pre-selected answer — which is the version this test exists to fail.
     fn blocking_card(html: &str) -> &str {
         let start = html
-            .find("Freeze this keyboard, or split it?")
+            .find("Should this keyboard keep typing?")
             .expect("the question's heading");
         let end = html[start..]
-            .find("4 &middot; Play")
-            .or_else(|| html[start..].find("4 · Play"))
+            .find("Save it for later or start playing now")
             .map(|at| start + at)
             .unwrap_or(html.len());
         &html[start..end]
@@ -1697,7 +1770,7 @@ mod tests {
         assert_ne!(empty.html, blind.html);
     }
 
-    /// **A machine that cannot plug a pad says so before the Play button.**
+    /// **A required output that cannot plug says so before the Play button.**
     ///
     /// Fails against every version of this page before the driver read
     /// existed. On those, a PC that had never had ViGEmBus rendered a
@@ -1707,21 +1780,31 @@ mod tests {
     /// while nothing works — and the fix was a shell command, which §7
     /// forbids as an answer.
     ///
-    /// Three states are asserted because the page has to tell them apart:
-    /// a bus that is known bad, a bus nothing could be learned about, and a
-    /// healthy one that must stay quiet. Collapsing the middle into either
-    /// neighbour is `SURFACES.md` §1b.
+    /// Three states are asserted because the page has to tell them apart: an
+    /// output known bad, one nothing could be learned about, and a healthy one
+    /// that must stay quiet. Collapsing the middle into either neighbour is
+    /// `SURFACES.md` §1b.
     #[test]
-    fn a_bus_that_cannot_plug_is_stated_before_the_play_button() {
+    fn a_required_output_that_cannot_plug_is_stated_before_the_play_button() {
         let page = EmbeddedPage::load("/start").unwrap();
-        let staged = payload(stage(&[choose(), add("xbox360")]));
+        let staged = payload(stage(&[choose(), add("xbox360"), answer()]));
+        let vigem = ksx_api::ControllerOutputsView::requirements(&staged.staged)
+            .into_iter()
+            .find(|requirement| requirement.backend == "vigem")
+            .expect("the Xbox stage requires ViGEmBus");
 
         // (1) NO VIGEMBUS. The setup is otherwise perfect and ready — which is
         // exactly the machine this test exists for.
         let missing = render_start(
             &page,
             &StartPayload {
-                pad_bus: ksx_api::PadBusView::from_doctor(ksx_api::pad_bus_codes::MISSING, None),
+                controller_outputs: ksx_api::ControllerOutputsView::from_required(vec![
+                    ksx_api::ControllerOutputView::vigem(
+                        vigem.clone(),
+                        ksx_api::vigem_output_codes::MISSING,
+                        None,
+                    ),
+                ]),
                 ..staged.clone()
             }
             .composed(),
@@ -1732,8 +1815,44 @@ mod tests {
             "a ready setup on a machine with no bus said nothing: {}",
             missing.html
         );
+        let missing_payload = StartPayload {
+            controller_outputs: ksx_api::ControllerOutputsView::from_required(vec![
+                ksx_api::ControllerOutputView::vigem(
+                    ksx_api::ControllerOutputsView::requirements(&staged.staged)
+                        .into_iter()
+                        .next()
+                        .unwrap(),
+                    ksx_api::vigem_output_codes::MISSING,
+                    None,
+                ),
+            ]),
+            ..staged.clone()
+        }
+        .composed();
+        assert!(missing_payload.flags.can_save);
+        assert!(!missing_payload.flags.can_play);
         assert!(
-            missing.html.contains("is NOT installed"),
+            missing.html.contains(r#"action="/start/save""#),
+            "a driver failure hid the still-valid Save action: {}",
+            missing.html
+        );
+        assert!(
+            !missing.html.contains(r#"action="/start/play""#),
+            "a driver failure left an actionable Play form in the SSR paint: {}",
+            missing.html
+        );
+        assert!(
+            missing.html.contains(&missing_payload.lines.save_status),
+            "Save did not state its independent readiness: {}",
+            missing.html
+        );
+        assert!(
+            missing.html.contains(&missing_payload.lines.play_status),
+            "Play did not state its output-specific blocker: {}",
+            missing.html
+        );
+        assert!(
+            missing.html.contains("is not installed"),
             "{}",
             missing.html
         );
@@ -1753,12 +1872,17 @@ mod tests {
             missing.html
         );
 
-        // (2) THE READ FAILED. Different heading, different colour, and it must
+        // (2) THE READ FAILED. Different heading, different color, and it must
         // never borrow (1)'s claim about the machine.
         let unread = render_start(
             &page,
             &StartPayload {
-                pad_bus: ksx_api::PadBusView::unreadable("the driver read is not available here"),
+                controller_outputs: ksx_api::ControllerOutputsView::from_required(vec![
+                    ksx_api::ControllerOutputView::unreadable(
+                        vigem,
+                        "the driver read is not available here",
+                    ),
+                ]),
                 ..staged.clone()
             }
             .composed(),
@@ -1779,6 +1903,31 @@ mod tests {
             "unknown is the amber banner, not the red one: {}",
             unread.html
         );
+        let unread_payload = StartPayload {
+            controller_outputs: ksx_api::ControllerOutputsView::from_required(vec![
+                ksx_api::ControllerOutputView::unreadable(
+                    ksx_api::ControllerOutputsView::requirements(&staged.staged)
+                        .into_iter()
+                        .next()
+                        .unwrap(),
+                    "the driver read is not available here",
+                ),
+            ]),
+            ..staged.clone()
+        }
+        .composed();
+        assert!(unread_payload.flags.can_save);
+        assert!(!unread_payload.flags.can_play);
+        assert!(
+            unread.html.contains(r#"action="/start/save""#),
+            "an unread output probe hid the still-valid Save action: {}",
+            unread.html
+        );
+        assert!(
+            !unread.html.contains(r#"action="/start/play""#),
+            "an unread output probe left an actionable Play form in the SSR paint: {}",
+            unread.html
+        );
 
         // (3) A HEALTHY BUS SAYS NOTHING — including in the payload block,
         // which is served verbatim to the island and to `/api/start`. A page
@@ -1795,9 +1944,122 @@ mod tests {
             "a healthy machine carried the unknown-read heading in its payload: {}",
             healthy.html
         );
+        assert!(staged.flags.can_save);
+        assert!(staged.flags.can_play);
+        assert!(healthy.html.contains(r#"action="/start/save""#));
+        assert!(healthy.html.contains(r#"action="/start/play""#));
 
         assert_ne!(missing.html, unread.html);
         assert_ne!(unread.html, healthy.html);
+    }
+
+    /// A DualSense-only stage must not inherit ViGEmBus's verdict, and an
+    /// installed HIDMaestro package must remain a Play-time verification rather
+    /// than a green promise that an endpoint already exists.
+    #[test]
+    fn dualsense_names_only_hidmaestro_and_stays_verified_on_play() {
+        let page = EmbeddedPage::load("/start").unwrap();
+        let staged = payload(stage(&[choose(), add("dualsense"), answer()]));
+        assert_eq!(staged.controller_outputs.required.len(), 1);
+        assert_eq!(staged.controller_outputs.required[0].backend, "hidmaestro");
+        assert!(staged.controller_outputs.verified_on_play);
+        assert!(!staged.controller_outputs.ready);
+        assert!(staged.controller_outputs.can_play);
+        assert!(staged.flags.can_save);
+        assert!(staged.flags.can_play);
+
+        let out = render_start(&page, &staged, None);
+        assert!(out.html.contains("DualSense is verified when Play starts"));
+        assert!(out.html.contains("no controller is running yet"));
+        assert!(
+            !out.html.contains("ViGEmBus is not installed"),
+            "the available Xbox/PlayStation picker labels may name their route, but the \
+             DualSense readiness banner must not inherit ViGEmBus's verdict: {}",
+            out.html
+        );
+    }
+
+    /// The full roster still says DualSense is implemented, while the
+    /// Add/Change option rows stop offering an impossible second instance.
+    /// The reason stays in primary controller copy instead of disappearing
+    /// with the option.
+    #[test]
+    fn a_staged_dualsense_keeps_the_offer_standing() {
+        let page = EmbeddedPage::load("/start").unwrap();
+        let staged = payload(stage(&[choose(), add("dualsense")]));
+        let dualsense = staged
+            .staged
+            .personas
+            .iter()
+            .find(|persona| persona.name == "dualsense")
+            .expect("DualSense remains in the canonical roster");
+        assert!(dualsense.can_plug);
+        assert_eq!(dualsense.backend, "hidmaestro");
+        // 2026-08-20: the multi-controller SDK host lifts the one-DualSense
+        // cap, so a staged DualSense leaves the offer standing — the
+        // unavailable machinery stays wired for the next bounded persona.
+        assert_eq!(dualsense.instance_limit, None);
+        assert!(dualsense.available);
+        assert_eq!(dualsense.unavailable_reason, None);
+        assert!(
+            staged
+                .rows
+                .personas
+                .iter()
+                .any(|option| option.value == "dualsense"),
+            "the form still offers a second DualSense: {:?}",
+            staged.rows.personas
+        );
+        assert!(
+            staged
+                .rows
+                .personas
+                .iter()
+                .any(|option| option.value == "playstation"),
+            "unrelated live personas remain choices"
+        );
+
+        let out = render_start(&page, &staged, None);
+        assert!(
+            out.html.contains(r#"<option value="dualsense""#),
+            "the SSR form must offer a second DualSense: {}",
+            out.html
+        );
+    }
+
+    /// Filling Windows' four XInput places removes the Xbox add/change choice
+    /// while keeping both the non-XInput compatibility lane and Add itself
+    /// available.
+    #[test]
+    fn a_full_xinput_stage_offers_only_non_xinput_personas() {
+        let mut setup = choose()
+            .apply(&ksx_core::stage::StagedSetup::new())
+            .expect("the fixture device stages");
+        for number in 1..=ksx_core::MAX_XINPUT_SLOTS {
+            setup = setup
+                .add_slot(
+                    number,
+                    ksx_core::Persona::Xbox360,
+                    ksx_core::Preset::builtin_empty(),
+                )
+                .expect("the four legal XInput controllers stage");
+        }
+        let staged = payload(StagedSetupView::of(&setup));
+        assert!(staged.flags.can_add, "plain HID still fits this setup");
+        assert!(!staged
+            .rows
+            .personas
+            .iter()
+            .any(|option| option.value == "xbox360"));
+        assert!(staged
+            .rows
+            .personas
+            .iter()
+            .any(|option| option.value == "playstation"));
+        assert!(staged
+            .lines
+            .controller_line
+            .contains("All 4 Xbox-style controller places"));
     }
 
     /// **Saving over an existing preset is said BEFORE the click.**
@@ -2150,11 +2412,60 @@ mod tests {
         assert!(out.html.contains(r#"id="__ksx-payload""#), "{}", out.html);
     }
 
-    /// The first-run header is the compact customer navigation: Setup,
-    /// Controls and Test. Saved games is a task link in the page body. The
-    /// operator/developer pages deliberately do not crowd this first screen.
+    /// A source-tree QA runtime may inspect the durable installed task, but it
+    /// must never offer to repoint that task at its disposable executable.
+    /// The state remains a successful read; only the mutation affordance is
+    /// absent, with the install-lane remedy visible in its place.
     #[test]
-    fn the_first_run_customer_links_reach_each_task() {
+    fn managed_dev_start_shows_installed_autostart_truth_without_a_mutation_form() {
+        let page = EmbeddedPage::load("/start").unwrap();
+        let mut p = fresh();
+        p.autostart_read = Some(ksx_api::AutostartView {
+            registered: true,
+            line: "registered — installed ksx daemon".into(),
+            mode: Some("daemon".into()),
+            read_only: true,
+            read_only_detail: Some(
+                "This managed development build shows the installed sign-in task read-only. \
+                 Install a complete candidate to test startup."
+                    .into(),
+            ),
+            ..ksx_api::AutostartView::default()
+        });
+        let p = p.composed();
+        assert!(p.autostart.readable);
+        assert!(p.autostart.read_only);
+
+        let out = render_start(&page, &p, None);
+        assert!(
+            out.html.contains("ksx starts by itself when you sign in"),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html
+                .contains("Install a complete candidate to test startup"),
+            "{}",
+            out.html
+        );
+        assert!(
+            !out.html.contains(r#"action="/start/autostart""#),
+            "a read-only runtime rendered the forbidden form: {}",
+            out.html
+        );
+        assert!(
+            !out.html.contains(r#"name="confirm_autostart""#),
+            "a read-only runtime rendered mutation consent: {}",
+            out.html
+        );
+    }
+
+    /// The first-run header is the four-stage customer journey; the compact
+    /// Tools menu still reaches Test and saved Games without crowding it.
+    /// Because Keyboard and Controller are in-page destinations, the current
+    /// one uses the ARIA `location` token rather than claiming another page.
+    #[test]
+    fn the_guided_header_links_reach_each_task() {
         let page = EmbeddedPage::load("/start").unwrap();
         let out = render_start(&page, &fresh(), None);
         for href in ["/start", "/map", "/check", "/profiles"] {
@@ -2165,8 +2476,8 @@ mod tests {
             );
         }
         assert!(
-            out.html.contains(r#"aria-current="page""#),
-            "the current route must be marked: {}",
+            out.html.contains(r#"aria-current="location""#),
+            "the current in-page destination must be marked: {}",
             out.html
         );
     }

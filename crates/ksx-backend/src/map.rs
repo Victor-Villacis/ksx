@@ -37,6 +37,9 @@ pub enum Action {
         /// AUTO-FIRE: `--turbo-hz N`. `None` leaves any existing rate alone,
         /// `Some(0)` clears it (docs/INPUT-TRANSFORMS.md §3).
         turbo_hz: Option<u32>,
+        /// TOGGLE-HOLD: `--toggle true|false`. `None` leaves any existing
+        /// latch alone (docs/INPUT-TRANSFORMS.md §2 item 8).
+        toggle: Option<bool>,
     },
     Restore(RestoreKind),
     /// Unbind every function of the preset (a timestamped backup first).
@@ -70,6 +73,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             when,
             unless,
             turbo_hz,
+            toggle,
         } => mapping::apply(
             &store,
             &MapSpec {
@@ -84,6 +88,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 when,
                 unless,
                 turbo_hz,
+                toggle,
             },
         )
         .map(|applied| {
@@ -107,6 +112,9 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 // capped by what a 60 Hz poller can see (§3).
                 "turbo_hz": applied.turbo_hz,
                 "turbo_effective_hz": applied.turbo_effective_hz,
+                // TOGGLE-HOLD: press once holds, press again releases (§2
+                // item 8).
+                "toggle": applied.toggle,
                 // MULTI-BIND: the other controls of this preset the key drives
                 // now. Information, never an error — the write succeeded and
                 // none of them was touched (docs/INPUT-TRANSFORMS.md §1a).

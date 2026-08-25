@@ -37,6 +37,7 @@ pub(super) async fn collect_map(
                 selected: number,
                 macros: crate::snapshot::MacroSnapshot::unavailable(&reason),
                 macro_selected: macro_selected.unwrap_or_default(),
+                shelf: Default::default(),
             };
         }
         let selected = selected
@@ -74,9 +75,18 @@ pub(super) async fn collect_map(
             selected,
             macros,
             macro_selected: macro_selected.unwrap_or_default(),
+            shelf: Default::default(),
         }
     })
     .await
+    .map(|mut payload| {
+        // The shelf is composed from whatever mapper this collect produced —
+        // saved, staged, or the unavailable sentinel (whose empty slot list
+        // yields an empty shelf). One composition site, so the page render and
+        // `/api/map` cannot disagree.
+        payload.shelf = crate::render_map::shelf_views(&payload.mapper);
+        payload
+    })
     .unwrap_or_else(|_| MapPayload {
         target: target.to_owned(),
         mapper: crate::snapshot::MapperSnapshot::unavailable("mapper collection panicked"),
@@ -85,6 +95,7 @@ pub(super) async fn collect_map(
         selected: 0,
         macros: crate::snapshot::MacroSnapshot::unavailable("mapper collection panicked"),
         macro_selected: String::new(),
+        shelf: Default::default(),
     })
 }
 
@@ -133,7 +144,11 @@ pub(super) async fn map_page(
                 },
             )
         });
-    let out = render_map(&state.map_page, &payload, flash.as_deref());
+    let theme = page_theme(&state).await;
+    let out = crate::render::with_theme(
+        render_map(&state.map_page, &payload, flash.as_deref()),
+        theme.as_deref(),
+    );
     (
         [
             (
@@ -167,17 +182,12 @@ pub(super) async fn api_map(
         .into_response()
 }
 
-pub(super) async fn api_learn_poll(State(state): State<Arc<AppState>>) -> Response {
-    control_json(state, |control| control.learn_poll()).await
-}
-
-pub(super) async fn api_learn_start(State(state): State<Arc<AppState>>) -> Response {
-    control_json(state, |control| control.learn_start()).await
-}
-
-pub(super) async fn api_learn_cancel(State(state): State<Arc<AppState>>) -> Response {
-    control_json(state, |control| control.learn_cancel()).await
-}
+// The learner's JSON trio (`/api/learn`, `/api/learn/start`,
+// `/api/learn/cancel`) MOVED to `server/nocturne.rs` on 2026-08-17 with the
+// rebind-editor migration: the learner is one daemon-owned surface shared by
+// this page, identify-by-key and the Nocturne rebind flow, and the new page
+// owns it now. The routes are unchanged; this page's island keeps calling
+// them.
 
 pub(super) struct TargetBind<'a> {
     target: Option<&'a str>,
@@ -259,11 +269,16 @@ pub(super) fn bind_for_target(control: &dyn ControlSource, bind: TargetBind<'_>)
     };
     control.stage_bind(&ksx_api::StagedBindRequest {
         number,
+        expected_device: String::new(),
+        expected_target_revision: String::new(),
         preset: bind.preset.to_owned(),
         function: bind.function.to_owned(),
         keys: bind.keys.to_vec(),
         force: bind.force,
         turbo_hz: bind.turbo_hz,
+        // The Studio bind form has no toggle control yet; absent means
+        // "leave any latch as it is", never "clear it".
+        toggle: None,
     })
 }
 
@@ -374,46 +389,11 @@ pub(super) async fn api_bind_keys(
     .await
 }
 
-/// POST /api/macro/save — write (or delete) one whole `[macros.<name>]` table.
-///
-/// `reload` is forced on, exactly like the restore route: the daemon only
-/// applies to a session that is actually RUNNING, and a macro body is a
-/// binding change — it changes no slot, persona or device, so the session
-/// hot-swaps it with the pads left plugged instead of bouncing them.
-///
-/// Feedback parity with every other write on this page: `message` is the
-/// toast, `problems` are the refusal's rows, `warnings` are the advisories a
-/// successful save still has to say out loud (a step below the sampling
-/// floor), and `backup` names the restore point this edit left — which the
-/// mapper's existing "Restore backup from …" (`latest-backup`) undoes.
-pub(super) async fn api_macro_save(
-    State(state): State<Arc<AppState>>,
-    axum::Json(request): axum::Json<TargetedMacroWrite>,
-) -> Response {
-    let write = crate::control::MacroWrite {
-        reload: true,
-        ..request.write
-    };
-    control_json(state, move |control| {
-        consumerize_macro(macro_for_target(
-            control,
-            request.target.as_deref(),
-            request.slot,
-            &write,
-        ))
-    })
-    .await
-}
-
-#[derive(Deserialize)]
-pub(super) struct TargetedMacroWrite {
-    #[serde(flatten)]
-    write: crate::control::MacroWrite,
-    #[serde(default)]
-    target: Option<String>,
-    #[serde(default)]
-    slot: Option<u8>,
-}
+// `POST /api/macro/save` (and its `TargetedMacroWrite` body) MOVED to
+// `server/nocturne.rs` on 2026-08-17 with the macro-lifecycle migration —
+// same route, one macro-writing surface for both pages. The
+// `macro_for_target`/`consumerize_macro` machinery stays here beside its
+// bind twins; the moved handler calls back into it.
 
 #[derive(Deserialize)]
 pub(super) struct RestoreRequest {

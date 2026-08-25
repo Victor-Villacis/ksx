@@ -25,7 +25,7 @@ use ksx_api::{
     PresetsView, ProfileRow, Refusal, StatusSnapshot, StatusSource, TemplateRow,
 };
 use ksx_platform::autostart;
-use ksx_platform::{BusDriverReport, InterceptionReport, ServiceState};
+use ksx_platform::{BusDriverReport, HidMaestroReport, InterceptionReport, ServiceState};
 
 pub fn configured_profile() -> Option<String> {
     let root = ksx_config::ConfigRoot::discover().ok()?;
@@ -51,6 +51,10 @@ pub fn configured_profile() -> Option<String> {
 pub struct CollectorSource;
 
 impl StatusSource for CollectorSource {
+    fn environment(&self) -> ksx_api::RuntimeEnvironmentView {
+        runtime_environment(std::env::var_os(MANAGED_DEV_RUNTIME_ENV).as_deref())
+    }
+
     fn snapshot(&self) -> StatusSnapshot {
         collect_snapshot()
     }
@@ -249,6 +253,7 @@ fn collect_mapper() -> MapperSnapshot {
             backup,
             session_backup,
             turbo: layout.turbo,
+            toggle: layout.toggle,
             // The tournament switch, straight off the slot entry: "my
             // macros do nothing" has two causes, and this is the one you
             // cannot see by reading the preset.
@@ -269,6 +274,7 @@ fn collect_mapper() -> MapperSnapshot {
 struct LayoutView {
     bindings: std::collections::BTreeMap<String, Vec<String>>,
     turbo: std::collections::BTreeMap<String, u32>,
+    toggle: std::collections::BTreeSet<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -303,9 +309,11 @@ fn preset_layout(
     for t in &core.turbo {
         rates.insert(ksx_config::function_name(&t.binding), t.hz);
     }
+    let toggle = core.toggle.iter().map(ksx_config::function_name).collect();
     Ok(LayoutView {
         bindings,
         turbo: rates,
+        toggle,
     })
 }
 
@@ -313,10 +321,17 @@ fn collect_snapshot() -> StatusSnapshot {
     let report = ksx_platform::collect();
     let (daemon_running, daemon_detail) = daemon_check();
     let (profiles, config_root) = load_profiles();
+    let (hidmaestro_installed, hidmaestro_partial, hidmaestro_version) =
+        hidmaestro_prerequisite(&report.hidmaestro);
 
     StatusSnapshot {
         generated_at: now_utc(),
         vigem: bus_line(&report.vigembus),
+        hidmaestro: ksx_api::ControllerOutputView::hidmaestro_inventory(
+            hidmaestro_installed,
+            hidmaestro_partial,
+            hidmaestro_version,
+        ),
         interception: interception_line(&report.interception),
         daemon_running,
         daemon_detail,
@@ -373,6 +388,18 @@ fn bus_line(bus: &BusDriverReport) -> String {
         Some(version) => format!("installed — {state} — driver v{version}"),
         None => format!("installed — {state} — driver version unknown"),
     }
+}
+
+/// The package facts shared by Status/System and `/start`'s persona-aware
+/// output row. One interpretation of the exact Doctor probe: a service key or
+/// candidate DLL without the pinned package is partial, never installed.
+fn hidmaestro_prerequisite(report: &HidMaestroReport) -> (bool, bool, Option<String>) {
+    let version = report
+        .driver_file
+        .as_ref()
+        .and_then(|file| file.file_version.clone());
+    let partial = !report.installed && (report.service_key || report.driver_file.is_some());
+    (report.installed, partial, version)
 }
 
 fn interception_line(icpt: &InterceptionReport) -> String {
@@ -462,6 +489,34 @@ fn autostart_line() -> String {
 /// Windows boot: the USB tree is still settling, and a ksx that enumerates
 /// devices into that finds a panel that is not there yet.
 const DEFAULT_AUTOSTART_DELAY_SECS: u32 = 10;
+/// Set only by the managed source-tree launcher. A process bearing this marker
+/// is intentionally disposable and must never register its temporary path as
+/// the machine's durable logon command (or remove the installed command while
+/// pretending that is ordinary development QA).
+const MANAGED_DEV_RUNTIME_ENV: &str = "KSX_MANAGED_DEV_RUNTIME";
+
+fn managed_dev_runtime(marker: Option<&std::ffi::OsStr>) -> bool {
+    marker.is_some_and(|value| !value.is_empty())
+}
+
+fn runtime_environment(marker: Option<&std::ffi::OsStr>) -> ksx_api::RuntimeEnvironmentView {
+    let mut environment = ksx_api::RuntimeEnvironmentView::live();
+    if managed_dev_runtime(marker) {
+        environment.label = "DEV BUILD · REAL HARDWARE".to_owned();
+        environment.detail = "A matched local development artifact is reading this computer's real KSX state and devices. Confirmed hardware actions can affect the selected physical device; this build is not an installed release candidate.".to_owned();
+    }
+    environment
+}
+
+fn managed_dev_autostart_refusal(marker: Option<&std::ffi::OsStr>) -> Option<Refusal> {
+    managed_dev_runtime(marker).then(|| {
+        Refusal::with_remedy(
+            ksx_api::codes::MANAGED_DEV_RUNTIME,
+            "this is a managed development runtime, so it cannot change the installed sign-in task",
+            "install the complete candidate and change sign-in behavior from that installed copy",
+        )
+    })
+}
 
 /// A scheduler failure, as a refusal a surface can show.
 ///
@@ -479,6 +534,12 @@ fn autostart_refusal(err: autostart::AutostartError) -> Refusal {
 }
 
 fn autostart_view() -> Result<ksx_api::AutostartView, Refusal> {
+    let managed_dev = managed_dev_runtime(std::env::var_os(MANAGED_DEV_RUNTIME_ENV).as_deref());
+    let read_only_detail = managed_dev.then(|| {
+        "This managed development build shows the installed sign-in task read-only. Install a \
+         complete candidate to test startup."
+            .to_owned()
+    });
     let status = autostart::query(autostart::DEFAULT_TASK_NAME).map_err(|err| {
         Refusal::new(
             ksx_api::codes::REFUSED,
@@ -490,15 +551,30 @@ fn autostart_view() -> Result<ksx_api::AutostartView, Refusal> {
         return Ok(ksx_api::AutostartView {
             registered: false,
             line,
+            read_only: managed_dev,
+            read_only_detail,
             ..ksx_api::AutostartView::default()
         });
     };
 
     // Best effort: a process that cannot name its own exe has nothing to
     // compare against, and "could not check" must never render as "stale".
-    let staleness = std::env::current_exe()
-        .ok()
-        .map(|exe| autostart::check_staleness(task, &exe, |path| path.exists()));
+    // The managed QA executable is disposable by design, so comparing the
+    // installed task against that path would make every healthy installation
+    // look stale. In that runtime, validate the registered command itself:
+    // missing/no-command remain broken, while an existing installed command
+    // is the installed task's honest truth.
+    let staleness = if managed_dev {
+        Some(autostart::check_staleness(
+            task,
+            std::path::Path::new(task.command.as_deref().unwrap_or_default()),
+            |path| path.exists(),
+        ))
+    } else {
+        std::env::current_exe()
+            .ok()
+            .map(|exe| autostart::check_staleness(task, &exe, |path| path.exists()))
+    };
     let stale_detail = match &staleness {
         None | Some(autostart::Staleness::Current) => None,
         Some(autostart::Staleness::MissingExe { .. }) => Some(
@@ -525,6 +601,8 @@ fn autostart_view() -> Result<ksx_api::AutostartView, Refusal> {
         profile: task.game(),
         stale: stale_detail.is_some(),
         stale_detail,
+        read_only: managed_dev,
+        read_only_detail,
     })
 }
 
@@ -763,7 +841,138 @@ fn refusal_of(code: &'static str, message: String, remedy: Option<String>) -> Re
 /// is told "not here, run this" for the rest — on screen, per press.
 pub struct LocalMachine;
 
+#[cfg(windows)]
+fn catalogued_panel_selector(selector: &str) -> bool {
+    let identity = match ksx_core::DeviceSelector::parse(selector.trim()) {
+        Ok(ksx_core::DeviceSelector::Usb {
+            vendor_id,
+            product_id,
+            ..
+        }) => Some((vendor_id, product_id)),
+        Ok(ksx_core::DeviceSelector::InstancePath(path))
+        | Ok(ksx_core::DeviceSelector::HardwareId(path)) => {
+            let upper = path.to_ascii_uppercase();
+            let field = |name: &str| {
+                let start = upper.find(name)? + name.len();
+                u16::from_str_radix(upper.get(start..start + 4)?, 16).ok()
+            };
+            field("VID_").zip(field("PID_"))
+        }
+        Err(_) => None,
+    };
+    identity.is_some_and(|(vendor_id, product_id)| {
+        crate::panel_catalog::family_for(vendor_id, product_id).is_some()
+    })
+}
+
 impl ksx_api::MachineSource for LocalMachine {
+    /// Passive USB/HID panel inventory. The HID survey opens metadata handles
+    /// with desired access zero and sends no report transaction; exact vendor
+    /// mode and EEPROM chart state therefore remain explicit unknowns.
+    #[cfg(windows)]
+    fn panel_status(
+        &self,
+        spec: &ksx_api::PanelStatusSpec,
+    ) -> Result<ksx_api::PanelStatusView, Refusal> {
+        crate::panel::status(spec)
+    }
+
+    #[cfg(windows)]
+    fn panel_chart(
+        &self,
+        spec: &ksx_api::PanelChartSpec,
+    ) -> Result<ksx_api::PanelChartView, Refusal> {
+        crate::panel_programming::chart(spec)
+    }
+
+    #[cfg(windows)]
+    fn panel_routing_guard(
+        &self,
+        spec: &ksx_api::PanelRoutingAuthoritySpec,
+    ) -> Result<Option<Box<dyn ksx_api::PanelRoutingGuard>>, Refusal> {
+        // The staged selector is server-owned. Exact catalog recognition is
+        // enough to decide whether a fresh hardware classification is needed;
+        // the facade then resolves that selector against current inventory and
+        // bypasses recognized profiles which cannot persistently rewrite a
+        // chart. Ordinary keyboards never pay for a HID chart read.
+        if !catalogued_panel_selector(&spec.device) {
+            return Ok(None);
+        }
+        crate::panel_programming::routing_guard_if_needed(spec)
+    }
+
+    #[cfg(windows)]
+    fn panel_backups(
+        &self,
+        spec: &ksx_api::PanelBackupsSpec,
+    ) -> Result<ksx_api::PanelBackupsView, Refusal> {
+        crate::panel_programming::backups(spec)
+    }
+
+    fn panel_hardware_profiles(&self) -> Result<ksx_api::PanelHardwareProfilesView, Refusal> {
+        crate::panel_profiles::profiles()
+    }
+
+    fn panel_hardware_profile_save(
+        &self,
+        spec: &ksx_api::PanelHardwareProfileSaveSpec,
+    ) -> Result<ksx_api::PanelHardwareProfileMutationView, Refusal> {
+        crate::panel_profiles::save(spec)
+    }
+
+    fn panel_hardware_profile_delete(
+        &self,
+        spec: &ksx_api::PanelHardwareProfileDeleteSpec,
+    ) -> Result<ksx_api::PanelHardwareProfileMutationView, Refusal> {
+        crate::panel_profiles::delete(spec)
+    }
+
+    #[cfg(windows)]
+    fn panel_program_plan(
+        &self,
+        spec: &ksx_api::PanelProgramSpec,
+    ) -> Result<ksx_api::PanelProgramPlanView, Refusal> {
+        crate::panel_programming::program_plan(spec)
+    }
+
+    #[cfg(windows)]
+    fn panel_program(
+        &self,
+        spec: &ksx_api::PanelProgramApplySpec,
+    ) -> Result<ksx_api::PanelProgramOutcome, Refusal> {
+        if session_is_running() {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                "stop Play before programming the physical encoder; nothing was changed",
+                "stop the running session, rebuild the hardware diff, then confirm Program",
+            ));
+        }
+        crate::panel_programming::program(spec)
+    }
+
+    #[cfg(windows)]
+    fn panel_restore_plan(
+        &self,
+        spec: &ksx_api::PanelRestoreSpec,
+    ) -> Result<ksx_api::PanelProgramPlanView, Refusal> {
+        crate::panel_programming::restore_plan(spec)
+    }
+
+    #[cfg(windows)]
+    fn panel_restore(
+        &self,
+        spec: &ksx_api::PanelRestoreApplySpec,
+    ) -> Result<ksx_api::PanelProgramOutcome, Refusal> {
+        if session_is_running() {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                "stop Play before restoring the physical encoder; nothing was changed",
+                "stop the running session, rebuild the restore diff, then confirm Restore",
+            ));
+        }
+        crate::panel_programming::restore(spec)
+    }
+
     /// **Change split-or-freeze on a config that is already saved.**
     ///
     /// The whole capability used to live inside first run: `stage::apply` was
@@ -813,6 +1022,46 @@ impl ksx_api::MachineSource for LocalMachine {
                 .unwrap_or_default(),
             backup: backup.map(|path| path.display().to_string()),
             session_running,
+        })
+    }
+
+    /// Remember the Studio's theme choice. `set_blocking`'s discipline exactly:
+    /// one backup, one write, the value re-read from the parsed document.
+    ///
+    /// The contract here is deliberately dumber than the Studio's: any short
+    /// css-ident (or empty = System) is stored. The Studio validates ids
+    /// against its generated roster BEFORE building the spec and sanitizes
+    /// again at render time, so this check only keeps a broken caller from
+    /// wedging the config with something no parser should meet.
+    fn set_theme(&self, spec: &ksx_api::ThemeSpec) -> Result<ksx_api::ThemeView, Refusal> {
+        let wanted = spec.theme.trim();
+        let ident_ok = wanted.len() <= 64
+            && wanted
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if !ident_ok {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::BAD_REQUEST,
+                format!("'{}' is not a theme name ksx could store", spec.theme),
+                "pick one of the themes on the page",
+            ));
+        }
+
+        let store = crate::device_edit::store().map_err(config_refusal)?;
+        let mut config = store.load_config().map_err(config_refusal)?.value;
+        config.settings.theme = if wanted.is_empty() {
+            None
+        } else {
+            Some(wanted.to_owned())
+        };
+        let path = store.root().config_path();
+        let backup = store.backup(&path).map_err(config_refusal)?;
+        store.save_config(&config).map_err(config_refusal)?;
+
+        let on_disk = store.load_config().map_err(config_refusal)?.value;
+        Ok(ksx_api::ThemeView {
+            theme: on_disk.settings.theme.unwrap_or_default(),
+            backup: backup.map(|path| path.display().to_string()),
         })
     }
 
@@ -1088,6 +1337,11 @@ impl ksx_api::MachineSource for LocalMachine {
                 "tick the box, then try again",
             ));
         }
+        if let Some(refusal) =
+            managed_dev_autostart_refusal(std::env::var_os(MANAGED_DEV_RUNTIME_ENV).as_deref())
+        {
+            return Err(refusal);
+        }
         if spec.enable {
             // The DEFAULTS, spelled once: the tray daemon, so the cabinet comes
             // up ready for any game rather than locked to one; the default
@@ -1151,6 +1405,39 @@ impl ksx_api::MachineSource for LocalMachine {
             &config,
             &games,
         ))
+    }
+
+    /// Resolve the daemon learner's press-to-identify observation for Studio's
+    /// hardware step. Observation and selection stay separate: the daemon
+    /// owns the live panel tap, this joins its returned instance path to the
+    /// same board inventory as `device_scan`, and the Studio stage writer
+    /// performs the later reversible choice.
+    ///
+    /// The join is by PnP tree, not by string alone. Raw Input — the source
+    /// that hears an ORDINARY keyboard — names the press by its **HID child**
+    /// devnode, while the scan enumerates the **USB interface** devnodes
+    /// (different class prefix AND a different instance suffix; measured on
+    /// hardware 2026-08-17, where exact matching made press-to-identify
+    /// structurally impossible for any unclaimed keyboard). So the observed
+    /// path is matched first as given — a WinUSB-claimed observation already
+    /// speaks USB — and then each of its PnP ancestors, nearest first.
+    #[cfg(windows)]
+    fn device_identify(
+        &self,
+        observed_instance: &str,
+    ) -> Result<ksx_api::DeviceIdentifyView, Refusal> {
+        if observed_instance.trim().is_empty() {
+            return Err(Refusal::new(
+                ksx_api::codes::IDENTIFY_UNMATCHED,
+                "the observed keyboard has no device identity",
+            ));
+        }
+        let scan = self.device_scan()?;
+        let mut candidates = vec![observed_instance.to_owned()];
+        // Four levels is HID child → USB interface → composite device → hub,
+        // comfortably past every real join point without walking to the root.
+        candidates.extend(ksx_platform::ancestor_instance_ids(observed_instance, 4));
+        identify_board(scan, &candidates)
     }
 
     /// Write one `[[device]]` entry — the plan/apply pair, never the CLI verb.
@@ -1284,34 +1571,62 @@ impl ksx_api::MachineSource for LocalMachine {
         crate::onboard::import(request)
     }
 
-    /// **Can a pad be plugged on this machine right now?**
+    /// Output readiness for exactly the supported personas in the live stage.
     ///
-    /// One read (`collect_vigembus`) and one judgement
-    /// (`ksx_platform::advice::vigembus_advice`) — deliberately the SAME
-    /// judgement `ksx doctor` prints, reached through the same function, so a
-    /// first-run page and the driver report can never disagree about whether
-    /// this machine has a bus. Re-deriving "installed and running" here would
-    /// have been three lines and a second opinion.
+    /// The requirement list comes from `Persona::backend()` through ksx-api;
+    /// this provider never assumes ViGEmBus is universal. It performs no probe
+    /// for an empty stage, only the ViGEm probe for Xbox 360/PlayStation, only
+    /// the exact HIDMaestro package probe for DualSense, and both for a mixed
+    /// setup. Switch Pro and Xbox Series cannot enter a valid stage in this
+    /// build, so installing HIDMaestro never makes those unfinished personas
+    /// appear ready.
     ///
-    /// Read-only: two registry reads, one service query, one file-version
-    /// read. Nothing is installed, and nothing here could install anything —
-    /// `docs/SURFACES.md` §3 marks driver installation `never` for the browser
-    /// surface, and this is what lets a browser page obey that while still
-    /// saying, before the button, that the button cannot work.
-    fn pad_bus(&self) -> Result<ksx_api::PadBusView, Refusal> {
-        let bus = ksx_platform::collect_vigembus();
-        let version = bus
-            .driver_file
-            .as_ref()
-            .and_then(|file| file.file_version.clone());
-        // At most one piece of advice comes back per bus (each arm returns),
-        // and none at all means healthy. `first()` rather than an index so a
-        // future second entry degrades to "the worst thing doctor said" rather
-        // than a panic.
-        let code = ksx_platform::advice::vigembus_advice(&bus)
-            .first()
-            .map_or(ksx_api::pad_bus_codes::HEALTHY, |advice| advice.code);
-        Ok(ksx_api::PadBusView::from_doctor(code, version))
+    /// The HIDMaestro row deliberately stops at "verified on Play" after a
+    /// successful package probe. The protected host handshake and endpoint
+    /// creation belong to the session transaction; probing the package cannot
+    /// truthfully turn those future operations green.
+    fn controller_outputs(
+        &self,
+        staged: &ksx_api::StagedSetupView,
+    ) -> Result<ksx_api::ControllerOutputsView, Refusal> {
+        let requirements = ksx_api::ControllerOutputsView::requirements(staged);
+        let mut rows = Vec::with_capacity(requirements.len());
+        for requirement in requirements {
+            let backend = requirement.backend.clone();
+            let row = match backend.as_str() {
+                "vigem" => {
+                    let bus = ksx_platform::collect_vigembus();
+                    let version = bus
+                        .driver_file
+                        .as_ref()
+                        .and_then(|file| file.file_version.clone());
+                    // At most one entry comes back for the bus; silence is the
+                    // healthy Doctor verdict.
+                    let code = ksx_platform::advice::vigembus_advice(&bus)
+                        .first()
+                        .map_or(ksx_api::vigem_output_codes::HEALTHY, |advice| advice.code);
+                    ksx_api::ControllerOutputView::vigem(requirement, code, version)
+                }
+                "hidmaestro" => {
+                    let report = ksx_platform::collect_hidmaestro();
+                    let (installed, partial, version) = hidmaestro_prerequisite(&report);
+                    ksx_api::ControllerOutputView::hidmaestro(
+                        requirement,
+                        installed,
+                        partial,
+                        version,
+                    )
+                }
+                // Requirements are created from PadBackend::ALL. Keep a new
+                // backend loud if core grows before this provider does.
+                other => ksx_api::ControllerOutputView::unreadable(
+                    requirement,
+                    format!("this build has no machine probe for output backend {other}"),
+                ),
+            };
+            rows.push(row);
+        }
+        Ok(ksx_api::ControllerOutputsView::from_required(rows))
     }
 
     /// Everything `ksx pads` and `ksx pads --prune` know, in one read.
@@ -1393,6 +1708,17 @@ impl ksx_api::MachineSource for LocalMachine {
                 "pick a persona from the list",
             )
         })?;
+        if persona.backend() != ksx_core::PadBackend::Vigem {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                format!(
+                    "{} is not a ViGEm compatibility controller, so it cannot be started from \
+                     the ViGEm diagnostics page",
+                    persona.label()
+                ),
+                "use guided Setup and Play for HIDMaestro controller personas",
+            ));
+        }
         // Re-read at ACTION time, deliberately: the view a page is rendering
         // may be two seconds old, and two seconds is long enough for a
         // session to start or for another submit's pads to land on the bus.
@@ -2003,6 +2329,75 @@ fn remove_view(outcome: &crate::device_edit::RemoveOutcome) -> ksx_api::DeviceRe
     }
 }
 
+/// The identify join, pure: the FIRST candidate path that matches any board
+/// decides, and it must resolve to exactly one. Candidates arrive nearest
+/// first (the observed devnode, then its PnP ancestors), so a path the scan
+/// speaks directly always wins over anything inferred by climbing — and an
+/// ancestor that two boards somehow share refuses as ambiguous rather than
+/// guessing, exactly like a direct two-board collision.
+fn identify_board(
+    scan: ksx_api::DeviceScanView,
+    candidates: &[String],
+) -> Result<ksx_api::DeviceIdentifyView, Refusal> {
+    let matches_candidate = |board: &ksx_api::BoardRow, candidate: &str| {
+        board
+            .keyboard
+            .as_deref()
+            .is_some_and(|id| id.eq_ignore_ascii_case(candidate))
+            || board
+                .interfaces
+                .iter()
+                .any(|interface| interface.instance_id.eq_ignore_ascii_case(candidate))
+    };
+    let matched = candidates.iter().find_map(|candidate| {
+        let matched: Vec<&ksx_api::BoardRow> = scan
+            .boards
+            .iter()
+            .filter(|board| matches_candidate(board, candidate))
+            .collect();
+        if matched.is_empty() {
+            None
+        } else {
+            Some(matched)
+        }
+    });
+    let Some(matched) = matched else {
+        return Err(Refusal::new(
+            ksx_api::codes::IDENTIFY_UNMATCHED,
+            "the pressed key did not resolve to exactly one selectable keyboard",
+        ));
+    };
+    let [board] = matched.as_slice() else {
+        return Err(Refusal::new(
+            ksx_api::codes::IDENTIFY_UNMATCHED,
+            "the pressed key did not resolve to exactly one selectable keyboard",
+        ));
+    };
+    if !board.pickable {
+        return Err(Refusal::new(
+            ksx_api::codes::IDENTIFY_UNMATCHED,
+            "the pressed device is not a keyboard ksx can select",
+        ));
+    }
+    let selector = board.selector.clone().ok_or_else(|| {
+        Refusal::new(
+            ksx_api::codes::IDENTIFY_UNMATCHED,
+            "the pressed keyboard has no exact selector",
+        )
+    })?;
+    if board.alias_hint.trim().is_empty() || board.name.trim().is_empty() {
+        return Err(Refusal::new(
+            ksx_api::codes::IDENTIFY_UNMATCHED,
+            "the pressed keyboard has no safe display identity",
+        ));
+    }
+    Ok(ksx_api::DeviceIdentifyView {
+        selector,
+        alias: board.alias_hint.clone(),
+        label: board.name.clone(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     /// **The residue read, against whatever machine runs it.**
@@ -2037,6 +2432,49 @@ mod tests {
     }
     use super::*;
     use ksx_api::MacroWrite;
+
+    #[test]
+    fn a_disposable_managed_runtime_cannot_rewrite_the_installed_logon_task() {
+        assert!(!managed_dev_runtime(None));
+        assert!(!managed_dev_runtime(Some(std::ffi::OsStr::new(""))));
+        assert!(managed_dev_runtime(Some(std::ffi::OsStr::new(
+            "launch-123"
+        ))));
+        assert!(managed_dev_autostart_refusal(None).is_none());
+        assert!(managed_dev_autostart_refusal(Some(std::ffi::OsStr::new(""))).is_none());
+        let refusal = managed_dev_autostart_refusal(Some(std::ffi::OsStr::new("launch-123")))
+            .expect("a managed development marker must fence the write");
+        assert_eq!(refusal.code, ksx_api::codes::MANAGED_DEV_RUNTIME);
+        assert!(refusal.message.contains("managed development runtime"));
+        assert!(refusal
+            .remedy
+            .as_deref()
+            .is_some_and(|remedy| remedy.contains("complete candidate")));
+    }
+
+    #[test]
+    fn the_production_collector_explicitly_claims_live_machine_provenance() {
+        let environment = StatusSource::environment(&CollectorSource);
+        assert_eq!(environment.id, "live-machine");
+        assert!(!environment.fixture);
+        assert!(environment.generation.is_empty());
+    }
+
+    #[test]
+    fn a_managed_source_tree_runtime_is_visibly_development_on_real_hardware() {
+        let environment = runtime_environment(Some(std::ffi::OsStr::new("launch-123")));
+        assert_eq!(environment.id, "live-machine");
+        assert_eq!(environment.label, "DEV BUILD · REAL HARDWARE");
+        assert!(!environment.fixture);
+        assert!(environment.generation.is_empty());
+        assert!(environment.detail.contains("local development artifact"));
+        assert!(environment.detail.contains("real KSX state and devices"));
+
+        assert_eq!(
+            runtime_environment(None).label,
+            "LIVE MACHINE · REAL HARDWARE"
+        );
+    }
 
     /// A pointer, not a test: the request SHAPES this file used to pin
     /// (`map` with `"key"` / `"keys"` / `"clear"`, `map-macro` with the whole
@@ -2607,5 +3045,99 @@ steps = [{ hold = ["A"], ms = 50 }]
         // must always disclose the mechanism's limit and point at the pipe.
         let (_, detail) = daemon_check();
         assert!(detail.contains("Session panel"), "{detail}");
+    }
+
+    /// One pickable board shaped like the measured machine: USB interface
+    /// devnodes in the scan, HID child devnodes from Raw Input.
+    fn hp_board() -> ksx_api::BoardRow {
+        ksx_api::BoardRow {
+            name: "HP Elite USB Keyboard".into(),
+            alias_hint: "hp-elite".into(),
+            selector: Some("usb:03f0:034a:00".into()),
+            pickable: true,
+            looks_like_a_keyboard: true,
+            keyboard: Some(r"USB\VID_03F0&PID_034A&MI_00\7&F06C3D8&0&0000".into()),
+            interfaces: vec![
+                ksx_api::UsbRow {
+                    instance_id: r"USB\VID_03F0&PID_034A&MI_00\7&F06C3D8&0&0000".into(),
+                    ..Default::default()
+                },
+                ksx_api::UsbRow {
+                    instance_id: r"USB\VID_03F0&PID_034A&MI_01\7&F06C3D8&0&0001".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    fn scan_with(boards: Vec<ksx_api::BoardRow>) -> ksx_api::DeviceScanView {
+        ksx_api::DeviceScanView {
+            boards,
+            ..Default::default()
+        }
+    }
+
+    /// **The measured defect (2026-08-17).** Raw Input reports the HID child
+    /// (`HID\…\8&…`), the scan speaks USB interfaces (`USB\…\7&…`) — exact
+    /// matching alone can never join them on real hardware, which made
+    /// press-to-identify refuse every unclaimed keyboard. With the observed
+    /// path's PnP ancestors as later candidates, the USB interface parent
+    /// matches exactly and the board resolves.
+    #[test]
+    #[cfg(windows)]
+    fn a_raw_input_hid_child_identifies_its_board_through_its_usb_parent() {
+        let candidates = vec![
+            // What Raw Input reported — matches nothing in the scan.
+            r"HID\VID_03F0&PID_034A&MI_00\8&2F8AC447&0&0000".to_owned(),
+            // Its PnP parent — the exact devnode the scan enumerates.
+            r"USB\VID_03F0&PID_034A&MI_00\7&F06C3D8&0&0000".to_owned(),
+            // Grandparent (the composite device) — never reached.
+            r"USB\VID_03F0&PID_034A\5&11111111&0&1".to_owned(),
+        ];
+        let identified = identify_board(scan_with(vec![hp_board()]), &candidates)
+            .expect("the HID child must resolve through its USB parent");
+        assert_eq!(identified.selector, "usb:03f0:034a:00");
+        assert_eq!(identified.label, "HP Elite USB Keyboard");
+    }
+
+    /// A WinUSB-claimed observation already speaks USB: the FIRST candidate
+    /// matches and no climbing is consulted.
+    #[test]
+    #[cfg(windows)]
+    fn a_usb_level_observation_still_matches_directly() {
+        let candidates = vec![r"USB\VID_03F0&PID_034A&MI_00\7&F06C3D8&0&0000".to_owned()];
+        assert!(identify_board(scan_with(vec![hp_board()]), &candidates).is_ok());
+    }
+
+    /// No candidate matching anything is the same honest refusal as before.
+    #[test]
+    #[cfg(windows)]
+    fn an_unmatchable_observation_still_refuses() {
+        let candidates = vec![
+            r"HID\VID_AAAA&PID_BBBB\9&0".to_owned(),
+            r"USB\VID_AAAA&PID_BBBB&MI_00\9&0".to_owned(),
+        ];
+        let refusal =
+            identify_board(scan_with(vec![hp_board()]), &candidates).expect_err("nothing matches");
+        assert!(
+            refusal.message.contains("exactly one"),
+            "{}",
+            refusal.message
+        );
+    }
+
+    /// An ancestor two boards somehow share refuses as ambiguous rather than
+    /// guessing — the twin-board rule, unchanged by the climb.
+    #[test]
+    #[cfg(windows)]
+    fn an_ancestor_shared_by_two_boards_is_ambiguous_not_a_guess() {
+        let mut twin = hp_board();
+        twin.name = "HP Elite USB Keyboard (2)".into();
+        let candidates = vec![
+            r"HID\VID_03F0&PID_034A&MI_00\8&2F8AC447&0&0000".to_owned(),
+            r"USB\VID_03F0&PID_034A&MI_00\7&F06C3D8&0&0000".to_owned(),
+        ];
+        assert!(identify_board(scan_with(vec![hp_board(), twin]), &candidates).is_err());
     }
 }

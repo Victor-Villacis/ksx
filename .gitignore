@@ -6,6 +6,9 @@
 # Forma authoring dependencies
 /studio-ui/node_modules
 
+# Local research extracts and generated visual-audit scratch files
+/tmp/
+
 # Inno Setup output
 /packaging/out
 

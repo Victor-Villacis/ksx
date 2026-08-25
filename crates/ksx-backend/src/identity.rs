@@ -348,6 +348,7 @@ mod tests {
             parent_id: id.to_owned(),
             vendor_id: vid,
             product_id: pid,
+            bcd_device: 0x0056,
             interface_number: mi,
             interface_class: 3,
             interface_subclass: 1,

@@ -1,0 +1,50 @@
+[
+  {
+    "n": 30,
+    "name": "conflict-cross-player",
+    "note": "Pressed Numpad4 (P2's key) while assigning on P1 — cross-player conflict presentation",
+    "file": "30-conflict-cross-player.png"
+  },
+  {
+    "n": 31,
+    "name": "macro-steps-editor",
+    "note": "Macro editor opened from Steps…: step grid, holds, durations, motion writer, test",
+    "file": "31-macro-steps-editor.png"
+  },
+  {
+    "n": 32,
+    "name": "macro-step-added",
+    "note": "A step added to the macro timeline",
+    "file": "32-macro-step-added.png"
+  },
+  {
+    "n": 33,
+    "name": "turbo-on",
+    "note": "Turbo switched on: rate control revealed",
+    "file": "33-turbo-on.png"
+  },
+  {
+    "n": 34,
+    "name": "macro-recording",
+    "note": "Macro recording armed: real-timing capture state",
+    "file": "34-macro-recording.png"
+  },
+  {
+    "n": 35,
+    "name": "macro-recorded-keys",
+    "note": "Keys pressed during macro record",
+    "file": "35-macro-recorded-keys.png"
+  },
+  {
+    "n": 36,
+    "name": "right-collapsed",
+    "note": "Right panel collapsed to its rail",
+    "file": "36-right-collapsed.png"
+  },
+  {
+    "n": 38,
+    "name": "undo-chip-zoom",
+    "note": "The 6-second undo chip after removing a controller (left pane detail)",
+    "file": "38-undo-chip-zoom.png"
+  }
+]

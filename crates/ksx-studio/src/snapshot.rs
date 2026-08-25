@@ -57,6 +57,32 @@ pub struct MapPayload {
     /// older fixtures and clients retain the saved-layout behavior.
     #[serde(default)]
     pub target: String,
+    /// The keyboard shelf for EVERY slot (key → the controls it drives, plus
+    /// the summary sentence), keyed by slot number as a string because it
+    /// crosses JSON. Composed once, in Rust (`render_map::shelf_views`), and
+    /// rendered verbatim by the island's list — the parity suite caught the
+    /// previous shape, where the SSR paint said "No bound keys yet" and the
+    /// client rebuilt the shelf imperatively on adoption.
+    #[serde(default)]
+    pub shelf: std::collections::BTreeMap<String, ShelfView>,
+}
+
+/// One slot's keyboard shelf: the summary line + one row per bound key.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShelfView {
+    pub summary: String,
+    pub keys: Vec<ShelfKeyRow>,
+}
+
+/// One bound physical key on the shelf, display-ready. The island binds these
+/// fields as direct member reads; nothing is derived client-side.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShelfKeyRow {
+    pub key: String,
+    /// The controls it drives, joined "|" — the button's `data-controls`.
+    pub controls: String,
+    pub title: String,
+    pub use_label: String,
 }
 
 /// What `GET /api/check` serves AND what the button-check island's props carry
@@ -407,7 +433,7 @@ impl ProfilesDerived {
             presets_summary: presets_summary(p.presets.presets.len(), presets_failed),
             templates_summary: templates_summary(p.presets.templates.len(), presets_failed),
             templates_intro: templates_intro(&p.presets.templates, presets_failed),
-            play_status: play_status(&p.session),
+            play_status: session_play_status(&p.session),
             daemon_cmd: crate::render::daemon_command(&p.session),
             max_slots: ksx_api::MAX_SLOTS,
             max_player: p
@@ -617,7 +643,7 @@ fn templates_intro(templates: &[ksx_api::TemplateRow], failed: bool) -> String {
         .to_owned()
 }
 
-fn play_status(session: &crate::control::SessionView) -> String {
+fn session_play_status(session: &crate::control::SessionView) -> String {
     if !session.reachable {
         return "Play is unavailable. Reopen ksx and try again.".to_owned();
     }
@@ -800,6 +826,12 @@ pub struct SetupLines {
     /// What this keyboard does while a game is running, in one sentence, with
     /// the honest hedge when nothing is configured yet.
     pub blocking_line: String,
+    /// Which theme the Studio renders in, in one sentence — including the
+    /// case where the config names a theme this build does not ship (which
+    /// renders as System, and the page should say so rather than pretend the
+    /// choice was never made).
+    #[serde(default)]
+    pub theme_line: String,
 }
 
 impl SetupLines {
@@ -831,6 +863,9 @@ impl SetupLines {
                 prove_blocked: prove_blocked_line(session, learn),
                 wire_warning: wire_warning_line(session),
                 blocking_line: "What the keyboard does while you play could not be read."
+                    .to_owned(),
+                theme_line: "The saved theme choice could not be read; pages follow the \
+                             operating system until it can be."
                     .to_owned(),
             };
         }
@@ -871,6 +906,36 @@ impl SetupLines {
             prove_blocked: prove_blocked_line(session, learn),
             wire_warning: wire_warning_line(session),
             blocking_line: blocking_line(view),
+            theme_line: theme_line(view),
+        }
+    }
+}
+
+/// Which theme the Studio renders in, as one sentence.
+fn theme_line(view: &ksx_api::SetupView) -> String {
+    if view.theme.is_empty() {
+        return "Pages follow the operating system's light or dark choice.".to_owned();
+    }
+    match crate::theme_tokens::THEMES
+        .iter()
+        .find(|t| t.id == view.theme)
+    {
+        Some(meta) => format!("Every page renders in {}.", meta.label),
+        // Say it, never swallow it: the config names a choice this build
+        // cannot render, and the stamp sanitizer is quietly falling back.
+        // The shipped ids ride along so a case or whitespace typo in a
+        // hand-edited config explains itself.
+        None => {
+            let shipped = crate::theme_tokens::THEMES
+                .iter()
+                .map(|t| t.id)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "The config names theme '{}', which this build does not ship (it has \
+                 {shipped}) — pages follow the operating system instead.",
+                view.theme
+            )
         }
     }
 }
@@ -1120,6 +1185,23 @@ pub struct SetupBlockingRowView {
     pub button: String,
 }
 
+/// One theme choice, current one marked — the blocking-row idiom exactly
+/// (member `chosen_cls` + a per-row one-hidden-input POST form), because it
+/// is the repo's one established "pick one of N, server decides which is
+/// current" widget and it works with scripting switched off.
+///
+/// Rows come from the GENERATED roster (`theme_tokens::THEMES`) plus the
+/// System row, so shipping a new theme never edits TS or this composition.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupThemeRowView {
+    /// What the row's form posts: a theme id, or `system`.
+    pub value: String,
+    pub title: String,
+    pub detail: String,
+    pub chosen_cls: String,
+    pub button: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetupRows {
     pub steps: Vec<SetupStepRowView>,
@@ -1129,6 +1211,11 @@ pub struct SetupRows {
     /// literal in either language.
     pub slot_options: Vec<SetupOptionRowView>,
     pub preset_options: Vec<SetupTextRowView>,
+    /// Controller identities this build can actually create. The full served
+    /// roster remains on [`ksx_api::SetupView::persona_options`] so unavailable
+    /// identities are not erased from the contract; this form intentionally
+    /// omits them rather than offering a write the daemon must refuse.
+    pub persona_options: Vec<SetupOptionRowView>,
     pub profile_options: Vec<SetupTextRowView>,
     pub notes: Vec<SetupTextRowView>,
     /// The split-or-freeze answers, current one marked. Composed here so the
@@ -1137,6 +1224,10 @@ pub struct SetupRows {
     /// The SOCD `<select>`'s options, served. The blank "leave it as it is"
     /// entry is the FORM's, not a policy, so it is not in here.
     pub socd_options: Vec<SetupOptionRowView>,
+    /// The theme choices (System first, then the generated roster), current
+    /// one marked. Same rule as blocking: the browser never decides.
+    #[serde(default)]
+    pub themes: Vec<SetupThemeRowView>,
 }
 
 impl SetupRows {
@@ -1193,6 +1284,15 @@ impl SetupRows {
                 .iter()
                 .map(|name| SetupTextRowView { text: name.clone() })
                 .collect(),
+            persona_options: view
+                .persona_options
+                .iter()
+                .filter(|option| option.can_plug)
+                .map(|option| SetupOptionRowView {
+                    value: option.name.clone(),
+                    label: persona_picker_label(option),
+                })
+                .collect(),
             profile_options: view
                 .profiles
                 .iter()
@@ -1237,6 +1337,66 @@ impl SetupRows {
                     }
                 })
                 .collect(),
+            themes: {
+                // Three states, three honest markings (review-caught: the
+                // first cut marked System "in use" even when the config could
+                // not be READ — a claim about a file nothing read, on the page
+                // whose signature rule is that a refusal renders as one):
+                //  - unreadable → NO row marked and every button stays an
+                //    action; theme_line carries the refusal sentence.
+                //  - unknown id → System IS what renders (the pill is true)
+                //    but not what is SET, so the button offers the useful act
+                //    — clearing the id — instead of claiming "this is how it
+                //    is set" about a config that says otherwise.
+                //  - known/empty → the blocking card's marking exactly.
+                let known = crate::theme_tokens::THEMES
+                    .iter()
+                    .any(|t| t.id == view.theme);
+                let readable = setup.available;
+                let system_set = readable && view.theme.is_empty();
+                let system_fallback = readable && !view.theme.is_empty() && !known;
+                let mark = |chosen: bool| {
+                    if chosen {
+                        "pill pill-ok".to_owned()
+                    } else {
+                        "pill pill-none".to_owned()
+                    }
+                };
+                let mut rows = vec![SetupThemeRowView {
+                    value: "system".to_owned(),
+                    title: "Match the operating system".to_owned(),
+                    detail: "Light or dark follows the system setting on the machine \
+                             viewing the page."
+                        .to_owned(),
+                    chosen_cls: mark(system_set || system_fallback),
+                    button: if system_set {
+                        "This is how it is set".to_owned()
+                    } else if system_fallback {
+                        "Follow the operating system instead".to_owned()
+                    } else {
+                        "Match the operating system".to_owned()
+                    },
+                }];
+                rows.extend(crate::theme_tokens::THEMES.iter().map(|meta| {
+                    let chosen = readable && view.theme == meta.id;
+                    SetupThemeRowView {
+                        value: meta.id.to_owned(),
+                        title: meta.label.to_owned(),
+                        detail: if meta.scheme == "light" {
+                            "Every page renders light, whatever the system prefers.".to_owned()
+                        } else {
+                            "Every page renders dark, whatever the system prefers.".to_owned()
+                        },
+                        chosen_cls: mark(chosen),
+                        button: if chosen {
+                            "This is how it is set".to_owned()
+                        } else {
+                            meta.label.to_owned()
+                        },
+                    }
+                }));
+                rows
+            },
         }
     }
 }
@@ -1294,13 +1454,13 @@ impl SetupPayload {
 /// the same one-struct-one-serializer rule as [`StatusPayload`], parity pinned
 /// in `render_start.rs`.
 ///
-/// **Five reads, five failure modes, five fields.** They are kept apart for the
+/// **Independent reads keep independent failure states.** They are kept apart for the
 /// reason `docs/SURFACES.md` §1b gives: a daemon that is down and a machine
 /// with no boards are opposite advice, and collapsing either into an empty
 /// value is how a page ends up saying "you have staged nothing" when the truth
 /// is "nothing answered". [`Self::staged`] carries its own `reachable` +
-/// `error`; [`Self::pad_bus`] carries its own `readable`; the other two carry
-/// theirs beside them.
+/// `error`; [`Self::controller_outputs`] carries per-required-backend read
+/// state; the other reads carry theirs beside them.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartPayload {
     /// The staged setup, from `ControlSource::staged` — the DAEMON's memory,
@@ -1310,20 +1470,21 @@ pub struct StartPayload {
     /// read `/devices` renders.
     pub scan: ksx_api::DeviceScanView,
     pub session: crate::control::SessionView,
-    /// **Whether a pad can be plugged at all**, from `MachineSource::pad_bus`.
+    /// Output readiness for exactly the supported personas currently staged,
+    /// from `MachineSource::controller_outputs`.
     ///
-    /// The one machine fact this page cannot get from the daemon or from the
-    /// device list, and the one that decides whether moment 7 can happen: with
-    /// no ViGEmBus every step above works perfectly and Play plugs nothing.
+    /// The machine fact this page cannot get from the daemon or device list,
+    /// and the one that decides whether moment 7 can happen: a missing backend
+    /// required by a staged persona leaves every authoring step functional but
+    /// cannot materialize that controller.
     /// Read-only — `docs/SURFACES.md` §3 marks driver installation `never` for
     /// the browser, and this is how a page obeys that rule and still tells the
-    /// truth before the button.
-    ///
-    /// It carries its own `readable`, so a refused read becomes
-    /// `PadBusView::unreadable(...)` rather than a default that would render
-    /// as a healthy bus.
+    /// truth before the button. ViGEmBus is considered only for staged
+    /// Xbox/PlayStation personas; HIDMaestro only for staged DualSense. A
+    /// refused read preserves those requirements as unknown, and an installed
+    /// HIDMaestro package remains `verified-on-play` rather than false green.
     #[serde(default)]
-    pub pad_bus: ksx_api::PadBusView,
+    pub controller_outputs: ksx_api::ControllerOutputsView,
     /// Empty when the scan answered. Otherwise the refusal, verbatim.
     #[serde(default)]
     pub unavailable: String,
@@ -1358,6 +1519,12 @@ pub struct StartPayload {
     /// One-shot action feedback (the `?flash=` query). Always `None` from
     /// `/api/start` — a poll is not an action.
     pub flash: Option<String>,
+    /// Backend-owned progress semantics for the persistent four-stage rail.
+    /// The browser never infers completion or invents blocker reasons from a
+    /// route: these four rows are composed from the same staged/capture/output
+    /// facts that gate Save and Play.
+    #[serde(default)]
+    pub journey: StartJourney,
     /// The page's sentences, composed from the four above. Derived, never
     /// authored — [`StartPayload::composed`] fills it.
     #[serde(default)]
@@ -1382,6 +1549,7 @@ impl StartPayload {
         self.lines = StartLines::of(&self);
         self.flags = StartFlags::of(&self);
         self.rows = StartRows::of(&self);
+        self.journey = StartJourney::of(&self);
         self
     }
 
@@ -1443,21 +1611,32 @@ enum StartCaptureMode {
 
 impl StartCaptureView {
     fn of(payload: &StartPayload) -> Self {
-        let Some(device) = payload.staged.device.as_ref() else {
+        Self::from_parts(&payload.staged, &payload.scan, payload.scan_read())
+    }
+
+    /// The ONE capture-mode derivation, shared by `/start`'s card and
+    /// `/nocturne`'s prepared-for-play control. Extracted rather than copied
+    /// when the keyboard backend migrated (2026-08-17): two mode machines
+    /// would eventually disagree about the same physical keyboard.
+    pub(crate) fn from_parts(
+        staged: &ksx_api::StagedSetupView,
+        scan: &ksx_api::DeviceScanView,
+        scan_read: bool,
+    ) -> Self {
+        let Some(device) = staged.device.as_ref() else {
             return Self::default();
         };
-        if !payload.staged.reachable {
+        if !staged.reachable {
             return Self::default();
         }
-        if !payload.scan_read() {
+        if !scan_read {
             return Self::blocked(device.selector.clone());
         }
 
         // A selector chosen from the served inventory should name one board.
         // Re-check that invariant instead of taking the first match: a stale
         // or malformed inventory must remove the action, never retarget it.
-        let mut matches = payload
-            .scan
+        let mut matches = scan
             .boards
             .iter()
             .filter(|board| board.selector.as_deref() == Some(device.selector.as_str()));
@@ -1470,8 +1649,7 @@ impl StartCaptureView {
         let Some(instance_id) = board.keyboard.as_ref() else {
             return Self::blocked(device.selector.clone());
         };
-        if payload
-            .scan
+        if scan
             .boards
             .iter()
             .flat_map(|candidate| candidate.interfaces.iter())
@@ -1488,7 +1666,7 @@ impl StartCaptureView {
         let interception = "interception";
         let winusb = "winusb";
         let interception_ready = backend == interception
-            && payload.scan.interception_available
+            && scan.interception_available
             && board.interception_eligible
             && board.can_type
             && !board.claimed;
@@ -1533,6 +1711,21 @@ impl StartCaptureView {
             self.mode,
             StartCaptureMode::Ready | StartCaptureMode::PrepareOptional | StartCaptureMode::Release
         )
+    }
+
+    /// The mode as a stable word, for derivations OUTSIDE this module
+    /// (`NocturneDerived`) that need the full seven-way answer without the
+    /// private enum crossing the boundary.
+    pub(crate) fn mode_word(&self) -> &'static str {
+        match self.mode {
+            StartCaptureMode::None => "none",
+            StartCaptureMode::Ready => "ready",
+            StartCaptureMode::Prepare => "prepare",
+            StartCaptureMode::PrepareOptional => "prepare-optional",
+            StartCaptureMode::Release => "release",
+            StartCaptureMode::Held => "held",
+            StartCaptureMode::Blocked => "blocked",
+        }
     }
 
     fn prepare(&self) -> bool {
@@ -1612,8 +1805,17 @@ pub struct StartLines {
     /// Ready to save or play, or a customer-facing next step selected from the
     /// staged facts. Raw domain refusals remain support data.
     pub ready_line: String,
-    /// The driver banner's heading. What the SENTENCES say is
-    /// `ksx_api::PadBusView`'s and arrives composed; what this page decides is
+    /// Save and Play have different prerequisites. Save needs a complete
+    /// staged setup and capture path; controller output is irrelevant because
+    /// saving plugs nothing. Play additionally needs a readable, non-blocked
+    /// output view. These separate lines keep a driver problem from making a
+    /// valid setup look unsaveable.
+    #[serde(default)]
+    pub save_status: String,
+    #[serde(default)]
+    pub play_status: String,
+    /// The output banner's heading. What the SENTENCES say is
+    /// `ksx_api::ControllerOutputsView`'s and arrives composed; what this page decides is
     /// how to introduce it — "cannot" and "could not be checked" are two
     /// different headings and a page that used one for both would be asserting
     /// the machine's state from a read that failed.
@@ -1707,9 +1909,11 @@ impl StartLines {
             },
             preset_line: preset_line(p),
             mapper_line: MAPPER_LINE.to_owned(),
-            bus_heading: bus_heading(&p.pad_bus).to_owned(),
-            bus_cls: bus_cls(&p.pad_bus).to_owned(),
-            ready_line: ready_line(p),
+            bus_heading: bus_heading(&p.controller_outputs).to_owned(),
+            bus_cls: bus_cls(&p.controller_outputs).to_owned(),
+            ready_line: play_status(p),
+            save_status: save_status(p),
+            play_status: play_status(p),
             play_line: PLAY_LINE.to_owned(),
             guide_line: GUIDE_LINE.to_owned(),
             escape_line: ESCAPE_LINE.to_owned(),
@@ -1728,42 +1932,246 @@ impl StartLines {
     }
 }
 
-fn ready_line(payload: &StartPayload) -> String {
+fn setup_prerequisite(payload: &StartPayload) -> Option<String> {
     let staged = &payload.staged;
     if !staged.reachable {
-        return "Setup is temporarily unavailable. Close and reopen ksx; nothing has been \
-                changed."
-            .to_owned();
+        return Some(
+            "Setup is temporarily unavailable. Close and reopen ksx; nothing has been changed."
+                .to_owned(),
+        );
     }
     if staged.device.is_none() {
-        return "Choose a keyboard before saving or playing.".to_owned();
+        return Some("Choose a keyboard before saving or playing.".to_owned());
     }
     if !payload.capture.ready() {
-        return if payload.capture.prepare() {
+        return Some(if payload.capture.prepare() {
             "Prepare the selected keyboard before saving or playing.".to_owned()
         } else {
             "The selected keyboard is not ready for capture. Follow the highlighted keyboard \
              guidance before saving or playing."
                 .to_owned()
-        };
+        });
     }
     if staged.slots.is_empty() {
-        return "Add at least one controller before saving or playing.".to_owned();
+        return Some("Add at least one controller before saving or playing.".to_owned());
     }
     if let Some(slot) = staged.slots.iter().find(|slot| slot.bindings == 0) {
-        return format!(
+        return Some(format!(
             "Player {} has no controls yet. Choose a ready-made layout or open Controls before \
              saving or playing.",
             slot.number
-        );
+        ));
     }
     if staged.blocking.is_none() {
-        return "Choose whether this keyboard should freeze or keep typing before saving or \
-                playing."
-            .to_owned();
+        return Some(
+            "Choose whether this keyboard should freeze or keep typing before saving or playing."
+                .to_owned(),
+        );
     }
     if !staged.ready {
-        return "Finish the highlighted Setup choices before saving or playing.".to_owned();
+        return Some("Finish the highlighted Setup choices before saving or playing.".to_owned());
+    }
+    None
+}
+
+/// One rail destination. `cls` is presentation state only; `badge` is its
+/// glanceable word and `detail` is the full accessible explanation rendered
+/// beside the destination for assistive technology.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartJourneyStep {
+    pub cls: String,
+    pub badge: String,
+    pub detail: String,
+}
+
+/// Truthful progress for the four-stage setup journey.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartJourney {
+    pub keyboard: StartJourneyStep,
+    pub controller: StartJourneyStep,
+    pub mapping: StartJourneyStep,
+    pub play: StartJourneyStep,
+}
+
+impl StartJourneyStep {
+    fn new(base: &str, state: &str, badge: &str, detail: String) -> Self {
+        Self {
+            cls: if state.is_empty() {
+                format!("navlink workflow-link {base}")
+            } else {
+                format!("navlink workflow-link {base} workflow-{state}")
+            },
+            badge: badge.to_owned(),
+            detail,
+        }
+    }
+}
+
+impl StartJourney {
+    fn of(p: &StartPayload) -> Self {
+        let staged = &p.staged;
+        let keyboard_complete = staged.device.is_some();
+        let keyboard = if keyboard_complete {
+            StartJourneyStep::new(
+                "workflow-keyboard",
+                "complete",
+                "done",
+                "Keyboard complete: one physical keyboard is selected.".to_owned(),
+            )
+        } else if !staged.reachable
+            || !p.scan_read()
+            || (!p.flags.has_boards && !p.flags.has_experimental)
+        {
+            StartJourneyStep::new(
+                "workflow-keyboard",
+                "blocked",
+                "blocked",
+                format!("Keyboard blocked: {}", p.lines.device_line),
+            )
+        } else {
+            StartJourneyStep::new(
+                "workflow-keyboard",
+                "pending",
+                "next",
+                "Keyboard next: choose the physical keyboard you want to play with.".to_owned(),
+            )
+        };
+
+        let controller_complete = keyboard_complete && !staged.slots.is_empty();
+        let controller = if controller_complete {
+            StartJourneyStep::new(
+                "workflow-controller",
+                "complete",
+                "done",
+                format!(
+                    "Controller complete: {} virtual controller{} staged.",
+                    staged.slots.len(),
+                    if staged.slots.len() == 1 { "" } else { "s" }
+                ),
+            )
+        } else if !keyboard_complete {
+            StartJourneyStep::new(
+                "workflow-controller",
+                "upcoming",
+                "waiting",
+                "Controller waiting: choose a keyboard first.".to_owned(),
+            )
+        } else if p.flags.can_add {
+            StartJourneyStep::new(
+                "workflow-controller",
+                "pending",
+                "next",
+                "Controller next: add at least one virtual controller.".to_owned(),
+            )
+        } else {
+            StartJourneyStep::new(
+                "workflow-controller",
+                "blocked",
+                "blocked",
+                format!("Controller blocked: {}", p.lines.controller_line),
+            )
+        };
+
+        let unmapped = staged.slots.iter().find(|slot| slot.bindings == 0);
+        let mapping_complete = staged.ready;
+        let mapping = if mapping_complete {
+            StartJourneyStep::new(
+                "workflow-mapping",
+                "complete",
+                "done",
+                "Mapping complete: controls and keyboard behavior are ready.".to_owned(),
+            )
+        } else if !controller_complete {
+            StartJourneyStep::new(
+                "workflow-mapping",
+                "upcoming",
+                "waiting",
+                "Mapping waiting: create a controller first.".to_owned(),
+            )
+        } else if p.flags.can_layout || staged.blocking.is_none() {
+            let detail = unmapped.map_or_else(
+                || "Mapping next: choose how the keyboard behaves while playing.".to_owned(),
+                |slot| {
+                    format!(
+                        "Mapping next: Player {} needs at least one mapped control.",
+                        slot.number
+                    )
+                },
+            );
+            StartJourneyStep::new("workflow-mapping", "pending", "next", detail)
+        } else {
+            StartJourneyStep::new(
+                "workflow-mapping",
+                "blocked",
+                "blocked",
+                format!("Mapping blocked: {}", p.lines.save_status),
+            )
+        };
+
+        let play = if p.session.reachable && p.session.running {
+            StartJourneyStep::new(
+                "workflow-play",
+                "live",
+                "active",
+                "Play active: a gameplay session is starting or running.".to_owned(),
+            )
+        } else if p.flags.can_play {
+            StartJourneyStep::new(
+                "workflow-play",
+                "ready",
+                "ready",
+                "Play ready: this staged setup can start.".to_owned(),
+            )
+        } else if staged.ready {
+            StartJourneyStep::new(
+                "workflow-play",
+                "blocked",
+                "blocked",
+                format!("Play blocked: {}", p.lines.play_status),
+            )
+        } else {
+            StartJourneyStep::new(
+                "workflow-play",
+                "upcoming",
+                "waiting",
+                format!("Play waiting: {}", p.lines.play_status),
+            )
+        };
+
+        Self {
+            keyboard,
+            controller,
+            mapping,
+            play,
+        }
+    }
+}
+
+fn save_status(payload: &StartPayload) -> String {
+    match setup_prerequisite(payload) {
+        Some(problem) => problem,
+        None => "Ready to save. Saving keeps this setup for later and starts nothing.".to_owned(),
+    }
+}
+
+fn play_status(payload: &StartPayload) -> String {
+    if let Some(problem) = setup_prerequisite(payload) {
+        return problem;
+    }
+    if payload.controller_outputs.blocked {
+        return "This setup is ready to save, but Play cannot create every staged controller \
+                until the highlighted controller-output problem is repaired."
+            .to_owned();
+    }
+    if payload.controller_outputs.unknown {
+        return "This setup is ready to save, but controller output could not be checked. Reopen \
+                ksx or use the advanced driver check before Play."
+            .to_owned();
+    }
+    if payload.controller_outputs.verified_on_play {
+        return "Ready. Save keeps this setup for later; Play verifies the DualSense endpoint \
+                while starting it and saves nothing."
+            .to_owned();
     }
     "Ready. Save keeps this setup for later; Play starts it without saving.".to_owned()
 }
@@ -1988,11 +2396,12 @@ const MAPPER_LINE: &str =
 
 /// **What Play does**, stated before the button rather than after it.
 ///
-/// The two halves are the ones a first-run user has no way to predict: a pad
-/// appears on the ViGEm bus (so a game finds a controller that was not there a
-/// second ago) and their keyboard changes behaviour (which, under Freeze, means
-/// it stops typing). Both are reversible and the sentence says how — Stop, or
-/// the escape latch, which is the same one §3's card carries.
+/// The two halves are the ones a first-run user has no way to predict: one pad
+/// appears through each persona's routed output backend (so a game finds a
+/// controller that was not there a second ago) and their keyboard changes
+/// behaviour (which, under Freeze, means it stops typing). Both are reversible
+/// and the sentence says how — Stop, or the escape latch, which is the same one
+/// §3's card carries.
 const PLAY_LINE: &str =
     "Play makes one game controller for each controller above and uses the keyboard you picked \
      to operate them. Stop removes those game controllers and returns the keyboard to normal — \
@@ -2021,7 +2430,7 @@ const GUIDE_LINE: &str =
      controller to open Game Bar” is turned on in Windows Settings > Gaming > Game Bar. ksx does \
      not change that Windows setting.";
 
-/// The driver banner's heading, and the only place this page words the
+/// The output banner's heading, and the only place this page words the
 /// difference between the two reasons it appears.
 ///
 /// A `blocked` bus is a statement about the machine and reads like one. An
@@ -2029,14 +2438,15 @@ const GUIDE_LINE: &str =
 /// — and must never borrow the first heading, because "ksx cannot plug a
 /// controller" is a claim nothing here is entitled to make.
 ///
-/// A healthy bus gets the EMPTY string, not the nearest of the two. The banner
-/// is hidden either way (`StartFlags::bus_warn`), but the payload block is
+/// A fully preflighted requirement set gets the EMPTY string, not the nearest
+/// of the three. The banner is hidden either way (`StartFlags::bus_warn`), but the payload block is
 /// served verbatim to the island and to `/api/start`, so a heading left lying
 /// in it would be a sentence about a machine that is fine, saying it is not.
-fn bus_heading(bus: &ksx_api::PadBusView) -> &'static str {
-    match (bus.blocked, bus.unknown) {
-        (true, _) => "Play cannot plug a controller on this machine yet",
-        (_, true) => "The controller driver could not be checked",
+fn bus_heading(outputs: &ksx_api::ControllerOutputsView) -> &'static str {
+    match (outputs.blocked, outputs.unknown, outputs.verified_on_play) {
+        (true, _, _) => "Play cannot plug a controller on this machine yet",
+        (_, true, _) => "The required controller output could not be checked",
+        (_, _, true) => "DualSense is verified when Play starts",
         _ => "",
     }
 }
@@ -2044,17 +2454,18 @@ fn bus_heading(bus: &ksx_api::PadBusView) -> &'static str {
 /// Red for a bus that is known not to work, amber for one nothing is known
 /// about, and nothing at all for a healthy one — same rule as
 /// [`bus_heading`]. Both banners are `.card.alarm`; `.alarm.warn` is the amber
-/// variant (`studio.css` §4.9).
-fn bus_cls(bus: &ksx_api::PadBusView) -> &'static str {
-    match (bus.blocked, bus.unknown) {
-        (true, _) => "card alarm",
-        (_, true) => "card alarm warn",
+/// variant (`studio.css` §4.9). The deferred HIDMaestro check is amber too:
+/// it is neither a false green nor a known failure.
+fn bus_cls(outputs: &ksx_api::ControllerOutputsView) -> &'static str {
+    match (outputs.blocked, outputs.unknown, outputs.verified_on_play) {
+        (true, _, _) => "card alarm",
+        (_, true, _) | (_, _, true) => "card alarm warn",
         _ => "",
     }
 }
 
 fn controller_line(staged: &ksx_api::StagedSetupView) -> String {
-    match staged.slots.len() {
+    let base = match staged.slots.len() {
         0 => format!(
             "Pick what the keyboard should become. Nothing is plugged and nothing is written — \
              changing your mind costs a click. Up to {} controllers.",
@@ -2067,6 +2478,35 @@ fn controller_line(staged: &ksx_api::StagedSetupView) -> String {
             "{n} controllers are ready to customize. They are still only on this screen, and \
              Remove leaves no trace."
         ),
+    };
+    let capacity = staged
+        .personas
+        .iter()
+        .filter(|persona| persona.can_plug && !persona.available)
+        .filter_map(|persona| persona.unavailable_reason.as_deref())
+        .collect::<Vec<_>>();
+    if capacity.is_empty() {
+        base
+    } else {
+        format!("{base} {}", capacity.join(" "))
+    }
+}
+
+/// A persona picker says both the public identity and the immutable output
+/// route. A per-session ceiling belongs in the option too: it is useful before
+/// the first pick, while [`ksx_api::PersonaOption::available`] prevents an impossible
+/// later pick from appearing at all.
+fn persona_picker_label(option: &ksx_api::PersonaOption) -> String {
+    let backend = if option.backend_label.trim().is_empty() {
+        option.backend.as_str()
+    } else {
+        option.backend_label.as_str()
+    };
+    match option.instance_limit {
+        Some(1) => format!("{} · {} · one per session", option.label, backend),
+        Some(limit) => format!("{} · {} · up to {limit} per session", option.label, backend),
+        None if backend.trim().is_empty() => option.label.clone(),
+        None => format!("{} · {}", option.label, backend),
     }
 }
 
@@ -2121,12 +2561,10 @@ pub struct StartFlags {
     pub scan_down: bool,
     /// The preset read refused.
     pub presets_down: bool,
-    /// **The pad bus needs saying before the Play button.** True when ksx is
-    /// known to be unable to plug a pad, and true when that could not be
-    /// determined — the two look different (`bus_cls`, `bus_heading`) but both
-    /// are things a user is entitled to read before pressing a button that
-    /// depends on them. False only for a bus `ksx doctor` has nothing to say
-    /// about.
+    /// **A required output needs saying before the Play button.** Known
+    /// blockers, unknown reads, and HIDMaestro's Play-time verification are
+    /// distinct states. False only when no backend is required or every
+    /// required backend is fully preflighted.
     pub bus_warn: bool,
     /// A keyboard is staged.
     pub has_device: bool,
@@ -2168,7 +2606,20 @@ pub struct StartFlags {
     pub can_layout: bool,
     /// §3 has been answered.
     pub blocking_answered: bool,
-    /// The setup is complete enough to save or play.
+    /// Save and Play deliberately have different gates. Controller-output
+    /// readiness affects Play only: committing the staged files is safe and
+    /// useful even on a machine whose required driver is missing or unread.
+    #[serde(default)]
+    pub can_save: bool,
+    #[serde(default)]
+    pub can_play: bool,
+    #[serde(default)]
+    pub cannot_save: bool,
+    #[serde(default)]
+    pub cannot_play: bool,
+    /// Compatibility pair for the current island while it migrates to the
+    /// split shows. They mirror Save's gate so a driver problem never hides a
+    /// valid Save action; the server independently guards Play with `can_play`.
     pub ready: bool,
     pub not_ready: bool,
     /// Anything at all is staged, so "Start over" means something.
@@ -2188,6 +2639,8 @@ impl StartFlags {
         let scan_read = p.scan_read();
         let flash = p.flash.as_deref().unwrap_or_default().trim();
         let flash_error = flash.starts_with("error");
+        let can_save = staged.reachable && staged.ready && p.capture.ready();
+        let can_play = can_save && p.controller_outputs.can_play;
         Self {
             pill_running: session.reachable && session.running,
             pill_idle: session.reachable && !session.running,
@@ -2200,7 +2653,7 @@ impl StartFlags {
             // "unknown" is the one state where saying nothing is indefensible,
             // because the page would be resolving the doubt in the machine's
             // favour on the user's behalf.
-            bus_warn: !p.pad_bus.silent(),
+            bus_warn: !p.controller_outputs.silent(),
             has_device: staged.device.is_some(),
             has_prepared: !held_boards(p).is_empty(),
             capture_prepare: p.capture.prepare(),
@@ -2231,13 +2684,17 @@ impl StartFlags {
             can_add: staged.reachable
                 && staged.device.is_some()
                 && staged.next_slot.is_some()
-                && staged.personas.iter().any(|p| p.can_plug),
+                && staged.personas.iter().any(|p| p.can_plug && p.available),
             slots_full: staged.reachable && staged.device.is_some() && staged.next_slot.is_none(),
             has_gaps: staged.personas.iter().any(|p| !p.can_plug),
             can_layout: staged.reachable && !staged.slots.is_empty() && !staged.layouts.is_empty(),
             blocking_answered: staged.blocking.is_some(),
-            ready: staged.reachable && staged.ready && p.capture.ready(),
-            not_ready: !staged.reachable || !staged.ready || !p.capture.ready(),
+            can_save,
+            can_play,
+            cannot_save: !can_save,
+            cannot_play: !can_play,
+            ready: can_save,
+            not_ready: !can_save,
             can_discard: staged.reachable && !staged.empty,
             session_live: session.reachable && session.running,
             flash_ok: !flash.is_empty() && !flash_error,
@@ -2406,9 +2863,10 @@ pub struct StartRows {
     pub other: Vec<StartOtherRow>,
     pub notes: Vec<StartTextRow>,
     pub slots: Vec<StartSlotRow>,
-    /// The personas this build CAN plug, in `Persona::ALL` order. Nothing here
-    /// is spelled in TypeScript: `docs/SURFACES.md` §10 already settled that
-    /// the roster is served with a `can_plug` flag per entry.
+    /// The personas this build can plug AND this stage can still add, in
+    /// `Persona::ALL` order. Nothing here is spelled in TypeScript:
+    /// `docs/SURFACES.md` §10 already settled that the full roster is served
+    /// with build capability plus stage-specific availability per entry.
     pub personas: Vec<StartOptionRow>,
     /// The ones it cannot, listed rather than hidden — a menu that silently
     /// drops three of eight choices teaches a user the product has five.
@@ -2552,10 +3010,10 @@ impl StartRows {
             personas: staged
                 .personas
                 .iter()
-                .filter(|p| p.can_plug)
+                .filter(|p| p.can_plug && p.available)
                 .map(|p| StartOptionRow {
                     value: p.name.clone(),
-                    label: p.label.clone(),
+                    label: persona_picker_label(p),
                 })
                 .collect(),
             gaps: staged
@@ -2566,7 +3024,7 @@ impl StartRows {
                     label: p.label.clone(),
                     // `Persona::gap()`'s own sentence. A surface that
                     // paraphrased it into "install HIDMaestro" would be
-                    // promising a fix that does not exist for two of the three.
+                    // promising a fix that does not exist for the gated pair.
                     gap: p.gap.clone().unwrap_or_default(),
                     instead: format!("Use {} instead.", p.instead),
                 })
@@ -2648,6 +3106,10 @@ pub struct StartAutostartView {
     /// Why - composed by the provider, never `Staleness::message`, whose
     /// remedy names a CLI command.
     pub stale_detail: String,
+    /// The state is a real scheduler read, but this runtime has no authority
+    /// to mutate the durable installed task.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 impl StartAutostartView {
@@ -2671,6 +3133,7 @@ impl StartAutostartView {
 
         let stale = view.stale;
         let stale_detail = view.stale_detail.clone().unwrap_or_default();
+        let read_only = view.read_only;
         // A stale registration offers the REPAIR, not the removal: turning it
         // on again rewrites the task to point here, which is the whole fix. An
         // "off" button would leave the cabinet in the state it is already
@@ -2689,7 +3152,11 @@ impl StartAutostartView {
             } else {
                 "ksx starts by itself when you sign in.".to_owned()
             },
-            detail: if enable && !view.registered {
+            detail: if read_only {
+                view.read_only_detail.clone().unwrap_or_else(|| {
+                    "This sign-in state is read-only in the current runtime.".to_owned()
+                })
+            } else if enable && !view.registered {
                 "Turn this on and the cabinet comes up ready on its own - no keyboard, no mouse, \
                  nobody standing at it."
                     .to_owned()
@@ -2707,6 +3174,7 @@ impl StartAutostartView {
             enable,
             stale,
             stale_detail,
+            read_only,
         }
     }
 }
@@ -2787,9 +3255,2953 @@ fn hidden_when_empty(text: &str, class: &str) -> String {
     }
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// /workspace — the Nocturne workspace shell (M0 skeleton)
+// ───────────────────────────────────────────────────────────────────────────
+
+/// What `GET /api/workspace` serves AND what the workspace island's props
+/// carry — the same one-struct-one-serializer rule as [`StatusPayload`],
+/// parity pinned in `render_workspace.rs`.
+///
+/// M0 is the frame of the screen that will absorb `/start`, `/map` and `/`:
+/// the payload carries the daemon-held draft and the session, and every
+/// sentence the page shows lives in [`WorkspaceDerived`] — composed once, in
+/// Rust, exactly as [`ProfilesDerived`] and [`SetupLines`] are. The island
+/// copies fields and derives nothing, so the SSR paint and the 2 s poll can
+/// never disagree.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspacePayload {
+    /// The staged setup, from `ControlSource::staged` — the DAEMON's memory,
+    /// not a file. Its own `reachable`/`error` fields say when there is none.
+    pub staged: ksx_api::StagedSetupView,
+    pub session: crate::control::SessionView,
+    /// The slot the page is LOOKING AT (`?slot=N`), resolved by the server —
+    /// absent or unknown falls back to the first staged slot. The poller
+    /// echoes the page's own query string, so a poll cannot flip the view.
+    #[serde(default)]
+    pub selected: Option<u8>,
+    /// Every displayed string and every `show:` branch, computed once —
+    /// recomputed from the fields above by [`Self::derived`]; never assembled
+    /// by hand.
+    #[serde(default)]
+    pub view: WorkspaceDerived,
+}
+
+impl WorkspacePayload {
+    /// Fill [`Self::view`] from the raw provider data. Every producer of a
+    /// payload calls this — the page render and `GET /api/workspace` share one
+    /// collector — so the server paint and the poll are the same bytes by
+    /// construction rather than by two implementations agreeing.
+    #[must_use]
+    pub fn derived(mut self) -> Self {
+        self.view = WorkspaceDerived::of(&self);
+        self
+    }
+}
+
+/// One staged controller as the workspace rack renders it. Every string is
+/// composed HERE and every form value is precomposed — including the
+/// whole-order sequence each Move button submits, because the daemon's
+/// reorder verb takes the WHOLE order (`StageEdit::ReorderSlots`) and a page
+/// that recomputed it client-side would be a second derivation of slot order.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceSlotRow {
+    /// The slot number, as the string a form field submits.
+    pub number: String,
+    /// `"wsrow"`, `"wsrow on"` for the selected controller.
+    pub row_cls: String,
+    /// `/workspace?slot=N` — selection is a LINK, so switching controllers
+    /// works with no JavaScript at all.
+    pub href: String,
+    /// "P1 · Xbox 360".
+    pub title: String,
+    /// "\"Player 1\" · 12 controls".
+    pub detail: String,
+    /// "Opposites: Up wins", or empty for the off default — a policy nobody
+    /// set is not narrated.
+    pub socd_note: String,
+    /// The whole slot order after moving this row UP, space-separated
+    /// (`"2 1 3"`), or empty for the first row — the server answers an empty
+    /// submission with the honest already-there sentence.
+    pub up_order: String,
+    /// Same, moving DOWN; empty for the last row.
+    pub down_order: String,
+}
+
+/// One radio-row of a workspace choice group (keyboard capture). The chosen
+/// state is a composed CLASS and a composed button label, never client logic.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceChoiceRow {
+    pub name: String,
+    pub title: String,
+    pub detail: String,
+    /// `"wschoice on"` for the current answer, `"wschoice"` otherwise.
+    pub row_cls: String,
+    /// "This is how it is set" / "Choose".
+    pub button: String,
+}
+
+/// A `<select>` option, value + label, both served.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceOptionRow {
+    pub value: String,
+    pub label: String,
+}
+
+/// One binding-list row of the workspace's right pane: the selected slot's
+/// controls in the zone tables' own order, each with the composed strings
+/// the Nocturne row anatomy renders and the fields its Clear twin submits.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceBindRow {
+    /// Canonical function name — the form field and the row key.
+    pub function: String,
+    /// "LS ▲", "D-pad ◀", "A" — the mapper's own legend label.
+    pub label: String,
+    /// "G · H", or the honest "—" for an unbound control.
+    pub keys: String,
+    /// The row's modifiers as one quiet sentence: "Turbo ~12 Hz · Toggle ·
+    /// this key also drives A, B" — empty when the row is plain.
+    pub notes: String,
+    /// `"wsbind"` (+" unbound"/" shared").
+    pub cls: String,
+    /// The fan-out sentence ALONE ("this key also drives A · B"), for a
+    /// surface that shows turbo/toggle as badges instead of prose.
+    pub share_note: String,
+
+    /// "Clear" on a bound row, empty (and therefore hidden) on an unbound
+    /// one — the list idiom for a per-row action that is sometimes a no-op.
+    pub clear: String,
+    /// The slot number the Clear twin submits.
+    pub slot: String,
+    /// The control's delivered auto-fire rate as the turbo box's prefill
+    /// ("12"), or empty for none.
+    pub turbo_hz: String,
+    /// TOGGLE-HOLD: the control latches (press once holds, press again
+    /// releases).
+    pub toggle: bool,
+}
+
+/// Everything the workspace SHOWS that is not verbatim provider data. The
+/// island reads these fields and renders them; it derives nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceDerived {
+    /// The stage card's one customer sentence for the session state.
+    pub state_detail: String,
+    /// The Keyboard section's one line: the staged board's LABEL
+    /// (`FIRST-RUN.md` §5 — the label is the identifier on screen), or the
+    /// honest empty/unreadable sentence.
+    pub device_line: String,
+    /// The board's capture path in small print — "USB · Interception",
+    /// "USB · built-in (WinUSB)" — or empty with no board.
+    pub device_meta: String,
+    /// The Virtual-controllers section's one line.
+    pub rack_line: String,
+    /// The staged controllers, in slot order.
+    pub rack: Vec<WorkspaceSlotRow>,
+    /// The capacity sentence under the rack — served ceilings, never
+    /// hardcoded ones.
+    pub rack_caption: String,
+    /// P1..Pn for the shared opposite-directions form.
+    pub socd_slots: Vec<WorkspaceOptionRow>,
+    /// The served SOCD roster (`SocdOption`), as select options.
+    pub socd_policies: Vec<WorkspaceOptionRow>,
+    /// The capture question's current-answer sentence.
+    pub blocking_line: String,
+    /// The three capture answers as radio-rows.
+    pub blocking: Vec<WorkspaceChoiceRow>,
+    /// The personas "Add a controller" may offer — this build's pluggable,
+    /// this stage's still-addable, with the backend and per-session ceiling
+    /// in the label (the same filter and label `/start` offers).
+    pub add_personas: Vec<WorkspaceOptionRow>,
+    /// The in-box layouts, best-fit-first for the next slot.
+    pub add_layouts: Vec<WorkspaceOptionRow>,
+    /// The preset name the add would create — SERVED, because it becomes a
+    /// file name (`StagedSetupView::next_preset`'s own rule).
+    pub add_preset: String,
+    /// The ceiling sentence when every slot is staged, else empty.
+    pub add_full_line: String,
+    /// The schematic's accessible summary: the first controller's identity
+    /// and bound count, with the Sony-vocabulary honesty caption for
+    /// PlayStation-family pads ("shown on a generic gamepad outline").
+    pub pad_caption: String,
+    /// The right pane's heading line: the SELECTED controller's identity, or
+    /// the honest empty/unreachable sentence.
+    pub bind_title: String,
+    /// The selected controller's binding list, in zone order.
+    pub bind_rows: Vec<WorkspaceBindRow>,
+    /// "14 of 25 controls bound · 2 keys shared." — or empty with no slot.
+    pub bind_foot: String,
+    /// Where the full mapper lives for the selected slot
+    /// (`/map?target=stage&slot=N`), or `/map` with none.
+    pub map_href: String,
+    /// "Unsaved changes — …" when the draft is dirty, else empty.
+    pub dirty_line: String,
+    pub pill_running: bool,
+    pub pill_idle: bool,
+    pub pill_down: bool,
+    /// The pane-structure branches: a readable non-empty draft shows the
+    /// rack and its forms; a readable EMPTY draft shows the build/adopt
+    /// affordances; an unreachable one shows neither (the lines above carry
+    /// the failed-read sentences).
+    pub stage_ready: bool,
+    pub stage_empty: bool,
+    pub has_device: bool,
+    pub show_dirty: bool,
+    pub can_add: bool,
+    pub add_full: bool,
+    /// Which stage schematic renders: the first controller's FAMILY decides,
+    /// and an empty or unreadable draft shows the Xbox outline as the
+    /// generic default. Exactly one of the pair is ever true.
+    pub pad_xbox: bool,
+    pub pad_ps: bool,
+}
+
+/// The slot the page is looking at: the requested one when it still exists,
+/// else the first — a removed slot must not leave the pane staring at
+/// nothing when there is something honest to show.
+fn workspace_selected(p: &WorkspacePayload) -> Option<&ksx_api::StagedSlotView> {
+    if !p.staged.reachable {
+        return None;
+    }
+    p.selected
+        .and_then(|n| p.staged.slots.iter().find(|slot| slot.number == n))
+        .or_else(|| p.staged.slots.first())
+}
+
+impl WorkspaceDerived {
+    fn of(p: &WorkspacePayload) -> Self {
+        let staged = &p.staged;
+        let ready = staged.reachable && !staged.empty;
+        let selected = workspace_selected(p);
+        let binds = workspace_bind_rows(staged, selected);
+        Self {
+            state_detail: session_play_status(&p.session),
+            device_line: workspace_device_line(staged),
+            device_meta: workspace_device_meta(staged),
+            rack_line: workspace_rack_line(staged),
+            rack: workspace_rack_rows(staged, selected.map(|slot| slot.number)),
+            rack_caption: workspace_rack_caption(staged),
+            socd_slots: staged
+                .slots
+                .iter()
+                .map(|slot| WorkspaceOptionRow {
+                    value: slot.number.to_string(),
+                    label: format!("P{}", slot.number),
+                })
+                .collect(),
+            socd_policies: staged
+                .socd_options
+                .iter()
+                .map(|option| WorkspaceOptionRow {
+                    value: option.name.clone(),
+                    label: option.title.clone(),
+                })
+                .collect(),
+            blocking_line: workspace_blocking_line(staged),
+            blocking: workspace_blocking_rows(staged),
+            add_personas: staged
+                .personas
+                .iter()
+                .filter(|p| p.can_plug && p.available)
+                .map(|p| WorkspaceOptionRow {
+                    value: p.name.clone(),
+                    label: persona_picker_label(p),
+                })
+                .collect(),
+            add_layouts: layout_options(staged)
+                .into_iter()
+                .map(|option| WorkspaceOptionRow {
+                    value: option.value,
+                    label: option.label,
+                })
+                .collect(),
+            add_preset: staged.next_preset.clone().unwrap_or_default(),
+            add_full_line: if ready && staged.next_slot.is_none() {
+                format!(
+                    "All {} controller slots are staged — remove one to add a different one.",
+                    staged.max_slots
+                )
+            } else {
+                String::new()
+            },
+            pad_caption: workspace_pad_caption(selected),
+            bind_title: binds.title,
+            bind_rows: binds.rows,
+            bind_foot: binds.foot,
+            map_href: binds.map_href,
+            dirty_line: if ready && staged.dirty {
+                "Unsaved changes — Save writes them; Play runs them as they are.".to_owned()
+            } else {
+                String::new()
+            },
+            pill_running: p.session.reachable && p.session.running,
+            pill_idle: p.session.reachable && !p.session.running,
+            pill_down: !p.session.reachable,
+            stage_ready: ready,
+            stage_empty: staged.reachable && staged.empty,
+            has_device: staged.reachable && staged.device.is_some(),
+            show_dirty: ready && staged.dirty,
+            can_add: ready
+                && staged.next_slot.is_some()
+                && staged.personas.iter().any(|p| p.can_plug && p.available),
+            add_full: ready && staged.next_slot.is_none(),
+            pad_ps: selected.is_some_and(|slot| !slot.is_xinput),
+            pad_xbox: !selected.is_some_and(|slot| !slot.is_xinput),
+        }
+    }
+}
+
+/// A failed READ is not an absence (`docs/SURFACES.md` §1b): an unreachable
+/// draft says so, and never renders as "No keyboard chosen yet" — which is
+/// advice, and would be the wrong advice.
+fn workspace_device_line(staged: &ksx_api::StagedSetupView) -> String {
+    if !staged.reachable {
+        return "The draft could not be read. Reopen ksx and try again.".to_owned();
+    }
+    match &staged.device {
+        Some(device) => device.label.clone(),
+        None => "No keyboard chosen yet.".to_owned(),
+    }
+}
+
+fn workspace_rack_line(staged: &ksx_api::StagedSetupView) -> String {
+    if !staged.reachable {
+        return "Not readable right now.".to_owned();
+    }
+    match staged.slots.len() {
+        0 => "No controllers staged yet.".to_owned(),
+        1 => "1 controller staged.".to_owned(),
+        n => format!("{n} controllers staged."),
+    }
+}
+
+/// The capture path in the words `/start`'s device rows use, from the served
+/// backend name — matched, never parsed out of a selector.
+fn workspace_device_meta(staged: &ksx_api::StagedSetupView) -> String {
+    let Some(device) = staged.device.as_ref().filter(|_| staged.reachable) else {
+        return String::new();
+    };
+    match device.backend.as_str() {
+        "winusb" => "USB · built-in (WinUSB)".to_owned(),
+        "interception" => "USB · Interception".to_owned(),
+        // A backend this build has no words for still gets shown — the served
+        // name is at least true, and hiding it would claim there is none.
+        other => other.to_owned(),
+    }
+}
+
+fn workspace_rack_rows(
+    staged: &ksx_api::StagedSetupView,
+    selected: Option<u8>,
+) -> Vec<WorkspaceSlotRow> {
+    if !staged.reachable {
+        return Vec::new();
+    }
+    let order: Vec<u8> = staged.slots.iter().map(|slot| slot.number).collect();
+    let swapped = |a: usize, b: usize| -> String {
+        let mut next = order.clone();
+        next.swap(a, b);
+        next.iter().map(u8::to_string).collect::<Vec<_>>().join(" ")
+    };
+    staged
+        .slots
+        .iter()
+        .enumerate()
+        .map(|(at, slot)| WorkspaceSlotRow {
+            number: slot.number.to_string(),
+            row_cls: if selected == Some(slot.number) {
+                "wsrow on".to_owned()
+            } else {
+                "wsrow".to_owned()
+            },
+            href: format!("/workspace?slot={}", slot.number),
+            title: format!("P{} · {}", slot.number, slot.persona_label),
+            detail: format!(
+                "\"{}\" · {} control{}",
+                slot.preset,
+                slot.bindings,
+                if slot.bindings == 1 { "" } else { "s" }
+            ),
+            socd_note: match slot.socd.as_str() {
+                "" | "off" => String::new(),
+                _ => format!("Opposites: {}", slot.socd_label),
+            },
+            up_order: if at == 0 {
+                String::new()
+            } else {
+                swapped(at - 1, at)
+            },
+            down_order: if at + 1 == order.len() {
+                String::new()
+            } else {
+                swapped(at, at + 1)
+            },
+        })
+        .collect()
+}
+
+/// Served ceilings, never hardcoded ones — and only the Xbox half when it is
+/// the binding constraint, because "1 of 4" beside "1 of 16" reads as two
+/// unrelated quotas until one of them refuses.
+fn workspace_rack_caption(staged: &ksx_api::StagedSetupView) -> String {
+    if !staged.reachable || staged.slots.is_empty() {
+        return String::new();
+    }
+    format!(
+        "{} of {} controllers · {} of {} Xbox seats used.",
+        staged.slots.len(),
+        staged.max_slots,
+        staged.xinput_used,
+        staged.max_xinput_slots
+    )
+}
+
+fn workspace_blocking_line(staged: &ksx_api::StagedSetupView) -> String {
+    if !staged.reachable {
+        return String::new();
+    }
+    let current = staged.blocking.as_deref().unwrap_or("");
+    match staged
+        .blocking_options
+        .iter()
+        .find(|option| option.name == current)
+    {
+        Some(option) => format!("{} — {}", option.title, option.detail),
+        None => "Not answered yet. Play needs an answer; pick one below.".to_owned(),
+    }
+}
+
+/// The schematic's one accessible sentence: which pad it stands for and how
+/// bound it is. No vocabulary caveat any more — the stage shows each
+/// family's OWN outline (`WorkspaceDerived::pad_ps`), so the art and the
+/// words already agree.
+fn workspace_pad_caption(selected: Option<&ksx_api::StagedSlotView>) -> String {
+    let Some(slot) = selected else {
+        return String::new();
+    };
+    format!(
+        "P{} · {} — \"{}\", {} control{} bound.",
+        slot.number,
+        slot.persona_label,
+        slot.preset,
+        slot.bindings,
+        if slot.bindings == 1 { "" } else { "s" }
+    )
+}
+
+/// The right pane's whole content for one selected controller, composed off
+/// the SAME machinery the mapper reads (`ksx_api::staged_mapper_slot` + the
+/// zone tables in render_map.rs), so the two surfaces cannot describe one
+/// binding differently.
+struct WorkspaceBinds {
+    title: String,
+    rows: Vec<WorkspaceBindRow>,
+    foot: String,
+    map_href: String,
+}
+
+fn workspace_bind_rows(
+    staged: &ksx_api::StagedSetupView,
+    selected: Option<&ksx_api::StagedSlotView>,
+) -> WorkspaceBinds {
+    let empty = |title: &str| WorkspaceBinds {
+        title: title.to_owned(),
+        rows: Vec::new(),
+        foot: String::new(),
+        map_href: "/map".to_owned(),
+    };
+    if !staged.reachable {
+        return empty("Not readable right now.");
+    }
+    let Some(slot) = selected else {
+        return empty("No controller staged yet.");
+    };
+    let keyboard = staged
+        .device
+        .as_ref()
+        .map(|device| device.label.as_str())
+        .unwrap_or("(none)");
+    let Ok(mapper) = ksx_api::staged_mapper_slot(slot, keyboard) else {
+        // An older daemon serves no authoring table; the mapper page carries
+        // the full explanation, so point there rather than paraphrasing.
+        return WorkspaceBinds {
+            title: format!("P{} · {}", slot.number, slot.persona_label),
+            rows: Vec::new(),
+            foot: String::new(),
+            map_href: format!("/map?target=stage&slot={}", slot.number),
+        };
+    };
+    let shared = crate::render_map::shared_labels(&mapper);
+    let zones = crate::render_map::zones_for(&mapper.persona);
+    let rows: Vec<WorkspaceBindRow> = zones
+        .iter()
+        .zip(&shared)
+        .map(|(zone, share)| {
+            let keys = crate::render_map::key_tag(&mapper, zone.fn_name);
+            let unbound = keys == "—";
+            let mut notes: Vec<String> = Vec::new();
+            if let Some(effective) = mapper.turbo.get(zone.fn_name) {
+                notes.push(format!("Turbo ~{effective} Hz"));
+            }
+            if mapper.toggle.contains(zone.fn_name) {
+                notes.push("Toggle: a press holds until the next press".to_owned());
+            }
+            // PER-KEY fan-out, subject named — "this key also drives…" could
+            // not say WHICH key on a multi-key row. One vocabulary
+            // everywhere: keys DRIVE controls (the board's own words).
+            let share_note = {
+                let mut parts: Vec<String> = Vec::new();
+                for key in crate::render_map::keys_of(&mapper, zone.fn_name) {
+                    let others: Vec<String> = zones
+                        .iter()
+                        .filter(|other| other.fn_name != zone.fn_name)
+                        .filter(|other| {
+                            crate::render_map::keys_of(&mapper, other.fn_name).contains(&key)
+                        })
+                        .map(|other| {
+                            crate::render_map::legend_label_for_persona(&mapper.persona, other)
+                        })
+                        .collect();
+                    if !others.is_empty() {
+                        parts.push(format!("{key} also drives {}", others.join(" · ")));
+                    }
+                }
+                parts.join(" — ")
+            };
+            if !share_note.is_empty() {
+                notes.push(share_note.clone());
+            }
+            let mut cls = String::from("wsbind");
+            if unbound {
+                cls.push_str(" unbound");
+            }
+            if !share.is_empty() {
+                cls.push_str(" shared");
+            }
+            WorkspaceBindRow {
+                function: zone.fn_name.to_owned(),
+                label: crate::render_map::legend_label_for_persona(&mapper.persona, zone),
+                keys,
+                notes: notes.join(" · "),
+                cls,
+                share_note,
+                clear: if unbound {
+                    String::new()
+                } else {
+                    "Clear".to_owned()
+                },
+                slot: slot.number.to_string(),
+                turbo_hz: mapper
+                    .turbo
+                    .get(zone.fn_name)
+                    .map(|hz| hz.to_string())
+                    .unwrap_or_default(),
+                toggle: mapper.toggle.contains(zone.fn_name),
+            }
+        })
+        .collect();
+    let bound = rows.iter().filter(|row| row.keys != "—").count();
+    // A key is SHARED when it drives more than one control — counted once,
+    // by inverting the binding table, so a key that merely sits beside a
+    // shared one on some row never inflates the number.
+    let shared_keys: usize = {
+        let mut fanout: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+        for keys in mapper.bindings.values() {
+            for key in keys {
+                *fanout.entry(key.as_str()).or_default() += 1;
+            }
+        }
+        fanout.values().filter(|count| **count > 1).count()
+    };
+    let foot = match shared_keys {
+        0 => format!("{bound} of {} controls bound.", rows.len()),
+        1 => format!("{bound} of {} controls bound · 1 key shared.", rows.len()),
+        n => format!(
+            "{bound} of {} controls bound · {n} keys shared.",
+            rows.len()
+        ),
+    };
+    WorkspaceBinds {
+        title: format!(
+            "P{} · {} — \"{}\"",
+            slot.number, slot.persona_label, slot.preset
+        ),
+        rows,
+        foot,
+        map_href: format!("/map?target=stage&slot={}", slot.number),
+    }
+}
+
+fn workspace_blocking_rows(staged: &ksx_api::StagedSetupView) -> Vec<WorkspaceChoiceRow> {
+    if !staged.reachable {
+        return Vec::new();
+    }
+    let current = staged.blocking.as_deref().unwrap_or("");
+    staged
+        .blocking_options
+        .iter()
+        .map(|option| WorkspaceChoiceRow {
+            name: option.name.clone(),
+            title: option.title.clone(),
+            detail: option.detail.clone(),
+            row_cls: if option.name == current {
+                "wschoice on".to_owned()
+            } else {
+                "wschoice".to_owned()
+            },
+            button: if option.name == current {
+                "This is how it is set".to_owned()
+            } else {
+                "Choose".to_owned()
+            },
+        })
+        .collect()
+}
+
+// ═══ /nocturne — THE MIGRATED KEYBOARD SECTION ═════════════════════════════
+//
+// The first real payload behind the Nocturne route (2026-08-17): the keyboard
+// facts ONLY — device pick rows off the live machine scan, the split/freeze
+// roster, and the prepared-for-play control composed from the SAME
+// [`StartCaptureView`] mode machine `/start`'s card uses. Everything else on
+// the page stays the design proof's placeholder until its own migration pass.
+
+/// `/nocturne`'s served facts. Independent reads with independent failure
+/// modes, exactly like [`StartPayload`]: a dead daemon must not read as "you
+/// have staged nothing" and a refused enumeration must not read as "you have
+/// no keyboards".
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NocturnePayload {
+    /// Provenance of every machine/device answer in this payload. Fixtures
+    /// must name themselves so manual QA can never confuse synthetic state
+    /// with an attached cabinet.
+    #[serde(default)]
+    pub environment: ksx_api::RuntimeEnvironmentView,
+    pub staged: ksx_api::StagedSetupView,
+    pub scan: ksx_api::DeviceScanView,
+    pub session: crate::control::SessionView,
+    /// Empty when the scan answered; otherwise the refusal, verbatim.
+    #[serde(default)]
+    pub unavailable: String,
+    /// The configuration menu's three reads, each with its own honest
+    /// degradation: what config.toml holds, the games.toml profiles, and the
+    /// sign-in task — `None` plus the error sentence when a read refused.
+    #[serde(default)]
+    pub setup: Option<ksx_api::SetupView>,
+    #[serde(default)]
+    pub setup_error: String,
+    #[serde(default)]
+    pub games: Option<ksx_api::ProfilesView>,
+    #[serde(default)]
+    pub games_error: String,
+    #[serde(default)]
+    pub autostart_read: Option<ksx_api::AutostartView>,
+    #[serde(default)]
+    pub autostart_error: String,
+    /// The `?slot=N` the request asked for — SERVER-resolved against the
+    /// staged roster (a number the draft does not have falls back to the
+    /// first slot), so selection works with no JavaScript and survives a
+    /// reload.
+    #[serde(default)]
+    pub selected: Option<u8>,
+    /// The binding filter (`?q=`), server-resolved like the selection.
+    #[serde(default)]
+    pub q: Option<String>,
+    /// Which macro the step editor is open on — a SERVED selection, like
+    /// the slot, so the dialog survives a reload and a reader with no
+    /// scripting can still open a sequence and read it.
+    pub macro_selected: Option<String>,
+    /// The undo chip's sentence while the server still holds a removed
+    /// controller's resurrection material (`server/nocturne.rs` stash).
+    #[serde(default)]
+    pub undo_label: Option<String>,
+    /// Every sentence and row the page renders, composed once, here.
+    #[serde(default)]
+    pub view: NocturneDerived,
+}
+
+impl NocturnePayload {
+    /// Recompose [`view`](Self::view) from this payload's own facts — called
+    /// on the way OUT, like every other `composed()`/`derived()` here.
+    #[must_use]
+    pub fn derived(mut self) -> Self {
+        self.view = NocturneDerived::of(&self);
+        self
+    }
+
+    fn scan_read(&self) -> bool {
+        self.unavailable.trim().is_empty()
+    }
+}
+
+/// One pickable keyboard row: the row IS the `/nocturne/device` form's
+/// button, so the three hidden values ride beside the display fields. All
+/// three are SERVED — `FIRST-RUN.md` §6 forbids asking anyone to type a
+/// device path, and this page has no text input either.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneDeviceRow {
+    pub cls: String,
+    pub name: String,
+    pub meta: String,
+    /// `keyboard` | `panel-encoder` | `other`, copied from the backend-owned
+    /// [`ksx_api::BoardRole`]. The island uses this value for presentation; it
+    /// never identifies an encoder by matching the display name.
+    pub role: String,
+    pub selector: String,
+    pub alias: String,
+    pub label: String,
+}
+
+/// One board that cannot be picked, and why — kept visible, never hidden:
+/// a list that silently drops rows teaches a user the machine has fewer
+/// keyboards than it does.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneOtherRow {
+    pub name: String,
+    pub meta: String,
+}
+
+/// One split-or-freeze answer, from `BlockingOption::roster()` — the same
+/// words `/start` and `/workspace` ask with, deliberately not a third wording.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneChoiceRow {
+    pub name: String,
+    pub title: String,
+    pub detail: String,
+    pub cls: String,
+}
+
+/// One staged controller in the rack.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneRackRow {
+    pub number: String,
+    pub badge: String,
+    /// The controller's identity color class: `n-pbadge np1..np16` by
+    /// slot number — each of the 16 slots owns a distinct default color
+    /// (`--pcs1..16`), user-overridable from the rack's color dot.
+    pub badge_cls: String,
+    /// The color dot that opens the picker: `n-cdot np{N}`.
+    pub dot_cls: String,
+    pub name: String,
+    pub meta: String,
+    pub cls: String,
+    /// The selection link (`/nocturne?slot=N`) — served whole, because a
+    /// list body must be bare member reads (the compiler contract).
+    pub href: String,
+    /// The whole slot order with this row swapped one place up/down — one
+    /// reorder per click, precomposed server-side (the workspace's rule).
+    /// Empty at that end of the order; the handler answers with the honest
+    /// at-that-end sentence instead of a write.
+    pub up_order: String,
+    pub down_order: String,
+}
+
+/// One free slot the rack shows as an invitation.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneEmptyRow {
+    pub badge: String,
+}
+
+/// One persona card in the create form. Unavailable personas stay listed —
+/// a menu that silently drops choices teaches a user the product has fewer.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturnePersonaRow {
+    pub name: String,
+    pub label: String,
+    pub api: String,
+    pub note: String,
+    pub cls: String,
+}
+
+/// One `<option>`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneOptionRow {
+    pub value: String,
+    pub label: String,
+}
+
+/// One binding-list row, composed off the SAME machinery the mapper reads
+/// (via [`workspace_bind_rows`]) and re-dressed for the Nocturne pane.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneBindRow {
+    pub function: String,
+    pub label: String,
+    pub chip: String,
+    pub note: String,
+    pub cls: String,
+    pub chip_cls: String,
+    /// `n-minus` when the chip carries several keys (a pair to choose),
+    /// `n-minus none` otherwise — the ⊖ only shows where it can act.
+    pub minus_cls: String,
+    pub clear_cls: String,
+    pub slot: String,
+    /// The turbo box's prefill — the delivered rate ("12"), or empty.
+    pub turbo: String,
+    /// The chip's hover sentence: the RELATION, stated from the game's side
+    /// ("Driven by G or H — …"), because the chip lives on a control row.
+    pub chip_title: String,
+
+    /// The summary badge — "Toggle · 12/s" / "12/s" / "Toggle", with its
+    /// visibility class ("" cannot ride CSS `:empty`: the renderer keeps a
+    /// zero-width text node in an empty slot).
+    pub badge: String,
+    pub badge_cls: String,
+    /// The ghost "+" add-a-key chip: hidden on an unbound row, whose main
+    /// chip already binds the first key.
+    pub add_cls: String,
+    /// The Hold|Toggle pill pair, precomposed: exactly one carries `on`.
+    pub hold_cls: String,
+    pub tog_cls: String,
+}
+
+/// One macro of the selected slot's layout, as the right pane's lifecycle
+/// row: trigger keys, a step/policy summary, and the enable/disable state.
+/// Step EDITING stays on the Controls editor until its own pass; this row
+/// says so with a link instead of pretending.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneMacroRow {
+    /// The table name — the display label.
+    pub name: String,
+    /// `macro.<name>` — the binding-table function the learn flow rebinds.
+    pub fn_name: String,
+    /// Trigger keys joined, or the honest "No trigger key".
+    pub chip: String,
+    /// The chip's hover sentence — the relation, plus the gesture.
+    pub chip_title: String,
+    /// The ghost "+" add-a-trigger chip; hidden until one trigger exists.
+    pub add_cls: String,
+    pub chip_cls: String,
+    /// "3 steps · repeats while held · …".
+    pub meta: String,
+    pub cls: String,
+    pub slot: String,
+    /// The Controls editor, opened at exactly this macro.
+    pub edit_href: String,
+    /// The lifecycle pair, precomposed: what the submit does and the wire
+    /// value it sends ("yes" enables, empty disables).
+    pub toggle_label: String,
+    pub toggle_value: String,
+}
+
+/// One saved game in the configuration menu — a LOAD row, never a launcher.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneGameRow {
+    /// The games.toml profile title — the row's label AND the adopt form's
+    /// `profile` value.
+    pub title: String,
+    /// "2 controllers · ready" / the broken verdict, compact.
+    pub meta: String,
+    /// `"nm-game"` (+" broken").
+    pub cls: String,
+    pub ico_cls: String,
+}
+
+/// One FREE control in the By-control view's per-group strip: click it,
+/// then press (or click) a key — the control-side twin of a free key chip.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneCtlChip {
+    /// The mapper's own spelling, for the learn target.
+    pub function: String,
+    pub label: String,
+    pub cls: String,
+}
+
+/// One row of the pane's BY-KEY view: a bound key and everything it
+/// drives, the relation read from the keyboard's side.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneKeyRow {
+    pub key: String,
+    /// The controls this key drives, in readable zone labels ("A · RB").
+    pub targets: String,
+    /// The same controls as canonical fn tokens, space-joined lowercase —
+    /// the client's door to the By-control rows.
+    pub fns: String,
+    /// `n-krow` (+" shared" when the key fans out to several controls).
+    pub cls: String,
+    /// The selected slot's number, carried so the row's per-key Clear form
+    /// twin can name it. Empty on the free-key chips (nothing to clear).
+    pub slot: String,
+}
+
+/// One chip of the board's color legend: which color speaks for which
+/// controller, and the door to muting it on the keys.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneLegendRow {
+    pub slot: String,
+    pub badge: String,
+    /// The persona label, so the chip says who as well as which color.
+    pub name: String,
+    /// `n-lgd np{N}` — the chip wears the controller's own color.
+    pub cls: String,
+}
+
+/// One controller for the stage's MULTI-PAD grid: everything the client
+/// needs to clone the right master art and dress it for this slot. Pure
+/// payload data — no template reads it, so it mints no slots.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturnePadView {
+    pub slot: u8,
+    /// Opaque staged-controller revision served with this exact row. The
+    /// browser returns it unchanged with a bind; it is not presentation data
+    /// and must never be reconstructed from the visible preset/persona.
+    #[serde(default)]
+    pub target_revision: String,
+    /// "xbox" | "ps" — which master silhouette the client clones.
+    pub family: String,
+    /// The slot's preset name — the controller's STABLE identity across
+    /// reorders (seats renumber, worksheets travel), which is what the
+    /// client keys its identity colors by.
+    pub preset: String,
+    pub title: String,
+    /// Canonical fn → its key chip ("G · H"), for the clone's callouts.
+    pub fn_keys: std::collections::BTreeMap<String, String>,
+    /// `false` means the provider could not project this slot's direct mapper
+    /// table. An empty `fn_keys` is otherwise the valid fact "nothing is
+    /// bound", so availability has to travel separately.
+    #[serde(default)]
+    pub mapping_available: bool,
+    #[serde(default)]
+    pub mapping_reason: String,
+    /// Every controller control in one stable authoring order. Unlike
+    /// `fn_keys`, this keeps the exact key vector and the per-control
+    /// transforms the canvas needs to edit a connection without reading the
+    /// legacy binding pane's DOM. Empty is meaningful only while
+    /// `mapping_available` is true; otherwise `mapping_reason` says why no
+    /// authoring projection could be made.
+    #[serde(default)]
+    pub controls: Vec<NocturneControlAuthoring>,
+    /// Canonical fn → the persona's readable label ("LS ↑", "△") — the
+    /// toast's vocabulary for arming ANY pad's control, not just the
+    /// selected one.
+    pub fn_names: std::collections::BTreeMap<String, String>,
+    /// Timed processors owned by this preset. The canvas renders these as
+    /// real key → macro → control chains instead of pretending a trigger
+    /// key is a direct controller binding.
+    #[serde(default)]
+    pub macros: Vec<NocturneMacroFlow>,
+    /// `false` means the provider could not answer the macro read. It must not
+    /// collapse into an empty macro list: "unknown" and "defines none" are
+    /// different authoring facts.
+    #[serde(default)]
+    pub macro_available: bool,
+    #[serde(default)]
+    pub macro_reason: String,
+}
+
+/// One controller-side endpoint in the canvas authoring graph.
+///
+/// The identity comes from [`crate::render_map::zones_for`], while binding
+/// and transform facts come straight from [`ksx_api::MapperSlot`]. This is a
+/// normalized backend projection, not a transcription of whichever rows a
+/// surface happens to render.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneControlAuthoring {
+    /// Canonical mapper function spelling (`A`, `dpad.up`, `lx.min`).
+    pub function: String,
+    /// Persona-aware control name (`A`, `△`, `Create`, `LS ←`).
+    pub label: String,
+    /// Stable machine group slug: face, dpad, shoulders, left-stick,
+    /// right-stick, or system.
+    pub group: String,
+    /// Zero-based position in the complete normalized control sequence.
+    pub order: usize,
+    /// Exact authored OR-chain, in file order. Empty means unbound.
+    pub keys: Vec<String>,
+    /// Whether a press latches until the next press.
+    pub toggle: bool,
+    /// Authored auto-fire rate; absent means ordinary non-turbo behavior.
+    pub turbo_hz: Option<u32>,
+}
+
+/// The read-only part of one macro needed by the canvas signal graph.
+///
+/// This is composed from the same staged [`ksx_api::MacroSnapshot`] as the
+/// lifecycle rows and step editor. The browser receives presentation-ready
+/// step words plus canonical output names; it does not interpret macro files
+/// or invent execution semantics of its own.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneMacroFlow {
+    pub name: String,
+    pub triggers: Vec<String>,
+    /// Unique canonical functions touched anywhere in the timeline, in first
+    /// appearance order. A neutral-only macro legitimately leaves this empty.
+    pub outputs: Vec<NocturneMacroFlowOutput>,
+    /// One persona-aware sentence per step ("D-pad ↓", "D-pad ↘", "X").
+    pub timeline: Vec<String>,
+    pub meta: String,
+    pub disabled: bool,
+    pub edit_href: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneMacroFlowOutput {
+    pub function: String,
+    /// One-based step numbers where this output is held. This is what keeps a
+    /// sequence from being presented as simultaneous fan-out.
+    pub steps: Vec<usize>,
+}
+
+fn nocturne_macro_meta(mac: &ksx_api::MacroView) -> String {
+    let mut notes = vec![match mac.steps.len() {
+        1 => "1 step".to_owned(),
+        n => format!("{n} steps"),
+    }];
+    match mac.repeat.as_str() {
+        "while-held" => notes.push("repeats while held".to_owned()),
+        "turbo" => notes.push(match (mac.turbo_hz, mac.gap_ms) {
+            (Some(hz), _) => format!("turbo {hz} Hz"),
+            (_, Some(gap)) => format!("turbo · {gap} ms gap"),
+            _ => "turbo".to_owned(),
+        }),
+        _ => {}
+    }
+    if mac.on_release == "abort" {
+        notes.push("aborts on release".to_owned());
+    }
+    if mac.disabled {
+        notes.push("disabled — keeps every step, never starts".to_owned());
+    }
+    notes.join(" · ")
+}
+
+fn nocturne_macro_outputs(mac: &ksx_api::MacroView) -> Vec<NocturneMacroFlowOutput> {
+    let mut positions = std::collections::HashMap::<String, usize>::new();
+    let mut outputs: Vec<NocturneMacroFlowOutput> = Vec::new();
+    for (step_index, step) in mac.steps.iter().enumerate() {
+        for function in &step.hold {
+            let normalized = function.to_ascii_lowercase();
+            if let Some(index) = positions.get(&normalized).copied() {
+                outputs[index].steps.push(step_index + 1);
+            } else {
+                positions.insert(normalized, outputs.len());
+                outputs.push(NocturneMacroFlowOutput {
+                    function: function.clone(),
+                    steps: vec![step_index + 1],
+                });
+            }
+        }
+    }
+    outputs
+}
+
+/// How many owner bands a keycap can carry before the last one becomes the
+/// neutral "and more" mark: four 6px bands is the legible floor at 30px, and
+/// no palette is readable past a handful of hues anyway.
+const BAND_MAX: usize = 4;
+
+/// The band class prefixes, in paint order (left to right).
+const BAND_KEYS: [&str; BAND_MAX] = ["ba", "bb", "bc", "bd"];
+
+/// One keycap on the standard board, dressed with its binding short.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneKeyCell {
+    pub cap: String,
+    /// The canonical `ksx_core::Key` name — the live feed's `KeyHit.key`
+    /// vocabulary, carried as `data-key` so live lighting is a lookup.
+    pub key: String,
+    pub cls: String,
+    pub short: String,
+    /// The hover sentence: which controls this key drives, in the persona's
+    /// readable zone labels. Empty on an unbound cap.
+    pub title: String,
+    /// The assistive name (`role="img"` + `aria-label`): the same sentence
+    /// on a bound cap, the bare cap otherwise — never empty.
+    pub aria: String,
+}
+
+/// Every sentence `/nocturne` states as a served fact.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneDerived {
+    /// The device kicker's count — "N found", or the honest refusal word.
+    pub dev_count: String,
+    /// `scan.boards_summary` or the refusal sentence — the one line that
+    /// distinguishes "no keyboard-capable board" from "nothing could be read".
+    pub dev_note: String,
+    /// Recognized physical panel encoders get their own first-run lane even
+    /// when keyboard mode makes their capture interface declare as a keyboard.
+    pub encoder_count: String,
+    pub encoder_head: String,
+    /// The keyboard header over the key grid: the STAGED selection's identity.
+    pub kb_title: String,
+    pub dev_encoders: Vec<NocturneDeviceRow>,
+    pub dev_rows: Vec<NocturneDeviceRow>,
+    /// Pickable HID devices that do NOT identify themselves as keyboards —
+    /// the explicit experimentation playground, never mixed into the
+    /// ordinary keyboard list (the same split `/start` draws).
+    pub dev_exp: Vec<NocturneDeviceRow>,
+    pub dev_other: Vec<NocturneOtherRow>,
+    /// The two folds' headers ("… · N") and visibility classes; empty tiers
+    /// hide their fold entirely.
+    pub exp_head: String,
+    pub exp_fold_cls: String,
+    pub other_head: String,
+    pub other_fold_cls: String,
+    pub mode_rows: Vec<NocturneChoiceRow>,
+    /// Why the behaviour section has nothing to offer, when it does not —
+    /// an empty roster with no sentence is a silent hole, not a state.
+    pub mode_note: String,
+    /// The prepared-for-play control, composed from [`StartCaptureView`]'s
+    /// mode machine. `capd_cls` hides the whole control (`none`) or strips
+    /// its action (`noact`); the two dialog shows are exclusive.
+    pub cap_line: String,
+    pub capd_cls: String,
+    pub cap_sw_cls: String,
+    pub cap_selector: String,
+    pub cap_instance: String,
+    pub cap_prepare: bool,
+    pub cap_release: bool,
+    /// The title bar: real version, the draft's origin + dirty answer, the
+    /// backend-owned escape hatch, and the session verbs' visibility.
+    pub version: String,
+    /// Persistent title-bar provenance. `environment_id` is the stable token;
+    /// the label is presentation copy. `environment_cls` distinguishes live,
+    /// fixture, and fail-closed unknown providers.
+    pub environment_id: String,
+    pub environment_label: String,
+    pub environment_detail: String,
+    pub environment_cls: String,
+    pub environment_fixture: bool,
+    pub environment_generation: String,
+    pub chip_text: String,
+    pub save_text: String,
+    pub escape_line: String,
+    pub play_cls: String,
+    pub stop_cls: String,
+    /// The title bar's Apply-changes verb: visible only while a session
+    /// runs AND the draft is dirty (`stage_apply` — M1b F3's UI).
+    pub apply_cls: String,
+    /// The rack.
+    pub rack_rows: Vec<NocturneRackRow>,
+    pub rack_empty: Vec<NocturneEmptyRow>,
+    pub rack_caption: String,
+    /// The create form: real personas, layouts, SOCD roster, served preset
+    /// name, and the lede naming the player and board.
+    pub add_lede: String,
+    pub add_preset: String,
+    pub persona_rows: Vec<NocturnePersonaRow>,
+    pub layout_opts: Vec<NocturneOptionRow>,
+    pub socd_opts: Vec<NocturneOptionRow>,
+    /// The selected slot's opposite-directions editor under the rack:
+    /// visibility class, the slot number the form names, its label, and the
+    /// served policy roster (its own list — the create dialog's `socd_opts`
+    /// already mints a list slot, and one signal cannot feed two lists).
+    pub socd_cls: String,
+    pub socd_num: String,
+    pub socd_lab: String,
+    pub socd_edit_opts: Vec<NocturneOptionRow>,
+    /// The stage's meta bar and the binding pane, off the first slot.
+    pub pad_badge: String,
+    /// The meta bar's badge wears the selected slot's ramp shade too.
+    pub pad_badge_cls: String,
+    pub pad_name: String,
+    pub pad_sub: String,
+    /// The hidden masters' family classes (`"n-padwrap"` / `"n-padwrap
+    /// none"`): with JS the masters are clone templates and the class is
+    /// moot, but WITHOUT JS the canvas relaxes into a document and the
+    /// served class is what picks which body shows. Exactly one is visible.
+    pub pad_xbox_cls: String,
+    pub pad_ps_cls: String,
+    pub pad_ps5_cls: String,
+    pub pad_switchpro_cls: String,
+    pub pad_xboxseries_cls: String,
+    pub bind_title: String,
+    /// The binding list, grouped the way the physical controller is
+    /// organised: face cluster, D-pad, shoulders & triggers, each stick,
+    /// and the system row. Six served lists because a list body is one
+    /// flat template — the group headers live in the island markup, each
+    /// with its served "N of M bound" count beside it.
+    pub bind_face: Vec<NocturneBindRow>,
+    pub bind_dpad: Vec<NocturneBindRow>,
+    pub bind_shoulders: Vec<NocturneBindRow>,
+    pub bind_lstick: Vec<NocturneBindRow>,
+    pub bind_rstick: Vec<NocturneBindRow>,
+    pub bind_system: Vec<NocturneBindRow>,
+    pub bind_face_n: String,
+    pub bind_dpad_n: String,
+    pub bind_shoulders_n: String,
+    pub bind_lstick_n: String,
+    pub bind_rstick_n: String,
+    pub bind_system_n: String,
+    /// Per-group section classes: `n-bindg empty` when `?q=` hides every
+    /// row of a group — the island's sweep mirrors the same rule.
+    pub bind_face_cls: String,
+    pub bind_dpad_cls: String,
+    pub bind_shoulders_cls: String,
+    pub bind_lstick_cls: String,
+    pub bind_rstick_cls: String,
+    pub bind_system_cls: String,
+    /// The current slot number for the filter form's hidden field.
+    pub slot_val: String,
+    /// Hides the six group frames when no slot serves rows; otherwise
+    /// carries the selected slot's ramp digit so the dots wear its shade.
+    pub bind_g_cls: String,
+    /// The board wrapper's class — the ramp digit tints the bound caps.
+    pub kb_cls: String,
+    /// The rack's undo chip: visible while the server holds a removed
+    /// controller, with the sentence naming it.
+    pub undo_cls: String,
+    pub undo_label: String,
+    /// The stage's quiet across-the-room state word ("Running" or empty).
+    pub stage_word: String,
+    pub bind_foot: String,
+    /// The selected slot's macros: lifecycle rows + the honest state line.
+    pub macros_head: String,
+    pub macro_rows: Vec<NocturneMacroRow>,
+    pub macros_note: String,
+    /// The keyboard grid, dressed: six rows of the standard board with each
+    /// key's binding short, the off-board tray, and the honesty note naming
+    /// which controller the shorts describe.
+    pub kb_row1: Vec<NocturneKeyCell>,
+    pub kb_row2: Vec<NocturneKeyCell>,
+    pub kb_row3: Vec<NocturneKeyCell>,
+    pub kb_row4: Vec<NocturneKeyCell>,
+    pub kb_row5: Vec<NocturneKeyCell>,
+    pub kb_row6: Vec<NocturneKeyCell>,
+    pub kb_tray: Vec<NocturneKeyCell>,
+    /// The BY-KEY view: one row per bound key, keyboard -> controller.
+    pub key_rows: Vec<NocturneKeyRow>,
+    pub keys_note: String,
+    /// The rest of the board's REAL vocabulary, free to bind — in the
+    /// keyboard's own geography (main / navigation / numpad).
+    pub avail_main: Vec<NocturneKeyRow>,
+    pub avail_nav: Vec<NocturneKeyRow>,
+    pub avail_num: Vec<NocturneKeyRow>,
+    /// The multi-pad grid's controllers (payload data, no slots).
+    pub pads: Vec<NocturnePadView>,
+    /// The board's color legend, one chip per staged controller.
+    pub legend: Vec<NocturneLegendRow>,
+    /// The solo button's label — "Only P1", naming the selected controller.
+    pub solo_label: String,
+    pub avail_main_head: String,
+    pub avail_nav_head: String,
+    pub avail_num_head: String,
+    pub avail_main_cls: String,
+    pub avail_nav_cls: String,
+    pub avail_num_cls: String,
+    /// The By-control strips: each group's FREE controls as chips.
+    pub avail_ctl_face: Vec<NocturneCtlChip>,
+    pub avail_ctl_dpad: Vec<NocturneCtlChip>,
+    pub avail_ctl_shoulders: Vec<NocturneCtlChip>,
+    pub avail_ctl_lstick: Vec<NocturneCtlChip>,
+    pub avail_ctl_rstick: Vec<NocturneCtlChip>,
+    pub avail_ctl_system: Vec<NocturneCtlChip>,
+    pub kb_tray_head: String,
+    pub kb_tray_cls: String,
+    pub kb_note: String,
+    /// The legend's key to a STACKED cap, shown only when some key actually
+    /// carries more owners than the bands can name.
+    pub kb_more_cls: String,
+    /// The macro step editor, composed whole (see [`crate::macro_editor`]).
+    pub mac: crate::macro_editor::NocturneMacroEditor,
+    /// The configuration menu, served: the saved-config row, the load/start-
+    /// over affordances, the games list, and the sign-in task's fold.
+    pub cfg_line: String,
+    pub cfg_meta: String,
+    pub cfg_cls: String,
+    pub cfg_check: String,
+    pub adopt_cls: String,
+    pub discard_note: String,
+    pub games_head: String,
+    pub game_rows: Vec<NocturneGameRow>,
+    pub games_note: String,
+    pub auto_line: String,
+    pub auto_sw_cls: String,
+    /// The DIRECTION the autostart form submits ("on" = register, "" =
+    /// unregister) — served, never inferred client-side from a stale page.
+    pub auto_dir: String,
+    pub auto_btn: String,
+    pub auto_note: String,
+    /// Hides the consent form when the sign-in state could not be read or the
+    /// runtime is explicitly read-only — an unknown or unavailable verb is
+    /// not offered.
+    pub auto_form_cls: String,
+}
+
+/// Which of the right pane's six controller clusters a mapper function
+/// belongs to — the order a hand finds them: face buttons, D-pad,
+/// shoulders & triggers, left stick, right stick, system. The rows carry
+/// the MAPPER's spelling, which writes the face buttons UPPERCASE while the
+/// zone vocabulary is lowercase (the live-echo lesson) — match both.
+/// Anything unrecognised lands in the system group rather than disappearing.
+/// The six group names, exactly as the island's markup spells them — the
+/// server-side filter and the client sweep both match against these.
+const NOCTURNE_BIND_GROUP_LABELS: [&str; 6] = [
+    "Face buttons",
+    "D-pad",
+    "Shoulders & triggers",
+    "Left stick",
+    "Right stick",
+    "System",
+];
+
+/// Stable canvas vocabulary for the same six physical clusters. These are
+/// slugs rather than display copy so a frontend can group controls without
+/// inheriting the right pane's headings.
+const NOCTURNE_CONTROL_GROUPS: [&str; 6] = [
+    "face",
+    "dpad",
+    "shoulders",
+    "left-stick",
+    "right-stick",
+    "system",
+];
+
+/// Which drawn body a seat wears — the ONE rule, read by both the per-slot
+/// pad views (what each canvas widget clones) and the no-JS master classes.
+///
+/// Keyed on the persona rather than on `is_xinput`, because a DualSense is
+/// not a DualShock: it has its own shell, its own Create/Options pair and its
+/// own touchpad, and drawing it as a PS4 pad is a picture that lies about the
+/// device Windows just gained.
+///
+fn pad_art_family(persona: Option<&str>, slot: Option<&ksx_api::StagedSlotView>) -> &'static str {
+    match persona {
+        Some("dualsense") => "ps5",
+        Some("switchpro") => "switchpro",
+        Some("xboxseries") => "xboxseries",
+        _ => {
+            if slot.is_some_and(|slot| slot.is_xinput) {
+                "xbox"
+            } else if slot.is_some() {
+                "ps"
+            } else {
+                // An empty roster keeps the neutral Xbox outline as ground.
+                "xbox"
+            }
+        }
+    }
+}
+
+fn nocturne_bind_group(function: &str) -> usize {
+    match function {
+        "a" | "b" | "x" | "y" | "A" | "B" | "X" | "Y" => 0,
+        f if f.starts_with("dpad.") => 1,
+        "lb" | "rb" | "lt" | "rt" => 2,
+        "lthumb" => 3,
+        f if f.starts_with("lx.") || f.starts_with("ly.") => 3,
+        "rthumb" => 4,
+        f if f.starts_with("rx.") || f.starts_with("ry.") => 4,
+        _ => 5,
+    }
+}
+
+/// A human-scannable order independent of the art tables' drawing order.
+/// The tables remain the source of which controls and persona labels exist;
+/// this rank only normalizes those controls into face, D-pad, shoulders,
+/// sticks, system for any authoring surface.
+fn nocturne_control_rank(function: &str) -> (usize, usize) {
+    let group = nocturne_bind_group(function);
+    let normalized = function.to_ascii_lowercase();
+    let within = match group {
+        0 => ["a", "b", "x", "y"]
+            .iter()
+            .position(|candidate| *candidate == normalized)
+            .unwrap_or(usize::MAX),
+        1 => ["dpad.up", "dpad.down", "dpad.left", "dpad.right"]
+            .iter()
+            .position(|candidate| *candidate == normalized)
+            .unwrap_or(usize::MAX),
+        2 => ["lb", "rb", "lt", "rt"]
+            .iter()
+            .position(|candidate| *candidate == normalized)
+            .unwrap_or(usize::MAX),
+        3 => ["lthumb", "ly.max", "ly.min", "lx.min", "lx.max"]
+            .iter()
+            .position(|candidate| *candidate == normalized)
+            .unwrap_or(usize::MAX),
+        4 => ["rthumb", "ry.max", "ry.min", "rx.min", "rx.max"]
+            .iter()
+            .position(|candidate| *candidate == normalized)
+            .unwrap_or(usize::MAX),
+        _ => ["back", "guide", "start"]
+            .iter()
+            .position(|candidate| *candidate == normalized)
+            .unwrap_or(usize::MAX),
+    };
+    (group, within)
+}
+
+fn nocturne_control_authoring(
+    persona: &str,
+    mapper: &ksx_api::MapperSlot,
+) -> Vec<NocturneControlAuthoring> {
+    let mut zones: Vec<_> = crate::render_map::zones_for(persona).iter().collect();
+    zones.sort_by_key(|zone| nocturne_control_rank(zone.fn_name));
+    zones
+        .into_iter()
+        .enumerate()
+        .map(|(order, zone)| {
+            // Face-button casing differs between some mapper providers and
+            // the art vocabulary. Read every authored fact case-bridged, but
+            // always serialize the zone table's canonical spelling.
+            let keys = mapper
+                .bindings
+                .get(zone.fn_name)
+                .or_else(|| {
+                    mapper
+                        .bindings
+                        .iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case(zone.fn_name))
+                        .map(|(_, keys)| keys)
+                })
+                .cloned()
+                .unwrap_or_default();
+            let toggle = mapper
+                .toggle
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(zone.fn_name));
+            let turbo_hz = mapper.turbo.get(zone.fn_name).copied().or_else(|| {
+                mapper
+                    .turbo
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(zone.fn_name))
+                    .map(|(_, rate)| *rate)
+            });
+            let group = nocturne_bind_group(zone.fn_name);
+            NocturneControlAuthoring {
+                function: zone.fn_name.to_owned(),
+                label: crate::render_map::legend_label_for_persona(persona, zone),
+                group: NOCTURNE_CONTROL_GROUPS[group].to_owned(),
+                order,
+                keys,
+                toggle,
+                turbo_hz,
+            }
+        })
+        .collect()
+}
+
+impl NocturneDerived {
+    fn of(p: &NocturnePayload) -> Self {
+        let staged = &p.staged;
+        let scan_read = p.scan_read();
+        let chosen = staged.device.as_ref().map(|d| d.selector.as_str());
+
+        let mut dev_encoders = Vec::new();
+        let mut dev_rows = Vec::new();
+        let mut dev_exp = Vec::new();
+        let mut dev_other = Vec::new();
+        if scan_read {
+            for b in &p.scan.boards {
+                if !b.pickable {
+                    dev_other.push(NocturneOtherRow {
+                        name: b.name.clone(),
+                        meta: format!("{} · {}", b.transport_label, b.backends),
+                    });
+                    continue;
+                }
+                let Some(selector) = b.selector.clone() else {
+                    dev_other.push(NocturneOtherRow {
+                        name: b.name.clone(),
+                        meta: b.backends.clone(),
+                    });
+                    continue;
+                };
+                let is_chosen = chosen == Some(selector.as_str());
+                let verdict = if b.claimed {
+                    "Held by ksx"
+                } else if b.role == ksx_api::BoardRole::PanelEncoder {
+                    // An arcade encoder being reachable through its HID
+                    // interface does not prove that any terminal has a usable
+                    // key assignment.  The chart read in I-PAC Setup owns that
+                    // answer; the device roster must not call an unchecked (or
+                    // deliberately cleared) EEPROM chart "ready".
+                    "Connected · outputs not checked"
+                } else if b.cannot_type_line.trim().is_empty() {
+                    "Ready to use"
+                } else {
+                    "Cannot type right now"
+                };
+                let row = NocturneDeviceRow {
+                    cls: if is_chosen {
+                        "n-dev on".to_owned()
+                    } else {
+                        "n-dev".to_owned()
+                    },
+                    name: b.name.clone(),
+                    meta: format!("{} · {}", b.transport_label, verdict),
+                    role: b.role.code().to_owned(),
+                    selector,
+                    alias: b.alias_hint.clone(),
+                    label: b.name.clone(),
+                };
+                if b.role == ksx_api::BoardRole::PanelEncoder {
+                    dev_encoders.push(row);
+                } else if b.looks_like_a_keyboard {
+                    dev_rows.push(row);
+                } else {
+                    dev_exp.push(row);
+                }
+            }
+        }
+        let exp_head = format!("Not keyboards — experimental · {}", dev_exp.len());
+        let exp_fold_cls = if dev_exp.is_empty() {
+            "n-devfold none".to_owned()
+        } else {
+            "n-devfold".to_owned()
+        };
+        let other_head = format!("Unavailable devices · {}", dev_other.len());
+        let other_fold_cls = if dev_other.is_empty() {
+            "n-devfold none".to_owned()
+        } else {
+            "n-devfold".to_owned()
+        };
+
+        let encoder_count = if scan_read {
+            format!("{} found", dev_encoders.len())
+        } else {
+            "unavailable".to_owned()
+        };
+        let encoder_head = "Arcade encoders".to_owned();
+        let dev_count = if scan_read {
+            format!("{} found", dev_rows.len())
+        } else {
+            "unavailable".to_owned()
+        };
+        let dev_note = if scan_read {
+            p.scan.boards_summary.clone()
+        } else {
+            p.unavailable.clone()
+        };
+
+        let kb_title = match staged.device.as_ref() {
+            _ if !staged.reachable => "The draft could not be read — reopen ksx".to_owned(),
+            Some(d) => {
+                let transport = p
+                    .scan
+                    .boards
+                    .iter()
+                    .find(|b| b.selector.as_deref() == Some(d.selector.as_str()))
+                    .map(|b| b.transport_label.as_str())
+                    .filter(|t| !t.trim().is_empty());
+                match transport {
+                    Some(t) => format!("{} · {}", d.label, t),
+                    None => d.label.clone(),
+                }
+            }
+            None => "No keyboard selected — pick one on the left".to_owned(),
+        };
+
+        let selected_is_panel_encoder = chosen.is_some_and(|selector| {
+            dev_encoders
+                .iter()
+                .any(|row| row.selector.eq_ignore_ascii_case(selector))
+        });
+        let mode_note = if staged.reachable && selected_is_panel_encoder {
+            "Choose how this encoder's Windows key signals behave while Play is running. Hardware assignments stay unchanged."
+                .to_owned()
+        } else if staged.reachable {
+            String::new()
+        } else {
+            "The draft could not be read, so the capture answer cannot be shown. Reopen ksx."
+                .to_owned()
+        };
+        let current_mode = staged.blocking.as_deref().unwrap_or("");
+        let mode_rows = if staged.reachable {
+            staged
+                .blocking_options
+                .iter()
+                .map(|option| {
+                    let (title, detail) = if selected_is_panel_encoder {
+                        match option.name.as_str() {
+                            "whole" => (
+                                "Dedicated arcade panel".to_owned(),
+                                "Capture every I-PAC signal during Play so cabinet buttons never type into Windows or trigger shortcuts."
+                                    .to_owned(),
+                            ),
+                            "bound-keys" => (
+                                "Share unused outputs with Windows".to_owned(),
+                                "Capture mapped I-PAC signals; outputs that KSX does not use still pass through to Windows."
+                                    .to_owned(),
+                            ),
+                            _ => (
+                                "Observe and pass through".to_owned(),
+                                "KSX routes mapped outputs while Windows receives those same I-PAC key signals too."
+                                    .to_owned(),
+                            ),
+                        }
+                    } else {
+                        (option.title.clone(), option.detail.clone())
+                    };
+                    NocturneChoiceRow {
+                    name: option.name.clone(),
+                    title,
+                    detail,
+                    cls: if option.name == current_mode {
+                        "n-radio on".to_owned()
+                    } else {
+                        "n-radio".to_owned()
+                    },
+                }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let cap = StartCaptureView::from_parts(staged, &p.scan, scan_read);
+        let mode = cap.mode_word();
+        let (cap_prepare, cap_release) = match mode {
+            "prepare" | "prepare-optional" => (true, false),
+            "release" => (false, true),
+            _ => (false, false),
+        };
+        let cap_line = match mode {
+            "none" => String::new(),
+            "ready" => {
+                "Ready through the shared capture driver — typing normally until Play.".to_owned()
+            }
+            "prepare-optional" => {
+                "Typing normally — the shared driver is ready; preparing the built-in path is \
+                 optional."
+                    .to_owned()
+            }
+            "prepare" => {
+                "Prepare for play — Windows stops this keyboard's ordinary typing until it is \
+                 released here."
+                    .to_owned()
+            }
+            "release" => {
+                "Prepared for play — this keyboard will not type until it is released here."
+                    .to_owned()
+            }
+            "held" => "Held by ksx but staged for the ordinary Windows path — release it from the \
+                 held-keyboards list on the Start screen."
+                .to_owned(),
+            _ => "This keyboard is not ready for capture right now.".to_owned(),
+        };
+        let capd_cls = match mode {
+            "none" => "n-capd none".to_owned(),
+            "prepare" | "prepare-optional" | "release" => "n-capd".to_owned(),
+            _ => "n-capd noact".to_owned(),
+        };
+        let cap_sw_cls = if mode == "release" {
+            "n-capsw on".to_owned()
+        } else {
+            "n-capsw".to_owned()
+        };
+
+        let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+        let environment_id = p.environment.id.clone();
+        let environment_label = p.environment.label.clone();
+        let environment_detail = p.environment.detail.clone();
+        let environment_cls = if p.environment.fixture {
+            "n-environment fixture"
+        } else if p.environment.id == "live-machine" {
+            "n-environment live"
+        } else {
+            "n-environment unknown"
+        }
+        .to_owned();
+        let environment_fixture = p.environment.fixture;
+        let environment_generation = p.environment.generation.clone();
+        let chip_text = if !staged.reachable {
+            "Draft unavailable".to_owned()
+        } else if staged.origin == "config" {
+            "Saved configuration".to_owned()
+        } else {
+            "New draft".to_owned()
+        };
+        let save_text = if !staged.reachable {
+            String::new()
+        } else if staged.dirty {
+            "Unsaved changes".to_owned()
+        } else {
+            "Saved".to_owned()
+        };
+        let escape_line = ksx_api::stage::ESCAPE_HATCH_LINE.to_owned();
+        let running = p.session.reachable && p.session.running;
+        let play_cls = if running { "n-play none" } else { "n-play" }.to_owned();
+        let stop_cls = if running { "n-stop" } else { "n-stop none" }.to_owned();
+        // Apply-in-place is offered exactly when it can mean something: a
+        // session is running AND the draft has unsaved edits to hand it.
+        let apply_cls = if running && staged.dirty {
+            "n-apply".to_owned()
+        } else {
+            "n-apply none".to_owned()
+        };
+
+        // The selected slot: the `?slot=N` the request asked for when the
+        // draft still has it, else the first — resolved HERE so every pane
+        // (rack mark, binding rows, board shorts, stage family) follows one
+        // answer.
+        let selected = p
+            .selected
+            .and_then(|number| staged.slots.iter().find(|slot| slot.number == number))
+            .or_else(|| staged.slots.first());
+        let selected_number = selected.map(|slot| slot.number);
+        let rack_order: Vec<u8> = staged.slots.iter().map(|slot| slot.number).collect();
+        let rack_swapped = |a: usize, b: usize| -> String {
+            let mut next = rack_order.clone();
+            next.swap(a, b);
+            next.iter().map(u8::to_string).collect::<Vec<_>>().join(" ")
+        };
+        let rack_rows: Vec<NocturneRackRow> = if staged.reachable {
+            staged
+                .slots
+                .iter()
+                .enumerate()
+                .map(|(at, slot)| NocturneRackRow {
+                    number: slot.number.to_string(),
+                    badge: format!("P{}", slot.number),
+                    badge_cls: format!("n-pbadge np{}", slot.number),
+                    dot_cls: format!("n-cdot np{}", slot.number),
+                    name: slot.persona_label.clone(),
+                    // The quoted name is the PRESET, not the seat: a
+                    // reorder renumbers P{n} but the worksheet travels with
+                    // its controller — the label keeps that readable.
+                    meta: format!(
+                        "\"{}\" preset · {} bound · SOCD {}",
+                        slot.preset, slot.bindings, slot.socd_label
+                    ),
+                    cls: if selected_number == Some(slot.number) {
+                        "n-slot on".to_owned()
+                    } else {
+                        "n-slot".to_owned()
+                    },
+                    href: format!("/nocturne?slot={}", slot.number),
+                    up_order: if at == 0 {
+                        String::new()
+                    } else {
+                        rack_swapped(at - 1, at)
+                    },
+                    down_order: if at + 1 == rack_order.len() {
+                        String::new()
+                    } else {
+                        rack_swapped(at, at + 1)
+                    },
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let rack_empty: Vec<NocturneEmptyRow> = if !staged.reachable {
+            Vec::new()
+        } else {
+            match staged.next_slot {
+                None => Vec::new(),
+                Some(next) => {
+                    // Fill the rack to four visible rows the way the design
+                    // does; past four, one invitation for the next slot.
+                    let upto = if staged.slots.len() < 4 {
+                        (u8::try_from(staged.slots.len()).unwrap_or(u8::MAX) + 1)..=4
+                    } else {
+                        next..=next
+                    };
+                    upto.map(|n| NocturneEmptyRow {
+                        badge: format!("P{n}"),
+                    })
+                    .collect()
+                }
+            }
+        };
+        let rack_caption = if staged.reachable {
+            format!(
+                "{}/{} XInput · {}/{} slots",
+                staged.xinput_used,
+                staged.max_xinput_slots,
+                staged.slots.len(),
+                staged.max_slots
+            )
+        } else {
+            String::new()
+        };
+
+        let add_lede = match (staged.next_slot, staged.device.as_ref()) {
+            (Some(next), Some(device)) => {
+                format!("Games will see Player {next}, driven by {}.", device.label)
+            }
+            (Some(next), None) => {
+                format!("Games will see Player {next}, driven by the selected keyboard.")
+            }
+            (None, _) => "Every controller slot is staged. Remove one to add another.".to_owned(),
+        };
+        let add_preset = staged.next_preset.clone().unwrap_or_default();
+        let persona_rows: Vec<NocturnePersonaRow> = staged
+            .personas
+            .iter()
+            .map(|persona| {
+                let usable = persona.can_plug && persona.available;
+                NocturnePersonaRow {
+                    name: persona.name.clone(),
+                    label: persona.label.clone(),
+                    api: if persona.is_xinput {
+                        format!("{} · XInput", persona.backend_label)
+                    } else {
+                        persona.backend_label.clone()
+                    },
+                    note: persona
+                        .unavailable_reason
+                        .clone()
+                        .or_else(|| persona.gap.clone())
+                        .unwrap_or_default(),
+                    cls: if usable {
+                        "nd-card sel".to_owned()
+                    } else {
+                        "nd-card off".to_owned()
+                    },
+                }
+            })
+            .collect();
+        // A daemon built before a roster field serves it EMPTY (serde
+        // default) — and an empty `<select>` renders as a dead blank box.
+        // Degrade honestly: one option that says why, whose empty value the
+        // add handler skips, so the daemon's own default applies.
+        let layout_opts: Vec<NocturneOptionRow> = if staged.reachable && staged.layouts.is_empty() {
+            vec![NocturneOptionRow {
+                value: String::new(),
+                label: "Empty worksheet — this ksx build serves no starting layouts".to_owned(),
+            }]
+        } else {
+            staged
+                .layouts
+                .iter()
+                .map(|layout| NocturneOptionRow {
+                    value: layout.id.clone(),
+                    label: layout.label.clone(),
+                })
+                .collect()
+        };
+        let socd_opts: Vec<NocturneOptionRow> =
+            if staged.reachable && staged.socd_options.is_empty() {
+                vec![NocturneOptionRow {
+                    value: String::new(),
+                    label: "Daemon default — update ksx to choose a policy".to_owned(),
+                }]
+            } else {
+                staged
+                    .socd_options
+                    .iter()
+                    .map(|option| NocturneOptionRow {
+                        value: option.name.clone(),
+                        label: option.title.clone(),
+                    })
+                    .collect()
+            };
+        // The selected slot's opposite-directions editor, under the rack.
+        // Hidden when nothing is staged — and when the daemon serves no
+        // policy roster, because a select of names the engine never listed
+        // would be an invented value.
+        let socd_editable =
+            staged.reachable && selected.is_some() && !staged.socd_options.is_empty();
+        let socd_cls = if socd_editable {
+            "n-socdform".to_owned()
+        } else {
+            "n-socdform none".to_owned()
+        };
+        let socd_num = if socd_editable {
+            selected_number.map(|n| n.to_string()).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let socd_lab = if socd_editable {
+            selected
+                .map(|slot| format!("Opposites — P{}", slot.number))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let socd_edit_opts: Vec<NocturneOptionRow> = if socd_editable {
+            staged
+                .socd_options
+                .iter()
+                .map(|option| NocturneOptionRow {
+                    value: option.name.clone(),
+                    label: option.title.clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // The selected slot's ramp digit, worn by every surface that speaks
+        // for it: the meta badge, the board's bound-cap tint, and the
+        // binding pane's dots.
+        let ramp = selected.map(|slot| slot.number);
+        let pad_badge_cls = match ramp {
+            Some(digit) => format!("n-pbadge np{digit}"),
+            None => "n-pbadge".to_owned(),
+        };
+        let kb_cls = match ramp {
+            Some(digit) => format!("n-kb np{digit}"),
+            None => "n-kb".to_owned(),
+        };
+        let slot_val = selected_number.map(|n| n.to_string()).unwrap_or_default();
+        let (undo_cls, undo_label) = match p.undo_label.as_ref() {
+            Some(label) => ("n-undochip".to_owned(), label.clone()),
+            None => ("n-undochip none".to_owned(), String::new()),
+        };
+        // The quiet across-the-room state word inside the stage — from the
+        // polled session, never invented.
+        let stage_word = if running {
+            "Running".to_owned()
+        } else {
+            String::new()
+        };
+        let (pad_badge, pad_name, pad_sub) = match selected {
+            Some(slot) => (
+                format!("P{}", slot.number),
+                slot.persona_label.clone(),
+                format!("\"{}\" preset · SOCD {}", slot.preset, slot.socd_label),
+            ),
+            None => (String::new(), String::new(), String::new()),
+        };
+        // Which vendored silhouette the no-JS page draws — the selected
+        // slot's OWN family (the workspace's `pad_ps` rule), so a
+        // PlayStation draft is a DualShock on screen, not an Xbox with
+        // relabelled pills. An empty roster keeps the neutral Xbox outline
+        // as its ground. (With JS the masters are display:none clone
+        // templates and every staged pad is its own canvas widget.)
+        // ⚠️Keyed on the PERSONA, not on `is_xinput`: a DualSense has its
+        // own body, and drawing every non-XInput seat as a DualShock is how
+        // modern controllers ended up wearing another generation's art.
+        let pad_family = pad_art_family(selected.map(|slot| slot.persona.as_str()), selected);
+        let wrap_cls = |family: &str| {
+            if pad_family == family {
+                "n-padwrap".to_owned()
+            } else {
+                "n-padwrap none".to_owned()
+            }
+        };
+        let pad_xbox_cls = wrap_cls("xbox");
+        let pad_ps_cls = wrap_cls("ps");
+        let pad_ps5_cls = wrap_cls("ps5");
+        let pad_switchpro_cls = wrap_cls("switchpro");
+        let pad_xboxseries_cls = wrap_cls("xboxseries");
+        // The keyboard grid: the SAME mapper table the binding pane reads,
+        // inverted key→functions, painted onto the standard-board layout.
+        let keyboard_name = staged
+            .device
+            .as_ref()
+            .map(|device| device.label.as_str())
+            .unwrap_or("(none)");
+        let mapper =
+            selected.and_then(|slot| ksx_api::staged_mapper_slot(slot, keyboard_name).ok());
+        // ⚠️ A MACRO TRIGGER IS A BINDING TOO. `MapperSlot.bindings` is built
+        // from the preset's CONTROL entries only — a macro trigger lives in a
+        // separate table with no `Binding` variant — so every inversion built
+        // on it alone was blind to them: the key that starts a macro painted
+        // UNBOUND on the board, and "add another trigger key" appended to a
+        // list it could not see, which is a replace.
+        let trigger_keys = |slot: &ksx_api::StagedSlotView| -> Vec<(String, Vec<String>)> {
+            ksx_api::staged_macro_snapshot(slot)
+                .macros
+                .into_iter()
+                .filter(|m| !m.triggers.is_empty())
+                .map(|m| (format!("macro.{}", m.name), m.triggers))
+                .collect()
+        };
+        let selected_triggers: Vec<(String, Vec<String>)> =
+            selected.map(trigger_keys).unwrap_or_default();
+        let mut key_fns: std::collections::BTreeMap<&str, Vec<&str>> =
+            std::collections::BTreeMap::new();
+        if let Some(mapper) = mapper.as_ref() {
+            for (fn_name, keys) in &mapper.bindings {
+                for key in keys {
+                    key_fns
+                        .entry(key.as_str())
+                        .or_default()
+                        .push(fn_name.as_str());
+                }
+            }
+        }
+        for (fn_name, keys) in &selected_triggers {
+            for key in keys {
+                key_fns
+                    .entry(key.as_str())
+                    .or_default()
+                    .push(fn_name.as_str());
+            }
+        }
+        // The GLOBAL ownership read: which controllers each key drives,
+        // across EVERY staged slot — the board's color strips wear it.
+        let mut key_slots: std::collections::BTreeMap<String, Vec<u8>> =
+            std::collections::BTreeMap::new();
+        for slot in &staged.slots {
+            let mut own = |key: &String| {
+                let owners = key_slots.entry(key.clone()).or_default();
+                if !owners.contains(&slot.number) {
+                    owners.push(slot.number);
+                }
+            };
+            if let Ok(m) = ksx_api::staged_mapper_slot(slot, keyboard_name) {
+                for keys in m.bindings.values() {
+                    for key in keys {
+                        own(key);
+                    }
+                }
+            }
+            // …and the keys that START a macro on this controller.
+            for (_, keys) in trigger_keys(slot) {
+                for key in &keys {
+                    own(key);
+                }
+            }
+        }
+        // OWNERSHIP IS THE CAP'S FILL. Every key that some controller drives
+        // paints that controller's color; a key several controllers share
+        // splits into one band each, ALWAYS in slot order. The order is
+        // stable on purpose: a key P1 and P2 share reads blue|coral whoever
+        // you are editing, so the stripe itself tells you who is on it and
+        // the map never rearranges under you. (Which of them is YOURS is
+        // the ring's job — see `--mine` in the sheet.) Four bands is the
+        // honest ceiling at 30px; past it the cap stops naming owners
+        // altogether and becomes a STACK.
+        let bands = |owners: &[u8]| -> String {
+            if owners.is_empty() {
+                return String::new();
+            }
+            if owners.len() > BAND_MAX {
+                // THE STACK. Three colors out of eight would be an arbitrary
+                // three, and a band plus a separate "+N" makes you add two
+                // marks that stand for the same controllers. So past four the
+                // face becomes one woven texture that names NOBODY, and the
+                // cap carries the TOTAL: nothing to add, nothing to guess.
+                // (Every owner is still named in the cap's own sentence, and
+                // the ring still says whether one of them is yours.)
+                return format!(" bstack bcount{}", owners.len());
+            }
+            let mut order: Vec<u8> = owners.to_vec();
+            order.sort_unstable();
+            let mut cls = format!(" bn{}", order.len());
+            for (at, slot) in order.iter().enumerate() {
+                cls.push_str(&format!(" {}{slot}", BAND_KEYS[at]));
+            }
+            cls
+        };
+        // Does any key carry more owners than the bands can name? Then the
+        // legend explains the stacked cap in words, beside the colors it
+        // stands in for — a mark nothing names is a mark you have to guess.
+        let kb_more_cls = if key_slots.values().any(|owners| owners.len() > BAND_MAX) {
+            "n-lgdmore".to_owned()
+        } else {
+            "n-lgdmore none".to_owned()
+        };
+        // The board's legend: every staged controller with its color, so
+        // "which color is who" is answerable without the left pane, and
+        // each chip is the door to muting that player on the keys.
+        let legend: Vec<NocturneLegendRow> = staged
+            .slots
+            .iter()
+            .map(|slot| NocturneLegendRow {
+                slot: slot.number.to_string(),
+                badge: format!("P{}", slot.number),
+                name: slot.persona_label.clone(),
+                // The selected controller's chip is marked, so "only this
+                // one" can cross out every OTHER chip without the browser
+                // having to work out which is which.
+                cls: if selected_number == Some(slot.number) {
+                    format!("n-lgd np{} on", slot.number)
+                } else {
+                    format!("n-lgd np{}", slot.number)
+                },
+            })
+            .collect();
+        let solo_label = match selected_number {
+            Some(number) => format!("Only P{number}"),
+            None => "Only this player".to_owned(),
+        };
+        // The multi-pad grid's data: every staged controller, its family,
+        // its callout chips and its readable control names.
+        let pads: Vec<NocturnePadView> = staged
+            .slots
+            .iter()
+            .map(|slot| {
+                let mut fn_keys = std::collections::BTreeMap::new();
+                let mut mapping_available = true;
+                let mut mapping_reason = String::new();
+                let mapper = match ksx_api::staged_mapper_slot(slot, keyboard_name) {
+                    Ok(mapper) => Some(mapper),
+                    Err(refusal) => {
+                        mapping_available = false;
+                        mapping_reason = refusal.message;
+                        None
+                    }
+                };
+                if let Some(m) = mapper.as_ref() {
+                    for (fn_name, keys) in &m.bindings {
+                        if !keys.is_empty() {
+                            fn_keys.insert(fn_name.clone(), keys.join(" · "));
+                        }
+                    }
+                }
+                let controls = mapper
+                    .as_ref()
+                    .map(|mapper| nocturne_control_authoring(&slot.persona, mapper))
+                    .unwrap_or_default();
+                let fn_names = crate::render_map::zones_for(&slot.persona)
+                    .iter()
+                    .map(|zone| {
+                        (
+                            zone.fn_name.to_owned(),
+                            crate::render_map::legend_label_for_persona(&slot.persona, zone),
+                        )
+                    })
+                    .collect();
+                let macro_snapshot = ksx_api::staged_macro_snapshot(slot);
+                let macros = macro_snapshot
+                    .macros
+                    .iter()
+                    .map(|mac| NocturneMacroFlow {
+                        name: mac.name.clone(),
+                        triggers: mac.triggers.clone(),
+                        outputs: nocturne_macro_outputs(mac),
+                        timeline: mac
+                            .steps
+                            .iter()
+                            .map(|step| {
+                                crate::render_map::hold_text_for_persona(&slot.persona, &step.hold)
+                            })
+                            .collect(),
+                        meta: nocturne_macro_meta(mac),
+                        disabled: mac.disabled,
+                        edit_href: format!(
+                            "/nocturne?slot={}&macro={}",
+                            slot.number,
+                            crate::render_map::urlencode_value(&mac.name)
+                        ),
+                    })
+                    .collect();
+                NocturnePadView {
+                    slot: slot.number,
+                    target_revision: slot.target_revision.clone(),
+                    family: pad_art_family(Some(slot.persona.as_str()), Some(slot)).to_owned(),
+                    preset: slot.preset.clone(),
+                    title: format!("{} — \"{}\" preset", slot.persona_label, slot.preset),
+                    fn_keys,
+                    mapping_available,
+                    mapping_reason,
+                    controls,
+                    fn_names,
+                    macros,
+                    macro_available: macro_snapshot.available,
+                    macro_reason: macro_snapshot.reason,
+                }
+            })
+            .collect();
+        let persona = selected
+            .map(|slot| slot.persona.as_str())
+            .unwrap_or("xbox360");
+        // The READABLE control names for hover/assistive sentences — the
+        // zone tables' own labels ("LS ↑", "D-pad ←", "△"), looked up
+        // case-bridged because the mapper spells face functions UPPERCASE.
+        let zone_labels: std::collections::HashMap<String, String> =
+            crate::render_map::zones_for(persona)
+                .iter()
+                .map(|zone| {
+                    (
+                        zone.fn_name.to_ascii_lowercase(),
+                        crate::render_map::legend_label_for_persona(persona, zone),
+                    )
+                })
+                .collect();
+        let readable = |f: &str| -> String {
+            if let Some(name) = f.strip_prefix("macro.") {
+                format!("macro \"{name}\"")
+            } else {
+                zone_labels
+                    .get(&f.to_ascii_lowercase())
+                    .cloned()
+                    .unwrap_or_else(|| f.to_owned())
+            }
+        };
+        let drives_whom = selected
+            .map(|slot| format!(" on P{}", slot.number))
+            .unwrap_or_default();
+        let dress = |cell: &crate::keyboard_layout::KeyCell| {
+            let mut cls = String::from("n-key");
+            if !cell.unit.is_empty() {
+                cls.push(' ');
+                cls.push_str(cell.unit);
+            }
+            if cell.sp {
+                cls.push_str(" sp");
+            }
+            if cell.ghost {
+                cls.push_str(" ghost");
+            }
+            let fns = key_fns.get(cell.key).filter(|fns| !fns.is_empty());
+            let (short, title) = match fns {
+                Some(fns) => {
+                    cls.push_str(" bound");
+                    if fns.len() > 1 {
+                        cls.push_str(" shared");
+                    }
+                    let short = crate::keyboard_layout::short_for(persona, fns[0]);
+                    let spoken: Vec<String> = fns.iter().map(|f| readable(f)).collect();
+                    (
+                        short,
+                        format!("{} — drives {}{drives_whom}", cell.cap, spoken.join(" · ")),
+                    )
+                }
+                None => (String::new(), String::new()),
+            };
+            let owners = key_slots.get(cell.key).map(|v| v.as_slice()).unwrap_or(&[]);
+            let others: Vec<String> = owners
+                .iter()
+                .filter(|n| Some(**n) != selected_number)
+                .map(|n| format!("P{n}"))
+                .collect();
+            let title = if !others.is_empty() {
+                if title.is_empty() {
+                    format!("{} — bound on {}", cell.cap, others.join(" · "))
+                } else {
+                    format!("{title}; also bound on {}", others.join(" · "))
+                }
+            } else {
+                title
+            };
+            let aria = if title.is_empty() {
+                cell.cap.to_owned()
+            } else {
+                title.clone()
+            };
+            cls.push_str(&bands(owners));
+            NocturneKeyCell {
+                cap: cell.cap.to_owned(),
+                key: cell.key.to_owned(),
+                cls,
+                short,
+                title,
+                aria,
+            }
+        };
+        let kb_rows: Vec<Vec<NocturneKeyCell>> = crate::keyboard_layout::ROWS
+            .iter()
+            .map(|row| row.iter().map(dress).collect())
+            .collect();
+        let mut kb_rows = kb_rows.into_iter();
+        let kb_row1 = kb_rows.next().unwrap_or_default();
+        let kb_row2 = kb_rows.next().unwrap_or_default();
+        let kb_row3 = kb_rows.next().unwrap_or_default();
+        let kb_row4 = kb_rows.next().unwrap_or_default();
+        let kb_row5 = kb_rows.next().unwrap_or_default();
+        let kb_row6 = kb_rows.next().unwrap_or_default();
+        // Off-board keys: bound in the table but not on the standard board.
+        let board_keys: std::collections::BTreeSet<&str> = crate::keyboard_layout::ROWS
+            .iter()
+            .flat_map(|row| row.iter())
+            .filter(|cell| !cell.key.is_empty())
+            .map(|cell| cell.key)
+            .collect();
+        let kb_tray: Vec<NocturneKeyCell> = key_fns
+            .iter()
+            .filter(|(key, _)| !board_keys.contains(*key))
+            .map(|(key, fns)| {
+                let tray_owners = key_slots.get(*key).map(|v| v.as_slice()).unwrap_or(&[]);
+                let spoken: Vec<String> = fns.iter().map(|f| readable(f)).collect();
+                let title = format!("{key} — drives {}{drives_whom}", spoken.join(" · "));
+                // The board's cells name the other owners; so does the tray.
+                let others: Vec<String> = tray_owners
+                    .iter()
+                    .filter(|n| Some(**n) != selected_number)
+                    .map(|n| format!("P{n}"))
+                    .collect();
+                let title = if others.is_empty() {
+                    title
+                } else {
+                    format!("{title}; also bound on {}", others.join(" · "))
+                };
+                NocturneKeyCell {
+                    cap: (*key).to_owned(),
+                    key: (*key).to_owned(),
+                    cls: {
+                        let mut cls = if fns.len() > 1 {
+                            "n-key tray bound shared".to_owned()
+                        } else {
+                            "n-key tray bound".to_owned()
+                        };
+                        cls.push_str(&bands(tray_owners));
+                        cls
+                    },
+                    short: crate::keyboard_layout::short_for(persona, fns[0]),
+                    aria: title.clone(),
+                    title,
+                }
+            })
+            .collect();
+        // The BY-KEY view's rows: the same inversion the board reads,
+        // alphabetical (BTreeMap order), each key with its whole fan-out.
+        let key_rows: Vec<NocturneKeyRow> = key_fns
+            .iter()
+            .map(|(key, fns)| NocturneKeyRow {
+                key: (*key).to_owned(),
+                targets: fns
+                    .iter()
+                    .map(|f| readable(f))
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+                fns: fns
+                    .iter()
+                    .map(|f| f.to_lowercase())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                cls: if fns.len() > 1 {
+                    "n-krow shared".to_owned()
+                } else {
+                    "n-krow".to_owned()
+                },
+                slot: selected_number.map(|n| n.to_string()).unwrap_or_default(),
+            })
+            .collect();
+        // Every key on the standard board NOT yet bound — the REAL roster
+        // (the board table is unit-pinned against `ksx_core::Key`), served
+        // so the By-key view can offer what is still free.
+        // The free keys, in the keyboard's own geography: main block,
+        // navigation cluster, numpad — classified by canonical name.
+        const NAV_KEYS: [&str; 13] = [
+            "Insert",
+            "Delete",
+            "Home",
+            "End",
+            "PageUp",
+            "PageDown",
+            "Up",
+            "Down",
+            "Left",
+            "Right",
+            "PrintScreen",
+            "ScrollLock",
+            "Pause",
+        ];
+        let mut avail_main: Vec<NocturneKeyRow> = Vec::new();
+        let mut avail_nav: Vec<NocturneKeyRow> = Vec::new();
+        let mut avail_num: Vec<NocturneKeyRow> = Vec::new();
+        if selected.is_some() {
+            for cell in crate::keyboard_layout::ROWS
+                .iter()
+                .flat_map(|row| row.iter())
+            {
+                if cell.ghost || cell.key.is_empty() || key_fns.contains_key(cell.key) {
+                    continue;
+                }
+                let chip = NocturneKeyRow {
+                    key: cell.key.to_owned(),
+                    targets: String::new(),
+                    fns: String::new(),
+                    cls: "n-akey".to_owned(),
+                    slot: String::new(),
+                };
+                if cell.key.starts_with("Numpad") || cell.key == "NumLock" {
+                    avail_num.push(chip);
+                } else if NAV_KEYS.contains(&cell.key) {
+                    avail_nav.push(chip);
+                } else {
+                    avail_main.push(chip);
+                }
+            }
+        }
+        let section = |name: &str, rows: &Vec<NocturneKeyRow>| -> (String, String) {
+            if rows.is_empty() {
+                (String::new(), "n-akeysec none".to_owned())
+            } else {
+                (format!("{name} · {}", rows.len()), "n-akeysec".to_owned())
+            }
+        };
+        let (avail_main_head, avail_main_cls) = section("Main block", &avail_main);
+        let (avail_nav_head, avail_nav_cls) = section("Navigation", &avail_nav);
+        let (avail_num_head, avail_num_cls) = section("Numpad", &avail_num);
+        let avail_total = avail_main.len() + avail_nav.len() + avail_num.len();
+        let keys_note = match selected {
+            Some(_) if !key_rows.is_empty() => format!(
+                "{} keys drive this controller · {} more available below.",
+                key_rows.len(),
+                avail_total
+            ),
+            Some(_) => {
+                "No keys bound yet — click an available key, then a control on the pad.".to_owned()
+            }
+            None => String::new(),
+        };
+        let kb_tray_head = format!("Bound off this board · {}", kb_tray.len());
+        let kb_tray_cls = if kb_tray.is_empty() {
+            "n-kbtray none".to_owned()
+        } else {
+            "n-kbtray".to_owned()
+        };
+        // ── The macro STEP editor, when one is open ───────────────────────
+        // A macro is addressed by NAME on the selected controller; an unknown
+        // name simply leaves the dialog closed rather than inventing a macro.
+        let mac = match (selected, p.macro_selected.as_deref()) {
+            (Some(slot), Some(name)) if !name.is_empty() => {
+                let snap = ksx_api::staged_macro_snapshot(slot);
+                snap.macros
+                    .iter()
+                    .find(|m| m.name == name)
+                    .map(|m| {
+                        crate::macro_editor::NocturneMacroEditor::compose(
+                            m,
+                            &slot.persona,
+                            mapper.as_ref(),
+                            slot.number,
+                            p.q.as_deref(),
+                        )
+                    })
+                    .unwrap_or_else(crate::macro_editor::NocturneMacroEditor::closed)
+            }
+            _ => crate::macro_editor::NocturneMacroEditor::closed(),
+        };
+
+        let kb_note = match selected {
+            Some(slot) if mapper.is_some() => format!(
+                "Key shorts show what drives P{} · {} — on a standard board layout.",
+                slot.number, slot.persona_label
+            ),
+            _ => String::new(),
+        };
+
+        // ── The configuration menu, served ────────────────────────────────
+        // The saved-config row: what config.toml holds, and whether THIS
+        // draft came from it (daemon-stamped origin + dirty).
+        let (cfg_line, cfg_meta, cfg_cls, cfg_check, adopt_cls) = match &p.setup {
+            Some(setup) if setup.config_exists => {
+                let config_slots = setup
+                    .slots
+                    .iter()
+                    .filter(|slot| slot.source == "config.toml")
+                    .count();
+                let meta = match config_slots {
+                    0 => "config.toml — no controllers wired yet".to_owned(),
+                    1 => "config.toml — 1 controller".to_owned(),
+                    n => format!("config.toml — {n} controllers"),
+                };
+                let from_config = staged.origin == "config";
+                (
+                    "Saved configuration".to_owned(),
+                    if from_config && staged.dirty {
+                        format!("{meta} · this draft came from it, with unsaved edits")
+                    } else if from_config {
+                        format!("{meta} · this draft came from it")
+                    } else {
+                        meta
+                    },
+                    if from_config { "nm-cfg on" } else { "nm-cfg" }.to_owned(),
+                    if from_config { "✓" } else { "" }.to_owned(),
+                    "nm-item".to_owned(),
+                )
+            }
+            // First run: no config.toml yet, and that is not an error.
+            Some(_) => (
+                "No saved configuration yet".to_owned(),
+                "Save writes this draft as the configuration.".to_owned(),
+                "nm-cfg".to_owned(),
+                String::new(),
+                "nm-item none".to_owned(),
+            ),
+            None => (
+                "Configuration could not be read".to_owned(),
+                p.setup_error.clone(),
+                "nm-cfg".to_owned(),
+                String::new(),
+                "nm-item none".to_owned(),
+            ),
+        };
+        // The dirty-aware sentence the Start-over fold shows BEFORE the verb.
+        let discard_note = if !staged.reachable {
+            "The draft is not readable right now.".to_owned()
+        } else if staged.empty {
+            "This draft is already empty; discarding changes nothing.".to_owned()
+        } else if staged.dirty {
+            "This draft has unsaved edits — discarding loses them. Saved files are not touched."
+                .to_owned()
+        } else {
+            "This draft is cleared from memory. Saved files are not touched.".to_owned()
+        };
+        // Saved games: LOAD rows, never launchers — Play stays its own act.
+        let (games_head, game_rows, games_note) = match &p.games {
+            Some(games) => {
+                let rows: Vec<NocturneGameRow> = games
+                    .profiles
+                    .iter()
+                    .map(|game| {
+                        let broken = game.state == "broken";
+                        let controllers = match game.slots {
+                            1 => "1 controller".to_owned(),
+                            n => format!("{n} controllers"),
+                        };
+                        NocturneGameRow {
+                            title: game.title.clone(),
+                            meta: if broken {
+                                format!(
+                                    "{controllers} · its program is missing — bindings still load"
+                                )
+                            } else {
+                                controllers
+                            },
+                            cls: if broken { "nm-game broken" } else { "nm-game" }.to_owned(),
+                            ico_cls: if broken { "nm-gico broken" } else { "nm-gico" }.to_owned(),
+                        }
+                    })
+                    .collect();
+                let head = format!("Saved games · {}", rows.len());
+                let note = if rows.is_empty() {
+                    "No saved games yet.".to_owned()
+                } else {
+                    games.notes.join(" · ")
+                };
+                (head, rows, note)
+            }
+            None => ("Saved games".to_owned(), Vec::new(), p.games_error.clone()),
+        };
+        // The sign-in task: the SAME derivation /start's card uses, so the
+        // two surfaces cannot word one scheduler two ways.
+        let auto = StartAutostartView::of(&StartPayload {
+            autostart_read: p.autostart_read.clone(),
+            autostart_error: p.autostart_error.clone(),
+            ..StartPayload::default()
+        });
+        let auto_note = if !auto.readable {
+            format!("{} {}", auto.error, auto.detail)
+        } else if auto.read_only {
+            auto.detail.clone()
+        } else if auto.stale && !auto.stale_detail.is_empty() {
+            format!("{} {}", auto.stale_detail, auto.detail)
+        } else {
+            auto.detail.clone()
+        };
+        let auto_sw_cls = if auto.registered {
+            "n-capsw on".to_owned()
+        } else {
+            "n-capsw".to_owned()
+        };
+        // The wire value `checked()` accepts — the same spelling the /start
+        // card's form has always sent.
+        let auto_dir = if auto.enable {
+            "yes".to_owned()
+        } else {
+            String::new()
+        };
+        let auto_form_cls = if auto.readable && !auto.read_only {
+            "n-capform".to_owned()
+        } else {
+            // An unreadable precondition or an explicitly read-only provider
+            // cannot license a mutation; the next poll still retries reads.
+            "n-capform none".to_owned()
+        };
+
+        let binds = workspace_bind_rows(staged, selected);
+        // The pane groups its rows the way the physical controller is
+        // organised — face cluster, D-pad, shoulders & triggers, each
+        // stick, system — so a row is found where a hand would find the
+        // control. Six served lists (a list body is one flat template; the
+        // group headers live in the island markup over these).
+        let mut bind_groups: [Vec<NocturneBindRow>; 6] = Default::default();
+        let mut avail_groups: [Vec<NocturneCtlChip>; 6] = Default::default();
+        let mut bind_bound = [0usize; 6];
+        for row in &binds.rows {
+            // The mapper's own unbound placeholder (`key_tag`).
+            let bound = row.keys != "—";
+            let group = nocturne_bind_group(&row.function);
+            if !bound {
+                // A free control is a CHIP, not a row: its whole story is
+                // "available" — click it to give it a key.
+                avail_groups[group].push(NocturneCtlChip {
+                    function: row.function.clone(),
+                    label: row.label.clone(),
+                    cls: "n-ctlchip".to_owned(),
+                });
+                continue;
+            }
+            bind_bound[group] += 1;
+            bind_groups[group].push(NocturneBindRow {
+                function: row.function.clone(),
+                label: row.label.clone(),
+                chip: if bound {
+                    row.keys.clone()
+                } else {
+                    "Unbound".to_owned()
+                },
+                note: row.share_note.clone(),
+                chip_title: if bound {
+                    format!(
+                        "Driven by {} — click, then press a new key to replace",
+                        row.keys.replace(" · ", " or ")
+                    )
+                } else {
+                    "Not bound — click, then press a key".to_owned()
+                },
+                badge: {
+                    let mut parts: Vec<String> = Vec::new();
+                    if row.toggle {
+                        parts.push("Toggle".to_owned());
+                    }
+                    if !row.turbo_hz.is_empty() {
+                        parts.push(format!("{}/s", row.turbo_hz));
+                    }
+                    parts.join(" · ")
+                },
+                badge_cls: if row.toggle || !row.turbo_hz.is_empty() {
+                    "n-rowbadge".to_owned()
+                } else {
+                    "n-rowbadge none".to_owned()
+                },
+                add_cls: if bound {
+                    "n-addchip".to_owned()
+                } else {
+                    "n-addchip none".to_owned()
+                },
+                cls: if bound {
+                    "n-bind on".to_owned()
+                } else {
+                    "n-bind".to_owned()
+                },
+                chip_cls: match (bound, row.share_note.is_empty()) {
+                    (true, true) => "n-keychip".to_owned(),
+                    // The ONE shared-key signal, the board's dashed ring.
+                    (true, false) => "n-keychip shared".to_owned(),
+                    (false, _) => "n-keychip ghost".to_owned(),
+                },
+                minus_cls: if bound && row.keys.contains(" · ") {
+                    "n-minus".to_owned()
+                } else {
+                    "n-minus none".to_owned()
+                },
+                clear_cls: if bound {
+                    "n-rowclear".to_owned()
+                } else {
+                    "n-rowclear none".to_owned()
+                },
+                slot: row.slot.clone(),
+                turbo: row.turbo_hz.clone(),
+                hold_cls: if row.toggle {
+                    "n-bpill".to_owned()
+                } else {
+                    "n-bpill on".to_owned()
+                },
+                tog_cls: if row.toggle {
+                    "n-bpill on".to_owned()
+                } else {
+                    "n-bpill".to_owned()
+                },
+            });
+        }
+        // Within a group the rows read in the canonical spoken order (A B X
+        // Y; LB RB LT RT) rather than the zone table's diamond geometry — a
+        // LIST is scanned by name, not by position on the pad.
+        for (group, order) in [
+            (0usize, ["a", "b", "x", "y"]),
+            (2, ["lb", "rb", "lt", "rt"]),
+        ] {
+            bind_groups[group].sort_by_key(|row| {
+                order
+                    .iter()
+                    .position(|f| row.function.eq_ignore_ascii_case(f))
+                    .unwrap_or(usize::MAX)
+            });
+        }
+        // The `?q=` filter, SERVER-resolved: a row matches on its own label
+        // or its group's ("stick" keeps both stick clusters), and a group
+        // whose rows are all hidden hides whole. The island's sweep applies
+        // the SAME rule imperatively — the two must not drift, which is why
+        // both read these exact labels.
+        let query =
+            p.q.as_deref()
+                .map(str::trim)
+                .filter(|q| !q.is_empty())
+                .map(str::to_lowercase);
+        let mut bind_group_cls: [String; 6] = std::array::from_fn(|_| "n-bindg".to_owned());
+        if let Some(query) = query.as_deref() {
+            for group in 0..6 {
+                let gmatch = NOCTURNE_BIND_GROUP_LABELS[group]
+                    .to_lowercase()
+                    .contains(query);
+                let mut visible = 0usize;
+                for row in bind_groups[group].iter_mut() {
+                    if gmatch || row.label.to_lowercase().contains(query) {
+                        visible += 1;
+                    } else {
+                        row.cls.push_str(" hide");
+                    }
+                }
+                for chip in avail_groups[group].iter_mut() {
+                    if gmatch || chip.label.to_lowercase().contains(query) {
+                        visible += 1;
+                    } else {
+                        chip.cls.push_str(" hide");
+                    }
+                }
+                if visible == 0
+                    && !(bind_groups[group].is_empty() && avail_groups[group].is_empty())
+                {
+                    bind_group_cls[group] = "n-bindg empty".to_owned();
+                }
+            }
+        }
+        let [bind_face_cls, bind_dpad_cls, bind_shoulders_cls, bind_lstick_cls, bind_rstick_cls, bind_system_cls] =
+            bind_group_cls;
+        let bind_heads: Vec<String> = bind_groups
+            .iter()
+            .zip(avail_groups.iter())
+            .zip(bind_bound)
+            .map(|((rows, avail), bound)| {
+                let total = rows.len() + avail.len();
+                if total == 0 {
+                    String::new()
+                } else if bound == 0 {
+                    "none bound".to_owned()
+                } else {
+                    format!("{bound} of {total} bound")
+                }
+            })
+            .collect();
+        let bind_g_cls = if binds.rows.is_empty() {
+            "n-bindgroups none".to_owned()
+        } else {
+            match selected.map(|slot| slot.number) {
+                Some(digit) => format!("n-bindgroups np{digit}"),
+                None => "n-bindgroups".to_owned(),
+            }
+        };
+        let [bind_face, bind_dpad, bind_shoulders, bind_lstick, bind_rstick, bind_system] =
+            bind_groups;
+        let [avail_face, avail_dpad, avail_shoulders, avail_lstick, avail_rstick, avail_system] =
+            avail_groups;
+        let [bind_face_n, bind_dpad_n, bind_shoulders_n, bind_lstick_n, bind_rstick_n, bind_system_n]: [String; 6] =
+            bind_heads.try_into().expect("six groups");
+
+        // ── The selected slot's macros: lifecycle rows off the SAME staged
+        // authoring the mapper reads. Step editing stays on Controls until
+        // its own pass, and the rows say so with a link, not a pretence.
+        let (macros_head, macro_rows, macros_note) = match selected {
+            None => ("Macros".to_owned(), Vec::new(), String::new()),
+            Some(slot) => {
+                let snap = ksx_api::staged_macro_snapshot(slot);
+                if !snap.available {
+                    ("Macros".to_owned(), Vec::new(), snap.reason.clone())
+                } else {
+                    let rows: Vec<NocturneMacroRow> = snap
+                        .macros
+                        .iter()
+                        .map(|mac| {
+                            let triggered = !mac.triggers.is_empty();
+                            NocturneMacroRow {
+                                name: mac.name.clone(),
+                                fn_name: format!("macro.{}", mac.name),
+                                chip: if triggered {
+                                    mac.triggers.join(" · ")
+                                } else {
+                                    "No trigger key".to_owned()
+                                },
+                                chip_title: if triggered {
+                                    format!(
+                                        "Started by {} — click, then press a new trigger key",
+                                        mac.triggers.join(" or ")
+                                    )
+                                } else {
+                                    "No trigger key — click, then press a key".to_owned()
+                                },
+                                add_cls: if triggered {
+                                    "n-addchip".to_owned()
+                                } else {
+                                    "n-addchip none".to_owned()
+                                },
+                                chip_cls: if triggered {
+                                    "n-keychip".to_owned()
+                                } else {
+                                    "n-keychip ghost".to_owned()
+                                },
+                                meta: nocturne_macro_meta(mac),
+                                cls: if triggered && !mac.disabled {
+                                    "n-bind on".to_owned()
+                                } else {
+                                    "n-bind".to_owned()
+                                },
+                                slot: slot.number.to_string(),
+                                edit_href: format!(
+                                    "/nocturne?slot={}&macro={}",
+                                    slot.number,
+                                    crate::render_map::urlencode_value(&mac.name)
+                                ),
+                                toggle_label: if mac.disabled {
+                                    "Enable".to_owned()
+                                } else {
+                                    "Disable".to_owned()
+                                },
+                                toggle_value: if mac.disabled {
+                                    "yes".to_owned()
+                                } else {
+                                    String::new()
+                                },
+                            }
+                        })
+                        .collect();
+                    let head = format!("Macros · {}", rows.len());
+                    let note = if rows.is_empty() {
+                        "No macros in this layout yet — author them in the Controls editor."
+                            .to_owned()
+                    } else {
+                        String::new()
+                    };
+                    (head, rows, note)
+                }
+            }
+        };
+
+        Self {
+            version,
+            environment_id,
+            environment_label,
+            environment_detail,
+            environment_cls,
+            environment_fixture,
+            environment_generation,
+            chip_text,
+            save_text,
+            escape_line,
+            play_cls,
+            stop_cls,
+            apply_cls,
+            rack_rows,
+            rack_empty,
+            rack_caption,
+            add_lede,
+            add_preset,
+            persona_rows,
+            layout_opts,
+            socd_opts,
+            socd_cls,
+            socd_num,
+            socd_lab,
+            socd_edit_opts,
+            pad_badge,
+            pad_badge_cls,
+            kb_cls,
+            undo_cls,
+            undo_label,
+            stage_word,
+            pad_name,
+            pad_sub,
+            pad_xbox_cls,
+            pad_ps_cls,
+            pad_ps5_cls,
+            pad_switchpro_cls,
+            pad_xboxseries_cls,
+            bind_title: binds.title,
+            bind_face,
+            bind_dpad,
+            bind_shoulders,
+            bind_lstick,
+            bind_rstick,
+            bind_system,
+            bind_face_n,
+            bind_dpad_n,
+            bind_shoulders_n,
+            bind_lstick_n,
+            bind_rstick_n,
+            bind_system_n,
+            bind_face_cls,
+            bind_dpad_cls,
+            bind_shoulders_cls,
+            bind_lstick_cls,
+            bind_rstick_cls,
+            bind_system_cls,
+            slot_val,
+            bind_g_cls,
+            bind_foot: binds.foot,
+            macros_head,
+            macro_rows,
+            macros_note,
+            kb_row1,
+            kb_row2,
+            kb_row3,
+            kb_row4,
+            kb_row5,
+            kb_row6,
+            kb_tray,
+            key_rows,
+            keys_note,
+            avail_main,
+            avail_nav,
+            avail_num,
+            pads,
+            legend,
+            solo_label,
+            avail_main_head,
+            avail_nav_head,
+            avail_num_head,
+            avail_main_cls,
+            avail_nav_cls,
+            avail_num_cls,
+            avail_ctl_face: avail_face,
+            avail_ctl_dpad: avail_dpad,
+            avail_ctl_shoulders: avail_shoulders,
+            avail_ctl_lstick: avail_lstick,
+            avail_ctl_rstick: avail_rstick,
+            avail_ctl_system: avail_system,
+            kb_tray_head,
+            kb_tray_cls,
+            kb_note,
+            kb_more_cls,
+            mac,
+            cfg_line,
+            cfg_meta,
+            cfg_cls,
+            cfg_check,
+            adopt_cls,
+            discard_note,
+            games_head,
+            game_rows,
+            games_note,
+            auto_line: auto.line,
+            auto_sw_cls,
+            auto_dir,
+            auto_btn: auto.button,
+            auto_note,
+            auto_form_cls,
+            dev_count,
+            dev_note,
+            encoder_count,
+            encoder_head,
+            kb_title,
+            dev_encoders,
+            dev_rows,
+            dev_exp,
+            dev_other,
+            exp_head,
+            exp_fold_cls,
+            other_head,
+            other_fold_cls,
+            mode_rows,
+            mode_note,
+            cap_line,
+            capd_cls,
+            cap_sw_cls,
+            cap_selector: cap.expected_selector.clone(),
+            cap_instance: cap.instance_id.clone(),
+            cap_prepare,
+            cap_release,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nocturne_environment_provenance_survives_derivation() {
+        let payload = NocturnePayload {
+            environment: ksx_api::RuntimeEnvironmentView::fixture(
+                "fixture-first-run",
+                "FIXTURE · FIRST RUN",
+                "Synthetic first-run state; no physical device is read.",
+            )
+            .with_generation("seed-42"),
+            ..NocturnePayload::default()
+        }
+        .derived();
+
+        assert_eq!(payload.environment.id, "fixture-first-run");
+        assert_eq!(payload.view.environment_id, "fixture-first-run");
+        assert_eq!(payload.view.environment_label, "FIXTURE · FIRST RUN");
+        assert_eq!(payload.view.environment_cls, "n-environment fixture");
+        assert!(payload.view.environment_fixture);
+        assert_eq!(payload.view.environment_generation, "seed-42");
+        assert!(payload
+            .view
+            .environment_detail
+            .contains("no physical device"));
+    }
 
     /// **The saved answer is marked, and an unconfigured machine claims
     /// nothing.**
@@ -3028,6 +6440,7 @@ mod tests {
                 // have been built from. `Unknown` is that, not a guess at
                 // `Config`.
                 origin: ksx_api::SessionOrigin::Unknown,
+                active: None,
             },
             ..ProfilesPayload::default()
         };
@@ -3126,6 +6539,7 @@ mod tests {
                 line: "idle — daemon reachable".into(),
                 profile: None,
                 origin: ksx_api::SessionOrigin::Unknown,
+                active: None,
             },
             flash: None,
         };
@@ -3243,6 +6657,7 @@ mod tests {
             line: "running — 4 pad(s)".into(),
             profile: None,
             origin: ksx_api::SessionOrigin::Config,
+            active: None,
         }
     }
 
@@ -3250,6 +6665,7 @@ mod tests {
         crate::control::LearnView {
             ok: true,
             state: "idle".into(),
+            generation: None,
             remaining_ms: None,
             device: None,
             key: None,
@@ -3442,6 +6858,62 @@ mod tests {
     /// exact strings both seams (render_setup.rs's SSR injection and
     /// SetupIsland.ts's poll) now read verbatim — the formatters they used to
     /// each own are gone, so this is the only place a row wording can change.
+    /// The theme card's three states, pinned (TK2/TK3 review finding: the
+    /// first cut marked System "in use" on a config nothing had READ, and
+    /// claimed "this is how it is set" about a config that said otherwise).
+    #[test]
+    fn the_theme_rows_and_line_say_only_what_the_read_supports() {
+        let marked = |rows: &[SetupThemeRowView]| {
+            rows.iter()
+                .filter(|r| r.chosen_cls == "pill pill-ok")
+                .map(|r| r.value.clone())
+                .collect::<Vec<_>>()
+        };
+
+        // Nothing stored: System is genuinely how it is set.
+        let snap = SetupSnapshot::ready(ksx_api::SetupView::default());
+        let rows = SetupRows::of(&snap).themes;
+        assert_eq!(marked(&rows), ["system"]);
+        assert_eq!(rows[0].button, "This is how it is set");
+        assert_eq!(
+            theme_line(&snap.view),
+            "Pages follow the operating system's light or dark choice."
+        );
+
+        // A shipped id: that row is marked; System offers its action.
+        let snap = SetupSnapshot::ready(ksx_api::SetupView {
+            theme: "light".to_owned(),
+            ..Default::default()
+        });
+        let rows = SetupRows::of(&snap).themes;
+        assert_eq!(marked(&rows), ["light"]);
+        assert_eq!(rows[0].button, "Match the operating system");
+        assert!(rows
+            .iter()
+            .any(|r| r.value == "light" && r.button == "This is how it is set"));
+        assert_eq!(theme_line(&snap.view), "Every page renders in Light.");
+
+        // An id this build does not ship: System IS what renders (the pill is
+        // true) but NOT what is set — the button offers the useful act, and
+        // the line names the shipped ids so a typo explains itself.
+        let snap = SetupSnapshot::ready(ksx_api::SetupView {
+            theme: "matrix2".to_owned(),
+            ..Default::default()
+        });
+        let rows = SetupRows::of(&snap).themes;
+        assert_eq!(marked(&rows), ["system"]);
+        assert_eq!(rows[0].button, "Follow the operating system instead");
+        let line = theme_line(&snap.view);
+        assert!(line.contains("does not ship"), "{line}");
+        assert!(line.contains("dark, light, matrix"), "{line}");
+
+        // A config nothing could read: no row claims anything about it.
+        let snap = SetupSnapshot::unavailable("the store refused");
+        let rows = SetupRows::of(&snap).themes;
+        assert_eq!(marked(&rows), Vec::<String>::new());
+        assert!(rows.iter().all(|r| r.button != "This is how it is set"));
+    }
+
     #[test]
     fn the_setup_rows_are_composed_once_from_the_view() {
         let view = ksx_api::SetupView {
@@ -3481,6 +6953,24 @@ mod tests {
             "P1 board · Xbox 360 pad · config.toml"
         );
         assert_eq!(rows.preset_options[0].text, "Panel P1");
+        assert_eq!(
+            rows.persona_options
+                .iter()
+                .map(|option| option.value.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "xbox360",
+                "playstation",
+                "dualsense",
+                "switchpro",
+                "xboxseries",
+                "snes",
+                "genesis"
+            ],
+            "the maintenance menu offers every live persona and no gated one"
+        );
+        assert_eq!(rows.persona_options[0].label, "Xbox 360 · ViGEmBus");
+        assert_eq!(rows.persona_options[2].label, "DualSense · HIDMaestro");
         assert_eq!(rows.profile_options[0].text, "Example Game");
         assert_eq!(rows.notes[0].text, "a note");
 

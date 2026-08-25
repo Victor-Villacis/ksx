@@ -712,12 +712,12 @@ fn installer_and_ci_package_the_prepare_provider_only_in_the_installed_product()
         );
     }
 
-    let portable = build
+    let portable_tail = build
         .split("- name: Package portable distribution with license material")
         .nth(1)
-        .expect("portable packaging step exists")
-        .split("- uses: actions/upload-artifact@v4")
-        .next()
+        .expect("portable packaging step exists");
+    let (portable, _) = portable_tail
+        .split_once("- uses: actions/upload-artifact@")
         .expect("portable step has an upload boundary");
     for forbidden in [
         "ksx-winusb-helper.exe",
@@ -1087,6 +1087,11 @@ fn installer_and_portable_zip_carry_complete_license_material() {
             "Copyright (c) 2024 Al. Lopez",
         ),
         (
+            "THIRD-PARTY-LICENSES/dualshock-tools-MIT.txt",
+            "Copyright (c) 2024 the_al",
+        ),
+        ("THIRD-PARTY-LICENSES/CC0-1.0.txt", "CC0 1.0 Universal"),
+        (
             "THIRD-PARTY-LICENSES/Lucide-ISC.txt",
             "Lucide Contributors 2022",
         ),
@@ -1135,11 +1140,108 @@ fn installer_and_portable_zip_carry_complete_license_material() {
         );
     }
 
+    // The project-owner-supplied dedication is binary evidence, not a text
+    // licence. Pin its stable packaged name, PDF shape and exact byte length;
+    // NOTICE below pins the reviewed SHA-256 and source chain.
+    let dedication_path = repo_root()
+        .join("THIRD-PARTY-LICENSES")
+        .join("Funky-Designs-CC0-1.0-Dedication.pdf");
+    let dedication = std::fs::read(&dedication_path)
+        .unwrap_or_else(|err| panic!("{} could not be read: {err}", dedication_path.display()));
+    assert!(
+        dedication.starts_with(b"%PDF-1.7"),
+        "{} is not the reviewed PDF",
+        dedication_path.display()
+    );
+    assert_eq!(
+        dedication.len(),
+        15_763,
+        "{} differs from the reviewed dedication bytes",
+        dedication_path.display()
+    );
+
     let notice = read("NOTICE");
     assert!(notice.contains("forma-ir 0.2.0 and forma-server 0.2.0"));
     assert!(notice.contains("interception-sys` 0.1.3 as LGPL-3.0"));
     assert!(notice.contains("libwdi 1.5.1 prepare provider"));
     assert!(notice.contains("9b23b82a2dd1cbffc16d46c212f92c6bf8c0c602"));
+    assert!(notice.contains("28A22A03379A68451E339B30865C7BA7C7C29193723EC87E17FB52FACFA070C7"));
+    assert!(notice.contains("97BD7A3ADE8B38B06B9769C5E843C51E467BEABFA4581BAB3830ABF60014F144"));
+    assert!(notice.contains("0748B6C76FA2C0EC7C7E69590383F1F8BA391E0831DB1F3B45D14E4432F80B32"));
+    assert!(notice.contains("BF14390606252C2106B18D8869151BF1686D925B6E306A32D635C7FEF26D5549"));
+    assert!(notice.contains("F6D59BE0A20CC7EF9698D43A0B0703D1EA76387B707260A90A31BF1047C40F83"));
+    assert!(notice.contains("CFF42BF349FAB306DC57021F21912E35190FEC78A3EF193C8B372099C8406E48"));
+    assert!(notice.contains("B9FE4FA6528FCC9AFA52F7590E5D141F8FC68983B12E1090ADC19D057061D2A0"));
+    assert!(notice.contains("0B23A9FE39047F059ADB528F180C971EDFDB5A59F7835EC6E71B23722B0751FF"));
+    // The premium Nocturne trio is reconstructed from owner-held source
+    // archives rather than vendored source SVGs. Keep every reviewed archive
+    // and selected-entry pin in the distributable NOTICE so the generated
+    // geometry can always be traced back to the CC0 dedication.
+    for source_hash in [
+        // DualSense archive + selected SVG.
+        "2EE5D51F310E73B2464C1D1A6B3856F4DEBD9E1495358962ACADBFDFA57C5160",
+        "1A295010C4318D1EE64A735E2F285F75E47A4D64F8727AA1C0708A06BADF10BA",
+        // Switch Pro detailed archive + selected SVG.
+        "9B11A0B150911E8BD62506436DC4DFC90D5AA66A9FBF10BB50821AF3F333607F",
+        "FFF8851462BBDD746BE392437F8A14167AAA20D62A65ACFAAEDC411EDB153B52",
+        // Xbox Series outer archive, then each nested archive and selected SVG.
+        "E64FB9D1C70855B1ACBD86F5B6887C9E852CF4404402D219E9F72F8360BE3611",
+        "98145FBE73FA989CD132CFB08D3BE891AF3352130C057B98E87A2AB203352231",
+        "15229EA57B7059D3EDDABA5C223E080799E322172688F928759D133D3F36F0A1",
+        "044E3C020D5A4EB54B233FB12623EF18AE153219D368C475EAB599F04EDCF468",
+        "20CF3E05F273CA70D2B081FE49BD7A0EB5B44EBAAFFC3D73D7AFCD41258DC487",
+        "92AE0525D9BA9B951DC881DD9DE18D2B6E0B1D889083351FB742FAB0B3F029E0",
+        "0241274A159DE2B8B10E0E816AF95FAB366C077A7A749D113F910BA5428EDC0E",
+        "0A441F2AB0015FEAD153A93C25572EF1057A506F72499E7F62E00B63ADF82AC9",
+        "226B5CDE638C72AE4FC3745E530D84A55AEEF0FAA836D97D4BCAD72618CD247A",
+        "7AF60C843100E01EF3045E5EBA198FC95D108C9DFE4B22A56C4DA76B97B75F58",
+        "39A9BD501B696E886CEAFEDFC968F94ED7DE69E42813C7D6C5F70B318AA4C82A",
+    ] {
+        assert!(
+            notice.contains(source_hash),
+            "NOTICE lost premium controller source pin {source_hash}"
+        );
+    }
+    for generated_hash in [
+        // DualSense importer, generated geometry, and SSR-safe art wrapper.
+        "8565AEFBDFE3B42777476EDF7600D2B8C84EF31AF7A8B0211BC7737686795107",
+        "B869750BD153681A8A27BF6CD2879CAC0742780789A3E08F189058B836D47846",
+        "2EF59983923F6D8D24E49110C198F7DE573486377CE0D26960C0C148A25B02D2",
+        // Switch importer, losslessly chunked geometry, and art wrapper.
+        "90B83DB08F9D70F763A5F92A20D852AF95737D558B752546C6E7DE41F39D4EAC",
+        "4020678345B91E7BDCC5F767E12FDEB8DAE8F88EA5804B9E065B1026B0B09FE8",
+        "815BCB2BF3F42F9870BF3FA4A9D2EF5641F566B815E50C3FC61D230ED37E8CA0",
+        // Xbox Series importer, generated geometry, and art wrapper.
+        "9C361446B936FFF074457ED43350E67B6FD6D5CCD1D888783D592E8252D59E5D",
+        "A066EDB3B724F578644F563F7F577509766D5237A7983123306375AAA1E6CAA7",
+        "C0DB070027091C2FBF1D7BCF43FB51ECD17FE77F180C087A3F6D894314C1C765",
+    ] {
+        assert!(
+            notice.contains(generated_hash),
+            "NOTICE lost premium controller generated-file pin {generated_hash}"
+        );
+    }
+    assert!(
+        notice.contains("those legacy bytes are no longer built, embedded or shipped"),
+        "NOTICE must record that the unlicensed legacy DualSense bytes were retired"
+    );
+    for retired_path in [
+        "studio-ui/art/src-dualsense.svg",
+        "crates/ksx-studio/assets/pad-ps5.svg",
+    ] {
+        assert!(
+            !repo_root().join(retired_path).exists(),
+            "retired unlicensed controller art must stay absent: {retired_path}"
+        );
+    }
+    let studio_build = read("studio-ui/build.mjs");
+    for retired_marker in ["src-dualsense.svg", "pad-ps5.svg", "DUALSENSE_VIEWBOX"] {
+        assert!(
+            !studio_build.contains(retired_marker),
+            "Studio build resurrected retired unlicensed controller art marker {retired_marker}"
+        );
+    }
+    assert!(notice.contains("5E45318030E7A8F38580F76BD8DCF46C0C3E4E4D6380551C7FD1839F10C55B31"));
     assert!(
         !notice.contains("licenses travel with them in `Cargo.lock`"),
         "Cargo.lock carries versions and checksums, not distributable license text"
@@ -1314,12 +1416,34 @@ fn hidmaestro_runtime_and_installer_bootstrap_are_installed_only_and_built_first
     assert!(build.contains("bundledUpstreamAssemblyCount -ne 0"));
     assert!(build.contains("requiresNetworkAtInstall -ne $true"));
 
-    let portable = build
+    let dispatch = build
+        .split("- name: Exercise HIDMaestro installer private dispatch without loading SDK")
+        .nth(1)
+        .expect("compiled private-dispatch smoke")
+        .split("- name: Build release")
+        .next()
+        .expect("private-dispatch smoke boundary");
+    for required in [
+        "ksx-hidmaestro-installer-contract-",
+        "install-worker-v1",
+        "C:\\not-a-ksx-staging-directory",
+        "$worker.ExitCode -ne 5",
+        "unexpected-command",
+        "$unknown.ExitCode -ne 2",
+        "Refusing reparse-point HIDMaestro dispatch probe cleanup",
+    ] {
+        assert!(
+            dispatch.contains(required),
+            "compiled private-dispatch smoke lost `{required}`"
+        );
+    }
+
+    let portable_tail = build
         .split("- name: Package portable distribution with license material")
         .nth(1)
-        .expect("portable packaging step")
-        .split("- uses: actions/upload-artifact@v4")
-        .next()
+        .expect("portable packaging step");
+    let (portable, _) = portable_tail
+        .split_once("- uses: actions/upload-artifact@")
         .expect("portable upload boundary");
     for forbidden in [
         "ksx-hidmaestro-host.exe",
@@ -1330,6 +1454,153 @@ fn hidmaestro_runtime_and_installer_bootstrap_are_installed_only_and_built_first
             "portable ZIP must omit installed-only {forbidden}"
         );
     }
+}
+
+/// Exit 8 is reached only after the pinned `InstallDriver` call returned.
+///
+/// Version 0.4.0 folded that cleanup result into the generic failure paragraph,
+/// blamed the network and told the user DualSense was unavailable even when the
+/// package had just been installed. Keep the cleanup-only branch separate and
+/// non-destructive in its claims.
+#[test]
+fn hidmaestro_cleanup_pending_is_not_reported_as_install_failure() {
+    let code = section(&script(), "[Code]").join("\n");
+    let cleanup_tail = code
+        .split("if ResultCode = 8 then")
+        .nth(1)
+        .expect("exit 8 has a dedicated cleanup-only branch");
+    let (cleanup, _) = cleanup_tail
+        .split_once("HidMaestroNote :=\n'The HIDMaestro controller driver install did not complete")
+        .expect("cleanup-only branch ends before generic failure handling");
+
+    for required in [
+        "The HIDMaestro controller driver installed",
+        "verified temporary SDK files",
+        "DualSense may already be available",
+        "wait at least two minutes (or restart Windows)",
+        "exact hash-verified KSX staging residue",
+        "mbInformation",
+    ] {
+        assert!(
+            cleanup.contains(required),
+            "cleanup-only message lost `{required}`: {cleanup}"
+        );
+    }
+    for forbidden in [
+        "did not complete",
+        "NOT installed",
+        "will remain unavailable",
+        "Check the internet connection",
+    ] {
+        assert!(
+            !cleanup.contains(forbidden),
+            "cleanup-only result regained false failure claim `{forbidden}`: {cleanup}"
+        );
+    }
+}
+
+/// The v0.4.0 cleanup failure was structural: the process deleting the SDK was
+/// also the process that still had `HIDMaestro.Core.dll` loaded. More retries in
+/// that process merely make the same race longer. The coordinator must wait for
+/// a separately validated worker to exit, and only then remove pinned staging.
+#[test]
+fn hidmaestro_installer_isolates_sdk_loading_before_exact_cleanup() {
+    let source = read("tools/hidmaestro-driver-installer/Program.cs");
+    for required in [
+        "install-worker-v1",
+        "ProcessStartInfo",
+        "startInfo.ArgumentList.Add(WorkerCommand)",
+        "worker.WaitForExit()",
+        "IsExactWorkingDirectoryPath",
+        "IsVerifiedWorkingDirectory(workDirectory, requireComplete: true)",
+        "IsStrictWorkingDirectoryName",
+        "MaxPriorWorkDirectories",
+        "WorkerMutexName",
+        "IsWorkerActive()",
+        "PriorWorkDirectoryMinimumAge",
+        "IsPriorWorkingDirectoryOldEnough",
+        "DeleteWorkingDirectory(workDirectory, requirePins: stagingComplete)",
+        "if (!cleaned && result == 0)",
+        "return 10;",
+    ] {
+        assert!(
+            source.contains(required),
+            "process-isolated HIDMaestro cleanup lost `{required}`"
+        );
+    }
+
+    let coordinator = source
+        .split_once("private static int RunCoordinator()")
+        .expect("coordinator exists")
+        .1
+        .split_once("private static int RunWorker")
+        .expect("worker follows coordinator")
+        .0;
+    let invoke = coordinator
+        .find("result = InvokePinnedInstallerWorker(workDirectory)")
+        .expect("coordinator invokes worker");
+    let cleanup = coordinator
+        .find("DeleteWorkingDirectory(workDirectory, requirePins: stagingComplete)")
+        .expect("coordinator performs exact cleanup");
+    assert!(
+        invoke < cleanup,
+        "coordinator must wait for worker result before staging cleanup"
+    );
+    let worker_probe = coordinator
+        .find("if (IsWorkerActive())")
+        .expect("coordinator checks for an orphaned worker");
+    let prior_sweep = coordinator
+        .find("if (!RemovePriorWorkingDirectories())")
+        .expect("coordinator has a bounded prior-staging sweep");
+    assert!(
+        worker_probe < prior_sweep,
+        "coordinator must refuse a live orphaned worker before touching staging"
+    );
+
+    let worker = source
+        .split_once("private static int RunWorker")
+        .expect("worker exists")
+        .1
+        .split_once("private static async Task<byte[]> DownloadArchiveAsync")
+        .expect("worker has a bounded source section")
+        .0;
+    let verify = worker
+        .find("IsVerifiedWorkingDirectory(workDirectory, requireComplete: true)")
+        .expect("worker verifies its complete pinned input");
+    let lease = worker
+        .find("TryAcquireMutex(workerLease)")
+        .expect("worker acquires its process-lifetime lease");
+    let load = worker
+        .find("InvokePinnedInstaller(workDirectory)")
+        .expect("worker invokes the pinned API");
+    let release = worker
+        .find("workerLease.ReleaseMutex()")
+        .expect("worker releases its lease only while returning");
+    assert!(
+        lease < verify && verify < load && load < release,
+        "worker lease must surround pinned verification and SDK execution"
+    );
+
+    let sweep = source
+        .split_once("private static bool RemovePriorWorkingDirectories()")
+        .expect("prior-staging sweep exists")
+        .1
+        .split_once("private static bool IsPriorWorkingDirectoryOldEnough")
+        .expect("age predicate follows sweep")
+        .0;
+    let age = sweep
+        .find("!IsPriorWorkingDirectoryOldEnough(path)")
+        .expect("prior staging is quarantined by age");
+    let pinned = sweep
+        .find("!IsVerifiedWorkingDirectory(path, requireComplete: false)")
+        .expect("prior staging remains byte-pinned");
+    let remove = sweep
+        .find("DeleteWorkingDirectory(path, requirePins: true)")
+        .expect("prior staging uses exact nonrecursive cleanup");
+    assert!(
+        age < pinned && pinned < remove,
+        "recent staging must be refused before pinned prior-residue cleanup"
+    );
 }
 
 /// **The install goes through the verb that verifies it.**
@@ -1540,8 +1811,7 @@ fn the_code_section_uses_line_comments_only() {
 /// `.github/workflows/build-installer.yml` refuses to build a release unless the
 /// tag equals both, and it is the release that makes the disagreement expensive:
 /// a tag is a public name you cannot reuse, so learning ten minutes into a
-/// release run that two files disagree costs a deleted tag and a burned version
-/// number.
+/// release run that two files disagree burns an immutable candidate version.
 ///
 /// Fails against the ordinary broken tree: someone bumps `Cargo.toml` to 0.2.1
 /// and `ksx.iss` keeps 0.2.0. Nothing else in this repository notices — the
@@ -1559,7 +1829,7 @@ fn the_installer_version_and_the_workspace_version_cannot_drift() {
     );
 }
 
-/// **The release is a pushed tag, and nothing else is a release.**
+/// **A pushed tag starts the only release-candidate path.**
 ///
 /// Fails against three broken versions, each of which has a plausible author:
 ///
@@ -1686,6 +1956,10 @@ fn the_release_attaches_the_installer_that_ksx_iss_actually_produces() {
     assert!(
         assets.contains("PORTABLE_NAME"),
         "the portable distribution rides along for people who want no installer: {assets}"
+    );
+    assert!(
+        assets.contains("MANIFEST_NAME"),
+        "the exact-candidate manifest must remain public beside both distributables: {assets}"
     );
 }
 

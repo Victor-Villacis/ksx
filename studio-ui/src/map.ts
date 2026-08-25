@@ -15,6 +15,7 @@ import { fetchJSON } from "@getforma/core/http";
 // Compile-time anchor: the imported *Page component NOT in the
 // activateIslands registry is this entry's SSR root (see status.ts).
 import { MapPage } from "./MapPage";
+import type { KeyHit, LiveEnvelope } from "./CheckIsland";
 import {
   MapIsland,
   applyMap,
@@ -33,6 +34,8 @@ import {
   isPaused,
   keyList,
   learnAllowed,
+  liveEchoSessionFingerprint,
+  liveEchoTargetState,
   liveProfile,
   macroAskAboutShortSteps,
   macroClearShortStepQuestion,
@@ -83,6 +86,7 @@ import {
   showLearnMode,
   showLearnTurbo,
   showListening,
+  syncShelf,
   toggleSelected,
   turboHzOf,
   updateCountdown,
@@ -100,12 +104,22 @@ void MapPage; // compile-time anchor only
 
 /** Bindings/session poll cadence — same as the status page. */
 const POLL_MS = 2000;
+/** Keep a tap visible long enough to read, matching the dedicated Test page. */
+const LIVE_FLASH_MS = 140;
+/** A physical key tap gets a slightly longer keycap depression: the key shelf
+ * is denser than the controller diagram and needs one extra beat to scan. */
+const LIVE_KEY_FLASH_MS = 200;
 /** While learning: poll the daemon's learner at PadForge's recorder tick
  *  (33 ms, docs/research/padforge-code-audit.md §1.2) — it doubles as the
  *  smooth countdown update, the visible timer PadForge never had. */
 const LEARN_POLL_MS = 33;
 /** The daemon's learn timeout (LEARN_TIMEOUT in daemon/learn.rs). */
 const LEARN_TOTAL_MS = 10_000;
+
+/** Polls also run after writes and stream reconnects. Only the newest request
+ *  may publish session truth; a slower older response must not roll the live
+ *  origin handshake (or the visible mapper) backward. */
+let mapPollSequence = 0;
 
 type Json = Record<string, unknown>;
 
@@ -170,6 +184,12 @@ interface VerbOutcome {
 }
 
 async function poll(): Promise<void> {
+  const requestSequence = ++mapPollSequence;
+  // A frame boundary can invalidate the origin while this request is in
+  // flight. Only the request made under the still-current generation may
+  // re-license paint when its authoritative session answer arrives.
+  const originGeneration = liveOriginGeneration;
+  const previousSession = liveEchoSessionFingerprint();
   try {
     // The SELECTED slot travels with the poll. `MapPayload.macros` is ONE
     // preset's table — the selected slot's (server.rs `collect_map`) — and a
@@ -188,11 +208,369 @@ async function poll(): Promise<void> {
       : editingStage()
         ? "/api/map?target=stage"
         : "/api/map";
-    applyMap(await fetchJSON<MapPayload>(url));
+    const payload = await fetchJSON<MapPayload>(url);
+    if (requestSequence !== mapPollSequence) return;
+    applyMap(payload);
+    reconcileLiveOrigin(previousSession, originGeneration);
   } catch {
+    if (requestSequence !== mapPollSequence) return;
     applyMapUnreachable();
+    invalidateLiveOrigin("Live setup check unavailable · retrying", false);
   }
   syncMacroControls();
+  renderKeyboardInventory();
+  paintMapLiveState();
+}
+
+/** Re-point the keyboard shelf at the selected slot. The rows and the summary
+ * are SERVED (`MapPayload.shelf`, composed in render_map.rs) and rendered by
+ * the island's own list — no derivation is left here, which is what keeps the
+ * SSR shelf and the hydrated shelf identical (the parity suite caught the
+ * previous shape). What remains client-owned is the transient trace, which
+ * resets on every re-sync exactly as it did when the rows were rebuilt here. */
+let tracedInventoryKey: string | null = null;
+
+function renderKeyboardInventory(): void {
+  syncShelf();
+  tracedInventoryKey = null;
+  clearInventoryTrace();
+}
+
+function clearInventoryTrace(): void {
+  for (const el of Array.from(document.querySelectorAll(".inventory-hot"))) {
+    el.classList.remove("inventory-hot");
+  }
+  for (const key of Array.from(document.querySelectorAll<HTMLElement>(".inventory-key.on"))) {
+    key.classList.remove("on");
+    key.setAttribute("aria-pressed", "false");
+  }
+}
+
+function traceInventoryKey(button: HTMLElement): void {
+  const key = button.dataset.inventoryKey ?? "";
+  const controls = (button.dataset.controls ?? "").split("|").filter(Boolean);
+  const turnOn = key !== "" && tracedInventoryKey !== key;
+  clearInventoryTrace();
+  tracedInventoryKey = turnOn ? key : null;
+  if (!turnOn) return;
+
+  button.classList.add("on");
+  button.setAttribute("aria-pressed", "true");
+  for (const control of controls) {
+    for (const node of Array.from(document.querySelectorAll<HTMLElement>(`[data-fn="${CSS.escape(control)}"]`))) {
+      node.classList.add("inventory-hot");
+    }
+  }
+}
+
+// ── Live controller echo ─────────────────────────────────────
+
+/** Current held controls per player. Live frames are transition-scoped, so a
+ *  player omitted from one frame must keep the last state we saw for it. */
+const liveDownBySlot = new Map<number, Set<string>>();
+const liveKeysDown = new Set<string>();
+const liveFlashTimers = new Map<Element, number>();
+const liveKeyFlashTimers = new Map<Element, number>();
+let acceptedLiveSession: string | null = null;
+let liveOriginGeneration = 0;
+let liveOriginConfirmed = false;
+let liveSourceOpen = false;
+
+function mapLiveStatus(
+  text: string,
+  connected: boolean,
+  announcement: string | null = null,
+): void {
+  const status = document.getElementById("map-live-status");
+  if (!status) return;
+  // Visual connection chatter can change several times during one automatic
+  // EventSource retry. Keep it out of the live region; only durable semantic
+  // changes are sent to the separate announcer, and only when they differ.
+  if (status.textContent !== text) status.textContent = text;
+  if (status.classList.contains("connected") !== connected) {
+    status.classList.toggle("connected", connected);
+  }
+  if (announcement !== null) {
+    const announcer = document.getElementById("map-live-announcer");
+    if (announcer && announcer.textContent !== announcement) {
+      announcer.textContent = announcement;
+    }
+  }
+}
+
+function mappedControlNodes(control: string): Element[] {
+  const escaped = CSS.escape(control);
+  return Array.from(
+    document.querySelectorAll(
+      `.stagecard [data-fn="${escaped}"], .legendcard [data-fn="${escaped}"]`,
+    ),
+  );
+}
+
+function clearMapLivePaint(clearFlashes: boolean): void {
+  for (const node of Array.from(document.querySelectorAll(".map-live-down"))) {
+    node.classList.remove("map-live-down");
+  }
+  if (!clearFlashes) return;
+  for (const [node, timer] of liveFlashTimers) {
+    window.clearTimeout(timer);
+    node.classList.remove("map-live-flash");
+  }
+  liveFlashTimers.clear();
+}
+
+function clearMapLiveKeyPaint(clearFlashes: boolean): void {
+  for (const node of Array.from(document.querySelectorAll(".map-live-key-down"))) {
+    node.classList.remove("map-live-key-down");
+  }
+  if (!clearFlashes) return;
+  for (const [node, timer] of liveKeyFlashTimers) {
+    window.clearTimeout(timer);
+    node.classList.remove("map-live-key-flash");
+  }
+  liveKeyFlashTimers.clear();
+}
+
+function clearAllMapLivePaint(clearFlashes: boolean): void {
+  clearMapLivePaint(clearFlashes);
+  clearMapLiveKeyPaint(clearFlashes);
+}
+
+/** Repaint from the held-state ledger when the selected player changes. */
+function paintMapLiveDown(): void {
+  clearMapLivePaint(false);
+  if (liveEchoTargetState() !== "matching") return;
+  const slot = currentSlot();
+  if (!slot) return;
+  for (const control of liveDownBySlot.get(slot.number) ?? []) {
+    for (const node of mappedControlNodes(control)) {
+      node.classList.add("map-live-down");
+    }
+  }
+}
+
+function flashMapControl(control: string): void {
+  for (const node of mappedControlNodes(control)) {
+    const pending = liveFlashTimers.get(node);
+    if (pending !== undefined) window.clearTimeout(pending);
+    node.classList.add("map-live-flash");
+    liveFlashTimers.set(
+      node,
+      window.setTimeout(() => {
+        node.classList.remove("map-live-flash");
+        liveFlashTimers.delete(node);
+      }, LIVE_FLASH_MS),
+    );
+  }
+}
+
+function normalizedLiveKey(key: string): string {
+  return key.trim().toLocaleLowerCase("en-US");
+}
+
+function inventoryKeyNodes(key: string): HTMLElement[] {
+  const wanted = normalizedLiveKey(key);
+  return Array.from(document.querySelectorAll<HTMLElement>(".inventory-key")).filter(
+    (node) => normalizedLiveKey(node.dataset.inventoryKey ?? "") === wanted,
+  );
+}
+
+/** A live frame may contain more than one configured panel. The key shelf is
+ *  for the selected player only, so require the frame's friendly alias or its
+ *  exact device path to identify that player's configured keyboard. `(any)`
+ *  is the intentional shared-keyboard mode and therefore accepts either. */
+function keyHitBelongsToCurrentSlot(hit: KeyHit): boolean {
+  const slot = currentSlot();
+  if (!slot) return false;
+  const expected = slot.keyboard.trim().toLocaleLowerCase("en-US");
+  if (expected === "(any)" || expected === "any") return true;
+  if (expected === "") return false;
+  return [hit.alias, hit.device].some(
+    (candidate) => candidate.trim().toLocaleLowerCase("en-US") === expected,
+  );
+}
+
+function paintMapLiveKeys(): void {
+  clearMapLiveKeyPaint(false);
+  for (const key of liveKeysDown) {
+    for (const node of inventoryKeyNodes(key)) node.classList.add("map-live-key-down");
+  }
+}
+
+function flashMapKey(key: string): void {
+  for (const node of inventoryKeyNodes(key)) {
+    const pending = liveKeyFlashTimers.get(node);
+    if (pending !== undefined) window.clearTimeout(pending);
+    node.classList.add("map-live-key-flash");
+    liveKeyFlashTimers.set(
+      node,
+      window.setTimeout(() => {
+        node.classList.remove("map-live-key-flash");
+        liveKeyFlashTimers.delete(node);
+      }, LIVE_KEY_FLASH_MS),
+    );
+  }
+}
+
+/** Paint only against the exact session fact that licensed the frame ledger.
+ *  The SSE wire format has no origin field yet, so every observable stream or
+ *  session boundary invalidates the license and waits for a fresh `/api/map`
+ *  answer. No cached frame is replayed across that boundary. */
+function paintMapLiveState(): void {
+  clearMapLivePaint(false);
+  clearMapLiveKeyPaint(false);
+  if (
+    !liveOriginConfirmed ||
+    liveEchoTargetState() !== "matching" ||
+    acceptedLiveSession !== liveEchoSessionFingerprint()
+  ) {
+    return;
+  }
+  paintMapLiveDown();
+  paintMapLiveKeys();
+}
+
+function invalidateLiveOrigin(
+  text: string,
+  requestFreshSession: boolean,
+  announcement: string | null = null,
+): void {
+  liveOriginGeneration += 1;
+  liveOriginConfirmed = false;
+  acceptedLiveSession = null;
+  liveDownBySlot.clear();
+  liveKeysDown.clear();
+  clearAllMapLivePaint(true);
+  mapLiveStatus(text, false, announcement);
+  if (requestFreshSession) window.setTimeout(() => void poll(), 0);
+}
+
+function reconcileLiveOrigin(previousSession: string, requestGeneration: number): void {
+  const currentSession = liveEchoSessionFingerprint();
+  if (previousSession !== currentSession) {
+    acceptedLiveSession = null;
+    liveDownBySlot.clear();
+    liveKeysDown.clear();
+    clearAllMapLivePaint(true);
+  }
+  // A stop/unavailable/reconnect event landed while this request was in
+  // flight. Its response may already be older than that boundary, so it must
+  // not license the next frame; the next poll will do the handshake.
+  if (requestGeneration !== liveOriginGeneration) return;
+  liveOriginConfirmed = true;
+  const targetState = liveEchoTargetState();
+  if (targetState === "matching") {
+    // An ordinary 2 s poll that confirms the same live session is not a new
+    // user-facing event. Preserve "Live input · Pn" instead of bouncing the
+    // aria-live region through "waiting" and back on every poll/frame pair.
+    if (acceptedLiveSession === currentSession) return;
+    mapLiveStatus(
+      liveSourceOpen ? "Live echo connected · waiting for input" : "Live echo reconnecting…",
+      liveSourceOpen,
+    );
+  } else if (targetState === "different") {
+    mapLiveStatus(
+      "Live session uses a different setup",
+      false,
+      "Live input is unavailable because Play is using a different setup.",
+    );
+  } else {
+    mapLiveStatus(
+      "Start playing to see live input",
+      false,
+      "Live input is inactive. Start playing to see input.",
+    );
+  }
+}
+
+function paintMapLive(envelope: LiveEnvelope): void {
+  if (!envelope.frame.running) {
+    invalidateLiveOrigin(
+      "Start playing to see live input",
+      false,
+      "Live input is inactive. Start playing to see input.",
+    );
+    return;
+  }
+
+  const targetState = liveEchoTargetState();
+  if (!liveOriginConfirmed || targetState !== "matching") {
+    liveDownBySlot.clear();
+    liveKeysDown.clear();
+    acceptedLiveSession = null;
+    clearAllMapLivePaint(true);
+    const different = targetState === "different";
+    mapLiveStatus(
+      different ? "Live session uses a different setup" : "Live session detected · checking setup…",
+      false,
+      different ? "Live input is unavailable because Play is using a different setup." : null,
+    );
+    return;
+  }
+
+  const session = liveEchoSessionFingerprint();
+  if (acceptedLiveSession !== session) {
+    liveDownBySlot.clear();
+    liveKeysDown.clear();
+    clearAllMapLivePaint(true);
+    acceptedLiveSession = session;
+  }
+
+  for (const slot of envelope.frame.slots) {
+    liveDownBySlot.set(slot.slot, new Set(slot.down));
+    if (slot.slot === currentSlot()?.number) {
+      for (const control of slot.hit) flashMapControl(control);
+    }
+  }
+
+  for (const hit of envelope.frame.keys) {
+    if (!keyHitBelongsToCurrentSlot(hit)) continue;
+    const key = normalizedLiveKey(hit.key);
+    if (key === "") continue;
+    if (hit.down) {
+      liveKeysDown.add(key);
+      flashMapKey(key);
+    } else {
+      liveKeysDown.delete(key);
+    }
+  }
+
+  paintMapLiveState();
+  const selected = currentSlot();
+  mapLiveStatus(
+    selected ? `Live input · P${selected.number}` : "Live input connected",
+    true,
+    selected ? `Live input is active for Player ${selected.number}.` : "Live input is active.",
+  );
+}
+
+/** Mapping and Test consume the same read-only SSE stream. This adds no write
+ *  path and never surfaces provider details; EventSource owns reconnection. */
+function connectMapLiveEcho(): void {
+  const source = new EventSource("/api/live");
+  source.addEventListener("open", () => {
+    liveSourceOpen = true;
+    invalidateLiveOrigin("Live feed connected · checking setup…", true);
+  });
+  source.addEventListener("frame", (event) => {
+    try {
+      paintMapLive(JSON.parse((event as MessageEvent<string>).data) as LiveEnvelope);
+    } catch {
+      invalidateLiveOrigin("Live echo could not read the latest input", false);
+    }
+  });
+  source.addEventListener("unavailable", () => {
+    liveSourceOpen = false;
+    invalidateLiveOrigin(
+      "Start playing to see live input",
+      false,
+      "Live input is inactive. Start playing to see input.",
+    );
+  });
+  source.addEventListener("error", () => {
+    liveSourceOpen = false;
+    invalidateLiveOrigin("Live echo reconnecting…", false);
+  });
 }
 
 /** One JSON verb → its outcome, with transport failure folded into the same
@@ -337,9 +715,21 @@ let learnTargets: string[] = [];
 let learnWrite:
   | { target: WriteTarget; before: Map<string, string[]> }
   | null = null;
-/** Supersede guard. The single-fn flow could compare `learningFn` by value;
- *  a list cannot, so every arm bumps a generation and late polls check it. */
+/** Browser-request supersede guard. The single-fn flow could compare
+ *  `learningFn` by value; a list cannot, so every arm bumps a generation and
+ *  late HTTP completions check it. This is deliberately separate from the
+ *  daemon-owned generation below. */
 let learnGen = 0;
+/** At most one daemon `learn-key` start may be in flight. A browser click can
+ * supersede another before its POST returns; serializing those POSTs prevents
+ * the older request from reaching the pipe last and stealing the fresh
+ * attempt. */
+let learnStartFlight: Promise<LearnView> | null = null;
+/** Exact daemon learner generation returned by `learn-key`. Another Studio
+ *  tab, Identify action, or setup proof can supersede the daemon listener;
+ *  no key may be written unless the polled result still belongs to this exact
+ *  attempt. */
+let daemonLearnGeneration: number | null = null;
 let learnTimer: number | undefined;
 /** The hit waiting on the conflict dialog's verdict. */
 let pendingKey: string | null = null;
@@ -390,6 +780,26 @@ function stopLearnTimer(): void {
   }
 }
 
+function validLearnGeneration(value: number | null): value is number {
+  return value !== null && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** Best-effort daemon cleanup with no browser-state side effects. The daemon
+ * performs the generation comparison atomically, so either request order is
+ * safe when a new start and an old cancel cross on the wire. */
+async function cancelDaemonLearnGeneration(generation: number): Promise<void> {
+  try {
+    await fetch("/api/learn/cancel", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ generation }),
+    });
+  } catch {
+    // A lost cleanup expires at the daemon's bounded learner timeout. It has no
+    // browser write path because the owning browser generation is retired.
+  }
+}
+
 // ── Browser-focus guard ────────────────────────────────────────────────────
 // While a learn is armed the session is stopped, so the panel's keys reach
 // Windows — and therefore this page. Space or Enter would then "click" whatever
@@ -407,9 +817,20 @@ function guardKeys(ev: KeyboardEvent): void {
   ev.stopPropagation();
 }
 
+let learnReturnFocus: HTMLElement | null = null;
+let learnReturnControl: string | null = null;
+
 function armFocusGuard(): void {
   const active = document.activeElement;
-  if (active instanceof HTMLElement) active.blur();
+  learnReturnFocus = null;
+  learnReturnControl = null;
+  if (active instanceof HTMLElement) {
+    if (islandRoot?.contains(active)) {
+      learnReturnFocus = active;
+      learnReturnControl = active.closest<HTMLElement>("[data-fn]")?.dataset.fn ?? null;
+    }
+    active.blur();
+  }
   window.addEventListener("keydown", guardKeys, true);
   window.addEventListener("keypress", guardKeys, true);
 }
@@ -417,6 +838,71 @@ function armFocusGuard(): void {
 function disarmFocusGuard(): void {
   window.removeEventListener("keydown", guardKeys, true);
   window.removeEventListener("keypress", guardKeys, true);
+}
+
+/** Forma materializes the active show branch after its signal changes. Focus
+ *  on the next frame so the dialog title is announced instead of leaving the
+ *  virtual cursor on content now covered by an aria-modal surface. */
+function focusLearnDialog(): void {
+  window.requestAnimationFrame(() => {
+    if (!modalIsOpen()) return;
+    islandRoot?.querySelector<HTMLElement>('.modal[role="dialog"]')?.focus({
+      preventScroll: true,
+    });
+  });
+}
+
+function restoreLearnFocus(): void {
+  const target = learnReturnFocus;
+  const control = learnReturnControl;
+  learnReturnFocus = null;
+  learnReturnControl = null;
+  if (!target && !control) return;
+  window.requestAnimationFrame(() => {
+    if (target?.isConnected) {
+      target.focus({ preventScroll: true });
+      return;
+    }
+    if (!control) return;
+    islandRoot
+      ?.querySelector<HTMLElement>(`[data-fn="${CSS.escape(control)}"]`)
+      ?.focus({ preventScroll: true });
+  });
+}
+
+function closeLearnDialog(restoreFocus = true): void {
+  closeModal();
+  if (restoreFocus) restoreLearnFocus();
+}
+
+/** Conflict is a conventional dialog (capture has ended), so keep Tab and
+ *  Shift+Tab inside it until the user chooses Replace, Cancel or Escape. */
+function trapLearnDialogTab(ev: KeyboardEvent): void {
+  const dialog = islandRoot?.querySelector<HTMLElement>('.modal[role="dialog"]');
+  if (!dialog) return;
+  const focusable = Array.from(
+    dialog.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  );
+  if (focusable.length === 0) {
+    ev.preventDefault();
+    dialog.focus({ preventScroll: true });
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const active = document.activeElement;
+  if (!dialog.contains(active)) {
+    ev.preventDefault();
+    (ev.shiftKey ? last : first).focus({ preventScroll: true });
+  } else if (ev.shiftKey && (active === first || active === dialog)) {
+    ev.preventDefault();
+    last.focus({ preventScroll: true });
+  } else if (!ev.shiftKey && active === last) {
+    ev.preventDefault();
+    first.focus({ preventScroll: true });
+  }
 }
 
 async function startLearn(fns: string[]): Promise<void> {
@@ -431,29 +917,81 @@ async function startLearn(fns: string[]): Promise<void> {
     oops("No controller is selected, so there is nowhere to save that key.");
     return;
   }
+  // Retire the previous browser attempt BEFORE installing the new target.
+  // Otherwise a timer poll can snapshot the new target with the old daemon
+  // generation and write the old hit into the newly clicked control.
+  const previousDaemonGeneration = daemonLearnGeneration;
+  const gen = ++learnGen;
+  stopLearnTimer();
+  learnTargets = [];
+  learnWrite = null;
+  daemonLearnGeneration = null;
+  disarmFocusGuard();
+  closeLearnDialog(false);
+  if (previousDaemonGeneration !== null) {
+    void cancelDaemonLearnGeneration(previousDaemonGeneration);
+  }
   learnTargets = fns;
   learnWrite = {
     target,
     before: new Map(fns.map((fn) => [fn, previousKeys(fn)])),
   };
-  const gen = ++learnGen;
   pendingKey = null;
   pendingWrite = null;
   learnMode = "replace";
   selectFn(fns[0]);
   armFocusGuard();
   try {
-    const started = await fetchJSON<LearnView>("/api/learn/start", { method: "POST" });
-    if (learnGen !== gen) return; // superseded while the POST was in flight
-    if (started.state !== "listening") {
+    // A previous browser start may still be travelling to the sequential pipe.
+    // Wait for and retire its exact daemon generation before sending ours. A
+    // third click retires this browser generation while it waits, so only the
+    // latest click can issue the next start.
+    const priorStart = learnStartFlight;
+    if (priorStart !== null) {
+      try {
+        const superseded = await priorStart;
+        if (validLearnGeneration(superseded.generation)) {
+          void cancelDaemonLearnGeneration(superseded.generation);
+        }
+      } catch {
+        // The prior owner reports its own transport failure. The current click
+        // is still allowed to establish a fresh listener.
+      }
+      if (learnGen !== gen) return;
+    }
+
+    const flight = fetchJSON<LearnView>("/api/learn/start", { method: "POST" });
+    learnStartFlight = flight;
+    let started: LearnView;
+    try {
+      started = await flight;
+    } finally {
+      if (learnStartFlight === flight) learnStartFlight = null;
+    }
+    if (learnGen !== gen) {
+      // This request reached the daemon but its browser target was superseded.
+      // Retire only the generation it created; a newer listener is untouched.
+      if (validLearnGeneration(started.generation)) {
+        void cancelDaemonLearnGeneration(started.generation);
+      }
+      return;
+    }
+    if (
+      !validLearnGeneration(started.generation) ||
+      (started.state !== "listening" && started.state !== "hit")
+    ) {
+      learnGen += 1;
       learnTargets = [];
       learnWrite = null;
+      daemonLearnGeneration = null;
       disarmFocusGuard();
+      restoreLearnFocus();
       oops(
         `Can't listen for a key: ${safeDetail(started.error, "automatic key listening is not ready")}.`,
       );
       return;
     }
+    daemonLearnGeneration = started.generation;
     const single = fns.length === 1;
     showListening(
       single ? prompt(fns[0]) : multiPrompt(fns),
@@ -463,6 +1001,7 @@ async function startLearn(fns: string[]): Promise<void> {
       started.remaining_ms ?? LEARN_TOTAL_MS,
       LEARN_TOTAL_MS,
     );
+    focusLearnDialog();
     // AUTO-FIRE lives beside Replace/Add/Clear, so the modal has to say what
     // this control does today before anyone types a number into the box. A
     // multi-control arm has N rates and no single answer, so it says nothing.
@@ -473,10 +1012,18 @@ async function startLearn(fns: string[]): Promise<void> {
     }
     stopLearnTimer();
     learnTimer = window.setInterval(() => void pollLearn(), LEARN_POLL_MS);
+    // A fast press can land before the start response reaches the browser.
+    // Poll immediately instead of waiting for the first timer tick; the same
+    // generation gate below still owns the write.
+    if (started.state === "hit") void pollLearn();
   } catch {
+    if (learnGen !== gen) return;
+    learnGen += 1;
     learnTargets = [];
     learnWrite = null;
+    daemonLearnGeneration = null;
     disarmFocusGuard();
+    restoreLearnFocus();
     oops("Can't listen for a key: the request failed — is ksx studio still running?");
   }
 }
@@ -485,6 +1032,7 @@ async function pollLearn(): Promise<void> {
   const targets = learnTargets;
   const write = learnWrite;
   const gen = learnGen;
+  const daemonGeneration = daemonLearnGeneration;
   if (targets.length === 0) {
     stopLearnTimer();
     return;
@@ -496,6 +1044,24 @@ async function pollLearn(): Promise<void> {
     return; // transient — keep the countdown running on the last known value
   }
   if (learnGen !== gen) return; // superseded meanwhile
+  if (
+    daemonGeneration === null ||
+    !validLearnGeneration(learn.generation) ||
+    learn.generation !== daemonGeneration
+  ) {
+    // A different action now owns the daemon listener. Fail closed: never
+    // repaint or bind its hit into this mapping attempt, and never cancel the
+    // newer listener from this stale browser flow.
+    stopLearnTimer();
+    learnGen += 1;
+    learnTargets = [];
+    learnWrite = null;
+    daemonLearnGeneration = null;
+    disarmFocusGuard();
+    closeLearnDialog();
+    oops("Another key-listening action replaced this one. Nothing changed.");
+    return;
+  }
   const names = targets.map(identityLabel).join(", ");
   switch (learn.state) {
     case "listening":
@@ -503,10 +1069,17 @@ async function pollLearn(): Promise<void> {
       break;
     case "hit":
       stopLearnTimer();
+      // Retire the browser attempt before any asynchronous writes. The 33 ms
+      // timer and the immediate fast-hit poll may overlap; only the first
+      // terminal response is allowed to reach mapAll/saveBinding.
+      learnGen += 1;
       learnTargets = [];
       learnWrite = null;
+      daemonLearnGeneration = null;
       disarmFocusGuard();
-      closeModal();
+      // Capture is over before the write starts. Keep the original trigger as
+      // the return target in case the write opens a conflict dialog.
+      closeLearnDialog(false);
       if (learn.key && write) {
         if (targets.length !== 1) await mapAll(targets, learn.key, write.target, write.before);
         // The modal's own choice: join the control's key list, or take it over.
@@ -522,29 +1095,36 @@ async function pollLearn(): Promise<void> {
           );
         }
       }
+      if (!modalIsOpen()) restoreLearnFocus();
       break;
     case "timeout":
       stopLearnTimer();
+      learnGen += 1;
       learnTargets = [];
       learnWrite = null;
+      daemonLearnGeneration = null;
       disarmFocusGuard();
-      closeModal();
+      closeLearnDialog();
       oops(`Timed out: no key was pressed within 10 s for ${names}. Nothing changed.`);
       break;
     case "cancelled":
       stopLearnTimer();
+      learnGen += 1;
       learnTargets = [];
       learnWrite = null;
+      daemonLearnGeneration = null;
       disarmFocusGuard();
-      closeModal();
+      closeLearnDialog();
       break;
     default:
       // failed / unavailable / idle-after-restart: report and stop.
       stopLearnTimer();
+      learnGen += 1;
       learnTargets = [];
       learnWrite = null;
+      daemonLearnGeneration = null;
       disarmFocusGuard();
-      closeModal();
+      closeLearnDialog();
       oops(
         `Key listening stopped: ${safeDetail(learn.error, "the background helper stopped listening")}. Nothing changed.`,
       );
@@ -552,21 +1132,23 @@ async function pollLearn(): Promise<void> {
   }
 }
 
-async function cancelLearn(): Promise<void> {
+async function cancelLearn(restoreFocus = true): Promise<void> {
+  const daemonGeneration = daemonLearnGeneration;
   stopLearnTimer();
   learnTargets = [];
   learnWrite = null;
+  daemonLearnGeneration = null;
   learnGen += 1;
   pendingKey = null;
   pendingWrite = null;
   learnMode = "replace";
   disarmFocusGuard();
-  closeModal();
-  try {
-    await fetch("/api/learn/cancel", { method: "POST" });
-  } catch {
-    // the modal is already closed; a lost cancel just times out server-side
-  }
+  closeLearnDialog(restoreFocus);
+  // Cancellation is generation-qualified end to end. A stale tab closes its
+  // own modal immediately but cannot stop an Identify/Setup/Mapping listener
+  // that superseded it in the daemon.
+  if (daemonGeneration === null) return;
+  await cancelDaemonLearnGeneration(daemonGeneration);
 }
 
 /** One `map` write. Transport failure is folded into the same shape so no
@@ -794,7 +1376,7 @@ async function saveBinding(
   const name = identityLabel(fn);
   const outcome = await bindOnce(target, fn, key, force);
   if (outcome.ok) {
-    closeModal();
+    closeLearnDialog();
     pendingKey = null;
     pendingWrite = null;
     markSaved();
@@ -841,10 +1423,11 @@ async function saveBinding(
     showConflict(
       prompt(fn).replace("Press the panel key for", "Bind") + ` = ${key}?`,
       lines.join("; ") +
-        " — Replace also uses it here; the other player's controls are not changed.",
+        " — Use here too shares the key with this control; the other player's controls are not changed.",
     );
+    focusLearnDialog();
   } else {
-    closeModal();
+    closeLearnDialog();
     pendingKey = null;
     pendingWrite = null;
     oops(
@@ -902,7 +1485,7 @@ async function mapAll(
   if (verified === null) {
     line =
       `Player ${target.slot} could not be checked after the change, so the result is not ` +
-      "being guessed. Refresh Controls before continuing.";
+      "being guessed. Refresh Mapping before continuing.";
   } else if (kept.length === fns.length) {
     line =
       `${key} now drives ${kept.length} controls: ` +
@@ -977,7 +1560,7 @@ async function clearBinding(fn: string): Promise<void> {
   const target = captureWriteTarget();
   if (!target) return;
   const before = previousKeys(fn);
-  if (learning()) await cancelLearn();
+  if (learning()) await cancelLearn(false);
   await saveBinding(fn, null, false, target, before);
 }
 
@@ -1802,6 +2385,13 @@ function wire(root: HTMLElement): void {
     const target = ev.target as HTMLElement | null;
     if (!target) return;
 
+    const inventoryKey = target.closest<HTMLElement>("[data-inventory-key]");
+    if (inventoryKey) {
+      ev.preventDefault();
+      traceInventoryKey(inventoryKey);
+      return;
+    }
+
     // ── The toast stack, checked first: it floats over the page, so its
     // buttons must never be read as something underneath them. ───────────
     const undoId = target.closest<HTMLElement>("[data-undo]")?.dataset.undo;
@@ -2035,7 +2625,15 @@ function wire(root: HTMLElement): void {
       ev.preventDefault();
       void cancelLearn();
       selectSlot(Number(tab.dataset.slot));
-      window.history.replaceState(null, "", `/map?slot=${tab.dataset.slot}`);
+      liveKeysDown.clear();
+      clearMapLiveKeyPaint(true);
+      renderKeyboardInventory();
+      paintMapLiveState();
+      window.history.replaceState(
+        null,
+        "",
+        `/map?${editingStage() ? "target=stage&" : ""}slot=${tab.dataset.slot}`,
+      );
       return;
     }
 
@@ -2236,15 +2834,23 @@ function wire(root: HTMLElement): void {
   });
 
   window.addEventListener("keydown", (ev) => {
+    if (ev.key === "Tab" && modalIsOpen() && !learning()) {
+      trapLearnDialogTab(ev);
+      return;
+    }
     if (ev.key === "Escape") {
       // One key, one road out, most-specific first: cancel the capture, close
       // the modal, drop the selection, leave select mode.
       if (learning()) {
+        ev.preventDefault();
         void cancelLearn();
         return;
       }
       if (modalIsOpen()) {
-        closeModal();
+        ev.preventDefault();
+        pendingKey = null;
+        pendingWrite = null;
+        closeLearnDialog();
         return;
       }
       if (selectionCount() > 0) {
@@ -2276,6 +2882,13 @@ function wire(root: HTMLElement): void {
     // MAME's UI Clear, keyboard edition — ONLY while the modal is open, so it
     // can never fire at a control the user is merely hovering.
     if ((ev.key === "Delete" || ev.key === "Backspace") && modalIsOpen()) {
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLElement &&
+        (active.isContentEditable || /^(input|textarea|select)$/i.test(active.tagName))
+      ) {
+        return;
+      }
       const fn = selectedFnName();
       if (fn) {
         ev.preventDefault();
@@ -2330,17 +2943,17 @@ activateIslands({
           safeDetail(flash, failed ? "That change could not be completed. Nothing changed." : "The change was completed."),
           { kind: failed ? "err" : "ok" },
         );
-        window.history.replaceState(
-          null,
-          "",
-          fromQuery ? `/map?slot=${fromQuery}` : "/map",
-        );
+        query.delete("flash");
+        const cleanQuery = query.toString();
+        window.history.replaceState(null, "", cleanQuery === "" ? "/map" : `/map?${cleanQuery}`);
       }
     }
     wire(el);
     // The macro editor's form controls carry values an attribute binding
     // cannot keep once they are dirty; seed them from the draft right away.
     syncMacroControls();
+    renderKeyboardInventory();
+    connectMapLiveEcho();
     window.setInterval(() => void poll(), POLL_MS);
     return MapIsland();
   },

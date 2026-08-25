@@ -335,6 +335,20 @@ pub struct GuardedEntry {
     /// a race. Emission therefore writes the rate on the FIRST row only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turbo_hz: Option<u32>,
+    /// Does this row's FUNCTION latch (docs/INPUT-TRANSFORMS.md §2 item 8:
+    /// press once → held until pressed again)?
+    ///
+    /// The same output-not-key rule as `turbo_hz`, and the same first-row
+    /// emission. `toggle = false` means what absence means; only `true` says
+    /// anything, so a file that never mentions it is byte-identical.
+    ///
+    /// ```toml
+    /// [bindings]
+    /// lb = { key = "CapsLock", toggle = true }             # sticky hold
+    /// A  = { key = "G", toggle = true, turbo_hz = 12 }     # toggle-turbo
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toggle: Option<bool>,
 }
 
 impl PresetFile {
@@ -353,6 +367,7 @@ impl PresetFile {
         let mut entries = Vec::new();
         let mut chords = Vec::new();
         let mut turbo = Vec::new();
+        let mut toggle = Vec::new();
         for (function, entry) in &self.bindings {
             collect_entries(
                 function,
@@ -361,6 +376,7 @@ impl PresetFile {
                 &mut chords,
                 &mut macros,
                 &mut turbo,
+                &mut toggle,
             )?;
         }
         Ok(ksx_core::Preset {
@@ -369,6 +385,7 @@ impl PresetFile {
             chords,
             macros,
             turbo,
+            toggle,
             protected: false,
         })
     }
@@ -399,6 +416,7 @@ impl PresetFile {
                     when: chord.when.iter().map(|k| k.name().to_owned()).collect(),
                     unless: chord.unless.iter().map(|k| k.name().to_owned()).collect(),
                     turbo_hz: None,
+                    toggle: None,
                 });
         }
         // Macro triggers are ordinary `[bindings]` rows under a `macro.<name>`
@@ -414,40 +432,51 @@ impl PresetFile {
                 .0
                 .push(trigger.key.name().to_owned());
         }
-        // Turbo is a property of the FUNCTION, and the file has no place to put
-        // one except on a row — so it goes on the first row of that function
-        // and `to_core` reads it from wherever it finds it. A plain key with a
-        // rate is therefore emitted as a guardless table, which is exactly the
-        // shape §3 documents (`A = { key = "G", turbo_hz = 12 }`).
+        // Turbo and toggle are properties of the FUNCTION, and the file has no
+        // place to put one except on a row — so both go on the first row of
+        // that function and `to_core` reads them from wherever it finds them.
+        // A plain key with either flag is therefore emitted as a guardless
+        // table, which is exactly the shape the docs give
+        // (`A = { key = "G", turbo_hz = 12 }`, `lb = { key = "L", toggle = true }`).
         let rates: BTreeMap<String, u32> = preset
             .turbo
             .iter()
             .map(|t| (function_name(&t.binding), t.hz))
             .collect();
+        let latched: std::collections::BTreeSet<String> =
+            preset.toggle.iter().map(function_name).collect();
         let bindings = grouped
             .into_iter()
             .map(|(function, (mut keys, mut guards))| {
                 let hz = rates.get(&function).copied();
+                let latch = latched.contains(&function);
+                let flagged = hz.is_some() || latch;
                 let entry = match (keys.len(), guards.len()) {
-                    (1, 0) if hz.is_none() => BindingEntry::Key(keys.remove(0)),
-                    (1, 0) => BindingEntry::Guarded(turbo_row(keys.remove(0), hz)),
+                    (1, 0) if !flagged => BindingEntry::Key(keys.remove(0)),
+                    (1, 0) => BindingEntry::Guarded(flag_row(keys.remove(0), hz, latch)),
                     (0, 1) => {
                         let mut guard = guards.remove(0);
                         guard.turbo_hz = hz;
+                        guard.toggle = latch.then_some(true);
                         BindingEntry::Guarded(guard)
                     }
-                    (_, 0) if hz.is_none() => BindingEntry::Keys(keys),
+                    (_, 0) if !flagged => BindingEntry::Keys(keys),
                     _ => {
                         let mut rows: Vec<BindingEntry> = Vec::new();
-                        let mut rate = hz;
+                        let mut flags = flagged.then_some((hz, latch));
                         for key in keys {
-                            rows.push(match rate.take() {
-                                Some(hz) => BindingEntry::Guarded(turbo_row(key, Some(hz))),
+                            rows.push(match flags.take() {
+                                Some((hz, latch)) => {
+                                    BindingEntry::Guarded(flag_row(key, hz, latch))
+                                }
                                 None => BindingEntry::Key(key),
                             });
                         }
                         for mut guard in guards {
-                            guard.turbo_hz = rate.take();
+                            if let Some((hz, latch)) = flags.take() {
+                                guard.turbo_hz = hz;
+                                guard.toggle = latch.then_some(true);
+                            }
                             rows.push(BindingEntry::Guarded(guard));
                         }
                         BindingEntry::Many(rows)
@@ -476,6 +505,7 @@ fn collect_entries(
     chords: &mut Vec<ksx_core::Chord>,
     macros: &mut Macros,
     turbo: &mut Vec<ksx_core::TurboBinding>,
+    toggle: &mut Vec<ksx_core::Binding>,
 ) -> Result<(), ConfigError> {
     match entry {
         BindingEntry::Key(key) => push_entry(function, key, out, macros),
@@ -487,15 +517,17 @@ fn collect_entries(
         }
         BindingEntry::Guarded(guarded) if guarded.when.is_empty() && guarded.unless.is_empty() => {
             push_turbo(function, guarded, turbo)?;
+            push_toggle(function, guarded, toggle)?;
             push_entry(function, &guarded.key, out, macros)
         }
         BindingEntry::Guarded(guarded) => {
             push_turbo(function, guarded, turbo)?;
+            push_toggle(function, guarded, toggle)?;
             push_chord(function, guarded, chords)
         }
         BindingEntry::Many(entries) => {
             for entry in entries {
-                collect_entries(function, entry, out, chords, macros, turbo)?;
+                collect_entries(function, entry, out, chords, macros, turbo, toggle)?;
             }
             Ok(())
         }
@@ -508,6 +540,7 @@ fn collect_entries(
                     chords,
                     macros,
                     turbo,
+                    toggle,
                 )?;
             }
             Ok(())
@@ -538,6 +571,30 @@ fn push_turbo(
     let binding = parse_function(function)?;
     if !turbo.iter().any(|t| t.binding == binding) {
         turbo.push(ksx_core::TurboBinding::new(binding, hz));
+    }
+    Ok(())
+}
+
+/// Record this row's latch flag against its FUNCTION — the same
+/// one-per-endpoint, first-row-wins rule [`push_turbo`] follows, and the same
+/// refusal on a `macro.<name>` row: a sequence owns its own timeline, and a
+/// latch on its trigger would be a second spelling for behavior the macro
+/// table already owns (`on_release` / `repeat`).
+fn push_toggle(
+    function: &str,
+    guarded: &GuardedEntry,
+    toggle: &mut Vec<ksx_core::Binding>,
+) -> Result<(), ConfigError> {
+    if guarded.toggle != Some(true) {
+        // Absent and an explicit `toggle = false` mean the same thing.
+        return Ok(());
+    }
+    if let Some(name) = crate::function::macro_name(function) {
+        return Err(ConfigError::ToggleOnMacroTrigger(name.to_owned()));
+    }
+    let binding = parse_function(function)?;
+    if !toggle.contains(&binding) {
+        toggle.push(binding);
     }
     Ok(())
 }
@@ -600,12 +657,13 @@ fn push_chord(
 
 /// A plain key that auto-fires: a guardless table, which `to_core` normalizes
 /// straight back to an ordinary entry plus a turbo row.
-fn turbo_row(key: String, turbo_hz: Option<u32>) -> GuardedEntry {
+fn flag_row(key: String, turbo_hz: Option<u32>, toggle: bool) -> GuardedEntry {
     GuardedEntry {
         key,
         when: Vec::new(),
         unless: Vec::new(),
         turbo_hz,
+        toggle: toggle.then_some(true),
     }
 }
 
@@ -748,7 +806,11 @@ A = ["S", "Enter"]
     fn builtin_empty_survives_core_round_trip() {
         let original = Preset::builtin_empty();
         let file = PresetFile::from_core(&original);
-        assert_eq!(file.bindings.len(), 25);
+        assert_eq!(
+            file.bindings.len(),
+            ksx_core::preset::MAPPABLE_COUNT,
+            "every mappable function reaches the file"
+        );
         assert!(file
             .bindings
             .values()
@@ -815,6 +877,7 @@ lb = { key = "A", when = ["B", "C"], unless = ["LeftShift"] }
             )],
             macros: Default::default(),
             turbo: Vec::new(),
+            toggle: Vec::new(),
             protected: false,
         };
         let file = PresetFile::from_core(&original);
@@ -847,6 +910,7 @@ lb = { key = "A", when = ["B", "C"], unless = ["LeftShift"] }
             ],
             macros: Default::default(),
             turbo: Vec::new(),
+            toggle: Vec::new(),
             protected: false,
         };
         let text = toml::to_string(&PresetFile::from_core(&original)).unwrap();
@@ -924,6 +988,7 @@ B = "H"
             chords: Vec::new(),
             macros: Default::default(),
             turbo: vec![ksx_core::TurboBinding::new(Binding::Button(XButton::A), 8)],
+            toggle: Vec::new(),
             protected: false,
         };
         let text = toml::to_string(&PresetFile::from_core(&original)).unwrap();
@@ -951,6 +1016,7 @@ B = "H"
                 Binding::Trigger(Trigger::Right),
                 6,
             )],
+            toggle: Vec::new(),
             protected: false,
         };
         let text = toml::to_string(&PresetFile::from_core(&original)).unwrap();
@@ -989,6 +1055,158 @@ steps = [{ hold = ["A"], ms = 50 }]
         for preset in Preset::builtins() {
             let text = toml::to_string(&PresetFile::from_core(&preset)).unwrap();
             assert!(!text.contains("turbo_hz"), "{text}");
+        }
+    }
+
+    // ---- per-binding toggle (docs/INPUT-TRANSFORMS.md §2 item 8) ----------
+
+    /// The headline spelling: `toggle = true` on a plain row. Like a rate, it
+    /// is a property of the FUNCTION carried on an ordinary entry — no guard,
+    /// no chord, just a latch.
+    #[test]
+    fn a_toggle_on_a_plain_row_is_an_entry_plus_a_latch() {
+        let file: PresetFile = toml::from_str(
+            r#"
+name = "latch"
+[bindings]
+A = { key = "G", toggle = true }
+B = "H"
+"#,
+        )
+        .unwrap();
+        let core = file.to_core().unwrap();
+        assert_eq!(
+            core.entries,
+            vec![
+                (Key::G, Binding::Button(XButton::A)),
+                (Key::H, Binding::Button(XButton::B)),
+            ]
+        );
+        assert!(core.chords.is_empty(), "a guardless row is not a chord");
+        assert_eq!(core.toggle, vec![Binding::Button(XButton::A)]);
+        assert!(!core.toggled(Binding::Button(XButton::B)));
+    }
+
+    /// `toggle = false` is the explicit spelling of the default: it parses,
+    /// and it latches nothing. (The wire uses the same three states, so the
+    /// file must not read `false` as anything but "plain".)
+    #[test]
+    fn an_explicit_toggle_false_is_plain() {
+        let file: PresetFile = toml::from_str(
+            r#"
+name = "plain"
+[bindings]
+A = { key = "G", toggle = false }
+"#,
+        )
+        .unwrap();
+        let core = file.to_core().unwrap();
+        assert_eq!(core.entries, vec![(Key::G, Binding::Button(XButton::A))]);
+        assert!(core.toggle.is_empty());
+    }
+
+    /// Several keys on one latched function share ONE latch, and the emission
+    /// writes the flag on the first row only — the same first-row rule as a
+    /// rate, for the same reason (two flags that disagree are unwritable).
+    #[test]
+    fn several_keys_share_one_latch_and_round_trip() {
+        let original = Preset {
+            name: "multi".into(),
+            entries: vec![
+                (Key::G, Binding::Button(XButton::A)),
+                (Key::H, Binding::Button(XButton::A)),
+            ],
+            chords: Vec::new(),
+            macros: Default::default(),
+            turbo: Vec::new(),
+            toggle: vec![Binding::Button(XButton::A)],
+            protected: false,
+        };
+        let text = toml::to_string(&PresetFile::from_core(&original)).unwrap();
+        assert_eq!(text.matches("toggle").count(), 1, "{text}");
+        let back: PresetFile = toml::from_str(&text).unwrap();
+        let back = back.to_core().unwrap();
+        assert_eq!(back.entries, original.entries, "{text}");
+        assert_eq!(back.toggle, original.toggle, "{text}");
+    }
+
+    /// The §3a composition as a file: one row carrying BOTH flags is the
+    /// toggle-turbo (press once, auto-fires hands-free until pressed again),
+    /// and both survive the round trip on that one row.
+    #[test]
+    fn a_toggle_turbo_row_round_trips() {
+        let original = Preset {
+            name: "hands-free".into(),
+            entries: vec![(Key::G, Binding::Button(XButton::A))],
+            chords: Vec::new(),
+            macros: Default::default(),
+            turbo: vec![ksx_core::TurboBinding::new(Binding::Button(XButton::A), 12)],
+            toggle: vec![Binding::Button(XButton::A)],
+            protected: false,
+        };
+        let text = toml::to_string(&PresetFile::from_core(&original)).unwrap();
+        let back = toml::from_str::<PresetFile>(&text)
+            .unwrap()
+            .to_core()
+            .unwrap();
+        assert_eq!(back.turbo, original.turbo, "{text}");
+        assert_eq!(back.toggle, original.toggle, "{text}");
+    }
+
+    /// A latch and a guard on one row: the chord is the flipper. Both survive
+    /// the round trip exactly as a guarded turbo does.
+    #[test]
+    fn a_guarded_toggle_round_trips() {
+        let original = Preset {
+            name: "guarded".into(),
+            entries: Vec::new(),
+            chords: vec![ksx_core::Chord::new(
+                Key::A,
+                Binding::Trigger(Trigger::Right),
+                vec![Key::B],
+            )],
+            macros: Default::default(),
+            turbo: Vec::new(),
+            toggle: vec![Binding::Trigger(Trigger::Right)],
+            protected: false,
+        };
+        let text = toml::to_string(&PresetFile::from_core(&original)).unwrap();
+        let back = toml::from_str::<PresetFile>(&text)
+            .unwrap()
+            .to_core()
+            .unwrap();
+        assert_eq!(back.chords, original.chords, "{text}");
+        assert_eq!(back.toggle, original.toggle, "{text}");
+    }
+
+    /// A latch on a macro trigger is refused: what a press starts and what a
+    /// release does are the macro's own business (`on_release`, `repeat`), and
+    /// a latch would silently rewrite both.
+    #[test]
+    fn a_toggle_on_a_macro_trigger_is_refused() {
+        let file: PresetFile = toml::from_str(
+            r#"
+name = "no"
+[macros.jab]
+steps = [{ hold = ["A"], ms = 50 }]
+[bindings]
+"macro.jab" = { key = "P", toggle = true }
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            file.to_core(),
+            Err(ConfigError::ToggleOnMacroTrigger(_))
+        ));
+    }
+
+    /// The regression guarantee: a preset without a latch serializes to
+    /// exactly the bytes it always did.
+    #[test]
+    fn a_toggle_free_preset_emits_no_latch() {
+        for preset in Preset::builtins() {
+            let text = toml::to_string(&PresetFile::from_core(&preset)).unwrap();
+            assert!(!text.contains("toggle"), "{text}");
         }
     }
 
@@ -1036,6 +1254,7 @@ consume = { key = "Left", when = ["Right"] }
             ],
             macros: Default::default(),
             turbo: Vec::new(),
+            toggle: Vec::new(),
             protected: false,
         };
         let text = toml::to_string(&PresetFile::from_core(&original)).unwrap();

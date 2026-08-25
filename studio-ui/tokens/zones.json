@@ -1,0 +1,634 @@
+{
+  "version": 1,
+  "functions": [
+    "A",
+    "B",
+    "X",
+    "Y",
+    "lb",
+    "rb",
+    "lt",
+    "rt",
+    "back",
+    "start",
+    "guide",
+    "lthumb",
+    "rthumb",
+    "dpad.up",
+    "dpad.down",
+    "dpad.left",
+    "dpad.right",
+    "lx.min",
+    "lx.max",
+    "ly.min",
+    "ly.max",
+    "rx.min",
+    "rx.max",
+    "ry.min",
+    "ry.max"
+  ],
+  "xbox": [
+    {
+      "function": "lt",
+      "label": "LT",
+      "palette": "sh",
+      "rect": [
+        31.0,
+        4.6,
+        10.0,
+        5.2
+      ],
+      "kind": "trigger"
+    },
+    {
+      "function": "lb",
+      "label": "LB",
+      "palette": "sh",
+      "rect": [
+        34.0,
+        10.9,
+        11.0,
+        5.2
+      ],
+      "kind": "bumper"
+    },
+    {
+      "function": "rb",
+      "label": "RB",
+      "palette": "sh",
+      "rect": [
+        66.0,
+        10.9,
+        11.0,
+        5.2
+      ],
+      "kind": "bumper"
+    },
+    {
+      "function": "rt",
+      "label": "RT",
+      "palette": "sh",
+      "rect": [
+        69.0,
+        4.6,
+        10.0,
+        5.2
+      ],
+      "kind": "trigger"
+    },
+    {
+      "function": "Y",
+      "label": "Y",
+      "palette": "xy",
+      "rect": [
+        75.2,
+        31.1,
+        7.2,
+        8.4
+      ],
+      "kind": "round"
+    },
+    {
+      "function": "B",
+      "label": "B",
+      "palette": "xb",
+      "rect": [
+        82.0,
+        39.6,
+        7.2,
+        8.4
+      ],
+      "kind": "round"
+    },
+    {
+      "function": "A",
+      "label": "A",
+      "palette": "xa",
+      "rect": [
+        75.3,
+        48.3,
+        7.2,
+        8.4
+      ],
+      "kind": "round"
+    },
+    {
+      "function": "X",
+      "label": "X",
+      "palette": "xx",
+      "rect": [
+        68.7,
+        39.7,
+        7.2,
+        8.4
+      ],
+      "kind": "round"
+    },
+    {
+      "function": "guide",
+      "label": "guide",
+      "palette": "txt",
+      "rect": [
+        50.0,
+        27.0,
+        9.0,
+        11.0
+      ],
+      "kind": "round"
+    },
+    {
+      "function": "back",
+      "label": "view",
+      "palette": "txt",
+      "rect": [
+        44.0,
+        39.0,
+        6.5,
+        8.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "start",
+      "label": "menu",
+      "palette": "txt",
+      "rect": [
+        56.0,
+        39.0,
+        6.5,
+        8.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "lthumb",
+      "label": "L3",
+      "palette": "hub",
+      "rect": [
+        24.0,
+        39.7,
+        8.0,
+        10.0
+      ],
+      "kind": "round"
+    },
+    {
+      "function": "ly.max",
+      "label": "↑",
+      "palette": "dir",
+      "rect": [
+        24.0,
+        31.7,
+        7.0,
+        6.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "ly.min",
+      "label": "↓",
+      "palette": "dir",
+      "rect": [
+        24.0,
+        47.7,
+        7.0,
+        6.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "lx.min",
+      "label": "←",
+      "palette": "dir",
+      "rect": [
+        17.25,
+        39.7,
+        5.5,
+        7.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "lx.max",
+      "label": "→",
+      "palette": "dir",
+      "rect": [
+        30.75,
+        39.7,
+        5.5,
+        7.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "dpad.up",
+      "label": "↑",
+      "palette": "dir",
+      "rect": [
+        36.4,
+        50.6,
+        7.0,
+        9.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "dpad.down",
+      "label": "↓",
+      "palette": "dir",
+      "rect": [
+        36.4,
+        69.2,
+        7.0,
+        9.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "dpad.left",
+      "label": "←",
+      "palette": "dir",
+      "rect": [
+        29.2,
+        59.9,
+        7.0,
+        9.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "dpad.right",
+      "label": "→",
+      "palette": "dir",
+      "rect": [
+        43.6,
+        59.9,
+        7.0,
+        9.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "rthumb",
+      "label": "R3",
+      "palette": "hub",
+      "rect": [
+        62.5,
+        58.4,
+        8.0,
+        10.0
+      ],
+      "kind": "round"
+    },
+    {
+      "function": "ry.max",
+      "label": "↑",
+      "palette": "dir",
+      "rect": [
+        62.5,
+        50.4,
+        7.0,
+        6.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "ry.min",
+      "label": "↓",
+      "palette": "dir",
+      "rect": [
+        62.5,
+        66.4,
+        7.0,
+        6.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "rx.min",
+      "label": "←",
+      "palette": "dir",
+      "rect": [
+        55.75,
+        58.4,
+        5.5,
+        7.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "rx.max",
+      "label": "→",
+      "palette": "dir",
+      "rect": [
+        69.25,
+        58.4,
+        5.5,
+        7.0
+      ],
+      "kind": "chip"
+    }
+  ],
+  "ds4": [
+    {
+      "function": "lt",
+      "label": "L2",
+      "palette": "sh",
+      "rect": [
+        17.0,
+        4.6,
+        9.5,
+        5.2
+      ],
+      "kind": "trigger"
+    },
+    {
+      "function": "lb",
+      "label": "L1",
+      "palette": "sh",
+      "rect": [
+        19.5,
+        10.9,
+        10.5,
+        5.2
+      ],
+      "kind": "bumper"
+    },
+    {
+      "function": "rb",
+      "label": "R1",
+      "palette": "sh",
+      "rect": [
+        80.5,
+        10.9,
+        10.5,
+        5.2
+      ],
+      "kind": "bumper"
+    },
+    {
+      "function": "rt",
+      "label": "R2",
+      "palette": "sh",
+      "rect": [
+        83.0,
+        4.6,
+        9.5,
+        5.2
+      ],
+      "kind": "trigger"
+    },
+    {
+      "function": "Y",
+      "label": "△",
+      "palette": "pt",
+      "rect": [
+        81.2,
+        29.2,
+        7.0,
+        9.0
+      ],
+      "kind": "round"
+    },
+    {
+      "function": "B",
+      "label": "○",
+      "palette": "po",
+      "rect": [
+        88.4,
+        38.8,
+        7.0,
+        9.0
+      ],
+      "kind": "round"
+    },
+    {
+      "function": "A",
+      "label": "✕",
+      "palette": "pc",
+      "rect": [
+        81.3,
+        48.1,
+        7.0,
+        9.0
+      ],
+      "kind": "round"
+    },
+    {
+      "function": "X",
+      "label": "□",
+      "palette": "psq",
+      "rect": [
+        74.0,
+        38.7,
+        7.0,
+        9.0
+      ],
+      "kind": "round"
+    },
+    {
+      "function": "back",
+      "label": "share",
+      "palette": "txt",
+      "rect": [
+        30.0,
+        25.5,
+        7.0,
+        9.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "start",
+      "label": "options",
+      "palette": "txt",
+      "rect": [
+        70.0,
+        25.5,
+        7.0,
+        9.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "guide",
+      "label": "PS",
+      "palette": "txt",
+      "rect": [
+        50.0,
+        63.0,
+        8.0,
+        10.0
+      ],
+      "kind": "round"
+    },
+    {
+      "function": "lthumb",
+      "label": "L3",
+      "palette": "hub",
+      "rect": [
+        33.8,
+        56.8,
+        8.0,
+        10.0
+      ],
+      "kind": "round"
+    },
+    {
+      "function": "ly.max",
+      "label": "↑",
+      "palette": "dir",
+      "rect": [
+        33.8,
+        48.8,
+        7.0,
+        6.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "ly.min",
+      "label": "↓",
+      "palette": "dir",
+      "rect": [
+        33.8,
+        64.8,
+        7.0,
+        6.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "lx.min",
+      "label": "←",
+      "palette": "dir",
+      "rect": [
+        27.05,
+        56.8,
+        5.5,
+        7.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "lx.max",
+      "label": "→",
+      "palette": "dir",
+      "rect": [
+        40.55,
+        56.8,
+        5.5,
+        7.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "dpad.up",
+      "label": "↑",
+      "palette": "dir",
+      "rect": [
+        18.5,
+        31.5,
+        5.4,
+        7.2
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "dpad.down",
+      "label": "↓",
+      "palette": "dir",
+      "rect": [
+        18.5,
+        46.6,
+        5.4,
+        7.2
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "dpad.left",
+      "label": "←",
+      "palette": "dir",
+      "rect": [
+        12.9,
+        39.2,
+        5.4,
+        7.2
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "dpad.right",
+      "label": "→",
+      "palette": "dir",
+      "rect": [
+        23.9,
+        39.2,
+        5.4,
+        7.2
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "rthumb",
+      "label": "R3",
+      "palette": "hub",
+      "rect": [
+        66.1,
+        56.8,
+        8.0,
+        10.0
+      ],
+      "kind": "round"
+    },
+    {
+      "function": "ry.max",
+      "label": "↑",
+      "palette": "dir",
+      "rect": [
+        66.1,
+        48.8,
+        7.0,
+        6.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "ry.min",
+      "label": "↓",
+      "palette": "dir",
+      "rect": [
+        66.1,
+        64.8,
+        7.0,
+        6.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "rx.min",
+      "label": "←",
+      "palette": "dir",
+      "rect": [
+        59.35,
+        56.8,
+        5.5,
+        7.0
+      ],
+      "kind": "chip"
+    },
+    {
+      "function": "rx.max",
+      "label": "→",
+      "palette": "dir",
+      "rect": [
+        72.85,
+        56.8,
+        5.5,
+        7.0
+      ],
+      "kind": "chip"
+    }
+  ]
+}

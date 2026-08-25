@@ -23,13 +23,14 @@
 //! - `ds4` (Windows) — `PadState` → DualShock 4 report for the PlayStation
 //!   persona. Not a field copy like the Xbox path: Y axes invert, the D-pad
 //!   collapses to a 4-bit hat, and triggers are analog *and* digital.
-//! - [`HidMaestroBackend`] (M8) — production one-DualSense adapter over the
-//!   fixed authenticated elevated host. Switch Pro and Xbox Series remain
-//!   refused by independent capability gates.
+//! - [`HidMaestroBackend`] (M8) — production multi-controller adapter over
+//!   the fixed authenticated elevated SDK host. Every HIDMaestro persona —
+//!   DualSense, Switch Pro, Xbox Series — rides it (all three measured
+//!   working 2026-08-20), up to the host's eight-pad pool, with Xbox-family
+//!   pads further seated by XInput's four.
 //! - [`RoutedBackend`] — persona → backend routing rule. X360/DS4 stay on
 //!   ViGEm (slots 1–4 never migrate to HIDMaestro's XInput synthesis layer).
-//!   DualSense builds its host lazily; unfinished rich personas refuse before
-//!   either factory runs.
+//!   The HIDMaestro host builds lazily at the first rich-persona plug.
 //! - `tests/loopback.rs` — cabinet-only XInput round-trip behind the `cab-tests`
 //!   feature; never runs in CI or on machines without ViGEmBus.
 

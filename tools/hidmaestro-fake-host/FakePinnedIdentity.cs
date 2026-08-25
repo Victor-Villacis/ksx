@@ -35,6 +35,8 @@ internal static class FakePinnedIdentity
         HostProfileId.DualSense => new(profile, 0x054C, 0x0CE6),
         HostProfileId.SwitchPro => new(profile, 0x057E, 0x2009),
         HostProfileId.XboxSeries => new(profile, 0x045E, 0x0B13),
+        HostProfileId.Snes => new(profile, 0x0583, 0x2060),
+        HostProfileId.Genesis => new(profile, 0x2341, 0x8036),
         _ => throw new ArgumentOutOfRangeException(nameof(profile)),
     };
 }

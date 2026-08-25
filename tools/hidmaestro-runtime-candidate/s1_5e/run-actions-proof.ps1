@@ -1117,7 +1117,7 @@ function Stage-ExactCandidate {
     }
 
     Assert-ExactFileSet -Root $candidateRoot -Expected $expectedPaths.ToArray()
-    if ($expectedPaths.Count -ne 241) { throw 'The staged candidate does not contain 241 files.' }
+    if ($expectedPaths.Count -ne 244) { throw 'The staged candidate does not contain 244 files.' }
     return [pscustomobject]@{
         Root = $candidateRoot
         RelativePaths = $expectedPaths.ToArray()
@@ -1279,7 +1279,7 @@ function Get-XmlExpectedItems {
 
     $compileNodes = @($xml.SelectNodes('/Project/ItemGroup/Compile'))
     $resourceNodes = @($xml.SelectNodes('/Project/ItemGroup/EmbeddedResource'))
-    if ($compileNodes.Count -ne 11 -or $resourceNodes.Count -ne 228) {
+    if ($compileNodes.Count -ne 14 -or $resourceNodes.Count -ne 228) {
         throw 'The candidate project XML item topology is not exact.'
     }
     $compileValues = [Collections.Generic.List[string]]::new()
@@ -1546,7 +1546,7 @@ function Get-EvaluatedManifest {
     $compileItems = Get-OrdinalSorted -Values @($evaluation.Items.Compile | ForEach-Object {
         ([string]$_.Identity).Replace('\', '/')
     })
-    if ($compileItems.Count -ne 11 -or
+    if ($compileItems.Count -ne 14 -or
         [string]::Join("`n", $compileItems) -cne [string]::Join("`n", $expected.Compile)) {
         throw 'Evaluated Compile identities are not the exact project list.'
     }
@@ -3100,7 +3100,7 @@ try {
             candidateNetworkAuthorized = $false
         }
         stage = [ordered]@{
-            fileCountPerBuild = 241
+            fileCountPerBuild = 244
             preRawTreeSha256 = $stageA.RawTreeSha256
             postRawTreeSha256 = $postRawA
             preNormalizedTreeSha256 = $stageA.NormalizedTreeSha256

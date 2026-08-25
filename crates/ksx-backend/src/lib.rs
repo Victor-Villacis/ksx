@@ -54,6 +54,7 @@ pub mod doctor;
 pub mod feed;
 #[cfg(windows)]
 pub(crate) mod identity;
+pub mod input_test_cli;
 pub mod install;
 pub mod logging;
 pub mod macro_cli;
@@ -61,6 +62,10 @@ pub mod macro_trace;
 pub mod map;
 pub mod mapping;
 pub mod monitor;
+pub mod panel;
+pub(crate) mod panel_catalog;
+pub mod panel_profiles;
+pub mod panel_programming;
 // The first-run state and the path-free config in/out, for the surfaces that
 // have a screen. Gated with `sources` because that is the only caller: the CLI
 // reaches this machinery through `config_io` directly.
@@ -81,6 +86,7 @@ pub mod session;
 pub mod setup;
 pub mod slot_cli;
 pub mod slots;
+pub mod stage_cli;
 // Gated because it reaches `cabinet` and `studio_launch`, which are themselves
 // behind those features — so this is not a tidiness gate, it is what the module
 // can actually name.

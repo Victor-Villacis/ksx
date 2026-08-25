@@ -44,6 +44,32 @@ internal static class PersonaContract
                 "separate",
                 true,
                 17),
+            ["ibuffalo-snes"] = new(
+                "iBuffalo Classic USB SNES Gamepad",
+                "iBuffalo",
+                "0x0583",
+                "0x2060",
+                "USB,2-axis 8-button gamepad",
+                "gamepad",
+                "usb",
+                "umdf2",
+                null,
+                null,
+                true,
+                0),
+            ["daemonbite-genesis"] = new(
+                "DaemonBite Sega Genesis/Saturn Controller Adapter",
+                "DaemonBite",
+                "0x2341",
+                "0x8036",
+                "Sega Controller",
+                "gamepad",
+                "usb",
+                "umdf2",
+                null,
+                null,
+                true,
+                4),
         };
 
     internal static ContractReport Verify(IReadOnlyList<CatalogProfile> profiles)

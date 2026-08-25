@@ -68,7 +68,7 @@ try {
     finally {
         $sha256.Dispose()
     }
-    if ($runtimeHash -cne '1C49F9CE3F406ED3163935B759EDC35B9B3CBEBD6396A99DDFE3DC9F07E468B0') {
+    if ($runtimeHash -cne '4F76F31C049390A1342388E09F9D0D0E3547162D08EA501FD829AF3CF64F67DA') {
         throw 'The HIDMaestro runtime contract identity changed.'
     }
 

@@ -68,9 +68,12 @@ mod tests {
 
     #[test]
     fn an_unknown_policy_names_the_options() {
-        let err = toml::from_str::<Holder>("socd = \"snaptap\"").unwrap_err();
+        // ("snaptap" is no longer a candidate here: it PARSES, as last-input.)
+        let err = toml::from_str::<Holder>("socd = \"sideways\"").unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("snaptap"), "{msg}");
+        assert!(msg.contains("sideways"), "{msg}");
         assert!(msg.contains("up-priority"), "{msg}");
+        assert!(msg.contains("last-input"), "{msg}");
+        assert!(msg.contains("first-input"), "{msg}");
     }
 }

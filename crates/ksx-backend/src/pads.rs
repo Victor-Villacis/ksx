@@ -796,6 +796,19 @@ pub mod surface {
                 };
             }
         }
+        // The elevated HIDMaestro host carries a fixed pool of live pads; a
+        // request past it must be refused before anything is plugged, because
+        // the runtime adapter's own refusal at pad N+1 arrives after N pads
+        // are already live.
+        if persona.backend() == ksx_core::PadBackend::HidMaestro
+            && usize::from(count) > usize::from(ksx_core::MAX_HIDMAESTRO_PADS)
+        {
+            return SpawnPlan::PersonaCapacity {
+                persona,
+                requested: count,
+                limit: usize::from(ksx_core::MAX_HIDMAESTRO_PADS),
+            };
+        }
         if on_bus.saturating_add(usize::from(count)) > usize::from(MAX_SLOTS) {
             return SpawnPlan::BusFull {
                 on_bus,
@@ -1095,8 +1108,11 @@ pub mod surface {
     /// The whole spawn offer, every option already labelled.
     ///
     /// The counts stop at the bus's remaining headroom, so the menu can never
-    /// offer a click [`plan_spawn`] would refuse — the same invariant that
-    /// keeps unimplementable personas out of the persona list.
+    /// offer a click [`plan_spawn`] would refuse. The persona list is narrower
+    /// on purpose: `/pads` observes, prunes and restarts the ViGEm bus, so it
+    /// offers only personas that actually travel through that bus. HIDMaestro
+    /// identities are exercised by guided Setup/Play, where their endpoint
+    /// readiness and persona-specific capacities are part of the same plan.
     pub fn spawn_offer(
         session_running: bool,
         xinput_in_use: Option<u8>,
@@ -1107,7 +1123,7 @@ pub mod surface {
         let offered: Vec<Persona> = Persona::ALL
             .iter()
             .copied()
-            .filter(|p| p.can_plug())
+            .filter(|p| p.can_plug() && p.backend() == ksx_core::PadBackend::Vigem)
             .collect();
         // Whichever personas this build can actually create decide the wording
         // — nothing here spells "xbox360" or "playstation" by hand.
@@ -1135,10 +1151,11 @@ pub mod surface {
                 })
                 .collect(),
             note: format!(
-                "A spawn is a TEST: the pads plug, run the A/B/X/Y + stick pattern so you can \
-                 see them move in joy.cpl, then unplug themselves when the hold expires. \
-                 Nothing is written to config, the longest hold is {MAX_HOLD_SECS}s, and the \
-                 bus is never allowed past {MAX_SLOTS} pads in total."
+                "A spawn here is a ViGEmBus TEST: an Xbox 360 or PlayStation pad plugs, runs the \
+                 A/B/X/Y + stick pattern so you can see it move in joy.cpl, then unplugs when \
+                 the hold expires. DualSense uses HIDMaestro and is tested through guided Setup \
+                 and Play instead. Nothing is written to config, the longest hold is \
+                 {MAX_HOLD_SECS}s, and the bus is never allowed past {MAX_SLOTS} pads in total."
             ),
             refused: if session_running {
                 Some(SpawnPlan::SessionRunning.message())
@@ -1289,13 +1306,19 @@ pub mod surface {
             assert_eq!(unreadable, Some(0));
         }
 
-        /// A persona this build cannot create is refused before ViGEmBus is
-        /// opened — a build limitation must never arrive shaped like a driver
-        /// problem (the same ordering `run` keeps).
+        /// Every shipping persona plans (retro leg flip 2026-08-20) — and
+        /// the ViGEm diagnostic page still offers only its own backend's
+        /// personas.
         #[test]
-        fn an_unimplementable_persona_is_refused_and_not_offered() {
-            let plan = plan_spawn(1, Persona::SwitchPro, 30, false, IDLE.0, IDLE.1);
-            assert_eq!(plan.code(), Some("persona-not-implemented"));
+        fn the_vigem_page_offers_only_implemented_vigem_personas() {
+            for persona in [Persona::XboxSeries, Persona::Snes, Persona::Genesis] {
+                let plan = plan_spawn(1, persona, 30, false, IDLE.0, IDLE.1);
+                assert_ne!(
+                    plan.code(),
+                    Some("persona-not-implemented"),
+                    "{persona} plans"
+                );
+            }
             let offered: Vec<String> = spawn_offer(false, IDLE.0, IDLE.1)
                 .personas
                 .into_iter()
@@ -1305,22 +1328,68 @@ pub mod surface {
                 !offered.iter().any(|v| v == "switchpro"),
                 "a menu must not offer what the plan refuses: {offered:?}"
             );
+            let expected = Persona::ALL
+                .iter()
+                .copied()
+                .filter(|persona| {
+                    persona.can_plug() && persona.backend() == ksx_core::PadBackend::Vigem
+                })
+                .map(|persona| persona.as_str().to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(offered, expected);
             assert!(offered.iter().any(|v| v == "xbox360"), "{offered:?}");
-            assert!(offered.iter().any(|v| v == "dualsense"), "{offered:?}");
+            assert!(offered.iter().any(|v| v == "playstation"), "{offered:?}");
+            assert!(
+                !offered.iter().any(|v| v == "dualsense"),
+                "the ViGEm diagnostic must not offer HIDMaestro: {offered:?}"
+            );
+
+            let note = spawn_offer(false, IDLE.0, IDLE.1).note;
+            assert!(note.contains("ViGEmBus TEST"), "{note}");
+            assert!(note.contains("DualSense uses HIDMaestro"), "{note}");
         }
 
+        /// Every persona/count pair rendered by the form is accepted by the
+        /// same planner. This guards both halves of the truthful-offer rule:
+        /// no hidden backend and no count that only looks valid in the menu.
         #[test]
-        fn the_dualsense_test_surface_enforces_the_one_host_capacity() {
-            assert!(matches!(
-                plan_spawn(1, Persona::DualSense, 30, false, IDLE.0, IDLE.1),
-                SpawnPlan::Plug { .. }
-            ));
-            let refused = plan_spawn(2, Persona::DualSense, 30, false, IDLE.0, IDLE.1);
+        fn every_vigem_spawn_option_cross_product_is_plannable() {
+            let offer = spawn_offer(false, Some(0), 0);
+            for persona in &offer.personas {
+                let persona: Persona = persona.value.parse().expect("a canonical persona");
+                assert_eq!(persona.backend(), ksx_core::PadBackend::Vigem);
+                for count in &offer.counts {
+                    let count: u8 = count.value.parse().expect("a served count");
+                    assert_eq!(
+                        plan_spawn(count, persona, 30, false, Some(0), 0).code(),
+                        None,
+                        "the form offered {count} x {persona}, but the planner refused it"
+                    );
+                }
+            }
+        }
+
+        /// The elevated SDK host carries eight live pads: counts 1..=8 plan,
+        /// the ninth refuses BEFORE anything plugs — the runtime adapter's
+        /// own refusal would arrive after eight pads were live.
+        #[test]
+        fn the_plan_enforces_the_hidmaestro_pool_capacity() {
+            for count in [1u8, 2, 4, 8] {
+                assert!(
+                    matches!(
+                        plan_spawn(count, Persona::DualSense, 30, false, IDLE.0, IDLE.1),
+                        SpawnPlan::Plug { .. }
+                    ),
+                    "{count} DualSense pads must plan"
+                );
+            }
+            let refused = plan_spawn(9, Persona::DualSense, 30, false, IDLE.0, IDLE.1);
             assert_eq!(refused.code(), Some("persona-capacity"));
-            assert!(refused.message().contains("at most 1"));
-            assert!(refused
-                .remedy()
-                .is_some_and(|text| text.contains("one pad")));
+            assert!(
+                refused.message().contains("at most 8"),
+                "{}",
+                refused.message()
+            );
         }
 
         #[test]

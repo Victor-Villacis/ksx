@@ -17,7 +17,8 @@
 //! # Every number here is SERVED, never known by the surface
 //!
 //! [`StagedSetupView`] carries `max_slots`, `max_xinput_slots`, `xinput_used`
-//! and the whole persona roster with a `can_plug` flag on each. `docs/CLAUDE.md`
+//! and the whole persona roster with build capability, immutable output route,
+//! persona ceiling and current-stage availability on each. `docs/CLAUDE.md`
 //! and `SURFACES.md` §1 make that a rule rather than a courtesy: a `16` typed
 //! into TypeScript is the specific bug the rule exists for, and the day
 //! the production HIDMaestro host lands and the roster changes underneath
@@ -88,6 +89,15 @@ impl From<&StagedDevice> for StagedDeviceView {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StagedSlotView {
     pub number: u8,
+    /// Opaque identity-and-content revision for actions opened on this exact
+    /// controller row. A surface sends it back unchanged; it must never infer
+    /// or recompute it from the visible labels.
+    ///
+    /// Older daemons omit the field. Such a row remains readable, but a newer
+    /// mutation surface must refresh before it can safely bind through a route
+    /// that requires stale-target protection.
+    #[serde(default)]
+    pub target_revision: String,
     /// Canonical persona name (`xbox360`, `playstation`…) — what a
     /// [`StageEdit`] sends back.
     pub persona: String,
@@ -107,6 +117,17 @@ pub struct StagedSlotView {
     /// mapper edit until it is refreshed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authoring: Option<ksx_config::PresetFile>,
+    /// This slot's simultaneous-opposite-direction policy — a
+    /// [`ksx_core::Socd`] name (`off` | `neutral` | `up-priority` | `last-input` | `first-input`). Older
+    /// daemons did not serve the field; absence reads as the default, which
+    /// is also what every staged slot starts on.
+    #[serde(default)]
+    pub socd: String,
+    /// The policy in the words a player reads ([`SocdOption::roster`]'s own
+    /// title), served beside the canonical name so no surface grows a second
+    /// name→label table.
+    #[serde(default)]
+    pub socd_label: String,
     /// **How many bindings a key can actually reach**
     /// ([`ksx_core::Preset::live_bindings`]).
     ///
@@ -133,6 +154,21 @@ pub struct PersonaOption {
     pub name: String,
     pub label: String,
     pub is_xinput: bool,
+    /// Canonical [`ksx_core::PadBackend`] name (`vigem` | `hidmaestro`).
+    ///
+    /// This is routing truth, not a setting: a surface may explain which
+    /// output package a persona needs, but must never let the user pair a
+    /// persona with a different backend.
+    #[serde(default)]
+    pub backend: String,
+    /// Human label for [`Self::backend`]. Kept beside the canonical value so a
+    /// surface does not grow a second `vigem` -> `ViGEmBus` lookup table.
+    #[serde(default)]
+    pub backend_label: String,
+    /// Maximum number of this exact persona one session may contain. `None`
+    /// means only the normal setup and XInput ceilings apply.
+    #[serde(default)]
+    pub instance_limit: Option<usize>,
     /// Can THIS BUILD create it? A fact about the binary, never a driver probe.
     pub can_plug: bool,
     /// What is missing, when it cannot — `Persona::gap()`'s own sentence, so
@@ -141,6 +177,16 @@ pub struct PersonaOption {
     /// The nearest persona this build CAN plug, so an option that is greyed out
     /// still points somewhere.
     pub instead: String,
+    /// Can an Add-controller action choose this persona in THIS staged setup?
+    ///
+    /// Older daemons did not serve the field, so absence deliberately means
+    /// true. A refreshed view always supplies the exact answer.
+    #[serde(default = "default_true")]
+    pub available: bool,
+    /// Why [`Self::available`] is false: either the build gap or the staged
+    /// persona/XInput capacity that has already been reached.
+    #[serde(default)]
+    pub unavailable_reason: Option<String>,
 }
 
 impl PersonaOption {
@@ -148,16 +194,87 @@ impl PersonaOption {
     pub fn roster() -> Vec<Self> {
         Persona::ALL
             .iter()
-            .map(|&persona| Self {
-                name: persona.as_str().to_owned(),
-                label: persona.label().to_owned(),
-                is_xinput: persona.is_xinput(),
-                can_plug: persona.can_plug(),
-                gap: persona.gap().map(str::to_owned),
-                instead: persona.nearest_pluggable().as_str().to_owned(),
+            .map(|&persona| Self::for_persona(persona))
+            .collect()
+    }
+
+    /// Every persona, with Add-controller availability evaluated against one
+    /// staged setup. `can_plug` stays the build capability; `available` is the
+    /// narrower, stage-specific answer a picker needs right now.
+    pub fn roster_for(setup: &StagedSetup) -> Vec<Self> {
+        let xinput_full = setup.xinput_slots() >= usize::from(MAX_XINPUT_SLOTS);
+        let hidmaestro_full = Persona::ALL
+            .iter()
+            .copied()
+            .filter(|p| p.backend() == ksx_core::PadBackend::HidMaestro)
+            .map(|p| setup.persona_slots(p))
+            .sum::<usize>()
+            >= usize::from(ksx_core::MAX_HIDMAESTRO_PADS);
+        Self::roster()
+            .into_iter()
+            .zip(Persona::ALL.iter().copied())
+            .map(|(mut option, persona)| {
+                if !option.can_plug {
+                    return option;
+                }
+                if let Some(limit) = option.instance_limit {
+                    if setup.persona_slots(persona) >= limit {
+                        option.available = false;
+                        option.unavailable_reason = Some(if limit == 1 {
+                            format!(
+                                "This setup already has its one {} controller. Remove or change it before adding another.",
+                                option.label
+                            )
+                        } else {
+                            format!(
+                                "This setup already has the maximum of {limit} {} controllers. Remove or change one before adding another.",
+                                option.label
+                            )
+                        });
+                        return option;
+                    }
+                }
+                if option.is_xinput && xinput_full {
+                    option.available = false;
+                    option.unavailable_reason = Some(format!(
+                        "All {} Xbox-style controller places are already in use. Remove or change an Xbox-style controller before adding another.",
+                        MAX_XINPUT_SLOTS
+                    ));
+                    return option;
+                }
+                if persona.backend() == ksx_core::PadBackend::HidMaestro && hidmaestro_full {
+                    option.available = false;
+                    option.unavailable_reason = Some(format!(
+                        "This setup already stages the HIDMaestro host's {} pads. Remove or change one before adding another.",
+                        ksx_core::MAX_HIDMAESTRO_PADS
+                    ));
+                }
+                option
             })
             .collect()
     }
+
+    fn for_persona(persona: Persona) -> Self {
+        let backend = persona.backend();
+        let gap = persona.gap().map(str::to_owned);
+        Self {
+            name: persona.as_str().to_owned(),
+            label: persona.label().to_owned(),
+            is_xinput: persona.is_xinput(),
+            backend: backend.as_str().to_owned(),
+            backend_label: backend.label().to_owned(),
+            instance_limit: persona.instance_limit(),
+            can_plug: persona.can_plug(),
+            available: persona.can_plug(),
+            unavailable_reason: gap.clone(),
+            gap,
+            instead: persona.nearest_pluggable().as_str().to_owned(),
+        }
+    }
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 /// One blocking answer, as `FIRST-RUN.md` §3 words it for a user.
@@ -200,7 +317,7 @@ pub const BLOCKING_SCOPE_LINE: &str =
 /// it can tell that this is that.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SocdOption {
-    /// `off` | `neutral` | `up-priority` - a `ksx_core::Socd` name.
+    /// `off` | `neutral` | `up-priority` | `last-input` | `first-input` - a `ksx_core::Socd` name.
     pub name: String,
     pub title: String,
     pub detail: String,
@@ -217,6 +334,8 @@ impl SocdOption {
                     ksx_core::Socd::Off => "Send both",
                     ksx_core::Socd::Neutral => "Cancel to centre",
                     ksx_core::Socd::UpPriority => "Up wins",
+                    ksx_core::Socd::LastInput => "Last press wins",
+                    ksx_core::Socd::FirstInput => "First press wins",
                 }
                 .to_owned(),
                 detail: match socd {
@@ -232,6 +351,15 @@ impl SocdOption {
                         "Left and right together read as centre, but up beats down - so \
                          down-back rolled into up-back jumps instead of crouching. The \
                          fighting-game standard."
+                    }
+                    ksx_core::Socd::LastInput => {
+                        "Holding one direction and tapping the opposite follows the newer \
+                         press, and letting it go hands back to the held key. SOCD last-input \
+                         priority - \"snap tap\", the leverless standard."
+                    }
+                    ksx_core::Socd::FirstInput => {
+                        "The direction pressed first holds until it is released; the opposite \
+                         press waits its turn. SOCD first-input priority."
                     }
                 }
                 .to_owned(),
@@ -340,6 +468,22 @@ pub struct StagedSetupView {
     pub default_layout: String,
     /// The blocking answers, in §3's own words.
     pub blocking_options: Vec<BlockingOption>,
+    /// The SOCD policies a slot can choose, served for the reason every
+    /// roster is: a surface that hardcoded three names would keep offering
+    /// them after the engine grew a fourth. Older daemons omit the field.
+    #[serde(default)]
+    pub socd_options: Vec<SocdOption>,
+    /// **The draft has edits its origin has not seen.** Written by the
+    /// DAEMON, which owns the visit — [`Self::of`] cannot know it, so it
+    /// composes `false` and the daemon overlays the truth. Feeds the dirty
+    /// dot and "Unsaved changes".
+    #[serde(default)]
+    pub dirty: bool,
+    /// Where this draft came from: empty for a fresh visit, `config` when it
+    /// was adopted from the saved config.toml, `profile:<title>` when adopted
+    /// from one saved game. Daemon-written, like [`Self::dirty`].
+    #[serde(default)]
+    pub origin: String,
     /// [`ESCAPE_HATCH_LINE`], served so it cannot be paraphrased on the way to
     /// a screen. §3 requires it beside the question, not buried.
     pub escape_hatch: String,
@@ -374,14 +518,21 @@ impl StagedSetupView {
             slots: setup
                 .slots()
                 .iter()
-                .map(|slot| StagedSlotView {
-                    number: slot.number,
-                    persona: slot.persona.as_str().to_owned(),
-                    persona_label: slot.persona.label().to_owned(),
-                    is_xinput: slot.persona.is_xinput(),
-                    preset: slot.preset.name.clone(),
-                    authoring: Some(ksx_config::PresetFile::from_core(&slot.preset)),
-                    bindings: slot.preset.live_bindings(),
+                .map(|slot| {
+                    let mut view = StagedSlotView {
+                        number: slot.number,
+                        target_revision: String::new(),
+                        persona: slot.persona.as_str().to_owned(),
+                        persona_label: slot.persona.label().to_owned(),
+                        is_xinput: slot.persona.is_xinput(),
+                        preset: slot.preset.name.clone(),
+                        authoring: Some(ksx_config::PresetFile::from_core(&slot.preset)),
+                        bindings: slot.preset.live_bindings(),
+                        socd: slot.socd.as_str().to_owned(),
+                        socd_label: socd_title(slot.socd),
+                    };
+                    view.target_revision = staged_slot_revision(&view);
+                    view
                 })
                 .collect(),
             blocking: setup.blocking().map(|b| b.as_str().to_owned()),
@@ -390,16 +541,30 @@ impl StagedSetupView {
             xinput_used: setup.xinput_slots(),
             max_slots: MAX_SLOTS,
             max_xinput_slots: MAX_XINPUT_SLOTS,
-            personas: PersonaOption::roster(),
+            personas: PersonaOption::roster_for(setup),
             layouts: TemplateRow::roster(),
             default_layout: default_layout(),
             blocking_options: BlockingOption::roster(),
+            socd_options: SocdOption::roster(),
             escape_hatch: ESCAPE_HATCH_LINE.to_owned(),
             blocking_scope: BLOCKING_SCOPE_LINE.to_owned(),
             not_ready: ready.as_ref().err().map(ToString::to_string),
             ready: ready.is_ok(),
+            // The daemon owns the visit; a view composed from the bare setup
+            // honestly claims nothing about it.
+            dirty: false,
+            origin: String::new(),
         }
     }
+}
+
+/// One policy's title, from [`SocdOption::roster`] — the single wording site.
+fn socd_title(socd: ksx_core::Socd) -> String {
+    SocdOption::roster()
+        .into_iter()
+        .find(|option| option.name == socd.as_str())
+        .map(|option| option.title)
+        .unwrap_or_else(|| socd.as_str().to_owned())
 }
 
 /// One edit to a staged setup, as a surface spells it.
@@ -485,6 +650,17 @@ pub enum StageEdit {
     /// Delete a staged controller. Free and complete: no file, no backup, no
     /// trace.
     RemoveSlot { number: u8 },
+    /// **Reorder the staged controllers** — `numbers` is the CURRENT slot
+    /// numbers in the desired new order, a whole-order write (the same
+    /// whole-value rule `SetBindings` and `bind_keys` follow, so a drag that
+    /// raced a poll carries its entire intent). The result renumbers
+    /// contiguously 1..=n; each controller keeps its persona, bindings and
+    /// SOCD answer.
+    ReorderSlots { numbers: Vec<u8> },
+    /// Set one staged controller's simultaneous-opposite-direction policy —
+    /// a `ksx_core::Socd` name (`off` | `neutral` | `up-priority` | `last-input` | `first-input`), the same
+    /// vocabulary `ksx slot assign --socd` writes onto a saved slot.
+    SetSocd { number: u8, socd: String },
     /// Moment 6's one question: `whole` (freeze) or `bound-keys` (split).
     SetBlocking { blocking: String },
     /// **Start over.** Always works.
@@ -568,6 +744,7 @@ impl StageEdit {
                         chords: Vec::new(),
                         macros: Default::default(),
                         turbo: Vec::new(),
+                        toggle: Vec::new(),
                         protected: false,
                     },
                 };
@@ -606,6 +783,19 @@ impl StageEdit {
                 setup.set_bindings(*number, core).map_err(refuse)
             }
             Self::RemoveSlot { number } => setup.remove_slot(*number).map_err(refuse),
+            Self::ReorderSlots { numbers } => setup.reorder_slots(numbers).map_err(refuse),
+            Self::SetSocd { number, socd } => {
+                let socd: ksx_core::Socd =
+                    socd.trim().parse().map_err(|err: ksx_core::UnknownSocd| {
+                        Refusal::with_remedy(
+                            codes::BAD_REQUEST,
+                            err.to_string(),
+                            "send a ksx_core::Socd name: off | neutral | up-priority | \
+                             last-input | first-input",
+                        )
+                    })?;
+                setup.set_socd(*number, socd).map_err(refuse)
+            }
             Self::SetBlocking { blocking } => {
                 let blocking: Blocking =
                     blocking
@@ -632,6 +822,23 @@ impl StageEdit {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StagedBindRequest {
     pub number: u8,
+    /// Input-board selector observed when the binding action began. Studio
+    /// supplies this for every Nocturne bind so the daemon can recheck the
+    /// selected source while holding its staged-state lock. Older callers may
+    /// omit it; the empty value preserves their existing behavior.
+    #[serde(default)]
+    pub expected_device: String,
+    /// Opaque identity-and-content revision of the exact staged controller
+    /// observed when the binding action began.
+    ///
+    /// Studio captures this from the served [`StagedSlotView`] before it
+    /// performs any slow machine check. The daemon compares it while holding
+    /// the staged-state lock, so removing and recreating the same player
+    /// number cannot receive the stale write — even if the replacement's
+    /// visible content is identical. Older callers may omit it; the empty
+    /// value preserves their existing behavior.
+    #[serde(default)]
+    pub expected_target_revision: String,
     /// Controller-layout name observed with `number` when the action began.
     /// The daemon checks both pieces of identity so removing and recreating a
     /// player at the same number cannot receive a stale browser write.
@@ -644,6 +851,10 @@ pub struct StagedBindRequest {
     pub force: bool,
     #[serde(default)]
     pub turbo_hz: Option<u32>,
+    /// TOGGLE-HOLD, three-state like `turbo_hz`: absent leaves the latch
+    /// alone, `false` clears it, `true` sets it.
+    #[serde(default)]
+    pub toggle: Option<bool>,
 }
 
 /// One whole macro edit aimed at an exact in-memory staged controller.
@@ -750,6 +961,19 @@ pub fn staged_bind_edit(
             Vec::new(),
         ));
     }
+    if !request.expected_device.trim().is_empty()
+        && !setup.device.as_ref().is_some_and(|device| {
+            device
+                .selector
+                .eq_ignore_ascii_case(request.expected_device.trim())
+        })
+    {
+        return Err(bind_refusal(
+            codes::BAD_REQUEST,
+            "The selected input changed while this binding was being checked. Nothing changed. Refresh the canvas and try again.",
+            Vec::new(),
+        ));
+    }
     let Some(slot) = setup
         .slots
         .iter()
@@ -764,7 +988,43 @@ pub fn staged_bind_edit(
             Vec::new(),
         ));
     };
+    if !request.expected_target_revision.trim().is_empty()
+        && request.expected_target_revision.trim() != slot.target_revision
+    {
+        return Err(bind_refusal(
+            codes::BAD_SLOT,
+            format!(
+                "Player {} changed while this binding was being checked. Nothing changed. Refresh the canvas and try again.",
+                request.number
+            ),
+            Vec::new(),
+        ));
+    }
     staged_slot_bind_edit(slot, &setup.slots, request)
+}
+
+/// Deterministic, opaque revision for one staged binding target.
+///
+/// The complete serialized slot participates, including the persona, SOCD
+/// policy, macro bodies and every binding in the authoring table. This is the
+/// deterministic fallback used outside the daemon. The daemon prefixes it
+/// with a draft incarnation and mutation generation before serving it, which
+/// is what also detects an exact-content remove/recreate. `PresetFile` uses
+/// ordered maps, making its JSON bytes stable.
+pub fn staged_slot_revision(slot: &StagedSlotView) -> String {
+    const OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+    const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
+    // The served revision is an output of this function, never one of its
+    // inputs. Clear it before serialization so a row recomputes identically
+    // after crossing JSON and so the token cannot hash itself.
+    let mut canonical = slot.clone();
+    canonical.target_revision.clear();
+    let bytes =
+        serde_json::to_vec(&canonical).unwrap_or_else(|_| format!("{canonical:?}").into_bytes());
+    let hash = bytes.iter().fold(OFFSET, |hash, byte| {
+        (hash ^ u128::from(*byte)).wrapping_mul(PRIME)
+    });
+    format!("s1-{hash:032x}")
 }
 
 /// Prepare a binding edit when the caller already selected the target slot.
@@ -920,7 +1180,7 @@ pub fn staged_slot_bind_edit(
         }
     }
 
-    let (canonical, also_drives, turbo_hz, turbo_effective_hz) = match target {
+    let (canonical, also_drives, turbo_hz, turbo_effective_hz, latched) = match target {
         Target::Pad { binding, canonical } => {
             core.entries
                 .retain(|(_, bound)| ksx_config::function_name(bound) != canonical);
@@ -946,6 +1206,16 @@ pub fn staged_slot_bind_edit(
                     core.turbo.push(TurboBinding::new(binding, hz));
                 }
             }
+            // TOGGLE-HOLD, same absent-means-untouched rule (§3b).
+            match request.toggle {
+                Some(false) | None if keys.is_empty() => core.toggle.retain(|row| *row != binding),
+                None => {}
+                Some(false) => core.toggle.retain(|row| *row != binding),
+                Some(true) => {
+                    core.toggle.retain(|row| *row != binding);
+                    core.toggle.push(binding);
+                }
+            }
             let also = other_functions_for_keys(&core, &keys, &canonical);
             let turbo = core
                 .turbo
@@ -957,6 +1227,7 @@ pub fn staged_slot_bind_edit(
                 also,
                 turbo.map(|row| row.hz),
                 turbo.map(TurboBinding::effective_hz),
+                core.toggle.contains(&binding),
             )
         }
         Target::Macro { index, canonical } => {
@@ -965,6 +1236,16 @@ pub fn staged_slot_bind_edit(
                     codes::BAD_REQUEST,
                     format!(
                         "{canonical} is a macro trigger; its repeat rate belongs in the macro body, not on its trigger key"
+                    ),
+                    Vec::new(),
+                ));
+            }
+            if request.toggle == Some(true) {
+                return Err(bind_refusal(
+                    codes::BAD_REQUEST,
+                    format!(
+                        "{canonical} is a macro trigger; what a release or repeat does belongs in \
+                         the macro body (`on_release`, `repeat`), not in a latch on its key"
                     ),
                     Vec::new(),
                 ));
@@ -978,7 +1259,7 @@ pub fn staged_slot_bind_edit(
                     .map(|key| ksx_core::MacroTrigger::new(key, index)),
             );
             let also = other_functions_for_keys(&core, &keys, &canonical);
-            (canonical, also, None, None)
+            (canonical, also, None, None, false)
         }
     };
 
@@ -1020,6 +1301,7 @@ pub fn staged_slot_bind_edit(
             also_drives,
             turbo_hz,
             turbo_effective_hz,
+            toggle: latched,
             // Staging is neither a disk write nor a live hot reload.
             reloaded: false,
             ..BindOutcome::default()
@@ -1260,6 +1542,7 @@ pub fn staged_mapper_slot(slot: &StagedSlotView, keyboard: &str) -> Result<Mappe
         .iter()
         .map(|row| (ksx_config::function_name(&row.binding), row.hz))
         .collect();
+    let toggle = core.toggle.iter().map(ksx_config::function_name).collect();
     Ok(MapperSlot {
         number: slot.number,
         persona: slot.persona.clone(),
@@ -1271,6 +1554,7 @@ pub fn staged_mapper_slot(slot: &StagedSlotView, keyboard: &str) -> Result<Mappe
         backup: None,
         session_backup: false,
         turbo,
+        toggle,
         macros_off: false,
     })
 }
@@ -1679,6 +1963,12 @@ pub struct StageOutcome {
     /// Stable refusal word (`too-many-xinput-slots`, `persona-not-implemented`,
     /// `bad-request`…).
     pub code: Option<String>,
+    /// The verb that works anyway, when the refusal knows one —
+    /// [`Refusal::remedy`], carried through instead of dropped so a surface
+    /// can offer the honest next step (`stage-apply`'s `needs-restart` names
+    /// `stage-play` here). Absent on the wire when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remedy: Option<String>,
     /// The setup AFTER the verb — unchanged when it was refused.
     pub setup: StagedSetupView,
     /// A save happened, and this is the config file it wrote. `None` for every
@@ -1713,6 +2003,7 @@ impl StageOutcome {
             ok: false,
             error: Some(refusal.message.clone()),
             code: Some(refusal.code.clone()),
+            remedy: refusal.remedy.clone(),
             setup: StagedSetupView::of(setup),
             ..Self::default()
         }
@@ -1817,7 +2108,32 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
         for option in &view.personas {
             let persona: Persona = option.name.parse().expect("a canonical name");
             assert_eq!(option.can_plug, persona.can_plug(), "{}", option.name);
+            assert_eq!(option.available, persona.can_plug(), "{}", option.name);
+            assert_eq!(
+                option.backend,
+                persona.backend().as_str(),
+                "{}",
+                option.name
+            );
+            assert_eq!(
+                option.backend_label,
+                persona.backend().label(),
+                "{}",
+                option.name
+            );
+            assert_eq!(
+                option.instance_limit,
+                persona.instance_limit(),
+                "{}",
+                option.name
+            );
             assert_eq!(option.gap.is_none(), option.can_plug, "{}", option.name);
+            assert_eq!(
+                option.unavailable_reason.is_none(),
+                option.available,
+                "{}",
+                option.name
+            );
             assert!(
                 view.personas
                     .iter()
@@ -1835,6 +2151,124 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             .expect("the roster lists the production DualSense persona");
         assert!(dualsense.can_plug);
         assert_eq!(dualsense.gap, None);
+        assert_eq!(dualsense.backend, "hidmaestro");
+        assert_eq!(dualsense.backend_label, "HIDMaestro");
+        // 2026-08-20: the multi-controller SDK host lifts the per-persona cap.
+        assert_eq!(dualsense.instance_limit, None);
+    }
+
+    /// A staged DualSense leaves the offer standing (the one-per-session cap
+    /// died with the multi-controller host), and the roster goes unavailable
+    /// only when the HIDMaestro pool itself fills at eight — with the pool
+    /// named as the reason. ViGEm personas are untouched by it.
+    #[test]
+    fn the_stage_roster_marks_hidmaestro_personas_unavailable_at_the_pool_ceiling() {
+        let mut setup = StagedSetup::new()
+            .add_slot(1, Persona::DualSense, ksx_core::Preset::builtin_empty())
+            .expect("the first DualSense stages");
+        {
+            let view = StagedSetupView::of(&setup);
+            let dualsense = view
+                .personas
+                .iter()
+                .find(|option| option.name == "dualsense")
+                .expect("DualSense remains in the served roster");
+            assert!(dualsense.can_plug, "this remains a build capability");
+            assert!(dualsense.available, "a second instance is offered");
+            assert_eq!(dualsense.unavailable_reason, None);
+        }
+
+        // Fill the pool: eight non-XInput HIDMaestro pads.
+        for n in 2u8..=8 {
+            let persona = if n % 2 == 0 {
+                Persona::SwitchPro
+            } else {
+                Persona::DualSense
+            };
+            setup = setup
+                .add_slot(n, persona, ksx_core::Preset::builtin_empty())
+                .unwrap_or_else(|e| panic!("pad {n} of 8 must stage: {e}"));
+        }
+        let full = StagedSetupView::of(&setup);
+        for name in ["dualsense", "switchpro", "xboxseries"] {
+            let option = full
+                .personas
+                .iter()
+                .find(|option| option.name == name)
+                .expect("roster keeps every persona");
+            assert!(
+                !option.available,
+                "{name} must be unavailable at the pool ceiling"
+            );
+            assert!(
+                option
+                    .unavailable_reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("HIDMaestro host's 8 pads")),
+                "{name}: {:?}",
+                option.unavailable_reason
+            );
+        }
+        assert!(
+            full.personas
+                .iter()
+                .find(|option| option.name == "playstation")
+                .is_some_and(|option| option.available),
+            "ViGEm personas sit outside the pool"
+        );
+    }
+
+    /// The four-place XInput ceiling is also stage-specific picker truth. It
+    /// removes another Xbox choice while leaving the non-XInput lane open.
+    #[test]
+    fn the_stage_roster_marks_xinput_personas_unavailable_at_the_ceiling() {
+        let mut setup = StagedSetup::new();
+        for number in 1..=MAX_XINPUT_SLOTS {
+            setup = setup
+                .add_slot(number, Persona::Xbox360, ksx_core::Preset::builtin_empty())
+                .expect("the four legal XInput slots stage");
+        }
+        let view = StagedSetupView::of(&setup);
+        let xbox = view
+            .personas
+            .iter()
+            .find(|option| option.name == "xbox360")
+            .expect("Xbox 360 remains in the served roster");
+        assert!(xbox.can_plug);
+        assert!(!xbox.available);
+        assert!(
+            xbox.unavailable_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("All 4 Xbox-style controller places")),
+            "{:?}",
+            xbox.unavailable_reason
+        );
+        assert!(view
+            .personas
+            .iter()
+            .find(|option| option.name == "playstation")
+            .is_some_and(|option| option.available));
+    }
+
+    /// Older daemon JSON had neither backend/capacity metadata nor the
+    /// stage-specific gate. Missing availability must remain permissive until
+    /// the next poll replaces it with a fully evaluated roster.
+    #[test]
+    fn an_older_persona_option_defaults_to_available() {
+        let option: PersonaOption = serde_json::from_value(serde_json::json!({
+            "name": "xbox360",
+            "label": "Xbox 360",
+            "is_xinput": true,
+            "can_plug": true,
+            "gap": null,
+            "instead": "xbox360"
+        }))
+        .expect("the pre-metadata wire shape remains readable");
+        assert!(option.available);
+        assert_eq!(option.backend, "");
+        assert_eq!(option.backend_label, "");
+        assert_eq!(option.instance_limit, None);
+        assert_eq!(option.unavailable_reason, None);
     }
 
     /// An unreachable daemon renders as an unreachable daemon, with the reason
@@ -1981,21 +2415,26 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
         assert_eq!(typo.code, codes::BAD_REQUEST);
         assert!(typo.message.contains("playstation"), "{typo}");
 
-        let refused = StageEdit::AddSlot {
+        // Every shipping persona is accepted over the wire (retro leg flip);
+        // the persona-not-implemented wire shape re-arms with the next gated
+        // persona.
+        StageEdit::AddSlot {
             number: None,
-            persona: "switchpro".into(),
+            persona: "snes".into(),
             preset: "P1".into(),
             layout: None,
         }
         .apply(&setup)
-        .unwrap_err();
-        assert_eq!(refused.code, "persona-not-implemented");
-        assert!(
-            refused
-                .message
-                .contains("has not yet completed its independent production runtime"),
-            "{refused}"
-        );
+        .expect("snes is accepted");
+
+        StageEdit::AddSlot {
+            number: None,
+            persona: "xboxseries".into(),
+            preset: "P1".into(),
+            layout: None,
+        }
+        .apply(&setup)
+        .expect("xboxseries is accepted");
 
         let bad_blocking = StageEdit::SetBlocking {
             blocking: "sometimes".into(),
@@ -2321,6 +2760,13 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
                 persona: "playstation".into(),
             },
             StageEdit::RemoveSlot { number: 1 },
+            StageEdit::ReorderSlots {
+                numbers: vec![3, 1, 2],
+            },
+            StageEdit::SetSocd {
+                number: 1,
+                socd: "up-priority".into(),
+            },
             StageEdit::SetBlocking {
                 blocking: "whole".into(),
             },
@@ -2333,6 +2779,50 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
         // The tag is the field a surface switches on.
         let text = serde_json::to_string(&StageEdit::Discard).unwrap();
         assert_eq!(text, r#"{"edit":"discard"}"#);
+    }
+
+    /// The SOCD roster serves every engine policy, in `Socd::ALL` order, each
+    /// with a jargon-free title — the reason it is a served roster at all is
+    /// that a surface hardcoding three names would keep offering them after
+    /// the engine grew the order-aware pair, which it now has (§2.6a).
+    #[test]
+    fn the_socd_roster_carries_all_five_policies() {
+        let roster = SocdOption::roster();
+        assert_eq!(
+            roster.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(),
+            vec!["off", "neutral", "up-priority", "last-input", "first-input"]
+        );
+        assert_eq!(
+            roster.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(),
+            vec![
+                "Send both",
+                "Cancel to centre",
+                "Up wins",
+                "Last press wins",
+                "First press wins"
+            ]
+        );
+        // Every detail names its consequence; the order-aware pair also name
+        // the standard they implement, so a player can find the mode their
+        // community calls "snap tap".
+        assert!(
+            roster[3].detail.contains("snap tap"),
+            "{}",
+            roster[3].detail
+        );
+        assert!(roster[4].detail.contains("first"), "{}", roster[4].detail);
+
+        // The community spellings land through the same parser every surface
+        // uses, so `ksx stage socd 1 snap-tap` needs no extra vocabulary.
+        let edit = StageEdit::SetSocd {
+            number: 1,
+            socd: "snap-tap".into(),
+        };
+        let setup = staged_with_preset(&authored_preset());
+        let changed = edit.apply(&setup).expect("snap-tap is last-input");
+        let view = StagedSetupView::of(&changed);
+        assert_eq!(view.slots[0].socd, "last-input");
+        assert_eq!(view.slots[0].socd_label, "Last press wins");
     }
 
     #[test]
@@ -2371,11 +2861,14 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             &before,
             &StagedBindRequest {
                 number: 1,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
                 preset: "Player 1".into(),
                 function: "a".into(),
                 keys: vec!["g".into(), "enter".into(), "G".into()],
                 force: false,
                 turbo_hz: Some(12),
+                toggle: None,
             },
         )
         .expect("a free multi-key binding stages");
@@ -2418,11 +2911,14 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             &changed_view,
             &StagedBindRequest {
                 number: 1,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
                 preset: "Player 1".into(),
                 function: "A".into(),
                 keys: vec!["none".into()],
                 force: false,
                 turbo_hz: None,
+                toggle: None,
             },
         )
         .expect("None is the canonical clear placeholder");
@@ -2441,6 +2937,172 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             .turbo
             .iter()
             .any(|row| ksx_config::function_name(&row.binding) == "A"));
+    }
+
+    #[test]
+    fn staged_binding_rechecks_the_selected_input_selector() {
+        let setup = staged_with_preset(&authored_preset());
+        let view = StagedSetupView::of(&setup);
+        let refused = staged_bind_edit(
+            &view,
+            &StagedBindRequest {
+                number: 1,
+                expected_device: "usb:d209:0431:00".to_owned(),
+                preset: "Player 1".to_owned(),
+                function: "A".to_owned(),
+                keys: vec!["G".to_owned()],
+                ..StagedBindRequest::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(refused.code.as_deref(), Some(codes::BAD_REQUEST));
+        assert!(
+            refused
+                .error
+                .as_deref()
+                .is_some_and(|message| message.contains("selected input changed")),
+            "{refused:?}"
+        );
+
+        let accepted = staged_bind_edit(
+            &view,
+            &StagedBindRequest {
+                number: 1,
+                expected_device: "USB:D209:0430:00".to_owned(),
+                preset: "Player 1".to_owned(),
+                function: "A".to_owned(),
+                keys: vec!["G".to_owned()],
+                ..StagedBindRequest::default()
+            },
+        );
+        assert!(accepted.is_ok(), "the exact selector is case-insensitive");
+    }
+
+    #[test]
+    fn staged_binding_rechecks_the_complete_controller_target() {
+        let old_request: StagedBindRequest = serde_json::from_value(serde_json::json!({
+            "number": 1,
+            "preset": "Player 1",
+            "function": "A",
+            "keys": ["G"]
+        }))
+        .unwrap();
+        assert!(
+            old_request.expected_target_revision.is_empty(),
+            "an older caller retains the compatibility path"
+        );
+
+        let setup = staged_with_preset(&authored_preset());
+        let first = StagedSetupView::of(&setup);
+        let first_slot = &first.slots[0];
+        let revision = staged_slot_revision(first_slot);
+
+        let changed = StageEdit::SetPersona {
+            number: 1,
+            persona: "playstation".into(),
+        }
+        .apply(&setup)
+        .unwrap();
+        let changed = StageEdit::SetLayout {
+            number: 1,
+            layout: "empty".into(),
+            player: None,
+        }
+        .apply(&changed)
+        .unwrap();
+        let changed = StagedSetupView::of(&changed);
+        assert_eq!(changed.slots[0].number, first_slot.number);
+        assert_eq!(changed.slots[0].preset, first_slot.preset);
+        assert_ne!(staged_slot_revision(&changed.slots[0]), revision);
+
+        let refused = staged_bind_edit(
+            &changed,
+            &StagedBindRequest {
+                number: 1,
+                expected_target_revision: revision,
+                preset: "Player 1".into(),
+                function: "A".into(),
+                keys: vec!["G".into()],
+                ..StagedBindRequest::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(refused.code.as_deref(), Some(codes::BAD_SLOT));
+        let error = refused.error.as_deref().unwrap_or_default();
+        assert!(error.contains("Player 1 changed"), "{error}");
+        assert!(error.contains("Nothing changed"), "{error}");
+    }
+
+    /// TOGGLE-HOLD at the staging layer: the same three-state rule as the
+    /// rate (absent = untouched, `false` = cleared, `true` = latched), the
+    /// same clear-drops-it rule, and the same macro-trigger refusal.
+    #[test]
+    fn staged_bindings_carry_the_latch_through_the_same_three_states() {
+        let setup = staged_with_preset(&authored_preset());
+        let view = StagedSetupView::of(&setup);
+        let latch = |keys: Vec<String>, toggle: Option<bool>| StagedBindRequest {
+            number: 1,
+            expected_device: String::new(),
+            expected_target_revision: String::new(),
+            preset: "Player 1".into(),
+            function: "a".into(),
+            keys,
+            force: false,
+            turbo_hz: None,
+            toggle,
+        };
+
+        // Latch it.
+        let prepared = staged_bind_edit(&view, &latch(vec!["g".into()], Some(true)))
+            .expect("a latch on a pad function stages");
+        assert!(prepared.outcome.toggle, "the ack says it is latched");
+        let setup = prepared.edit.apply(&setup).unwrap();
+        let view = StagedSetupView::of(&setup);
+        let core = view.slots[0].authoring.as_ref().unwrap().to_core().unwrap();
+        assert!(core.toggled(ksx_core::Binding::Button(ksx_core::XButton::A)));
+
+        // Rebinding the KEY with the flag absent keeps the latch.
+        let prepared = staged_bind_edit(&view, &latch(vec!["h".into()], None))
+            .expect("a rebind without the flag stages");
+        assert!(prepared.outcome.toggle, "absent means untouched");
+
+        // `false` is the explicit off.
+        let prepared = staged_bind_edit(&view, &latch(vec!["g".into()], Some(false)))
+            .expect("clearing the latch stages");
+        assert!(!prepared.outcome.toggle);
+        let StageEdit::SetBindings { preset, .. } = &prepared.edit else {
+            unreachable!()
+        };
+        assert!(preset.to_core().unwrap().toggle.is_empty());
+
+        // Clearing the control clears its latch with it.
+        let prepared = staged_bind_edit(&view, &latch(vec!["none".into()], None))
+            .expect("None is the canonical clear placeholder");
+        assert!(!prepared.outcome.toggle);
+        let StageEdit::SetBindings { preset, .. } = &prepared.edit else {
+            unreachable!()
+        };
+        assert!(preset.to_core().unwrap().toggle.is_empty());
+
+        // A macro trigger refuses the latch in the macro's own vocabulary.
+        let refused = staged_bind_edit(
+            &view,
+            &StagedBindRequest {
+                number: 1,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
+                preset: "Player 1".into(),
+                function: "macro.hadouken".into(),
+                keys: vec!["p".into()],
+                force: false,
+                turbo_hz: None,
+                toggle: Some(true),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(refused.code.as_deref(), Some(codes::BAD_REQUEST));
+        let error = refused.error.as_deref().unwrap();
+        assert!(error.contains("macro body"), "{error}");
     }
 
     #[test]
@@ -2519,11 +3181,14 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             .unwrap();
         let request = StagedBindRequest {
             number: 1,
+            expected_device: String::new(),
+            expected_target_revision: String::new(),
             preset: "Player 1".into(),
             function: "A".into(),
             keys: vec![occupied],
             force: false,
             turbo_hz: None,
+            toggle: None,
         };
         let refused = staged_bind_edit(&view, &request).unwrap_err();
         assert_eq!(refused.code.as_deref(), Some(codes::CONFLICT));
@@ -2587,11 +3252,14 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             &with_body_view,
             &StagedBindRequest {
                 number: 1,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
                 preset: "Player 1".into(),
                 function: "MACRO.Hadouken".into(),
                 keys: vec!["p".into(), "leftcontrol".into()],
                 force: false,
                 turbo_hz: None,
+                toggle: None,
             },
         )
         .expect("macro trigger rows use the same binding helper");

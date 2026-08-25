@@ -300,6 +300,107 @@ fn axis_release_with_same_direction_still_held_stays_deflected() {
     assert_eq!(engine.pad_state(1).unwrap().ly, AXIS_MIN);
 }
 
+#[test]
+fn same_sign_ladder_release_falls_back_instead_of_centering() {
+    // The bug the old `opposite_snap` could not see. It consulted only holders
+    // of the OPPOSITE sign, so releasing the larger of two SAME-sign holders
+    // found no fallback and centred the axis. A ladder is exactly this shape
+    // (docs/UNIVERSAL-IO.md M12), and so is a modifier that deepens a lean.
+    let dev = DeviceId::new("DEV_A");
+    let p = preset(
+        "p",
+        vec![
+            (Key::A, axis(Axis::X, 16384)),
+            (Key::S, axis(Axis::X, AXIS_MAX)),
+        ],
+    );
+    let mut engine = Engine::new(vec![slot(1, &dev, p)]);
+
+    engine.handle(&ev(&dev, Key::A, true));
+    let d = engine.handle(&ev(&dev, Key::S, true));
+    assert_eq!(d[0].state.lx, AXIS_MAX, "the deeper demand takes the axis");
+
+    let d = engine.handle(&ev(&dev, Key::S, false));
+    assert_eq!(
+        d[0].state.lx, 16384,
+        "falls back to the still-held shallower demand, NOT to centre"
+    );
+
+    let d = engine.handle(&ev(&dev, Key::A, false));
+    assert_eq!(
+        d[0].state.lx, AXIS_CENTER,
+        "holding nothing is the only thing that centres an axis"
+    );
+}
+
+#[test]
+fn a_weaker_same_sign_press_does_not_stomp_a_stronger_hold() {
+    // The other half of the one rule, and the half nothing else pins: magnitude
+    // arbitrates WITHIN a sign, so a shallower demand pressed while a deeper one
+    // is held changes nothing. Pure recency would answer 16384 here.
+    // `opposite_axis_snap_prefers_largest_held_deflection` cannot tell the two
+    // apart, because it only ever presses in increasing order.
+    let dev = DeviceId::new("DEV_A");
+    let p = preset(
+        "p",
+        vec![
+            (Key::A, axis(Axis::X, AXIS_MAX)),
+            (Key::S, axis(Axis::X, 16384)),
+        ],
+    );
+    let mut engine = Engine::new(vec![slot(1, &dev, p)]);
+
+    let d = engine.handle(&ev(&dev, Key::A, true));
+    assert_eq!(d[0].state.lx, AXIS_MAX);
+
+    let d = engine.handle(&ev(&dev, Key::S, true));
+    assert!(
+        d.is_empty(),
+        "a shallower same-sign press is not a state change"
+    );
+    assert_eq!(engine.pad_state(1).unwrap().lx, AXIS_MAX);
+
+    let d = engine.handle(&ev(&dev, Key::S, false));
+    assert!(d.is_empty(), "and neither is its release");
+    assert_eq!(engine.pad_state(1).unwrap().lx, AXIS_MAX);
+}
+
+#[test]
+fn a_zero_axis_demand_centres_whichever_way_the_stick_leans() {
+    // `lx.0` is authorable (`ksx_config::parse_function`) and its entire meaning
+    // is "centre this axis". Zero is therefore a SIGN OF ITS OWN in the resolver,
+    // not a weak positive: bucketed with the positives it would lose max() to any
+    // held positive holder while still beating every negative one, so the same
+    // binding would centre a left lean and do nothing to a right one. Caught by
+    // adversarial review; the asymmetry is the whole point of this test.
+    let dev = DeviceId::new("DEV_A");
+    let p = preset(
+        "p",
+        vec![
+            (Key::A, axis(Axis::X, AXIS_MIN)),
+            (Key::D, axis(Axis::X, AXIS_MAX)),
+            (Key::C, axis(Axis::X, AXIS_CENTER)),
+        ],
+    );
+    let mut engine = Engine::new(vec![slot(1, &dev, p)]);
+
+    // Leaning right, then demand centre.
+    engine.handle(&ev(&dev, Key::D, true));
+    let d = engine.handle(&ev(&dev, Key::C, true));
+    assert_eq!(d[0].state.lx, AXIS_CENTER, "centres a right lean");
+
+    engine.handle(&ev(&dev, Key::C, false));
+    engine.handle(&ev(&dev, Key::D, false));
+
+    // Leaning left, then demand centre — the SAME binding must answer the same.
+    engine.handle(&ev(&dev, Key::A, true));
+    let d = engine.handle(&ev(&dev, Key::C, true));
+    assert_eq!(
+        d[0].state.lx, AXIS_CENTER,
+        "and centres a left lean identically"
+    );
+}
+
 // --------------------------------------------------------------------- rule 6
 
 #[test]

@@ -75,26 +75,54 @@ pub const CLIENT_LEASE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 pub const CLIENT_LEASE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Finite upper bounds passed to every transport implementation.
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
-pub const CREATE_TIMEOUT: Duration = Duration::from_secs(15);
+/// Creating a devnode is slow and gets slower with siblings: the 2026-08-20
+/// session measured the FIRST Switch Pro create at 0.8 s and the SECOND at
+/// 7.7 s (the driver re-enumerates with every added pad). 15 s left too
+/// little headroom for the later pads of an eight-pad couch; a genuine bind
+/// failure still answers as a named Fault well inside this bound (the host's
+/// own child-wait is 12 s).
+pub const CREATE_TIMEOUT: Duration = Duration::from_secs(30);
 pub const SUBMIT_TIMEOUT: Duration = Duration::from_millis(250);
-pub const DESTROY_TIMEOUT: Duration = Duration::from_secs(5);
-pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+/// Destroying a virtual controller removes a live devnode, and the OS-side
+/// removal cascade is the slow part: the 2026-08-20 hardware session measured
+/// `DIF_REMOVE` on the first-ever HIDMaestro teardown at 11,978 ms (upstream
+/// budgets 120 s for the same wait). 5 s abandoned a perfectly healthy
+/// teardown and reported a torn transport over a pad that was cleanly
+/// removed seven seconds later.
+pub const DESTROY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Shutdown performs a full controller destroy (the same measured ~12 s
+/// removal cascade) before the host answers Bye, so it carries the same
+/// bound as [`DESTROY_TIMEOUT`].
+pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One of the fixed catalog identities KSX may eventually request.
 ///
-/// This is protocol vocabulary, not a capability gate. The production host
-/// currently enables DualSense only; Switch Pro and Xbox Series remain gated
-/// independently by [`Persona::can_plug()`].
+/// This is protocol vocabulary, not a capability gate. Which personas a
+/// build offers is decided independently by [`Persona::can_plug()`] — all
+/// three since the 2026-08-20 session measured them working through the
+/// multi-controller SDK-lane host.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum ProfileId {
     DualSense = 1,
     SwitchPro = 2,
     XboxSeries = 3,
+    /// The iBuffalo Classic USB Gamepad identity carrying the SNES persona
+    /// (see `Persona::Snes` for why this identity and not the NSO pad).
+    Snes = 4,
+    /// The DaemonBite Genesis/Saturn adapter identity carrying the Genesis
+    /// persona (see `Persona::Genesis`).
+    Genesis = 5,
 }
 
 impl ProfileId {
-    pub const ALL: &'static [Self] = &[Self::DualSense, Self::SwitchPro, Self::XboxSeries];
+    pub const ALL: &'static [Self] = &[
+        Self::DualSense,
+        Self::SwitchPro,
+        Self::XboxSeries,
+        Self::Snes,
+        Self::Genesis,
+    ];
 
     /// The pinned HIDMaestro catalog slug selected inside the host.
     pub const fn catalog_slug(self) -> &'static str {
@@ -102,6 +130,8 @@ impl ProfileId {
             Self::DualSense => "dualsense",
             Self::SwitchPro => "switch-pro",
             Self::XboxSeries => "xbox-series-xs-bt",
+            Self::Snes => "ibuffalo-snes",
+            Self::Genesis => "daemonbite-genesis",
         }
     }
 
@@ -110,6 +140,8 @@ impl ProfileId {
             Self::DualSense => Persona::DualSense,
             Self::SwitchPro => Persona::SwitchPro,
             Self::XboxSeries => Persona::XboxSeries,
+            Self::Snes => Persona::Snes,
+            Self::Genesis => Persona::Genesis,
         }
     }
 
@@ -119,6 +151,8 @@ impl ProfileId {
             Self::DualSense => (0x054C, 0x0CE6),
             Self::SwitchPro => (0x057E, 0x2009),
             Self::XboxSeries => (0x045E, 0x0B13),
+            Self::Snes => (0x0583, 0x2060),
+            Self::Genesis => (0x2341, 0x8036),
         }
     }
 
@@ -127,6 +161,8 @@ impl ProfileId {
             1 => Ok(Self::DualSense),
             2 => Ok(Self::SwitchPro),
             3 => Ok(Self::XboxSeries),
+            4 => Ok(Self::Snes),
+            5 => Ok(Self::Genesis),
             other => Err(ProtocolError::UnknownValue {
                 field: "profile",
                 value: u64::from(other),
@@ -148,6 +184,8 @@ impl TryFrom<Persona> for ProfileId {
             Persona::DualSense => Ok(Self::DualSense),
             Persona::SwitchPro => Ok(Self::SwitchPro),
             Persona::XboxSeries => Ok(Self::XboxSeries),
+            Persona::Snes => Ok(Self::Snes),
+            Persona::Genesis => Ok(Self::Genesis),
             other => Err(UnsupportedHostPersona(other)),
         }
     }
@@ -2757,14 +2795,35 @@ mod tests {
         ));
     }
 
-    /// Protocol vocabulary does not enable unfinished product personas. The
-    /// production DualSense profile is live, while Switch Pro and Xbox Series
-    /// remain independently gated even though the host can parse their names.
+    /// The adapter now asks the profile which persona it is, instead of
+    /// answering DualSense for every live handle. That only works if the two
+    /// directions agree, so pin the round trip for all three — including the
+    /// two that are still build-gated, because the gate is a product decision
+    /// and this is a protocol fact.
     #[test]
-    fn protocol_profiles_enable_only_finished_product_personas() {
-        assert!(ProfileId::DualSense.persona().can_plug());
-        for profile in [ProfileId::SwitchPro, ProfileId::XboxSeries] {
-            assert!(!profile.persona().can_plug(), "{profile:?}");
+    fn a_profile_and_a_persona_name_each_other_both_ways() {
+        for id in ProfileId::ALL {
+            assert_eq!(
+                ProfileId::try_from(id.persona()).expect("a host profile maps back"),
+                *id,
+                "{id:?} did not survive the round trip"
+            );
+        }
+        // ...and the two ViGEm personas have no host profile at all: a
+        // HIDMaestro Xbox 360 pad would be the synthesis layer we refuse.
+        for persona in [Persona::Xbox360, Persona::PlayStation] {
+            assert!(ProfileId::try_from(persona).is_err(), "{persona}");
+        }
+    }
+
+    /// Every protocol profile is product-enabled (retro leg flip
+    /// 2026-08-20). The CANDIDATE-shaped harness below still refuses Switch
+    /// Pro — the candidate host serves nothing in production and stays the
+    /// conformance reference.
+    #[test]
+    fn protocol_profiles_carry_their_measured_gates() {
+        for profile in ProfileId::ALL.iter().copied() {
+            assert!(profile.persona().can_plug(), "{profile:?}");
         }
         let (_harness, transport) = Harness::new();
         let mut client = HostClient::connect(transport, nonce(), expectation()).unwrap();

@@ -21,6 +21,16 @@ use serde::{Deserialize, Serialize};
 pub trait StatusSource: Send + Sync {
     fn snapshot(&self) -> StatusSnapshot;
 
+    /// Identifies whether a surface is reading the live machine or a
+    /// deliberately synthetic fixture.  This is presentation metadata, not a
+    /// security boundary: its job is to keep screenshots and manual QA from
+    /// mistaking seeded data for physical hardware.
+    fn environment(&self) -> RuntimeEnvironmentView {
+        // Fail closed. A new fixture/provider that forgets to classify itself
+        // must never inherit authority to call its answers real hardware.
+        RuntimeEnvironmentView::default()
+    }
+
     /// The mapper page's data: slots with their presets and bindings. The
     /// default is an honest "no data" so existing sources keep compiling;
     /// ksx-backend overrides it with the config-store reader.
@@ -44,6 +54,75 @@ pub trait StatusSource: Send + Sync {
     }
 }
 
+/// Human-facing provenance for the state a surface is rendering.
+///
+/// [`Default`] is deliberately unknown. Production providers must return
+/// [`RuntimeEnvironmentView::live`], while test/demo providers must return a
+/// fixture-specific id and explanation. Forgetting either classification is
+/// therefore conspicuous instead of silently granting live-hardware authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeEnvironmentView {
+    /// Stable machine token (`live-machine`, `fixture-seeded`, ...).
+    pub id: String,
+    /// Compact title-bar label.
+    pub label: String,
+    /// Tooltip/help copy that states what this process may read or mutate.
+    pub detail: String,
+    /// True only when every machine/device answer is synthetic.
+    pub fixture: bool,
+    /// Stable for one fixture process and empty for live providers. A fixture
+    /// origin uses this to discard browser-only drafts when its seed process
+    /// is deliberately restarted.
+    #[serde(default)]
+    pub generation: String,
+}
+
+impl RuntimeEnvironmentView {
+    #[must_use]
+    pub fn live() -> Self {
+        Self {
+            id: "live-machine".to_owned(),
+            label: "LIVE MACHINE · REAL HARDWARE".to_owned(),
+            detail: "Live providers read this computer's devices and saved KSX state; confirmed hardware actions can affect the selected physical device.".to_owned(),
+            fixture: false,
+            generation: String::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn fixture(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            detail: detail.into(),
+            fixture: true,
+            generation: String::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_generation(mut self, generation: impl Into<String>) -> Self {
+        self.generation = generation.into();
+        self
+    }
+}
+
+impl Default for RuntimeEnvironmentView {
+    fn default() -> Self {
+        Self {
+            id: "unknown-environment".to_owned(),
+            label: "UNKNOWN ENVIRONMENT · NOT QA EVIDENCE".to_owned(),
+            detail: "This provider did not declare whether its data is live or synthetic. Do not use this page as evidence about physical hardware.".to_owned(),
+            fixture: false,
+            generation: String::new(),
+        }
+    }
+}
+
 /// Everything the cabinet status sections show. Point-in-time by design: a
 /// snapshot is re-read on every request and never claims to be live session
 /// data — that is the session panel's job, over [`crate::ControlSource`] and
@@ -54,6 +133,16 @@ pub struct StatusSnapshot {
     pub generated_at: String,
     /// One line describing ViGEmBus (installed / service state / version).
     pub vigem: String,
+    /// HIDMaestro's exact installed-package evidence for the supported
+    /// DualSense lane.
+    ///
+    /// This is system inventory, not a claim that a controller endpoint is
+    /// already live. An installed package therefore remains
+    /// `verified-on-play`; the protected host handshake and endpoint creation
+    /// are proved by the Play transaction. Missing/partial and unreadable are
+    /// distinct typed states inherited from `ControllerOutputView`.
+    #[serde(default)]
+    pub hidmaestro: crate::ControllerOutputView,
     /// One line describing the Interception keyboard filter.
     pub interception: String,
     /// A ksx process other than the caller is alive right now.
@@ -78,6 +167,7 @@ impl StatusSnapshot {
         Self {
             generated_at: "(unavailable)".to_owned(),
             vigem: reason.to_owned(),
+            hidmaestro: crate::ControllerOutputView::hidmaestro_inventory_unreadable(reason),
             interception: reason.to_owned(),
             daemon_running: false,
             daemon_detail: reason.to_owned(),
@@ -172,6 +262,11 @@ pub struct MapperSlot {
     /// one rate per row of the legend.
     #[serde(default)]
     pub turbo: std::collections::BTreeMap<String, u32>,
+    /// Functions that LATCH (toggle-hold, docs/INPUT-TRANSFORMS.md §2 item 8),
+    /// keyed by FUNCTION for turbo's reason. Absent on older daemons; empty
+    /// for every preset written before toggle existed.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub toggle: std::collections::BTreeSet<String>,
     /// This slot says `macros = "off"` (config.toml or the games.toml profile)
     /// — the TOURNAMENT SWITCH. Every macro of its preset is silenced whatever
     /// each one's own `enabled` says; nothing is deleted.
@@ -401,6 +496,11 @@ mod tests {
         StatusSnapshot {
             generated_at: "2026-08-04 12:00:00 UTC".into(),
             vigem: "installed — service running — driver v1.21.442.0".into(),
+            hidmaestro: crate::ControllerOutputView::hidmaestro_inventory(
+                true,
+                false,
+                Some("1.6.1".into()),
+            ),
             interception: "installed — keyboard filter active".into(),
             daemon_running: true,
             daemon_detail: "ksx.exe alive (pid 4242)".into(),
@@ -426,6 +526,35 @@ mod tests {
     }
 
     #[test]
+    fn runtime_environment_defaults_unknown_and_requires_explicit_authority() {
+        let unknown = RuntimeEnvironmentView::default();
+        assert_eq!(unknown.id, "unknown-environment");
+        assert!(!unknown.fixture);
+        assert!(unknown.generation.is_empty());
+
+        let live = RuntimeEnvironmentView::live();
+        assert_eq!(live.id, "live-machine");
+        assert!(!live.fixture);
+        assert!(live.generation.is_empty());
+
+        let fixture = RuntimeEnvironmentView::fixture(
+            "fixture-first-run",
+            "FIXTURE · FIRST RUN",
+            "Synthetic machine; no physical device is read.",
+        )
+        .with_generation("pid-4242");
+        assert!(fixture.fixture);
+        assert_eq!(fixture.generation, "pid-4242");
+        assert_eq!(
+            serde_json::from_str::<RuntimeEnvironmentView>(
+                &serde_json::to_string(&fixture).unwrap(),
+            )
+            .unwrap(),
+            fixture,
+        );
+    }
+
+    #[test]
     fn snapshot_serializes_to_stable_field_names() {
         let v = serde_json::to_value(sample()).unwrap();
         assert_eq!(
@@ -433,6 +562,16 @@ mod tests {
             Some(&serde_json::json!(
                 "installed — service running — driver v1.21.442.0"
             ))
+        );
+        assert_eq!(
+            v.pointer("/hidmaestro/state"),
+            Some(&serde_json::json!(
+                crate::controller_output_states::VERIFIED_ON_PLAY
+            ))
+        );
+        assert_eq!(
+            v.pointer("/hidmaestro/personas/0"),
+            Some(&serde_json::json!("dualsense"))
         );
         assert_eq!(v.pointer("/daemon_running"), Some(&serde_json::json!(true)));
         assert_eq!(
@@ -456,6 +595,12 @@ mod tests {
         ] {
             assert_eq!(line, "collector panicked");
         }
+        assert_eq!(
+            snap.hidmaestro.state,
+            crate::controller_output_states::UNKNOWN
+        );
+        assert!(!snap.hidmaestro.readable);
+        assert!(snap.hidmaestro.line.contains("collector panicked"));
         assert!(!snap.daemon_running);
         assert!(snap.pads.is_empty() && snap.profiles.is_empty());
     }

@@ -51,8 +51,8 @@ fn summarize_hidmaestro(report: &DriverReport, out: &mut Vec<Advice>) {
             severity: Severity::Info,
             code: "personas-not-implemented",
             message: format!(
-                "The {} personas have not completed their independent production runtimes. \
-                 DualSense is live; use xbox360 for the unfinished profiles.",
+                "The {} personas have not completed their independent production runtimes; \
+                 use xbox360 for those.",
                 gated.join("/"),
             ),
         });
@@ -67,9 +67,9 @@ fn summarize_hidmaestro(report: &DriverReport, out: &mut Vec<Advice>) {
             severity: Severity::Warning,
             code: "hidmaestro-partial",
             message: format!(
-                "The HIDMaestro package is missing, duplicated, or does not match the pinned \
-                 v1.6.1 INF and UMDF driver hashes (checked {}): reinstall it with the KSX \
-                 installer task, or remove the broken package.",
+                "The HIDMaestro package is missing, duplicated, or does not match pinned \
+                 v1.6.1 (the INF hash or the SDK's InstalledManifestSha256 differs; checked {}): \
+                 reinstall it with the KSX installer task, or remove the broken package.",
                 hm.looked_for.join(", "),
             ),
         });
@@ -569,13 +569,10 @@ mod tests {
         let advice = summarize(&r);
         // Sorted most-severe-first, so the two Info-level notes land last —
         // behind anything that is actually broken.
+        // Retro leg flip: no persona is gated, so no gate note appears.
         assert_eq!(
             codes(&advice),
-            vec![
-                "interception-missing",
-                "personas-not-implemented",
-                "hidmaestro-missing"
-            ]
+            vec!["interception-missing", "hidmaestro-missing"]
         );
         assert_eq!(advice[0].severity, Severity::Warning);
     }
@@ -595,24 +592,17 @@ mod tests {
         present.hidmaestro.installed = true;
         present.hidmaestro.service_key = true;
 
+        // Retro leg flip: nothing is gated, so the note stays silent in
+        // BOTH states — the property this test pins: an install must not
+        // change what the build can plug.
+        assert!(crate::report::HidMaestroReport::gated_personas().is_empty());
         for (label, report) in [("absent", &absent), ("installed", &present)] {
             let advice = summarize(report);
-            let gate = advice
-                .iter()
-                .find(|a| a.code == "personas-not-implemented")
-                .unwrap_or_else(|| {
-                    panic!("{label}: the gate note must survive: {:?}", codes(&advice))
-                });
-            for persona in crate::report::HidMaestroReport::gated_personas() {
-                assert!(gate.message.contains(persona), "{label}: {}", gate.message);
-            }
             assert!(
-                gate.message
-                    .contains("have not completed their independent production runtimes"),
-                "{label}: {}",
-                gate.message
+                !advice.iter().any(|a| a.code == "personas-not-implemented"),
+                "{label}: an install must not conjure a gate note: {:?}",
+                codes(&advice)
             );
-            assert_eq!(gate.severity, Severity::Info, "{label}");
         }
         // ...and the install note itself only appears when it is true.
         assert!(codes(&summarize(&absent)).contains(&"hidmaestro-missing"));

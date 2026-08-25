@@ -59,6 +59,18 @@ fn main() {
         return;
     }
 
+    // Windows reserves only 1 MiB for the process's initial thread by
+    // default.  Clap constructs this binary's deliberately broad command
+    // graph on that thread before dispatch, and the nested panel/programming
+    // surface can legitimately cross that limit in an unoptimised developer
+    // build.  Keep the real main thread (the tray and cabinet paths rely on
+    // its Win32 lifetime) and give this binary, alone, a measured margin.
+    // `tests/no_interception_dll.rs` reads the emitted PE header so this
+    // contract cannot regress into a source-only linker hint.
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        println!("cargo:rustc-link-arg-bin=ksx=/STACK:4194304");
+    }
+
     #[cfg(windows)]
     windows_resources();
 }

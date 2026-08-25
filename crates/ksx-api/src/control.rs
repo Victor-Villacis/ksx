@@ -88,6 +88,27 @@ pub trait ControlSource: Send + Sync {
     fn learn_cancel(&self) -> LearnView {
         LearnView::unavailable("this control source has no learner")
     }
+    /// Stop only the exact listener generation the caller opened. The
+    /// default preserves compatibility for in-process/test providers; the
+    /// daemon pipe implementation performs the atomic generation check.
+    fn learn_cancel_generation(&self, _generation: Option<u64>) -> LearnView {
+        self.learn_cancel()
+    }
+
+    /// Start a bounded, read-only simultaneous-key diagnostic for one exact
+    /// keyboard-compatible device. The daemon owns the observation so a
+    /// WinUSB-claimed panel and an ordinary keyboard use the same seam.
+    fn input_test_start(&self, _spec: &InputTestSpec) -> InputTestView {
+        InputTestView::unavailable("this control source has no simultaneous-input tester")
+    }
+    /// Snapshot the active diagnostic attempt.
+    fn input_test_poll(&self) -> InputTestView {
+        InputTestView::unavailable("this control source has no simultaneous-input tester")
+    }
+    /// Stop only the diagnostic generation the caller opened.
+    fn input_test_cancel_generation(&self, _generation: Option<u64>) -> InputTestView {
+        InputTestView::unavailable("this control source has no simultaneous-input tester")
+    }
 
     /// Write one binding (pipe `map`). `request.key == None` clears it.
     fn bind(&self, _request: &BindRequest) -> BindOutcome {
@@ -289,6 +310,30 @@ pub trait ControlSource: Send + Sync {
     fn stage_play(&self) -> StageOutcome {
         StageOutcome::unavailable(
             "this control source cannot start a staged setup — a daemon holds it (`ksx daemon`)",
+        )
+    }
+
+    /// **Adopt the saved configuration into the stage** — config.toml (or one
+    /// games.toml profile) becomes the draft, read from disk into daemon
+    /// memory with nothing written. Refused when the stage is non-empty:
+    /// adoption never overwrites edits, so a surface that means to replace
+    /// them sends [`StageEdit::Discard`] first, behind its own confirmation.
+    fn stage_adopt(&self, _profile: Option<&str>) -> StageOutcome {
+        StageOutcome::unavailable(
+            "this control source cannot adopt the saved configuration — a daemon holds the \
+             stage (`ksx daemon`)",
+        )
+    }
+
+    /// **Apply the staged setup's bindings to the running session in place** —
+    /// pads stay plugged, nothing written. Refused with `needs-restart` when
+    /// the draft differs structurally (the message names the difference, and
+    /// [`ControlSource::stage_play`] is the verb that replaces the session),
+    /// and refused when nothing is running.
+    fn stage_apply(&self) -> StageOutcome {
+        StageOutcome::unavailable(
+            "this control source cannot apply the staged setup to a live session — a daemon \
+             holds both (`ksx daemon`)",
         )
     }
 }
@@ -681,6 +726,10 @@ pub fn without_key(keys: &[String], key: &str) -> Vec<String> {
 pub struct LearnView {
     pub ok: bool,
     pub state: String,
+    /// Daemon-owned attempt identity. A caller that starts an observation and
+    /// then polls must keep this exact value so another tab cannot supersede
+    /// the attempt and have its key mistaken for the first caller's result.
+    pub generation: Option<u64>,
     /// Countdown for the mapper's visible timer (the PadForge gap the design
     /// closes) — `Some` only while listening.
     pub remaining_ms: Option<u64>,
@@ -696,6 +745,7 @@ impl LearnView {
         Self {
             ok: false,
             state: "unavailable".to_owned(),
+            generation: None,
             remaining_ms: None,
             device: None,
             key: None,
@@ -714,6 +764,95 @@ impl LearnView {
             self.error
                 .clone()
                 .unwrap_or_else(|| "the learner is unavailable".to_owned()),
+        ))
+    }
+}
+
+/// One exact, bounded simultaneous-input observation request.
+///
+/// `selector` is the canonical selector already returned by the machine
+/// inventory (`usb:VID:PID:MI`, serial/port-qualified when necessary). It is
+/// resolved again by the daemon immediately before listening; a display name
+/// or ambiguous substring is never accepted as authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputTestSpec {
+    pub selector: String,
+    /// Bounded by the daemon to 1–60 seconds. Thirty seconds is long enough to
+    /// hold a cabinet chord without leaving a hidden listener behind.
+    #[serde(default = "default_input_test_duration_ms")]
+    pub duration_ms: u64,
+}
+
+impl Default for InputTestSpec {
+    fn default() -> Self {
+        Self {
+            selector: String::new(),
+            duration_ms: default_input_test_duration_ms(),
+        }
+    }
+}
+
+pub const fn default_input_test_duration_ms() -> u64 {
+    30_000
+}
+
+/// Daemon-owned snapshot of a simultaneous-input diagnostic.
+///
+/// The counts describe signals KSX actually observed, not physical switches:
+/// two encoder terminals programmed to the same key are indistinguishable
+/// after the board emits them. `rollover_visibility` is explicit because Raw
+/// Input cannot see a USB ErrorRollOver report.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputTestView {
+    pub ok: bool,
+    /// `idle` | `listening` | `timeout` | `cancelled` | `failed` |
+    /// `unavailable`.
+    pub state: String,
+    pub generation: Option<u64>,
+    pub selector: Option<String>,
+    pub remaining_ms: Option<u64>,
+    #[serde(default)]
+    pub held: Vec<String>,
+    #[serde(default)]
+    pub seen: Vec<String>,
+    #[serde(default)]
+    pub peak: u32,
+    #[serde(default)]
+    pub events: u64,
+    #[serde(default)]
+    pub dropped: u64,
+    /// `unavailable` in the first implementation: Windows Raw Input exposes
+    /// decoded make/break transitions, not the original rollover report.
+    #[serde(default)]
+    pub rollover_visibility: String,
+    /// Backend-composed interpretation; surfaces render it verbatim.
+    #[serde(default)]
+    pub detail: String,
+    pub error: Option<String>,
+}
+
+impl InputTestView {
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            state: "unavailable".to_owned(),
+            rollover_visibility: "unavailable".to_owned(),
+            detail: "No simultaneous-input observation was made.".to_owned(),
+            error: Some(reason.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn refusal(&self) -> Option<Refusal> {
+        if self.ok {
+            return None;
+        }
+        Some(Refusal::new(
+            codes::REFUSED,
+            self.error
+                .clone()
+                .unwrap_or_else(|| "the simultaneous-input test is unavailable".to_owned()),
         ))
     }
 }
@@ -801,6 +940,10 @@ pub struct BindOutcome {
     pub turbo_hz: Option<u32>,
     #[serde(default)]
     pub turbo_effective_hz: Option<u32>,
+    /// TOGGLE-HOLD (docs/INPUT-TRANSFORMS.md §2 item 8): the control is now
+    /// latched — press once to hold, press again to release.
+    #[serde(default)]
+    pub toggle: bool,
     pub reloaded: bool,
 }
 
@@ -844,6 +987,7 @@ impl From<MapResponse> for BindOutcome {
             also_drives: response.also_drives,
             turbo_hz: response.turbo_hz,
             turbo_effective_hz: response.turbo_effective_hz,
+            toggle: response.toggle,
             reloaded: response.reloaded,
         }
     }
@@ -965,6 +1109,18 @@ impl SessionOrigin {
 /// [`crate::StatusSnapshot`]: the provider composes the line, a surface only
 /// places it and picks which controls to render.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActiveSessionView {
+    /// Short clock derived from the daemon's monotonic age (for example 2m 07s).
+    pub elapsed: String,
+    /// One path-free sentence covering selected keyboards and capture policy.
+    pub input: String,
+    /// One path-free sentence covering the controller persona/backend roster.
+    pub outputs: String,
+    /// The exact emergency gesture served from the domain contract.
+    pub escape_hatch: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionView {
     /// A daemon control channel answered. `false` renders every control
     /// disabled with the reason — never hidden, never silently inert.
@@ -992,6 +1148,10 @@ pub struct SessionView {
     /// what Resume will put back instead of guessing.
     #[serde(default)]
     pub origin: SessionOrigin,
+    /// Facts captured from the runner that actually started, never inferred
+    /// from the mutable config currently on disk.
+    #[serde(default)]
+    pub active: Option<ActiveSessionView>,
 }
 
 impl SessionView {
@@ -1005,7 +1165,22 @@ impl SessionView {
             // Nothing answered, so nothing is known about what ran. `Unknown`
             // is the whole point of the variant.
             origin: SessionOrigin::Unknown,
+            active: None,
         }
+    }
+}
+
+fn elapsed_label(elapsed_ms: u64) -> String {
+    let total_seconds = elapsed_ms / 1_000;
+    let hours = total_seconds / 3_600;
+    let minutes = (total_seconds % 3_600) / 60;
+    let seconds = total_seconds % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes:02}m")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds:02}s")
+    } else {
+        format!("{seconds}s")
     }
 }
 
@@ -1036,6 +1211,27 @@ impl From<crate::wire::StatusResponse> for SessionView {
             "quitting" => "daemon shutting down…".to_owned(),
             other => format!("daemon state: {other}"),
         };
+        let active = status.active.map(|active| {
+            let keyboard_noun = if active.keyboards == 1 {
+                "keyboard"
+            } else {
+                "keyboards"
+            };
+            let outputs = if active.controllers.is_empty() {
+                "No controller outputs are attached to this session.".to_owned()
+            } else {
+                active.controllers.join(" · ")
+            };
+            ActiveSessionView {
+                elapsed: elapsed_label(active.elapsed_ms),
+                input: format!(
+                    "{} selected {keyboard_noun} · {}",
+                    active.keyboards, active.capture
+                ),
+                outputs,
+                escape_hatch: crate::stage::ESCAPE_HATCH_LINE.to_owned(),
+            }
+        });
         Self {
             reachable: true,
             running,
@@ -1044,6 +1240,7 @@ impl From<crate::wire::StatusResponse> for SessionView {
             // A daemon that does not send the field said nothing, and
             // `parse` turns "nothing" into `Unknown` rather than into a guess.
             origin: SessionOrigin::parse(status.origin.as_deref().unwrap_or_default()),
+            active,
         }
     }
 }
@@ -1198,6 +1395,32 @@ mod tests {
         assert!(running.reachable && running.running);
         assert_eq!(running.line, "running — Example Game — 4 pad(s)");
         assert_eq!(running.profile.as_deref(), Some("Example Game"));
+
+        let active = SessionView::from(crate::wire::StatusResponse {
+            ok: true,
+            run: "running".into(),
+            slots: Some(2),
+            active: Some(crate::wire::ActiveSessionResponse {
+                elapsed_ms: 127_000,
+                keyboards: 1,
+                capture: "mapped keys captured · WinUSB".into(),
+                controllers: vec![
+                    "P1 Xbox 360 (ViGEmBus)".into(),
+                    "P2 DualSense (HIDMaestro)".into(),
+                ],
+            }),
+            ..Default::default()
+        });
+        let facts = active.active.expect("the live runner facts are carried");
+        assert_eq!(facts.elapsed, "2m 07s");
+        assert!(
+            facts.input.contains("1 selected keyboard"),
+            "{}",
+            facts.input
+        );
+        assert!(facts.input.contains("WinUSB"), "{}", facts.input);
+        assert!(facts.outputs.contains("DualSense (HIDMaestro)"));
+        assert_eq!(facts.escape_hatch, crate::stage::ESCAPE_HATCH_LINE);
 
         let idle = SessionView::from(crate::wire::StatusResponse {
             ok: true,

@@ -396,6 +396,7 @@ mod tests {
             line: "idle — daemon reachable".into(),
             profile: None,
             origin: ksx_api::SessionOrigin::Unknown,
+            active: None,
         }
     }
 
@@ -919,7 +920,7 @@ mod tests {
         assert!(out.html.contains("&lt;script&gt;"), "{}", out.html);
     }
 
-    /// An error flash colours the error side of the pair, and only that side.
+    /// An error flash colors the error side of the pair, and only that side.
     #[test]
     fn an_error_flash_picks_the_error_variant() {
         let shows = |flash: Option<&str>| {
@@ -942,30 +943,33 @@ mod tests {
         assert_eq!(shows(Some("error: a session is running")), (false, true));
     }
 
-    /// Specialist screens keep the customer rail intact: Setup → Controls →
-    /// Test. Pad maintenance is not promoted to a fourth workflow stage.
+    /// Specialist screens keep the customer rail intact — the four-stage
+    /// guided workflow — and the Tools menu marks this page as current. Pad
+    /// maintenance is not promoted to a fifth workflow stage.
     #[test]
     fn the_nav_reaches_the_other_screens() {
         let page = EmbeddedPage::load("/pads").unwrap();
         let out = render_pads(&page, &payload());
         assert!(
-            out.html
-                .contains(r#"<a class="navlink" href="/start">Setup</a>"#),
+            out.html.contains(
+                r#"<a class="navlink workflow-link" href="/start#keyboard"><span class="workflow-num">1</span>Keyboard</a>"#
+            ),
             "{}",
             out.html
         );
         assert!(
-            out.html
-                .contains(r#"<a class="navlink" href="/map">Controls</a>"#),
+            out.html.contains(
+                r#"<a class="navlink workflow-link" href="/map"><span class="workflow-num">3</span>Mapping</a>"#
+            ),
             "{}",
             out.html
         );
         assert!(
-            out.html
-                .contains(r#"<a class="navlink" href="/check">Test</a>"#),
+            out.html.contains(r#"<a href="/pads" aria-current="page">"#),
             "{}",
             out.html
         );
+        assert!(out.html.contains(r#"href="/check""#), "{}", out.html);
     }
 
     /// The page embeds the SAME struct `/api/pads` serves, so the poller's

@@ -125,18 +125,19 @@ pub(crate) struct BrandAssets;
 ///   carries eight size-specific entries and the consumer reads the ICO
 ///   directory to choose. A hand-written list here could only ever go stale
 ///   against `tools/icongen`'s table.
-/// - **`apple-touch-icon.png`** — 180 px, flattened onto the plate colour, so
+/// - **`apple-touch-icon.png`** — 180 px, flattened onto the plate color, so
 ///   iOS's home-screen mask has no transparent corners to composite black.
 ///
 /// # Why this is spliced in rather than passed to `render_page`
 ///
-/// forma-server 0.1.4's `PageConfig` has no head hook — `title`,
-/// `config_script`, `body_class`, `personality_css`, `body_prefix` is the
-/// whole list, and none of them reaches `<head>`'s link section. One
-/// `</head>` insertion is a smaller and more honest workaround than forking
-/// the template, and the tests below fail the moment upstream grows a real
-/// hook or changes the markup — which is the point at which this should go
-/// away.
+/// forma-server 0.2.0's `PageConfig` has no head hook — the field list
+/// (title, route_pattern, manifest, config_script, config_json, body_class,
+/// personality_css, body_prefix, render_mode, ir_module, slots) reaches many
+/// places, but not `<head>`'s link section and not the `<html>` opener
+/// (which is why [`with_theme`] splices too). One `</head>` insertion is a
+/// smaller and more honest workaround than forking the template, and the
+/// tests below fail the moment upstream grows a real hook or changes the
+/// markup — which is the point at which this should go away.
 ///
 const ICON_LINKS: &str = concat!(
     r#"<link rel="icon" href="/favicon.svg" type="image/svg+xml">"#,
@@ -153,6 +154,49 @@ pub(crate) fn with_icon_links(mut out: PageOutput) -> PageOutput {
     match out.html.find("</head>") {
         Some(at) => out.html.insert_str(at, ICON_LINKS),
         None => tracing::warn!("rendered page has no </head>; ksx icon links not added"),
+    }
+    out
+}
+
+/// Stamp the chosen theme on the root element: `<html lang="en">` becomes
+/// `<html lang="en" data-theme="{id}">`, which the stylesheet's
+/// `:root[data-theme=…]` blocks and the anti-flash CSS both key on. `None`
+/// (System) stamps nothing — the `:root:not([data-theme])` media guard then
+/// follows the OS scheme, exactly the pre-TK2 behavior.
+///
+/// A [`with_icon_links`]-style post-render splice for the same reason that
+/// one exists: forma-server 0.2.0's `PageConfig` has no hook that reaches the
+/// root element (`<html lang="en">` is a template literal in both render
+/// phases), and like that one, this should migrate upstream the moment a real
+/// hook appears.
+///
+/// **Only ids in the generated [`crate::theme_tokens::THEMES`] roster are
+/// stamped.** The config is hand-editable and `/setup/import` writes
+/// `Settings` wholesale, so an id this build does not ship CAN reach this
+/// function — and stamping it would defeat the system-follow light guard
+/// while styling nothing (a light-OS user would silently get base dark).
+/// Unknown means System, out loud in the log.
+pub(crate) fn with_theme(mut out: PageOutput, theme: Option<&str>) -> PageOutput {
+    let Some(id) = theme.filter(|id| !id.is_empty()) else {
+        return out;
+    };
+    if !crate::theme_tokens::THEMES.iter().any(|t| t.id == id) {
+        // Bounded and escaped: the id comes from a hand-editable file and
+        // the import path places no shape on it, and this warn fires at
+        // navigation rate — never echo an unbounded raw string into the log.
+        let shown: String = id.chars().take(32).collect();
+        tracing::warn!(
+            "config names theme '{}', which this build does not ship; rendering as System",
+            shown.escape_debug()
+        );
+        return out;
+    }
+    const OPENER: &str = "<html lang=\"en\"";
+    match out.html.find(OPENER) {
+        Some(at) => out
+            .html
+            .insert_str(at + OPENER.len(), &format!(" data-theme=\"{id}\"")),
+        None => tracing::warn!("rendered page has no <html lang=\"en\"; theme not stamped"),
     }
     out
 }
@@ -243,7 +287,7 @@ const ISLAND_COMPONENT: &str = "StatusIsland";
 /// inserted mid-document — is GONE (dogfood ledger #4/#14, adopted
 /// 2026-08-06). [`show_values`] now yields `(slot name, value)` pairs, so
 /// document order is documentation, not contract.
-const SHOW_COUNT: usize = 17;
+const SHOW_COUNT: usize = 21;
 
 /// Bare-named slots this page renders and the seam deliberately never fills.
 /// EMPTY here, and that is the claim: every signal `StatusIsland.ts` binds to
@@ -266,24 +310,20 @@ const ANONYMOUS_SLOTS: [&str; 0] = [];
 /// closes it.
 pub(crate) const REFRESH_SECS: u32 = 5;
 
-/// Inline `<style nonce>` applied before the stylesheet arrives (canon
-/// template's anti-flash trick): the body starts on the studio ground color
-/// instead of flashing white. Values mirror `--bg`/`--text` in studio.css,
-/// both schemes.
+/// The anti-flash `<style nonce>` CSS, re-exported from the GENERATED
+/// [`crate::theme_tokens`] module so every page module keeps importing it
+/// from here.
 ///
-/// This is a HAND COPY of two tokens, so it drifts silently — and it had:
-/// before the Street Fighter palette pass these read `#0b0e14`/`#dbe2ef`
-/// while studio.css had moved to `#0a0d13`/`#e3e9f4`, i.e. the first paint
-/// was a *different colour* from the stylesheet that replaced it. Nothing
-/// could catch that, because a wrong anti-flash colour looks like a flash.
-/// `ksx-studio/tests/contrast.rs` now parses studio.css and pins both.
-/// `pub(crate)` so a THIRD page reuses this copy instead of minting another
-/// one. `render_map.rs` keeps a byte-identical copy from before the rule was
-/// worth stating, and `tests/contrast.rs` pins both against the `--bg`/`--text`
-/// tokens — but a copy that cannot drift is better than a copy that is checked,
-/// and the check only knows about the two files it names.
-pub(crate) const PERSONALITY_CSS: &str = "body{background:#120c1c;color:#f0ebe0;margin:0}\
-@media (prefers-color-scheme:light){body{background:#f6f3ee;color:#1c1428}}";
+/// This used to be a HAND COPY of two tokens, and it had drifted once
+/// (`#0b0e14` against a stylesheet that had moved) — a wrong anti-flash
+/// color looks exactly like the flash it exists to prevent, so nothing could
+/// catch it. Then it was a checked copy (`tests/contrast.rs` pinned this
+/// file and `render_map.rs`'s byte-twin against studio.css). Since TK0 it is
+/// not a copy at all: `studio-ui/tokens/build-tokens.mjs` derives it from
+/// the same token source `tokens.gen.css` is compiled from, and the contrast
+/// gate cross-pins the generated module — a copy that cannot drift, still
+/// checked, because the generator itself could be wrong once.
+pub(crate) use crate::theme_tokens::PERSONALITY_CSS;
 
 /// The minimum number of pad tiles the signature card shows: live pads
 /// first, then ghost outlines up to this floor (a 4-slot XInput cabinet at
@@ -358,12 +398,20 @@ pub(crate) fn daemon_command(session: &SessionView) -> String {
     }
 }
 
-/// Pick the art for a persona LABEL ("PlayStation (DS4) pad") or persona id
-/// ("playstation"). Anything un-PlayStation renders as the Xbox pad — the
-/// cabinet's default persona.
+/// Pick the art for a PlayStation-family persona label or id. DualSense is a
+/// live HIDMaestro persona and therefore uses Sony vocabulary and the closest
+/// bundled PlayStation diagram rather than silently falling through to Xbox.
+/// Anything outside that family renders as the cabinet's default Xbox pad.
 pub(crate) fn art_for(persona: &str) -> &'static str {
     let lower = persona.to_ascii_lowercase();
-    if lower.contains("playstation") || lower.contains("ds4") || lower.contains("ps4") {
+    if lower.contains("playstation")
+        || lower.contains("dualsense")
+        || lower.contains("dualshock")
+        || lower.contains("ds4")
+        || lower.contains("ds5")
+        || lower.contains("ps4")
+        || lower.contains("ps5")
+    {
         ART_DS4
     } else {
         ART_XBOX
@@ -376,9 +424,12 @@ fn scalar_slots(
     session: &SessionView,
     flash: Option<&str>,
 ) -> serde_json::Value {
+    let active = session.active.as_ref();
     serde_json::json!({
         "generatedAt": snap.generated_at,
         "vigemLine": snap.vigem,
+        "hidmaestroLine": snap.hidmaestro.line,
+        "hidmaestroRemedy": snap.hidmaestro.remedy,
         "interceptionLine": snap.interception,
         "daemonYesNo": if snap.daemon_running { "yes" } else { "no" },
         "daemonDetail": snap.daemon_detail,
@@ -387,6 +438,19 @@ fn scalar_slots(
         "profilesSummary": profiles_summary(snap),
         "configRoot": snap.config_root,
         "sessionLine": session.line,
+        "sessionElapsed": active.map_or("starting…", |facts| facts.elapsed.as_str()),
+        "activeInput": active.map_or(
+            "The daemon is starting the selected input pipeline.",
+            |facts| facts.input.as_str(),
+        ),
+        "activeOutputs": active.map_or(
+            "Controller endpoints are being created.",
+            |facts| facts.outputs.as_str(),
+        ),
+        "escapeHatch": active.map_or(
+            ksx_api::stage::ESCAPE_HATCH_LINE,
+            |facts| facts.escape_hatch.as_str(),
+        ),
         "flashLine": flash.unwrap_or(""),
         // FIX 1: the copyable remedy, with this machine's profile flag.
         "daemonCmd": daemon_command(session),
@@ -524,12 +588,19 @@ fn show_values(
         ("show:flashError", flash_err),
         ("show:canStart", can_start),
         ("show:canStop", running),
+        ("show:activeDetails", running && session.active.is_some()),
         ("show:daemonDown", !session.reachable),
         // profile rows: with Start buttons / inert.
         ("show:rowsLive", can_start),
         ("show:rowsPlain", !can_start),
         ("show:vigemOk", vigem_ok(snap)),
         ("show:vigemWarn", !vigem_ok(snap)),
+        (
+            "show:hidmaestroVerifiedOnPlay",
+            snap.hidmaestro.verified_on_play,
+        ),
+        ("show:hidmaestroBlocked", snap.hidmaestro.blocked),
+        ("show:hidmaestroUnknown", snap.hidmaestro.unknown),
         ("show:icptBorrowed", interception_installed(snap)),
         ("show:icptAbsent", !interception_installed(snap)),
         ("show:autostartOn", autostart_on(snap)),
@@ -822,6 +893,11 @@ mod tests {
         StatusSnapshot {
             generated_at: "2026-08-04 12:00:00 UTC".into(),
             vigem: "installed — service running — driver v1.21.442.0".into(),
+            hidmaestro: ksx_api::ControllerOutputView::hidmaestro_inventory(
+                true,
+                false,
+                Some("1.6.1".into()),
+            ),
             interception: "installed — keyboard filter active".into(),
             daemon_running: true,
             daemon_detail: "ksx.exe alive (pid 4242)".into(),
@@ -851,6 +927,7 @@ mod tests {
             line: "idle — daemon reachable".into(),
             profile: None,
             origin: ksx_api::SessionOrigin::Unknown,
+            active: None,
         }
     }
 
@@ -861,6 +938,12 @@ mod tests {
             line: "running — Example Game — 4 pad(s)".into(),
             profile: Some("Example Game".into()),
             origin: ksx_api::SessionOrigin::Config,
+            active: Some(ksx_api::ActiveSessionView {
+                elapsed: "2m 07s".into(),
+                input: "1 selected keyboard · mapped keys captured · WinUSB".into(),
+                outputs: "P1 Xbox 360 (ViGEmBus) · P2 DualSense (HIDMaestro)".into(),
+                escape_hatch: ksx_api::stage::ESCAPE_HATCH_LINE.into(),
+            }),
         }
     }
 
@@ -872,6 +955,58 @@ mod tests {
         let ir_name = page.manifest.route("/").unwrap().ir.clone().unwrap();
         let bytes = Assets::get(&ir_name).unwrap().data;
         assert_eq!(&bytes[0..6], b"FMIR\x02\x00");
+    }
+
+    /// System inventory keeps HIDMaestro's package evidence distinct from a
+    /// controller endpoint: installed is deferred to Play, missing is blocked,
+    /// and a failed read is unknown. Exactly one badge is licensed each time.
+    #[test]
+    fn hidmaestro_system_shows_are_typed_and_exclusive() {
+        let session = idle_session();
+        for (view, expected) in [
+            (
+                ksx_api::ControllerOutputView::hidmaestro_inventory(
+                    true,
+                    false,
+                    Some("1.6.1".into()),
+                ),
+                "show:hidmaestroVerifiedOnPlay",
+            ),
+            (
+                ksx_api::ControllerOutputView::hidmaestro_inventory(false, false, None),
+                "show:hidmaestroBlocked",
+            ),
+            (
+                ksx_api::ControllerOutputView::hidmaestro_inventory_unreadable(
+                    "the system probe refused",
+                ),
+                "show:hidmaestroUnknown",
+            ),
+        ] {
+            let snapshot = StatusSnapshot {
+                hidmaestro: view,
+                ..sample()
+            };
+            let values: std::collections::BTreeMap<&str, bool> =
+                show_values(&snapshot, &session, None).into_iter().collect();
+            let names = [
+                "show:hidmaestroVerifiedOnPlay",
+                "show:hidmaestroBlocked",
+                "show:hidmaestroUnknown",
+            ];
+            let selected = names
+                .into_iter()
+                .filter(|name| values.get(*name).copied().unwrap_or(false))
+                .count();
+            assert_eq!(
+                selected, 1,
+                "HIDMaestro must render exactly one system state: {values:?}"
+            );
+            assert!(
+                values.get(expected).copied().unwrap_or(false),
+                "expected {expected}: {values:?}"
+            );
+        }
     }
 
     /// Pins the slot-table contract the seam depends on: every scalar signal
@@ -1063,6 +1198,31 @@ mod tests {
             out.html
         );
         assert!(
+            out.html
+                .contains(r#""hidmaestroLine":"The exact HIDMaestro package v1.6.1"#)
+                || out.html.contains(
+                    "&quot;hidmaestroLine&quot;:&quot;The exact HIDMaestro package v1.6.1",
+                ),
+            "props must carry HIDMaestro's package evidence: {}",
+            out.html
+        );
+        assert!(
+            out.html.contains(r#""show:hidmaestroVerifiedOnPlay":true"#)
+                || out
+                    .html
+                    .contains("&quot;show:hidmaestroVerifiedOnPlay&quot;:true"),
+            "installed HIDMaestro must stay a Play-time check: {}",
+            out.html
+        );
+        assert!(out.html.contains("HIDMaestro"), "{}", out.html);
+        assert!(out.html.contains("check at Play"), "{}", out.html);
+        assert!(
+            out.html
+                .contains("when Play starts; no controller is running yet"),
+            "the System row invented endpoint readiness: {}",
+            out.html
+        );
+        assert!(
             out.html.contains(r#""show:pillIdle":true"#)
                 || out.html.contains("&quot;show:pillIdle&quot;:true"),
             "props must carry the named show booleans: {}",
@@ -1091,9 +1251,8 @@ mod tests {
             out.html
         );
         assert!(
-            out.html.contains(&format!(
-                r#"<style nonce="{nonce}">body{{background:#120c1c"#
-            )),
+            out.html
+                .contains(&format!(r#"<style nonce="{nonce}">{PERSONALITY_CSS}"#)),
             "personality css must carry the CSP nonce: {}",
             out.html
         );
@@ -1232,16 +1391,30 @@ mod tests {
             "{}",
             out.html
         );
-        // The customer rail is the three-stage Setup → Controls → Test flow.
-        // Pad maintenance remains discoverable from the relevant status card,
-        // without becoming a fourth primary-workflow stage.
-        assert!(out.html.contains(r#"href="/start">Setup"#), "{}", out.html);
-        assert!(out.html.contains(r#"href="/map">Controls"#), "{}", out.html);
-        assert!(out.html.contains(r#"href="/check">Test"#), "{}", out.html);
+        // The customer rail is the four-stage guided workflow (Keyboard →
+        // Controller → Mapping → Play, this page current). Pad maintenance
+        // remains discoverable from the Tools menu and the pad card, without
+        // becoming a fifth primary-workflow stage.
+        assert!(
+            out.html.contains(
+                r#"<a class="navlink workflow-link" href="/start#keyboard"><span class="workflow-num">1</span>Keyboard</a>"#
+            ),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html.contains(
+                r#"<a class="navlink workflow-link" href="/map"><span class="workflow-num">3</span>Mapping</a>"#
+            ),
+            "{}",
+            out.html
+        );
+        assert!(out.html.contains(r#"href="/check""#), "{}", out.html);
         assert_eq!(
             out.html.matches(r#"href="/pads""#).count(),
-            1,
-            "the pad-card maintenance link must remain discoverable: {}",
+            2,
+            "the Tools menu and the pad card each keep pad maintenance \
+             discoverable: {}",
             out.html
         );
     }
@@ -1303,6 +1476,8 @@ mod tests {
         assert_eq!(art_for("xbox360"), ART_XBOX);
         assert_eq!(art_for("PlayStation (DS4) pad"), ART_DS4);
         assert_eq!(art_for("playstation"), ART_DS4);
+        assert_eq!(art_for("DualSense"), ART_DS4);
+        assert_eq!(art_for("PS5 controller"), ART_DS4);
         assert_eq!(art_for("something unknown"), ART_XBOX, "default persona");
     }
 
@@ -1398,6 +1573,15 @@ mod tests {
         assert!(out.html.contains(r#"action="/session/stop""#));
         assert!(out.html.contains(r#"action="/config/reload""#));
         assert!(!out.html.contains(r#"action="/session/start""#));
+        assert!(out.html.contains("2m 07s"), "{}", out.html);
+        assert!(out.html.contains("mapped keys captured"), "{}", out.html);
+        assert!(out.html.contains("DualSense (HIDMaestro)"), "{}", out.html);
+        assert!(
+            out.html
+                .contains("LeftCtrl five times always toggles keyboard capture"),
+            "{}",
+            out.html
+        );
     }
 
     /// No control channel: every control renders DISABLED with the reason —

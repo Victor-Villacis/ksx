@@ -94,6 +94,9 @@ pub use watchdog::Watchdog;
 #[cfg(windows)]
 pub use interception::InterceptionBackend;
 #[cfg(windows)]
-pub use rawinput::{observe_next_key, wait_for_keypress, IdentifiedPress, ObservedKey};
+pub use rawinput::{
+    observe_key_events, observe_next_key, wait_for_keypress, IdentifiedPress, ObservedKey,
+    ObservedKeyEvent,
+};
 #[cfg(windows)]
 pub use winusb::{enumerate::candidates as usb_candidates, Binding, UsbCandidate, WinUsbBackend};

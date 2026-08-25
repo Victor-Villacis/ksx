@@ -4,12 +4,12 @@
   "status": "source-frozen-verifier-does-not-build-or-load",
   "assurance": "hash-pinned-static-candidate-source-and-project-xml-closure-only",
   "canonicalization": "strict UTF-8 without BOM; CRLF and bare CR normalized to LF; final-newline state preserved; SHA-256 uppercase hexadecimal",
-  "expectedVerifierCheckCount": 453,
+  "expectedVerifierCheckCount": 612,
   "candidateTreeFraming": "for each ordinal-sorted candidate-relative path: UTF-8 path, one NUL byte, normalized UTF-8 content bytes, one NUL byte",
-  "candidateTreeSha256": "4AC8E4AAD314BC44BE9EC629AD85CCAD3739DA85406857520E6E6B9FCFC88393",
+  "candidateTreeSha256": "C5B1B3223762BDDC33FE5BCCBCD0962A6C62757B8238AA7DE9D1F38E39F0408F",
   "expectedCounts": {
-    "candidateFileCount": 12,
-    "compileItemCount": 11,
+    "candidateFileCount": 15,
+    "compileItemCount": 14,
     "embeddedResourceCount": 228,
     "deployableProfileCount": 130,
     "candidateApiTypeCount": 7,
@@ -26,13 +26,13 @@
       "id": "aggregate-contract",
       "path": "../candidate-contract.json",
       "format": "json",
-      "sha256": "755050266EB93009EDB81F7E630B3A72298ED411EC03C2BE940056A03C549BA1"
+      "sha256": "042F8D45309AD71A79FF92FCAE6555D98026B862552E02AE008992CAF3CEEAA1"
     },
     {
       "id": "api-lock",
       "path": "../api/contract.lock.json",
       "format": "json",
-      "sha256": "1C782DE7B46D96A50975D44DD851CCC3EBFFFA8A529EB9892EDE9D1AF358D8F5"
+      "sha256": "C7EBDC9357735AE71B96309D1A448CBB31CAB8A2FE2CE49F76E1F718188A6224"
     },
     {
       "id": "public-api-contract",
@@ -44,7 +44,7 @@
       "id": "source-compilation-contract",
       "path": "../api/source-compilation.contract.json",
       "format": "json",
-      "sha256": "4174095C3264D311AFE3546778C669FADBF6063CD7AA479D050086882F19666A"
+      "sha256": "86D5FB011B0B64ACC06CCB934175A7A8EC91322F45436D7DBFC839DDC39D9052"
     },
     {
       "id": "profile-catalog-lock",
@@ -93,6 +93,30 @@
       "path": "../../hidmaestro-input-contract/verify-source-contract.ps1",
       "format": "text",
       "sha256": "FE657CB353CA5C7E88B9D82C19A7FFD3EC9CF93D300EE93AA1D86ACE1F2D7321"
+    },
+    {
+      "id": "input-contract-xbox-series",
+      "path": "../../hidmaestro-input-contract-xbox-series/contract.json",
+      "format": "json",
+      "sha256": "A2D449EFE4B2D3269B9122F79606601E3A589F097D4F31F71BC060EE5AFE4CD5"
+    },
+    {
+      "id": "input-vectors-xbox-series",
+      "path": "../../hidmaestro-input-contract-xbox-series/golden-vectors.json",
+      "format": "json",
+      "sha256": "8D154FD30ADF5AD6FA2C8E3338D95CC0CC82D6303D7BBF083A44B23359EEC00A"
+    },
+    {
+      "id": "input-contract-switch-pro",
+      "path": "../../hidmaestro-input-contract-switch-pro/contract.json",
+      "format": "json",
+      "sha256": "6A230BD9F92442CE98DCF5099CC1D57F33617E787DB93E9E1BA57830297F3B2E"
+    },
+    {
+      "id": "input-vectors-switch-pro",
+      "path": "../../hidmaestro-input-contract-switch-pro/golden-vectors.json",
+      "format": "json",
+      "sha256": "6CE51A832A24C22A14476C0A146552233FF8872287B15A5ADBB7AE3C692B32D1"
     }
   ],
   "candidateFiles": [
@@ -102,15 +126,15 @@
     },
     {
       "path": "candidate/HIDMaestro.Core.csproj",
-      "sha256": "F8FA6FA337EDDD16499F36F376D534680FCAEE8F239DA525B63B081641A6844E"
+      "sha256": "FB18A45510839CDCEAC46D39515AF183E47C4BFD53827B1D58CD530DFCC1A1AB"
     },
     {
       "path": "candidate/HMContext.cs",
-      "sha256": "7020E298B206295C24AD72AE9DB7C96C5FA8240A1BFDF3D19FA2D63BFDE2B21A"
+      "sha256": "508EC162589C7295196710DEDA1EAC8B4624A5D354A8CF8BC805E5A0D310469A"
     },
     {
       "path": "candidate/HMController.cs",
-      "sha256": "34EC5839DB775EB46B8BB802FC06090067284A2BCC4CB4B8BDE0419711163359"
+      "sha256": "7A089C36FA626C662DBCFBE6405CFF126A92C9B36B19C22FED5CC9AF293A0759"
     },
     {
       "path": "candidate/HMGamepadState.cs",
@@ -133,16 +157,28 @@
       "sha256": "CEE2C77EEE36F7032E8969EFE65F31E1FA18E07D22760745718B23C1E3F52682"
     },
     {
+      "path": "candidate/Internal/RuntimeInputWireShape.cs",
+      "sha256": "4F06F52043BDC83B30F4223CAB8A3DEF24E693C50C3C40E38F028ECC4F521F78"
+    },
+    {
       "path": "candidate/Internal/RuntimeOwnedSharedMemoryIO.cs",
-      "sha256": "AA2B7CC6B8550A9AFC77DC82CEAECB8DAC29708DA8075E62156FCA03556C3602"
+      "sha256": "CBABB8EE2BFBC4293746D8BF878C5D8B2B9A37B18688F8EB076AB22A05F8CDC4"
     },
     {
       "path": "candidate/Internal/RuntimePlainHidLifecycle.cs",
-      "sha256": "3831AAD96E3C5F9ACBA665A5C52E7B4C4B380A1E37D22AF3020C218150D736ED"
+      "sha256": "96A2703A0ABFB355D322F64279D8EEDEAB1A35FD9FFEA1FD24DDC67588D60033"
     },
     {
       "path": "candidate/Internal/RuntimeProfileCatalog.cs",
       "sha256": "35EBDC00D721E7987C562B54B640FF1111542497BC6E3D939D39C3A54DB436EC"
+    },
+    {
+      "path": "candidate/Internal/RuntimeSwitchProInputEncoder.cs",
+      "sha256": "02D880209628D50FA16137A14BF7215E39B0296D7A3281DB205A734401318EA4"
+    },
+    {
+      "path": "candidate/Internal/RuntimeXboxSeriesInputEncoder.cs",
+      "sha256": "519B02A025834F9B27D015DFD6E2DD8A8037E5E54BD364920200671F4F0D8312"
     }
   ],
   "project": {
@@ -153,23 +189,74 @@
     "assemblyAttributeSource": "candidate/HMContext.cs",
     "targetFrameworkAttribute": "[assembly: TargetFramework(\".NETCoreApp,Version=v10.0\", FrameworkDisplayName = \".NET 10.0\")]",
     "requiredProperties": [
-      { "name": "PlatformTarget", "value": "x64" },
-      { "name": "OutputType", "value": "Library" },
-      { "name": "RootNamespace", "value": "HIDMaestro" },
-      { "name": "Version", "value": "1.6.1" },
-      { "name": "LangVersion", "value": "14.0" },
-      { "name": "Nullable", "value": "enable" },
-      { "name": "ImplicitUsings", "value": "disable" },
-      { "name": "EnableDefaultItems", "value": "false" },
-      { "name": "EnableDefaultCompileItems", "value": "false" },
-      { "name": "EnableDefaultEmbeddedResourceItems", "value": "false" },
-      { "name": "EnableDefaultNoneItems", "value": "false" },
-      { "name": "GenerateAssemblyInfo", "value": "false" },
-      { "name": "GenerateTargetFrameworkAttribute", "value": "false" },
-      { "name": "Deterministic", "value": "true" },
-      { "name": "ContinuousIntegrationBuild", "value": "true" },
-      { "name": "AllowUnsafeBlocks", "value": "false" },
-      { "name": "SelfContained", "value": "false" }
+      {
+        "name": "PlatformTarget",
+        "value": "x64"
+      },
+      {
+        "name": "OutputType",
+        "value": "Library"
+      },
+      {
+        "name": "RootNamespace",
+        "value": "HIDMaestro"
+      },
+      {
+        "name": "Version",
+        "value": "1.6.1"
+      },
+      {
+        "name": "LangVersion",
+        "value": "14.0"
+      },
+      {
+        "name": "Nullable",
+        "value": "enable"
+      },
+      {
+        "name": "ImplicitUsings",
+        "value": "disable"
+      },
+      {
+        "name": "EnableDefaultItems",
+        "value": "false"
+      },
+      {
+        "name": "EnableDefaultCompileItems",
+        "value": "false"
+      },
+      {
+        "name": "EnableDefaultEmbeddedResourceItems",
+        "value": "false"
+      },
+      {
+        "name": "EnableDefaultNoneItems",
+        "value": "false"
+      },
+      {
+        "name": "GenerateAssemblyInfo",
+        "value": "false"
+      },
+      {
+        "name": "GenerateTargetFrameworkAttribute",
+        "value": "false"
+      },
+      {
+        "name": "Deterministic",
+        "value": "true"
+      },
+      {
+        "name": "ContinuousIntegrationBuild",
+        "value": "true"
+      },
+      {
+        "name": "AllowUnsafeBlocks",
+        "value": "false"
+      },
+      {
+        "name": "SelfContained",
+        "value": "false"
+      }
     ],
     "forbiddenElementNames": [
       "PackageReference",
@@ -190,22 +277,86 @@
     ]
   },
   "apiMemberAnchors": [
-    { "typeId": "HIDMaestro.HMContext", "memberId": ".ctor()", "text": "public HMContext()" },
-    { "typeId": "HIDMaestro.HMContext", "memberId": "LoadDefaultProfiles()", "text": "public int LoadDefaultProfiles()" },
-    { "typeId": "HIDMaestro.HMContext", "memberId": "GetProfile(System.String)", "text": "public HMProfile? GetProfile(string id)" },
-    { "typeId": "HIDMaestro.HMContext", "memberId": "CreateController(HIDMaestro.HMProfile)", "text": "public HMController CreateController(HMProfile profile)" },
-    { "typeId": "HIDMaestro.HMContext", "memberId": "Dispose()", "text": "public void Dispose()" },
-    { "typeId": "HIDMaestro.HMController", "memberId": "Profile", "text": "public HMProfile Profile { get; }" },
-    { "typeId": "HIDMaestro.HMController", "memberId": "OutputReceived", "text": "public event Action<HMController, HMOutputPacket>? OutputReceived;" },
-    { "typeId": "HIDMaestro.HMController", "memberId": "SubmitState(in HIDMaestro.HMGamepadState)", "text": "public void SubmitState(in HMGamepadState state)" },
-    { "typeId": "HIDMaestro.HMController", "memberId": "Dispose()", "text": "public void Dispose()" },
-    { "typeId": "HIDMaestro.HMProfile", "memberId": "Id", "text": "public string Id { get; }" },
-    { "typeId": "HIDMaestro.HMProfile", "memberId": "Name", "text": "public string Name { get; }" },
-    { "typeId": "HIDMaestro.HMProfile", "memberId": "VendorId", "text": "public ushort VendorId { get; }" },
-    { "typeId": "HIDMaestro.HMProfile", "memberId": "ProductId", "text": "public ushort ProductId { get; }" },
-    { "typeId": "HIDMaestro.HMGamepadState", "memberId": "Axes", "text": "public Dictionary<HMAxis, float>? Axes;" },
-    { "typeId": "HIDMaestro.HMGamepadState", "memberId": "Buttons", "text": "public HMButton Buttons;" },
-    { "typeId": "HIDMaestro.HMGamepadState", "memberId": "Hat", "text": "public HMHat Hat;" }
+    {
+      "typeId": "HIDMaestro.HMContext",
+      "memberId": ".ctor()",
+      "text": "public HMContext()"
+    },
+    {
+      "typeId": "HIDMaestro.HMContext",
+      "memberId": "LoadDefaultProfiles()",
+      "text": "public int LoadDefaultProfiles()"
+    },
+    {
+      "typeId": "HIDMaestro.HMContext",
+      "memberId": "GetProfile(System.String)",
+      "text": "public HMProfile? GetProfile(string id)"
+    },
+    {
+      "typeId": "HIDMaestro.HMContext",
+      "memberId": "CreateController(HIDMaestro.HMProfile)",
+      "text": "public HMController CreateController(HMProfile profile)"
+    },
+    {
+      "typeId": "HIDMaestro.HMContext",
+      "memberId": "Dispose()",
+      "text": "public void Dispose()"
+    },
+    {
+      "typeId": "HIDMaestro.HMController",
+      "memberId": "Profile",
+      "text": "public HMProfile Profile { get; }"
+    },
+    {
+      "typeId": "HIDMaestro.HMController",
+      "memberId": "OutputReceived",
+      "text": "public event Action<HMController, HMOutputPacket>? OutputReceived;"
+    },
+    {
+      "typeId": "HIDMaestro.HMController",
+      "memberId": "SubmitState(in HIDMaestro.HMGamepadState)",
+      "text": "public void SubmitState(in HMGamepadState state)"
+    },
+    {
+      "typeId": "HIDMaestro.HMController",
+      "memberId": "Dispose()",
+      "text": "public void Dispose()"
+    },
+    {
+      "typeId": "HIDMaestro.HMProfile",
+      "memberId": "Id",
+      "text": "public string Id { get; }"
+    },
+    {
+      "typeId": "HIDMaestro.HMProfile",
+      "memberId": "Name",
+      "text": "public string Name { get; }"
+    },
+    {
+      "typeId": "HIDMaestro.HMProfile",
+      "memberId": "VendorId",
+      "text": "public ushort VendorId { get; }"
+    },
+    {
+      "typeId": "HIDMaestro.HMProfile",
+      "memberId": "ProductId",
+      "text": "public ushort ProductId { get; }"
+    },
+    {
+      "typeId": "HIDMaestro.HMGamepadState",
+      "memberId": "Axes",
+      "text": "public Dictionary<HMAxis, float>? Axes;"
+    },
+    {
+      "typeId": "HIDMaestro.HMGamepadState",
+      "memberId": "Buttons",
+      "text": "public HMButton Buttons;"
+    },
+    {
+      "typeId": "HIDMaestro.HMGamepadState",
+      "memberId": "Hat",
+      "text": "public HMHat Hat;"
+    }
   ],
   "forbiddenCapabilityFamilies": [
     {
@@ -271,7 +422,10 @@
       "requirement": "Constructor performs no background work, process launch, file extraction, driver probe, service mutation or global cleanup.",
       "path": "candidate/HMContext.cs",
       "anchors": [
-        { "id": "unavailable-backends", "text": "public HMContext() : this( RuntimeExactDeviceManager.CreateUnavailable(), RuntimeOwnedSharedMemoryFactory.CreateUnavailable())" }
+        {
+          "id": "unavailable-backends",
+          "text": "public HMContext() : this( RuntimeExactDeviceManager.CreateUnavailable(), RuntimeOwnedSharedMemoryFactory.CreateUnavailable())"
+        }
       ]
     },
     {
@@ -280,9 +434,18 @@
       "requirement": "CreateController accepts only the exact conformance profile and refuses a second live controller.",
       "path": "candidate/HMContext.cs",
       "anchors": [
-        { "id": "one-live", "text": "if (_controller is not null)" },
-        { "id": "dualsense-lookup", "text": "HMProfile? frozenProfile = _catalog.GetProfile(\"dualsense\");" },
-        { "id": "reference-identity", "text": "if (!ReferenceEquals(profile, frozenProfile))" }
+        {
+          "id": "one-live",
+          "text": "if (_controller is not null)"
+        },
+        {
+          "id": "dualsense-lookup",
+          "text": "HMProfile? frozenProfile = _catalog.GetProfile(profile.Id);"
+        },
+        {
+          "id": "reference-identity",
+          "text": "if (!ReferenceEquals(profile, frozenProfile))"
+        }
       ]
     },
     {
@@ -291,13 +454,34 @@
       "requirement": "A failed creation leaves its exact recovery action owned by the context, blocks another create, and is retried by Dispose.",
       "path": "candidate/HMContext.cs",
       "anchors": [
-        { "id": "pending-field", "text": "private RuntimeExactRecovery? _pendingRecovery;" },
-        { "id": "block-create", "text": "if (_pendingRecovery is not null) { throw new InvalidOperationException(" },
-        { "id": "outer-recovery-catch", "text": "catch (RuntimeRecoveryRequiredException recoveryFailure)" },
-        { "id": "retain-recovery", "text": "_pendingRecovery = recoveryFailure.Recovery;" },
-        { "id": "snapshot-for-dispose", "text": "pendingRecovery = _pendingRecovery;" },
-        { "id": "retry-from-dispose", "text": "pendingRecovery?.Retry();" },
-        { "id": "clear-only-same-recovery", "text": "if (ReferenceEquals(_pendingRecovery, pendingRecovery)) { _pendingRecovery = null; }" }
+        {
+          "id": "pending-field",
+          "text": "private RuntimeExactRecovery? _pendingRecovery;"
+        },
+        {
+          "id": "block-create",
+          "text": "if (_pendingRecovery is not null) { throw new InvalidOperationException("
+        },
+        {
+          "id": "outer-recovery-catch",
+          "text": "catch (RuntimeRecoveryRequiredException recoveryFailure)"
+        },
+        {
+          "id": "retain-recovery",
+          "text": "_pendingRecovery = recoveryFailure.Recovery;"
+        },
+        {
+          "id": "snapshot-for-dispose",
+          "text": "pendingRecovery = _pendingRecovery;"
+        },
+        {
+          "id": "retry-from-dispose",
+          "text": "pendingRecovery?.Retry();"
+        },
+        {
+          "id": "clear-only-same-recovery",
+          "text": "if (ReferenceEquals(_pendingRecovery, pendingRecovery)) { _pendingRecovery = null; }"
+        }
       ]
     },
     {
@@ -306,8 +490,14 @@
       "requirement": "Dispose tears down only the exact owned device set returned by create.",
       "path": "candidate/HMController.cs",
       "anchors": [
-        { "id": "owned-record", "text": "private readonly RuntimeOwnedDeviceSet _ownedDevice;" },
-        { "id": "remove-owned", "text": "_lifecycle.RemoveOwned(_ownedDevice);" }
+        {
+          "id": "owned-record",
+          "text": "private readonly RuntimeOwnedDeviceSet _ownedDevice;"
+        },
+        {
+          "id": "remove-owned",
+          "text": "_lifecycle.RemoveOwned(_ownedDevice);"
+        }
       ]
     },
     {
@@ -316,8 +506,14 @@
       "requirement": "Create only the one plain-HID parent required by dualsense after proving the signed package was preinstalled.",
       "path": "candidate/Internal/RuntimePlainHidLifecycle.cs",
       "anchors": [
-        { "id": "exact-profile", "text": "EnsureExactDualSense(profile);" },
-        { "id": "proof-before-register", "text": "RuntimePreinstalledPackageProof proof = _deviceManager.ProvePreinstalledDualSensePackage(); RuntimeDeviceRegistration registration = _deviceManager.RegisterPlainHidDualSense(proof);" }
+        {
+          "id": "exact-profile",
+          "text": "EnsureExactSupportedProfile(profile);"
+        },
+        {
+          "id": "proof-before-register",
+          "text": "RuntimePreinstalledPackageProof proof = _deviceManager.ProvePreinstalledDualSensePackage(); RuntimeDeviceRegistration registration = _deviceManager.RegisterPlainHidDualSense(proof);"
+        }
       ]
     },
     {
@@ -326,7 +522,10 @@
       "requirement": "Capture the exact parent instance identity immediately when registration succeeds, before any later fallible binding or child-discovery step.",
       "path": "candidate/Internal/RuntimePlainHidLifecycle.cs",
       "anchors": [
-        { "id": "capture-before-binding", "text": "RuntimeDeviceRegistration registration = _deviceManager.RegisterPlainHidDualSense(proof); var partial = new RuntimePartialOwnedDevice(registration.ParentInstanceId); try { _deviceManager.ProveExactParentBound(registration);" }
+        {
+          "id": "capture-before-binding",
+          "text": "RuntimeDeviceRegistration registration = _deviceManager.RegisterPlainHidDualSense(proof); var partial = new RuntimePartialOwnedDevice(registration.ParentInstanceId); try { _deviceManager.ProveExactParentBound(registration);"
+        }
       ]
     },
     {
@@ -335,13 +534,34 @@
       "requirement": "Retain exact-owned recovery state and a serialized retry action until creation either commits or exact-identity rollback completes.",
       "path": "candidate/Internal/RuntimePlainHidLifecycle.cs",
       "anchors": [
-        { "id": "partial-field", "text": "private readonly RuntimePartialOwnedDevice _partialOwnedDevice;" },
-        { "id": "partial-retained", "text": "_partialOwnedDevice = partialOwnedDevice;" },
-        { "id": "partial-rollback", "text": "IReadOnlyList<Exception> rollbackFailures = _lifecycle.Rollback(_partialOwnedDevice, _statePath);" },
-        { "id": "serialized-recovery", "text": "internal void Retry() { lock (_gate)" },
-        { "id": "recovery-reference-identity", "text": "if (statePath is not null && !ReferenceEquals(statePath.OwnedDevice, ownedDevice))" },
-        { "id": "retry-order", "text": "StatePath?.NeutralizeAndStop(); _lifecycle.RemoveOwned(OwnedDevice); _completed = true;" },
-        { "id": "rollback-retains-action", "text": "new RuntimeExactRecovery(_lifecycle, _ownedDevice, _statePath)" }
+        {
+          "id": "partial-field",
+          "text": "private readonly RuntimePartialOwnedDevice _partialOwnedDevice;"
+        },
+        {
+          "id": "partial-retained",
+          "text": "_partialOwnedDevice = partialOwnedDevice;"
+        },
+        {
+          "id": "partial-rollback",
+          "text": "IReadOnlyList<Exception> rollbackFailures = _lifecycle.Rollback(_partialOwnedDevice, _statePath);"
+        },
+        {
+          "id": "serialized-recovery",
+          "text": "internal void Retry() { lock (_gate)"
+        },
+        {
+          "id": "recovery-reference-identity",
+          "text": "if (statePath is not null && !ReferenceEquals(statePath.OwnedDevice, ownedDevice))"
+        },
+        {
+          "id": "retry-order",
+          "text": "StatePath?.NeutralizeAndStop(); _lifecycle.RemoveOwned(OwnedDevice); _completed = true;"
+        },
+        {
+          "id": "rollback-retains-action",
+          "text": "new RuntimeExactRecovery(_lifecycle, _ownedDevice, _statePath)"
+        }
       ]
     },
     {
@@ -350,13 +570,34 @@
       "requirement": "On every error after registration, neutralize any started state path and roll back only the exact captured parent and child identities; report rollback failure explicitly instead of discarding ownership state.",
       "path": "candidate/Internal/RuntimePlainHidLifecycle.cs",
       "anchors": [
-        { "id": "registration-catch", "text": "catch (Exception creationFailure) { IReadOnlyList<Exception> rollbackFailures = Rollback(partial, statePath: null);" },
-        { "id": "neutralize-first", "text": "statePath.NeutralizeAndStop();" },
-        { "id": "state-path-retained", "text": "StatePath = statePath;" },
-        { "id": "state-path-recovery-property", "text": "internal RuntimeOwnedSharedMemoryIO? StatePath { get; }" },
-        { "id": "state-failure-blocks-removal", "text": "catch (Exception error) { failures.Add(error); return failures; }" },
-        { "id": "exact-removal", "text": "foreach (Exception failure in RemoveExactIdentities(ownedDevice))" },
-        { "id": "recovery-error", "text": "throw new RuntimeRecoveryRequiredException(" }
+        {
+          "id": "registration-catch",
+          "text": "catch (Exception creationFailure) { IReadOnlyList<Exception> rollbackFailures = Rollback(partial, statePath: null);"
+        },
+        {
+          "id": "neutralize-first",
+          "text": "statePath.NeutralizeAndStop();"
+        },
+        {
+          "id": "state-path-retained",
+          "text": "StatePath = statePath;"
+        },
+        {
+          "id": "state-path-recovery-property",
+          "text": "internal RuntimeOwnedSharedMemoryIO? StatePath { get; }"
+        },
+        {
+          "id": "state-failure-blocks-removal",
+          "text": "catch (Exception error) { failures.Add(error); return failures; }"
+        },
+        {
+          "id": "exact-removal",
+          "text": "foreach (Exception failure in RemoveExactIdentities(ownedDevice))"
+        },
+        {
+          "id": "recovery-error",
+          "text": "throw new RuntimeRecoveryRequiredException("
+        }
       ]
     },
     {
@@ -365,10 +606,22 @@
       "requirement": "Return an immutable owned-device record containing the exact parent instance ID and exact child IDs observed from that parent.",
       "path": "candidate/Internal/RuntimeExactDeviceManager.cs",
       "anchors": [
-        { "id": "child-copy", "text": "_childInstanceIds = new string[childInstanceIds.Count];" },
-        { "id": "readonly-copy", "text": "_readOnlyChildInstanceIds = Array.AsReadOnly(_childInstanceIds);" },
-        { "id": "parent-id", "text": "internal string ParentInstanceId { get; }" },
-        { "id": "child-ids", "text": "internal IReadOnlyList<string> ChildInstanceIds => _readOnlyChildInstanceIds;" }
+        {
+          "id": "child-copy",
+          "text": "_childInstanceIds = new string[childInstanceIds.Count];"
+        },
+        {
+          "id": "readonly-copy",
+          "text": "_readOnlyChildInstanceIds = Array.AsReadOnly(_childInstanceIds);"
+        },
+        {
+          "id": "parent-id",
+          "text": "internal string ParentInstanceId { get; }"
+        },
+        {
+          "id": "child-ids",
+          "text": "internal IReadOnlyList<string> ChildInstanceIds => _readOnlyChildInstanceIds;"
+        }
       ]
     },
     {
@@ -377,8 +630,14 @@
       "requirement": "Never enumerate or delete devices by ControllerIndex, VID/PID, HIDMaestro token, profile family or global orphan status.",
       "path": "candidate/Internal/RuntimePlainHidLifecycle.cs",
       "anchors": [
-        { "id": "parent-scoped-children", "text": "_deviceManager.ReadExactChildInstanceIds(registration);" },
-        { "id": "exact-remove", "text": "_deviceManager.RemoveExactInstance(exactInstanceId);" }
+        {
+          "id": "parent-scoped-children",
+          "text": "_deviceManager.ReadExactChildInstanceIds(registration);"
+        },
+        {
+          "id": "exact-remove",
+          "text": "_deviceManager.RemoveExactInstance(exactInstanceId);"
+        }
       ]
     },
     {
@@ -387,8 +646,14 @@
       "requirement": "Retain the immutable owned-device record for the controller lifetime.",
       "path": "candidate/HMController.cs",
       "anchors": [
-        { "id": "readonly-field", "text": "private readonly RuntimeOwnedDeviceSet _ownedDevice;" },
-        { "id": "constructor-retain", "text": "_ownedDevice = ownedDevice ?? throw new ArgumentNullException(nameof(ownedDevice));" }
+        {
+          "id": "readonly-field",
+          "text": "private readonly RuntimeOwnedDeviceSet _ownedDevice;"
+        },
+        {
+          "id": "constructor-retain",
+          "text": "_ownedDevice = ownedDevice ?? throw new ArgumentNullException(nameof(ownedDevice));"
+        }
       ]
     },
     {
@@ -397,96 +662,720 @@
       "requirement": "Dispose first neutralizes and stops owned shared-memory pumps, then removes only retained exact instance IDs.",
       "path": "candidate/HMController.cs",
       "anchors": [
-        { "id": "ordered-teardown", "text": "_sharedState.NeutralizeAndStop(); _lifecycle.RemoveOwned(_ownedDevice);" },
-        { "id": "state-path-retained-on-wrapper", "text": "new RuntimeExactRecovery(_lifecycle, _ownedDevice, _sharedState)" }
+        {
+          "id": "ordered-teardown",
+          "text": "_sharedState.NeutralizeAndStop(); _lifecycle.RemoveOwned(_ownedDevice);"
+        },
+        {
+          "id": "state-path-retained-on-wrapper",
+          "text": "new RuntimeExactRecovery(_lifecycle, _ownedDevice, _sharedState)"
+        }
       ]
     }
   ],
   "feedbackAdapter": {
     "path": "candidate/Internal/RawDualSenseFeedbackAdapter.cs",
     "numericAnchors": [
-      { "id": "data-length", "contractPath": "sourceFacts.dataLength", "pattern": "(?m)\\binternal\\s+const\\s+int\\s+OutputDataLength\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
-      { "id": "report-id", "contractPath": "sourceFacts.reportId", "pattern": "(?m)\\binternal\\s+const\\s+byte\\s+OutputReportId\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
-      { "id": "valid-flag-0", "contractPath": "sourceFacts.dataOffsets.validFlag0", "pattern": "(?m)\\binternal\\s+const\\s+int\\s+ValidFlag0Offset\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
-      { "id": "right-small-motor", "contractPath": "sourceFacts.dataOffsets.rightSmallMotor", "pattern": "(?m)\\binternal\\s+const\\s+int\\s+RightSmallMotorOffset\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
-      { "id": "left-large-motor", "contractPath": "sourceFacts.dataOffsets.leftLargeMotor", "pattern": "(?m)\\binternal\\s+const\\s+int\\s+LeftLargeMotorOffset\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
-      { "id": "valid-flag-2", "contractPath": "sourceFacts.dataOffsets.validFlag2", "pattern": "(?m)\\binternal\\s+const\\s+int\\s+ValidFlag2Offset\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
-      { "id": "legacy-mask", "contractPath": "sourceFacts.validityMasks.validFlag0CompatibleVibration", "pattern": "(?m)\\binternal\\s+const\\s+byte\\s+CompatibleVibrationMask\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
-      { "id": "selector-mask", "contractPath": "sourceFacts.validityMasks.validFlag0HapticsSelect", "pattern": "(?m)\\binternal\\s+const\\s+byte\\s+HapticsSelectMask\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
-      { "id": "v2-mask", "contractPath": "sourceFacts.validityMasks.validFlag2CompatibleVibrationV2", "pattern": "(?m)\\binternal\\s+const\\s+byte\\s+CompatibleVibrationV2Mask\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" }
+      {
+        "id": "data-length",
+        "contractPath": "sourceFacts.dataLength",
+        "pattern": "(?m)\\binternal\\s+const\\s+int\\s+OutputDataLength\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;"
+      },
+      {
+        "id": "report-id",
+        "contractPath": "sourceFacts.reportId",
+        "pattern": "(?m)\\binternal\\s+const\\s+byte\\s+OutputReportId\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;"
+      },
+      {
+        "id": "valid-flag-0",
+        "contractPath": "sourceFacts.dataOffsets.validFlag0",
+        "pattern": "(?m)\\binternal\\s+const\\s+int\\s+ValidFlag0Offset\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;"
+      },
+      {
+        "id": "right-small-motor",
+        "contractPath": "sourceFacts.dataOffsets.rightSmallMotor",
+        "pattern": "(?m)\\binternal\\s+const\\s+int\\s+RightSmallMotorOffset\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;"
+      },
+      {
+        "id": "left-large-motor",
+        "contractPath": "sourceFacts.dataOffsets.leftLargeMotor",
+        "pattern": "(?m)\\binternal\\s+const\\s+int\\s+LeftLargeMotorOffset\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;"
+      },
+      {
+        "id": "valid-flag-2",
+        "contractPath": "sourceFacts.dataOffsets.validFlag2",
+        "pattern": "(?m)\\binternal\\s+const\\s+int\\s+ValidFlag2Offset\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;"
+      },
+      {
+        "id": "legacy-mask",
+        "contractPath": "sourceFacts.validityMasks.validFlag0CompatibleVibration",
+        "pattern": "(?m)\\binternal\\s+const\\s+byte\\s+CompatibleVibrationMask\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;"
+      },
+      {
+        "id": "selector-mask",
+        "contractPath": "sourceFacts.validityMasks.validFlag0HapticsSelect",
+        "pattern": "(?m)\\binternal\\s+const\\s+byte\\s+HapticsSelectMask\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;"
+      },
+      {
+        "id": "v2-mask",
+        "contractPath": "sourceFacts.validityMasks.validFlag2CompatibleVibrationV2",
+        "pattern": "(?m)\\binternal\\s+const\\s+byte\\s+CompatibleVibrationV2Mask\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;"
+      }
     ],
     "requiredAnchors": [
-      { "id": "source-envelope", "text": "if (packet.Source != HMOutputSource.HidOutput)" },
-      { "id": "report-envelope", "text": "if (packet.ReportId != OutputReportId)" },
-      { "id": "length-envelope", "text": "if (packet.Data.Length != OutputDataLength)" },
-      { "id": "separate-data", "text": "ReadOnlySpan<byte> data = packet.Data.Span;" },
-      { "id": "all-zero-stop", "text": "if (IsAllZero(data)) { _largeMotor = 0; _smallMotor = 0; disposition = RawDualSenseDisposition.StopAllZero;" },
-      { "id": "legacy-select", "text": "if (selector && legacy && !v2)" },
-      { "id": "v2-select", "text": "else if (selector && !legacy && v2)" },
-      { "id": "conflict-preserve", "text": "else if (legacy && v2)" },
-      { "id": "selector-preserve", "text": "else if (selector)" },
-      { "id": "missing-selector-preserve", "text": "else if (legacy || v2)" },
-      { "id": "complete-snapshot", "text": "new RawDualSenseFeedbackSnapshot(_largeMotor, _smallMotor, packet.SeqNo)" },
-      { "id": "motor-coordinates", "text": "_smallMotor = data[RightSmallMotorOffset]; _largeMotor = data[LeftLargeMotorOffset];" }
+      {
+        "id": "source-envelope",
+        "text": "if (packet.Source != HMOutputSource.HidOutput)"
+      },
+      {
+        "id": "report-envelope",
+        "text": "if (packet.ReportId != OutputReportId)"
+      },
+      {
+        "id": "length-envelope",
+        "text": "if (packet.Data.Length != OutputDataLength)"
+      },
+      {
+        "id": "separate-data",
+        "text": "ReadOnlySpan<byte> data = packet.Data.Span;"
+      },
+      {
+        "id": "all-zero-stop",
+        "text": "if (IsAllZero(data)) { _largeMotor = 0; _smallMotor = 0; disposition = RawDualSenseDisposition.StopAllZero;"
+      },
+      {
+        "id": "legacy-select",
+        "text": "if (selector && legacy && !v2)"
+      },
+      {
+        "id": "v2-select",
+        "text": "else if (selector && !legacy && v2)"
+      },
+      {
+        "id": "conflict-preserve",
+        "text": "else if (legacy && v2)"
+      },
+      {
+        "id": "selector-preserve",
+        "text": "else if (selector)"
+      },
+      {
+        "id": "missing-selector-preserve",
+        "text": "else if (legacy || v2)"
+      },
+      {
+        "id": "complete-snapshot",
+        "text": "new RawDualSenseFeedbackSnapshot(_largeMotor, _smallMotor, packet.SeqNo)"
+      },
+      {
+        "id": "motor-coordinates",
+        "text": "_smallMotor = data[RightSmallMotorOffset]; _largeMotor = data[LeftLargeMotorOffset];"
+      }
     ],
     "dispositions": [
-      { "vectorValue": "apply-legacy", "sourceName": "RawDualSenseDisposition.ApplyLegacy" },
-      { "vectorValue": "apply-v2", "sourceName": "RawDualSenseDisposition.ApplyV2" },
-      { "vectorValue": "stop-legacy", "sourceName": "RawDualSenseDisposition.StopLegacy" },
-      { "vectorValue": "stop-v2", "sourceName": "RawDualSenseDisposition.StopV2" },
-      { "vectorValue": "stop-all-zero", "sourceName": "RawDualSenseDisposition.StopAllZero" },
-      { "vectorValue": "preserve-no-motor-validity", "sourceName": "RawDualSenseDisposition.PreserveNoMotorValidity" },
-      { "vectorValue": "preserve-selector-only", "sourceName": "RawDualSenseDisposition.PreserveSelectorOnly" },
-      { "vectorValue": "preserve-missing-selector", "sourceName": "RawDualSenseDisposition.PreserveMissingSelector" },
-      { "vectorValue": "preserve-conflicting-variants", "sourceName": "RawDualSenseDisposition.PreserveConflictingVariants" },
-      { "vectorValue": "reject-source", "sourceName": "RawDualSenseRejectReason.Source" },
-      { "vectorValue": "reject-report-id", "sourceName": "RawDualSenseRejectReason.ReportId" },
-      { "vectorValue": "reject-length", "sourceName": "RawDualSenseRejectReason.Length" }
+      {
+        "vectorValue": "apply-legacy",
+        "sourceName": "RawDualSenseDisposition.ApplyLegacy"
+      },
+      {
+        "vectorValue": "apply-v2",
+        "sourceName": "RawDualSenseDisposition.ApplyV2"
+      },
+      {
+        "vectorValue": "stop-legacy",
+        "sourceName": "RawDualSenseDisposition.StopLegacy"
+      },
+      {
+        "vectorValue": "stop-v2",
+        "sourceName": "RawDualSenseDisposition.StopV2"
+      },
+      {
+        "vectorValue": "stop-all-zero",
+        "sourceName": "RawDualSenseDisposition.StopAllZero"
+      },
+      {
+        "vectorValue": "preserve-no-motor-validity",
+        "sourceName": "RawDualSenseDisposition.PreserveNoMotorValidity"
+      },
+      {
+        "vectorValue": "preserve-selector-only",
+        "sourceName": "RawDualSenseDisposition.PreserveSelectorOnly"
+      },
+      {
+        "vectorValue": "preserve-missing-selector",
+        "sourceName": "RawDualSenseDisposition.PreserveMissingSelector"
+      },
+      {
+        "vectorValue": "preserve-conflicting-variants",
+        "sourceName": "RawDualSenseDisposition.PreserveConflictingVariants"
+      },
+      {
+        "vectorValue": "reject-source",
+        "sourceName": "RawDualSenseRejectReason.Source"
+      },
+      {
+        "vectorValue": "reject-report-id",
+        "sourceName": "RawDualSenseRejectReason.ReportId"
+      },
+      {
+        "vectorValue": "reject-length",
+        "sourceName": "RawDualSenseRejectReason.Length"
+      }
     ]
   },
   "inputBinding": {
-    "encoderPath": "candidate/Internal/RuntimeDualSenseInputEncoder.cs",
     "sharedMemoryPath": "candidate/Internal/RuntimeOwnedSharedMemoryIO.cs",
     "controllerPath": "candidate/HMController.cs",
-    "numericAnchors": [
-      { "id": "report-id", "contractPath": "report.reportId", "pattern": "(?m)\\binternal\\s+const\\s+byte\\s+ReportId\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" },
-      { "id": "wire-byte-length", "contractPath": "report.wireByteLength", "pattern": "(?m)\\binternal\\s+const\\s+int\\s+EncodedReportSize\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;" }
+    "wireShapePath": "candidate/Internal/RuntimeInputWireShape.cs",
+    "encoders": [
+      {
+        "id": "dualsense",
+        "checkPrefix": "",
+        "encoderPath": "candidate/Internal/RuntimeDualSenseInputEncoder.cs",
+        "inputContractInputId": "input-contract",
+        "inputVectorsInputId": "input-vectors",
+        "aggregateRequirementUnit": "RuntimeDualSenseInputEncoder",
+        "aggregateRequirementCount": 3,
+        "isNewUnit": false,
+        "hasReportId": true,
+        "expectedHatWireByte": 8,
+        "expectedFixedZeroRegionCount": 4,
+        "expectedButtonCounts": {
+          "carried": 13,
+          "aliased": 4,
+          "dropped": 5
+        },
+        "sharedSlice": {
+          "offset": 1,
+          "length": 63
+        },
+        "vectorEnvelope": {
+          "hexLength": 128,
+          "prefix": "01"
+        },
+        "numericAnchors": [
+          {
+            "id": "report-id",
+            "contractPath": "report.reportId",
+            "pattern": "(?m)\\binternal\\s+const\\s+byte\\s+ReportId\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;"
+          },
+          {
+            "id": "wire-byte-length",
+            "contractPath": "report.wireByteLength",
+            "pattern": "(?m)\\binternal\\s+const\\s+int\\s+EncodedReportSize\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;"
+          }
+        ],
+        "axisLocals": [
+          {
+            "stateKey": "X",
+            "localName": "x"
+          },
+          {
+            "stateKey": "Y",
+            "localName": "y"
+          },
+          {
+            "stateKey": "Z",
+            "localName": "z"
+          },
+          {
+            "stateKey": "Rz",
+            "localName": "rz"
+          },
+          {
+            "stateKey": "Rx",
+            "localName": "rx"
+          },
+          {
+            "stateKey": "Ry",
+            "localName": "ry"
+          }
+        ],
+        "requiredEncoderAnchors": [
+          {
+            "id": "exact-destination-length",
+            "text": "if (destination.Length != EncodedReportSize)"
+          },
+          {
+            "id": "clear-complete-frame",
+            "text": "destination.Clear();"
+          },
+          {
+            "id": "write-report-id",
+            "text": "destination[0] = ReportId;"
+          },
+          {
+            "id": "axes-source",
+            "text": "Dictionary<HMAxis, float>? axes = state.Axes;"
+          },
+          {
+            "id": "missing-axis-zero",
+            "text": "if (axes is null || !axes.TryGetValue(axis, out float value)) { return 0.0f; }"
+          },
+          {
+            "id": "finite-axis-only",
+            "text": "if (!float.IsFinite(value))"
+          },
+          {
+            "id": "clamp-axis",
+            "text": "return Math.Clamp(value, 0.0f, 1.0f);"
+          },
+          {
+            "id": "truncate-scale",
+            "text": "return (byte)(int)Math.Truncate((double)normalized * 255.0);"
+          },
+          {
+            "id": "button-mask-source",
+            "text": "uint buttons = (uint)state.Buttons;"
+          },
+          {
+            "id": "button-mask-test",
+            "text": "if ((buttons & (uint)button) != 0)"
+          },
+          {
+            "id": "button-write",
+            "text": "destination[wireByte] |= mask;"
+          }
+        ],
+        "expectedDirectDestinationIndexes": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          8,
+          9
+        ],
+        "expectedDestinationIndexExpressions": [
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "8",
+          "9",
+          "wireByte"
+        ],
+        "templates": {
+          "axisRead": "float {local} = GetNormalizedAxis(axes, HMAxis.{stateKey});",
+          "axisWriteByBitLength": {
+            "8": "destination[{wireByte}] = ScaleAxis({local});"
+          },
+          "hat": "HMHat.{name} => (byte){wireValue}",
+          "button": "SetButton(buttons, HMButton.{name}, destination, wireByte: {wireByte}, mask: {maskLiteral});",
+          "triggerCondition": "if ({local} > 0.0f)",
+          "triggerWrite": "destination[{wireByte}] |= {maskLiteral};",
+          "separateUsage": "destination[{wireByte}] |= {maskLiteral};"
+        }
+      },
+      {
+        "id": "xbox-series",
+        "checkPrefix": "xboxSeries.",
+        "encoderPath": "candidate/Internal/RuntimeXboxSeriesInputEncoder.cs",
+        "inputContractInputId": "input-contract-xbox-series",
+        "inputVectorsInputId": "input-vectors-xbox-series",
+        "aggregateRequirementUnit": "RuntimeXboxSeriesInputEncoder",
+        "aggregateRequirementCount": 3,
+        "isNewUnit": true,
+        "hasReportId": false,
+        "expectedHatWireByte": 14,
+        "expectedFixedZeroRegionCount": 6,
+        "expectedButtonCounts": {
+          "carried": 11,
+          "aliased": 0,
+          "dropped": 6
+        },
+        "sharedSlice": {
+          "offset": 0,
+          "length": 17
+        },
+        "vectorEnvelope": {
+          "hexLength": 34,
+          "prefix": null
+        },
+        "numericAnchors": [
+          {
+            "id": "wire-byte-length",
+            "contractPath": "report.wireByteLength",
+            "pattern": "(?m)\\binternal\\s+const\\s+int\\s+EncodedReportSize\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;"
+          }
+        ],
+        "axisLocals": [
+          {
+            "stateKey": "X",
+            "localName": "leftStickX"
+          },
+          {
+            "stateKey": "Y",
+            "localName": "leftStickY"
+          },
+          {
+            "stateKey": "Z",
+            "localName": "rightStickX"
+          },
+          {
+            "stateKey": "Rz",
+            "localName": "rightStickY"
+          },
+          {
+            "stateKey": "Rx",
+            "localName": "leftTrigger"
+          },
+          {
+            "stateKey": "Ry",
+            "localName": "rightTrigger"
+          }
+        ],
+        "requiredEncoderAnchors": [
+          {
+            "id": "exact-destination-length",
+            "text": "if (destination.Length != EncodedReportSize)"
+          },
+          {
+            "id": "clear-complete-frame",
+            "text": "destination.Clear();"
+          },
+          {
+            "id": "axes-source",
+            "text": "Dictionary<HMAxis, float>? axes = state.Axes;"
+          },
+          {
+            "id": "missing-axis-zero",
+            "text": "if (axes is null || !axes.TryGetValue(axis, out float value)) { return 0.0f; }"
+          },
+          {
+            "id": "finite-axis-only",
+            "text": "if (!float.IsFinite(value))"
+          },
+          {
+            "id": "clamp-axis",
+            "text": "return Math.Clamp(value, 0.0f, 1.0f);"
+          },
+          {
+            "id": "truncate-scale",
+            "text": "double scaled = Math.Truncate((double)normalized * logicalMaximum);"
+          },
+          {
+            "id": "button-mask-source",
+            "text": "uint buttons = (uint)state.Buttons;"
+          },
+          {
+            "id": "button-mask-test",
+            "text": "if ((buttons & (uint)button) == 0)"
+          },
+          {
+            "id": "button-write",
+            "text": "destination[12 + (index / 8)] |= (byte)(1 << (index % 8));"
+          },
+          {
+            "id": "hat-write",
+            "text": "destination[14] = EncodeHat(state.Hat);"
+          },
+          {
+            "id": "guide-separate-usage",
+            "text": "if ((buttons & (uint)HMButton.Guide) != 0)"
+          },
+          {
+            "id": "sixteen-bit-write",
+            "text": "destination[offset] = (byte)(scaled & 0xFF); destination[offset + 1] = (byte)(scaled >> 8);"
+          },
+          {
+            "id": "ten-bit-write",
+            "text": "destination[offset] = (byte)(scaled & 0xFF); destination[offset + 1] = (byte)((scaled >> 8) & 0x03);"
+          }
+        ],
+        "expectedDirectDestinationIndexes": [
+          14,
+          15
+        ],
+        "expectedDestinationIndexExpressions": [
+          "12 + (index / 8)",
+          "14",
+          "15",
+          "offset",
+          "offset + 1"
+        ],
+        "templates": {
+          "axisRead": "float {local} = GetNormalizedAxis(axes, HMAxis.{stateKey});",
+          "axisWriteByBitLength": {
+            "16": "WriteUInt16(destination, {wireByte}, {local});",
+            "10": "WriteUInt10(destination, {wireByte}, {local});"
+          },
+          "hat": "HMHat.{name} => (byte){wireValue}",
+          "button": "(HMButton.{name}, {descriptorButtonIndex}),",
+          "triggerCondition": "if ({local} > 0.0f)",
+          "triggerWrite": "destination[{wireByte}] |= {maskLiteral};",
+          "separateUsage": "destination[{wireByte}] |= {maskLiteral};"
+        }
+      },
+      {
+        "id": "switch-pro",
+        "checkPrefix": "switchPro.",
+        "encoderPath": "candidate/Internal/RuntimeSwitchProInputEncoder.cs",
+        "inputContractInputId": "input-contract-switch-pro",
+        "inputVectorsInputId": "input-vectors-switch-pro",
+        "aggregateRequirementUnit": "RuntimeSwitchProInputEncoder",
+        "aggregateRequirementCount": 3,
+        "isNewUnit": true,
+        "hasReportId": false,
+        "expectedHatWireByte": 4,
+        "expectedFixedZeroRegionCount": 7,
+        "expectedButtonCounts": {
+          "carried": 12,
+          "aliased": 0,
+          "dropped": 6
+        },
+        "sharedSlice": {
+          "offset": 0,
+          "length": 48
+        },
+        "vectorEnvelope": {
+          "hexLength": 96,
+          "prefix": null
+        },
+        "numericAnchors": [
+          {
+            "id": "wire-byte-length",
+            "contractPath": "report.wireByteLength",
+            "pattern": "(?m)\\binternal\\s+const\\s+int\\s+EncodedReportSize\\s*=\\s*(?<value>0[xX][0-9A-Fa-f]+|\\d+)\\s*;"
+          }
+        ],
+        "axisLocals": [
+          {
+            "stateKey": "X",
+            "localName": "leftStickX"
+          },
+          {
+            "stateKey": "Y",
+            "localName": "leftStickY"
+          },
+          {
+            "stateKey": "Z",
+            "localName": "rightStickX"
+          },
+          {
+            "stateKey": "Rz",
+            "localName": "rightStickY"
+          },
+          {
+            "stateKey": "Rx",
+            "localName": "leftTrigger"
+          },
+          {
+            "stateKey": "Ry",
+            "localName": "rightTrigger"
+          }
+        ],
+        "requiredEncoderAnchors": [
+          {
+            "id": "exact-destination-length",
+            "text": "if (destination.Length != EncodedReportSize)"
+          },
+          {
+            "id": "clear-complete-frame",
+            "text": "destination.Clear();"
+          },
+          {
+            "id": "axes-source",
+            "text": "Dictionary<HMAxis, float>? axes = state.Axes;"
+          },
+          {
+            "id": "missing-axis-zero",
+            "text": "if (axes is null || !axes.TryGetValue(axis, out float value)) { return 0.0f; }"
+          },
+          {
+            "id": "finite-axis-only",
+            "text": "if (!float.IsFinite(value))"
+          },
+          {
+            "id": "clamp-axis",
+            "text": "return Math.Clamp(value, 0.0f, 1.0f);"
+          },
+          {
+            "id": "stick-centre-and-range",
+            "text": "int raw = 0x800 + (int)(centered * 0x600);"
+          },
+          {
+            "id": "stick-y-inversion",
+            "text": "ushort raw = StickRaw(normalized, invert: true);"
+          },
+          {
+            "id": "stick-pack-low",
+            "text": "destination[offset] = (byte)(raw & 0xFF); destination[offset + 1] |= (byte)((raw >> 8) & 0x0F);"
+          },
+          {
+            "id": "stick-pack-high",
+            "text": "destination[offset + 1] |= (byte)((raw & 0x0F) << 4); destination[offset + 2] = (byte)(raw >> 4);"
+          },
+          {
+            "id": "left-stick-x-write",
+            "text": "WriteStickX(destination, 5, leftStickX);"
+          },
+          {
+            "id": "left-stick-y-write",
+            "text": "WriteStickY(destination, 5, leftStickY);"
+          },
+          {
+            "id": "right-stick-x-write",
+            "text": "WriteStickX(destination, 8, rightStickX);"
+          },
+          {
+            "id": "right-stick-y-write",
+            "text": "WriteStickY(destination, 8, rightStickY);"
+          },
+          {
+            "id": "button-mask-source",
+            "text": "uint buttons = (uint)state.Buttons;"
+          },
+          {
+            "id": "button-mask-test",
+            "text": "if ((buttons & (uint)button) == 0)"
+          },
+          {
+            "id": "button-write",
+            "text": "destination[bodyByte] |= (byte)(1 << bit);"
+          },
+          {
+            "id": "semantic-back-is-minus",
+            "text": "(HMButton.Back, 3, 0),"
+          },
+          {
+            "id": "semantic-guide-is-home",
+            "text": "(HMButton.Guide, 3, 4),"
+          },
+          {
+            "id": "dpad-write",
+            "text": "destination[4] |= EncodeDpad(state.Hat);"
+          }
+        ],
+        "expectedDirectDestinationIndexes": [
+          2,
+          4
+        ],
+        "expectedDestinationIndexExpressions": [
+          "2",
+          "4",
+          "bodyByte",
+          "offset",
+          "offset + 1",
+          "offset + 2"
+        ],
+        "templates": {
+          "axisRead": "float {local} = GetNormalizedAxis(axes, HMAxis.{stateKey});",
+          "axisWriteByBitLength": {
+            "12": "(destination, {wireByte}, {local});"
+          },
+          "hat": "HMHat.{name} => (byte){wireValue}",
+          "button": "(HMButton.{name}, {wireByte}, {wireBit}),",
+          "triggerCondition": "if ({local} > 0.0f)",
+          "triggerWrite": "destination[{wireByte}] |= {maskLiteral};",
+          "separateUsage": "destination[{wireByte}] |= {maskLiteral};"
+        }
+      }
     ],
-    "axisLocals": [
-      { "stateKey": "X", "localName": "x" },
-      { "stateKey": "Y", "localName": "y" },
-      { "stateKey": "Z", "localName": "z" },
-      { "stateKey": "Rz", "localName": "rz" },
-      { "stateKey": "Rx", "localName": "rx" },
-      { "stateKey": "Ry", "localName": "ry" }
-    ],
-    "requiredEncoderAnchors": [
-      { "id": "exact-destination-length", "text": "if (destination.Length != EncodedReportSize)" },
-      { "id": "clear-complete-frame", "text": "destination.Clear();" },
-      { "id": "write-report-id", "text": "destination[0] = ReportId;" },
-      { "id": "axes-source", "text": "Dictionary<HMAxis, float>? axes = state.Axes;" },
-      { "id": "missing-axis-zero", "text": "if (axes is null || !axes.TryGetValue(axis, out float value)) { return 0.0f; }" },
-      { "id": "finite-axis-only", "text": "if (!float.IsFinite(value))" },
-      { "id": "clamp-axis", "text": "return Math.Clamp(value, 0.0f, 1.0f);" },
-      { "id": "truncate-scale", "text": "return (byte)(int)Math.Truncate((double)normalized * 255.0);" },
-      { "id": "button-mask-source", "text": "uint buttons = (uint)state.Buttons;" },
-      { "id": "button-mask-test", "text": "if ((buttons & (uint)button) != 0)" },
-      { "id": "button-write", "text": "destination[wireByte] |= mask;" }
+    "requiredWireShapeAnchors": [
+      {
+        "id": "closed-shape-set",
+        "text": "internal static bool TryGet(string profileId, out RuntimeInputWireShape shape)"
+      },
+      {
+        "id": "private-construction",
+        "text": "private RuntimeInputWireShape("
+      },
+      {
+        "id": "dualsense-shape",
+        "text": "DualSenseProfileId, 0x054C, 0x0CE6, \"usb\", declaredInputReportSize: RuntimeDualSenseInputEncoder.EncodedReportSize, fullWireLength: RuntimeDualSenseInputEncoder.EncodedReportSize, includesReportId: true, reportId: RuntimeDualSenseInputEncoder.ReportId, sharedDataOffset: 1, sharedDataLength: RuntimeDualSenseInputEncoder.EncodedReportSize - 1);"
+      },
+      {
+        "id": "xbox-series-shape",
+        "text": "XboxSeriesProfileId, 0x045E, 0x0B13, \"bluetooth\", declaredInputReportSize: RuntimeXboxSeriesInputEncoder.EncodedReportSize, fullWireLength: RuntimeXboxSeriesInputEncoder.EncodedReportSize, includesReportId: false, reportId: 0x00, sharedDataOffset: 0, sharedDataLength: RuntimeXboxSeriesInputEncoder.EncodedReportSize, requiresSoftwareDeviceCompanion: true);"
+      },
+      {
+        "id": "length-validation",
+        "text": "if (fullWireReport.Length != FullWireLength)"
+      },
+      {
+        "id": "report-id-validation",
+        "text": "if (IncludesReportId && fullWireReport[0] != ReportId)"
+      },
+      {
+        "id": "identity-match",
+        "text": "string.Equals(profile.Id, ProfileId, StringComparison.Ordinal) && profile.VendorId == VendorId && profile.ProductId == ProductId && string.Equals(profile.Connection, Connection, StringComparison.Ordinal) && profile.InputReportSize == DeclaredInputReportSize && profile.HasDescriptor;"
+      },
+      {
+        "id": "switch-pro-shape",
+        "text": "SwitchProProfileId, 0x057E, 0x2009, \"bluetooth\", declaredInputReportSize: 362, fullWireLength: RuntimeSwitchProInputEncoder.EncodedReportSize, includesReportId: false, reportId: 0x00, sharedDataOffset: 0, sharedDataLength: RuntimeSwitchProInputEncoder.EncodedReportSize);"
+      },
+      {
+        "id": "software-device-lane",
+        "text": "internal bool RequiresSoftwareDeviceCompanion { get; }"
+      }
     ],
     "requiredSharedMemoryAnchors": [
-      { "id": "endpoint-data-only-surface", "text": "void SubmitLegacyInputData(ReadOnlySpan<byte> dataWithoutReportId);" },
-      { "id": "full-wire-entry", "text": "internal void SubmitFullWireInput(ReadOnlySpan<byte> fullWireReport)" },
-      { "id": "exact-full-length", "text": "if (fullWireReport.Length != RuntimeDualSenseInputEncoder.EncodedReportSize)" },
-      { "id": "exact-report-id", "text": "if (fullWireReport[0] != RuntimeDualSenseInputEncoder.ReportId)" },
-      { "id": "unavailable-endpoint-fail-closed", "text": "public void SubmitLegacyInputData(ReadOnlySpan<byte> dataWithoutReportId) { _ = dataWithoutReportId; throw new NotSupportedException(" }
+      {
+        "id": "endpoint-data-only-surface",
+        "text": "void SubmitLegacyInputData(ReadOnlySpan<byte> dataWithoutReportId);"
+      },
+      {
+        "id": "full-wire-entry",
+        "text": "internal void SubmitFullWireInput( ReadOnlySpan<byte> fullWireReport, in RuntimeInputWireShape wireShape)"
+      },
+      {
+        "id": "shape-validated",
+        "text": "wireShape.ValidateFullWireReport(fullWireReport, nameof(fullWireReport));"
+      },
+      {
+        "id": "unavailable-endpoint-fail-closed",
+        "text": "public void SubmitLegacyInputData(ReadOnlySpan<byte> dataWithoutReportId) { _ = dataWithoutReportId; throw new NotSupportedException("
+      }
     ],
-    "sharedMemorySlicePattern": "(?m)_endpoint\\.SubmitLegacyInputData\\(fullWireReport\\.Slice\\(\\s*(?<offset>\\d+)\\s*,\\s*(?<length>\\d+)\\s*\\)\\s*\\)\\s*;",
+    "sharedMemorySlicePattern": "_endpoint\\.SubmitLegacyInputData\\(\\s*fullWireReport\\.Slice\\(\\s*wireShape\\.SharedDataOffset\\s*,\\s*wireShape\\.SharedDataLength\\s*\\)\\s*\\)\\s*;",
     "requiredControllerAnchors": [
-      { "id": "encoder-field", "text": "private readonly RuntimeDualSenseInputEncoder _inputEncoder = new();" },
-      { "id": "exact-report-buffer", "text": "private readonly byte[] _inputReport = new byte[RuntimeDualSenseInputEncoder.EncodedReportSize];" },
-      { "id": "encode-then-publish", "text": "_inputEncoder.Encode(in state, _inputReport); _sharedState.SubmitFullWireInput(_inputReport);" }
-    ],
-    "expectedDirectDestinationIndexes": [0, 1, 2, 3, 4, 5, 6, 8, 9]
+      {
+        "id": "dualsense-encoder-field",
+        "text": "private readonly RuntimeDualSenseInputEncoder? _dualSenseEncoder;"
+      },
+      {
+        "id": "xbox-series-encoder-field",
+        "text": "private readonly RuntimeXboxSeriesInputEncoder? _xboxSeriesEncoder;"
+      },
+      {
+        "id": "wire-shape-field",
+        "text": "private readonly RuntimeInputWireShape _wireShape;"
+      },
+      {
+        "id": "shape-resolution",
+        "text": "if (!RuntimeInputWireShape.TryGet(profile.Id, out _wireShape))"
+      },
+      {
+        "id": "exact-report-buffer",
+        "text": "_inputReport = new byte[_wireShape.FullWireLength];"
+      },
+      {
+        "id": "switch-pro-encoder-field",
+        "text": "private readonly RuntimeSwitchProInputEncoder? _switchProEncoder;"
+      },
+      {
+        "id": "encode-dualsense",
+        "text": "_dualSenseEncoder.Encode(in state, _inputReport);"
+      },
+      {
+        "id": "encode-xbox-series",
+        "text": "_xboxSeriesEncoder.Encode(in state, _inputReport);"
+      },
+      {
+        "id": "encode-switch-pro",
+        "text": "_switchProEncoder!.Encode(in state, _inputReport);"
+      },
+      {
+        "id": "publish-after-encode",
+        "text": "_sharedState.SubmitFullWireInput(_inputReport, in _wireShape);"
+      }
+    ]
   },
   "gateState": {
     "artifactPublicApiAllowlistFrozen": false,

@@ -43,6 +43,11 @@ pub enum Issue {
     /// game, which is a failure that looks like success — so it is reported
     /// here, where the fix (a HID persona) can be named.
     TooManyXinputSlots { count: usize },
+    /// More slots use a HIDMaestro persona than the elevated host carries.
+    ///
+    /// Reported here for the same reason [`Issue::TooManyXinputSlots`] is: the
+    /// config would otherwise look valid and die at the ninth plug of startup.
+    TooManyHidMaestroPads { count: usize },
     /// More slots request a persona than this release's runtime can own.
     PersonaCapacity {
         persona: String,
@@ -289,6 +294,13 @@ pub enum Issue {
     /// Advisory: `turbo_hz` on a `consume` row. A consume-only chord drives no
     /// endpoint at all, so there is nothing for a rate to auto-fire.
     TurboOnConsume { preset: String, function: String },
+    /// Advisory: `toggle` on a `consume` row — nothing there for a latch to
+    /// hold, for the same reason as [`Issue::TurboOnConsume`].
+    ToggleOnConsume { preset: String, function: String },
+    /// `macro.<name> = { key = …, toggle = true }`. What a release or repeat
+    /// does is the macro body's own business (`on_release`, `repeat`); a latch
+    /// on its trigger would be a second spelling for the same thing.
+    GuardedMacroToggle { preset: String, name: String },
     /// `macro.<name> = { key = …, turbo_hz = … }`. A macro repeats by saying so
     /// in its own table; a second spelling for the same thing would make "which
     /// one runs" something a reader has to remember.
@@ -307,6 +319,8 @@ pub enum Issue {
     GameSlotNumberOutOfRange { game: String, number: u8 },
     /// See [`Issue::TooManyXinputSlots`], for one game's slot list.
     GameTooManyXinputSlots { game: String, count: usize },
+    /// See [`Issue::TooManyHidMaestroPads`], for one game's slot list.
+    GameTooManyHidMaestroPads { game: String, count: usize },
     /// Two slots of one game share a number.
     GameDuplicateSlotNumber { game: String, number: u8 },
     /// Game slot references an unknown preset.
@@ -351,6 +365,7 @@ impl Issue {
                 | Issue::TurboRateWithoutTurbo { .. }
                 | Issue::BindingTurboClamped { .. }
                 | Issue::TurboOnConsume { .. }
+                | Issue::ToggleOnConsume { .. }
                 // Advisory because several macros on one key is a real thing to
                 // want; what it is not is something to discover from a cabinet.
                 // Kept advisory rather than promoted to a fault even though the
@@ -390,6 +405,17 @@ impl fmt::Display for Issue {
             }
             Issue::SlotNumberOutOfRange { number } => {
                 write!(f, "[[slot]] number {number} is outside 1..={MAX_SLOTS}")
+            }
+            Issue::TooManyHidMaestroPads { count } => {
+                write!(
+                    f,
+                    "{count} slots use a HIDMaestro persona, but the elevated HIDMaestro host \
+                     carries at most {} live pads; give the extra slots persona '{}' or '{}' \
+                     (ViGEmBus, outside that pool)",
+                    ksx_core::MAX_HIDMAESTRO_PADS,
+                    Persona::Xbox360,
+                    Persona::PlayStation
+                )
             }
             Issue::TooManyXinputSlots { count } => {
                 write!(
@@ -630,6 +656,19 @@ impl fmt::Display for Issue {
                  at all — its whole effect is suppressing its constituents, and there is nothing \
                  there to auto-fire"
             ),
+            Issue::ToggleOnConsume { preset, function } => write!(
+                f,
+                "preset '{preset}': '{function}' sets toggle, but `consume` drives no endpoint \
+                 at all — its whole effect is suppressing its constituents, and there is nothing \
+                 there for a latch to hold"
+            ),
+            Issue::GuardedMacroToggle { preset, name } => write!(
+                f,
+                "preset '{preset}': '{MACRO_PREFIX}{name}' sets toggle, but what a release or \
+                 repeat does is the macro body's own business (`on_release`, `repeat` in \
+                 [macros.{name}]) — a latch on its trigger would be a second spelling for the \
+                 same thing (§3b)"
+            ),
             Issue::UnknownMacroRef {
                 preset,
                 function,
@@ -718,6 +757,17 @@ impl fmt::Display for Issue {
                 write!(
                     f,
                     "game '{game}': slot number {number} is outside 1..={MAX_SLOTS}"
+                )
+            }
+            Issue::GameTooManyHidMaestroPads { game, count } => {
+                write!(
+                    f,
+                    "game '{game}': {count} slots use a HIDMaestro persona, but the elevated \
+                     HIDMaestro host carries at most {} live pads; give the extra slots persona \
+                     '{}' or '{}'",
+                    ksx_core::MAX_HIDMAESTRO_PADS,
+                    Persona::Xbox360,
+                    Persona::PlayStation
                 )
             }
             Issue::GameTooManyXinputSlots { game, count } => {
@@ -839,6 +889,16 @@ pub fn validate(config: &ConfigFile, presets: &[PresetFile]) -> Vec<Issue> {
             count: xinput_slots,
         });
     }
+    let hidmaestro_slots = config
+        .slots
+        .iter()
+        .filter(|s| s.persona.backend() == ksx_core::PadBackend::HidMaestro)
+        .count();
+    if hidmaestro_slots > usize::from(ksx_core::MAX_HIDMAESTRO_PADS) {
+        issues.push(Issue::TooManyHidMaestroPads {
+            count: hidmaestro_slots,
+        });
+    }
     for persona in Persona::ALL.iter().copied() {
         let Some(limit) = persona.instance_limit() else {
             continue;
@@ -927,6 +987,17 @@ pub fn validate_games(games: &GamesFile, presets: &[PresetFile]) -> Vec<Issue> {
             issues.push(Issue::GameTooManyXinputSlots {
                 game: game.title.clone(),
                 count: xinput_slots,
+            });
+        }
+        let hidmaestro_slots = game
+            .slots
+            .iter()
+            .filter(|s| s.persona.backend() == ksx_core::PadBackend::HidMaestro)
+            .count();
+        if hidmaestro_slots > usize::from(ksx_core::MAX_HIDMAESTRO_PADS) {
+            issues.push(Issue::GameTooManyHidMaestroPads {
+                game: game.title.clone(),
+                count: hidmaestro_slots,
             });
         }
         for persona in Persona::ALL.iter().copied() {
@@ -1103,14 +1174,14 @@ fn validate_preset(preset: &PresetFile, issues: &mut Vec<Issue>) {
     validate_binding_turbo(preset, &pairs, issues);
 }
 
-/// Per-binding auto-fire (docs/INPUT-TRANSFORMS.md §3).
+/// Per-binding auto-fire (docs/INPUT-TRANSFORMS.md §3) and toggle-hold (§3b).
 ///
-/// Three things can go wrong and exactly one of them is fatal. The rate being
-/// undeliverable is not: the engine runs the closest thing a 60 Hz sampler can
-/// see, and saying BOTH numbers is the whole point of resolving the clamp in
-/// one place. Two rows on one function disagreeing IS fatal, because turbo
-/// belongs to the output and picking a winner by file order is the kind of
-/// silent decision this project refuses to make.
+/// Three things can go wrong with a rate and exactly one of them is fatal.
+/// The rate being undeliverable is not: the engine runs the closest thing a
+/// 60 Hz sampler can see, and saying BOTH numbers is the whole point of
+/// resolving the clamp in one place. Two rows on one function disagreeing IS
+/// fatal, because turbo belongs to the output and picking a winner by file
+/// order is the kind of silent decision this project refuses to make.
 fn validate_binding_turbo(
     preset: &PresetFile,
     pairs: &[(String, Flat<'_>)],
@@ -1159,6 +1230,37 @@ fn validate_binding_turbo(
                     });
                 }
             }
+        }
+    }
+
+    // TOGGLE (§3b), the same two shapes without the rate arithmetic: a latch
+    // is a bool, so two rows agreeing is redundancy and `false` is just the
+    // default spelled out — nothing to conflict over. `seen` keeps a
+    // multi-row function from being reported once per row.
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for (function, flat) in pairs {
+        let Flat::Guard(guard) = flat else { continue };
+        if guard.toggle != Some(true) || !seen.insert(function.as_str()) {
+            continue;
+        }
+        // Refused at load time (`ConfigError::ToggleOnMacroTrigger`); named
+        // here too so `ksx check` reports it rather than only failing to
+        // parse.
+        if let Some(name) = macro_name(function) {
+            issues.push(Issue::GuardedMacroToggle {
+                preset: preset.name.clone(),
+                name: name.to_owned(),
+            });
+            continue;
+        }
+        let Ok(binding) = parse_function(function) else {
+            continue; // an unknown function is already reported above
+        };
+        if binding == Binding::Consume {
+            issues.push(Issue::ToggleOnConsume {
+                preset: preset.name.clone(),
+                function: function.clone(),
+            });
         }
     }
 }
@@ -1746,27 +1848,20 @@ preset = "default"
             socd: Socd::default(),
             macros: Default::default(),
         };
-        for persona in [Persona::SwitchPro, Persona::XboxSeries] {
+        // Every shipping persona validates clean (retro leg flip); the
+        // PersonaNotImplemented issue re-arms with the next gated persona.
+        for persona in Persona::ALL.iter().copied() {
             let cfg = ConfigFile {
                 slots: vec![slot(1, persona)],
                 ..ConfigFile::default()
             };
             let issues = validate(&cfg, &[]);
-            let found = issues
-                .iter()
-                .find(|i| matches!(i, Issue::PersonaNotImplemented { .. }))
-                .unwrap_or_else(|| panic!("{persona} produced no issue: {issues:?}"));
-            let msg = found.to_string();
-            assert!(msg.contains(persona.as_str()), "{msg}");
-            // A refusal that stops at "no" makes the user guess. It has to name
-            // what is missing AND what to write instead.
-            assert!(msg.contains("cannot be plugged by this build"), "{msg}");
             assert!(
-                msg.contains(persona.nearest_pluggable().as_str()),
-                "{msg} must name the persona to use instead"
+                !issues
+                    .iter()
+                    .any(|i| matches!(i, Issue::PersonaNotImplemented { .. })),
+                "{persona}: {issues:?}"
             );
-            // It is a fault, not advice: the slot does not work as written.
-            assert!(!found.is_advisory(), "{msg}");
         }
     }
 
@@ -1795,52 +1890,69 @@ preset = "default"
     }
 
     #[test]
-    fn a_second_dualsense_is_rejected_by_config_and_game_validation() {
+    fn a_ninth_hidmaestro_pad_is_rejected_by_config_and_game_validation() {
+        // Alternating non-XInput HIDMaestro personas: the pool rule must fire
+        // on its own, not hide behind the four-seat XInput rule.
         let slot = |number: u8| SlotEntry {
             number,
             keyboard: None,
             mouse: None,
             preset: "default".into(),
-            persona: Persona::DualSense,
+            persona: if number % 2 == 0 {
+                Persona::DualSense
+            } else {
+                Persona::SwitchPro
+            },
             socd: Socd::default(),
             macros: Default::default(),
         };
-        let cfg = ConfigFile {
-            slots: vec![slot(1), slot(2)],
+        let eight = ConfigFile {
+            slots: (1u8..=8).map(slot).collect(),
+            ..ConfigFile::default()
+        };
+        assert_eq!(validate(&eight, &[]), vec![], "eight pads fill the pool");
+        let nine = ConfigFile {
+            slots: (1u8..=9).map(slot).collect(),
             ..ConfigFile::default()
         };
         assert_eq!(
-            validate(&cfg, &[]),
-            vec![Issue::PersonaCapacity {
-                persona: "dualsense".into(),
-                count: 2,
-                limit: 1,
-            }]
+            validate(&nine, &[]),
+            vec![Issue::TooManyHidMaestroPads { count: 9 }]
         );
+        let msg = validate(&nine, &[])[0].to_string();
+        assert!(msg.contains("at most 8"), "{msg}");
 
         use crate::games::GameSlotEntry;
         let mut games: GamesFile =
             toml::from_str("[[game]]\ntitle = \"PS5\"\npath = \"C:\\\\ps5.exe\"\n").unwrap();
-        games.games[0].slots = (1..=2)
+        games.games[0].slots = (1u8..=9)
             .map(|number| GameSlotEntry {
                 number,
                 user_index: None,
                 keyboard: None,
                 mouse: None,
                 preset: "default".into(),
-                persona: Persona::DualSense,
+                persona: if number % 2 == 0 {
+                    Persona::DualSense
+                } else {
+                    Persona::SwitchPro
+                },
                 socd: Socd::default(),
                 macros: Default::default(),
             })
             .collect();
         assert_eq!(
             validate_games(&games, &[]),
-            vec![Issue::GamePersonaCapacity {
+            vec![Issue::GameTooManyHidMaestroPads {
                 game: "PS5".into(),
-                persona: "dualsense".into(),
-                count: 2,
-                limit: 1,
+                count: 9,
             }]
+        );
+        games.games[0].slots.truncate(8);
+        assert_eq!(
+            validate_games(&games, &[]),
+            vec![],
+            "eight pads fill the pool cleanly"
         );
     }
 
@@ -1855,24 +1967,21 @@ preset = "default"
             keyboard: None,
             mouse: None,
             preset: "default".into(),
-            persona: Persona::SwitchPro,
+            persona: Persona::XboxSeries,
             socd: Socd::default(),
             macros: Default::default(),
         }];
-        let issues = validate_games(&games, &[]);
-        assert_eq!(
-            issues,
-            vec![Issue::GamePersonaNotImplemented {
-                game: "Bloodborne".into(),
-                slot: 1,
-                persona: "switchpro".into(),
-                reason: Persona::SwitchPro.gap().unwrap().to_owned(),
-                instead: "xbox360".into(),
-            }]
-        );
-        let msg = issues[0].to_string();
-        assert!(msg.contains("Bloodborne"), "{msg}");
-        assert!(msg.contains("xbox360"), "{msg}");
+        // Every shipping persona validates clean per game (retro leg flip);
+        // the per-game report shape re-arms with the next gated persona.
+        for persona in [Persona::XboxSeries, Persona::Snes, Persona::Genesis] {
+            games.games[0].slots[0].persona = persona;
+            assert!(
+                !validate_games(&games, &[])
+                    .iter()
+                    .any(|i| matches!(i, Issue::GamePersonaNotImplemented { .. })),
+                "{persona}"
+            );
+        }
     }
 
     /// The trap, stated as a test: this check may never consult the machine.
@@ -1884,17 +1993,12 @@ preset = "default"
     /// says the install does not help.
     #[test]
     fn the_persona_gap_is_a_build_fact_and_says_installing_will_not_help() {
-        let (reason, instead) =
-            persona_gap(Persona::SwitchPro).expect("switchpro cannot be plugged by this build");
-        assert_eq!(
-            reason,
-            Persona::SwitchPro.gap().unwrap(),
-            "the sentence must come from the capability, not a second copy"
-        );
-        assert!(reason.contains("has not yet completed its independent production runtime"));
-        assert_eq!(instead, "xbox360");
-        // And no gap at all for what the cabinet actually runs.
-        assert_eq!(persona_gap(Persona::Xbox360), None);
+        // The check stays wired to the capability (never a probe): no
+        // persona carries a gap while everything plugs; it re-arms with the
+        // next gated persona.
+        for persona in Persona::ALL.iter().copied() {
+            assert_eq!(persona_gap(persona), None, "{persona}");
+        }
         assert_eq!(persona_gap(Persona::PlayStation), None);
         assert_eq!(persona_gap(Persona::DualSense), None);
     }
@@ -2386,11 +2490,12 @@ preset = "default"
         )
     }
 
-    /// A plain SOCD slot is completely clean: the policy generates chords, and
-    /// generated chords are not something the user can get wrong.
+    /// A plain SOCD slot is completely clean: the static policies generate
+    /// chords, the order-aware ones run in the engine, and neither is
+    /// something the user can get wrong.
     #[test]
     fn an_ordinary_socd_slot_reports_nothing() {
-        for policy in ["off", "neutral", "up-priority"] {
+        for policy in ["off", "neutral", "up-priority", "last-input", "first-input"] {
             assert_eq!(
                 validate(&socd_config(policy), &[stick_preset()]),
                 Vec::new(),
@@ -2412,6 +2517,7 @@ preset = "default"
                 when: vec!["Left".into()],
                 unless: Vec::new(),
                 turbo_hz: None,
+                toggle: None,
             }),
         );
         // (The flash advisory fires too — a direction key is by definition
@@ -2445,6 +2551,7 @@ preset = "default"
                 when: vec!["Left".into()],
                 unless: Vec::new(),
                 turbo_hz: None,
+                toggle: None,
             }),
         );
         assert_eq!(
@@ -2464,6 +2571,7 @@ preset = "default"
                 when: vec!["Up".into()],
                 unless: Vec::new(),
                 turbo_hz: None,
+                toggle: None,
             }),
         );
         let games: GamesFile = toml::from_str(
@@ -2843,5 +2951,61 @@ preset = "empty"
             }),
             "{issues:?}"
         );
+    }
+
+    /// A latch on `consume` holds nothing: the row's whole effect is
+    /// suppressing its constituents. Advisory, like the rate's version —
+    /// harmless, but worth a sentence.
+    #[test]
+    fn a_latch_on_consume_is_reported() {
+        let presets = vec![preset(
+            "t",
+            "\"lx.min\" = \"Left\"\n\"lx.max\" = \"Right\"\n\
+             consume = { key = \"Left\", when = [\"Right\"], toggle = true }\n",
+        )];
+        let issues = validate(&ConfigFile::default(), &presets);
+        assert!(
+            issues.contains(&Issue::ToggleOnConsume {
+                preset: "t".into(),
+                function: "consume".into(),
+            }),
+            "{issues:?}"
+        );
+        assert!(issues
+            .iter()
+            .find(|issue| matches!(issue, Issue::ToggleOnConsume { .. }))
+            .unwrap()
+            .is_advisory());
+    }
+
+    /// A latch on a macro trigger is named here as well as refused at load
+    /// time, so `ksx check` explains it rather than the file merely failing
+    /// to parse — the same double reporting as the rate.
+    #[test]
+    fn a_latch_on_a_macro_trigger_is_named() {
+        let presets = vec![macro_preset(
+            "[bindings]\nA = \"S\"\nmacro.fire = { key = \"P\", toggle = true }\n\
+             [macros.fire]\nsteps = [{ hold = [\"A\"], ms = 50 }]\n",
+        )];
+        let issues = validate(&ConfigFile::default(), &presets);
+        assert!(
+            issues.contains(&Issue::GuardedMacroToggle {
+                preset: "m".into(),
+                name: "fire".into(),
+            }),
+            "{issues:?}"
+        );
+    }
+
+    /// A plain latch, and even a redundant second flag or an explicit
+    /// `toggle = false`, report nothing: a bool cannot disagree with itself.
+    #[test]
+    fn a_deliverable_latch_reports_nothing() {
+        let presets = vec![preset(
+            "t",
+            "A = [{ key = \"G\", toggle = true }, { key = \"H\", toggle = true }]\n\
+             B = { key = \"J\", toggle = false }\n",
+        )];
+        assert_eq!(validate(&ConfigFile::default(), &presets), Vec::new());
     }
 }

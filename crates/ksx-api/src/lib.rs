@@ -29,9 +29,11 @@
 //!   forma, no tokio, no HTTP types — not even behind a feature. If this crate
 //!   ever grows a dependency that can open a socket, the M9 decision has been
 //!   undone by accident.
-//! - **Exactly the tray's reach.** Every write verb is one `DaemonCommand` or
-//!   one call into the single mapping writer. Nothing here can touch capture,
-//!   output, or a live session (docs/ARCHITECTURE.md rules 1–5).
+//! - **Mutations stay within the tray/mapping boundary.** Every write verb is
+//!   one `DaemonCommand` or one call into the single mapping writer. Read-only
+//!   diagnostics may ask the daemon to own a bounded observation, but nothing
+//!   in this API crate can touch capture, output, or a live session directly
+//!   (docs/ARCHITECTURE.md rules 1–5).
 //! - **The read side never needs a daemon.** [`StatusSource`] is satisfiable
 //!   from the config store and the platform alone, which is what keeps the
 //!   read-only mapper alive behind the "No daemon" banner.
@@ -80,8 +82,9 @@ pub use ksx_core::MAX_SLOTS;
 
 pub use client::{Client, VerbSink};
 pub use control::{
-    map_request, multi_key_refusal, with_key, without_key, BindConflict, BindOutcome, BindRequest,
-    ControlSource, LearnView, MacroOutcome, MacroWrite, SessionOrigin, SessionView, SlotOutcome,
+    map_request, multi_key_refusal, with_key, without_key, ActiveSessionView, BindConflict,
+    BindOutcome, BindRequest, ControlSource, InputTestSpec, InputTestView, LearnView, MacroOutcome,
+    MacroWrite, SessionOrigin, SessionView, SlotOutcome,
 };
 pub use live::{
     KeyHit, LiveEnvelope, LiveFeed, LiveFrame, LiveSource, LiveStream, NoFeed, NoLiveSource,
@@ -89,16 +92,26 @@ pub use live::{
 };
 pub use live_pipe::PipeLiveSource;
 pub use machine::{
-    pad_bus_codes, setup_states, setup_steps, AdviceRow, AutostartSpec, AutostartView,
-    BlockingSpec, BlockingView, BoardRow, ConfigExport, ConfiguredDevice, DeletePreset,
-    DeleteProfile, DevicePickSpec, DevicePickView, DeviceRemoveSpec, DeviceRemoveView,
-    DeviceScanView, DevicesView, DoctorRow, DoctorView, ExportRequest, ImportReport, ImportRequest,
-    ImportWrite, KeyboardRow, MachineSource, NewPreset, NewProfile, PadBusView, PadsSpawnSpec,
-    PadsView, PresetRow, PresetsView, ProfileDetail, ProfilesView, PrunePlanView, RenamePreset,
-    SetupDeviceRow, SetupSlotRow, SetupStep, SetupView, SpawnOffer, SpawnOption, TemplateRow,
-    UpdateProfile, UsbRow, VirtualPadRow, WinusbCertificateSweepSpec, WinusbMutationView,
-    WinusbPrepareSpec, WinusbReleaseSpec, WinusbResidueRow, WinusbResidueView, WinusbView,
-    CAVEAT_NOT_A_KEYBOARD, CLAIM_LEAD, INSTALL_BUS_REMEDY, NO_BOARDS_LINE, NO_BUS_READ_REMEDY,
+    controller_output_states, setup_states, setup_steps, vigem_output_codes, AdviceRow,
+    AutostartSpec, AutostartView, BlockingSpec, BlockingView, BoardRole, BoardRow, ConfigExport,
+    ConfiguredDevice, ControllerOutputRequirement, ControllerOutputView, ControllerOutputsView,
+    DeletePreset, DeleteProfile, DeviceIdentifyView, DevicePickSpec, DevicePickView,
+    DeviceRemoveSpec, DeviceRemoveView, DeviceScanView, DevicesView, DoctorRow, DoctorView,
+    ExportRequest, ImportReport, ImportRequest, ImportWrite, KeyboardRow, MachineSource, NewPreset,
+    NewProfile, PadsSpawnSpec, PadsView, PanelBackupRow, PanelBackupsSpec, PanelBackupsView,
+    PanelByteDiffRow, PanelChartSpec, PanelChartView, PanelDriverCapabilities,
+    PanelHardwareProfile, PanelHardwareProfileDeleteSpec, PanelHardwareProfileMutationView,
+    PanelHardwareProfileSaveSpec, PanelHardwareProfilesView, PanelHardwareTerminal,
+    PanelHidCollectionRow, PanelInterfaceRow, PanelKeyOption, PanelKeyValue, PanelProgramApplySpec,
+    PanelProgramOutcome, PanelProgramPlanView, PanelProgramSpec, PanelRestoreApplySpec,
+    PanelRestoreSpec, PanelRoutingAuthoritySpec, PanelRoutingGuard, PanelShiftState,
+    PanelStatusRow, PanelStatusSpec, PanelStatusView, PanelTerminalDiffRow, PanelTerminalEdit,
+    PanelTerminalRow, PresetRow, PresetsView, ProfileDetail, ProfilesView, PrunePlanView,
+    RenamePreset, SetupDeviceRow, SetupSlotRow, SetupStep, SetupView, SpawnOffer, SpawnOption,
+    TemplateRow, ThemeSpec, ThemeView, UpdateProfile, UsbRow, VirtualPadRow,
+    WinusbCertificateSweepSpec, WinusbMutationView, WinusbPrepareSpec, WinusbReleaseSpec,
+    WinusbResidueRow, WinusbResidueView, WinusbView, CAVEAT_NOT_A_KEYBOARD, CLAIM_LEAD,
+    INSTALL_HIDMAESTRO_REMEDY, INSTALL_VIGEM_REMEDY, NO_BOARDS_LINE, NO_OUTPUT_READ_REMEDY,
     RELEASE_LEAD, UNREAD_BOARDS_LINE, UNREAD_CONFIGURED_LINE,
 };
 pub use pipe::{PipeTransport, TransportError, NO_CHANNEL};
@@ -106,18 +119,18 @@ pub use refusal::{codes, Refusal, Refused};
 pub use stage::{
     preset_name_for_slot, staged_bind_edit, staged_macro_edit, staged_macro_edit_for_setup,
     staged_macro_snapshot, staged_mapper_slot, staged_mapper_snapshot, staged_slot_bind_edit,
-    BlockingOption, PersonaOption, SocdOption, StageEdit, StageOutcome, StagedBindEdit,
-    StagedBindRequest, StagedDeviceView, StagedMacroEdit, StagedMacroRequest, StagedSetupView,
-    StagedSlotView,
+    staged_slot_revision, BlockingOption, PersonaOption, SocdOption, StageEdit, StageOutcome,
+    StagedBindEdit, StagedBindRequest, StagedDeviceView, StagedMacroEdit, StagedMacroRequest,
+    StagedSetupView, StagedSlotView,
 };
 pub use status::{
     MacroSnapshot, MacroStepView, MacroView, MapperSlot, MapperSnapshot, PadRow, ProfileRow,
-    StatusSnapshot, StatusSource,
+    RuntimeEnvironmentView, StatusSnapshot, StatusSource,
 };
 pub use wire::{
     macro_body, ActionResponse, BackupView, BackupsRequest, BackupsResponse, ClearAllRequest,
-    ConflictView, FlashView, HealthView, LastSessionView, LearnResponse, MacroResponse,
-    MacroWriteKind, MapMacroRequest, MapRequest, MapResponse, MovedFromView, Request, Response,
-    RestoreMode, RestoreRequest, RestoreResponse, SlotAssignRequest, SlotAssignResponse,
-    StatusResponse, PIPE_NAME, RESTORE_MODES,
+    ConflictView, FlashView, HealthView, InputTestResponse, LastSessionView, LearnResponse,
+    MacroResponse, MacroWriteKind, MapMacroRequest, MapRequest, MapResponse, MovedFromView,
+    Request, Response, RestoreMode, RestoreRequest, RestoreResponse, SlotAssignRequest,
+    SlotAssignResponse, StatusResponse, PIPE_NAME, RESTORE_MODES,
 };

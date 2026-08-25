@@ -84,7 +84,7 @@ async function submitForm(form: HTMLFormElement): Promise<void> {
     if (!leavingPage) {
       pendingForms.delete(form);
       submits.forEach((control) => {
-        if (control.isConnected) control.disabled = false;
+        control.disabled = false;
       });
     }
   }

@@ -351,7 +351,14 @@ fn render_hidmaestro(doc: &mut Doc, hm: &ksx_platform::HidMaestroReport) {
         }
         return;
     }
-    doc.line("  [OK]   installed — production DualSense runtime is available");
+    doc.line("  [OK]   installed — production DualSense package is staged");
+    if !hm.service_key {
+        // Not a fault, and not a pending event either: the 2026-08-20
+        // hardware session bound the driver and enumerated a live pad with
+        // no HIDMaestro-named service key ever appearing (UMDF loads under
+        // the reflector). The key's absence is the measured normal state.
+        doc.line("  [INFO] no HIDMaestro service key — measured normal; the UMDF driver loads without one");
+    }
     match &hm.driver_file {
         Some(file) => render_driver_file(doc, file),
         None => doc.line("  [WARN] driver file present but unreadable"),
@@ -581,9 +588,10 @@ mod tests {
             virtual_pads: VirtualPadReport::empty(),
             // Synthetic absent-state fixture: no service key or UMDF driver.
             hidmaestro: ksx_platform::HidMaestroReport::absent(vec![
-                "HKLM\\SYSTEM\\CurrentControlSet\\Services\\HIDMaestro".into(),
                 "C:\\Windows\\System32\\DriverStore\\FileRepository\\hidmaestro.inf_amd64_*\\hidmaestro.inf (SHA256 187D5B06625CEECC0E1B43C0FA8DDA5F6DAB6A9962F79B037BBAD419F1084704)".into(),
-                "C:\\Windows\\System32\\DriverStore\\FileRepository\\hidmaestro.inf_amd64_*\\HIDMaestro.dll (SHA256 D68EF6C311E295C6599634BF8E74A7FB18BA915DB809F4CD7DD040111EA40A5C)".into(),
+                "C:\\Windows\\System32\\DriverStore\\FileRepository\\hidmaestro.inf_amd64_*\\HIDMaestro.dll (present; bytes are re-signed per install)".into(),
+                "HKLM\\SOFTWARE\\HIDMaestro\\InstalledManifestSha256 == 2f5c0313b3ea6fa79179a501648d9ff1b4330fbc4d1ab23294be14885edb2d8c".into(),
+                "HKLM\\SYSTEM\\CurrentControlSet\\Services\\HIDMaestro (informational; measured 2026-08-20: absent even with a live pad — UMDF loads without it)".into(),
             ]),
         }
     }
@@ -626,11 +634,11 @@ mod tests {
             !text.contains("personas available"),
             "doctor must never advertise a persona it cannot plug:\n{text}"
         );
-        for persona in ksx_platform::HidMaestroReport::gated_personas() {
-            assert!(text.contains(persona), "{persona} unmentioned:\n{text}");
-        }
+        // Retro leg flip: nothing is gated, so the unavailable-personas
+        // lines vanish instead of naming an empty set.
+        assert!(ksx_platform::HidMaestroReport::gated_personas().is_empty());
         assert!(
-            text.contains("profile runtimes are not implemented"),
+            !text.contains("profile runtimes are not implemented"),
             "{text}"
         );
         // The install is still reported — it is worth knowing, it just decides

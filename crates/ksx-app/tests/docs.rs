@@ -93,6 +93,13 @@ fn read_doc(name: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{} is missing: {e}", path.display()))
 }
 
+fn read_repo_file(name: &str) -> String {
+    let path = repo_root().join(name);
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{} is missing: {e}", path.display()))
+        .replace("\r\n", "\n")
+}
+
 /// Every `§N` cited within a few characters of `doc`'s filename, and who cites
 /// it.
 ///
@@ -190,6 +197,7 @@ fn every_governing_doc_is_cited_from_the_code_it_governs() {
         "M9-DECISION.md",
         "MAPPER-UX.md",
         "SURFACES.md",
+        "UNIVERSAL-IO.md",
     ];
 
     let sources = source_files();
@@ -253,4 +261,325 @@ fn the_setup_docs_name_the_picker_wherever_they_show_a_devnode() {
              that is what the picker writes and what a reader should copy"
         );
     }
+}
+
+/// **The managed real-QA lifecycle contract.**
+///
+/// Port 4460 is useful only when Studio and the daemon share one matched
+/// managed artifact. These assertions intentionally guard the small set of
+/// script tokens that prove that relationship: an idle daemon, a reachable draft, exact ownership of
+/// both global pipes, same-handle shutdown, and a paired schema-v2 record.
+#[test]
+fn managed_real_qa_is_an_idle_identity_checked_process_pair() {
+    let start = read_repo_file("tools/studio-env/start-real.ps1");
+    let probe = read_repo_file("tools/studio-env/runtime-probe.ps1");
+    let teardown = read_repo_file("tools/studio-env/teardown.ps1");
+    let status = read_repo_file("tools/studio-env/status.ps1");
+
+    assert!(
+        start.contains(r#"-ArgumentList @("daemon", "--console")"#),
+        "real QA must launch the managed daemon in the foreground logging mode"
+    );
+    assert!(
+        !start.contains(r#"-ArgumentList @("daemon", "--start")"#),
+        "opening real QA must not start an emulation session"
+    );
+    assert!(
+        start.contains("$Payload.staged.reachable"),
+        "the real-QA health gate must require Studio's draft channel to reach the daemon"
+    );
+    for pipe in [r#"-PipeName "ksx-daemon""#, r#"-PipeName "ksx-live""#] {
+        assert!(
+            start.matches(pipe).count() >= 2,
+            "the startup and post-Studio health gates must both verify ownership of {pipe}"
+        );
+        assert!(
+            status.contains(pipe),
+            "status must verify ownership of {pipe} before calling real QA healthy"
+        );
+    }
+
+    assert!(
+        probe.contains("GetNamedPipeServerProcessId(pipe.SafePipeHandle"),
+        "pipe identity must come from the connected handle"
+    );
+    assert!(
+        probe.matches("TokenImpersonationLevel.Anonymous").count() >= 2
+            && probe.matches("HandleInheritability.None").count() >= 2,
+        "identity and quit probes must use anonymous, non-inheritable pipe handles"
+    );
+    let quit_start = probe
+        .find("public static void RequestExactDaemonQuit")
+        .expect("runtime probe must expose an exact-daemon quit operation");
+    let quit_end = probe[quit_start..]
+        .find("function Stop-KsxDaemonGracefully")
+        .map(|offset| quit_start + offset)
+        .expect("the C# exact-quit helper must end before its PowerShell wrapper");
+    let exact_quit = &probe[quit_start..quit_end];
+    assert_eq!(
+        exact_quit.matches("new NamedPipeClientStream(").count(),
+        1,
+        "exact quit must validate and write through one connected pipe handle"
+    );
+    assert!(
+        exact_quit.contains("GetNamedPipeServerProcessId(pipe.SafePipeHandle")
+            && exact_quit.contains("new StreamWriter(\n                    pipe,")
+            && exact_quit.contains(r#"writer.WriteLine("{\"verb\":\"quit\"}")"#),
+        "exact quit must check the server PID and send quit on that same handle"
+    );
+
+    assert!(
+        start.contains("schema_version = 2") && start.contains("processes = @("),
+        "the real launcher must persist its daemon and Studio as a schema-v2 process pair"
+    );
+    for (name, script) in [("teardown", &teardown), ("status", &status)] {
+        assert!(
+            script.contains(r#"PSObject.Properties.Name -contains "processes""#)
+                && script.contains(r#"role -eq "studio""#)
+                && script.contains(r#"role -eq "daemon""#)
+                && script.contains(r#"PSObject.Properties.Name -contains "schema_version""#),
+            "{name} must understand both roles in the paired schema-v2 record"
+        );
+    }
+    assert!(
+        teardown.contains("Stop-KsxDaemonGracefully -ExpectedProcessId $ManagedProcessId"),
+        "teardown must use the identity-checked same-handle daemon quit"
+    );
+    assert!(
+        status.contains("$DaemonReachable = [bool]$Payload.staged.reachable")
+            && status.contains("$DaemonPipesValid"),
+        "status must require both draft reachability and exact pipe ownership"
+    );
+    assert!(
+        start.contains("Get-Process WinIPAC -ErrorAction SilentlyContinue")
+            && start.contains("This script will not close it."),
+        "real QA may warn that WinIPAC can contend for MI_02, but must never close the user's configurator"
+    );
+    let winipac_start = start
+        .find("$WinIpac = Get-Process WinIPAC -ErrorAction SilentlyContinue")
+        .expect("real QA must retain its advisory WinIPAC probe");
+    let winipac_end = start[winipac_start..]
+        .find("$TransitionMutex = $null")
+        .map(|offset| winipac_start + offset)
+        .expect("the advisory WinIPAC block must end before environment transition work");
+    let winipac_block = &start[winipac_start..winipac_end];
+    for forbidden in ["Stop-Process", "CloseMainWindow", ".Kill("] {
+        assert!(
+            !winipac_block.contains(forbidden),
+            "the advisory WinIPAC block must not use {forbidden}"
+        );
+    }
+}
+
+/// The fast development loop and the release pipeline protect different
+/// boundaries, but together they make one claim: the bytes being observed are
+/// identified, coherent, and never silently replaced by look-alike output.
+#[test]
+fn development_and_release_promotion_are_identity_bound() {
+    let build_graph = read_repo_file("tools/studio-env/build-graph.ps1");
+    let assets = read_repo_file("tools/studio-env/build-assets.ps1");
+    let source_graph = read_repo_file("tools/studio-env/source-graph.ps1");
+    let render_map = read_repo_file("crates/ksx-studio/src/render_map.rs");
+    let watch = read_repo_file("tools/studio-env/watch.ps1");
+    let start = read_repo_file("tools/studio-env/start-real.ps1");
+    let seed = read_repo_file("tools/studio-env/seed.ps1");
+    let status = read_repo_file("tools/studio-env/status.ps1");
+    let teardown = read_repo_file("tools/studio-env/teardown.ps1");
+    let ci = read_repo_file(".github/workflows/ci.yml");
+    let installer = read_repo_file(".github/workflows/build-installer.yml");
+    // Git may materialize workflow files with CRLF on Windows. These checks
+    // care about YAML structure, not the checkout's newline convention.
+    let release = read_repo_file(".github/workflows/release.yml").replace("\r\n", "\n");
+    let promotion_controls = read_repo_file("tools/release/assert-promotion-controls.ps1");
+    let promotion_activation = read_repo_file("tools/release/activate-studio-promotion-checks.ps1");
+    let pipeline = read_doc("DEVELOPMENT-PIPELINE.md");
+
+    assert!(
+        build_graph.contains(r#"Global\KSXStudioBuildGraph-v1"#)
+            && build_graph.contains("assets.dirty")
+            && build_graph.contains("assets-state.json")
+            && build_graph.contains("Assert-KsxStudioAssetGraphReady"),
+        "one shared graph lock and fail-closed receipt must guard Node writers and Cargo readers"
+    );
+    assert_eq!(
+        assets.matches("Invoke-StudioAssetBuild").count(),
+        3,
+        "the wrapper should define one build operation and invoke it exactly twice"
+    );
+    for token in [
+        "studio_input_sha256",
+        "zone_producer_sha256",
+        "asset_graph_sha256",
+        "generated_file_count",
+        "Get-FileHash",
+    ] {
+        assert!(assets.contains(token), "asset receipt lost {token}");
+    }
+    assert!(
+        source_graph.contains(r#""tools\studio-env\build-assets.ps1""#)
+            && source_graph.contains(r#""tools\studio-env\build-graph.ps1""#)
+            && source_graph.contains(r#""tools\studio-env\source-graph.ps1""#)
+            && source_graph
+                .contains(r#"-ExcludedRelativePrefixes @("studio-ui/tokens/zones.json")"#),
+        "asset compiler semantics must be inputs while the Rust handoff remains an output"
+    );
+    assert!(
+        render_map
+            .contains("generated zone tokens are stale; run tools/studio-env/build-assets.ps1"),
+        "the Rust handoff verifier must route remediation through the locked wrapper"
+    );
+    assert!(
+        assets
+            .find("$StudioInputBefore = Get-KsxSourceGraphFingerprint")
+            .unwrap()
+            < assets
+                .find("$Toolchain = Resolve-KsxStudioToolchain")
+                .unwrap(),
+        "asset authoring identity must be captured before long preflight/generation work"
+    );
+    for (name, script) in [("real", &start), ("fixture", &seed)] {
+        assert!(
+            script.contains("Enter-KsxStudioBuildGraphLock")
+                && script.contains("Assert-KsxStudioAssetGraphReady"),
+            "{name} Cargo build must share the generated-asset graph lock"
+        );
+    }
+
+    assert!(
+        start.contains(r#"Global\KeyboardSplitterXboxPro.PanelProgramming.v1"#)
+            && start.contains("KSX_WATCH_DEFERRED:")
+            && start.contains("$ExactStopped")
+            && start.contains("$ExactAbsent")
+            && start.contains(r#"Payload.run -ceq "stopped""#)
+            && start.contains(r#"Payload.code -ceq "daemon-not-running""#),
+        "real replacement must defer across Play and persistent panel transactions"
+    );
+    assert!(
+        teardown.contains(r#"Global\KeyboardSplitterXboxPro.PanelProgramming.v1"#)
+            && teardown.contains("Invoke-KsxDaemonStatusProbe")
+            && teardown.contains("$ExactIncompleteAbsent"),
+        "direct real teardown must share the hardware lease and require typed idle/absence"
+    );
+    assert!(
+        watch.contains(r#"Global\KSXStudioEnvironment-$Environment-watch-v1"#)
+            && watch.contains("DebounceMilliseconds = 900")
+            && watch.contains("another edit arrived during the build")
+            && watch.contains("leaves the last healthy process running")
+            && watch.contains("Get-KsxPostFailureObservation")
+            && watch.contains("LastFailedZoneProducers")
+            && watch.contains("restart-required"),
+        "watch mode must be singleton, debounced, sequential, and preserve healthy service"
+    );
+    for token in [
+        "$Environment",
+        "$Json",
+        "$RequireHealthy",
+        "$RequireCurrent",
+        "$Unhealthy",
+        "$NotCurrent",
+        "ProvenanceComplete",
+    ] {
+        assert!(
+            status.contains(token),
+            "automation-safe status lost {token}"
+        );
+    }
+
+    assert!(
+        ci.contains("studio-environments:")
+            && ci.contains("tools/studio-env/build-assets.ps1")
+            && ci.contains("Prove PowerShell 5.1 and 7 hash the same build graph")
+            && ci.contains("watch.ps1")
+            && ci.contains("-Environment blank-encoder -Once")
+            && ci.contains("format('source-{0}-{1}', github.event_name, github.ref)")
+            && ci.contains("cargo check -p ksx-output --features cab-tests --all-targets")
+            && ci.contains("needs: [test, studio-browser, studio-environments,"),
+        "clean CI must execute the environment lifecycle and compile the hardware-only gate"
+    );
+    for token in [
+        "ksx-candidate-manifest.json",
+        "CANDIDATE_RUN_ID",
+        "CANDIDATE_RUN_ATTEMPT",
+        "SETUP_SHA256",
+        "PORTABLE_SHA256",
+    ] {
+        assert!(installer.contains(token), "candidate manifest lost {token}");
+    }
+    assert!(
+        release.contains("Prove the tag commit is exactly origin/main HEAD")
+            && release.contains("environment:\n      name: production")
+            && release.contains("KSX_PRODUCTION_APPROVAL_CONFIGURED")
+            && release.contains("assert-promotion-controls.ps1")
+            && release.contains("ksx-windows-candidate-manifest")
+            && release.contains("queue: max")
+            && release.contains("gh api --paginate --slurp")
+            && release.contains("--draft")
+            && release.contains("$_.digest")
+            && release.contains("isImmutable")
+            && release.contains("the downloaded candidate bytes do not match"),
+        "release must wait for approval and promote the exact tag-run bytes"
+    );
+    for token in [
+        "can_admins_bypass",
+        "immutable-releases",
+        "sha_pinning_required",
+        "RequireNoRulesetBypassActors",
+        "PolicyRows[0].type -cne 'tag'",
+        "KSX main promotion gate",
+        "KSX release tag immutability",
+        "studio-environments",
+        "refs/tags/v*",
+        "'update'",
+    ] {
+        assert!(
+            promotion_controls.contains(token),
+            "promotion-control verifier lost {token}"
+        );
+    }
+    assert!(
+        promotion_activation.contains("contents/.github/workflows?ref=")
+            && promotion_activation.contains("[0-9a-fA-F]{40}")
+            && promotion_activation
+                .find(r#"repos/$Repository/actions/permissions" --input -"#)
+                .unwrap()
+                < promotion_activation
+                    .find(r#"repos/$Repository/rulesets/$([int64]$Detail.id)" --input -"#)
+                    .unwrap(),
+        "post-merge activation must verify default workflows and fail closed by enabling SHA policy before six-check rules"
+    );
+    for phrase in [
+        "DEV BUILD · REAL HARDWARE",
+        "INSTALLED QA",
+        "Same run id",
+        "without rebuilding",
+    ] {
+        assert!(pipeline.contains(phrase), "pipeline runbook lost {phrase}");
+    }
+
+    let node_pin = read_repo_file(".node-version").trim().to_owned();
+    let package = read_repo_file("studio-ui/package.json");
+    let package_lock = read_repo_file("studio-ui/package-lock.json");
+    assert_eq!(
+        node_pin, "24.19.0",
+        "production asset Node pin must be current LTS"
+    );
+    for contract in [r#""node": "24.19.0""#, r#""npm": "11.17.0""#] {
+        assert!(
+            package.contains(contract),
+            "package metadata lost {contract}"
+        );
+        assert!(
+            package_lock.contains(contract),
+            "lock metadata lost {contract}"
+        );
+    }
+    assert!(package.contains(r#""packageManager": "npm@11.17.0""#));
+    assert!(package.contains("tools/studio-env/build-assets.ps1"));
+    assert!(assets.contains(r#"$RequiredNodeVersion = "24.19.0""#));
+    assert!(assets.contains(r#"$RequiredNpmVersion = "11.17.0""#));
+    assert_eq!(
+        ci.matches("node-version-file: '.node-version'").count(),
+        3,
+        "every Node-bearing CI job must consume the one root pin"
+    );
 }

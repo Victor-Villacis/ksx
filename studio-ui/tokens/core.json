@@ -1,0 +1,4 @@
+{
+  "$description": "Core primitives — raw scales shared by more than one semantic token or theme. Empty at TK0 by design: the semantic tier carries today's values verbatim, and raws graduate here the first time two tokens or two themes need to share one. See docs/research/token-system-design.md §4.1.",
+  "tokens": []
+}

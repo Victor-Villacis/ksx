@@ -88,11 +88,13 @@ use crate::snapshot::SetupPayload;
 const LIST_SLOT_STEPS: &str = "list:stepRows:array";
 const LIST_SLOT_SLOT_OPTIONS: &str = "list:slotOptions:array";
 const LIST_SLOT_PRESET_OPTIONS: &str = "list:presetOptions:array";
+const LIST_SLOT_PERSONA_OPTIONS: &str = "list:personaOptions:array";
 const LIST_SLOT_PROFILE_OPTIONS: &str = "list:profileOptions:array";
 const LIST_SLOT_DEVICES: &str = "list:deviceRows:array";
 const LIST_SLOT_SLOTS: &str = "list:slotRows:array";
 const LIST_SLOT_NOTES: &str = "list:noteRows:array";
 const LIST_SLOT_BLOCKING: &str = "list:blockingRows:array";
+const LIST_SLOT_THEMES: &str = "list:themeRows:array";
 const LIST_SLOT_SOCD_OPTIONS: &str = "list:socdOptions:array";
 
 /// How many `createShow` pairs this page has; pinned by the layout test
@@ -141,11 +143,17 @@ fn scalar_slots(payload: &SetupPayload, flash: Option<&str>) -> serde_json::Valu
         "exportLine": lines.export,
         "proveLine": lines.prove,
         "proveKey": payload.learn.key.clone().unwrap_or_default(),
+        "proveGeneration": payload
+            .learn
+            .generation
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
         "setupSource": payload.setup.source,
         "wireBlocked": lines.wire_blocked,
         "proveBlocked": lines.prove_blocked,
         "wireWarning": lines.wire_warning,
         "blockingLine": lines.blocking_line,
+        "themeLine": lines.theme_line,
     })
 }
 
@@ -157,7 +165,7 @@ fn scalar_slots(payload: &SetupPayload, flash: Option<&str>) -> serde_json::Valu
 /// which is docs/SURFACES.md §1 drift with a runtime cost: the two copies
 /// could disagree between the SSR paint and the first poll. Now both read the
 /// rows `SetupPayload::composed` filled, so they cannot.
-fn list_values(payload: &SetupPayload) -> [(&'static str, SlotValue); 9] {
+fn list_values(payload: &SetupPayload) -> [(&'static str, SlotValue); 11] {
     let rows = &payload.rows;
 
     let steps = SlotValue::array(
@@ -206,6 +214,17 @@ fn list_values(payload: &SetupPayload) -> [(&'static str, SlotValue); 9] {
             })
             .collect(),
     );
+    let persona_options = SlotValue::array(
+        rows.persona_options
+            .iter()
+            .map(|option| {
+                SlotValue::object(vec![
+                    ("value".to_owned(), SlotValue::Text(option.value.clone())),
+                    ("label".to_owned(), SlotValue::Text(option.label.clone())),
+                ])
+            })
+            .collect(),
+    );
     let presets = text_rows(&rows.preset_options);
     let profiles = text_rows(&rows.profile_options);
     let notes = text_rows(&rows.notes);
@@ -243,15 +262,35 @@ fn list_values(payload: &SetupPayload) -> [(&'static str, SlotValue); 9] {
             .collect(),
     );
 
+    let themes = SlotValue::array(
+        rows.themes
+            .iter()
+            .map(|row| {
+                SlotValue::object(vec![
+                    ("value".to_owned(), SlotValue::Text(row.value.clone())),
+                    ("title".to_owned(), SlotValue::Text(row.title.clone())),
+                    ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
+                    (
+                        "chosen_cls".to_owned(),
+                        SlotValue::Text(row.chosen_cls.clone()),
+                    ),
+                    ("button".to_owned(), SlotValue::Text(row.button.clone())),
+                ])
+            })
+            .collect(),
+    );
+
     [
         (LIST_SLOT_STEPS, steps),
         (LIST_SLOT_SLOT_OPTIONS, slot_options),
         (LIST_SLOT_PRESET_OPTIONS, presets),
+        (LIST_SLOT_PERSONA_OPTIONS, persona_options),
         (LIST_SLOT_PROFILE_OPTIONS, profiles),
         (LIST_SLOT_DEVICES, devices),
         (LIST_SLOT_SLOTS, slots),
         (LIST_SLOT_NOTES, notes),
         (LIST_SLOT_BLOCKING, blocking),
+        (LIST_SLOT_THEMES, themes),
         (LIST_SLOT_SOCD_OPTIONS, socd_options),
     ]
 }
@@ -431,6 +470,7 @@ mod tests {
             line: "idle — daemon reachable".into(),
             profile: None,
             origin: ksx_api::SessionOrigin::Unknown,
+            active: None,
         }
     }
 
@@ -438,6 +478,7 @@ mod tests {
         LearnView {
             ok: true,
             state: "idle".into(),
+            generation: None,
             remaining_ms: None,
             device: None,
             key: None,
@@ -454,6 +495,7 @@ mod tests {
             line: "running — 4 pad(s)".into(),
             profile: Some("Example Game".into()),
             origin: ksx_api::SessionOrigin::Config,
+            active: None,
         }
     }
 
@@ -547,12 +589,14 @@ mod tests {
                 LIST_SLOT_STEPS,
                 LIST_SLOT_SLOT_OPTIONS,
                 LIST_SLOT_PRESET_OPTIONS,
+                LIST_SLOT_PERSONA_OPTIONS,
                 LIST_SLOT_SOCD_OPTIONS,
                 LIST_SLOT_PROFILE_OPTIONS,
                 LIST_SLOT_DEVICES,
                 LIST_SLOT_SLOTS,
                 LIST_SLOT_NOTES,
                 LIST_SLOT_BLOCKING,
+                LIST_SLOT_THEMES,
             ],
             "list slot names drifted between SetupIsland.ts and the LIST_SLOT_* \
              constants; slots: {names:?}"
@@ -651,6 +695,39 @@ mod tests {
     /// The two verbs are on the page, reachable without JavaScript, and Export
     /// is a GET link while Import is a POST form — because one reads and one
     /// writes, and `guard.rs` decides what to police by METHOD.
+    /// The theme card, pinned (TK2/TK3 review finding: the card had zero
+    /// direct coverage — `data-native`, the one attribute that makes a theme
+    /// click repaint under JS, could be deleted with every gate green).
+    #[test]
+    fn the_theme_card_posts_natively_from_the_roster() {
+        let page = EmbeddedPage::load("/setup").unwrap();
+        let out = render_setup(&page, &configured(), None);
+
+        let chunks: Vec<&str> = out.html.split(r#"action="/setup/theme""#).skip(1).collect();
+        assert_eq!(
+            chunks.len(),
+            1 + crate::theme_tokens::THEMES.len(),
+            "one form per row: System plus the generated roster"
+        );
+        let mut values = Vec::new();
+        for chunk in &chunks {
+            let form = &chunk[..chunk.find("</form>").expect("closed theme form")];
+            assert!(
+                form.contains("data-native"),
+                "every theme form opts OUT of the fetch enhancement — the 303-follow                  repaint IS the feedback: {form}"
+            );
+            let value = form
+                .split(r#"name="theme" value=""#)
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .expect("a hidden theme value");
+            values.push(value.to_owned());
+        }
+        let mut expected = vec!["system".to_owned()];
+        expected.extend(crate::theme_tokens::THEMES.iter().map(|t| t.id.to_owned()));
+        assert_eq!(values, expected, "row order: System first, then the roster");
+    }
+
     #[test]
     fn export_is_a_link_and_import_is_a_post_form() {
         let page = EmbeddedPage::load("/setup").unwrap();
@@ -771,6 +848,49 @@ mod tests {
             out.html
         );
         assert!(out.html.contains("Nothing is running"), "{}", out.html);
+    }
+
+    /// The backend accepted persona changes before this control existed. The
+    /// form now exposes the same canonical roster as `/start`, while its blank
+    /// first option preserves the slot identity during an unrelated edit.
+    #[test]
+    fn the_slot_form_can_change_controller_without_changing_it_by_default() {
+        let page = EmbeddedPage::load("/setup").unwrap();
+        let out = render_setup(&page, &configured(), None);
+        let form = out
+            .html
+            .split(r#"action="/setup/slot""#)
+            .nth(1)
+            .expect("slot form");
+        let form = &form[..form.find("</form>").expect("closed slot form")];
+
+        assert!(form.contains(r#"for="setup-persona""#), "{form}");
+        assert!(
+            form.contains(r#"id="setup-persona" name="persona""#)
+                || form.contains(r#"name="persona" id="setup-persona""#),
+            "{form}"
+        );
+        let blank = form.find("(leave as it is)").expect("preserving sentinel");
+        for (name, label) in [
+            ("xbox360", "Xbox 360"),
+            ("playstation", "PlayStation"),
+            ("dualsense", "DualSense"),
+            ("switchpro", "Switch Pro"),
+        ] {
+            let at = form
+                .find(&format!(r#"value="{name}""#))
+                .unwrap_or_else(|| panic!("missing {label} option: {form}"));
+            assert!(blank < at, "the preserving sentinel must be first: {form}");
+            assert!(form.contains(label), "missing {label}: {form}");
+        }
+        assert!(form.contains("Xbox 360 · ViGEmBus"), "{form}");
+        assert!(form.contains("DualSense · HIDMaestro"), "{form}");
+        // Every shipping persona is offered (2026-08-20 hardware session +
+        // retro leg flip).
+        assert!(form.contains("Switch Pro · HIDMaestro"), "{form}");
+        assert!(form.contains(r#"value="xboxseries""#), "{form}");
+        assert!(form.contains(r#"value="snes""#), "{form}");
+        assert!(form.contains(r#"value="genesis""#), "{form}");
     }
 
     /// The slot menu offers every slot the BACKEND accepts — the ceiling it
@@ -1064,23 +1184,20 @@ mod tests {
         assert!(out.html.contains(r#"href="/devices""#), "{}", out.html);
         assert!(out.html.contains("ksx device pick"), "{}", out.html);
         assert!(
-            out.html
-                .contains(r#"<a class="navlink" href="/start">Setup</a>"#),
+            out.html.contains(
+                r#"<a class="navlink workflow-link" href="/start#keyboard"><span class="workflow-num">1</span>Keyboard</a>"#
+            ),
             "{}",
             out.html
         );
         assert!(
-            out.html
-                .contains(r#"<a class="navlink" href="/map">Controls</a>"#),
+            out.html.contains(
+                r#"<a class="navlink workflow-link" href="/map"><span class="workflow-num">3</span>Mapping</a>"#
+            ),
             "{}",
             out.html
         );
-        assert!(
-            out.html
-                .contains(r#"<a class="navlink" href="/check">Test</a>"#),
-            "{}",
-            out.html
-        );
+        assert!(out.html.contains(r#"href="/check""#), "{}", out.html);
     }
 
     /// Ledger #5's contract: the payload block IS the /api/setup payload.

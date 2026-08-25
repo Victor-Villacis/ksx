@@ -97,6 +97,22 @@ function Normalize-Whitespace {
     return [regex]::Replace($Text, '\s+', ' ').Trim()
 }
 
+function Expand-AnchorTemplate {
+    param(
+        [string] $Template,
+        [hashtable] $Values
+    )
+
+    # Anchor templates let each persona declare the exact source grammar its
+    # own encoder is written in, so one loop can hold every encoder to its own
+    # contract without any of them loosening the others.
+    $text = $Template
+    foreach ($key in $Values.Keys) {
+        $text = $text.Replace(('{' + $key + '}'), [string]$Values[$key])
+    }
+    return $text
+}
+
 function Test-ContainsNormalized {
     param(
         [string] $Text,
@@ -428,6 +444,10 @@ try {
         'input-vectors' = '../../hidmaestro-input-contract/golden-vectors.json'
         'input-source-lock' = '../../hidmaestro-input-contract/source-lock.json'
         'input-source-verifier' = '../../hidmaestro-input-contract/verify-source-contract.ps1'
+        'input-contract-xbox-series' = '../../hidmaestro-input-contract-xbox-series/contract.json'
+        'input-vectors-xbox-series' = '../../hidmaestro-input-contract-xbox-series/golden-vectors.json'
+        'input-contract-switch-pro' = '../../hidmaestro-input-contract-switch-pro/contract.json'
+        'input-vectors-switch-pro' = '../../hidmaestro-input-contract-switch-pro/golden-vectors.json'
     }
     $loadedInputs = @{}
     foreach ($input in @($lock.sourceInputs)) {
@@ -656,10 +676,20 @@ try {
         ($source.futureCompileManifest.projectUnit -ceq $lock.project.path -and
          @($lock.candidateFiles.path | Where-Object { $_ -ceq $lock.project.path }).Count -eq 1) `
         'project path is the one frozen by the source-compilation contract'
+    # Every source unit with no upstream counterpart must be declared here:
+    # the managed feedback adapter, the wire-shape table, and each persona
+    # encoder the lock introduces. Anything else appearing in requiredNewUnits
+    # is an unreviewed addition and fails.
+    $declaredNewUnitPaths = @($lock.feedbackAdapter.path) +
+        @($lock.inputBinding.wireShapePath) +
+        @($lock.inputBinding.encoders |
+            Where-Object { $_.isNewUnit -eq $true } |
+            ForEach-Object { $_.encoderPath })
+    $actualNewUnitPaths = @($source.requiredNewUnits | ForEach-Object { $_.path })
     Add-Check 'source.feedbackAdapterPath' `
-        (@($source.requiredNewUnits).Count -eq 1 -and
-         $source.requiredNewUnits[0].path -ceq $lock.feedbackAdapter.path) `
-        'managed feedback adapter path is the sole required new source unit'
+        ($actualNewUnitPaths -ccontains $lock.feedbackAdapter.path -and
+         (Test-SameStringSet $actualNewUnitPaths $declaredNewUnitPaths)) `
+        'required new source units are exactly the managed feedback adapter, the wire-shape table, and the declared persona encoders'
     $replacementPresence = @($source.classification.replacementRequired |
         ForEach-Object { $_.replacementPresent })
     $newUnitPresence = @($source.requiredNewUnits | ForEach-Object { $_.present })
@@ -1231,166 +1261,275 @@ try {
          $aggregate.sourceContracts.rawDualSenseFeedback.managedRuntimeAdapterPresent -eq $true) `
         'managed adapter source is present while behavior/artifact proof remains false'
 
-    $encoderCode = $candidateRecords[$lock.inputBinding.encoderPath].code
+    # The input path is verified per persona. Every encoder declared in the
+    # lock is checked against ITS OWN frozen input contract and golden vectors,
+    # using anchor templates the lock supplies, so a second profile with a
+    # different report shape is anchored exactly as strongly as the first
+    # without either one relaxing the other. The DualSense binding declares an
+    # empty check prefix so its check identifiers are unchanged by this
+    # generalization.
     $sharedMemoryCode = $candidateRecords[$lock.inputBinding.sharedMemoryPath].code
     $controllerCode = $candidateRecords[$lock.inputBinding.controllerPath].code
+    $wireShapeCode = $candidateRecords[$lock.inputBinding.wireShapePath].code
+    $everyEncoderPathInSourceSet = $true
+    foreach ($encoderBinding in @($lock.inputBinding.encoders)) {
+        if ($expectedCandidateSourceUnits -cnotcontains $encoderBinding.encoderPath) {
+            $everyEncoderPathInSourceSet = $false
+        }
+    }
     Add-Check 'inputBinding.pathSet' `
-        ($expectedCandidateSourceUnits -ccontains $lock.inputBinding.encoderPath -and
+        ($everyEncoderPathInSourceSet -and
+         $expectedCandidateSourceUnits -ccontains $lock.inputBinding.wireShapePath -and
          $expectedCandidateSourceUnits -ccontains $lock.inputBinding.sharedMemoryPath -and
          $expectedCandidateSourceUnits -ccontains $lock.inputBinding.controllerPath) `
-        'input encoder, shared-memory seam, and controller chain are all inside the exact candidate source set'
-    $inputRequirement = @($aggregate.implementationSafetySummary.selectedRequirements |
-        Where-Object unit -ceq 'RuntimeDualSenseInputEncoder')
-    Add-Check 'inputBinding.aggregateRequirement' `
-        ($inputRequirement.Count -eq 1 -and
-         @($inputRequirement[0].requirements).Count -eq 3) `
-        'aggregate contract retains all three managed input-encoder and 64-to-63 seam requirements'
-    foreach ($numeric in @($lock.inputBinding.numericAnchors)) {
-        $match = [regex]::Match($encoderCode, $numeric.pattern,
-            [Text.RegularExpressions.RegexOptions]::CultureInvariant)
-        [uint64]$actual = 0
-        $parsed = $false
-        if ($match.Success -and $match.Groups['value'].Success) {
-            try {
-                $actual = Convert-NumericLiteral $match.Groups['value'].Value
-                $parsed = $true
+        'every input encoder, the wire-shape table, the shared-memory seam, and the controller chain are all inside the exact candidate source set'
+
+    foreach ($encoderBinding in @($lock.inputBinding.encoders)) {
+        $p = [string]$encoderBinding.checkPrefix
+        $encoderCode = $candidateRecords[$encoderBinding.encoderPath].code
+        $encoderContract = $loadedInputs[$encoderBinding.inputContractInputId].json
+        $encoderVectors = $loadedInputs[$encoderBinding.inputVectorsInputId].json
+        $templates = $encoderBinding.templates
+
+        $inputRequirement = @($aggregate.implementationSafetySummary.selectedRequirements |
+            Where-Object unit -ceq $encoderBinding.aggregateRequirementUnit)
+        Add-Check "inputBinding.${p}aggregateRequirement" `
+            ($inputRequirement.Count -eq 1 -and
+             @($inputRequirement[0].requirements).Count -eq [int]$encoderBinding.aggregateRequirementCount) `
+            "aggregate contract retains all $($encoderBinding.aggregateRequirementCount) managed input-encoder requirements for $($encoderBinding.aggregateRequirementUnit)"
+
+        foreach ($numeric in @($encoderBinding.numericAnchors)) {
+            $match = [regex]::Match($encoderCode, $numeric.pattern,
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+            [uint64]$actual = 0
+            $parsed = $false
+            if ($match.Success -and $match.Groups['value'].Success) {
+                try {
+                    $actual = Convert-NumericLiteral $match.Groups['value'].Value
+                    $parsed = $true
+                }
+                catch { $parsed = $false }
             }
-            catch { $parsed = $false }
+            [uint64]$expected = Get-ObjectPathValue $encoderContract $numeric.contractPath
+            Add-Check "inputBinding.${p}numeric.$($numeric.id)" `
+                ($match.Success -and $parsed -and $actual -eq $expected) `
+                "expected $expected from $($numeric.contractPath); got $(if ($parsed) { $actual } else { '<absent-or-unparsed>' })"
         }
-        [uint64]$expected = Get-ObjectPathValue $inputContract $numeric.contractPath
-        Add-Check "inputBinding.numeric.$($numeric.id)" `
-            ($match.Success -and $parsed -and $actual -eq $expected) `
-            "expected $expected from $($numeric.contractPath); got $(if ($parsed) { $actual } else { '<absent-or-unparsed>' })"
-    }
-    foreach ($anchor in @($lock.inputBinding.requiredEncoderAnchors)) {
-        Add-Check "inputBinding.encoderAnchor.$($anchor.id)" `
-            (Test-ContainsNormalized $encoderCode $anchor.text) `
-            "encoder contains source-relation anchor: $($anchor.text)"
+
+        foreach ($anchor in @($encoderBinding.requiredEncoderAnchors)) {
+            Add-Check "inputBinding.${p}encoderAnchor.$($anchor.id)" `
+                (Test-ContainsNormalized $encoderCode $anchor.text) `
+                "encoder contains source-relation anchor: $($anchor.text)"
+        }
+
+        $contractAxisKeys = @(@($encoderContract.axes.entries | ForEach-Object stateKey) +
+            @($encoderContract.derivedTriggerButtons | Where-Object { $null -ne $_ } | ForEach-Object axisStateKey) |
+            Sort-Object -Unique)
+        $lockedAxisKeys = @($encoderBinding.axisLocals | ForEach-Object stateKey)
+        Add-Check "inputBinding.${p}axisKeySet" `
+            (Test-SameStringSet $contractAxisKeys $lockedAxisKeys) `
+            'axis-local bindings cover exactly the descriptor-derived axis keys'
+        $reportIdOffset = if ($encoderBinding.hasReportId) { 1 } else { 0 }
+        foreach ($axis in @($encoderContract.axes.entries)) {
+            $binding = @($encoderBinding.axisLocals | Where-Object stateKey -ceq $axis.stateKey)
+            $localName = if ($binding.Count -eq 1) { [string]$binding[0].localName } else { '' }
+            $bitLength = if ($null -ne $axis.wireBitLength) { [string]$axis.wireBitLength } else { '8' }
+            $writeTemplate = [string]$templates.axisWriteByBitLength.PSObject.Properties[$bitLength].Value
+            $readAnchor = Expand-AnchorTemplate $templates.axisRead @{
+                local = $localName; stateKey = $axis.stateKey
+            }
+            $writeAnchor = Expand-AnchorTemplate $writeTemplate @{
+                local = $localName; wireByte = $axis.wireByte
+            }
+            Add-Check "inputBinding.${p}axis.$($axis.stateKey)" `
+                ($binding.Count -eq 1 -and
+                 ![string]::IsNullOrWhiteSpace($writeTemplate) -and
+                 [int]$axis.wireByte -eq ([int]$axis.sharedDataByte + $reportIdOffset) -and
+                 (Test-ContainsNormalized $encoderCode $readAnchor) -and
+                 (Test-ContainsNormalized $encoderCode $writeAnchor)) `
+                "axis $($axis.stateKey) is read once and written to full-wire byte $($axis.wireByte)"
+        }
+
+        Add-Check "inputBinding.${p}hatContractShape" `
+            (@($encoderContract.hat.values).Count -eq 9 -and
+             [int]$encoderContract.hat.wireByte -eq [int]$encoderBinding.expectedHatWireByte -and
+             [int]$encoderContract.hat.wireByte -eq ([int]$encoderContract.hat.sharedDataByte + $reportIdOffset) -and
+             $encoderContract.hat.hasNullState -eq $true) `
+            "hat contract retains eight octants plus null-state value at full-wire byte $($encoderBinding.expectedHatWireByte)"
+        foreach ($hat in @($encoderContract.hat.values)) {
+            $hatAnchor = Expand-AnchorTemplate $templates.hat @{
+                name = $hat.name; wireValue = $hat.wireValue
+            }
+            Add-Check "inputBinding.${p}hat.$($hat.name)" `
+                (Test-ContainsNormalized $encoderCode $hatAnchor) `
+                "hat $($hat.name) maps to descriptor-derived value $($hat.wireValue)"
+        }
+
+        Add-Check "inputBinding.${p}buttonContractShape" `
+            (@($encoderContract.buttons.entries).Count -eq [int]$encoderBinding.expectedButtonCounts.carried -and
+             @($encoderContract.buttons.aliases).Count -eq [int]$encoderBinding.expectedButtonCounts.aliased -and
+             @($encoderContract.buttons.dropped).Count -eq [int]$encoderBinding.expectedButtonCounts.dropped) `
+            "input contract retains $($encoderBinding.expectedButtonCounts.carried) carried, $($encoderBinding.expectedButtonCounts.aliased) aliased, and $($encoderBinding.expectedButtonCounts.dropped) dropped button names"
+        foreach ($button in @($encoderContract.buttons.entries)) {
+            [uint64]$mask = [uint64]1 -shl [int]$button.wireBit
+            $maskLiteral = '0x{0:X2}' -f $mask
+            $buttonAnchor = Expand-AnchorTemplate $templates.button @{
+                name = $button.name
+                wireByte = $button.wireByte
+                wireBit = $button.wireBit
+                maskLiteral = $maskLiteral
+                descriptorButtonIndex = $button.descriptorButtonIndex
+            }
+            Add-Check "inputBinding.${p}button.$($button.name)" `
+                (Test-ContainsNormalized $encoderCode $buttonAnchor) `
+                "button $($button.name) maps to full-wire byte $($button.wireByte), bit $($button.wireBit)"
+        }
+        $buttonApiTypes = @($api.types | Where-Object id -ceq 'HIDMaestro.HMButton')
+        foreach ($alias in @($encoderContract.buttons.aliases)) {
+            $aliasValue = @(if ($buttonApiTypes.Count -eq 1) {
+                $buttonApiTypes[0].values | Where-Object name -ceq $alias.name
+            })
+            $targetValue = @(if ($buttonApiTypes.Count -eq 1) {
+                $buttonApiTypes[0].values | Where-Object name -ceq $alias.sameAs
+            })
+            Add-Check "inputBinding.${p}buttonAlias.$($alias.name)" `
+                ($aliasValue.Count -eq 1 -and $targetValue.Count -eq 1 -and
+                 [uint64]$aliasValue[0].value -eq [uint64]$targetValue[0].value) `
+                "button alias $($alias.name) has the same frozen enum mask as $($alias.sameAs)"
+        }
+        foreach ($dropped in @($encoderContract.buttons.dropped)) {
+            Add-Check "inputBinding.${p}buttonDropped.$($dropped.name)" `
+                (Test-IdentifierAbsent $encoderCode $dropped.name) `
+                "unsupported button $($dropped.name) is not aliased into the encoder"
+        }
+
+        foreach ($trigger in @($encoderContract.derivedTriggerButtons | Where-Object { $null -ne $_ })) {
+            $binding = @($encoderBinding.axisLocals | Where-Object stateKey -ceq $trigger.axisStateKey)
+            $localName = if ($binding.Count -eq 1) { [string]$binding[0].localName } else { '' }
+            [uint64]$mask = [uint64]1 -shl [int]$trigger.wireBit
+            $maskLiteral = '0x{0:X2}' -f $mask
+            $conditionAnchor = Expand-AnchorTemplate $templates.triggerCondition @{ local = $localName }
+            $writeAnchor = Expand-AnchorTemplate $templates.triggerWrite @{
+                wireByte = $trigger.wireByte; maskLiteral = $maskLiteral
+            }
+            # The trigger's local must also be BOUND to its axis by an
+            # axis-read anchor. Without this, a trigger axis that appears only
+            # in derivedTriggerButtons (Switch Pro's ZL/ZR) had its identifier
+            # names pinned but not its source, so repointing leftTrigger at a
+            # different HMAxis passed every semantic check.
+            $readAnchor = Expand-AnchorTemplate $templates.axisRead @{
+                local = $localName; stateKey = $trigger.axisStateKey
+            }
+            Add-Check "inputBinding.${p}trigger.$($trigger.axisStateKey)" `
+                ($binding.Count -eq 1 -and
+                 $trigger.condition -ceq 'clamped normalized value > 0.0' -and
+                 (Test-ContainsNormalized $encoderCode $readAnchor) -and
+                 (Test-ContainsNormalized $encoderCode $conditionAnchor) -and
+                 (Test-ContainsNormalized $encoderCode $writeAnchor)) `
+                "trigger axis $($trigger.axisStateKey) derives its digital bit only when the clamped value is greater than zero"
+        }
+
+        # A usage the profile's buttonMap drops but the descriptor still
+        # carries in a field of its own (Xbox's Guide on System Main Menu).
+        foreach ($usage in @($encoderContract.separateUsages | Where-Object { $null -ne $_ })) {
+            [uint64]$mask = [uint64]1 -shl [int]$usage.wireBit
+            $maskLiteral = '0x{0:X2}' -f $mask
+            $usageAnchor = Expand-AnchorTemplate $templates.separateUsage @{
+                wireByte = $usage.wireByte; maskLiteral = $maskLiteral
+            }
+            Add-Check "inputBinding.${p}separateUsage.$($usage.name)" `
+                ([int]$usage.wireByte -eq ([int]$usage.sharedDataByte + $reportIdOffset) -and
+                 (Test-ContainsNormalized $encoderCode $usageAnchor)) `
+                "$($usage.name) is carried on its own descriptor field at full-wire byte $($usage.wireByte), bit $($usage.wireBit)"
+        }
+
+        $directDestinationIndexes = @([regex]::Matches(
+            $encoderCode,
+            'destination\[\s*(?<index>\d+)\s*\]',
+            [Text.RegularExpressions.RegexOptions]::CultureInvariant) |
+            ForEach-Object { $_.Groups['index'].Value } | Sort-Object -Unique)
+        $expectedDirectDestinationIndexes = @($encoderBinding.expectedDirectDestinationIndexes |
+            ForEach-Object { [string]$_ })
+        Add-Check "inputBinding.${p}fixedZeroWriteClosure" `
+            (Test-SameStringSet $directDestinationIndexes $expectedDirectDestinationIndexes) `
+            'literal-index writes are closed to the frozen set for this encoder; separately checked helper calls are the only dynamic-index writes'
+        $destinationIndexExpressions = @([regex]::Matches(
+            $encoderCode,
+            'destination\[\s*(?<expression>[^\]]+)\s*\]',
+            [Text.RegularExpressions.RegexOptions]::CultureInvariant) |
+            ForEach-Object { $_.Groups['expression'].Value.Trim() })
+        $destinationIndexWrites = @([regex]::Matches(
+            $encoderCode,
+            'destination\[\s*[^\]]+\s*\]\s*(?:\|=|=)',
+            [Text.RegularExpressions.RegexOptions]::CultureInvariant))
+        Add-Check "inputBinding.${p}destinationIndexClosure" `
+            ($destinationIndexExpressions.Count -eq $destinationIndexWrites.Count -and
+             (Test-SameStringSet `
+                 -Left @($destinationIndexExpressions | Sort-Object -Unique) `
+                 -Right @($encoderBinding.expectedDestinationIndexExpressions | ForEach-Object { [string]$_ }))) `
+            'every destination index expression is a write and is either a frozen literal index or a checked helper index'
+        $destinationMemberCalls = @([regex]::Matches(
+            $encoderCode,
+            'destination\s*\.\s*(?<member>[A-Za-z_][A-Za-z0-9_]*)\s*\(',
+            [Text.RegularExpressions.RegexOptions]::CultureInvariant) |
+            ForEach-Object { $_.Groups['member'].Value })
+        Add-Check "inputBinding.${p}destinationMemberClosure" `
+            ($destinationMemberCalls.Count -eq 1 -and
+             $destinationMemberCalls[0] -ceq 'Clear') `
+            'Clear is the encoder destination span''s only member call; no fill, copy, or range mutation is present'
+        Add-Check "inputBinding.${p}completeFrameSemantics" `
+            ($encoderContract.report.clearedBeforeEveryEncode -eq $true -and
+             $encoderContract.report.statefulFields -eq $false -and
+             $encoderContract.report.rollingSequence -eq $false -and
+             $encoderContract.report.inputDefaultsOverlay -eq $false -and
+             $encoderContract.fullStateBehavior.priorFrameCarry -eq $false -and
+             @($encoderContract.fixedZeroRegions).Count -eq [int]$encoderBinding.expectedFixedZeroRegionCount -and
+             ![regex]::IsMatch($encoderCode,
+                 '(?m)^\s*(?:private|internal|protected|public)\s+(?!const\b)(?:static\s+)?(?:readonly\s+)?[^\r\n(){}=]+\s+_[A-Za-z0-9_]+\s*;\s*$')) `
+            'encoder is a cleared complete-frame transform with no candidate instance state or rolling sequence'
+
+        # Each encoder's wire coordinates must agree with the frozen wire-shape
+        # entry the seam will use for that profile.
+        Add-Check "inputBinding.${p}wireCoordinates" `
+            ([int]$encoderContract.coordinates.candidateFullWireEncoder.byteLength -eq
+                [int]$encoderContract.report.wireByteLength -and
+             $encoderContract.coordinates.candidateFullWireEncoder.includesReportId -eq
+                [bool]$encoderBinding.hasReportId -and
+             [int]$encoderContract.coordinates.upstreamLegacySharedInput.dataOffset -eq
+                [int]$encoderBinding.sharedSlice.offset -and
+             [int]$encoderContract.coordinates.upstreamLegacySharedInput.dataLen -eq
+                [int]$encoderBinding.sharedSlice.length -and
+             [int]$encoderContract.coordinates.upstreamLegacySharedInput.byteLength -eq
+                [int]$encoderBinding.sharedSlice.length -and
+             $encoderContract.coordinates.upstreamLegacySharedInput.includesReportId -eq $false) `
+            "full-wire report of $($encoderContract.report.wireByteLength) bytes yields the endpoint slice ($($encoderBinding.sharedSlice.offset), $($encoderBinding.sharedSlice.length))"
+
+        $encoderFramesAreFullWire = $true
+        foreach ($scenario in @($encoderVectors.vectors)) {
+            foreach ($frame in @($scenario.frames)) {
+                $hex = [string]$frame.reportHex
+                if ($hex.Length -ne [int]$encoderBinding.vectorEnvelope.hexLength) {
+                    $encoderFramesAreFullWire = $false
+                }
+                elseif ($hex -notmatch '^[0-9A-Fa-f]+$') {
+                    $encoderFramesAreFullWire = $false
+                }
+                elseif ($null -ne $encoderBinding.vectorEnvelope.prefix -and
+                        !$hex.StartsWith([string]$encoderBinding.vectorEnvelope.prefix,
+                            [StringComparison]::OrdinalIgnoreCase)) {
+                    $encoderFramesAreFullWire = $false
+                }
+            }
+        }
+        Add-Check "inputBinding.${p}vectorEnvelope" $encoderFramesAreFullWire `
+            "all frozen input frames for this encoder are $([int]$encoderBinding.vectorEnvelope.hexLength / 2)-byte full-wire reports"
     }
 
-    $contractAxisKeys = @($inputContract.axes.entries | ForEach-Object stateKey)
-    $lockedAxisKeys = @($lock.inputBinding.axisLocals | ForEach-Object stateKey)
-    Add-Check 'inputBinding.axisKeySet' `
-        (Test-SameStringSet $contractAxisKeys $lockedAxisKeys) `
-        'axis-local bindings cover exactly the six descriptor-derived axis keys'
-    foreach ($axis in @($inputContract.axes.entries)) {
-        $binding = @($lock.inputBinding.axisLocals | Where-Object stateKey -ceq $axis.stateKey)
-        $localName = if ($binding.Count -eq 1) { [string]$binding[0].localName } else { '' }
-        $readAnchor = "float $localName = GetNormalizedAxis(axes, HMAxis.$($axis.stateKey));"
-        $writeAnchor = "destination[$($axis.wireByte)] = ScaleAxis($localName);"
-        Add-Check "inputBinding.axis.$($axis.stateKey)" `
-            ($binding.Count -eq 1 -and
-             [int]$axis.wireByte -eq ([int]$axis.sharedDataByte + 1) -and
-             (Test-ContainsNormalized $encoderCode $readAnchor) -and
-             (Test-ContainsNormalized $encoderCode $writeAnchor)) `
-            "axis $($axis.stateKey) is read once and written to full-wire byte $($axis.wireByte)"
+    foreach ($anchor in @($lock.inputBinding.requiredWireShapeAnchors)) {
+        Add-Check "inputBinding.wireShapeAnchor.$($anchor.id)" `
+            (Test-ContainsNormalized $wireShapeCode $anchor.text) `
+            "wire-shape table contains frozen coordinate anchor: $($anchor.text)"
     }
-
-    Add-Check 'inputBinding.hatContractShape' `
-        (@($inputContract.hat.values).Count -eq 9 -and
-         [int]$inputContract.hat.wireByte -eq 8 -and
-         [int]$inputContract.hat.sharedDataByte -eq 7 -and
-         $inputContract.hat.hasNullState -eq $true) `
-        'hat contract retains eight octants plus null-state value at full-wire byte 8'
-    foreach ($hat in @($inputContract.hat.values)) {
-        $hatAnchor = "HMHat.$($hat.name) => (byte)$($hat.wireValue)"
-        Add-Check "inputBinding.hat.$($hat.name)" `
-            (Test-ContainsNormalized $encoderCode $hatAnchor) `
-            "hat $($hat.name) maps to descriptor-derived value $($hat.wireValue)"
-    }
-
-    Add-Check 'inputBinding.buttonContractShape' `
-        (@($inputContract.buttons.entries).Count -eq 13 -and
-         @($inputContract.buttons.aliases).Count -eq 4 -and
-         @($inputContract.buttons.dropped).Count -eq 5) `
-        'input contract retains thirteen carried, four aliased, and five dropped button names'
-    foreach ($button in @($inputContract.buttons.entries)) {
-        [uint64]$mask = [uint64]1 -shl [int]$button.wireBit
-        $maskLiteral = '0x{0:X2}' -f $mask
-        $buttonAnchor = "SetButton(buttons, HMButton.$($button.name), destination, wireByte: $($button.wireByte), mask: $maskLiteral);"
-        Add-Check "inputBinding.button.$($button.name)" `
-            (Test-ContainsNormalized $encoderCode $buttonAnchor) `
-            "button $($button.name) maps to full-wire byte $($button.wireByte), bit $($button.wireBit)"
-    }
-    $buttonApiTypes = @($api.types | Where-Object id -ceq 'HIDMaestro.HMButton')
-    foreach ($alias in @($inputContract.buttons.aliases)) {
-        $aliasValue = @(if ($buttonApiTypes.Count -eq 1) {
-            $buttonApiTypes[0].values | Where-Object name -ceq $alias.name
-        })
-        $targetValue = @(if ($buttonApiTypes.Count -eq 1) {
-            $buttonApiTypes[0].values | Where-Object name -ceq $alias.sameAs
-        })
-        Add-Check "inputBinding.buttonAlias.$($alias.name)" `
-            ($aliasValue.Count -eq 1 -and $targetValue.Count -eq 1 -and
-             [uint64]$aliasValue[0].value -eq [uint64]$targetValue[0].value) `
-            "button alias $($alias.name) has the same frozen enum mask as $($alias.sameAs)"
-    }
-    foreach ($dropped in @($inputContract.buttons.dropped)) {
-        Add-Check "inputBinding.buttonDropped.$($dropped.name)" `
-            (Test-IdentifierAbsent $encoderCode $dropped.name) `
-            "unsupported button $($dropped.name) is not aliased into the encoder"
-    }
-
-    foreach ($trigger in @($inputContract.derivedTriggerButtons)) {
-        $binding = @($lock.inputBinding.axisLocals | Where-Object stateKey -ceq $trigger.axisStateKey)
-        $localName = if ($binding.Count -eq 1) { [string]$binding[0].localName } else { '' }
-        [uint64]$mask = [uint64]1 -shl [int]$trigger.wireBit
-        $maskLiteral = '0x{0:X2}' -f $mask
-        $conditionAnchor = "if ($localName > 0.0f)"
-        $writeAnchor = "destination[$($trigger.wireByte)] |= $maskLiteral;"
-        Add-Check "inputBinding.trigger.$($trigger.axisStateKey)" `
-            ($binding.Count -eq 1 -and
-             $trigger.condition -ceq 'clamped normalized value > 0.0' -and
-             (Test-ContainsNormalized $encoderCode $conditionAnchor) -and
-             (Test-ContainsNormalized $encoderCode $writeAnchor)) `
-            "trigger axis $($trigger.axisStateKey) derives its digital bit only when the clamped value is greater than zero"
-    }
-
-    $directDestinationIndexes = @([regex]::Matches(
-        $encoderCode,
-        'destination\[\s*(?<index>\d+)\s*\]',
-        [Text.RegularExpressions.RegexOptions]::CultureInvariant) |
-        ForEach-Object { $_.Groups['index'].Value } | Sort-Object -Unique)
-    $expectedDirectDestinationIndexes = @($lock.inputBinding.expectedDirectDestinationIndexes |
-        ForEach-Object { [string]$_ })
-    Add-Check 'inputBinding.fixedZeroWriteClosure' `
-        (Test-SameStringSet $directDestinationIndexes $expectedDirectDestinationIndexes) `
-        'literal-index writes are closed to report ID, six axes, hat, and trigger byte; separately checked button calls are the only dynamic-index writes'
-    $destinationIndexExpressions = @([regex]::Matches(
-        $encoderCode,
-        'destination\[\s*(?<expression>[^\]]+)\s*\]',
-        [Text.RegularExpressions.RegexOptions]::CultureInvariant) |
-        ForEach-Object { $_.Groups['expression'].Value.Trim() })
-    $destinationIndexWrites = @([regex]::Matches(
-        $encoderCode,
-        'destination\[\s*[^\]]+\s*\]\s*(?:\|=|=)',
-        [Text.RegularExpressions.RegexOptions]::CultureInvariant))
-    Add-Check 'inputBinding.destinationIndexClosure' `
-        ($destinationIndexExpressions.Count -eq $destinationIndexWrites.Count -and
-         (Test-SameStringSet `
-             -Left @($destinationIndexExpressions | Sort-Object -Unique) `
-             -Right @($expectedDirectDestinationIndexes + 'wireByte'))) `
-        'every destination index expression is a write and is either a frozen literal index or the checked button helper index'
-    $destinationMemberCalls = @([regex]::Matches(
-        $encoderCode,
-        'destination\s*\.\s*(?<member>[A-Za-z_][A-Za-z0-9_]*)\s*\(',
-        [Text.RegularExpressions.RegexOptions]::CultureInvariant) |
-        ForEach-Object { $_.Groups['member'].Value })
-    Add-Check 'inputBinding.destinationMemberClosure' `
-        ($destinationMemberCalls.Count -eq 1 -and
-         $destinationMemberCalls[0] -ceq 'Clear') `
-        'Clear is the encoder destination span''s only member call; no fill, copy, or range mutation is present'
-    Add-Check 'inputBinding.completeFrameSemantics' `
-        ($inputContract.report.clearedBeforeEveryEncode -eq $true -and
-         $inputContract.report.statefulFields -eq $false -and
-         $inputContract.report.rollingSequence -eq $false -and
-         $inputContract.report.inputDefaultsOverlay -eq $false -and
-         $inputContract.fullStateBehavior.priorFrameCarry -eq $false -and
-         @($inputContract.fixedZeroRegions).Count -eq 4 -and
-         ![regex]::IsMatch($encoderCode,
-             '(?m)^\s*(?:private|internal|protected|public)\s+(?!const\b)(?:static\s+)?(?:readonly\s+)?[^\r\n(){}=]+\s+_[A-Za-z0-9_]+\s*;\s*$')) `
-        'encoder is a cleared complete-frame transform with no candidate instance state or rolling sequence'
-
     foreach ($anchor in @($lock.inputBinding.requiredSharedMemoryAnchors)) {
         Add-Check "inputBinding.sharedMemoryAnchor.$($anchor.id)" `
             (Test-ContainsNormalized $sharedMemoryCode $anchor.text) `
@@ -1400,43 +1539,14 @@ try {
         $sharedMemoryCode,
         $lock.inputBinding.sharedMemorySlicePattern,
         [Text.RegularExpressions.RegexOptions]::CultureInvariant))
-    $sliceOffset = if ($sliceMatches.Count -eq 1) {
-        [int]$sliceMatches[0].Groups['offset'].Value
-    }
-    else { -1 }
-    $sliceLength = if ($sliceMatches.Count -eq 1) {
-        [int]$sliceMatches[0].Groups['length'].Value
-    }
-    else { -1 }
     Add-Check 'inputBinding.fullWireToSharedSlice' `
-        ($sliceMatches.Count -eq 1 -and
-         $sliceOffset -eq [int]$inputContract.coordinates.upstreamLegacySharedInput.dataOffset -and
-         $sliceLength -eq [int]$inputContract.coordinates.upstreamLegacySharedInput.dataLen -and
-         [int]$inputContract.coordinates.candidateFullWireEncoder.byteLength -eq
-            [int]$inputContract.report.wireByteLength -and
-         $inputContract.coordinates.candidateFullWireEncoder.includesReportId -eq $true -and
-         [int]$inputContract.coordinates.candidateFullWireEncoder.firstByte -eq
-            [int]$inputContract.report.reportId -and
-         [int]$inputContract.coordinates.upstreamLegacySharedInput.byteLength -eq 63 -and
-         $inputContract.coordinates.upstreamLegacySharedInput.includesReportId -eq $false) `
-        "candidate strips full-wire byte $sliceOffset and submits exactly $sliceLength descriptor-data bytes"
+        ($sliceMatches.Count -eq 1) `
+        'the seam submits exactly the wire shape''s own data slice, and does so in exactly one place'
     foreach ($anchor in @($lock.inputBinding.requiredControllerAnchors)) {
         Add-Check "inputBinding.controllerAnchor.$($anchor.id)" `
             (Test-ContainsNormalized $controllerCode $anchor.text) `
             "HMController contains input submission chain anchor: $($anchor.text)"
     }
-    $allInputFramesAreFullWire = $true
-    foreach ($scenario in $inputScenarios) {
-        foreach ($frame in @($scenario.frames)) {
-            $hex = [string]$frame.reportHex
-            if ($hex -notmatch '^[0-9A-Fa-f]{128}$' -or
-                !$hex.StartsWith('01', [StringComparison]::OrdinalIgnoreCase)) {
-                $allInputFramesAreFullWire = $false
-            }
-        }
-    }
-    Add-Check 'inputBinding.vectorEnvelope' $allInputFramesAreFullWire `
-        'all 37 frozen input frames are 64-byte full-wire reports beginning with report ID 1'
     Add-Check 'inputBinding.artifactGatesStillFalse' `
         ($aggregate.gateState.artifactCompileAllowlistFrozen -eq $false -and
          $aggregate.gateState.driverRuntimeAbiBound -eq $false -and

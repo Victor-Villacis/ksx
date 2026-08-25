@@ -275,6 +275,7 @@ pub(super) fn cabinet_slots() -> Vec<ResolvedSlot> {
                 chords: Vec::new(),
                 macros: Default::default(),
                 turbo: Vec::new(),
+                toggle: Vec::new(),
                 protected: false,
             };
             ResolvedSlot {
@@ -973,22 +974,23 @@ fn an_escape_still_fires_while_its_own_device_is_being_blocked() {
     assert_eq!(session.resent[0].state, KEY_UP);
 }
 
-/// The lockout this whole fix exists for: the output thread is wedged inside a
-/// driver call (a ViGEm IOCTL that never returns), so the delta channel fills.
-/// Before the fix the engine blocked on `deltas.send()`, stopped draining key
-/// events, and the escape — evaluated on that same engine thread — never fired:
-/// every cabinet keyboard stayed captured with no way back.
+/// F1: the output thread is proven wedged inside a driver call (a ViGEm IOCTL
+/// that never returns), yet the capture-side escape still fires and teardown
+/// releases every keyboard before waiting for that output call. F2 below owns
+/// the separate proof that a full delta channel cannot stall the engine.
 #[test]
 fn a_wedged_output_thread_cannot_prevent_un_capturing() {
     // Release the wedge the moment the keyboards are freed. If un-capturing
     // required the output thread to make progress, this would deadlock; the
     // bounded wait below turns that into a failure instead of a hung test.
     let released = Arc::new(AtomicBool::new(false));
+    let entered_update = Arc::new(AtomicBool::new(false));
     let log = PadLog::default();
 
     struct Wedged {
         inner: MockBackend,
         released: Arc<AtomicBool>,
+        entered_update: Arc<AtomicBool>,
         log: PadLog,
     }
     impl VirtualPadBackend for Wedged {
@@ -1004,6 +1006,7 @@ fn a_wedged_output_thread_cannot_prevent_un_capturing() {
             self.inner.user_index(handle)
         }
         fn update(&mut self, handle: PadHandle, state: &PadState) -> Result<(), OutputError> {
+            self.entered_update.store(true, Ordering::SeqCst);
             // Strictly SHORTER than the supervisor backstop below. If the
             // release never arrives, the wedge must be what gives up first, so
             // the failure names the thing under test; a backstop that fires
@@ -1030,11 +1033,10 @@ fn a_wedged_output_thread_cannot_prevent_un_capturing() {
         }
     }
 
-    // Enough traffic to overrun the 1024-deep delta channel while the output
-    // thread is stuck in its first update.
-    let mut script: Vec<MockStroke> = (0..700)
-        .flat_map(|_| [key_stroke(0, Key::A, true), key_stroke(0, Key::A, false)])
-        .collect();
+    // One mapped stroke is enough to put the output thread inside `update`.
+    // Delta-channel saturation is a separate F2 property pinned by
+    // `a_wedged_output_thread_does_not_stall_the_engine` below.
+    let mut script = vec![key_stroke(0, Key::A, true), key_stroke(0, Key::A, false)];
     script.extend((0..5).flat_map(|_| {
         [
             key_stroke(0, Key::LeftControl, true),
@@ -1045,18 +1047,38 @@ fn a_wedged_output_thread_cannot_prevent_un_capturing() {
     script.push(key_stroke(0, Key::LeftAlt, true));
     script.push(key_stroke(0, Key::Delete, true));
 
-    let capture = MockCaptureBackend::new(vec![keyboard(IPAC, 1)], script).with_ctl_observer({
-        let log = log.clone();
-        let released = Arc::clone(&released);
-        Box::new(move |message| {
-            log.push(TraceEvent::Ctl(CtlKind::of(message)));
-            if matches!(message, CaptureCtl::SetPassthrough) {
-                // Keyboards are free: let the "driver" return so the test can
-                // finish. Nothing about freeing them waited on this thread.
-                released.store(true, Ordering::SeqCst);
-            }
+    let capture = MockCaptureBackend::new(vec![keyboard(IPAC, 1)], script)
+        .with_before_stroke({
+            let entered_update = Arc::clone(&entered_update);
+            Box::new(move |index, _| {
+                // Hold the second stroke until the first has reached the
+                // blocking driver call. This gives the later escape gesture a
+                // causal, deterministic wedge to challenge.
+                if index != 1 {
+                    return;
+                }
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !entered_update.load(Ordering::SeqCst) && Instant::now() < deadline {
+                    std::thread::yield_now();
+                }
+                assert!(
+                    entered_update.load(Ordering::SeqCst),
+                    "the output thread never entered the test's wedged update call"
+                );
+            })
         })
-    });
+        .with_ctl_observer({
+            let log = log.clone();
+            let released = Arc::clone(&released);
+            Box::new(move |message| {
+                log.push(TraceEvent::Ctl(CtlKind::of(message)));
+                if matches!(message, CaptureCtl::SetPassthrough) {
+                    // Keyboards are free: let the "driver" return so the test can
+                    // finish. Nothing about freeing them waited on this thread.
+                    released.store(true, Ordering::SeqCst);
+                }
+            })
+        });
     let trace: Trace = Arc::new(Mutex::new(Vec::new()));
     // Backstop so a regression fails instead of hanging forever — and nothing
     // else. It is deliberately far longer than any legitimate run of this test,
@@ -1065,11 +1087,8 @@ fn a_wedged_output_thread_cannot_prevent_un_capturing() {
     // `EmergencyStop` assertion below fails for a reason that has nothing to do
     // with un-capturing.
     //
-    // It was 15s, which is under a second's slack on this workload — 1400
-    // strokes through a bounded channel while the output thread is wedged, plus
-    // thread scheduling. It passed on main and failed on the v0.2.0 tag run
-    // at THE SAME COMMIT, then blocked the release. A loaded runner is not a
-    // regression, so the number has to be one no honest run can reach.
+    // It was 15s and once won this race on a loaded tag runner. This timeout is
+    // only a hang guard, so it must be one no honest run can reach.
     let hard_deadline = Instant::now() + Duration::from_secs(120);
     let mut options = RunOptions {
         clock: Clock::monotonic_nanos(),
@@ -1086,6 +1105,7 @@ fn a_wedged_output_thread_cannot_prevent_un_capturing() {
             pads: Box::new(Wedged {
                 inner: MockBackend::new(),
                 released: Arc::clone(&released),
+                entered_update: Arc::clone(&entered_update),
                 log: log.clone(),
             }),
         },
@@ -1106,9 +1126,8 @@ fn a_wedged_output_thread_cannot_prevent_un_capturing() {
         "LeftCtrl x5 must also have fired while wedged"
     );
     assert!(
-        outcome.deltas_coalesced > 0,
-        "the delta channel must genuinely have backed up — otherwise this test \
-         is not exercising the wedge"
+        entered_update.load(Ordering::SeqCst),
+        "the escape sequence ran before the output driver was genuinely wedged"
     );
     assert!(
         released.load(Ordering::SeqCst),

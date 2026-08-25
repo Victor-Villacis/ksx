@@ -37,6 +37,12 @@ pub enum ConfigError {
          \"which one runs\" something a reader has to remember (docs/INPUT-TRANSFORMS.md §3)"
     )]
     TurboOnMacroTrigger(String),
+    #[error(
+        "'macro.{0}' cannot carry `toggle`: a macro's lifetime is its own table's business \
+         (`on_release`, `repeat`), and a latch on its trigger would be a second spelling for \
+         the same thing (docs/INPUT-TRANSFORMS.md §2 item 8)"
+    )]
+    ToggleOnMacroTrigger(String),
     #[error("unknown device alias '{0}' (no [[device]] entry has this alias)")]
     UnknownDeviceAlias(String),
     #[error(transparent)]

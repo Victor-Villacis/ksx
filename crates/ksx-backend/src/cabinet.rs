@@ -128,7 +128,7 @@ fn daemon_sink(
                 })
             }),
             // The one write the cabinet DOES have: which preset a slot uses.
-            slot_assign: crate::daemon::pipe::slot_assign_fn(root),
+            slot_assign: crate::daemon::pipe::slot_assign_fn(root.clone()),
             // **The cabinet cannot SAVE a staged setup**, and that is this
             // table's rule again rather than a gap. `docs/FIRST-RUN.md` is a
             // desk flow: choosing a keyboard from a list of real devices and
@@ -148,6 +148,12 @@ fn daemon_sink(
                         .to_owned(),
                 ))
             }),
+            // Adopting the SAVED setup into the draft is the real closure,
+            // not a refusal, for the same reason stage EDITS are available
+            // through this sink: it is a disk READ into daemon memory —
+            // operating over things that already exist — and turning the
+            // result into files remains locked above.
+            stage_adopt: crate::daemon::pipe::stage_adopt_fn(root),
             // A forged/legacy staged Save or Play still has to prove its
             // chosen capture backend exists before it reaches either exit.
             stage_capture_preflight: Box::new(crate::stage::preflight_capture),
@@ -161,6 +167,9 @@ fn daemon_sink(
             learn: crate::daemon::learn::LearnService::refusing(
                 "the cabinet cannot learn a key. That is authoring — it exists to fill in a \
                  binding. Author with ksx Studio, or `ksx map --learn`",
+            ),
+            input_test: crate::daemon::input_test::InputTestService::refusing(
+                "the cabinet cannot open a simultaneous-input diagnostic; use ksx Studio",
             ),
         }),
     }

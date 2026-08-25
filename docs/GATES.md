@@ -7,10 +7,11 @@ scripts for those sessions: exact actions, what each one should show, and what
 to do the moment one of them does not. A session walking an operator through a
 gate should follow it top to bottom and never improvise past a failed step.
 
-> **Standalone 0.2.0 QA reset:** Gates 1–4 are **NOT RUN**. Evidence from prior
-> development machines does not count toward this release. Fill only the blank
-> ledgers in this document while testing the exact 0.2.0 release candidate; a
-> new artifact hash invalidates the affected gate and starts it over.
+> **Current-candidate QA reset:** Gates 1–4 start **NOT RUN** for every new
+> `ksx-candidate-manifest.json`. Evidence from a prior run does not count. Fill
+> the ledgers while testing the exact tag-run installer; a different manifest,
+> Release run id/attempt, or artifact hash is a different candidate and resets
+> the affected gate.
 
 - **GATE 1 — "M5 rest"**: autostart at boot, the tray daemon, and the frontend
   wrapper. Software-only; Interception semantics; every failure is recoverable
@@ -58,7 +59,7 @@ Proves the three M5 deliverables on hardware: the tray daemon, start-at-logon,
 and the frontend wrapper — ending in a real emulator with 4 live pads and a
 clean exit.
 
-**STATUS for standalone 0.2.0: NOT RUN.**
+**STATUS for current candidate: NOT RUN.**
 
 ## Preconditions
 
@@ -68,9 +69,10 @@ clean exit.
   four-player phases and `<AUTOSTART_PROFILE>` for the cold-boot phase. Both
   must already resolve through `%APPDATA%\ksx\games.toml`; substitute their
   actual titles anywhere those placeholders appear below.
-- You know which `ksx.exe` is being tested (installed copy vs a build under
-  `target\`). Run every command from that one — `ksx autostart --status` will
-  call out a mismatch as `different-exe`.
+- The manifest-bound current-candidate installer is installed. Run every
+  command from that installed copy; `ksx autostart --status` must not report
+  `different-exe`. A `target\` build is valid development evidence, but never
+  fills this release-candidate ledger.
 - One supported frontend is ready for Phase C. The example uses RetroBat or
   LaunchBox plus this repository's `examples\ksx-wrap.ps1`; substitute the
   selected frontend, emulator, ROM and clone paths and record them in the log.
@@ -211,11 +213,14 @@ LaunchBox emulator edit to unwrap; `taskkill /f /im ksx.exe` ends anything
 stuck (keyboards return within a second — Interception crash-only guarantee).
 `LeftCtrl ×5` un-captures at any moment; `Ctrl+Alt+Del` always works.
 
-## GATE 1 RUN LOG — standalone 0.2.0
+## GATE 1 RUN LOG — current candidate
 
 **STATUS: NOT RUN.** Fill every field during the supervised run:
 
-- Release-candidate version / source commit / artifact SHA-256:
+- Release tag/version / source commit:
+- Release run id / attempt / candidate-manifest SHA-256:
+- Installer filename / SHA-256:
+- Machine / operator / started-at UTC / ended-at UTC:
 - `<FOUR_PLAYER_PROFILE>` / `<AUTOSTART_PROFILE>`:
 - Selected frontend / emulator / wrapper / ROM paths:
 - Phase A tray lifecycle / clean checklist:
@@ -249,7 +254,7 @@ WinUSB is a separate decision taken after this passes (see PASS). No WDK,
 self-signing command, Zadig, device-path paste, CLI mutation or TOML edit is part
 of the supported round trip.
 
-**STATUS for standalone 0.2.0: NOT RUN.**
+**STATUS for current candidate: NOT RUN.**
 
 ## Preconditions — every one, no exceptions
 
@@ -272,7 +277,7 @@ of the supported round trip.
 - **Interception is NOT uninstalled.** It is the fallback for the whole gate;
   it comes out only after the two-week soak, when `ksx run --dry-run` says
   `winusb` with no Interception context at all.
-- **The standalone 0.2.0 GATE 1 ledger records PASS** — autostart must be proven
+- **The current-candidate GATE 1 ledger records PASS** — autostart must be proven
   on this release candidate before anyone lives with a claim.
 - **A restore point exists** (one click; it is a gate precaution, not the
   normal rollback path).
@@ -508,11 +513,14 @@ cleanup has identified them. A prepared panel “not typing” usually means the
 daemon is not running; start installed KSX before assuming the binding is
 broken (`RECOVERY.md` §2, first table).
 
-## GATE 2 RUN LOG — standalone 0.2.0
+## GATE 2 RUN LOG — current candidate
 
 **STATUS: NOT RUN.** Fill every field during the supervised round trip:
 
-- Release-candidate version / source commit / artifact SHA-256:
+- Release tag/version / source commit:
+- Release run id / attempt / candidate-manifest SHA-256:
+- Installer filename / SHA-256:
+- Machine / operator / started-at UTC / ended-at UTC:
 - GATE 1 ledger reference and verdict:
 - Tested spare keyboard / recovery copy location / restore point:
 - Baseline snapshot path and SHA-256:
@@ -536,8 +544,8 @@ at the test system can perform. Nothing here changes source; the only writes
 are one driver uninstall, the installed Prepare/Save transaction, and entries
 in the blank run log below.
 
-**STATUS for standalone 0.2.0: NOT RUN.** No earlier machine state or partial
-run carries into this gate. Begin only after the standalone 0.2.0 GATE 1 and
+**STATUS for current candidate: NOT RUN.** No earlier machine state or partial
+run carries into this gate. Begin only after the current-candidate GATE 1 and
 GATE 2 ledgers both record PASS for the same release candidate. GATE 2 ends
 with the test interface released, so deliberately Prepare it again in installed
 Studio, Save that verified `winusb` stage, and record the state before Phase 1.
@@ -547,7 +555,7 @@ Keep Interception installed until Phase 3 removes it.
 
 - The exact current CI-built release candidate is installed (`ksx doctor`
   shows the recorded version and the artifact matches the GATE 1/2 ledgers).
-- The standalone 0.2.0 GATE 1 and GATE 2 ledgers record PASS for that release
+- The current-candidate GATE 1 and GATE 2 ledgers record PASS for that release
   candidate.
 - A second, never-claimed spare keyboard is plugged in and typing.
 - `%APPDATA%\ksx\config.toml` backed up beside itself with today's date.
@@ -620,11 +628,14 @@ cross-signed driver is the thing this whole milestone removes; reinstalling it
 under pressure at midnight re-adds a boot-critical EOL filter to fix what is
 almost always "the daemon is not running" (`RECOVERY.md` §2, first table).
 
-## GATE 3 RUN LOG — standalone 0.2.0
+## GATE 3 RUN LOG — current candidate
 
 **STATUS: NOT RUN.** Fill every field during the supervised run and soak:
 
-- Release-candidate version / source commit / artifact SHA-256:
+- Release tag/version / source commit:
+- Release run id / attempt / candidate-manifest SHA-256:
+- Installer filename / SHA-256:
+- Machine / operator / started-at UTC / ended-at UTC:
 - GATE 1 and GATE 2 ledger references / verdicts:
 - Tested spare keyboard / configuration backup path and SHA-256:
 - Re-prepared interface path / status / typethrough baseline:
@@ -647,7 +658,7 @@ receive whispered instructions. The observer may collect hashes, process-owner
 evidence and before/after file state, but none of that may become a step the
 customer has to perform.
 
-**STATUS for standalone 0.2.0: NOT RUN.** Nothing below is a claim that this
+**STATUS for current candidate: NOT RUN.** Nothing below is a claim that this
 gate passed.
 
 ## What software tests prove — and what they do not
@@ -904,12 +915,15 @@ pad appeared,” or “the Game Bar mapping exists.” Any failure stays in the 
 log with the last known clean state; fix it, produce a new CI artifact with a
 new hash, and restart this gate from Phase 1.
 
-## GATE 4 RUN LOG — standalone 0.2.0
+## GATE 4 RUN LOG — current candidate
 
 **STATUS: NOT RUN.** Fill every field during the supervised run:
 
-- Installer file / product version / source commit / published SHA-256:
+- Release tag / source commit / Release run id + attempt:
+- Candidate-manifest file / independently measured SHA-256:
+- Installer file / product version / manifest-declared installer SHA-256:
 - Independently measured SHA-256:
+- Machine / operator / started-at UTC / ended-at UTC:
 - Windows edition + build / test-user type / separate admin used:
 - Keyboard A / Keyboard B human names and exported slot device values:
 - Interception absent / USB-only clean path / identical-model precheck:

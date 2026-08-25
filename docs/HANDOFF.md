@@ -4,7 +4,7 @@ For whoever takes this over. It says what ksx is, how it is built, what is
 finished, what is not, and — most usefully — **which beliefs about this codebase
 turned out to be false**, because several of them cost a day each to discover.
 
-Updated 2026-08-10 for the standalone **KSX 0.2.0** release candidate. Software
+Updated 2026-08-24 for the current standalone **KSX release candidate**. Software
 gates and a packaged build are evidence about the tree, not a release or a
 physical cabinet acceptance result; the supervised checks in `docs/GATES.md`
 remain open until someone records them on the target hardware.
@@ -77,8 +77,9 @@ source, not another Rust package.
 `docs/SURFACES.md` is the authority; the short version:
 
 - **CLI** — the development surface and the intended first driver for backend
-  capabilities. It is the cheapest thing to test and the only surface CI can
-  drive headlessly. Two current parity debts are named rather than hidden:
+  capabilities. It is the cheapest backend surface to test and the broadest
+  one CI drives headlessly; CI also drives Studio through its pinned Playwright
+  browser checks. Two current parity debts are named rather than hidden:
   staged setup and profile CRUD have typed backend contracts and Studio faces,
   while `ksx stage` and `ksx games new|update|delete` remain planned
   (`docs/SURFACES.md` §3c and §10). The product does not require either CLI face
@@ -104,7 +105,7 @@ includes a separately confirmed Release action, saved games, setup, controls and
 button check; the backend also supports recorded-session replay, a unified
 USB+Bluetooth device list, and multiple controller personas.
 
-**KSX 0.2.0 candidate:** every customer shortcut and the
+**Current KSX candidate:** every customer shortcut and the
 post-install hand-off target `ksx-launcher.exe`, which starts the sibling
 console-subsystem `ksx.exe open` with `CREATE_NO_WINDOW`. `ksx open` starts and
 waits for a plain daemon, then opens Studio directly at `/start` in ksx's own
@@ -136,12 +137,28 @@ matching quote pair. Guide copy names both default keys, the Windows Game Bar
 controller prerequisite and a direct Settings link; ksx does not silently
 change the per-user Windows setting.
 
+**Studio theming (TK0–TK3, 2026-08-20):** the whole palette lives in ONE
+source, `studio-ui/tokens/` (DTCG-flavored JSON compiled by
+`tokens/build-tokens.mjs` inside `node build.mjs` into the hashed sheet, the
+generated `theme_tokens.rs` and the pad-art sheet — the four hand-mirrored
+palette copies are gone). Themes are user-selectable at runtime: `/setup`
+carries the picker, the choice persists as `Settings.theme` in config.toml,
+every page stamps `data-theme` on `<html>` (only roster ids; anything else
+renders as System = follow the OS), and the contrast gate enumerates every
+shipped theme with per-theme exemption pins. Three ship: dark (default),
+light, matrix — matrix cost one JSON file plus two pin rows, which is the
+system working as designed. Adding a theme touches no component CSS, no TS
+and no hand-written Rust. Design record with the open decisions (Nocturne
+prototype palette as a fourth theme vs. deletion at M5, theme fonts):
+`docs/research/token-system-design.md`.
+
 **Milestones:** M0–M3, M6.5, M7, M9, M10a are done. M4, M5, M6 are
-code-complete and **cabinet-gate pending** (§4). M8 has an honestly gated
-HIDMaestro catalog probe, bounded host contract and structural package audit,
-but no production adapter; the incompatible latch adapter was removed.
-Authenticated transport, a sanitized runtime-only SDK, signed packages and a
-supervised controller lifecycle are next. M8.1 adds VIIPER later as a
+code-complete and **cabinet-gate pending** (§4). M8 now has the production
+adapter (`ksx-output::HidMaestroBackend` through the router), the
+authenticated KSXH transport, a three-persona runtime candidate and the
+installer bootstrap; the incompatible latch adapter was removed. What remains
+is the SUPERVISED HARDWARE LIFECYCLE — no HIDMaestro device has ever been
+observed to exist; see `docs/HIDMAESTRO-STATE.md` for the measured state. M8.1 adds VIIPER later as a
 complementary virtual-USB/network/Linux lane while ViGEmBus remains the shipped
 X360/DS4 fallback. See `docs/HIDMAESTRO.md` and `docs/ENHANCEMENTS.md` E1.
 
@@ -311,8 +328,8 @@ orient, at enormous cost.
 
 **Push your branch; let CI gate it.** `rust-toolchain.toml` pins 1.97.1 and CI
 runs on every branch: fmt, workspace clippy, **all four feature combinations**,
-the full suite, plus the installer compile. Do not run the four-way matrix
-locally.
+the full suite, the pinned-Chromium Studio parity/visual-smoke job, plus the
+installer compile. Do not run the four-way matrix locally.
 
 > **Only a clean CI runner produces shippable binaries.** Local builds are useful
 > diagnostics, but they include developer-host state and are not release
@@ -323,18 +340,20 @@ The workflow now builds the prepare-only provider twice and compares hashes,
 runs its disposable elevated `pnputil /add-driver` (without `/install`) smoke,
 checks the helper's x64 GUI subsystem and requireAdministrator manifest, then
 packages the installer. That workflow existing is not a PASS: the clean-runner
-provider smoke and all physical Gates 1–4 are **NOT RUN** for the current 0.2.0
-candidate until Actions/the gate ledgers record otherwise.
+provider smoke and all physical Gates 1–4 are **NOT RUN** for a candidate until
+Actions/the gate ledgers bind them to its run id, manifest hash, and installer
+hash.
 
 **The four feature combinations are not paranoia.** `studio` and `cabinet` are
 independent opt-ins, the default build compiles neither, and five breakages have
 reached main through that gap.
 
 **Never hand-merge generated assets** (`crates/ksx-studio/assets/*`). Regenerate
-with `cd studio-ui && node build.mjs`. They are `-text` in `.gitattributes`, so
+with `tools/studio-env/build-assets.ps1` under its machine-wide lock. They are
+`-text` in `.gitattributes`, so
 a clean rebuild leaves `git status` clean — if it does not, something really
-changed. A hand-resolved manifest yields a page whose HTML and JS disagree, and
-that fails in a browser and in no Rust test.
+changed. A hand-resolved manifest yields a page whose HTML and JS disagree. No
+Rust test sees that seam; the CI Playwright parity guard does.
 
 **Doc section numbers are load-bearing.** ~30 code sites cite
 `DEVICE-IDENTITY.md` by §number, and `crates/ksx-app/tests/docs.rs` fails the
@@ -349,21 +368,24 @@ be the same string.
 
 ## §7 Releasing
 
-`docs/RELEASING.md` is the runbook. Short version: a **CLI-pushed tag** is the
-trigger — `git tag v0.2.0 && git push origin v0.2.0`. A tag pushed from inside
-Actions does not fire workflows, so it must come from a person's machine. CI
-builds on a clean runner, re-hashes the installer, refuses to publish if the
-hash disagrees, and attaches it to a GitHub Release with the SHA-256 and source
-commit in the notes.
+`docs/RELEASING.md` is the runbook. Short version: a **CLI-pushed tag** at the
+exact `origin/main` HEAD starts the candidate build. A tag pushed from inside
+Actions does not fire workflows, so it must come from a person's machine. The
+Release run builds once, emits a candidate manifest, and waits behind the
+protected `production` environment. A reviewer installs that run's exact
+installer, records its hashes in `docs/GATES.md`, and then approves publication
+of those same bytes without a rebuild.
 
 `Cargo.toml` and `packaging/ksx.iss` both carry the version and the release
 **fails** if they disagree — deliberately, rather than patching one, because
 `AppVersion` is also `VersionInfoVersion` and the Apps & Features row.
 
 A clean CI/ISCC run proves compilation, packaging and reproducible committed
-Forma assets. It does **not** prove installation behavior. Before tagging, run
-the fresh-customer product gate and the still-open Gate 3 in `docs/GATES.md`;
-record the exact setup.exe SHA in the gate log.
+Forma assets, and runs Studio's Playwright parity and visual-smoke checks. It
+does **not** prove installation behavior or replace human visual review. After
+the tag-run candidate build and before approving `production`, run the physical
+and fresh-customer gates against that exact setup file; record the Release run,
+manifest SHA, and setup SHA in the gate log.
 
 ---
 
@@ -378,8 +400,10 @@ record the exact setup.exe SHA in the gate log.
 | how a device is identified, and why not by path | `DEVICE-IDENTITY.md` |
 | what each control surface can do | `CONTROL-SURFACE.md` |
 | keys, chords, turbo, SOCD, macros | `INPUT-TRANSFORMS.md` |
+| any device in, any device out (M11-M19) | `UNIVERSAL-IO.md` |
 | supervised hardware runbooks | `GATES.md` |
 | the panel is dead / a claim went wrong | `RECOVERY.md` |
+| dev, fixture, real-hardware QA, installed QA, and release lanes | `DEVELOPMENT-PIPELINE.md` and `STUDIO-ENVIRONMENTS.md` |
 | driver policy: pins, signatures, consent | `DRIVERS.md` |
 | the mapper's UX contract and remaining polish | `MAPPER-UX.md` |
 | Studio's visual language | `DESIGN-SYSTEM.md` |

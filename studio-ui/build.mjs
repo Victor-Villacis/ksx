@@ -1,15 +1,17 @@
 // ksx Studio UI build — TS → FMIR + hashed assets into crates/ksx-studio/assets/.
 //
-// Run with plain `node build.mjs` (no tsx needed — see
+// Invoked through `tools/studio-env/build-assets.ps1` with plain Node internally
+// (no tsx needed — see
 // docs/research/forma-spike-1-fmir-compat.md). Plain-CSS entries only: this
 // page needs no tailwind. (The @getforma/build 0.1.8 Windows bug — `npx`
 // spawned via execFileSync without shell:true, ENOENT — was fixed in 0.1.9,
 // so a `tailwind: true` cssEntry would now work if ever wanted.)
 //
-// EIGHT routes — "/start" (the first run), "/" (status), "/map" (the mapper),
-// "/check", "/pads", "/devices", "/profiles" and "/setup" (the configuration:
-// import, export, first run) — plus the vendored controller art copied
-// (cleaned) from art/ into the embed.
+// TEN routes — "/start" (the first run), "/workspace" (the Nocturne
+// workspace shell, growing toward v0.5's single main screen), "/" (status),
+// "/map" (the mapper), "/check", "/pads", "/devices", "/profiles" and
+// "/setup" (the configuration: import, export, first run) — plus the vendored
+// controller art copied (cleaned) from art/ into the embed.
 //
 // Adding a route is THREE edits in this file and none of them is optional:
 // `entryPoints`, `routes` and `ssrEntryPoints`. Miss any one and
@@ -29,7 +31,7 @@ import { build } from "@getforma/build";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { brotliCompressSync, gzipSync, constants as zlibConstants } from "zlib";
+import { buildTokens } from "./tokens/build-tokens.mjs";
 
 // NOTHING BUT THIS SCRIPT'S OUTPUT MAY LIVE HERE. `build()` below calls
 // `rmSync(outputDir, { recursive: true, force: true })` before it emits
@@ -70,24 +72,203 @@ console.warn = (...args) => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// MAPPABLE ZONES (M11 piece 1b): Rust owns both the controller vocabulary and
+// the mapper's persona-specific art geometry. Its freshness test emits and
+// verifies tokens/zones.json; this build validates that interchange file and
+// turns it into the literal TypeScript tables Forma and the browser consume.
+// Keeping the transform here means neither MapIsland.ts nor MapPage.ts carries
+// a hand-maintained copy, while the generated output is still rebuilt and
+// byte-diffed with every other committed Studio artifact.
+// ---------------------------------------------------------------------------
+function zoneDataError(detail) {
+  throw new Error(`tokens/zones.json: ${detail}`);
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readZoneData(path) {
+  let value;
+  try {
+    value = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    zoneDataError(`could not be parsed (${error instanceof Error ? error.message : String(error)})`);
+  }
+
+  if (!isRecord(value)) zoneDataError("root must be an object");
+  const rootKeys = Object.keys(value).sort();
+  const expectedRootKeys = ["ds4", "functions", "version", "xbox"];
+  if (rootKeys.join("\0") !== expectedRootKeys.join("\0")) {
+    zoneDataError("root must contain exactly version, functions, xbox, and ds4");
+  }
+  if (value.version !== 1) zoneDataError(`version must be 1, got ${JSON.stringify(value.version)}`);
+  if (!Array.isArray(value.functions) || value.functions.length === 0) {
+    zoneDataError("functions must be a non-empty array");
+  }
+
+  const functions = value.functions.map((fn, index) => {
+    if (typeof fn !== "string" || fn.length === 0 || fn.trim() !== fn) {
+      zoneDataError(`functions[${index}] must be a non-empty, trimmed string`);
+    }
+    return fn;
+  });
+  const functionSet = new Set(functions);
+  if (functionSet.size !== functions.length) zoneDataError("functions contains a duplicate spelling");
+
+  const readPersona = (name) => {
+    const rows = value[name];
+    if (!Array.isArray(rows)) zoneDataError(`${name} must be an array`);
+    const seen = new Set();
+    const parsed = rows.map((row, index) => {
+      const at = `${name}[${index}]`;
+      if (!isRecord(row)) zoneDataError(`${at} must be an object`);
+      const keys = Object.keys(row).sort();
+      const expectedKeys = ["function", "kind", "label", "palette", "rect"];
+      if (keys.join("\0") !== expectedKeys.join("\0")) {
+        zoneDataError(`${at} must contain exactly function, label, palette, rect, and kind`);
+      }
+      for (const field of ["function", "label", "palette", "kind"]) {
+        if (
+          typeof row[field] !== "string" ||
+          row[field].length === 0 ||
+          row[field].trim() !== row[field]
+        ) {
+          zoneDataError(`${at}.${field} must be a non-empty, trimmed string`);
+        }
+      }
+      if (!functionSet.has(row.function)) {
+        zoneDataError(`${at}.function '${row.function}' is absent from functions`);
+      }
+      if (seen.has(row.function)) zoneDataError(`${name} repeats function '${row.function}'`);
+      seen.add(row.function);
+      if (
+        !Array.isArray(row.rect) ||
+        row.rect.length !== 4 ||
+        row.rect.some((part) => typeof part !== "number" || !Number.isFinite(part))
+      ) {
+        zoneDataError(`${at}.rect must contain exactly four finite numbers`);
+      }
+      return row;
+    });
+
+    const missing = functions.filter((fn) => !seen.has(fn));
+    if (missing.length > 0 || seen.size !== functionSet.size) {
+      zoneDataError(
+        `${name} must cover functions exactly once` +
+          (missing.length > 0 ? ` (missing: ${missing.join(", ")})` : ""),
+      );
+    }
+    return parsed;
+  };
+
+  return {
+    functions,
+    xbox: readPersona("xbox"),
+    ds4: readPersona("ds4"),
+  };
+}
+
+function renderZoneTypescript(data) {
+  const functionRows = data.functions.map((fn) => `  { k: ${JSON.stringify(fn)} },`).join("\n");
+  const zoneRows = (rows) =>
+    rows
+      .map((row) => {
+        const tuple = [
+          row.function,
+          row.label,
+          row.palette,
+          ...row.rect,
+          row.kind,
+        ];
+        return `  [${tuple.map((part) => JSON.stringify(part)).join(", ")}],`;
+      })
+      .join("\n");
+
+  return (
+    "// Generated by studio-ui/build.mjs — DO NOT EDIT.\n" +
+    "// Source of truth: studio-ui/tokens/zones.json (emitted and verified by Rust).\n" +
+    "// Regenerate: tools/studio-env/build-assets.ps1\n" +
+    "\n" +
+    "export interface FunctionOption {\n" +
+    "  readonly k: string;\n" +
+    "}\n" +
+    "\n" +
+    "export type ZoneDef = readonly [\n" +
+    "  functionName: string,\n" +
+    "  label: string,\n" +
+    "  palette: string,\n" +
+    "  cx: number,\n" +
+    "  cy: number,\n" +
+    "  width: number,\n" +
+    "  height: number,\n" +
+    "  kind: string,\n" +
+    "];\n" +
+    "\n" +
+    "export const FUNCTIONS: FunctionOption[] = [\n" +
+    `${functionRows}\n` +
+    "];\n" +
+    "\n" +
+    "export const ZONE_XBOX: readonly ZoneDef[] = [\n" +
+    `${zoneRows(data.xbox)}\n` +
+    "];\n" +
+    "\n" +
+    "export const ZONE_DS4: readonly ZoneDef[] = [\n" +
+    `${zoneRows(data.ds4)}\n` +
+    "];\n"
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TOKENS FIRST (TK0, docs/research/token-system-design.md): studio-ui/tokens/
+// is the single source of the palette. buildTokens() validates it (throws —
+// fatal, like a slot collision) and emits the COMMITTED generated files:
+// src/tokens.gen.css (prepended into the hashed sheet below) and
+// crates/ksx-studio/src/theme_tokens.rs (the anti-flash const the render
+// seams share), plus src/zones.gen.ts from Rust's interchange file. All are
+// pinned by the same ci.yml byte-diff as assets/ and are LF from birth. The
+// token build also validates that src/studio.css itself stayed
+// token-free — a leftover :root block or prefers-color-scheme query would
+// shadow the generated tokens while the contrast gate (which reads only the
+// FIRST light marker) stayed green.
+// ---------------------------------------------------------------------------
+const authoredCss = readFileSync("src/studio.css", "utf8").replace(/\r\n?/g, "\n");
+const tokens = buildTokens({ authoredCss });
+writeFileSync("src/tokens.gen.css", tokens.css, "utf8");
+writeFileSync("../crates/ksx-studio/src/theme_tokens.rs", tokens.rustModule, "utf8");
+const zoneData = readZoneData("tokens/zones.json");
+writeFileSync("src/zones.gen.ts", renderZoneTypescript(zoneData), "utf8");
+
 // @getforma/build 0.2.0 concatenates plain CSS byte-for-byte. A Windows
 // worktree can therefore hand it mixed/CRLF bytes while a clean Actions
 // checkout hands it LF, producing different content hashes from the same Git
-// commit. Feed the framework an ephemeral LF-normalized copy instead. The CSS
+// commit. Feed the framework ephemeral LF-normalized copies instead. The CSS
 // has no relative @import/url references, so changing its temporary directory
-// cannot change resolution semantics.
+// cannot change resolution semantics. generateCss accepts an ARRAY input and
+// joins the files with "\n" before hashing, so the token sheet is prepended
+// with no framework patch.
 const cssTempDir = mkdtempSync(join(tmpdir(), "ksx-studio-css-"));
-const normalizedCss = join(cssTempDir, "studio.css");
+const tokensCssTmp = join(cssTempDir, "tokens.gen.css");
+writeFileSync(tokensCssTmp, tokens.css, "utf8");
+// The vendored genui canvas sheet (studio-ui/src/genui/README.md carries the
+// provenance) rides BETWEEN the tokens and the authored sheet, so studio.css
+// §9's canvas skin can override its literals at equal specificity by order.
+const canvasCssTmp = join(cssTempDir, "genui-canvas.css");
 writeFileSync(
-  normalizedCss,
-  readFileSync("src/studio.css", "utf8").replace(/\r\n?/g, "\n"),
+  canvasCssTmp,
+  readFileSync("src/genui-canvas.css", "utf8").replace(/\r\n?/g, "\n"),
   "utf8",
 );
+const normalizedCss = join(cssTempDir, "studio.css");
+writeFileSync(normalizedCss, authoredCss, "utf8");
 
 try {
   await build({
     entryPoints: [
       { entry: "src/start.ts", outfile: "start.js" },
+      { entry: "src/workspace.ts", outfile: "workspace.js" },
+      { entry: "src/nocturne.ts", outfile: "nocturne.js" },
       { entry: "src/status.ts", outfile: "status.js" },
       { entry: "src/map.ts", outfile: "map.js" },
       { entry: "src/check.ts", outfile: "check.js" },
@@ -96,9 +277,11 @@ try {
       { entry: "src/profiles.ts", outfile: "profiles.js" },
       { entry: "src/setup.ts", outfile: "setup.js" },
     ],
-    cssEntries: [{ input: normalizedCss, outfile: "studio.css" }],
+    cssEntries: [{ input: [tokensCssTmp, canvasCssTmp, normalizedCss], outfile: "studio.css" }],
     routes: {
       "/start": { js: ["start"], css: ["studio"] },
+      "/workspace": { js: ["workspace"], css: ["studio"] },
+      "/nocturne": { js: ["nocturne"], css: ["studio"] },
       "/": { js: ["status"], css: ["studio"] },
       "/map": { js: ["map"], css: ["studio"] },
       "/check": { js: ["check"], css: ["studio"] },
@@ -108,9 +291,22 @@ try {
       "/setup": { js: ["setup"], css: ["studio"] },
     },
     outputDir,
+    // The mapping-flow lens, contextual Inspector, Keyboard Arranger, physical
+    // Control Surface Builder, complete 56-terminal encoder editor, portable
+    // hardware-layout profiles, supervised backup/program/verify/restore,
+    // blank-encoder entry, movable macro processors, multi-family discovery,
+    // chart-derived panels, visible control → terminal → key handoffs, the
+    // fallback signal shelf, semantic route index, and shared simultaneous-
+    // input diagnostic live in Nocturne's one island. Exact-generation recovery
+    // for lost Start/Poll/Cancel responses and fail-closed environment/reseed
+    // provenance add the final bounded slice; keep a narrow 282,500-byte ceiling
+    // so that safety cost remains deliberate rather than an open-ended bump.
+    budgetThreshold: 282_500,
     ssr: true,
     ssrEntryPoints: {
       start: "src/start.ts",
+      workspace: "src/workspace.ts",
+      nocturne: "src/nocturne.ts",
       status: "src/status.ts",
       map: "src/map.ts",
       check: "src/check.ts",
@@ -233,14 +429,15 @@ for (const logical of Object.keys(manifest.assets)) {
 // /_assets/pad-ds4.svg; the status page's .tileart uses the same files.
 // ---------------------------------------------------------------------------
 
-// Palette sheet: dark values echo --panel-3/--text-3/--text-2 territory from
-// studio.css; light values echo its light scheme. vector-effect keeps the
-// silhouette outline ~1.5 px whatever size the <img> renders at.
-//
-// These are HAND-MIRRORED from studio.css and cannot use var() — an <img>
-// SVG is its own document and inherits no custom properties from the page.
-// That makes them a drift risk, so `contrast.rs` parses this sheet too and
-// checks it against the same floors as everything else.
+// Palette sheet. An <img> SVG is its own document and inherits no custom
+// properties from the page, so var() is impossible here — but the four values
+// that ARE token mirrors (dark stroke = --text-3; light body/stroke/detail =
+// --panel-2/--text-3/--text-2) are TEMPLATED from the token source rather
+// than hand-copied, so they cannot drift. The remaining literals are bespoke
+// art colors chosen against the silhouette (dark body/detail, both insets) —
+// copies of nothing, deliberately not pinned. `contrast.rs` parses the
+// EMITTED pad-xbox.svg (this sheet as shipped) for floors and the token pins.
+// vector-effect keeps the silhouette outline ~1.5 px at any <img> size.
 //
 // Violet family as of the Street Fighter palette pass: the art used to be
 // blue-steel (#1d2534/#8593ad), which read as a foreign hue sitting on a
@@ -249,12 +446,12 @@ for (const logical of Object.keys(manifest.assets)) {
 // art's values (detail/body 9.08 vs 9.44, body/page 1.20 vs 1.27).
 const PAD_SHEET =
   "<style>" +
-  ".pad-body{fill:#261c3b;stroke:#8f83a3;stroke-width:1.5;stroke-linejoin:round;vector-effect:non-scaling-stroke}" +
+  `.pad-body{fill:#261c3b;stroke:${tokens.resolveHex("dark", "--text-3")};stroke-width:1.5;stroke-linejoin:round;vector-effect:non-scaling-stroke}` +
   ".pad-detail{fill:#c9bfd6}" +
   ".pad-inset{fill:#37294e}" +
   "@media (prefers-color-scheme:light){" +
-  ".pad-body{fill:#efe9e2;stroke:#685c7a}" +
-  ".pad-detail{fill:#4c4059}" +
+  `.pad-body{fill:${tokens.resolveHex("light", "--panel-2")};stroke:${tokens.resolveHex("light", "--text-3")}}` +
+  `.pad-detail{fill:${tokens.resolveHex("light", "--text-2")}}` +
   ".pad-inset{fill:#dcd2c8}" +
   "}</style>";
 
@@ -328,6 +525,11 @@ const ART = [
 for (const [source, out, extra] of ART) {
   writeFileSync(join(outputDir, out), cleanSvg(source, extra));
 }
+
+// The theme roster (id/label/scheme + resolved --bg/--text anchors), for the
+// browser suite's painted-theme assertions. Unhashed like the pad SVGs;
+// CI-pinned by the same assets byte-diff.
+writeFileSync(join(outputDir, "themes.json"), tokens.themesJson);
 
 // ---------------------------------------------------------------------------
 // FMIR version guard (docs/research/forma-spike-1-fmir-compat.md "cheap

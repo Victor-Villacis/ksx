@@ -14,7 +14,7 @@ raw-feedback managed-host experiment without building or loading HIDMaestro:
    are excluded.
 
 S1.5d now supplies every planned replacement and required new source unit in a
-separately hash-frozen inert candidate. Its project names exactly 11 compile
+separately hash-frozen inert candidate. Its project names exactly 14 compile
 inputs and 228 resources, and the S1.5d/API source verifiers build and load
 nothing. The exact S1.5e observation infrastructure is now source-frozen. Its
 GitHub Actions build is authorized but the observation is not established; its

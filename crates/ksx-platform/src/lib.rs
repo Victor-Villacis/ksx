@@ -24,6 +24,8 @@
 pub mod advice;
 pub mod app_paths;
 pub mod autostart;
+pub mod hid;
+pub mod hid_report;
 pub mod inject;
 pub mod installer;
 pub mod local_pipe;
@@ -40,7 +42,9 @@ pub mod xinput;
 mod win;
 
 #[cfg(windows)]
-pub use win::{collect, collect_vigembus, collect_virtual_pads};
+pub use win::{
+    ancestor_instance_ids, collect, collect_hidmaestro, collect_vigembus, collect_virtual_pads,
+};
 
 pub use advice::{summarize, Advice, Severity};
 pub use report::{

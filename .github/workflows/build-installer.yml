@@ -50,6 +50,15 @@ on:
       portable_sha256:
         description: SHA-256 of the portable ZIP, as built.
         value: ${{ jobs.build.outputs.portable_sha256 }}
+      manifest_name:
+        description: The exact-candidate manifest filename.
+        value: ${{ jobs.build.outputs.manifest_name }}
+      manifest_sha256:
+        description: SHA-256 of the exact-candidate manifest.
+        value: ${{ jobs.build.outputs.manifest_sha256 }}
+
+permissions:
+  contents: read
 
 # A called workflow does NOT inherit the caller's workflow-level env, so this is
 # repeated here rather than relied upon from ci.yml.
@@ -65,9 +74,11 @@ jobs:
       exe_sha256: ${{ steps.exe.outputs.sha256 }}
       portable_name: ${{ steps.portable.outputs.name }}
       portable_sha256: ${{ steps.portable.outputs.sha256 }}
+      manifest_name: ${{ steps.candidate_manifest.outputs.name }}
+      manifest_sha256: ${{ steps.candidate_manifest.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: 10.0.400
 
@@ -91,9 +102,10 @@ jobs:
       #    disagreement rather than removing it.
       #
       # So one rule covers all three: the tag says what the tree already says.
-      # The cost of being wrong is one deleted tag and one more commit. The cost
-      # of the silent version is a user holding a setup.exe whose About box
-      # disagrees with the page they downloaded it from.
+      # The cost of being wrong is one new version commit and candidate tag.
+      # Release tags are immutable evidence even when their candidate fails;
+      # deleting or moving one is forbidden. The cost of a silent version is a
+      # user holding a setup.exe whose About box disagrees with its release.
       #
       # `crates/ksx-app/tests/installer.rs` pins .iss == Cargo.toml on every
       # test run, so the only thing left to check here is the tag — and it is
@@ -141,8 +153,8 @@ jobs:
               "  packaging/ksx.iss says $issVersion   (#define AppVersion)"
               "  Cargo.toml says        $cargoVersion   ([workspace.package] version)"
               ''
-              "Nothing has been built. Fix the tree, delete the tag, tag again:"
-              "  git tag -d $tag && git push origin :refs/tags/$tag"
+              "Nothing has been built. Do not delete or move immutable $tag."
+              "Fix the tree, increment the version, merge it, and cut a new tag."
             )
             throw ($lines -join "`n")
           }
@@ -152,7 +164,7 @@ jobs:
       # overrides the pin.
       - name: Toolchain (pinned by rust-toolchain.toml)
         run: rustup show active-toolchain
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Build pinned production HIDMaestro host
         shell: pwsh
@@ -164,11 +176,47 @@ jobs:
           $parsed = $receipt | Select-Object -Last 1 | ConvertFrom-Json
           if ($parsed.schemaVersion -ne 1 -or
               $parsed.upstreamCommit -cne '2a0dac0857901a63d365a36dcf99cf50114ca954' -or
-              $parsed.runtimeContractSha256 -cne '1C49F9CE3F406ED3163935B759EDC35B9B3CBEBD6396A99DDFE3DC9F07E468B0' -or
+              $parsed.runtimeContractSha256 -cne '4F76F31C049390A1342388E09F9D0D0E3547162D08EA501FD829AF3CF64F67DA' -or
               $parsed.executableSha256 -notmatch '^[A-F0-9]{64}$') {
             throw 'The HIDMaestro host build receipt is not exact.'
           }
           Write-Host "ksx-hidmaestro-host.exe SHA256 $($parsed.executableSha256)"
+
+      # The SDK-lane host references the pinned official release SDK, which is
+      # 113 MB and never committed. Cache the archive by its content hash so a
+      # cache hit skips the download entirely; the fetch script verifies the
+      # bytes identically either way.
+      - name: Cache pinned HIDMaestro release archive
+        id: sdk-archive-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: sdk-archive/HIDMaestro-v1.6.1.zip
+          key: hidmaestro-release-00145C23D9838BE6089389CE58B3FD2B6766FA9BC0F1F3C60A3C885361B53C34
+
+      - name: Build pinned SDK-lane HIDMaestro host
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path sdk-archive -Force | Out-Null
+          $archive = Join-Path $PWD 'sdk-archive/HIDMaestro-v1.6.1.zip'
+          if (-not (Test-Path -LiteralPath $archive)) {
+            Invoke-WebRequest `
+              -Uri 'https://github.com/hifihedgehog/HIDMaestro/releases/download/v1.6.1/HIDMaestro-v1.6.1.zip' `
+              -OutFile $archive -UseBasicParsing
+          }
+          $receipt = ./tools/hidmaestro-sdk-host/publish-sdk.ps1 `
+            -WorkspaceRoot $PWD `
+            -OutputDirectory (Join-Path $PWD 'target/release') `
+            -ArchivePath $archive
+          if ($LASTEXITCODE -ne 0) { throw 'SDK-lane host publish failed' }
+          $parsed = $receipt | Select-Object -Last 1 | ConvertFrom-Json
+          if ($parsed.schemaVersion -ne 1 -or
+              $parsed.lane -cne 'pinned-official-sdk' -or
+              $parsed.sdkAssemblySha256 -cne 'ADADD9E2604B7B6B047F386EBDD03879FEEF48009C6290281E4C665E2190F6D5' -or
+              $parsed.runtimeContractSha256 -cne 'EDE64B5F53CB6B8681A66AEFFE4C7C464BC5A37697E8DA160C29B655B60FFE89' -or
+              $parsed.executableSha256 -notmatch '^[A-F0-9]{64}$') {
+            throw 'The SDK-lane host build receipt is not exact.'
+          }
+          Write-Host "ksx-hidmaestro-sdk-host.exe SHA256 $($parsed.executableSha256)"
 
       - name: Build pinned HIDMaestro driver installer
         shell: pwsh
@@ -188,6 +236,72 @@ jobs:
             throw 'The HIDMaestro driver installer build receipt is not exact.'
           }
           Write-Host "ksx-hidmaestro-driver-installer.exe SHA256 $($parsed.executableSha256)"
+
+      # Exercise the compiled private-command boundary without downloading the
+      # SDK or touching the Driver Store. The copy must run from Program Files
+      # to cross the same protected-installation gate as the shipping helper.
+      - name: Exercise HIDMaestro installer private dispatch without loading SDK
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $programFilesRoot = [IO.Path]::TrimEndingDirectorySeparator(
+            [IO.Path]::GetFullPath($env:ProgramFiles))
+          $probeRoot = Join-Path $programFilesRoot (
+            'ksx-hidmaestro-installer-contract-' + [Guid]::NewGuid().ToString('N'))
+          $resolvedProbe = [IO.Path]::GetFullPath($probeRoot)
+          $programFilesPrefix = $programFilesRoot + [IO.Path]::DirectorySeparatorChar
+          if (-not $resolvedProbe.StartsWith(
+              $programFilesPrefix,
+              [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'HIDMaestro dispatch probe escaped Program Files.'
+          }
+
+          try {
+            New-Item -ItemType Directory -Path $resolvedProbe | Out-Null
+            $attributes = [IO.File]::GetAttributes($resolvedProbe)
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+              throw 'HIDMaestro dispatch probe directory is a reparse point.'
+            }
+            $probeExe = Join-Path $resolvedProbe 'ksx-hidmaestro-driver-installer.exe'
+            Copy-Item `
+              -LiteralPath 'target/release/ksx-hidmaestro-driver-installer.exe' `
+              -Destination $probeExe
+
+            $worker = Start-Process `
+              -FilePath $probeExe `
+              -ArgumentList @('install-worker-v1', 'C:\not-a-ksx-staging-directory') `
+              -Wait `
+              -PassThru `
+              -WindowStyle Hidden
+            if ($worker.ExitCode -ne 5) {
+              throw "Invalid private worker path returned $($worker.ExitCode), expected 5."
+            }
+
+            $unknown = Start-Process `
+              -FilePath $probeExe `
+              -ArgumentList @('unexpected-command') `
+              -Wait `
+              -PassThru `
+              -WindowStyle Hidden
+            if ($unknown.ExitCode -ne 2) {
+              throw "Unknown private command returned $($unknown.ExitCode), expected 2."
+            }
+          }
+          finally {
+            $cleanupTarget = [IO.Path]::GetFullPath($resolvedProbe)
+            if (-not $cleanupTarget.StartsWith(
+                $programFilesPrefix,
+                [StringComparison]::OrdinalIgnoreCase)) {
+              throw 'Refusing unsafe HIDMaestro dispatch probe cleanup.'
+            }
+            if (Test-Path -LiteralPath $cleanupTarget) {
+              $cleanupAttributes = [IO.File]::GetAttributes($cleanupTarget)
+              if (($cleanupAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'Refusing reparse-point HIDMaestro dispatch probe cleanup.'
+              }
+              Remove-Item -LiteralPath $cleanupTarget -Recurse -Force
+            }
+          }
 
       # cabinet + studio is the shipping combination: the egui panel UI plus the
       # local web config server. The launcher is deliberately a separate package:
@@ -315,9 +429,10 @@ jobs:
           $launcher = 'target/release/ksx-launcher.exe'
           $helper = 'target/release/ksx-winusb-helper.exe'
           $hidmaestroHost = 'target/release/ksx-hidmaestro-host.exe'
+          $hidmaestroSdkHost = 'target/release/ksx-hidmaestro-sdk-host.exe'
           $hidmaestroInstaller = 'target/release/ksx-hidmaestro-driver-installer.exe'
           $provider = 'target/release/libwdi.dll'
-          foreach ($required in @($exe, $launcher, $helper, $hidmaestroHost, $hidmaestroInstaller, $provider)) {
+          foreach ($required in @($exe, $launcher, $helper, $hidmaestroHost, $hidmaestroSdkHost, $hidmaestroInstaller, $provider)) {
             if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
               throw "required release binary was not built: $required"
             }
@@ -342,6 +457,12 @@ jobs:
               $hostHeaders -notmatch '(?im)^\s+8664 machine \(x64\)' -or
               $hostHeaders -notmatch '(?im)subsystem \(Windows CUI\)') {
             throw 'ksx-hidmaestro-host.exe must be an x64 console-subsystem PE'
+          }
+          $sdkHostHeaders = (& $dumpbin.FullName /nologo /headers $hidmaestroSdkHost | Out-String)
+          if ($LASTEXITCODE -ne 0 -or
+              $sdkHostHeaders -notmatch '(?im)^\s+8664 machine \(x64\)' -or
+              $sdkHostHeaders -notmatch '(?im)subsystem \(Windows CUI\)') {
+            throw 'ksx-hidmaestro-sdk-host.exe must be an x64 console-subsystem PE'
           }
           $installerHeaders = (& $dumpbin.FullName /nologo /headers $hidmaestroInstaller | Out-String)
           if ($LASTEXITCODE -ne 0 -or
@@ -369,6 +490,7 @@ jobs:
           $launcherKb = [math]::Round((Get-Item $launcher).Length / 1KB, 1)
           $helperHash = (Get-FileHash $helper -Algorithm SHA256).Hash
           $hidmaestroHostHash = (Get-FileHash $hidmaestroHost -Algorithm SHA256).Hash
+          $hidmaestroSdkHostHash = (Get-FileHash $hidmaestroSdkHost -Algorithm SHA256).Hash
           $hidmaestroInstallerHash = (Get-FileHash $hidmaestroInstaller -Algorithm SHA256).Hash
           $providerHash = (Get-FileHash $provider -Algorithm SHA256).Hash
           Write-Host "ksx.exe  $mb MB"
@@ -377,10 +499,11 @@ jobs:
           Write-Host "SHA256            $launcherHash"
           Write-Host "ksx-winusb-helper.exe SHA256 $helperHash"
           Write-Host "ksx-hidmaestro-host.exe SHA256 $hidmaestroHostHash"
+          Write-Host "ksx-hidmaestro-sdk-host.exe SHA256 $hidmaestroSdkHostHash"
           Write-Host "ksx-hidmaestro-driver-installer.exe SHA256 $hidmaestroInstallerHash"
           Write-Host "libwdi.dll SHA256               $providerHash"
           "sha256=$h" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
-          "### ksx executables`n`n- ksx.exe: $mb MB, SHA256 ``$h```n- ksx-launcher.exe: $launcherKb KB, SHA256 ``$launcherHash```n- ksx-winusb-helper.exe: SHA256 ``$helperHash```n- ksx-hidmaestro-host.exe: SHA256 ``$hidmaestroHostHash```n- ksx-hidmaestro-driver-installer.exe: SHA256 ``$hidmaestroInstallerHash```n- libwdi.dll: SHA256 ``$providerHash```n- commit: ``$env:GITHUB_SHA``" |
+          "### ksx executables`n`n- ksx.exe: $mb MB, SHA256 ``$h```n- ksx-launcher.exe: $launcherKb KB, SHA256 ``$launcherHash```n- ksx-winusb-helper.exe: SHA256 ``$helperHash```n- ksx-hidmaestro-host.exe: SHA256 ``$hidmaestroHostHash```n- ksx-hidmaestro-sdk-host.exe: SHA256 ``$hidmaestroSdkHostHash```n- ksx-hidmaestro-driver-installer.exe: SHA256 ``$hidmaestroInstallerHash```n- libwdi.dll: SHA256 ``$providerHash```n- commit: ``$env:GITHUB_SHA``" |
             Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
       # The secondary release download is a PORTABLE DISTRIBUTION, not a bare
@@ -422,10 +545,11 @@ jobs:
           "sha256=$h" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
           Write-Host "$name  SHA256 $h"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ksx-windows-portable
           path: packaging/out/*-portable.zip
+          overwrite: true
           if-no-files-found: error
           retention-days: 30
 
@@ -780,9 +904,109 @@ jobs:
             Remove-Item -LiteralPath $install -Recurse -Force -ErrorAction SilentlyContinue
           }
 
-      - uses: actions/upload-artifact@v4
+      # One machine-readable identity for the candidate a person installs.
+      # Branch and tag builds can have the same source commit and still produce
+      # different container bytes, so QA and publication bind to these files,
+      # this run, and this hash rather than to "the same recipe".
+      - name: Write exact-candidate manifest
+        id: candidate_manifest
+        shell: pwsh
+        env:
+          CANDIDATE_COMMIT: ${{ github.sha }}
+          CANDIDATE_REF: ${{ github.ref }}
+          CANDIDATE_RUN_ID: ${{ github.run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CANDIDATE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SETUP_NAME: ${{ steps.installer.outputs.name }}
+          SETUP_SHA256: ${{ steps.installer.outputs.sha256 }}
+          PORTABLE_NAME: ${{ steps.portable.outputs.name }}
+          PORTABLE_SHA256: ${{ steps.portable.outputs.sha256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cargo = Get-Content -LiteralPath 'Cargo.toml' -Raw
+          if ($cargo -notmatch '(?s)\[workspace\.package\][^\[]*?version\s*=\s*"([^"]+)"') {
+            throw 'Cargo.toml has no [workspace.package] version.'
+          }
+          $version = $Matches[1]
+          $toolchainSpec = Get-Content -LiteralPath 'rust-toolchain.toml' -Raw
+          if ($toolchainSpec -notmatch '(?m)^channel\s*=\s*"([^"]+)"') {
+            throw 'rust-toolchain.toml has no pinned channel'
+          }
+          $toolchainChannel = $Matches[1]
+          $activeToolchain = (& rustup show active-toolchain | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($activeToolchain)) {
+            throw 'the active Rust toolchain could not be recorded'
+          }
+
+          $setup = Join-Path 'packaging/out' $env:SETUP_NAME
+          $portable = Join-Path 'packaging/out' $env:PORTABLE_NAME
+          foreach ($path in @($setup, $portable)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "candidate artifact is missing before manifest creation: $path"
+            }
+          }
+          $setupItem = Get-Item -LiteralPath $setup
+          $portableItem = Get-Item -LiteralPath $portable
+          $setupHash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash
+          $portableHash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash
+          if ($setupHash -cne $env:SETUP_SHA256 -or
+              $portableHash -cne $env:PORTABLE_SHA256) {
+            throw 'candidate bytes changed after their build-step hashes were recorded'
+          }
+
+          $manifest = [ordered]@{
+            schema = 1
+            source = [ordered]@{
+              repository = $env:CANDIDATE_REPOSITORY
+              commit = $env:CANDIDATE_COMMIT
+              ref = $env:CANDIDATE_REF
+            }
+            run = [ordered]@{
+              id = $env:CANDIDATE_RUN_ID
+              attempt = [int]$env:CANDIDATE_RUN_ATTEMPT
+            }
+            release = [ordered]@{
+              tag = [string]$env:RELEASE_TAG
+              version = $version
+            }
+            toolchain = [ordered]@{
+              channel = $toolchainChannel
+              active = $activeToolchain
+            }
+            artifacts = [ordered]@{
+              installer = [ordered]@{
+                filename = $setupItem.Name
+                size = [long]$setupItem.Length
+                sha256 = $setupHash
+              }
+              portable = [ordered]@{
+                filename = $portableItem.Name
+                size = [long]$portableItem.Length
+                sha256 = $portableHash
+              }
+            }
+          }
+          $name = 'ksx-candidate-manifest.json'
+          $path = Join-Path 'packaging/out' $name
+          $manifest | ConvertTo-Json -Depth 6 |
+            Set-Content -LiteralPath $path -Encoding utf8
+          $manifestHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+          "name=$name" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          "sha256=$manifestHash" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          Write-Host "$name SHA256 $manifestHash"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ksx-windows-installer
           path: packaging/out/*setup.exe
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ksx-windows-candidate-manifest
+          path: packaging/out/ksx-candidate-manifest.json
+          overwrite: true
           if-no-files-found: error
           retention-days: 30

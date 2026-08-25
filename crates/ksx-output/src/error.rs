@@ -187,19 +187,29 @@ mod tests {
     }
 
     #[test]
-    fn a_persona_this_build_cannot_make_is_refused_with_a_way_out() {
-        let err = OutputError::PersonaNotImplemented(ksx_core::Persona::SwitchPro);
+    fn the_dormant_persona_refusal_keeps_its_shape() {
+        // A PLUGGABLE persona reaching this refusal is a bug elsewhere; its
+        // rendering stays honest — no invented reason.
+        let err = OutputError::PersonaNotImplemented(ksx_core::Persona::XboxSeries);
         let msg = err.to_string();
-        assert!(msg.contains("switchpro"), "{msg}");
-        // It must not read as an install problem...
+        assert!(msg.contains("xboxseries"), "{msg}");
         assert!(!err.is_hidmaestro_missing(), "{msg}");
         assert!(err.is_not_implemented());
-        assert!(
-            msg.contains("has not yet completed its independent production runtime"),
-            "{msg} must close off the wrong fix"
-        );
-        // ...and it must end in something the user can actually type.
-        assert!(msg.contains("xbox360"), "{msg}");
+        assert!(msg.contains("no reason recorded"), "{msg}");
+    }
+
+    /// With every persona pluggable the gap-rendering arm is dormant: the
+    /// refusal keeps its honest fallback for any persona (re-arms with the
+    /// next gated one; the gapped rendering's shape lives in git history).
+    #[test]
+    fn a_gated_persona_refusal_names_the_gap_and_a_way_out() {
+        for persona in [ksx_core::Persona::Snes, ksx_core::Persona::Genesis] {
+            let err = OutputError::PersonaNotImplemented(persona);
+            let msg = err.to_string();
+            assert!(msg.contains(persona.as_str()), "{msg}");
+            assert!(msg.contains("no reason recorded"), "{msg}");
+            assert!(err.is_not_implemented());
+        }
     }
 
     #[test]

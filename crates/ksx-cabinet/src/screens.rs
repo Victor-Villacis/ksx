@@ -1431,6 +1431,7 @@ mod tests {
                 line: "running".into(),
                 profile: session_profile.map(str::to_owned),
                 origin: ksx_api::SessionOrigin::Config,
+                active: None,
             },
             mapper: MapperSnapshot {
                 generated_at: "t".into(),
@@ -1447,6 +1448,7 @@ mod tests {
                     backup: None,
                     session_backup: false,
                     turbo: Default::default(),
+                    toggle: Default::default(),
                     macros_off: false,
                 }],
             },

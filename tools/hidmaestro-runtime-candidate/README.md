@@ -12,10 +12,20 @@ The candidate is deliberately narrower than the eventual product backend: one
 plain USB DualSense profile (`dualsense`, `054C:0CE6`), one live controller at
 index 0, on a disposable Windows machine where the exact signed HIDMaestro HID
 driver package was installed beforehand and no other HIDMaestro consumer or
-device exists. Switch Pro is also structurally plain HID, but it is not needed
-to answer S2's first lifecycle question. Xbox Series needs an SWD companion;
-composite profiles need the USB/IP lane. Adding either now would enlarge the
-ownership and provisioning problem before the first proof exists.
+device exists. That remains the only persona this candidate can CREATE.
+
+Two more personas are now source-frozen but deliberately not live. Switch Pro
+and Xbox Series each have an input encoder, a source-derived input contract and
+golden vectors, and S1.5d verifies each encoder against its own contract rather
+than holding one persona's grammar over all three. Encoding a report and
+creating the device that carries it are separate problems, and only the first
+is solved here. Switch Pro is structurally plain HID and is the next lifecycle
+candidate. Xbox Series is created as a single software-device companion bound
+by Windows' own inbox `xinputhid` driver — not as a plain-HID node, and not as
+an XUSB companion — so the device lifecycle refuses it by name rather than
+attempting a creation that cannot work. Composite
+profiles still need the USB/IP lane. The ksx build gate keeps both personas off
+until a built artifact drives a real pad.
 
 `source.lock.json` pins the exact upstream v1.6.1 commit and the original
 decision inputs. The `api/` and `profiles/` directories now add an exhaustive
@@ -30,6 +40,23 @@ legacy USB input path from 12 pinned upstream blobs: six descriptor groups,
 nine scenarios, and 37 complete 64-byte reports. The report ID is byte zero;
 the future legacy shared-memory endpoint receives exactly bytes 1 through 63.
 That source-derived contract does not prove compiled candidate behavior.
+
+`../hidmaestro-input-contract-xbox-series/` and
+`../hidmaestro-input-contract-switch-pro/` freeze the same shape for the two
+added personas. Xbox Series is 17 bytes with no report ID at all — nothing is
+stripped and the endpoint receives the whole report — across 13 scenarios and
+45 frames. Switch Pro is NOT a descriptor report at all: it is the 48-byte
+report-`0x30` BODY the driver's own streamer serves — the driver reads
+`Data[2..10]` (buttons + 12-bit packed sticks) and, when IMU streaming is
+armed, `Data[12..47]`, frames the report itself, and owns the whole
+handshake. An earlier revision froze the descriptor's 12-byte `0x3F` report
+here on the argument that only `0x3F` is field-by-field derivable; that
+argument was true and irrelevant — the driver never treats the submission as
+a report, and an 11-byte `0x3F` slice passes its `DataSize >= 11` guard and
+is silently misparsed. Both contracts record that the host state mapper
+populates `HMAxis` with one fixed physical assignment shaped by DualSense, so
+a descriptor that spells its axes differently must be read by physical
+meaning rather than by letter.
 
 The original source hashes deliberately describe a Windows checkout made with
 `core.autocrlf=true`; CI sets that conversion explicitly so runner-global Git
@@ -89,9 +116,9 @@ and `artifactPublicApiAllowlistFrozen` remains false.
 
 The source-disposition contract classifies all 51 upstream `.cs`/`.csproj`
 units exactly once: one may remain byte-for-byte unchanged, 13 require narrowed
-replacement, and 37 are excluded. S1.5d now contains ten candidate C# files,
+replacement, and 37 are excluded. S1.5d now contains thirteen candidate C# files,
 one explicit project, and a `.gitignore` for the deliberately absent fixed
-upstream staging directory. The project names exactly 11 compile inputs and
+upstream staging directory. The project names exactly 14 compile inputs and
 228 literal resource inputs with default item discovery disabled. This is
 source/project closure only: `artifactCompileAllowlistFrozen` remains false
 before the isolated observation build, and an observation result will still require
@@ -155,9 +182,16 @@ source build with the unwanted units absent, not post-build surgery.
 ## Broader runtime after S2
 
 The next increment can add Switch Pro after the same exact-owned lifecycle
-passes for its plain-HID profile. Xbox Series must wait for a fixed, installed,
-identity-verified `hmswd.exe` and a create result that retains every exact SWD,
-HID and XUSB companion ID. The helper must be resolved from one ACL-protected
+passes for its plain-HID profile; its encoder and input contract are now in
+place. Its `inputReportSize` of 362 is the length of its LARGEST declared
+report (`0x31`/`0x32`/`0x33`, 361 data bytes plus an ID), not of the one this
+candidate encodes; a shorter submission is ordinary because the shared section
+carries an explicit `DataSize` field, as DualSense's 63 bytes already show. Xbox Series must wait for a fixed, installed,
+identity-verified `hmswd.exe` — which upstream ships only as
+`driver/hmswd/hmswd.c`, so we compile it ourselves. Its encoder and input
+contract are in place, and `RuntimeInputWireShape` marks it as requiring that
+helper so the refusal names the missing piece. No XInput INF needs shipping:
+`xinputhid` is genuine Microsoft inbox. The helper must be resolved from one ACL-protected
 installed location, never an embedded resource, `%TEMP%`, `PATH`, the working
 directory, an environment variable, or IPC input; its own temporary self-log
 must also be removed.
@@ -178,7 +212,7 @@ run on an isolated disposable machine.
 ## GitHub Actions plan
 
 [Actions run 31863647868](https://github.com/Victor-Villacis/ksx/actions/runs/31863647868)
-passed the complete S1.5d source-only gate, including all 453 inert-candidate
+passed the complete S1.5d source-only gate, including all 605 inert-candidate
 checks. It did not build or load this candidate.
 
 Keep all expensive and mutating work off the development PC:

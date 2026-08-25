@@ -154,20 +154,23 @@ fn press(event: &KeyEvent) -> Option<Press> {
 }
 
 #[cfg(windows)]
-pub use windows_observer::{observer, Sources};
+pub use windows_observer::{input_observer, observer, Sources};
 
 #[cfg(windows)]
 mod windows_observer {
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use crossbeam_channel::Sender;
-    use ksx_capture::{CaptureBackend, CaptureCtl, ExitReason};
-    use ksx_core::KeyEvent;
+    use ksx_capture::{CaptureBackend, CaptureCtl, ExitReason, HealthView};
+    use ksx_core::{DeviceId, Key, KeyEvent};
 
+    use super::super::input_test::{InputTransition, ObserveEventsFn};
     use super::super::learn::ObserveFn;
     use super::super::panel::{Panel, PanelTap};
+    use super::super::{RunState, SharedState};
     use super::{first_press, Press, KEY_CHANNEL_CAPACITY};
 
     /// The observer the daemon gives its learn service.
@@ -188,6 +191,369 @@ mod windows_observer {
         })
     }
 
+    /// The exact-device, multi-transition counterpart of [`observer`].
+    ///
+    /// A fresh machine inventory resolves the canonical selector before any
+    /// listener starts. Ordinary keyboards use Raw Input; a prepared board
+    /// uses either the daemon's existing claim or one exact temporary claim.
+    /// No fallback is allowed: failure of the selected source is a failed test,
+    /// never apparent silence from some other keyboard.
+    pub fn input_observer(
+        panel: Option<Arc<Panel>>,
+        state: SharedState,
+        config_dir: PathBuf,
+    ) -> ObserveEventsFn {
+        // Windows inventory is read-only but not cancellable. A diagnostic's
+        // foreground budget may expire while that helper is still unwinding;
+        // keep one process-local fence so repeated starts cannot accumulate
+        // detached resolver threads behind a wedged device stack.
+        let resolver_in_flight = Arc::new(AtomicBool::new(false));
+        Arc::new(move |selector, deadline, cancel, emit| {
+            // Keep the daemon-owned state as the fast, descriptive gate. The
+            // same check inside the machine lease closes the check/acquire
+            // interval against tray/autostart transitions.
+            if session_owns_input(&state) {
+                return Err(
+                    "the simultaneous-input test cannot start while Play is running or starting"
+                        .into(),
+                );
+            }
+            with_input_test_machine_lease(&config_dir, || {
+                if session_owns_input(&state) {
+                    return Err(
+                        "the simultaneous-input test cannot start while Play is running or starting"
+                            .into(),
+                    );
+                }
+                let Some(target) = resolve_target_bounded(
+                    selector,
+                    deadline,
+                    Arc::clone(&cancel),
+                    Arc::clone(&state),
+                    Arc::clone(&resolver_in_flight),
+                    Target::resolve,
+                )?
+                else {
+                    return Ok(0);
+                };
+                if target.claimed {
+                    let sources = Sources::start_target(panel.as_ref(), &target)?;
+                    // Opening a panel tap/temporary claim is cold hardware work.
+                    // Re-check every terminal condition immediately afterwards so
+                    // a tray/autostart Play transition can never turn it into an
+                    // apparently-live diagnostic.
+                    if cancel.load(Ordering::SeqCst) || Instant::now() >= deadline {
+                        return Ok(sources.dropped());
+                    }
+                    if session_owns_input(&state) {
+                        return Err(
+                            "Play started while the simultaneous-input test was preparing; the selected keyboard was released before accepting a signal"
+                                .into(),
+                        );
+                    }
+                    loop {
+                        if session_owns_input(&state) {
+                            return Err(
+                                "Play started while the simultaneous-input test was listening; the test stopped before accepting another signal"
+                                    .into(),
+                            );
+                        }
+                        if cancel.load(Ordering::SeqCst) {
+                            return Ok(sources.dropped());
+                        }
+                        let left = deadline.saturating_duration_since(std::time::Instant::now());
+                        if left.is_zero() {
+                            return Ok(sources.dropped());
+                        }
+                        match sources.keys.recv_timeout(left.min(super::SLICE)) {
+                            Ok(event) => {
+                                if let Some(transition) =
+                                    claimed_transition_while_idle(&state, &target, event)?
+                                {
+                                    emit(transition);
+                                }
+                            }
+                            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                                return Err(
+                                    "the selected claimed keyboard stopped delivering input".into(),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // A Play transition can arrive through the tray/autostart rather
+                // than this pipe, so the pipe's start gate is not sufficient.
+                // Wake the Raw Input window within one observer slice even when
+                // the user is holding no key; the callback repeats the same check
+                // before emitting to close the event-vs-watch race.
+                let stop = Arc::new(AtomicBool::new(false));
+                let play_started = Arc::new(AtomicBool::new(false));
+                let watch = InputTestWatch::start(
+                    Arc::clone(&cancel),
+                    Arc::clone(&stop),
+                    Arc::clone(&state),
+                    Arc::clone(&play_started),
+                )?;
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() || cancel.load(Ordering::SeqCst) {
+                    return Ok(0);
+                }
+                let observed = ksx_capture::observe_key_events(left, &stop, |event| {
+                    if session_owns_input(&state) {
+                        play_started.store(true, Ordering::SeqCst);
+                        return true;
+                    }
+                    if target.matches(&event.instance_path) && event.key != Key::Unknown {
+                        emit(InputTransition {
+                            key: event.key.name().to_owned(),
+                            down: event.down,
+                        });
+                    }
+                    cancel.load(Ordering::SeqCst)
+                });
+                drop(watch);
+                observed
+                    .map_err(|err| format!("could not observe the selected keyboard: {err}"))?;
+                if play_started.load(Ordering::SeqCst) || session_owns_input(&state) {
+                    return Err(
+                        "Play started while the simultaneous-input test was listening; the test stopped before accepting another signal"
+                            .into(),
+                    );
+                }
+                Ok(0)
+            })
+        })
+    }
+
+    /// The diagnostic owns the same cross-process lease as Play and persistent
+    /// encoder maintenance for its complete worker lifetime. The local
+    /// [`RunState`] checks remain the fast, descriptive gate; this lease closes
+    /// the separate-process and Studio-machine-operation races they cannot see.
+    fn with_input_test_machine_lease<T>(
+        config_dir: &std::path::Path,
+        operation: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let _lease = crate::panel_programming::acquire_play_start_guard(config_dir)
+            .map_err(|refusal| refusal.message)?;
+        operation()
+    }
+
+    fn session_owns_input(state: &SharedState) -> bool {
+        state.lock().map_or(true, |state| {
+            matches!(&state.run, RunState::Running { .. } | RunState::Starting)
+        })
+    }
+
+    /// Turn one already-received claimed-panel event into diagnostic evidence
+    /// only while the diagnostic still owns input. The second ownership check
+    /// belongs after the blocking receive: tray/autostart Play can win while
+    /// that receive is asleep, and accepting the waking key before the next
+    /// loop iteration would make the failed diagnostic include gameplay-era
+    /// evidence.
+    fn claimed_transition_while_idle(
+        state: &SharedState,
+        target: &Target,
+        event: KeyEvent,
+    ) -> Result<Option<InputTransition>, String> {
+        if !target.matches(event.device.as_str()) || event.key == Key::Unknown {
+            return Ok(None);
+        }
+        if session_owns_input(state) {
+            return Err(
+                "Play started while the simultaneous-input test was listening; the test stopped before accepting another signal"
+                    .into(),
+            );
+        }
+        Ok(Some(InputTransition {
+            key: event.key.name().to_owned(),
+            down: event.down,
+        }))
+    }
+
+    /// Resolve an exact source without letting a slow machine inventory extend
+    /// the diagnostic's wall-clock budget or hide a Play transition.
+    ///
+    /// Resolution is read-only, so it may finish harmlessly on its detached
+    /// helper thread after a cancel/deadline. Hardware is opened only by the
+    /// caller after this function returns `Some`, never by that helper.
+    fn resolve_target_bounded<R>(
+        selector: String,
+        deadline: Instant,
+        cancel: Arc<AtomicBool>,
+        state: SharedState,
+        resolver_in_flight: Arc<AtomicBool>,
+        resolve: R,
+    ) -> Result<Option<Target>, String>
+    where
+        R: FnOnce(&str) -> Result<Target, String> + Send + 'static,
+    {
+        if resolver_in_flight
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err(
+                "the previous exact-device resolver is still completing; wait for it to finish before starting another simultaneous-input test"
+                    .into(),
+            );
+        }
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        let flight = Arc::clone(&resolver_in_flight);
+        let resolver = std::thread::Builder::new()
+            .name("ksx-input-test-resolve".into())
+            .spawn(move || {
+                let _flight = ResolverFlight(flight);
+                let _ = tx.send(resolve(&selector));
+            });
+        let resolver = match resolver {
+            Ok(resolver) => resolver,
+            Err(err) => {
+                resolver_in_flight.store(false, Ordering::SeqCst);
+                return Err(format!("could not start the exact-device resolver: {err}"));
+            }
+        };
+        let mut resolver = Some(resolver);
+
+        loop {
+            if cancel.load(Ordering::SeqCst) || Instant::now() >= deadline {
+                return Ok(None);
+            }
+            if session_owns_input(&state) {
+                return Err(
+                    "Play started while the simultaneous-input test was preparing; no keyboard observer was opened"
+                        .into(),
+                );
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(left.min(super::SLICE)) {
+                Ok(target) => {
+                    if let Some(resolver) = resolver.take() {
+                        let _ = resolver.join();
+                    }
+                    if cancel.load(Ordering::SeqCst) || Instant::now() >= deadline {
+                        return Ok(None);
+                    }
+                    if session_owns_input(&state) {
+                        return Err(
+                            "Play started while the simultaneous-input test was preparing; no keyboard observer was opened"
+                                .into(),
+                        );
+                    }
+                    return target.map(Some);
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                    if let Some(resolver) = resolver.take() {
+                        let _ = resolver.join();
+                    }
+                    return Err("the exact-device resolver stopped without an answer".into());
+                }
+            }
+        }
+    }
+
+    struct ResolverFlight(Arc<AtomicBool>);
+
+    impl Drop for ResolverFlight {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+
+    #[derive(Debug)]
+    struct Target {
+        identities: Vec<String>,
+        keyboard: DeviceId,
+        claimed: bool,
+    }
+
+    impl Target {
+        fn resolve(selector: &str) -> Result<Self, String> {
+            let devices = crate::devices::to_view(&crate::devices::collect());
+            let store = crate::device_edit::store()
+                .map_err(|err| format!("could not open the device configuration: {err}"))?;
+            let config = store
+                .load_config()
+                .map_err(|err| format!("could not read config.toml: {err}"))?
+                .value;
+            let games = store
+                .load_games()
+                .map_err(|err| format!("could not read games.toml: {err}"))?
+                .value;
+            let scan = crate::device_scan::view(
+                &devices,
+                &crate::device_edit::connected_facts(),
+                &config,
+                &games,
+            );
+            Self::from_boards(&scan.boards, selector)
+        }
+
+        fn from_boards(boards: &[ksx_api::BoardRow], selector: &str) -> Result<Self, String> {
+            let matched: Vec<_> = boards
+                .iter()
+                .filter(|board| {
+                    board
+                        .selector
+                        .as_deref()
+                        .is_some_and(|served| served.eq_ignore_ascii_case(selector))
+                })
+                .collect();
+            let [board] = matched.as_slice() else {
+                return Err(
+                    "the selected device did not resolve to exactly one keyboard on this machine"
+                        .into(),
+                );
+            };
+            if !board.pickable {
+                return Err(
+                    "the selected device has no keyboard signal interface; switch the encoder to keyboard mode before testing it"
+                        .into(),
+                );
+            }
+            let Some(keyboard) = board.keyboard.as_deref() else {
+                return Err(
+                    "the selected device has no keyboard signal interface; switch the encoder to keyboard mode before testing it"
+                        .into(),
+                );
+            };
+            if !board.claimed && !board.can_type {
+                return Err(if board.cannot_type_reason.trim().is_empty() {
+                    "the selected keyboard is present but cannot deliver a Windows signal right now"
+                        .into()
+                } else {
+                    board.cannot_type_reason.clone()
+                });
+            }
+            let mut identities: Vec<String> = board
+                .interfaces
+                .iter()
+                .map(|interface| interface.instance_id.to_ascii_uppercase())
+                .collect();
+            identities.push(keyboard.to_ascii_uppercase());
+            identities.sort();
+            identities.dedup();
+            Ok(Self {
+                identities,
+                keyboard: DeviceId::new(keyboard),
+                claimed: board.claimed,
+            })
+        }
+
+        fn matches(&self, observed: &str) -> bool {
+            let mut candidates = vec![observed.to_ascii_uppercase()];
+            candidates.extend(
+                ksx_platform::ancestor_instance_ids(observed, 4)
+                    .into_iter()
+                    .map(|candidate| candidate.to_ascii_uppercase()),
+            );
+            candidates
+                .iter()
+                .any(|candidate| self.identities.iter().any(|id| id == candidate))
+        }
+    }
+
     /// Everything that can hear a key, held open together.
     ///
     /// Two callers with opposite lifetimes: [`observer`] builds one per learn,
@@ -200,6 +566,7 @@ mod windows_observer {
         _adhoc: AdhocClaims,
         /// Dropping this un-mutes the daemon's panel.
         _tap: Option<PanelTap>,
+        panel_health: Option<HealthView>,
     }
 
     impl Sources {
@@ -212,6 +579,7 @@ mod windows_observer {
             // 1 · The daemon's own claim. The tap also mutes the panel while it
             //     lives, so the key being bound does not type into whatever has
             //     focus behind the mapper.
+            let panel_health = panel.map(|panel| HealthView::new(panel.health()));
             let tap = panel.map(|panel| panel.observe(key_tx.clone()));
             // 2 · Prepared boards nobody is holding — the first-run case.
             let adhoc = AdhocClaims::start(panel, key_tx);
@@ -219,7 +587,42 @@ mod windows_observer {
                 keys,
                 _adhoc: adhoc,
                 _tap: tap,
+                panel_health,
             }
+        }
+
+        fn start_target(panel: Option<&Arc<Panel>>, target: &Target) -> Result<Self, String> {
+            let (key_tx, keys) = crossbeam_channel::bounded::<KeyEvent>(KEY_CHANNEL_CAPACITY);
+            let covered = panel.is_some_and(|panel| panel.covers(&target.keyboard));
+            if covered && panel.is_some_and(|panel| panel.lost()) {
+                return Err(
+                    "the daemon's claim for the selected keyboard is no longer live".into(),
+                );
+            }
+            let panel_health = covered
+                .then(|| panel.map(|panel| HealthView::new(panel.health())))
+                .flatten();
+            let tap = covered.then(|| panel.expect("covered panel").observe(key_tx.clone()));
+            let adhoc = if covered {
+                AdhocClaims::empty()
+            } else {
+                AdhocClaims::start_one(&target.keyboard, key_tx)?
+            };
+            Ok(Self {
+                keys,
+                _adhoc: adhoc,
+                _tap: tap,
+                panel_health,
+            })
+        }
+
+        fn dropped(&self) -> u64 {
+            let panel = self
+                .panel_health
+                .as_ref()
+                .map(|health| health.snapshot().dropped_events)
+                .unwrap_or(0);
+            panel.saturating_add(self._adhoc.dropped())
         }
 
         /// The first press on any source, or `Ok(None)` on timeout/cancel.
@@ -333,6 +736,60 @@ mod windows_observer {
         }
     }
 
+    /// Stops an ordinary-keyboard Raw Input observation when either its owner
+    /// cancels or Play takes ownership of input through any daemon surface.
+    /// Unlike [`Watch`], failure to create this guard is a refusal: without it
+    /// a quiet keyboard could leave the Raw Input registration alive for the
+    /// rest of the diagnostic after a tray-started session begins.
+    struct InputTestWatch {
+        done: Arc<AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl InputTestWatch {
+        fn start(
+            cancel: Arc<AtomicBool>,
+            stop: Arc<AtomicBool>,
+            state: SharedState,
+            play_started: Arc<AtomicBool>,
+        ) -> Result<Self, String> {
+            let done = Arc::new(AtomicBool::new(false));
+            let thread = std::thread::Builder::new()
+                .name("ksx-input-test-watch".into())
+                .spawn({
+                    let done = Arc::clone(&done);
+                    move || {
+                        while !done.load(Ordering::SeqCst) {
+                            if cancel.load(Ordering::SeqCst) {
+                                stop.store(true, Ordering::SeqCst);
+                                return;
+                            }
+                            if session_owns_input(&state) {
+                                play_started.store(true, Ordering::SeqCst);
+                                stop.store(true, Ordering::SeqCst);
+                                return;
+                            }
+                            std::thread::sleep(super::SLICE);
+                        }
+                    }
+                })
+                .map_err(|err| format!("could not start the input-ownership watcher: {err}"))?;
+            Ok(Self {
+                done,
+                thread: Some(thread),
+            })
+        }
+    }
+
+    impl Drop for InputTestWatch {
+        fn drop(&mut self) {
+            self.done.store(true, Ordering::SeqCst);
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
     /// Claims taken for the length of one observation, and released after it.
     ///
     /// Only boards that are **prepared** (`winusb.sys`) and **not already held**
@@ -343,6 +800,7 @@ mod windows_observer {
     pub(super) struct AdhocClaims {
         ctl: Vec<Sender<CaptureCtl>>,
         threads: Vec<std::thread::JoinHandle<ExitReason>>,
+        health: Vec<HealthView>,
     }
 
     impl AdhocClaims {
@@ -350,6 +808,7 @@ mod windows_observer {
             let mut claims = Self {
                 ctl: Vec::new(),
                 threads: Vec::new(),
+                health: Vec::new(),
             };
             let candidates = match ksx_capture::usb_candidates() {
                 Ok(candidates) => candidates,
@@ -383,12 +842,14 @@ mod windows_observer {
                         continue;
                     }
                 };
+                let health = HealthView::new(backend.health());
                 let (ctl_tx, ctl_rx) = crossbeam_channel::unbounded::<CaptureCtl>();
                 match Box::new(backend).run(events.clone(), ctl_rx) {
                     Ok(handle) => {
                         tracing::debug!(id = %candidate.id, "listening on a prepared board");
                         claims.ctl.push(ctl_tx);
                         claims.threads.push(handle);
+                        claims.health.push(health);
                     }
                     Err(err) => {
                         tracing::debug!(id = %candidate.id, %err, "could not run the claim");
@@ -396,6 +857,50 @@ mod windows_observer {
                 }
             }
             claims
+        }
+
+        fn empty() -> Self {
+            Self {
+                ctl: Vec::new(),
+                threads: Vec::new(),
+                health: Vec::new(),
+            }
+        }
+
+        fn start_one(target: &DeviceId, events: Sender<KeyEvent>) -> Result<Self, String> {
+            let candidate = ksx_capture::usb_candidates()
+                .map_err(|err| format!("could not enumerate the selected keyboard: {err}"))?
+                .into_iter()
+                .find(|candidate| &candidate.id == target)
+                .ok_or_else(|| {
+                    "the selected keyboard disappeared before the input test started".to_owned()
+                })?;
+            if !candidate.binding.is_winusb() {
+                return Err(
+                    "the selected encoder is not prepared for direct keyboard observation".into(),
+                );
+            }
+            let backend = ksx_capture::WinUsbBackend::claim(
+                &candidate,
+                Box::new(ksx_platform::inject::NullInjector),
+            )
+            .map_err(|err| format!("could not open the selected keyboard: {err}"))?;
+            let health = HealthView::new(backend.health());
+            let (ctl_tx, ctl_rx) = crossbeam_channel::unbounded::<CaptureCtl>();
+            let handle = Box::new(backend)
+                .run(events, ctl_rx)
+                .map_err(|err| format!("could not run the selected keyboard claim: {err}"))?;
+            Ok(Self {
+                ctl: vec![ctl_tx],
+                threads: vec![handle],
+                health: vec![health],
+            })
+        }
+
+        fn dropped(&self) -> u64 {
+            self.health.iter().fold(0u64, |total, health| {
+                total.saturating_add(health.snapshot().dropped_events)
+            })
         }
     }
 
@@ -407,6 +912,337 @@ mod windows_observer {
             for thread in self.threads.drain(..) {
                 let _ = thread.join();
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod target_tests {
+        use super::*;
+
+        fn board(
+            selector: Option<&str>,
+            keyboard: Option<&str>,
+            pickable: bool,
+        ) -> ksx_api::BoardRow {
+            ksx_api::BoardRow {
+                name: "test board".into(),
+                selector: selector.map(str::to_owned),
+                keyboard: keyboard.map(str::to_owned),
+                pickable,
+                can_type: true,
+                interfaces: keyboard
+                    .into_iter()
+                    .map(|instance_id| ksx_api::UsbRow {
+                        instance_id: instance_id.into(),
+                        ..ksx_api::UsbRow::default()
+                    })
+                    .collect(),
+                ..ksx_api::BoardRow::default()
+            }
+        }
+
+        #[test]
+        fn selector_resolution_is_exact_and_ambiguity_refuses() {
+            let boards = vec![
+                board(Some("usb:d209:0430:00"), Some("USB\\IPAC\\ONE"), true),
+                board(
+                    Some("usb:d209:0430:00:serial=x"),
+                    Some("USB\\IPAC\\TWO"),
+                    true,
+                ),
+            ];
+            let exact = Target::from_boards(&boards, "USB:D209:0430:00").unwrap();
+            assert_eq!(exact.keyboard.as_str(), "USB\\IPAC\\ONE");
+            assert!(Target::from_boards(&boards, "d209:0430").is_err());
+
+            let ambiguous = vec![
+                board(Some("usb:d209:0430:00"), Some("USB\\IPAC\\ONE"), true),
+                board(Some("usb:d209:0430:00"), Some("USB\\IPAC\\TWO"), true),
+            ];
+            assert!(Target::from_boards(&ambiguous, "usb:d209:0430:00").is_err());
+        }
+
+        #[test]
+        fn a_non_keyboard_mode_board_refuses_instead_of_listening_elsewhere() {
+            let boards = vec![board(Some("usb:d209:0430:00"), None, false)];
+            let error = Target::from_boards(&boards, "usb:d209:0430:00").unwrap_err();
+            assert!(error.contains("keyboard mode"), "{error}");
+        }
+
+        #[test]
+        fn a_present_but_disconnected_keyboard_refuses_instead_of_looking_silent() {
+            let mut disconnected = board(
+                Some("bt:046d:b342:serial=desk"),
+                Some("BTHENUM\\DEV_DESK"),
+                true,
+            );
+            disconnected.can_type = false;
+            disconnected.cannot_type_reason =
+                "paired, but not connected — switch it on or replace its battery".into();
+
+            let error =
+                Target::from_boards(&[disconnected], "bt:046d:b342:serial=desk").unwrap_err();
+            assert!(error.contains("not connected"), "{error}");
+
+            let mut claimed = board(Some("usb:d209:0430:00"), Some("USB\\IPAC\\ONE"), true);
+            claimed.claimed = true;
+            claimed.can_type = false; // expected: WinUSB removed it from kbdclass
+            assert!(Target::from_boards(&[claimed], "usb:d209:0430:00").is_ok());
+        }
+
+        fn resolved_target(claimed: bool) -> Target {
+            Target {
+                identities: vec!["USB\\IPAC\\ONE".into()],
+                keyboard: DeviceId::new("USB\\IPAC\\ONE"),
+                claimed,
+            }
+        }
+
+        /// A standalone `ksx run` and Studio's persistent encoder writer do
+        /// not share this daemon's [`RunState`]. The machine lease is therefore
+        /// the only truthful cross-process exclusion: if it is busy, not even
+        /// exact-device resolution may begin.
+        #[test]
+        fn a_busy_machine_lease_refuses_before_the_input_observer_starts() {
+            static SERIAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!(
+                "ksx-input-test-lease-{}-{serial}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let held = crate::panel_programming::acquire_play_start_guard(&dir)
+                .expect("hold the shared Play/programming lease");
+            let observer_started = Arc::new(AtomicBool::new(false));
+            let marker = Arc::clone(&observer_started);
+
+            let refused = with_input_test_machine_lease(&dir, move || {
+                marker.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+            .expect_err("a second observer must not enter the leased operation");
+
+            assert!(refused.contains("hardware lease"), "{refused}");
+            assert!(
+                !observer_started.load(Ordering::SeqCst),
+                "exact-device observation began while another process owned the machine"
+            );
+            drop(held);
+
+            with_input_test_machine_lease(&dir, || {
+                assert!(
+                    crate::panel_programming::acquire_play_start_guard(&dir).is_err(),
+                    "the observer did not retain the machine lease for its operation"
+                );
+                Ok(())
+            })
+            .expect("the diagnostic acquires the released lease");
+            let after = crate::panel_programming::acquire_play_start_guard(&dir)
+                .expect("the diagnostic released the lease after observer cleanup");
+            drop(after);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn play_winning_during_resolution_opens_neither_a_panel_tap_nor_an_adhoc_claim() {
+            for claimed in [false, true] {
+                let state = Arc::new(Mutex::new(crate::daemon::DaemonState::default()));
+                let resolver_state = Arc::clone(&state);
+                let result = resolve_target_bounded(
+                    "usb:d209:0430:00".into(),
+                    Instant::now() + Duration::from_secs(1),
+                    Arc::new(AtomicBool::new(false)),
+                    state,
+                    Arc::new(AtomicBool::new(false)),
+                    move |_| {
+                        resolver_state.lock().unwrap().run = RunState::Starting;
+                        Ok(resolved_target(claimed))
+                    },
+                );
+                let error = result.unwrap_err();
+                assert!(error.contains("no keyboard observer was opened"), "{error}");
+            }
+        }
+
+        #[test]
+        fn slow_resolution_obeys_the_absolute_deadline_and_cancel_budget() {
+            let state = Arc::new(Mutex::new(crate::daemon::DaemonState::default()));
+            let started = Instant::now();
+            let timed_out = resolve_target_bounded(
+                "usb:d209:0430:00".into(),
+                started + Duration::from_millis(40),
+                Arc::new(AtomicBool::new(false)),
+                Arc::clone(&state),
+                Arc::new(AtomicBool::new(false)),
+                |_| {
+                    std::thread::sleep(Duration::from_millis(500));
+                    Ok(resolved_target(false))
+                },
+            )
+            .unwrap();
+            assert!(timed_out.is_none());
+            assert!(
+                started.elapsed() < Duration::from_millis(300),
+                "resolution outlived the wall-clock budget: {:?}",
+                started.elapsed()
+            );
+
+            let cancel = Arc::new(AtomicBool::new(false));
+            let set_cancel = Arc::clone(&cancel);
+            let canceller = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(40));
+                set_cancel.store(true, Ordering::SeqCst);
+            });
+            let started = Instant::now();
+            let cancelled = resolve_target_bounded(
+                "usb:d209:0430:00".into(),
+                started + Duration::from_secs(2),
+                cancel,
+                state,
+                Arc::new(AtomicBool::new(false)),
+                |_| {
+                    std::thread::sleep(Duration::from_millis(500));
+                    Ok(resolved_target(true))
+                },
+            )
+            .unwrap();
+            canceller.join().unwrap();
+            assert!(cancelled.is_none());
+            assert!(
+                started.elapsed() < Duration::from_millis(300),
+                "cancel waited for the slow resolver: {:?}",
+                started.elapsed()
+            );
+        }
+
+        /// A timeout returns control promptly, but Windows inventory itself is
+        /// not cancellable. The shared observer must refuse another resolver
+        /// until that helper really exits, otherwise one bad device stack can
+        /// grow an unbounded thread per retry.
+        #[test]
+        fn a_draining_resolver_fences_retries_without_extending_the_deadline() {
+            let state = Arc::new(Mutex::new(crate::daemon::DaemonState::default()));
+            let in_flight = Arc::new(AtomicBool::new(false));
+            let release = Arc::new(AtomicBool::new(false));
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let first_release = Arc::clone(&release);
+            let first_calls = Arc::clone(&calls);
+            let started = Instant::now();
+            let first = resolve_target_bounded(
+                "usb:d209:0430:00".into(),
+                started + Duration::from_millis(40),
+                Arc::new(AtomicBool::new(false)),
+                Arc::clone(&state),
+                Arc::clone(&in_flight),
+                move |_| {
+                    first_calls.fetch_add(1, Ordering::SeqCst);
+                    while !first_release.load(Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    Ok(resolved_target(false))
+                },
+            )
+            .unwrap();
+            assert!(first.is_none());
+            assert!(started.elapsed() < Duration::from_millis(300));
+            assert!(in_flight.load(Ordering::SeqCst));
+
+            let retry_started = Arc::new(AtomicBool::new(false));
+            let retry_probe = Arc::clone(&retry_started);
+            let retry = resolve_target_bounded(
+                "usb:d209:0430:00".into(),
+                Instant::now() + Duration::from_secs(1),
+                Arc::new(AtomicBool::new(false)),
+                Arc::clone(&state),
+                Arc::clone(&in_flight),
+                move |_| {
+                    retry_probe.store(true, Ordering::SeqCst);
+                    Ok(resolved_target(false))
+                },
+            )
+            .unwrap_err();
+            assert!(retry.contains("still completing"), "{retry}");
+            assert!(
+                !retry_started.load(Ordering::SeqCst),
+                "retry spawned a resolver"
+            );
+
+            release.store(true, Ordering::SeqCst);
+            let drained = Instant::now() + Duration::from_secs(2);
+            while in_flight.load(Ordering::SeqCst) {
+                assert!(Instant::now() < drained, "resolver fence did not release");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            let final_calls = Arc::clone(&calls);
+            let resolved = resolve_target_bounded(
+                "usb:d209:0430:00".into(),
+                Instant::now() + Duration::from_secs(1),
+                Arc::new(AtomicBool::new(false)),
+                state,
+                in_flight,
+                move |_| {
+                    final_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(resolved_target(false))
+                },
+            )
+            .unwrap();
+            assert!(resolved.is_some());
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+        }
+
+        /// Regression: Play can start from the tray without traversing the
+        /// pipe gate. A quiet keyboard still has to release its Raw Input
+        /// registration promptly; waiting for a key event is too late.
+        #[test]
+        fn a_play_transition_stops_a_quiet_raw_input_observer() {
+            let state = Arc::new(Mutex::new(crate::daemon::DaemonState::default()));
+            let cancel = Arc::new(AtomicBool::new(false));
+            let stop = Arc::new(AtomicBool::new(false));
+            let play_started = Arc::new(AtomicBool::new(false));
+            let watch = InputTestWatch::start(
+                cancel,
+                Arc::clone(&stop),
+                Arc::clone(&state),
+                Arc::clone(&play_started),
+            )
+            .unwrap();
+
+            state.lock().unwrap().run = RunState::Starting;
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while !stop.load(Ordering::SeqCst) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "input ownership watcher did not stop"
+                );
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            assert!(play_started.load(Ordering::SeqCst));
+            drop(watch);
+        }
+
+        /// Regression: the claimed-panel loop can be blocked in `recv_timeout`
+        /// after its top-of-loop ownership check. A tray-started session that
+        /// wins during that wait must reject the event that wakes the receive,
+        /// not count it and notice Play only on the following iteration.
+        #[test]
+        fn a_claimed_event_received_after_play_starts_is_not_accepted() {
+            let state = Arc::new(Mutex::new(crate::daemon::DaemonState::default()));
+            let target = resolved_target(true);
+            state.lock().unwrap().run = RunState::Starting;
+
+            let error = claimed_transition_while_idle(
+                &state,
+                &target,
+                KeyEvent {
+                    device: DeviceId::new("USB\\IPAC\\ONE"),
+                    key: Key::J,
+                    down: true,
+                    t: 0,
+                },
+            )
+            .unwrap_err();
+
+            assert!(error.contains("before accepting another signal"), "{error}");
         }
     }
 }

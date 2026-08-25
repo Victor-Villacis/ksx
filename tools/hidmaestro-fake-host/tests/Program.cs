@@ -16,7 +16,7 @@ internal static class Program
             ("pinned identity and personas are exact", () => RunSync(PinnedIdentityIsExact)),
             ("hello echoes nonce and real expected pin", () => RunSync(HandshakeIsExact)),
             ("all twelve directions are dispatched", () => RunSync(AllKindsAreAccountedFor)),
-            ("three personas and lifetime ids are bounded", () => RunSync(PersonasAndLifetimeBudgetAreExact)),
+            ("every pinned persona and the lifetime id budget are exact", () => RunSync(PersonasAndLifetimeBudgetAreExact)),
             ("submit yields full deterministic feedback", () => RunSync(SubmitAndFeedbackAreExact)),
             ("pump and lease deadlines are host-local", () => RunSync(PumpAndLeaseAreExact)),
             ("feedback is global bounded drop-oldest", () => RunSync(FeedbackQueueIsBounded)),
@@ -89,6 +89,8 @@ internal static class Program
         Require(FakePinnedIdentity.Persona(HostProfileId.DualSense) == new FakePersona(HostProfileId.DualSense, 0x054C, 0x0CE6));
         Require(FakePinnedIdentity.Persona(HostProfileId.SwitchPro) == new FakePersona(HostProfileId.SwitchPro, 0x057E, 0x2009));
         Require(FakePinnedIdentity.Persona(HostProfileId.XboxSeries) == new FakePersona(HostProfileId.XboxSeries, 0x045E, 0x0B13));
+        Require(FakePinnedIdentity.Persona(HostProfileId.Snes) == new FakePersona(HostProfileId.Snes, 0x0583, 0x2060));
+        Require(FakePinnedIdentity.Persona(HostProfileId.Genesis) == new FakePersona(HostProfileId.Genesis, 0x2341, 0x8036));
     }
 
     private static void HandshakeIsExact()
@@ -165,6 +167,8 @@ internal static class Program
             HostProfileId.DualSense,
             HostProfileId.SwitchPro,
             HostProfileId.XboxSeries,
+            HostProfileId.Snes,
+            HostProfileId.Genesis,
         ];
         for (int index = 0; index < expected.Length; index++)
         {
@@ -180,11 +184,14 @@ internal static class Program
             Require(initial.Controller == message.Controller);
             Require(initial.Reason == FakePublicationReason.ControllerCreatedNeutral && initial.State.IsNeutral);
         }
-        _ = profiles.Dispatch(HostFrame.Create(5, new DestroyMessage(1)), 0);
+        // Request ids must keep advancing past the five-create loop (ids
+        // 2..6), and controller ids are monotonic, never reused: five issued,
+        // one destroyed, the next mint is 6.
+        _ = profiles.Dispatch(HostFrame.Create(7, new DestroyMessage(1)), 0);
         CreatedMessage afterDestroy = RequireMessage<CreatedMessage>(profiles.Dispatch(
-            HostFrame.Create(6, new CreateMessage(HostProfileId.DualSense)),
+            HostFrame.Create(8, new CreateMessage(HostProfileId.DualSense)),
             0).Response);
-        Require(afterDestroy.Controller == 4);
+        Require(afterDestroy.Controller == 6);
         profiles.CleanupAll(0);
 
         var capacity = HandshakenSession();

@@ -148,7 +148,11 @@ internal static class ProtocolContract
             ClientLeaseRefreshMicroseconds: HostPolicy.ClientLeaseRefreshMicroseconds,
             ClientLeaseTimeoutMicroseconds: HostPolicy.ClientLeaseTimeoutMicroseconds,
             MaximumQueuedFeedback: HostPolicy.MaximumQueuedFeedback,
-            Deadlines: new RequestDeadlines(5_000, 15_000, 250, 5_000, 10_000),
+            // Mirrors crates/ksx-hidmaestro/src/host.rs (the SourceOfTruth
+            // below): CREATE grew to 30 s when the second Switch Pro create
+            // measured 7.7 s, DESTROY/SHUTDOWN to 30 s when the first-ever
+            // DIF_REMOVE measured ~12 s (2026-08-20 hardware session).
+            Deadlines: new RequestDeadlines(5_000, 30_000, 250, 30_000, 30_000),
             SourceOfTruth: "crates/ksx-hidmaestro/src/host.rs",
             FreezeSha256: Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(FreezeMaterial))),
             Header:
@@ -164,6 +168,8 @@ internal static class ProtocolContract
                 new(1, "DualSense", "dualsense", "0x054C", "0x0CE6"),
                 new(2, "SwitchPro", "switch-pro", "0x057E", "0x2009"),
                 new(3, "XboxSeries", "xbox-series-xs-bt", "0x045E", "0x0B13"),
+                new(4, "Snes", "ibuffalo-snes", "0x0583", "0x2060"),
+                new(5, "Genesis", "daemonbite-genesis", "0x2341", "0x8036"),
             ],
             Messages:
             [

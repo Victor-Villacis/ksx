@@ -96,7 +96,7 @@ const ANONYMOUS_SLOTS: [&str; 0] = [];
 /// The pill class for a value `ksx_api` has already judged.
 ///
 /// The level word travels; the class is built from it, so adding a level in the
-/// backend cannot leave a surface silently rendering the wrong colour — it
+/// backend cannot leave a surface silently rendering the wrong color — it
 /// renders `pill pill-<level>`, and an unstyled level is visible rather than
 /// wrong. `pill-none` is the hidden one (studio.css).
 fn pill_of(level: &str) -> String {
@@ -793,12 +793,12 @@ mod tests {
             scan: cabinet_scan(),
             // A machine whose receipt store ANSWERED and had nothing to
             // report. Stated rather than defaulted, for the reason the
-            // `pad_bus` fixtures give: the default is the UNREADABLE view, so
+            // other machine-read fixtures give: the default is the UNREADABLE view, so
             // every fixture here would otherwise be rendering the "could not
             // be read" warning and the tests that care about it would prove
             // nothing.
             // A receipt store that ANSWERED and had one thing to report.
-            // Stated rather than defaulted for the reason the `pad_bus`
+            // Stated rather than defaulted for the reason those machine-read
             // fixtures give — the default is the UNREADABLE view, so every
             // fixture would otherwise render the "could not be read" warning
             // and the tests that care about it would prove nothing. One ROW
@@ -836,6 +836,7 @@ mod tests {
                 line: "idle — daemon reachable".into(),
                 profile: None,
                 origin: ksx_api::SessionOrigin::Unknown,
+                active: None,
             },
             unavailable: String::new(),
             flash: None,
@@ -1672,31 +1673,35 @@ mod tests {
         assert!(out.html.contains(r#"id="__ksx-payload""#), "{}", out.html);
     }
 
-    /// Specialist screens keep the customer rail intact: Setup → Controls →
-    /// Test. Devices remains reachable from the relevant setup affordance, not
-    /// as another primary-workflow stage.
+    /// Specialist screens keep the customer rail intact — the four-stage
+    /// guided workflow — and the Tools menu marks this page as current.
+    /// Devices remains reachable from the relevant setup affordance, not as
+    /// another primary-workflow stage.
     #[test]
     fn the_nav_reaches_every_sibling_page() {
         let page = EmbeddedPage::load("/devices").unwrap();
         let out = render_devices(&page, &cabinet(), None);
         assert!(
+            out.html.contains(
+                r#"<a class="navlink workflow-link" href="/start#keyboard"><span class="workflow-num">1</span>Keyboard</a>"#
+            ),
+            "{}",
             out.html
-                .contains(r#"<a class="navlink" href="/start">Setup</a>"#),
+        );
+        assert!(
+            out.html.contains(
+                r#"<a class="navlink workflow-link" href="/map"><span class="workflow-num">3</span>Mapping</a>"#
+            ),
             "{}",
             out.html
         );
         assert!(
             out.html
-                .contains(r#"<a class="navlink" href="/map">Controls</a>"#),
+                .contains(r#"<a href="/devices" aria-current="page">"#),
             "{}",
             out.html
         );
-        assert!(
-            out.html
-                .contains(r#"<a class="navlink" href="/check">Test</a>"#),
-            "{}",
-            out.html
-        );
+        assert!(out.html.contains(r#"href="/check""#), "{}", out.html);
     }
 
     /// A running session keeps the devices it already opened. Writing config

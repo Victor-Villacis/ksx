@@ -1,0 +1,254 @@
+import { activateIslands } from "@getforma/core";
+
+// The compiler's island-first entry pattern (parseEntryPoint): the imported
+// `*Page` component NOT in the activateIslands registry is the SSR root.
+// NocturnePage never runs in the browser — esbuild tree-shakes it — but this
+// import is what anchors IR emission. Do not remove it.
+import { NocturnePage } from "./NocturnePage";
+import {
+  applyFlash,
+  applyNocturne,
+  applyNocturneUnreachable,
+  initNocturneCanvas,
+  NocturneIsland,
+  syncPadWidgets,
+  nocturneLiveConnect,
+  nocturneWire,
+  restoreNocturneFilter,
+  setNocturnePoll,
+  type NocturnePayload,
+} from "./NocturneIsland";
+
+void NocturnePage; // compile-time anchor only (see above)
+
+/** Same cadence as every structure poller: the draft and the machine change
+ *  on human actions, not at display rate. */
+const POLL_MS = 2000;
+const POLL_TIMEOUT_MS = 10_000;
+
+/** The last applied body, verbatim. An idle page's polls come back byte
+ *  identical, and skipping the apply then costs ~50 signal writes and every
+ *  list's key walk — the cheapest work is the work not done. */
+let lastBody = "";
+
+/** The last answer's ETag, echoed back as If-None-Match EXPLICITLY — the
+ *  server then answers an idle poll with a bodiless 304 (and skips the
+ *  render). Manual rather than trusting the browser's cache heuristics,
+ *  which do not reliably revalidate a polled fetch. */
+let lastEtag = "";
+let pollGeneration = 0;
+let activePoll: {
+  generation: number;
+  selection: string;
+  priority: number;
+  fresh: boolean;
+  controller: AbortController;
+} | null = null;
+
+async function poll(
+  fresh = false,
+  origin: "background" | "interaction" | "mutation" = "background",
+): Promise<void> {
+  // A hidden tab does not need fresh paint; visibilitychange below polls
+  // the moment it returns.
+  if (document.hidden && origin === "background") return;
+  // The poller echoes the page's own selection, so the payload it copies is
+  // the one this URL's SSR would paint (the workspace's rule). Rescan asks
+  // with fresh=1, which drops the server's machine-read cache first — a
+  // fresh read IS that button's promise.
+  const here = new URLSearchParams(window.location.search);
+  const slot = here.get("slot");
+  // ⚠️ THE MACRO SELECTION IS PART OF THE SELECTION. Without it the payload
+  // composes a CLOSED editor, so an open roll vanished two seconds after it
+  // was opened and every control in it went inert.
+  const macro = here.get("macro");
+  const selection = `${slot ?? ""}\u0000${macro ?? ""}`;
+  let requestFresh = fresh;
+  let priority = origin === "mutation" ? 3 : fresh || origin === "interaction" ? 2 : 1;
+  // A timer refresh may not cancel the slower fresh read the Rescan button
+  // explicitly promised. A newer interaction, or a different selection,
+  // still supersedes it immediately.
+  if (activePoll?.selection === selection) {
+    if (origin === "background") return;
+    if (activePoll.fresh) {
+      // A higher-priority mutation may supersede the read, but it inherits
+      // the cache invalidation already promised by Rescan. Equal/lower work
+      // can simply share the active fresh request.
+      // A mutation refresh is also the concurrency hand-off for a chained
+      // mapping action: it must observe the post-write target revision, not
+      // merely share a request that began before the write committed.
+      if (priority <= activePoll.priority && origin !== "mutation") return;
+      requestFresh = true;
+    } else if (fresh) {
+      // Rescan is never discarded behind an ordinary mutation refresh. Give
+      // the replacement the stronger priority as well as fresh=1.
+      priority = Math.max(priority, activePoll.priority);
+    } else if (activePoll.priority > priority && origin !== "mutation") {
+      return;
+    }
+  }
+  const params = new URLSearchParams();
+  if (slot) params.set("slot", slot);
+  if (macro) params.set("macro", macro);
+  if (requestFresh) params.set("fresh", "1");
+  const qs = params.toString();
+  const url = qs ? `/api/nocturne?${qs}` : "/api/nocturne";
+  // Selection-changing gestures can start a poll while the 2 s timer's old
+  // selection is still in flight. Only the newest request may repaint; an
+  // older closed-macro payload must never arrive after the editor was opened.
+  const generation = ++pollGeneration;
+  activePoll?.controller.abort();
+  const controller = new AbortController();
+  activePoll = { generation, selection, priority, fresh: requestFresh, controller };
+  const timeout = window.setTimeout(() => controller.abort(), POLL_TIMEOUT_MS);
+  try {
+    const headers: Record<string, string> = { accept: "application/json" };
+    if (lastEtag && !requestFresh) headers["if-none-match"] = lastEtag;
+    const res = await fetch(url, { headers, signal: controller.signal });
+    if (generation !== pollGeneration) return;
+    if (res.status === 304) return; // nothing changed, nothing to do
+    if (!res.ok) throw new Error(String(res.status));
+    lastEtag = res.headers.get("etag") ?? "";
+    const body = await res.text();
+    if (generation !== pollGeneration) return;
+    if (body === lastBody) return;
+    lastBody = body;
+    applyNocturne(JSON.parse(body) as NocturnePayload);
+  } catch {
+    if (generation !== pollGeneration) return;
+    // Recovery must re-apply even an identical payload.
+    lastBody = "";
+    lastEtag = "";
+    applyNocturneUnreachable();
+  } finally {
+    window.clearTimeout(timeout);
+    if (activePoll?.generation === generation) activePoll = null;
+  }
+}
+
+/** Fetch-enhance the plain-HTML forms (the devices.ts pattern). With
+ *  JavaScript off they POST + 303 + full reload, which is the baseline this
+ *  page is built on; with it on, the submit goes through fetch, the outcome
+ *  is read out of the redirect's ?flash= query, and the panes refresh in
+ *  place — so the row you just acted on is still under the cursor. Delegated
+ *  on the island root, because the lists are reconciled and a per-form
+ *  listener would die with its row. */
+function wireForms(root: HTMLElement): void {
+  root.addEventListener("submit", (ev) => {
+    const form = ev.target as HTMLFormElement | null;
+    if (!form) return;
+    if (form.method.toLowerCase() === "get") {
+      ev.preventDefault();
+      if (form.classList.contains("n-filter")) {
+        // The filter's GET form exists for the no-JS reader; with scripting
+        // on the input already filters live, so Enter changes nothing.
+        return;
+      }
+      // The Rescan form: a fresh read IS the poll — cache-busted.
+      void poll(true, "interaction");
+      return;
+    }
+    if (form.method.toLowerCase() !== "post") return;
+    ev.preventDefault();
+    void submitForm(form);
+  });
+}
+
+/** A UAC-backed mutation (capture prepare/release) must not be launched
+ *  twice by a double click while the first permission prompt is open. */
+const pendingForms = new WeakSet<HTMLFormElement>();
+
+async function submitForm(form: HTMLFormElement): Promise<void> {
+  if (pendingForms.has(form)) return;
+  pendingForms.add(form);
+  const submits = Array.from(
+    form.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
+      'button[type="submit"], input[type="submit"]',
+    ),
+  );
+  submits.forEach((control) => {
+    control.disabled = true;
+  });
+  try {
+    const body = new URLSearchParams();
+    new FormData(form).forEach((value, key) => {
+      if (typeof value === "string") body.append(key, value);
+    });
+    const res = await fetch(form.action, {
+      method: "POST",
+      body,
+      redirect: "follow", // 303 → GET /nocturne?flash=…; the outcome rides res.url
+    });
+    applyFlash(new URL(res.url).searchParams.get("flash"));
+    // A consent fold that just acted closes itself: the outcome line above
+    // and the refreshed switch state are the answer now. The bind and macro
+    // EDITORS (data-fn rows) stay open — the user is iterating in them and
+    // closes them by hand.
+    const fold = form.closest("details");
+    if (fold && !fold.hasAttribute("data-fn")) fold.removeAttribute("open");
+  } catch {
+    applyFlash("error: request failed — is ksx studio still running?");
+  } finally {
+    pendingForms.delete(form);
+    // Unconditionally: a createShow'd dialog UNMOUNTS when applyFlash closes
+    // it, but its tree is CACHED and returns on the next open — a button
+    // skipped here because it was disconnected came back permanently
+    // disabled (the second Create-a-controller silently did nothing until a
+    // full reload). Setting `disabled` on a detached node is harmless.
+    submits.forEach((control) => {
+      control.disabled = false;
+    });
+  }
+  void poll(false, "mutation");
+}
+
+/** The SOURCE payload the server embedded (render.rs `PAYLOAD_SCRIPT_ID`) —
+ *  not the island's `props` argument, which carries the RENDERED SLOT VALUES.
+ *  See status.ts for the longer note (dogfood ledger #8/#19). */
+function embeddedPayload<T>(): T | null {
+  const el = document.getElementById("__ksx-payload");
+  if (!el?.textContent) return null;
+  try {
+    return JSON.parse(el.textContent) as T;
+  } catch {
+    return null;
+  }
+}
+
+// /nocturne carries one migrated REAL section (the keyboard pane — device
+// pick, identify, split-or-freeze, prepared-for-play) beside the design
+// proof's placeholder demos. Ledger #5 order: the served signals hold the
+// server's values BEFORE the island tree builds, or adoption clobbers SSR.
+activateIslands({
+  NocturneIsland: (el) => {
+    const seed = embeddedPayload<NocturnePayload>();
+    if (seed) applyNocturne(seed);
+    nocturneWire(el);
+    wireForms(el);
+    setNocturnePoll(() => poll(false, "mutation"));
+    nocturneLiveConnect();
+    window.setInterval(() => void poll(), POLL_MS);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) void poll();
+    });
+    // The filter input, the board and the canvas exist only after the
+    // island mounts: restore ?q=, then adopt the canvas on the next frame —
+    // it mounts the keyboard widget and the controller widgets, and
+    // syncPadWidgets dresses each clone's key callouts from its own slot.
+    window.requestAnimationFrame(() => {
+      restoreNocturneFilter();
+      initNocturneCanvas(el);
+      syncPadWidgets();
+    });
+    // A no-JS POST landed us on ?flash=…: the server already painted the
+    // line; strip the query so a manual reload does not replay feedback for
+    // an action nobody just took.
+    const query = new URLSearchParams(window.location.search);
+    if (query.get("flash")) {
+      query.delete("flash");
+      const clean = query.toString();
+      window.history.replaceState(null, "", clean === "" ? "/nocturne" : `/nocturne?${clean}`);
+    }
+    return NocturneIsland();
+  },
+});

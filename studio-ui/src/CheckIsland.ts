@@ -160,7 +160,7 @@ const [sourceLine, setSourceLine] = createSignal("");
 const [emptyHeading, setEmptyHeading] = createSignal("");
 const [emptyLine, setEmptyLine] = createSignal("");
 const [emptyHref, setEmptyHref] = createSignal("/start");
-const [emptyAction, setEmptyAction] = createSignal("Open Setup");
+const [emptyAction, setEmptyAction] = createSignal("Open setup");
 const [feedHint, setFeedHint] = createSignal("");
 const [sessionLine, setSessionLine] = createSignal("");
 /** The FEED's own state line — the daemon's `unavailable` sentence, or this
@@ -171,9 +171,16 @@ const [feedLine, setFeedLine] = createSignal("");
 const [lossLine, setLossLine] = createSignal("");
 const [offPanelLine, setOffPanelLine] = createSignal("");
 
-const [chips, setChips] = createList<ControlChip>([]);
-const [emptyPlayers, setEmptyPlayers] = createList<EmptyPlayerRow>([]);
-const [keyRows, setKeyRows] = createList<KeyRow>([]);
+// List STATE is a `createSignal` holding an array — `createList` is the DOM
+// helper that RENDERS one (function source + key + row body) and lives only
+// in the tree below. Declaring state with `createList([])` type-checks (the
+// generics are loose) and then throws "e is not a function" inside the first
+// list effect at activation, which left this whole page stuck at
+// data-forma-status="pending" — no live echo, ever, with SSR looking fine.
+// The visual-smoke suite is the gate that catches this class.
+const [chips, setChips] = createSignal<ControlChip[]>([]);
+const [emptyPlayers, setEmptyPlayers] = createSignal<EmptyPlayerRow[]>([]);
+const [keyRows, setKeyRows] = createSignal<KeyRow[]>([]);
 
 const [live, setLive] = createSignal(false);
 const [feedDown, setFeedDown] = createSignal(false);
@@ -198,28 +205,28 @@ interface EmptyState {
 function emptyState(mapper: MapperSnapshot): EmptyState | null {
   if (mapper.generated_at === "(unavailable)" || mapper.config_root === "(unavailable)") {
     return {
-      heading: "Controls could not be checked",
+      heading: "Mappings could not be checked",
       line:
-        "Reopen ksx, then use Setup to confirm a controller and Controls to check its buttons. Nothing was changed.",
+        "Reopen ksx, then use setup to confirm a controller and Mapping to check its buttons. Nothing was changed.",
       href: "/start",
-      action: "Open Setup",
+      action: "Open setup",
     };
   }
   if (mapper.slots.length === 0) {
     return {
       heading: "No controller is ready to test",
-      line: "Add a controller in Setup, then come back to test its buttons.",
+      line: "Add a controller in setup, then come back to test its buttons.",
       href: "/start",
-      action: "Open Setup",
+      action: "Open setup",
     };
   }
   if (mapper.slots.every((slot) => Object.keys(slot.bindings).length === 0)) {
     return {
       heading: "No controls are ready to test",
       line:
-        "Open Controls and choose a ready-made layout or add button keys, then come back here.",
+        "Open Mapping and choose a ready-made layout or add button keys, then come back here.",
       href: "/map",
-      action: "Open Controls",
+      action: "Open Mapping",
     };
   }
   return null;
@@ -229,7 +236,7 @@ function emptyState(mapper: MapperSnapshot): EmptyState | null {
  *  be the label a customer reads. These are the same controller identities the
  *  Controls screen draws; unknown extension controls are still humanized. */
 export function controlLabel(persona: string, control: string): string {
-  const playstation = /playstation|ds4|ps4/i.test(persona);
+  const playstation = /playstation|dualsense|dualshock|ds[45]|ps[45]/i.test(persona);
   const standard: Record<string, string> = {
     A: playstation ? "✕" : "A",
     B: playstation ? "○" : "B",
@@ -287,7 +294,7 @@ export function applyCheck(p: CheckPayload): void {
   setEmptyHeading(empty?.heading ?? "");
   setEmptyLine(empty?.line ?? "");
   setEmptyHref(empty?.href ?? "/start");
-  setEmptyAction(empty?.action ?? "Open Setup");
+  setEmptyAction(empty?.action ?? "Open setup");
 
   const rows: ControlChip[] = [];
   const missing: EmptyPlayerRow[] = [];
@@ -295,9 +302,9 @@ export function applyCheck(p: CheckPayload): void {
     if (Object.keys(slot.bindings).length === 0) {
       missing.push({
         player: `Player ${slot.number} has no controls yet`,
-        line: "Open Controls and choose a ready-made layout or add button keys for this player.",
+        line: "Open Mapping and choose a ready-made layout or add button keys for this player.",
         href: `/map?slot=${slot.number}`,
-        action: "Open Controls",
+        action: "Open Mapping",
       });
     }
     for (const control of Object.keys(slot.bindings)) {
@@ -344,26 +351,56 @@ export function applyKeys(rows: KeyRow[]): void {
 
 export function CheckIsland() {
   return h(
-    "main",
-    { class: "wrap check" },
+    "div",
+    { class: "studio testflow" },
     h(
-      "nav",
-      { class: "topnav", "aria-label": "screens" },
-      h("a", { class: "navlink", href: "/start" }, "Setup"),
-      h("a", { class: "navlink", href: "/map" }, "Controls"),
+      "header",
+      { class: "top" },
       h(
-        "a",
-        { class: "navlink on", href: "/check", "aria-current": "page" },
-        "Test",
+        "div",
+        { class: "brand" },
+        h("span", { class: "brand-ksx" }, "ksx"),
+        h("span", { class: "brand-studio" }, "Studio"),
+        h("span", { class: "crumb" }, "Test inputs"),
+      ),
+      h(
+        "nav",
+        { class: "topnav workflow-nav", "aria-label": "Set up and play" },
+        h("a", { class: "navlink workflow-link", href: "/start#keyboard" }, h("span", { class: "workflow-num" }, "1"), "Keyboard"),
+        h("a", { class: "navlink workflow-link", href: "/start#controller" }, h("span", { class: "workflow-num" }, "2"), "Controller"),
+        h("a", { class: "navlink workflow-link", href: "/map" }, h("span", { class: "workflow-num" }, "3"), "Mapping"),
+        h("a", { class: "navlink workflow-link", href: "/" }, h("span", { class: "workflow-num" }, "4"), "Play"),
+      ),
+      h(
+        "details",
+        { class: "appmenu" },
+        h("summary", { class: "navlink on", "aria-label": "Open Studio tools" }, "Tools"),
+        h(
+          "nav",
+          { class: "appmenu-panel", "aria-label": "Studio tools" },
+          h("a", { href: "/check", "aria-current": "page" }, h("span", null, "Test inputs"), h("small", null, "Live controller feedback")),
+          h("a", { href: "/profiles" }, h("span", null, "Game library"), h("small", null, "Saved launch profiles")),
+          h("a", { href: "/devices" }, h("span", null, "Hardware"), h("small", null, "Devices and recovery")),
+          h("a", { href: "/pads" }, h("span", null, "Virtual controllers"), h("small", null, "Inspect and test pads")),
+          h("a", { href: "/setup" }, h("span", null, "Import & recovery"), h("small", null, "Advanced configuration")),
+        ),
       ),
     ),
     h(
-      "header",
-      { class: "head" },
-      h("h1", null, "Button check"),
-      h("p", { class: "sub" }, () => sourceLine()),
-      h("p", { class: "product-hidden" }, () => generatedAt()),
-    ),
+      "main",
+      { class: "wrap check" },
+      h(
+        "header",
+        { class: "test-hero" },
+        h("div", null,
+          h("p", { class: "eyebrow" }, "Live verification"),
+          h("h1", null, "Press a key. Watch the controller respond."),
+          h("p", { class: "workflow-lede" }, "Use this focused view after Play starts to confirm every physical input reaches the expected virtual control."),
+          h("p", { class: "sub" }, () => sourceLine()),
+          h("p", { class: "product-hidden" }, () => generatedAt()),
+        ),
+        h("a", { class: "btn", href: "/map" }, "Edit mapping"),
+      ),
 
     // **The no-JS truth, first and unmissable.** This whole page is a live
     // echo, and a live echo is the one thing a document cannot do: with
@@ -394,7 +431,11 @@ export function CheckIsland() {
       "section",
       { class: "card feedcard" },
       h("h2", null, "Live input"),
-      h("p", { class: "dvalue" }, () => feedLine()),
+      // CONNECTION CHATTER (`data-live-chatter`): the stream is opened by
+      // the browser, so this line's value is client-owned by nature — the
+      // parity suite exempts exactly these marked nodes. See MapIsland's
+      // map-live-status note.
+      h("p", { class: "dvalue", "data-live-chatter": "" }, () => feedLine()),
       h("p", { class: "sub" }, () => sessionLine()),
       h("p", { class: "sub" }, () => feedHint()),
     ),
@@ -521,6 +562,7 @@ export function CheckIsland() {
           { class: "sub" },
           "Live. Even a very short button press flashes here.",
         ),
+    ),
     ),
   );
 }

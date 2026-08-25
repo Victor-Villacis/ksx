@@ -107,6 +107,13 @@ impl ConfigRoot {
         self.dir.join("presets")
     }
 
+    /// Portable semantic encoder layouts. These are user-editable KSX
+    /// resources, unlike the machine-bound raw EEPROM journal in
+    /// `panel-backups`.
+    pub fn panel_layouts_dir(&self) -> PathBuf {
+        self.dir.join("panel-layouts")
+    }
+
     pub fn games_path(&self) -> PathBuf {
         self.dir.join("games.toml")
     }
@@ -170,6 +177,10 @@ mod tests {
         );
         assert_eq!(root.presets_dir(), Path::new(r"C:\cfg\ksx").join("presets"));
         assert_eq!(
+            root.panel_layouts_dir(),
+            Path::new(r"C:\cfg\ksx").join("panel-layouts")
+        );
+        assert_eq!(
             root.games_path(),
             Path::new(r"C:\cfg\ksx").join("games.toml")
         );
@@ -181,6 +192,10 @@ mod tests {
             Path::new(r"D:\cab").join("ksx.toml")
         );
         assert_eq!(portable.presets_dir(), Path::new(r"D:\cab").join("presets"));
+        assert_eq!(
+            portable.panel_layouts_dir(),
+            Path::new(r"D:\cab").join("panel-layouts")
+        );
     }
 
     /// Every canonical file has a JSON interop sibling in the same place,

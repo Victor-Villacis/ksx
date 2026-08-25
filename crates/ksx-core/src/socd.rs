@@ -18,15 +18,20 @@
 //!   That is **up-priority**, the fighting-game standard, and it is one
 //!   ordinary chord.
 //!
-//! So all this module does is GENERATE those chords from a per-slot
-//! [`Socd`] setting. Everything downstream — consumption, the all-keys-up
-//! rule, the one-batch release discipline, the zero-allocation hot path —
-//! is the chord engine, unchanged.
+//! So for those two policies all this module does is GENERATE those chords
+//! from a per-slot [`Socd`] setting. Everything downstream — consumption, the
+//! all-keys-up rule, the one-batch release discipline, the zero-allocation
+//! hot path — is the chord engine, unchanged.
 //!
-//! **Not implemented: last-wins / "snap tap".** It needs to know which
-//! direction was pressed *most recently*, which is input history; the engine
-//! is deliberately a pure function of the current key SET. It waits for the
-//! transform stage (§3), not for a new binding shape.
+//! **The two ORDER-AWARE policies are different.** [`Socd::LastInput`]
+//! ("snap tap") and [`Socd::FirstInput`] need to know which side was pressed
+//! *more recently*, which no static chord can express — a chord is a pure
+//! function of the current key SET. They generate nothing here; the engine
+//! carries a small per-control order memory instead
+//! (`engine.rs::sync_socd`), which feeds the SAME consumption mask chords
+//! use, so everything downstream is still the one suppression mechanism.
+//! This module's contribution to them is [`opposing_sides`] — the build-time
+//! answer to "which keys are the two sides of each control".
 
 use std::fmt;
 use std::str::FromStr;
@@ -49,10 +54,23 @@ pub enum Socd {
     /// Left+Right → centre, but Up beats Down (the fighting-game standard:
     /// it makes down-back → up-back a jump instead of a crouch).
     UpPriority,
+    /// The NEWER press wins and the release hands back — "snap tap", the
+    /// leverless standard. Order-aware: runs in the engine, generates no
+    /// chords.
+    LastInput,
+    /// The FIRST press holds until it is released; the opposite press waits
+    /// its turn. Order-aware, like [`Socd::LastInput`].
+    FirstInput,
 }
 
 impl Socd {
-    pub const ALL: &'static [Socd] = &[Socd::Off, Socd::Neutral, Socd::UpPriority];
+    pub const ALL: &'static [Socd] = &[
+        Socd::Off,
+        Socd::Neutral,
+        Socd::UpPriority,
+        Socd::LastInput,
+        Socd::FirstInput,
+    ];
 
     /// Canonical name — what a config file stores.
     pub const fn as_str(self) -> &'static str {
@@ -60,12 +78,27 @@ impl Socd {
             Socd::Off => "off",
             Socd::Neutral => "neutral",
             Socd::UpPriority => "up-priority",
+            Socd::LastInput => "last-input",
+            Socd::FirstInput => "first-input",
         }
     }
 
-    /// Does this policy generate anything? `false` is the zero-change path.
+    /// Does this policy do anything at all? `false` is the zero-change path.
     pub const fn is_active(self) -> bool {
         !matches!(self, Socd::Off)
+    }
+
+    /// Is this policy expressed as generated chords ([`generate`])? The
+    /// complement of [`Socd::is_runtime`] among active policies.
+    pub const fn generates_chords(self) -> bool {
+        matches!(self, Socd::Neutral | Socd::UpPriority)
+    }
+
+    /// Does this policy need the engine's order memory? Order cannot be a
+    /// function of the current key set, so these two generate nothing and
+    /// the engine resolves them per event instead.
+    pub const fn is_runtime(self) -> bool {
+        matches!(self, Socd::LastInput | Socd::FirstInput)
     }
 }
 
@@ -76,7 +109,10 @@ impl fmt::Display for Socd {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("unknown socd policy '{0}' (expected one of: off, neutral, up-priority)")]
+#[error(
+    "unknown socd policy '{0}' (expected one of: off, neutral, up-priority, last-input, \
+     first-input)"
+)]
 pub struct UnknownSocd(pub String);
 
 impl FromStr for Socd {
@@ -94,6 +130,8 @@ impl FromStr for Socd {
             "off" | "none" | "raw" => Ok(Socd::Off),
             "neutral" | "cancel" | "nullify" => Ok(Socd::Neutral),
             "uppriority" | "up" | "upwins" => Ok(Socd::UpPriority),
+            "lastinput" | "lastwins" | "snaptap" => Ok(Socd::LastInput),
+            "firstinput" | "firstwins" => Ok(Socd::FirstInput),
             _ => Err(UnknownSocd(s.to_owned())),
         }
     }
@@ -378,8 +416,13 @@ pub fn shadowing_chord<'a>(preset: &'a Preset, pair: &OpposingPair) -> Option<&'
 ///
 /// Idempotent: a chord the preset already carries (same trigger, guard and
 /// output) is never duplicated, so applying twice is applying once.
+///
+/// The order-aware policies generate NOTHING here — order is not a function
+/// of the key set, so they run in the engine ([`Socd::is_runtime`]) and this
+/// function's early return is what keeps a last-input slot from silently
+/// getting neutral chords on top.
 pub fn generate(preset: &Preset, policy: Socd) -> Vec<Chord> {
-    if !policy.is_active() {
+    if !policy.generates_chords() {
         return Vec::new();
     }
     let keys = key_directions(preset);
@@ -422,11 +465,59 @@ pub fn generate(preset: &Preset, policy: Socd) -> Vec<Chord> {
 
 impl Preset {
     /// Append the chords `policy` implies (see [`generate`]). A no-op for
-    /// [`Socd::Off`], which is what makes the default byte-identical.
+    /// [`Socd::Off`] — which is what makes the default byte-identical — and
+    /// for the order-aware policies, which live in the engine instead.
     pub fn apply_socd(&mut self, policy: Socd) {
         let generated = generate(self, policy);
         self.chords.extend(generated);
     }
+}
+
+/// The two sides of one opposing control, for the engine's order-aware
+/// policies ([`Socd::is_runtime`]).
+///
+/// DIRECTION-level on purpose, where [`opposing_pairs`] is pairwise: the
+/// chord primitive needed one chord per key pair, but the engine's order
+/// memory is about which SIDE was pressed more recently — several keys on one
+/// direction are one side (multi-bind is one clock, one flipper, and here one
+/// side), rising when the group goes from silent to driving.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpposingSides {
+    /// Keys driving the NEGATIVE half (left, or down) — and ONLY that half.
+    pub neg: Vec<Key>,
+    /// Keys driving the POSITIVE half (right, or up), same rule.
+    pub pos: Vec<Key>,
+}
+
+/// Every control both of whose halves this preset can drive, in control order
+/// (dpad H, dpad V, left stick X/Y, right stick X/Y).
+///
+/// A key bound to BOTH halves of one control belongs to neither side of it:
+/// it opposes itself, and "which press was newer" has no honest answer for a
+/// key that says both at once — such a key keeps its raw behavior. (The
+/// static policies answer the same shape by falling back to neutral; here the
+/// fallback is "untouched", because suppressing a self-opposing key would
+/// have to pick a winner the player never expressed.)
+pub fn opposing_sides(preset: &Preset) -> Vec<OpposingSides> {
+    let keys = key_directions(preset);
+    let mut out = Vec::new();
+    for control in [DPAD_H, DPAD_V, AXIS_X, AXIS_Y, AXIS_RX, AXIS_RY] {
+        let mut sides = OpposingSides {
+            neg: Vec::new(),
+            pos: Vec::new(),
+        };
+        for k in &keys {
+            match (k.drives(control, false), k.drives(control, true)) {
+                (true, false) => sides.neg.push(k.key),
+                (false, true) => sides.pos.push(k.key),
+                _ => {}
+            }
+        }
+        if !sides.neg.is_empty() && !sides.pos.is_empty() {
+            out.push(sides);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -470,6 +561,7 @@ mod tests {
             chords: Vec::new(),
             macros: Default::default(),
             turbo: Vec::new(),
+            toggle: Vec::new(),
             protected: false,
         }
     }
@@ -491,9 +583,87 @@ mod tests {
         }
         assert_eq!("up_priority".parse(), Ok(Socd::UpPriority));
         assert_eq!("UpPriority".parse(), Ok(Socd::UpPriority));
+        // The community's names for the order-aware modes all land.
+        assert_eq!("snap tap".parse(), Ok(Socd::LastInput));
+        assert_eq!("last-wins".parse(), Ok(Socd::LastInput));
+        assert_eq!("first_wins".parse(), Ok(Socd::FirstInput));
         assert_eq!(Socd::default(), Socd::Off);
-        let err = "snaptap".parse::<Socd>().unwrap_err();
-        assert!(err.to_string().contains("up-priority"), "{err}");
+        let err = "sideways".parse::<Socd>().unwrap_err();
+        assert!(err.to_string().contains("last-input"), "{err}");
+    }
+
+    /// The order-aware policies are the ENGINE's business: they generate no
+    /// chords, and saying so here is what keeps a last-input slot from
+    /// silently getting neutral chords stacked on top of the runtime rule.
+    #[test]
+    fn order_aware_policies_generate_nothing() {
+        for policy in [Socd::LastInput, Socd::FirstInput] {
+            assert!(policy.is_active());
+            assert!(policy.is_runtime());
+            assert!(!policy.generates_chords());
+            assert!(generate(&stick_preset(), policy).is_empty());
+            let mut preset = stick_preset();
+            preset.apply_socd(policy);
+            assert_eq!(preset, stick_preset());
+        }
+        // ...and the static three keep their exact classification.
+        assert!(Socd::Neutral.generates_chords() && !Socd::Neutral.is_runtime());
+        assert!(Socd::UpPriority.generates_chords() && !Socd::UpPriority.is_runtime());
+        assert!(!Socd::Off.generates_chords() && !Socd::Off.is_runtime());
+    }
+
+    #[test]
+    fn opposing_sides_group_by_direction_and_exclude_self_opposition() {
+        // Multi-bind: two keys on Left are ONE side.
+        let axis = |value| Binding::Axis {
+            axis: Axis::X,
+            value,
+        };
+        let preset = Preset {
+            name: "sides".into(),
+            entries: vec![
+                (Key::A, axis(AXIS_MIN)),
+                (Key::S, axis(-16384)),
+                (Key::D, axis(AXIS_MAX)),
+                // Self-opposing: drives BOTH halves, belongs to neither side.
+                (Key::X, axis(AXIS_MIN)),
+                (Key::X, axis(AXIS_MAX)),
+                // Vertical dpad pair on the same preset — its own control.
+                (Key::I, Binding::Dpad(DpadDirection::Up)),
+                (Key::K, Binding::Dpad(DpadDirection::Down)),
+                // A button opposes nothing.
+                (Key::P, Binding::Button(XButton::A)),
+            ],
+            chords: Vec::new(),
+            macros: Default::default(),
+            turbo: Vec::new(),
+            toggle: Vec::new(),
+            protected: false,
+        };
+        assert_eq!(
+            opposing_sides(&preset),
+            vec![
+                OpposingSides {
+                    neg: vec![Key::K],
+                    pos: vec![Key::I],
+                },
+                OpposingSides {
+                    neg: vec![Key::A, Key::S],
+                    pos: vec![Key::D],
+                },
+            ]
+        );
+        // One side alone is not an opposition: nothing to clean.
+        let preset = Preset {
+            name: "one-sided".into(),
+            entries: vec![(Key::A, axis(AXIS_MIN)), (Key::S, axis(-16384))],
+            chords: Vec::new(),
+            macros: Default::default(),
+            turbo: Vec::new(),
+            toggle: Vec::new(),
+            protected: false,
+        };
+        assert!(opposing_sides(&preset).is_empty());
     }
 
     #[test]
@@ -556,6 +726,7 @@ mod tests {
             chords: Vec::new(),
             macros: Default::default(),
             turbo: Vec::new(),
+            toggle: Vec::new(),
             protected: false,
         };
         let chords = generate(&preset, Socd::UpPriority);
@@ -594,6 +765,7 @@ mod tests {
             chords: Vec::new(),
             macros: Default::default(),
             turbo: Vec::new(),
+            toggle: Vec::new(),
             protected: false,
         };
         let chords = generate(&preset, Socd::Neutral);
@@ -636,6 +808,7 @@ mod tests {
             chords: Vec::new(),
             macros: Default::default(),
             turbo: Vec::new(),
+            toggle: Vec::new(),
             protected: false,
         };
         let chords = generate(&preset, Socd::UpPriority);
@@ -672,6 +845,7 @@ mod tests {
             chords: Vec::new(),
             macros: Default::default(),
             turbo: Vec::new(),
+            toggle: Vec::new(),
             protected: false,
         };
         assert!(opposing_pairs(&preset).is_empty());
@@ -819,6 +993,7 @@ mod tests {
             chords: Vec::new(),
             macros: Default::default(),
             turbo: Vec::new(),
+            toggle: Vec::new(),
             protected: false,
         };
         let pairs = opposing_pairs(&preset);

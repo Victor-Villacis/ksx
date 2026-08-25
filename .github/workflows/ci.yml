@@ -37,6 +37,25 @@ on:
       portable_sha256:
         description: SHA-256 of the portable ZIP, as built.
         value: ${{ jobs.release-binary.outputs.portable_sha256 }}
+      manifest_name:
+        description: The exact-candidate manifest filename.
+        value: ${{ jobs.release-binary.outputs.manifest_name }}
+      manifest_sha256:
+        description: SHA-256 of the exact-candidate manifest.
+        value: ${{ jobs.release-binary.outputs.manifest_sha256 }}
+
+# Read is enough for tests and reusable artifact construction. The release
+# caller grants its publishing job separately; a branch build never receives a
+# repository write token merely because it also proves the installer recipe.
+permissions:
+  contents: read
+
+# One useful run per event/source ref. A new branch/PR push supersedes its older
+# diagnostics, but a tag or release workflow_call is immutable release evidence
+# and must be allowed to finish even if the workflow is dispatched again.
+concurrency:
+  group: ci-${{ inputs.release_tag != '' && format('release-{0}', inputs.release_tag) || format('source-{0}-{1}', github.event_name, github.ref) }}
+  cancel-in-progress: ${{ inputs.release_tag == '' && !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -45,37 +64,39 @@ jobs:
   test:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       # rust-toolchain.toml pins the exact compiler; `rustup show` installs it.
       # NOT dtolnay/rust-toolchain: that action exports RUSTUP_TOOLCHAIN, which
       # overrides the pin — and an overridden pin is how local 1.96 and CI 1.97
       # both said "clippy clean" about different diagnostics on 2026-08-07.
       - name: Toolchain (pinned by rust-toolchain.toml)
         run: rustup show active-toolchain
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          # @getforma/core 2.0.0 declares this minimum. Pinning the floor proves
-          # the authoring project does not accidentally rely on a newer Node.
-          node-version: '20.19.0'
+          # One production/LTS pin for local authoring, CI and release assets.
+          node-version-file: '.node-version'
           cache: npm
           cache-dependency-path: studio-ui/package-lock.json
+      # build-assets runs the Rust-owned zone writer before Node. Restore the
+      # Cargo cache before that wrapper so the first build is not accidentally
+      # the only cold Rust compile in this job.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Studio assets reproduce from registry dependencies
-        working-directory: studio-ui
-        shell: pwsh
+        shell: powershell
         run: |
-          npm ci
-          if ($LASTEXITCODE -ne 0) { throw 'Studio registry install failed' }
-          node build.mjs
-          if ($LASTEXITCODE -ne 0) { throw 'Studio asset build failed' }
-          git -C .. diff --exit-code -- crates/ksx-studio/assets
+          tools/studio-env/build-assets.ps1
+          # The four generated-and-committed generator handoffs/outputs ride the
+          # same byte-diff as the assets: zones.json carries Rust's vocabulary
+          # into Studio, zones.gen.ts projects it, and the token pair feeds the
+          # hashed sheet, contrast gate and anti-flash const.
+          git diff --exit-code -- crates/ksx-studio/assets studio-ui/tokens/zones.json studio-ui/src/tokens.gen.css studio-ui/src/zones.gen.ts crates/ksx-studio/src/theme_tokens.rs
           if ($LASTEXITCODE -ne 0) {
             throw 'committed Studio assets differ from a clean Forma build'
           }
-          $untracked = git -C .. ls-files --others --exclude-standard -- crates/ksx-studio/assets
+          $untracked = git ls-files --others --exclude-standard -- crates/ksx-studio/assets studio-ui/tokens/zones.json studio-ui/src/tokens.gen.css studio-ui/src/zones.gen.ts crates/ksx-studio/src/theme_tokens.rs
           if ($untracked) {
             throw "Studio build emitted untracked assets:`n$($untracked -join "`n")"
           }
-      - uses: Swatinem/rust-cache@v2
       - name: Format
         # vendored vigem-client keeps upstream formatting; check only our crates.
         # Naming crates individually is how ksx-api, ksx-hidmaestro, ksx-studio,
@@ -148,6 +169,250 @@ jobs:
           }
       - name: Check vendored vigem-client compiles
         run: cargo check -p vigem-client --all-features
+      - name: Compile the hardware-only output tests without running them
+        # `cab-tests` reaches the real controller loopback when EXECUTED. A
+        # compile-only check is safe on a hosted runner and closes the gap in
+        # PLAYBOOK.md: the hardware gate remains supervised, while its test
+        # target can no longer quietly rot between cabinet sessions.
+        run: cargo check -p ksx-output --features cab-tests --all-targets
+
+  # Browser validation repeats the guarded asset/Rust handoff on its own
+  # runner, then downloads Chromium and runs the Studio fixture. Keep that
+  # work off the unreliable development CPU.
+  studio-browser:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: studio-browser
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+          cache-dependency-path: |
+            studio-ui/package-lock.json
+            studio-ui/pwtest/package-lock.json
+      - name: Verify the browser checkout serves current Forma assets
+        shell: powershell
+        run: |
+          tools/studio-env/build-assets.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'guarded Studio asset build failed' }
+          git diff --exit-code -- crates/ksx-studio/assets studio-ui/tokens/zones.json studio-ui/src/tokens.gen.css studio-ui/src/zones.gen.ts crates/ksx-studio/src/theme_tokens.rs
+          if ($LASTEXITCODE -ne 0) {
+            throw 'browser checkout assets differ from the current Studio source'
+          }
+          $untracked = git ls-files --others --exclude-standard -- crates/ksx-studio/assets studio-ui/tokens/zones.json studio-ui/src/tokens.gen.css studio-ui/src/zones.gen.ts crates/ksx-studio/src/theme_tokens.rs
+          if ($untracked) {
+            throw "Studio build emitted untracked assets:`n$($untracked -join "`n")"
+          }
+      - name: Install browser-test dependencies
+        working-directory: studio-ui/pwtest
+        run: npm ci
+      - name: Install pinned Playwright Chromium
+        working-directory: studio-ui/pwtest
+        # `npm exec` resolves the Playwright version pinned by package-lock.json.
+        run: npm exec -- playwright install chromium
+      - name: Run Studio browser validation
+        working-directory: studio-ui/pwtest
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}\ksx-studio-browser-target
+          # Keep parity fixtures clear of the macro fixture's port even if a
+          # prior Windows process takes a moment to release its listening socket.
+          KSX_PWTEST_PARITY_PORT: '4488'
+          KSX_PWTEST_VISUAL_PORT: '4500'
+          KSX_PWTEST_SCREENSHOT_DIR: ${{ runner.temp }}\ksx-studio-browser-screenshots
+        run: npm test
+      - name: Upload Studio browser screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: studio-browser-screenshots
+          path: ${{ runner.temp }}\ksx-studio-browser-screenshots
+          overwrite: true
+          # Dependency or browser-install failures can precede the first capture.
+          if-no-files-found: warn
+          retention-days: 30
+
+  # The checked-in environment scripts are part of the development product:
+  # they decide which process a person is looking at and which process may be
+  # stopped. Parse them in both shells we support, then exercise a complete
+  # synthetic lifecycle. No production provider, daemon pipe, driver, or
+  # physical device is touched by this job.
+  studio-environments:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+          cache-dependency-path: studio-ui/package-lock.json
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: studio-environments
+      - name: Parse environment scripts with PowerShell 7
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scripts = @(
+            Get-ChildItem -LiteralPath tools/studio-env -Filter *.ps1
+            Get-ChildItem -LiteralPath tools/release -Filter *.ps1
+          )
+          foreach ($file in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              $file.FullName,
+              [ref]$tokens,
+              [ref]$errors)
+            if ($errors.Count -ne 0) {
+              throw "$($file.Name) has PowerShell 7 parse errors: $($errors -join '; ')"
+            }
+          }
+      - name: Parse environment scripts with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scripts = @(
+            Get-ChildItem -LiteralPath tools/studio-env -Filter *.ps1
+            Get-ChildItem -LiteralPath tools/release -Filter *.ps1
+          )
+          foreach ($file in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              $file.FullName,
+              [ref]$tokens,
+              [ref]$errors)
+            if ($errors.Count -ne 0) {
+              throw "$($file.Name) has Windows PowerShell 5.1 parse errors: $($errors -join '; ')"
+            }
+          }
+      - name: Prove PowerShell 5.1 and 7 hash the same build graph
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $probe = Join-Path $env:RUNNER_TEMP 'ksx-build-graph-probe.ps1'
+          @'
+          param([Parameter(Mandatory = $true)][string]$Root)
+          $ErrorActionPreference = 'Stop'
+          . (Join-Path $Root 'tools/studio-env/source-graph.ps1')
+          . (Join-Path $Root 'tools/studio-env/build-graph.ps1')
+          $snapshot = @(Get-KsxStudioGeneratedOutputSnapshot -RepoRoot $Root)
+          [ordered]@{
+            Studio = Get-KsxSourceGraphFingerprint -Kind Studio -RepoRoot $Root
+            Runtime = Get-KsxSourceGraphFingerprint -Kind Runtime -RepoRoot $Root
+            ZoneProducers = Get-KsxSourceGraphFingerprint -Kind ZoneProducers -RepoRoot $Root
+            All = Get-KsxSourceGraphFingerprint -Kind All -RepoRoot $Root
+            GeneratedCount = $snapshot.Count
+            GeneratedGraph = Get-KsxStudioGeneratedOutputGraphHash -Snapshot $snapshot
+          } | ConvertTo-Json -Compress
+          '@ | Set-Content -LiteralPath $probe -Encoding utf8
+
+          $ps51 = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $probe -Root $PWD)
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell graph probe failed' }
+          $ps7 = @(& pwsh -NoProfile -File $probe -Root $PWD)
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 7 graph probe failed' }
+          $left = [string]($ps51 | Select-Object -Last 1)
+          $right = [string]($ps7 | Select-Object -Last 1)
+          if ($left -cne $right) {
+            throw "PowerShell build-graph identities differ:`n5.1 $left`n7   $right"
+          }
+          Write-Host $left
+      - name: Build the deterministic embedded Studio asset graph
+        shell: powershell
+        run: tools/studio-env/build-assets.ps1
+      - name: Seed, inspect, replace, and tear down the seeded fixture
+        shell: powershell
+        timeout-minutes: 15
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $seed = Join-Path $PWD 'tools/studio-env/seed.ps1'
+          $status = Join-Path $PWD 'tools/studio-env/status.ps1'
+          $teardown = Join-Path $PWD 'tools/studio-env/teardown.ps1'
+          $uri = 'http://127.0.0.1:4476/api/nocturne'
+
+          try {
+            & $seed -Environment seeded
+            if ($LASTEXITCODE -ne 0) { throw "first fixture seed exited $LASTEXITCODE" }
+            $first = (Invoke-WebRequest -UseBasicParsing -Uri $uri -TimeoutSec 3).Content |
+              ConvertFrom-Json
+            $firstRows = & $status -Json | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "fixture status exited $LASTEXITCODE" }
+            $firstStatus = @($firstRows | Where-Object Environment -eq 'seeded')
+            if ($firstStatus.Count -ne 1 -or
+                -not [bool]$firstStatus[0].Healthy -or
+                -not [bool]$firstStatus[0].Current -or
+                -not [bool]$firstStatus[0].ProvenanceComplete -or
+                [string]$firstStatus[0].State -cne 'managed / running' -or
+                -not [bool]$first.environment.fixture -or
+                [string]$first.environment.id -cne 'fixture-seeded-demo' -or
+                [string]::IsNullOrWhiteSpace([string]$first.environment.generation)) {
+              throw 'the first seeded fixture did not report its exact healthy provenance'
+            }
+            $firstGeneration = [string]$first.environment.generation
+            $firstOwnerCount = @(
+              Get-NetTCPConnection -State Listen -LocalPort 4476 -ErrorAction Stop |
+                Select-Object -ExpandProperty OwningProcess -Unique).Count
+            if ($firstOwnerCount -ne 1) { throw 'the first seed did not have one listener owner' }
+
+            & $seed -Environment seeded -SkipBuild
+            if ($LASTEXITCODE -ne 0) { throw "replacement fixture seed exited $LASTEXITCODE" }
+            $second = (Invoke-WebRequest -UseBasicParsing -Uri $uri -TimeoutSec 3).Content |
+              ConvertFrom-Json
+            $secondRows = & $status -Json | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "replacement status exited $LASTEXITCODE" }
+            $secondStatus = @($secondRows | Where-Object Environment -eq 'seeded')
+            $secondOwner = @(
+              Get-NetTCPConnection -State Listen -LocalPort 4476 -ErrorAction Stop |
+                Select-Object -ExpandProperty OwningProcess -Unique)
+            if ($secondStatus.Count -ne 1 -or
+                -not [bool]$secondStatus[0].Healthy -or
+                -not [bool]$secondStatus[0].Current -or
+                -not [bool]$secondStatus[0].ProvenanceComplete -or
+                [string]$secondStatus[0].State -cne 'managed / running' -or
+                [string]$second.environment.generation -ceq $firstGeneration -or
+                $secondOwner.Count -ne 1) {
+              throw 'reseed did not replace the process and fixture generation cleanly'
+            }
+          } finally {
+            & $teardown -Environment seeded -AllowMissing
+            if ($LASTEXITCODE -ne 0) { throw "fixture teardown exited $LASTEXITCODE" }
+          }
+
+          if (@(Get-NetTCPConnection -State Listen -LocalPort 4476 -ErrorAction SilentlyContinue).Count -ne 0) {
+            throw 'fixture teardown left port 4476 listening'
+          }
+          $afterRows = & $status -Json | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "post-teardown status exited $LASTEXITCODE" }
+          $after = @($afterRows | Where-Object Environment -eq 'seeded')
+          if ($after.Count -ne 1 -or [string]$after[0].State -cne 'stopped') {
+            throw 'fixture teardown did not return seeded to the stopped state'
+          }
+      - name: Exercise the documented one-shot watcher on a blank encoder
+        shell: powershell
+        timeout-minutes: 15
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $watch = Join-Path $PWD 'tools/studio-env/watch.ps1'
+          $status = Join-Path $PWD 'tools/studio-env/status.ps1'
+          $teardown = Join-Path $PWD 'tools/studio-env/teardown.ps1'
+          try {
+            & $watch -Environment blank-encoder -Once
+            if ($LASTEXITCODE -ne 0) { throw "one-shot watcher exited $LASTEXITCODE" }
+            & $status -Environment blank-encoder -RequireHealthy -RequireCurrent
+            if ($LASTEXITCODE -ne 0) { throw "watched fixture status exited $LASTEXITCODE" }
+          } finally {
+            & $teardown -Environment blank-encoder -AllowMissing
+            if ($LASTEXITCODE -ne 0) { throw "watched fixture teardown exited $LASTEXITCODE" }
+          }
 
   # Keep the HIDMaestro contract work off the unreliable development CPU too.
   # GitHub's Windows runner is an administrator with UAC disabled, so it must
@@ -158,13 +423,13 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Toolchain (pinned by rust-toolchain.toml)
         run: rustup show active-toolchain
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: hidmaestro-contracts
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           # Match the SDK used to establish the current probe baseline; do not
           # let `LangVersion=latest` silently move under this contract.
@@ -217,7 +482,7 @@ jobs:
           $s1dLockPath = 'tools/hidmaestro-runtime-candidate/s1_5d/contract.lock.json'
           $s1dVerifierPath = 'tools/hidmaestro-runtime-candidate/s1_5d/verify-source-candidate.ps1'
           $expectedLockHash = 'F9DF8924F3C84228A1FD0ED646704112B775B06B733DC480E618284D02D715CC'
-          $expectedContractHash = '755050266EB93009EDB81F7E630B3A72298ED411EC03C2BE940056A03C549BA1'
+          $expectedContractHash = '042F8D45309AD71A79FF92FCAE6555D98026B862552E02AE008992CAF3CEEAA1'
           if ((Get-NormalizedTextSha256 $lockPath) -cne $expectedLockHash -or
               (Get-NormalizedTextSha256 $contractPath) -cne $expectedContractHash -or
               (Get-NormalizedTextSha256 $runtimeVerifierPath) -cne
@@ -225,7 +490,7 @@ jobs:
             throw 'The complete runtime source lock or inert candidate contract drifted.'
           }
           if ((Get-NormalizedTextSha256 $apiLockPath) -cne
-                '1C782DE7B46D96A50975D44DD851CCC3EBFFFA8A529EB9892EDE9D1AF358D8F5' -or
+                'C7EBDC9357735AE71B96309D1A448CBB31CAB8A2FE2CE49F76E1F718188A6224' -or
               (Get-NormalizedTextSha256 $apiVerifierPath) -cne
                 '6735CD5847FCA178D24027BFFD7D2D6D17233B01F22AA0521DC943735385748D' -or
               (Get-NormalizedTextSha256 $profileLockPath) -cne
@@ -259,9 +524,9 @@ jobs:
             throw 'A frozen S1.5c/S1.5d API, profile, feedback, or input source contract drifted.'
           }
           if ((Get-NormalizedTextSha256 $s1dLockPath) -cne
-                '01DD327F4C280FC996484141A8E664B1E415A12BE748587A9670287FBD0401EA' -or
+                'BFE49555DE8C3B985B2045C7E39FE02B567CBA0A134866555BCED3BB97570311' -or
               (Get-NormalizedTextSha256 $s1dVerifierPath) -cne
-                '9B7FBEF83B420F1143EEEF9EF31FEF923EE8F36CC15F9DE0B94198EB7BBF3861') {
+                'EB13AEC225273C4A5F8C88ABA249E4AF3E71A30A72A78098224BC33FE5E8AC46') {
             throw 'The frozen S1.5d inert managed-source candidate contract drifted.'
           }
           $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
@@ -378,8 +643,8 @@ jobs:
                   $contract.sourceContracts.compilationDisposition.replacementRequiredCount -ne 13 -or
                   $contract.sourceContracts.compilationDisposition.excludedCount -ne 37 -or
                   $contract.sourceContracts.compilationDisposition.replacementSourcesPresent -ne $true -or
-                  $contract.sourceContracts.managedSourceCandidate.candidateFileCount -ne 12 -or
-                  $contract.sourceContracts.managedSourceCandidate.compileItemCount -ne 11 -or
+                  $contract.sourceContracts.managedSourceCandidate.candidateFileCount -ne 15 -or
+                  $contract.sourceContracts.managedSourceCandidate.compileItemCount -ne 14 -or
                   $contract.sourceContracts.managedSourceCandidate.embeddedResourceCount -ne 228 -or
                   $contract.sourceContracts.managedSourceCandidate.sourceAndProjectXmlFrozen -ne $true -or
                   $contract.sourceContracts.managedSourceCandidate.sourceVerifierBuildAuthorized -ne $false -or
@@ -594,9 +859,9 @@ jobs:
                     'hash-pinned-static-candidate-source-and-project-xml-closure-only' -or
                   $s1dReport.ok -ne $true -or
                   $s1dReport.candidateTreeSha256 -cne
-                    '4AC8E4AAD314BC44BE9EC629AD85CCAD3739DA85406857520E6E6B9FCFC88393' -or
-                  $s1dReport.counts.candidateFiles -ne 12 -or
-                  $s1dReport.counts.compileItems -ne 11 -or
+                    'C5B1B3223762BDDC33FE5BCCBCD0962A6C62757B8238AA7DE9D1F38E39F0408F' -or
+                  $s1dReport.counts.candidateFiles -ne 15 -or
+                  $s1dReport.counts.compileItems -ne 14 -or
                   $s1dReport.counts.embeddedResources -ne 228 -or
                   $s1dReport.counts.deployableProfileSources -ne 130 -or
                   $s1dReport.counts.candidateApiTypes -ne 7 -or
@@ -607,8 +872,8 @@ jobs:
                   $s1dReport.counts.inputScenarios -ne 9 -or
                   $s1dReport.counts.inputFrames -ne 37 -or
                   $s1dReport.counts.lockedInputSourceVerifierChecks -ne 538 -or
-                  $s1dReport.counts.checks -ne 453 -or
-                  $s1dChecks.Count -ne 453 -or
+                  $s1dReport.counts.checks -ne 612 -or
+                  $s1dChecks.Count -ne 612 -or
                   @($s1dChecks | Where-Object passed -ne $true).Count -ne 0 -or
                   $s1dReport.sourceOnly.verifierBuiltCandidate -ne $false -or
                   $s1dReport.sourceOnly.verifierLoadedCandidate -ne $false -or
@@ -621,7 +886,7 @@ jobs:
                     'artifactPublicApiAllowlistFrozen,artifactCompileAllowlistFrozen,profileSourceCatalogBound,rawFeedbackDecoderFrozen,driverRuntimeAbiBound,distributionReady' -or
                   @($s1dReport.gateState.PSObject.Properties |
                     Where-Object Value -ne $false).Count -ne 0) {
-                throw 'the exact 453-check S1.5d inert source-candidate contract did not pass'
+                throw 'the exact 612-check S1.5d inert source-candidate contract did not pass'
               }
               $s1dDocument.Dispose()
             } catch {
@@ -744,9 +1009,9 @@ jobs:
               }
               $personas = @($report.ksxPersonaContract.personas)
               if ($report.ksxPersonaContract.ok -ne $true -or
-                  $personas.Count -ne 3 -or
+                  $personas.Count -ne 5 -or
                   @($personas | Where-Object { $_.present -ne $true -or $_.passed -ne $true }).Count -ne 0) {
-                throw 'the three KSX persona contracts did not pass'
+                throw 'the five KSX persona contracts did not pass'
               }
               if ($report.safety.requestsReadOnlySdkOperations -ne $false -or
                   $report.safety.constructsSdkContext -ne $false -or
@@ -998,10 +1263,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '10.0.400'
       - name: Verify the frozen S1.5e observation infrastructure
@@ -1065,9 +1330,9 @@ jobs:
           $lockPath = 'tools/hidmaestro-runtime-candidate/s1_5e/contract.lock.json'
           $verifierPath = 'tools/hidmaestro-runtime-candidate/s1_5e/verify-source-contract.ps1'
           if ((Get-NormalizedTextSha256 $lockPath) -cne
-                '2F693C2B240963DE8FDB1118138B2D92414F6B4A8ECA9A0A9604C67EFFAAE872' -or
+                'D71F807B34D0D696547EAA4226D3231437086B7E83AC4F3B52A304FFFC330D16' -or
               (Get-NormalizedTextSha256 $verifierPath) -cne
-                'E0606A72E6CDE90C543F5F6C431F72D9DB139A472C59888343C9E7EEF5117B4D') {
+                '2F4CE763FC45AE2E545D26C8A68F476290E8D07F4E7CC3FCFA36B12922A9F02B') {
             throw 'The frozen S1.5e observation contract or verifier drifted.'
           }
 
@@ -1162,7 +1427,7 @@ jobs:
               $receipt.actionsRunner.upstreamCommit -cne
                 '2a0dac0857901a63d365a36dcf99cf50114ca954' -or
               $receipt.actionsRunner.infrastructureNetworkUsedForPinnedFetch -ne $true -or
-              $receipt.stage.fileCountPerBuild -ne 241 -or
+              $receipt.stage.fileCountPerBuild -ne 244 -or
               $receipt.stage.upstreamSelectedFileCount -ne 229 -or
               $receipt.stage.preRawTreeSha256 -cne $receipt.stage.postRawTreeSha256 -or
               $receipt.stage.preNormalizedTreeSha256 -cne
@@ -1333,7 +1598,7 @@ jobs:
   # walk through the Actions tab. `release.yml` is what turns the same two files
   # into a releases-page download (docs/FIRST-RUN.md §1 moment 1).
   release-binary:
-    needs: [test, hidmaestro-contracts, hidmaestro-artifact-observation]
+    needs: [test, studio-browser, studio-environments, hidmaestro-contracts, hidmaestro-artifact-observation]
     uses: ./.github/workflows/build-installer.yml
     with:
       # Empty on every ordinary push; the tag when release.yml is the caller.

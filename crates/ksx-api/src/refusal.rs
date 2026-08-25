@@ -40,10 +40,29 @@ pub mod codes {
     pub const MACRO_INVALID: &str = "macro-invalid";
     /// A restore mode / verb argument this build does not know.
     pub const BAD_REQUEST: &str = "bad-request";
+    /// A persistent hardware transaction may have started, but KSX could not
+    /// return a fully verified recovery outcome. Callers must not classify
+    /// this by matching human-readable prose.
+    pub const RECOVERY_REQUIRED: &str = "recovery-required";
+    /// Another application owns the panel encoder's exclusive configuration
+    /// collection. Keyboard input may still work, but chart reads and writes
+    /// must wait for that owner to release the hardware interface.
+    pub const PANEL_INTERFACE_BUSY: &str = "panel-interface-busy";
+    /// A press was heard but could not be joined to exactly one selectable board.
+    pub const IDENTIFY_UNMATCHED: &str = "identify-unmatched";
     /// The operation exists, but not on this surface — the remedy names the
     /// one that has it. This is the honest answer a defaulted trait method
     /// gives, and it is never a silent no-op.
     pub const NOT_HERE: &str = "not-here";
+    /// A disposable, source-tree-managed runtime refused an installed-machine
+    /// lifecycle write. The complete installed candidate is the authority for
+    /// autostart and other paths that must survive removal of a dev artifact.
+    pub const MANAGED_DEV_RUNTIME: &str = "managed-dev-runtime";
+    /// The change is real but cannot happen in place: applying it means
+    /// replugging the pads (`stage-apply` on a structurally different draft).
+    /// The message names WHAT differs; the surface's honest next offer is the
+    /// verb that replaces the session (`stage-play`).
+    pub const NEEDS_RESTART: &str = "needs-restart";
 }
 
 /// A refusal: what was refused, why, and — when one exists — the command that

@@ -90,6 +90,78 @@ complex tool with the simplest interface."
    controller layout, keeping the out-of-box experience close to zero mapping.
    The mapper exists for the exceptions.
 
+## Canvas authoring migration (decision, 2026-08-22)
+
+Nocturne's permanent right-hand binding ledger is deprecated as a spatial
+surface, not as a capability set. The canvas is the relation now: physical
+keys → real processing steps → virtual-controller controls. A giant editor
+card placed between every source and destination would falsely claim the
+editor participates in runtime, so it is not the replacement.
+
+The replacement has four parts:
+
+1. **Semantic graph selection** is separate from widget move/resize selection.
+   Click selects one endpoint or route; Ctrl/Shift-click and a touch Select
+   mode build a set. A contextual action dock describes the exact keys,
+   controls, routes and processors selected.
+2. **The cords are the two old tabs.** Selecting a key reveals every control
+   it drives; selecting a control reveals every key that drives it. Find
+   (Ctrl+K) searches keys, controls, players, macros and routes, then pans and
+   highlights matches instead of filtering a second copy of the graph.
+3. **Only real behavior becomes a node.** A macro remains a processor. Toggle
+   and turbo form one compact behavior processor immediately before the
+   destination control, because those settings apply to that control's
+   combined incoming keys. Plain hold stays a direct cord.
+4. **A nonpersistent Connections table remains the accessible/no-script
+   escape hatch.** Native forms and consequence text survive there (and on
+   `/map`); they no longer reserve a quarter of the main canvas.
+
+### Canvas route and processor placement contract (revised 2026-08-24)
+
+The shipped direct-route presentation is one independent, axis-aware lasso
+curve for every physical-key → virtual-control relation. Direct cords never
+merge into a player harness, trunk, shared bus or bundled segment. Fan-out is
+therefore one real source endpoint with separately traceable outgoing cords;
+fan-in likewise keeps every incoming relation distinct. Each cord attaches to
+the exact visible keycap and controller control, receives its own deterministic
+lane, and remains independently inspectable.
+
+Macro segments are the deliberate causal exception to a direct key → control
+cord: they remain explicit key → processor and processor → control relations.
+Macro processors auto-place between their live source and destination groups.
+Dragging a processor, or nudging its move control with the keyboard, stores a
+manual offset from that automatic position; the relationship can therefore
+move with its widgets without discarding the user's adjustment. The processor
+exposes an explicit **Auto** action which removes that offset and returns it to
+automatic placement.
+If browser storage refuses either write, the card stays useful for the current
+session, labels that state visibly, and keeps a keyboard-reachable retry rather
+than claiming the change was saved.
+
+Processor offsets are canvas presentation state only. Canonical keys,
+functions, macro topology and mapping writes remain backend-owned; moving a
+processor never changes a binding.
+
+Bulk connection grammar is explicit:
+
+- one key + many controls = fan-out;
+- many keys + one control = fan-in;
+- many keys + many controls must choose Pair in selection order, Connect all
+  combinations (with the exact edge count), or Map in sequence.
+
+Ghost cords preview the result before one atomic staged write. One physical
+key shared by four players remains one source endpoint with four outgoing
+cords, never four fake keycaps. The batch write carries the staged revision,
+exact additions/removals and strategy; conflict/consequence composition stays
+server-owned and the operation is all-or-nothing.
+
+Migration order is contractual: first normalize the backend authoring graph
+and remove every dependency on the ledger DOM; then ship read-only selection
+and Find; then direct/bulk authoring; then behavior and macro lifecycle; only
+then default the table closed and remove the permanent pane after parity tests.
+Hiding the pane before `Map all`, label lookup, learn/assign and open-row state
+stop querying it would silently remove features and is therefore forbidden.
+
 ## The three builds (in order)
 
 **Build A status (v7, 2026-08-05).** Landed on the mapper page: every zone
@@ -159,10 +231,13 @@ into MAME's `joystick_map`. Direction glyphs are unified on arrows everywhere,
 including the art's zone labels: a diagonal that did not look like the same
 family as its two parents would defeat the lens.
 
-**Build A — core shipped.** The visual controller, legend, multi-key editing,
-conflict handling, recovery actions, macros, and persona-aware vocabulary are
-in Studio. Remaining polish is passive press-to-select and live echo directly
-on the mapping surface; `/check` is the shipped reference consumer for echo.
+**Build A — core shipped.** The visual controller, binding inspector, physical
+key inventory, multi-key editing, conflict handling, recovery actions, macros,
+persona-aware vocabulary, and direct live echo are in Studio. `/map` and
+`/check` consume the same read-only SSE feed. The mapper paints it only when
+the running session origin matches the saved config or staged draft currently
+on screen; matching player numbers alone are not enough. The remaining
+interaction polish is passive press-to-select.
 
 **Build B — product first run shipped.** `/start` holds a complete setup in the
 idle daemon, and `/map?target=stage&slot=N` points this same mapper at it.
@@ -198,8 +273,12 @@ control name and the key that drives it. The roster is the BACKEND's —
 `MapperSlot::bindings`' key set, unbound controls included, because that is
 exactly the control somebody is standing at the cabinet trying to test.
 
-*What is left of commandment 2.* The echo ON the mapping surface itself. The
-feed it needs now exists and `/check` is the reference consumer.
+*Commandment 2 is now visible in place.* `/map` consumes the same read-only
+feed as `/check`, but paints it only after a fresh map/session-origin
+handshake proves the running setup matches the saved or staged target on
+screen. Controller hits and the selected keyboard's physical keys illuminate
+in the mapper; observable stream/session changes clear the ledger before any
+new frame is accepted.
 
 ## Explicitly deferred (recorded so they're chosen, not forgotten)
 
@@ -211,9 +290,10 @@ feed it needs now exists and `/check` is the reference consumer.
 - Steam-style activators (hold/double-press) — engine feature first, UI
   after; belongs with shift-layers vocabulary from the PadForge audit.
 - Community preset sharing (Steam's playtime-ranked configs) — M7+.
-- WinUSB-claimed panels can't be learned via RawInput (injected typethrough
-  is invisible) — the learn path needs a capture-side tap when M6 migration
-  becomes real; recorded in CONTROL-SURFACE.
+- ~~WinUSB-claimed panels cannot be learned through RawInput.~~ The current
+  learner is daemon-owned and observes the capture-side panel tap. Studio
+  binds Identify and Mapping results to the exact daemon generation, so a
+  competing tab/action cannot lend its key to the wrong write.
 
 ## The 2026-native layer (what no tool in the field study could do)
 
@@ -227,9 +307,9 @@ the capabilities that stack only for us, ranked by leverage:
    backend. Press a panel button → ksx translates → the virtual pad changes
    → the mapper's render lights up. That is END-TO-END verification of the
    entire product pipeline, drawn on the mapping surface (commandment 2),
-   and it makes Build C's core value buildable TODAY: the physical-side
-   echo still wants the live socket, but the virtual-side echo — the half
-   users actually need to trust the chain — is free. (Caveats: page must be
+   and it complements Build C's shipped physical-side SSE echo with an
+   independent virtual-side proof of the final controller state. (Caveats:
+   the page must be
    visible, first read needs a user gesture, mapping-order quirks per
    browser — feature-detect and degrade to socket echo later.)
 2. **AI-assisted mapping (E5 grown up).** Every mapper in the study makes
@@ -260,7 +340,7 @@ the capabilities that stack only for us, ranked by leverage:
    proved config UIs should be drivable from the thing being configured —
    on a cabinet, that's the panel).
 
-Current placement: Build B's product first run and Build C's live check are
-shipped. Direct mapper echo, QR/LAN pairing, PWA presentation, the command
-palette, and multi-surface sync remain future work; none is part of the current
-fresh-install acceptance claim.
+Current placement: Build B's product first run, Build C's live check, and the
+mapper's direct physical-side echo are shipped. Virtual-side Gamepad API echo,
+QR/LAN pairing, PWA presentation, the command palette, and multi-surface sync
+remain future work; none is part of the current fresh-install acceptance claim.

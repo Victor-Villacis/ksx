@@ -53,9 +53,26 @@ export interface ProfileRow {
   detail: string;
 }
 
+export interface ControllerOutputView {
+  backend: string;
+  label: string;
+  personas: string[];
+  persona_labels: string[];
+  code: string;
+  state: string;
+  readable: boolean;
+  blocked: boolean;
+  unknown: boolean;
+  verified_on_play: boolean;
+  version: string | null;
+  line: string;
+  remedy: string;
+}
+
 export interface StatusSnapshot {
   generated_at: string;
   vigem: string;
+  hidmaestro: ControllerOutputView;
   interception: string;
   daemon_running: boolean;
   daemon_detail: string;
@@ -72,6 +89,12 @@ export interface SessionView {
   /** games.toml profile the daemon is (or would be) pointed at — the --game
    *  flag the no-daemon banner's command needs on a profile-driven cabinet. */
   profile: string | null;
+  active: {
+    elapsed: string;
+    input: string;
+    outputs: string;
+    escape_hatch: string;
+  } | null;
 }
 
 /** What GET /api/status serves and what the island props carry — one shape
@@ -107,6 +130,8 @@ const PAD_TILE_FLOOR = 4;
 
 const [generatedAt, setGeneratedAt] = createSignal("(no snapshot)");
 const [vigemLine, setVigemLine] = createSignal("not collected");
+const [hidmaestroLine, setHidmaestroLine] = createSignal("not collected");
+const [hidmaestroRemedy, setHidmaestroRemedy] = createSignal("");
 const [interceptionLine, setInterceptionLine] = createSignal("not collected");
 const [daemonYesNo, setDaemonYesNo] = createSignal("unknown");
 const [daemonDetail, setDaemonDetail] = createSignal("not collected");
@@ -115,6 +140,12 @@ const [padsSummary, setPadsSummary] = createSignal("not collected");
 const [profilesSummary, setProfilesSummary] = createSignal("not collected");
 const [configRoot, setConfigRoot] = createSignal("(unknown)");
 const [sessionLine, setSessionLine] = createSignal("not collected");
+const [sessionElapsed, setSessionElapsed] = createSignal("0s");
+const [activeInput, setActiveInput] = createSignal("Active input details are unavailable.");
+const [activeOutputs, setActiveOutputs] = createSignal("Active output details are unavailable.");
+const [escapeHatch, setEscapeHatch] = createSignal(
+  "LeftCtrl five times always toggles keyboard capture off or on. Stop or Ctrl+Alt+Del ends Play.",
+);
 const [flashLine, setFlashLine] = createSignal("");
 const [daemonCmd, setDaemonCmd] = createSignal("ksx daemon");
 
@@ -129,12 +160,16 @@ const [canStop, setCanStop] = createSignal(false);
 const [daemonDown, setDaemonDown] = createSignal(false);
 const [vigemOk, setVigemOk] = createSignal(false);
 const [vigemWarn, setVigemWarn] = createSignal(false);
+const [hidmaestroVerifiedOnPlay, setHidmaestroVerifiedOnPlay] = createSignal(false);
+const [hidmaestroBlocked, setHidmaestroBlocked] = createSignal(false);
+const [hidmaestroUnknown, setHidmaestroUnknown] = createSignal(false);
 const [icptBorrowed, setIcptBorrowed] = createSignal(false);
 const [icptAbsent, setIcptAbsent] = createSignal(false);
 const [autostartOn, setAutostartOn] = createSignal(false);
 const [autostartOff, setAutostartOff] = createSignal(false);
 const [rowsLive, setRowsLive] = createSignal(false);
 const [rowsPlain, setRowsPlain] = createSignal(false);
+const [activeDetails, setActiveDetails] = createSignal(false);
 
 const [profileOptions, setProfileOptions] = createSignal<ProfileRow[]>([]);
 const [padTiles, setPadTiles] = createSignal<PadTile[]>([]);
@@ -164,6 +199,8 @@ export function applyStatus(p: StatusPayload): void {
 
   setGeneratedAt(snap.generated_at);
   setVigemLine(snap.vigem);
+  setHidmaestroLine(snap.hidmaestro.line);
+  setHidmaestroRemedy(snap.hidmaestro.remedy);
   setInterceptionLine(snap.interception);
   setDaemonYesNo(snap.daemon_running ? "yes" : "no");
   setDaemonDetail(snap.daemon_detail);
@@ -172,6 +209,10 @@ export function applyStatus(p: StatusPayload): void {
   setProfilesSummary(profilesSummaryLine(snap.profiles.length));
   setConfigRoot(snap.config_root);
   setSessionLine(session.line);
+  setSessionElapsed(session.active?.elapsed ?? "starting…");
+  setActiveInput(session.active?.input ?? "The daemon is starting the selected input pipeline.");
+  setActiveOutputs(session.active?.outputs ?? "Controller endpoints are being created.");
+  if (session.active?.escape_hatch) setEscapeHatch(session.active.escape_hatch);
   setDaemonCmd(session.profile ? `ksx daemon --game "${session.profile}"` : "ksx daemon");
 
   const okVigem = snap.vigem.startsWith("installed — service running");
@@ -188,12 +229,16 @@ export function applyStatus(p: StatusPayload): void {
   setDaemonDown(!session.reachable);
   setVigemOk(okVigem);
   setVigemWarn(!okVigem);
+  setHidmaestroVerifiedOnPlay(snap.hidmaestro.verified_on_play);
+  setHidmaestroBlocked(snap.hidmaestro.blocked);
+  setHidmaestroUnknown(snap.hidmaestro.unknown);
   setIcptBorrowed(icptInstalled);
   setIcptAbsent(!icptInstalled);
   setAutostartOn(onAutostart);
   setAutostartOff(!onAutostart);
   setRowsLive(startable);
   setRowsPlain(!startable);
+  setActiveDetails(session.running && session.active != null);
 
   setProfileOptions(snap.profiles);
   setProfileRows(snap.profiles);
@@ -204,7 +249,7 @@ export function applyStatus(p: StatusPayload): void {
       instance: pad.instance,
       // Mirrors render.rs art_for(): PlayStation-ish personas get the DS4
       // art, everything else the Xbox pad.
-      art: /playstation|ds4|ps4/i.test(pad.persona)
+      art: /playstation|dualsense|dualshock|ds[45]|ps[45]/i.test(pad.persona)
         ? "/_assets/pad-ds4.svg"
         : "/_assets/pad-xbox.svg",
       maphref: `/map?slot=${i + 1}`,
@@ -231,6 +276,7 @@ export function applyUnreachable(): void {
   setDaemonDown(true);
   setRowsLive(false);
   setRowsPlain(true);
+  setActiveDetails(false);
 }
 
 /** One-shot action feedback (POST outcome or the seed's ?flash= value).
@@ -263,7 +309,7 @@ export function applyFlash(flash: string | null | undefined): void {
 export function StatusIsland() {
   return h(
     "div",
-    { class: "studio" },
+    { class: "studio playflow" },
     // ── App shell: brand, route nav, live state ─────────────────────────
     // The nav is a REAL two-item rail on both screens (v14): a wordmark and a
     // one-way "Mapper →" link read as a page that happens to have a sibling;
@@ -279,10 +325,25 @@ export function StatusIsland() {
       ),
       h(
         "nav",
-        { class: "topnav", "aria-label": "screens" },
-        h("a", { class: "navlink", href: "/start" }, "Setup"),
-        h("a", { class: "navlink", href: "/map" }, "Controls"),
-        h("a", { class: "navlink", href: "/check" }, "Test"),
+        { class: "topnav workflow-nav", "aria-label": "Set up and play" },
+        h("a", { class: "navlink workflow-link", href: "/start#keyboard" }, h("span", { class: "workflow-num" }, "1"), "Keyboard"),
+        h("a", { class: "navlink workflow-link", href: "/start#controller" }, h("span", { class: "workflow-num" }, "2"), "Controller"),
+        h("a", { class: "navlink workflow-link", href: "/map" }, h("span", { class: "workflow-num" }, "3"), "Mapping"),
+        h("span", { class: "navlink workflow-link on", "aria-current": "page" }, h("span", { class: "workflow-num" }, "4"), "Play"),
+      ),
+      h(
+        "details",
+        { class: "appmenu" },
+        h("summary", { class: "navlink", "aria-label": "Open Studio tools" }, "Tools"),
+        h(
+          "nav",
+          { class: "appmenu-panel", "aria-label": "Studio tools" },
+          h("a", { href: "/check" }, h("span", null, "Test inputs"), h("small", null, "Live controller feedback")),
+          h("a", { href: "/profiles" }, h("span", null, "Game library"), h("small", null, "Saved launch profiles")),
+          h("a", { href: "/devices" }, h("span", null, "Hardware"), h("small", null, "Devices and recovery")),
+          h("a", { href: "/pads" }, h("span", null, "Virtual controllers"), h("small", null, "Inspect and test pads")),
+          h("a", { href: "/setup" }, h("span", null, "Import & recovery"), h("small", null, "Advanced configuration")),
+        ),
       ),
       createShow(
         () => pillRunning(),
@@ -300,6 +361,16 @@ export function StatusIsland() {
     h(
       "main",
       null,
+      h(
+        "section",
+        { class: "play-hero", "aria-labelledby": "play-title" },
+        h("div", null,
+          h("p", { class: "eyebrow" }, "Step 4 · Play"),
+          h("h1", { id: "play-title" }, "Your controllers, ready when you are"),
+          h("p", { class: "workflow-lede" }, "Start a saved setup, test the live inputs, and keep the emergency stop within reach."),
+        ),
+        h("a", { class: "btn", href: "/check" }, "Test controller"),
+      ),
       // ── FIX 1: the no-daemon banner, TOP of the page and identical in
       // wording to the mapper's. The session card below already renders its
       // controls disabled; this is what makes the state impossible to miss
@@ -339,7 +410,7 @@ export function StatusIsland() {
       h(
         "section",
         { class: "card hero session" },
-        h("h2", null, "Session"),
+        h("h2", null, "Gameplay session"),
         h("p", { class: "state" }, () => sessionLine()),
         // Flash = feedback from the LAST action, visually distinct from
         // the state line above (which is the present-tense truth) and
@@ -351,6 +422,38 @@ export function StatusIsland() {
         createShow(
           () => flashError(),
           () => h("p", { class: "flash flash-err" }, () => flashLine()),
+        ),
+        createShow(
+          () => activeDetails(),
+          () =>
+            h(
+              "div",
+              { class: "session-live-facts", "aria-label": "Active gameplay details" },
+              h(
+                "div",
+                { class: "session-fact" },
+                h("span", { class: "session-fact-label" }, "Duration"),
+                h("strong", { class: "mono" }, () => sessionElapsed()),
+              ),
+              h(
+                "div",
+                { class: "session-fact" },
+                h("span", { class: "session-fact-label" }, "Keyboard capture"),
+                h("strong", null, () => activeInput()),
+              ),
+              h(
+                "div",
+                { class: "session-fact" },
+                h("span", { class: "session-fact-label" }, "Controller outputs"),
+                h("strong", null, () => activeOutputs()),
+              ),
+              h(
+                "div",
+                { class: "session-emergency", role: "note" },
+                h("span", { class: "session-fact-label" }, "Emergency release"),
+                h("strong", null, () => escapeHatch()),
+              ),
+            ),
         ),
         createShow(
           () => canStart(),
@@ -369,7 +472,7 @@ export function StatusIsland() {
                   (o) => h("option", null, o.title),
                 ),
               ),
-              h("button", { class: "btn btn-primary", type: "submit" }, "Start"),
+              h("button", { class: "btn btn-primary btn-play", type: "submit" }, "Start playing"),
             ),
         ),
         createShow(
@@ -381,7 +484,7 @@ export function StatusIsland() {
               h(
                 "form",
                 { method: "post", action: "/session/stop" },
-                h("button", { class: "btn btn-danger", type: "submit" }, "Stop"),
+                h("button", { class: "btn btn-danger", type: "submit" }, "Stop playing"),
               ),
               h(
                 "form",
@@ -401,7 +504,7 @@ export function StatusIsland() {
                 { disabled: "" },
                 h("option", null, "(profiles unavailable)"),
               ),
-              h("button", { class: "btn", disabled: "" }, "Start"),
+              h("button", { class: "btn", disabled: "" }, "Start playing"),
               h(
                 "p",
                 { class: "warn" },
@@ -415,15 +518,20 @@ export function StatusIsland() {
       h(
         "section",
         { class: "card wide padcard" },
-        h("h2", null, "Virtual pads"),
+        h("h2", null, "ViGEm virtual pads"),
         h("p", { class: "cardline" }, () => padsSummary()),
+        h(
+          "p",
+          { class: "cardline" },
+          "This inventory is the ViGEm compatibility bus. DualSense uses HIDMaestro and is verified when its gameplay session starts.",
+        ),
         // The deep link that makes /pads findable. A page reachable only from
         // the top nav is a page nobody finds, and "no virtual pads exposed by
         // the bus" is exactly the sentence someone wants to act on.
         h(
           "p",
           { class: "cardline" },
-          h("a", { class: "maplink", href: "/pads" }, "Spawn or prune pads →"),
+          h("a", { class: "maplink", href: "/pads" }, "Manage ViGEm pads →"),
         ),
         h(
           "div",
@@ -448,7 +556,7 @@ export function StatusIsland() {
                   { class: "padmeta" },
                   h("span", { class: "player" }, p.player),
                   h("span", { class: "persona" }, p.persona),
-                  h("a", { class: "maplink", href: p.maphref }, "Map"),
+                  h("a", { class: "maplink", href: p.maphref }, "Edit mapping"),
                 ),
                 h("div", { class: "instance" }, p.instance),
               ),
@@ -485,7 +593,7 @@ export function StatusIsland() {
           "p",
           { class: "cardline" },
           "Each profile is a games.toml entry: the program to launch and the ",
-          "slots it hands out. Starting one is what puts pads on the bus.",
+          "slots it hands out. Starting one brings its controller outputs online.",
         ),
         h("p", { class: "cardline mono" }, () => profilesSummary()),
         createShow(
@@ -511,7 +619,7 @@ export function StatusIsland() {
                       "form",
                       { method: "post", action: "/session/start" },
                       h("input", { type: "hidden", name: "profile", value: g.title }),
-                      h("button", { class: "btn btn-row", type: "submit" }, "Start"),
+                      h("button", { class: "btn btn-row", type: "submit" }, "Launch game"),
                     ),
                   ),
               ),
@@ -572,6 +680,25 @@ export function StatusIsland() {
           ),
         ),
         h("p", { class: "ddetail" }, () => vigemLine()),
+        h(
+          "div",
+          { class: "drow" },
+          h("span", { class: "dname" }, "HIDMaestro"),
+          createShow(
+            () => hidmaestroVerifiedOnPlay(),
+            () => h("span", { class: "pill pill-warn" }, "check at Play"),
+          ),
+          createShow(
+            () => hidmaestroBlocked(),
+            () => h("span", { class: "pill pill-warn" }, "attention"),
+          ),
+          createShow(
+            () => hidmaestroUnknown(),
+            () => h("span", { class: "pill pill-idle" }, "unknown"),
+          ),
+        ),
+        h("p", { class: "ddetail" }, () => hidmaestroLine()),
+        h("p", { class: "ddetail system-remedy" }, () => hidmaestroRemedy()),
         h(
           "div",
           { class: "drow" },

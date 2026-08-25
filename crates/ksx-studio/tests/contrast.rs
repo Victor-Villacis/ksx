@@ -7,13 +7,16 @@
 //! a doc does not defend itself.
 //!
 //! So this file re-derives every ratio from the CSS that actually ships, on
-//! every `cargo test`. It parses `studio-ui/src/studio.css` rather than
-//! restating its values, because a test that hardcodes the palette is a second
-//! copy of the palette and would drift in exactly the same way.
+//! every `cargo test`. It parses the sheet — since TK0 the generated
+//! `tokens.gen.css` (compiled from `studio-ui/tokens/`, the single palette
+//! source) concatenated with the authored `studio.css`, the same order the
+//! build hashes them — rather than restating values, because a test that
+//! hardcodes the palette is a second copy of the palette and would drift in
+//! exactly the same way.
 //!
 //! # What it checks, and why those pairs
 //!
-//! Not the cartesian product of colours and grounds — that would fail on
+//! Not the cartesian product of colors and grounds — that would fail on
 //! combinations the app never draws and force the palette darker than the
 //! design needs. The ground sets below are the ones that **actually compose**
 //! in `studio.css`:
@@ -23,7 +26,7 @@
 //!   `:hover` rule that sets it also sets one of those two
 //!   (`.btn:hover`, `.tab:hover`, `.navlink:active`), so `--text-3` is not
 //!   checked against it.
-//! - **Coloured roles** sit on the four panel grounds — including
+//! - **Colored roles** sit on the four panel grounds — including
 //!   `--bg-2`, which is a real card ground (`.legendcard`, `.macrocard`,
 //!   `.hint`, `.grid .card`, `.strow.sthead`), not just a page wash. They are
 //!   never drawn on `--panel-3`.
@@ -51,17 +54,38 @@
 
 use std::collections::BTreeMap;
 
-const CSS: &str = include_str!("../../../studio-ui/src/studio.css");
-const BUILD_MJS: &str = include_str!("../../../studio-ui/build.mjs");
-const RENDER_RS: &str = include_str!("../src/render.rs");
-const RENDER_MAP_RS: &str = include_str!("../src/render_map.rs");
+/// The sheet as the browser reads it: the GENERATED token CSS first, the
+/// authored component CSS after — the same order build.mjs concatenates them
+/// into the hashed studio.<hash>.css. Since TK0 every token lives in
+/// tokens.gen.css (compiled from studio-ui/tokens/), and build-tokens.mjs
+/// fails the build if a `:root` block or a second light media query creeps
+/// back into studio.css — which is what keeps `split_themes` below reading
+/// the right region.
+const CSS: &str = concat!(
+    include_str!("../../../studio-ui/src/tokens.gen.css"),
+    "\n", // generateCss joins array inputs with \n — keep the constant byte-exact
+    include_str!("../../../studio-ui/src/genui-canvas.css"),
+    "\n",
+    include_str!("../../../studio-ui/src/studio.css"),
+);
+/// The generated Rust module the anti-flash pin reads. An integration test
+/// cannot see a `pub(crate)` const, so the pin matches the module's SOURCE —
+/// which obliges the generator to emit each pinned rule as one unbroken
+/// string literal (no concat seams or line continuations mid-rule).
+const THEME_TOKENS_RS: &str = include_str!("../src/theme_tokens.rs");
+/// The controller art as SHIPPED: the committed embed output, which CI pins
+/// to a fresh build. Parsing the emitted asset (rather than build.mjs's
+/// source, as this file did while the sheet was hand-mirrored) checks the
+/// whole chain: token source → build.mjs templating → the SVG a browser gets.
+const PAD_XBOX_SVG: &str = include_str!("../assets/pad-xbox.svg");
+const PAD_DS4_SVG: &str = include_str!("../assets/pad-ds4.svg");
 
 const TEXT_FLOOR: f64 = 4.5;
 const NON_TEXT_FLOOR: f64 = 3.0;
 /// See the module docs: calibrated to the outgoing theme, not to WCAG.
 const SEPARATOR_FLOOR: f64 = 1.12;
 
-// ── colour ───────────────────────────────────────────────────────────────
+// ── color ───────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Rgba {
@@ -83,7 +107,7 @@ impl Rgba {
 
     /// Composite `self` over `bg`. The tint tokens are the whole reason this
     /// exists: `--accent-dim` is `rgba(accent, 0.13)`, and what a reader sees
-    /// is that *over a ground*, which is neither of the two colours named.
+    /// is that *over a ground*, which is neither of the two colors named.
     fn over(self, bg: Rgba) -> Rgba {
         Rgba {
             r: self.r * self.a + bg.r * (1.0 - self.a),
@@ -113,7 +137,7 @@ fn ratio(fg: Rgba, bg: Rgba) -> f64 {
     (hi + 0.05) / (lo + 0.05)
 }
 
-fn parse_colour(raw: &str) -> Option<Rgba> {
+fn parse_color(raw: &str) -> Option<Rgba> {
     let raw = raw.trim();
     if let Some(h) = raw.strip_prefix('#') {
         let h = h.trim();
@@ -150,7 +174,7 @@ fn parse_colour(raw: &str) -> Option<Rgba> {
     None
 }
 
-// ── parsing studio.css ───────────────────────────────────────────────────
+// ── parsing the sheet (tokens.gen.css + studio.css) ──────────────────────
 
 /// The light theme lives in `@media (prefers-color-scheme: light)`. Everything
 /// before it is the dark theme plus the theme-agnostic primitives; the media
@@ -159,7 +183,7 @@ fn split_themes(css: &str) -> (String, String) {
     let marker = "@media (prefers-color-scheme: light)";
     let start = css
         .find(marker)
-        .expect("studio.css must contain the light-theme media query");
+        .expect("tokens.gen.css must contain the light-theme media query");
     let after = &css[start..];
     let open = after.find('{').expect("media query must open a block");
     let mut depth = 0usize;
@@ -181,7 +205,7 @@ fn split_themes(css: &str) -> (String, String) {
     (css[..start].to_owned(), after[open..=end].to_owned())
 }
 
-/// Every `--name: <colour>` declaration in `block`. Non-colour custom
+/// Every `--name: <color>` declaration in `block`. Non-color custom
 /// properties (`--macrow: 1.9rem`) simply do not parse and are skipped.
 fn tokens(block: &str) -> BTreeMap<String, Rgba> {
     let mut out = BTreeMap::new();
@@ -198,7 +222,7 @@ fn tokens(block: &str) -> BTreeMap<String, Rgba> {
         // comment has to come off before the semicolon does.
         let value = value.split("/*").next().unwrap_or(value);
         let value = value.trim().trim_end_matches(';').trim();
-        if let Some(c) = parse_colour(value) {
+        if let Some(c) = parse_color(value) {
             out.insert(name.trim().to_owned(), c);
         }
     }
@@ -206,19 +230,88 @@ fn tokens(block: &str) -> BTreeMap<String, Rgba> {
 }
 
 struct Theme {
-    name: &'static str,
+    name: String,
+    /// `dark` or `light` — what the block's own `color-scheme` declares.
+    /// Scrollbars and form controls follow it, so the anti-flash pin needs it
+    /// per theme.
+    scheme: String,
     tok: BTreeMap<String, Rgba>,
+}
+
+/// Replace every `/* … */` comment with spaces (newlines kept), so the
+/// line-based parsers below cannot be poisoned by declaration-shaped text or
+/// a `:root[data-theme="` marker INSIDE a comment — the concat carries the
+/// authored sheet's prose and every theme file's note, and a changelog line
+/// like `--accent: #0b7d72;` in a comment would otherwise last-wins into the
+/// token map with every gate green (review-caught vector).
+fn strip_comments(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut rest = css;
+    while let Some(start) = rest.find("/*") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        match after.find("*/") {
+            Some(end) => {
+                out.extend(
+                    after[..end]
+                        .chars()
+                        .map(|c| if c == '\n' { '\n' } else { ' ' }),
+                );
+                rest = &after[end + 2..];
+            }
+            None => rest = "",
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Every declaration in a block, TEXTUALLY: custom properties AND
+/// `color-scheme`, values whitespace-normalized but otherwise verbatim. The
+/// mirror check below uses this because parsed-color comparison has subset
+/// semantics and color-only coverage — an omitted token or a diverging
+/// `--ground`/`--e-*`/`--font-sans` would slip through it.
+fn declarations(block: &str) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for line in block.lines() {
+        let line = line.trim();
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim();
+        if !name.starts_with("--") && name != "color-scheme" {
+            continue;
+        }
+        let value = value.trim().trim_end_matches(';').trim();
+        out.insert(
+            name.to_owned(),
+            value.split_whitespace().collect::<Vec<_>>().join(" "),
+        );
+    }
+    out
+}
+
+/// The `color-scheme` a block declares — the one non-custom-property line
+/// the theme machinery cares about.
+fn scheme_of(block: &str) -> Option<String> {
+    block
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("color-scheme:"))
+        .map(|v| v.trim().trim_end_matches(';').to_owned())
 }
 
 impl Theme {
     fn get(&self, name: &str) -> Rgba {
-        *self
-            .tok
-            .get(name)
-            .unwrap_or_else(|| panic!("{}: token --{name} is missing from studio.css", self.name))
+        *self.tok.get(name).unwrap_or_else(|| {
+            panic!(
+                "{}: token --{name} is missing from the token source \
+                     (studio-ui/tokens/, emitted into tokens.gen.css)",
+                self.name
+            )
+        })
     }
 
-    /// The four grounds a panel-level colour can legitimately sit on.
+    /// The four grounds a panel-level color can legitimately sit on.
     fn panel_grounds(&self) -> Vec<(&'static str, Rgba)> {
         vec![
             ("--bg (surface)", self.get("bg")),
@@ -229,21 +322,111 @@ impl Theme {
     }
 }
 
+/// Every `:root[data-theme="X"] { … }` block in the sheet, in document order.
+/// TK1 taught the gate to ENUMERATE themes instead of hardcoding two; the
+/// stamped blocks arrive with TK2 (the dark/light pins) and TK3+ (new
+/// themes), and land after the light media block, outside `split_themes`'s
+/// scan regions — this is the parser that sees them.
+fn data_theme_blocks(css: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let marker = ":root[data-theme=\"";
+    let mut at = 0usize;
+    while let Some(rel) = css[at..].find(marker) {
+        let name_start = at + rel + marker.len();
+        let name_end = name_start
+            + css[name_start..]
+                .find('"')
+                .expect("data-theme selector must close its quote");
+        let name = css[name_start..name_end].to_owned();
+        let open = name_end
+            + css[name_end..]
+                .find('{')
+                .expect("data-theme block must open");
+        let mut depth = 0usize;
+        let mut end = None;
+        for (i, ch) in css[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(open + i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let end = end.expect("data-theme block must close");
+        out.push((name, css[open..=end].to_owned()));
+        at = end;
+    }
+    out
+}
+
 fn themes() -> Vec<Theme> {
-    let (dark_block, light_block) = split_themes(CSS);
-    let dark = tokens(&dark_block);
-    let mut light = dark.clone();
+    let css = strip_comments(CSS);
+    let (dark_block, light_block) = split_themes(&css);
+    let base = tokens(&dark_block);
+    let mut light = base.clone();
     light.extend(tokens(&light_block));
-    vec![
+    let mut out = vec![
         Theme {
-            name: "dark",
-            tok: dark,
+            name: "dark".to_owned(),
+            scheme: scheme_of(&dark_block).expect("the base block must declare color-scheme"),
+            tok: base.clone(),
         },
         Theme {
-            name: "light",
+            name: "light".to_owned(),
+            scheme: scheme_of(&light_block).expect("the light block must declare color-scheme"),
             tok: light,
         },
-    ]
+    ];
+
+    // The stamped blocks. An id that names an existing map ("dark" pins the
+    // base values, "light" the media block's — both generated from ONE
+    // source) must MATCH it token-for-token: a divergence means the generator
+    // emitted two truths for one token, the exact drift class this file
+    // exists to kill. Any other id is a real theme: the base map overlaid,
+    // and every floor test below runs over it automatically.
+    for (name, block) in data_theme_blocks(&css) {
+        let declared = tokens(&block);
+        if let Some(existing) = out.iter().find(|t| t.name == name) {
+            for (tok_name, val) in &declared {
+                let want = existing.tok.get(tok_name).unwrap_or_else(|| {
+                    panic!("[data-theme={name}]: pins --{tok_name}, which the {name} map lacks")
+                });
+                assert_eq!(
+                    val, want,
+                    "[data-theme={name}]: --{tok_name} disagrees with the {name} map — \
+                     the generator emitted two truths for one token"
+                );
+            }
+            // The light mirror also gets a TEXTUAL set-equality check
+            // against the media block: the parsed-color pass above has
+            // subset semantics and reads only colors, so an omitted token
+            // or a diverging non-color value (--ground, the shadows, an
+            // optional --font-sans override) would slip through it while
+            // the two "one source" copies quietly disagreed.
+            if name == "light" {
+                assert_eq!(
+                    declarations(&block),
+                    declarations(&light_block),
+                    "[data-theme=light] must declare exactly what the system-follow \
+                     media block declares — both are generated from themes/light.json, \
+                     so any difference is the generator emitting two truths"
+                );
+            }
+        } else {
+            let scheme = scheme_of(&block).unwrap_or_else(|| {
+                panic!("[data-theme={name}]: every theme block declares color-scheme")
+            });
+            let mut tok = base.clone();
+            tok.extend(declared);
+            out.push(Theme { name, scheme, tok });
+        }
+    }
+    out
 }
 
 // ── the report ───────────────────────────────────────────────────────────
@@ -296,7 +479,7 @@ fn text_tiers_clear_the_floor_on_every_ground() {
             for tier in ["text", "text-2", "text-3"] {
                 r.check(
                     TEXT_FLOOR,
-                    t.name,
+                    &t.name,
                     &format!("--{tier} on {gn}"),
                     t.get(tier),
                     g,
@@ -320,7 +503,7 @@ fn text_tiers_clear_the_floor_on_every_ground() {
         for tier in ["text", "text-2", "text-3"] {
             r.check(
                 TEXT_FLOOR,
-                t.name,
+                &t.name,
                 &format!("--{tier} on --panel-3 (hover)"),
                 t.get(tier),
                 hover,
@@ -330,16 +513,16 @@ fn text_tiers_clear_the_floor_on_every_ground() {
     r.finish("text tiers");
 }
 
-/// Accent, identity and the three state colours, drawn as text.
+/// Accent, identity and the three state colors, drawn as text.
 #[test]
-fn coloured_roles_clear_the_floor_as_text() {
+fn colored_roles_clear_the_floor_as_text() {
     let mut r = Report::default();
     for t in themes() {
         for (gn, g) in t.panel_grounds() {
             for role in ["accent", "accent-strong", "cool", "ok", "warn", "danger"] {
                 r.check(
                     TEXT_FLOOR,
-                    t.name,
+                    &t.name,
                     &format!("--{role} on {gn}"),
                     t.get(role),
                     g,
@@ -347,7 +530,7 @@ fn coloured_roles_clear_the_floor_as_text() {
             }
         }
     }
-    r.finish("coloured roles as text");
+    r.finish("colored roles as text");
 }
 
 /// The state triad: full-strength text on its own tint, over each ground.
@@ -368,7 +551,7 @@ fn role_text_clears_the_floor_on_its_own_tint() {
                 let composed = t.get(tint).over(g);
                 r.check(
                     TEXT_FLOOR,
-                    t.name,
+                    &t.name,
                     &format!("--{role} on --{tint} over {gn}"),
                     t.get(role),
                     composed,
@@ -386,21 +569,21 @@ fn text_on_solid_role_plates_clears_the_floor() {
     for t in themes() {
         r.check(
             TEXT_FLOOR,
-            t.name,
+            &t.name,
             "--accent-on over --accent-fill (.btn-primary)",
             t.get("accent-on"),
             t.get("accent-fill"),
         );
         r.check(
             TEXT_FLOOR,
-            t.name,
+            &t.name,
             "--danger-on over --danger-fill (Stop)",
             t.get("danger-on"),
             t.get("danger-fill"),
         );
         r.check(
             TEXT_FLOOR,
-            t.name,
+            &t.name,
             "--accent-on over --accent-strong (:hover)",
             t.get("accent-on"),
             t.get("accent-strong"),
@@ -421,7 +604,7 @@ fn focus_ring_clears_the_non_text_floor() {
         for (gn, g) in grounds {
             r.check(
                 NON_TEXT_FLOOR,
-                t.name,
+                &t.name,
                 &format!("--focus on {gn}"),
                 t.get("focus"),
                 g,
@@ -445,7 +628,7 @@ fn separators_stay_perceptible() {
             for g in grounds {
                 r.check(
                     SEPARATOR_FLOOR,
-                    t.name,
+                    &t.name,
                     &format!("--{line} on --{g}"),
                     t.get(line),
                     t.get(g),
@@ -466,9 +649,10 @@ fn separators_stay_perceptible() {
 /// somebody has to make on purpose.
 #[test]
 fn hardware_markings_are_either_legible_or_a_recorded_exemption() {
-    let (dark_block, _) = split_themes(CSS);
+    let (dark_block, _) = split_themes(&strip_comments(CSS));
     let t = Theme {
-        name: "hw",
+        name: "hw".to_owned(),
+        scheme: "dark".to_owned(),
         tok: tokens(&dark_block),
     };
     let mut r = Report::default();
@@ -508,7 +692,8 @@ fn hardware_markings_are_either_legible_or_a_recorded_exemption() {
             "--{name} is a recorded contrast exemption measured at {expected:.2}:1, \
              but now measures {got:.2}:1. That is fine if it went UP, and a \
              decision either way — update the exemption in \
-             ksx-studio/tests/contrast.rs and the note in studio.css §1."
+             ksx-studio/tests/contrast.rs and the hardware-markings note in \
+             studio-ui/tokens/semantic.json (emitted into tokens.gen.css §1)."
         );
     }
 }
@@ -528,7 +713,7 @@ fn placeholder_text_clears_the_text_floor() {
         for ground in ["panel-2", "panel", "bg"] {
             r.check(
                 TEXT_FLOOR,
-                t.name,
+                &t.name,
                 &format!("--text-3 placeholder on --{ground}"),
                 t.get("text-3"),
                 t.get(ground),
@@ -583,7 +768,7 @@ fn placeholder_text_clears_the_text_floor() {
 ///
 /// What must NOT be dimmed is the reason: the `<p class="warn">` in the same
 /// block is deliberately outside both selectors, and is checked at full
-/// strength by `coloured_roles_clear_the_floor_as_text`.
+/// strength by `colored_roles_clear_the_floor_as_text`.
 #[test]
 fn disabled_controls_are_a_pinned_exemption() {
     /// `.controls.off .btn` / `.controls.off select`.
@@ -598,106 +783,171 @@ fn disabled_controls_are_a_pinned_exemption() {
         }
     }
 
-    // Measured 2026-08-06. Dark reads noticeably better than light because
-    // fading toward a bright parent collapses the pair faster.
-    for (theme_name, expected) in [("dark", 3.45_f64), ("light", 2.36_f64)] {
-        let t = themes()
-            .into_iter()
-            .find(|t| t.name == theme_name)
-            .expect("theme present");
+    // Measured 2026-08-06 (dark/light). PER-THEME PIN TABLE (TK1): every
+    // theme ships its exemption numbers (DESIGN-SYSTEM §13.7) — a theme with
+    // no row here fails loudly rather than inheriting anything. Dark reads
+    // noticeably better than light because fading toward a bright parent
+    // collapses the pair faster.
+    const DISABLED_PINS: &[(&str, f64)] = &[("dark", 3.45), ("light", 2.36), ("matrix", 3.66)];
+    for t in themes() {
+        let expected = DISABLED_PINS
+            .iter()
+            .find(|(n, _)| *n == t.name)
+            .map(|(_, v)| *v)
+            .unwrap_or_else(|| {
+                panic!(
+                    "theme '{}' has no recorded disabled-control pin — measure the \
+                     composite (this test prints it), decide it per DESIGN-SYSTEM \
+                     §3.5/§13.7, and add the row to DISABLED_PINS",
+                    t.name
+                )
+            });
         let card = t.get("panel");
         let label = faded(t.get("text"), DISABLED_OPACITY, card);
         let field = faded(t.get("panel-2"), DISABLED_OPACITY, card);
         let got = ratio(label, field);
         assert!(
             (got - expected).abs() < 0.02,
-            "{theme_name}: the disabled control label measures {got:.2}:1, pinned at \
+            "{}: the disabled control label measures {got:.2}:1, pinned at \
              {expected:.2}:1. This pair is a WCAG 1.4.3 exemption (inactive \
              component), NOT a free pass — if it moved, decide again and update \
-             both this pin and DESIGN-SYSTEM §3.5."
+             both this pin and DESIGN-SYSTEM §3.5.",
+            t.name
         );
     }
 
     // Case 2: the read-only mapper. `.zone.z-dead, .lrow.l-dead { opacity: .4 }`
     // over the legend's own ground. `--bg-2` is the ground the legend card
     // actually draws on (`.legendcard`), which is why it is the one measured.
+    // Same per-theme pin discipline as above.
     const DEAD_OPACITY: f64 = 0.40;
-    for (theme_name, role, expected) in [
-        ("dark", "accent", 2.55_f64), // a bound key in the legend
-        ("dark", "text-3", 1.81_f64), // a control's own label
-        ("light", "accent", 1.85_f64),
-        ("light", "text-3", 1.70_f64),
-    ] {
-        let t = themes()
-            .into_iter()
-            .find(|t| t.name == theme_name)
-            .expect("theme present");
-        let ground = t.get("bg-2");
-        let got = ratio(faded(t.get(role), DEAD_OPACITY, ground), ground);
-        assert!(
-            (got - expected).abs() < 0.05,
-            "{theme_name}: --{role} in the READ-ONLY MAPPER measures {got:.2}:1 against \
-             its own ground, pinned at {expected:.2}:1. This is the whole mapper — every \
-             pad zone and every legend row carries z-dead/l-dead while a session runs. \
-             It is pinned, not blessed: see this test's docs before changing the opacity \
-             or the token, and update DESIGN-SYSTEM §3.5 with whatever is decided."
-        );
+    const DEAD_PINS: &[(&str, &str, f64)] = &[
+        ("dark", "accent", 2.55), // a bound key in the legend
+        ("dark", "text-3", 1.81), // a control's own label
+        ("light", "accent", 1.85),
+        ("light", "text-3", 1.70),
+        ("matrix", "accent", 2.72), // measured 2026-08-20, TK3
+        ("matrix", "text-3", 2.07),
+    ];
+    for t in themes() {
+        for role in ["accent", "text-3"] {
+            let expected = DEAD_PINS
+                .iter()
+                .find(|(n, r, _)| *n == t.name && *r == role)
+                .map(|(_, _, v)| *v)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "theme '{}' has no recorded read-only-mapper pin for --{role} — \
+                         measure it, decide it, and add the row to DEAD_PINS",
+                        t.name
+                    )
+                });
+            let ground = t.get("bg-2");
+            let got = ratio(faded(t.get(role), DEAD_OPACITY, ground), ground);
+            assert!(
+                (got - expected).abs() < 0.05,
+                "{}: --{role} in the READ-ONLY MAPPER measures {got:.2}:1 against \
+                 its own ground, pinned at {expected:.2}:1. This is the whole mapper — every \
+                 pad zone and every legend row carries z-dead/l-dead while a session runs. \
+                 It is pinned, not blessed: see this test's docs before changing the opacity \
+                 or the token, and update DESIGN-SYSTEM §3.5 with whatever is decided.",
+                t.name
+            );
+        }
     }
 }
 
-/// The anti-flash `<style>` is a hand copy of `--bg`/`--text`, so it drifts
-/// silently: a wrong anti-flash colour looks exactly like the flash it exists
-/// to prevent. It HAD drifted before this test existed (`#0b0e14` against a
-/// stylesheet that had moved to `#0a0d13`).
+/// The anti-flash `<style>` used to be a hand copy of `--bg`/`--text` in two
+/// files, and it HAD drifted before this test existed (`#0b0e14` against a
+/// stylesheet that had moved to `#0a0d13`) — a wrong anti-flash color looks
+/// exactly like the flash it exists to prevent. Since TK0 the const is
+/// GENERATED into `theme_tokens.rs` from the same token source as the sheet,
+/// so it cannot drift by hand — this pin now guards the other failure mode:
+/// the generator emitting CSS and Rust that disagree.
 #[test]
 fn anti_flash_css_matches_the_tokens_it_mirrors() {
     let themes = themes();
-    let dark = &themes[0];
-    let light = &themes[1];
+    let dark = themes
+        .iter()
+        .find(|t| t.name == "dark")
+        .expect("dark theme present");
+    let light = themes
+        .iter()
+        .find(|t| t.name == "light")
+        .expect("light theme present");
 
-    let expect_dark = format!(
-        "body{{background:{};color:{};margin:0}}",
-        css_hex(dark.get("bg")),
-        css_hex(dark.get("text"))
-    );
-    let expect_light = format!(
-        "body{{background:{};color:{}}}",
-        css_hex(light.get("bg")),
-        css_hex(light.get("text"))
-    );
+    let mut expected = vec![
+        // Base + the system-follow light media rules, color-scheme included:
+        // without it, scrollbars and form controls first-paint in the OS
+        // scheme while the sheet is pending — the same flash class at
+        // smaller scale (review-caught during TK2's design).
+        "html{color-scheme:dark}".to_owned(),
+        format!(
+            "body{{background:{};color:{};margin:0}}",
+            css_hex(dark.get("bg")),
+            css_hex(dark.get("text"))
+        ),
+        "@media (prefers-color-scheme:light){html{color-scheme:light}".to_owned(),
+        format!(
+            "body{{background:{};color:{}}}",
+            css_hex(light.get("bg")),
+            css_hex(light.get("text"))
+        ),
+    ];
+    // One rule pair per ENUMERATED theme: a stamped choice must win first
+    // paint in both OS schemes, and a theme the sheet ships without an
+    // anti-flash rule would flash the base theme at exactly its users.
+    for t in &themes {
+        expected.push(format!(
+            "html[data-theme={}]{{color-scheme:{}}}",
+            t.name, t.scheme
+        ));
+        expected.push(format!(
+            "html[data-theme={}] body{{background:{};color:{}}}",
+            t.name,
+            css_hex(t.get("bg")),
+            css_hex(t.get("text"))
+        ));
+    }
 
-    for (file, src) in [("render.rs", RENDER_RS), ("render_map.rs", RENDER_MAP_RS)] {
-        let compact: String = src.chars().filter(|c| !c.is_whitespace()).collect();
-        let want_dark: String = expect_dark.chars().filter(|c| !c.is_whitespace()).collect();
-        let want_light: String = expect_light
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect();
+    let compact: String = THEME_TOKENS_RS
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    for want in expected {
+        let want_compact: String = want.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
-            compact.contains(&want_dark),
-            "{file}: PERSONALITY_CSS must open with the dark tokens from \
-             studio.css — expected to find `{expect_dark}`"
-        );
-        assert!(
-            compact.contains(&want_light),
-            "{file}: PERSONALITY_CSS's light override must match studio.css — \
-             expected to find `{expect_light}`"
+            compact.contains(&want_compact),
+            "theme_tokens.rs: PERSONALITY_CSS must carry `{want}` (derived from \
+             the token source). Regenerate through tools/studio-env/build-assets.ps1"
         );
     }
 }
 
-/// The controller art's palette is hand-mirrored into `build.mjs` because an
-/// `<img>`-embedded SVG is its own document and inherits no custom properties.
-/// Same drift risk as the anti-flash CSS, so same treatment.
+/// The controller art carries its own palette sheet because an
+/// `<img>`-embedded SVG is its own document and inherits no custom
+/// properties. Since TK0 build.mjs TEMPLATES the sheet's four token values
+/// from the token source (the bespoke art colors stay literal), so this test
+/// parses the sheet out of the SHIPPED asset — checking the whole chain,
+/// token source → build.mjs → the bytes a browser gets — instead of
+/// build.mjs's source, where the templated values no longer appear as text.
 #[test]
 fn pad_art_palette_stays_separable() {
-    let sheet = BUILD_MJS
-        .split("const PAD_SHEET")
+    let sheet = PAD_XBOX_SVG
+        .split("<style>")
         .nth(1)
-        .expect("build.mjs must define PAD_SHEET");
+        .expect("pad-xbox.svg must carry its injected palette <style>");
     let sheet = &sheet[..sheet
         .find("</style>")
-        .expect("PAD_SHEET must close its <style>")];
+        .expect("the palette sheet must close its <style>")];
+
+    // Both pads get the identical sheet injected; pin that with one substring
+    // so the DS4 cannot quietly ship a different palette.
+    assert!(
+        PAD_DS4_SVG.contains(sheet),
+        "pad-ds4.svg must carry the same palette sheet as pad-xbox.svg — \
+         regenerate both through tools/studio-env/build-assets.ps1"
+    );
 
     let grab = |class: &str, prop: &str, nth: usize| -> Rgba {
         let hits: Vec<&str> = sheet
@@ -706,15 +956,15 @@ fn pad_art_palette_stays_separable() {
             .collect();
         let block = hits.get(nth).unwrap_or_else(|| {
             panic!(
-                "PAD_SHEET must declare {class} at least {} time(s)",
+                "the pad palette sheet must declare {class} at least {} time(s)",
                 nth + 1
             )
         });
-        let after = &block[block
-            .find(prop)
-            .unwrap_or_else(|| panic!("PAD_SHEET's {class} (occurrence {nth}) must set {prop}"))..];
-        let hex_start = after.find('#').expect("declaration must use a hex colour");
-        parse_colour(&after[hex_start..hex_start + 7]).expect("valid hex colour")
+        let after = &block[block.find(prop).unwrap_or_else(|| {
+            panic!("the pad palette sheet's {class} (occurrence {nth}) must set {prop}")
+        })..];
+        let hex_start = after.find('#').expect("declaration must use a hex color");
+        parse_color(&after[hex_start..hex_start + 7]).expect("valid hex color")
     };
 
     let mut r = Report::default();
@@ -754,19 +1004,27 @@ fn pad_art_palette_stays_separable() {
 
     // ── the mirrors, pinned ──────────────────────────────────────────────
     //
-    // Separation alone does NOT catch drift: `PAD_SHEET` is a hand copy of
-    // specific studio.css tokens, and a copy that wanders stays perfectly
-    // separable while quietly disagreeing with the page around it. That is
-    // how the light outline came to be `#6d6180` after `--text-3` had moved
-    // to `#685c7a` — the art kept the old tertiary, and nothing noticed.
+    // Separation alone does NOT catch drift: a sheet that wanders stays
+    // perfectly separable while quietly disagreeing with the page around it.
+    // That is how the light outline came to be `#6d6180` after `--text-3`
+    // had moved to `#685c7a` — the art kept the old tertiary, and nothing
+    // noticed. build.mjs now templates these four values from the token
+    // source, so a mismatch here means the COMMITTED asset is stale (or the
+    // templating broke), and the fix is a rebuild, not a hand edit.
     //
     // Only the values that really ARE token mirrors are pinned. The dark
-    // body fill, dark detail and both insets are bespoke art colours chosen
+    // body fill, dark detail and both insets are bespoke art colors chosen
     // against the silhouette, not copies of anything, so asserting them
     // would be inventing a contract that was never there.
     let themes = themes();
-    let dark = &themes[0];
-    let light = &themes[1];
+    let dark = themes
+        .iter()
+        .find(|t| t.name == "dark")
+        .expect("dark theme present");
+    let light = themes
+        .iter()
+        .find(|t| t.name == "light")
+        .expect("light theme present");
     for (nth, theme, class, prop, token, expect) in [
         (
             0usize,
@@ -805,11 +1063,11 @@ fn pad_art_palette_stays_separable() {
         assert_eq!(
             css_hex(got),
             css_hex(expect),
-            "build.mjs PAD_SHEET: {theme} {class}{prop} is a hand mirror of \
-             studio.css `--{token}` and has drifted — it reads {} but the token \
-             is {}. Update PAD_SHEET (an <img> SVG is its own document and \
-             cannot use var(), so the copy is unavoidable; letting it rot is \
-             not).",
+            "pad-xbox.svg palette sheet: {theme} {class}{prop} must equal the \
+             `--{token}` token it is templated from, but the shipped asset \
+             reads {} while the token is {}. The committed art is stale — \
+             regenerate through tools/studio-env/build-assets.ps1 (an <img> SVG is its \
+             own document and cannot use var(), so the sheet is baked in).",
             css_hex(got),
             css_hex(expect)
         );

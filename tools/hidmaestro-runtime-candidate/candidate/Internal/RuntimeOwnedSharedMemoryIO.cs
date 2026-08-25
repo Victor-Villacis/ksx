@@ -9,9 +9,12 @@ internal interface IRuntimeOwnedSharedMemoryEndpoint : IDisposable
     // NeutralizeAndStop can close it after any thrown exception.
     void Start(Action<HMOutputPacket> outputCallback);
 
-    // The frozen input contract requires the endpoint to receive the 63
-    // descriptor data bytes only. The report ID is configured on the exact
-    // device and is prepended by the driver.
+    // The frozen input contract requires the endpoint to receive descriptor
+    // data bytes only. Where the profile's descriptor declares a report ID it
+    // is configured on the exact device and prepended by the driver, so the
+    // leading byte is stripped; where it declares none there is nothing to
+    // strip and the whole report is data. Which of the two applies is carried
+    // by the profile's RuntimeInputWireShape, never assumed here.
     void SubmitLegacyInputData(ReadOnlySpan<byte> dataWithoutReportId);
 
     void Neutralize();
@@ -60,7 +63,9 @@ internal sealed class RuntimeOwnedSharedMemoryIO
         }
     }
 
-    internal void SubmitFullWireInput(ReadOnlySpan<byte> fullWireReport)
+    internal void SubmitFullWireInput(
+        ReadOnlySpan<byte> fullWireReport,
+        in RuntimeInputWireShape wireShape)
     {
         lock (_gate)
         {
@@ -69,21 +74,10 @@ internal sealed class RuntimeOwnedSharedMemoryIO
                 throw new ObjectDisposedException(nameof(RuntimeOwnedSharedMemoryIO));
             }
 
-            if (fullWireReport.Length != RuntimeDualSenseInputEncoder.EncodedReportSize)
-            {
-                throw new ArgumentException(
-                    $"The full DualSense wire report must be exactly {RuntimeDualSenseInputEncoder.EncodedReportSize} bytes.",
-                    nameof(fullWireReport));
-            }
+            wireShape.ValidateFullWireReport(fullWireReport, nameof(fullWireReport));
 
-            if (fullWireReport[0] != RuntimeDualSenseInputEncoder.ReportId)
-            {
-                throw new ArgumentException(
-                    $"The full DualSense wire report must begin with report ID 0x{RuntimeDualSenseInputEncoder.ReportId:X2}.",
-                    nameof(fullWireReport));
-            }
-
-            _endpoint.SubmitLegacyInputData(fullWireReport.Slice(1, 63));
+            _endpoint.SubmitLegacyInputData(
+                fullWireReport.Slice(wireShape.SharedDataOffset, wireShape.SharedDataLength));
         }
     }
 

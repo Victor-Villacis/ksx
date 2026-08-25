@@ -88,9 +88,45 @@ pub enum Request {
     StageCommit,
     /// **Play** the staged setup, with nothing written.
     StagePlay,
+    /// **Apply** the staged setup's BINDINGS to the running session in place —
+    /// pads stay plugged, keyboards stay captured, nothing re-enumerates, and
+    /// nothing is written. Refused (code `needs-restart`) when the draft
+    /// differs structurally from what is running — slot count or numbering,
+    /// persona, device assignment, blocking, capture backend — with the
+    /// difference named, so a surface can offer the honest alternative:
+    /// [`Self::StagePlay`], which replaces the session. Refused too when
+    /// nothing is running: there is no session to apply into.
+    StageApply,
+    /// **Adopt the saved configuration into the stage**: build the draft from
+    /// config.toml and its presets — or from one games.toml profile — so the
+    /// everyday screen can show the setup this machine already has. A READ of
+    /// disk and a write of daemon memory only; no file changes. Refused when
+    /// the stage is non-empty, because adoption must never overwrite edits —
+    /// a surface that means to replace them sends `discard` first, behind its
+    /// own confirmation.
+    StageAdopt {
+        /// A games.toml profile title. Absent adopts config.toml — and it is
+        /// absent on the wire too, so the documented plain line stays plain.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
+    },
     LearnKey,
     LearnPoll,
-    LearnCancel,
+    LearnCancel {
+        /// Cancel only the learner attempt the caller actually opened. Older
+        /// clients omit this and retain the legacy unconditional cancel; new
+        /// Studio flows send it so a stale tab cannot stop a newer listener.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        generation: Option<u64>,
+    },
+    /// Begin a read-only, bounded simultaneous-input observation for one
+    /// exact keyboard-compatible device.
+    InputTestStart(crate::InputTestSpec),
+    InputTestPoll,
+    InputTestCancel {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        generation: Option<u64>,
+    },
 }
 
 impl Request {
@@ -115,9 +151,14 @@ impl Request {
             Self::StageMacro(_) => "stage-macro",
             Self::StageCommit => "stage-commit",
             Self::StagePlay => "stage-play",
+            Self::StageApply => "stage-apply",
+            Self::StageAdopt { .. } => "stage-adopt",
             Self::LearnKey => "learn-key",
             Self::LearnPoll => "learn-poll",
-            Self::LearnCancel => "learn-cancel",
+            Self::LearnCancel { .. } => "learn-cancel",
+            Self::InputTestStart(_) => "input-test-start",
+            Self::InputTestPoll => "input-test-poll",
+            Self::InputTestCancel { .. } => "input-test-cancel",
         }
     }
 
@@ -167,6 +208,11 @@ pub struct MapRequest {
     /// about", which leaves an existing rate alone; `0` clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turbo_hz: Option<u32>,
+    /// TOGGLE-HOLD (docs/INPUT-TRANSFORMS.md §2 item 8). ABSENT means "not
+    /// asked about", which leaves an existing latch alone; `false` clears it,
+    /// `true` sets it — the same three-state rule the rate follows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toggle: Option<bool>,
     /// Apply it to a running session (a binding change hot-swaps).
     #[serde(default, skip_serializing_if = "is_false")]
     pub reload: bool,
@@ -216,6 +262,7 @@ impl MapRequest {
                 .get("turbo_hz")
                 .and_then(serde_json::Value::as_u64)
                 .and_then(|hz| u32::try_from(hz).ok()),
+            toggle: request.get("toggle").and_then(serde_json::Value::as_bool),
             reload: flag(request, "reload"),
         })
     }
@@ -533,7 +580,7 @@ pub struct SlotAssignRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona: Option<String>,
     /// **What opposite directions on this slot's stick do** - a
-    /// [`ksx_core::Socd`] name (`off`, `neutral`, `up-priority`).
+    /// [`ksx_core::Socd`] name (`off`, `neutral`, `up-priority`, `last-input`, `first-input`).
     ///
     /// ABSENT means "not asked about", the same three-state rule
     /// [`Self::persona`] follows and for the same reason: `Socd::default()` is
@@ -635,6 +682,7 @@ pub enum Response {
     /// chances for the same page to be built from a different view type.
     Stage(Box<crate::StageOutcome>),
     Learn(LearnResponse),
+    InputTest(InputTestResponse),
 }
 
 impl Response {
@@ -678,11 +726,21 @@ impl Response {
             Request::SlotAssign(_) => {
                 Self::SlotAssign(serde_json::from_value(value).map_err(read(verb))?)
             }
-            Request::Stage | Request::StageEdit(_) | Request::StageCommit | Request::StagePlay => {
+            Request::Stage
+            | Request::StageEdit(_)
+            | Request::StageCommit
+            | Request::StagePlay
+            | Request::StageApply
+            | Request::StageAdopt { .. } => {
                 Self::Stage(serde_json::from_value(value).map_err(read(verb))?)
             }
-            Request::LearnKey | Request::LearnPoll | Request::LearnCancel => {
+            Request::LearnKey | Request::LearnPoll | Request::LearnCancel { .. } => {
                 Self::Learn(serde_json::from_value(value).map_err(read(verb))?)
+            }
+            Request::InputTestStart(_)
+            | Request::InputTestPoll
+            | Request::InputTestCancel { .. } => {
+                Self::InputTest(serde_json::from_value(value).map_err(read(verb))?)
             }
         })
     }
@@ -700,6 +758,7 @@ impl Response {
             Self::SlotAssign(r) => serde_json::to_value(r),
             Self::Stage(r) => serde_json::to_value(r),
             Self::Learn(r) => serde_json::to_value(r),
+            Self::InputTest(r) => serde_json::to_value(r),
         };
         value.unwrap_or(serde_json::Value::Null)
     }
@@ -727,6 +786,23 @@ macro_rules! refusal_of {
 
 /// `status`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActiveSessionResponse {
+    /// Monotonic session age as measured by the daemon that owns the run.
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    /// Number of distinct physical keyboards feeding the running plan.
+    #[serde(default)]
+    pub keyboards: u32,
+    /// Human-safe capture policy/backend summary. Never contains a device path.
+    #[serde(default)]
+    pub capture: String,
+    /// One served, path-free controller row per live slot.
+    #[serde(default)]
+    pub controllers: Vec<String>,
+}
+
+/// `status`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusResponse {
     pub ok: bool,
     /// `stopped` | `starting` | `running` | `failed` | `quitting`.
@@ -747,6 +823,11 @@ pub struct StatusResponse {
     /// resume puts an unsaved setup back or replaces it.
     #[serde(default)]
     pub origin: Option<String>,
+    /// Details bound to the runner that actually started. `None` from older
+    /// daemons and whenever no session is live; surfaces must not reconstruct
+    /// these from a config file that may have changed after Play began.
+    #[serde(default)]
+    pub active: Option<ActiveSessionResponse>,
     /// The daemon's own one-line self-description — the tray tooltip.
     #[serde(default)]
     pub tooltip: Option<String>,
@@ -847,6 +928,9 @@ pub struct MapResponse {
     /// The rate the game will actually SEE (~15 Hz ceiling).
     #[serde(default)]
     pub turbo_effective_hz: Option<u32>,
+    /// TOGGLE-HOLD (§2 item 8): press once holds, press again releases.
+    #[serde(default)]
+    pub toggle: bool,
     #[serde(default)]
     pub reloaded: bool,
     /// The live session took it with the pads left plugged.
@@ -1083,6 +1167,40 @@ pub struct LearnResponse {
 
 refusal_of!(LearnResponse);
 
+/// `input-test-start` / `input-test-poll` / `input-test-cancel`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputTestResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub generation: Option<u64>,
+    #[serde(default)]
+    pub selector: Option<String>,
+    #[serde(default)]
+    pub remaining_ms: Option<u64>,
+    #[serde(default)]
+    pub held: Vec<String>,
+    #[serde(default)]
+    pub seen: Vec<String>,
+    #[serde(default)]
+    pub peak: u32,
+    #[serde(default)]
+    pub events: u64,
+    #[serde(default)]
+    pub dropped: u64,
+    #[serde(default)]
+    pub rollover_visibility: String,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub code: Option<String>,
+}
+
+refusal_of!(InputTestResponse);
+
 // ---------------------------------------------------------------------------
 // Small shared readers — the daemon's field conventions, in one place
 // ---------------------------------------------------------------------------
@@ -1152,7 +1270,29 @@ mod tests {
         assert_eq!(Request::Quit.to_line(), r#"{"verb":"quit"}"#);
         assert_eq!(Request::LearnKey.to_line(), r#"{"verb":"learn-key"}"#);
         assert_eq!(Request::LearnPoll.to_line(), r#"{"verb":"learn-poll"}"#);
-        assert_eq!(Request::LearnCancel.to_line(), r#"{"verb":"learn-cancel"}"#);
+        assert_eq!(
+            Request::InputTestStart(crate::InputTestSpec {
+                selector: "usb:d209:0430:00".into(),
+                duration_ms: 30_000,
+            })
+            .to_line(),
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":30000}"#
+        );
+        assert_eq!(
+            Request::InputTestPoll.to_line(),
+            r#"{"verb":"input-test-poll"}"#
+        );
+        assert_eq!(
+            Request::LearnCancel { generation: None }.to_line(),
+            r#"{"verb":"learn-cancel"}"#
+        );
+        assert_eq!(
+            Request::LearnCancel {
+                generation: Some(7)
+            }
+            .to_line(),
+            r#"{"verb":"learn-cancel","generation":7}"#
+        );
         assert_eq!(
             Request::Start { profile: None }.to_line(),
             r#"{"verb":"start"}"#
@@ -1230,6 +1370,14 @@ steps = [{ hold = ["A"], frames = 2, allow_short = true }]
                 preset: "Panel P1".into(),
             }),
             Request::LearnKey,
+            Request::InputTestStart(crate::InputTestSpec {
+                selector: "usb:d209:0430:00".into(),
+                duration_ms: 12_000,
+            }),
+            Request::InputTestPoll,
+            Request::InputTestCancel {
+                generation: Some(9),
+            },
         ];
         for request in requests {
             let line = request.to_line();
@@ -1237,6 +1385,33 @@ steps = [{ hold = ["A"], frames = 2, allow_short = true }]
                 .unwrap_or_else(|err| panic!("{line} did not read back: {err}"));
             assert_eq!(back, request, "{line}");
         }
+    }
+
+    /// A Studio update may reach an older daemon response shape while the
+    /// resident process is still being restarted. Newly-added diagnostic
+    /// counters therefore default rather than making a truthful partial
+    /// snapshot unreadable; the client supplies the explicit unavailable
+    /// rollover verdict.
+    #[test]
+    fn an_older_input_test_response_remains_readable() {
+        let response = Response::parse(
+            &Request::InputTestPoll,
+            serde_json::json!({
+                "ok": true,
+                "state": "listening",
+                "generation": 4,
+                "selector": "usb:d209:0430:00"
+            }),
+        )
+        .expect("response");
+        let Response::InputTest(response) = response else {
+            panic!("wrong response kind");
+        };
+        assert_eq!(response.generation, Some(4));
+        assert!(response.held.is_empty());
+        assert!(response.seen.is_empty());
+        assert_eq!(response.peak, 0);
+        assert!(response.rollover_visibility.is_empty());
     }
 
     /// THE REGRESSION, in type form. A macro body written with a `repeat`

@@ -4,9 +4,9 @@
 
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Refusals are typed now (docs/M9-DECISION.md §6): a fake daemon refuses with
 /// the same `Refusal` a real one does, so what the page renders here is what it
@@ -32,16 +32,47 @@ struct FixedStatus;
 const BACKUP_LABEL: &str = "2026-08-05 14:32:07 UTC";
 
 /// Remember every address handed to a test server for this process. The tests
-/// run in parallel and a port-0 probe is released before `serve` binds; without
-/// this reservation two probes can briefly choose the same address and make
-/// one test talk to another test's fixture.
+/// run in parallel and `serve` owns its bind internally, so the port-0 probe
+/// must be released first. The reservation keeps two in-process probes apart;
+/// the nonce handshake below proves which provider won the remaining bind race.
 static SERVER_ADDRS: Mutex<Vec<SocketAddr>> = Mutex::new(Vec::new());
+static SERVER_NONCE: AtomicU64 = AtomicU64::new(1);
+
+/// Decorate the ordinary status provider with a one-use startup marker. The
+/// marker travels through the real `/api/status` handler, so observing it
+/// proves much more than "something accepted TCP": this exact fixture's
+/// provider, router and listener own the address returned to the test.
+struct FixtureStatus {
+    inner: Box<dyn StatusSource>,
+    marker: String,
+}
+
+impl StatusSource for FixtureStatus {
+    fn snapshot(&self) -> StatusSnapshot {
+        let mut snapshot = self.inner.snapshot();
+        snapshot.generated_at.clone_from(&self.marker);
+        snapshot
+    }
+
+    fn mapper(&self) -> MapperSnapshot {
+        self.inner.mapper()
+    }
+
+    fn macros(&self, preset: &str) -> MacroSnapshot {
+        self.inner.macros(preset)
+    }
+}
 
 impl StatusSource for FixedStatus {
     fn snapshot(&self) -> StatusSnapshot {
         StatusSnapshot {
             generated_at: "test".into(),
             vigem: "installed".into(),
+            hidmaestro: ksx_api::ControllerOutputView::hidmaestro_inventory(
+                true,
+                false,
+                Some("1.6.1".into()),
+            ),
             interception: "installed".into(),
             daemon_running: true,
             daemon_detail: "test".into(),
@@ -83,6 +114,7 @@ impl StatusSource for FixedStatus {
                 // One AUTO-FIRING control, so the legend badge is covered by
                 // the ordinary page assertions.
                 turbo: std::collections::BTreeMap::from([("B".to_owned(), 12)]),
+                toggle: Default::default(),
                 macros_off: false,
             }],
         }
@@ -157,10 +189,35 @@ struct ScriptedControl {
     played: AtomicBool,
     committed: AtomicBool,
     learning: AtomicBool,
+    learn_generation: AtomicUsize,
+    input_test_generation: AtomicUsize,
+    input_test_spec: Mutex<Option<ksx_api::InputTestSpec>>,
+    input_test_cancelled: AtomicBool,
+    /// The daemon's StageMeta dirty stamp, scripted: set by the test that
+    /// exercises the Apply button's running+dirty visibility.
+    dirty: AtomicBool,
+    /// Daemon-style staged mutation generation. Unlike the content fallback
+    /// this changes even when a slot is removed and recreated identically.
+    stage_revision: AtomicUsize,
+    /// Scripts `stage_apply` to refuse with `needs-restart`.
+    apply_needs_restart: AtomicBool,
+    /// Emulate an older daemon whose staged slot predates the authoring table.
+    without_authoring: bool,
+    /// Keep macro tables readable while making the direct mapper projection
+    /// fail, so persona labels and the two availability channels are tested
+    /// independently.
+    invalid_mapping_authoring: AtomicBool,
+    /// Optional one-shot daemon learner hit. Ordinary mapper fixtures leave
+    /// this empty and continue reporting `listening`; the Identify route test
+    /// supplies the exact interface path a real daemon panel tap returns.
+    identify_hit: Mutex<Option<String>>,
     bound_with: std::sync::Mutex<Option<BindRequest>>,
     restored_with: std::sync::Mutex<Option<(String, String)>>,
     cleared: std::sync::Mutex<Option<String>>,
     saved_macro: std::sync::Mutex<Option<MacroWrite>>,
+    /// Optional machine-guard lifetime probe used by the encoder bind tests.
+    route_guard_probe: Mutex<Option<Arc<AtomicBool>>>,
+    stage_bind_saw_route_guard: AtomicBool,
 }
 
 impl ScriptedControl {
@@ -175,10 +232,22 @@ impl ScriptedControl {
             played: AtomicBool::new(false),
             committed: AtomicBool::new(false),
             learning: AtomicBool::new(false),
+            learn_generation: AtomicUsize::new(0),
+            input_test_generation: AtomicUsize::new(0),
+            input_test_spec: Mutex::new(None),
+            input_test_cancelled: AtomicBool::new(false),
+            dirty: AtomicBool::new(false),
+            stage_revision: AtomicUsize::new(0),
+            apply_needs_restart: AtomicBool::new(false),
+            without_authoring: false,
+            invalid_mapping_authoring: AtomicBool::new(false),
+            identify_hit: Mutex::new(None),
             bound_with: std::sync::Mutex::new(None),
             restored_with: std::sync::Mutex::new(None),
             cleared: std::sync::Mutex::new(None),
             saved_macro: std::sync::Mutex::new(None),
+            route_guard_probe: Mutex::new(None),
+            stage_bind_saw_route_guard: AtomicBool::new(false),
         }
     }
 
@@ -188,6 +257,28 @@ impl ScriptedControl {
         Self {
             no_daemon: true,
             ..Self::new(true)
+        }
+    }
+
+    fn with_identify_hit(self, device: impl Into<String>) -> Self {
+        *self.identify_hit.lock().unwrap() = Some(device.into());
+        self
+    }
+
+    fn without_authoring(mut self) -> Self {
+        self.without_authoring = true;
+        self
+    }
+
+    fn invalidate_mapping_authoring(&self) {
+        self.invalid_mapping_authoring.store(true, Ordering::SeqCst);
+    }
+
+    fn stamp_target_revisions(&self, view: &mut ksx_api::StagedSetupView) {
+        let revision = self.stage_revision.load(Ordering::SeqCst);
+        for slot in &mut view.slots {
+            let content = ksx_api::staged_slot_revision(slot);
+            slot.target_revision = format!("test-d1-{revision:016x}-{content}");
         }
     }
 }
@@ -275,6 +366,7 @@ impl ControlSource for ScriptedControl {
                 line: "running — 4 pad(s)".into(),
                 profile: Some("Example Game".into()),
                 origin: ksx_api::SessionOrigin::Config,
+                active: None,
             }
         } else {
             SessionView {
@@ -283,6 +375,7 @@ impl ControlSource for ScriptedControl {
                 line: "idle".into(),
                 profile: None,
                 origin: ksx_api::SessionOrigin::Unknown,
+                active: None,
             }
         }
     }
@@ -324,9 +417,11 @@ impl ControlSource for ScriptedControl {
 
     fn learn_start(&self) -> LearnView {
         self.learning.store(true, Ordering::SeqCst);
+        let generation = self.learn_generation.fetch_add(1, Ordering::SeqCst) + 1;
         LearnView {
             ok: true,
             state: "listening".into(),
+            generation: Some(generation as u64),
             remaining_ms: Some(10_000),
             device: None,
             key: None,
@@ -336,9 +431,22 @@ impl ControlSource for ScriptedControl {
 
     fn learn_poll(&self) -> LearnView {
         if self.learning.load(Ordering::SeqCst) {
+            if let Some(device) = self.identify_hit.lock().unwrap().take() {
+                self.learning.store(false, Ordering::SeqCst);
+                return LearnView {
+                    ok: true,
+                    state: "hit".into(),
+                    generation: Some(self.learn_generation.load(Ordering::SeqCst) as u64),
+                    remaining_ms: None,
+                    device: Some(device),
+                    key: Some("A".into()),
+                    error: None,
+                };
+            }
             LearnView {
                 ok: true,
                 state: "listening".into(),
+                generation: Some(self.learn_generation.load(Ordering::SeqCst) as u64),
                 remaining_ms: Some(9_000),
                 device: None,
                 key: None,
@@ -348,6 +456,7 @@ impl ControlSource for ScriptedControl {
             LearnView {
                 ok: true,
                 state: "idle".into(),
+                generation: None,
                 remaining_ms: None,
                 device: None,
                 key: None,
@@ -361,11 +470,82 @@ impl ControlSource for ScriptedControl {
         LearnView {
             ok: true,
             state: "cancelled".into(),
+            generation: Some(self.learn_generation.load(Ordering::SeqCst) as u64),
             remaining_ms: None,
             device: None,
             key: None,
             error: None,
         }
+    }
+
+    fn learn_cancel_generation(&self, generation: Option<u64>) -> LearnView {
+        let current = self.learn_generation.load(Ordering::SeqCst) as u64;
+        if generation.is_some_and(|generation| generation != current) {
+            return self.learn_poll();
+        }
+        self.learn_cancel()
+    }
+
+    fn input_test_start(&self, spec: &ksx_api::InputTestSpec) -> ksx_api::InputTestView {
+        let generation = self.input_test_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        *self.input_test_spec.lock().unwrap() = Some(spec.clone());
+        self.input_test_cancelled.store(false, Ordering::SeqCst);
+        ksx_api::InputTestView {
+            ok: true,
+            state: "listening".into(),
+            generation: Some(generation as u64),
+            selector: Some(spec.selector.clone()),
+            remaining_ms: Some(spec.duration_ms),
+            held: vec!["A".into(), "S".into()],
+            seen: vec!["A".into(), "S".into(), "D".into()],
+            peak: 3,
+            events: 7,
+            dropped: 0,
+            rollover_visibility: "unavailable".into(),
+            detail: "KSX observed three simultaneous signals.".into(),
+            error: None,
+        }
+    }
+
+    fn input_test_poll(&self) -> ksx_api::InputTestView {
+        let Some(spec) = self.input_test_spec.lock().unwrap().clone() else {
+            return ksx_api::InputTestView {
+                ok: true,
+                state: "idle".into(),
+                rollover_visibility: "unavailable".into(),
+                detail: "Release every key, then start the test.".into(),
+                ..ksx_api::InputTestView::default()
+            };
+        };
+        let cancelled = self.input_test_cancelled.load(Ordering::SeqCst);
+        ksx_api::InputTestView {
+            ok: true,
+            state: if cancelled { "cancelled" } else { "listening" }.into(),
+            generation: Some(self.input_test_generation.load(Ordering::SeqCst) as u64),
+            selector: Some(spec.selector),
+            remaining_ms: (!cancelled).then_some(spec.duration_ms.saturating_sub(1_000)),
+            held: if cancelled {
+                Vec::new()
+            } else {
+                vec!["S".into()]
+            },
+            seen: vec!["A".into(), "S".into(), "D".into()],
+            peak: 3,
+            events: 8,
+            dropped: 0,
+            rollover_visibility: "unavailable".into(),
+            detail: "KSX observed three simultaneous signals.".into(),
+            error: None,
+        }
+    }
+
+    fn input_test_cancel_generation(&self, generation: Option<u64>) -> ksx_api::InputTestView {
+        let current = self.input_test_generation.load(Ordering::SeqCst) as u64;
+        if generation.is_some_and(|generation| generation != current) {
+            return self.input_test_poll();
+        }
+        self.input_test_cancelled.store(true, Ordering::SeqCst);
+        self.input_test_poll()
     }
 
     // ── The staged setup, the way the daemon holds it ────────────────────
@@ -374,7 +554,47 @@ impl ControlSource for ScriptedControl {
         if self.no_daemon {
             return ksx_api::StagedSetupView::unreachable(NO_CHANNEL);
         }
-        ksx_api::StagedSetupView::of(&self.staged.lock().unwrap())
+        let setup = self.staged.lock().unwrap();
+        let mut view = ksx_api::StagedSetupView::of(&setup);
+        self.stamp_target_revisions(&mut view);
+        view.dirty = self.dirty.load(Ordering::SeqCst);
+        if self.without_authoring {
+            for slot in &mut view.slots {
+                slot.authoring = None;
+            }
+        } else if self.invalid_mapping_authoring.load(Ordering::SeqCst) {
+            for slot in &mut view.slots {
+                if let Some(authoring) = &mut slot.authoring {
+                    authoring.bindings.insert(
+                        "not.a.controller.function".into(),
+                        ksx_config::BindingEntry::Key("P".into()),
+                    );
+                }
+            }
+        }
+        view
+    }
+
+    /// Apply-in-place, in the daemon's three shapes: refused when nothing
+    /// runs, refused `needs-restart` when scripted to differ structurally,
+    /// ok otherwise (and the dirty stamp settles).
+    fn stage_apply(&self) -> ksx_api::StageOutcome {
+        if self.no_daemon {
+            return ksx_api::StageOutcome::unavailable(NO_CHANNEL);
+        }
+        let setup = self.staged.lock().unwrap();
+        if !self.running.load(Ordering::SeqCst) {
+            let refusal =
+                ksx_api::Refusal::new("no-session", "nothing is running to apply the draft to");
+            return ksx_api::StageOutcome::refused(&setup, &refusal);
+        }
+        if self.apply_needs_restart.load(Ordering::SeqCst) {
+            let refusal =
+                ksx_api::Refusal::new("needs-restart", "the draft changed the session's structure");
+            return ksx_api::StageOutcome::refused(&setup, &refusal);
+        }
+        self.dirty.store(false, Ordering::SeqCst);
+        ksx_api::StageOutcome::ok(&setup, "applied in place")
     }
 
     fn stage_edit(&self, edit: &ksx_api::StageEdit) -> ksx_api::StageOutcome {
@@ -385,10 +605,83 @@ impl ControlSource for ScriptedControl {
         match edit.apply(&setup) {
             Ok(next) => {
                 *setup = next;
+                self.stage_revision.fetch_add(1, Ordering::SeqCst);
                 ksx_api::StageOutcome::ok(&setup, "staged")
             }
             Err(refusal) => ksx_api::StageOutcome::refused(&setup, &refusal),
         }
+    }
+
+    fn stage_bind(&self, request: &ksx_api::StagedBindRequest) -> BindOutcome {
+        if self
+            .route_guard_probe
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|active| active.load(Ordering::SeqCst))
+        {
+            self.stage_bind_saw_route_guard
+                .store(true, Ordering::SeqCst);
+        }
+        let mut setup = self.staged.lock().unwrap();
+        let mut view = ksx_api::StagedSetupView::of(&setup);
+        self.stamp_target_revisions(&mut view);
+        let prepared = match ksx_api::staged_bind_edit(&view, request) {
+            Ok(prepared) => prepared,
+            Err(outcome) => return outcome,
+        };
+        match prepared.edit.apply(&setup) {
+            Ok(next) => {
+                *setup = next;
+                self.stage_revision.fetch_add(1, Ordering::SeqCst);
+                let outcome = ksx_api::StageOutcome::ok(&setup, "staged");
+                prepared.finish(&outcome)
+            }
+            Err(refusal) => {
+                let outcome = ksx_api::StageOutcome::refused(&setup, &refusal);
+                prepared.finish(&outcome)
+            }
+        }
+    }
+
+    /// Adoption with the daemon's exact refusal discipline (`stage-not-empty`
+    /// over any content), built THROUGH the real staging edits like the
+    /// daemon's own `stage::adopt` — a fake that skipped the engine would let
+    /// the menu pass while the domain refused.
+    fn stage_adopt(&self, profile: Option<&str>) -> ksx_api::StageOutcome {
+        if self.no_daemon {
+            return ksx_api::StageOutcome::unavailable(NO_CHANNEL);
+        }
+        let mut setup = self.staged.lock().unwrap();
+        if !ksx_api::StagedSetupView::of(&setup).empty {
+            let refusal = ksx_api::Refusal::new(
+                "stage-not-empty",
+                "this draft already has content; discard it before loading",
+            );
+            return ksx_api::StageOutcome::refused(&setup, &refusal);
+        }
+        let mut next = ksx_core::stage::StagedSetup::new();
+        for edit in [
+            ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".into(),
+                alias: "panel".into(),
+                label: "I-PAC".into(),
+            },
+            ksx_api::StageEdit::AddSlot {
+                number: None,
+                persona: "xbox360".into(),
+                preset: profile.unwrap_or("Panel P1").to_owned(),
+                layout: Some("arcade-6button".into()),
+            },
+        ] {
+            match edit.apply(&next) {
+                Ok(applied) => next = applied,
+                Err(refusal) => return ksx_api::StageOutcome::refused(&setup, &refusal),
+            }
+        }
+        *setup = next;
+        self.stage_revision.fetch_add(1, Ordering::SeqCst);
+        ksx_api::StageOutcome::ok(&setup, "adopted")
     }
 
     /// Save, gated by `commit()` exactly as the daemon gates it — the fake
@@ -512,6 +805,7 @@ impl ControlSource for ScriptedControl {
                 also_drives: Vec::new(),
                 turbo_hz: None,
                 turbo_effective_hz: None,
+                toggle: false,
                 reloaded: false,
             }
         } else {
@@ -534,6 +828,7 @@ impl ControlSource for ScriptedControl {
                 },
                 turbo_hz: None,
                 turbo_effective_hz: None,
+                toggle: false,
                 reloaded: request.reload,
             }
         }
@@ -553,8 +848,48 @@ impl ControlSource for ScriptedControl {
 /// no keyboard interface at all, and one configured entry whose id is
 /// PORT-PINNED.
 struct ScriptedMachine {
+    /// How many times the ROUTE layer actually asked for a device scan —
+    /// the machine-cache tests count real enumerations, not requests.
+    scans: AtomicUsize,
+    /// The panel-capability probe is deliberately on-demand and outside the
+    /// Nocturne poll cache. Calls and targets are recorded independently so a
+    /// test can catch either accidental polling or browser-supplied authority.
+    panel_status_calls: AtomicUsize,
+    panel_status_devices: Mutex<Vec<Option<String>>>,
+    panel_status_refuse: bool,
+    panel_chart_specs: Mutex<Vec<ksx_api::PanelChartSpec>>,
+    panel_chart_refusal: Option<Refusal>,
+    panel_routing_specs: Mutex<Vec<ksx_api::PanelRoutingAuthoritySpec>>,
+    /// 0 = ordinary/unwritable bypass; 1 = exact authority; 2 = recovery.
+    panel_routing_mode: AtomicUsize,
+    panel_routing_active: Arc<AtomicBool>,
+    panel_routing_hold: AtomicBool,
+    panel_routing_entered: AtomicBool,
+    panel_backup_specs: Mutex<Vec<ksx_api::PanelBackupsSpec>>,
+    panel_profile_reads: AtomicUsize,
+    panel_profile_save_specs: Mutex<Vec<ksx_api::PanelHardwareProfileSaveSpec>>,
+    panel_profile_delete_specs: Mutex<Vec<ksx_api::PanelHardwareProfileDeleteSpec>>,
+    panel_program_plan_specs: Mutex<Vec<ksx_api::PanelProgramSpec>>,
+    panel_plan_refusal: Option<Refusal>,
+    panel_program_specs: Mutex<Vec<ksx_api::PanelProgramApplySpec>>,
+    /// Hermetic gate for the epoch-ordering tests. When held, the provider has
+    /// already been entered (so the server fence is Running) but has not yet
+    /// returned its verified outcome.
+    panel_program_hold: AtomicBool,
+    panel_program_entered: AtomicBool,
+    panel_restore_plan_specs: Mutex<Vec<ksx_api::PanelRestoreSpec>>,
+    panel_restore_specs: Mutex<Vec<ksx_api::PanelRestoreApplySpec>>,
+    /// Restore uses the same fence as program; keep an independent hermetic
+    /// hold so that parity is proven rather than inferred from duplicated
+    /// handler structure.
+    panel_restore_hold: AtomicBool,
+    panel_restore_entered: AtomicBool,
     picked: Mutex<Vec<(String, Option<String>)>>,
     removed: Mutex<Vec<(String, bool)>>,
+    /// Raw daemon learner identities presented for safe inventory resolution.
+    /// They never cross the HTTP response; this proves the route did not ask
+    /// the machine provider to open a competing observer.
+    identified_from: Mutex<Vec<String>>,
     /// Refuse the read — the "this surface cannot enumerate devices" path.
     refuse: bool,
     /// The scan ANSWERS but the USB enumeration inside it failed: empty lists
@@ -565,6 +900,11 @@ struct ScriptedMachine {
     /// The last `profile_new` spec this provider was asked for, so a test can
     /// prove the FORM's values reached the verb rather than a default.
     created_profile: Mutex<Option<ksx_api::NewProfile>>,
+    /// The stored theme id ("" = System) the setup view reports, and every
+    /// `set_theme` spec in arrival order, so a test can prove the form's
+    /// value reached the verb and that a refused id never did.
+    theme: Mutex<String>,
+    set_theme_specs: Mutex<Vec<String>>,
     updated_profile: Mutex<Option<ksx_api::UpdateProfile>>,
     deleted_profile: Mutex<Option<ksx_api::DeleteProfile>>,
     created_preset: Mutex<Option<ksx_api::NewPreset>>,
@@ -574,6 +914,9 @@ struct ScriptedMachine {
     /// page used to render for it — and distinct from [`Self::refuse`], which
     /// is the DEVICE scan refusing.
     reads_refuse: bool,
+    /// The production managed-dev fence, scripted without touching this
+    /// process's environment or Windows Task Scheduler.
+    autostart_dev_refuse: bool,
     /// Every Saved Games writer refuses with deliberately hostile internal
     /// vocabulary. Presentation tests prove none of it reaches a redirect.
     hostile_profile_writes: bool,
@@ -587,20 +930,52 @@ struct ScriptedMachine {
     prepare_instance: Mutex<Option<String>>,
     release_state: Mutex<Option<String>>,
     release_instance: Mutex<Option<String>>,
+    /// 0 = every required probe passes; 1 = each required backend is known
+    /// missing; 2 = the required probes refuse. The stage still decides which
+    /// rows exist, so this cannot accidentally make ViGEmBus universal again.
+    output_mode: AtomicUsize,
 }
 
 impl Default for ScriptedMachine {
     fn default() -> Self {
         Self {
+            scans: AtomicUsize::new(0),
+            panel_status_calls: AtomicUsize::new(0),
+            panel_status_devices: Mutex::new(Vec::new()),
+            panel_status_refuse: false,
+            panel_chart_specs: Mutex::new(Vec::new()),
+            panel_chart_refusal: None,
+            panel_routing_specs: Mutex::new(Vec::new()),
+            panel_routing_mode: AtomicUsize::new(0),
+            panel_routing_active: Arc::new(AtomicBool::new(false)),
+            panel_routing_hold: AtomicBool::new(false),
+            panel_routing_entered: AtomicBool::new(false),
+            panel_backup_specs: Mutex::new(Vec::new()),
+            panel_profile_reads: AtomicUsize::new(0),
+            panel_profile_save_specs: Mutex::new(Vec::new()),
+            panel_profile_delete_specs: Mutex::new(Vec::new()),
+            panel_program_plan_specs: Mutex::new(Vec::new()),
+            panel_plan_refusal: None,
+            panel_program_specs: Mutex::new(Vec::new()),
+            panel_program_hold: AtomicBool::new(false),
+            panel_program_entered: AtomicBool::new(false),
+            panel_restore_plan_specs: Mutex::new(Vec::new()),
+            panel_restore_specs: Mutex::new(Vec::new()),
+            panel_restore_hold: AtomicBool::new(false),
+            panel_restore_entered: AtomicBool::new(false),
             picked: Mutex::new(Vec::new()),
             removed: Mutex::new(Vec::new()),
+            identified_from: Mutex::new(Vec::new()),
             refuse: false,
             blind: false,
             created_profile: Mutex::new(None),
+            theme: Mutex::new(String::new()),
+            set_theme_specs: Mutex::new(Vec::new()),
             updated_profile: Mutex::new(None),
             deleted_profile: Mutex::new(None),
             created_preset: Mutex::new(None),
             reads_refuse: false,
+            autostart_dev_refuse: false,
             hostile_profile_writes: false,
             prepared_with: Mutex::new(Vec::new()),
             released_with: Mutex::new(Vec::new()),
@@ -611,15 +986,31 @@ impl Default for ScriptedMachine {
             prepare_instance: Mutex::new(None),
             release_state: Mutex::new(None),
             release_instance: Mutex::new(None),
+            output_mode: AtomicUsize::new(0),
         }
     }
 }
 
 const IPAC_KB: &str = r"USB\VID_D209&PID_0430&MI_00\7&1A2B3C4D&0&0000";
 const IPAC_AUX: &str = r"USB\VID_D209&PID_0430&MI_01\7&1A2B3C4D&0&0001";
+/// What Raw Input reports for the same I-PAC MI_00 collection. The real
+/// backend resolves this HID child through its USB parent before returning a
+/// canonical selector to Studio's learner endpoint.
+const IPAC_RAW_HID: &str = r"HID\VID_D209&PID_0430&MI_00\8&2F8AC447&0&0000";
+const DESK_RAW_HID: &str = r"HID\VID_046D&PID_C31C&MI_00\9&DEADBEEF&0&0000";
 const EXAMPLE_AUX_HID: &str = r"USB\VID_F00D&PID_CAFE&MI_01\7&5A6B7C8&0&0001";
 /// A paired Bluetooth keyboard with a shape-preserving synthetic identity.
 const BT_KEYBOARD: &str = r"BTHENUM\{00001124-0000-1000-8000-00805F9B34FB}_VID&0002045E_PID&0800\7&B1C2D3E4&0&02A1B2C3D4E5_C00000000";
+
+struct ScriptedPanelRoutingGuard(Arc<AtomicBool>);
+
+impl ksx_api::PanelRoutingGuard for ScriptedPanelRoutingGuard {}
+
+impl Drop for ScriptedPanelRoutingGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
 
 impl ScriptedMachine {
     fn refusing() -> Self {
@@ -642,6 +1033,178 @@ impl ScriptedMachine {
         Self {
             reads_refuse: true,
             ..Self::default()
+        }
+    }
+
+    fn managed_dev_runtime() -> Self {
+        Self {
+            autostart_dev_refuse: true,
+            ..Self::default()
+        }
+    }
+
+    fn panel_status_refusing() -> Self {
+        Self {
+            panel_status_refuse: true,
+            ..Self::default()
+        }
+    }
+
+    fn panel_chart_busy() -> Self {
+        Self {
+            panel_chart_refusal: Some(Refusal::with_remedy(
+                ksx_api::codes::PANEL_INTERFACE_BUSY,
+                "Another app is using this I-PAC's configuration interface.",
+                "Close WinIPAC or the other encoder tool, then choose Read board again. KSX keyboard input can continue and nothing was changed.",
+            )),
+            ..Self::default()
+        }
+    }
+
+    fn panel_plan_busy() -> Self {
+        Self {
+            panel_plan_refusal: Some(Refusal::with_remedy(
+                ksx_api::codes::PANEL_INTERFACE_BUSY,
+                "the I-PAC configuration interface became busy before the hardware diff was built",
+                "close WinIPAC or the other encoder tool, then retry this review; KSX keyboard input can continue",
+            )),
+            ..Self::default()
+        }
+    }
+
+    fn panel_backup() -> ksx_api::PanelBackupRow {
+        ksx_api::PanelBackupRow {
+            backup_id: "20260823-120000-A1B2C3D4E5F6".to_owned(),
+            label: "Original chart · Aug 23, 2026".to_owned(),
+            created_at: "2026-08-23 12:00:00 UTC".to_owned(),
+            board_fingerprint: "ultimarc-ipac:D209:0430:board-4".to_owned(),
+            image_sha256: "A".repeat(64),
+            image_bytes: 256,
+            reason: "chart-read".to_owned(),
+        }
+    }
+
+    fn panel_chart_view() -> ksx_api::PanelChartView {
+        let current_terminal = ksx_api::PanelTerminalRow {
+            terminal_id: "1sw4".to_owned(),
+            terminal_label: "Player 1 · Button 4".to_owned(),
+            player: 1,
+            kind: "button".to_owned(),
+            normal: ksx_api::PanelKeyValue {
+                code: 13,
+                key: Some("J".to_owned()),
+                label: "J".to_owned(),
+                supported: true,
+            },
+            shifted: ksx_api::PanelKeyValue {
+                code: 0,
+                key: None,
+                label: "Unassigned".to_owned(),
+                supported: true,
+            },
+            shift_state: ksx_api::PanelShiftState::Disabled,
+            is_shift: false,
+        };
+        let recommended_terminal = ksx_api::PanelTerminalRow {
+            normal: ksx_api::PanelKeyValue {
+                code: 4,
+                key: Some("A".to_owned()),
+                label: "A".to_owned(),
+                supported: true,
+            },
+            ..current_terminal.clone()
+        };
+        ksx_api::PanelChartView {
+            generated_at: "2026-08-23 12:00:00 UTC".to_owned(),
+            summary: "Complete 256-byte I-PAC chart read and backed up.".to_owned(),
+            board_id: r"USB\VID_D209&PID_0430\4".to_owned(),
+            board_name: "Ultimarc I-PAC 4X".to_owned(),
+            board_fingerprint: "ultimarc-ipac:D209:0430:board-4".to_owned(),
+            driver: "ultimarc-ipac4".to_owned(),
+            protocol_profile: "ipac4-pac256-v1".to_owned(),
+            image_sha256: "A".repeat(64),
+            image_bytes: 256,
+            programming_state: "supervised".to_owned(),
+            programming_detail:
+                "Lossless backup, exact write, full readback, verification, and restore are available."
+                    .to_owned(),
+            qualification_state: "qualified".to_owned(),
+            qualification_detail: "Writer qualification passed.".to_owned(),
+            qualification_restore_backup_id: None,
+            terminals: vec![current_terminal],
+            recommended_terminals: vec![recommended_terminal],
+            key_options: vec![ksx_api::PanelKeyOption {
+                key: "J".to_owned(),
+                label: "J".to_owned(),
+                code: 13,
+                safe_for_qualification: true,
+            }],
+            backup: Some(Self::panel_backup()),
+            notes: Vec::new(),
+        }
+    }
+
+    fn panel_plan_view() -> ksx_api::PanelProgramPlanView {
+        ksx_api::PanelProgramPlanView {
+            summary: "1 terminal assignment changes 1 byte; 255 bytes are preserved.".to_owned(),
+            board_id: r"USB\VID_D209&PID_0430\4".to_owned(),
+            board_name: "Ultimarc I-PAC 4X".to_owned(),
+            board_fingerprint: "ultimarc-ipac:D209:0430:board-4".to_owned(),
+            protocol_profile: "ipac4-pac256-v1".to_owned(),
+            base_sha256: "A".repeat(64),
+            desired_sha256: "B".repeat(64),
+            image_bytes: 256,
+            terminal_diff: vec![ksx_api::PanelTerminalDiffRow {
+                terminal_id: "1sw4".to_owned(),
+                terminal_label: "Player 1 · Button 4".to_owned(),
+                layer: "normal".to_owned(),
+                before: "J".to_owned(),
+                after: "K".to_owned(),
+            }],
+            byte_diff: vec![ksx_api::PanelByteDiffRow {
+                offset: 33,
+                before: 13,
+                after: 14,
+                meaning: "1sw4 normal".to_owned(),
+            }],
+            preserved_byte_count: 255,
+            confirmation: "Program Ultimarc I-PAC 4X".to_owned(),
+            blockers: Vec::new(),
+        }
+    }
+
+    fn panel_hardware_profile() -> ksx_api::PanelHardwareProfile {
+        ksx_api::PanelHardwareProfile {
+            schema: "ksx-panel-profile-v1".to_owned(),
+            profile_id: "four-player-cabinet".to_owned(),
+            name: "Four player cabinet".to_owned(),
+            description: "The portable terminal chart, not a raw recovery image.".to_owned(),
+            driver: "ultimarc-ipac4".to_owned(),
+            protocol_profile: "ipac4-pac256-v1".to_owned(),
+            terminal_signature: "terminal-signature-56".to_owned(),
+            revision: "revision-A".to_owned(),
+            created_at: "2026-08-23 12:00:00 UTC".to_owned(),
+            updated_at: "2026-08-23 12:00:00 UTC".to_owned(),
+            terminals: vec![ksx_api::PanelHardwareTerminal {
+                terminal_id: "1sw4".to_owned(),
+                normal_key: Some("J".to_owned()),
+                shifted_key: None,
+                is_shift: false,
+                allow_shared_key: false,
+            }],
+        }
+    }
+
+    fn panel_program_outcome() -> ksx_api::PanelProgramOutcome {
+        ksx_api::PanelProgramOutcome {
+            state: "verified".to_owned(),
+            summary: "The I-PAC chart was programmed and every byte verified.".to_owned(),
+            board_fingerprint: "ultimarc-ipac:D209:0430:board-4".to_owned(),
+            expected_sha256: "B".repeat(64),
+            observed_sha256: Some("B".repeat(64)),
+            backup: Self::panel_backup(),
+            verified_at: "2026-08-23 12:00:02 UTC".to_owned(),
+            next_step: "Teach each physical control to verify its Windows signal.".to_owned(),
         }
     }
 
@@ -732,7 +1295,49 @@ impl ScriptedMachine {
 }
 
 impl ksx_api::MachineSource for ScriptedMachine {
+    fn controller_outputs(
+        &self,
+        staged: &ksx_api::StagedSetupView,
+    ) -> Result<ksx_api::ControllerOutputsView, Refusal> {
+        let mode = self.output_mode.load(Ordering::SeqCst);
+        let rows = ksx_api::ControllerOutputsView::requirements(staged)
+            .into_iter()
+            .map(|requirement| {
+                if mode == 2 {
+                    return ksx_api::ControllerOutputView::unreadable(
+                        requirement,
+                        "the scripted machine refused the output read",
+                    );
+                }
+                let backend = requirement.backend.clone();
+                match backend.as_str() {
+                    "vigem" => ksx_api::ControllerOutputView::vigem(
+                        requirement,
+                        if mode == 1 {
+                            ksx_api::vigem_output_codes::MISSING
+                        } else {
+                            ksx_api::vigem_output_codes::HEALTHY
+                        },
+                        (mode == 0).then(|| "1.22.0.0".to_owned()),
+                    ),
+                    "hidmaestro" => ksx_api::ControllerOutputView::hidmaestro(
+                        requirement,
+                        mode == 0,
+                        false,
+                        (mode == 0).then(|| "1.6.1".to_owned()),
+                    ),
+                    other => ksx_api::ControllerOutputView::unreadable(
+                        requirement,
+                        format!("no scripted probe for {other}"),
+                    ),
+                }
+            })
+            .collect();
+        Ok(ksx_api::ControllerOutputsView::from_required(rows))
+    }
+
     fn device_scan(&self) -> Result<ksx_api::DeviceScanView, Refusal> {
+        self.scans.fetch_add(1, Ordering::SeqCst);
         if self.refuse {
             return Err(Refusal::not_here("listing devices", "run `ksx devices`"));
         }
@@ -848,6 +1453,314 @@ impl ksx_api::MachineSource for ScriptedMachine {
             }],
             Vec::new(),
         ))
+    }
+
+    fn panel_status(
+        &self,
+        spec: &ksx_api::PanelStatusSpec,
+    ) -> Result<ksx_api::PanelStatusView, Refusal> {
+        self.panel_status_calls.fetch_add(1, Ordering::SeqCst);
+        self.panel_status_devices
+            .lock()
+            .unwrap()
+            .push(spec.device.clone());
+        if self.panel_status_refuse {
+            return Err(Refusal::new(
+                ksx_api::codes::REFUSED,
+                "the scripted HID inventory could not be read",
+            ));
+        }
+        Ok(ksx_api::PanelStatusView {
+            generated_at: "test".to_owned(),
+            summary: "One selected panel encoder was inspected.".to_owned(),
+            inspection_note:
+                "Inspection only. KSX did not program or change this encoder.".to_owned(),
+            access_detail: "USB descriptors and passive HID collection metadata were readable."
+                .to_owned(),
+            usb_available: true,
+            hid_available: true,
+            panels: vec![ksx_api::PanelStatusRow {
+                board_id: r"USB\VID_D209&PID_0430\4".to_owned(),
+                name: "Ultimarc I-PAC 4X".to_owned(),
+                identity: "USB D209:0430 · bcdDevice 0x0056".to_owned(),
+                vendor_id: 0xd209,
+                product_id: 0x0430,
+                family_id: Some("ultimarc-ipac4".to_owned()),
+                family_label: Some("Ultimarc I-PAC 4X".to_owned()),
+                bcd_device: 0x0056,
+                firmware_label: Some("1.56".to_owned()),
+                firmware_detail: "Measured KSX I-PAC 4 release-0056 profile matched USB bcdDevice 0x0056; firmware was not queried from the board.".to_owned(),
+                profile_terminal_count: Some(56),
+                serial: None,
+                driver: "ultimarc-ipac".to_owned(),
+                driver_supported: true,
+                driver_label: "Ultimarc I-PAC family".to_owned(),
+                observed_mode: "keyboard-compatible".to_owned(),
+                mode_detail: "Keyboard-compatible HID input was observed; exact vendor mode was not queried."
+                    .to_owned(),
+                observed_mode_label: "Keyboard-compatible input observed".to_owned(),
+                mode_read_supported: false,
+                capabilities: ksx_api::PanelDriverCapabilities {
+                    can_identify: true,
+                    can_report_mode: false,
+                    can_read_chart: true,
+                    can_write_chart: true,
+                    write_is_persistent: true,
+                },
+                chart_state: "protocol-unverified".to_owned(),
+                chart_attempted: false,
+                chart_detail:
+                    "Chart read-back protocol is unverified, so no report was sent.".to_owned(),
+                chart_label: "Protocol unverified · Not attempted".to_owned(),
+                configuration_collection_state: "candidate-unverified".to_owned(),
+                configuration_collection: Some(
+                    r"HID\VID_D209&PID_0430&MI_02&COL01\TEST".to_owned(),
+                ),
+                configuration_collection_detail:
+                    "One passive 5-byte input/output candidate was observed; its protocol is unverified."
+                        .to_owned(),
+                recommendation:
+                    "Keep this encoder in keyboard mode so Teach and Route retain KSX's dynamic transforms."
+                        .to_owned(),
+                programming_recovery_required: false,
+                programming_recovery_detail: String::new(),
+                interfaces: vec![ksx_api::PanelInterfaceRow {
+                    instance_id: IPAC_KB.to_owned(),
+                    interface_number: 0,
+                    interface_class: 3,
+                    interface_subclass: 1,
+                    interface_protocol: 1,
+                    binding: "hidusb.sys (keyboard stack)".to_owned(),
+                    boot_keyboard: true,
+                    description: "USB Input Device".to_owned(),
+                }],
+                hid_collections: vec![ksx_api::PanelHidCollectionRow {
+                    instance_id: r"HID\VID_D209&PID_0430&MI_02&COL01\TEST".to_owned(),
+                    state: "available".to_owned(),
+                    vendor_id: Some(0xd209),
+                    product_id: Some(0x0430),
+                    version_number: Some(0x0056),
+                    usage_page: Some(0xff00),
+                    usage: Some(1),
+                    input_report_bytes: Some(5),
+                    output_report_bytes: Some(5),
+                    feature_report_bytes: Some(0),
+                    errors: Vec::new(),
+                }],
+            }],
+            notes: Vec::new(),
+        })
+    }
+
+    fn panel_chart(
+        &self,
+        spec: &ksx_api::PanelChartSpec,
+    ) -> Result<ksx_api::PanelChartView, Refusal> {
+        self.panel_chart_specs.lock().unwrap().push(spec.clone());
+        if let Some(refusal) = &self.panel_chart_refusal {
+            return Err(refusal.clone());
+        }
+        Ok(Self::panel_chart_view())
+    }
+
+    fn panel_routing_guard(
+        &self,
+        spec: &ksx_api::PanelRoutingAuthoritySpec,
+    ) -> Result<Option<Box<dyn ksx_api::PanelRoutingGuard>>, Refusal> {
+        self.panel_routing_specs.lock().unwrap().push(spec.clone());
+        match self.panel_routing_mode.load(Ordering::SeqCst) {
+            0 => Ok(None),
+            2 => Err(Refusal::with_remedy(
+                ksx_api::codes::RECOVERY_REQUIRED,
+                "the scripted encoder has an unresolved hardware transaction",
+                "read and recover its complete chart",
+            )),
+            _ => {
+                let exact = spec.device.eq_ignore_ascii_case("usb:d209:0430:00")
+                    && spec
+                        .expected_selector
+                        .as_deref()
+                        .is_some_and(|value| value.eq_ignore_ascii_case("usb:d209:0430:00"))
+                    && spec
+                        .expected_instance
+                        .as_deref()
+                        .is_some_and(|value| value.eq_ignore_ascii_case(IPAC_KB))
+                    && spec.expected_board_fingerprint.as_deref()
+                        == Some("ultimarc-ipac:D209:0430:board-4")
+                    && spec
+                        .expected_chart_sha256
+                        .as_deref()
+                        .is_some_and(|value| value == "A".repeat(64));
+                if !exact {
+                    return Err(Refusal::with_remedy(
+                        ksx_api::codes::BAD_REQUEST,
+                        "the scripted encoder authority is missing or stale; nothing was mapped",
+                        "read its complete chart and try again",
+                    ));
+                }
+                if self
+                    .panel_routing_active
+                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_err()
+                {
+                    return Err(Refusal::new(
+                        ksx_api::codes::REFUSED,
+                        "another scripted route owns the encoder",
+                    ));
+                }
+                self.panel_routing_entered.store(true, Ordering::SeqCst);
+                while self.panel_routing_hold.load(Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+                Ok(Some(Box::new(ScriptedPanelRoutingGuard(Arc::clone(
+                    &self.panel_routing_active,
+                )))))
+            }
+        }
+    }
+
+    fn panel_backups(
+        &self,
+        spec: &ksx_api::PanelBackupsSpec,
+    ) -> Result<ksx_api::PanelBackupsView, Refusal> {
+        self.panel_backup_specs.lock().unwrap().push(spec.clone());
+        Ok(ksx_api::PanelBackupsView {
+            summary: "1 lossless restore point.".to_owned(),
+            board_fingerprint: "ultimarc-ipac:D209:0430:board-4".to_owned(),
+            backups: vec![Self::panel_backup()],
+        })
+    }
+
+    fn panel_hardware_profiles(&self) -> Result<ksx_api::PanelHardwareProfilesView, Refusal> {
+        self.panel_profile_reads.fetch_add(1, Ordering::SeqCst);
+        Ok(ksx_api::PanelHardwareProfilesView {
+            summary: "1 saved encoder layout.".to_owned(),
+            config_root: r"C:\cfg".to_owned(),
+            terminal_signature: "terminal-signature-56".to_owned(),
+            profiles: vec![Self::panel_hardware_profile()],
+        })
+    }
+
+    fn panel_hardware_profile_save(
+        &self,
+        spec: &ksx_api::PanelHardwareProfileSaveSpec,
+    ) -> Result<ksx_api::PanelHardwareProfileMutationView, Refusal> {
+        self.panel_profile_save_specs
+            .lock()
+            .unwrap()
+            .push(spec.clone());
+        let mut profile = Self::panel_hardware_profile();
+        profile.name.clone_from(&spec.name);
+        profile.description.clone_from(&spec.description);
+        profile.terminals.clone_from(&spec.terminals);
+        let state = if let Some(profile_id) = &spec.profile_id {
+            profile.profile_id.clone_from(profile_id);
+            profile.revision = "revision-B".to_owned();
+            "updated"
+        } else {
+            "created"
+        };
+        Ok(ksx_api::PanelHardwareProfileMutationView {
+            state: state.to_owned(),
+            summary: format!("{} saved encoder layout.", state),
+            profile_id: profile.profile_id.clone(),
+            profile: Some(profile),
+        })
+    }
+
+    fn panel_hardware_profile_delete(
+        &self,
+        spec: &ksx_api::PanelHardwareProfileDeleteSpec,
+    ) -> Result<ksx_api::PanelHardwareProfileMutationView, Refusal> {
+        self.panel_profile_delete_specs
+            .lock()
+            .unwrap()
+            .push(spec.clone());
+        Ok(ksx_api::PanelHardwareProfileMutationView {
+            state: "deleted".to_owned(),
+            summary: "Deleted saved encoder layout; hardware was not changed.".to_owned(),
+            profile_id: spec.profile_id.clone(),
+            profile: None,
+        })
+    }
+
+    fn panel_program_plan(
+        &self,
+        spec: &ksx_api::PanelProgramSpec,
+    ) -> Result<ksx_api::PanelProgramPlanView, Refusal> {
+        self.panel_program_plan_specs
+            .lock()
+            .unwrap()
+            .push(spec.clone());
+        if let Some(refusal) = &self.panel_plan_refusal {
+            return Err(refusal.clone());
+        }
+        Ok(Self::panel_plan_view())
+    }
+
+    fn panel_program(
+        &self,
+        spec: &ksx_api::PanelProgramApplySpec,
+    ) -> Result<ksx_api::PanelProgramOutcome, Refusal> {
+        self.panel_program_entered.store(true, Ordering::SeqCst);
+        while self.panel_program_hold.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        self.panel_program_specs.lock().unwrap().push(spec.clone());
+        Ok(Self::panel_program_outcome())
+    }
+
+    fn panel_restore_plan(
+        &self,
+        spec: &ksx_api::PanelRestoreSpec,
+    ) -> Result<ksx_api::PanelProgramPlanView, Refusal> {
+        self.panel_restore_plan_specs
+            .lock()
+            .unwrap()
+            .push(spec.clone());
+        if let Some(refusal) = &self.panel_plan_refusal {
+            return Err(refusal.clone());
+        }
+        let mut plan = Self::panel_plan_view();
+        plan.summary = "Restore 1 terminal assignment from the selected backup.".to_owned();
+        Ok(plan)
+    }
+
+    fn panel_restore(
+        &self,
+        spec: &ksx_api::PanelRestoreApplySpec,
+    ) -> Result<ksx_api::PanelProgramOutcome, Refusal> {
+        self.panel_restore_entered.store(true, Ordering::SeqCst);
+        while self.panel_restore_hold.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        self.panel_restore_specs.lock().unwrap().push(spec.clone());
+        let mut outcome = Self::panel_program_outcome();
+        outcome.summary = "The backup was restored and every byte verified.".to_owned();
+        Ok(outcome)
+    }
+
+    fn device_identify(
+        &self,
+        observed_instance: &str,
+    ) -> Result<ksx_api::DeviceIdentifyView, Refusal> {
+        self.identified_from
+            .lock()
+            .unwrap()
+            .push(observed_instance.to_owned());
+        if !observed_instance.eq_ignore_ascii_case(IPAC_KB)
+            && !observed_instance.eq_ignore_ascii_case(IPAC_RAW_HID)
+        {
+            return Err(Refusal::new(
+                ksx_api::codes::IDENTIFY_UNMATCHED,
+                "the observed interface did not match the scripted board",
+            ));
+        }
+        Ok(ksx_api::DeviceIdentifyView {
+            selector: "usb:d209:0430:00".to_owned(),
+            alias: "panel".to_owned(),
+            label: "Ultimarc I-PAC 4X".to_owned(),
+        })
     }
 
     fn device_pick(
@@ -1025,6 +1938,58 @@ impl ksx_api::MachineSource for ScriptedMachine {
         })
     }
 
+    fn autostart(&self) -> Result<ksx_api::AutostartView, Refusal> {
+        if self.reads_refuse {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                "the scheduler could not be asked",
+                "run `ksx doctor`",
+            ));
+        }
+        if self.autostart_dev_refuse {
+            return Ok(ksx_api::AutostartView {
+                registered: true,
+                line: "registered — installed ksx daemon".into(),
+                mode: Some("daemon".into()),
+                read_only: true,
+                read_only_detail: Some(
+                    "This managed development build shows the installed sign-in task read-only. \
+                     Install a complete candidate to test startup."
+                        .into(),
+                ),
+                ..ksx_api::AutostartView::default()
+            });
+        }
+        Ok(ksx_api::AutostartView {
+            registered: false,
+            line: "not registered".into(),
+            ..ksx_api::AutostartView::default()
+        })
+    }
+
+    /// The re-read discipline: the answer is the state AFTER the write.
+    fn set_autostart(
+        &self,
+        spec: &ksx_api::AutostartSpec,
+    ) -> Result<ksx_api::AutostartView, Refusal> {
+        if self.autostart_dev_refuse {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::MANAGED_DEV_RUNTIME,
+                "this is a managed development runtime",
+                "install the complete candidate",
+            ));
+        }
+        Ok(ksx_api::AutostartView {
+            registered: spec.enable,
+            line: if spec.enable {
+                "registered".into()
+            } else {
+                "not registered".into()
+            },
+            ..ksx_api::AutostartView::default()
+        })
+    }
+
     fn presets(&self) -> Result<ksx_api::PresetsView, Refusal> {
         if self.reads_refuse {
             return Err(Refusal::with_remedy(
@@ -1196,9 +2161,22 @@ impl ksx_api::MachineSource for ScriptedMachine {
                 },
             ],
             notes: Vec::new(),
+            theme: self.theme.lock().unwrap().clone(),
             // The ceiling comes from the BACKEND (`ksx_core::MAX_SLOTS`); the
             // default carries it, which is the behaviour a real provider has.
             ..ksx_api::SetupView::default()
+        })
+    }
+
+    fn set_theme(&self, spec: &ksx_api::ThemeSpec) -> Result<ksx_api::ThemeView, Refusal> {
+        self.set_theme_specs
+            .lock()
+            .unwrap()
+            .push(spec.theme.clone());
+        *self.theme.lock().unwrap() = spec.theme.clone();
+        Ok(ksx_api::ThemeView {
+            theme: spec.theme.clone(),
+            backup: None,
         })
     }
 
@@ -1515,8 +2493,9 @@ impl ksx_api::MachineSource for CertificateMachine {
     }
 }
 
-/// Bind port 0 to learn a free port, release it, and serve there. The tiny
-/// race is acceptable in a local test.
+/// Bind port 0 to learn a free port, release it, and serve there. Because the
+/// production server owns its bind internally, startup is not considered
+/// complete until the exact fixture provider answers a unique handshake.
 fn start_server(control: Arc<ScriptedControl>) -> SocketAddr {
     start_server_with_machine(control, Arc::new(ScriptedMachine::default()))
 }
@@ -1567,6 +2546,19 @@ fn start_server_with_sources(
         break candidate;
     };
     drop(addresses);
+    let marker = format!(
+        "ksx-http-fixture-{}-{}-{}",
+        std::process::id(),
+        SERVER_NONCE.fetch_add(1, Ordering::Relaxed),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let status: Box<dyn StatusSource> = Box::new(FixtureStatus {
+        inner: status,
+        marker: marker.clone(),
+    });
     struct SharedControl(Arc<ScriptedControl>);
     impl ControlSource for SharedControl {
         fn session(&self) -> SessionView {
@@ -1593,6 +2585,18 @@ fn start_server_with_sources(
         fn learn_cancel(&self) -> LearnView {
             self.0.learn_cancel()
         }
+        fn learn_cancel_generation(&self, generation: Option<u64>) -> LearnView {
+            self.0.learn_cancel_generation(generation)
+        }
+        fn input_test_start(&self, spec: &ksx_api::InputTestSpec) -> ksx_api::InputTestView {
+            self.0.input_test_start(spec)
+        }
+        fn input_test_poll(&self) -> ksx_api::InputTestView {
+            self.0.input_test_poll()
+        }
+        fn input_test_cancel_generation(&self, generation: Option<u64>) -> ksx_api::InputTestView {
+            self.0.input_test_cancel_generation(generation)
+        }
         fn bind(&self, request: &BindRequest) -> BindOutcome {
             self.0.bind(request)
         }
@@ -1614,17 +2618,101 @@ fn start_server_with_sources(
         fn stage_edit(&self, edit: &ksx_api::StageEdit) -> ksx_api::StageOutcome {
             self.0.stage_edit(edit)
         }
+        fn stage_bind(&self, request: &ksx_api::StagedBindRequest) -> BindOutcome {
+            self.0.stage_bind(request)
+        }
         fn stage_commit(&self) -> ksx_api::StageOutcome {
             self.0.stage_commit()
         }
         fn stage_play(&self) -> ksx_api::StageOutcome {
             self.0.stage_play()
         }
+        fn stage_adopt(&self, profile: Option<&str>) -> ksx_api::StageOutcome {
+            self.0.stage_adopt(profile)
+        }
+        fn stage_apply(&self) -> ksx_api::StageOutcome {
+            self.0.stage_apply()
+        }
     }
     struct SharedMachine(Arc<dyn ksx_api::MachineSource>);
     impl ksx_api::MachineSource for SharedMachine {
+        fn controller_outputs(
+            &self,
+            staged: &ksx_api::StagedSetupView,
+        ) -> Result<ksx_api::ControllerOutputsView, Refusal> {
+            self.0.controller_outputs(staged)
+        }
         fn device_scan(&self) -> Result<ksx_api::DeviceScanView, Refusal> {
             self.0.device_scan()
+        }
+        fn panel_status(
+            &self,
+            spec: &ksx_api::PanelStatusSpec,
+        ) -> Result<ksx_api::PanelStatusView, Refusal> {
+            self.0.panel_status(spec)
+        }
+        fn panel_chart(
+            &self,
+            spec: &ksx_api::PanelChartSpec,
+        ) -> Result<ksx_api::PanelChartView, Refusal> {
+            self.0.panel_chart(spec)
+        }
+        fn panel_routing_guard(
+            &self,
+            spec: &ksx_api::PanelRoutingAuthoritySpec,
+        ) -> Result<Option<Box<dyn ksx_api::PanelRoutingGuard>>, Refusal> {
+            self.0.panel_routing_guard(spec)
+        }
+        fn panel_backups(
+            &self,
+            spec: &ksx_api::PanelBackupsSpec,
+        ) -> Result<ksx_api::PanelBackupsView, Refusal> {
+            self.0.panel_backups(spec)
+        }
+        fn panel_hardware_profiles(&self) -> Result<ksx_api::PanelHardwareProfilesView, Refusal> {
+            self.0.panel_hardware_profiles()
+        }
+        fn panel_hardware_profile_save(
+            &self,
+            spec: &ksx_api::PanelHardwareProfileSaveSpec,
+        ) -> Result<ksx_api::PanelHardwareProfileMutationView, Refusal> {
+            self.0.panel_hardware_profile_save(spec)
+        }
+        fn panel_hardware_profile_delete(
+            &self,
+            spec: &ksx_api::PanelHardwareProfileDeleteSpec,
+        ) -> Result<ksx_api::PanelHardwareProfileMutationView, Refusal> {
+            self.0.panel_hardware_profile_delete(spec)
+        }
+        fn panel_program_plan(
+            &self,
+            spec: &ksx_api::PanelProgramSpec,
+        ) -> Result<ksx_api::PanelProgramPlanView, Refusal> {
+            self.0.panel_program_plan(spec)
+        }
+        fn panel_program(
+            &self,
+            spec: &ksx_api::PanelProgramApplySpec,
+        ) -> Result<ksx_api::PanelProgramOutcome, Refusal> {
+            self.0.panel_program(spec)
+        }
+        fn panel_restore_plan(
+            &self,
+            spec: &ksx_api::PanelRestoreSpec,
+        ) -> Result<ksx_api::PanelProgramPlanView, Refusal> {
+            self.0.panel_restore_plan(spec)
+        }
+        fn panel_restore(
+            &self,
+            spec: &ksx_api::PanelRestoreApplySpec,
+        ) -> Result<ksx_api::PanelProgramOutcome, Refusal> {
+            self.0.panel_restore(spec)
+        }
+        fn device_identify(
+            &self,
+            observed_instance: &str,
+        ) -> Result<ksx_api::DeviceIdentifyView, Refusal> {
+            self.0.device_identify(observed_instance)
         }
         fn device_pick(
             &self,
@@ -1680,6 +2768,18 @@ fn start_server_with_sources(
         fn setup_state(&self) -> Result<ksx_api::SetupView, Refusal> {
             self.0.setup_state()
         }
+        fn set_theme(&self, spec: &ksx_api::ThemeSpec) -> Result<ksx_api::ThemeView, Refusal> {
+            self.0.set_theme(spec)
+        }
+        fn autostart(&self) -> Result<ksx_api::AutostartView, Refusal> {
+            self.0.autostart()
+        }
+        fn set_autostart(
+            &self,
+            spec: &ksx_api::AutostartSpec,
+        ) -> Result<ksx_api::AutostartView, Refusal> {
+            self.0.set_autostart(spec)
+        }
         fn config_export(
             &self,
             request: &ksx_api::ExportRequest,
@@ -1706,8 +2806,9 @@ fn start_server_with_sources(
             self.0.pads_prune(confirm)
         }
     }
+    let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
-        let _ = ksx_studio::serve(
+        let result = ksx_studio::serve(
             addr,
             status,
             Box::new(SharedControl(control)),
@@ -1720,16 +2821,84 @@ fn start_server_with_sources(
                     .with_remedy("start the daemon"),
             ),
         );
+        let _ = startup_tx.send(result);
     });
-    // Wait until it accepts.
+    // A TCP connect alone is not proof of ownership: another process can win
+    // the bind between the port-0 probe and `serve`. Wait for this fixture's
+    // nonce through the real router, while also surfacing `serve`'s bind error
+    // instead of discarding it on the spawned thread.
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if TcpStream::connect(addr).is_ok() {
+        match startup_rx.try_recv() {
+            Ok(Ok(())) => panic!("test server exited before startup on {addr}"),
+            Ok(Err(error)) => panic!("test server could not start on {addr}: {error}"),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                panic!("test server thread ended before startup on {addr}")
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+        if fixture_owns_endpoint(addr, &marker) {
             return addr;
         }
-        assert!(Instant::now() < deadline, "server never came up on {addr}");
+        assert!(
+            Instant::now() < deadline,
+            "server never proved fixture ownership on {addr} (wanted {marker})"
+        );
         std::thread::sleep(Duration::from_millis(25));
     }
+}
+
+fn fixture_owns_endpoint(addr: SocketAddr, marker: &str) -> bool {
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(250)) else {
+        return false;
+    };
+    let timeout = Some(Duration::from_millis(250));
+    if stream.set_read_timeout(timeout).is_err() || stream.set_write_timeout(timeout).is_err() {
+        return false;
+    }
+    if stream
+        .write_all(b"GET /api/status HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .is_err()
+    {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() || !response.starts_with("HTTP/1.1 200") {
+        return false;
+    }
+    serde_json::from_str::<serde_json::Value>(body_of(&response))
+        .ok()
+        .and_then(|payload| {
+            payload["snapshot"]["generated_at"]
+                .as_str()
+                .map(str::to_owned)
+        })
+        .is_some_and(|observed| observed == marker)
+}
+
+/// Regression for the old readiness probe, which accepted any TCP listener
+/// on the released port and could send a later test request to another fixture
+/// (or an unrelated local process). HTTP 200 is still not ownership without
+/// the nonce supplied by this invocation of `start_server_with_sources`.
+#[test]
+fn fixture_startup_handshake_rejects_a_foreign_listener() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let foreign = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0_u8; 256];
+        let _ = stream.read(&mut request).unwrap();
+        let body = r#"{"snapshot":{"generated_at":"some-other-fixture"}}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+    });
+
+    assert!(!fixture_owns_endpoint(addr, "the-fixture-we-started"));
+    foreign.join().unwrap();
 }
 
 fn http(addr: SocketAddr, request: &str) -> String {
@@ -1747,6 +2916,15 @@ fn get(addr: SocketAddr, path: &str) -> String {
     http(
         addr,
         &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"),
+    )
+}
+
+fn get_if_none_match(addr: SocketAddr, path: &str, etag: &str) -> String {
+    http(
+        addr,
+        &format!(
+            "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nIf-None-Match: {etag}\r\n\r\n"
+        ),
     )
 }
 
@@ -1998,7 +3176,24 @@ fn the_mapper_page_learn_flow_and_bind_round_trip() {
     let polled = get(addr, "/api/learn");
     let learn: serde_json::Value = serde_json::from_str(body_of(&polled)).expect("json");
     assert_eq!(learn["state"], "listening");
-    let cancelled = post_json(addr, "/api/learn/cancel", "");
+    // Browser cancellation is generation-qualified. A cached pre-generation
+    // tab cannot issue an empty cancel that stops the listener a fresh tab now
+    // owns.
+    let unqualified = post_json(addr, "/api/learn/cancel", r#"{}"#);
+    assert!(!unqualified.starts_with("HTTP/1.1 200"), "{unqualified}");
+    let still_listening: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/learn"))).expect("json");
+    assert_eq!(still_listening["state"], "listening");
+    assert_eq!(still_listening["generation"], learn["generation"]);
+    let stale = post_json(addr, "/api/learn/cancel", r#"{"generation":0}"#);
+    let stale: serde_json::Value = serde_json::from_str(body_of(&stale)).expect("json");
+    assert_eq!(stale["state"], "listening");
+    assert_eq!(stale["generation"], learn["generation"]);
+    let cancelled = post_json(
+        addr,
+        "/api/learn/cancel",
+        &format!(r#"{{"generation":{}}}"#, learn["generation"]),
+    );
     let learn: serde_json::Value = serde_json::from_str(body_of(&cancelled)).expect("json");
     assert_eq!(learn["state"], "cancelled");
 
@@ -2100,7 +3295,7 @@ fn a_dead_daemon_is_loud_on_both_pages_with_a_runnable_command() {
         ),
         (
             "/map",
-            "Controls need the background helper",
+            "Mapping needs the background helper",
             "Close and reopen ksx",
         ),
     ] {
@@ -2137,6 +3332,88 @@ fn a_dead_daemon_is_loud_on_both_pages_with_a_runnable_command() {
     // The mapping controls remain present and visibly inert, but there is no
     // customer-facing shell fallback competing with the reopen remedy.
     assert!(!map.contains("ksx map --preset"), "{map}");
+}
+
+#[test]
+fn simultaneous_input_http_routes_share_one_typed_generation_stamped_contract() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+
+    let idle = get(addr, "/api/input-test");
+    assert!(idle.starts_with("HTTP/1.1 200"), "{idle}");
+    assert!(
+        idle.to_ascii_lowercase()
+            .contains("cache-control: no-store"),
+        "a held-key snapshot must never be cached: {idle}"
+    );
+    let idle: serde_json::Value = serde_json::from_str(body_of(&idle)).unwrap();
+    assert_eq!(idle["state"], "idle");
+
+    let unknown_start = post_json(
+        addr,
+        "/api/input-test/start",
+        r#"{"selector":"usb:d209:0430:00","guess":true}"#,
+    );
+    assert!(
+        !unknown_start.starts_with("HTTP/1.1 200"),
+        "the HTTP seam accepted a field the daemon pipe refuses: {unknown_start}"
+    );
+
+    let started = post_json(
+        addr,
+        "/api/input-test/start",
+        r#"{"selector":"usb:d209:0430:00"}"#,
+    );
+    assert!(started.starts_with("HTTP/1.1 200"), "{started}");
+    let started: serde_json::Value = serde_json::from_str(body_of(&started)).unwrap();
+    assert_eq!(started["state"], "listening");
+    assert_eq!(started["selector"], "usb:d209:0430:00");
+    assert_eq!(started["remaining_ms"], 30_000, "HTTP default is typed");
+    assert_eq!(started["held"], serde_json::json!(["A", "S"]));
+    assert_eq!(started["seen"], serde_json::json!(["A", "S", "D"]));
+    assert_eq!(started["peak"], 3);
+    assert_eq!(started["rollover_visibility"], "unavailable");
+    assert_eq!(
+        control.input_test_spec.lock().unwrap().as_ref().unwrap(),
+        &ksx_api::InputTestSpec {
+            selector: "usb:d209:0430:00".into(),
+            duration_ms: 30_000,
+        }
+    );
+
+    let generation = started["generation"].as_u64().unwrap();
+    let unknown_cancel = post_json(
+        addr,
+        "/api/input-test/cancel",
+        &format!(r#"{{"generation":{generation},"all":true}}"#),
+    );
+    assert!(
+        !unknown_cancel.starts_with("HTTP/1.1 200"),
+        "cancel accepted an unstamped authority field: {unknown_cancel}"
+    );
+    let stale = post_json(
+        addr,
+        "/api/input-test/cancel",
+        &format!(r#"{{"generation":{}}}"#, generation + 1),
+    );
+    let stale: serde_json::Value = serde_json::from_str(body_of(&stale)).unwrap();
+    assert_eq!(stale["state"], "listening", "stale cancel won: {stale}");
+    assert_eq!(stale["generation"], generation);
+
+    let cancelled = post_json(
+        addr,
+        "/api/input-test/cancel",
+        &format!(r#"{{"generation":{generation}}}"#),
+    );
+    let cancelled: serde_json::Value = serde_json::from_str(body_of(&cancelled)).unwrap();
+    assert_eq!(cancelled["state"], "cancelled");
+    assert_eq!(cancelled["generation"], generation);
+
+    let missing = post_json(addr, "/api/input-test/start", r#"{"duration_ms":5000}"#);
+    assert!(
+        !missing.starts_with("HTTP/1.1 200"),
+        "a missing exact selector must fail closed: {missing}"
+    );
 }
 
 /// FIX 0 over HTTP: the mapper's own session controls are the same
@@ -3380,7 +4657,7 @@ fn every_page_links_to_the_device_picker() {
         let page = get(addr, route);
         let body = body_of(&page);
         assert!(
-            body.contains(r#"href="/start""#),
+            body.contains(r#"href="/start#keyboard""#),
             "{route} has no link to the device picker: {body}"
         );
     }
@@ -3549,7 +4826,7 @@ fn hostile_saved_games_providers_cannot_write_internal_copy_into_flashes() {
 fn creating_a_profile_reaches_the_verb_and_flashes_the_outcome() {
     let control = Arc::new(ScriptedControl::new(true));
     let machine = Arc::new(ScriptedMachine::default());
-    let addr = start_server_with_machine(control, machine.clone());
+    let addr = start_server_with_machine(control.clone(), machine.clone());
 
     let response = post_form(
         addr,
@@ -3580,7 +4857,7 @@ fn creating_a_profile_reaches_the_verb_and_flashes_the_outcome() {
 fn updating_a_profile_reaches_the_typed_verb() {
     let control = Arc::new(ScriptedControl::new(true));
     let machine = Arc::new(ScriptedMachine::default());
-    let addr = start_server_with_machine(control, machine.clone());
+    let addr = start_server_with_machine(control.clone(), machine.clone());
 
     let response = post_form(
         addr,
@@ -4046,20 +5323,25 @@ fn every_page_links_to_every_other_page() {
     ] {
         let response = get(addr, route);
         let body = body_of(&response);
-        assert!(body.contains(r#"href="/start""#), "{route}: {body}");
-        assert!(body.contains(r#">Setup<"#), "{route}: {body}");
-        assert!(body.contains(r#">Controls<"#), "{route}: {body}");
+        assert!(
+            body.contains(r#"href="/start#keyboard""#),
+            "{route}: {body}"
+        );
+        assert!(body.contains(r#">Keyboard<"#), "{route}: {body}");
+        assert!(body.contains(r#">Mapping<"#), "{route}: {body}");
         assert!(body.contains(r#"href="/check""#), "{route}: {body}");
-        assert!(body.contains(r#">Test<"#), "{route}: {body}");
+        assert!(body.contains(r#">Test inputs<"#), "{route}: {body}");
         if route == "/map" {
             assert!(
-                body.contains(r#"<span class="navlink on" aria-current="page">Controls</span>"#),
-                "the active Controls stage must preserve mapper context: {body}"
+                body.contains(
+                    r#"<span class="navlink workflow-link on" aria-current="page"><span class="workflow-num">3</span>Mapping</span>"#
+                ),
+                "the active Mapping stage must preserve mapper context: {body}"
             );
         } else {
             assert!(
-                body.contains(r#"href="/map">Controls"#),
-                "{route} cannot reach Controls: {body}"
+                body.contains(r#"href="/map""#),
+                "{route} cannot reach Mapping: {body}"
             );
         }
     }
@@ -4115,6 +5397,38 @@ fn the_setup_api_serves_the_payload_the_page_embeds() {
         serde_json::json!(true)
     );
     assert_eq!(payload["setup"]["view"]["steps"][2]["state"], "now");
+    assert_eq!(
+        payload["setup"]["view"]["persona_options"]
+            .as_array()
+            .expect("served persona roster")
+            .len(),
+        ksx_core::Persona::ALL.len(),
+        "the API keeps the complete capability roster"
+    );
+    let dualsense = payload["setup"]["view"]["persona_options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|option| option["name"] == "dualsense")
+        .expect("the canonical DualSense option");
+    assert_eq!(dualsense["backend"], "hidmaestro");
+    assert_eq!(dualsense["backend_label"], "HIDMaestro");
+    assert_eq!(dualsense["instance_limit"], serde_json::Value::Null);
+    assert_eq!(dualsense["available"], true);
+    assert_eq!(dualsense["unavailable_reason"], serde_json::Value::Null);
+    assert_eq!(
+        payload["rows"]["persona_options"],
+        serde_json::json!([
+            {"value": "xbox360", "label": "Xbox 360 · ViGEmBus"},
+            {"value": "playstation", "label": "PlayStation · ViGEmBus"},
+            {"value": "dualsense", "label": "DualSense · HIDMaestro"},
+            {"value": "switchpro", "label": "Switch Pro · HIDMaestro"},
+            {"value": "xboxseries", "label": "Xbox Series X|S · HIDMaestro"},
+            {"value": "snes", "label": "SNES · HIDMaestro"},
+            {"value": "genesis", "label": "Genesis · HIDMaestro"}
+        ]),
+        "the form rows contain every live persona and no gated one"
+    );
     assert_eq!(payload["learn"]["state"], "idle");
     // A poll is not an action.
     assert_eq!(payload["flash"], serde_json::json!(null));
@@ -4298,6 +5612,16 @@ fn wiring_a_slot_goes_through_assign_slot_and_prints_the_daemons_own_sentence() 
         "the flash claimed a pad bounce against an idle daemon: {idle}"
     );
 
+    // Persona is the canonical value the served menu posts. The existing
+    // assign-slot verb parses it; the page owns no alias table.
+    let dualsense = post_form(
+        addr,
+        "/setup/slot",
+        "slot=2&preset=Panel+P1&persona=dualsense&profile=",
+    );
+    assert!(dualsense.starts_with("HTTP/1.1 303"), "{dualsense}");
+    assert!(dualsense.contains("DualSense"), "{dualsense}");
+
     // A running session: the bounce is named once, by the daemon, and not
     // again by this page.
     let started = post_form(addr, "/session/start", "profile=");
@@ -4413,7 +5737,15 @@ fn proving_a_button_uses_the_daemon_learner_with_no_javascript() {
     assert!(page.contains("press any button on the panel"), "{page}");
     assert!(page.contains(r#"action="/setup/prove/cancel""#), "{page}");
 
-    let stopped = post_form(addr, "/setup/prove/cancel", "");
+    // A cached form without the generation is refused without cancelling the
+    // listener a newer page owns.
+    let stale = post_form(addr, "/setup/prove/cancel", "");
+    assert!(stale.starts_with("HTTP/1.1 303"), "{stale}");
+    assert!(stale.contains("stale"), "{stale}");
+    let page = body_of(&get(addr, "/setup")).to_owned();
+    assert!(page.contains("press any button on the panel"), "{page}");
+
+    let stopped = post_form(addr, "/setup/prove/cancel", "generation=1");
     assert!(stopped.starts_with("HTTP/1.1 303"), "{stopped}");
 }
 
@@ -4429,6 +5761,7 @@ fn the_setup_routes_are_guarded_like_every_other_one() {
     for path in [
         "/setup/import",
         "/setup/slot",
+        "/setup/theme",
         "/setup/prove",
         "/setup/prove/cancel",
     ] {
@@ -4460,6 +5793,137 @@ fn the_setup_routes_are_guarded_like_every_other_one() {
             "{path} must refuse a rebound read, got: {response}"
         );
     }
+}
+
+/// TK2's stamp oracle: every page GET renders `<html lang="en">` with the
+/// stored theme stamped — and ONLY ids this build ships. The stamp is applied
+/// per handler (`page_theme` + `render::with_theme`) and the render-layer
+/// tests cannot see it because the splice happens above them — so this loop
+/// is the coverage, and PAGES is a HAND-KEPT list: an eleventh page must be
+/// added both to its handler and to this array, or its stamp ships untested.
+#[test]
+fn every_page_stamps_the_stored_theme_and_only_a_shipped_one() {
+    const PAGES: [&str; 10] = [
+        "/",
+        "/start",
+        "/workspace",
+        "/nocturne",
+        "/map",
+        "/check",
+        "/pads",
+        "/devices",
+        "/profiles",
+        "/setup",
+    ];
+
+    // No stored choice → no stamp: System is the ABSENCE of the attribute,
+    // which is what hands the choice to the stylesheet's
+    // `:root:not([data-theme])` system-follow guard.
+    let addr = start_server(Arc::new(ScriptedControl::new(false)));
+    for path in PAGES {
+        let response = get(addr, path);
+        let body = body_of(&response);
+        assert!(
+            body.contains("<html lang=\"en\">"),
+            "{path}: the un-stamped opener is missing"
+        );
+        // The inline anti-flash CSS legitimately carries `data-theme=`
+        // selectors on every page, so the check is the OPENER, not the token.
+        assert!(
+            !body.contains("<html lang=\"en\" data-theme="),
+            "{path}: stamped with no stored choice"
+        );
+    }
+
+    // A stored, shipped id → stamped on EVERY page.
+    let machine = Arc::new(ScriptedMachine::default());
+    *machine.theme.lock().unwrap() = "light".to_owned();
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(false)), machine);
+    for path in PAGES {
+        let response = get(addr, path);
+        let body = body_of(&response);
+        // Positional, not just present: the payload block escapes `<`, so a
+        // body match cannot come from user data — but pinning the stamp
+        // BEFORE </head> says it is the document opener, not a fluke.
+        let at = body
+            .find("<html lang=\"en\" data-theme=\"light\">")
+            .unwrap_or_else(|| panic!("{path}: missing the light stamp"));
+        assert!(
+            at < body.find("</head>").unwrap_or(usize::MAX),
+            "{path}: the stamp must sit on the document opener"
+        );
+    }
+
+    // A stored id this build does NOT ship → renders as System. The config is
+    // hand-editable and /setup/import writes Settings wholesale, so this path
+    // is reachable — and stamping it would defeat the system-follow guard
+    // while styling nothing (a light-OS user silently gets base dark).
+    let machine = Arc::new(ScriptedMachine::default());
+    *machine.theme.lock().unwrap() = "matrix2".to_owned();
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(false)), machine);
+    let response = get(addr, "/");
+    // Positive first (review-caught: a negative-only arm passes vacuously on
+    // a broken page), then the absence claim.
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "the page must still render under an unknown stored id, got: {response}"
+    );
+    let body = body_of(&response);
+    assert!(
+        body.contains("<html lang=\"en\">"),
+        "the un-stamped opener must be present under an unknown stored id"
+    );
+    assert!(
+        !body.contains("<html lang=\"en\" data-theme="),
+        "an id this build does not ship must render as System"
+    );
+}
+
+/// The theme form's round trip: a shipped id is stored and the very next
+/// render stamps it; `system` clears (the spec carries the empty string, not
+/// a word); an id this build lacks is refused at the door and never reaches
+/// the machine provider.
+#[test]
+fn the_theme_form_round_trips_and_refuses_what_the_build_lacks() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(
+        Arc::new(ScriptedControl::new(false)),
+        Arc::clone(&machine) as Arc<dyn ksx_api::MachineSource>,
+    );
+
+    let response = post_form(addr, "/setup/theme", "theme=light");
+    assert!(response.starts_with("HTTP/1.1 303"), "got: {response}");
+    assert!(response.contains("/setup?flash=Saved"), "got: {response}");
+    assert_eq!(
+        machine.set_theme_specs.lock().unwrap().as_slice(),
+        ["light"],
+        "the form's id must reach the verb"
+    );
+    let after = get(addr, "/setup");
+    assert!(
+        body_of(&after).contains("data-theme=\"light\""),
+        "the redirect's render must already stamp the new choice \
+         (the POST busts the machine cache)"
+    );
+
+    let response = post_form(addr, "/setup/theme", "theme=system");
+    assert!(response.starts_with("HTTP/1.1 303"), "got: {response}");
+    assert_eq!(
+        machine.set_theme_specs.lock().unwrap().as_slice(),
+        ["light", ""],
+        "`system` clears: the stored value is the empty string"
+    );
+
+    let response = post_form(addr, "/setup/theme", "theme=matrix2");
+    assert!(
+        response.contains("flash=error"),
+        "an unshipped id flashes an error, got: {response}"
+    );
+    assert_eq!(
+        machine.set_theme_specs.lock().unwrap().len(),
+        2,
+        "a refused id must never reach the machine provider"
+    );
 }
 
 /// With no daemon, the config half of the page keeps working and the two verbs
@@ -4498,7 +5962,7 @@ fn the_existing_pages_link_to_setup() {
     for path in ["/", "/map"] {
         let body = body_of(&get(addr, path)).to_owned();
         assert!(
-            body.contains(r#"href="/start">Setup"#),
+            body.contains(r#"href="/start#keyboard""#),
             "{path} must reach the product Setup flow from its nav: {body}"
         );
     }
@@ -4653,7 +6117,7 @@ fn spawning_pads_passes_the_whole_spec_through_and_303s_back() {
     );
 }
 
-/// A refusal flashes too, prefixed `error:` so the page colours it — never a
+/// A refusal flashes too, prefixed `error:` so the page colors it — never a
 /// silent failure and never an error page dead-ending the no-JS loop.
 #[test]
 fn a_refused_spawn_flashes_the_refusal() {
@@ -4936,10 +6400,10 @@ fn the_check_distinguishes_unavailable_empty_and_zero_control_rosters_over_http(
     );
     let unavailable = rendered_body(&get(unavailable, "/check"));
     assert!(
-        unavailable.contains("Controls could not be checked"),
+        unavailable.contains("Mappings could not be checked"),
         "{unavailable}"
     );
-    assert!(unavailable.contains("Open Setup"), "{unavailable}");
+    assert!(unavailable.contains("Open setup"), "{unavailable}");
     assert!(!unavailable.contains("ksx preset list"), "{unavailable}");
 
     let empty = start_server_with_status(
@@ -4954,7 +6418,7 @@ fn the_check_distinguishes_unavailable_empty_and_zero_control_rosters_over_http(
     );
     let empty = rendered_body(&get(empty, "/check"));
     assert!(empty.contains("No controller is ready to test"), "{empty}");
-    assert!(empty.contains("Add a controller in Setup"), "{empty}");
+    assert!(empty.contains("Add a controller in setup"), "{empty}");
 
     let zero = start_server_with_status(
         Arc::new(ScriptedControl::new(false)),
@@ -4972,6 +6436,7 @@ fn the_check_distinguishes_unavailable_empty_and_zero_control_rosters_over_http(
                 backup: None,
                 session_backup: false,
                 turbo: Default::default(),
+                toggle: Default::default(),
                 macros_off: false,
             }],
             profile: None,
@@ -5008,6 +6473,7 @@ fn the_check_keeps_canonical_live_keys_but_shows_controller_labels_over_http() {
                 backup: None,
                 session_backup: false,
                 turbo: Default::default(),
+                toggle: Default::default(),
                 macros_off: false,
             },
             MapperSlot {
@@ -5020,6 +6486,7 @@ fn the_check_keeps_canonical_live_keys_but_shows_controller_labels_over_http() {
                 backup: None,
                 session_backup: false,
                 turbo: Default::default(),
+                toggle: Default::default(),
                 macros_off: false,
             },
         ],
@@ -5130,8 +6597,10 @@ fn start_gates_controls_describes_replacement_and_sanitizes_feedback_over_http()
         "/start/device",
         "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
     );
+    // MIGRATED (2026-08-17): the keyboard verbs answer on /nocturne now —
+    // the old form still works, but the outcome lands on the new page.
     assert!(
-        refused.contains("location: /start?flash=error"),
+        refused.contains("location: /nocturne?flash=error"),
         "{refused}"
     );
     for raw in ["daemon", "pipe", "control%20channel", "%60ksx"] {
@@ -5681,6 +7150,120 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
     assert!(control.played.load(Ordering::SeqCst), "{response}");
 }
 
+/// The API carries the full build roster and a narrower picker at the same
+/// time. Once the one-host DualSense is staged, a second one is absent from
+/// the real `/start` form and a handcrafted POST still cannot bypass the
+/// domain limit.
+#[test]
+fn start_keeps_offering_dualsense_after_the_first_over_http() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    post_form(
+        addr,
+        "/start/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+    );
+    let first = post_form(
+        addr,
+        "/start/controller",
+        "persona=dualsense&preset=Player+1&layout=keyboard-2p",
+    );
+    assert!(!first.contains("flash=error"), "{first}");
+
+    let payload: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("start payload");
+    let dualsense = payload["staged"]["personas"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|option| option["name"] == "dualsense")
+        .expect("the full roster keeps DualSense");
+    assert_eq!(dualsense["can_plug"], true);
+    assert_eq!(dualsense["backend"], "hidmaestro");
+    // 2026-08-20: the multi-controller SDK host lifts the one-DualSense cap —
+    // the offer stands after the first, and a second POST stages an ordinary
+    // slot. The unavailable machinery stays wired for the next bounded
+    // persona.
+    assert_eq!(dualsense["instance_limit"], serde_json::Value::Null);
+    assert_eq!(dualsense["available"], true);
+    assert_eq!(dualsense["unavailable_reason"], serde_json::Value::Null);
+    assert!(
+        payload["rows"]["personas"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|option| option["value"] == "dualsense"),
+        "the rendered option rows keep offering DualSense: {payload}"
+    );
+    assert!(payload["rows"]["personas"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|option| option["value"] == "playstation"));
+
+    let page = rendered_body(&get(addr, "/start"));
+    assert!(
+        page.contains(r#"<option value="dualsense""#),
+        "the HTML form must keep offering DualSense: {page}"
+    );
+
+    let second = post_form(
+        addr,
+        "/start/controller",
+        "persona=dualsense&preset=Player+2&layout=keyboard-2p",
+    );
+    assert!(!second.contains("flash=error"), "{second}");
+    assert_eq!(
+        control.staged().slots.len(),
+        2,
+        "the second DualSense stages an ordinary slot"
+    );
+}
+
+/// Saving writes no controller and therefore remains available when a required
+/// output is missing or unreadable. Play has the stricter gate, repeated in
+/// the handler so a hand-authored POST cannot bypass the page.
+#[test]
+fn controller_output_readiness_blocks_play_without_blocking_save() {
+    for (mode, expected_state) in [(1, "blocked"), (2, "unknown")] {
+        let control = Arc::new(ScriptedControl::new(false));
+        let machine = Arc::new(ScriptedMachine::default());
+        machine.output_mode.store(mode, Ordering::SeqCst);
+        let addr = start_server_with_machine(Arc::clone(&control), machine);
+
+        post_form(
+            addr,
+            "/start/device",
+            "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+        );
+        let prepared = prepare_ipac(addr);
+        assert!(!prepared.contains("flash=error"), "{prepared}");
+        post_form(
+            addr,
+            "/start/controller",
+            "persona=xbox360&preset=Player+1&layout=arcade-6button",
+        );
+        post_form(addr, "/start/blocking", "blocking=bound-keys");
+
+        let payload: serde_json::Value =
+            serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("start payload");
+        assert_eq!(payload["controller_outputs"]["state"], expected_state);
+        assert_eq!(payload["flags"]["can_save"], true);
+        assert_eq!(payload["flags"]["can_play"], false);
+        assert_eq!(payload["flags"]["cannot_save"], false);
+        assert_eq!(payload["flags"]["cannot_play"], true);
+
+        let save = post_form(addr, "/start/save", "");
+        assert!(!save.contains("flash=error"), "{save}");
+        assert!(control.committed.load(Ordering::SeqCst), "{save}");
+
+        let play = post_form(addr, "/start/play", "");
+        assert!(play.contains("flash=error"), "{play}");
+        assert!(play.contains("ready%20to%20save"), "{play}");
+        assert!(!control.played.load(Ordering::SeqCst), "{play}");
+    }
+}
+
 /// **A controller with no layout is staged, refused by name, and fixable
 /// without leaving the page.**
 ///
@@ -5753,6 +7336,7 @@ fn the_start_routes_are_behind_the_guard() {
     let addr = start_server(Arc::new(ScriptedControl::new(false)));
     for path in [
         "/start/device",
+        "/start/device/identify",
         "/start/capture/prepare",
         "/start/capture/release",
         "/start/controller",
@@ -5777,4 +7361,4307 @@ fn the_start_routes_are_behind_the_guard() {
             "{path} accepted a cross-origin POST: {response}"
         );
     }
+}
+
+/// The browser's Identify action starts the daemon-owned learner, passes that
+/// exact generation's observed interface to the machine inventory resolver,
+/// and lets the ordinary stage writer own the reversible selection. It must
+/// not require a path from the browser, open a competing local observer, or
+/// mutate capture/output state.
+#[test]
+fn start_identify_selects_the_machine_providers_exact_board() {
+    let control = Arc::new(ScriptedControl::new(false).with_identify_hit(IPAC_KB));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
+
+    let page = get(addr, "/start");
+    assert!(
+        page.contains(r#"action="/start/device/identify""#),
+        "{page}"
+    );
+    assert!(page.contains("Identify by pressing a key"), "{page}");
+
+    let response = post_form(addr, "/start/device/identify", "");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("Keyboard%20identified"), "{response}");
+
+    let staged = control.staged();
+    let selected = staged.device.expect("the identified keyboard is staged");
+    assert_eq!(selected.label, "Ultimarc I-PAC 4X");
+    assert_eq!(selected.alias, "panel");
+    assert_eq!(selected.selector, "usb:d209:0430:00");
+    assert!(
+        staged.slots.is_empty(),
+        "identify must not create a controller"
+    );
+    assert_eq!(
+        *machine.identified_from.lock().unwrap(),
+        vec![IPAC_KB.to_owned()],
+        "the machine resolver must receive the daemon learner's exact identity"
+    );
+}
+
+// ── /workspace — the left pane's form twins (M2) ────────────────────────────
+
+/// The whole left pane, no JavaScript anywhere: stage a draft, reorder it,
+/// set a slot's opposite-directions rule, answer the capture question, remove
+/// a controller — every step one POST, every answer a 303 with an allowlisted
+/// flash, every fact read back from the same payload the island polls.
+#[test]
+fn the_workspace_left_pane_edits_through_its_form_twins() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+
+    // Stage a draft with /start's twins — one stage, two doors onto it.
+    post_form(
+        addr,
+        "/start/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+    );
+    post_form(
+        addr,
+        "/start/controller",
+        "persona=xbox360&preset=Player+1&layout=arcade-6button",
+    );
+    post_form(
+        addr,
+        "/start/controller",
+        "persona=playstation&preset=Player+2&layout=arcade-6button",
+    );
+
+    let page = get(addr, "/workspace");
+    assert!(page.contains("P1 · Xbox 360"), "{page}");
+    assert!(page.contains("P2 · PlayStation"), "{page}");
+    assert!(
+        page.contains(r#"action="/workspace/controller/move""#),
+        "{page}"
+    );
+    assert!(
+        page.contains(r#"action="/workspace/controller/socd""#),
+        "{page}"
+    );
+    assert!(page.contains(r#"action="/workspace/blocking""#), "{page}");
+
+    // Reorder: one whole-order write, and the renumbering is the daemon's.
+    let response = post_form(addr, "/workspace/controller/move", "number=1&order=2+1");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+    assert_eq!(api["view"]["rack"][0]["title"], "P1 · PlayStation", "{api}");
+    assert_eq!(api["view"]["rack"][1]["title"], "P2 · Xbox 360", "{api}");
+
+    // The first row's "Move up" is already at that end: no write, and the
+    // honest sentence rather than an error.
+    let response = post_form(addr, "/workspace/controller/move", "number=1&order=");
+    assert!(response.contains("already%20at%20that%20end"), "{response}");
+
+    // A slot's opposite-directions rule, in the served roster's own words.
+    let response = post_form(
+        addr,
+        "/workspace/controller/socd",
+        "number=1&socd=last-input",
+    );
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+    assert_eq!(
+        api["view"]["rack"][0]["socd_note"], "Opposites: Last press wins",
+        "{api}"
+    );
+
+    // The capture answer.
+    let response = post_form(addr, "/workspace/blocking", "blocking=whole");
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+    assert!(
+        api["view"]["blocking_line"]
+            .as_str()
+            .unwrap()
+            .starts_with("Freeze"),
+        "{api}"
+    );
+
+    // Remove one; the rack shrinks and says so.
+    let response = post_form(addr, "/workspace/controller/remove", "number=2");
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+    assert_eq!(api["view"]["rack"].as_array().unwrap().len(), 1, "{api}");
+    assert_eq!(api["view"]["rack_line"], "1 controller staged.", "{api}");
+
+    // Add one back through the workspace's own form: served persona roster,
+    // served layout roster, served preset name.
+    let preset = api["view"]["add_preset"].as_str().expect("a served name");
+    assert!(!preset.is_empty(), "{api}");
+    let response = post_form(
+        addr,
+        "/workspace/controller",
+        &format!(
+            "persona=xbox360&preset={}&layout=arcade-6button",
+            preset.replace(' ', "+")
+        ),
+    );
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+    assert_eq!(api["view"]["rack"].as_array().unwrap().len(), 2, "{api}");
+}
+
+/// The workspace's Identify goes through the same daemon-owned transaction
+/// as /start's, and lands its flash on THIS page.
+#[test]
+fn workspace_identify_selects_the_board_and_returns_here() {
+    let control = Arc::new(ScriptedControl::new(false).with_identify_hit(IPAC_KB));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
+
+    let page = get(addr, "/workspace");
+    assert!(
+        page.contains(r#"action="/workspace/device/identify""#),
+        "{page}"
+    );
+
+    let response = post_form(addr, "/workspace/device/identify", "");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("/workspace?flash="), "{response}");
+    assert!(response.contains("Keyboard%20identified"), "{response}");
+    let staged = control.staged();
+    assert_eq!(
+        staged
+            .device
+            .expect("the identified keyboard is staged")
+            .label,
+        "Ultimarc I-PAC 4X"
+    );
+}
+
+/// Duplicate is a COMPOSITION of existing staging verbs, and the copy is
+/// honest: same bindings, same opposite-directions rule, the served fresh
+/// preset name — never the same name twice, because a save writes one file
+/// per slot.
+#[test]
+fn duplicating_a_controller_copies_bindings_rule_and_takes_the_served_name() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    post_form(
+        addr,
+        "/start/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+    );
+    post_form(
+        addr,
+        "/start/controller",
+        "persona=xbox360&preset=Player+1&layout=arcade-6button",
+    );
+    post_form(
+        addr,
+        "/workspace/controller/socd",
+        "number=1&socd=last-input",
+    );
+
+    let response = post_form(addr, "/workspace/controller/duplicate", "number=1");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("Controller%20duplicated"), "{response}");
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+    let rack = api["view"]["rack"].as_array().unwrap();
+    assert_eq!(rack.len(), 2, "{api}");
+    assert_eq!(rack[1]["socd_note"], "Opposites: Last press wins", "{api}");
+    // Same binding count, different preset name.
+    let d0 = rack[0]["detail"].as_str().unwrap();
+    let d1 = rack[1]["detail"].as_str().unwrap();
+    assert_eq!(
+        d0.split("· ").last(),
+        d1.split("· ").last(),
+        "the copy binds what the original binds: {api}"
+    );
+    assert!(
+        d0.contains("Player 1") && !d1.contains("\"Player 1\""),
+        "{api}"
+    );
+
+    let staged = control.staged();
+    assert_eq!(staged.slots[0].bindings, staged.slots[1].bindings);
+    assert_ne!(staged.slots[0].preset, staged.slots[1].preset);
+}
+
+/// `?slot=N` selection is a server-resolved LINK: the rack marks the row,
+/// the right pane lists that controller's bindings, and the Clear twin puts
+/// one control back to unbound — no JavaScript anywhere in the loop.
+#[test]
+fn selecting_a_slot_lists_its_bindings_and_clear_unbinds_one_control() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    post_form(
+        addr,
+        "/start/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+    );
+    post_form(
+        addr,
+        "/start/controller",
+        "persona=xbox360&preset=Player+1&layout=arcade-6button",
+    );
+    post_form(
+        addr,
+        "/start/controller",
+        "persona=playstation&preset=Player+2&layout=arcade-6button",
+    );
+
+    let page = get(addr, "/workspace?slot=2");
+    assert!(page.contains("P2 · PlayStation — \"Player 2\""), "{page}");
+    assert!(page.contains(r#"action="/workspace/bind/clear""#), "{page}");
+    let api: serde_json::Value = serde_json::from_str(body_of(&get(addr, "/api/workspace?slot=2")))
+        .expect("workspace payload");
+    assert_eq!(api["view"]["rack"][1]["row_cls"], "wsrow on", "{api}");
+    assert_eq!(
+        api["view"]["pad_ps"], true,
+        "the stage follows the selection"
+    );
+    let rows = api["view"]["bind_rows"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        ksx_core::preset::MAPPABLE_COUNT,
+        "one row per zone: {api}"
+    );
+    let bound_before = rows.iter().filter(|r| r["keys"] != "—").count();
+    assert!(bound_before > 0, "{api}");
+    let cleared_fn = rows
+        .iter()
+        .find(|r| r["keys"] != "—")
+        .and_then(|r| r["function"].as_str())
+        .unwrap()
+        .to_owned();
+
+    let response = post_form(
+        addr,
+        "/workspace/bind/clear",
+        &format!("slot=2&function={}", cleared_fn.replace('.', "%2E")),
+    );
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value = serde_json::from_str(body_of(&get(addr, "/api/workspace?slot=2")))
+        .expect("workspace payload");
+    let row = api["view"]["bind_rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["function"] == cleared_fn.as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(row["keys"], "—", "{api}");
+    assert_eq!(row["clear"], "", "{api}");
+}
+
+/// The flash is an allowlist, not a reflector: whatever lands in the query,
+/// only this module's own copy reaches the page.
+#[test]
+fn an_unknown_workspace_flash_is_never_reflected() {
+    let addr = start_server(Arc::new(ScriptedControl::new(false)));
+    let page = get(addr, "/workspace?flash=%3Cscript%3Ealert(1)%3C%2Fscript%3E");
+    assert!(!page.contains("alert(1)"), "{page}");
+    assert!(
+        page.contains("could not finish that request"),
+        "the unknown-flash fallback must render: {page}"
+    );
+}
+
+/// Every mutating `/workspace` route is behind the guard: a rebound host must
+/// not be able to edit this machine's draft.
+#[test]
+fn the_workspace_routes_are_behind_the_guard() {
+    let addr = start_server(Arc::new(ScriptedControl::new(false)));
+    for path in [
+        "/workspace/blocking",
+        "/workspace/controller",
+        "/workspace/controller/move",
+        "/workspace/controller/duplicate",
+        "/workspace/controller/remove",
+        "/workspace/controller/socd",
+        "/workspace/device/identify",
+        "/workspace/bind/clear",
+        "/workspace/adopt",
+    ] {
+        let response = http(
+            addr,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\n\
+                 Content-Type: application/x-www-form-urlencoded\r\n\
+                 Content-Length: 0\r\nConnection: close\r\n\r\n"
+            ),
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 403") || response.starts_with("HTTP/1.1 421"),
+            "{path} accepted a cross-origin POST: {response}"
+        );
+    }
+}
+
+/// **The MIGRATED keyboard section, over HTTP.** `/nocturne` serves the
+/// scan-backed device rows and the roster beside the placeholder half,
+/// reflects only its own allowlisted flash copy, and its verbs — the same
+/// handlers `/start`'s old routes now point at — answer on `/nocturne` with
+/// every guard intact.
+#[test]
+fn nocturne_serves_the_migrated_keyboard_section_over_http() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
+
+    // The page embeds its payload and renders the machine's board beside the
+    // roster's own words and the design-proof placeholder half.
+    let raw = get(addr, "/nocturne");
+    assert!(
+        body_of(&raw).contains("__ksx-payload"),
+        "payload block missing"
+    );
+    let page = rendered_body(&raw);
+    assert!(page.contains("I-PAC"), "{page}");
+    assert!(page.contains("Freeze this keyboard"), "{page}");
+    // Pass 2: the rack caption and the escape hatch are served facts now,
+    // and the design proof's invented values are gone.
+    assert!(page.contains("XInput"), "{page}");
+    assert!(page.contains("LeftCtrl five times"), "{page}");
+    assert!(!page.contains("16 of 24 inputs bound"), "{page}");
+
+    // The canvas contract: the keyboard widget is SERVED carrying the exact
+    // attributes the engine's mountItem would write, so adoption is a no-op
+    // for parity. Losing any of these breaks the canvas silently — the
+    // island would still hydrate, the engine would just restyle the article
+    // one frame later and the parity gate would light up instead of this.
+    for pin in [
+        r#"data-instance-id="keyboard""#,
+        "data-widget-navigation-item",
+        r#"data-canvas-preferred-width="980""#,
+        r#"data-canvas-resizable="false""#,
+        "widget-instance n-widget n-widget-kb",
+        "widget-drag-handle",
+    ] {
+        assert!(
+            page.contains(pin),
+            "served keyboard widget lost {pin:?}: {page}"
+        );
+    }
+    // And the client-built side of the same contract: controller widgets
+    // must NOT be served (their SSR absence is parity rule 3e).
+    assert!(!page.contains("data-client-widget"), "{page}");
+
+    // Only copy this page can emit is reflected back onto it.
+    let hostile = rendered_body(&get(
+        addr,
+        "/nocturne?flash=error%3A%20daemon%20pipe%20C%3A%5Cksx%20--secret%20claim",
+    ));
+    assert!(hostile.contains("could not be finished"), "{hostile}");
+    for raw in ["daemon pipe", "--secret", r"C:\ksx"] {
+        assert!(
+            !hostile.contains(raw),
+            "raw flash fragment {raw:?}: {hostile}"
+        );
+    }
+
+    // Picking a board IS the old "Use this device": one staged value.
+    let picked = post_form(
+        addr,
+        "/nocturne/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+    );
+    assert!(
+        picked.contains("location: /nocturne?flash=Keyboard%20selected"),
+        "{picked}"
+    );
+    assert_eq!(
+        control.staged().device.expect("staged device").selector,
+        "usb:d209:0430:00"
+    );
+
+    // The capture answer carries its own sentence, not the device one…
+    let blocked = post_form(addr, "/nocturne/blocking", "blocking=bound-keys");
+    assert!(
+        blocked.contains("Capture%20behaviour%20updated"),
+        "{blocked}"
+    );
+    assert_eq!(control.staged().blocking.as_deref(), Some("bound-keys"));
+    // …and a junk answer refuses without touching the staged one.
+    let junk = post_form(addr, "/nocturne/blocking", "blocking=everything");
+    assert!(junk.contains("flash=error"), "{junk}");
+    assert_eq!(control.staged().blocking.as_deref(), Some("bound-keys"));
+
+    // A crafted prepare missing a consent never reaches the provider — the
+    // same server-side validation the old card had, behind the new fold.
+    let missing = post_form(
+        addr,
+        "/nocturne/capture/prepare",
+        "expected_selector=usb%3Ad209%3A0430%3A00&         instance_id=USB%5CVID_D209%26PID_0430%26MI_00%5C7%261A2B3C4D%260%260000&         confirm_spare_keyboard=yes&confirm_machine_certificate=yes",
+    );
+    assert!(missing.contains("Confirm%20all%20three"), "{missing}");
+    assert!(machine.prepared_with.lock().unwrap().is_empty());
+
+    // The poller serves the same derived facts the page painted.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("nocturne payload");
+    assert!(
+        api["view"]["kb_title"]
+            .as_str()
+            .expect("kb_title")
+            .contains("I-PAC"),
+        "{api}"
+    );
+    assert!(
+        !api["view"]["mode_rows"]
+            .as_array()
+            .expect("mode rows")
+            .is_empty(),
+        "{api}"
+    );
+
+    // A dead daemon refuses in the page's own words, with nothing raw.
+    let dead = start_server(Arc::new(ScriptedControl::dead()));
+    let refused = post_form(dead, "/nocturne/blocking", "blocking=bound-keys");
+    assert!(
+        refused.contains("location: /nocturne?flash=error"),
+        "{refused}"
+    );
+}
+
+/// The nocturne pane's six controller groups, flattened back into one row
+/// list for tests that search across the whole pane.
+fn nocturne_bind_rows(api: &serde_json::Value) -> Vec<serde_json::Value> {
+    [
+        "bind_face",
+        "bind_dpad",
+        "bind_shoulders",
+        "bind_lstick",
+        "bind_rstick",
+        "bind_system",
+    ]
+    .iter()
+    .flat_map(|k| api["view"][k].as_array().cloned().unwrap_or_default())
+    .collect()
+}
+
+fn seed_nocturne_panel(control: &ScriptedControl, slots: u8) {
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".into(),
+                alias: "panel".into(),
+                label: "I-PAC".into(),
+            })
+            .ok
+    );
+    for number in 1..=slots {
+        assert!(
+            control
+                .stage_edit(&ksx_api::StageEdit::AddSlot {
+                    number: Some(number),
+                    persona: "xbox360".into(),
+                    preset: format!("Player {number}"),
+                    layout: None,
+                })
+                .ok
+        );
+    }
+}
+
+fn staged_target_revision(control: &ScriptedControl, slot: u8) -> String {
+    control
+        .staged()
+        .slots
+        .into_iter()
+        .find(|candidate| candidate.number == slot)
+        .unwrap_or_else(|| panic!("no staged Player {slot}"))
+        .target_revision
+}
+
+fn nocturne_bind_body_with_revision(
+    slot: u8,
+    target_revision: &str,
+    function: &str,
+    key: &str,
+    mode: Option<&str>,
+    force: bool,
+) -> String {
+    serde_json::json!({
+        "slot": slot,
+        "expected_target_revision": target_revision,
+        "function": function,
+        "key": key,
+        "mode": mode,
+        "force": force,
+    })
+    .to_string()
+}
+
+fn nocturne_bind_body(
+    control: &ScriptedControl,
+    slot: u8,
+    function: &str,
+    key: &str,
+    mode: Option<&str>,
+    force: bool,
+) -> String {
+    nocturne_bind_body_with_revision(
+        slot,
+        &staged_target_revision(control, slot),
+        function,
+        key,
+        mode,
+        force,
+    )
+}
+
+fn encoder_bind_body_with_revision(
+    slot: u8,
+    target_revision: &str,
+    key: &str,
+    force: bool,
+    sha: &str,
+) -> String {
+    serde_json::json!({
+        "slot": slot,
+        "expected_target_revision": target_revision,
+        "function": "A",
+        "key": key,
+        "force": force,
+        "encoder_authority": {
+            "expected_selector": "usb:d209:0430:00",
+            "expected_instance": IPAC_KB,
+            "expected_board_fingerprint": "ultimarc-ipac:D209:0430:board-4",
+            "expected_chart_sha256": sha,
+        },
+    })
+    .to_string()
+}
+
+fn encoder_bind_body(
+    control: &ScriptedControl,
+    slot: u8,
+    key: &str,
+    force: bool,
+    sha: &str,
+) -> String {
+    encoder_bind_body_with_revision(
+        slot,
+        &staged_target_revision(control, slot),
+        key,
+        force,
+        sha,
+    )
+}
+
+/// A programmable encoder route is authorized by the server, not by a
+/// browser preflight. Missing/stale/recovery proofs never reach staged state;
+/// a valid proof owns its opaque machine guard through the atomic bind; and
+/// ordinary keyboard-compatible providers retain the legacy request shape.
+#[test]
+fn nocturne_encoder_binds_require_fresh_machine_authority() {
+    let control = Arc::new(ScriptedControl::new(false));
+    seed_nocturne_panel(&control, 2);
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.panel_routing_mode.store(1, Ordering::SeqCst);
+    *control.route_guard_probe.lock().unwrap() = Some(Arc::clone(&machine.panel_routing_active));
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+
+    let missing: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body(&control, 1, "A", "F7", None, false),
+    )))
+    .unwrap();
+    assert_eq!(missing["ok"], false, "{missing}");
+    assert_eq!(missing["code"], "bad-request", "{missing}");
+
+    let stale: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &encoder_bind_body(&control, 1, "F7", false, &"B".repeat(64)),
+    )))
+    .unwrap();
+    assert_eq!(stale["ok"], false, "{stale}");
+    assert_eq!(control.staged().slots[0].bindings, 0);
+
+    machine.panel_routing_mode.store(2, Ordering::SeqCst);
+    let recovery: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &encoder_bind_body(&control, 1, "F7", false, &"A".repeat(64)),
+    )))
+    .unwrap();
+    assert_eq!(recovery["code"], "recovery-required", "{recovery}");
+    assert_eq!(control.staged().slots[0].bindings, 0);
+
+    machine.panel_routing_mode.store(1, Ordering::SeqCst);
+    let first: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &encoder_bind_body(&control, 1, "F7", false, &"A".repeat(64)),
+    )))
+    .unwrap();
+    assert_eq!(first["ok"], true, "{first}");
+    assert!(control.stage_bind_saw_route_guard.load(Ordering::SeqCst));
+    assert!(!machine.panel_routing_active.load(Ordering::SeqCst));
+
+    let conflict: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &encoder_bind_body(&control, 2, "F7", false, &"A".repeat(64)),
+    )))
+    .unwrap();
+    assert_eq!(conflict["code"], "conflict", "{conflict}");
+    let forced: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &encoder_bind_body(&control, 2, "F7", true, &"A".repeat(64)),
+    )))
+    .unwrap();
+    assert_eq!(forced["ok"], true, "{forced}");
+
+    let ordinary = Arc::new(ScriptedControl::new(false));
+    seed_nocturne_panel(&ordinary, 1);
+    let ordinary_addr =
+        start_server_with_machine(ordinary.clone(), Arc::new(ScriptedMachine::default()));
+    let compatible: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        ordinary_addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body(&ordinary, 1, "A", "F8", None, false),
+    )))
+    .unwrap();
+    assert_eq!(compatible["ok"], true, "{compatible}");
+}
+
+/// A hardware chart proof can take long enough for another surface to replace
+/// its controller. Reusing the same player number and preset name must not let
+/// the old request land on that new controller after the machine guard opens.
+#[test]
+fn nocturne_encoder_bind_refuses_a_recreated_staged_target_after_hardware_proof() {
+    let control = Arc::new(ScriptedControl::new(false));
+    seed_nocturne_panel(&control, 1);
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.panel_routing_mode.store(1, Ordering::SeqCst);
+    machine.panel_routing_hold.store(true, Ordering::SeqCst);
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+
+    let body = encoder_bind_body(&control, 1, "F9", false, &"A".repeat(64));
+    let bind = std::thread::spawn(move || post_json(addr, "/nocturne/api/bind", &body));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !machine.panel_routing_entered.load(Ordering::SeqCst) {
+        assert!(
+            Instant::now() < deadline,
+            "route never entered its slow guard"
+        );
+        std::thread::yield_now();
+    }
+
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::RemoveSlot { number: 1 })
+            .ok
+    );
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::AddSlot {
+                number: Some(1),
+                persona: "playstation".into(),
+                preset: "Player 1".into(),
+                layout: Some("empty".into()),
+            })
+            .ok
+    );
+
+    machine.panel_routing_hold.store(false, Ordering::SeqCst);
+    let refused: serde_json::Value =
+        serde_json::from_str(body_of(&bind.join().unwrap())).expect("bind response");
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_eq!(refused["code"], "bad-slot", "{refused}");
+
+    let after = control.staged();
+    assert_eq!(after.slots[0].number, 1);
+    assert_eq!(after.slots[0].preset, "Player 1");
+    assert_eq!(after.slots[0].persona, "playstation");
+    assert_eq!(
+        after.slots[0].bindings, 0,
+        "the stale F9 write must not land on the recreated controller"
+    );
+}
+
+/// Content equality is not identity. Removing and rebuilding the exact same
+/// slot while the HID proof is blocked still creates a new draft target, so a
+/// content hash alone must never let the old request through.
+#[test]
+fn nocturne_encoder_bind_refuses_an_identical_recreated_target_after_hardware_proof() {
+    let control = Arc::new(ScriptedControl::new(false));
+    seed_nocturne_panel(&control, 1);
+    let original_revision = staged_target_revision(&control, 1);
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.panel_routing_mode.store(1, Ordering::SeqCst);
+    machine.panel_routing_hold.store(true, Ordering::SeqCst);
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+
+    let body =
+        encoder_bind_body_with_revision(1, &original_revision, "F10", false, &"A".repeat(64));
+    let bind = std::thread::spawn(move || post_json(addr, "/nocturne/api/bind", &body));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !machine.panel_routing_entered.load(Ordering::SeqCst) {
+        assert!(
+            Instant::now() < deadline,
+            "route never entered its slow guard"
+        );
+        std::thread::yield_now();
+    }
+
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::RemoveSlot { number: 1 })
+            .ok
+    );
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::AddSlot {
+                number: Some(1),
+                persona: "xbox360".into(),
+                preset: "Player 1".into(),
+                layout: None,
+            })
+            .ok
+    );
+    assert_ne!(
+        staged_target_revision(&control, 1),
+        original_revision,
+        "an identical replacement must still have a new incarnation"
+    );
+
+    machine.panel_routing_hold.store(false, Ordering::SeqCst);
+    let refused: serde_json::Value =
+        serde_json::from_str(body_of(&bind.join().unwrap())).expect("bind response");
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_eq!(refused["code"], "bad-slot", "{refused}");
+    assert_eq!(control.staged().slots[0].bindings, 0);
+}
+
+/// The slot may be visually unchanged while another tab selects a different
+/// physical keyboard. Because the served target revision covers the complete
+/// daemon draft generation, that stale tab is rejected before hardware proof.
+#[test]
+fn nocturne_bind_refuses_a_stale_tab_after_only_the_input_device_changes() {
+    let control = Arc::new(ScriptedControl::new(false));
+    seed_nocturne_panel(&control, 1);
+    let old_revision = staged_target_revision(&control, 1);
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.panel_routing_mode.store(1, Ordering::SeqCst);
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:1234:5678:00".into(),
+                alias: "replacement".into(),
+                label: "Keyboard B".into(),
+            })
+            .ok
+    );
+    let stale: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &encoder_bind_body_with_revision(1, &old_revision, "F11", false, &"A".repeat(64)),
+    )))
+    .expect("stale bind response");
+    assert_eq!(stale["ok"], false, "{stale}");
+    assert_eq!(stale["code"], "bad-slot", "{stale}");
+    assert!(!machine.panel_routing_entered.load(Ordering::SeqCst));
+    assert_eq!(control.staged().slots[0].bindings, 0);
+}
+
+/// Conflict consent belongs to the exact conflict set the dialog disclosed.
+/// If another slot acquires the key while the dialog is open, forcing the old
+/// answer must refresh and ask again rather than silently broadening fan-out.
+#[test]
+fn nocturne_conflict_force_refuses_after_an_external_draft_mutation() {
+    let control = Arc::new(ScriptedControl::new(false));
+    seed_nocturne_panel(&control, 3);
+    let addr = start_server(Arc::clone(&control));
+
+    let first: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body(&control, 2, "A", "F12", None, false),
+    )))
+    .expect("first owner");
+    assert_eq!(first["ok"], true, "{first}");
+
+    let disclosed_revision = staged_target_revision(&control, 1);
+    let conflict_body =
+        nocturne_bind_body_with_revision(1, &disclosed_revision, "A", "F12", None, false);
+    let conflict: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &conflict_body,
+    )))
+    .expect("conflict response");
+    assert_eq!(conflict["code"], "conflict", "{conflict}");
+
+    let slot3 = control
+        .staged()
+        .slots
+        .into_iter()
+        .find(|slot| slot.number == 3)
+        .expect("Player 3");
+    assert!(
+        control
+            .stage_bind(&ksx_api::StagedBindRequest {
+                number: 3,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
+                preset: slot3.preset,
+                function: "A".into(),
+                keys: vec!["F12".into()],
+                force: true,
+                turbo_hz: None,
+                toggle: None,
+            })
+            .ok
+    );
+
+    let forced: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body_with_revision(1, &disclosed_revision, "A", "F12", None, true),
+    )))
+    .expect("forced response");
+    assert_eq!(forced["ok"], false, "{forced}");
+    assert_eq!(forced["code"], "bad-slot", "{forced}");
+    let player1 = control
+        .staged()
+        .slots
+        .into_iter()
+        .find(|slot| slot.number == 1)
+        .expect("Player 1");
+    assert_eq!(player1.bindings, 0, "stale consent must write nothing");
+}
+
+/// Studio request admission is ordered before either blocking task can race
+/// to the cross-process lease: the request registered first wins, in both
+/// directions, and the losing provider is never entered.
+#[test]
+fn nocturne_encoder_bind_and_program_requests_cannot_overtake_each_other() {
+    let program_body = |epoch: &str| {
+        format!(
+            r#"{{"hardware_epoch":"{epoch}","expected_selector":"usb:d209:0430:00","program":{{"expected_base_sha256":"{}","layout":"custom","edits":[]}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+            "A".repeat(64),
+            "B".repeat(64),
+        )
+    };
+
+    let control = Arc::new(ScriptedControl::new(false));
+    seed_nocturne_panel(&control, 1);
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.panel_routing_mode.store(1, Ordering::SeqCst);
+    machine.panel_program_hold.store(true, Ordering::SeqCst);
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+    let body = program_body("writer-first");
+    let writer = std::thread::spawn(move || post_json(addr, "/api/panel/program/apply", &body));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !machine.panel_program_entered.load(Ordering::SeqCst) {
+        assert!(Instant::now() < deadline, "writer never entered");
+        std::thread::yield_now();
+    }
+    let blocked: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &encoder_bind_body(&control, 1, "F7", false, &"A".repeat(64)),
+    )))
+    .unwrap();
+    assert_eq!(blocked["ok"], false, "{blocked}");
+    assert!(!machine.panel_routing_entered.load(Ordering::SeqCst));
+    machine.panel_program_hold.store(false, Ordering::SeqCst);
+    let _ = writer.join().unwrap();
+
+    let control = Arc::new(ScriptedControl::new(false));
+    seed_nocturne_panel(&control, 1);
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.panel_routing_mode.store(1, Ordering::SeqCst);
+    machine.panel_routing_hold.store(true, Ordering::SeqCst);
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+    let bind_body = encoder_bind_body(&control, 1, "F8", false, &"A".repeat(64));
+    let bind = std::thread::spawn(move || post_json(addr, "/nocturne/api/bind", &bind_body));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !machine.panel_routing_entered.load(Ordering::SeqCst) {
+        assert!(Instant::now() < deadline, "route never entered");
+        std::thread::yield_now();
+    }
+    let blocked: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/panel/program/apply",
+        &program_body("route-first"),
+    )))
+    .unwrap();
+    assert_eq!(blocked["mutation_disposition"], "not-started", "{blocked}");
+    assert!(machine.panel_program_specs.lock().unwrap().is_empty());
+    machine.panel_routing_hold.store(false, Ordering::SeqCst);
+    let bound: serde_json::Value = serde_json::from_str(body_of(&bind.join().unwrap())).unwrap();
+    assert_eq!(bound["ok"], true, "{bound}");
+}
+
+/// **Raw Input identity is joined before it reaches the canvas.** The daemon
+/// reports a HID child for an ordinary keyboard-stack hit, while the device
+/// picker and staged setup name the USB MI_00 interface. Studio asks the
+/// machine provider for the canonical selector and preserves the raw path only
+/// as observation detail. A direct MI_00 observation remains valid, while an
+/// unrelated desk keyboard stays unresolved.
+#[test]
+fn nocturne_learner_resolves_hid_child_and_usb_mi00_to_one_canonical_selector() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    let machine_source: Arc<dyn ksx_api::MachineSource> = machine.clone();
+    let addr = start_server_with_machine(Arc::clone(&control), machine_source);
+
+    for observed in [IPAC_RAW_HID, IPAC_KB] {
+        *control.identify_hit.lock().unwrap() = Some(observed.to_owned());
+        let started: serde_json::Value =
+            serde_json::from_str(body_of(&post_json(addr, "/api/learn/start", "{}"))).unwrap();
+        assert_eq!(started["state"], "listening", "{started}");
+        assert!(started["selector"].is_null(), "{started}");
+        let polled: serde_json::Value =
+            serde_json::from_str(body_of(&get(addr, "/api/learn"))).unwrap();
+        assert_eq!(polled["state"], "hit", "{polled}");
+        assert_eq!(polled["device"], observed, "{polled}");
+        assert_eq!(polled["selector"], "usb:d209:0430:00", "{polled}");
+    }
+
+    *control.identify_hit.lock().unwrap() = Some(DESK_RAW_HID.to_owned());
+    let _: serde_json::Value =
+        serde_json::from_str(body_of(&post_json(addr, "/api/learn/start", "{}"))).unwrap();
+    let unresolved: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/learn"))).unwrap();
+    assert_eq!(unresolved["device"], DESK_RAW_HID, "{unresolved}");
+    assert!(unresolved["selector"].is_null(), "{unresolved}");
+
+    assert_eq!(
+        *machine.identified_from.lock().unwrap(),
+        vec![
+            IPAC_RAW_HID.to_owned(),
+            IPAC_KB.to_owned(),
+            DESK_RAW_HID.to_owned(),
+        ]
+    );
+}
+
+/// **The MIGRATED rebind editor, over HTTP.** The learner's JSON trio
+/// answers from its new home with generation-stamped states; the staged bind
+/// verb resolves the slot's preset identity and current key list server-side
+/// (a browser is never trusted with a key list it made up); a cross-slot
+/// duplicate refuses with the typed conflict rows until `force` says yes;
+/// and the turbo/toggle form twins carry every guard in allowlisted words.
+#[test]
+fn nocturne_serves_the_migrated_rebind_editor_over_http() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+
+    // A real staged draft, seeded through the same edits the daemon applies:
+    // a board, a dressed first controller, an empty second one.
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 2".into(),
+            layout: None,
+        },
+    ] {
+        let out = control.stage_edit(&edit);
+        assert!(out.ok, "seed edit refused: {:?}", out.error);
+    }
+
+    // The learner's trio, from its new home.
+    let started: serde_json::Value =
+        serde_json::from_str(body_of(&post_json(addr, "/api/learn/start", "{}")))
+            .expect("learn start");
+    assert_eq!(started["state"], "listening", "{started}");
+    let generation = started["generation"].as_u64().expect("generation");
+    let polled: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/learn"))).expect("learn poll");
+    assert_eq!(polled["generation"].as_u64(), Some(generation), "{polled}");
+    let cancelled: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/learn/cancel",
+        &format!("{{\"generation\":{generation}}}"),
+    )))
+    .expect("learn cancel");
+    assert_eq!(cancelled["state"], "cancelled", "{cancelled}");
+
+    // The rows the page serves are where the test finds its targets — never
+    // hardcoded to a layout's private details.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let rows = nocturne_bind_rows(&api);
+    assert!(!rows.is_empty(), "{api}");
+    // The six controller groups carry every zone exactly once — bound
+    // controls as rows, FREE ones as the group's available chips: face 4,
+    // D-pad 4, shoulders & triggers 4, each stick 5 (hub + four
+    // directions), system 3.
+    for (group, avail, count) in [
+        ("bind_face", "avail_ctl_face", 4),
+        ("bind_dpad", "avail_ctl_dpad", 4),
+        ("bind_shoulders", "avail_ctl_shoulders", 4),
+        ("bind_lstick", "avail_ctl_lstick", 5),
+        ("bind_rstick", "avail_ctl_rstick", 5),
+        ("bind_system", "avail_ctl_system", 3),
+    ] {
+        let bound = api["view"][group].as_array().expect(group).len();
+        let free = api["view"][avail].as_array().expect(avail).len();
+        assert_eq!(bound + free, count, "{group}: {api}");
+    }
+    let free_total: usize = [
+        "avail_ctl_face",
+        "avail_ctl_dpad",
+        "avail_ctl_shoulders",
+        "avail_ctl_lstick",
+        "avail_ctl_rstick",
+        "avail_ctl_system",
+    ]
+    .iter()
+    .map(|k| api["view"][k].as_array().expect(k).len())
+    .sum();
+    assert_eq!(
+        rows.len() + free_total,
+        ksx_core::preset::MAPPABLE_COUNT,
+        "bound plus free is the whole vocabulary: {api}"
+    );
+    assert!(
+        api["view"]["bind_face_n"]
+            .as_str()
+            .is_some_and(|n| n.ends_with("bound")),
+        "{api}"
+    );
+    // The groups wrapper carries the selected slot's ramp digit (the
+    // dots wear its shade), and the board wrapper tints with it too.
+    assert_eq!(api["view"]["bind_g_cls"], "n-bindgroups np1", "{api}");
+    assert_eq!(api["view"]["kb_cls"], "n-kb np1", "{api}");
+    // Idle: no across-the-room word.
+    assert_eq!(api["view"]["stage_word"], "", "{api}");
+    let bound_fn = rows
+        .iter()
+        .find(|r| r["chip"] != "Unbound")
+        .expect("a bound row")["function"]
+        .as_str()
+        .expect("function")
+        .to_owned();
+    // Unbound controls are the groups' FREE chips now, not rows.
+    let unbound_fn = [
+        "avail_ctl_face",
+        "avail_ctl_dpad",
+        "avail_ctl_shoulders",
+        "avail_ctl_lstick",
+        "avail_ctl_rstick",
+        "avail_ctl_system",
+    ]
+    .iter()
+    .find_map(|k| api["view"][k].as_array().and_then(|chips| chips.first()))
+    .expect("a free control chip")["function"]
+        .as_str()
+        .expect("function")
+        .to_owned();
+
+    // Replace, resolved server-side: slot number in, preset identity found.
+    let replaced: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body(&control, 1, &unbound_fn, "F7", None, false),
+    )))
+    .expect("bind outcome");
+    assert_eq!(replaced["ok"], true, "{replaced}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let row = nocturne_bind_rows(&api)
+        .into_iter()
+        .find(|r| r["function"] == unbound_fn.as_str())
+        .expect("edited row");
+    assert_eq!(row["chip"], "F7", "{row}");
+
+    // Adding a key the control already has refuses in words, changes nothing.
+    let dup: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body(&control, 1, &unbound_fn, "F7", Some("add"), false),
+    )))
+    .expect("dup outcome");
+    assert_eq!(dup["ok"], false, "{dup}");
+    assert!(
+        dup["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("already has")),
+        "{dup}"
+    );
+
+    // A cross-slot duplicate: Player 2 asking for Player 1's key refuses
+    // with the typed conflict rows…
+    let conflicted: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body(&control, 2, &unbound_fn, "F7", None, false),
+    )))
+    .expect("conflict outcome");
+    assert_eq!(conflicted["ok"], false, "{conflicted}");
+    assert_eq!(conflicted["code"], "conflict", "{conflicted}");
+    assert!(
+        !conflicted["conflicts"].as_array().expect("rows").is_empty(),
+        "{conflicted}"
+    );
+    // …until force — the dialog's "Use here too" — says yes to the fan-out.
+    let forced: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body(&control, 2, &unbound_fn, "F7", None, true),
+    )))
+    .expect("forced outcome");
+    assert_eq!(forced["ok"], true, "{forced}");
+
+    // A slot this draft does not have refuses with authored copy.
+    let missing: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        "{\"slot\":9,\"function\":\"a\",\"key\":\"F8\"}",
+    )))
+    .expect("missing outcome");
+    assert_eq!(missing["ok"], false, "{missing}");
+    assert!(
+        missing["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("no longer in this unsaved setup")),
+        "{missing}"
+    );
+
+    // The turbo twin: sets a rate on a bound control…
+    let set = post_form(
+        addr,
+        "/nocturne/bind/turbo",
+        &format!("slot=1&function={bound_fn}&turbo_hz=9"),
+    );
+    assert!(set.contains("Auto-fire%20updated"), "{set}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let row = nocturne_bind_rows(&api)
+        .into_iter()
+        .find(|r| r["function"] == bound_fn.as_str())
+        .expect("turbo row");
+    assert!(
+        row["badge"]
+            .as_str()
+            .is_some_and(|badge| badge.ends_with("/s")),
+        "{row}"
+    );
+    assert!(!row["turbo"].as_str().unwrap_or("").is_empty(), "{row}");
+    // …refuses a blank or non-numeric rate before any write…
+    let junk = post_form(
+        addr,
+        "/nocturne/bind/turbo",
+        &format!("slot=1&function={bound_fn}&turbo_hz=fast"),
+    );
+    assert!(junk.contains("Type%20a%20number"), "{junk}");
+    // …and refuses an unbound control instead of inventing a write. (The
+    // second slot's rows are all unbound except the forced F7.)
+    let hollow = post_form(addr, "/nocturne/bind/turbo", "slot=2&function=a&turbo_hz=9");
+    assert!(hollow.contains("nothing%20to%20auto-fire"), "{hollow}");
+
+    // The toggle twin: latch on, in allowlisted words, visible in the row…
+    let latched = post_form(
+        addr,
+        "/nocturne/bind/toggle",
+        &format!("slot=1&function={bound_fn}&mode=toggle"),
+    );
+    assert!(latched.contains("Press%20behaviour%20updated"), "{latched}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let row = nocturne_bind_rows(&api)
+        .into_iter()
+        .find(|r| r["function"] == bound_fn.as_str())
+        .expect("toggle row");
+    assert!(
+        row["badge"]
+            .as_str()
+            .is_some_and(|badge| badge.contains("Toggle")),
+        "{row}"
+    );
+    assert_eq!(row["tog_cls"], "n-bpill on", "{row}");
+    assert_eq!(row["hold_cls"], "n-bpill", "{row}");
+    // …back to hold…
+    let held = post_form(
+        addr,
+        "/nocturne/bind/toggle",
+        &format!("slot=1&function={bound_fn}&mode=hold"),
+    );
+    assert!(held.contains("Press%20behaviour%20updated"), "{held}");
+    // …an unbound control refuses…
+    let hollow = post_form(
+        addr,
+        "/nocturne/bind/toggle",
+        "slot=2&function=b&mode=toggle",
+    );
+    assert!(hollow.contains("nothing%20to%20hold"), "{hollow}");
+    // …and a junk mode refuses without reaching the stage.
+    let blink = post_form(
+        addr,
+        "/nocturne/bind/toggle",
+        &format!("slot=1&function={bound_fn}&mode=blink"),
+    );
+    assert!(blink.contains("flash=error"), "{blink}");
+
+    // A rate or latch edit on a key deliberately SHARED across players
+    // re-affirms the existing list, it does not ask for a new fan-out — it
+    // must not re-trip the cross-slot conflict (F7 is on both players now).
+    let shared_turbo = post_form(
+        addr,
+        "/nocturne/bind/turbo",
+        &format!("slot=1&function={unbound_fn}&turbo_hz=5"),
+    );
+    assert!(
+        shared_turbo.contains("Auto-fire%20updated"),
+        "{shared_turbo}"
+    );
+    let shared_latch = post_form(
+        addr,
+        "/nocturne/bind/toggle",
+        &format!("slot=1&function={unbound_fn}&mode=toggle"),
+    );
+    assert!(
+        shared_latch.contains("Press%20behaviour%20updated"),
+        "{shared_latch}"
+    );
+}
+
+/// **The MIGRATED macro lifecycle, over HTTP.** The macro rows are the
+/// staged authoring's own facts; the moved /api/macro/save authors into the
+/// **A MACRO TRIGGER IS A BINDING TOO.** `MapperSlot.bindings` is built from
+/// the preset's CONTROL entries, and a trigger lives in a different table with
+/// no `Binding` variant — so every read that inverted `bindings` was blind to
+/// triggers. Two things broke on that: "add another trigger key" appended to a
+/// list it could not see, which is a REPLACE, and the key that starts a macro
+/// painted unbound on a board that shows every other binding.
+#[test]
+fn nocturne_treats_a_macro_trigger_as_a_binding() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let saved: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        "{\"target\":\"stage\",\"slot\":1,\"preset\":\"Player 1\",\"name\":\"combo\",\
+         \"steps\":[{\"hold\":[\"A\"],\"ms\":50}]}",
+    )))
+    .expect("macro save");
+    assert_eq!(saved["ok"], true, "{saved}");
+
+    let bind = |key: &str, mode: &str| -> serde_json::Value {
+        serde_json::from_str(body_of(&post_json(
+            addr,
+            "/nocturne/api/bind",
+            &nocturne_bind_body(&control, 1, "macro.combo", key, Some(mode), false),
+        )))
+        .expect("bind")
+    };
+    let triggers = || -> String {
+        let api: serde_json::Value =
+            serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1"))).expect("payload");
+        api["view"]["macro_rows"][0]["chip"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+
+    assert_eq!(bind("P", "replace")["ok"], true);
+    assert_eq!(triggers(), "P");
+    // THE REPORT: `add` must JOIN the list, not stand in for it.
+    assert_eq!(bind("O", "add")["ok"], true);
+    assert_eq!(triggers(), "P · O", "a second trigger key JOINS the first");
+    // …and one can be taken off again without losing the other.
+    assert_eq!(bind("P", "remove")["ok"], true);
+    assert_eq!(triggers(), "O");
+    assert_eq!(bind("P", "add")["ok"], true);
+
+    // THE BOARD: a key that starts a macro is bound like any other.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1"))).expect("payload");
+    let cell = [
+        "kb_row1", "kb_row2", "kb_row3", "kb_row4", "kb_row5", "kb_row6",
+    ]
+    .iter()
+    .filter_map(|row| api["view"][row].as_array())
+    .flatten()
+    .find(|c| c["key"] == "O")
+    .expect("O is on the board")
+    .clone();
+    let cls = cell["cls"].as_str().unwrap_or_default();
+    assert!(cls.contains("bound"), "a trigger key paints bound: {cell}");
+    assert!(
+        cls.contains(" bn1"),
+        "and wears its controller's color: {cell}"
+    );
+    assert_eq!(cell["short"], "M", "{cell}");
+    assert!(
+        cell["title"].as_str().is_some_and(|t| t.contains("combo")),
+        "and says WHICH macro it starts: {cell}"
+    );
+    // …so it is no longer offered as a key nobody is using.
+    for grid in ["avail_main", "avail_nav", "avail_num"] {
+        let free = api["view"][grid].as_array().cloned().unwrap_or_default();
+        assert!(
+            !free.iter().any(|c| c["cap"] == "O" || c["key"] == "O"),
+            "{grid} still offers a bound trigger key as free"
+        );
+    }
+
+    // THE PER-KEY CLEAR acts on what the row says it drives.
+    let cleared = post_form(addr, "/nocturne/key/clear", "number=1&key=O");
+    assert!(!cleared.contains("flash=error"), "{cleared}");
+    assert_eq!(
+        triggers(),
+        "P",
+        "the ✕ took the trigger off, and only that one"
+    );
+}
+
+/// **A macro is authored and edited without leaving the page**: the New twin
+/// writes the smallest table `save_macro` accepts, and the edit door applies
+/// ONE act to a draft the browser is holding and hands back the roll that
+/// draws it — the same composition SSR paints, so the two cannot drift.
+#[test]
+fn nocturne_authors_and_edits_a_macro_over_http() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+
+    // A name is what the table is CALLED, so a blank one is refused in words.
+    let blank = post_form(addr, "/nocturne/macro/new", "slot=1&name=%20%20");
+    assert!(
+        blank.contains("flash=error"),
+        "a blank name is answered, not swallowed: {blank}"
+    );
+
+    let made = post_form(addr, "/nocturne/macro/new", "slot=1&name=combo");
+    assert!(made.contains("flash="), "{made}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?macro=combo"))).expect("payload");
+    let mac = api["view"]["mac"].clone();
+    assert_eq!(mac["open"], true, "the editor opens on what was just made");
+    assert_eq!(
+        mac["rows"].as_array().expect("rows").len(),
+        1,
+        "one step, holding nothing — the smallest legal table: {mac}"
+    );
+    assert_eq!(
+        mac["table"]["steps"][0]["hold"]
+            .as_array()
+            .expect("hold")
+            .len(),
+        0
+    );
+
+    // ONE act, applied to the draft the browser holds.
+    let draft = mac["table"].clone();
+    let edited: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/macro/edit",
+        &format!("{{\"slot\":1,\"act\":\"cell|0|diag:dpad:dr\",\"draft\":{draft}}}"),
+    )))
+    .expect("edit");
+    assert_eq!(edited["ok"], true, "{edited}");
+    assert_eq!(
+        edited["draft"]["steps"][0]["hold"],
+        serde_json::json!(["dpad.down", "dpad.right"]),
+        "a diagonal pick writes the PAIR, because that is what a diagonal is          in the file: {edited}"
+    );
+    assert!(
+        edited["said"]
+            .as_str()
+            .is_some_and(|s| s.contains("dpad.down + dpad.right")),
+        "…and it says so, naming both halves: {edited}"
+    );
+    // The roll that comes back is the SAME composition SSR paints.
+    let lit: Vec<&str> = edited["view"]["cells"]
+        .as_array()
+        .expect("cells")
+        .iter()
+        .filter(|c| {
+            c["cls"]
+                .as_str()
+                .is_some_and(|cls| cls.split(' ').any(|one| one == "on"))
+        })
+        .filter_map(|c| c["cell"].as_str())
+        .collect();
+    assert_eq!(lit, vec!["0|diag:dpad:dr"], "{edited}");
+    assert!(
+        edited["view"]["rows"][0]["exp"]
+            .as_str()
+            .is_some_and(|e| e.contains("dpad.down")),
+        "and the row still spells what the file stores: {edited}"
+    );
+
+    // A REFUSAL IS SAID OUT LOUD. Answering a rejected act with `ok: true`
+    // and an empty sentence let the browser mark the macro dirty over a
+    // change that never happened — the number in the box and the number
+    // that would be saved disagreeing, in silence.
+    for (act, expect) in [
+        ("pol|on_release|explode", "not a setting"),
+        ("dur|0|0", "not a length"),
+        ("dur|0|abc", "not a length"),
+        ("down|x", "bottom"),
+        ("short|0", "long enough"),
+        ("wat", "not something this editor does"),
+    ] {
+        let junk: serde_json::Value = serde_json::from_str(body_of(&post_json(
+            addr,
+            "/nocturne/api/macro/edit",
+            &format!("{{\"slot\":1,\"act\":\"{act}\",\"draft\":{draft}}}"),
+        )))
+        .expect("edit");
+        assert_eq!(junk["ok"], false, "{act} should be refused: {junk}");
+        assert!(
+            junk["said"].as_str().is_some_and(|w| w.contains(expect)),
+            "{act} must say why: {junk}"
+        );
+        assert_eq!(junk["draft"], draft, "{act} changed the draft");
+    }
+
+    // …and a malformed index is answered rather than suffered: `down` used to
+    // do its arithmetic before its range test, so an unparseable index
+    // overflowed and panicked the request.
+    let dead: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/macro/edit",
+        &format!("{{\"slot\":1,\"act\":\"down|-1\",\"draft\":{draft}}}"),
+    )))
+    .expect("edit");
+    assert_eq!(dead["ok"], false, "{dead}");
+    assert!(
+        !dead["said"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("panicked"),
+        "it refuses, it does not crash: {dead}"
+    );
+
+    // NEW MEANS NEW. `stage_macro` resolves a name case-insensitively and
+    // writes over what it finds, so "New macro" on an existing name silently
+    // replaced a whole authored table with one empty step.
+    let taken = post_form(addr, "/nocturne/macro/new", "slot=1&name=COMBO");
+    assert!(taken.contains("flash=error"), "{taken}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?macro=combo"))).expect("payload");
+    assert_eq!(
+        api["view"]["mac"]["rows"].as_array().expect("rows").len(),
+        1,
+        "the table that was already there is untouched: {api}"
+    );
+
+    // A name becomes a TOML key and the `macro=` half of its own edit link,
+    // so one that cannot survive either is refused rather than minted.
+    for bad in ["punch%26kick", "a%20b", "%2Eleading", "%23hash"] {
+        let out = post_form(addr, "/nocturne/macro/new", &format!("slot=1&name={bad}"));
+        assert!(out.contains("flash=error"), "{bad}: {out}");
+    }
+}
+
+/// **The macro STEP editor is served**: a macro is addressed by NAME on the
+/// selected controller, and the whole roll — columns, bands, steps, cells,
+/// policies — arrives composed. The two things worth pinning are the ones the
+/// editor exists for: a hand-written direction PAIR reads back as ONE diagonal
+/// with the file's own spelling beside it, and a step under the sampling floor
+/// is flagged in the unit it was authored in.
+#[test]
+fn nocturne_serves_the_macro_step_editor() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    // Step 1 is written as a PAIR, by hand, the way a preset file does it.
+    // Step 2 is one frame — shorter than a 60 Hz poller can see.
+    let saved: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        "{\"target\":\"stage\",\"slot\":1,\"preset\":\"Player 1\",\"name\":\"combo\",\"steps\":[\
+         {\"hold\":[\"dpad.down\",\"dpad.right\"],\"ms\":50},{\"hold\":[\"A\"],\"frames\":1}]}",
+    )))
+    .expect("macro save");
+    assert_eq!(saved["ok"], true, "{saved}");
+
+    // Closed until a macro is named — and an unknown name opens nothing.
+    for query in ["", "?macro=nosuchmacro"] {
+        let api: serde_json::Value =
+            serde_json::from_str(body_of(&get(addr, &format!("/api/nocturne{query}"))))
+                .expect("payload");
+        assert_eq!(api["view"]["mac"]["open"], false, "{query}: {api}");
+        assert_eq!(api["view"]["mac"]["back_cls"], "nd-back none", "{query}");
+    }
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?macro=combo"))).expect("payload");
+    let mac = api["view"]["mac"].clone();
+    // The canvas receives the same staged macro as a per-pad topology. This
+    // catches the broken client-only shortcut that tried to derive All-player
+    // flows from selected-slot lifecycle rows (which have no step outputs).
+    let flow = api["view"]["pads"][0]["macros"][0].clone();
+    assert_eq!(api["view"]["pads"][0]["mapping_available"], true);
+    assert_eq!(api["view"]["pads"][0]["mapping_reason"], "");
+    assert_eq!(api["view"]["pads"][0]["macro_available"], true);
+    assert_eq!(api["view"]["pads"][0]["macro_reason"], "");
+    assert_eq!(flow["name"], "combo", "{flow}");
+    assert_eq!(flow["triggers"], serde_json::json!([]), "{flow}");
+    assert_eq!(flow["outputs"][0]["function"], "dpad.down", "{flow}");
+    assert_eq!(
+        flow["outputs"][0]["steps"],
+        serde_json::json!([1]),
+        "{flow}"
+    );
+    assert_eq!(flow["outputs"][1]["function"], "dpad.right", "{flow}");
+    assert_eq!(flow["outputs"][2]["function"], "A", "{flow}");
+    assert!(
+        flow["timeline"][0]
+            .as_str()
+            .is_some_and(|step| step.contains('\u{2198}')),
+        "the signal node says diagonal instead of flattening the sequence: {flow}"
+    );
+    assert_eq!(mac["open"], true, "{mac}");
+    assert_eq!(mac["name"], "combo", "{mac}");
+    assert_eq!(
+        mac["head"], "2 steps \u{b7} 83 ms",
+        "the shape before the detail: {mac}"
+    );
+    assert_eq!(mac["close_href"], "/nocturne?slot=1", "{mac}");
+    // The direction zones become three rings of eight, so a diagonal is a thing
+    // you point at instead of a thing you know how to build. The width is
+    // derived: `the_grid_is_three_rings` owns the shape, this owns the wiring.
+    let cols = mac["cols"].as_array().expect("cols").len();
+    let rows_n = mac["rows"].as_array().expect("rows").len();
+    assert_eq!(rows_n, 2, "{mac}");
+    assert_eq!(
+        mac["cells"].as_array().expect("cells").len(),
+        cols * rows_n,
+        "one cell per (step, column): {mac}"
+    );
+
+    // THE LENS: the pair reads as one control, and the file's spelling is
+    // beside it rather than hidden in the TOML.
+    let first = mac["rows"][0].clone();
+    assert!(
+        first["hold"]
+            .as_str()
+            .is_some_and(|h| h.contains('\u{2198}')),
+        "a written pair reads back as the diagonal it is: {first}"
+    );
+    assert!(
+        first["exp"]
+            .as_str()
+            .is_some_and(|e| e.contains("dpad.down") && e.contains("dpad.right")),
+        "and the row still spells what the file stores: {first}"
+    );
+    let lit: Vec<&str> = mac["cells"]
+        .as_array()
+        .expect("cells")
+        .iter()
+        .filter(|c| {
+            c["cls"]
+                .as_str()
+                .is_some_and(|cls| cls.split(' ').any(|one| one == "on"))
+        })
+        .filter_map(|c| c["cell"].as_str())
+        .collect();
+    assert_eq!(lit, vec!["0|diag:dpad:dr", "1|A"], "{mac}");
+    assert!(
+        mac["cells"]
+            .as_array()
+            .expect("cells")
+            .iter()
+            .filter(|c| c["cls"].as_str().is_some_and(|cls| cls.contains(" part")))
+            .count()
+            == 2,
+        "the two cardinals stay ticked underneath — the lens never hides the store: {mac}"
+    );
+
+    // THE FLOOR: flagged where it is read, in the unit it was authored in.
+    let second = mac["rows"][1].clone();
+    assert!(
+        second["cls"].as_str().is_some_and(|c| c.contains("short")),
+        "{second}"
+    );
+    assert!(
+        second["warn"].as_str().is_some_and(|w| w.contains("fr")),
+        "the flag counts frames, because that is how the step was written: {second}"
+    );
+    assert_eq!(second["unit"], "fr", "{second}");
+
+    // The bands are NAMED and COUNTED: where a macro lives, before you read a
+    // single cell.
+    let bands: Vec<(String, String)> = mac["groups"]
+        .as_array()
+        .expect("groups")
+        .iter()
+        .map(|g| {
+            (
+                g["label"].as_str().unwrap_or_default().to_owned(),
+                g["count"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    assert!(
+        bands.contains(&("D-pad".to_owned(), "1".to_owned()))
+            && bands.contains(&("Face buttons".to_owned(), "1".to_owned())),
+        "{bands:?}"
+    );
+    assert!(
+        bands
+            .iter()
+            .any(|(label, count)| label == "Right stick" && count.is_empty()),
+        "a band this macro never touches counts nothing: {bands:?}"
+    );
+
+    // Every policy option is visible, and the current one is marked.
+    let on: Vec<&str> = mac["pols"]
+        .as_array()
+        .expect("pols")
+        .iter()
+        .filter(|o| o["cls"] == "n-bpill on")
+        .filter_map(|o| o["act"].as_str())
+        .collect();
+    assert_eq!(
+        on,
+        vec![
+            "on_release|finish",
+            "retrigger|ignore",
+            "interrupt|none",
+            "repeat|once"
+        ],
+        "{mac}"
+    );
+    assert_eq!(
+        mac["turbo_cls"], "n-macrate none",
+        "no turbo, no rate: {mac}"
+    );
+    assert_eq!(
+        mac["motions"].as_array().expect("motions").len(),
+        8,
+        "{mac}"
+    );
+    assert!(
+        mac["motions"][0]["label"]
+            .as_str()
+            .is_some_and(|l| !l.is_empty()),
+        "every motion carries its NAME, not just its shape: {mac}"
+    );
+
+    // …and the row that opens it points at this page, not at Controls.
+    let row = api["view"]["macro_rows"][0].clone();
+    assert_eq!(row["edit_href"], "/nocturne?slot=1&macro=combo", "{row}");
+}
+
+/// An older daemon can still serve its staged roster while omitting the
+/// authoring table. The canvas must say that macro topology is unavailable;
+/// an empty list would falsely claim the preset defines no processors.
+#[test]
+fn nocturne_does_not_turn_unavailable_macro_data_into_an_empty_answer() {
+    let control = Arc::new(ScriptedControl::new(false).without_authoring());
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let addr = start_server(control);
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1"))).expect("payload");
+    let pad = api["view"]["pads"][0].clone();
+    assert_eq!(pad["mapping_available"], false, "{pad}");
+    assert_eq!(pad["fn_keys"], serde_json::json!({}), "{pad}");
+    assert_eq!(
+        pad["controls"],
+        serde_json::json!([]),
+        "an unavailable authoring read must not look like a controller with every control unbound: {pad}"
+    );
+    assert_eq!(
+        pad["mapping_reason"],
+        "Player 1's controller layout is not available. Refresh the unsaved setup.",
+        "{pad}"
+    );
+    assert_eq!(pad["macro_available"], false, "{pad}");
+    assert_eq!(pad["macros"], serde_json::json!([]), "{pad}");
+    assert_eq!(
+        pad["macro_reason"],
+        "Player 1's controller layout is not available. Refresh the unsaved setup.",
+        "{pad}"
+    );
+}
+
+/// Macro authoring and direct-mapper projection are independent reads. A bad
+/// binding must not hide a readable macro, and its timeline still uses the
+/// staged controller's own button language rather than an Xbox fallback.
+#[test]
+fn nocturne_keeps_persona_macro_labels_when_direct_mapping_is_unavailable() {
+    let control = Arc::new(ScriptedControl::new(false));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "playstation".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let addr = start_server(Arc::clone(&control));
+    let saved: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        "{\"target\":\"stage\",\"slot\":1,\"preset\":\"Player 1\",\"name\":\"cross\",\"steps\":[{\"hold\":[\"A\"],\"ms\":50}]}",
+    )))
+    .expect("macro save");
+    assert_eq!(saved["ok"], true, "{saved}");
+    control.invalidate_mapping_authoring();
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1&macro=cross")))
+            .expect("payload");
+    let pad = api["view"]["pads"][0].clone();
+    assert_eq!(pad["mapping_available"], false, "{pad}");
+    assert!(
+        pad["mapping_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("not.a.controller.function")),
+        "{pad}"
+    );
+    assert_eq!(pad["fn_keys"], serde_json::json!({}), "{pad}");
+    assert_eq!(pad["macro_available"], true, "{pad}");
+    assert_eq!(
+        pad["macros"][0]["timeline"],
+        serde_json::json!(["✕"]),
+        "{pad}"
+    );
+    let editor = api["view"]["mac"].clone();
+    assert_eq!(editor["open"], true, "{editor}");
+    assert_eq!(editor["rows"][0]["hold"], "✕", "{editor}");
+    let cross_column = editor["cols"]
+        .as_array()
+        .and_then(|cols| {
+            cols.iter().find(|column| {
+                column["title"]
+                    .as_str()
+                    .is_some_and(|title| title.ends_with("(A)"))
+            })
+        })
+        .expect("cross column");
+    assert_eq!(cross_column["id"], "✕", "{editor}");
+
+    // The first edit response recomposes the same editor. It must retain the
+    // staged persona even though direct mapper conversion is still refused.
+    let request = serde_json::json!({
+        "slot": 1,
+        "act": "cell|0|B",
+        "draft": editor["table"].clone()
+    })
+    .to_string();
+    let edited: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/macro/edit",
+        &request,
+    )))
+    .expect("macro edit");
+    assert_eq!(edited["ok"], true, "{edited}");
+    assert!(
+        edited["view"]["rows"][0]["hold"]
+            .as_str()
+            .is_some_and(|hold| hold.contains('✕') && hold.contains('○')),
+        "{edited}"
+    );
+    assert!(
+        edited["view"]["cols"]
+            .as_array()
+            .expect("columns")
+            .iter()
+            .any(|column| column["id"] == "○"),
+        "{edited}"
+    );
+}
+
+/// Canvas topology is pad-owned, not borrowed from the selected controller's
+/// macro editor. Asking to inspect P1 must therefore keep P2's complete macro
+/// chain in the payload, including P2's own controller vocabulary.
+#[test]
+fn nocturne_keeps_nonselected_player_macro_topology() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "switchpro".into(),
+            preset: "Player 2".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    for (slot, preset, name, hold) in [
+        (1, "Player 1", "p1-combo", serde_json::json!(["A"])),
+        (2, "Player 2", "p2-combo", serde_json::json!(["lt", "back"])),
+    ] {
+        let request = serde_json::json!({
+            "target": "stage",
+            "slot": slot,
+            "preset": preset,
+            "name": name,
+            "steps": [{ "hold": hold, "ms": 50 }]
+        })
+        .to_string();
+        let saved: serde_json::Value =
+            serde_json::from_str(body_of(&post_json(addr, "/api/macro/save", &request)))
+                .expect("macro save");
+        assert_eq!(saved["ok"], true, "{saved}");
+    }
+    for (slot, function, key) in [(1, "macro.p1-combo", "F11"), (2, "macro.p2-combo", "F12")] {
+        let request = serde_json::json!({
+            "slot": slot,
+            "expected_target_revision": staged_target_revision(&control, slot),
+            "function": function,
+            "key": key,
+            "mode": "replace",
+            "force": true
+        })
+        .to_string();
+        let bound: serde_json::Value =
+            serde_json::from_str(body_of(&post_json(addr, "/nocturne/api/bind", &request)))
+                .expect("macro trigger bind");
+        assert_eq!(bound["ok"], true, "{bound}");
+    }
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1"))).expect("payload");
+    let pads = api["view"]["pads"].as_array().expect("pads");
+    assert_eq!(pads.len(), 2, "{api}");
+    assert_eq!(pads[0]["macros"][0]["name"], "p1-combo", "{api}");
+    assert_eq!(pads[0]["macros"][0]["triggers"], serde_json::json!(["F11"]));
+    assert_eq!(pads[1]["slot"], 2, "{api}");
+    assert_eq!(pads[1]["macros"][0]["name"], "p2-combo", "{api}");
+    assert_eq!(pads[1]["macros"][0]["triggers"], serde_json::json!(["F12"]));
+    assert_eq!(
+        pads[1]["macros"][0]["timeline"],
+        serde_json::json!(["ZL + Capture"]),
+        "{api}"
+    );
+    assert_eq!(pads[1]["fn_names"]["lt"], "ZL", "{api}");
+    assert_eq!(pads[1]["fn_names"]["back"], "Capture", "{api}");
+
+    let p2: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=2&macro=p2-combo")))
+            .expect("P2 editor payload");
+    let editor = &p2["view"]["mac"];
+    assert_eq!(editor["open"], true, "{editor}");
+    assert_eq!(editor["rows"][0]["hold"], "ZL + Capture", "{editor}");
+    for (function, label) in [("lt", "ZL"), ("back", "Capture")] {
+        let suffix = format!("({function})");
+        let column = editor["cols"]
+            .as_array()
+            .and_then(|cols| {
+                cols.iter().find(|column| {
+                    column["title"]
+                        .as_str()
+                        .is_some_and(|title| title.ends_with(suffix.as_str()))
+                })
+            })
+            .expect("Switch column");
+        assert_eq!(column["id"], label, "{editor}");
+    }
+}
+
+/// Existing preset files do not cap macro-name length. The canvas door must
+/// therefore encode the complete name (including query delimiters), and that
+/// exact href must reopen the existing editor instead of a truncated ghost.
+#[test]
+fn nocturne_macro_flow_href_round_trips_long_reserved_names() {
+    let control = Arc::new(ScriptedControl::new(false));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let addr = start_server(control);
+    let name = format!("{} &?#/%", "long".repeat(31));
+    assert!(name.chars().count() > 120);
+    let request = serde_json::json!({
+        "target": "stage",
+        "slot": 1,
+        "preset": "Player 1",
+        "name": name,
+        "steps": [{ "hold": ["A"], "ms": 50 }]
+    })
+    .to_string();
+    let saved: serde_json::Value =
+        serde_json::from_str(body_of(&post_json(addr, "/api/macro/save", &request)))
+            .expect("macro save");
+    assert_eq!(saved["ok"], true, "{saved}");
+
+    let encoded = format!("{}%20%26%3F%23%2F%25", "long".repeat(31));
+    let api: serde_json::Value = serde_json::from_str(body_of(&get(
+        addr,
+        &format!("/api/nocturne?slot=1&macro={encoded}"),
+    )))
+    .expect("payload");
+    assert_eq!(api["view"]["mac"]["open"], true, "{api}");
+    assert_eq!(api["view"]["mac"]["name"], name, "{api}");
+    let flow = api["view"]["pads"][0]["macros"]
+        .as_array()
+        .and_then(|macros| macros.iter().find(|mac| mac["name"] == name))
+        .expect("long macro flow");
+    assert_eq!(
+        flow["edit_href"],
+        format!("/nocturne?slot=1&macro={encoded}"),
+        "{flow}"
+    );
+}
+
+/// draft; the trigger rebinds through the SAME staged bind verb as any
+/// control; the toggle keeps every step; delete removes table and triggers
+/// together — and every twin refuses junk in allowlisted words.
+#[test]
+fn nocturne_serves_the_migrated_macro_lifecycle_over_http() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+
+    // A layout with no macros serves the honest empty state.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert!(
+        api["view"]["macro_rows"]
+            .as_array()
+            .expect("rows")
+            .is_empty(),
+        "{api}"
+    );
+    assert!(
+        api["view"]["macros_note"]
+            .as_str()
+            .is_some_and(|note| note.contains("Controls")),
+        "{api}"
+    );
+
+    // Author one through the MOVED editor verb (same route as ever).
+    let saved: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        "{\"target\":\"stage\",\"slot\":1,\"preset\":\"Player 1\",\"name\":\"combo\",\"steps\":[{\"hold\":[\"dpad.down\"],\"ms\":50},{\"hold\":[\"A\"],\"ms\":80}]}",
+    )))
+    .expect("macro save");
+    assert_eq!(saved["ok"], true, "{saved}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let row = api["view"]["macro_rows"][0].clone();
+    assert_eq!(row["name"], "combo", "{api}");
+    assert_eq!(row["chip"], "No trigger key", "{api}");
+    assert!(
+        row["meta"]
+            .as_str()
+            .is_some_and(|meta| meta.contains("2 steps")),
+        "{api}"
+    );
+
+    // The trigger rebinds through the same staged bind verb as any control.
+    let bound: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body(&control, 1, "macro.combo", "F9", None, false),
+    )))
+    .expect("trigger bind");
+    assert_eq!(bound["ok"], true, "{bound}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["macro_rows"][0]["chip"], "F9", "{api}");
+
+    // Toggle off: the table keeps everything, only the flag moves.
+    let off = post_form(addr, "/nocturne/macro/toggle", "slot=1&name=combo");
+    assert!(off.contains("Macro%20updated"), "{off}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let row = api["view"]["macro_rows"][0].clone();
+    assert!(
+        row["meta"]
+            .as_str()
+            .is_some_and(|meta| meta.contains("disabled")),
+        "{api}"
+    );
+    assert_eq!(row["toggle_label"], "Enable", "{api}");
+    assert!(
+        row["meta"]
+            .as_str()
+            .is_some_and(|meta| meta.contains("2 steps")),
+        "the toggle must keep the steps: {api}"
+    );
+
+    // Back on…
+    let on = post_form(
+        addr,
+        "/nocturne/macro/toggle",
+        "slot=1&name=combo&enable=yes",
+    );
+    assert!(on.contains("Macro%20updated"), "{on}");
+
+    // …and delete removes the table AND its trigger rows, in this draft only.
+    let gone = post_form(addr, "/nocturne/macro/delete", "slot=1&name=combo");
+    assert!(gone.contains("Macro%20removed"), "{gone}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert!(
+        api["view"]["macro_rows"]
+            .as_array()
+            .expect("rows")
+            .is_empty(),
+        "{api}"
+    );
+
+    // A slot this draft does not have refuses without touching anything.
+    let missing = post_form(addr, "/nocturne/macro/delete", "slot=9&name=combo");
+    assert!(missing.contains("flash=error"), "{missing}");
+}
+
+/// **Slot selection is server-resolved.** `?slot=N` picks which controller
+/// every pane follows — the rack mark, the binding title, the stage family —
+/// and a number the draft does not have falls back to the first slot instead
+/// of a dead page.
+#[test]
+fn nocturne_resolves_the_selected_slot_server_side() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "playstation".into(),
+            preset: "Player 2".into(),
+            layout: None,
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=2"))).expect("payload");
+    assert!(
+        api["view"]["bind_title"]
+            .as_str()
+            .is_some_and(|title| title.contains("P2")),
+        "{api}"
+    );
+    let rack = api["view"]["rack_rows"].as_array().expect("rack");
+    assert_eq!(rack[0]["cls"], "n-slot", "{api}");
+    assert_eq!(rack[1]["cls"], "n-slot on", "{api}");
+    // The second slot is the PlayStation draft: the stage follows its family,
+    // and every ramp surface wears P2's shade.
+    assert_eq!(api["view"]["pad_ps_cls"], "n-padwrap", "{api}");
+    assert_eq!(api["view"]["pad_ps5_cls"], "n-padwrap none", "{api}");
+    assert_eq!(api["view"]["pad_badge_cls"], "n-pbadge np2", "{api}");
+    assert_eq!(api["view"]["kb_cls"], "n-kb np2", "{api}");
+
+    // A slot this draft does not have falls back to the first.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=9"))).expect("payload");
+    assert!(
+        api["view"]["bind_title"]
+            .as_str()
+            .is_some_and(|title| title.contains("P1")),
+        "{api}"
+    );
+    assert_eq!(api["view"]["rack_rows"][0]["cls"], "n-slot on", "{api}");
+
+    // The page itself resolves the same way (SSR paints the selection).
+    let page = rendered_body(&get(addr, "/nocturne?slot=2"));
+    assert!(page.contains("P2"), "{page}");
+
+    // A DualSense gets its OWN body. Before this, family was `is_xinput`
+    // decided, so every non-Xbox seat drew a DualShock 4 — a PS5 pad wearing
+    // PS4 art, which is a picture that lies about the device Windows gained.
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::AddSlot {
+                number: None,
+                persona: "dualsense".into(),
+                preset: "Player 3".into(),
+                layout: None,
+            })
+            .ok
+    );
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=3"))).expect("payload");
+    let pads = api["view"]["pads"].as_array().expect("pads");
+    let families: Vec<&str> = pads
+        .iter()
+        .map(|pad| pad["family"].as_str().unwrap_or("?"))
+        .collect();
+    assert_eq!(families, vec!["xbox", "ps", "ps5"], "{api}");
+    // …and the no-JS masters follow the selected seat: exactly one shows.
+    assert_eq!(api["view"]["pad_ps5_cls"], "n-padwrap", "{api}");
+    assert_eq!(api["view"]["pad_ps_cls"], "n-padwrap none", "{api}");
+    assert_eq!(api["view"]["pad_xbox_cls"], "n-padwrap none", "{api}");
+
+    // Switch Pro and Xbox Series are not aliases for the nearest old art:
+    // each modern persona keeps the physical layout it actually exposes.
+    for persona in ["switchpro", "xboxseries"] {
+        assert!(
+            control
+                .stage_edit(&ksx_api::StageEdit::AddSlot {
+                    number: None,
+                    persona: persona.into(),
+                    preset: format!("{persona} art"),
+                    layout: None,
+                })
+                .ok
+        );
+    }
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=4"))).expect("payload");
+    let families: Vec<&str> = api["view"]["pads"]
+        .as_array()
+        .expect("pads")
+        .iter()
+        .map(|pad| pad["family"].as_str().unwrap_or("?"))
+        .collect();
+    assert_eq!(
+        families,
+        vec!["xbox", "ps", "ps5", "switchpro", "xboxseries"],
+        "{api}"
+    );
+    assert_eq!(api["view"]["pad_switchpro_cls"], "n-padwrap", "{api}");
+    assert_eq!(api["view"]["pad_xboxseries_cls"], "n-padwrap none", "{api}");
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=5"))).expect("payload");
+    assert_eq!(api["view"]["pad_xboxseries_cls"], "n-padwrap", "{api}");
+    assert_eq!(api["view"]["pad_switchpro_cls"], "n-padwrap none", "{api}");
+}
+
+/// **The MIGRATED rack ordering + opposite-directions verbs, over HTTP.**
+/// One whole-order reorder per click with the daemon's own renumbering; an
+/// end row's empty order gets the honest at-that-end sentence, not a write;
+/// the SOCD verb renames the selected slot's policy in the served roster's
+/// words; and the re-pointed `/workspace` doors land their answers on
+/// `/nocturne`.
+#[test]
+fn nocturne_serves_the_migrated_rack_ordering_and_socd_over_http() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "playstation".into(),
+            preset: "Player 2".into(),
+            layout: None,
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+
+    // Every rack row precomposes its one-swap whole orders, empty at the
+    // ends, and the SOCD editor is live for the selected (first) slot.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let rack = api["view"]["rack_rows"].as_array().expect("rack");
+    assert_eq!(rack[0]["up_order"], "", "{api}");
+    assert_eq!(rack[0]["down_order"], "2 1", "{api}");
+    assert_eq!(rack[1]["up_order"], "2 1", "{api}");
+    assert_eq!(rack[1]["down_order"], "", "{api}");
+    assert_eq!(api["view"]["socd_cls"], "n-socdform", "{api}");
+    assert_eq!(api["view"]["socd_num"], "1", "{api}");
+    assert_eq!(api["view"]["socd_lab"], "Opposites — P1", "{api}");
+    assert!(
+        !api["view"]["socd_edit_opts"]
+            .as_array()
+            .expect("roster")
+            .is_empty(),
+        "{api}"
+    );
+
+    // Reorder: one whole-order write; the renumbering is the daemon's.
+    let response = post_form(addr, "/nocturne/controller/move", "order=2+1");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("location: /nocturne?flash="),
+        "{response}"
+    );
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["rack_rows"][0]["name"], "PlayStation", "{api}");
+    assert_eq!(api["view"]["rack_rows"][1]["name"], "Xbox 360", "{api}");
+
+    // An end row's order is empty: no write, and the honest sentence.
+    let response = post_form(addr, "/nocturne/controller/move", "order=");
+    assert!(response.contains("already%20at%20that%20end"), "{response}");
+
+    // The slot's opposite-directions rule, in the served roster's words.
+    let response = post_form(
+        addr,
+        "/nocturne/controller/socd",
+        "number=1&socd=last-input",
+    );
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert!(
+        api["view"]["rack_rows"][0]["meta"]
+            .as_str()
+            .is_some_and(|meta| meta.contains("SOCD Last press wins")),
+        "{api}"
+    );
+
+    // The old /workspace doors answer on /nocturne now.
+    let via_workspace = post_form(addr, "/workspace/controller/move", "number=1&order=");
+    assert!(
+        via_workspace.contains("location: /nocturne?flash="),
+        "{via_workspace}"
+    );
+    let via_workspace = post_form(addr, "/workspace/controller/socd", "number=1&socd=off");
+    assert!(
+        via_workspace.contains("location: /nocturne?flash="),
+        "{via_workspace}"
+    );
+}
+
+/// **The machine-read cache + ETag**: the 2-second poll must not cost a
+/// USB enumeration per tick — reads inside the TTL are served from the
+/// cache; every MUTATING request and Rescan's `fresh=1` drop it; and an
+/// unchanged payload answers `304 Not Modified` to `If-None-Match`.
+#[test]
+fn nocturne_caches_machine_reads_and_answers_304() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(
+        Arc::clone(&control),
+        Arc::clone(&machine) as Arc<dyn ksx_api::MachineSource>,
+    );
+
+    // Two polls inside the TTL: ONE enumeration.
+    let first = get(addr, "/api/nocturne");
+    let _second = get(addr, "/api/nocturne");
+    assert!(first.contains(" 200 "), "{first}");
+    assert_eq!(machine.scans.load(Ordering::SeqCst), 1, "cache missed");
+
+    // The unchanged answer carries an ETag and honours If-None-Match.
+    let etag = first
+        .lines()
+        .find_map(|line| line.strip_prefix("etag: "))
+        .expect("an etag header")
+        .trim()
+        .to_owned();
+    let not_modified = get_if_none_match(addr, "/api/nocturne", &etag);
+    assert!(not_modified.contains(" 304 "), "{not_modified}");
+    assert!(!not_modified.contains("staged"), "a 304 carries no body");
+
+    // A mutating request drops the cache: the next poll enumerates again.
+    let _ = post_form(addr, "/nocturne/blocking", "blocking=whole");
+    let _ = get(addr, "/api/nocturne");
+    assert_eq!(
+        machine.scans.load(Ordering::SeqCst),
+        2,
+        "a POST must invalidate"
+    );
+
+    // And so does Rescan's fresh=1, explicitly.
+    let _ = get(addr, "/api/nocturne?fresh=1");
+    assert_eq!(
+        machine.scans.load(Ordering::SeqCst),
+        3,
+        "fresh=1 must invalidate"
+    );
+
+    // A changed draft changes the ETag (the 304 can never mask an edit).
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".into(),
+                alias: "panel".into(),
+                label: "I-PAC".into(),
+            })
+            .ok
+    );
+    let after = get_if_none_match(addr, "/api/nocturne", &etag);
+    assert!(after.contains(" 200 "), "{after}");
+}
+
+/// **The `?q=` filter, SERVER-resolved**: rows and whole groups hide in
+/// the SSR answer itself — the no-JS filter is real, not dead chrome —
+/// with the same row-or-group-label rule the island sweep applies.
+#[test]
+fn nocturne_resolves_the_filter_server_side() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?q=stick"))).expect("payload");
+    // "stick" matches both stick GROUPS: their rows stay visible.
+    assert_eq!(api["view"]["bind_lstick_cls"], "n-bindg", "{api}");
+    assert_eq!(api["view"]["bind_rstick_cls"], "n-bindg", "{api}");
+    assert!(
+        api["view"]["bind_lstick"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .all(|row| !row["cls"].as_str().unwrap_or("").contains("hide")),
+        "{api}"
+    );
+    // The face group matches nothing: every row hidden, the group empty.
+    assert_eq!(api["view"]["bind_face_cls"], "n-bindg empty", "{api}");
+    assert!(
+        api["view"]["bind_face"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .all(|row| row["cls"].as_str().unwrap_or("").contains("hide")),
+        "{api}"
+    );
+    // And the SSR page paints the same truth for a no-JS reader.
+    let page = rendered_body(&get(addr, "/nocturne?q=stick"));
+    assert!(page.contains("n-bindg empty"), "{page}");
+
+    // No query: nothing hides.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["bind_face_cls"], "n-bindg", "{api}");
+}
+
+/// **Clear-all over HTTP**: one write empties the slot's whole key table —
+/// macro TRIGGER keys included, because triggers are bindings — while the
+/// macros keep their steps. A junk slot changes nothing.
+#[test]
+fn nocturne_clears_every_binding_in_one_write() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    assert!(control.staged().slots[0].bindings > 0);
+
+    let response = post_form(addr, "/nocturne/bind/clear-all", "number=1");
+    assert!(response.contains("Every%20key%20unbound"), "{response}");
+    let slot = control.staged().slots[0].clone();
+    assert_eq!(slot.bindings, 0, "{slot:?}");
+    assert!(
+        slot.authoring
+            .as_ref()
+            .is_some_and(|preset| preset.bindings.is_empty()),
+        "{slot:?}"
+    );
+
+    let junk = post_form(addr, "/nocturne/bind/clear-all", "number=9");
+    assert!(junk.contains("could%20not%20be%20made"), "{junk}");
+}
+
+/// **Per-key clear over HTTP**: one key taken away from EVERYTHING it drives
+/// — a shared control keeps its other keys, a solo control goes unbound —
+/// each rewrite through the daemon's own staged-bind verb, the touched
+/// functions named by the same staged inversion the By-key rows render. A
+/// key that drives nothing gets the honest nothing-changed sentence.
+#[test]
+fn nocturne_clears_one_key_everywhere_it_drives() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: None,
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let preset = control.staged().slots[0].preset.clone();
+    for (function, keys) in [("A", vec!["G", "H"]), ("B", vec!["G"])] {
+        assert!(
+            control
+                .stage_bind(&ksx_api::StagedBindRequest {
+                    number: 1,
+                    expected_device: String::new(),
+                    expected_target_revision: String::new(),
+                    preset: preset.clone(),
+                    function: function.into(),
+                    keys: keys.into_iter().map(str::to_owned).collect(),
+                    force: true,
+                    turbo_hz: None,
+                    toggle: None,
+                })
+                .ok
+        );
+    }
+
+    let response = post_form(addr, "/nocturne/key/clear", "number=1&key=G");
+    assert!(response.contains("free%20again"), "{response}");
+    let staged = control.staged();
+    let mapper = ksx_api::staged_mapper_slot(&staged.slots[0], "I-PAC").expect("mapper");
+    assert_eq!(
+        mapper.bindings.get("A").cloned().unwrap_or_default(),
+        vec!["H".to_owned()],
+        "the shared control keeps its other key"
+    );
+    assert!(
+        mapper
+            .bindings
+            .get("B")
+            .cloned()
+            .unwrap_or_default()
+            .is_empty(),
+        "the solo control goes unbound"
+    );
+
+    let none = post_form(addr, "/nocturne/key/clear", "number=1&key=F9");
+    assert!(none.contains("not%20driving%20anything"), "{none}");
+}
+
+/// **The board is a territory map**: every owned key's cap carries its
+/// FIRST owner's color class (`own{N}`, plus `owned` when the key belongs
+/// to another controller entirely), and the strips mark only the REMAINING
+/// owners — so a key with one owner needs no underline, and a shared key
+/// wears the second owner's mark over the first owner's fill.
+#[test]
+fn nocturne_paints_the_board_by_owner() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: None,
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 2".into(),
+            layout: None,
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let staged = control.staged();
+    let p1 = staged.slots[0].preset.clone();
+    let p2 = staged.slots[1].preset.clone();
+    for (number, preset, function, key) in [
+        (1, p1.clone(), "A", "G"),
+        (2, p2.clone(), "B", "G"),
+        (2, p2, "lb", "F6"),
+    ] {
+        assert!(
+            control
+                .stage_bind(&ksx_api::StagedBindRequest {
+                    number,
+                    expected_device: String::new(),
+                    expected_target_revision: String::new(),
+                    preset,
+                    function: function.into(),
+                    keys: vec![key.into()],
+                    force: true,
+                    turbo_hz: None,
+                    toggle: None,
+                })
+                .ok
+        );
+    }
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let cell = |key: &str| -> serde_json::Value {
+        [
+            "kb_row1", "kb_row2", "kb_row3", "kb_row4", "kb_row5", "kb_row6",
+        ]
+        .iter()
+        .filter_map(|row| api["view"][row].as_array())
+        .flatten()
+        .find(|c| c["key"] == key)
+        .unwrap_or_else(|| panic!("{key} is not on the board"))
+        .clone()
+    };
+
+    // Shared by two: the cap splits, and the SELECTED slot's band leads.
+    let g = cell("G");
+    let g_cls = g["cls"].as_str().expect("cls");
+    assert!(
+        g_cls.contains(" bound"),
+        "the ring says the selection drives it"
+    );
+    assert!(g_cls.contains(" bn2"), "two owners, two bands: {g}");
+    assert!(g_cls.contains(" ba1") && g_cls.contains(" bb2"), "{g}");
+    assert!(
+        g["title"]
+            .as_str()
+            .is_some_and(|t| t.contains("also bound on P2")),
+        "the words name the other owner: {g}"
+    );
+
+    // Owned by another controller only: one band in ITS color, and no
+    // ring — the selected slot does not drive this key.
+    let f6 = cell("F6");
+    let f6_cls = f6["cls"].as_str().expect("cls");
+    assert!(f6_cls.contains(" bn1") && f6_cls.contains(" ba2"), "{f6}");
+    assert!(!f6_cls.contains(" bound"), "{f6}");
+
+    // Untouched keys stay plain.
+    let z = cell("Z");
+    let z_cls = z["cls"].as_str().expect("cls");
+    assert!(!z_cls.contains(" bn") && !z_cls.contains(" bound"), "{z}");
+
+    // The legend names every controller in its own color.
+    let legend = api["view"]["legend"].as_array().expect("legend");
+    assert_eq!(legend.len(), 2, "{api}");
+    assert_eq!(legend[0]["badge"], "P1", "{api}");
+    assert_eq!(
+        legend[0]["cls"], "n-lgd np1 on",
+        "the selected controller's chip is marked, so soloing can cross out          every other one: {api}"
+    );
+    assert_eq!(legend[1]["cls"], "n-lgd np2", "{api}");
+    assert_eq!(api["view"]["solo_label"], "Only P1", "{api}");
+}
+
+/// **A crowded key stacks**: four bands is the ceiling a 30px cap can carry,
+/// so a key five controllers share stops naming anyone — one woven face, the
+/// TOTAL on the cap, and every owner still named in words. Nothing to add:
+/// no band class survives, so the number can only be read as "five".
+#[test]
+fn nocturne_stacks_a_key_five_controllers_share() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".into(),
+                alias: "panel".into(),
+                label: "I-PAC".into(),
+            })
+            .ok
+    );
+    for n in 1..=5 {
+        // XInput seats only four; the fifth controller is a PlayStation pad
+        // (ViGEm), which is exactly why five owners is a real case.
+        let persona = if n <= 4 { "xbox360" } else { "playstation" };
+        assert!(
+            control
+                .stage_edit(&ksx_api::StageEdit::AddSlot {
+                    number: None,
+                    persona: persona.into(),
+                    preset: format!("Player {n}"),
+                    layout: None,
+                })
+                .ok,
+            "adding controller {n}"
+        );
+    }
+    let staged = control.staged();
+    // Every controller drives Q; the selected one (P1) is bound LAST, to
+    // prove its band still leads.
+    for slot in staged.slots.iter().rev() {
+        assert!(
+            control
+                .stage_bind(&ksx_api::StagedBindRequest {
+                    number: slot.number,
+                    expected_device: String::new(),
+                    expected_target_revision: String::new(),
+                    preset: slot.preset.clone(),
+                    function: "A".into(),
+                    keys: vec!["Q".into()],
+                    force: true,
+                    turbo_hz: None,
+                    toggle: None,
+                })
+                .ok
+        );
+    }
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=3"))).expect("payload");
+    let q = [
+        "kb_row1", "kb_row2", "kb_row3", "kb_row4", "kb_row5", "kb_row6",
+    ]
+    .iter()
+    .filter_map(|row| api["view"][row].as_array())
+    .flatten()
+    .find(|c| c["key"] == "Q")
+    .expect("Q is on the board")
+    .clone();
+    let cls = q["cls"].as_str().expect("cls");
+    assert!(
+        cls.contains(" bstack") && cls.contains(" bcount5"),
+        "past four owners the cap stacks and carries the TOTAL: {q}"
+    );
+    assert!(
+        !cls.contains(" bn") && !cls.contains(" ba1") && !cls.contains(" bb2"),
+        "and it names NOBODY — three colors out of five would be an \
+         arbitrary three, and a band beside a count is a sum to work out: {q}"
+    );
+    assert!(
+        q["title"]
+            .as_str()
+            .is_some_and(|t| t.contains("P1") && t.contains("P5")),
+        "the words still name every owner: {q}"
+    );
+    assert_eq!(
+        api["view"]["kb_more_cls"], "n-lgdmore",
+        "and the legend explains the stacked cap, since nothing else does: {api}"
+    );
+
+    // Exactly four owners is still four named bands: the stack begins where
+    // the colors run out, not before.
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::RemoveSlot { number: 5 })
+            .ok
+    );
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=3"))).expect("payload");
+    let q = [
+        "kb_row1", "kb_row2", "kb_row3", "kb_row4", "kb_row5", "kb_row6",
+    ]
+    .iter()
+    .filter_map(|row| api["view"][row].as_array())
+    .flatten()
+    .find(|c| c["key"] == "Q")
+    .expect("Q is on the board")
+    .clone();
+    let cls = q["cls"].as_str().expect("cls");
+    assert!(
+        cls.contains(" bn4")
+            && cls.contains(" ba1")
+            && cls.contains(" bb2")
+            && cls.contains(" bc3")
+            && cls.contains(" bd4"),
+        "four owners, four bands, slot order whoever is selected: {q}"
+    );
+    assert!(
+        !cls.contains(" bstack") && !cls.contains(" bcount"),
+        "nothing stacks while every owner has a color: {q}"
+    );
+    assert_eq!(
+        api["view"]["kb_more_cls"], "n-lgdmore none",
+        "and the legend's key stays away until a cap actually stacks: {api}"
+    );
+}
+
+/// The canvas authoring projection is backend-owned: every zone appears once
+/// in a normalized group order, persona labels come from that controller's
+/// art vocabulary, and exact keys plus per-control transforms come directly
+/// from the staged mapper rather than from the legacy pane rows.
+#[test]
+fn nocturne_serves_ordered_canvas_control_authoring() {
+    let control = Arc::new(ScriptedControl::new(false));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "playstation".into(),
+            preset: "Player 1".into(),
+            layout: None,
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let preset = control.staged().slots[0].preset.clone();
+    assert!(
+        control
+            .stage_bind(&ksx_api::StagedBindRequest {
+                number: 1,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
+                preset,
+                function: "A".into(),
+                keys: vec!["G".into(), "H".into()],
+                force: true,
+                turbo_hz: Some(12),
+                toggle: Some(true),
+            })
+            .ok
+    );
+
+    let addr = start_server(control);
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1"))).expect("payload");
+    let pad = &api["view"]["pads"][0];
+    assert_eq!(pad["mapping_available"], true, "{pad}");
+    assert_eq!(pad["mapping_reason"], "", "{pad}");
+    let controls = pad["controls"].as_array().expect("controls");
+    assert_eq!(controls.len(), ksx_core::preset::MAPPABLE_COUNT, "{pad}");
+
+    let expected = [
+        "A",
+        "B",
+        "X",
+        "Y",
+        "dpad.up",
+        "dpad.down",
+        "dpad.left",
+        "dpad.right",
+        "lb",
+        "rb",
+        "lt",
+        "rt",
+        "lthumb",
+        "ly.max",
+        "ly.min",
+        "lx.min",
+        "lx.max",
+        "rthumb",
+        "ry.max",
+        "ry.min",
+        "rx.min",
+        "rx.max",
+        "back",
+        "guide",
+        "start",
+    ];
+    let functions: Vec<&str> = controls
+        .iter()
+        .map(|control| control["function"].as_str().expect("function"))
+        .collect();
+    assert_eq!(functions, expected, "normalized authoring order drifted");
+    for (order, control) in controls.iter().enumerate() {
+        assert_eq!(control["order"].as_u64(), Some(order as u64), "{control}");
+    }
+    let groups: Vec<&str> = controls
+        .iter()
+        .map(|control| control["group"].as_str().expect("group"))
+        .collect();
+    assert_eq!(
+        groups,
+        [
+            "face",
+            "face",
+            "face",
+            "face",
+            "dpad",
+            "dpad",
+            "dpad",
+            "dpad",
+            "shoulders",
+            "shoulders",
+            "shoulders",
+            "shoulders",
+            "left-stick",
+            "left-stick",
+            "left-stick",
+            "left-stick",
+            "left-stick",
+            "right-stick",
+            "right-stick",
+            "right-stick",
+            "right-stick",
+            "right-stick",
+            "system",
+            "system",
+            "system",
+        ],
+        "{pad}"
+    );
+
+    let a = controls
+        .iter()
+        .find(|control| control["function"] == "A")
+        .expect("A control");
+    assert_eq!(a["label"], "✕", "the label must speak PlayStation: {a}");
+    assert_eq!(a["keys"], serde_json::json!(["G", "H"]), "{a}");
+    assert_eq!(a["toggle"], true, "{a}");
+    assert_eq!(a["turbo_hz"], 12, "{a}");
+    // The exact vector is the new contract; the old joined callout remains
+    // for existing clients during migration.
+    assert_eq!(pad["fn_keys"]["A"], "G · H", "{pad}");
+
+    let b = controls
+        .iter()
+        .find(|control| control["function"] == "B")
+        .expect("B control");
+    assert_eq!(b["label"], "○", "{b}");
+    assert_eq!(b["keys"], serde_json::json!([]), "{b}");
+    assert_eq!(b["toggle"], false, "{b}");
+    assert_eq!(b["turbo_hz"], serde_json::Value::Null, "{b}");
+}
+
+/// **The multi-pad payload**: every staged controller serves its family,
+/// title, callout chips and readable control names — the clone grid's whole
+/// diet, pure payload data that mints no slots.
+#[test]
+fn nocturne_serves_every_pad_for_the_grid() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: None,
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "playstation".into(),
+            preset: "Player 2".into(),
+            layout: None,
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let preset = control.staged().slots[0].preset.clone();
+    assert!(
+        control
+            .stage_bind(&ksx_api::StagedBindRequest {
+                number: 1,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
+                preset,
+                function: "A".into(),
+                keys: vec!["G".into(), "H".into()],
+                force: true,
+                turbo_hz: None,
+                toggle: None,
+            })
+            .ok
+    );
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let pads = api["view"]["pads"].as_array().expect("pads");
+    assert_eq!(pads.len(), 2, "{api}");
+    assert_eq!(pads[0]["slot"], 1, "{api}");
+    assert_eq!(pads[0]["family"], "xbox", "{api}");
+    assert_eq!(pads[0]["fn_keys"]["A"], "G · H", "{api}");
+    assert_eq!(pads[1]["slot"], 2, "{api}");
+    assert_eq!(pads[1]["family"], "ps", "{api}");
+    // The readable names speak the persona's own vocabulary.
+    assert_eq!(pads[0]["fn_names"]["A"], "A", "{api}");
+    assert!(
+        pads[1]["fn_names"]
+            .as_object()
+            .expect("names")
+            .values()
+            .any(|v| v == "△"),
+        "{api}"
+    );
+}
+
+/// **The ⊖ over HTTP**: mode "remove" on the bind verb takes ONE key off ONE
+/// control — its other keys stay, and removing the last key leaves the
+/// control honestly unbound. A key the control never had refuses in words.
+#[test]
+fn nocturne_removes_one_key_from_one_control() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: None,
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let preset = control.staged().slots[0].preset.clone();
+    assert!(
+        control
+            .stage_bind(&ksx_api::StagedBindRequest {
+                number: 1,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
+                preset: preset.clone(),
+                function: "A".into(),
+                keys: vec!["G".into(), "H".into()],
+                force: true,
+                turbo_hz: None,
+                toggle: None,
+            })
+            .ok
+    );
+
+    let removed: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body(&control, 1, "A", "H", Some("remove"), false),
+    )))
+    .expect("remove outcome");
+    assert_eq!(removed["ok"], true, "{removed}");
+    let staged = control.staged();
+    let mapper = ksx_api::staged_mapper_slot(&staged.slots[0], "I-PAC").expect("mapper");
+    assert_eq!(
+        mapper.bindings.get("A").cloned().unwrap_or_default(),
+        vec!["G".to_owned()],
+        "the other key stays"
+    );
+
+    // Removing a key the control never had refuses in words.
+    let missing: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body(&control, 1, "A", "F9", Some("remove"), false),
+    )))
+    .expect("missing outcome");
+    assert_eq!(missing["ok"], false, "{missing}");
+    assert!(
+        missing["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("not driven by")),
+        "{missing}"
+    );
+
+    // Removing the LAST key leaves the control honestly unbound.
+    let last: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body(&control, 1, "A", "G", Some("remove"), false),
+    )))
+    .expect("last outcome");
+    assert_eq!(last["ok"], true, "{last}");
+    let staged = control.staged();
+    let mapper = ksx_api::staged_mapper_slot(&staged.slots[0], "I-PAC").expect("mapper");
+    assert!(
+        mapper
+            .bindings
+            .get("A")
+            .cloned()
+            .unwrap_or_default()
+            .is_empty(),
+        "unbound after the last removal"
+    );
+}
+
+/// **The undo chip over HTTP**: removing a controller stashes its whole
+/// slot view SERVER-side; the chip is served while the window holds; Undo
+/// replays add + bindings + socd and consumes the stash — a second Undo
+/// gets the honest gone sentence, as does an Undo nobody earned.
+#[test]
+fn nocturne_undoes_a_removal_from_the_server_held_stash() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "playstation".into(),
+            preset: "Player 2".into(),
+            layout: Some("arcade-6button".into()),
+        },
+        ksx_api::StageEdit::SetSocd {
+            number: 2,
+            socd: "last-input".into(),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+
+    // Nothing removed yet: no chip, and an unearned Undo says so.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["undo_cls"], "n-undochip none", "{api}");
+    let response = post_form(addr, "/nocturne/controller/undo", "");
+    assert!(response.contains("no%20longer%20be%20undone"), "{response}");
+
+    // Remove P2: the chip appears naming it.
+    let bindings_before = control.staged().slots[1].bindings;
+    assert!(bindings_before > 0);
+    let response = post_form(addr, "/nocturne/controller/remove", "number=2");
+    assert!(response.contains("Draft%20updated"), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["undo_cls"], "n-undochip", "{api}");
+    assert!(
+        api["view"]["undo_label"]
+            .as_str()
+            .is_some_and(|label| label.contains("P2") && label.contains("PlayStation")),
+        "{api}"
+    );
+
+    // Undo: the controller returns whole — persona, preset, bindings, SOCD.
+    let response = post_form(addr, "/nocturne/controller/undo", "");
+    assert!(response.contains("Controller%20restored"), "{response}");
+    let staged = control.staged();
+    assert_eq!(staged.slots.len(), 2, "{staged:?}");
+    let restored = staged
+        .slots
+        .iter()
+        .find(|slot| slot.number == 2)
+        .expect("P2 back");
+    assert_eq!(restored.persona, "playstation");
+    assert_eq!(restored.preset, "Player 2");
+    assert_eq!(restored.bindings, bindings_before);
+    assert_eq!(restored.socd, "last-input");
+
+    // The stash is consumed: no chip, and a second Undo is honest.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["undo_cls"], "n-undochip none", "{api}");
+    let response = post_form(addr, "/nocturne/controller/undo", "");
+    assert!(response.contains("no%20longer%20be%20undone"), "{response}");
+}
+
+/// **Apply-in-place over HTTP** (`stage_apply`, M1b F3's UI): the button is
+/// served only while a session runs AND the draft is dirty; the verb
+/// flashes the daemon's three shapes — applied in place, `needs-restart`
+/// naming Play, and the honest error when nothing can take it.
+#[test]
+fn nocturne_applies_the_dirty_draft_to_the_running_session() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".into(),
+                alias: "panel".into(),
+                label: "I-PAC".into(),
+            })
+            .ok
+    );
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::AddSlot {
+                number: None,
+                persona: "xbox360".into(),
+                preset: "Player 1".into(),
+                layout: Some("arcade-6button".into()),
+            })
+            .ok
+    );
+
+    // Idle, clean: the verb is not offered.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["apply_cls"], "n-apply none", "{api}");
+
+    // Running + dirty: offered.
+    control.running.store(true, Ordering::SeqCst);
+    control.dirty.store(true, Ordering::SeqCst);
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["apply_cls"], "n-apply", "{api}");
+
+    // The hot path applies in place.
+    let response = post_form(addr, "/nocturne/apply", "");
+    assert!(response.contains("Changes%20applied"), "{response}");
+
+    // A structural difference refuses with the sentence naming Play.
+    control.dirty.store(true, Ordering::SeqCst);
+    control.apply_needs_restart.store(true, Ordering::SeqCst);
+    let response = post_form(addr, "/nocturne/apply", "");
+    assert!(
+        response.contains("cannot%20take%20it%20in%20place"),
+        "{response}"
+    );
+
+    // Nothing running: the honest error.
+    control.running.store(false, Ordering::SeqCst);
+    let response = post_form(addr, "/nocturne/apply", "");
+    assert!(
+        response.contains("could%20not%20be%20applied"),
+        "{response}"
+    );
+
+    // The JSON twin answers with the daemon's OWN words: the hot path's
+    // fixed flash, and the needs-restart shape carrying the difference
+    // sentence verbatim for the quoting dialog.
+    control.running.store(true, Ordering::SeqCst);
+    control.apply_needs_restart.store(false, Ordering::SeqCst);
+    let hot: serde_json::Value =
+        serde_json::from_str(body_of(&post_json(addr, "/nocturne/api/apply", "")))
+            .expect("apply json");
+    assert_eq!(hot["done"], true, "{hot}");
+    assert!(
+        hot["flash"]
+            .as_str()
+            .is_some_and(|f| f.starts_with("Changes applied")),
+        "{hot}"
+    );
+    control.apply_needs_restart.store(true, Ordering::SeqCst);
+    let restart: serde_json::Value =
+        serde_json::from_str(body_of(&post_json(addr, "/nocturne/api/apply", "")))
+            .expect("apply json");
+    assert_eq!(restart["done"], false, "{restart}");
+    assert_eq!(restart["code"], "needs-restart", "{restart}");
+    assert_eq!(
+        restart["message"], "the draft changed the session's structure",
+        "{restart}"
+    );
+    control.running.store(false, Ordering::SeqCst);
+    let idle: serde_json::Value =
+        serde_json::from_str(body_of(&post_json(addr, "/nocturne/api/apply", "")))
+            .expect("apply json");
+    assert_eq!(idle["done"], false, "{idle}");
+    assert!(idle["code"].is_null(), "{idle}");
+}
+
+/// **The MIGRATED configuration menu, over HTTP.** The menu's facts are
+/// served (config identity, games with the broken row's honesty, the
+/// sign-in task in /start's exact vocabulary); adopt refuses over content
+/// and loads into emptiness — never starting anything; discard always
+/// works; and the sign-in twin keeps its consent gate. The re-pointed
+/// `/start` and `/workspace` doors land their answers on `/nocturne`.
+#[test]
+fn nocturne_serves_the_migrated_configuration_menu_over_http() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::clone(&control), machine);
+
+    // The served menu facts, from the machine reads.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["view"]["cfg_line"], "Saved configuration", "{api}");
+    assert!(
+        api["view"]["cfg_meta"]
+            .as_str()
+            .is_some_and(|meta| meta.contains("config.toml")),
+        "{api}"
+    );
+    assert_eq!(api["view"]["games_head"], "Saved games · 2", "{api}");
+    let games = api["view"]["game_rows"].as_array().expect("game rows");
+    assert!(
+        games.iter().any(|game| game["cls"] == "nm-game broken"
+            && game["meta"]
+                .as_str()
+                .is_some_and(|meta| meta.contains("program is missing"))),
+        "the broken game's honesty is gone: {api}"
+    );
+    assert!(
+        api["view"]["auto_line"]
+            .as_str()
+            .is_some_and(|line| line.contains("does not start on its own")),
+        "{api}"
+    );
+
+    // Adopt into an EMPTY draft loads and starts nothing.
+    let adopted = post_form(addr, "/nocturne/adopt", "");
+    assert!(
+        adopted.contains("Loaded%20into%20this%20draft"),
+        "{adopted}"
+    );
+    assert!(!control.staged().slots.is_empty());
+    assert!(
+        !control.played.load(Ordering::SeqCst),
+        "adopt must not Play"
+    );
+
+    // Over content it refuses with the Start-over remedy…
+    let blocked = post_form(addr, "/nocturne/adopt", "profile=Example+Game");
+    assert!(blocked.contains("already%20has%20content"), "{blocked}");
+
+    // …and Start over always works; then a game loads by title.
+    let discarded = post_form(addr, "/nocturne/discard", "");
+    assert!(discarded.contains("Draft%20discarded"), "{discarded}");
+    assert!(control.staged().empty);
+    let game = post_form(addr, "/nocturne/adopt", "profile=Example+Game");
+    assert!(game.contains("Loaded%20into%20this%20draft"), "{game}");
+    assert_eq!(control.staged().slots[0].preset, "Example Game");
+
+    // The sign-in twin: no consent, no write; with consent, the re-read's
+    // own truth answers.
+    let unticked = post_form(addr, "/nocturne/autostart", "enable=yes");
+    assert!(unticked.contains("Tick%20the%20box"), "{unticked}");
+    let on = post_form(
+        addr,
+        "/nocturne/autostart",
+        "enable=yes&confirm_autostart=yes",
+    );
+    assert!(on.contains("start%20when%20you%20sign%20in"), "{on}");
+    let off = post_form(addr, "/nocturne/autostart", "confirm_autostart=yes");
+    assert!(off.contains("no%20longer%20start"), "{off}");
+
+    // The old doors answer on /nocturne now.
+    let via_start = post_form(addr, "/start/discard", "");
+    assert!(
+        via_start.contains("location: /nocturne?flash=Draft%20discarded"),
+        "{via_start}"
+    );
+    let via_workspace = post_form(addr, "/workspace/adopt", "");
+    assert!(
+        via_workspace.contains("location: /nocturne?flash=Loaded%20into%20this%20draft"),
+        "{via_workspace}"
+    );
+}
+
+#[test]
+fn managed_development_runtime_words_the_autostart_fence_in_the_ui() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::managed_dev_runtime());
+    let addr = start_server_with_machine(control, machine);
+
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    assert_eq!(api["autostart_read"]["registered"], true, "{api}");
+    assert_eq!(api["autostart_read"]["read_only"], true, "{api}");
+    assert!(
+        api["view"]["auto_line"]
+            .as_str()
+            .is_some_and(|line| line.contains("starts by itself")),
+        "{api}"
+    );
+    assert!(
+        api["view"]["auto_note"]
+            .as_str()
+            .is_some_and(|note| note.contains("Install a complete candidate to test startup")),
+        "{api}"
+    );
+    assert_eq!(api["view"]["auto_form_cls"], "n-capform none", "{api}");
+
+    let start_api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("start payload");
+    assert_eq!(start_api["autostart"]["readable"], true, "{start_api}");
+    assert_eq!(start_api["autostart"]["registered"], true, "{start_api}");
+    assert_eq!(start_api["autostart"]["read_only"], true, "{start_api}");
+    assert!(
+        start_api["autostart"]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("Install a complete candidate to test startup")),
+        "{start_api}"
+    );
+
+    let start_page = rendered_body(&get(addr, "/start"));
+    assert!(
+        start_page.contains("ksx starts by itself when you sign in"),
+        "{start_page}"
+    );
+    assert!(
+        start_page.contains("Install a complete candidate to test startup"),
+        "{start_page}"
+    );
+    assert!(
+        !start_page.contains(r#"action="/start/autostart""#),
+        "{start_page}"
+    );
+    assert!(
+        !start_page.contains(r#"name="confirm_autostart""#),
+        "{start_page}"
+    );
+
+    let response = post_form(
+        addr,
+        "/nocturne/autostart",
+        "enable=yes&confirm_autostart=yes",
+    );
+    assert!(
+        response
+            .contains("development%20build%20cannot%20change%20the%20installed%20sign-in%20task"),
+        "{response}"
+    );
+    assert!(response.contains("Nothing%20was%20changed"), "{response}");
+}
+
+/// The Builder's hardware card is an explicit read, not another participant
+/// in `/api/nocturne`'s 2 s poll. With no staged device there is no target and
+/// therefore no license to enumerate HID collections at all.
+#[test]
+fn panel_status_is_on_demand_and_skips_the_provider_without_a_selected_encoder() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
+
+    for _ in 0..2 {
+        let response = get(addr, "/api/nocturne");
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+    assert_eq!(machine.panel_status_calls.load(Ordering::SeqCst), 0);
+
+    let response = get(addr, "/api/panel/status");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(response.contains("cache-control: no-store"), "{response}");
+    let payload: serde_json::Value =
+        serde_json::from_str(body_of(&response)).expect("panel status payload");
+    assert!(payload["target_selector"].is_null(), "{payload}");
+    assert!(payload["unavailable"].is_null(), "{payload}");
+    assert!(payload["view"].is_null(), "{payload}");
+    assert_eq!(
+        machine.panel_status_calls.load(Ordering::SeqCst),
+        0,
+        "no selection must not become a whole-machine HID probe"
+    );
+}
+
+/// A selected board comes from the daemon-held draft, reaches the typed
+/// MachineSource verb once, and returns composed copy plus raw evidence. The
+/// chart's absence is an explicit unattempted state, never an empty chart.
+#[test]
+fn panel_status_uses_the_staged_selector_and_reports_metadata_without_mutation() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let selected = control.stage_edit(&ksx_api::StageEdit::ChooseDevice {
+        selector: "usb:d209:0430:00".to_owned(),
+        alias: "panel".to_owned(),
+        label: "Ultimarc I-PAC 4X".to_owned(),
+    });
+    assert!(selected.ok, "{selected:?}");
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
+
+    let response = get(addr, "/api/panel/status");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(response.contains("cache-control: no-store"), "{response}");
+    let payload: serde_json::Value =
+        serde_json::from_str(body_of(&response)).expect("panel status payload");
+    assert_eq!(payload["target_selector"], "usb:d209:0430:00", "{payload}");
+    assert!(payload["unavailable"].is_null(), "{payload}");
+    let view = &payload["view"];
+    assert_eq!(
+        view["panels"].as_array().map(Vec::len),
+        Some(1),
+        "{payload}"
+    );
+    assert_eq!(view["panels"][0]["bcd_device"], 0x0056, "{payload}");
+    assert_eq!(
+        view["panels"][0]["family_id"], "ultimarc-ipac4",
+        "{payload}"
+    );
+    assert_eq!(
+        view["panels"][0]["family_label"], "Ultimarc I-PAC 4X",
+        "{payload}"
+    );
+    assert_eq!(
+        view["panels"][0]["capabilities"],
+        serde_json::json!({
+            "can_identify": true,
+            "can_report_mode": false,
+            "can_read_chart": true,
+            "can_write_chart": true,
+            "write_is_persistent": true
+        }),
+        "{payload}"
+    );
+    assert_eq!(view["panels"][0]["firmware_label"], "1.56", "{payload}");
+    assert_eq!(view["panels"][0]["profile_terminal_count"], 56, "{payload}");
+    assert!(
+        view["panels"][0]["firmware_detail"]
+            .as_str()
+            .is_some_and(|detail| {
+                detail.contains("I-PAC 4 release-0056 profile")
+                    && detail.contains("firmware was not queried from the board")
+            }),
+        "friendly firmware evidence lost its provenance: {payload}"
+    );
+    assert_eq!(
+        view["panels"][0]["observed_mode"], "keyboard-compatible",
+        "{payload}"
+    );
+    assert_eq!(
+        view["panels"][0]["chart_state"], "protocol-unverified",
+        "{payload}"
+    );
+    assert_eq!(view["panels"][0]["chart_attempted"], false, "{payload}");
+    assert_eq!(view["panels"][0]["mode_read_supported"], false, "{payload}");
+    assert!(
+        view["panels"][0]["identity"]
+            .as_str()
+            .is_some_and(|line| line.contains("0x0056")),
+        "raw bcdDevice disappeared from the backend-composed line: {payload}"
+    );
+    assert_eq!(
+        view["inspection_note"], "Inspection only. KSX did not program or change this encoder.",
+        "{payload}"
+    );
+    assert_eq!(machine.panel_status_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *machine.panel_status_devices.lock().unwrap(),
+        vec![Some("usb:d209:0430:00".to_owned())]
+    );
+    assert!(machine.picked.lock().unwrap().is_empty());
+    assert!(machine.prepared_with.lock().unwrap().is_empty());
+    assert!(machine.released_with.lock().unwrap().is_empty());
+    assert!(control.bound_with.lock().unwrap().is_none());
+}
+
+/// A failed provider read is neither an unsupported device nor a healthy
+/// empty inventory. It stays an unavailable envelope the card can Retry.
+#[test]
+fn panel_status_preserves_provider_refusal_as_unavailable() {
+    let control = Arc::new(ScriptedControl::new(false));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4X".to_owned(),
+            })
+            .ok
+    );
+    let machine = Arc::new(ScriptedMachine::panel_status_refusing());
+    let addr = start_server_with_machine(control, machine.clone());
+
+    let response = get(addr, "/api/panel/status");
+    let payload: serde_json::Value =
+        serde_json::from_str(body_of(&response)).expect("panel refusal envelope");
+    assert_eq!(payload["target_selector"], "usb:d209:0430:00", "{payload}");
+    assert!(
+        payload["unavailable"]
+            .as_str()
+            .is_some_and(|line| line.contains("could not be read")),
+        "{payload}"
+    );
+    assert!(payload["view"].is_null(), "{payload}");
+    assert_eq!(machine.panel_status_calls.load(Ordering::SeqCst), 1);
+}
+
+/// The endpoint is local-read-only in both directions: a rebound Host cannot
+/// reach it, and POST is not a hidden programming surface.
+#[test]
+fn panel_status_is_guarded_and_has_no_write_method() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(false)), machine.clone());
+    let rebound = http(
+        addr,
+        "GET /api/panel/status HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n",
+    );
+    assert!(rebound.starts_with("HTTP/1.1 421"), "{rebound}");
+    let posted = post_json(addr, "/api/panel/status", "{}");
+    assert!(posted.starts_with("HTTP/1.1 405"), "{posted}");
+    assert_eq!(machine.panel_status_calls.load(Ordering::SeqCst), 0);
+}
+
+/// A passive inventory can see MI_02 while another application owns its
+/// exclusive read/write handle. Preserve the typed refusal and recovery words
+/// so Studio can explain WinIPAC contention instead of printing a raw Windows
+/// error or pretending the encoder has no chart.
+#[test]
+fn panel_chart_preserves_configuration_owner_refusal_and_remedy() {
+    let control = Arc::new(ScriptedControl::new(false));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4X".to_owned(),
+            })
+            .ok
+    );
+    let machine = Arc::new(ScriptedMachine::panel_chart_busy());
+    let addr = start_server_with_machine(control, machine.clone());
+
+    let response = post_json(
+        addr,
+        "/api/panel/chart",
+        r#"{"expected_selector":"usb:d209:0430:00","backup":true}"#,
+    );
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(response.contains("cache-control: no-store"), "{response}");
+    let payload: serde_json::Value = serde_json::from_str(body_of(&response)).unwrap();
+    assert_eq!(payload["target_selector"], "usb:d209:0430:00", "{payload}");
+    assert_eq!(
+        payload["refusal_code"],
+        ksx_api::codes::PANEL_INTERFACE_BUSY,
+        "{payload}"
+    );
+    assert!(
+        payload["unavailable"]
+            .as_str()
+            .is_some_and(|line| line.contains("Another app is using")),
+        "{payload}"
+    );
+    assert!(
+        payload["remedy"]
+            .as_str()
+            .is_some_and(|line| line.contains("WinIPAC") && line.contains("Read board again")),
+        "{payload}"
+    );
+    assert!(payload["view"].is_null(), "{payload}");
+    assert_eq!(machine.panel_chart_specs.lock().unwrap().len(), 1);
+    assert!(machine.panel_program_plan_specs.lock().unwrap().is_empty());
+    assert!(machine.panel_program_specs.lock().unwrap().is_empty());
+    assert!(machine.panel_restore_specs.lock().unwrap().is_empty());
+}
+
+/// A competing configurator can acquire MI_02 after Studio has read a chart
+/// but before either diff is prepared. Both pre-write routes must keep the
+/// stable refusal identity and recovery text; neither route may collapse that
+/// state into a generic failed-plan banner.
+#[test]
+fn panel_plan_routes_preserve_late_configuration_contention() {
+    let control = Arc::new(ScriptedControl::new(false));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4X".to_owned(),
+            })
+            .ok
+    );
+    let machine = Arc::new(ScriptedMachine::panel_plan_busy());
+    let addr = start_server_with_machine(control, machine.clone());
+
+    let program = post_json(
+        addr,
+        "/api/panel/program/plan",
+        &format!(
+            r#"{{"expected_selector":"usb:d209:0430:00","expected_base_sha256":"{}","layout":"custom","edits":[{{"terminal_id":"1sw4","normal_key":"K"}}]}}"#,
+            "A".repeat(64)
+        ),
+    );
+    assert!(program.starts_with("HTTP/1.1 200"), "{program}");
+    let program: serde_json::Value = serde_json::from_str(body_of(&program)).unwrap();
+
+    let restore = post_json(
+        addr,
+        "/api/panel/restore/plan",
+        &format!(
+            r#"{{"expected_selector":"usb:d209:0430:00","backup_id":"20260823-120000-A1B2C3D4E5F6","expected_current_sha256":"{}"}}"#,
+            "B".repeat(64)
+        ),
+    );
+    assert!(restore.starts_with("HTTP/1.1 200"), "{restore}");
+    let restore: serde_json::Value = serde_json::from_str(body_of(&restore)).unwrap();
+
+    for payload in [&program, &restore] {
+        assert_eq!(
+            payload["refusal_code"],
+            ksx_api::codes::PANEL_INTERFACE_BUSY,
+            "{payload}"
+        );
+        assert!(
+            payload["unavailable"]
+                .as_str()
+                .is_some_and(|line| line.contains("became busy")),
+            "{payload}"
+        );
+        assert!(
+            payload["remedy"]
+                .as_str()
+                .is_some_and(|line| line.contains("WinIPAC") && line.contains("retry")),
+            "{payload}"
+        );
+        assert!(payload["plan"].is_null(), "{payload}");
+    }
+    assert_eq!(machine.panel_program_plan_specs.lock().unwrap().len(), 1);
+    assert_eq!(machine.panel_restore_plan_specs.lock().unwrap().len(), 1);
+    assert!(machine.panel_program_specs.lock().unwrap().is_empty());
+    assert!(machine.panel_restore_specs.lock().unwrap().is_empty());
+}
+
+/// Every panel POST can cause the machine provider to exchange HID reports,
+/// including the nominally read-only chart and plan steps. A foreign page must
+/// be stopped by the shared Origin guard before any of those typed verbs run.
+#[test]
+fn panel_report_routes_reject_foreign_origins_before_the_machine_provider() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(false)), machine.clone());
+
+    for path in [
+        "/api/panel/chart",
+        "/api/panel/profiles/save",
+        "/api/panel/profiles/delete",
+        "/api/panel/program/plan",
+        "/api/panel/program/apply",
+        "/api/panel/restore/plan",
+        "/api/panel/restore/apply",
+    ] {
+        let response = http(
+            addr,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://evil.example\r\n\
+                 Content-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+            ),
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 403") || response.starts_with("HTTP/1.1 421"),
+            "{path} reached a report-sending handler from a foreign origin: {response}"
+        );
+    }
+
+    assert!(machine.panel_chart_specs.lock().unwrap().is_empty());
+    assert!(machine.panel_profile_save_specs.lock().unwrap().is_empty());
+    assert!(machine
+        .panel_profile_delete_specs
+        .lock()
+        .unwrap()
+        .is_empty());
+    assert!(machine.panel_program_plan_specs.lock().unwrap().is_empty());
+    assert!(machine.panel_program_specs.lock().unwrap().is_empty());
+    assert!(machine.panel_restore_plan_specs.lock().unwrap().is_empty());
+    assert!(machine.panel_restore_specs.lock().unwrap().is_empty());
+}
+
+/// Saved layouts are portable semantic profiles, not board-bound recovery
+/// images. They can therefore be listed and edited before an encoder is
+/// selected, while revisions still make update/delete stale-write safe. This
+/// catches the broken version where the Studio treated profile deletion as a
+/// hardware clear or trusted browser-supplied driver/protocol metadata.
+#[test]
+fn panel_profile_routes_create_update_and_delete_without_touching_hardware() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(false)), machine.clone());
+
+    let listed = get(addr, "/api/panel/profiles");
+    assert!(listed.starts_with("HTTP/1.1 200"), "{listed}");
+    assert!(listed.contains("cache-control: no-store"), "{listed}");
+    let listed: serde_json::Value = serde_json::from_str(body_of(&listed)).unwrap();
+    assert!(listed["unavailable"].is_null(), "{listed}");
+    assert_eq!(listed["view"]["config_root"], r"C:\cfg", "{listed}");
+    assert_eq!(
+        listed["view"]["terminal_signature"], "terminal-signature-56",
+        "{listed}"
+    );
+    assert_eq!(
+        listed["view"]["profiles"][0]["protocol_profile"], "ipac4-pac256-v1",
+        "compatibility must be served by the backend: {listed}"
+    );
+    assert_eq!(machine.panel_profile_reads.load(Ordering::SeqCst), 1);
+    assert_eq!(machine.panel_status_calls.load(Ordering::SeqCst), 0);
+
+    let create_body = serde_json::json!({
+        "name": "Tournament panel",
+        "description": "Four players, six buttons each",
+        "terminals": [{
+            "terminal_id": "1sw4",
+            "normal_key": "K",
+            "shifted_key": null,
+            "is_shift": false,
+            "allow_shared_key": true
+        }]
+    })
+    .to_string();
+    let created = post_json(addr, "/api/panel/profiles/save", &create_body);
+    assert!(created.contains("cache-control: no-store"), "{created}");
+    let created: serde_json::Value = serde_json::from_str(body_of(&created)).unwrap();
+    assert_eq!(created["mutation"]["state"], "created", "{created}");
+    assert_eq!(
+        created["mutation"]["profile"]["name"], "Tournament panel",
+        "{created}"
+    );
+    let saves = machine.panel_profile_save_specs.lock().unwrap();
+    assert_eq!(saves.len(), 1);
+    assert!(saves[0].profile_id.is_none());
+    assert!(saves[0].expected_revision.is_none());
+    assert_eq!(saves[0].terminals[0].normal_key.as_deref(), Some("K"));
+    assert!(saves[0].terminals[0].allow_shared_key);
+    drop(saves);
+
+    let update_body = serde_json::json!({
+        "profile_id": "four-player-cabinet",
+        "expected_revision": "revision-A",
+        "name": "Tournament panel v2",
+        "description": "Renamed in Studio",
+        "terminals": [{
+            "terminal_id": "1sw4",
+            "normal_key": "J",
+            "is_shift": false,
+            "allow_shared_key": false
+        }]
+    })
+    .to_string();
+    let updated = post_json(addr, "/api/panel/profiles/save", &update_body);
+    let updated: serde_json::Value = serde_json::from_str(body_of(&updated)).unwrap();
+    assert_eq!(updated["mutation"]["state"], "updated", "{updated}");
+    assert_eq!(
+        updated["mutation"]["profile"]["revision"], "revision-B",
+        "{updated}"
+    );
+    let saves = machine.panel_profile_save_specs.lock().unwrap();
+    assert_eq!(saves.len(), 2);
+    assert_eq!(saves[1].profile_id.as_deref(), Some("four-player-cabinet"));
+    assert_eq!(saves[1].expected_revision.as_deref(), Some("revision-A"));
+    drop(saves);
+
+    let deleted = post_json(
+        addr,
+        "/api/panel/profiles/delete",
+        r#"{"profile_id":"four-player-cabinet","expected_revision":"revision-B"}"#,
+    );
+    let deleted: serde_json::Value = serde_json::from_str(body_of(&deleted)).unwrap();
+    assert_eq!(deleted["mutation"]["state"], "deleted", "{deleted}");
+    assert!(deleted["mutation"]["profile"].is_null(), "{deleted}");
+    let deletes = machine.panel_profile_delete_specs.lock().unwrap();
+    assert_eq!(deletes.len(), 1);
+    assert_eq!(deletes[0].profile_id, "four-player-cabinet");
+    assert_eq!(deletes[0].expected_revision, "revision-B");
+
+    assert!(
+        machine.panel_program_specs.lock().unwrap().is_empty(),
+        "deleting a saved profile must never clear the physical encoder"
+    );
+    assert!(machine.panel_restore_specs.lock().unwrap().is_empty());
+}
+
+/// Axum must reject incomplete profile JSON before a machine verb sees it.
+/// This catches a permissive transport that defaulted an omitted complete
+/// terminal chart to an empty profile or deleted without a reviewed revision.
+#[test]
+fn panel_profile_routes_reject_incomplete_json_before_the_provider() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(false)), machine.clone());
+
+    let save = post_json(
+        addr,
+        "/api/panel/profiles/save",
+        r#"{"name":"Incomplete","description":"missing terminal chart"}"#,
+    );
+    assert!(save.starts_with("HTTP/1.1 422"), "{save}");
+    let delete = post_json(
+        addr,
+        "/api/panel/profiles/delete",
+        r#"{"profile_id":"four-player-cabinet"}"#,
+    );
+    assert!(delete.starts_with("HTTP/1.1 422"), "{delete}");
+    assert!(machine.panel_profile_save_specs.lock().unwrap().is_empty());
+    assert!(machine
+        .panel_profile_delete_specs
+        .lock()
+        .unwrap()
+        .is_empty());
+}
+
+/// The encoder programmer is one supervised flow over the typed machine
+/// verbs: read + immutable backup, exact diff, explicit write, readback result,
+/// and a separately reviewed restore. The staged selector remains the server's
+/// authority in every request.
+#[test]
+fn panel_programming_routes_preserve_the_backup_plan_confirm_verify_contract() {
+    let control = Arc::new(ScriptedControl::new(false));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4X".to_owned(),
+            })
+            .ok
+    );
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(control, machine.clone());
+
+    let chart = post_json(
+        addr,
+        "/api/panel/chart",
+        r#"{"expected_selector":"usb:d209:0430:00","backup":true}"#,
+    );
+    assert!(chart.starts_with("HTTP/1.1 200"), "{chart}");
+    assert!(chart.contains("cache-control: no-store"), "{chart}");
+    let chart: serde_json::Value = serde_json::from_str(body_of(&chart)).unwrap();
+    assert_eq!(chart["target_selector"], "usb:d209:0430:00", "{chart}");
+    assert_eq!(chart["view"]["programming_state"], "supervised", "{chart}");
+    assert_eq!(
+        chart["view"]["protocol_profile"], "ipac4-pac256-v1",
+        "{chart}"
+    );
+    assert_eq!(chart["view"]["image_bytes"], 256, "{chart}");
+    assert_eq!(
+        chart["view"]["terminals"][0]["shift_state"], "disabled",
+        "an is_shift=false compatibility bit must not hide an opaque shift byte: {chart}"
+    );
+    assert_eq!(chart["view"]["terminals"][0]["is_shift"], false);
+    assert_eq!(
+        chart["view"]["recommended_terminals"][0]["normal"]["key"],
+        "A",
+        "Studio receives a semantic backend-owned recommendation instead of recreating key bytes: {chart}"
+    );
+    assert_eq!(
+        chart["view"]["key_options"][0]["safe_for_qualification"], true,
+        "Studio must receive the backend-owned first-write key policy: {chart}"
+    );
+    let chart_calls = machine.panel_chart_specs.lock().unwrap();
+    assert_eq!(chart_calls.len(), 1);
+    assert_eq!(chart_calls[0].device.as_deref(), Some("usb:d209:0430:00"));
+    assert!(chart_calls[0].backup);
+    drop(chart_calls);
+
+    let backups = get(addr, "/api/panel/backups");
+    let backups: serde_json::Value = serde_json::from_str(body_of(&backups)).unwrap();
+    assert_eq!(backups["view"]["backups"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        machine.panel_backup_specs.lock().unwrap()[0]
+            .device
+            .as_deref(),
+        Some("usb:d209:0430:00")
+    );
+
+    let plan = post_json(
+        addr,
+        "/api/panel/program/plan",
+        &format!(
+            r#"{{"expected_selector":"usb:d209:0430:00","expected_base_sha256":"{}","layout":"custom","edits":[{{"terminal_id":"1sw4","normal_key":"K"}}]}}"#,
+            "A".repeat(64)
+        ),
+    );
+    let plan: serde_json::Value = serde_json::from_str(body_of(&plan)).unwrap();
+    assert!(plan["unavailable"].is_null(), "{plan}");
+    assert_eq!(plan["plan"]["desired_sha256"], "B".repeat(64), "{plan}");
+    let planned = machine.panel_program_plan_specs.lock().unwrap();
+    assert_eq!(planned.len(), 1);
+    assert_eq!(planned[0].device.as_deref(), Some("usb:d209:0430:00"));
+    assert_eq!(planned[0].edits[0].terminal_id, "1sw4");
+    drop(planned);
+
+    let applied = post_json(
+        addr,
+        "/api/panel/program/apply",
+        &format!(
+            r#"{{"hardware_epoch":"http-program-1","expected_selector":"usb:d209:0430:00","program":{{"expected_base_sha256":"{}","layout":"custom","edits":[{{"terminal_id":"1sw4","normal_key":"K"}}]}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+            "A".repeat(64),
+            "B".repeat(64)
+        ),
+    );
+    let applied: serde_json::Value = serde_json::from_str(body_of(&applied)).unwrap();
+    assert_eq!(applied["outcome"]["state"], "verified", "{applied}");
+    assert_eq!(applied["mutation_disposition"], "verified", "{applied}");
+    assert_eq!(applied["hardware_epoch"], "http-program-1", "{applied}");
+    let writes = machine.panel_program_specs.lock().unwrap();
+    assert_eq!(writes.len(), 1);
+    assert!(writes[0].confirm);
+    assert!(writes[0].supervised);
+    assert_eq!(
+        writes[0].expected_board_fingerprint,
+        "ultimarc-ipac:D209:0430:board-4"
+    );
+    assert_eq!(writes[0].expected_protocol_profile, "ipac4-pac256-v1");
+    assert_eq!(
+        writes[0].program.device.as_deref(),
+        Some("usb:d209:0430:00")
+    );
+    drop(writes);
+
+    let restore_plan = post_json(
+        addr,
+        "/api/panel/restore/plan",
+        &format!(
+            r#"{{"expected_selector":"usb:d209:0430:00","backup_id":"20260823-120000-A1B2C3D4E5F6","expected_current_sha256":"{}"}}"#,
+            "B".repeat(64)
+        ),
+    );
+    let restore_plan: serde_json::Value = serde_json::from_str(body_of(&restore_plan)).unwrap();
+    assert!(restore_plan["plan"]["summary"]
+        .as_str()
+        .is_some_and(|line| line.starts_with("Restore")));
+
+    let restored = post_json(
+        addr,
+        "/api/panel/restore/apply",
+        &format!(
+            r#"{{"hardware_epoch":"http-restore-1","expected_selector":"usb:d209:0430:00","restore":{{"backup_id":"20260823-120000-A1B2C3D4E5F6","expected_current_sha256":"{}"}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+            "B".repeat(64),
+            "B".repeat(64)
+        ),
+    );
+    let restored: serde_json::Value = serde_json::from_str(body_of(&restored)).unwrap();
+    assert_eq!(restored["mutation_disposition"], "verified", "{restored}");
+    assert_eq!(restored["hardware_epoch"], "http-restore-1", "{restored}");
+    assert!(restored["outcome"]["summary"]
+        .as_str()
+        .is_some_and(|line| line.contains("restored")));
+    assert_eq!(machine.panel_restore_specs.lock().unwrap().len(), 1);
+}
+
+/// A recovery read which reaches the server before its matching mutation must
+/// install a process-lifetime cancel tombstone. The delayed apply may not turn
+/// that same browser epoch into a write after the chart has been declared
+/// settled.
+#[test]
+fn panel_recovery_epoch_wins_before_delayed_apply() {
+    let control = Arc::new(ScriptedControl::new(false));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4X".to_owned(),
+            })
+            .ok
+    );
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(control, machine.clone());
+    let epoch = "http-recovery-wins-1";
+
+    let recovered = post_json(
+        addr,
+        "/api/panel/chart",
+        &format!(
+            r#"{{"expected_selector":"usb:d209:0430:00","backup":false,"hardware_epoch":"{epoch}","expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4"}}"#
+        ),
+    );
+    let recovered: serde_json::Value = serde_json::from_str(body_of(&recovered)).unwrap();
+    assert_eq!(recovered["hardware_epoch"], epoch, "{recovered}");
+    assert_eq!(recovered["hardware_fence"], "settled", "{recovered}");
+    assert_eq!(
+        recovered["view"]["board_fingerprint"], "ultimarc-ipac:D209:0430:board-4",
+        "{recovered}"
+    );
+
+    let delayed = post_json(
+        addr,
+        "/api/panel/program/apply",
+        &format!(
+            r#"{{"hardware_epoch":"{epoch}","expected_selector":"usb:d209:0430:00","program":{{"expected_base_sha256":"{}","layout":"custom","edits":[]}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+            "A".repeat(64),
+            "B".repeat(64)
+        ),
+    );
+    let delayed: serde_json::Value = serde_json::from_str(body_of(&delayed)).unwrap();
+    assert_eq!(delayed["hardware_epoch"], epoch, "{delayed}");
+    assert_eq!(delayed["mutation_disposition"], "not-started", "{delayed}");
+    assert!(
+        machine.panel_program_specs.lock().unwrap().is_empty(),
+        "a recovery-canceled epoch reached the hardware provider"
+    );
+}
+
+/// Once the matching apply has entered the provider, a crash-recovery chart
+/// waits for that exact mutation to finish and only then reads. This is the
+/// inverse ordering of `panel_recovery_epoch_wins_before_delayed_apply`.
+#[test]
+fn panel_apply_epoch_wins_before_recovery_read() {
+    let control = Arc::new(ScriptedControl::new(false));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4X".to_owned(),
+            })
+            .ok
+    );
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.panel_program_hold.store(true, Ordering::SeqCst);
+    let addr = start_server_with_machine(control, machine.clone());
+    let epoch = "http-apply-wins-1";
+    let apply_body = format!(
+        r#"{{"hardware_epoch":"{epoch}","expected_selector":"usb:d209:0430:00","program":{{"expected_base_sha256":"{}","layout":"custom","edits":[]}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+        "A".repeat(64),
+        "B".repeat(64)
+    );
+    let duplicate_body = apply_body.clone();
+    let apply =
+        std::thread::spawn(move || post_json(addr, "/api/panel/program/apply", &apply_body));
+    let entered_deadline = Instant::now() + Duration::from_secs(3);
+    while !machine.panel_program_entered.load(Ordering::SeqCst) {
+        assert!(
+            Instant::now() < entered_deadline,
+            "the apply never entered the scripted hardware provider"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    let duplicate = post_json(addr, "/api/panel/program/apply", &duplicate_body);
+    let duplicate: serde_json::Value = serde_json::from_str(body_of(&duplicate)).unwrap();
+    assert_eq!(duplicate["hardware_epoch"], epoch, "{duplicate}");
+    assert_eq!(
+        duplicate["mutation_disposition"], "unknown",
+        "a duplicate cannot claim nothing is running while the original token can still write: {duplicate}"
+    );
+
+    let recovery_body = format!(
+        r#"{{"expected_selector":"usb:d209:0430:00","backup":false,"hardware_epoch":"{epoch}","expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4"}}"#
+    );
+    let (chart_tx, chart_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = chart_tx.send(post_json(addr, "/api/panel/chart", &recovery_body));
+    });
+    assert!(
+        matches!(
+            chart_rx.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ),
+        "the recovery chart returned before the admitted apply finished"
+    );
+    assert!(
+        machine.panel_chart_specs.lock().unwrap().is_empty(),
+        "the chart provider ran before the admitted apply finished"
+    );
+
+    machine.panel_program_hold.store(false, Ordering::SeqCst);
+    let applied = apply.join().unwrap();
+    let applied: serde_json::Value = serde_json::from_str(body_of(&applied)).unwrap();
+    assert_eq!(applied["mutation_disposition"], "verified", "{applied}");
+    assert_eq!(applied["hardware_epoch"], epoch, "{applied}");
+    let recovered = chart_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    let recovered: serde_json::Value = serde_json::from_str(body_of(&recovered)).unwrap();
+    assert_eq!(recovered["hardware_epoch"], epoch, "{recovered}");
+    assert_eq!(recovered["hardware_fence"], "settled", "{recovered}");
+    assert_eq!(machine.panel_program_specs.lock().unwrap().len(), 1);
+    assert_eq!(machine.panel_chart_specs.lock().unwrap().len(), 1);
+}
+
+/// Restore is a full persistent-chart mutation too. A recovery read carrying
+/// its epoch must wait for the admitted restore, then prove the post-restore
+/// hardware state before the browser may settle its journal.
+#[test]
+fn panel_restore_epoch_wins_before_recovery_read() {
+    let control = Arc::new(ScriptedControl::new(false));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4X".to_owned(),
+            })
+            .ok
+    );
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.panel_restore_hold.store(true, Ordering::SeqCst);
+    let addr = start_server_with_machine(control, machine.clone());
+    let epoch = "http-restore-wins-1";
+    let restore_body = format!(
+        r#"{{"hardware_epoch":"{epoch}","expected_selector":"usb:d209:0430:00","restore":{{"backup_id":"20260823-120000-A1B2C3D4E5F6","expected_current_sha256":"{}"}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+        "B".repeat(64),
+        "B".repeat(64)
+    );
+    let restore =
+        std::thread::spawn(move || post_json(addr, "/api/panel/restore/apply", &restore_body));
+    let entered_deadline = Instant::now() + Duration::from_secs(3);
+    while !machine.panel_restore_entered.load(Ordering::SeqCst) {
+        assert!(
+            Instant::now() < entered_deadline,
+            "the restore never entered the scripted hardware provider"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    let recovery_body = format!(
+        r#"{{"expected_selector":"usb:d209:0430:00","backup":false,"hardware_epoch":"{epoch}","expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4"}}"#
+    );
+    let (chart_tx, chart_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = chart_tx.send(post_json(addr, "/api/panel/chart", &recovery_body));
+    });
+    assert!(
+        matches!(
+            chart_rx.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ),
+        "the recovery chart returned before the admitted restore finished"
+    );
+    assert!(
+        machine.panel_chart_specs.lock().unwrap().is_empty(),
+        "the chart provider ran before the admitted restore finished"
+    );
+
+    machine.panel_restore_hold.store(false, Ordering::SeqCst);
+    let restored = restore.join().unwrap();
+    let restored: serde_json::Value = serde_json::from_str(body_of(&restored)).unwrap();
+    assert_eq!(restored["mutation_disposition"], "verified", "{restored}");
+    assert_eq!(restored["hardware_epoch"], epoch, "{restored}");
+    let recovered = chart_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    let recovered: serde_json::Value = serde_json::from_str(body_of(&recovered)).unwrap();
+    assert_eq!(recovered["hardware_epoch"], epoch, "{recovered}");
+    assert_eq!(recovered["hardware_fence"], "settled", "{recovered}");
+    assert_eq!(machine.panel_restore_specs.lock().unwrap().len(), 1);
+    assert_eq!(machine.panel_chart_specs.lock().unwrap().len(), 1);
+}
+
+/// A browser selector is a stale-screen assertion, never authority, and a
+/// live Play session is a hard stop before the provider can see a write.
+#[test]
+fn panel_programming_rejects_stale_targets_and_live_session_writes() {
+    let running = Arc::new(ScriptedControl::new(false));
+    running.running.store(true, Ordering::SeqCst);
+    assert!(
+        running
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4X".to_owned(),
+            })
+            .ok
+    );
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(running, machine.clone());
+
+    let stale = post_json(
+        addr,
+        "/api/panel/chart",
+        r#"{"expected_selector":"usb:d209:0431:00","backup":true}"#,
+    );
+    let stale: serde_json::Value = serde_json::from_str(body_of(&stale)).unwrap();
+    assert!(stale["unavailable"]
+        .as_str()
+        .is_some_and(|line| line.contains("changed")));
+    assert!(machine.panel_chart_specs.lock().unwrap().is_empty());
+
+    let blocked = post_json(
+        addr,
+        "/api/panel/program/apply",
+        &format!(
+            r#"{{"hardware_epoch":"http-running-blocked-1","expected_selector":"usb:d209:0430:00","program":{{"expected_base_sha256":"{}","layout":"custom","edits":[]}},"expected_board_fingerprint":"ultimarc-ipac:D209:0430:board-4","expected_protocol_profile":"ipac4-pac256-v1","expected_desired_sha256":"{}","confirm":true,"supervised":true}}"#,
+            "A".repeat(64),
+            "B".repeat(64)
+        ),
+    );
+    let blocked: serde_json::Value = serde_json::from_str(body_of(&blocked)).unwrap();
+    assert_eq!(blocked["mutation_disposition"], "not-started", "{blocked}");
+    assert_eq!(
+        blocked["hardware_epoch"], "http-running-blocked-1",
+        "{blocked}"
+    );
+    assert!(blocked["unavailable"]
+        .as_str()
+        .is_some_and(|line| line.contains("stop Play")));
+    assert!(machine.panel_program_specs.lock().unwrap().is_empty());
 }

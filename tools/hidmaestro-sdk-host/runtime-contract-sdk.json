@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "runtimeId": "ksx-hidmaestro-sdk-host-v1",
+  "hostProtocol": "ksx.hidmaestro.host.v1",
+  "lane": "pinned-official-sdk",
+  "laneRationale": "The SDK and the driver are a matched pair speaking a private shared-memory dialect. Re-implementing the SDK half per persona meant re-deriving that dialect from source each time; this lane instead loads the exact pinned release SDK inside the elevated host boundary, the way PadForge consumes it, DualSense joined this lane on 2026-08-20 after the hardware session measured the SDK lane working first-try while the candidate lane needed three live root-causes; the audited candidate host still ships as the conformance reference.",
+  "upstreamRepository": "https://github.com/hifihedgehog/HIDMaestro",
+  "upstreamCommit": "2a0dac0857901a63d365a36dcf99cf50114ca954",
+  "upstreamVersion": "1.6.1",
+  "sdkAssembly": "HIDMaestro.Core.dll",
+  "sdkAssemblySha256": "ADADD9E2604B7B6B047F386EBDD03879FEEF48009C6290281E4C665E2190F6D5",
+  "sdkCompanions": [
+    {
+      "name": "Microsoft.Windows.SDK.NET.dll",
+      "sha256": "C633AB241CD09846C2AA409F0BEE2026962610404A7BF132C75CBD66B0E5A9F4"
+    },
+    {
+      "name": "WinRT.Runtime.dll",
+      "sha256": "BCF3A14E8712A90837FC5C0D8C8A24696AF2BD7F74E9767597EC81EDEDFB23DB"
+    }
+  ],
+  "catalogResourceCount": 228,
+  "catalogSha256": "8F407E6E1C3C241E16CF6BEF387216AD4D1F5DE055A2C4CC041CA16CE7954A6A",
+  "supportedProfiles": [
+    {
+      "id": 1,
+      "slug": "dualsense",
+      "vendorId": 1356,
+      "productId": 3302,
+      "transport": "usb",
+      "buttonSemantics": "semantic HMButton flags (the descriptor lane maps them through the profile buttonMap)"
+    },
+    {
+      "id": 2,
+      "slug": "switch-pro",
+      "vendorId": 1406,
+      "productId": 8201,
+      "transport": "bluetooth",
+      "buttonSemantics": "layout-indexed mask (the Switch protocol packer indexes the raw mask by layout button indices; semantic flags would land Back on ZL)"
+    },
+    {
+      "id": 3,
+      "slug": "xbox-series-xs-bt",
+      "vendorId": 1118,
+      "productId": 2835,
+      "transport": "bluetooth",
+      "buttonSemantics": "semantic HMButton flags (the descriptor lane maps them through the profile buttonMap)"
+    },
+    {
+      "id": 4,
+      "slug": "ibuffalo-snes",
+      "vendorId": 1411,
+      "productId": 8288,
+      "transport": "usb",
+      "buttonSemantics": "descriptor-ordered mask (bare-descriptor profile; the builder's no-ButtonMap fallback is identity, so bit positions ARE descriptor button indices; positional faces, provisional until the hardware leg adjudicates)"
+    },
+    {
+      "id": 5,
+      "slug": "daemonbite-genesis",
+      "vendorId": 9025,
+      "productId": 32822,
+      "transport": "usb",
+      "buttonSemantics": "descriptor-ordered mask (bare-descriptor profile, identity fallback; six-button fighting layout, provisional until the hardware leg adjudicates; the same wire identity serves Saturn per the adapter's own descriptor notes)"
+    }
+  ],
+  "unsupportedProfiles": [],
+  "controllerLimit": 8,
+  "xinputSeatLimit": 4,
+  "leaseMilliseconds": 5000,
+  "feedback": "none in v1 — rumble decode (SwitchProPacker amplitude / descriptor output reports) is a recorded follow-up",
+  "sdkApiSurfaceUsed": [
+    "HMContext.LoadDefaultProfiles",
+    "HMContext.GetProfile",
+    "HMContext.CreateController",
+    "HMController.SubmitState",
+    "HMController.Dispose",
+    "HMProfile.Sticks",
+    "HMProfile.Triggers"
+  ],
+  "sdkApiSurfaceNeverCalled": [
+    "InstallDriver",
+    "certificate or signing surfaces",
+    "global device sweeps",
+    "registry provisioning beyond what CreateController itself performs"
+  ],
+  "driverMutationAuthority": "create-and-remove-session-owned-devices-through-the-pinned-sdk-only",
+  "driverPackageInstallAuthority": false,
+  "driverPackageUpdateAuthority": false,
+  "networkAuthority": false
+}

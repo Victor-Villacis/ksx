@@ -72,8 +72,8 @@
     "managedSourceCandidate": {
       "path": "s1_5d/contract.lock.json",
       "candidateRoot": "candidate",
-      "candidateFileCount": 12,
-      "compileItemCount": 11,
+      "candidateFileCount": 15,
+      "compileItemCount": 14,
       "embeddedResourceCount": 228,
       "sourceAndProjectXmlFrozen": true,
       "sourceVerifierBuildAuthorized": false,
@@ -216,6 +216,22 @@
           "Disable default compile and resource globs.",
           "Compile an explicit source allowlist.",
           "Embed only the hash-pinned profile catalog; never run PackResources or DownloadFile."
+        ]
+      },
+      {
+        "unit": "RuntimeXboxSeriesInputEncoder",
+        "requirements": [
+          "Encode a complete 17-byte Bluetooth input report with no report ID from the frozen source-derived xbox-series-xs-bt input contract.",
+          "Clear every report before encoding, reject non-finite axes, clamp finite axes to [0,1], truncate against each field's own logical maximum, and preserve the frozen 16-bit stick, 10-bit trigger, button-map, logical 1..8 hat and System Main Menu mappings.",
+          "Read every axis by physical semantic rather than by descriptor letter, because the host state mapper populates HMAxis with a DualSense-shaped assignment that disagrees with this descriptor on four of six axes."
+        ]
+      },
+      {
+        "unit": "RuntimeSwitchProInputEncoder",
+        "requirements": [
+          "Encode the 48-byte Switch Pro report-0x30 BODY from the frozen source-derived switch-pro input contract: three button bytes, two 12-bit little-nibble packed sticks with wire Y up-positive, a four-bit d-pad decomposition, and a zeroed IMU region, leaving the counter, battery and vibrator bytes for the driver's overlay.",
+          "Clear every body before encoding, reject non-finite axes, clamp finite axes to [0,1], scale sticks as 0x800 plus the truncated centred value times 0x600, and preserve the frozen semantic HMButton-to-wire mapping and digital ZL/ZR derivation.",
+          "Read every axis by physical semantic rather than by descriptor letter, and never synthesize the descriptor's 0x3F/0x31-0x33 reports or the driver-owned handshake \u2014 the driver frames and streams the body itself."
         ]
       }
     ]

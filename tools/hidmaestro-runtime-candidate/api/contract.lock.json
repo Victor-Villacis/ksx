@@ -6,7 +6,7 @@
   "files": [
     {
       "path": "../candidate-contract.json",
-      "sha256": "755050266EB93009EDB81F7E630B3A72298ED411EC03C2BE940056A03C549BA1"
+      "sha256": "042F8D45309AD71A79FF92FCAE6555D98026B862552E02AE008992CAF3CEEAA1"
     },
     {
       "path": "../profiles/catalog.lock.json",
@@ -18,7 +18,7 @@
     },
     {
       "path": "source-compilation.contract.json",
-      "sha256": "4174095C3264D311AFE3546778C669FADBF6063CD7AA479D050086882F19666A"
+      "sha256": "86D5FB011B0B64ACC06CCB934175A7A8EC91322F45436D7DBFC839DDC39D9052"
     }
   ]
 }

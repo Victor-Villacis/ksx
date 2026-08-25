@@ -62,6 +62,163 @@ pub trait MachineSource: Send + Sync {
         ))
     }
 
+    /// `ksx panel status` — passive encoder identity and HID capabilities.
+    ///
+    /// This read opens HID metadata handles with desired access zero and sends
+    /// no input, output, or feature report. Exact vendor mode and EEPROM chart
+    /// reads remain explicit unsupported/unverified states in the returned
+    /// view; a surface must not infer them from USB topology.
+    fn panel_status(&self, _spec: &PanelStatusSpec) -> Result<PanelStatusView, Refusal> {
+        Err(Refusal::not_here(
+            "inspecting panel encoder capabilities",
+            "run `ksx panel status`",
+        ))
+    }
+
+    /// `ksx panel chart` — explicitly read one supported encoder's complete
+    /// configuration image and decode the terminal assignments KSX knows.
+    ///
+    /// This is deliberately separate from [`Self::panel_status`]. Status is a
+    /// desired-access-zero inventory read; chart inspection performs the
+    /// vendor report transaction the user requested and therefore remains an
+    /// on-demand action on every surface.
+    fn panel_chart(&self, _spec: &PanelChartSpec) -> Result<PanelChartView, Refusal> {
+        Err(Refusal::not_here(
+            "reading the panel encoder chart",
+            "run `ksx panel chart`",
+        ))
+    }
+
+    /// Establish the machine-side authority required to turn a key emitted by
+    /// the currently staged input into a controller binding.
+    ///
+    /// Ordinary keyboards return `Ok(None)`. A recognized panel encoder must
+    /// instead return a guard which retains the same cross-process lease used
+    /// by panel programming until the caller has committed its staged bind.
+    /// Implementations validate the browser's last complete chart identity and
+    /// hash while acquiring that guard; a surface-side preflight alone cannot
+    /// close the race with a CLI hardware mutation.
+    fn panel_routing_guard(
+        &self,
+        _spec: &PanelRoutingAuthoritySpec,
+    ) -> Result<Option<Box<dyn PanelRoutingGuard>>, Refusal> {
+        // Providers without panel-programming support have no managed encoder
+        // class. Production's LocalMachine overrides this and independently
+        // classifies the selected board from its fresh machine inventory.
+        Ok(None)
+    }
+
+    /// `ksx panel backups` — immutable, lossless hardware restore points for
+    /// the selected physical encoder. Raw images stay in the backend store;
+    /// this view exposes identity and hashes, never EEPROM bytes.
+    fn panel_backups(&self, _spec: &PanelBackupsSpec) -> Result<PanelBackupsView, Refusal> {
+        Err(Refusal::not_here(
+            "listing panel encoder backups",
+            "run `ksx panel backups`",
+        ))
+    }
+
+    /// List portable, complete semantic hardware layouts saved by KSX.
+    ///
+    /// These are deliberately not raw EEPROM recovery images. A hardware
+    /// layout can be renamed, copied to another supported I-PAC and edited by
+    /// a surface; the raw transaction journal remains machine/board-bound.
+    fn panel_hardware_profiles(&self) -> Result<PanelHardwareProfilesView, Refusal> {
+        Err(Refusal::not_here(
+            "listing saved encoder layouts",
+            "open Encoder setup in KSX Studio",
+        ))
+    }
+
+    /// Create or update one complete portable encoder layout. Updates carry
+    /// the revision returned by [`Self::panel_hardware_profiles`] so an older
+    /// editor cannot overwrite a newer save.
+    fn panel_hardware_profile_save(
+        &self,
+        _spec: &PanelHardwareProfileSaveSpec,
+    ) -> Result<PanelHardwareProfileMutationView, Refusal> {
+        Err(Refusal::not_here(
+            "saving an encoder layout",
+            "open Encoder setup in KSX Studio",
+        ))
+    }
+
+    /// Delete one saved portable layout. This never clears or otherwise
+    /// changes the physical encoder; hardware programming is a separate,
+    /// reviewed [`Self::panel_program`] transaction.
+    fn panel_hardware_profile_delete(
+        &self,
+        _spec: &PanelHardwareProfileDeleteSpec,
+    ) -> Result<PanelHardwareProfileMutationView, Refusal> {
+        Err(Refusal::not_here(
+            "deleting a saved encoder layout",
+            "open Encoder setup in KSX Studio",
+        ))
+    }
+
+    /// Read-only `ksx panel program` planning. It explicitly reads the current
+    /// chart, but sends no write report and creates no backup. The returned
+    /// identity, profile, and hashes are the stale-write contract the apply
+    /// call must prove again immediately before packet zero.
+    fn panel_program_plan(
+        &self,
+        _spec: &PanelProgramSpec,
+    ) -> Result<PanelProgramPlanView, Refusal> {
+        Err(Refusal::not_here(
+            "planning a panel encoder change",
+            "run `ksx panel program` without `--yes`",
+        ))
+    }
+
+    /// Confirmed `ksx panel program --yes` transaction: re-read, stale-hash
+    /// guard, durable lossless backup, write, complete readback, byte verify.
+    fn panel_program(&self, _spec: &PanelProgramApplySpec) -> Result<PanelProgramOutcome, Refusal> {
+        Err(Refusal::not_here(
+            "programming the panel encoder",
+            "run `ksx panel program --yes`",
+        ))
+    }
+
+    /// Read-only reverse diff for one immutable hardware backup. Planning
+    /// explicitly reads the current chart but sends no write report.
+    fn panel_restore_plan(
+        &self,
+        _spec: &PanelRestoreSpec,
+    ) -> Result<PanelProgramPlanView, Refusal> {
+        Err(Refusal::not_here(
+            "planning a panel encoder restore",
+            "run `ksx panel restore` without `--yes`",
+        ))
+    }
+
+    /// Confirmed restore. The current chart is itself backed up before the
+    /// older image is written, and success still requires full readback.
+    fn panel_restore(&self, _spec: &PanelRestoreApplySpec) -> Result<PanelProgramOutcome, Refusal> {
+        Err(Refusal::not_here(
+            "restoring the panel encoder",
+            "run `ksx panel restore --yes`",
+        ))
+    }
+
+    /// Resolve one physical key observation from the daemon learner through
+    /// the same board inventory as [`Self::device_scan`], and return the exact
+    /// served values a subsequent [`Self::device_pick`] would use.
+    ///
+    /// The caller obtains `observed_instance` through the control source's
+    /// daemon-owned learner. That ownership is load-bearing on Windows: a
+    /// prepared panel can already be exclusively claimed by the daemon and a
+    /// second local observer cannot hear it. Resolution itself remains
+    /// observational: it does not suppress the key, capture the keyboard,
+    /// write configuration, or start a session. A surface may use the result
+    /// as the explicit human selection in its ordinary staging flow; the
+    /// stage writer remains the authority for that mutation.
+    fn device_identify(&self, _observed_instance: &str) -> Result<DeviceIdentifyView, Refusal> {
+        Err(Refusal::not_here(
+            "identifying a keyboard by key press",
+            "run `ksx setup`",
+        ))
+    }
+
     /// `ksx device pick` — write the `[[device]]` entry for one board.
     ///
     /// Not a claim, and the distinction is load-bearing
@@ -224,6 +381,19 @@ pub trait MachineSource: Send + Sync {
         ))
     }
 
+    /// **Remember the Studio's theme choice on a saved config.**
+    ///
+    /// A whole-config write, so it takes the same backup discipline every
+    /// other config writer here takes and returns what is on disk AFTER the
+    /// write. Unlike [`Self::set_blocking`] there is no session caveat: the
+    /// theme is read per page render, never by the daemon.
+    fn set_theme(&self, _spec: &ThemeSpec) -> Result<ThemeView, Refusal> {
+        Err(Refusal::not_here(
+            "remembering a theme choice",
+            "pick it on the Studio's configuration page",
+        ))
+    }
+
     /// **What ksx left behind**, compared against what Windows reports.
     ///
     /// Read-only: reads the receipt store, the device tree and the driver
@@ -259,23 +429,25 @@ pub trait MachineSource: Send + Sync {
         Err(Refusal::not_here("the driver report", "run `ksx doctor`"))
     }
 
-    /// **Can a virtual controller be created right now?** — the one slice of
-    /// [`Self::doctor`] a first run has to know before it offers to Play.
+    /// **Can the currently staged controller personas be materialized?**
     ///
-    /// Its own method, and not a field on [`DoctorView`], for two reasons that
-    /// both matter at the poll rate `/start` runs at: the full report walks the
-    /// Interception class filters, probes HIDMaestro, reads the CI policy and
-    /// takes a process snapshot, none of which this question needs; and
-    /// [`DoctorView`] is prose plus advice rows, while a page deciding what to
-    /// say before a button needs something it can branch on.
+    /// This is deliberately persona-aware. Xbox 360 and PlayStation slots
+    /// require ViGEmBus; DualSense requires HIDMaestro; an empty stage requires
+    /// neither. A universal "pad bus" check is wrong in both directions: it
+    /// warns a DualSense-only setup about a bus it never uses and paints a
+    /// green ViGEmBus result over a missing HIDMaestro package.
     ///
-    /// Read-only, exactly like the rest of this trait's reads: it queries the
-    /// registry and the service manager and installs nothing. `SURFACES.md` §3
-    /// keeps installing off the browser surface entirely, and this method is
-    /// what lets a page obey that rule while still telling the truth.
-    fn pad_bus(&self) -> Result<PadBusView, Refusal> {
+    /// The provider probes only the backends named by supported personas in
+    /// `staged`. The returned rows keep a machine prerequisite separate from a
+    /// runtime promise: HIDMaestro's exact package can be proved here, while
+    /// its protected host and controller endpoint are verified only when Play
+    /// starts. Read-only; no driver is installed or controller plugged.
+    fn controller_outputs(
+        &self,
+        _staged: &crate::StagedSetupView,
+    ) -> Result<ControllerOutputsView, Refusal> {
         Err(Refusal::not_here(
-            "the controller-driver state",
+            "the controller-output state",
             "run `ksx doctor`",
         ))
     }
@@ -478,6 +650,543 @@ pub struct DevicesView {
     /// Anything the report has to say out loud (both backends missing, an
     /// enumeration that failed) — rendered, never swallowed.
     pub notes: Vec<String>,
+}
+
+/// One passive `ksx panel status` request.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelStatusSpec {
+    /// Optional case-insensitive exact id/name/alias, or a unique substring.
+    /// `None` lists every physical USB board; it never selects the first one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+}
+
+/// Browser evidence for one encoder-sourced staged binding.
+///
+/// `device` is always supplied by the server from the daemon-held stage. The
+/// remaining optional values are the untrusted browser proof: they stay
+/// optional on the wire so omission reaches the backend as an authored
+/// refusal instead of becoming an Axum extractor error. A recognized encoder
+/// requires all of them; an ordinary keyboard ignores them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelRoutingAuthoritySpec {
+    pub device: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_instance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_board_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_chart_sha256: Option<String>,
+}
+
+/// Opaque lifetime token returned by [`MachineSource::panel_routing_guard`].
+///
+/// The value intentionally exposes no operation. Keeping it alive is the
+/// operation: production stores the machine-wide panel-programming lease in
+/// it, and dropping it releases that lease after the staged bind settles.
+pub trait PanelRoutingGuard {}
+
+/// `ksx panel status`, presentation-shaped for every surface.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelStatusView {
+    pub generated_at: String,
+    /// Backend-composed headline; surfaces copy it verbatim.
+    pub summary: String,
+    /// The safety boundary stated in words: metadata-only, no reports sent.
+    pub inspection_note: String,
+    /// Backend-composed availability line; surfaces keep the booleans for
+    /// branching but never translate their combinations into user prose.
+    pub access_detail: String,
+    /// Did the ordinary USB enumeration complete?
+    pub usb_available: bool,
+    /// Did SetupAPI return a present HID collection set?
+    pub hid_available: bool,
+    /// One row per physical USB board. An optional request filters this list
+    /// only after exact/unique resolution; it never picks an arbitrary row.
+    pub panels: Vec<PanelStatusRow>,
+    /// Enumeration-level failures and conservative interpretation notes.
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+/// One physical USB board and every interface/collection joined to it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelStatusRow {
+    pub board_id: String,
+    pub name: String,
+    /// Backend-composed VID/PID/release identity line.
+    pub identity: String,
+    pub vendor_id: u16,
+    pub product_id: u16,
+    /// Stable backend catalog id for a passively recognized encoder family.
+    /// Absence means KSX has only generic USB/HID facts for this board.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_id: Option<String>,
+    /// Human name owned by the same exact VID/PID family match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_label: Option<String>,
+    /// Raw USB `bcdDevice`; never presented as a parsed firmware version.
+    pub bcd_device: u16,
+    /// Friendly firmware wording supplied only by an exact, measured protocol
+    /// profile. A generic USB release is never guessed into a version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firmware_label: Option<String>,
+    /// Backend-owned explanation of how the firmware fact was (or was not)
+    /// established. Surfaces copy this instead of interpreting `bcdDevice`.
+    #[serde(default)]
+    pub firmware_detail: String,
+    /// Terminal capacity of the exact registered programming profile. This is
+    /// absent for recognized-but-unmeasured releases and unsupported boards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_terminal_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial: Option<String>,
+    /// Protocol driver id, or `unsupported` when no driver is registered.
+    pub driver: String,
+    pub driver_supported: bool,
+    pub driver_label: String,
+    /// `keyboard-compatible` | `unknown`.
+    pub observed_mode: String,
+    pub mode_detail: String,
+    pub observed_mode_label: String,
+    /// False in v1: topology is observed, no vendor mode query is issued.
+    pub mode_read_supported: bool,
+    /// Independently proven operations for the exact family/profile match.
+    /// Family recognition alone sets only `can_identify`.
+    #[serde(default)]
+    pub capabilities: PanelDriverCapabilities,
+    /// `protocol-unverified` | `unsupported-driver`.
+    pub chart_state: String,
+    /// Always false in v1. Kept explicit so absence cannot look like an empty
+    /// chart returned by hardware.
+    pub chart_attempted: bool,
+    pub chart_detail: String,
+    pub chart_label: String,
+    /// `candidate-unverified` | `not-found` | `ambiguous` | `unavailable` |
+    /// `unsupported-driver`.
+    pub configuration_collection_state: String,
+    /// The unique passive 5-byte IN/OUT candidate, when exactly one exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration_collection: Option<String>,
+    pub configuration_collection_detail: String,
+    /// One backend-composed next-step sentence; a surface does not interpret
+    /// protocol or topology codes to invent advice.
+    pub recommendation: String,
+    /// True when this exact physical board has an unresolved persistent write,
+    /// or when passive status cannot safely prove its machine-scoped journal
+    /// is settled (for example, a busy maintenance lease or invalid store).
+    /// No report handle is opened.
+    #[serde(default)]
+    pub programming_recovery_required: bool,
+    /// Backend-owned recovery wording for the exact board. Empty only when
+    /// the journal was read from a trusted store and proved settled.
+    #[serde(default)]
+    pub programming_recovery_detail: String,
+    pub interfaces: Vec<PanelInterfaceRow>,
+    pub hid_collections: Vec<PanelHidCollectionRow>,
+}
+
+/// Capability declaration for one panel status row.
+///
+/// These booleans are deliberately independent: recognizing a family does
+/// not authorize a report, and a future read-only driver must not accidentally
+/// inherit persistent-write support.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PanelDriverCapabilities {
+    pub can_identify: bool,
+    pub can_report_mode: bool,
+    pub can_read_chart: bool,
+    pub can_write_chart: bool,
+    pub write_is_persistent: bool,
+}
+
+/// One USB interface descriptor belonging to a physical board.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelInterfaceRow {
+    pub instance_id: String,
+    pub interface_number: u8,
+    pub interface_class: u8,
+    pub interface_subclass: u8,
+    pub interface_protocol: u8,
+    pub binding: String,
+    pub boot_keyboard: bool,
+    pub description: String,
+}
+
+/// Passive metadata for one HID top-level collection.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelHidCollectionRow {
+    pub instance_id: String,
+    /// `available` | `partial` | `unavailable`.
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor_id: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product_id: Option<u16>,
+    /// Raw HID `VersionNumber`; not interpreted as firmware.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_number: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_page: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_report_bytes: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_report_bytes: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_report_bytes: Option<u16>,
+    #[serde(default)]
+    pub errors: Vec<String>,
+}
+
+/// An explicit complete-chart read request. `backup` is a local, immutable
+/// restore point; it never alters the encoder.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelChartSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    #[serde(default)]
+    pub backup: bool,
+}
+
+/// One key/action value decoded from the board image.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelKeyValue {
+    /// Raw vendor action byte. Keeping it visible makes unknown values honest.
+    pub code: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    pub label: String,
+    pub supported: bool,
+}
+
+/// Decoded state of a terminal's shift-control byte.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PanelShiftState {
+    Disabled,
+    Enabled,
+    /// The raw byte is preserved but is not a known enabled/disabled value.
+    #[default]
+    Opaque,
+}
+
+/// One physical screw terminal in the supported encoder's chart.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelTerminalRow {
+    /// Stable hardware spelling, for example `1sw4`.
+    pub terminal_id: String,
+    pub terminal_label: String,
+    pub player: u8,
+    /// `direction` | `button` | `start` | `coin`.
+    pub kind: String,
+    pub normal: PanelKeyValue,
+    pub shifted: PanelKeyValue,
+    /// Lossless semantic state of the terminal's shift-control byte.
+    /// `is_shift == false` alone does not mean disabled: opaque values are
+    /// also false for that compatibility/display convenience field.
+    #[serde(default)]
+    pub shift_state: PanelShiftState,
+    /// Compatibility/display convenience. Mutation safety must use
+    /// `shift_state` and require `disabled` explicitly.
+    pub is_shift: bool,
+}
+
+/// One keyboard action KSX can both program and observe through its capture
+/// vocabulary. The backend owns this list; Studio must not invent key bytes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelKeyOption {
+    pub key: String,
+    pub label: String,
+    pub code: u16,
+    /// True only for the deliberately inert first-write test vocabulary.
+    /// Full-chart programming may use every served option after qualification.
+    #[serde(default)]
+    pub safe_for_qualification: bool,
+}
+
+/// Metadata for a durable raw-image backup. The bytes and filesystem path are
+/// intentionally absent from the surface contract.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelBackupRow {
+    pub backup_id: String,
+    pub label: String,
+    pub created_at: String,
+    pub board_fingerprint: String,
+    pub image_sha256: String,
+    pub image_bytes: usize,
+    pub reason: String,
+}
+
+/// A complete successful chart read, decoded without surrendering the raw
+/// image's authority. `programming_state` is `supervised`, `write-locked`, or
+/// `recovery-required`; a surface presents that state and never guesses around
+/// it. Writer qualification is separate from physical Teach: it proves this
+/// pinned EEPROM transport can write, read back and restore one harmless test
+/// assignment before a full chart is admitted.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelChartView {
+    pub generated_at: String,
+    pub summary: String,
+    pub board_id: String,
+    pub board_name: String,
+    pub board_fingerprint: String,
+    pub driver: String,
+    /// Versioned transport/image contract that admitted this exact board.
+    /// Apply and restore must echo it instead of trusting a stale selector.
+    pub protocol_profile: String,
+    pub image_sha256: String,
+    pub image_bytes: usize,
+    pub programming_state: String,
+    pub programming_detail: String,
+    /// First-live-write safety gate: `required`, `validation-written`,
+    /// `validation-recovery`, or `qualified`. A board is qualified only after
+    /// one normal-terminal write and a verified restore of that transaction's
+    /// exact safety backup. An interrupted test restore returns to `required`;
+    /// full-chart layouts remain blocked until a clean round trip completes.
+    pub qualification_state: String,
+    pub qualification_detail: String,
+    /// Exact restore point that completes `validation-written`, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification_restore_backup_id: Option<String>,
+    pub terminals: Vec<PanelTerminalRow>,
+    /// Backend-owned semantic preview of the deterministic four-player KSX
+    /// layout against this exact chart baseline. This is display/draft data,
+    /// not write authority: applying it still requires the ordinary reviewed
+    /// program plan bound to `image_sha256`. Opaque baseline shift bytes stay
+    /// opaque rather than being normalized by the preview.
+    #[serde(default)]
+    pub recommended_terminals: Vec<PanelTerminalRow>,
+    pub key_options: Vec<PanelKeyOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup: Option<PanelBackupRow>,
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelBackupsSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelBackupsView {
+    pub summary: String,
+    pub board_fingerprint: String,
+    pub backups: Vec<PanelBackupRow>,
+}
+
+/// One portable semantic assignment in a complete hardware layout.
+///
+/// `None` means Unassigned. Opaque vendor bytes cannot be represented here:
+/// they remain available only in the immutable raw recovery store. A profile
+/// contains exactly one row for every terminal in its `terminal_signature`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelHardwareTerminal {
+    pub terminal_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shifted_key: Option<String>,
+    #[serde(default)]
+    pub is_shift: bool,
+    /// Repeated assignments are accepted only when every participant carries
+    /// this explicit acknowledgement.
+    #[serde(default)]
+    pub allow_shared_key: bool,
+}
+
+/// A complete, portable I-PAC hardware layout owned by KSX.
+///
+/// Recovery images are intentionally a different type and store. This model
+/// carries only actions KSX can both program and observe, so it is safe to
+/// edit and apply to any board admitted by the same driver/profile/signature.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelHardwareProfile {
+    pub schema: String,
+    pub profile_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub driver: String,
+    pub protocol_profile: String,
+    /// Hash of the ordered physical-terminal vocabulary for this driver.
+    pub terminal_signature: String,
+    /// Opaque content revision used by update/delete stale-write guards.
+    pub revision: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub terminals: Vec<PanelHardwareTerminal>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelHardwareProfilesView {
+    pub summary: String,
+    pub config_root: String,
+    pub terminal_signature: String,
+    pub profiles: Vec<PanelHardwareProfile>,
+}
+
+/// Create when both identity fields are absent; update when both are present.
+/// The backend owns file ids, schema/profile metadata, timestamps and revision.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelHardwareProfileSaveSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub terminals: Vec<PanelHardwareTerminal>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelHardwareProfileDeleteSpec {
+    pub profile_id: String,
+    pub expected_revision: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelHardwareProfileMutationView {
+    /// `created` | `updated` | `unchanged` | `deleted`.
+    pub state: String,
+    pub summary: String,
+    pub profile_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<PanelHardwareProfile>,
+}
+
+/// One semantic terminal edit. An absent field is unchanged; an empty key
+/// spelling clears that action. The backend rejects any non-canonical key.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelTerminalEdit {
+    pub terminal_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shifted_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_shift: Option<bool>,
+    /// A repeated key on separate physical terminals is rejected unless every
+    /// participating edit marks that fan-in as deliberate. Mirrors collapse
+    /// to one terminal edit and never need this flag.
+    #[serde(default)]
+    pub allow_shared_key: bool,
+}
+
+/// Pure program-plan input. `layout` is `custom`, `blank`, or
+/// `canonical-four-player`; both complete layouts are allocated by the
+/// backend against the live baseline so opaque vendor bytes remain untouched.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelProgramSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    pub expected_base_sha256: String,
+    pub layout: String,
+    #[serde(default)]
+    pub edits: Vec<PanelTerminalEdit>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelTerminalDiffRow {
+    pub terminal_id: String,
+    pub terminal_label: String,
+    pub layer: String,
+    pub before: String,
+    pub after: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelByteDiffRow {
+    pub offset: usize,
+    pub before: u16,
+    pub after: u16,
+    pub meaning: String,
+}
+
+/// Exact review model for program and restore. It contains changed bytes, not
+/// an arbitrary raw image a browser could replay.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelProgramPlanView {
+    pub summary: String,
+    pub board_id: String,
+    pub board_name: String,
+    pub board_fingerprint: String,
+    /// Versioned transport/image contract used to read and plan this image.
+    pub protocol_profile: String,
+    pub base_sha256: String,
+    pub desired_sha256: String,
+    pub image_bytes: usize,
+    pub terminal_diff: Vec<PanelTerminalDiffRow>,
+    pub byte_diff: Vec<PanelByteDiffRow>,
+    pub preserved_byte_count: usize,
+    pub confirmation: String,
+    #[serde(default)]
+    pub blockers: Vec<String>,
+}
+
+/// Confirmed apply request. The backend recomputes the desired image from the
+/// semantic plan and proves both hashes; it never accepts raw report bytes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelProgramApplySpec {
+    pub program: PanelProgramSpec,
+    pub expected_desired_sha256: String,
+    /// Exact physical-board identity printed by the reviewed plan.
+    pub expected_board_fingerprint: String,
+    /// Exact protocol/image profile printed by the reviewed plan.
+    pub expected_protocol_profile: String,
+    #[serde(default)]
+    pub confirm: bool,
+    /// Explicit acknowledgement that this remains a supervised persistent
+    /// hardware write even after identity, profile, and hash checks pass.
+    #[serde(default)]
+    pub supervised: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelRestoreSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    pub backup_id: String,
+    pub expected_current_sha256: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelRestoreApplySpec {
+    pub restore: PanelRestoreSpec,
+    pub expected_desired_sha256: String,
+    /// Exact physical-board identity printed by the reviewed restore plan.
+    pub expected_board_fingerprint: String,
+    /// Exact protocol/image profile printed by the reviewed restore plan.
+    pub expected_protocol_profile: String,
+    #[serde(default)]
+    pub confirm: bool,
+    /// Explicit acknowledgement that this remains a supervised persistent
+    /// hardware write even when restoring a known-good backup.
+    #[serde(default)]
+    pub supervised: bool,
+}
+
+/// The only successful mutation result is `verified`. If packet delivery
+/// completed but readback did not match, state is `recovery-required` and the
+/// durable backup remains the road home.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelProgramOutcome {
+    pub state: String,
+    pub summary: String,
+    pub board_fingerprint: String,
+    pub expected_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_sha256: Option<String>,
+    pub backup: PanelBackupRow,
+    pub verified_at: String,
+    pub next_step: String,
 }
 
 /// One keyboard the capture layer can see.
@@ -1045,6 +1754,35 @@ fn device_health(device: &ConfiguredDevice) -> (String, &'static str) {
     }
 }
 
+/// Backend-owned role of one physical input board.
+///
+/// This is deliberately not inferred from a display name. A board can expose a
+/// boot-keyboard interface while physically being an arcade encoder, and the
+/// distinction decides which first-run workflow a surface offers. The backend
+/// assigns `panel-encoder` only from a catalogued exact hardware family; an
+/// unknown HID device remains a keyboard or other device until KSX has exact
+/// recognition evidence. Family recognition does not imply chart or write
+/// support; [`PanelDriverCapabilities`] carries those separately.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BoardRole {
+    #[default]
+    Keyboard,
+    PanelEncoder,
+    Other,
+}
+
+impl BoardRole {
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Keyboard => "keyboard",
+            Self::PanelEncoder => "panel-encoder",
+            Self::Other => "other",
+        }
+    }
+}
+
 /// One physical board: every interface that shares a composite parent
 /// (`crates/ksx-backend/src/device_scan.rs` `Board`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1064,6 +1802,12 @@ pub struct BoardRow {
     /// it merely HID? A mouse, an LED controller and a fan controller are all
     /// claimable; only this separates them from a panel.
     pub looks_like_a_keyboard: bool,
+    /// What this board physically is for first-run UX. An I-PAC remains a
+    /// `panel-encoder` even though keyboard mode makes MI_00 declare the boot
+    /// keyboard protocol. Surfaces render this verdict; they never match a
+    /// product label or VID/PID themselves.
+    #[serde(default)]
+    pub role: BoardRole,
     /// Is the keyboard interface bound to `winusb.sys` right now — i.e. off the
     /// Windows keyboard stack?
     pub claimed: bool,
@@ -1393,6 +2137,32 @@ pub struct BlockingView {
     /// different claims and a page that conflates them is lying at exactly the
     /// moment somebody is testing whether the change worked.
     pub session_running: bool,
+}
+
+/// What POST /setup/theme carries: a theme id, or empty for System.
+///
+/// The STUDIO validates the id against its own generated roster before this
+/// spec is built - the roster is a Studio artifact (its stylesheet ships the
+/// theme blocks), so neither this crate nor a machine provider can know it.
+/// A provider's only contract is "a short css-ident or empty", so a stale
+/// binary can never wedge the config with a name nothing can render.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeSpec {
+    /// A theme id (`dark`, `light`, ...) or empty = System (follow the OS).
+    pub theme: String,
+}
+
+/// What changing the theme did.
+///
+/// No `session_running` here, unlike [`BlockingView`]: the theme is read per
+/// page render, never by the daemon, so "saved" and "in effect" are the same
+/// claim - the next page load shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeView {
+    /// The value now on disk (empty = System).
+    pub theme: String,
+    /// Where the previous config went.
+    pub backup: Option<String>,
 }
 
 /// **What ksx left behind on this machine, and whether it matters.**
@@ -1990,6 +2760,16 @@ pub struct AutostartView {
     /// exact thing `FIRST-RUN.md` §6 says a surface must never be reduced to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stale_detail: Option<String>,
+    /// The scheduler state is readable, but this runtime deliberately cannot
+    /// change it. Managed source-tree QA uses this to show the installed
+    /// task's truth without offering to repoint that task at a disposable
+    /// executable.
+    #[serde(default)]
+    pub read_only: bool,
+    /// Why mutation is unavailable, phrased for a product surface rather than
+    /// as a failed action. `None` when [`read_only`](Self::read_only) is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only_detail: Option<String>,
 }
 
 /// What a first-run surface may ask of the logon task: on, or off.
@@ -2044,206 +2824,528 @@ pub struct AdviceRow {
 }
 
 // ---------------------------------------------------------------------------
-// The pad bus, as the one question a first run has to ask about it
+// Controller outputs required by the currently staged personas
 // ---------------------------------------------------------------------------
 
-/// Stable [`PadBusView::code`] values — `ksx doctor`'s own ViGEmBus advice
-/// codes, spelled once so a match arm cannot drift from the producer.
-///
-/// They are `ksx_platform::advice`'s, not a second vocabulary: the whole point
-/// of this view is that `/start` and `ksx doctor` reach the same verdict from
-/// the same function. `HEALTHY` is the one addition, because "doctor said
-/// nothing" needs a name on the wire.
-pub mod pad_bus_codes {
-    /// Doctor has nothing to say: registered, file present, service running.
-    pub const HEALTHY: &str = "";
-    /// No `ViGEmBus` service key at all.
-    pub const MISSING: &str = "vigembus-missing";
-    /// Service key registered, `ViGEmBus.sys` gone — a broken install.
-    pub const FILE_MISSING: &str = "vigembus-file-missing";
-    /// Installed, service not running. Usually a machine that has not rebooted.
-    pub const NOT_RUNNING: &str = "vigembus-not-running";
-    /// Installed, and Windows would not say what the service is doing.
-    pub const STATE_UNKNOWN: &str = "vigembus-state-unknown";
-    /// The read itself failed. **Not** a state of the driver (`SURFACES.md`
-    /// §1b) — a state of our knowledge.
-    pub const UNREADABLE: &str = "vigembus-unreadable";
+/// Stable states for [`ControllerOutputView::state`] and
+/// [`ControllerOutputsView::state`].
+pub mod controller_output_states {
+    /// Every required machine prerequisite was proved before Play.
+    pub const READY: &str = "ready";
+    /// A required prerequisite is known not to work.
+    pub const BLOCKED: &str = "blocked";
+    /// The prerequisite could not be read. This is never treated as missing.
+    pub const UNKNOWN: &str = "unknown";
+    /// The installed prerequisite was proved, but the endpoint can be verified
+    /// only as part of the transactional Play start.
+    pub const VERIFIED_ON_PLAY: &str = "verified-on-play";
 }
 
-/// **Can ksx create a virtual controller on this machine right now?**
+/// The exact board choice produced by a press-to-identify observation.
 ///
-/// One fact, because it is the one fact a first run cannot discover for
-/// itself: every persona ksx can plug goes out through ViGEmBus, so a machine
-/// without that driver stages perfectly, saves perfectly, and then plugs
-/// nothing. `docs/FIRST-RUN.md` §6 forbids exactly that shape — "a screen
-/// reports success while nothing works" — which is why this is stated *before*
-/// the button rather than diagnosed after it.
+/// No raw instance path leaves the trusted provider/handler boundary. The
+/// provider uses that path only to join the daemon observation to
+/// [`DeviceScanView`], then returns the same typed selector, alias and human
+/// label the picker already serves.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceIdentifyView {
+    /// `ksx_core::DeviceSelector` spelling chosen by the backend.
+    pub selector: String,
+    /// Existing configured alias, otherwise the board's safe alias hint.
+    pub alias: String,
+    /// Friendly board name for confirmation copy.
+    pub label: String,
+}
+
+/// Stable ViGEmBus codes shared with `ksx doctor`.
+pub mod vigem_output_codes {
+    pub const HEALTHY: &str = "";
+    pub const MISSING: &str = "vigembus-missing";
+    pub const FILE_MISSING: &str = "vigembus-file-missing";
+    pub const NOT_RUNNING: &str = "vigembus-not-running";
+    pub const STATE_UNKNOWN: &str = "vigembus-state-unknown";
+}
+
+/// The supported staged personas that require one output backend.
 ///
-/// **Three states, not two.** `blocked` and `unknown` are separate fields and
-/// never both set: "the driver is not installed" and "I could not find out" are
-/// different sentences, and a user acts on them differently (`SURFACES.md`
-/// §1b). The default value of this type is the `unknown` one, so a payload
-/// nobody filled in cannot read as a healthy bus.
+/// Canonical persona ids and customer labels are both carried so a surface
+/// never parses or relabels them. Requirements are unique per backend and are
+/// ordered by [`ksx_core::PadBackend::ALL`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControllerOutputRequirement {
+    pub backend: String,
+    pub label: String,
+    pub personas: Vec<String>,
+    pub persona_labels: Vec<String>,
+}
+
+/// Evidence for one output backend.
 ///
-/// **The verdict is not re-derived here.** [`Self::code`] is a `ksx doctor`
-/// advice code, produced by `ksx_platform::advice::vigembus_advice` — the same
-/// function `ksx doctor` prints from. What this type adds is the *wording* for
-/// somebody who has never opened a terminal, which is the audience `FIRST-RUN`
-/// is written about and not the audience `ksx doctor` is written for.
+/// `/start` carries only rows the current stage requires. Status/System also
+/// uses the HIDMaestro row as explicit system inventory; the persona list then
+/// names what that installed prerequisite can support without implying one is
+/// staged.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PadBusView {
-    /// The driver state was read at all. `false` means every judgement below
-    /// is "unknown", never "absent".
-    pub readable: bool,
-    /// One of [`pad_bus_codes`].
+pub struct ControllerOutputView {
+    pub backend: String,
+    pub label: String,
+    pub personas: Vec<String>,
+    pub persona_labels: Vec<String>,
+    /// A stable provider/detail code. ViGEm values are the same codes Doctor
+    /// emits; HIDMaestro has `hidmaestro-*` equivalents.
     pub code: String,
-    /// **Known** to be unable to plug a pad.
+    /// One of [`controller_output_states`].
+    pub state: String,
+    /// The machine prerequisite was read. `false` means unknown, never absent.
+    pub readable: bool,
+    /// Known unable to materialize the staged personas.
     pub blocked: bool,
-    /// Could not be determined — the read failed, the service state was
-    /// unreadable, or this build does not recognise the code it got back.
+    /// The read did not produce a verdict.
     pub unknown: bool,
-    /// The driver file's version, when one could be read.
+    /// The installed prerequisite is present, but the endpoint is verified as
+    /// part of Play. This is intentionally neither green nor red.
+    pub verified_on_play: bool,
+    /// Driver/package file version when the probe supplied one.
     pub version: Option<String>,
-    /// What is true, in a first-run user's words.
     pub line: String,
-    /// What to do about it, **no-terminal route first**. Empty when there is
-    /// nothing to do. `FIRST-RUN.md` §6: "the only way out of a mistake is a
-    /// shell command" is on the list of things that must never happen, so the
-    /// shell command is named second and never alone.
+    /// No-terminal route first. Empty when there is no action to take.
     pub remedy: String,
 }
 
-/// The honest zero value: nothing has been read, so nothing is known.
-///
-/// Hand-written rather than derived because a derived `Default` would be
-/// `readable: false` with an empty `line` and `unknown: false` — a view that
-/// claims nothing is wrong while having looked at nothing, which is the exact
-/// failure this type exists to prevent.
-impl Default for PadBusView {
+/// The honest zero value: no provider answered, so no output is known ready.
+impl Default for ControllerOutputView {
     fn default() -> Self {
-        Self::unreadable("the controller-driver state has not been read")
+        Self {
+            backend: "unknown".to_owned(),
+            label: "Controller output".to_owned(),
+            personas: Vec::new(),
+            persona_labels: Vec::new(),
+            code: "controller-output-unreadable".to_owned(),
+            state: controller_output_states::UNKNOWN.to_owned(),
+            readable: false,
+            blocked: false,
+            unknown: true,
+            verified_on_play: false,
+            version: None,
+            line: "The controller-output prerequisite has not been read. This does not mean a \
+                   driver is missing."
+                .to_owned(),
+            remedy: NO_OUTPUT_READ_REMEDY.to_owned(),
+        }
     }
 }
 
-impl PadBusView {
-    /// The read failed or never happened.
-    pub fn unreadable(reason: impl std::fmt::Display) -> Self {
-        Self {
-            readable: false,
-            code: pad_bus_codes::UNREADABLE.to_owned(),
-            blocked: false,
-            unknown: true,
-            version: None,
-            line: format!(
-                "Whether the ViGEmBus controller driver is installed could not be determined \
-                 ({reason}). That is not the same as it being missing — nothing here knows \
-                 either way."
-            ),
-            remedy: NO_BUS_READ_REMEDY.to_owned(),
-        }
-    }
-
-    /// Build the view from `ksx doctor`'s verdict.
-    ///
-    /// `code` is the first advice code `vigembus_advice` returned, or
-    /// [`pad_bus_codes::HEALTHY`] when it returned none. An unrecognised code
-    /// lands in [`Self::unknown`] with the code quoted: a producer that grew a
-    /// state this build has never heard of has said something, and rendering
-    /// that as "all fine" would be inventing an answer.
-    pub fn from_doctor(code: &str, version: Option<String>) -> Self {
-        let base = Self {
-            readable: true,
-            code: code.to_owned(),
-            blocked: false,
-            unknown: false,
-            version: version.clone(),
-            line: String::new(),
-            remedy: String::new(),
-        };
+impl ControllerOutputView {
+    /// Build the ViGEm row from Doctor's own stable verdict.
+    pub fn vigem(
+        requirement: ControllerOutputRequirement,
+        code: &str,
+        version: Option<String>,
+    ) -> Self {
+        let subject = requirement_subject(&requirement);
+        let base = Self::base(requirement, code, version.clone());
         match code {
-            pad_bus_codes::HEALTHY => Self {
+            vigem_output_codes::HEALTHY => Self {
+                state: controller_output_states::READY.to_owned(),
+                readable: true,
                 line: format!(
-                    "The ViGEmBus controller driver{} is installed and running, so ksx can \
-                     create virtual controllers on this machine.",
-                    match &version {
-                        Some(v) => format!(" (v{v})"),
-                        None => String::new(),
-                    }
+                    "ViGEmBus{} is installed and running for {subject}.",
+                    version
+                        .as_ref()
+                        .map(|value| format!(" v{value}"))
+                        .unwrap_or_default()
                 ),
                 ..base
             },
-            pad_bus_codes::MISSING => Self {
+            vigem_output_codes::MISSING => Self {
+                state: controller_output_states::BLOCKED.to_owned(),
+                readable: true,
                 blocked: true,
-                line: "The ViGEmBus controller driver is NOT installed. It is the driver that \
-                       makes a virtual controller exist, so until it is there ksx can stage and \
-                       save a setup but cannot plug a single pad — and no game will see one."
-                    .to_owned(),
-                remedy: INSTALL_BUS_REMEDY.to_owned(),
+                line: format!(
+                    "ViGEmBus is not installed, so ksx cannot create {subject} on this machine."
+                ),
+                remedy: INSTALL_VIGEM_REMEDY.to_owned(),
                 ..base
             },
-            pad_bus_codes::FILE_MISSING => Self {
+            vigem_output_codes::FILE_MISSING => Self {
+                state: controller_output_states::BLOCKED.to_owned(),
+                readable: true,
                 blocked: true,
-                line: "The ViGEmBus controller driver is registered with Windows but its driver \
-                       file is gone — a broken install. ksx cannot plug a pad through it."
-                    .to_owned(),
-                remedy: INSTALL_BUS_REMEDY.to_owned(),
+                line: format!(
+                    "ViGEmBus is registered with Windows but its driver file is gone, so ksx \
+                     cannot create {subject}."
+                ),
+                remedy: INSTALL_VIGEM_REMEDY.to_owned(),
                 ..base
             },
-            pad_bus_codes::NOT_RUNNING => Self {
+            vigem_output_codes::NOT_RUNNING => Self {
+                state: controller_output_states::BLOCKED.to_owned(),
+                readable: true,
                 blocked: true,
-                line: "The ViGEmBus controller driver is installed but its service is not \
-                       running, so nothing can be plugged through it yet. A machine that has \
-                       just installed the driver and not restarted looks exactly like this."
-                    .to_owned(),
-                remedy: "Restart Windows. If it is still stopped afterwards, run the ksx \
-                         installer again and leave \"Install the ViGEmBus controller driver\" \
-                         ticked."
+                line: format!(
+                    "ViGEmBus is installed but not running, so ksx cannot create {subject} yet."
+                ),
+                remedy: "Restart Windows. If ViGEmBus is still stopped afterwards, run the ksx \
+                         installer again and leave the ViGEmBus controller-driver task selected."
                     .to_owned(),
                 ..base
             },
-            pad_bus_codes::STATE_UNKNOWN => Self {
+            vigem_output_codes::STATE_UNKNOWN => Self {
+                state: controller_output_states::UNKNOWN.to_owned(),
+                readable: true,
                 unknown: true,
-                line: "The ViGEmBus controller driver is installed, but Windows would not say \
-                       whether its service is running — so whether a pad can be plugged is not \
-                       known from here."
-                    .to_owned(),
-                remedy: NO_BUS_READ_REMEDY.to_owned(),
+                line: format!(
+                    "ViGEmBus is installed, but Windows did not report whether it is running, so \
+                     readiness for {subject} is unknown."
+                ),
+                remedy: NO_OUTPUT_READ_REMEDY.to_owned(),
                 ..base
             },
             other => Self {
+                state: controller_output_states::UNKNOWN.to_owned(),
+                readable: true,
                 unknown: true,
                 line: format!(
-                    "The controller driver reported a state this build does not recognise \
-                     (\"{other}\"), so whether a pad can be plugged is not known from here."
+                    "ViGEmBus reported an unrecognized state (\"{other}\"), so readiness for \
+                     {subject} is unknown."
                 ),
-                remedy: NO_BUS_READ_REMEDY.to_owned(),
+                remedy: NO_OUTPUT_READ_REMEDY.to_owned(),
                 ..base
             },
         }
     }
 
-    /// Nothing is wrong and nothing needs saying before the button.
-    pub fn silent(&self) -> bool {
-        !self.blocked && !self.unknown
+    /// Build the HIDMaestro row from the exact package/hash probe Doctor uses.
+    ///
+    /// `installed` proves the pinned package prerequisite. It does not promise
+    /// that a virtual DualSense already exists: the protected host handshake
+    /// and endpoint creation are intentionally transactional with Play.
+    pub fn hidmaestro(
+        requirement: ControllerOutputRequirement,
+        installed: bool,
+        partial: bool,
+        version: Option<String>,
+    ) -> Self {
+        let subject = requirement_subject(&requirement);
+        let base = Self::base(
+            requirement,
+            if installed {
+                "hidmaestro-verified-on-play"
+            } else if partial {
+                "hidmaestro-partial"
+            } else {
+                "hidmaestro-missing"
+            },
+            version.clone(),
+        );
+        if installed {
+            return Self {
+                state: controller_output_states::VERIFIED_ON_PLAY.to_owned(),
+                readable: true,
+                verified_on_play: true,
+                line: format!(
+                    "The exact HIDMaestro package{} required for {subject} is installed. ksx \
+                     verifies the protected controller endpoint when Play starts; no controller \
+                     is running yet.",
+                    version
+                        .as_ref()
+                        .map(|value| format!(" v{value}"))
+                        .unwrap_or_default()
+                ),
+                ..base
+            };
+        }
+        if partial {
+            return Self {
+                state: controller_output_states::BLOCKED.to_owned(),
+                readable: true,
+                blocked: true,
+                line: format!(
+                    "The HIDMaestro installation is incomplete or does not match the pinned \
+                     package, so ksx cannot create {subject}."
+                ),
+                remedy: INSTALL_HIDMAESTRO_REMEDY.to_owned(),
+                ..base
+            };
+        }
+        Self {
+            state: controller_output_states::BLOCKED.to_owned(),
+            readable: true,
+            blocked: true,
+            line: format!(
+                "HIDMaestro is not installed, so ksx cannot create {subject} on this machine."
+            ),
+            remedy: INSTALL_HIDMAESTRO_REMEDY.to_owned(),
+            ..base
+        }
+    }
+
+    /// Machine-inventory view for the one supported HIDMaestro lane.
+    ///
+    /// Unlike [`ControllerOutputsView::requirements`], this does not imply a
+    /// DualSense is staged. It names the backend's supported personas because
+    /// the Status/System panel inventories installed plumbing, while retaining
+    /// the same package-versus-endpoint distinction the staged Play gate uses.
+    pub fn hidmaestro_inventory(installed: bool, partial: bool, version: Option<String>) -> Self {
+        Self::hidmaestro(
+            output_requirement(ksx_core::PadBackend::HidMaestro, |_| true),
+            installed,
+            partial,
+            version,
+        )
+    }
+
+    /// The Status/System inventory could not read the HIDMaestro prerequisite.
+    /// This remains unknown rather than being collapsed into "not installed".
+    pub fn hidmaestro_inventory_unreadable(reason: impl std::fmt::Display) -> Self {
+        Self::unreadable(
+            output_requirement(ksx_core::PadBackend::HidMaestro, |_| true),
+            reason,
+        )
+    }
+
+    /// A provider refusal is a state of knowledge, not a missing driver.
+    pub fn unreadable(
+        requirement: ControllerOutputRequirement,
+        reason: impl std::fmt::Display,
+    ) -> Self {
+        let subject = requirement_subject(&requirement);
+        let code = format!("{}-unreadable", requirement.backend);
+        Self {
+            state: controller_output_states::UNKNOWN.to_owned(),
+            readable: false,
+            unknown: true,
+            line: format!(
+                "The output required by {subject} could not be checked ({reason}). That is not \
+                 the same as its driver being missing."
+            ),
+            remedy: NO_OUTPUT_READ_REMEDY.to_owned(),
+            ..Self::base(requirement, &code, None)
+        }
+    }
+
+    fn base(requirement: ControllerOutputRequirement, code: &str, version: Option<String>) -> Self {
+        Self {
+            backend: requirement.backend,
+            label: requirement.label,
+            personas: requirement.personas,
+            persona_labels: requirement.persona_labels,
+            code: code.to_owned(),
+            state: String::new(),
+            readable: false,
+            blocked: false,
+            unknown: false,
+            verified_on_play: false,
+            version,
+            line: String::new(),
+            remedy: String::new(),
+        }
     }
 }
 
-/// The remedy for every state where the bus is known to be unusable.
+/// Readiness of exactly the output backends required by the current stage.
 ///
-/// The installer comes first and the command second, on purpose: the installer
-/// is elevated already, it is the one moment the user has consented to an
-/// administrator token, and it is a route that needs no terminal. The command
-/// is named anyway because someone who has one should not have to guess it.
-pub const INSTALL_BUS_REMEDY: &str =
-    "Run the ksx installer again and leave \"Install the ViGEmBus controller driver\" ticked — \
-     the driver is bundled with ksx and nothing is downloaded. From a terminal opened as \
-     administrator, `ksx install-drivers --yes` does the same thing.";
+/// `ready` is deliberately stricter than `can_play`: HIDMaestro's exact
+/// package check yields `verified_on_play`, not a false green `ready`, while
+/// Play may still proceed and perform the authoritative host/endpoint check.
+/// A provider read that failed is not evidence that the driver is missing, but
+/// it still cannot license the Play button. A successful `verified-on-play`
+/// preflight may proceed to the authoritative session transaction.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControllerOutputsView {
+    pub required: Vec<ControllerOutputView>,
+    /// Aggregate state, using blocked > unknown > verified-on-play > ready.
+    pub state: String,
+    pub readable: bool,
+    pub ready: bool,
+    pub can_play: bool,
+    pub blocked: bool,
+    pub unknown: bool,
+    pub verified_on_play: bool,
+    /// All required row facts, preserved in backend order for the existing
+    /// scalar banner and non-JavaScript first paint.
+    pub line: String,
+    /// Unique row remedies in backend order.
+    pub remedy: String,
+}
 
-/// The remedy when the answer itself is unknown. It cannot promise a fix,
-/// because it does not know there is anything to fix.
-pub const NO_BUS_READ_REMEDY: &str =
-    "Nothing needs doing in advance. If Play starts and no controller appears in your game, the \
-     Start menu's \"ksx (advanced) > driver check\" prints what this machine really has.";
+impl Default for ControllerOutputsView {
+    fn default() -> Self {
+        Self {
+            required: Vec::new(),
+            state: controller_output_states::UNKNOWN.to_owned(),
+            readable: false,
+            ready: false,
+            can_play: false,
+            blocked: false,
+            unknown: true,
+            verified_on_play: false,
+            line: "The controller outputs required by this setup have not been read. This does \
+                   not mean a driver is missing."
+                .to_owned(),
+            remedy: NO_OUTPUT_READ_REMEDY.to_owned(),
+        }
+    }
+}
+
+impl ControllerOutputsView {
+    /// Which output stacks this staged value actually requires. Unsupported
+    /// personas cannot enter a valid stage and are intentionally excluded if a
+    /// malformed external fixture constructs one by hand.
+    pub fn requirements(staged: &crate::StagedSetupView) -> Vec<ControllerOutputRequirement> {
+        if !staged.reachable {
+            return Vec::new();
+        }
+        ksx_core::PadBackend::ALL
+            .iter()
+            .filter_map(|backend| {
+                let requirement = output_requirement(*backend, |persona| {
+                    staged
+                        .slots
+                        .iter()
+                        .any(|slot| slot.persona == persona.as_str())
+                });
+                (!requirement.personas.is_empty()).then_some(requirement)
+            })
+            .collect()
+    }
+
+    /// Compose aggregate flags and copy from provider rows.
+    pub fn from_required(required: Vec<ControllerOutputView>) -> Self {
+        if required.is_empty() {
+            return Self::not_required();
+        }
+        let blocked = required.iter().any(|row| row.blocked);
+        let unknown = required.iter().any(|row| row.unknown);
+        let verified_on_play = required.iter().any(|row| row.verified_on_play);
+        let state = if blocked {
+            controller_output_states::BLOCKED
+        } else if unknown {
+            controller_output_states::UNKNOWN
+        } else if verified_on_play {
+            controller_output_states::VERIFIED_ON_PLAY
+        } else {
+            controller_output_states::READY
+        };
+        let line = required
+            .iter()
+            .map(|row| row.line.trim())
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut remedies = Vec::new();
+        for row in &required {
+            let remedy = row.remedy.trim();
+            if !remedy.is_empty() && !remedies.iter().any(|known| known == &remedy) {
+                remedies.push(remedy);
+            }
+        }
+        // `remedies` borrows the rows in `required`; finish the aggregate
+        // sentence before moving those rows into the returned view.
+        let remedy = remedies.join(" ");
+        Self {
+            readable: required.iter().all(|row| row.readable),
+            ready: state == controller_output_states::READY,
+            can_play: !blocked && !unknown,
+            blocked,
+            unknown,
+            verified_on_play,
+            required,
+            state: state.to_owned(),
+            line,
+            remedy,
+        }
+    }
+
+    /// No staged supported persona means no output prerequisite. This is a
+    /// successful empty requirement set, not an unread machine.
+    pub fn not_required() -> Self {
+        Self {
+            required: Vec::new(),
+            state: controller_output_states::READY.to_owned(),
+            readable: true,
+            ready: true,
+            can_play: true,
+            blocked: false,
+            unknown: false,
+            verified_on_play: false,
+            line: "No controller output is required until a supported controller is staged."
+                .to_owned(),
+            remedy: String::new(),
+        }
+    }
+
+    /// Preserve the stage's requirements when the provider read refuses.
+    pub fn unreadable(staged: &crate::StagedSetupView, reason: impl std::fmt::Display) -> Self {
+        let requirements = Self::requirements(staged);
+        if requirements.is_empty() {
+            return if staged.reachable && staged.slots.is_empty() {
+                Self::not_required()
+            } else {
+                Self::default()
+            };
+        }
+        let reason = reason.to_string();
+        Self::from_required(
+            requirements
+                .into_iter()
+                .map(|requirement| ControllerOutputView::unreadable(requirement, &reason))
+                .collect(),
+        )
+    }
+
+    /// Nothing needs saying only when no backend is required or every required
+    /// backend is fully preflighted. `verified-on-play` remains visible because
+    /// hiding it would turn a deferred check into a green promise.
+    pub fn silent(&self) -> bool {
+        self.state == controller_output_states::READY
+    }
+}
+
+fn output_requirement(
+    backend: ksx_core::PadBackend,
+    include: impl Fn(ksx_core::Persona) -> bool,
+) -> ControllerOutputRequirement {
+    let personas: Vec<ksx_core::Persona> = ksx_core::Persona::ALL
+        .iter()
+        .copied()
+        .filter(|persona| persona.can_plug() && persona.backend() == backend)
+        .filter(|persona| include(*persona))
+        .collect();
+    ControllerOutputRequirement {
+        backend: backend.as_str().to_owned(),
+        label: backend.label().to_owned(),
+        personas: personas
+            .iter()
+            .map(|persona| persona.as_str().to_owned())
+            .collect(),
+        persona_labels: personas
+            .iter()
+            .map(|persona| persona.label().to_owned())
+            .collect(),
+    }
+}
+
+fn requirement_subject(requirement: &ControllerOutputRequirement) -> String {
+    match requirement.persona_labels.as_slice() {
+        [] => "controller support".to_owned(),
+        [only] => format!("{only} controllers"),
+        many => format!("{} controllers", many.join(" and ")),
+    }
+}
+
+pub const INSTALL_VIGEM_REMEDY: &str =
+    "Run the ksx installer again and leave the ViGEmBus controller-driver task selected. The \
+     driver is bundled with ksx; `ksx install-drivers --yes` from an administrator terminal is \
+     the advanced equivalent.";
+
+pub const INSTALL_HIDMAESTRO_REMEDY: &str =
+    "Run the ksx installer again and leave the HIDMaestro DualSense-driver task selected. It \
+     uses the pinned official package and may require internet access.";
+
+pub const NO_OUTPUT_READ_REMEDY: &str =
+    "Nothing needs to be installed based on this message alone. Reopen ksx to retry; the Start \
+     menu's \"ksx (advanced) > driver check\" can show the detailed machine report.";
 
 // ---------------------------------------------------------------------------
 // First run, and the config in/out that has no path in it
@@ -2297,10 +3399,26 @@ pub struct SetupView {
     /// ways.
     #[serde(default)]
     pub blocking_options: Vec<crate::stage::BlockingOption>,
+    /// **The Studio theme id currently on disk**, or empty for System (follow
+    /// the OS light/dark choice). The Studio owns the roster of valid ids and
+    /// sanitizes at render time; this view reports what the config SAYS, so
+    /// the setup page can show a choice the build does not ship instead of
+    /// silently pretending it was never made.
+    #[serde(default)]
+    pub theme: String,
     /// What opposite directions can be made to do, per slot. Served for the
     /// same reason the blocking answers are: the wording is the domain's.
     #[serde(default)]
     pub socd_options: Vec<crate::stage::SocdOption>,
+    /// Controller identities this build knows, with the same build-capability
+    /// flags, immutable output backend and persona-specific ceiling the guided
+    /// `/start` flow uses. The setup surface renders only
+    /// entries whose [`crate::stage::PersonaOption::can_plug`] is true; keeping
+    /// the full roster here means every surface starts from the same answer and
+    /// a newly implemented persona cannot be forgotten by this maintenance
+    /// screen.
+    #[serde(default = "default_persona_options")]
+    pub persona_options: Vec<crate::stage::PersonaOption>,
     /// **Support detail, never an interface.** A person setting a cabinet up
     /// does not operate on a directory — they import, export, and follow the
     /// steps. This is here so a bug report can quote it, and it belongs in
@@ -2342,6 +3460,10 @@ fn default_max_slots() -> u8 {
     ksx_core::MAX_SLOTS
 }
 
+fn default_persona_options() -> Vec<crate::stage::PersonaOption> {
+    crate::stage::PersonaOption::roster()
+}
+
 impl Default for SetupView {
     /// Hand-written for one field: `max_slots` defaults to the ceiling this
     /// build really has. A derived `Default` would hand every caller a zero,
@@ -2353,7 +3475,9 @@ impl Default for SetupView {
             // would render the question as unanswerable rather than unread.
             blocking: String::new(),
             blocking_options: crate::stage::BlockingOption::roster(),
+            theme: String::new(),
             socd_options: crate::stage::SocdOption::roster(),
+            persona_options: default_persona_options(),
             config_root: String::new(),
             config_exists: false,
             devices: Vec::new(),
@@ -2565,6 +3689,62 @@ mod tests {
             ("ksx devices", Nothing.devices().unwrap_err()),
             ("ksx device scan", Nothing.device_scan().unwrap_err()),
             (
+                "ksx panel status",
+                Nothing
+                    .panel_status(&PanelStatusSpec::default())
+                    .unwrap_err(),
+            ),
+            (
+                "ksx panel chart",
+                Nothing.panel_chart(&PanelChartSpec::default()).unwrap_err(),
+            ),
+            (
+                "ksx panel backups",
+                Nothing
+                    .panel_backups(&PanelBackupsSpec::default())
+                    .unwrap_err(),
+            ),
+            (
+                "Encoder setup",
+                Nothing.panel_hardware_profiles().unwrap_err(),
+            ),
+            (
+                "Encoder setup",
+                Nothing
+                    .panel_hardware_profile_save(&PanelHardwareProfileSaveSpec::default())
+                    .unwrap_err(),
+            ),
+            (
+                "Encoder setup",
+                Nothing
+                    .panel_hardware_profile_delete(&PanelHardwareProfileDeleteSpec::default())
+                    .unwrap_err(),
+            ),
+            (
+                "ksx panel program",
+                Nothing
+                    .panel_program_plan(&PanelProgramSpec::default())
+                    .unwrap_err(),
+            ),
+            (
+                "ksx panel program",
+                Nothing
+                    .panel_program(&PanelProgramApplySpec::default())
+                    .unwrap_err(),
+            ),
+            (
+                "ksx panel restore",
+                Nothing
+                    .panel_restore_plan(&PanelRestoreSpec::default())
+                    .unwrap_err(),
+            ),
+            (
+                "ksx panel restore",
+                Nothing
+                    .panel_restore(&PanelRestoreApplySpec::default())
+                    .unwrap_err(),
+            ),
+            (
                 "ksx device pick",
                 Nothing.device_pick(&DevicePickSpec::default()).unwrap_err(),
             ),
@@ -2651,6 +3831,174 @@ mod tests {
     }
 
     #[test]
+    fn panel_apply_contract_requires_reviewed_identity_and_profile_and_defaults_unsupervised() {
+        let obsolete_program = serde_json::json!({
+            "program": {
+                "expected_base_sha256": "A".repeat(64),
+                "layout": "canonical-four-player",
+                "edits": []
+            },
+            "expected_desired_sha256": "B".repeat(64),
+            "confirm": true
+        });
+        assert!(
+            serde_json::from_value::<PanelProgramApplySpec>(obsolete_program).is_err(),
+            "an older apply request without its reviewed board/profile must fail closed"
+        );
+
+        let program: PanelProgramApplySpec = serde_json::from_value(serde_json::json!({
+            "program": {
+                "expected_base_sha256": "A".repeat(64),
+                "layout": "canonical-four-player",
+                "edits": []
+            },
+            "expected_desired_sha256": "B".repeat(64),
+            "expected_board_fingerprint": "D209:0430:bcd0056:MI_02:fixture",
+            "expected_protocol_profile": "ipac4-pac256-v1",
+            "confirm": true
+        }))
+        .unwrap();
+        assert_eq!(
+            program.expected_board_fingerprint,
+            "D209:0430:bcd0056:MI_02:fixture"
+        );
+        assert_eq!(program.expected_protocol_profile, "ipac4-pac256-v1");
+        assert!(program.confirm);
+        assert!(
+            !program.supervised,
+            "omitting the acknowledgement must never imply supervision"
+        );
+
+        let restore: PanelRestoreApplySpec = serde_json::from_value(serde_json::json!({
+            "restore": {
+                "backup_id": "backup-20260823",
+                "expected_current_sha256": "C".repeat(64)
+            },
+            "expected_desired_sha256": "D".repeat(64),
+            "expected_board_fingerprint": "D209:0430:bcd0056:MI_02:fixture",
+            "expected_protocol_profile": "ipac4-pac256-v1",
+            "confirm": true,
+            "supervised": true
+        }))
+        .unwrap();
+        assert!(restore.confirm && restore.supervised);
+    }
+
+    #[test]
+    fn panel_terminal_shift_state_never_collapses_opaque_into_disabled() {
+        let disabled = PanelTerminalRow {
+            shift_state: PanelShiftState::Disabled,
+            is_shift: false,
+            ..Default::default()
+        };
+        let opaque = PanelTerminalRow {
+            // The compatibility boolean is deliberately identical. The
+            // explicit state is the mutation-safety contract.
+            shift_state: PanelShiftState::Opaque,
+            is_shift: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_value(disabled).unwrap()["shift_state"],
+            "disabled"
+        );
+        assert_eq!(
+            serde_json::to_value(opaque).unwrap()["shift_state"],
+            "opaque"
+        );
+        assert_eq!(PanelShiftState::default(), PanelShiftState::Opaque);
+        let older: PanelTerminalRow = serde_json::from_value(serde_json::json!({
+            "terminal_id": "1sw4",
+            "terminal_label": "Player 1 · Button 4",
+            "player": 1,
+            "kind": "button",
+            "normal": { "code": 13, "key": "J", "label": "J", "supported": true },
+            "shifted": { "code": 0, "label": "Unassigned", "supported": true },
+            "is_shift": false
+        }))
+        .unwrap();
+        assert_eq!(
+            older.shift_state,
+            PanelShiftState::Opaque,
+            "an older false-only row must fail closed rather than imply disabled"
+        );
+
+        let older_key: PanelKeyOption = serde_json::from_value(serde_json::json!({
+            "key": "Escape",
+            "label": "Escape",
+            "code": 41
+        }))
+        .unwrap();
+        assert!(
+            !older_key.safe_for_qualification,
+            "missing first-write policy metadata must fail closed"
+        );
+
+        let mut older_chart = serde_json::to_value(PanelChartView::default()).unwrap();
+        older_chart
+            .as_object_mut()
+            .unwrap()
+            .remove("recommended_terminals");
+        let older_chart: PanelChartView = serde_json::from_value(older_chart).unwrap();
+        assert!(
+            older_chart.recommended_terminals.is_empty(),
+            "older chart responses remain readable, but cannot invent a backend-owned recommendation"
+        );
+    }
+
+    #[test]
+    fn older_panel_status_rows_leave_catalog_and_profile_facts_unknown() {
+        let mut older = serde_json::to_value(PanelStatusRow::default()).unwrap();
+        let object = older.as_object_mut().unwrap();
+        object.remove("family_id");
+        object.remove("family_label");
+        object.remove("capabilities");
+        object.remove("firmware_label");
+        object.remove("firmware_detail");
+        object.remove("profile_terminal_count");
+        object.remove("programming_recovery_required");
+        object.remove("programming_recovery_detail");
+
+        let decoded: PanelStatusRow = serde_json::from_value(older).unwrap();
+        assert_eq!(decoded.family_id, None);
+        assert_eq!(decoded.family_label, None);
+        assert_eq!(decoded.capabilities, PanelDriverCapabilities::default());
+        assert_eq!(decoded.firmware_label, None);
+        assert!(decoded.firmware_detail.is_empty());
+        assert_eq!(decoded.profile_terminal_count, None);
+        assert!(!decoded.programming_recovery_required);
+        assert!(decoded.programming_recovery_detail.is_empty());
+
+        let partial: PanelDriverCapabilities = serde_json::from_value(serde_json::json!({
+            "can_identify": true
+        }))
+        .unwrap();
+        assert!(partial.can_identify);
+        assert!(!partial.can_report_mode);
+        assert!(!partial.can_read_chart);
+        assert!(!partial.can_write_chart);
+        assert!(!partial.write_is_persistent);
+
+        let capabilities = PanelDriverCapabilities {
+            can_identify: true,
+            can_report_mode: false,
+            can_read_chart: true,
+            can_write_chart: false,
+            write_is_persistent: false,
+        };
+        assert_eq!(
+            serde_json::to_value(capabilities).unwrap(),
+            serde_json::json!({
+                "can_identify": true,
+                "can_report_mode": false,
+                "can_read_chart": true,
+                "can_write_chart": false,
+                "write_is_persistent": false
+            })
+        );
+    }
+
+    #[test]
     fn profile_update_and_delete_requests_are_serde_compatible() {
         let update: UpdateProfile = serde_json::from_str(
             r#"{"original_title":"Existing Game","title":"Example Game","path":"C:\\\\example-game.exe","slots":2,"preset":"Arcade"}"#,
@@ -2709,6 +4057,22 @@ mod tests {
             keyboard: Some("USB\\VID_D209&PID_0430&MI_00\\X".to_owned()),
             ..BoardRow::default()
         }
+    }
+
+    #[test]
+    fn a_board_role_has_stable_wire_words_and_an_old_row_defaults_to_keyboard() {
+        assert_eq!(
+            serde_json::to_string(&BoardRole::PanelEncoder).unwrap(),
+            r#""panel-encoder""#
+        );
+
+        let mut old_row = serde_json::to_value(BoardRow::default()).unwrap();
+        old_row
+            .as_object_mut()
+            .expect("board row object")
+            .remove("role");
+        let decoded: BoardRow = serde_json::from_value(old_row).unwrap();
+        assert_eq!(decoded.role, BoardRole::Keyboard);
     }
 
     /// **A surface picks a board by SELECTOR, and it never derives one.**
@@ -3198,70 +4562,201 @@ mod tests {
         assert_eq!(back.max_slots, ksx_core::MAX_SLOTS);
     }
 
-    /// **A default `PadBusView` must never read as a healthy bus.**
-    ///
-    /// Fails against a `#[derive(Default)]` on that struct — which is the
-    /// obvious thing to write and was the first thing written here. The
-    /// derived value is `blocked: false, unknown: false, line: ""`, so
-    /// `silent()` is true and a page renders nothing: a payload nobody filled
-    /// in would look exactly like a machine with a working driver, on the one
-    /// screen whose whole job is to say otherwise before the button.
+    /// A setup document written before controller choices were served still
+    /// receives this build's canonical roster. An empty list would make the
+    /// maintenance form look as though no controller identity exists.
     #[test]
-    fn an_uncollected_pad_bus_is_unknown_and_not_silent() {
-        let view = PadBusView::default();
+    fn an_older_setup_view_receives_this_builds_persona_roster() {
+        let older: SetupView = serde_json::from_str(
+            r#"{"generated_at":"","config_root":"","config_exists":false,
+                 "devices":[],"slots":[],"presets":[],"profiles":[],"steps":[],"notes":[]}"#,
+        )
+        .expect("an older document must still deserialize");
+        assert_eq!(older.persona_options, crate::PersonaOption::roster());
+
+        let defaults = SetupView::default();
+        assert_eq!(defaults.persona_options, crate::PersonaOption::roster());
+        assert!(defaults
+            .persona_options
+            .iter()
+            .any(|option| { option.name == "dualsense" && option.can_plug }));
+    }
+
+    fn staged_personas(personas: &[&str]) -> crate::StagedSetupView {
+        crate::StagedSetupView {
+            reachable: true,
+            slots: personas
+                .iter()
+                .enumerate()
+                .map(|(index, persona)| crate::StagedSlotView {
+                    number: u8::try_from(index + 1).unwrap(),
+                    persona: (*persona).to_owned(),
+                    ..crate::StagedSlotView::default()
+                })
+                .collect(),
+            ..crate::StagedSetupView::default()
+        }
+    }
+
+    fn requirement(staged: &crate::StagedSetupView, backend: &str) -> ControllerOutputRequirement {
+        ControllerOutputsView::requirements(staged)
+            .into_iter()
+            .find(|requirement| requirement.backend == backend)
+            .unwrap_or_else(|| panic!("no {backend} requirement"))
+    }
+
+    /// An output document nobody collected is unknown and cannot license Play.
+    #[test]
+    fn uncollected_outputs_are_unknown_not_missing_or_ready() {
+        let row = ControllerOutputView::default();
+        assert_eq!(row.state, controller_output_states::UNKNOWN);
+        assert!(!row.readable);
+        assert!(row.unknown);
+        assert!(!row.blocked);
+        assert!(!row.line.trim().is_empty());
+
+        let view = ControllerOutputsView::default();
         assert!(!view.readable);
-        assert!(view.unknown, "an unread bus is unknown, never fine");
-        assert!(!view.blocked, "unknown is not the same as blocked");
-        assert!(!view.silent(), "a page must have something to say here");
-        assert_eq!(view.code, pad_bus_codes::UNREADABLE);
+        assert!(view.unknown);
+        assert!(!view.blocked);
+        assert!(!view.ready);
+        assert!(!view.can_play);
+        assert!(!view.silent());
+        assert_eq!(view.state, controller_output_states::UNKNOWN);
         assert!(!view.line.trim().is_empty());
     }
 
-    /// The three states stay three, and only one of them licenses silence.
+    /// Requirements come only from supported personas actually in the stage.
     #[test]
-    fn every_doctor_code_lands_in_exactly_one_state() {
+    fn staged_personas_choose_their_real_backends() {
+        assert!(ControllerOutputsView::requirements(&staged_personas(&[])).is_empty());
+
+        let compatibility = ControllerOutputsView::requirements(&staged_personas(&[
+            "xbox360",
+            "playstation",
+            "xbox360",
+        ]));
+        assert_eq!(compatibility.len(), 1);
+        assert_eq!(compatibility[0].backend, "vigem");
+        assert_eq!(
+            compatibility[0].personas,
+            vec![String::from("xbox360"), String::from("playstation")]
+        );
+
+        let dualsense = ControllerOutputsView::requirements(&staged_personas(&["dualsense"]));
+        assert_eq!(dualsense.len(), 1);
+        assert_eq!(dualsense[0].backend, "hidmaestro");
+        assert_eq!(dualsense[0].personas, vec![String::from("dualsense")]);
+
+        let mixed =
+            ControllerOutputsView::requirements(&staged_personas(&["dualsense", "xbox360"]));
+        assert_eq!(
+            mixed
+                .iter()
+                .map(|row| row.backend.as_str())
+                .collect::<Vec<_>>(),
+            ["vigem", "hidmaestro"]
+        );
+    }
+
+    /// Doctor's ViGEm states remain three-way, but are scoped to the personas
+    /// that use ViGEmBus.
+    #[test]
+    fn every_vigem_code_lands_in_exactly_one_state() {
+        let staged = staged_personas(&["xbox360"]);
         for (code, blocked, unknown) in [
-            (pad_bus_codes::HEALTHY, false, false),
-            (pad_bus_codes::MISSING, true, false),
-            (pad_bus_codes::FILE_MISSING, true, false),
-            (pad_bus_codes::NOT_RUNNING, true, false),
-            (pad_bus_codes::STATE_UNKNOWN, false, true),
-            // A code from a future ksx-platform. Unknown, never silent.
+            (vigem_output_codes::HEALTHY, false, false),
+            (vigem_output_codes::MISSING, true, false),
+            (vigem_output_codes::FILE_MISSING, true, false),
+            (vigem_output_codes::NOT_RUNNING, true, false),
+            (vigem_output_codes::STATE_UNKNOWN, false, true),
             ("vigembus-something-new", false, true),
         ] {
-            let view = PadBusView::from_doctor(code, None);
-            assert_eq!(view.blocked, blocked, "blocked for {code:?}");
-            assert_eq!(view.unknown, unknown, "unknown for {code:?}");
-            assert!(
-                !(view.blocked && view.unknown),
-                "{code:?} claims both at once"
-            );
-            assert!(view.readable, "{code:?} came from a read that answered");
-            assert!(!view.line.trim().is_empty(), "{code:?} says nothing");
-            assert_eq!(
-                view.silent(),
-                code == pad_bus_codes::HEALTHY,
-                "only a healthy bus is silent ({code:?})"
-            );
-            // Anything that is not silent owes the user a next step, and
-            // FIRST-RUN.md §6 forbids that step being a shell command ALONE.
-            if !view.silent() {
-                assert!(!view.remedy.trim().is_empty(), "{code:?} has no remedy");
-                assert!(
-                    view.remedy.contains("installer") || view.remedy.contains("Start menu"),
-                    "{code:?}'s remedy needs a route with no terminal in it: {}",
-                    view.remedy
-                );
-            }
+            let row = ControllerOutputView::vigem(requirement(&staged, "vigem"), code, None);
+            assert_eq!(row.blocked, blocked, "blocked for {code:?}");
+            assert_eq!(row.unknown, unknown, "unknown for {code:?}");
+            assert!(!(row.blocked && row.unknown));
+            assert!(row.readable);
+            assert!(!row.line.trim().is_empty());
+            let view = ControllerOutputsView::from_required(vec![row]);
+            assert_eq!(view.silent(), code == vigem_output_codes::HEALTHY);
+            assert_eq!(view.can_play, !blocked && !unknown);
         }
+    }
+
+    /// An exact HIDMaestro package is evidence, but not a false green endpoint.
+    #[test]
+    fn hidmaestro_is_verified_on_play_or_blocked_by_its_own_probe() {
+        let staged = staged_personas(&["dualsense"]);
+        let installed =
+            ControllerOutputsView::from_required(vec![ControllerOutputView::hidmaestro(
+                requirement(&staged, "hidmaestro"),
+                true,
+                false,
+                Some("1.6.1".into()),
+            )]);
+        assert_eq!(installed.state, controller_output_states::VERIFIED_ON_PLAY);
+        assert!(installed.verified_on_play);
+        assert!(!installed.ready);
+        assert!(installed.can_play);
+        assert!(!installed.silent());
+        assert!(installed.line.contains("when Play starts"));
+
+        for partial in [false, true] {
+            let missing =
+                ControllerOutputsView::from_required(vec![ControllerOutputView::hidmaestro(
+                    requirement(&staged, "hidmaestro"),
+                    false,
+                    partial,
+                    None,
+                )]);
+            assert!(missing.blocked);
+            assert!(!missing.can_play);
+            assert_eq!(missing.state, controller_output_states::BLOCKED);
+            assert!(missing.remedy.contains("HIDMaestro"));
+        }
+    }
+
+    /// A healthy backend must not hide another required backend's failure.
+    #[test]
+    fn mixed_output_aggregate_keeps_each_backend_independent() {
+        let staged = staged_personas(&["xbox360", "dualsense"]);
+        let view = ControllerOutputsView::from_required(vec![
+            ControllerOutputView::vigem(
+                requirement(&staged, "vigem"),
+                vigem_output_codes::HEALTHY,
+                Some("1.22.0.0".into()),
+            ),
+            ControllerOutputView::hidmaestro(
+                requirement(&staged, "hidmaestro"),
+                false,
+                false,
+                None,
+            ),
+        ]);
+        assert_eq!(view.required.len(), 2);
+        assert!(view.blocked);
+        assert!(!view.ready);
+        assert!(!view.can_play);
+        assert!(view.line.contains("ViGEmBus"));
+        assert!(view.line.contains("HIDMaestro"));
     }
 
     /// The version is evidence, so it is printed only when it was read.
     #[test]
-    fn a_healthy_bus_names_its_version_only_when_there_is_one() {
-        let known = PadBusView::from_doctor(pad_bus_codes::HEALTHY, Some("1.22.0.0".into()));
+    fn a_healthy_vigem_row_names_its_version_only_when_there_is_one() {
+        let staged = staged_personas(&["xbox360"]);
+        let known = ControllerOutputView::vigem(
+            requirement(&staged, "vigem"),
+            vigem_output_codes::HEALTHY,
+            Some("1.22.0.0".into()),
+        );
         assert!(known.line.contains("v1.22.0.0"), "{}", known.line);
-        let unknown = PadBusView::from_doctor(pad_bus_codes::HEALTHY, None);
-        assert!(!unknown.line.contains("(v"), "{}", unknown.line);
+        let unknown = ControllerOutputView::vigem(
+            requirement(&staged, "vigem"),
+            vigem_output_codes::HEALTHY,
+            None,
+        );
+        assert!(!unknown.line.contains("v1.22.0.0"), "{}", unknown.line);
     }
 }

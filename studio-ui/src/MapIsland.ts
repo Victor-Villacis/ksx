@@ -1,9 +1,9 @@
 import { h, createSignal, createList, createShow } from "@getforma/core";
-// v9's no-JS vocabulary tables. They are DECLARED in MapPage.ts because the
-// compiler expands `...CONST.map(…)` spreads at build time from the root
-// *Page file's constants only (ledger #17, explained there); this import is
-// the runtime half of that single source. The cycle is inert — nothing here
-// reads them before MapIsland() runs.
+import { ZONE_DS4, ZONE_XBOX, type ZoneDef } from "./zones.gen";
+// v9's no-JS key tables stay declared in MapPage.ts; FUNCTIONS is re-exported
+// there from zones.gen.ts. Forma 0.3.1 follows that re-export when it expands
+// the literal option table, and the runtime cycle remains inert — nothing here
+// reads these arrays before MapIsland() runs.
 import {
   KEYS_LETTER,
   KEYS_DIGIT,
@@ -37,11 +37,12 @@ import {
 // the bottom of a fixed-aspect stage; the top band holds the LB/RB/LT/RT
 // chips, stacked trigger-over-bumper and anchored to the body silhouette.
 // Every mappable control is a positioned hit-zone <button data-fn=…> from
-// the ZONES tables below (authored from ../art/extents.mjs output — the
-// PadForge rule: derive layout from art with a script).
+// the generated ZONES tables. Rust owns the canonical geometry and emits the
+// JSON that build.mjs turns into zones.gen.ts, so the server and island cannot
+// drift through a hand-maintained TypeScript copy.
 //
 // Each zone wears its own identity. The vendored art draws no letters, so
-// the zone renders the control's name itself in the canonical colours (A
+// the zone renders the control's name itself in the canonical colors (A
 // green / B red / X blue / Y amber; ✕ ○ △ □ in the Sony hues), with the bound
 // key as the small mono tag underneath. Unbound controls still show their
 // identity — the pad reads like a controller with nothing mapped at all.
@@ -99,6 +100,7 @@ export interface SessionView {
 export interface LearnView {
   ok: boolean;
   state: string;
+  generation: number | null;
   remaining_ms: number | null;
   device: string | null;
   key: string | null;
@@ -153,6 +155,25 @@ export interface MacroSnapshot {
 
 /** What GET /api/map serves and what the island props carry — `MapPayload`
  *  in snapshot.rs; parity pinned there. */
+/** One bound physical key on the keyboard shelf — composed in Rust
+ *  (`render_map.rs::shelf_views`), rendered verbatim by the island's list.
+ *  Nothing here is derived client-side, which is what keeps the SSR shelf and
+ *  the hydrated shelf identical (the parity suite caught the previous shape:
+ *  a static "No bound keys yet" the client rebuilt imperatively on adoption). */
+export interface ShelfKeyRow {
+  key: string;
+  /** The controls it drives, joined "|" — the button's `data-controls`. */
+  controls: string;
+  title: string;
+  use_label: string;
+}
+
+/** One slot's keyboard shelf: the summary line + one row per bound key. */
+export interface ShelfView {
+  summary: string;
+  keys: ShelfKeyRow[];
+}
+
 export interface MapPayload {
   mapper: MapperSnapshot;
   session: SessionView;
@@ -164,6 +185,10 @@ export interface MapPayload {
   /** `stage` edits the in-memory first-run setup; `saved` edits a stored
    * controller layout. Older payloads omit this and therefore mean saved. */
   target?: string;
+  /** The keyboard shelf for EVERY slot, keyed by slot number as a string
+   *  (it crosses JSON). Older payloads omit it; the shelf then renders its
+   *  authored empty state. */
+  shelf?: Record<string, ShelfView>;
 }
 
 /** v11's grid rows. One list item per STEP: its number, its duration in the
@@ -222,7 +247,7 @@ interface MacroRow {
 
 /** One cell of the flat `steps × controls` matrix. Flat because a
  *  `createList` inside a list item has no seam (ledger #17's neighbour), so
- *  the matrix is one list laid out by a 25-column CSS grid. */
+ *  the matrix is one list laid out by the controller-column grid. */
 interface MacroCell {
   cls: string;
   /** `stepIndex|function` — what the click delegation toggles. */
@@ -296,6 +321,8 @@ interface SlotTab {
   num: string;
   label: string;
   cls: string;
+  /** Link navigation state; `page` for the controller being edited. */
+  current: "page" | "false";
   /** "P1" — the rail chip and the table's first column. */
   player: string;
   /** The preset FILE this slot binds, e.g. "player1". */
@@ -407,75 +434,16 @@ interface ToastRow {
   dismisstitle: string;
 }
 
-// ── Zone tables — MIRROR of render_map.rs ZONE_XBOX / ZONE_DS4 ────────────
-// [fn, label, cx, cy, w, h, kind]; stage-percent boxes, art bottom-aligned
-// at 86% stage height (ART_SHARE). Rects are pairwise DISJOINT (pinned by
-// render_map.rs `zone_tables_cover_every_mappable_function`): face buttons
-// sized to the drawn circles, dpad arrows to the drawn cross, and the four
-// stick-direction wedges RING the stick with the L3/R3 click zone as the
-// center hub — adjacent, never covering it.
-
-// [fn, identity label, identity palette, cx, cy, w, h, kind]
-type ZoneDef = [string, string, string, number, number, number, number, string];
-
-const ZONE_XBOX: ZoneDef[] = [
-  ["lt", "LT", "sh", 31.0, 4.6, 10.0, 5.2, "trigger"],
-  ["lb", "LB", "sh", 34.0, 10.9, 11.0, 5.2, "bumper"],
-  ["rb", "RB", "sh", 66.0, 10.9, 11.0, 5.2, "bumper"],
-  ["rt", "RT", "sh", 69.0, 4.6, 10.0, 5.2, "trigger"],
-  ["Y", "Y", "xy", 75.2, 31.1, 7.2, 8.4, "round"],
-  ["B", "B", "xb", 82.0, 39.6, 7.2, 8.4, "round"],
-  ["A", "A", "xa", 75.3, 48.3, 7.2, 8.4, "round"],
-  ["X", "X", "xx", 68.7, 39.7, 7.2, 8.4, "round"],
-  ["guide", "guide", "txt", 50.0, 27.0, 9.0, 11.0, "round"],
-  ["back", "view", "txt", 44.0, 39.0, 6.5, 8.0, "chip"],
-  ["start", "menu", "txt", 56.0, 39.0, 6.5, 8.0, "chip"],
-  ["lthumb", "L3", "hub", 24.0, 39.7, 8.0, 10.0, "round"],
-  ["ly.max", "↑", "dir", 24.0, 31.7, 7.0, 6.0, "chip"],
-  ["ly.min", "↓", "dir", 24.0, 47.7, 7.0, 6.0, "chip"],
-  ["lx.min", "←", "dir", 17.25, 39.7, 5.5, 7.0, "chip"],
-  ["lx.max", "→", "dir", 30.75, 39.7, 5.5, 7.0, "chip"],
-  ["dpad.up", "↑", "dir", 36.4, 50.6, 7.0, 9.0, "chip"],
-  ["dpad.down", "↓", "dir", 36.4, 69.2, 7.0, 9.0, "chip"],
-  ["dpad.left", "←", "dir", 29.2, 59.9, 7.0, 9.0, "chip"],
-  ["dpad.right", "→", "dir", 43.6, 59.9, 7.0, 9.0, "chip"],
-  ["rthumb", "R3", "hub", 62.5, 58.4, 8.0, 10.0, "round"],
-  ["ry.max", "↑", "dir", 62.5, 50.4, 7.0, 6.0, "chip"],
-  ["ry.min", "↓", "dir", 62.5, 66.4, 7.0, 6.0, "chip"],
-  ["rx.min", "←", "dir", 55.75, 58.4, 5.5, 7.0, "chip"],
-  ["rx.max", "→", "dir", 69.25, 58.4, 5.5, 7.0, "chip"],
-];
-
-const ZONE_DS4: ZoneDef[] = [
-  ["lt", "L2", "sh", 17.0, 4.6, 9.5, 5.2, "trigger"],
-  ["lb", "L1", "sh", 19.5, 10.9, 10.5, 5.2, "bumper"],
-  ["rb", "R1", "sh", 80.5, 10.9, 10.5, 5.2, "bumper"],
-  ["rt", "R2", "sh", 83.0, 4.6, 9.5, 5.2, "trigger"],
-  ["Y", "△", "pt", 81.2, 29.2, 7.0, 9.0, "round"],
-  ["B", "○", "po", 88.4, 38.8, 7.0, 9.0, "round"],
-  ["A", "✕", "pc", 81.3, 48.1, 7.0, 9.0, "round"],
-  ["X", "□", "psq", 74.0, 38.7, 7.0, 9.0, "round"],
-  ["back", "share", "txt", 30.0, 25.5, 7.0, 9.0, "chip"],
-  ["start", "options", "txt", 70.0, 25.5, 7.0, 9.0, "chip"],
-  ["guide", "PS", "txt", 50.0, 63.0, 8.0, 10.0, "round"],
-  ["lthumb", "L3", "hub", 33.8, 56.8, 8.0, 10.0, "round"],
-  ["ly.max", "↑", "dir", 33.8, 48.8, 7.0, 6.0, "chip"],
-  ["ly.min", "↓", "dir", 33.8, 64.8, 7.0, 6.0, "chip"],
-  ["lx.min", "←", "dir", 27.05, 56.8, 5.5, 7.0, "chip"],
-  ["lx.max", "→", "dir", 40.55, 56.8, 5.5, 7.0, "chip"],
-  ["dpad.up", "↑", "dir", 18.5, 31.5, 5.4, 7.2, "chip"],
-  ["dpad.down", "↓", "dir", 18.5, 46.6, 5.4, 7.2, "chip"],
-  ["dpad.left", "←", "dir", 12.9, 39.2, 5.4, 7.2, "chip"],
-  ["dpad.right", "→", "dir", 23.9, 39.2, 5.4, 7.2, "chip"],
-  ["rthumb", "R3", "hub", 66.1, 56.8, 8.0, 10.0, "round"],
-  ["ry.max", "↑", "dir", 66.1, 48.8, 7.0, 6.0, "chip"],
-  ["ry.min", "↓", "dir", 66.1, 64.8, 7.0, 6.0, "chip"],
-  ["rx.min", "←", "dir", 59.35, 56.8, 5.5, 7.0, "chip"],
-  ["rx.max", "→", "dir", 72.85, 56.8, 5.5, 7.0, "chip"],
-];
+// Generated from render_map.rs ZONE_XBOX / ZONE_DS4 via tokens/zones.json.
+// Tuple shape: [fn, identity label, identity palette, cx, cy, w, h, kind].
+// The stage-percent boxes remain pairwise disjoint; Rust owns and tests that
+// geometry, while this island only consumes the generated projection.
 
 export function isPlaystation(persona: string): boolean {
-  return /playstation|ds4|ps4/i.test(persona);
+  // DualSense is the live HIDMaestro PlayStation persona. Keep this in exact
+  // parity with render.rs::art_for and the Status/Pads/Check islands so it
+  // never falls through to Xbox art or ABXY vocabulary.
+  return /playstation|dualsense|dualshock|ds[45]|ps[45]/i.test(persona);
 }
 
 // ── The live state store (getter names MUST match MapPage.ts) ──────────────
@@ -550,6 +518,10 @@ const [selBar, setSelBar] = createSignal(false);
 const [slotTabs, setSlotTabs] = createSignal<SlotTab[]>([]);
 const [zones, setZones] = createSignal<ZoneRow[]>([]);
 const [legendRows, setLegendRows] = createSignal<LegendRow[]>([]);
+/** The keyboard shelf — SERVED rows and summary (payload.shelf), never
+ *  derived here. `syncShelf` picks the selected slot's view. */
+const [shelfSummary, setShelfSummary] = createSignal("No bound keys yet");
+const [inventoryKeys, setInventoryKeys] = createSignal<ShelfKeyRow[]>([]);
 /** The toast stack, newest FIRST. Client-only: SSR paints an empty list (the
  *  `<!--f:lN-->` markers are still emitted, which is what lets the adoption
  *  path insert into it later), so no-JS users keep the server-rendered flash
@@ -770,6 +742,46 @@ export function currentSlot(): MapperSlot | null {
   );
 }
 
+/** Point the shelf signals at the SELECTED slot's served view. Copying, not
+ *  deriving: the rows and the summary sentence are composed once, in Rust
+ *  (`shelf_views`), so the first paint and every poll agree by construction. */
+export function syncShelf(): void {
+  const slot = currentSlot();
+  const view = slot ? lastPayload?.shelf?.[String(slot.number)] : undefined;
+  setShelfSummary(view?.summary ?? "No bound keys yet");
+  setInventoryKeys(view?.keys ?? []);
+}
+
+/** Whether the outbound live feed describes the setup this mapper is showing.
+ *  A staged draft and a saved config may share slot numbers while containing
+ *  entirely different bindings, so the client must never paint one over the
+ *  other merely because P1 matches P1. */
+export function liveEchoTargetState(): "matching" | "inactive" | "different" {
+  if (!lastPayload?.session.reachable || !lastPayload.session.running) return "inactive";
+  const expected = editingStage() ? "staged" : "config";
+  return lastPayload.session.origin === expected ? "matching" : "different";
+}
+
+/** Identity of the session truth used to license a live-frame paint.
+ *
+ * The live pipe predates staged sessions and therefore carries controls, not
+ * their config/stage origin. Keep the browser's accepted-frame ledger tied to
+ * the exact polled session fact instead of letting a frame cached under one
+ * origin survive a later `/api/map` answer for another. This is deliberately
+ * presentation-only: the authoritative origin remains `SessionView.origin`.
+ */
+export function liveEchoSessionFingerprint(): string {
+  if (!lastPayload) return "no-map-payload";
+  const session = lastPayload.session;
+  return JSON.stringify([
+    lastPayload.target ?? "saved",
+    session.reachable,
+    session.running,
+    session.origin ?? null,
+    session.profile,
+  ]);
+}
+
 export function selectSlot(num: number): void {
   selectedSlot = num;
   // A selection belongs to ONE preset — carrying it across slots would apply
@@ -830,7 +842,7 @@ function eitherNote(count: number): string {
 }
 
 /** The zone table of the slot on screen. */
-function zoneTable(): ZoneDef[] {
+function zoneTable(): readonly ZoneDef[] {
   const slot = currentSlot();
   return slot && isPlaystation(slot.persona) ? ZONE_DS4 : ZONE_XBOX;
 }
@@ -1062,11 +1074,11 @@ function learnable(p: MapPayload): boolean {
 function reason(p: MapPayload): string {
   if (p.mapper.generated_at === "(unavailable)") return p.mapper.source;
   if (p.mapper.slots.length === 0)
-    return "No controller is ready to edit. Add one in Setup, then return to Controls.";
+    return "No controller is ready to edit. Add one in setup, then return to Mapping.";
   if (!p.session.reachable)
     return p.target === "stage"
-      ? "Setup's background helper is not available. Close and reopen ksx; nothing has been changed."
-      : "Controls are temporarily read-only. Close and reopen ksx, then try again.";
+      ? "Guided setup's background helper is not available. Close and reopen ksx; nothing has been changed."
+      : "Mapping is temporarily read-only. Close and reopen ksx, then try again.";
   if (p.session.running)
     return (
       // WORD FOR WORD what render_map.rs's `reason_line` renders — this is the
@@ -1152,12 +1164,14 @@ export function applyMap(p: MapPayload): void {
   if (p.session.reachable && p.session.running) {
     paused = false;
   }
+  syncShelf();
 
   setSlotTabs(
     p.mapper.slots.map((s) => ({
       num: String(s.number),
       label: `P${s.number} · ${s.preset}`,
       cls: slot && s.number === slot.number ? "tab active" : "tab",
+      current: slot && s.number === slot.number ? "page" : "false",
       href: staged ? `/map?target=stage&slot=${s.number}` : `/map?slot=${s.number}`,
       player: `P${s.number}`,
       preset: s.preset,
@@ -1175,8 +1189,8 @@ export function applyMap(p: MapPayload): void {
   setSourceLine(
     slot === null
       ? p.mapper.generated_at === "(unavailable)"
-        ? "This controller layout needs attention in Setup"
-        : "Add a keyboard and controller in Setup to begin"
+        ? "This controller layout needs attention in setup"
+        : "Add a keyboard and controller in setup to begin"
       : staged
       ? "Unsaved setup — changes stay here until Save or Play"
       : "Saved layout — changes apply immediately",
@@ -1353,7 +1367,7 @@ export function blockedReason(): string | null {
 
 /** The studio server itself stopped answering: keep the page, say so. */
 export function applyMapUnreachable(): void {
-  setReasonLine("Controls are not responding — retrying automatically");
+  setReasonLine("Mapping is not responding — retrying automatically");
   setReadOnly(true);
   setCanLearn(false);
   liveMapping = false;
@@ -1945,9 +1959,9 @@ const MACRO_RULE_LINE =
  *  render_map.rs `MACRO_RING_LINE`.
  *
  *  The numpad digits live HERE and in the tooltips, never in the glyph row: a
- *  second line of digits under only 24 of 37 columns makes the header ragged,
- *  and the digit is a lookup key (for somebody who read "3" on Dustloop or typed
- *  digits into MAME's `joystick_map`), not a label. */
+ *  second line of digits under only the three direction rings makes the header
+ *  ragged, and the digit is a lookup key (for somebody who read "3" on Dustloop
+ *  or typed digits into MAME's `joystick_map`), not a label. */
 const MACRO_RING_LINE =
   "Each direction group runs ↑ ↖ ← ↙ ↓ ↘ → ↗ (numpad 8 7 4 1 2 3 6 9), so a motion is a " +
   "SHAPE: a quarter-circle forward is a staircase, a half-circle a straight line, a dragon " +
@@ -2789,8 +2803,8 @@ function bandOf(fn: string): string {
 }
 
 /** The grid's columns for one persona: every non-direction control as itself,
- *  and every direction MECHANISM as its eight-position ring. 25 zones → 37
- *  columns. Mirror of render_map.rs `macro_columns`. */
+ *  and every direction MECHANISM as its eight-position ring. Its width follows
+ *  the generated zone vocabulary. Mirror of render_map.rs `macro_columns`. */
 function macroColumns(slot: MapperSlot | null): MacroColumn[] {
   const table = slot && isPlaystation(slot.persona) ? ZONE_DS4 : ZONE_XBOX;
   const out: MacroColumn[] = [];
@@ -3274,8 +3288,8 @@ function macroColsFor(slot: MapperSlot | null): MacroCol[] {
   return macroColumns(slot).map((c) => ({
     fn: c.token,
     id: c.glyph,
-    // UNIFORM colour, deliberately: a header row of coloured discs at column
-    // width is noise rather than information. The identity colours earn their
+    // UNIFORM color, deliberately: a header row of colored discs at column
+    // width is noise rather than information. The identity colors earn their
     // place on the controller art (where they map to physical buttons) and in
     // the legend beside it — here the column is NAMED, not badged.
     // `card`/`diag` are TYPE, not palette.
@@ -3429,7 +3443,7 @@ function macroRowsFor(mac: MacroView, slot: MapperSlot | null): MacroRow[] {
   });
 }
 
-/** The matrix, FLAT: `steps × 37` cells in row-major order.
+/** The matrix, FLAT: `steps × controller columns` cells in row-major order.
  *
  *  A step holding `ly.min` + `lx.max` lights the LS `↘` cell — not two stray
  *  ticks eight columns apart. That is the whole point, and it works on a
@@ -3580,7 +3594,7 @@ export function slotMacrosLineFor(slot: MapperSlot | undefined): string {
   if (!slot?.macros_off) return "";
   return (
     `Macros are off for Player ${slot.number}, so nothing in this card will run. ` +
-    "Nothing has been deleted. Rebuild this player in Setup and save it to turn macros on."
+    "Nothing has been deleted. Rebuild this player in guided setup and save it to turn macros on."
   );
 }
 
@@ -3610,7 +3624,7 @@ function macroTriggerLineFor(mac: MacroView): string {
 
 function macroNoteFor(p: MapPayload | null, mac: MacroView | null): string {
   if (!p || !p.macros.available) {
-    return "Macros for this controller could not be read, so nothing here can be edited or saved. Return to Setup and choose a working controller layout.";
+    return "Macros for this controller could not be read, so nothing here can be edited or saved. Return to guided setup and choose a working controller layout.";
   }
   if (p.macros.macros.length === 0) {
     return (
@@ -3824,26 +3838,31 @@ export function MapIsland() {
       ),
       h(
         "nav",
-        { class: "topnav", "aria-label": "screens" },
-        h("a", { class: "navlink", href: "/start" }, "Setup"),
-        h("span", { class: "navlink on", "aria-current": "page" }, "Controls"),
-        createShow(
-          () => savedTarget(),
-          () => h("a", { class: "navlink", href: "/check" }, "Test"),
-        ),
-        createShow(
-          () => stagedTarget(),
-          () =>
-            h(
-              "span",
-              {
-                class: "navlink navlink-disabled",
-                role: "link",
-                "aria-disabled": "true",
-                title: "Play this setup before opening Test",
-              },
-              "Test after Play",
-            ),
+        { class: "topnav workflow-nav", "aria-label": "Set up and play" },
+        h("a", { class: "navlink workflow-link", href: "/start#keyboard" }, h("span", { class: "workflow-num" }, "1"), "Keyboard"),
+        h("a", { class: "navlink workflow-link", href: "/start#controller" }, h("span", { class: "workflow-num" }, "2"), "Controller"),
+        h("span", { class: "navlink workflow-link on", "aria-current": "page" }, h("span", { class: "workflow-num" }, "3"), "Mapping"),
+        h("a", { class: "navlink workflow-link", href: "/" }, h("span", { class: "workflow-num" }, "4"), "Play"),
+      ),
+      h(
+        "details",
+        { class: "appmenu" },
+        h("summary", { class: "navlink", "aria-label": "Open Studio tools" }, "Tools"),
+        h(
+          "nav",
+          { class: "appmenu-panel", "aria-label": "Studio tools" },
+          createShow(
+            () => savedTarget(),
+            () => h("a", { href: "/check" }, h("span", null, "Test inputs"), h("small", null, "Live controller feedback")),
+          ),
+          createShow(
+            () => stagedTarget(),
+            () => h("span", { class: "appmenu-disabled", "aria-disabled": "true" }, h("span", null, "Test after Play"), h("small", null, "Start this setup to test live output")),
+          ),
+          h("a", { href: "/profiles" }, h("span", null, "Game library"), h("small", null, "Saved launch profiles")),
+          h("a", { href: "/devices" }, h("span", null, "Hardware"), h("small", null, "Devices and recovery")),
+          h("a", { href: "/pads" }, h("span", null, "Virtual controllers"), h("small", null, "Inspect and test pads")),
+          h("a", { href: "/setup" }, h("span", null, "Import & recovery"), h("small", null, "Advanced configuration")),
         ),
       ),
       createShow(
@@ -3868,6 +3887,19 @@ export function MapIsland() {
       null,
       h(
         "section",
+        { class: "mapping-hero", "aria-labelledby": "mapping-title" },
+        h("div", null,
+          h("p", { class: "eyebrow" }, "Step 3 · Mapping Studio"),
+          h("h1", { id: "mapping-title" }, "Select a control. Press a key. Keep moving."),
+          h("p", { class: "workflow-lede" }, "The controller is your map; the inspector is the exact binding record. Advanced timing and macros stay close without crowding the primary task."),
+        ),
+        h("div", { class: "mapping-hero-actions" },
+          h("a", { class: "btn btn-primary", href: "/start#play" }, "Continue to Play"),
+          h("a", { class: "btn btn-ghost", href: "/start#controller" }, "Guided setup"),
+        ),
+      ),
+      h(
+        "section",
         { class: () => stageBackCls() },
         h(
           "div",
@@ -3876,11 +3908,11 @@ export function MapIsland() {
           h(
             "p",
             { class: "cardline" },
-            "Bindings, auto-fire and macros update the controller you staged in Setup. ",
+            "Bindings, auto-fire and macros update the controller you staged in guided setup. ",
             "Nothing is written and no virtual controller appears while you edit.",
           ),
         ),
-        h("a", { class: "btn btn-primary", href: "/start" }, "Back to Setup"),
+        h("a", { class: "btn btn-primary", href: "/start#mapping-start" }, "Back to setup"),
       ),
       // ── FIX 1: the no-daemon banner. TOP of the page, not buried at the
       // bottom of a card — the failure it exists for is a page that looks
@@ -3894,12 +3926,12 @@ export function MapIsland() {
             h(
               "h2",
               null,
-              "Controls need the background helper",
+            "Mapping needs the background helper",
             ),
             h(
               "p",
               { class: "alarmlead" },
-              "Close and reopen ksx, then return to Controls. The controller layout shown ",
+              "Close and reopen ksx, then return to Mapping. The controller layout shown ",
               "below is read-only until the helper answers, and nothing has been changed.",
             ),
             h("span", { class: "product-hidden", "aria-hidden": "true" }, () => daemonCmd()),
@@ -3991,10 +4023,10 @@ export function MapIsland() {
         h(
           "p",
           { class: "cardline" },
-          "Choose a keyboard and add a controller in Setup. Controls will be ready as soon as ",
+          "Choose a keyboard and add a controller in setup. Mapping will be ready as soon as ",
           "that controller appears — nothing needs to be saved first.",
         ),
-        h("a", { class: "btn btn-primary", href: "/start" }, "Go to Setup"),
+        h("a", { class: "btn btn-primary", href: "/start" }, "Open setup"),
       ),
       // ── Slot context strip ────────────────────────────────────────────
       // ── The slot rail ────────────────────────────────────────────────
@@ -4006,8 +4038,8 @@ export function MapIsland() {
         "section",
         { class: "slotstrip" },
         h(
-          "div",
-          { class: "tabs", role: "tablist", "aria-label": "slot" },
+          "nav",
+          { class: "tabs", "aria-label": "Controllers" },
           createList(
             () => slotTabs(),
             (t) => t.num + "|" + t.label + "|" + t.cls,
@@ -4015,7 +4047,17 @@ export function MapIsland() {
             // server has always understood, so switching slots is one GET
             // with JavaScript off; map.ts intercepts the click and switches
             // in place (no navigation, no lost scroll position) with it on.
-            (t) => h("a", { class: t.cls, href: t.href, "data-slot": t.num }, t.label),
+            (t) =>
+              h(
+                "a",
+                {
+                  class: t.cls,
+                  href: t.href,
+                  "data-slot": t.num,
+                  "aria-current": t.current,
+                },
+                t.label,
+              ),
           ),
         ),
         h(
@@ -4052,7 +4094,7 @@ export function MapIsland() {
               h(
                 "span",
                 { class: "hintlead" },
-                "Click a control, then press the panel key for it.",
+                "Select a control, then press the keyboard key for it.",
               ),
             ),
             h(
@@ -4070,6 +4112,42 @@ export function MapIsland() {
             ),
           ),
       ),
+      h(
+        "section",
+        { class: "keyboard-shelf", "aria-labelledby": "keyboard-shelf-title" },
+        h(
+          "div",
+          { class: "keyboard-shelf-head" },
+          h("div", null,
+            h("p", { class: "step-kicker" }, "Physical keyboard"),
+            h("h2", { id: "keyboard-shelf-title" }, "Keys in this controller layout"),
+          ),
+          h("p", { class: "keyboard-shelf-summary", id: "keyboard-shelf-summary", "aria-live": "polite" }, () => shelfSummary()),
+        ),
+        h(
+          "div",
+          { class: "keyboard-inventory", id: "keyboard-inventory", role: "group", "aria-label": "Bound keyboard keys" },
+          createList(
+            () => inventoryKeys(),
+            (r) => r.key + "|" + r.controls + "|" + r.use_label,
+            (r) =>
+              h(
+                "button",
+                {
+                  type: "button",
+                  class: "inventory-key",
+                  "data-inventory-key": r.key,
+                  "data-controls": r.controls,
+                  title: r.title,
+                  "aria-pressed": "false",
+                },
+                h("span", { class: "inventory-key-name" }, r.key),
+                h("span", { class: "inventory-key-use" }, r.use_label),
+              ),
+          ),
+        ),
+        h("p", { class: "keyboard-shelf-note" }, "Select a keycap to trace every controller input it drives. Bindings shown together are alternatives—not a chord."),
+      ),
       // ── THE CONTROLLER (huge). Art + zone layer per persona. ──────────
       h(
         "section",
@@ -4081,7 +4159,40 @@ export function MapIsland() {
         h(
           "div",
           { class: "stagehead" },
-          h("h2", null, "Controller"),
+          h(
+            "div",
+            { class: "stage-title" },
+            h("h2", null, "Controller map"),
+            h(
+              "span",
+              {
+                class: "map-live-status",
+                id: "map-live-status",
+                "aria-hidden": "true",
+                // CONNECTION CHATTER: this text is client-owned by nature —
+                // the stream is opened by the browser, so the server can
+                // never truthfully say "live" or "reconnecting". The marker
+                // is the contract the SSR/hydration parity suite keys off to
+                // exempt exactly these nodes (and nothing else); durable
+                // announcements go through the separate polite announcer.
+                "data-live-chatter": "",
+              },
+              "Live echo starts after Play",
+            ),
+            h("span", {
+              class: "map-live-announcer",
+              id: "map-live-announcer",
+              role: "status",
+              "aria-live": "polite",
+              "aria-atomic": "true",
+              // Feed-state too (see map-live-status above): the announcer is
+              // deliberately EMPTY server-side — a live region announces
+              // CHANGES, and the first change is the browser's own connection
+              // resolving, which no SSR paint can know. Same parity exemption,
+              // same contract.
+              "data-live-chatter": "",
+            }),
+          ),
           h(
             "button",
             {
@@ -4140,7 +4251,7 @@ export function MapIsland() {
               h("img", {
                 class: "padart",
                 src: "/_assets/pad-ds4.svg",
-                alt: "DualShock 4 controller",
+                alt: "PlayStation-family controller diagram",
               }),
               h(
                 "div",
@@ -4177,7 +4288,13 @@ export function MapIsland() {
       h(
         "section",
         { class: "card legendcard" },
-        h("h2", null, "Bindings"),
+        h("div", { class: "inspector-head" },
+          h("div", null,
+            h("p", { class: "step-kicker" }, "Binding inspector"),
+            h("h2", null, "Controls and keys"),
+          ),
+          h("span", { class: "inspector-hint" }, "Choose any row to bind"),
+        ),
         h(
           "div",
           { class: "legend" },
@@ -4311,7 +4428,7 @@ export function MapIsland() {
                   // that one off it. (Removing one of several without
                   // JavaScript needs to name WHICH key — the picker beside
                   // these buttons is that name, so no second control is
-                  // needed and no per-key form has to be rendered 25 times.)
+                  // needed and no per-key form is repeated for every legend row.)
                   h(
                     "button",
                     {
@@ -4412,7 +4529,7 @@ export function MapIsland() {
             "Save macro",
           ),
           // The same fact in words, AFTER the button on purpose: CSS can then
-          // colour it from the button's own dirty class (`.macsave.dirty +
+          // color it from the button's own dirty class (`.macsave.dirty +
           // .macdirty`), so "unsaved" is amber and "saved" is quiet without a
           // second signal.
           h("span", { class: "macdirty mono" }, () => macroDirtyLine()),
@@ -4529,7 +4646,7 @@ export function MapIsland() {
           "div",
           { class: () => slotMacrosCls() },
           h("p", { class: "macslotoff" }, () => slotMacrosLine()),
-          h("a", { class: "btn btn-mini", href: "/start" }, "Open Setup to turn macros on"),
+          h("a", { class: "btn btn-mini", href: "/start" }, "Open guided setup to turn macros on"),
         ),
         h("p", { class: "macpolicy" }, () => macroPolicyLine()),
         // FIX 1c — COMMON MOTIONS. These are the sequences everybody is
@@ -4735,8 +4852,8 @@ export function MapIsland() {
                   { class: r.cls, title: r.durtitle },
                   h("span", { class: "macnum" }, r.n),
                   // WHAT THIS ROW HOLDS, before its timing — reading the grid
-                  // must never mean decoding which of 37 columns are lit. A
-                  // diagonal reads as ONE control here, because that is what
+                  // must never mean decoding which controller columns are lit.
+                  // A diagonal reads as ONE control here, because that is what
                   // was picked and what it means; `machold both` is the accent
                   // for a row that really does hold several things at once.
                   h("span", { class: r.holdcls }, r.hold),
@@ -5213,7 +5330,7 @@ export function MapIsland() {
       ),
       // ── v9: bind by name (no-JavaScript panel) ────────────────────────
       // The row forms above are the precise path; this is the one that does
-      // not make you hunt through 25 of them. Same two verbs, same 303 →
+      // not make you hunt through every one. Same two verbs, same 303 →
       // ?flash= report. Hidden the moment the island is marked `.js`.
       // Not a createShow — a plain section whose visibility is CSS, so it
       // costs zero MAP_SHOW_ORDER entries (ledger #4/#14).
@@ -5421,7 +5538,13 @@ export function MapIsland() {
             (t) =>
               h(
                 "a",
-                { class: t.rowcls, href: t.href, "data-slot": t.num, title: t.label },
+                {
+                  class: t.rowcls,
+                  href: t.href,
+                  "data-slot": t.num,
+                  title: t.label,
+                  "aria-current": t.current,
+                },
                 h("span", { class: "stcell stnum" }, t.player),
                 h("span", { class: "stcell stpreset" }, t.preset),
                 h("span", { class: "stcell stpersona" }, t.pad),
@@ -5520,14 +5643,21 @@ export function MapIsland() {
           { class: "mlayer", "data-cancel": "1" },
           h(
             "div",
-            { class: "modal" },
-            h("h3", null, () => modalPrompt()),
+            {
+              class: "modal",
+              role: "dialog",
+              "aria-modal": "true",
+              "aria-labelledby": "map-bind-dialog-title",
+              "aria-describedby": "map-bind-dialog-help",
+              tabindex: "-1",
+            },
+            h("h3", { id: "map-bind-dialog-title" }, () => modalPrompt()),
             createShow(
               () => modalListening(),
               () =>
                 h(
                   "div",
-                  { class: "mbody" },
+                  { class: "mbody", id: "map-bind-dialog-help" },
                   h("p", { class: "count mono" }, () => countdownText()),
                   h(
                     "div",
@@ -5629,7 +5759,7 @@ export function MapIsland() {
               () =>
                 h(
                   "div",
-                  { class: "mbody" },
+                  { class: "mbody", id: "map-bind-dialog-help" },
                   h("p", { class: "conflict" }, () => conflictLine()),
                   h(
                     "div",
@@ -5637,7 +5767,7 @@ export function MapIsland() {
                     h(
                       "button",
                       { class: "btn btn-primary", "data-act": "replace", type: "button" },
-                      "Replace",
+                      "Use here too",
                     ),
                     h("button", { class: "btn", "data-act": "cancel", type: "button" }, "Cancel"),
                   ),
@@ -5724,7 +5854,7 @@ export function MapIsland() {
       h(
         "p",
         null,
-        "Controls refresh automatically. Last snapshot ",
+        "Mapping refreshes automatically. Last snapshot ",
         h("span", { class: "mono" }, () => generatedAt()),
         ".",
       ),

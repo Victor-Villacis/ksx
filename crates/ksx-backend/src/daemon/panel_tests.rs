@@ -250,6 +250,7 @@ impl Reports {
 }
 
 struct PanelFactory {
+    config_dir: PathBuf,
     plan: RunPlan,
     panel: Arc<Panel>,
     trace: Trace,
@@ -262,7 +263,16 @@ struct PanelFactory {
 
 impl PanelFactory {
     fn new(panel: &Arc<Panel>, trace: &Trace, reports: &Reports) -> Self {
+        static SERIAL: AtomicUsize = AtomicUsize::new(0);
+        let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
         Self {
+            // Daemon panel tests run concurrently. Each one needs its own
+            // programming-lease namespace so the production global exclusion
+            // can be tested without unrelated fixtures blocking each other.
+            config_dir: std::env::temp_dir().join(format!(
+                "ksx-daemon-panel-test-{}-{serial}",
+                std::process::id()
+            )),
             plan: panel_plan(),
             panel: Arc::clone(panel),
             trace: Arc::clone(trace),
@@ -270,6 +280,12 @@ impl PanelFactory {
             makes: Arc::new(AtomicUsize::new(0)),
             slow_plug: Duration::ZERO,
         }
+    }
+}
+
+impl Drop for PanelFactory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.config_dir);
     }
 }
 
@@ -286,7 +302,7 @@ impl SessionFactory for PanelFactory {
     }
 
     fn config_dir(&self) -> PathBuf {
-        PathBuf::from("test")
+        self.config_dir.clone()
     }
 
     fn game(&self) -> Option<String> {

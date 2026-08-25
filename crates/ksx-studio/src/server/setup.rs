@@ -65,7 +65,18 @@ pub(super) async fn setup_screen(
 ) -> Response {
     let payload = collect_setup(&state).await;
     let flash = query.flash.as_deref().filter(|f| !f.trim().is_empty());
-    let out = render_setup(&state.setup_page, &payload, flash);
+    // The stamp comes from the SAME fresh read the page's content was
+    // composed from — not from the TTL-cached `page_theme` the other nine
+    // pages use. One response, one read: /setup is the page that SHOWS the
+    // choice, and a cached stamp could contradict the rows beside it for a
+    // TTL after a hand-edit (review-caught). `with_theme` still sanitizes
+    // against the roster, so an unknown stored id renders as System here
+    // exactly as everywhere else.
+    let theme = payload.setup.view.theme.clone();
+    let out = crate::render::with_theme(
+        render_setup(&state.setup_page, &payload, flash),
+        Some(theme.as_str()),
+    );
     (
         [
             (
@@ -351,6 +362,74 @@ pub(super) async fn setup_form_blocking(
     setup_redirect(outcome)
 }
 
+/// What POST /setup/theme carries: a theme id from the roster, or `system`.
+/// Optional so a malformed post is a flashed refusal rather than axum's bare
+/// 422 — this page's whole feedback channel with scripting off is the flash.
+#[derive(Debug, Deserialize)]
+pub(super) struct SetupThemeForm {
+    #[serde(default)]
+    theme: Option<String>,
+}
+
+/// POST /setup/theme - remember which theme the Studio renders in.
+///
+/// Validated HERE against the generated [`crate::theme_tokens::THEMES`]
+/// roster, not in the machine provider: the roster is a Studio artifact (its
+/// stylesheet ships the theme blocks), so the surface that renders the
+/// choices is the one that knows which choices exist. `system` clears the
+/// stored id — System is the ABSENCE of a choice, not a theme.
+///
+/// No confirm step, same reasoning as blocking — and unlike blocking there is
+/// no session caveat: the theme is read per page render, never by the daemon,
+/// so the redirect this returns already renders in the new theme.
+pub(super) async fn setup_form_theme(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<SetupThemeForm>,
+) -> Response {
+    let Some(theme_field) = form.theme else {
+        return setup_redirect(Err(
+            "the form did not say which theme — pick one on the page".to_owned(),
+        ));
+    };
+    let wanted = theme_field.trim().to_owned();
+    let stored = if wanted == "system" {
+        String::new()
+    } else if let Some(meta) = crate::theme_tokens::THEMES.iter().find(|t| t.id == wanted) {
+        meta.id.to_owned()
+    } else {
+        return setup_redirect(Err(format!(
+            "'{wanted}' is not a theme this build ships — pick one on the page"
+        )));
+    };
+    let outcome = tokio::task::spawn_blocking(move || {
+        state
+            .machine
+            .set_theme(&ksx_api::ThemeSpec { theme: stored })
+            .map(|view| {
+                // Two sentences, because the two choices claim different
+                // things: a named theme renders everywhere; System is the
+                // ABSENCE of a choice, and "renders in it" would have no
+                // referent (review-caught).
+                match crate::theme_tokens::THEMES
+                    .iter()
+                    .find(|t| t.id == view.theme)
+                {
+                    Some(meta) => format!(
+                        "Saved: {} — every page renders in it from now on.",
+                        meta.label
+                    ),
+                    None => "Saved — pages follow the operating system's light or dark \
+                             choice again."
+                        .to_owned(),
+                }
+            })
+            .map_err(|refusal| refusal.message)
+    })
+    .await
+    .unwrap_or_else(|_| Err("the change did not complete".to_owned()));
+    setup_redirect(outcome)
+}
+
 pub(super) async fn setup_form_slot(
     State(state): State<Arc<AppState>>,
     Form(form): Form<SetupSlotForm>,
@@ -420,10 +499,27 @@ pub(super) async fn setup_form_prove(State(state): State<Arc<AppState>>) -> Resp
     ))
 }
 
-/// POST /setup/prove/cancel — `ControlSource::learn_cancel`.
-pub(super) async fn setup_form_prove_cancel(State(state): State<Arc<AppState>>) -> Response {
-    let outcome = tokio::task::spawn_blocking(move || state.control.learn_cancel())
-        .await
-        .unwrap_or_else(|_| crate::control::LearnView::unavailable("the control call panicked"));
+#[derive(Default, Deserialize)]
+pub(super) struct SetupLearnCancelForm {
+    #[serde(default)]
+    generation: String,
+}
+
+/// POST /setup/prove/cancel — cancel only the listener generation rendered in
+/// this form, so a stale page cannot stop a newer Identify/Mapping attempt.
+pub(super) async fn setup_form_prove_cancel(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<SetupLearnCancelForm>,
+) -> Response {
+    let Ok(generation) = form.generation.trim().parse::<u64>() else {
+        return setup_redirect(Err(
+            "this listening window is stale — start listening again".to_owned(),
+        ));
+    };
+    let outcome = tokio::task::spawn_blocking(move || {
+        state.control.learn_cancel_generation(Some(generation))
+    })
+    .await
+    .unwrap_or_else(|_| crate::control::LearnView::unavailable("the control call panicked"));
     setup_redirect(learn_flash(outcome, "Stopped listening."))
 }

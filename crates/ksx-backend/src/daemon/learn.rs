@@ -28,7 +28,7 @@
 //! live gameplay and could strand a virtual button across the rebind. That gate
 //! lives in the pipe handler so this service stays a dumb recorder.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -81,6 +81,10 @@ struct Learn {
 pub struct LearnService {
     state: Arc<Mutex<Learn>>,
     observe: ObserveFn,
+    /// Observer threads that have not yet released their Raw Input window or
+    /// panel tap. A superseded attempt may overlap its successor during its
+    /// cleanup tail, so this is a count rather than the newest generation.
+    active_observers: Arc<AtomicU64>,
     /// Set by [`LearnService::refusing`]: this service will never listen, and
     /// says why on every verb. `None` is the ordinary recorder.
     refusal: Option<&'static str>,
@@ -96,7 +100,37 @@ impl LearnService {
                 cancel: Arc::new(AtomicBool::new(false)),
             })),
             observe,
+            active_observers: Arc::new(AtomicU64::new(0)),
             refusal: None,
+        }
+    }
+
+    pub fn observer_active(&self) -> bool {
+        self.active_observers.load(Ordering::SeqCst) != 0
+    }
+
+    /// Give a terminal generation a small, bounded chance to release its Raw
+    /// Input window/panel tap before another observer starts. A genuinely
+    /// listening Learn is never waited out: it still owns the user's action
+    /// and the caller must refuse immediately.
+    pub fn wait_for_terminal_observer_release(&self, budget: Duration) -> bool {
+        let deadline = Instant::now() + budget;
+        loop {
+            let terminal = self
+                .state
+                .lock()
+                .map(|learn| learn.phase != Phase::Listening)
+                .unwrap_or(false);
+            if !terminal {
+                return false;
+            }
+            if !self.observer_active() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(2));
         }
     }
 
@@ -155,25 +189,36 @@ impl LearnService {
         };
 
         let state = self.state.clone();
+        let active = self.active_observers.clone();
         let observe = self.observe.clone();
+        self.active_observers.fetch_add(1, Ordering::SeqCst);
         let spawned = std::thread::Builder::new()
             .name("ksx-learn".into())
             .spawn(move || {
                 let outcome = observe(LEARN_TIMEOUT, cancel.clone());
                 let mut learn = state.lock().expect("learn state poisoned");
-                if learn.generation != generation {
-                    return; // superseded — a fresh learn owns the state now
+                if learn.generation == generation {
+                    learn.phase = match outcome {
+                        Ok(Some((device, key))) => Phase::Hit { device, key },
+                        Ok(None) if cancel.load(Ordering::SeqCst) => Phase::Cancelled,
+                        Ok(None) => Phase::TimedOut,
+                        Err(error) => Phase::Failed(error),
+                    };
                 }
-                learn.phase = match outcome {
-                    Ok(Some((device, key))) => Phase::Hit { device, key },
-                    Ok(None) if cancel.load(Ordering::SeqCst) => Phase::Cancelled,
-                    Ok(None) => Phase::TimedOut,
-                    Err(error) => Phase::Failed(error),
-                };
+                drop(learn);
+                active.fetch_sub(1, Ordering::SeqCst);
             });
         if let Err(err) = spawned {
+            self.active_observers.fetch_sub(1, Ordering::SeqCst);
             let mut learn = self.state.lock().expect("learn state poisoned");
-            learn.phase = Phase::Failed(format!("could not spawn the learn thread: {err}"));
+            // A second `learn-key` may have superseded this generation while
+            // the OS was attempting to create the observer thread. Match the
+            // completion path above: a stale failure must never clobber the
+            // fresh listener that now owns the shared state.
+            if learn.generation == generation {
+                learn.phase = Phase::Failed(format!("could not spawn the learn thread: {err}"));
+                learn.deadline = None;
+            }
         }
         self.poll()
     }
@@ -213,12 +258,19 @@ impl LearnService {
 
     /// `learn-cancel`: stop listening. Idempotent; a hit that already landed
     /// stays a hit (the caller has not read it yet).
-    pub fn cancel(&self) -> serde_json::Value {
+    pub fn cancel(&self, expected_generation: Option<u64>) -> serde_json::Value {
         if let Some(refused) = self.refused() {
             return refused;
         }
         {
             let mut learn = self.state.lock().expect("learn state poisoned");
+            if expected_generation.is_some_and(|expected| expected != learn.generation) {
+                // A stale browser/action is cancelling a generation it no
+                // longer owns. Leave the current listener untouched; poll()
+                // below returns its actual generation and phase.
+                drop(learn);
+                return self.poll();
+            }
             learn.cancel.store(true, Ordering::SeqCst);
             if learn.phase == Phase::Listening {
                 learn.phase = Phase::Cancelled;
@@ -319,11 +371,27 @@ mod tests {
     fn cancel_stops_a_listening_learn() {
         let (service, _tx, _count) = scripted();
         service.start();
-        let snap = service.cancel();
+        let snap = service.cancel(None);
         assert_eq!(snap["state"], "cancelled");
         assert_eq!(snap["remaining_ms"], serde_json::Value::Null);
         // Idempotent.
-        assert_eq!(service.cancel()["state"], "cancelled");
+        assert_eq!(service.cancel(None)["state"], "cancelled");
+    }
+
+    #[test]
+    fn a_stale_generation_cannot_cancel_the_fresh_listener() {
+        let (service, _tx, _count) = scripted();
+        let stale = service.start()["generation"].as_u64().expect("generation");
+        let fresh = service.start()["generation"].as_u64().expect("generation");
+        assert!(fresh > stale);
+
+        let snap = service.cancel(Some(stale));
+        assert_eq!(snap["generation"], fresh);
+        assert_eq!(snap["state"], "listening", "stale cancel won: {snap}");
+
+        let snap = service.cancel(Some(fresh));
+        assert_eq!(snap["generation"], fresh);
+        assert_eq!(snap["state"], "cancelled");
     }
 
     #[test]
@@ -389,7 +457,7 @@ mod tests {
 
         // And a third start still works after that.
         assert_eq!(service.start()["state"], "listening");
-        service.cancel();
+        service.cancel(None);
     }
 
     #[test]

@@ -22,7 +22,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Victor-Villacis/ksx"
@@ -89,6 +89,7 @@ egui = "0.32"
 proptest = "1"
 insta = "1"
 rusty-xinput = "1"
+sha2 = "0.11"
 # No serialization/sync features: ksx only needs the in-process recorder.
 hdrhistogram = { version = "7", default-features = false }
 

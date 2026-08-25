@@ -64,6 +64,18 @@ pub struct Settings {
     /// The useful surface, if one is ever wanted, is a READ of where each pad
     /// actually landed.
     pub starting_user_index: u8,
+    /// The Studio's visual theme, by id — `None` follows the OS light/dark
+    /// choice ("System"), which is also why absence is the default rather
+    /// than a named theme.
+    ///
+    /// The Studio owns the theme roster (its generated `theme_tokens.rs`) and
+    /// validates ids at the door; this store keeps whatever short ident it
+    /// was handed, so a config written by a NEWER Studio still loads here and
+    /// the stamp-time sanitizer — not a parse error — decides what an unknown
+    /// id means (it renders as System). Skipped when `None` so configs that
+    /// never chose a theme stay byte-identical across load/save.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
 }
 
 impl Default for Settings {
@@ -73,6 +85,7 @@ impl Default for Settings {
             block_mice: false,
             mouse_move_deadzone: 5,
             starting_user_index: 1,
+            theme: None,
         }
     }
 }
@@ -129,7 +142,8 @@ pub struct SlotEntry {
     pub persona: Persona,
     /// What this slot does with simultaneous opposing directions:
     /// `"off"` (default — today's behavior, nothing generated), `"neutral"`,
-    /// or `"up-priority"`. See [`ksx_core::socd`].
+    /// `"up-priority"`, `"last-input"` or `"first-input"`. See
+    /// [`ksx_core::socd`].
     #[serde(
         default,
         with = "crate::socd_serde",

@@ -128,7 +128,7 @@ disable that key's other bindings.
   still held resumes its own binding in that one batch, so lifting B while
   A stays down gives you A back with no flicker.
 - **A chord is a holder.** It participates in the all-keys-up rule and the
-  opposite-axis snap like any key, so an endpoint driven by both a key and
+  analog resolver like any key, so an endpoint driven by both a key and
   a chord stays down while either drives it.
 - **Specificity.** A bigger guard beats a smaller one *where they share a
   constituent*: A+B+C suppresses A+B, and A+B comes back the instant C
@@ -449,7 +449,7 @@ For "make THIS button auto-fire" — one number, no sequence — the answer is
 
 A macro STEP is an ordinary **holder**: `holder_bindings[first + i]` is step
 `i`'s hold set, and the step is "held" exactly while the macro is on it. So
-the all-keys-up rule, the opposite-axis snap, the releases-before-presses
+the all-keys-up rule, the analog resolver, the releases-before-presses
 order and the one-batch discipline are the chord machinery unchanged — a
 macro cannot strand a button that a chord could not. Two consequences worth
 naming: an endpoint carried from one step to the next **never flickers**
@@ -690,12 +690,14 @@ Ordered by value on *this* machine, not by novelty.
 6. ~~**SOCD policy, user-visible.**~~ **SHIPPED** — see §2.6 below. It cost
    *one* new primitive (a chord that outputs nothing) because
    chord-with-consumption already was the mechanism. `last-wins` /
-   "snap tap" is the one mode still missing, and the reason is stated there.
+   "snap tap" and first-input followed later as §2.6a — the order-aware
+   pair, engine-side, for the cost of one bit of memory per control.
 7. ~~**NOT / exclusion conditions.**~~ **SHIPPED with chords** (§1b): the
    `when` guard made `unless` fall out free, exactly as predicted. MAME's
    `NOT`, in the same row as the binding it qualifies.
-8. **Toggle-hold (sticky hold).** Press once → held until pressed again.
-   Accessibility, and useful for triggers/auto-run.
+8. ~~**Toggle-hold (sticky hold).**~~ **SHIPPED** — see §3b. Press once →
+   held until pressed again. Accessibility, and useful for
+   triggers/auto-run. Toggle-turbo fell out of the wiring for free.
 9. **Double-tap / multi-tap activators** (Steam's model). Cheap once the
    clock exists for tap-hold.
 10. **Negative edge / release-triggered bindings.** Fighting-game charge
@@ -735,9 +737,11 @@ Chord::consuming(key, when)
 ```
 
 - **neutral** = `[Left+Right] → Consume`. Both keys suppressed, nothing
-  pressed in their place, so the axis falls to centre (via the existing
-  opposite-axis snap, which sees no held opposite) and both dpad bits
-  clear. Same for `[Up+Down]`.
+  pressed in their place, so the axis falls to centre — not by a rule about
+  opposites, but because consumption makes `holds()` false for both keys, so
+  the resolver finds NO holder on either sign and its third clause ("a control
+  with no holder is neutral") answers directly. Both dpad bits clear the same
+  way, by the digital arm's all-keys-up. Same for `[Up+Down]`.
 - **up-priority** = `[Down+Up] → whatever UP drove`. Consumption is
   all-or-nothing per chord, so "keep Up" is said as "consume both and
   re-emit Up" — and re-emit it *in full*, every binding that key had, or
@@ -754,6 +758,7 @@ Per slot, in `config.toml` and `games.toml`:
 number = 1
 preset = "street-fighter-p1"
 socd = "up-priority"      # "off" (default) | "neutral" | "up-priority"
+                          #   | "last-input" | "first-input" (§2.6a)
 ```
 
 `ksx_core::socd::generate` reads the preset and emits the chords at plan
@@ -770,15 +775,62 @@ preset already chords by hand, and validation says so
 An unguarded `consume = "Left"` row is inert and reported too
 (`ConsumeWithoutGuard`): consumption is what a *chord* does.
 
-#### The one mode ksx cannot do yet: last-wins / "snap tap"
+#### ~~The one mode ksx cannot do yet: last-wins / "snap tap"~~ — see §2.6a
 
 Last-wins needs to know which direction was pressed **most recently** —
 that is input *history*, and the engine is deliberately a pure function of
 the currently-held key SET (§0.1), which is exactly what makes chords
-free of clocks, deferral and latency. Adding an ordering memory is the
-transform stage's job (§3), not a new binding shape, so it waits for it.
-Note that some tournament rulesets restrict last-wins anyway; the two
-modes that shipped are the ones those rules ask for.
+free of clocks, deferral and latency. Adding an ordering memory was the
+transform stage's job, and it has now happened: see §2.6a. The paragraph
+above stays because its reasoning still governs the SPLIT — the two static
+modes are chords and stayed chords; only the order-aware pair got engine
+state, and exactly one bit of it per control. Note that some tournament
+rulesets restrict last-wins anyway; the compliant pair is still neutral
+and up-priority.
+
+### 2.6a. Order-aware SOCD: last-input and first-input — SHIPPED (2026-08-16)
+
+```toml
+socd = "last-input"    # snap tap: the newer press wins, release hands back
+socd = "first-input"   # the first press holds until it is released
+```
+
+The one moment the two modes disagree: the opposite direction pressed
+while the first is still held. Last-input follows the newer press (the
+leverless "snap tap" standard); first-input makes it wait its turn. In
+both, releasing the winning side hands the control to the other side if it
+is still held — the resume-on-release rule chords already follow.
+
+**No chords are generated** (`generate` returns nothing for these two —
+order is not a function of the key set), and no new suppression mechanism
+exists either: the engine keeps one `SocdRt` per opposing CONTROL — which
+keys are the two sides, one bit for who wins — and `sync_socd` writes the
+losing side's keys into the SAME `consumed` mask chord consumption uses.
+One suppression mechanism, two writers; everything downstream (all-keys-up,
+the analog resolver, releases-before-presses, one-batch deltas) is
+untouched.
+
+The rules, each pinned in `engine_socd.rs`:
+
+- **Sides, not key pairs.** Several keys on one direction are ONE side
+  (multi-bind is one clock, one flipper, and here one side): a side rises
+  when the group goes from silent to driving, so a second key on an
+  already-driving side is not a new press. A key bound to BOTH halves of a
+  control belongs to neither side — it opposes itself, and there is no
+  honest "newer press" for a key that says both at once — so it keeps its
+  raw behavior.
+- **Autorepeat is not a press** (§1c's edge rule, everywhere it matters).
+- **A hand-written chord over the pair wins at runtime**: while it holds
+  both keys consumed, neither side is driving and the policy has nothing
+  to say — the same precedence the static modes get from generation
+  skipping shadowed pairs, arrived at through the same mask.
+- **Vertical pairs follow order, not up**: unlike up-priority there is no
+  up bias — whichever direction the rule selects is the one reported.
+
+Wire names `last-input` / `first-input` (aliases: `snap-tap`, `last-wins`,
+`first-wins`), so `ksx slot assign --socd`, `ksx stage socd` and every
+staged surface learned them from `FromStr` for free. The Studio roster
+titles are "Last press wins" / "First press wins".
 
 ## 3. The transform stage — and its first tenant, per-binding TURBO
 
@@ -930,11 +982,78 @@ no JavaScript).
 
 #### What did not ship
 
-- **Toggle-turbo** (press once, it auto-fires until pressed again). It needs
-  the sticky/latch vocabulary from catalog item 8, not a second turbo mode.
+- ~~**Toggle-turbo**~~ — **SHIPPED with §3b**, and exactly as predicted: it
+  needed the latch vocabulary from catalog item 8, not a second turbo mode.
+  The latch drives the turbo's source, and auto-fire-while-latched falls out
+  of the wiring order.
 - **Turbo on a macro STEP.** Deliberate, see above.
 - **Per-key rates on one function.** The file format cannot express two, and
   the model matching the format exactly is what makes multi-bind one clock.
+
+### 3b. Toggle-hold — SHIPPED (2026-08-16)
+
+Catalog item 8, answered, and the transform stage's first CONTEXT tenant —
+turbo added time, toggle adds state that a release does not clear. Press once
+→ the endpoint is held; press again → it lets go. The key's RELEASE changes
+nothing, which is the whole feature.
+
+#### The file
+
+```toml
+[bindings]
+lb = { key = "L", toggle = true }                # press L once: LB stays held
+A  = { key = "G", toggle = true, turbo_hz = 12 } # toggle-turbo, one row
+rt = { key = "T", when = ["B"], toggle = true }  # the CHORD is the flipper
+```
+
+Like a rate, the latch is a property of the OUTPUT carried on the function's
+first row (`ksx_core::Preset::toggle` is the membership list), so several keys
+on one latched endpoint are ONE flipper: the latch flips when the group goes
+from silent to driving, and a second key pressed while the first is held is
+not a second flip. `toggle = false` is the explicit spelling of the default.
+
+#### The engine: a latch holder, flipped on rising edges only
+
+A latched endpoint is one more holder class (after turbo in the id space),
+rewired at build time exactly as turbo is: the keys and chords that used to
+drive the endpoint become the latch's SOURCES, and the holder's held bit is
+simply the latch state. The latch flips on the RISING EDGE of the aggregate
+source — keyboard autorepeat is not a new press (§1c's edge rule, again), a
+falling source never flips, and a chord handing a still-held key back to its
+owner is a rising edge and does flip (the same resume-on-release rule chords
+apply to ordinary bindings).
+
+**Toggle-turbo needs no code of its own.** Toggle is rewired before turbo, so
+a latched endpoint with a rate reads: keys → latch → turbo clock → endpoint.
+Press once and it auto-fires hands-free; press again and the clock stops and
+the endpoint releases in the same batch. A latch on an axis is auto-run: the
+direction stays deflected with every key up.
+
+#### Everything releases on the way out — deliberately MORE important here
+
+The latch survives all-keys-up *by design* (press once, walk away), which
+makes the exits load-bearing rather than tidy: a latched button on a pad the
+player has left is exactly the stuck-input failure the exits exist to
+prevent. All four release it, each pinned in `engine_toggle.rs`: session stop
+/ emergency escape, device yank, binding hot-swap (fresh tables start
+unlatched and the neutral deltas release), and reset.
+
+#### Surfaces
+
+```
+ksx map --preset "Panel P1" --function LB --key L --toggle true
+ksx map --preset "Panel P1" --function LB --key L --toggle false   # off
+```
+
+Three states, same as the rate: absent leaves an existing latch alone
+(rebinding a latched button must not silently make it momentary again),
+`false` clears it, clearing the control clears it with the keys. The
+confirmation says what a press now means — "(toggle: a press holds until the
+next press)" — and the staged mapper carries the same three states through
+`stage-bind`. A `toggle` on a `macro.<name>` trigger is refused everywhere
+(file, CLI, staged bind): what a release or repeat does is the macro body's
+own business (`on_release`, `repeat`), and a latch on its trigger would be a
+second spelling for the same thing.
 
 ## 4. Sequencing (proposed)
 
@@ -950,14 +1069,14 @@ Nothing here blocks M6/M7. Suggested order, cheapest-and-most-useful first:
    transform stage is the genuinely time-based half: turbo, tap-hold,
    double-tap, ramps — plus analog shaping, which needs neither. **SOCD
    cleaning also landed on top of chords** (§2.6), for the cost of one
-   consume-only binding; only its last-wins mode still waits for history.
+   consume-only binding; its order-aware modes followed as §2.6a.
 5. ~~**Macros**~~ — **DONE** (§1c). They did need the scheduler, and it
    turned out to be small: one ordered timer list on the engine thread, and
    a macro *step* modelled as an ordinary holder, so every release path
    chords already had covered macros for free. What the transform stage
-   still owes §3 is the rest of the time-based half — turbo, tap-hold,
-   double-tap, ramps — plus SOCD's last-wins mode, which needs history
-   rather than a clock.
+   still owes §3 is the rest of the time-based half — tap-hold, double-tap,
+   ramps (turbo landed as §3a, and SOCD's order-aware modes as §2.6a —
+   history, it turned out, is one bit per control rather than a clock).
 6. **Input display** alongside whichever of the above ships first; it is
    how the user (and we) will debug all of it.
 

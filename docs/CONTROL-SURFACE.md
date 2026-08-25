@@ -168,10 +168,12 @@ have to re-implement.** Violating it is how Studio gets forked.
 | Session status + live health | tray tooltip (`DaemonState::tooltip`: `RunState` + `LiveHealth` while running, `LastSession` after); stdin `status` → `DaemonCommand::Status`; pipe `status` / `ksx session status [--json]` (state + game + profiles + last/live health); `ksx run --latency` for the rolling latency summary | M9: poll the same `SharedState` snapshot (`DaemonState`) the tray polls — small, cloneable, no borrows of anything live. **M10: Studio's session panel renders the pipe `status` response (live)** | exists — pipe + CLI + Studio live |
 | Reload config | tray "Reload config" / stdin `reload` / pipe `reload` / `ksx session reload` → `DaemonCommand::Reload` — a clean stop and a clean start from disk. A mapper SAVE takes the narrower `DaemonCommand::ApplyBindings` instead: binding-only edits hot-swap into the live engine with the pads left plugged, structural changes fall back to the same bounce (see "the binding hot-swap") | M9: `DaemonCommand::Reload`. **M10: Studio's Reload button POSTs `/config/reload` → pipe `reload` (live)** | exists — pipe + CLI + Studio live |
 | List / identify devices | `ksx devices [--json]` (both backends, read-only); `ksx winusb status [--json]` for the USB/claim view | M9: same enumeration in-process — strictly read-only, safe mid-session. M10: api devices | exists |
+| **Measure simultaneous keyboard / encoder host signals** | Typed pipe `input-test-start` / `input-test-poll` / generation-stamped `input-test-cancel`; CLI: `ksx input-test start SELECTOR [--duration-ms 1000..=60000]`, then `poll`, and `cancel --generation N` | **Studio is primary**: keyboard Workbench / Control Surface Builder → `/api/input-test*`. Exact selected selector, bounded wall-clock observation, no mapping or hardware mutation. Reports host-visible `held`, `seen`, `peak`, `events`, `dropped` and explicitly unavailable rollover visibility; duplicate terminals emitting one key cannot be distinguished | exists — pipe + CLI + Studio |
+| **Inspect and initialize panel encoder hardware** | `ksx panel status [--device QUERY] [--json]` remains passive. `ksx panel chart`, `panel backups`, plan-first `panel program`, and `panel restore` provide the guarded read/backup/diff/apply/readback contract for a supported I-PAC; mutations require the exact hashes/fingerprint/profile plus `--yes --supervised` | Studio serves registered encoders in a distinct **Input hardware → Arcade encoders** lane. **Set up** stages that exact selector and opens chart read/backup plus the reversible first-writer check before a key event or physical panel exists. An all-Unassigned chart chooses its qualification terminal/key directly; templates and Design/Teach/Route remain a later physical-surface concern. The existing Builder hardware card remains the secondary entry for an already-modeled panel | implemented and synthetic-verified; first real hardware write remains supervised and gated by `PANEL-PROGRAMMING-STATE.md` |
 | **First-contact setup** | `ksx setup [--slot N] [--preset NAME] [--profile TITLE] [--step-secs N] [--dry-run] [--json]` — the wizard (`ksx-backend/src/setup.rs`): identify the panel by PRESS (Raw Input, the same observer the pipe's `learn-key` uses), then sequential position-named prompts (`SOUTH`, not `A`), auto-advance, inline ALREADY TAKEN, a completeness audit (warns when the panel can reach neither START nor BACK), and a TRANSACTIONAL commit — nothing is written until the review screen is confirmed, and the slot wiring (`config.toml` or a `games.toml` profile) is a separate question it ASKS. Chains P1→P4 in one run. Skipping is "press nothing": each prompt runs a visible countdown, two silent prompts end the run | M9: the same `Wizard` state machine behind a modal — it is deliberately pure (`Input` in, `Reaction` out), so the UI supplies the observer and the printer and decides nothing. M10: needs the live socket to carry presses; the audit and the transaction are already shared | exists — CLI |
 | **Preset templates** | `ksx preset list [--templates] [--json]`; `ksx preset new <NAME> --from-template <ID> [--player N] [--force] [--dry-run] [--json]`. Templates ship in code (`ksx-core/src/templates.rs`), beside the `default`/`empty` built-ins they sit with: `arcade-6button` (I-PAC/MAME six-button, P1–P2 blocks), `arcade-4way` (MAME four-player chart, P1–P4), `keyboard-wasd`, `keyboard-2p` (two players on ONE keyboard — WASD against the arrows, P1–P2 blocks), plus `default`/`empty` as named seeds. Instantiating writes an ORDINARY preset (never protected), refuses to clobber without `--force`, and backs up first when it does | M9/M10: a "new preset from…" picker over the same registry — the list and the instantiation are one call each and carry the panel notes with them | exists — CLI |
 | Pad test | `ksx pads --count N --persona xbox360\|playstation [--json]` (plug, test pattern, unplug) | M9: same routine in-process, only while emulation is stopped (test pads compete for the four XInput slots). M10: api | exists |
-| Per-slot persona | TOML edit: `persona = "playstation"` on the `[[slot]]` (aliases `ds4`/`ps4` accepted) | M7 wizard / mapping verbs first; then GUI forms write the same TOML and issue `Reload` | gap — TOML-only **by design** until M7 |
+| Per-slot persona | `ksx slot assign --slot N --persona xbox360\|playstation\|dualsense [--profile TITLE] [--reload]`; TOML remains first-class (`persona = "playstation"`, aliases `ds4`/`ps4` accepted) | Studio `/setup` serves the canonical backend/limit-aware persona roster and writes through the same slot assignment seam; guided `/start` stages the persona before Save or Play | exists — CLI + pipe + Studio |
 | Preset editing | `ksx map --preset "Panel P1" --function A --key G [--clear] [--force] [--move-from FUNCTION] [--json]`; **key LISTS: repeat or comma-separate `--key` (`--key S --key Enter`, `--key S,Enter`) → `A = ["S", "Enter"]`, one write** (pipe: `"keys": ["S","Enter"]`, the list spelling of `"key"` — exactly one of the two); chords: `--when B[,C] [--unless K]`; **TURBO: `--turbo-hz N`** (auto-fire while the key is held; `0` = off, omitted = leave the control's existing rate alone, `--clear` clears it with the keys; one rate per CONTROL, so several keys share one clock — docs/INPUT-TRANSFORMS.md §3a). The rate is CAPPED, never refused: a press AND a release must each survive a 60 Hz poll, so ~15 Hz is the fastest deliverable and the response carries both `turbo_hz` and `turbo_effective_hz` (pipe `map` takes the same `"turbo_hz"` field); whole-preset: `--restore defaults\|session-backup\|latest-backup`, `--clear-all`, `--list-backups`; macro BODIES: `ksx macro --preset X --name N --from-json FILE` / `--delete` (pipe `map-macro`); pipe `map` / `map-macro` / `map-restore` / `map-clear-all` / `map-backups` (same writers: `ksx-backend/src/mapping.rs`); TOML edit still first-class | **Studio's `/map` mapper (live)**: click a control → pipe `learn-key` → pipe `map` — every write goes through the one shared writer, never a parallel editor. "Add another key" and the per-key ✕ send the control's WHOLE key list (`ControlSource::bind_keys` → one `map` with `"keys"`), so a multi-key edit is ONE atomic write, not read-modify-write. Conflict detection is server-side in that writer (see below). The macro editor reads a preset's `[macros]` tables (`StatusSource::macros`) and saves a whole table back through `/api/macro/save` → `ControlSource::save_macro` → pipe `map-macro` — including `repeat` / `turbo_hz` / `gap_ms`, with the effective-rate math printed live beside the selector. PER-BINDING TURBO shows on each legend row as its EFFECTIVE rate and is set from the learn dialog ("Set turbo" / "No turbo", beside Replace / Add another key / Clear) or, with no JavaScript, the row form's `turbo_hz` box and `Turbo` submit → `POST /map/turbo`; both write through the same `ControlSource::bind_keys` with the control's current key list, so turbo is never a second writer. Studio does not yet DISPLAY chords (later pass) — the CLI/pipe author them and the engine runs them | exists — CLI + pipe + Studio live |
 | Learn a key ("press the panel key for P1·A") | pipe `learn-key` / `learn-poll` / `learn-cancel` (asynchronous; see "learn-key semantics" below) | **Studio's mapper drives it (live)**: `/api/learn*` → the pipe verbs. No CLI face yet (`ksx map` takes the key by name; `ksx monitor` shows names) | exists — pipe + Studio |
 | Game profiles | TOML edit (`games.toml`); consumed by `ksx run --game`, `ksx daemon --game`, `ksx autostart --game` | Editing: M7 verbs (E5 `ksx slot assign` family), then GUI forms over them. Consuming: `DaemonCommand`/api as above. **The cabinet's "Game" screen picks one and starts it** — one `start` with a profile title, never a new path | gap for AUTHORING a profile; consuming and picking exist |
@@ -179,7 +181,7 @@ have to re-implement.** Violating it is how Studio gets forked.
 | **Watch a running pipeline** (button check) | none — this is live data, not a verb | **The cabinet's "Buttons" screen**, over the lossy fan-out sink (`ksx-backend/src/feed.rs`, shape in `ksx-api::live`): what the PANEL sent beside what the PAD published, per slot. Read-only by construction — the sink has no write path at all | exists — cabinet (in-daemon only; there is no wire protocol for the stream yet, and `ksx cabinet` as a separate process says so instead of rendering a dead panel) |
 | WinUSB claim / release / status | Advanced CLI: `ksx winusb status` is read-only; legacy operator `claim`/`release` remain explicit. Supported customer mutation requires an installed build | **Studio `/start` is primary and installed-only**: exact selected selector+instance, three prepare confirmations (tested spare, rebind consequence, machine-local certificate), one release confirmation, UAC through the fixed GUI helper, fresh exact re-survey, then guarded backend transition. Portable copies refuse preparation/release | exists — CLI status + typed MachineSource + Studio |
 | Autostart | `ksx autostart --enable/--disable/--status` (validates the config before registering); hidden installed `uninstall-quiesce` removes only fixed `ksx\autostart` and freshly proves it absent | M9: same verb in-process. M10: api | exists |
-| Install ViGEmBus | `ksx install-drivers [--dry-run] [--yes]` — SealedFile pins; this verb never self-elevates | Installer checkbox is primary; Studio reports pad-bus state but cannot run this general installer. WinUSB's fixed exact-device helper is a separate capability/consent boundary, not this row | exists |
+| Install controller output drivers | `ksx install-drivers [--dry-run] [--yes]` for ViGEmBus; the checked HIDMaestro installer task owns its pinned package/bootstrap — neither ordinary runtime self-elevates to install | Installer checkboxes are primary; Studio `/start` reports only the backends required by the currently staged supported personas through `MachineSource::controller_outputs`, while Status/System inventories both installed stacks. HIDMaestro's package evidence stays `verified-on-play`; neither page pretends its protected endpoint exists before Play or can run either general installer. WinUSB's fixed exact-device helper is a separate capture capability/consent boundary, not this row | exists |
 | Export config as JSON | `ksx config export [--what config\|games\|presets\|all] [--preset NAME] [--out PATH\|-] [--compact] [--json]` — the document on stdout (so it pipes), the summary on stderr | M9: same verb in-process; the document IS the payload a form would populate. M10: **live** — `MachineSource::config_export` returns the document IN MEMORY (no path, no stdout), and Studio's `/setup` serves it as a download from `GET /setup/export.json` | exists — CLI + api + Studio |
 | Import config from JSON | `ksx config import <PATH\|-> [--what …] [--dry-run] [--yes] [--force] [--json]` — validated first, DRY RUN unless `--yes`, timestamped `.bak` of every overwritten file | M9: same verb, preserving dry-run-first. M10: **live and local only** — `MachineSource::config_import` takes the DOCUMENT, not a path, and keeps the CLI's consent shape exactly (`apply` is what writes; without it the answer is a report). Studio's `/setup` posts it at `POST /setup/import`. Still loopback-only: a REMOTE surface that can replace the whole config wants the pairing token first | exists — CLI + api + Studio |
 | Doctor | `ksx doctor [--latency] [--json]` — stable codes, `{report, advice}` | M9: same verb, render the JSON. M10: api | exists |
@@ -248,12 +250,13 @@ both halves.
 
 A running daemon now serves `\\.\pipe\ksx-daemon` (`ksx-backend/src/daemon/pipe.rs`).
 Formerly: "a RUNNING daemon has no external control channel" — `DaemonCommand`'s
-only senders were the tray thread and the headless stdin reader. The pipe is the
-third front end with **exactly the tray's reach**: it enqueues the same
-`DaemonCommand` values the tray menu produces onto the same crossbeam channel,
-reads the same `DaemonState` snapshot the tray polls, and reads games.toml from
-disk. It has no path to the factory, the panel, or any pipeline thread, and it
-runs on one plain thread — no async runtime, so E7 rule A (default build links
+only senders were the tray thread and the headless stdin reader. The pipe is now
+the typed `ControlSource` seam shared by shell and Studio. Session action verbs
+still enqueue the exact `DaemonCommand` values the tray menu produces and read
+the same `DaemonState` snapshot. Editor and bounded-observer verbs delegate to
+their daemon-owned services: mapping writers, Learn, and the simultaneous-input
+tester. The pipe never calls a time-critical pipeline loop directly, and it
+runs on plain threads — no async runtime, so E7 rule A (the default build links
 no tokio/axum/forma) still holds.
 
 **Protocol** — one JSON request line in, one JSON response line out, per
@@ -339,8 +342,20 @@ The M7 mapper slice adds four verbs on the same channel:
 → {"verb":"learn-poll"}
 ← {"ok":true,"state":"hit","generation":3,"remaining_ms":null,
    "device":"HID\\VID_D209&PID_0430&MI_00\\8&TEST_DEVICE&0&0000","key":"G","error":null}
-→ {"verb":"learn-cancel"}
+→ {"verb":"learn-cancel","generation":3}
 ← {"ok":true,"state":"cancelled", …}
+
+→ {"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":30000}
+← {"ok":true,"state":"listening","generation":7,
+   "selector":"usb:d209:0430:00","remaining_ms":29996,
+   "held":[],"seen":[],"peak":0,"events":0,"dropped":0,
+   "rollover_visibility":"unavailable","detail":"KSX currently observes …"}
+→ {"verb":"input-test-poll"}
+← {"ok":true,"state":"timeout","generation":7,"remaining_ms":null,
+   "held":[],"seen":["J","K","L"],"peak":3,"events":6,"dropped":0,
+   "rollover_visibility":"unavailable","detail":"KSX observed a peak …"}
+→ {"verb":"input-test-cancel","generation":7}
+← {"ok":true,"state":"timeout", …}
 ```
 
 ### Whole-preset writes: three restore destinations, plus clear-all
@@ -688,16 +703,58 @@ nobody walks away from a cabinet they stopped. One click each way, no tray
 hunt, no CLI — and the `ksx map` fallback is still printed. Same honest
 limit for WinUSB-claimed interfaces: a claimed panel is not in the keyboard
 stack, so Raw Input cannot hear it even between sessions (its typethrough
-injection is deliberately filtered as injected input) — learning from a
-claimed panel through the daemon's own report stream is the M8-adjacent
-follow-up. Constants are PadForge's earned recorder numbers
+injection is deliberately filtered as injected input). The daemon learner now
+observes the daemon-owned capture/report stream as well as ordinary Raw Input,
+so Studio's Identify and Mapper flows can hear that claimed panel without
+opening a competing device handle. Constants are PadForge's earned recorder numbers
 (docs/research/padforge-code-audit.md §1.2): 10 s timeout, 33 ms observer
 slices, wait-for-release re-baselining (keys held at learn start are ignored
 until released — autorepeat cannot steal a chained learn). The verb is
 asynchronous by design: the pipe serves clients sequentially, so `learn-key`
 only STARTS the observation and returns; `learn-poll` carries the outcome
 plus `remaining_ms` — the visible countdown PadForge never had. A second
-`learn-key` supersedes the first; `learn-cancel` stops within one slice.
+`learn-key` supersedes the first. Current clients send that attempt's exact
+`generation` with `learn-cancel`; the daemon compares it under the learner
+mutex, so a stale browser tab cannot cancel the fresh attempt that superseded
+it. Omitting `generation` remains a pipe-level compatibility spelling for old
+non-browser clients; Studio's HTTP cancellation boundary requires the number.
+An accepted cancellation stops within one observer slice.
+
+**simultaneous-input test semantics**: this is a different observation over the
+same exclusive physical-listener boundary. `input-test-start` takes one exact
+canonical selector and a total wall-clock budget of 1–60 seconds; preparation,
+fresh device resolution and listening all spend that one budget. It is refused
+while Play is running/starting or Learn is listening/releasing. A Play
+transition during preparation or listening stops the test before another
+signal is accepted. Ordinary keyboards are observed through Raw Input; a
+WinUSB-claimed panel is observed through the daemon's existing panel tap. The
+fresh resolution must still name that exact selected source — the service does
+not fall back to another keyboard when the board disappears or cannot type.
+The observer holds the same machine-wide lease as standalone Play and
+persistent encoder maintenance for its complete lifetime, so a separate
+process cannot start Play or read/write the board's chart underneath the test;
+whichever operation fails to acquire that lease refuses without opening its
+hardware path.
+
+The result measures **host signals KSX decoded**, not physical switches and not
+the encoder's advertised rollover. `held` is the current set, `seen` is the
+distinct set across the attempt, `peak` is the largest held set, and `events`
+counts accepted make/break transitions. Two physical terminals assigned the
+same key collapse into one signal before KSX can distinguish them. Raw Input
+does not expose the original USB ErrorRollOver report, so
+`rollover_visibility:"unavailable"` is explicit; a high peak is evidence of
+what this attempt delivered, never proof of NKRO.
+
+Start returns immediately with a monotonically increasing `generation`; poll
+returns a bounded snapshot (`idle`, `listening`, `timeout`, `cancelled`, or
+`failed`). Cancellation is generation-stamped, so a stale Studio tab or shell
+cannot stop a newer listener. The wire still accepts an omitted generation for
+old clients, but new Studio and `ksx input-test cancel` both require the exact
+number. A terminal `state:"failed"` is a readable diagnostic snapshot and may
+therefore carry `ok:true`; it still means the observer failed. The CLI prints
+its `error` and exits 1, while `timeout` and `cancelled` are successful terminal
+snapshots. `ksx input-test start|poll|cancel --json` prints the daemon's exact
+one-object response, so scripts and Studio consume the same field set.
 
 Action verbs poll the snapshot up to 5 s for the outcome; an unsettled command
 answers `ok:true` with a "requested — check `ksx session status`" message
@@ -727,10 +784,12 @@ renders the controls disabled with the reason. A daemon **older than the
 pipe** looks identical to "not running" on this surface — the process-list
 row on the Studio page is what catches that case.
 
-**Clients**: `ksx session status|start [--game TITLE]|stop|reload|quit` (`--json`
-prints the raw response; exit 0 = done, 1 = daemon refused / pipe error,
-2 = no control channel; initially absent is exit 0 for `quit` alone) and
-Studio's session panel (below). The E5 MCP shim gets the same channel for free.
+**Clients**: `ksx session status|start [--game TITLE]|stop|reload|quit` and
+`ksx input-test start|poll|cancel` (`--json` prints the raw response; exit 0 =
+done, 1 = daemon refusal / observer failure / pipe error, 2 = no control
+channel; initially absent is exit 0 for session `quit` alone), plus Studio's
+session panel and simultaneous-input dialog (below). The E5 MCP shim gets the
+same channel for free.
 
 ## The honest gaps
 
@@ -742,11 +801,16 @@ Studio's session panel (below). The E5 MCP shim gets the same channel for free.
    remaining half of that E5 item — wiring a DEVICE to a slot — stays with `ksx
    setup`, which identifies the board by PRESS; a preset name cannot imply
    which physical board is in front of the player.
-2. **Per-slot persona is a TOML edit today.** Deliberate until the M7 wizard:
-   the hand-editable config *is* the interface, and it round-trips.
-3. **learn-key cannot hear a WinUSB-claimed panel** (see semantics above) —
-   Interception-backed cabinets learn fine; a migrated cabinet uses `ksx map`
-   until the claimed-panel learner lands.
+2. ~~**Per-slot persona is a TOML edit today.**~~ **CLOSED.** `ksx slot
+   assign --persona`, the typed pipe/control request and Studio `/setup` now
+   share one writer; guided `/start` carries the same canonical persona roster
+   in its reversible stage. The hand-editable TOML remains a first-class bulk
+   interface and still round-trips.
+3. ~~**learn-key cannot hear a WinUSB-claimed panel.**~~ **CLOSED.** The daemon
+   learner observes its own capture/report stream as well as ordinary Raw
+   Input. Identify and Mapping therefore hear a claimed panel without racing
+   the daemon for a second device handle, and generation binding prevents one
+   tab from consuming or cancelling another tab's attempt.
 4. **learn-key still needs emulation stopped** — deliberately, for the four
    reasons in "learn-key semantics". Studio makes obeying it one click
    (Pause → map → Resume) rather than a dead end.

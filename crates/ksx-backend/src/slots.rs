@@ -251,6 +251,25 @@ pub enum SlotError {
         /// `config.toml`, or `profile "Example Launcher" (games.toml)`.
         destination: String,
     },
+    /// Writing this would put more slots on the HIDMaestro host than it
+    /// carries ([`ksx_core::MAX_HIDMAESTRO_PADS`] live pads).
+    #[error(
+        "that would make {after} slots in {destination} use a HIDMaestro persona, and the \
+         elevated HIDMaestro host carries at most {} live pads — the extra pads would refuse \
+         at startup after the others were already live. Give slot {slot} persona '{}' or '{}' \
+         (ViGEmBus, outside that pool), or move another slot off HIDMaestro first",
+        ksx_core::MAX_HIDMAESTRO_PADS,
+        Persona::Xbox360,
+        Persona::PlayStation
+    )]
+    TooManyHidMaestroPads {
+        slot: u8,
+        /// How many slots in the destination would be on a HIDMaestro persona
+        /// once this write landed.
+        after: usize,
+        /// `config.toml`, or `profile "Example Launcher" (games.toml)`.
+        destination: String,
+    },
     /// A persona-only write named a slot that is not in the file yet.
     ///
     /// "Keep the preset it uses" has no answer for a slot that uses none, and
@@ -281,6 +300,7 @@ impl SlotError {
             Self::PersonaNotImplemented { .. } => "persona-not-implemented",
             Self::PersonaCapacity { .. } => "persona-capacity",
             Self::TooManyXinputSlots { .. } => "too-many-xinput-slots",
+            Self::TooManyHidMaestroPads { .. } => "too-many-hidmaestro-pads",
             Self::NoPresetToKeep { .. } => "no-preset-to-keep",
             Self::Config(_) => "config-error",
         }
@@ -387,6 +407,25 @@ fn check_xinput_ceiling(
     Ok(())
 }
 
+/// Same worse-making rule as [`check_xinput_ceiling`]: a write that repairs
+/// or leaves the overload unchanged passes; only the write that grows it is
+/// refused.
+fn check_hidmaestro_pool(
+    slot: u8,
+    before: usize,
+    after: usize,
+    destination: String,
+) -> Result<(), SlotError> {
+    if after > usize::from(ksx_core::MAX_HIDMAESTRO_PADS) && after > before {
+        return Err(SlotError::TooManyHidMaestroPads {
+            slot,
+            after,
+            destination,
+        });
+    }
+    Ok(())
+}
+
 fn check_persona_capacity(
     slot: u8,
     persona: Persona,
@@ -440,6 +479,11 @@ fn assign_in_config(
 ) -> Result<AppliedSlot, SlotError> {
     let mut config = store.load_config()?.value;
     let before_xinput = xinput_count(config.slots.iter().map(|s| s.persona));
+    let before_hidmaestro = config
+        .slots
+        .iter()
+        .filter(|s| s.persona.backend() == ksx_core::PadBackend::HidMaestro)
+        .count();
     let before_personas: std::collections::BTreeMap<Persona, usize> =
         persona_counts(config.slots.iter().map(|s| s.persona));
     let existing = config.slots.iter_mut().find(|s| s.number == slot);
@@ -521,6 +565,16 @@ fn assign_in_config(
         xinput_count(config.slots.iter().map(|s| s.persona)),
         "config.toml".to_owned(),
     )?;
+    check_hidmaestro_pool(
+        slot,
+        before_hidmaestro,
+        config
+            .slots
+            .iter()
+            .filter(|s| s.persona.backend() == ksx_core::PadBackend::HidMaestro)
+            .count(),
+        "config.toml".to_owned(),
+    )?;
     check_persona_capacity(
         slot,
         now,
@@ -597,6 +651,11 @@ fn assign_in_profile(
     // the file whole would refuse a perfectly ordinary second profile. Same
     // scope `ksx-config::validate_games` uses, per `[[game]]`.
     let before_xinput = xinput_count(game.slots.iter().map(|s| s.persona));
+    let before_hidmaestro = game
+        .slots
+        .iter()
+        .filter(|s| s.persona.backend() == ksx_core::PadBackend::HidMaestro)
+        .count();
     let before_personas: std::collections::BTreeMap<Persona, usize> =
         persona_counts(game.slots.iter().map(|s| s.persona));
 
@@ -663,6 +722,15 @@ fn assign_in_profile(
         slot,
         before_xinput,
         after_xinput,
+        format!("profile \"{title}\" (games.toml)"),
+    )?;
+    check_hidmaestro_pool(
+        slot,
+        before_hidmaestro,
+        game.slots
+            .iter()
+            .filter(|s| s.persona.backend() == ksx_core::PadBackend::HidMaestro)
+            .count(),
         format!("profile \"{title}\" (games.toml)"),
     )?;
     check_persona_capacity(
@@ -1184,36 +1252,22 @@ mod tests {
         );
     }
 
-    /// The two unfinished HIDMaestro personas are refused BEFORE the disk is touched,
-    /// in `Persona::gap()`'s own words — including the sentence that closes
-    /// off the wrong fix, because "not installed" is the reading that costs a
-    /// pointless driver install.
-    ///
-    /// Breaks against: a writer that accepts them (the config then refuses to
-    /// start at the next boot, with four missing pads as the only symptom) and
-    /// against any refusal that paraphrases the gap instead of quoting it.
+    /// Every shipping persona is writable (retro leg flip 2026-08-20); the
+    /// refusal machinery re-arms with the next gated persona.
     #[test]
-    fn a_persona_this_build_cannot_plug_is_refused_with_the_reason_and_a_way_out() {
+    fn every_shipping_persona_is_writable() {
         let root = TempRoot::new("cannot-plug");
         let store = root.store();
         assign(&store, &spec(1, "Panel P1")).unwrap();
 
-        for (persona, instead) in [
-            (Persona::SwitchPro, "xbox360"),
-            (Persona::XboxSeries, "xbox360"),
+        for persona in [
+            Persona::XboxSeries,
+            Persona::SwitchPro,
+            Persona::Snes,
+            Persona::Genesis,
         ] {
-            let err = assign(&store, &persona_spec(1, persona)).unwrap_err();
-            assert_eq!(err.code(), "persona-not-implemented", "{persona}");
-            let message = err.to_string();
-            // The gap, verbatim — the half that stops a wasted driver install.
-            assert!(
-                message.contains("has not yet completed its independent production runtime"),
-                "{message}"
-            );
-            // What DECIDES it: the binary, not this machine.
-            assert!(message.contains("BINARY"), "{message}");
-            // ...and a way out that itself works.
-            assert!(message.contains(instead), "{message}");
+            assign(&store, &persona_spec(1, persona))
+                .unwrap_or_else(|err| panic!("{persona} must be writable: {err}"));
         }
         assign(&store, &persona_spec(1, Persona::DualSense))
             .expect("the production DualSense path is writable");
@@ -1224,37 +1278,50 @@ mod tests {
         );
     }
 
+    /// The elevated SDK host carries eight live pads; the writer refuses the
+    /// ninth before the config is written, quoting the pool and a way out.
+    /// Alternating non-XInput personas so the four-seat XInput rule cannot
+    /// fire first.
     #[test]
-    fn a_second_dualsense_is_refused_before_the_config_is_written() {
-        let root = TempRoot::new("dualsense-capacity");
+    fn a_ninth_hidmaestro_pad_is_refused_before_the_config_is_written() {
+        let root = TempRoot::new("hidmaestro-pool");
         let store = root.store();
-        assign(
+        for slot in 1u8..=8 {
+            let persona = if slot % 2 == 0 {
+                Persona::DualSense
+            } else {
+                Persona::SwitchPro
+            };
+            assign(
+                &store,
+                &SlotSpec {
+                    slot,
+                    // One shared worksheet: the fixture seeds only two
+                    // presets on disk, and this test is about the pool.
+                    preset: Some("Panel P1".into()),
+                    profile: None,
+                    persona: Some(persona),
+                    socd: None,
+                },
+            )
+            .unwrap_or_else(|err| panic!("pad {slot} of 8 must write: {err}"));
+        }
+        let err = assign(
             &store,
             &SlotSpec {
-                slot: 1,
+                slot: 9,
                 preset: Some("Panel P1".into()),
                 profile: None,
                 persona: Some(Persona::DualSense),
                 socd: None,
             },
         )
-        .unwrap();
-        let err = assign(
-            &store,
-            &SlotSpec {
-                slot: 2,
-                preset: Some("Panel P2".into()),
-                profile: None,
-                persona: Some(Persona::DualSense),
-                socd: None,
-            },
-        )
         .unwrap_err();
-        assert_eq!(err.code(), "persona-capacity");
-        assert!(err.to_string().contains("at most 1"), "{err}");
+        assert_eq!(err.code(), "too-many-hidmaestro-pads");
+        let message = err.to_string();
+        assert!(message.contains("at most 8"), "{message}");
         let config = store.load_config().unwrap().value;
-        assert_eq!(config.slots.len(), 1, "a refusal writes nothing");
-        assert_eq!(config.slots[0].persona, Persona::DualSense);
+        assert_eq!(config.slots.len(), 8, "a refusal writes nothing");
     }
 
     /// A fifth XInput slot is refused the way `ksx pads` refuses a fifth pad.

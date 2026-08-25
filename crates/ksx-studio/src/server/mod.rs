@@ -40,22 +40,26 @@
 mod check;
 mod devices;
 mod map;
+mod nocturne;
 mod pads;
 mod profiles;
 mod session;
 mod setup;
 mod start;
 mod status;
+mod workspace;
 
 use check::*;
 use devices::*;
 use map::*;
+use nocturne::*;
 use pads::*;
 use profiles::*;
 use session::*;
 use setup::*;
 use start::*;
 use status::*;
+use workspace::*;
 
 use std::net::SocketAddr;
 
@@ -89,13 +93,19 @@ use crate::render_setup::render_setup;
 
 use crate::render_start::render_start;
 
+use crate::render_workspace::render_workspace;
+
 use crate::snapshot::{
     CheckPayload, DevicesPayload, MapPayload, PadsPayload, ProfilesPayload, SetupPayload,
-    SetupSnapshot, StartPayload, StatusPayload, StatusSnapshot, StatusSource,
+    SetupSnapshot, StartPayload, StatusPayload, StatusSnapshot, StatusSource, WorkspacePayload,
 };
 
 struct AppState {
     page: EmbeddedPage,
+    workspace_page: EmbeddedPage,
+    /// The static design-proof route (see `render_nocturne.rs`): loaded like
+    /// every page, rendered from defaults, backed by nothing.
+    nocturne_page: EmbeddedPage,
     map_page: EmbeddedPage,
     check_page: EmbeddedPage,
     pads_page: EmbeddedPage,
@@ -131,6 +141,146 @@ struct AppState {
     /// `Arc`, not `Box`, because every SSE connection hands a handle to its own
     /// blocking bridge thread.
     live: Arc<dyn ksx_api::LiveSource>,
+    /// Process-local ordering fence for browser-declared physical encoder
+    /// mutations. The browser's Web Locks cannot survive a tab crash, while a
+    /// queued `spawn_blocking` task can; this fence makes recovery reads and
+    /// those already-admitted tasks agree on one epoch order before either
+    /// reaches the machine provider.
+    panel_hardware_fence: Arc<nocturne::PanelHardwareFence>,
+    /// The last REMOVED controller, held SERVER-side for the rack's short
+    /// undo window — the browser is shown a chip and a verb, never the
+    /// authoring table (`server/nocturne.rs`).
+    nocturne_undo: std::sync::Mutex<Option<nocturne::NocturneUndoStash>>,
+    /// The machine-read cache: the poller asks every 2 s, but a USB tree
+    /// enumeration and three TOML parses per poll is work the machine did
+    /// not ask for. TTL-bounded, invalidated by every mutating request and
+    /// by Rescan's `fresh=1` — so nothing the studio itself changed can
+    /// ever be served stale.
+    machine_cache: MachineCache,
+}
+
+/// A TTL cache over the FOUR machine reads the 2-second poll repeats
+/// (`collect_nocturne`): the device scan (a Config-Manager walk of the USB
+/// tree) and the three disk reads. NOT a `MachineSource` wrapper on
+/// purpose — a trait impl would let a forgotten forward silently answer
+/// with a trait default (the SharedControl lesson); collectors opt in per
+/// call instead.
+struct MachineCache {
+    scan: std::sync::Mutex<
+        Option<(
+            std::time::Instant,
+            Result<ksx_api::DeviceScanView, ksx_api::Refusal>,
+        )>,
+    >,
+    setup: std::sync::Mutex<
+        Option<(
+            std::time::Instant,
+            Result<ksx_api::SetupView, ksx_api::Refusal>,
+        )>,
+    >,
+    games: std::sync::Mutex<
+        Option<(
+            std::time::Instant,
+            Result<ksx_api::ProfilesView, ksx_api::Refusal>,
+        )>,
+    >,
+    auto: std::sync::Mutex<
+        Option<(
+            std::time::Instant,
+            Result<ksx_api::AutostartView, ksx_api::Refusal>,
+        )>,
+    >,
+}
+
+/// Long enough to skip most polls, short enough that an EXTERNAL change
+/// (a device plugged, a file edited by hand) paints within a breath — and
+/// Rescan busts it outright.
+const MACHINE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl MachineCache {
+    fn new() -> Self {
+        Self {
+            scan: std::sync::Mutex::new(None),
+            setup: std::sync::Mutex::new(None),
+            games: std::sync::Mutex::new(None),
+            auto: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn invalidate(&self) {
+        *self.scan.lock().unwrap() = None;
+        *self.setup.lock().unwrap() = None;
+        *self.games.lock().unwrap() = None;
+        *self.auto.lock().unwrap() = None;
+    }
+
+    fn fetch<T: Clone>(
+        slot: &std::sync::Mutex<Option<(std::time::Instant, Result<T, ksx_api::Refusal>)>>,
+        read: impl FnOnce() -> Result<T, ksx_api::Refusal>,
+    ) -> Result<T, ksx_api::Refusal> {
+        let mut held = slot.lock().unwrap();
+        if let Some((at, value)) = held.as_ref() {
+            if at.elapsed() < MACHINE_CACHE_TTL {
+                return value.clone();
+            }
+        }
+        let fresh = read();
+        *held = Some((std::time::Instant::now(), fresh.clone()));
+        fresh
+    }
+
+    fn device_scan(
+        &self,
+        machine: &dyn ksx_api::MachineSource,
+    ) -> Result<ksx_api::DeviceScanView, ksx_api::Refusal> {
+        Self::fetch(&self.scan, || machine.device_scan())
+    }
+
+    fn setup_state(
+        &self,
+        machine: &dyn ksx_api::MachineSource,
+    ) -> Result<ksx_api::SetupView, ksx_api::Refusal> {
+        Self::fetch(&self.setup, || machine.setup_state())
+    }
+
+    fn profiles(
+        &self,
+        machine: &dyn ksx_api::MachineSource,
+    ) -> Result<ksx_api::ProfilesView, ksx_api::Refusal> {
+        Self::fetch(&self.games, || machine.profiles())
+    }
+
+    fn autostart(
+        &self,
+        machine: &dyn ksx_api::MachineSource,
+    ) -> Result<ksx_api::AutostartView, ksx_api::Refusal> {
+        Self::fetch(&self.auto, || machine.autostart())
+    }
+}
+
+/// The theme id to stamp on a page render (`render::with_theme`), or `None`
+/// for System.
+///
+/// Reads the TTL-cached `SetupView` — cheap at navigation rate, and the
+/// invalidation layer below busts the cache before every mutating request,
+/// so the render a POST /setup/theme redirects to always sees the new
+/// choice. A refused machine read (or an unreadable config) is `None`: a
+/// page that cannot know the choice renders as System rather than not at
+/// all. Every page GET handler calls this; the tests/http.rs stamp oracle
+/// is what keeps a new page from forgetting to.
+async fn page_theme(state: &Arc<AppState>) -> Option<String> {
+    let state = Arc::clone(state);
+    tokio::task::spawn_blocking(move || {
+        state
+            .machine_cache
+            .setup_state(&*state.machine)
+            .ok()
+            .map(|view| view.theme)
+            .filter(|theme| !theme.is_empty())
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// Serve the page until the process is killed (Ctrl+C included — no
@@ -153,6 +303,8 @@ pub fn serve(
         return Err(StudioError::NonLoopbackBind { bind });
     }
     let page = EmbeddedPage::load("/")?;
+    let workspace = EmbeddedPage::load("/workspace")?;
+    let nocturne = EmbeddedPage::load("/nocturne")?;
     let mapper = EmbeddedPage::load("/map")?;
     let check = EmbeddedPage::load("/check")?;
     let pads = EmbeddedPage::load("/pads")?;
@@ -162,6 +314,8 @@ pub fn serve(
     let start = EmbeddedPage::load("/start")?;
     let state = Arc::new(AppState {
         page,
+        workspace_page: workspace,
+        nocturne_page: nocturne,
         map_page: mapper,
         check_page: check,
         pads_page: pads,
@@ -173,6 +327,9 @@ pub fn serve(
         control,
         machine,
         live,
+        panel_hardware_fence: Arc::new(nocturne::PanelHardwareFence::new()),
+        nocturne_undo: std::sync::Mutex::new(None),
+        machine_cache: MachineCache::new(),
     });
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -190,6 +347,82 @@ pub fn serve(
         let app = Router::new()
             .route("/", get(status_page))
             .route("/api/status", get(api_status))
+            // ── /workspace — the Nocturne workspace (M2: left-pane verbs) ─
+            // The reads, plus the left pane's form twins — each ONE staging
+            // verb, 303 → /workspace?flash=. The center and right panes'
+            // verbs arrive with M3–M4.
+            .route("/workspace", get(workspace_page))
+            // ── /nocturne — the Nocturne front end. The keyboard section
+            // is MIGRATED product surface (reads + verbs in nocturne.rs);
+            // the rest is still the design proof's placeholder.
+            .route("/nocturne", get(nocturne_page_handler))
+            .route("/api/nocturne", get(api_nocturne))
+            // On-demand hardware context for Control Surface Builder. Kept
+            // out of `/api/nocturne`'s 2 s poll: passive HID enumeration is a
+            // deliberate inspection, not background canvas state.
+            .route("/api/panel/status", get(api_panel_status))
+            .route("/api/panel/chart", post(api_panel_chart))
+            .route("/api/panel/backups", get(api_panel_backups))
+            .route("/api/panel/profiles", get(api_panel_profiles))
+            .route("/api/panel/profiles/save", post(api_panel_profile_save))
+            .route("/api/panel/profiles/delete", post(api_panel_profile_delete))
+            .route("/api/panel/program/plan", post(api_panel_program_plan))
+            .route("/api/panel/program/apply", post(api_panel_program_apply))
+            .route("/api/panel/restore/plan", post(api_panel_restore_plan))
+            .route("/api/panel/restore/apply", post(api_panel_restore_apply))
+            .route("/nocturne/device", post(nocturne_form_device))
+            .route("/nocturne/device/identify", post(nocturne_form_identify))
+            .route(
+                "/nocturne/capture/prepare",
+                post(nocturne_form_capture_prepare),
+            )
+            .route(
+                "/nocturne/capture/release",
+                post(nocturne_form_capture_release),
+            )
+            .route("/nocturne/blocking", post(nocturne_form_blocking))
+            .route("/nocturne/controller", post(nocturne_form_add))
+            .route("/nocturne/controller/remove", post(nocturne_form_remove))
+            .route("/nocturne/controller/undo", post(nocturne_form_undo))
+            .route("/nocturne/controller/move", post(nocturne_form_move))
+            .route("/nocturne/controller/socd", post(nocturne_form_socd))
+            .route(
+                "/nocturne/controller/duplicate",
+                post(nocturne_form_duplicate),
+            )
+            .route("/nocturne/bind/clear", post(nocturne_form_bind_clear))
+            .route("/nocturne/bind/clear-all", post(nocturne_form_clear_all))
+            .route("/nocturne/key/clear", post(nocturne_form_key_clear))
+            .route("/nocturne/api/bind", post(nocturne_api_bind))
+            .route("/nocturne/api/macro/edit", post(nocturne_api_macro_edit))
+            .route("/nocturne/bind/turbo", post(nocturne_form_bind_turbo))
+            .route("/nocturne/bind/toggle", post(nocturne_form_bind_toggle))
+            .route("/nocturne/macro/toggle", post(nocturne_form_macro_toggle))
+            .route("/nocturne/macro/new", post(nocturne_form_macro_new))
+            .route("/nocturne/macro/delete", post(nocturne_form_macro_delete))
+            .route("/nocturne/save", post(nocturne_form_save))
+            .route("/nocturne/play", post(nocturne_form_play))
+            .route("/nocturne/stop", post(nocturne_form_stop))
+            .route("/nocturne/apply", post(nocturne_form_apply))
+            .route("/nocturne/api/apply", post(nocturne_api_apply))
+            .route("/nocturne/adopt", post(nocturne_form_adopt))
+            .route("/nocturne/discard", post(nocturne_form_discard))
+            .route("/nocturne/autostart", post(nocturne_form_autostart))
+            .route("/api/workspace", get(api_workspace))
+            .route("/workspace/blocking", post(workspace_form_blocking))
+            .route("/workspace/controller/move", post(nocturne_form_move))
+            .route("/workspace/controller/remove", post(nocturne_form_remove))
+            .route("/workspace/controller/socd", post(nocturne_form_socd))
+            .route(
+                "/workspace/controller/duplicate",
+                post(nocturne_form_duplicate),
+            )
+            .route("/workspace/controller", post(nocturne_form_add))
+            .route("/workspace/device/identify", post(workspace_form_identify))
+            .route("/workspace/bind/clear", post(nocturne_form_bind_clear))
+            // MIGRATED (2026-08-17): adopt lives in nocturne.rs now; this
+            // page's button keeps working — the answer lands on /nocturne.
+            .route("/workspace/adopt", post(nocturne_form_adopt))
             .route("/session/start", post(session_start))
             .route("/session/stop", post(session_stop))
             .route("/config/reload", post(config_reload))
@@ -201,6 +434,9 @@ pub fn serve(
             .route("/api/learn", get(api_learn_poll))
             .route("/api/learn/start", post(api_learn_start))
             .route("/api/learn/cancel", post(api_learn_cancel))
+            .route("/api/input-test", get(api_input_test_poll))
+            .route("/api/input-test/start", post(api_input_test_start))
+            .route("/api/input-test/cancel", post(api_input_test_cancel))
             .route("/api/bind", post(api_bind))
             // v10: write a control's WHOLE key list (many keys → one
             // control). The island computes the new set from the payload it
@@ -342,6 +578,9 @@ pub fn serve(
             // says before the click, not after it.
             .route("/setup/slot", post(setup_form_slot))
             .route("/setup/blocking", post(setup_form_blocking))
+            // The Studio theme: a config write like blocking, but read per
+            // page render rather than by the daemon — "saved" IS "in effect".
+            .route("/setup/theme", post(setup_form_theme))
             // Step 3: the daemon's own learner, the two verbs the mapper
             // already uses. The page renders `learn_poll` per request, so this
             // step works with scripting switched off.
@@ -374,9 +613,19 @@ pub fn serve(
             // (the same argument `/setup/export.json` makes).
             .route("/start", get(start_page))
             .route("/api/start", get(api_start))
-            .route("/start/device", post(start_form_device))
-            .route("/start/capture/prepare", post(start_form_capture_prepare))
-            .route("/start/capture/release", post(start_form_capture_release))
+            // MIGRATED (2026-08-17): the keyboard verbs live in nocturne.rs
+            // now. The old paths stay registered so /start's intact frames
+            // keep working — pressing them lands the answer on /nocturne.
+            .route("/start/device", post(nocturne_form_device))
+            .route("/start/device/identify", post(nocturne_form_identify))
+            .route(
+                "/start/capture/prepare",
+                post(nocturne_form_capture_prepare),
+            )
+            .route(
+                "/start/capture/release",
+                post(nocturne_form_capture_release),
+            )
             .route("/start/controller", post(start_form_controller))
             .route(
                 "/start/controller/persona",
@@ -390,9 +639,12 @@ pub fn serve(
             // that has not saved anything yet.
             .route("/start/controller/layout", post(start_form_layout))
             .route("/start/controller/remove", post(start_form_remove))
-            .route("/start/blocking", post(start_form_blocking))
-            .route("/start/autostart", post(start_form_autostart))
-            .route("/start/discard", post(start_form_discard))
+            .route("/start/blocking", post(nocturne_form_blocking))
+            // MIGRATED (2026-08-17): the sign-in task and "Start over" live
+            // in nocturne.rs now; these cards keep working — the answers
+            // land on /nocturne.
+            .route("/start/autostart", post(nocturne_form_autostart))
+            .route("/start/discard", post(nocturne_form_discard))
             .route("/start/save", post(start_form_save))
             .route("/start/play", post(start_form_play))
             // Canon helper: correct no-cache + Service-Worker-Allowed
@@ -419,6 +671,34 @@ pub fn serve(
             // absent `Origin` is deliberately allowed through.
             .layer(axum::middleware::from_fn(move |req, next| {
                 crate::guard::same_origin(bind, req, next)
+            }))
+            // Every mutating request drops the machine-read cache BEFORE the
+            // handler runs AND AFTER it returns — one layer, not a call per
+            // handler (the guard's own rule), so nothing the studio changes
+            // is ever served stale. The AFTER half is load-bearing
+            // (review-caught): a cache-populating GET can overlap the
+            // handler's write and store the PRE-write view with a fresh
+            // timestamp, which the before-only wipe could never touch — the
+            // redirect after POST /setup/theme would then stamp the old
+            // theme for a TTL. `MachineCache::fetch` holds the slot mutex
+            // across its read+store, so this second wipe strictly follows
+            // any store that overlapped the handler.
+            .layer(axum::middleware::from_fn({
+                let state = Arc::clone(&state);
+                move |req: axum::extract::Request, next: axum::middleware::Next| {
+                    let state = Arc::clone(&state);
+                    async move {
+                        let mutating = req.method() != axum::http::Method::GET;
+                        if mutating {
+                            state.machine_cache.invalidate();
+                        }
+                        let response = next.run(req).await;
+                        if mutating {
+                            state.machine_cache.invalidate();
+                        }
+                        response
+                    }
+                }
             }))
             .with_state(state);
         tracing::info!(%bind, "ksx Studio listening");
@@ -602,7 +882,7 @@ async fn apple_touch_icon() -> Response {
 
 /// Query-string percent-encoding (RFC 3986 unreserved set kept literal).
 /// Local, tiny, and total — not worth a dependency.
-fn urlencode(text: &str) -> String {
+pub(crate) fn urlencode(text: &str) -> String {
     // The flash is a one-line human sentence; cap it (on a char boundary, so
     // the encoded query decodes as valid UTF-8) so a pathological daemon
     // error cannot mint an absurd URL.

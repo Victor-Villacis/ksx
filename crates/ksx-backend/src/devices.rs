@@ -1200,6 +1200,7 @@ mod tests {
             parent_id: "USB\\VID_D209&PID_0430\\4".into(),
             vendor_id: 0xD209,
             product_id: 0x0430,
+            bcd_device: 0x0056,
             interface_number: 0,
             interface_class: 0x03,
             interface_subclass: 1,

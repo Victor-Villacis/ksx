@@ -1,13 +1,28 @@
 # ksx Studio — design system
 
-The one place that says what a thing should look like. `studio-ui/src/studio.css`
-is the implementation; this file is the reasoning. If the two disagree, the CSS
-is the bug.
+The one place that says what a thing should look like. The implementation is
+`studio-ui/tokens/` (the palette and scales — the single token source, compiled
+into the sheet at build time; TK0, see `docs/research/token-system-design.md`)
+plus `studio-ui/src/studio.css` (the components that consume them); this file
+is the reasoning. If they disagree, the CSS is the bug.
 
-Two screens use it: **Status** (`/`, StatusIsland.ts) and the **Mapper**
-(`/map`, MapIsland.ts). Both are viewed on a desk monitor *and* on an arcade
-cabinet panel from across a room, in a light and a dark theme, with and without
-JavaScript. Everything below is chosen against those four constraints at once.
+Eight Studio routes use it. The stable product journey is **Keyboard**
+(`/start#keyboard`) → **Controller** (`/start#controller`) → **Mapping**
+(`/map`) → **Play** (`/`). Test inputs, the game library, hardware recovery,
+ViGEm pad diagnostics, and import/recovery stay one deliberate Tools action
+away; they do not compete with the primary path. Every route is viewed on a
+desk monitor *and* on an arcade cabinet panel from across a room, in a light and
+a dark theme, with and without JavaScript. Everything below is chosen against
+those constraints at once.
+
+The numbered rail is orientation, not a locked wizard: an expert can jump to
+any stage, and the staged setup remains the single source of truth. Page heroes
+state an outcome; cards carry one decision; advanced maintenance lives in a
+disclosure or the Tools menu. The Mapping route is the intentional exception to
+the ordinary single-column card stack: on a wide screen the controller remains
+dominant at left and the exact binding inventory is a contextual inspector at
+right. DOM order remains controller then inspector for narrow screens and
+assistive technology.
 
 ---
 
@@ -141,7 +156,7 @@ pass: it *was* a list, and in the rendered output the list was false. `select`
 and `input[type=text|number]` re-declare `min-height: var(--ctl-h)` in §4.4,
 below the list and at equal specificity, so the later rule won and **every
 field on every screen rendered 36 px on a touch panel** — /pads' three spawn
-selects, /profiles' six new-profile fields, /setup's four selects, /devices'
+selects, /profiles' six new-profile fields, /setup's five selects, /devices'
 alias box, all measured with touch emulation against the HTML the server
 actually sends. A custom property set on `:root` is not in the cascade with the
 component rules that read it, so nothing added later can shadow it, and every
@@ -273,7 +288,7 @@ come out right from one rule.
 
 ### 3.5 Contrast — the measured floors
 
-Text is ≥ 4.5:1 against the surface it sits on, in both themes. Dark text is
+Text is ≥ 4.5:1 against the surface it sits on, in every shipped theme. Dark text is
 cream, never pure white — pure white blooms on a TV panel, which is what a
 cabinet screen is.
 
@@ -385,22 +400,31 @@ contrast (worst: cross, 4.60 → 5.17).
 Numbers in a document do not defend themselves, so these are re-derived on
 every `cargo test`:
 
-- **`crates/ksx-studio/tests/contrast.rs`** — parses `studio-ui/src/studio.css`
-  (it does *not* restate the palette; a test that hardcodes the values is a
-  second copy that drifts the same way), composites every tint over every
-  ground, and checks 154 pairs across both themes. It also pins two
-  hand-mirrored copies of the tokens that had **already drifted**: the
-  anti-flash `PERSONALITY_CSS` in `render.rs`/`render_map.rs` (which was
-  painting `#0b0e14` while the stylesheet had moved to `#0a0d13` — a wrong
-  anti-flash colour looks exactly like the flash it exists to prevent), and
-  the controller-art palette in `build.mjs` (an `<img>`-embedded SVG is its own
-  document and cannot inherit a custom property).
+- **`crates/ksx-studio/tests/contrast.rs`** — parses the shipped sheet (the
+  generated `tokens.gen.css` — compiled from `studio-ui/tokens/` — concatenated
+  with the authored `studio.css`, the same order the build hashes them; it does
+  *not* restate the palette; a test that hardcodes the values is a second copy
+  that drifts the same way), composites every tint over every ground, and
+  checks every pair across every theme the sheet ships — since TK1 the gate
+  ENUMERATES themes (three today: dark, light, matrix; a user picks on `/setup`,
+  with System = follow-the-OS as the default) and a new theme passes the floors
+  or records per-theme pins. It also cross-pins the token consumers
+  that had **already drifted** back when they were hand copies: the anti-flash
+  `PERSONALITY_CSS` — since TK0 generated into `theme_tokens.rs` from the same
+  token source, and pinned there (it once painted `#0b0e14` while the
+  stylesheet had moved to `#0a0d13` — a wrong anti-flash colour looks exactly
+  like the flash it exists to prevent) — and the controller-art palette, whose
+  four token values `build.mjs` templates from the token source and which the
+  test reads back out of the **shipped** `pad-xbox.svg`/`pad-ds4.svg` (an
+  `<img>`-embedded SVG is its own document and cannot inherit a custom
+  property).
 - **`crates/ksx-cabinet/tests/contrast.rs`** — reads `theme::role` directly,
   because there the Rust constants *are* the theme, and checks the composed
   pairs that only exist on that surface: the focus plate, a state colour on
-  `tint(colour, 38)`, `ACCENT_ON` on `OK`. 58 pairs. It also asserts the two
-  surfaces agree on `--accent` — they diverge on *size* on purpose (body 28 vs
-  14, hero 68 vs 38) and must not diverge on what "you are here" looks like.
+  `tint(colour, 38)`, `ACCENT_ON` on `OK`. 58 pairs. It also pins all 13
+  byte-mirrored roles against the web tokens (`DANGER`/`DANGER_FILL` stay
+  recorded divergences) — the surfaces diverge on *size* on purpose (body 28
+  vs 14, hero 68 vs 38) and must not diverge on what any shared role means.
 
 Both print their full table under `--nocapture`; the failure message names the
 pair, the ratio and the floor, and says to fix the **token**, not the component
@@ -559,12 +583,14 @@ This app is read from six feet away on an arcade panel. What that changes:
 
 The system above is what things look like. This is where they go.
 
-### Status — three tiers, and they look like three tiers
+### Play — three tiers, and they look like three tiers
 
 1. **Primary — Session.** A hero bar: the state at 38 px on the left, the one
    action (Start / Stop + Reload) on the right.
-2. **Secondary — Virtual pads**, then **Profiles** (what starts them).
-3. **Tertiary — System.** Drivers, autostart, daemon process, config root, as
+2. **Secondary — ViGEm pad inventory**, then **Profiles** (what starts any
+   supported controller output). DualSense is not misreported as a ViGEm child.
+3. **Tertiary — System.** ViGEmBus, HIDMaestro package evidence, Interception,
+   autostart, daemon process, and config root, as
    key-value rows on a quiet panel at the *bottom*. Previously these were two
    half-empty cards in the middle of the page, shouting as loudly as the
    session; one of them was 80 % whitespace.
@@ -617,7 +643,7 @@ lists already use.
 3. Any new interactive element declares all four states before it ships.
 4. Any new colour has to answer "what does it *mean*?" — if the answer is "it
    looks nice", it does not go in.
-5. Verify by looking, in both themes, at 1600 / 1100 / 420, in every state the
+5. Verify by looking, in every shipped theme, at 1600 / 1100 / 420, in every state the
    screen can be in.
 6. **If you are editing a component rule to fix a colour, the token was
    wrong.** Fix the token. A component that needs a colour the roles cannot

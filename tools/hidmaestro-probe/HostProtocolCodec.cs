@@ -55,6 +55,8 @@ internal enum HostProfileId : byte
     DualSense = 1,
     SwitchPro = 2,
     XboxSeries = 3,
+    Snes = 4,
+    Genesis = 5,
 }
 
 internal enum HostFeedbackSource : byte
@@ -639,7 +641,7 @@ internal static class HostProtocolCodec
     private static bool TryProfile(byte value, out HostProfileId profile)
     {
         profile = (HostProfileId)value;
-        return value is >= 1 and <= 3;
+        return value is >= 1 and <= 5;
     }
 
     private static bool TryFeedbackSource(byte value, out HostFeedbackSource source)
@@ -654,7 +656,7 @@ internal static class HostProtocolCodec
         return value is >= 1 and <= 8;
     }
 
-    private static bool IsProfile(HostProfileId profile) => (byte)profile is >= 1 and <= 3;
+    private static bool IsProfile(HostProfileId profile) => (byte)profile is >= 1 and <= 5;
     private static bool IsFeedbackSource(HostFeedbackSource source) => (byte)source is >= 1 and <= 4;
     private static bool IsFaultCode(HostFaultCode code) => (ushort)code is >= 1 and <= 8;
 

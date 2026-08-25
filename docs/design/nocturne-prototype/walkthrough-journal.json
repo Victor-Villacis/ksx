@@ -1,0 +1,211 @@
+[
+  {
+    "n": 1,
+    "name": "overview-idle",
+    "note": "Initial state: config chip, 4 keyboards, P1 staged, 16/24 bound, idle stage",
+    "file": "01-overview-idle.png"
+  },
+  {
+    "n": 2,
+    "name": "config-menu",
+    "note": "Config dropdown: saved configurations, Start over, Save as new, Import/Export, Saved games, autostart",
+    "file": "02-config-menu.png"
+  },
+  {
+    "n": 3,
+    "name": "device-switch",
+    "note": "Selected the G915 TKL: selection dot moves, keyboard diagram should follow the device",
+    "file": "03-device-switch.png"
+  },
+  {
+    "n": 4,
+    "name": "identify-listening",
+    "note": "Identify-by-key listening state",
+    "file": "04-identify-listening.png"
+  },
+  {
+    "n": 5,
+    "name": "identify-resolved",
+    "note": "After pressing a key during identify",
+    "file": "05-identify-resolved.png"
+  },
+  {
+    "n": 6,
+    "name": "behaviour-freeze",
+    "note": "Freeze selected: whole keyboard devoted to play",
+    "file": "06-behaviour-freeze.png"
+  },
+  {
+    "n": 7,
+    "name": "create-dialog",
+    "note": "Create-controller dialog: persona grid, capacity notes, starter bindings, SOCD pills",
+    "file": "07-create-dialog.png"
+  },
+  {
+    "n": 8,
+    "name": "create-dialog-persona",
+    "note": "Persona selected in the create dialog",
+    "file": "08-create-dialog-persona.png"
+  },
+  {
+    "n": 9,
+    "name": "created-p2",
+    "note": "P2 created and now in the rack",
+    "file": "09-created-p2.png"
+  },
+  {
+    "n": 10,
+    "name": "duplicated",
+    "note": "Duplicated a controller into the next slot",
+    "file": "10-duplicated.png"
+  },
+  {
+    "n": 11,
+    "name": "removed-undo",
+    "note": "Removed the last controller: 6-second undo chip visible",
+    "file": "11-removed-undo.png"
+  },
+  {
+    "n": null,
+    "name": "MISS",
+    "note": "undo the remove: could not click \"Undo\""
+  },
+  {
+    "n": 12,
+    "name": "capture-armed",
+    "note": "Capture state armed: press-a-key banner, Esc cancels, Backspace clears",
+    "file": "12-capture-armed.png"
+  },
+  {
+    "n": 13,
+    "name": "capture-bound",
+    "note": "Key I bound to the assigned input; chip replaces Assign",
+    "file": "13-capture-bound.png"
+  },
+  {
+    "n": 14,
+    "name": "conflict-dialog",
+    "note": "Conflict dialog: the key is taken — Swap / Move here / Keep both with consequences",
+    "file": "14-conflict-dialog.png"
+  },
+  {
+    "n": null,
+    "name": "MISS",
+    "note": "resolve: keep both: could not click \"Keep both\""
+  },
+  {
+    "n": null,
+    "name": "MISS",
+    "note": "resolve: move here: could not click \"Move here\""
+  },
+  {
+    "n": null,
+    "name": "MISS",
+    "note": "dismiss conflict: could not click \"Cancel\""
+  },
+  {
+    "n": 15,
+    "name": "row-expanded",
+    "note": "Expanded binding row: Rebind/Clear, Hold|Toggle, Turbo + rate, macro entry",
+    "file": "15-row-expanded.png"
+  },
+  {
+    "n": 16,
+    "name": "row-toggle",
+    "note": "Toggle mode set on the input",
+    "file": "16-row-toggle.png"
+  },
+  {
+    "n": 17,
+    "name": "row-turbo",
+    "note": "Turbo enabled with its rate control",
+    "file": "17-row-turbo.png"
+  },
+  {
+    "n": null,
+    "name": "MISS",
+    "note": "open macro recorder: could not click \"Record macro\""
+  },
+  {
+    "n": 18,
+    "name": "macro-editor",
+    "note": "Macro editor: steps × holds grid, motion writer, durations, record, test",
+    "file": "18-macro-editor.png"
+  },
+  {
+    "n": null,
+    "name": "MISS",
+    "note": "close macro editor: could not click \"Close\""
+  },
+  {
+    "n": null,
+    "name": "MISS",
+    "note": "done macro editor: could not click \"Done\""
+  },
+  {
+    "n": 19,
+    "name": "pad-zone-selected",
+    "note": "Clicked Y on the pad: input selected / capture armed from the diagram",
+    "file": "19-pad-zone-selected.png"
+  },
+  {
+    "n": 20,
+    "name": "keyboard-inspect",
+    "note": "Clicked bound key W: inspection/selection of what it drives",
+    "file": "20-keyboard-inspect.png"
+  },
+  {
+    "n": 21,
+    "name": "filter-stick",
+    "note": "Filter 'stick': list narrowed to stick groups",
+    "file": "21-filter-stick.png"
+  },
+  {
+    "n": 22,
+    "name": "live-started",
+    "note": "Live state: stage glow, session stats running, ticker ready",
+    "file": "22-live-started.png"
+  },
+  {
+    "n": 23,
+    "name": "live-pressing",
+    "note": "Holding W+A live: pad zones light, keyboard keys light, ticker shows inputs",
+    "file": "23-live-pressing.png"
+  },
+  {
+    "n": 24,
+    "name": "live-turbo",
+    "note": "Holding a turbo'd input live (strobe state)",
+    "file": "24-live-turbo.png"
+  },
+  {
+    "n": 25,
+    "name": "paused",
+    "note": "Paused: pads disconnected, editing re-enabled",
+    "file": "25-paused.png"
+  },
+  {
+    "n": 26,
+    "name": "stopped",
+    "note": "Back to idle after the session",
+    "file": "26-stopped.png"
+  },
+  {
+    "n": 27,
+    "name": "left-collapsed",
+    "note": "Left panel collapsed to its 52px rail",
+    "file": "27-left-collapsed.png"
+  },
+  {
+    "n": 28,
+    "name": "saved",
+    "note": "After Save: chip shows saved state",
+    "file": "28-saved.png"
+  },
+  {
+    "n": 29,
+    "name": "final-state",
+    "note": "End of walkthrough",
+    "file": "29-final-state.png"
+  }
+]

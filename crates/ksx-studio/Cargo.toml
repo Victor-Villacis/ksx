@@ -48,3 +48,6 @@ ksx-core.workspace = true
 # one the grid drew. Nothing here is linked at runtime.
 ksx-config.workspace = true
 toml.workspace = true
+# The browser fixture hashes its synthetic PAC256 images so the review dialog
+# exercises the same base/desired integrity contract as production.
+sha2.workspace = true

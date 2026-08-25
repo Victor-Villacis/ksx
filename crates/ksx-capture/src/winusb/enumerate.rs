@@ -108,6 +108,12 @@ pub struct UsbCandidate {
     pub parent_id: String,
     pub vendor_id: u16,
     pub product_id: u16,
+    /// Raw `bcdDevice` from the USB device descriptor.
+    ///
+    /// This is a device-supplied release number, not a parsed firmware version.
+    /// Keep it raw: `0x0056` must not silently become a claim that the board is
+    /// running firmware `1.56`.
+    pub bcd_device: u16,
     /// `bInterfaceNumber` — `MI_00` on the I-PAC's keyboard.
     pub interface_number: u8,
     pub interface_class: u8,
@@ -147,7 +153,8 @@ impl UsbCandidate {
 
     /// Declares itself a boot keyboard (`subclass 1, protocol 1`).
     pub fn is_boot_keyboard(&self) -> bool {
-        self.interface_subclass == crate::hid::INTERFACE_SUBCLASS_BOOT
+        self.is_hid()
+            && self.interface_subclass == crate::hid::INTERFACE_SUBCLASS_BOOT
             && self.interface_protocol == crate::hid::INTERFACE_PROTOCOL_KEYBOARD
     }
 
@@ -259,6 +266,7 @@ pub fn candidates() -> std::io::Result<Vec<UsbCandidate>> {
                 parent_id: parent_id.clone(),
                 vendor_id: device.vendor_id(),
                 product_id: device.product_id(),
+                bcd_device: device.device_version(),
                 interface_number: number,
                 interface_class: interface.class(),
                 interface_subclass: interface.subclass(),
@@ -422,6 +430,7 @@ mod tests {
             parent_id: "USB\\VID_D209&PID_0430\\4".into(),
             vendor_id: vid,
             product_id: 0x0430,
+            bcd_device: 0x0056,
             interface_number: 0,
             interface_class: class,
             interface_subclass: subclass,
@@ -463,8 +472,9 @@ mod tests {
         assert!(nkro.is_keyboard_candidate());
 
         // A vendor-class interface is not.
-        let vendor = candidate("USB\\VID_1234&PID_5678&MI_00\\x", 0xFF, 0, 0, 0x1234);
+        let vendor = candidate("USB\\VID_1234&PID_5678&MI_00\\x", 0xFF, 1, 1, 0x1234);
         assert!(!vendor.is_hid());
+        assert!(!vendor.is_boot_keyboard());
         assert!(!vendor.is_keyboard_candidate());
         assert!(!vendor.is_ultimarc());
     }

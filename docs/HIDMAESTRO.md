@@ -1,5 +1,15 @@
 # HIDMaestro M8 execution plan
 
+> **This is the PLAN. For what is actually true right now, read
+> [`HIDMAESTRO-STATE.md`](HIDMAESTRO-STATE.md) — it wins over this file.**
+>
+> Read "implemented" below as *code-complete and CI-proven*, never as *observed
+> working*. As of 2026-08-20 no HIDMaestro device has ever been created on any
+> machine, DualSense included. Historical section numbers and counts in the
+> S1.x provenance trail describe the checkpoints they were written at, not the
+> current tree — the state doc carries the current figures with the measurement
+> behind each one.
+
 Status: **the installed product path for one plain-USB DualSense is implemented
 and has passed clean-runner build, byte-inspection, packaging, and installer
 acceptance; supervised hardware/API/force-kill acceptance remains. Switch Pro
@@ -103,18 +113,19 @@ residue result still need the supervised hardware gate below.
 
 The installer is the only provisioning authority. Its checked setup task runs a
 single-purpose self-contained bootstrap which downloads and verifies the pinned
-upstream archive at install time, calls `InstallDriver()` under the installer's
-existing elevation, then deletes the temporary SDK. The ordinary daemon and
-runtime host have no network or package-install authority. The host and
-bootstrap are omitted from portable packages. Current release signing and the
-supervised clean Windows/hardware matrix remain release acceptance work, not
+upstream archive at install time, calls `InstallDriver()` in an isolated worker
+under the installer's existing elevation, waits for that worker to exit, then
+deletes the temporary SDK. The ordinary daemon and runtime host have no network
+or package-install authority. The host and bootstrap are omitted from portable
+packages. Current release signing and the supervised clean Windows/hardware
+matrix remain release acceptance work, not
 missing product code.
 
 ## Delivery state
 
 | Product slice | State |
 |---|---|
-| One USB DualSense persona | **Implemented.** Exact VID/PID/descriptor, full state mapping, output feedback, idle republish and client lease are live. |
+| One USB DualSense persona | **Implemented, never observed.** Exact VID/PID/descriptor, full state mapping, output feedback, idle republish and client lease are written and CI-proven; no device has ever been created. |
 | Privileged host | **Implemented.** Fixed installed NativeAOT executable, UAC launch, authenticated one-use pipe, exact process/session checks and bounded protocol. |
 | Device ownership | **Implemented.** One preinstalled-package proof, one exact root, captured child identities, neutralize-before-remove and no Play-time global sweep. |
 | Capacity and configuration | **Implemented.** The one-controller ceiling is enforced by setup, validation, game profiles, slot mutation, pad testing, routing and host dispatch. |
@@ -230,11 +241,11 @@ The green S1.5c gate records four completed source-only facts:
 
 The green [S1.5d Actions gate](https://github.com/Victor-Villacis/ksx/actions/runs/31863647868)
 validates the complete inert managed-source candidate named by those
-contracts: 10 candidate C# units, one explicit project, and one staging
-ignore. The project lists exactly 11 compile inputs and 228 profile resources,
+contracts: 13 candidate C# units, one explicit project, and one staging
+ignore. The project lists exactly 14 compile inputs and 228 profile resources,
 disables default item discovery, and references only a fixed, deliberately
 absent `.pinned-upstream-v1.6.1` staging directory. Its source verifier freezes
-the 12-file tree and 453 static relationships without invoking MSBuild or
+the 15-file tree and 605 static relationships without invoking MSBuild or
 loading the candidate.
 
 The same checkpoint adds a source-derived DualSense input contract over 12

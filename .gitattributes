@@ -14,3 +14,8 @@ crates/ksx-studio/assets/** -text
 studio-ui/build.mjs text eol=lf
 studio-ui/package*.json text eol=lf
 studio-ui/src/** text eol=lf
+studio-ui/tokens/** text eol=lf
+
+# The generated-and-committed token output outside assets/: born LF by the
+# generator, byte-diffed by CI — keep the checkout stream identical too.
+crates/ksx-studio/src/theme_tokens.rs text eol=lf

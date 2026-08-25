@@ -28,12 +28,12 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { chromium } from "playwright";
+import { stopFixtureProcess } from "./fixture-process.mjs";
 
-/** Our own port — never 4460 (a real `ksx studio`) and never the macro
- *  suite's. The two suites must not run at the same time either: they share
- *  one `macro_fixture.exe`, and Windows will not relink a running binary. See
- *  `--test-concurrency=1` in package.json. */
-const PORT = Number(process.env.KSX_PWTEST_PARITY_PORT ?? 4477);
+/** Our own range — never 4460 (a real `ksx studio`) or 4478 (the macro
+ *  suite). The files still run serially because they share one
+ *  `macro_fixture.exe`, which Windows will not relink while it is running. */
+const FIRST_PORT = Number(process.env.KSX_PWTEST_PARITY_PORT ?? 4488);
 
 /** ONE PORT PER SESSION STATE, and here is why that matters.
  *
@@ -52,9 +52,9 @@ const PORT = Number(process.env.KSX_PWTEST_PARITY_PORT ?? 4477);
  *  why the fixture learned to be running" — was the one state never actually
  *  checked, on every run since it was added.
  *
- *  A port per state removes the reuse entirely; nothing has to wait on
- *  Windows releasing a socket. */
-const portFor = (session) => PORT + 1 + SESSIONS.indexOf(session);
+ *  A port per state removes the reuse entirely. Teardown still waits for the
+ *  process exit so the next FILE cannot race its executable handle. */
+const portFor = (session) => FIRST_PORT + SESSIONS.indexOf(session);
 const baseFor = (session) => `http://127.0.0.1:${portFor(session)}`;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -68,10 +68,23 @@ const exe = path.join(
   process.platform === "win32" ? "macro_fixture.exe" : "macro_fixture",
 );
 
-/** The routes that render server-side. `/start` includes the scalar capture
- *  preparation branch, whose hidden exact-target values must survive adoption
- *  without a first-paint swap. */
-const ROUTES = ["/", "/map", "/map?slot=1", "/start"];
+/** Every server-rendered route, plus the mapper's alternate slot view.
+ *  `/start` includes the scalar capture preparation branch, whose hidden
+ *  exact-target values must survive adoption without a first-paint swap. */
+const ROUTES = [
+  "/start",
+  "/workspace",
+  "/nocturne",
+  "/nocturne?slot=1&macro=hadouken",
+  "/",
+  "/map",
+  "/map?slot=1",
+  "/check",
+  "/pads",
+  "/devices",
+  "/profiles",
+  "/setup",
+];
 
 /** The session states the show pairs actually move between. `modal open` is
  *  deliberately absent: every modal show (`show:modalOpen` and its three inner
@@ -99,6 +112,68 @@ const SNAPSHOT = `(() => {
   //    which is to differ.
   clone.classList.remove("js");
   clone.querySelectorAll(".js").forEach((el) => el.classList.remove("js"));
+  // 3b. CONNECTION CHATTER, by contract. A node marked data-live-chatter
+  //    carries the live feed's own connection state ("connecting…",
+  //    "reconnecting…", "live") — a value the server can never know, because
+  //    the stream is opened by the browser after adoption. The MARKER is the
+  //    decision: only nodes that declare themselves chatter are exempt, their
+  //    presence still compares, and any un-marked sentence that flashes still
+  //    fails. Durable state goes through separate announcers and show pairs,
+  //    which stay fully asserted.
+  clone.querySelectorAll("[data-live-chatter]").forEach((el) => { el.textContent = ""; });
+  // 3c. RETIRED (was CLIENT FIT, data-client-fit: the old stage's
+  //    zoom-to-fit style exemption). The canvas replaced fit-scaling with
+  //    real camera geometry — nothing emits the marker any more, and a
+  //    normalization no node can trigger is a hole waiting for a tenant.
+  //    3d is the successor. Letters stay stable; do not reuse 3c.
+  // 3d. CLIENT CANVAS, by contract. A node marked data-client-canvas is
+  //    managed by the workspace canvas engine after adoption (the vendored
+  //    genui runtime): camera and widget geometry ride its STYLE attribute,
+  //    and the engine annotates its own state through five data- namespaces
+  //    (data-canvas-* geometry mirrors; data-widget-* navigation, chrome
+  //    dock and focus mode; data-attention-*, data-runtime-* and
+  //    data-virtualization-* visibility ranking). The selected input device's
+  //    reconciled role is likewise annotated as data-input-kind after mount;
+  //    the served shell is intentionally the protocol-neutral Input source.
+  //    These are all browser-side facts the server can never know. Exactly
+  //    those channels are exempt ON THE
+  //    MARKED NODE ITSELF — stripped from BOTH captures, so the served
+  //    identity attrs that share a prefix (data-widget-name) vanish equally
+  //    rather than escaping the compare. Everything else on the node
+  //    (data-instance-id, class, role, aria-*, tabindex), its whole content
+  //    subtree (the keyboard widget's served rows above all) and every
+  //    unmarked node still compare byte-for-byte.
+  clone.querySelectorAll("[data-client-canvas]").forEach((el) => {
+    el.removeAttribute("style");
+    for (const attr of Array.from(el.attributes)) {
+      if (
+        attr.name === "data-input-kind" ||
+        /^data-(canvas-|widget-|attention-|runtime-|virtualization-)/.test(attr.name)
+      ) {
+        el.removeAttribute(attr.name);
+      }
+    }
+  });
+  // 3e. CLIENT WIDGETS, by contract. Elements marked data-client-widget are
+  //    canvas widgets the island BUILDS from the payload roster after
+  //    adoption (the controller cards — the old pad grid's clones, made
+  //    contractual): their SSR absence is the point, exactly like the grid
+  //    they replace, so they are removed before comparing. The keyboard
+  //    widget deliberately carries NO such marker — it is served markup the
+  //    engine adopts, and its content stays fully asserted.
+  clone.querySelectorAll("[data-client-widget]").forEach((el) => el.remove());
+  // 3f. CLIENT-POPULATED SUBTREE, by contract. A node marked
+  //    data-client-subtree is a served, asserted CONTAINER whose CHILDREN
+  //    the client fills from live state (the canvas map's one marker per
+  //    mounted widget). Its children — and only its children — are dropped
+  //    before comparing: the container itself, its attributes and its
+  //    position among its siblings still compare byte-for-byte, so deleting
+  //    the map or renaming it still fails. Deliberately NOT the same rule as
+  //    3e: those nodes are absent server-side by contract, while this one
+  //    must be SERVED and empty.
+  clone.querySelectorAll("[data-client-subtree]").forEach((el) => {
+    el.replaceChildren();
+  });
   let html = clone.outerHTML;
   // 4. forma-ir's U+200B placeholders, which hold the position of an empty
   //    dynamic text slot server-side.
@@ -108,6 +183,15 @@ const SNAPSHOT = `(() => {
   // 6. An EMPTY value attribute the client writes into the form controls it
   //    owns. Empty only — a value the two sides disagree ABOUT still fails.
   html = html.replace(/ value=""/g, "");
+  // 7. <noscript> SUBTREES. With scripting enabled the parser stores noscript
+  //    content as raw TEXT, so the SSR serialization shows escaped markup —
+  //    but adoption rebuilds the island through the DOM API, which bypasses
+  //    the parser and gives noscript real ELEMENT children. Both serialize
+  //    differently while neither can ever paint (scripting is on in both
+  //    captures by definition), so the difference is unobservable and
+  //    by-design. Emptying the wrapper keeps its PRESENCE asserted — a page
+  //    that dropped its noscript block entirely still fails.
+  html = html.replace(/<noscript[^>]*>[\\s\\S]*?<\\/noscript>/g, "<noscript></noscript>");
   return html;
 })()`;
 
@@ -120,6 +204,18 @@ async function ssrDom(url) {
   try {
     const page = await ctx.newPage();
     await page.goto(url, { waitUntil: "domcontentloaded" });
+    // 3e removes [data-client-widget] from BOTH captures, so a server that
+    // wrongly SERVED one would sail through the compare. Their SSR absence
+    // is the contract — assert it on the raw document, before normalizing.
+    const servedClientWidgets = await page.evaluate(
+      () => document.querySelectorAll("[data-client-widget]").length,
+    );
+    assert.equal(
+      servedClientWidgets,
+      0,
+      `${url} SERVED ${servedClientWidgets} data-client-widget node(s) — ` +
+        "client-built widgets must not exist in SSR markup (parity rule 3e)",
+    );
     return await page.evaluate(SNAPSHOT);
   } finally {
     await ctx.close();
@@ -134,6 +230,25 @@ async function hydratedDom(url) {
     await page.goto(url, { waitUntil: "domcontentloaded" });
     await page.waitForFunction(
       () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+      null,
+      { timeout: 20_000 },
+    );
+    // The canvas adopts in the island's post-mount frame and then opens on
+    // an animated fitAll. Capturing in either window would compare a
+    // half-annotated page against a settled one, and `is-camera-animating`
+    // is a CLASS, which no exemption covers. Note the adoption wait cannot
+    // be a plain delay: it is not a fixed distance behind hydration. Both
+    // waits pass instantly on the routes that have no canvas.
+    await page.waitForFunction(
+      () => {
+        const kb = document.querySelector('.n-canvas [data-instance-id="keyboard"]');
+        return !document.querySelector(".n-canvas") || kb?.dataset.canvasX !== undefined;
+      },
+      null,
+      { timeout: 20_000 },
+    );
+    await page.waitForFunction(
+      () => !document.querySelector(".is-camera-animating"),
       null,
       { timeout: 20_000 },
     );
@@ -228,8 +343,8 @@ for (const session of SESSIONS) {
       }
     });
 
-    after(() => {
-      server?.kill();
+    after(async () => {
+      await stopFixtureProcess(server, `parity fixture (${session})`);
     });
 
     for (const route of ROUTES) {
@@ -243,8 +358,7 @@ for (const session of SESSIONS) {
           hydrated,
           `${route} (session ${session}) flashes: the server paints one thing and the ` +
             `client replaces it on adoption. Whichever side is wrong, the two ` +
-            `derivations have drifted — server: render.rs / render_map.rs, client: ` +
-            `StatusIsland.ts / MapIsland.ts.\n${firstDifference(ssr, hydrated)}`,
+            `derivations for this route have drifted.\n${firstDifference(ssr, hydrated)}`,
         );
       });
     }

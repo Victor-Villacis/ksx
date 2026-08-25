@@ -1,7 +1,8 @@
 //! **The contrast contract for the 10-foot surface.**
 //!
-//! The twin of `ksx-studio/tests/contrast.rs`. That one parses `studio.css`,
-//! because on the web the stylesheet is the source of truth; this one reads
+//! The twin of `ksx-studio/tests/contrast.rs`. That one parses the shipped
+//! sheet (the generated `tokens.gen.css` + authored `studio.css`), because on
+//! the web the stylesheet is the source of truth; this one reads
 //! [`theme::role`] directly, because here the Rust constants *are* the theme.
 //! Neither imports the other: twelve lines of duplicated WCAG arithmetic is a
 //! smaller price than a crate dependency between two UIs that share nothing
@@ -261,26 +262,64 @@ fn separators_stay_perceptible() {
     r.finish("separators");
 }
 
-/// The two surfaces must agree about the accent. They diverge on *size* on
-/// purpose — body 28 vs 14, hero 68 vs 38 — and that divergence is documented;
-/// they must not diverge on what "you are here" looks like.
+/// The two surfaces must agree about every role they share. They diverge on
+/// *size* on purpose — body 28 vs 14, hero 68 vs 38 — and on TWO colours on
+/// purpose (`DANGER`/`DANGER_FILL`, documented in `theme.rs`: this surface
+/// tints harder, so the web red fails its own composed pairs here). The
+/// other thirteen roles are byte-mirrors of the web tokens, and until TK0
+/// only `ACCENT` was actually pinned — the rest could drift from the web
+/// palette undetected, which is exactly the drift class both contrast files
+/// exist to kill.
+///
+/// The web side is read from the GENERATED `tokens.gen.css` (compiled from
+/// `studio-ui/tokens/`, the single palette source since TK0), addressing the
+/// base block by taking everything before the light media marker — not "the
+/// first match in file order", which stopped being a safe assumption the
+/// moment the sheet could carry more than one theme block.
 #[test]
-fn the_accent_matches_the_web_surface() {
-    let css = include_str!("../../../studio-ui/src/studio.css");
-    let want = css
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("--accent:"))
-        .map(|v| v.trim().trim_end_matches(';').to_ascii_lowercase())
-        .expect("studio.css must declare --accent");
-    let got = format!(
-        "#{:02x}{:02x}{:02x}",
-        role::ACCENT.r(),
-        role::ACCENT.g(),
-        role::ACCENT.b()
-    );
-    assert_eq!(
-        got, want,
-        "cabinet ACCENT and the web --accent must be the same colour: one app, \
-         one meaning for 'live/where you are'"
-    );
+fn the_mirrored_roles_match_the_web_surface() {
+    const TOKENS_CSS: &str = include_str!("../../../studio-ui/src/tokens.gen.css");
+    let base = &TOKENS_CSS[..TOKENS_CSS
+        .find("@media (prefers-color-scheme: light)")
+        .expect("tokens.gen.css must contain the light media block")];
+    let web_token = |name: &str| -> String {
+        base.lines()
+            .find_map(|l| l.trim().strip_prefix(name))
+            .and_then(|rest| rest.strip_prefix(':'))
+            .map(|v| {
+                v.split("/*")
+                    .next()
+                    .unwrap_or(v)
+                    .trim()
+                    .trim_end_matches(';')
+                    .trim()
+                    .to_ascii_lowercase()
+            })
+            .unwrap_or_else(|| panic!("tokens.gen.css base block must declare {name}"))
+    };
+    for (role_name, token, c) in [
+        ("SURFACE", "--bg", role::SURFACE),
+        ("RAISED", "--panel", role::RAISED),
+        ("INSET", "--panel-3", role::INSET),
+        ("TEXT", "--text", role::TEXT),
+        ("TEXT_2", "--text-2", role::TEXT_2),
+        ("TEXT_3", "--text-3", role::TEXT_3),
+        ("BORDER", "--line", role::BORDER),
+        ("BORDER_STRONG", "--line-strong", role::BORDER_STRONG),
+        ("ACCENT", "--accent", role::ACCENT),
+        ("ACCENT_ON", "--accent-on", role::ACCENT_ON),
+        ("OK", "--ok", role::OK),
+        ("WARN", "--warn", role::WARN),
+        ("COOL", "--cool", role::COOL),
+    ] {
+        let want = web_token(token);
+        let got = format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b());
+        assert_eq!(
+            got, want,
+            "cabinet {role_name} mirrors the web `{token}` and has drifted: one \
+             app, one meaning per role. If a divergence is deliberate, it \
+             belongs in theme.rs's docs AND out of this pin list, like \
+             DANGER/DANGER_FILL."
+        );
+    }
 }

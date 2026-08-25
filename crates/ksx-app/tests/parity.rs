@@ -376,6 +376,10 @@ fn classify(cell: &str) -> Claim {
     match plain.split_whitespace().next().unwrap_or("") {
         "owns" | "primary" | "view" | "convenience" | "input" => Claim::Shipped,
         "slot→preset" => Claim::Shipped,
+        // A face that ships SOME of the row's verbs and says which — the
+        // stage row's CLI cell (view/adopt/reorder/socd/apply, while save and
+        // play stay surface acts). Shipped: the named verbs must resolve.
+        "partial" => Claim::Shipped,
         "planned" | "never" | "—" | "-" => Claim::Absent,
         other => panic!(
             "docs/SURFACES.md §3 has a cell starting `{other}` ({cell:?}) that this guard \
@@ -474,12 +478,18 @@ struct Anchors {
 const ANCHORS: &[Anchors] = &[
     Anchors {
         capability: "First run: stage a setup, save or play",
-        // `planned` — and it is the reason the bookkeeping test below stopped
-        // demanding that every CLI anchor resolve. `ksx stage` does not exist;
-        // saying so IS the claim, exactly as `Screen::Mapper` below says the
-        // cabinet has no mapper. §3c records why the build order ran backwards
-        // here.
-        cli: &["stage"],
+        // `ksx stage` exists now (view / adopt / reorder / socd — the
+        // operator faces of the daemon-held draft). Save and Play stay
+        // surface acts on purpose: the two buttons carry the §2 consequence
+        // copy, and a shell spelling of them would be a third place for that
+        // copy to drift. The row's CLI cell says exactly that.
+        cli: &[
+            "stage view",
+            "stage adopt",
+            "stage reorder",
+            "stage socd",
+            "stage apply",
+        ],
         egui: &["Screen::FirstRun", "Ask::Stage"],
         // The two acts §2 requires be separable, plus the page they live on,
         // plus the one that gives a staged controller its BINDINGS. Naming
@@ -490,6 +500,7 @@ const ANCHORS: &[Anchors] = &[
         // did until `/start/controller/layout` existed.
         studio: &[
             "/start",
+            "/start/device/identify",
             "/start/controller/layout",
             "/start/save",
             "/start/play",
@@ -522,6 +533,41 @@ const ANCHORS: &[Anchors] = &[
         // somebody uses while PLAYING, and renaming files is not that moment.
         egui: &["Screen::Layouts", "Ask::RenamePreset"],
         studio: &["/profiles/preset/rename", "/profiles/preset/delete"],
+    },
+    Anchors {
+        capability: "Inspect and program panel encoder hardware / chart",
+        cli: &[
+            "panel status",
+            "panel chart",
+            "panel backups",
+            "panel program",
+            "panel restore",
+        ],
+        // Deliberately absent from the 10-foot cabinet surface: hardware
+        // inventory belongs beside Studio's panel authoring context, and no
+        // cabinet screen or confirmation owns it today.
+        egui: &["Screen::PanelStatus", "Ask::InspectPanel"],
+        studio: &[
+            "/api/panel/status",
+            "/api/panel/chart",
+            "/api/panel/backups",
+            "/api/panel/program/plan",
+            "/api/panel/program/apply",
+            "/api/panel/restore/plan",
+            "/api/panel/restore/apply",
+        ],
+    },
+    Anchors {
+        capability: "Measure simultaneous keyboard / encoder host signals",
+        cli: &["input-test start", "input-test poll", "input-test cancel"],
+        // Deliberately absent from the 10-foot surface: this is a timed,
+        // close-range setup diagnostic, not an operating control.
+        egui: &["Screen::InputTest"],
+        studio: &[
+            "/api/input-test",
+            "/api/input-test/start",
+            "/api/input-test/cancel",
+        ],
     },
     Anchors {
         capability: "Edit configuration",
@@ -626,6 +672,17 @@ const ANCHORS: &[Anchors] = &[
         studio: &["/setup/blocking"],
     },
     Anchors {
+        capability: "Studio theme",
+        // No CLI verb, same reasoning as blocking: a theme is picked where it
+        // is seen. The egui anchor is the name a cabinet theme prompt would
+        // take, asserted ABSENT — the 10-foot surface is dark-only by design
+        // (theme.rs's own docs), so a face appearing there is a decision this
+        // row exists to surface.
+        cli: &[],
+        egui: &["Ask::Theme"],
+        studio: &["/setup/theme"],
+    },
+    Anchors {
         capability: "Start ksx at sign-in",
         // The CLI keeps every option (--mode, --game, --delay-secs,
         // --task-name); Studio takes the one a first run needs and the
@@ -715,9 +772,11 @@ const EXEMPT: &[Exempt] = &[
               setup is the one place an admin token already exists and has already been \
               consented to (packaging/ksx.iss, docs/DRIVERS.md \"Who runs it, and when\"). \
               That is still not a surface — it happens once, before any surface exists. \
-              What the surfaces carry is the STATE: `MachineSource::pad_bus` is read by \
-              /start and said before the Play button, which is the row §3 already gives \
-              them (\"Is it working: pads, drivers\").",
+              What the surfaces carry is the STATE: `MachineSource::controller_outputs` \
+              evaluates only the backends required by the currently staged supported \
+              personas and is said before the Play button; Status/System inventories both \
+              installed output stacks without claiming HIDMaestro's endpoint exists before \
+              Play. That is the row §3 already gives them (\"Is it working: pads, drivers\").",
     },
     Exempt {
         verb: "studio",
@@ -1128,6 +1187,11 @@ const CONFIG_SURFACES: &[ConfigSurface] = &[
               the face is a READ of where each pad actually landed.",
     },
     ConfigSurface {
+        field: "theme",
+        row: Some("Studio theme"),
+        why: "",
+    },
+    ConfigSurface {
         field: "number",
         row: Some("Edit configuration"),
         why: "",
@@ -1232,6 +1296,7 @@ fn the_config_surface_ledger_names_every_field_that_exists() {
         block_mice: true,
         mouse_move_deadzone: 7,
         starting_user_index: 2,
+        theme: Some("light".to_owned()),
     };
     let slot = ksx_config::SlotEntry {
         number: 3,

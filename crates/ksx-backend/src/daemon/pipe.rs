@@ -5,18 +5,20 @@
 //! `stop`, `reload`, plus the M7 mapper slice: `map` (edit one preset binding
 //! through the same [`crate::mapping::apply`] the CLI verb uses — no
 //! pipe-private editor), `learn-key` / `learn-poll` / `learn-cancel` (the
-//! asynchronous "press the panel key" recorder, [`super::learn`]). `ksx
-//! session` and Studio are thin clients of this; docs/CONTROL-SURFACE.md
-//! carries the request/response examples.
+//! asynchronous "press the panel key" recorder, [`super::learn`]), and the
+//! bounded `input-test-*` diagnostic. `ksx session`, `ksx input-test`, and
+//! Studio are thin clients of this; docs/CONTROL-SURFACE.md carries the
+//! request/response examples.
 //!
 //! # Reach
 //!
-//! The pipe thread has exactly the tray's reach and no more: it enqueues the
-//! same [`DaemonCommand`] values the tray menu produces, reads the same
-//! [`DaemonState`] snapshot the tray polls, and reads games.toml from disk.
-//! It owns no path to the factory, the panel, or any pipeline thread — a
-//! wedged pipe client costs other clients their turn on the pipe, never a
-//! keyboard.
+//! Session verbs have exactly the tray's reach: they enqueue the same
+//! [`DaemonCommand`] values and read the same [`DaemonState`] snapshot. Editor
+//! verbs delegate to the daemon-owned mapping and observer services. Those
+//! observers may briefly own a Raw Input window or panel tap, but start is
+//! asynchronous and every attempt is bounded; the pipe still has no path to a
+//! factory or time-critical pipeline thread. A wedged pipe client costs other
+//! clients their turn on the pipe, never an unbounded keyboard claim.
 //!
 //! # Trust model
 //!
@@ -199,6 +201,13 @@ pub type StageCommitFn = Box<
 pub type StageCapturePreflightFn =
     Box<dyn Fn(&ksx_core::CommitSpec) -> Result<(), ksx_api::Refusal> + Send>;
 
+/// The reverse of [`StageCommitFn`]: build a stage from the saved
+/// configuration (`stage-adopt`). A READ — it takes a profile title and
+/// returns the setup or the refusal, and touches no daemon state itself, so
+/// protocol tests exercise the empty-stage guard above it with no disk.
+pub type StageAdoptFn =
+    Box<dyn Fn(Option<&str>) -> Result<ksx_core::StagedSetup, ksx_api::Refusal> + Send>;
+
 /// Everything a pipe request can reach. One struct so the transport, the
 /// tests and future verbs share a single wiring point.
 pub struct PipeDeps {
@@ -217,8 +226,12 @@ pub struct PipeDeps {
     /// The ONE act that turns the staged setup into files (`stage-commit`).
     /// Everything else about staging is memory (docs/FIRST-RUN.md §2).
     pub stage_commit: StageCommitFn,
+    /// Its reverse (`stage-adopt`): the saved configuration read into a fresh
+    /// stage, so the everyday screen can show what this machine already has.
+    pub stage_adopt: StageAdoptFn,
     pub stage_capture_preflight: StageCapturePreflightFn,
     pub learn: super::learn::LearnService,
+    pub input_test: super::input_test::InputTestService,
 }
 
 /// The real [`MapFn`] and [`MacroFn`]: [`crate::mapping::apply`] and
@@ -312,6 +325,11 @@ pub fn stage_commit_fn(root: ksx_config::ConfigRoot) -> StageCommitFn {
     Box::new(move |spec| crate::stage::apply(&ksx_config::Store::new(root.clone()), spec))
 }
 
+/// The real [`StageAdoptFn`]: [`crate::stage::adopt`] against `root`'s store.
+pub fn stage_adopt_fn(root: ksx_config::ConfigRoot) -> StageAdoptFn {
+    Box::new(move |profile| crate::stage::adopt(&ksx_config::Store::new(root.clone()), profile))
+}
+
 /// games.toml rows for the status response. Unreadable configuration reports
 /// itself as a row rather than vanishing — same honesty rule as Studio.
 pub fn profile_rows(root: &ksx_config::ConfigRoot) -> Vec<(String, String)> {
@@ -337,6 +355,10 @@ pub fn profile_rows(root: &ksx_config::ConfigRoot) -> Vec<(String, String)> {
 /// that a client is never parked behind a wedged start.
 const SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 const SETTLE_POLL: Duration = Duration::from_millis(25);
+/// A cancelled Learn answers before its observer finishes destroying the Raw
+/// Input window. Let that cleanup tail finish so the next user action does not
+/// spuriously bounce; never wait on a generation that is still listening.
+const OBSERVER_HANDOFF_GRACE: Duration = Duration::from_millis(250);
 /// A request line longer than this is an attack or a bug, not a verb.
 const MAX_REQUEST: usize = 64 * 1024;
 
@@ -370,6 +392,15 @@ fn status_json(state: &SharedState, profiles: &ProfilesFn) -> serde_json::Value 
         .into_iter()
         .map(|(title, detail)| serde_json::json!({ "title": title, "detail": detail }))
         .collect();
+    let active = snap.active.as_ref().map(|active| {
+        serde_json::json!({
+            "elapsed_ms": u64::try_from(active.started.elapsed().as_millis())
+                .unwrap_or(u64::MAX),
+            "keyboards": active.facts.keyboards,
+            "capture": &active.facts.capture,
+            "controllers": &active.facts.controllers,
+        })
+    });
     serde_json::json!({
         "ok": true,
         "run": run_word(&snap.run),
@@ -381,6 +412,7 @@ fn status_json(state: &SharedState, profiles: &ProfilesFn) -> serde_json::Value 
         // indistinguishable from outside — and `resume` is the verb that acts
         // on it.
         "origin": snap.origin.as_str(),
+        "active": active,
         "tooltip": snap.tooltip(),
         "profiles": rows,
         "last": snap.last.as_ref().map(|l| serde_json::json!({
@@ -494,12 +526,21 @@ fn handle_request_with_shutdown(
     };
     let Some(verb) = request.get("verb").and_then(|v| v.as_str()) else {
         return err_msg(
-            r#"request has no "verb" (status | start | stop | resume | reload | quit | map | map-macro | map-restore | map-clear-all | map-backups | slot-assign | stage | stage-edit | stage-bind | stage-macro | stage-commit | stage-play | learn-key | learn-poll | learn-cancel)"#,
+            r#"request has no "verb" (status | start | stop | resume | reload | quit | map | map-macro | map-restore | map-clear-all | map-backups | slot-assign | stage | stage-edit | stage-bind | stage-macro | stage-commit | stage-play | stage-apply | learn-key | learn-poll | learn-cancel | input-test-start | input-test-poll | input-test-cancel)"#,
         );
     };
     match verb {
         "status" => status_json(state, &deps.profiles),
         "start" => {
+            if !deps
+                .input_test
+                .wait_for_terminal_observer_release(OBSERVER_HANDOFF_GRACE)
+            {
+                return err_code(
+                    "observer-busy",
+                    "Play cannot start while the simultaneous-input test is listening or releasing; stop the test first",
+                );
+            }
             let profile = request
                 .get("profile")
                 .and_then(|p| p.as_str())
@@ -509,7 +550,18 @@ fn handle_request_with_shutdown(
         }
         // **Put back what `stop` stopped.** Not `start` with an argument: see
         // [`handle_resume`], and `ksx_api::ControlSource::resume`.
-        "resume" => handle_resume(deps, settle),
+        "resume" => {
+            if !deps
+                .input_test
+                .wait_for_terminal_observer_release(OBSERVER_HANDOFF_GRACE)
+            {
+                return err_code(
+                    "observer-busy",
+                    "Play cannot resume while the simultaneous-input test is listening or releasing; stop the test first",
+                );
+            }
+            handle_resume(deps, settle)
+        }
         "stop" => {
             let baseline = snapshot(state).run;
             if !matches!(baseline, RunState::Running { .. } | RunState::Starting) {
@@ -521,6 +573,15 @@ fn handle_request_with_shutdown(
             await_stop(state, settle)
         }
         "reload" => {
+            if !deps
+                .input_test
+                .wait_for_terminal_observer_release(OBSERVER_HANDOFF_GRACE)
+            {
+                return err_code(
+                    "observer-busy",
+                    "Play cannot reload while the simultaneous-input test is listening or releasing; stop the test first",
+                );
+            }
             let baseline = snapshot(state).run;
             if tx.send(DaemonCommand::Reload).is_err() {
                 return err_msg("the daemon is shutting down");
@@ -574,7 +635,20 @@ fn handle_request_with_shutdown(
         "stage-bind" => handle_stage_bind(&request, &deps.state),
         "stage-macro" => handle_stage_macro(&request, &deps.state),
         "stage-commit" => handle_stage_commit(deps),
-        "stage-play" => handle_stage_play(deps, settle),
+        "stage-play" => {
+            if !deps
+                .input_test
+                .wait_for_terminal_observer_release(OBSERVER_HANDOFF_GRACE)
+            {
+                return err_code(
+                    "observer-busy",
+                    "Play cannot start while the simultaneous-input test is listening or releasing; stop the test first",
+                );
+            }
+            handle_stage_play(deps, settle)
+        }
+        "stage-apply" => handle_stage_apply(deps, settle),
+        "stage-adopt" => handle_stage_adopt(&request, deps),
         // Learn needs an IDLE daemon, and this refusal is deliberate — it was
         // re-examined in full on 2026-08-05 and kept.
         //
@@ -622,14 +696,123 @@ fn handle_request_with_shutdown(
                      or bind directly with `ksx map`",
                 );
             }
+            if !deps
+                .input_test
+                .wait_for_terminal_observer_release(OBSERVER_HANDOFF_GRACE)
+            {
+                return err_code(
+                    "observer-busy",
+                    "learn-key is unavailable while the simultaneous-input test is listening or releasing; stop that test first",
+                );
+            }
             deps.learn.start()
         }
         "learn-poll" => deps.learn.poll(),
-        "learn-cancel" => deps.learn.cancel(),
+        "learn-cancel" => {
+            let generation = match request.get("generation") {
+                None => None,
+                Some(value) => match value.as_u64() {
+                    Some(value) => Some(value),
+                    None => {
+                        return err_code(
+                            "bad-request",
+                            "learn-cancel generation must be an unsigned integer",
+                        )
+                    }
+                },
+            };
+            deps.learn.cancel(generation)
+        }
+        "input-test-start" => {
+            if matches!(
+                snapshot(state).run,
+                RunState::Running { .. } | RunState::Starting
+            ) {
+                return err_code(
+                    "session-running",
+                    "the simultaneous-input test is unavailable while Play is running or starting; stop the session first",
+                );
+            }
+            if !deps
+                .learn
+                .wait_for_terminal_observer_release(OBSERVER_HANDOFF_GRACE)
+            {
+                return err_code(
+                    "observer-busy",
+                    "the simultaneous-input test is unavailable while Learn is listening or releasing; cancel Learn first",
+                );
+            }
+            if !deps
+                .input_test
+                .wait_for_terminal_observer_release(OBSERVER_HANDOFF_GRACE)
+            {
+                return err_code(
+                    "observer-busy",
+                    "the previous simultaneous-input test is still listening or releasing; cancel it and try again",
+                );
+            }
+            let Some(fields) = request.as_object() else {
+                return err_code("bad-request", "input-test-start must be a JSON object");
+            };
+            if fields
+                .keys()
+                .any(|field| !matches!(field.as_str(), "verb" | "selector" | "duration_ms"))
+            {
+                return err_code(
+                    "bad-request",
+                    "input-test-start accepts only selector and duration_ms",
+                );
+            }
+            let spec = match serde_json::from_value::<ksx_api::Request>(request.clone()) {
+                Ok(ksx_api::Request::InputTestStart(spec)) => spec,
+                Ok(_) => unreachable!("the fixed verb was checked above"),
+                Err(err) => {
+                    return err_code(
+                        "bad-request",
+                        format!("input-test-start could not be read: {err}"),
+                    )
+                }
+            };
+            deps.input_test.start(spec)
+        }
+        "input-test-poll" => {
+            if request.as_object().is_none_or(|fields| fields.len() != 1) {
+                return err_code(
+                    "bad-request",
+                    "input-test-poll accepts no fields other than its fixed verb",
+                );
+            }
+            deps.input_test.poll()
+        }
+        "input-test-cancel" => {
+            let Some(fields) = request.as_object() else {
+                return err_code("bad-request", "input-test-cancel must be a JSON object");
+            };
+            if fields
+                .keys()
+                .any(|field| !matches!(field.as_str(), "verb" | "generation"))
+            {
+                return err_code("bad-request", "input-test-cancel accepts only generation");
+            }
+            let generation = match request.get("generation") {
+                None => None,
+                Some(value) => match value.as_u64() {
+                    Some(value) => Some(value),
+                    None => {
+                        return err_code(
+                            "bad-request",
+                            "input-test-cancel generation must be an unsigned integer",
+                        )
+                    }
+                },
+            };
+            deps.input_test.cancel(generation)
+        }
         other => err_msg(format!(
             "unknown verb '{other}' (status | start | stop | reload | quit | map | map-macro | \
              map-restore | map-clear-all | map-backups | slot-assign | stage | stage-edit | \
-             stage-commit | stage-play | learn-key | learn-poll | learn-cancel)"
+             stage-commit | stage-play | stage-apply | learn-key | learn-poll | learn-cancel | \
+             input-test-start | input-test-poll | input-test-cancel)"
         )),
     }
 }
@@ -731,6 +914,8 @@ fn handle_map(request: &serde_json::Value, deps: &PipeDeps, settle: Duration) ->
             // AUTO-FIRE: absent means "not asked about" and leaves the rate alone;
             // 0 clears it (docs/INPUT-TRANSFORMS.md §3).
             turbo_hz: map.turbo_hz,
+            // TOGGLE-HOLD: the same absent-means-untouched rule (§2 item 8).
+            toggle: map.toggle,
         },
         Err(refusal) => return err_msg(refusal.message),
     };
@@ -756,6 +941,8 @@ fn handle_map(request: &serde_json::Value, deps: &PipeDeps, settle: Duration) ->
                 // legend row, because it is the one the game will see.
                 "turbo_hz": applied.turbo_hz,
                 "turbo_effective_hz": applied.turbo_effective_hz,
+                // TOGGLE-HOLD (§2 item 8): the control is now latched.
+                "toggle": applied.toggle,
                 // MULTI-BIND: the other controls of this preset this key also
                 // drives. Studio renders it as the legend's "also A · B"
                 // badges (ksx-studio/src/render_map.rs `shared_labels`), which
@@ -1037,6 +1224,30 @@ fn macro_json(outcome: &ksx_api::MacroOutcome) -> serde_json::Value {
     })
 }
 
+/// The visit metadata, stamped onto an outcome's view. The daemon owns it —
+/// `StagedSetupView::of` composes honest defaults, and this is the one place
+/// the truth is written over them.
+fn stamp_stage_meta(
+    mut outcome: ksx_api::StageOutcome,
+    meta: &super::StageMeta,
+) -> ksx_api::StageOutcome {
+    outcome.setup.dirty = meta.dirty;
+    outcome.setup.origin = meta.origin.clone();
+    stamp_stage_target_revisions(&mut outcome.setup, meta);
+    outcome
+}
+
+/// Replace the content-only fallback tokens composed by `ksx-api` with the
+/// daemon-owned draft incarnation and mutation generation. The content hash
+/// remains useful for diagnostics, but the prefix is what makes an exact
+/// remove/recreate an ABA-safe new target.
+fn stamp_stage_target_revisions(setup: &mut ksx_api::StagedSetupView, meta: &super::StageMeta) {
+    for slot in &mut setup.slots {
+        let content = ksx_api::staged_slot_revision(slot);
+        slot.target_revision = format!("d1-{}-{:016x}-{content}", meta.incarnation, meta.revision);
+    }
+}
+
 /// The staged setup as it stands. **A read: it changes nothing.**
 fn stage_view(state: &SharedState) -> serde_json::Value {
     let Ok(s) = state.lock() else {
@@ -1051,7 +1262,69 @@ fn stage_view(state: &SharedState) -> serde_json::Value {
     let mut outcome = ksx_api::StageOutcome::ok(&s.staged, "the staged setup");
     // A pure read reports no verb having happened.
     outcome.message = None;
-    stage_json(&outcome)
+    stage_json(&stamp_stage_meta(outcome, &s.stage_meta))
+}
+
+/// `{"verb":"stage-adopt"}` (optionally `"profile":"<title>"`) — the saved
+/// configuration, read into a fresh stage.
+///
+/// **Refused on a non-empty stage**, before any disk read: adoption must
+/// never overwrite a proposal, so a surface that means to replace one sends
+/// `discard` first, behind its own confirmation. The read itself is
+/// [`crate::stage::adopt`] behind [`PipeDeps::stage_adopt`]; nothing is
+/// written anywhere.
+fn handle_stage_adopt(request: &serde_json::Value, deps: &PipeDeps) -> serde_json::Value {
+    let profile = request
+        .get("profile")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(str::to_owned);
+    let Ok(mut s) = deps.state.lock() else {
+        return stage_json(&ksx_api::StageOutcome::unavailable(
+            "the daemon's state lock is poisoned, so the saved configuration could not be adopted",
+        ));
+    };
+    if !s.staged.is_empty() {
+        return stage_json(&stamp_stage_meta(
+            ksx_api::StageOutcome::refused(
+                &s.staged,
+                &ksx_api::Refusal::with_remedy(
+                    "stage-not-empty",
+                    "there is already a setup on this screen, and adopting the saved one would \
+                     overwrite it",
+                    "start over first (discard), then adopt — or keep editing what is here",
+                ),
+            ),
+            &s.stage_meta,
+        ));
+    }
+    match (deps.stage_adopt)(profile.as_deref()) {
+        Ok(setup) => {
+            s.staged = setup;
+            s.stage_meta = super::StageMeta::default();
+            s.stage_meta.origin = profile
+                .as_deref()
+                .map_or_else(|| "config".to_owned(), |title| format!("profile:{title}"));
+            let message = profile.map_or_else(
+                || {
+                    "Showing the saved setup. Edits stay on this screen until Save or Play."
+                        .to_owned()
+                },
+                |title| {
+                    format!("Showing \"{title}\". Edits stay on this screen until Save or Play.")
+                },
+            );
+            stage_json(&stamp_stage_meta(
+                ksx_api::StageOutcome::ok(&s.staged, message),
+                &s.stage_meta,
+            ))
+        }
+        Err(refusal) => stage_json(&stamp_stage_meta(
+            ksx_api::StageOutcome::refused(&s.staged, &refusal),
+            &s.stage_meta,
+        )),
+    }
 }
 
 /// `{"verb":"stage-edit","edit":"add-slot","persona":"playstation",…}` — one
@@ -1072,8 +1345,8 @@ fn handle_stage_edit(request: &serde_json::Value, deps: &PipeDeps) -> serde_json
                 "code": ksx_api::codes::BAD_REQUEST,
                 "error": format!(
                     "stage-edit needs an \"edit\" naming one of choose-device | add-slot | \
-                     set-persona | set-layout | set-bindings | remove-slot | set-blocking | \
-                     discard: {err}"
+                     set-persona | set-layout | set-bindings | remove-slot | reorder-slots | \
+                     set-socd | set-blocking | discard: {err}"
                 ),
             })
         }
@@ -1093,11 +1366,27 @@ fn apply_stage_edit(edit: &ksx_api::StageEdit, state: &mut DaemonState) -> ksx_a
     match edit.apply(&state.staged) {
         Ok(next) => {
             state.staged = next;
-            ksx_api::StageOutcome::ok(&state.staged, describe(edit))
+            // The visit metadata moves with the write, at this one site:
+            // Start over IS the fresh state (clean, no origin); every other
+            // edit is a proposal the origin has not seen.
+            match edit {
+                ksx_api::StageEdit::Discard => state.stage_meta = super::StageMeta::default(),
+                _ => {
+                    state.stage_meta.dirty = true;
+                    state.stage_meta.bump_revision();
+                }
+            }
+            stamp_stage_meta(
+                ksx_api::StageOutcome::ok(&state.staged, describe(edit)),
+                &state.stage_meta,
+            )
         }
         // The setup is handed back UNCHANGED, which is the whole promise: a
         // user told "no" is still looking at a true screen.
-        Err(refusal) => ksx_api::StageOutcome::refused(&state.staged, &refusal),
+        Err(refusal) => stamp_stage_meta(
+            ksx_api::StageOutcome::refused(&state.staged, &refusal),
+            &state.stage_meta,
+        ),
     }
 }
 
@@ -1130,7 +1419,8 @@ fn stage_bind(request: &ksx_api::StagedBindRequest, state: &SharedState) -> ksx_
             "the daemon's state lock is poisoned, so the staged binding could not be edited",
         );
     };
-    let setup = ksx_api::StagedSetupView::of(&state.staged);
+    let mut setup = ksx_api::StagedSetupView::of(&state.staged);
+    stamp_stage_target_revisions(&mut setup, &state.stage_meta);
     let prepared = match ksx_api::staged_bind_edit(&setup, request) {
         Ok(prepared) => prepared,
         Err(outcome) => return outcome,
@@ -1230,6 +1520,19 @@ fn describe(edit: &ksx_api::StageEdit) -> String {
         ksx_api::StageEdit::RemoveSlot { number } => {
             format!("Player {number} was removed from this setup.")
         }
+        ksx_api::StageEdit::ReorderSlots { numbers } => {
+            format!(
+                "Players reordered ({} of them). Each controller kept its layout and settings; \
+                 only the numbers changed.",
+                numbers.len()
+            )
+        }
+        ksx_api::StageEdit::SetSocd { number, .. } => {
+            format!(
+                "Player {number}'s opposite-directions rule changed. This change is still on \
+                 this screen."
+            )
+        }
         ksx_api::StageEdit::SetBlocking { .. } => {
             "Answered. LeftCtrl five times always frees or recaptures the keyboard without ending Play; Stop or Ctrl+Alt+Del ends Play."
                 .to_owned()
@@ -1273,10 +1576,14 @@ fn handle_stage_commit(deps: &PipeDeps) -> serde_json::Value {
             // configuration. Keep the first-run tray honest immediately,
             // without requiring a daemon restart.
             s.cabinet_ready = true;
+            // The draft now IS the saved config: clean, and its origin is the
+            // file it just became.
+            s.stage_meta.dirty = false;
+            s.stage_meta.origin = "config".to_owned();
             let mut outcome = ksx_api::StageOutcome::ok(&s.staged, written.message());
             outcome.saved = Some(written.config.display().to_string());
             outcome.backup = written.backup.map(|path| path.display().to_string());
-            stage_json(&outcome)
+            stage_json(&stamp_stage_meta(outcome, &s.stage_meta))
         }
         Err(err) => stage_json(&ksx_api::StageOutcome::refused(
             &s.staged,
@@ -1424,6 +1731,111 @@ fn handle_stage_play(deps: &PipeDeps, settle: Duration) -> serde_json::Value {
     outcome.saved = None;
     outcome.backup = None;
     stage_json(&outcome)
+}
+
+/// `{"verb":"stage-apply"}` — the draft's BINDINGS into the running session in
+/// place: pads stay plugged, nothing re-enumerates, nothing is written.
+///
+/// The dirty flag deliberately does not move: applying is not saving, and the
+/// draft still differs from its origin on disk exactly as much as it did. What
+/// changes is the session's ORIGIN — the control loop repoints it at the
+/// applied spec on success, so pause + resume brings back what is actually
+/// playing.
+///
+/// Refusals keep the session untouched, every one of them: an unsaved draft
+/// never tears a session down. Structural difference answers `needs-restart`
+/// with [`SessionShape::bounce_reason`]'s sentence naming what changed, and
+/// the remedy is the verb that IS allowed to replace the session —
+/// `stage-play`, behind the surface's own confirmation.
+///
+/// [`SessionShape::bounce_reason`]: crate::run::supervisor::SessionShape::bounce_reason
+fn handle_stage_apply(deps: &PipeDeps, settle: Duration) -> serde_json::Value {
+    // Committed from the setup as it stands NOW — `play_staged`'s rule, for
+    // the same reason: the whole point is carrying the edits somebody just
+    // made into the live session.
+    let (spec, staged, meta) = {
+        let Ok(s) = deps.state.lock() else {
+            return stage_json(&ksx_api::StageOutcome::unavailable(
+                "the daemon's state lock is poisoned, so the staged setup could not be applied",
+            ));
+        };
+        match s.staged.commit() {
+            Ok(spec) => (spec, s.staged.clone(), s.stage_meta.clone()),
+            Err(refusal) => {
+                return stage_json(&stamp_stage_meta(
+                    ksx_api::StageOutcome::refused(
+                        &s.staged,
+                        &ksx_api::Refusal::from_wire(Some(refusal.code()), refusal.to_string()),
+                    ),
+                    &s.stage_meta,
+                ));
+            }
+        }
+    };
+    let refused = |refusal: ksx_api::Refusal| {
+        stage_json(&stamp_stage_meta(
+            ksx_api::StageOutcome::refused(&staged, &refusal),
+            &meta,
+        ))
+    };
+
+    // The pure preflight, before anything is enqueued (`play_staged`'s rule):
+    // a draft that cannot even plan is refused with the planner's own
+    // sentence, which names the slot and the preset.
+    if let Err(err) = crate::stage::plan(&spec) {
+        return refused(ksx_api::Refusal::new(
+            ksx_api::codes::REFUSED,
+            err.to_string(),
+        ));
+    }
+    if !matches!(
+        snapshot(&deps.state).run,
+        RunState::Running { .. } | RunState::Starting
+    ) {
+        return refused(ksx_api::Refusal::with_remedy(
+            ksx_api::codes::REFUSED,
+            "nothing is running to apply the draft into",
+            "Play starts it (`stage-play`)",
+        ));
+    }
+
+    let baseline = snapshot(&deps.state)
+        .apply
+        .map_or(0, |report| report.generation);
+    if deps
+        .tx
+        .send(DaemonCommand::ApplyStaged(Box::new(spec)))
+        .is_err()
+    {
+        return refused(ksx_api::Refusal::new(
+            ksx_api::codes::REFUSED,
+            "the daemon is shutting down",
+        ));
+    }
+    match await_apply(&deps.state, baseline, settle) {
+        Some(report) if report.ok => {
+            let mut outcome = ksx_api::StageOutcome::ok(&staged, report.message);
+            outcome.playing = true;
+            // NEVER a path: applying writes nothing (`stage-play`'s rule).
+            outcome.saved = None;
+            outcome.backup = None;
+            stage_json(&stamp_stage_meta(outcome, &meta))
+        }
+        Some(report) if report.needs_restart => refused(ksx_api::Refusal::with_remedy(
+            ksx_api::codes::NEEDS_RESTART,
+            report.message,
+            "Play replaces the running session with the draft (`stage-play`)",
+        )),
+        Some(report) => refused(ksx_api::Refusal::new(
+            ksx_api::codes::REFUSED,
+            report.message,
+        )),
+        None => refused(ksx_api::Refusal::new(
+            ksx_api::codes::PIPE_ERROR,
+            "the daemon has not reported applying the draft yet — the session may still be \
+             starting",
+        )),
+    }
 }
 
 /// `{"verb":"start"}` — a session from **the config on disk**, optionally under
@@ -2455,7 +2867,13 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             Request::Stage,
             Request::LearnKey,
             Request::LearnPoll,
-            Request::LearnCancel,
+            Request::LearnCancel { generation: None },
+            Request::InputTestStart(ksx_api::InputTestSpec {
+                selector: "usb:d209:0430:00".into(),
+                duration_ms: 5_000,
+            }),
+            Request::InputTestPoll,
+            Request::InputTestCancel { generation: None },
             // The pure dispatcher has no process-owned rendezvous and must
             // refuse rather than pretending an in-process call closed a pipe.
             Request::Quit,
@@ -2506,8 +2924,14 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                         Response::Stage(_)
                     )
                     | (
-                        Request::LearnKey | Request::LearnPoll | Request::LearnCancel,
+                        Request::LearnKey | Request::LearnPoll | Request::LearnCancel { .. },
                         Response::Learn(_)
+                    )
+                    | (
+                        Request::InputTestStart(_)
+                            | Request::InputTestPoll
+                            | Request::InputTestCancel { .. },
+                        Response::InputTest(_)
                     )
             );
             assert!(right_shape, "`{verb}` was read as the wrong response kind");
@@ -2655,6 +3079,20 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         }))
     }
 
+    fn idle_input_test() -> super::super::input_test::InputTestService {
+        super::super::input_test::InputTestService::new(Arc::new(
+            |_selector, deadline, cancel, _emit| {
+                while Instant::now() < deadline {
+                    if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        return Ok(0);
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Ok(0)
+            },
+        ))
+    }
+
     /// A `map-restore` that refuses everything — protocol tests that never
     /// restore.
     fn no_restore() -> RestoreFn {
@@ -2693,6 +3131,15 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         })
     }
 
+    fn no_stage_adopt() -> StageAdoptFn {
+        Box::new(|_profile| {
+            Err(ksx_api::Refusal::new(
+                ksx_api::codes::REFUSED,
+                "this test daemon has no config root to adopt from",
+            ))
+        })
+    }
+
     fn deps(tx: Sender<DaemonCommand>, state: SharedState, profiles: ProfilesFn) -> PipeDeps {
         PipeDeps {
             tx,
@@ -2714,8 +3161,10 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             // so a test can assert that a REFUSED commit never reached the
             // writer, which "no file appeared" cannot prove.
             stage_commit: no_stage_commit(),
+            stage_adopt: no_stage_adopt(),
             stage_capture_preflight: Box::new(|_| Ok(())),
             learn: idle_learn(),
+            input_test: idle_input_test(),
         }
     }
 
@@ -2749,7 +3198,21 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
     #[test]
     fn status_reports_state_game_and_profiles() {
         let state = shared(RunState::Running { slots: 4 });
-        state.lock().unwrap().game = Some("Example Game".into());
+        {
+            let mut snapshot = state.lock().unwrap();
+            snapshot.game = Some("Example Game".into());
+            snapshot.active = Some(super::super::ActiveSession {
+                started: Instant::now() - Duration::from_secs(2),
+                facts: super::super::ActiveSessionFacts {
+                    keyboards: 2,
+                    capture: "mapped keys captured · WinUSB + Interception".into(),
+                    controllers: vec![
+                        "P1 Xbox 360 (ViGEmBus)".into(),
+                        "P2 DualSense (HIDMaestro)".into(),
+                    ],
+                },
+            });
+        }
         let (tx, _rx) = unbounded();
         let v = handle_request(
             r#"{"verb":"status"}"#,
@@ -2761,6 +3224,9 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         assert_eq!(v["slots"], 4);
         assert_eq!(v["game"], "Example Game");
         assert_eq!(v["profiles"][1]["title"], "Metal Slug");
+        assert!(v["active"]["elapsed_ms"].as_u64().unwrap() >= 2_000);
+        assert_eq!(v["active"]["keyboards"], 2);
+        assert_eq!(v["active"]["controllers"][1], "P2 DualSense (HIDMaestro)");
         assert!(v["tooltip"].as_str().unwrap().contains("running, 4 pad(s)"));
     }
 
@@ -2874,6 +3340,206 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             FAST,
         );
         assert_eq!(answered["ok"], true, "{answered}");
+    }
+
+    /// A one-slot setup the scripted [`StageAdoptFn`] hands back, standing in
+    /// for `crate::stage::adopt`'s disk read (unit-tested in stage.rs).
+    fn adopted_setup() -> ksx_core::StagedSetup {
+        ksx_core::StagedSetup::new()
+            .choose_device(ksx_core::stage::StagedDevice {
+                selector: ksx_core::DeviceSelector::parse("usb:d209:0430:00").unwrap(),
+                alias: "panel".to_owned(),
+                label: "panel".to_owned(),
+                backend: ksx_core::stage::StageCaptureBackend::Interception,
+            })
+            .unwrap()
+            .add_slot(1, ksx_core::Persona::Xbox360, {
+                ksx_core::Preset {
+                    name: "Player 1".to_owned(),
+                    entries: vec![(
+                        ksx_core::Key::A,
+                        ksx_core::preset::Binding::Button(ksx_core::pad::XButton::A),
+                    )],
+                    chords: Vec::new(),
+                    macros: Default::default(),
+                    turbo: Vec::new(),
+                    toggle: Vec::new(),
+                    protected: false,
+                }
+            })
+            .unwrap()
+            .set_blocking(ksx_core::Blocking::BoundKeys)
+    }
+
+    /// **`stage-adopt` fills an empty stage and refuses over a proposal.**
+    ///
+    /// The refusal half is the load-bearing one: the everyday screen adopts on
+    /// arrival, and a daemon that let that adoption overwrite a half-made
+    /// setup from another tab would eat the exact edits staging exists to
+    /// protect. Fails against a handler that skipped the empty-stage guard.
+    #[test]
+    fn stage_adopt_fills_an_empty_stage_and_refuses_over_a_proposal() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state.clone(), fixed_profiles());
+        d.stage_adopt = Box::new(|profile| match profile {
+            None => Ok(adopted_setup()),
+            Some("Fight Night") => Ok(adopted_setup()),
+            Some(other) => Err(ksx_api::Refusal::new(
+                ksx_api::codes::REFUSED,
+                format!("no saved game is called \"{other}\""),
+            )),
+        });
+
+        let adopted = handle_request(r#"{"verb":"stage-adopt"}"#, &d, FAST);
+        assert_eq!(adopted["ok"], true, "{adopted}");
+        assert_eq!(adopted["setup"]["dirty"], false, "{adopted}");
+        assert_eq!(adopted["setup"]["origin"], "config", "{adopted}");
+        assert_eq!(adopted["setup"]["slots"][0]["preset"], "Player 1");
+
+        // The stage is now a proposal; adopting again must refuse and hand
+        // the proposal back untouched.
+        let refused = handle_request(r#"{"verb":"stage-adopt"}"#, &d, FAST);
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert_eq!(refused["code"], "stage-not-empty", "{refused}");
+        assert_eq!(refused["setup"]["slots"][0]["preset"], "Player 1");
+
+        // The profile spelling reaches the reader, and its origin says which
+        // game the draft came from.
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state, fixed_profiles());
+        d.stage_adopt = Box::new(|profile| match profile {
+            Some("Fight Night") => Ok(adopted_setup()),
+            other => Err(ksx_api::Refusal::new(
+                ksx_api::codes::REFUSED,
+                format!("unexpected profile {other:?}"),
+            )),
+        });
+        let by_game = handle_request(
+            r#"{"verb":"stage-adopt","profile":"Fight Night"}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(by_game["ok"], true, "{by_game}");
+        assert_eq!(
+            by_game["setup"]["origin"], "profile:Fight Night",
+            "{by_game}"
+        );
+    }
+
+    /// **The dirty flag is the daemon's, and it moves with the writes**: an
+    /// edit marks the draft dirty, Start over resets it, and a successful
+    /// Save cleans it with the origin becoming the file the draft just
+    /// became. Fails against a view that composed `dirty` client-side — the
+    /// exact drift `StagedSetupView`'s field docs forbid.
+    #[test]
+    fn stage_edits_mark_the_draft_dirty_and_start_over_or_save_clean_it() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state.clone(), fixed_profiles());
+        d.stage_commit = Box::new(|spec| {
+            Ok(crate::stage::Committed {
+                config: std::path::PathBuf::from("C:/cfg/config.toml"),
+                backup: None,
+                presets: Vec::new(),
+                preset_backups: Vec::new(),
+                alias: spec.device.alias.clone(),
+                slots: spec.slots.iter().map(|s| s.spec.number).collect(),
+            })
+        });
+
+        let view = handle_request(r#"{"verb":"stage"}"#, &d, FAST);
+        assert_eq!(view["setup"]["dirty"], false, "a fresh visit is clean");
+
+        stage_ready(&d);
+        let view = handle_request(r#"{"verb":"stage"}"#, &d, FAST);
+        assert_eq!(
+            view["setup"]["dirty"], true,
+            "edits dirty the draft: {view}"
+        );
+
+        let saved = handle_request(r#"{"verb":"stage-commit"}"#, &d, FAST);
+        assert_eq!(saved["ok"], true, "{saved}");
+        assert_eq!(saved["setup"]["dirty"], false, "Save cleans: {saved}");
+        assert_eq!(saved["setup"]["origin"], "config", "{saved}");
+
+        let edited = handle_request(
+            r#"{"verb":"stage-edit","edit":"set-blocking","blocking":"whole"}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(edited["setup"]["dirty"], true, "{edited}");
+        assert_eq!(
+            edited["setup"]["origin"], "config",
+            "editing does not change where the draft came from: {edited}"
+        );
+
+        let fresh = handle_request(r#"{"verb":"stage-edit","edit":"discard"}"#, &d, FAST);
+        assert_eq!(
+            fresh["setup"]["dirty"], false,
+            "Start over is clean: {fresh}"
+        );
+        assert_eq!(fresh["setup"]["origin"], "", "{fresh}");
+    }
+
+    /// SOCD and reorder land over the wire as ordinary stage edits, with the
+    /// view carrying the canonical name AND its served label, and the refusal
+    /// codes a surface routes on.
+    #[test]
+    fn socd_and_reorder_land_over_the_wire() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let d = deps(tx, state, fixed_profiles());
+        stage_up(&d);
+        let added = handle_request(
+            r#"{"verb":"stage-edit","edit":"add-slot","persona":"xbox360",
+                "preset":"Player 2","layout":"arcade-6button"}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(added["ok"], true, "{added}");
+
+        let socd = handle_request(
+            r#"{"verb":"stage-edit","edit":"set-socd","number":2,"socd":"up-priority"}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(socd["ok"], true, "{socd}");
+        assert_eq!(socd["setup"]["slots"][1]["socd"], "up-priority", "{socd}");
+        assert_eq!(socd["setup"]["slots"][1]["socd_label"], "Up wins", "{socd}");
+
+        let unknown = handle_request(
+            r#"{"verb":"stage-edit","edit":"set-socd","number":2,"socd":"sideways"}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(unknown["ok"], false, "{unknown}");
+        assert_eq!(unknown["code"], ksx_api::codes::BAD_REQUEST, "{unknown}");
+
+        let reordered = handle_request(
+            r#"{"verb":"stage-edit","edit":"reorder-slots","numbers":[2,1]}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(reordered["ok"], true, "{reordered}");
+        assert_eq!(
+            reordered["setup"]["slots"][0]["preset"], "Player 2",
+            "{reordered}"
+        );
+        assert_eq!(reordered["setup"]["slots"][0]["number"], 1, "{reordered}");
+        assert_eq!(
+            reordered["setup"]["slots"][0]["socd"], "up-priority",
+            "SOCD moved with its controller: {reordered}"
+        );
+
+        let bad = handle_request(
+            r#"{"verb":"stage-edit","edit":"reorder-slots","numbers":[1,1]}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(bad["ok"], false, "{bad}");
+        assert_eq!(bad["code"], "bad-reorder", "{bad}");
     }
 
     /// Build N deliberately blank staged controllers. Blank layouts keep the
@@ -3056,6 +3722,105 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             before,
             "neither stale target may be redirected to the first slot"
         );
+    }
+
+    #[test]
+    fn served_stage_target_revisions_track_incarnation_device_and_each_successful_bind() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let deps = deps(tx, state.clone(), no_profiles());
+        stage_blank_slots(&deps, 1);
+        let served = handle_request(r#"{"verb":"stage"}"#, &deps, FAST);
+        let first = served["setup"]["slots"][0]["target_revision"]
+            .as_str()
+            .expect("served target revision")
+            .to_owned();
+        assert!(first.starts_with("d1-"), "{served}");
+
+        let bound = handle_request(
+            &serde_json::json!({
+                "verb": "stage-bind",
+                "number": 1,
+                "expected_target_revision": first.clone(),
+                "preset": "P1",
+                "function": "A",
+                "keys": ["G"],
+            })
+            .to_string(),
+            &deps,
+            FAST,
+        );
+        assert_eq!(bound["ok"], true, "{bound}");
+        let served = handle_request(r#"{"verb":"stage"}"#, &deps, FAST);
+        let second = served["setup"]["slots"][0]["target_revision"]
+            .as_str()
+            .expect("post-bind target revision")
+            .to_owned();
+        assert_ne!(second, first, "a chain needs a fresh post-write token");
+        let chained = handle_request(
+            &serde_json::json!({
+                "verb": "stage-bind",
+                "number": 1,
+                "expected_target_revision": second.clone(),
+                "preset": "P1",
+                "function": "B",
+                "keys": ["H"],
+            })
+            .to_string(),
+            &deps,
+            FAST,
+        );
+        assert_eq!(chained["ok"], true, "{chained}");
+
+        let before_device = handle_request(r#"{"verb":"stage"}"#, &deps, FAST);
+        let before_device = before_device["setup"]["slots"][0]["target_revision"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let changed = handle_request(
+            r#"{"verb":"stage-edit","edit":"choose-device","selector":"usb:1234:5678:00",
+                "alias":"replacement","label":"Keyboard B"}"#,
+            &deps,
+            FAST,
+        );
+        assert_eq!(changed["ok"], true, "{changed}");
+        assert_ne!(
+            changed["setup"]["slots"][0]["target_revision"], before_device,
+            "a device-only draft mutation must stale an armed mapping"
+        );
+
+        let removed = handle_request(
+            r#"{"verb":"stage-edit","edit":"remove-slot","number":1}"#,
+            &deps,
+            FAST,
+        );
+        assert_eq!(removed["ok"], true, "{removed}");
+        let recreated = handle_request(
+            r#"{"verb":"stage-edit","edit":"add-slot","number":1,
+                "persona":"playstation","preset":"P1"}"#,
+            &deps,
+            FAST,
+        );
+        assert_eq!(recreated["ok"], true, "{recreated}");
+        assert_ne!(
+            recreated["setup"]["slots"][0]["target_revision"], before_device,
+            "an identical slot incarnation must never reuse its old token"
+        );
+        let stale = handle_request(
+            &serde_json::json!({
+                "verb": "stage-bind",
+                "number": 1,
+                "expected_target_revision": before_device.clone(),
+                "preset": "P1",
+                "function": "X",
+                "keys": ["J"],
+            })
+            .to_string(),
+            &deps,
+            FAST,
+        );
+        assert_eq!(stale["ok"], false, "{stale}");
+        assert_eq!(stale["code"], ksx_api::codes::BAD_SLOT, "{stale}");
     }
 
     #[test]
@@ -3304,6 +4069,141 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             Some("usb:d209:0430:00"),
             "the staged slot names the staged board, by selector"
         );
+    }
+
+    // -- stage-apply: the draft into a LIVE session, hot or refused ----------
+
+    /// The happy half: a running session, a ready draft, and a control loop
+    /// that answers "hot". The verb enqueues `ApplyStaged` with the WHOLE spec
+    /// (the setup is not on disk), claims no file, and leaves the stage staged
+    /// — applying is not saving, and the dirty flag must not move.
+    #[test]
+    fn applying_a_staged_draft_enqueues_the_spec_and_claims_no_file() {
+        let state = shared(RunState::Running { slots: 1 });
+        let (tx, rx) = unbounded();
+        let deps = deps(tx, state.clone(), no_profiles());
+        stage_ready(&deps);
+        // The stage has been edited, so the visit is dirty — and must STAY so.
+        assert!(snapshot(&state).stage_meta.dirty);
+
+        let loop_thread = answer_apply(
+            rx,
+            state.clone(),
+            super::super::ApplyReport {
+                generation: 0,
+                ok: true,
+                hot: true,
+                restarted: false,
+                needs_restart: false,
+                message: "the draft's bindings are live — pads untouched".to_owned(),
+            },
+        );
+        let applied = handle_request(r#"{"verb":"stage-apply"}"#, &deps, Duration::from_secs(2));
+        assert_eq!(applied["ok"], true, "{applied}");
+        assert_eq!(applied["playing"], true, "{applied}");
+        assert!(
+            applied["message"]
+                .as_str()
+                .unwrap()
+                .contains("pads untouched"),
+            "{applied}"
+        );
+        // NEVER a path: applying writes nothing.
+        assert_eq!(applied["saved"], serde_json::Value::Null);
+        assert_eq!(applied["backup"], serde_json::Value::Null);
+        // Applying is not saving: the draft is still here, still unsaved.
+        assert_eq!(applied["setup"]["empty"], false);
+        assert_eq!(applied["setup"]["dirty"], true, "{applied}");
+
+        let DaemonCommand::ApplyStaged(spec) = loop_thread.join().unwrap() else {
+            panic!("stage-apply must enqueue ApplyStaged, not ApplyBindings or a start");
+        };
+        assert_eq!(spec.slots.len(), 1);
+    }
+
+    /// The structural refusal carries the stable `needs-restart` code, the
+    /// difference in the message, and the replace verb as the remedy — the
+    /// three things a surface needs to offer the honest next step.
+    #[test]
+    fn a_structural_apply_answers_needs_restart_with_the_replace_remedy() {
+        let state = shared(RunState::Running { slots: 1 });
+        let (tx, rx) = unbounded();
+        let deps = deps(tx, state.clone(), no_profiles());
+        stage_ready(&deps);
+
+        let loop_thread = answer_apply(
+            rx,
+            state.clone(),
+            super::super::ApplyReport {
+                generation: 0,
+                ok: false,
+                hot: false,
+                restarted: false,
+                needs_restart: true,
+                message: "the draft cannot go into the running session: the slot count changed \
+                          (1 → 2), and that means replugging the pads — nothing changed; Play \
+                          replaces the session"
+                    .to_owned(),
+            },
+        );
+        let refused = handle_request(r#"{"verb":"stage-apply"}"#, &deps, Duration::from_secs(2));
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert_eq!(refused["code"], "needs-restart", "{refused}");
+        assert!(
+            refused["error"]
+                .as_str()
+                .unwrap()
+                .contains("the slot count changed"),
+            "{refused}"
+        );
+        assert!(
+            refused["remedy"].as_str().unwrap().contains("stage-play"),
+            "{refused}"
+        );
+        assert!(matches!(
+            loop_thread.join().unwrap(),
+            DaemonCommand::ApplyStaged(_)
+        ));
+    }
+
+    /// With nothing running there is no session to apply into, and no disk
+    /// for "the next start" to read the draft from — refused before anything
+    /// is enqueued, with Play as the remedy.
+    #[test]
+    fn applying_with_nothing_running_is_refused_before_anything_is_enqueued() {
+        let state = shared(RunState::Stopped);
+        let (tx, rx) = unbounded();
+        let deps = deps(tx, state, no_profiles());
+        stage_ready(&deps);
+
+        let refused = handle_request(r#"{"verb":"stage-apply"}"#, &deps, FAST);
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert!(
+            refused["error"]
+                .as_str()
+                .unwrap()
+                .contains("nothing is running"),
+            "{refused}"
+        );
+        assert!(
+            refused["remedy"].as_str().unwrap().contains("stage-play"),
+            "{refused}"
+        );
+        assert!(rx.try_recv().is_err(), "nothing may be enqueued");
+    }
+
+    /// An incomplete draft refuses with the stage's own sentence — same words
+    /// as `stage-play` would give — and enqueues nothing.
+    #[test]
+    fn applying_an_incomplete_stage_is_refused_with_the_stages_own_words() {
+        let state = shared(RunState::Running { slots: 1 });
+        let (tx, rx) = unbounded();
+        let deps = deps(tx, state, no_profiles());
+        // Nothing staged at all: commit() has a refusal for that.
+
+        let refused = handle_request(r#"{"verb":"stage-apply"}"#, &deps, FAST);
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert!(rx.try_recv().is_err(), "nothing may be enqueued");
     }
 
     // -- pause and resume (docs/FIRST-RUN.md §2, §6) -------------------------
@@ -3978,6 +4878,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                 ksx_core::TurboBinding::new(ksx_core::Binding::Button(ksx_core::XButton::A), hz)
                     .effective_hz()
             }),
+            toggle: spec.toggle == Some(true),
         })
     }
 
@@ -4174,6 +5075,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                 ok: true,
                 hot: true,
                 restarted: false,
+                needs_restart: false,
                 message: "bindings applied live — pads untouched".to_owned(),
             },
         );
@@ -4290,6 +5192,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                 ok: true,
                 hot: true,
                 restarted: false,
+                needs_restart: false,
                 message: "bindings applied live — pads untouched".to_owned(),
             },
         );
@@ -4332,6 +5235,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                 ok: true,
                 hot: false,
                 restarted: true,
+                needs_restart: false,
                 message: "session restarted — slot 3 changed persona (Xbox 360 → PlayStation \
                           (DS4)) needs the pads replugged"
                     .to_owned(),
@@ -4827,6 +5731,264 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         assert_eq!(v["state"], "cancelled");
         let v = handle_request(r#"{"verb":"learn-poll"}"#, &d, FAST);
         assert_eq!(v["state"], "cancelled");
+    }
+
+    #[test]
+    fn simultaneous_input_test_is_bounded_typed_and_refused_during_play() {
+        for run in [RunState::Running { slots: 1 }, RunState::Starting] {
+            let state = shared(run);
+            let (tx, _rx) = unbounded();
+            let v = handle_request(
+                r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+                &deps(tx, state, no_profiles()),
+                FAST,
+            );
+            assert_eq!(v["ok"], false, "{v}");
+            assert_eq!(v["code"], "session-running", "{v}");
+        }
+
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let d = deps(tx, state, no_profiles());
+        for bad in [
+            r#"{"verb":"input-test-start","selector":"","duration_ms":5000}"#,
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":999}"#,
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000,"guess":true}"#,
+        ] {
+            let v = handle_request(bad, &d, FAST);
+            assert_eq!(v["ok"], false, "{bad} -> {v}");
+            assert_eq!(v["code"], "bad-request", "{bad} -> {v}");
+        }
+    }
+
+    #[test]
+    fn simultaneous_input_test_reports_backend_reduced_held_seen_and_peak() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state, no_profiles());
+        d.input_test = super::super::input_test::InputTestService::new(Arc::new(
+            |_selector, _timeout, _cancel, emit| {
+                for event in [
+                    super::super::input_test::InputTransition {
+                        key: "A".into(),
+                        down: true,
+                    },
+                    super::super::input_test::InputTransition {
+                        key: "S".into(),
+                        down: true,
+                    },
+                    super::super::input_test::InputTransition {
+                        key: "A".into(),
+                        down: false,
+                    },
+                ] {
+                    emit(event);
+                }
+                Ok(0)
+            },
+        ));
+        let started = handle_request(
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+            &d,
+            FAST,
+        );
+        let generation = started["generation"].as_u64().expect("generation");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let view = loop {
+            let view = handle_request(r#"{"verb":"input-test-poll"}"#, &d, FAST);
+            if view["state"] != "listening" {
+                break view;
+            }
+            assert!(Instant::now() < deadline, "observer did not settle: {view}");
+            std::thread::sleep(Duration::from_millis(2));
+        };
+        assert_eq!(view["generation"], generation);
+        assert_eq!(view["held"], serde_json::json!(["S"]));
+        assert_eq!(view["seen"], serde_json::json!(["A", "S"]));
+        assert_eq!(view["peak"], 2);
+        assert_eq!(view["rollover_visibility"], "unavailable");
+    }
+
+    #[test]
+    fn learn_and_simultaneous_test_cannot_own_the_observer_together() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let d = deps(tx, state, no_profiles());
+        assert_eq!(
+            handle_request(r#"{"verb":"learn-key"}"#, &d, FAST)["state"],
+            "listening"
+        );
+        let refused = handle_request(
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(refused["code"], "observer-busy", "{refused}");
+        handle_request(r#"{"verb":"learn-cancel"}"#, &d, FAST);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while d.learn.observer_active() {
+            assert!(
+                Instant::now() < deadline,
+                "Learn did not release its observer"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        let test = handle_request(
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(test["state"], "listening", "{test}");
+        let play = handle_request(r#"{"verb":"start"}"#, &d, FAST);
+        assert_eq!(play["code"], "observer-busy", "{play}");
+        let learn = handle_request(r#"{"verb":"learn-key"}"#, &d, FAST);
+        assert_eq!(learn["code"], "observer-busy", "{learn}");
+        handle_request(r#"{"verb":"input-test-cancel"}"#, &d, FAST);
+    }
+
+    /// Broken version caught: Learn cancel answered `cancelled` while its Raw
+    /// Input thread was still releasing, so the immediately-following input
+    /// test bounced with `observer-busy` even though the user had completed
+    /// the required cancellation step.
+    #[test]
+    fn a_terminal_learn_cleanup_hands_off_to_input_test_within_a_bounded_grace() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state, no_profiles());
+        let release_cleanup = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        d.learn = super::super::learn::LearnService::new(Arc::new({
+            let release_cleanup = Arc::clone(&release_cleanup);
+            move |_timeout, cancel| {
+                while !cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                while !release_cleanup.load(std::sync::atomic::Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Ok(None)
+            }
+        }));
+
+        assert_eq!(
+            handle_request(r#"{"verb":"learn-key"}"#, &d, FAST)["state"],
+            "listening"
+        );
+        assert_eq!(
+            handle_request(r#"{"verb":"learn-cancel"}"#, &d, FAST)["state"],
+            "cancelled"
+        );
+        assert!(d.learn.observer_active(), "cleanup tail was not held open");
+        let release = Arc::clone(&release_cleanup);
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            release.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        let started = handle_request(
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+            &d,
+            FAST,
+        );
+        releaser.join().unwrap();
+        assert_eq!(started["state"], "listening", "{started}");
+        handle_request(r#"{"verb":"input-test-cancel"}"#, &d, FAST);
+    }
+
+    /// The reverse handoff has the same customer contract: Cancel is a
+    /// terminal answer, so the next deliberate observer action must absorb the
+    /// short OS-release tail rather than bounce with a misleading busy error.
+    #[test]
+    fn a_cancelled_input_test_hands_off_immediately_to_learn_and_a_new_test() {
+        fn releasing_input_test(
+            released: Arc<std::sync::atomic::AtomicBool>,
+        ) -> super::super::input_test::InputTestService {
+            super::super::input_test::InputTestService::new(Arc::new(
+                move |_selector, _deadline, cancel, _emit| {
+                    while !cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    while !released.load(std::sync::atomic::Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    Ok(0)
+                },
+            ))
+        }
+
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state, no_profiles());
+        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        d.input_test = releasing_input_test(Arc::clone(&release));
+        assert_eq!(
+            handle_request(
+                r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+                &d,
+                FAST,
+            )["state"],
+            "listening"
+        );
+        assert_eq!(
+            handle_request(r#"{"verb":"input-test-cancel"}"#, &d, FAST)["state"],
+            "cancelled"
+        );
+        assert!(
+            d.input_test.observer_active(),
+            "cleanup tail was not held open"
+        );
+        let release_now = Arc::clone(&release);
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            release_now.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let learned = handle_request(r#"{"verb":"learn-key"}"#, &d, FAST);
+        releaser.join().unwrap();
+        assert_eq!(learned["state"], "listening", "{learned}");
+        handle_request(r#"{"verb":"learn-cancel"}"#, &d, FAST);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while d.learn.observer_active() {
+            assert!(
+                Instant::now() < deadline,
+                "Learn did not release its observer"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state, no_profiles());
+        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        d.input_test = releasing_input_test(Arc::clone(&release));
+        let first = handle_request(
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+            &d,
+            FAST,
+        );
+        let first_generation = first["generation"].as_u64().unwrap();
+        handle_request(
+            &format!(r#"{{"verb":"input-test-cancel","generation":{first_generation}}}"#),
+            &d,
+            FAST,
+        );
+        let release_now = Arc::clone(&release);
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            release_now.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let second = handle_request(
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+            &d,
+            FAST,
+        );
+        releaser.join().unwrap();
+        assert_eq!(second["state"], "listening", "{second}");
+        assert!(
+            second["generation"].as_u64().unwrap() > first_generation,
+            "a fresh generation was not opened: {second}"
+        );
+        handle_request(r#"{"verb":"input-test-cancel"}"#, &d, FAST);
     }
 
     #[test]

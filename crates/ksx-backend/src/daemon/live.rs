@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use super::{HealthSlot, SessionFactory, SessionRunner, SessionSummary};
+use super::{ActiveSessionFacts, HealthSlot, SessionFactory, SessionRunner, SessionSummary};
 
 /// Re-reads configuration on every `make()`. That is what "Reload config"
 /// means: a clean stop and a clean start from whatever is on disk now, never a
@@ -159,6 +159,40 @@ struct LiveRunner {
 impl SessionRunner for LiveRunner {
     fn slots(&self) -> usize {
         self.slots
+    }
+
+    fn facts(&self) -> Option<ActiveSessionFacts> {
+        let keyboards = u32::try_from(self.plan.captureable.len()).unwrap_or(u32::MAX);
+        let route = match (self.plan.winusb.len(), self.plan.captureable.len()) {
+            (_, 0) => "no keyboard capture backend",
+            (0, _) => "Interception",
+            (claimed, total) if claimed == total => "WinUSB",
+            _ => "WinUSB + Interception",
+        };
+        let policy = match self.plan.block_keyboards {
+            ksx_core::Blocking::Whole => "whole selected keyboard captured",
+            ksx_core::Blocking::BoundKeys => "mapped keys captured; all other keys keep typing",
+            ksx_core::Blocking::Off => "passthrough; no keys suppressed",
+        };
+        let capture = format!("{policy} · {route}");
+        let controllers = self
+            .plan
+            .slots
+            .iter()
+            .map(|slot| {
+                format!(
+                    "P{} {} ({})",
+                    slot.spec.number,
+                    slot.spec.persona.label(),
+                    slot.spec.persona.backend().label()
+                )
+            })
+            .collect();
+        Some(ActiveSessionFacts {
+            keyboards,
+            capture,
+            controllers,
+        })
     }
 
     fn health_slot(&self) -> HealthSlot {

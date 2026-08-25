@@ -2596,8 +2596,10 @@ export class MappingFlowLayer {
   }
 
   #inspectEvent(kind: "pointer" | "focus", event: Event): void {
-    const inspection = this.#inspectionFor(event.target);
-    if (inspection) this.#setInspection(kind, inspection);
+    // A rerender can remove the element which owned the previous inspection
+    // before pointerout/focusout reaches the delegated root. Entering blank
+    // canvas space is still meaningful: it must clear that orphaned state.
+    this.#setInspection(kind, this.#inspectionFor(event.target));
   }
 
   #leaveEvent(kind: "pointer" | "focus", event: Event): void {

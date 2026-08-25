@@ -590,6 +590,31 @@ describe("the canvas navigation controls", () => {
         body: JSON.stringify(panelChartPayload()),
       });
     });
+    let heldLearn = null;
+    await page.route("**/api/learn/start", async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      heldLearn = {
+        ...payload,
+        state: "listening",
+        remaining_ms: 10_000,
+        device: null,
+        key: null,
+        error: null,
+      };
+      await route.fulfill({ response, json: payload });
+    });
+    await page.route("**/api/learn", async (route) => {
+      if (route.request().method() !== "GET" || !heldLearn) {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(heldLearn),
+      });
+    });
     await page.route("**/api/nocturne*", async (route) => {
       const headers = { ...route.request().headers() };
       delete headers["if-none-match"];
@@ -1541,7 +1566,15 @@ describe("the canvas navigation controls", () => {
       assert.equal(reducedMotion.nodeTransition, "0s");
       assert.equal(reducedMotion.routeAnimation, "none");
       await page.emulateMedia({ reducedMotion: "no-preference" });
-      await page.waitForTimeout(180);
+      await page.waitForFunction(() => {
+        const widgets = Array.from(document.querySelectorAll(".widget-instance"));
+        widgets.forEach((widget) => void getComputedStyle(widget).transform);
+        return widgets.every((widget) => widget.getAnimations().filter(
+          (animation) => animation instanceof CSSAnimation &&
+            animation.animationName === "forma-widget-materialize",
+        ).every((animation) => animation.playState === "finished"));
+      });
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
 
       const truth = await page.evaluate(({ lines, ports, selectedSlot }) => {
         const edges = Array.from(document.querySelectorAll(`${lines} .n-flow-edge`));
@@ -3913,19 +3946,37 @@ describe("the canvas navigation controls", () => {
       await page.locator(".n-mapshow").waitFor({ state: "visible" });
       await page.click(".n-mapshow");
       await page.locator(".n-navigator").waitFor({ state: "visible" });
-      let editable = page.locator(
-        '#n-mapping-processors a.n-flow-processor:not([hidden])[data-flow-macro-id*="hadouken"]',
-      );
-      if (!(await editable.isVisible())) {
-        const overflow = page.locator(
-          "#n-mapping-processors details.n-flow-overflow:not([hidden])",
+      await page.waitForFunction(() => {
+        const visible = (element) => Boolean(
+          element && element.getClientRects().length > 0 &&
+          getComputedStyle(element).visibility !== "hidden",
         );
-        await overflow.locator("summary").press("Enter");
-        editable = overflow.locator(
-          'a.n-flow-overflow-link[data-flow-macro-id*="hadouken"]',
-        );
-      }
-      await editable.press("Enter");
+        let editable = Array.from(document.querySelectorAll(
+          '#n-mapping-processors a.n-flow-processor[data-flow-macro-id*="hadouken"]',
+        )).find(visible);
+        if (!editable) {
+          const overflow = document.querySelector(
+            "#n-mapping-processors details.n-flow-overflow:not([hidden])",
+          );
+          if (!visible(overflow)) return false;
+          overflow.open = true;
+          editable = overflow.querySelector(
+            'a.n-flow-overflow-link[data-flow-macro-id*="hadouken"]',
+          );
+        }
+        if (!visible(editable)) return false;
+        // Responsive packing can move this macro between the direct card and
+        // overflow bank on the next animation frame. Focus and activate the
+        // representation which exists now in this one browser task.
+        editable.focus();
+        editable.dispatchEvent(new KeyboardEvent("keydown", {
+          key: "Enter",
+          code: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }));
+        return true;
+      });
       await page.locator("#n-macro-dialog").waitFor({ state: "visible" });
       assert.deepEqual(page.ksxNoise, []);
     } finally {
@@ -8725,12 +8776,12 @@ describe("the canvas navigation controls", () => {
       await peer.locator('.n-widget-surface [data-nx="surface-encoder-read"]').click();
       await peer.waitForFunction(() => document.querySelector(
         ".n-widget-surface [data-surface-programming-summary]",
-      )?.textContent?.includes("changing or reading this encoder"));
+      )?.textContent?.includes("Another KSX window is using this encoder"));
       assert.equal(peerChartReads, 0,
         "a peer cannot slip an old chart read ahead of the writer's backend lease");
       assert.match(
         (await peer.locator("[data-surface-programming-summary]").textContent()).replace(/\s+/g, " "),
-        /another KSX window is changing or reading this encoder/i,
+        /another KSX window is using this encoder/i,
         "the read attempt reaches the Web Lock refusal instead of merely observing stale epoch copy",
       );
       const durableDuringWrite = await storedBoardVerifications();
@@ -8780,11 +8831,22 @@ describe("the canvas navigation controls", () => {
         '.n-widget-surface [data-nx="surface-encoder-open"]',
       )?.getAttribute("aria-expanded") === "false");
       assert.ok(chartReads >= 2, "a verified write triggers a fresh complete chart read");
-      if (await peerSetup.getAttribute("aria-expanded") !== "true") await peerSetup.click();
-      await peer.locator('.n-widget-surface [data-nx="surface-encoder-read"]').click();
+      const peerRead = peer.waitForResponse((response) =>
+        new URL(response.url()).pathname.endsWith("/api/panel/chart") &&
+          response.request().method() === "POST"
+      );
+      if (await peerSetup.getAttribute("aria-expanded") !== "true") {
+        // Reopening invalidated setup starts its one authoritative read.
+        await peerSetup.click();
+      } else {
+        await peer.locator('.n-widget-surface [data-nx="surface-encoder-read"]').click();
+      }
+      await peerRead;
       await peer.waitForFunction(() => document.querySelector(
         '.n-widget-surface .n-surface-programming',
-      )?.getAttribute("data-capability") === "programmable");
+      )?.getAttribute("data-capability") === "programmable" &&
+        document.querySelector('.n-widget-surface .n-surface-programming')
+          ?.getAttribute("aria-busy") === "false");
       assert.equal(peerChartReads, 1,
         "after completion, the peer performs its own authoritative current-chart read");
       await peer.locator('.n-widget-surface [data-nx="surface-encoder-close"]').click();
@@ -8985,12 +9047,12 @@ describe("the canvas navigation controls", () => {
       await page.click('.n-widget-surface [data-nx="surface-encoder-open"]');
       await page.waitForFunction(() => document.querySelector(
         ".n-widget-surface [data-surface-programming-summary]",
-      )?.textContent?.includes("cannot safely coordinate this encoder across browser windows"));
+      )?.textContent?.includes("cannot coordinate this encoder across windows"));
       assert.equal(chartRequests, 0,
         "a complete-chart request cannot reach the backend without cross-window exclusion");
       assert.match(
         (await page.locator("[data-surface-programming-summary]").textContent()).replace(/\s+/g, " "),
-        /cannot safely coordinate.*Nothing was changed/i,
+        /cannot coordinate.*Nothing changed/i,
       );
 
       await page.evaluate(() => {
@@ -9372,6 +9434,24 @@ describe("the canvas navigation controls", () => {
       await contender.waitForFunction(() => globalThis.__ksxQueuedHardwareLockCount?.() === 1);
       assert.equal(applyRequests, 0,
         "the contender has passed its outer checks but has not entered the lock callback");
+      assert.equal(await dialog.getAttribute("aria-busy"), "true");
+      assert.equal(
+        await dialog.locator('[data-panel-dialog-action="apply"]').isDisabled(),
+        true,
+        "the queued write is visibly single-flight while it waits for browser ownership",
+      );
+      assert.equal(await dialog.locator("[data-panel-program-confirm]").isDisabled(), true);
+      assert.equal(await dialog.locator("[data-panel-program-supervised]").isDisabled(), true);
+      await dialog.locator('[data-panel-dialog-action="apply"]').evaluate((button) => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      });
+      await contender.waitForTimeout(50);
+      assert.equal(
+        await contender.evaluate(() => globalThis.__ksxQueuedHardwareLockCount?.()),
+        1,
+        "a second Apply gesture cannot enqueue another same-document writer while the first waits",
+      );
+      assert.equal(applyRequests, 0);
 
       const device = await contender.evaluate(() => JSON.parse(
         document.getElementById("__ksx-payload")?.textContent ?? "{}",
@@ -9422,6 +9502,328 @@ describe("the canvas navigation controls", () => {
       await contender.evaluate(() => globalThis.__ksxReleaseQueuedHardwareLocks?.()).catch(() => {});
       await publisher?.close();
       await sharedContext.close();
+    }
+  });
+
+  test("a replacement encoder closes a write review queued on the previous device", async () => {
+    let switchTarget = false;
+    let applyRequests = 0;
+    let markReplacementPayloadServed = () => {};
+    const replacementPayloadServed = new Promise((resolve) => {
+      markReplacementPayloadServed = resolve;
+    });
+    const replacementInstance = "HID\\VID_D209&PID_0430\\QUEUED-WRITE-TARGET-B";
+    const isolatedContext = await browser.newContext({
+      viewport: { width: 1600, height: 1000 },
+      colorScheme: "dark",
+    });
+    const page = await openCanvasInContext(isolatedContext, async (candidate) => {
+      await candidate.addInitScript(() => {
+        const nativeLocks = navigator.locks;
+        const queued = [];
+        let holdNextRequest = false;
+        const facade = {
+          query: nativeLocks.query.bind(nativeLocks),
+          request(name, options, callback) {
+            const request = () => nativeLocks.request(name, options, callback);
+            if (!holdNextRequest) return request();
+            return new Promise((resolve, reject) => {
+              queued.push(() => request().then(resolve, reject));
+            });
+          },
+        };
+        Object.defineProperty(navigator, "locks", {
+          configurable: true,
+          get: () => facade,
+        });
+        globalThis.__ksxQueuedHardwareLockCount = () => queued.length;
+        globalThis.__ksxQueueNextHardwareLock = () => {
+          holdNextRequest = true;
+        };
+        globalThis.__ksxReleaseQueuedHardwareLocks = () => {
+          holdNextRequest = false;
+          for (const request of queued.splice(0)) request();
+        };
+      });
+      await candidate.route("**/api/nocturne*", async (route) => {
+        if (!switchTarget) {
+          await route.continue();
+          return;
+        }
+        const headers = { ...route.request().headers() };
+        delete headers["if-none-match"];
+        const response = await route.fetch({ headers });
+        assert.equal(response.status(), 200);
+        const payload = await response.json();
+        payload.view.cap_selector = PANEL_SELECTOR;
+        payload.view.cap_instance = replacementInstance;
+        await route.fulfill({ response, json: payload });
+        markReplacementPayloadServed();
+      });
+      await candidate.route("**/api/panel/status", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelStatusPayload({
+            name: switchTarget ? "Replacement encoder" : "Ultimarc I-PAC 4X",
+          })),
+        });
+      });
+      await candidate.route("**/api/panel/chart", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelChartPayload()),
+        });
+      });
+      await candidate.route("**/api/panel/backups", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            target_selector: PANEL_SELECTOR,
+            unavailable: null,
+            view: {
+              summary: "One verified backup.",
+              board_fingerprint: PANEL_FINGERPRINT,
+              backups: [panelBackup()],
+            },
+          }),
+        });
+      });
+      await candidate.route("**/api/panel/program/plan", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelProgramPlan({ terminals: ["1sw1"] })),
+        });
+      });
+      await candidate.route("**/api/panel/program/apply", async (route) => {
+        applyRequests += 1;
+        await route.fulfill({ status: 500, body: "a detached queued review must never POST" });
+      });
+    });
+
+    try {
+      await page.click('[data-nx="surface-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "ready");
+      await page.click('.n-widget-surface [data-surface-template="blank"]');
+      await page.click('.n-widget-surface [data-nx="surface-add"][data-control-kind="button30"]');
+      await page.click('.n-widget-surface [data-nx="surface-encoder-open"]');
+      await page.waitForFunction(() => document.querySelector(
+        ".n-widget-surface .n-surface-programming",
+      )?.getAttribute("data-capability") === "programmable");
+      await page.click('.n-widget-surface [data-surface-programming-mode="custom"]');
+      await page.locator(".n-widget-surface .n-surface-control").first().click();
+      await page.locator('.n-widget-surface [data-nx="surface-encoder-terminal"]').selectOption("1sw1");
+      await page.locator('.n-widget-surface [data-nx="surface-encoder-key"]').selectOption("A");
+      await page.locator('.n-widget-surface [data-nx="surface-encoder-review"]').click();
+      const dialog = page.locator("dialog.n-panel-program-dialog");
+      await dialog.locator("[data-panel-program-confirm]").check();
+      await dialog.locator("[data-panel-program-supervised]").check();
+      await page.evaluate(() => globalThis.__ksxQueueNextHardwareLock?.());
+      await dialog.locator('[data-panel-dialog-action="apply"]').click();
+      await page.waitForFunction(() => globalThis.__ksxQueuedHardwareLockCount?.() === 1);
+      assert.equal(await dialog.getAttribute("aria-busy"), "true");
+
+      switchTarget = true;
+      await Promise.race([
+        replacementPayloadServed,
+        new Promise((_, reject) => setTimeout(() => reject(
+          new Error("replacement encoder payload was not served while Apply waited")
+        ), 10_000)),
+      ]);
+      await page.waitForFunction((expected) => Array.from(
+        document.querySelectorAll('input[name="instance_id"]'),
+      ).some((input) => input.value === expected), replacementInstance);
+      await dialog.waitFor({ state: "hidden" });
+      assert.equal(await dialog.getAttribute("open"), null,
+        "an internal target reset force-closes only the detached review");
+
+      await page.evaluate(() => globalThis.__ksxReleaseQueuedHardwareLocks?.());
+      await page.waitForFunction(() => document.querySelector("dialog.n-panel-program-dialog")
+        ?.getAttribute("aria-busy") === "false");
+      assert.equal(applyRequests, 0,
+        "the old lock callback cannot write after its selector instance is replaced");
+      assert.equal(await dialog.getAttribute("open"), null,
+        "the refused callback does not reopen the detached review");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.evaluate(() => globalThis.__ksxReleaseQueuedHardwareLocks?.()).catch(() => {});
+      await isolatedContext.close();
+    }
+  });
+
+  test("a chart read cannot follow a replacement encoder through the old device lock", async () => {
+    let switchTarget = false;
+    let chartReads = 0;
+    let markReplacementPayloadServed = () => {};
+    const replacementPayloadServed = new Promise((resolve) => {
+      markReplacementPayloadServed = resolve;
+    });
+    const replacementInstance = "HID\\VID_D209&PID_0430\\READ-TARGET-B";
+    const isolatedContext = await browser.newContext({
+      viewport: { width: 1600, height: 1000 },
+      colorScheme: "dark",
+    });
+    const page = await openCanvasInContext(isolatedContext, async (candidate) => {
+      await candidate.addInitScript(() => {
+        const nativeLocks = navigator.locks;
+        const queued = [];
+        const requestedNames = [];
+        let holdNextRequest = false;
+        const facade = {
+          query: nativeLocks.query.bind(nativeLocks),
+          request(name, options, callback) {
+            requestedNames.push(name);
+            const request = () => nativeLocks.request(name, options, callback);
+            if (!holdNextRequest) return request();
+            return new Promise((resolve, reject) => {
+              queued.push(() => request().then(resolve, reject));
+            });
+          },
+        };
+        Object.defineProperty(navigator, "locks", {
+          configurable: true,
+          get: () => facade,
+        });
+        globalThis.__ksxQueuedHardwareLockCount = () => queued.length;
+        globalThis.__ksxRequestedHardwareLockNames = () => [...requestedNames];
+        globalThis.__ksxClearHardwareLockNames = () => requestedNames.splice(0);
+        globalThis.__ksxQueueNextHardwareLock = () => {
+          holdNextRequest = true;
+        };
+        globalThis.__ksxReleaseQueuedHardwareLocks = () => {
+          holdNextRequest = false;
+          for (const request of queued.splice(0)) request();
+        };
+      });
+      await candidate.route("**/api/nocturne*", async (route) => {
+        if (!switchTarget) {
+          await route.continue();
+          return;
+        }
+        const headers = { ...route.request().headers() };
+        delete headers["if-none-match"];
+        const response = await route.fetch({ headers });
+        assert.equal(response.status(), 200);
+        const payload = await response.json();
+        payload.view.cap_selector = PANEL_SELECTOR;
+        payload.view.cap_instance = replacementInstance;
+        await route.fulfill({ response, json: payload });
+        markReplacementPayloadServed();
+      });
+      await candidate.route("**/api/panel/status", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelStatusPayload({
+            driverLabel: "Ultimarc I-PAC 4 lossless chart driver",
+            chartState: "not-read",
+            chartLabel: "Chart not read — explicit action required",
+            chartDetail: "Open Encoder setup to perform the complete chart read.",
+            configurationState: "available-unopened",
+            configurationDetail: "One exact five-byte configuration collection is available and remains unopened.",
+          })),
+        });
+      });
+      await candidate.route("**/api/panel/chart", async (route) => {
+        chartReads += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(panelChartPayload()),
+        });
+      });
+    });
+
+    try {
+      await page.click('[data-nx="surface-open"]');
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "ready");
+      const originalInstance = await page.evaluate(() => JSON.parse(
+        document.getElementById("__ksx-payload")?.textContent ?? "{}",
+      ).view?.cap_instance ?? "");
+      assert.ok(originalInstance);
+
+      const initialRead = page.waitForResponse((response) =>
+        new URL(response.url()).pathname.endsWith("/api/panel/chart") &&
+          response.request().method() === "POST"
+      );
+      await page.click('.n-widget-surface [data-nx="surface-encoder-open"]');
+      await initialRead;
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-programming")
+          ?.getAttribute("aria-busy") === "false");
+      assert.equal(chartReads, 1);
+      chartReads = 0;
+      await page.evaluate(() => globalThis.__ksxClearHardwareLockNames?.());
+
+      await page.evaluate(() => globalThis.__ksxQueueNextHardwareLock?.());
+      await page.click('.n-widget-surface [data-nx="surface-encoder-read"]');
+      await page.waitForFunction(() => globalThis.__ksxQueuedHardwareLockCount?.() === 1);
+      assert.equal(chartReads, 0);
+      assert.equal(
+        await page.locator(".n-widget-surface .n-surface-programming").getAttribute("aria-busy"),
+        "true",
+      );
+      assert.deepEqual(await page.evaluate(() => globalThis.__ksxRequestedHardwareLockNames?.()), [
+        `ksx-panel-hardware-v1:board:${PANEL_FINGERPRINT.toLocaleUpperCase()}`,
+      ], "the suspended reread has not advanced beyond the original board lock");
+      for (const action of [
+        "surface-encoder-route",
+        "surface-encoder-build-panel",
+        "surface-encoder-design-panel",
+      ]) {
+        const control = page.locator(`.n-widget-surface [data-nx="${action}"]`);
+        assert.equal(await control.isDisabled(), true,
+          `${action} cannot consume the old chart while its authoritative reread waits`);
+        await control.evaluate((button) => {
+          button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        });
+      }
+      assert.equal(
+        await page.locator('.n-widget-surface[data-entry="encoder-setup"]').count(),
+        1,
+        "programmatic activation cannot leave setup or build from the stale chart",
+      );
+
+      switchTarget = true;
+      await replacementPayloadServed;
+      await page.waitForFunction((expected) => Array.from(
+        document.querySelectorAll('input[name="instance_id"]'),
+      ).some((input) => input.value === expected), replacementInstance);
+      await page.evaluate(() => globalThis.__ksxReleaseQueuedHardwareLocks?.());
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-programming")
+          ?.getAttribute("aria-busy") === "false");
+      assert.equal(chartReads, 0,
+        "a callback holding the original device lock cannot read its replacement");
+
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-hardware")?.getAttribute("data-state") === "ready");
+      await page.evaluate(() => globalThis.__ksxClearHardwareLockNames?.());
+      const replacementRead = page.waitForResponse((response) =>
+        new URL(response.url()).pathname.endsWith("/api/panel/chart") &&
+          response.request().method() === "POST"
+      );
+      const setup = page.locator('.n-widget-surface [data-nx="surface-encoder-open"]');
+      if (await setup.getAttribute("aria-expanded") !== "true") await setup.click();
+      else await page.locator('.n-widget-surface [data-nx="surface-encoder-read"]').click();
+      await replacementRead;
+      await page.waitForFunction(() =>
+        document.querySelector(".n-widget-surface .n-surface-programming")
+          ?.getAttribute("aria-busy") === "false");
+      assert.equal(chartReads, 1, "the replacement remains readable through its own lock");
+      assert.deepEqual(
+        await page.evaluate(() => globalThis.__ksxRequestedHardwareLockNames?.()),
+        [`ksx-panel-hardware-v1:device:${replacementInstance.toLocaleUpperCase()}`],
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.evaluate(() => globalThis.__ksxReleaseQueuedHardwareLocks?.()).catch(() => {});
+      await isolatedContext.close();
     }
   });
 
@@ -10403,9 +10805,29 @@ describe("the canvas navigation controls", () => {
       assert.equal(capturedQualificationRestore.expected_current_sha256, PANEL_DESIRED_SHA);
       await qualificationDialog.locator('[data-panel-dialog-action="close"]').click();
 
-      await programming.locator('[data-nx="surface-encoder-read"]').click();
       await page.waitForFunction(() =>
-        document.querySelector(".n-widget-surface .n-surface-programming")?.getAttribute("data-qualification") === "validation-written");
+        document.querySelector(".n-widget-surface .n-surface-programming")
+          ?.getAttribute("aria-busy") === "false");
+      const validationRead = page.waitForResponse((response) =>
+        new URL(response.url()).pathname.endsWith("/api/panel/chart") &&
+          response.request().method() === "POST"
+      );
+      await programming.locator('[data-nx="surface-encoder-read"]').click();
+      await validationRead;
+      await page.waitForFunction(() => {
+        const setup = document.querySelector(".n-widget-surface .n-surface-programming");
+        const qualification = document.querySelector(
+          ".n-widget-surface [data-surface-programming-qualification]",
+        )?.textContent ?? "";
+        const reviewCopy = document.querySelector(
+          '.n-widget-surface [data-nx="surface-encoder-review"]',
+        )?.textContent ?? "";
+        return setup?.getAttribute("aria-busy") === "false" &&
+          setup.getAttribute("data-qualification") === "validation-written" &&
+          /step 2 of 2.*restore (?:the )?exact safety backup.*unlocking full layouts/i.test(
+            qualification.replace(/\s+/g, " "),
+          ) && /Restore safety backup to finish/i.test(reviewCopy);
+      });
       assert.match(
         (await programming.locator("[data-surface-programming-qualification]").textContent()).replace(/\s+/g, " "),
         /step 2 of 2.*restore (?:the )?exact safety backup.*unlocking full layouts/i,

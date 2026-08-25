@@ -1516,7 +1516,19 @@ let panelProgrammingState = createPanelProgrammingState();
 let panelProgrammingBackups: PanelBackupView[] = [];
 let panelProgrammingMessage = "";
 let panelProgrammingBusy = false;
+// Web Locks are asynchronous. Record the read intent before awaiting the
+// browser lock so two gestures in this document cannot both reach the chart
+// endpoint during that otherwise-unobservable gap.
+let panelProgrammingReadPending = false;
+// Persistent writes have the same asynchronous lock-acquisition gap. Latch the
+// user's Apply intent before awaiting Web Locks so a second gesture in this
+// document cannot enqueue another writer or replace the active status message.
+let panelProgrammingApplyPending = false;
 let panelProgrammingGeneration = 0;
+
+function panelProgrammingInteractionBusy(): boolean {
+  return panelProgrammingReadPending || panelProgrammingApplyPending || panelProgrammingBusy;
+}
 // Selector strings are staging handles, not physical-device identities. Keep
 // every reviewed plan and in-flight outcome pinned to the selector + live
 // Windows instance that owned it so a re-enumerated replacement cannot inherit
@@ -2684,18 +2696,21 @@ function syncPanelProgrammingJourneyAndTest(): void {
       : `This ${encoderName} currently emits no supported Windows keys, so wired controls cannot reach KSX yet. Choose a hardware layout above first.`;
   }
   if (test) {
-    test.disabled = assigned === 0 || panelProgrammingBusy || panelProgrammingTransactionActive() ||
+    test.disabled = assigned === 0 || panelProgrammingInteractionBusy() ||
+      panelProgrammingTransactionActive() ||
       routingAuthoritySuspended;
     test.textContent = listening ? "Stop listening" : draftPending ? "Test current board" : "Test wiring";
     test.setAttribute("aria-pressed", String(listening));
   }
   if (route) {
-    route.disabled = assigned === 0 || panelProgrammingTransactionActive() ||
+    route.disabled = assigned === 0 || panelProgrammingInteractionBusy() ||
+      panelProgrammingTransactionActive() ||
       routingAuthoritySuspended ||
       Boolean(panelProgrammingLastTest && panelProgrammingLastTest.terminalIds.length === 0);
   }
   if (buildPanel) {
-    buildPanel.disabled = assigned === 0 || panelProgrammingTransactionActive() ||
+    buildPanel.disabled = assigned === 0 || panelProgrammingInteractionBusy() ||
+      panelProgrammingTransactionActive() ||
       routingAuthoritySuspended;
     buildPanel.textContent = controlSurfaceState.started
       ? "Replace panel from chart…"
@@ -2706,7 +2721,8 @@ function syncPanelProgrammingJourneyAndTest(): void {
   }
   if (designPanel) {
     designPanel.hidden = assigned > 0;
-    designPanel.disabled = !chart || panelProgrammingTransactionActive() ||
+    designPanel.disabled = !chart || panelProgrammingInteractionBusy() ||
+      panelProgrammingTransactionActive() ||
       routingAuthoritySuspended;
     designPanel.title = chart
       ? `Design the physical cabinet first, then link its controls to ${encoderName} terminals and choose the Windows keys the board will emit`
@@ -3070,8 +3086,9 @@ function panelProgrammingSetMessage(message: string): void {
   if (message) keyboardWorkbenchAnnounce(message);
 }
 
-function panelProgrammingCloseDialog(restoreFocus = true): void {
-  if (panelProgrammingTransactionActive()) return;
+function panelProgrammingCloseDialog(restoreFocus = true, forcePendingClose = false): void {
+  if ((!forcePendingClose && panelProgrammingApplyPending) ||
+      panelProgrammingTransactionActive()) return;
   if (panelProgrammingDialog?.open) panelProgrammingDialog.close();
   if (restoreFocus) {
     const target = panelProgrammingReturnFocus?.isConnected
@@ -3111,7 +3128,7 @@ function resetPanelProgramming(targetChanged: boolean): void {
   }
   if (!panelProgrammingTransactionActive()) {
     panelProgrammingTransactionTargetFingerprint = "";
-    panelProgrammingCloseDialog(false);
+    panelProgrammingCloseDialog(false, targetChanged);
     panelProgrammingState = createPanelProgrammingState();
     if (targetChanged) panelProgrammingState.inspection.phase = "changed";
   } else {
@@ -3911,7 +3928,7 @@ function panelProgrammingExactQualificationBackupId(): string {
 async function openPanelQualificationRestoreReview(backupId: string): Promise<void> {
   // A verified write immediately starts a fresh complete-chart read. Keep the
   // primary handoff deterministic if the user acts before that read settles.
-  while (panelProgrammingBusy && !panelProgrammingTransactionActive()) {
+  while (panelProgrammingInteractionBusy() && !panelProgrammingTransactionActive()) {
     await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
   }
   if (!backupId || !panelProgrammingQualificationNeedsRestore()) {
@@ -3925,7 +3942,7 @@ async function openPanelQualificationRestoreReview(backupId: string): Promise<vo
 }
 
 async function reopenPanelQualificationAfterRecovery(): Promise<void> {
-  while (panelProgrammingBusy && !panelProgrammingTransactionActive()) {
+  while (panelProgrammingInteractionBusy() && !panelProgrammingTransactionActive()) {
     await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
   }
   if (panelProgrammingQualificationState() !== "required") {
@@ -4639,7 +4656,7 @@ function renderPanelProgrammingTerminalEditor(): void {
     advanced.disabled = true;
     return;
   }
-  advanced.disabled = panelProgrammingBusy || panelProgrammingTransactionActive();
+  advanced.disabled = panelProgrammingInteractionBusy() || panelProgrammingTransactionActive();
   const drafts = new Map(panelProgrammingTerminalDraft.map((row) => [row.terminal_id, row]));
   for (let player = 1; player <= 4; player += 1) {
     const playerTerminals = chart.terminals.filter((candidate) => candidate.player === player);
@@ -4736,7 +4753,7 @@ function renderPanelProgrammingTerminalEditor(): void {
     : panelProgrammingAdvancedOpen
     ? "Advanced is open. Shifted assignments and Acts as Shift are persistent I-PAC behavior; leave opaque values on Preserve unless you intend to replace them."
     : "Windows key outputs are what KSX receives. Open Advanced only for the I-PAC shifted layer and terminal Shift roles.";
-  const locked = panelProgrammingBusy || panelProgrammingTransactionActive() ||
+  const locked = panelProgrammingInteractionBusy() || panelProgrammingTransactionActive() ||
     panelProgrammingState.capability.kind !== "programmable" ||
     panelProgrammingDraftSource === "recommended";
   for (const control of Array.from(grid.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
@@ -4888,7 +4905,7 @@ function syncPanelProgrammingUi(): void {
     section.dataset.qualification = chart ? qualificationState : "unread";
     section.dataset.dirty = String(panelProgrammingDraftDirty());
     section.dataset.draftSource = panelProgrammingDraftSource;
-    section.setAttribute("aria-busy", String(panelProgrammingBusy));
+    section.setAttribute("aria-busy", String(panelProgrammingInteractionBusy()));
   }
   if (programmingDevice) {
     programmingDevice.replaceChildren();
@@ -4999,7 +5016,7 @@ function syncPanelProgrammingUi(): void {
     qualificationTerminal.value = [...qualificationTerminal.options].some(
       (option) => option.value === selected,
     ) ? selected : "";
-    qualificationTerminal.disabled = panelProgrammingBusy ||
+    qualificationTerminal.disabled = panelProgrammingInteractionBusy() ||
       panelProgrammingTransactionActive() || recoveryRequired || !chart;
   }
   if (qualificationKey) {
@@ -5023,7 +5040,7 @@ function syncPanelProgrammingUi(): void {
     qualificationKey.value = [...qualificationKey.options].some(
       (option) => option.value === selected,
     ) ? selected : "";
-    qualificationKey.disabled = panelProgrammingBusy ||
+    qualificationKey.disabled = panelProgrammingInteractionBusy() ||
       panelProgrammingTransactionActive() || recoveryRequired || !chart;
   }
   if (qualificationSelection) {
@@ -5060,7 +5077,7 @@ function syncPanelProgrammingUi(): void {
       : mode === "custom" && qualificationNeedsRestore;
     const recommendationUnavailable = mode === "recommended" &&
       !panelProgrammingRecommendationAvailable(chart);
-    button.disabled = panelProgrammingBusy || panelProgrammingTransactionActive() ||
+    button.disabled = panelProgrammingInteractionBusy() || panelProgrammingTransactionActive() ||
       recoveryRequired || !chart || qualificationLocksMode || recommendationUnavailable ||
       (mode !== "keep-current" && capability.kind !== "programmable");
     if ((mode === "recommended" || mode === "blank") && qualificationState !== "qualified") {
@@ -5122,11 +5139,11 @@ function syncPanelProgrammingUi(): void {
         panelProgrammingTerminalDraft.length === chart?.terminals.length);
     const unchangedCurrent = panelProgrammingDraftSource === "current" &&
       !panelProgrammingDraftDirty() && qualificationState === "qualified";
-    review.disabled = panelProgrammingBusy || recoveryRequired ||
+    review.disabled = panelProgrammingInteractionBusy() || recoveryRequired ||
       capability.kind !== "programmable" || !chart || !authority ||
       qualificationNeedsRestore ||
       !layout || !qualificationReady || !customReady || !recommendationReady || unchangedCurrent;
-    review.textContent = panelProgrammingBusy
+    review.textContent = panelProgrammingInteractionBusy()
       ? "Preparing review…"
       : qualificationState === "validation-recovery"
       ? "Restore safety backup, then retry"
@@ -5161,7 +5178,7 @@ function syncPanelProgrammingUi(): void {
     if (panelProgrammingBackups.some((backup) => backup.backup_id === preferred)) {
       backupSelect.value = preferred;
     }
-    backupSelect.disabled = panelProgrammingBusy || panelProgrammingBackups.length === 0 ||
+    backupSelect.disabled = panelProgrammingInteractionBusy() || panelProgrammingBackups.length === 0 ||
       qualificationState === "required";
   }
   if (backupLabel) {
@@ -5177,7 +5194,7 @@ function syncPanelProgrammingUi(): void {
     const recoveryHasCurrentHash = !recoveryRequired || Boolean(
       panelProgrammingState.transaction.outcome?.observed_sha256,
     );
-    restore.disabled = panelProgrammingBusy || panelProgrammingTransactionActive() ||
+    restore.disabled = panelProgrammingInteractionBusy() || panelProgrammingTransactionActive() ||
       capability.kind !== "programmable" || !recoveryHasCurrentHash ||
       qualificationState === "required" || !chart || !backupSelect?.value ||
       (Boolean(exactQualificationBackup) &&
@@ -5192,7 +5209,10 @@ function syncPanelProgrammingUi(): void {
     // Keep the visible read action focusable while its first read is running;
     // readPanelProgrammingChart() is the single-flight authority.
     reread.disabled = panelProgrammingTransactionActive();
-    reread.setAttribute("aria-disabled", String(panelProgrammingBusy || reread.disabled));
+    reread.setAttribute(
+      "aria-disabled",
+      String(panelProgrammingInteractionBusy() || reread.disabled),
+    );
   }
   if (close) {
     close.disabled = panelProgrammingTransactionActive();
@@ -5203,7 +5223,8 @@ function syncPanelProgrammingUi(): void {
   const setupButton = item.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-open"]');
   if (setupButton) {
     const canOpenChart = panelBoardChartAccessReady(statusBoard);
-    setupButton.disabled = panelProgrammingBusy || panelProgrammingTransactionActive() ||
+    setupButton.disabled = panelProgrammingInteractionBusy() ||
+      panelProgrammingTransactionActive() ||
       !panelProgrammingTarget() || !canOpenChart;
     setupButton.textContent = open
       ? `${selectedEncoderShortName()} hardware open`
@@ -5236,32 +5257,44 @@ async function readPanelProgrammingChart(
   browserLockHeld = false,
 ): Promise<void> {
   if (!browserLockHeld) {
-    if (panelProgrammingBusy || panelProgrammingTransactionActive()) return;
-    const preferredDevice = nCapInstance().trim();
-    const preferredBoard = panelProgrammingState.inspection.chart?.board_fingerprint ?? "";
-    const lockIdentities = controlSurfaceHardwareLockIdentities(preferredDevice, preferredBoard);
-    if (lockIdentities.length === 0 || !navigator.locks) {
-      panelProgrammingSetMessage(
-        "KSX cannot safely coordinate this encoder across browser windows. Close other KSX windows or use a browser with Web Locks support, then read the complete chart again. Nothing was changed.",
-      );
-      return;
-    }
-    let acquired = false;
+    if (panelProgrammingInteractionBusy() || panelProgrammingTransactionActive()) return;
+    panelProgrammingReadPending = true;
     try {
-      acquired = await withControlSurfaceHardwareLocks(
+      syncPanelProgrammingUi();
+      const requestTargetFingerprint = currentControlSurfaceHardwareFingerprint();
+      const preferredDevice = nCapInstance().trim();
+      const preferredBoard = panelProgrammingState.inspection.chart?.board_fingerprint ?? "";
+      const lockIdentities = controlSurfaceHardwareLockIdentities(preferredDevice, preferredBoard);
+      if (lockIdentities.length === 0 || !navigator.locks) {
+        panelProgrammingSetMessage(
+          "KSX cannot coordinate this encoder across windows. Close other KSX windows or use Web Locks, then read the chart again. Nothing changed.",
+        );
+        return;
+      }
+      const acquired = await withControlSurfaceHardwareLocks(
         lockIdentities,
-        async () => readPanelProgrammingChart(backup, true),
+        async () => {
+          if (currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint) {
+            panelProgrammingSetMessage(
+              "The encoder changed while KSX waited for its lock. Nothing was read; open hardware outputs for the current device.",
+            );
+            return;
+          }
+          await readPanelProgrammingChart(backup, true);
+        },
       );
+      if (!acquired) {
+        panelProgrammingSetMessage(
+          "Another KSX window is using this encoder. Wait for it to finish, then read the chart again. Nothing changed.",
+        );
+      }
     } catch (error) {
       panelProgrammingSetMessage(
         `${error instanceof Error ? error.message : "The browser hardware lock failed."} Nothing was changed.`,
       );
-      return;
-    }
-    if (!acquired) {
-      panelProgrammingSetMessage(
-        "Another KSX window is changing or reading this encoder. Wait for it to finish, then read the complete chart again. Nothing was changed.",
-      );
+    } finally {
+      panelProgrammingReadPending = false;
+      syncPanelProgrammingUi();
     }
     return;
   }
@@ -5765,7 +5798,7 @@ function togglePanelProgrammingOutputTest(): void {
   }
   const chart = panelProgrammingState.inspection.chart;
   if (!chart || panelProgrammingAssignedCount(chart) === 0 ||
-      panelProgrammingBusy || panelProgrammingTransactionActive() ||
+      panelProgrammingInteractionBusy() || panelProgrammingTransactionActive() ||
       panelProgrammingRoutingAuthoritySuspended()) return;
   const expectedSelector = nCapSelector().trim();
   const expectedInstance = nCapInstance().trim();
@@ -5793,7 +5826,8 @@ function togglePanelProgrammingOutputTest(): void {
 
 function continueFromPanelHardwareToRouting(): void {
   const chart = panelProgrammingState.inspection.chart;
-  if (!chart || panelProgrammingAssignedCount(chart) === 0 ||
+  if (!chart || panelProgrammingInteractionBusy() ||
+      panelProgrammingAssignedCount(chart) === 0 ||
       panelProgrammingRoutingAuthoritySuspended()) return;
   if (panelProgrammingLastTest && panelProgrammingLastTest.terminalIds.length === 0) {
     panelProgrammingSetMessage(
@@ -5835,6 +5869,7 @@ function continueFromPanelHardwareToRouting(): void {
 function buildPhysicalPanelFromEncoderChart(): void {
   const chart = panelProgrammingState.inspection.chart;
   const records = controlSurfaceEncoderRecords();
+  if (panelProgrammingInteractionBusy()) return;
   if (!chart || records.length === 0 || panelProgrammingRoutingAuthoritySuspended()) {
     panelProgrammingSetMessage(
       `The ${selectedEncoderShortName()} chart has no assigned terminal-to-key outputs to draw yet. Configure or load at least one hardware output first.`,
@@ -5856,7 +5891,8 @@ function buildPhysicalPanelFromEncoderChart(): void {
  * terminal and program the Windows-key layer. */
 function designPhysicalPanelBeforeEncoderKeys(): void {
   const chart = panelProgrammingState.inspection.chart;
-  if (!chart || panelProgrammingTransactionActive() ||
+  if (!chart || panelProgrammingInteractionBusy() ||
+      panelProgrammingTransactionActive() ||
       panelProgrammingRoutingAuthoritySuspended()) return;
   if (learnRow?.purpose === "panel-test") void cancelLearn();
   closePanelProgrammingSetup(false, "surface");
@@ -5947,7 +5983,7 @@ function openPanelProgrammingSetup(): void {
   // A selector transition can already have started the guarded chart read.
   // The workspace still opens immediately so a second Set up gesture focuses
   // the in-flight task instead of looking like a dead button.
-  if (panelProgrammingBusy) return;
+  if (panelProgrammingInteractionBusy()) return;
   if (!panelProgrammingState.inspection.chart ||
       panelProgrammingState.inspection.target_selector !== panelProgrammingTarget()) {
     void readPanelProgrammingChart(true);
@@ -6046,7 +6082,7 @@ function closePanelProgrammingSetup(
 }
 
 function choosePanelProgrammingMode(mode: PanelAssignmentMode): void {
-  if (panelProgrammingBusy || panelProgrammingTransactionActive() ||
+  if (panelProgrammingInteractionBusy() || panelProgrammingTransactionActive() ||
       panelProgrammingState.transaction.phase === "recovery-required") return;
   const qualificationState = panelProgrammingQualificationState();
   if ((mode === "recommended" || mode === "blank") && qualificationState !== "qualified") {
@@ -6116,7 +6152,7 @@ function updatePanelProgrammingTerminalDraft(
   field: "normal_key" | "shifted_key" | "is_shift" | "allow_shared_key",
   value: string | boolean | undefined,
 ): void {
-  if (panelProgrammingBusy || panelProgrammingTransactionActive() ||
+  if (panelProgrammingInteractionBusy() || panelProgrammingTransactionActive() ||
       panelProgrammingState.capability.kind !== "programmable") return;
   const terminal = panelProgrammingTerminalDraft.find(
     (candidate) => candidate.terminal_id === terminalId,
@@ -6149,7 +6185,7 @@ function updatePanelProgrammingTerminalDraft(
 }
 
 function choosePanelQualificationTerminal(terminalId: string): void {
-  if (panelProgrammingBusy || panelProgrammingTransactionActive() ||
+  if (panelProgrammingInteractionBusy() || panelProgrammingTransactionActive() ||
       panelProgrammingQualificationState() !== "required") return;
   const terminal = panelProgrammingTerminal(terminalId);
   if (terminalId && (!terminal || !panelProgrammingQualificationTerminalIsEligible(terminal))) {
@@ -6170,7 +6206,7 @@ function choosePanelQualificationTerminal(terminalId: string): void {
 }
 
 function choosePanelQualificationKey(key: string): void {
-  if (panelProgrammingBusy || panelProgrammingTransactionActive() ||
+  if (panelProgrammingInteractionBusy() || panelProgrammingTransactionActive() ||
       panelProgrammingQualificationState() !== "required") return;
   const option = panelProgrammingState.inspection.chart?.key_options.find(
     (candidate) => candidate.key === key && candidate.safe_for_qualification === true,
@@ -6188,7 +6224,7 @@ function assignSelectedPanelTerminal(terminalId: string): void {
   const chart = panelProgrammingState.inspection.chart;
   const control = selectedControlSurfaceControl();
   const channel = selectedControlSurfaceChannel();
-  if (!chart || !control || !channel || panelProgrammingBusy ||
+  if (!chart || !control || !channel || panelProgrammingInteractionBusy() ||
       panelProgrammingState.transaction.phase === "recovery-required") return;
   if (!terminalId) {
     applyControlSurfaceState(
@@ -6251,7 +6287,7 @@ function assignSelectedPanelKey(key: string): void {
   const control = selectedControlSurfaceControl();
   const channel = selectedControlSurfaceChannel();
   const terminal = channel?.encoder ? panelProgrammingTerminal(channel.encoder.terminalId) : null;
-  if (!chart || !control || !channel || !terminal || panelProgrammingBusy ||
+  if (!chart || !control || !channel || !terminal || panelProgrammingInteractionBusy() ||
       panelProgrammingState.transaction.phase === "recovery-required") return;
   if (!chart.key_options.some((option) => option.key === key)) return;
   applyControlSurfaceState(
@@ -6315,7 +6351,9 @@ function ensurePanelProgrammingDialog(): HTMLDialogElement {
   dialog.setAttribute("aria-labelledby", "n-panel-program-title");
   dialog.addEventListener("cancel", (event) => {
     event.preventDefault();
-    if (!panelProgrammingTransactionActive()) panelProgrammingCloseDialog();
+    if (!panelProgrammingApplyPending && !panelProgrammingTransactionActive()) {
+      panelProgrammingCloseDialog();
+    }
   });
   dialog.addEventListener("change", (event) => {
     const target = event.target as HTMLInputElement | null;
@@ -6330,7 +6368,8 @@ function ensurePanelProgrammingDialog(): HTMLDialogElement {
     const apply = dialog.querySelector<HTMLButtonElement>('[data-panel-dialog-action="apply"]');
     const plan = panelProgrammingState.editor.plan;
     if (apply) {
-      apply.disabled = !panelProgrammingConfirmed || !panelProgrammingRecoveryReady ||
+      apply.disabled = panelProgrammingApplyPending ||
+        !panelProgrammingConfirmed || !panelProgrammingRecoveryReady ||
         !plan || plan.blockers.length > 0 || plan.byte_diff.length === 0 ||
         !panelProgrammingPlanIsCurrent(plan);
     }
@@ -6395,12 +6434,13 @@ function renderPanelProgrammingDialog(): void {
   const dialog = ensurePanelProgrammingDialog();
   const transaction = panelProgrammingState.transaction;
   const plan = panelProgrammingState.editor.plan;
+  const applyPending = panelProgrammingApplyPending;
   const detachedTransactionResult =
     (transaction.phase === "verified" || transaction.phase === "recovery-required") &&
     !panelProgrammingTransactionBelongsToCurrentTarget();
   dialog.replaceChildren();
   dialog.dataset.phase = transaction.phase;
-  dialog.setAttribute("aria-busy", String(panelProgrammingTransactionActive()));
+  dialog.setAttribute("aria-busy", String(applyPending || panelProgrammingTransactionActive()));
 
   const shell = document.createElement("div");
   shell.className = "n-panel-program-shell";
@@ -6667,7 +6707,8 @@ function renderPanelProgrammingDialog(): void {
     checkbox.type = "checkbox";
     checkbox.dataset.panelProgramConfirm = "";
     checkbox.checked = panelProgrammingConfirmed;
-    checkbox.disabled = stale || plan.blockers.length > 0 || plan.byte_diff.length === 0;
+    checkbox.disabled = applyPending || stale || plan.blockers.length > 0 ||
+      plan.byte_diff.length === 0;
     const confirmationCopy = document.createElement("span");
     confirmationCopy.textContent = plan.confirmation;
     confirmation.append(checkbox, confirmationCopy);
@@ -6679,7 +6720,8 @@ function renderPanelProgrammingDialog(): void {
     supervisedCheckbox.type = "checkbox";
     supervisedCheckbox.dataset.panelProgramSupervised = "";
     supervisedCheckbox.checked = panelProgrammingRecoveryReady;
-    supervisedCheckbox.disabled = stale || plan.blockers.length > 0 || plan.byte_diff.length === 0;
+    supervisedCheckbox.disabled = applyPending || stale || plan.blockers.length > 0 ||
+      plan.byte_diff.length === 0;
     const supervisedCopy = document.createElement("span");
     supervisedCopy.textContent =
       "I am at this cabinet, WinIPAC is closed, and I have a separate keyboard or recovery path if the encoder stops responding.";
@@ -6691,12 +6733,14 @@ function renderPanelProgrammingDialog(): void {
     cancel.type = "button";
     cancel.dataset.panelDialogAction = "close";
     cancel.textContent = "Back to assignments";
+    cancel.disabled = applyPending;
     const apply = document.createElement("button");
     apply.type = "button";
     apply.className = "primary danger";
     apply.dataset.panelDialogAction = "apply";
     apply.textContent = operation === "restore" ? "Restore and verify" : "Program and verify";
-    apply.disabled = !panelProgrammingConfirmed || !panelProgrammingRecoveryReady || stale ||
+    apply.disabled = applyPending || !panelProgrammingConfirmed ||
+      !panelProgrammingRecoveryReady || stale ||
       plan.blockers.length > 0 || plan.byte_diff.length === 0;
     actions.append(cancel, apply);
     shell.append(actions);
@@ -6740,7 +6784,8 @@ async function requestPanelProgrammingPlan(): Promise<void> {
   const qualificationChangedEdits = panelProgrammingQualificationChangedEdits(
     qualificationEdits,
   );
-  if (!chart || !authority || !layout || panelProgrammingBusy || panelProgrammingTransactionActive() ||
+  if (!chart || !authority || !layout || panelProgrammingInteractionBusy() ||
+      panelProgrammingTransactionActive() ||
       panelProgrammingState.transaction.phase === "recovery-required") return;
   if (panelProgrammingQualificationNeedsRestore(qualificationState)) {
     panelProgrammingSetMessage(
@@ -6823,7 +6868,8 @@ async function requestPanelProgrammingPlan(): Promise<void> {
 async function requestPanelRestorePlan(backupId: string): Promise<void> {
   const authority = currentPanelChartAuthority();
   const requestTargetFingerprint = currentControlSurfaceHardwareFingerprint();
-  if (!authority || !backupId || panelProgrammingBusy || panelProgrammingTransactionActive() ||
+  if (!authority || !backupId || panelProgrammingInteractionBusy() ||
+      panelProgrammingTransactionActive() ||
       panelProgrammingState.capability.kind !== "programmable") return;
   const qualificationState = panelProgrammingQualificationState();
   if (qualificationState === "required") {
@@ -6943,7 +6989,7 @@ function reconcilePanelProgrammingOutcome(
 async function applyPanelProgrammingPlan(browserLockHeld = false): Promise<void> {
   if (!browserLockHeld) {
     const candidatePlan = panelProgrammingState.editor.plan;
-    if (!candidatePlan || panelProgrammingBusy || panelProgrammingTransactionActive()) return;
+    if (!candidatePlan || panelProgrammingInteractionBusy() || panelProgrammingTransactionActive()) return;
     if (panelProgrammingRoutingAuthoritySuspended()) {
       panelProgrammingSetMessage(
         "This encoder is still being changed or recovered. Read its complete chart before reviewing another hardware write.",
@@ -6963,8 +7009,14 @@ async function applyPanelProgrammingPlan(browserLockHeld = false): Promise<void>
       renderPanelProgrammingDialog();
       return;
     }
+    // Establish same-document ownership before the first await. Web Locks
+    // serialize browser documents; this latch also serializes gestures inside
+    // this document while the lock callback is still queued.
+    panelProgrammingApplyPending = true;
     let acquired = false;
     try {
+      renderPanelProgrammingDialog();
+      syncPanelProgrammingUi();
       acquired = await withControlSurfaceHardwareLocks(
         lockIdentities,
         async () => applyPanelProgrammingPlan(true),
@@ -6973,8 +7025,11 @@ async function applyPanelProgrammingPlan(browserLockHeld = false): Promise<void>
       panelProgrammingSetMessage(
         `${error instanceof Error ? error.message : "The browser hardware lock failed."} Nothing was written.`,
       );
-      renderPanelProgrammingDialog();
       return;
+    } finally {
+      panelProgrammingApplyPending = false;
+      renderPanelProgrammingDialog();
+      syncPanelProgrammingUi();
     }
     if (!acquired) {
       panelProgrammingSetMessage(
@@ -6997,7 +7052,8 @@ async function applyPanelProgrammingPlan(browserLockHeld = false): Promise<void>
     return;
   }
   const plan = panelProgrammingState.editor.plan;
-  if (!plan || !panelProgrammingConfirmed || !panelProgrammingRecoveryReady || panelProgrammingBusy ||
+  if (!plan || !panelProgrammingConfirmed || !panelProgrammingRecoveryReady ||
+      panelProgrammingReadPending || panelProgrammingBusy ||
       panelProgrammingTransactionActive() || plan.blockers.length > 0 ||
       !panelProgrammingPlanIsCurrent(plan) || !panelProgrammingPlanTargetFingerprint ||
       panelProgrammingPlanTargetFingerprint !== currentControlSurfaceHardwareFingerprint() ||
@@ -9792,7 +9848,7 @@ function syncControlSurfaceInspector(): void {
       chart: panelProgrammingState.inspection.chart?.image_sha256 ?? "",
       capability: panelProgrammingState.capability.kind,
       message: panelProgrammingMessage,
-      busy: panelProgrammingBusy,
+      busy: panelProgrammingInteractionBusy(),
       transaction: panelProgrammingState.transaction.phase,
       routingAuthoritySuspended,
       deliberateSharedKey: control && channel
@@ -9958,7 +10014,7 @@ function syncControlSurfaceInspector(): void {
     const qualificationTerminalIneligible = qualificationState === "required" &&
       Boolean(selectedTerminal &&
         !panelProgrammingQualificationTerminalIsEligible(selectedTerminal));
-    terminalSelect.disabled = routingAuthoritySuspended || panelProgrammingBusy ||
+    terminalSelect.disabled = routingAuthoritySuspended || panelProgrammingInteractionBusy() ||
       panelProgrammingTransactionActive() ||
       qualificationAwaitingRestore;
     terminalLabel.append(terminalSelect);
@@ -9991,7 +10047,7 @@ function syncControlSurfaceInspector(): void {
     keySelect.value = encoderMatchesChart && chart.key_options.some(
       (option) => option.key === channel.encoder?.expectedKey,
     ) ? channel.encoder?.expectedKey ?? "" : "";
-    keySelect.disabled = routingAuthoritySuspended || panelProgrammingBusy ||
+    keySelect.disabled = routingAuthoritySuspended || panelProgrammingInteractionBusy() ||
       panelProgrammingTransactionActive() ||
       qualificationAwaitingRestore || qualificationTerminalIneligible ||
       panelProgrammingState.editor.assignment_mode !== "custom" || !terminalSelect.value;
@@ -10007,7 +10063,7 @@ function syncControlSurfaceInspector(): void {
     sharedKeyCheckbox.checked = encoderMatchesChart && panelProgrammingDraftTerminal(
       channel.encoder?.terminalId ?? "",
     )?.allow_shared_key === true;
-    sharedKeyCheckbox.disabled = routingAuthoritySuspended || panelProgrammingBusy ||
+    sharedKeyCheckbox.disabled = routingAuthoritySuspended || panelProgrammingInteractionBusy() ||
       panelProgrammingTransactionActive() ||
       qualificationAwaitingRestore || qualificationTerminalIneligible ||
       panelProgrammingState.editor.assignment_mode !== "custom" || !keySelect.value;
@@ -15430,7 +15486,7 @@ export function nocturneWire(root: HTMLElement): void {
     } else if (hit === "surface-encoder-close") {
       closePanelProgrammingSetup();
     } else if (hit === "surface-encoder-read") {
-      if (!panelProgrammingBusy &&
+      if (!panelProgrammingInteractionBusy() &&
           confirmPanelProgrammingDraftReplacement("read the board again")) {
         void readPanelProgrammingChart(true);
       }

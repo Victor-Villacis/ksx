@@ -71,6 +71,7 @@ import {
   removeControlSurfaceControl,
   renameControlSurfaceControl,
   resolveControlSurfaceSharedSignal,
+  retireControlSurfaceStoreDeviceClaims,
   sanitizeControlSurfaceStore,
   selectControlSurfaceControl,
   setControlSurfacePlayerSlot,
@@ -81,6 +82,7 @@ import {
   type ControlSurfaceChannel,
   type ControlSurfaceControl,
   type ControlSurfaceControlKind,
+  type ControlSurfaceDeviceKind,
   type ControlSurfaceMappingRecord,
   type ControlSurfaceStage,
   type ControlSurfaceState,
@@ -2415,6 +2417,25 @@ function controlSurfaceSignalTruth(
   // With no device chart to consult, the only signal truth is what Teach
   // actually observed arriving from this control.
   const observedKey = channel.input.kind === "keyboard" ? channel.input.key.trim() : "";
+  if (channel.encoder) {
+    // ⚠️ A LINKED CHANNEL IS FED BY A PROGRAMMABLE TERMINAL, and ksx has no
+    // reader for one. Whatever Teach saw was true of the chart the board
+    // carried at the time; the board may have been rewritten since, by ksx's
+    // own removed writer or by WinIPAC, and nothing here can tell. So the
+    // observation is kept and SHOWN — `observedKey` still dresses the keycap
+    // and its hover sentence — but it is not route authority, and no cord may
+    // anchor to it. `verification` is the seam: when a chart verb returns and
+    // can prove `matched`, this is the one branch that has to change.
+    return {
+      authority: "unassigned",
+      flowAuthority: "unassigned",
+      configuredKnown: false,
+      configuredKey: "",
+      plannedKey: "",
+      observedKey,
+      flowKey: "",
+    };
+  }
   return {
     authority: observedKey ? "observed" : "unassigned",
     flowAuthority: observedKey ? "observed" : "unassigned",
@@ -2611,6 +2632,39 @@ function loadControlSurfacePrefs(): void {
       hardwareEpochs: {},
     };
   }
+  const arrivedLegacy = arrivedAs === 1 || arrivedAs === 2;
+  if (arrivedLegacy) {
+    // **THE THREE-STATE DEVICE AUTHORITY SWEEP, run exactly once.**
+    //
+    // Gated on legacy ARRIVAL rather than run on every load for the reason
+    // spelled out over `retireControlSurfaceDeviceClaims`: this is an upgrade
+    // step, not an invariant. A v3 document has already been through it, and
+    // re-running the rule would re-retire a key the user has since taught on
+    // an encoder they just read — destroying work to re-derive an answer that
+    // was already recorded.
+    //
+    // It runs BEFORE the identity and document are read out of the store, and
+    // writes the swept store itself, because `saveControlSurfacePrefs` rebases
+    // every save against whatever is on disk and folds in only the CURRENT
+    // device's document. Leaving the write to it would have published a v3
+    // store in which every other keyboard's legacy claims were laundered
+    // forward unswept — and, the version having moved, never looked at again.
+    controlSurfaceStore = retireControlSurfaceStoreDeviceClaims(
+      controlSurfaceStore,
+      controlSurfaceDeviceKind,
+    );
+    try {
+      window.localStorage.setItem(
+        CONTROL_SURFACE_STORAGE_KEY,
+        JSON.stringify(controlSurfaceStore),
+      );
+    } catch {
+      controlSurfaceSaveFailed = true;
+      // The sweep still governs this session. A browser that cannot store it
+      // simply arrives legacy again next time and sweeps again, which is the
+      // correct outcome: nothing durable claims more than ksx can vouch for.
+    }
+  }
   controlSurfaceIdentity = currentKeyboardWorkbenchIdentity();
   controlSurfaceState = controlSurfaceStateForDevice(
     controlSurfaceStore,
@@ -2627,7 +2681,6 @@ function loadControlSurfacePrefs(): void {
   // reconciliation, and the write rode along with it. That reconciliation
   // left for PacBench and the argument was stubbed to `false`, taking the
   // document migration with it — the migration is ksx's, not the chart's.
-  const arrivedLegacy = arrivedAs === 1 || arrivedAs === 2;
   applyControlSurfaceState(controlSurfaceState, arrivedLegacy);
   installControlSurfaceStorageSync();
 }
@@ -2996,6 +3049,59 @@ let lastProvenEncoderRow: NocturneDeviceRowView | undefined;
 
 function selectedInputIsPanelEncoder(): boolean {
   return Boolean(selectedEncoderRow());
+}
+
+/** Reduce any spelling of one physical board to `VID:PID`, or "" if the value
+ * names no USB device at all.
+ *
+ * The two vocabularies that have to meet here never overlap textually. A
+ * stored `input.device` is whatever the LEARNER reported — an exact Windows
+ * instance path such as `HID\VID_D209&PID_0430\7&1A2B3C&0&0000` — while the
+ * served roster carries ksx SELECTORS (`usb:d209:0430:00`). Documents also
+ * hold the surface's own device identity (`keyboard:usb:d209:0430:00`) where
+ * no exact instance was ever observed, so all three spellings are accepted.
+ *
+ * ⚠️ VID/PID IS THE RIGHT WIDTH, not merely the available one. The KIND of a
+ * device is a property of the MODEL: an I-PAC's terminals are programmable
+ * whichever USB port it is in, and a keyboard's scan codes are burned in
+ * whoever owns it. The instance path is deliberately narrower than that — it
+ * moves with the port on some boards and survives a port move on others (an
+ * I-PAC's path is serial-anchored) — so matching on it would make the kind
+ * rule answer "unknown" for the very board sitting in the roster. Two
+ * different boards that share a VID/PID share a kind too, which is exactly
+ * the claim being made and costs nothing. */
+function deviceModelToken(value: string): string {
+  const text = value.trim().toLocaleUpperCase();
+  const instance = /VID_([0-9A-F]{4})&PID_([0-9A-F]{4})/u.exec(text);
+  if (instance) return `${instance[1]}:${instance[2]}`;
+  const selector = /(?:^|:)USB:([0-9A-F]{4}):([0-9A-F]{4})(?::|$)/u.exec(text);
+  return selector ? `${selector[1]}:${selector[2]}` : "";
+}
+
+/** THE LOOKUP HALF of the three-state device authority rule; the TRANSFORM
+ * half is `retireControlSurfaceDeviceClaims` in the pure module.
+ *
+ * Every pickable board reaches the browser in exactly one of the three served
+ * lists, and each row carries the role snapshot.rs read off
+ * `ksx_api::BoardRole`. Ask the ROW rather than which list it landed in: the
+ * lists are a presentation split (encoders get their own first-run lane, and
+ * non-keyboards get the experimentation fold), while `role` is the served
+ * fact.
+ *
+ * A device with no matching row answers `unknown`, and so does the served
+ * `other` role. That is not a failure mode to be defended against — it is the
+ * third state working. An unreadable machine scan serves no rows at all, and
+ * the honest consequence is that a sweep during that window vouches for
+ * nothing and MARKS everything, rather than retiring a panel because a read
+ * did not land. */
+function controlSurfaceDeviceKind(device: string): ControlSurfaceDeviceKind {
+  const model = deviceModelToken(device);
+  if (!model) return "unknown";
+  const row = [...nDevEncoders(), ...nDevRows(), ...nDevExp()].find(
+    (candidate) => deviceModelToken(candidate.selector) === model,
+  );
+  if (row?.role === "panel-encoder") return "panel-encoder";
+  return row?.role === "keyboard" ? "keyboard" : "unknown";
 }
 
 function selectedEncoderShortName(): string {
@@ -4481,7 +4587,11 @@ function renderControlSurfaceControls(): void {
     existing.delete(control.id);
     const relationship = controlSurfaceRelationship(control);
     const selected = control.id === controlSurfaceState.selectedControlId;
-    const encoderChannels: ControlSurfaceChannel[] = [];
+    // A preserved terminal link is the only thing that still says "a key is
+    // EXPECTED here" — the chart that would confirm it is PacBench's now, so
+    // `verifiedEncoderChannels` stays empty until a chart verb returns and
+    // `controlSurfaceSignalTruth` can answer `matched` for a linked channel.
+    const encoderChannels = control.channels.filter((channel) => Boolean(channel.encoder));
     const verifiedEncoderChannels = encoderChannels.filter((channel) => {
       const authority = controlSurfaceSignalTruth(channel).authority;
       return authority === "matched" || authority === "mismatch";
@@ -4525,7 +4635,10 @@ function renderControlSurfaceControls(): void {
     const inputCopy = control.channels
       .map((channel) => {
         const truth = controlSurfaceSignalTruth(channel);
-        const terminal = "";
+        const terminal = channel.encoder?.terminalId.toLocaleUpperCase() ?? "";
+        if (terminal) {
+          return `${channel.label}: ${terminal} is a programmable encoder terminal${truth.observedKey ? `, last observed emitting ${truth.observedKey}` : ""}; ksx cannot read this board, so it routes nothing`;
+        }
         if (truth.authority === "planned") {
           return `${channel.label}: ${terminal} currently emits ${truth.configuredKey || "Disabled"}; draft plans ${truth.plannedKey || "Disabled"}, not written`;
         }
@@ -4542,7 +4655,12 @@ function renderControlSurfaceControls(): void {
           return `${channel.label}: ${terminal} is expected to emit ${truth.plannedKey}; read the board to confirm`;
         }
         if (truth.authority === "observed") {
-          return `${channel.label}: Windows observed ${truth.observedKey}`;
+          // The third state of the device authority rule, said out loud. The
+          // observation is real and still splits keys; what ksx cannot do is
+          // vouch that the device it names is still the thing emitting it.
+          return channel.deviceUnverified
+            ? `${channel.label}: Windows observed ${truth.observedKey}; ksx does not recognise the device it came from, so this is kept unverified`
+            : `${channel.label}: Windows observed ${truth.observedKey}`;
         }
         return `${channel.label}: unassigned`;
       })
@@ -4573,7 +4691,12 @@ function renderControlSurfaceControls(): void {
       signal.replaceChildren();
       signal.dataset.channelCount = String(control.channels.length);
       for (const channel of control.channels) {
-        const encoder = undefined;
+        // The preserved terminal link, when a legacy document carried one. It
+        // dresses the chain — the terminal chip names P3 UP instead of
+        // UNLINKED — and nothing else: every authority branch below reads
+        // `truth`, which refuses to draw any from a link (see
+        // `controlSurfaceSignalTruth`).
+        const encoder = channel.encoder;
         const truth = controlSurfaceSignalTruth(channel);
         const expectedKey = truth.plannedKey;
         const observedKey = truth.observedKey;
@@ -4584,6 +4707,10 @@ function renderControlSurfaceControls(): void {
         chain.className = `n-surface-signal-chain channel-${channel.id}`;
         chain.dataset.surfaceChannelId = channel.id;
         chain.dataset.verification = verification;
+        // Machine-readable half of the same statement: a swept channel whose
+        // device ksx could not recognise is marked, never silently kept.
+        if (channel.deviceUnverified) chain.dataset.deviceUnverified = "";
+        else delete chain.dataset.deviceUnverified;
         if (encoder?.terminalId) chain.dataset.terminalId = encoder.terminalId;
 
         const stem = document.createElement("span");
@@ -4670,7 +4797,9 @@ function renderControlSurfaceControls(): void {
             : "TEACH";
           keycap.append(key, state);
         }
-        keycap.title = verification === "planned" && encoder
+        keycap.title = encoder
+          ? `${encoder.terminalId.toLocaleUpperCase()} is a programmable encoder terminal${observedKey ? `; Windows Teach once observed ${observedKey}` : ""}. ksx cannot read this board's outputs, so nothing here is treated as a route.`
+          : verification === "planned" && encoder
           ? `${encoder.terminalId.toLocaleUpperCase()} currently emits ${truth.configuredKey || "Disabled"}; the draft proposes ${expectedKey || "Disabled"}. Nothing changes until Program board verifies the write.`
           : verification === "matched" && encoder
           ? `${encoder.terminalId.toLocaleUpperCase()} is configured for ${truth.configuredKey || expectedKey}; Windows Teach verified the same key${pendingPlan ? `; the draft still proposes ${expectedKey || "Disabled"}` : ""}`

@@ -50,10 +50,68 @@ export interface ControlSurfaceInput {
   device: string;
 }
 
+/** The three states a stored `input.device` can be in, as ksx serves them.
+ *
+ * `keyboard` and `panel-encoder` are the served roles (`ksx_api::BoardRole`,
+ * carried to the browser on `NocturneDeviceRowView.role`). `unknown` folds
+ * together the served `other` role AND "no row in the roster names this
+ * device at all" — because those two are the same epistemic state: ksx knows
+ * nothing about what the thing emits. They are deliberately NOT separated
+ * here; a rule that treated an unrecognised board differently from a
+ * recognised-but-uncategorised one would be inventing a distinction the wire
+ * does not make. */
+export type ControlSurfaceDeviceKind = "keyboard" | "panel-encoder" | "unknown";
+
+/** How a channel's encoder terminal link was last checked. Persisted, so the
+ * whole historical vocabulary has to survive a round trip even though ksx can
+ * no longer PRODUCE most of it. */
+export const CONTROL_SURFACE_ENCODER_VERIFICATIONS = [
+  "unverified",
+  "expected",
+  "configured",
+  "planned",
+  "matched",
+  "mismatch",
+] as const;
+
+export type ControlSurfaceEncoderVerification =
+  (typeof CONTROL_SURFACE_ENCODER_VERIFICATIONS)[number];
+
+/** A channel's link to one terminal on a programmable encoder board.
+ *
+ * ⚠️ NOTHING IN KSX CREATES ONE. Reading a board's chart — which is what named
+ * a terminal, learned its configured key and produced every verification state
+ * above — left for PacBench with `3901990`. This record survives only so that
+ * a document written BEFORE that keeps its terminal identity: which physical
+ * terminal fed this channel, and what the board was called when it was read.
+ * Dropping it on migration would quietly delete the only thing that can
+ * reattach a preserved observation to real hardware when the chart verbs come
+ * back, one at a time, as the owner decided.
+ *
+ * It is inert by design: `controlSurfaceSignalTruth` draws NO route authority
+ * from a linked channel, because a terminal's output is programmable and ksx
+ * has no reader for it. Preserved, shown, never believed. */
+export interface ControlSurfaceChannelEncoder {
+  driver: string;
+  boardFingerprint: string;
+  terminalId: string;
+  terminalLabel: string;
+  expectedKey: string;
+  verification: ControlSurfaceEncoderVerification;
+}
+
 export interface ControlSurfaceChannel {
   id: string;
   label: string;
   input: ControlSurfaceInput;
+  /** Present only on a document that predates the chart extraction. */
+  encoder?: ControlSurfaceChannelEncoder;
+  /** Present only when this observation was KEPT past a device-authority
+   * sweep that could not vouch for `input.device` (see
+   * `retireControlSurfaceDeviceClaims`). The observation still splits keys
+   * exactly as before; the flag is the honest statement that nothing in ksx
+   * currently stands behind it. Absent = never swept, or swept and vouched. */
+  deviceUnverified?: true;
 }
 
 export interface ControlSurfaceControl {
@@ -199,6 +257,29 @@ function cleanInput(value: unknown): ControlSurfaceInput {
   return { kind: "keyboard", key, device: cleanString(value.device, 240) };
 }
 
+function validEncoderVerification(
+  value: unknown,
+): value is ControlSurfaceEncoderVerification {
+  return typeof value === "string" &&
+    CONTROL_SURFACE_ENCODER_VERIFICATIONS.includes(value as ControlSurfaceEncoderVerification);
+}
+
+function cleanEncoderLink(value: unknown): ControlSurfaceChannelEncoder | null {
+  if (!isRecord(value)) return null;
+  // A link with no terminal identifies nothing, which is the whole point of
+  // keeping it. Everything else may legitimately have been empty on disk.
+  const terminalId = cleanString(value.terminalId, 32);
+  if (!terminalId) return null;
+  return {
+    driver: cleanString(value.driver, 64),
+    boardFingerprint: cleanString(value.boardFingerprint, 160),
+    terminalId,
+    terminalLabel: cleanString(value.terminalLabel, 40),
+    expectedKey: cleanString(value.expectedKey),
+    verification: validEncoderVerification(value.verification) ? value.verification : "unverified",
+  };
+}
+
 function cleanChannels(value: unknown, kind: ControlSurfaceControlKind): ControlSurfaceChannel[] {
   const fallback = channelsForKind(kind);
   if (!Array.isArray(value)) return fallback;
@@ -209,11 +290,21 @@ function cleanChannels(value: unknown, kind: ControlSurfaceControlKind): Control
     const id = cleanString(raw.id, 32);
     if (!id || seen.has(id) || FORBIDDEN_RECORD_KEYS.has(id)) continue;
     seen.add(id);
-    channels.push({
+    const channel: ControlSurfaceChannel = {
       id,
       label: cleanString(raw.label, 40) || id,
       input: cleanInput(raw.input),
-    });
+    };
+    const encoder = cleanEncoderLink(raw.encoder);
+    if (encoder) channel.encoder = encoder;
+    // Only a keyboard observation can be unvouched: an unassigned channel
+    // names no device, so a mark on it would describe nothing. Emitting the
+    // key ONLY when it is true keeps an already-honest document byte-for-byte
+    // stable across a sanitize round trip.
+    if (raw.deviceUnverified === true && channel.input.kind === "keyboard") {
+      channel.deviceUnverified = true;
+    }
+    channels.push(channel);
     if (channels.length >= MAX_CHANNELS) break;
   }
   return channels.length > 0 ? channels : fallback;
@@ -280,6 +371,7 @@ export function cloneControlSurfaceState(state: ControlSurfaceState): ControlSur
       channels: control.channels.map((channel) => ({
         ...channel,
         input: { ...channel.input },
+        ...(channel.encoder ? { encoder: { ...channel.encoder } } : {}),
           })),
     })),
   };
@@ -364,6 +456,100 @@ export function sanitizeControlSurfaceState(value: unknown): ControlSurfaceState
   };
 }
 
+/** THE THREE-STATE DEVICE AUTHORITY RULE, applied to one document.
+ *
+ * A stored channel says "device D emits key K". Whether ksx can still stand
+ * behind that sentence depends entirely on what KIND of thing D is:
+ *
+ *   keyboard       its output is fixed in hardware. Nothing ksx did or
+ *                  stopped doing can have changed it -> KEEP the observation.
+ *   panel-encoder  its output is PROGRAMMABLE, and the chart read that used
+ *                  to prove what a terminal currently emits left with
+ *                  PacBench. ksx cannot vouch for the sentence any more, and
+ *                  a route built on an unvouchable claim is the wrong kind of
+ *                  wrong -> RETIRE it back to unassigned.
+ *   unknown        ksx knows nothing about D -> KEEP IT AND MARK IT. Retiring
+ *                  an unknown device's bindings destroys the user's work on a
+ *                  hunch; calling it verified asserts an answer for a read
+ *                  that never completed, which is this project's signature
+ *                  bug. The keys still split — the claim just carries no
+ *                  vouching, and says so.
+ *
+ * ⚠️ THE KIND ARRIVES AS AN ARGUMENT, and this module never looks it up.
+ * `kindOf` is a live, refreshing, sometimes-unavailable server read; this
+ * module is pure and is called on EVERY edit (move, rename, teach, template).
+ * Wiring the roster into `sanitizeControlSurfaceState` would have meant two
+ * separate disasters: re-running the retirement on every save, so a key the
+ * user taught on a freshly read encoder is destroyed the moment they drag the
+ * button; and a sanitizer whose answer silently depends on whether a machine
+ * scan happened to have landed, so one failed scan retires the whole panel.
+ * The retirement is a ONE-TIME upgrade step and lives at the migration call
+ * site (`loadControlSurfacePrefs`), which is the only place that knows a
+ * document arrived legacy and the only place with the roster in hand.
+ *
+ * Note there is no EXEMPTION arm ("keep this one, I checked"). That needs a
+ * hardware epoch, and nothing in ksx publishes one since the chart reader
+ * left. It returns later as an additive narrowing of this rule; building the
+ * lock now, with no key, would only be a way to trap people. */
+export function retireControlSurfaceDeviceClaims(
+  state: ControlSurfaceState,
+  kindOf: (device: string) => ControlSurfaceDeviceKind,
+): ControlSurfaceState {
+  const safe = sanitizeControlSurfaceState(state);
+  const kinds = new Map<string, ControlSurfaceDeviceKind>();
+  const kindFor = (device: string): ControlSurfaceDeviceKind => {
+    const known = kinds.get(device);
+    if (known) return known;
+    const kind = kindOf(device);
+    kinds.set(device, kind);
+    return kind;
+  };
+  return sanitizeControlSurfaceState({
+    ...safe,
+    controls: safe.controls.map((control) => ({
+      ...control,
+      channels: control.channels.map((channel) => {
+        // Judge only a channel that NAMES a device. An unassigned channel
+        // claims nothing, and a keyboard observation saved without a device
+        // string never attributed itself to hardware in the first place —
+        // there is no claim there to retire or to qualify.
+        if (channel.input.kind !== "keyboard" || !channel.input.device) return channel;
+        const kind = kindFor(channel.input.device);
+        if (kind === "panel-encoder") {
+          // RETIRE THE STRONGEST CLAIM THE CHANNEL STILL MAKES, and only
+          // that one. A channel with a terminal link says "terminal T on
+          // board B was verified to emit K"; the verification is the claim,
+          // so it drops to `unverified` and the observation survives ATTACHED
+          // TO A NAMED TERMINAL — reattachable the moment a board can be read
+          // again. A channel with no link says only "this board emits K",
+          // with nothing to hang it on once the board's output may have been
+          // reprogrammed, so the observation itself is what has to go.
+          return channel.encoder
+            ? {
+                id: channel.id,
+                label: channel.label,
+                input: { ...channel.input },
+                encoder: { ...channel.encoder, verification: "unverified" as const },
+              }
+            : { id: channel.id, label: channel.label, input: { ...EMPTY_INPUT } };
+        }
+        // A keyboard's output is fixed in hardware, so nothing about it can
+        // have gone stale — including a terminal link to some OTHER board,
+        // which describes hardware this sweep was never asked about. Left
+        // exactly as found, minus any mark an earlier sweep left behind.
+        const kept: ControlSurfaceChannel = {
+          id: channel.id,
+          label: channel.label,
+          input: { ...channel.input },
+        };
+        if (channel.encoder) kept.encoder = { ...channel.encoder };
+        if (kind === "unknown") kept.deviceUnverified = true;
+        return kept;
+      }),
+    })),
+  });
+}
+
 function emptyStore(): ControlSurfaceStore {
   return {
     version: CONTROL_SURFACE_STORE_VERSION,
@@ -422,6 +608,26 @@ export function sanitizeControlSurfaceStore(value: unknown): ControlSurfaceStore
     migratedWorkbench,
     hardwareEpochs,
   };
+}
+
+/** The same rule across EVERY device's document in one store.
+ *
+ * Not a convenience wrapper: the store version is store-WIDE, so sanitizing a
+ * v1 store rewrites every device's document as v3 in one go. Sweeping only
+ * the document that happens to be selected would launder the other keyboards'
+ * legacy claims into a v3 store that no later load will ever look at again —
+ * the stale encoder observation on the board you were not using when you
+ * upgraded would then be permanent. */
+export function retireControlSurfaceStoreDeviceClaims(
+  store: ControlSurfaceStore,
+  kindOf: (device: string) => ControlSurfaceDeviceKind,
+): ControlSurfaceStore {
+  const safe = sanitizeControlSurfaceStore(store);
+  const devices: Record<string, ControlSurfaceState> = {};
+  for (const [identity, state] of Object.entries(safe.devices)) {
+    devices[identity] = retireControlSurfaceDeviceClaims(state, kindOf);
+  }
+  return { ...safe, devices };
 }
 
 export function controlSurfaceStateForDevice(

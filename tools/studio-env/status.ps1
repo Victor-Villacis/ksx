@@ -1,3 +1,58 @@
+<#
+.SYNOPSIS
+    What is running on every lane, whether it is healthy, and whether it is
+    current. Read-only.
+
+.DESCRIPTION
+    Lists every manual and default Playwright port with its state, watcher
+    state and provenance. Three separate facts, and conflating them is how a
+    stale page becomes QA evidence:
+
+      Healthy             the recorded processes, listener, fixture/live
+                          identity and daemon endpoints all agree.
+      ProvenanceComplete  the managed receipt carries all four exact
+                          identities: runtime source graph, Studio authoring
+                          graph, Rust zone-producer graph, generated assets.
+      Current             stricter -- those four identities must equal the
+                          checkout NOW, and the generated files on disk must
+                          still hash to their receipt. A healthy previous
+                          artifact can therefore stay usable while a new edit
+                          builds, without being mislabeled current.
+
+    Safe to run at any time, including in the middle of a build: assets/ is
+    deleted and rewritten by every asset build, and this report is written to
+    survive that window rather than to report a torn read as a failure.
+
+.PARAMETER Environment
+    Report one lane instead of the whole table. The test-* names are
+    Playwright-owned; they are listed so a stray process is visible, never so a
+    person starts one.
+
+.PARAMETER Json
+    Stable automation output. The table is for people; both include watcher
+    state.
+
+.PARAMETER RequireHealthy
+    Exit nonzero unless every selected lane is healthy.
+
+.PARAMETER RequireCurrent
+    Exit nonzero unless every selected lane is current. Independent of
+    -RequireHealthy on purpose -- see the three facts above.
+
+.PARAMETER SkipCurrentVerification
+    For watch mode only, which already hashes the source graph itself. Keeps its
+    health reconciliation cheap while people and deployment gates keep the
+    default exact-current audit.
+
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/status.ps1
+
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/status.ps1 -Environment real -RequireHealthy -RequireCurrent
+
+.LINK
+    docs/STUDIO-ENVIRONMENTS.md
+#>
 [CmdletBinding()]
 param(
     [ValidateSet(

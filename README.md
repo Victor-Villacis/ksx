@@ -471,6 +471,7 @@ crates/ksx-config         TOML config + presets
 crates/ksx-api            the typed control API every front end consumes (no HTTP, no async)
 crates/ksx-capture        CaptureBackend: interception / winusb / rawinput-identify
 crates/ksx-output         VirtualPadBackend: ViGEmBus + production DualSense HIDMaestro routing
+crates/ksx-hidmaestro     the bounded elevated host behind the plain-USB DualSense persona
 crates/ksx-platform       driver health, install, autostart, WinUSB rebind, SendInput
 crates/ksx-games          game launch + exit detection (launcher hand-off)
 crates/ksx-app            the `ksx` binary: clap definitions and verb dispatch, nothing else
@@ -481,6 +482,7 @@ tools/hidmaestro-host     installed-only elevated one-DualSense runtime host
 tools/hidmaestro-driver-installer explicit pinned driver install/repair boundary
 crates/ksx-studio         ksx Studio, the optional localhost UI (feature `studio`)
 crates/ksx-cabinet        the operate-only 10-foot egui surface
+crates/ksx-fuzz           proptest byte-fuzzing of every parser that eats untrusted bytes
 crates/vigem-client       vendored CasualX/vigem-client (MIT)
 assets/brand/             the ksx mark: two master SVGs + every generated raster
 tools/icongen/            regenerates them (own cargo workspace — see assets/brand/README.md)
@@ -489,10 +491,13 @@ examples/                 frontend wrapper scripts
 docs/                     architecture, integration, driver story, recovery, migration, research
 ```
 
-`cargo metadata` currently reports 16 workspace packages. The helper is the
-16th current member after the legacy-import crate was removed; the C libwdi
-provider is corresponding source built by the release workflow, not a Rust
-workspace package.
+`cargo metadata` currently reports 16 workspace packages, and the sixteen
+`crates/` entries listed above are exactly those packages — `tools/` holds
+build/installer helpers that are not workspace members. `ksx-fuzz` is a member
+but not a shipped binary; `vigem-client` is a member excluded from
+`default-members` because its integration tests need the ViGEmBus driver. The C
+libwdi provider is corresponding source built by the release workflow, not a
+Rust workspace package.
 
 ### The icon
 

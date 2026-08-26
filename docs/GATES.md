@@ -27,9 +27,12 @@ gate should follow it top to bottom and never improvise past a failed step.
 
 ## Shared rules (cabinet gates 1–3)
 
-- **conhost, not Windows Terminal.** Windows Terminal 1.24/1.25 fail-fasts when
-  virtual pads send input — even as a background window — taking every tab with
-  it, ksx included (`RECOVERY.md`, "Known environment hazard"). `Win+R` →
+- **conhost, not Windows Terminal.** Affected Windows Terminal builds fail-fast
+  when virtual pads send input — even as a background window — taking every tab
+  with it, ksx included (`RECOVERY.md`, "Known upstream hazard: affected Windows
+  Terminal builds can exit on gamepad input", which names the upstream issues
+  and says to use a release containing the fix). Do not run this gate on a
+  build you have not checked: `Win+R` →
   `conhost.exe`, run ksx there. The tray daemon
   and the frontend wrapper are immune (no Terminal attachment); every
   *interactive* ksx command in these gates is not.
@@ -683,8 +686,16 @@ admit an empty implicit setup as an idle control host; API and HTTP tests cover
 three server-validated consents, exact revalidation, canonical
 `prepared`/`released`, guarded backend transitions, staged bindings, macros,
 Play-before-Save and profile create/update/delete/switch;
-template and Studio tests pin the two default Guide keys and the direct Game Bar
-Settings link.
+template and Studio tests pin the two default Guide keys — P1 `LeftWindows` and
+P2 Numpad `*` — in `crates/ksx-api/src/stage.rs` and
+`crates/ksx-core/src/templates.rs`.
+
+They do **not** pin a Game Bar Settings link, because there is not one. A grep
+for `gamebar` / `ms-settings` across `crates/`, `studio-ui/src`,
+`studio-ui/pwtest` and `packaging/` returns four prose comments and no control,
+no URL and no test. Phase 5 step 1 below says the same thing and is the
+authority; this paragraph used to claim the coverage that step says is missing,
+which is the exact shape of error this section exists to prevent.
 
 Those tests cannot prove that UAC returned to the original user, no console
 flashed, the machine-local certificate/package worked on this Windows machine,
@@ -766,11 +777,14 @@ does not pass this release gate.
 2. The customer gets one chrome-less ksx app window at `/nocturne`, not a
    terminal and not a normal browser tab. It has no address bar and does not ask
    the user to choose a URL. *(Since the 2026-08-25 cutover there is no second
-   page it could land on by mistake — there is one product page. What it CAN
-   land on is nothing at all: `ksx open` still requests the deleted `/start`, so
-   until `studio_launch.rs` is corrected this step fails on a 404 in a window
-   with no way to type a different address. **Do not run Gate 4 until that is
-   fixed** — every phase below starts from this window.)*
+   page it could land on by mistake — there is one product page. That cutover
+   did briefly leave `ksx open` requesting the deleted `/start`, which put the
+   customer's first window on a 404 with no way to type a different address;
+   fixed in `ad520b4` on 2026-08-26, and `crates/ksx-backend/src/studio_launch.rs`
+   now returns `/nocturne` in both the URL builder and the `--app=` argument,
+   with a test pinning it. Confirm the address in the window title/history
+   anyway — every phase below starts from this window, and this is the second
+   time this exact target has been wrong.)*
 3. In Task Manager's **User name** and **Command line** columns, confirm both
    surviving `ksx.exe` children — `daemon` and `studio --port 4460` — belong to
    the fresh standard user, not the administrator whose credentials satisfied

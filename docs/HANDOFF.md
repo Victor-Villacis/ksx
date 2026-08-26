@@ -4,7 +4,7 @@ For whoever takes this over. It says what ksx is, how it is built, what is
 finished, what is not, and — most usefully — **which beliefs about this codebase
 turned out to be false**, because several of them cost a day each to discover.
 
-Updated 2026-08-24 for the current standalone **KSX release candidate**. Software
+Updated 2026-08-26 for the current standalone **KSX release candidate**. Software
 gates and a packaged build are evidence about the tree, not a release or a
 physical cabinet acceptance result; the supervised checks in `docs/GATES.md`
 remain open until someone records them on the target hardware.
@@ -49,6 +49,7 @@ ksx-config ──────► core           TOML: config, games, presets, va
 ksx-api ─────────► core, config   THE WIRE CONTRACT between backend and surfaces
 ksx-platform ────► core           Windows: USB enumeration, WinUSB claim/release
 ksx-capture ─────► core, platform capture backends behind one trait
+ksx-hidmaestro ──► core, platform the bounded elevated host for the USB DualSense persona
 ksx-output ──────► core, hidmaestro  ViGEm pads, persona routing
 ksx-backend ─────► all of the above  every verb's logic, the daemon, the supervisor
 ksx-app ─────────► backend + surfaces  ONE FILE: clap definitions and a match
@@ -80,10 +81,19 @@ source, not another Rust package.
   capabilities. It is the cheapest backend surface to test and the broadest
   one CI drives headlessly; CI also drives Studio through its pinned Playwright
   browser checks. Two current parity debts are named rather than hidden:
-  staged setup and profile CRUD have typed backend contracts and Studio faces,
-  while `ksx stage` and `ksx games new|update|delete` remain planned
-  (`docs/SURFACES.md` §3c and §10). The product does not require either CLI face
-  (`docs/FIRST-RUN.md`).
+  staged setup and profile CRUD have typed backend contracts and Studio faces.
+  `ksx stage` **ships** — `view`, `adopt`, `reorder`, `socd` and `apply`, each
+  one pipe request against the daemon-held stage — so the remaining CLI debt is
+  `ksx games new|update|delete`, which does not exist (there is no `Games` verb
+  in `crates/ksx-app/src/main.rs`; the `Games` identifier there is a
+  `ConfigPart` value for `ksx config export`). `docs/SURFACES.md` contradicts
+  itself here: the §3 matrix row is correct — *"partial (`ksx stage`
+  view/adopt/reorder/socd/apply; save and play stay surface acts)"* — while §3c
+  still says *"The terminal driver `ksx stage` remains planned"*. Believe the
+  matrix: `crates/ksx-app/tests/parity.rs` reads those cells and checks each
+  claimed face against a real anchor in the tree, while the prose beside them is
+  checked by nothing. That asymmetry is exactly how this pair drifted apart. The
+  product does not require either CLI face (`docs/FIRST-RUN.md`).
 - **Studio** (browser) — the workbench: ONE product page plus three tool pages
   since 2026-08-25. `/nocturne` carries the whole set-up-and-play flow — device
   choice, controllers, mapping, saved games, configuration, Save and Play — and
@@ -192,13 +202,21 @@ code.
 person who has never seen ksx gets from the exact downloaded installer to a
 controller moving in a game, with no terminal, no file editing, and nobody
 telling them what to do next.* The missing staged mapper and wrong landing page
-described by the old handoff are half closed. The staged mapper works: `/nocturne`
-routes bindings and macros into `StageEdit::SetBindings`. **The landing page is
-wrong again**, and by the same mechanism as before — `studio_launch.rs` still
-asks for `/start`, which the 2026-08-25 cutover deleted, and the router has no
-fallback, so `ksx open` opens a chrome-less window on a 404. A test in that file
-pins the wrong value, which is why nothing went red. Read this paragraph as the
-requirement, not as a report.
+described by the old handoff are **both closed**. The staged mapper works:
+`/nocturne` routes bindings and macros into `StageEdit::SetBindings`. The
+landing page broke a second time when the 2026-08-25 cutover deleted `/start`
+while `studio_launch.rs` still asked for it — `ksx open` put a chrome-less
+window with no address bar on a 404, and a test in that file pinned the wrong
+value, which is why nothing went red. Fixed in `ad520b4` (2026-08-26):
+`studio_launch.rs` returns `/nocturne`, the `--app=` argument agrees, and the
+test now pins the constant instead of a literal.
+
+> That paragraph stood here for a day describing a bug the **same commit** had
+> already fixed, because the audit prose and the repair landed together and the
+> prose was never re-read. `GATES.md` carried the identical claim and used it to
+> block Gate 4. Worth keeping as an example: a doc that says "not done" is a
+> claim about the tree, and it goes stale in exactly the direction that wastes
+> someone's afternoon.
 
 **Moment 4's built-in prepare and Moment 7 remain unverified on physical Windows
 hardware.** Software tests
@@ -372,6 +390,25 @@ a clean rebuild leaves `git status` clean — if it does not, something really
 changed. A hand-resolved manifest yields a page whose HTML and JS disagree. No
 Rust test sees that seam; the CI Playwright parity guard does.
 
+**A failed asset build deletes 24 tracked files, and that is not a broken
+tree.** `studio-ui/build.mjs` `rmSync`s `crates/ksx-studio/assets/` *before* it
+emits anything, so an interrupted or crashed generator leaves the directory
+empty and every launcher correctly refusing a dirty receipt. Recover with
+`git checkout -- crates/ksx-studio/assets/`, then rebuild. This is reachable
+from a pure-Rust edit: the whole `crates` tree is an input to the asset
+receipt's `ZoneProducers` fingerprint, so any change there re-runs the
+generator. `DEVELOPMENT-PIPELINE.md` has the full note.
+
+**`STATUS_ACCESS_VIOLATION` (0xc0000005) from `rustc` is this machine, not your
+change — retry once before concluding anything.** The compiler process dying
+(as opposed to reporting an error) under peak memory load is a known property of
+this hardware, on file beside the 14900K/RAM instability. It has taken out a
+release build in `ksx-studio` under LTO with `codegen-units=1` and an asset
+build on the same day; both retries succeeded, and no debug build or test run
+has ever failed this way. A single 0xc0000005 read as evidence about the tree is
+§9's failure mode wearing a compiler's clothes. If it reproduces on a clean CI
+runner, *then* it is the tree.
+
 **Doc section numbers are load-bearing.** ~30 code sites cite
 `DEVICE-IDENTITY.md` by §number, and `crates/ksx-app/tests/docs.rs` fails the
 build if a cited section stops existing.
@@ -421,6 +458,7 @@ manifest SHA, and setup SHA in the gate log.
 | supervised hardware runbooks | `GATES.md` |
 | the panel is dead / a claim went wrong | `RECOVERY.md` |
 | dev, fixture, real-hardware QA, installed QA, and release lanes | `DEVELOPMENT-PIPELINE.md` and `STUDIO-ENVIRONMENTS.md` |
+| **adding support for a new keyboard or encoder** | `DEVELOPMENT-PIPELINE.md`, "Adding a new input device" |
 | driver policy: pins, signatures, consent | `DRIVERS.md` |
 | the mapper's UX contract and remaining polish | `MAPPER-UX.md` |
 | Studio's visual language | `DESIGN-SYSTEM.md` |

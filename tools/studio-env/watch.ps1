@@ -1,3 +1,49 @@
+<#
+.SYNOPSIS
+    Resident supervisor for ONE Studio lane: rebuild on save, restart what died.
+
+.DESCRIPTION
+    Debounces editor saves, fingerprints file CONTENTS (not timestamps) as the
+    source of truth, orders Studio asset generation before Cargo, and runs one
+    build at a time under the machine-wide build-graph lock. It also reconciles
+    process health, so a managed process that dies is restarted from the same
+    proven graph without anyone having to fake a source edit.
+
+    A permanent compile failure is attempted once for that exact content graph
+    and then waits for another edit. Hardware/session and machine-lock
+    deferrals keep retrying, because the source itself is not broken.
+
+    Ctrl+C stops the WATCHER and deliberately leaves the last healthy process
+    running -- this script supervises a lane it does not have to own, so killing
+    the supervisor must not kill an artifact somebody is looking at. To stop the
+    lane itself, run teardown.ps1. See tools/studio-env/README.md.
+
+.PARAMETER Environment
+    Which lane to supervise. 'real' is 4460 and reads the actual USB inventory,
+    config root and daemon; 'seeded' (4476) and 'first-run' (4520) are
+    disposable fixtures. See docs/STUDIO-ENVIRONMENTS.md for the roster.
+
+.PARAMETER Once
+    One deterministic refresh, then exit. Use this rather than a resident
+    watcher when a session may be running on 4460.
+
+.PARAMETER NoInitialRefresh
+    Attach to an already-running lane without replacing a healthy current
+    artifact. Not a promise to tolerate a stale or stopped lane: the first
+    reconciliation still schedules current/health recovery. Cannot be combined
+    with -Once, because that pair would perform no work at all.
+
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/watch.ps1 -Environment real
+
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/watch.ps1 -Environment real -Once
+
+.LINK
+    docs/DEVELOPMENT-PIPELINE.md
+.LINK
+    docs/STUDIO-ENVIRONMENTS.md
+#>
 [CmdletBinding()]
 param(
     [ValidateSet("real", "seeded", "first-run")]
@@ -374,6 +420,7 @@ try {
     Write-Host "Watching '$Environment' from $RepoRoot"
     Write-Host "Quiet debounce: $DebounceMilliseconds ms; full reconciliation: $ReconcileSeconds s."
     Write-Host "Ctrl+C stops the watcher and leaves the last healthy process running."
+    Write-Host "To stop the lane itself: tools/studio-env/teardown.ps1 -Environment $Environment"
 
     if (-not $NoInitialRefresh) {
         try {

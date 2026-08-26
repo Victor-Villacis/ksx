@@ -1,6 +1,6 @@
 # How the code is laid out, and what is deliberately not tidy
 
-Measured 12 August 2026 at v0.3.1. Numbers are `wc -l` over
+Measured 26 August 2026 at v0.4.1. Numbers are raw line counts (`wc -l`) over
 `crates/*/src/**.rs`; the code/test split is measured from each file's own
 `mod tests` line, not from its first `#[cfg(test)]` — see the trap below.
 
@@ -16,42 +16,89 @@ lose. Checked by parsing `[dependencies]` separately from
 `[dev-dependencies]` in each `Cargo.toml`: `ksx-core` and `ksx-config` appear
 only in the latter, test-only, and say so in a comment.
 
+**The three device tables are three tables on purpose.** A tidy-up would merge
+them; each merge would lose a different guarantee.
+`crates/ksx-core/src/vendors.rs` maps a VID/PID to a *name* and returns only
+`&str` — never a `bool`, because `is_ipac()` is the shape that invites a branch,
+and three copies of exactly that branch once labelled a SpinTrak trackball
+`[I-PAC]`. `crates/ksx-backend/src/panel_catalog.rs` then splits recognition
+from capability twice over: `FAMILIES` recognizes an encoder from an exact
+VID/PID and authorizes no report, while `PROFILES` admits one measured firmware
+tuple and is the only thing allowed to advertise a chart read or a persistent
+write. Seven families, one profile, and the gap between those two numbers is the
+design working. `docs/DEVELOPMENT-PIPELINE.md`'s "Adding a new input device"
+says which one a given change belongs in.
+
 **Inline tests at roughly half a file are the house style.** `mapping.rs` is
-2,124 lines of code and 2,196 of tests; `daemon/mod.rs` is 1,716 and 1,612.
+2,173 lines of code and 2,366 of tests; `daemon/mod.rs` is 2,024 and 1,865.
 That reads as bloat in a line count and is the opposite — the tests sit beside
 the rules they pin. A cleanup that "shrinks the big files" would delete the
 better half of them.
 
 > **The measuring trap.** Keying the split on the first `#[cfg(test)]` in a
-> file is wrong: in `render_map.rs` that is a test-only *constant* on line 99,
-> which makes the file look like 98 lines of code and 6,223 of tests. It is
-> 3,198 and 3,123. Measure from `mod tests`.
+> file is wrong, and `render_map.rs` has now demonstrated it twice with two
+> different mechanisms. It used to be a test-only *constant* near the top of
+> the file. Today the first match at line 74 is not code at all — it is the
+> string `` `#[cfg(test)]` `` inside a doc comment explaining why the zone
+> generator is test-gated — so a naive first-match split reads the file as 73
+> lines of code and 1,709 of tests. Its real `mod tests` is at line 1,618:
+> **1,618 code, 164 tests**. Measure from `mod tests`.
+>
+> Note also that `render_map.rs` is the exception the house-style paragraph
+> above does not cover. At 9% tests it is nothing like `mapping.rs`, because
+> most of what it asserts is checked by the Studio HTTP and browser suites
+> instead.
 
 ## The shape
 
 | crate | lines | files | share |
 |---|---:|---:|---:|
-| ksx-backend | 68,272 | 60 | 35% |
-| ksx-studio | 34,507 | 32 | 18% |
-| ksx-platform | 22,625 | 26 | 12% |
-| ksx-api | 13,799 | 11 | 7% |
-| ksx-core | 12,236 | 19 | 6% |
-| ksx-capture | 9,716 | 26 | 5% |
-| everything else | 31,293 | 63 | 16% |
+| ksx-backend | 72,753 | 60 | 38.8% |
+| ksx-platform | 24,149 | 26 | 12.9% |
+| ksx-studio | 18,996 | 22 | 10.1% |
+| ksx-api | 14,605 | 11 | 7.8% |
+| ksx-core | 13,028 | 19 | 6.9% |
+| ksx-capture | 10,581 | 26 | 5.6% |
+| everything else | 33,493 | 63 | 17.9% |
 
-**Measured 2026-08-25 by the command below**; 192,448 lines total. These are a snapshot, not a
-contract — nothing verifies them, and the previous figures had drifted by a
-third before anyone noticed. Re-measure rather than trust them:
+**Measured 2026-08-26 by the command below**; 187,605 lines across 227 files.
+These are a snapshot, not a contract — nothing verifies them, and the previous
+figures had drifted by a third before anyone noticed. Re-measure rather than
+trust them:
 
 ```powershell
 Get-ChildItem crates\*\src -Recurse -Filter *.rs |
-  Group-Object { $_.FullName -replace '.*\crates\([^\]+)\.*','$1' } |
+  Group-Object { $_.FullName -replace '.*\\crates\\([^\\]+)\\.*', '$1' } |
   ForEach-Object { [pscustomobject]@{
     crate = $_.Name
     files = $_.Count
-    lines = ($_.Group | Get-Content | Measure-Object -Line).Lines } } |
+    lines = @($_.Group | Get-Content).Count } } |
   Sort-Object lines -Descending
 ```
+
+> **Two ways this command has been wrong, both fixed above; check yours before
+> quoting a number from it.**
+>
+> The regex lost its backslashes to a markdown paste, leaving
+> `.*\crates\([^\]+)\.*`. `\c` is not a valid escape and `[^\]` is an
+> unterminated class, so PowerShell threw `The regular expression pattern … is
+> not valid` once per file and grouped nothing — while the paragraph above it
+> claimed the table had been measured by it.
+>
+> The line counter was `Measure-Object -Line`, which **skips blank lines**. It
+> is a defensible number, just not the one the header promises: it reports
+> ksx-backend at 68,274 where `wc -l` reports 72,753, and the gap is 6% of the
+> tree. `@(… | Get-Content).Count` matches `wc -l` exactly on all sixteen
+> crates. If you re-measure with a different tool, say which one.
+
+Re-measured the *old* way — `Measure-Object -Line`, so the comparison is
+like-for-like with the table this replaces — only two rows have moved at all
+since the previous count. `ksx-backend` grew by 2 lines. `ksx-studio` went from
+34,507 to 18,096 across 32 files down to 22: **10 files and 48% of the crate**,
+which is the whole story of the 2026-08-25 single-page cutover. Every other row,
+including `everything else` at 31,293, comes back identical. The table above is
+therefore not evidence of general drift; it is one deletion plus a change of
+counting tool.
 
 `ksx-backend` being a third of the codebase is partly by design — it holds the
 logic so the surfaces can stay thin, and that trade is *why* the boundary
@@ -81,13 +128,13 @@ Every item moved verbatim. No route changed, no test changed, and the 89 HTTP
 integration tests pass unmodified — which is the evidence that it was a move
 and not a rewrite.
 
-**Where that left the tree after the single-page cutover (measured 2026-08-25).**
+**Where that left the tree after the single-page cutover (measured 2026-08-26).**
 Five of those modules were deleted with their pages and their verbs moved onto
 one:
 
 ```
-server/mod.rs      796   AppState, the router, flash_of, act, urlencode
-server/nocturne.rs 2856  the product page: reads plus ~40 verbs
+server/mod.rs      782   AppState, the router, flash_of, act, urlencode
+server/nocturne.rs 3235  the product page: reads plus ~40 verbs
 server/devices.rs   315
 server/pads.rs      204
 server/check.rs      81
@@ -96,13 +143,16 @@ server/session.rs     4  ← a doc comment and nothing else
 
 Two things in that listing are worth reading as findings rather than as sizes.
 
-`server/nocturne.rs` at 2,856 lines is more than a third of the way back to the
-4,241-line file this split existed to break up, and it got there in one commit.
-The split's premise was that a module boundary per page keeps handlers from
-growing two opinions about the same thing; with one page, that boundary is gone
-and nothing has replaced it. Whether it needs to be re-cut along some other seam
-— by verb family, say — is an open question, and the honest answer today is that
-nobody has decided.
+`server/nocturne.rs` at 3,235 lines is **76% of the way back** to the
+4,241-line file this split existed to break up, and the rate is the finding, not
+the size. `git` puts it at 2,576 → 2,599 → 2,744 (the cutover commit) → 2,792 →
+2,856 → 3,235 over six commits, the last of which added 379 lines by itself.
+Nothing objects at any step, because there is no longer a boundary for a step to
+cross. The split's premise was that a module boundary per page keeps handlers
+from growing two opinions about the same thing; with one page, that boundary is
+gone and nothing has replaced it. Whether it needs to be re-cut along some other
+seam — by verb family, say — is an open question, and the honest answer today is
+that nobody has decided.
 
 `server/session.rs` is four lines: a module doc comment reading *"The session
 JSON verbs: start, stop and resume"* over an empty file. Those verbs are on

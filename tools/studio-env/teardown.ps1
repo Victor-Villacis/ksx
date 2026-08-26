@@ -1,3 +1,43 @@
+<#
+.SYNOPSIS
+    STOP a lane. This is the verb Ctrl+C is not.
+
+.DESCRIPTION
+    watch.ps1's Ctrl+C stops the watcher and leaves the lane running on purpose,
+    so this script is the only thing that ends one.
+
+    It opens and validates each EXACT recorded process generation before
+    stopping anything, and refuses to kill an unrecorded process merely because
+    that process owns a known port or daemon pipe -- which is also why a
+    portable executable someone launched by hand is deliberately left alone.
+    Logs stay under tmp/studio-env/logs; PID records and copied executables are
+    disposable and Git-ignored.
+
+    Each target is stopped while holding that lane's
+    Global\KSXStudioEnvironment-<lane>-transition mutex, so a teardown cannot
+    race a seed or a real-lane start. Mutex ownership is recursive for the
+    owning thread, which is what lets those transitions call this script while
+    already holding the lock.
+
+.PARAMETER Environment
+    One of 'seeded', 'first-run', 'real'. Mutually exclusive with -All.
+
+.PARAMETER All
+    Stop all three lanes. Takes no -Environment.
+
+.PARAMETER AllowMissing
+    Treat an already-stopped lane as success rather than an error. Use it in
+    cleanup paths where the lane may or may not be up.
+
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/teardown.ps1 -Environment real
+
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/teardown.ps1 -All
+
+.LINK
+    docs/STUDIO-ENVIRONMENTS.md
+#>
 [CmdletBinding(DefaultParameterSetName = "One")]
 param(
     [Parameter(Mandatory = $true, ParameterSetName = "One")]

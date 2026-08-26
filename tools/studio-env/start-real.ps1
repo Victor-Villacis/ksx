@@ -1,3 +1,42 @@
+<#
+.SYNOPSIS
+    Build and start the real-hardware QA lane on 4460. THE ONLY LANE THAT TOUCHES
+    REAL DEVICES.
+
+.DESCRIPTION
+    Builds a matched daemon + Studio pair under the machine-wide build-graph
+    lock and starts them against the ACTUAL USB inventory, the real
+    %APPDATA%\ksx config root, the real backups and any physical encoder
+    attached to this machine. Confirmed hardware actions on this instance can
+    change what a device IS to Windows.
+
+    It proves the daemon is stopped before replacing anything, so a running game
+    becomes a visible deferred state rather than a surprise restart, and it
+    records a managed process generation that status.ps1 and teardown.ps1
+    validate against. The banner reads DEV BUILD - REAL HARDWARE: a matched
+    source-tree artifact reading this computer, not an installed candidate.
+
+    4460 is never seeded. This script holds the complementary reserved list to
+    seed.ps1's, so a mistyped port is refused rather than served.
+
+    Stop the lane with teardown.ps1 -Environment real. See
+    tools/studio-env/README.md.
+
+.PARAMETER SkipBuild
+    Intentionally unavailable here and throws. The disposable runtime must be
+    rebuilt so it is guaranteed to carry the current machine-lifecycle safety
+    fences; use -SkipBuild only with isolated fixtures (seed.ps1).
+
+.PARAMETER LaunchReason
+    Recorded in the managed receipt, so a later reader can tell a manual start
+    from a watcher-driven replacement. watch.ps1 passes "watch:<reason>".
+
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/start-real.ps1
+
+.LINK
+    docs/STUDIO-ENVIRONMENTS.md
+#>
 [CmdletBinding()]
 param(
     [switch]$SkipBuild,
@@ -692,6 +731,7 @@ try {
     Write-Host "Build graph: source $($SourceGraphHash.Substring(0, 12)); assets $($AssetGraphHash.Substring(0, 12)); reason $LaunchReason."
     Write-Host "Open: http://127.0.0.1:$Port/nocturne"
     Write-Host "Warning: confirmed hardware actions on this instance can affect the selected physical device."
+    Write-Host "Stop it with: tools/studio-env/teardown.ps1 -Environment real"
 } catch {
     $Failure = $_
     if ($RecordWritten -and (Test-Path -LiteralPath $RecordPath -PathType Leaf)) {

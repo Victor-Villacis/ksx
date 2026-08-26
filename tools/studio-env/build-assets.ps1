@@ -1,3 +1,33 @@
+<#
+.SYNOPSIS
+    The lock-owning wrapper around studio-ui/build.mjs. Never call node
+    build.mjs directly in a shared checkout.
+
+.DESCRIPTION
+    Installs the lockfile's Node dependencies when necessary, holds
+    Global\KSXStudioBuildGraph-v1, marks the asset graph dirty BEFORE running
+    the destructive generator, runs the build twice, and compares every output
+    by path, byte length and SHA-256. Only then does it atomically record
+    assets-state.json and clear the sentinel. seed.ps1 and start-real.ps1 take
+    the same lock while Cargo reads the embedded assets, and refuse a missing,
+    stale or dirty receipt.
+
+    Studio embeds crates/ksx-studio/assets at compile time, so an asset writer
+    and an executable builder operate on ONE build graph even though Node and
+    Cargo are separate processes. That is what the shared lock is for.
+
+    KNOWN HAZARD: build.mjs rmSync's crates/ksx-studio/assets/ before it emits
+    anything, and 24 files there are tracked by Git. A crashed or interrupted
+    generator therefore leaves those files DELETED and the dirty sentinel set.
+    That is not a corrupt tree -- recover with
+    `git checkout -- crates/ksx-studio/assets/` and run this again.
+
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/build-assets.ps1
+
+.LINK
+    docs/STUDIO-ENVIRONMENTS.md
+#>
 [CmdletBinding()]
 param()
 

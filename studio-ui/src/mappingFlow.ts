@@ -2264,7 +2264,8 @@ export class MappingFlowLayer {
         y: source.y + (target.y - source.y) * 0.52 + (vertical ? 0 : fan),
       };
       entry.automaticPosition = automaticPosition;
-      const offset = entry.previewOffset ?? entry.manualOffset ?? { x: 0, y: 0 };
+      const placed = entry.previewOffset ?? entry.manualOffset;
+      const offset = placed ?? { x: 0, y: 0 };
       const position = this.#processorPositionAvoidingOverlays(
         shell,
         {
@@ -2277,6 +2278,7 @@ export class MappingFlowLayer {
         widgetObstacles,
         navigator,
         viewport,
+        placed ? "manual" : "auto",
       );
       if (!position) {
         shell.hidden = true;
@@ -2323,6 +2325,7 @@ export class MappingFlowLayer {
       widgetObstacles,
       navigator,
       viewport,
+      "auto",
     );
     // If the chrome and visible cards leave no honest lane for the bank,
     // fold the last visible card into it and retry. With zero visible cards
@@ -2346,6 +2349,7 @@ export class MappingFlowLayer {
         widgetObstacles,
         navigator,
         viewport,
+        "auto",
       );
     }
     if (!bankPosition) {
@@ -2370,6 +2374,7 @@ export class MappingFlowLayer {
     widgets: readonly DOMRect[],
     navigator: DOMRect | undefined,
     viewport: DOMRect,
+    placement: "auto" | "manual",
   ): DOMPoint | null {
     const margin = 12;
     // Desktop cards are 176px wide; the compact phone treatment is 136px so
@@ -2397,55 +2402,113 @@ export class MappingFlowLayer {
       x - halfWidth - margin < rect.right &&
       y + halfHeight + margin > rect.top &&
       y - halfHeight - margin < rect.bottom;
-    const nearestClear = (obstacles: readonly DOMRect[]): { x: number; y: number } | null => {
-      // Walk outward from the desired midpoint and stop at the first clear
-      // screen-space lane. The old obstacle-boundary Cartesian product built
-      // and sorted O(N²) candidates, then scanned O(N) obstacles for every
-      // processor on every animation frame. This walk is bounded by viewport
-      // size, allocates no candidate cloud, and short-circuits immediately.
-      const stepX = Math.max(48, halfWidth * 2 + margin * 2);
-      const stepY = Math.max(40, halfHeight * 2 + margin * 2);
-      const maxRadius = Math.max(
-        1,
-        Math.ceil(Math.max(viewport.width / stepX, viewport.height / stepY)) + 1,
-      );
+    // Walk outward from the desired midpoint over a bounded screen-space
+    // lattice. The old obstacle-boundary Cartesian product built and sorted
+    // O(N²) candidates, then scanned O(N) obstacles for every processor on
+    // every animation frame. This walk is bounded by viewport size, allocates
+    // no candidate cloud, and can short-circuit immediately.
+    const stepX = Math.max(48, halfWidth * 2 + margin * 2);
+    const stepY = Math.max(40, halfHeight * 2 + margin * 2);
+    const maxRadius = Math.max(
+      1,
+      Math.ceil(Math.max(viewport.width / stepX, viewport.height / stepY)) + 1,
+    );
+    /** Offer every distinct lattice point, nearest the ideal first, until the
+     *  visitor claims one by returning `true`. */
+    const walkLattice = (visit: (x: number, y: number) => boolean): void => {
       const seen = new Set<string>();
-      const clearAt = (dx: number, dy: number): { x: number; y: number } | null => {
+      const offer = (dx: number, dy: number): boolean => {
         const x = clamp(ideal.x + dx * stepX, minX, maxX);
         const y = clamp(ideal.y + dy * stepY, minY, maxY);
         const token = x.toFixed(2) + ":" + y.toFixed(2);
-        if (seen.has(token)) return null;
+        if (seen.has(token)) return false;
         seen.add(token);
-        return obstacles.some((rect) => intersects(x, y, rect)) ? null : { x, y };
+        return visit(x, y);
       };
       for (let radius = 0; radius <= maxRadius; radius += 1) {
         if (radius === 0) {
-          const center = clearAt(0, 0);
-          if (center) return center;
+          if (offer(0, 0)) return;
           continue;
         }
         for (let dx = -radius; dx <= radius; dx += 1) {
-          const top = clearAt(dx, -radius);
-          if (top) return top;
-          const bottom = clearAt(dx, radius);
-          if (bottom) return bottom;
+          if (offer(dx, -radius)) return;
+          if (offer(dx, radius)) return;
         }
         for (let dy = -radius + 1; dy < radius; dy += 1) {
-          const left = clearAt(-radius, dy);
-          if (left) return left;
-          const right = clearAt(radius, dy);
-          if (right) return right;
+          if (offer(-radius, dy)) return;
+          if (offer(radius, dy)) return;
         }
       }
-      return null;
+    };
+    const nearestClear = (obstacles: readonly DOMRect[]): { x: number; y: number } | null => {
+      let clear: { x: number; y: number } | null = null;
+      walkLattice((x, y) => {
+        if (obstacles.some((rect) => intersects(x, y, rect))) return false;
+        clear = { x, y };
+        return true;
+      });
+      return clear;
+    };
+    const coveredArea = (x: number, y: number, rect: DOMRect): number =>
+      Math.max(0, Math.min(x + halfWidth, rect.right) - Math.max(x - halfWidth, rect.left)) *
+      Math.max(0, Math.min(y + halfHeight, rect.bottom) - Math.max(y - halfHeight, rect.top));
+    /** The same lattice, scored instead of gated. `hard` is still absolute —
+     *  cards may never stack, because a pile of part-hidden 44px targets is
+     *  precisely the failure the overflow bank exists to prevent — while
+     *  `soft` is merely expensive, and the candidate burying the fewest of
+     *  its pixels wins. Ties keep the earliest offer, which is the one
+     *  nearest the ideal. */
+    const leastCovered = (
+      hard: readonly DOMRect[],
+      soft: readonly DOMRect[],
+    ): { x: number; y: number } | null => {
+      let best: { x: number; y: number } | null = null;
+      let bestCost = Infinity;
+      walkLattice((x, y) => {
+        if (hard.some((rect) => intersects(x, y, rect))) return false;
+        const cost = soft.reduce((total, rect) => total + coveredArea(x, y, rect), 0);
+        if (cost < bestCost) {
+          bestCost = cost;
+          best = { x, y };
+        }
+        // Never claim: the whole lattice has to be scored before the cheapest
+        // point is known.
+        return false;
+      });
+      return best;
     };
     // Widget chrome remains operable even when the map forces the ideal node
     // away from the midpoint. On a phone all three boxes may not fit at once;
     // in that case the passive navigator may sit under the reachable card.
+    //
+    // ⚠️ THE LAST RESORT IS "LEAST COVERED", NOT "PRETEND THE WIDGETS ARE NOT
+    // THERE". It used to be the latter — when no lane cleared every widget the
+    // walk was simply re-run with the widgets removed from the obstacle list,
+    // which hands back the clamped ideal: the midpoint between a key and the
+    // pad control it drives, i.e. the dead centre of the biggest widget on the
+    // canvas. A 176x98 anchor then sat on the keyboard and swallowed every
+    // pointer event underneath it, so hovering the very key the card is wired
+    // FROM did nothing at all — no cord lit, no hook painted, and no way to
+    // tell that from a mapping that had silently stopped working. Whether a
+    // clear lane exists is a property of the CAMERA, not of the mapping: a
+    // fitted canvas whose widgets fill it has none, and that is an ordinary
+    // desktop at 1600x1000, not a pathological case. So the widgets stay in
+    // the reckoning; they only stop being absolute, and the card goes wherever
+    // it buries the least of them.
+    // ⚠️ ONLY AN AUTOMATIC CARD MAY BE RE-AIMED. A manual one is where a human
+    // dragged or nudged it, having LOOKED at this canvas; "you covered a key"
+    // is information they already had, and answering it by sliding the card
+    // somewhere else is overruling an explicit instruction — and, because the
+    // resolved position is what gets persisted, it also writes the override
+    // back as if it were the user's own choice. So a manual card keeps the
+    // original last two rungs exactly: hold the requested point, and give up
+    // only the navigator to do it.
+    const spareNavigator = navigator ? [...placedProcessors, navigator] : placedProcessors;
     const adjustedScreen = nearestClear(navigator ? [...hardObstacles, navigator] : hardObstacles) ??
       nearestClear(hardObstacles) ??
-      nearestClear(navigator ? [...placedProcessors, navigator] : placedProcessors) ??
-      nearestClear(placedProcessors);
+      (placement === "auto"
+        ? leastCovered(spareNavigator, widgets) ?? leastCovered(placedProcessors, widgets)
+        : nearestClear(spareNavigator) ?? nearestClear(placedProcessors));
     if (!adjustedScreen) return null;
 
     const adjusted = this.#lines.createSVGPoint();

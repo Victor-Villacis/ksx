@@ -6,12 +6,21 @@ nothing discovered in the trenches evaporates. Rule: a finding is either
 FIXED-ADOPTED, an OPEN ASK (waiting on upstream), or OURS-TO-SEND (we owe
 upstream the report/PR).
 
-**Version in use** (2026-08-09): `@getforma/compiler` 0.3.1,
-`@getforma/build` 0.2.0 and `@getforma/core` 2.0.0, all consumed as published
-registry artifacts pinned by `studio-ui/package-lock.json`; a clean `npm ci`
-needs no sibling Forma checkout. The Rust crates `forma-ir`/`forma-server` are
-0.2.0. Core 2.0.0 and forma-server 0.2.0 close the two halves of #13, so both
-local workarounds have been retired.
+**Version in use** (2026-08-09, re-checked 2026-08-26 and UNCHANGED):
+`@getforma/compiler` 0.3.1, `@getforma/build` 0.2.0 and `@getforma/core` 2.0.0,
+all consumed as published registry artifacts pinned by
+`studio-ui/package-lock.json`; a clean `npm ci` needs no sibling Forma checkout.
+The Rust crates `forma-ir`/`forma-server` are 0.2.0. Core 2.0.0 and
+forma-server 0.2.0 close the two halves of #13, so both local workarounds have
+been retired.
+
+The re-check matters because of what landed on 2026-08-26. The `/nocturne`
+cutover (2026-08-25) and the two days of fixes after it reproduced #22, put
+#20(b) back on a shipping page, and turned up #23 — and **not one of them is a
+regression**. The pinned versions did not move. They are the SAME compiler
+behaving the SAME way, on a page this ledger had never mentioned, hit by an
+author who did not know the entries existed. That is the argument for the asks
+below: a residue nobody can see is a residue everybody re-finds.
 
 **Upstream repo map** (file bugs here; verified 2026-08-05):
 - `@getforma/compiler`, `@getforma/build` -> github.com/getforma-dev/forma-tools
@@ -24,7 +33,7 @@ local workarounds have been retired.
 |---|---------|--------|-------|
 | 1 | `@getforma/build` tailwind step spawned `npx` via `execFileSync` without `shell:true` → ENOENT on Windows (`npx` is `npx.cmd`) | **FIXED upstream** (build 0.1.9, 2026-08-05) — adopted same day; we still use plain-CSS entries by choice | `studio-ui/build.mjs` note |
 | 2 | Compiler named every `createList` slot literally `list:array` — multi-list pages could not inject by name; we shipped a positional workaround | **FIXED upstream** (compiler 0.2.0, 2026-08-05) — adopted, workaround deleted | `crates/ksx-studio/src/render.rs` history note |
-| 3 | 0.2.0's list names are document-order indexed (`list:#N:array`), not binding-derived (`list:<source>:array`) as the release notes suggested — reordering lists in the page still shifts names | **MOSTLY RESOLVED for us (v4, 2026-08-05)**: binding-derived names DO exist when the list source is a derivable binding — `() => padTiles()` compiles to `list:padTiles:array` (occurrence-suffixed `#N` on reuse); only literal sources like `() => []` fall back to positional. v4's signal-backed lists get named slots for free. Residual ask: document it; derive something stabler than doc-order for literals | `render.rs` seam constants doc |
+| 3 | 0.2.0's list names are document-order indexed (`list:#N:array`), not binding-derived (`list:<source>:array`) as the release notes suggested — reordering lists in the page still shifts names | **MOSTLY RESOLVED for us (v4, 2026-08-05)**: binding-derived names DO exist when the list source is a derivable binding — `() => padTiles()` compiles to `list:padTiles:array` (occurrence-suffixed `#N` on reuse); v4's signal-backed lists get named slots for free. **Narrowed 2026-08-26 by reading the shipped 0.3.1**: the fallback is `deriveBindingName(source) ?? (paramName !== "_" ? paramName : null)` (`index.js:3141`), so `createList(() => [], (row) => …)` is named `list:row:array` from the MAP PARAMETER and positional `#N` happens only when that parameter is literally `_`. Residual ask restated against that. And binding-derived naming does **not** imply one-binding-one-slot — see **#23** | `render.rs` seam constants doc |
 | 4 | `createShow` slots were all named `show:createShow` — Bool show/hide state could not be injected by name; a SHOW_ORDER positional seam (17 status + 19 mapper entries) was the workaround | **FIXED upstream** (compiler 0.3.1, 2026-08-06) — **ADOPTED same day**: slots are named after the condition getter (`show:canStart`), `show_values()` yields `(name, bool)` pairs, both `*_SHOW_ORDER` arrays deleted, and the layout tests now assert the NAME SET instead of a count | `render.rs` / `render_map.rs` `show_values` |
 | 5 | Plain hydration clobbers server-rendered values: `adoptNode` binds text to client signal state (first effect run overwrites SSR text with signal defaults) and list adoption removes SSR rows absent from the client array. The sanctioned path is the islands protocol (`data-forma-props` initializing signals BEFORE adoption) — discoverable only by reading `@getforma/core` internals | **ADOPTED in production (v4, 2026-08-05)**: Studio is now one island whose signals seed from props before adoption, then a 2 s `/api/status` poller — live updates, zero clobber. The docs ask ("SSR with server data" recipe) is still **OURS-TO-SEND** | `render.rs` module docs; `studio-ui/src/status.ts` |
 | 6 | `create-forma-app` dashboard template binds `0.0.0.0` with no auth and no warning (its own sibling, the minimal template, computes a CSP then discards it — earlier E7 finding) | **OURS-TO-SEND**: security nudge — default to `127.0.0.1`, make LAN opt-in | E7; canon study |
@@ -33,17 +42,18 @@ local workarounds have been retired.
 | 9 | Signal slot-table extraction read ONLY the root `*Page` component function, so signals declared in island files got anonymous `text:N` slots. Forced the twin-file split: `*Page.ts` re-declared every signal purely to mint slots while `*Island.ts` owned the runtime copies | **FIXED upstream** (compiler 0.3.1 walk-driven signal scopes, 2026-08-06) — **ADOPTED same day**: 29 twins deleted from StatusPage.ts, 67 from MapPage.ts; both files are now four lines plus (for MapPage) the #17 const tables. After 0.3.1 the twins were actively HARMFUL — see the adoption note below. **Hardened the same day**: a resurrected twin passed the entire 97-test gate, so the guard is no longer the build log — `build.mjs` throws on the collision and `assert_island_slot_contract` requires every injected name to be one the ISLAND RENDERS | `StatusPage.ts`, `MapPage.ts`, `render.rs` `assert_island_slot_contract` |
 | 10 | An identifier as a static attr value (`d: SIL_BODY`, a module `const` string) compiled to an empty SOURCE_CLIENT slot — SSR rendered the element with the attribute MISSING, no warning. Studio v1–v3 shipped pad silhouettes with no body path for four versions | **FIXED upstream** (compiler 0.3.1, 2026-08-06) — **VERIFIED HERE** with a throwaway probe: `h("path", { d: PROBE_D })` now folds the const into a static attribute (string table holds the literal, no slot, no island). Nothing in ksx still needs the inlining workaround; the vendored art replaced the silhouettes in v5 | probe recorded below |
 | 11 | Good news, load-bearing for v5: **member-expression attribute values in `createList` item bodies compile to per-item dyn-attr slots** (`h("img", { src: p.art })`, `style: z.style`, `"data-fn": z.fn`) — SSR emits the attribute from the injected array, the client runtime re-derives it per item. The whole mapper zone layer (25 positioned buttons × style/class/data-fn/title) and the status tiles' per-persona art ride this; without it every zone would have needed its own named signal. Constraint held from #9's world: the member read must be a bare `param.field` (or `String(param.field)`) — computed/derived expressions still get anonymous slots | worth documenting upstream as a SUPPORTED pattern (it is compiler 0.2.0's `listItemBindings` path) | `MapIsland.ts` zone list; `render_map.rs` `zone_rows` |
-| 12 | Two-route builds work end to end (entryPoints + routes + per-route `ssrEntryPoints`) — but the island BYPRODUCT cleanup (`*.islands.js`) had to be repeated **per entry**, and the second occurrence of a reused list binding gets the `#N` suffix across a page, not across the build | **HALF FIXED** (build 0.2.0 no longer emits the byproducts; scrub deleted 2026-08-06, replaced by a build-time assertion that they stay gone). The `#N`-is-per-page fact stands, and the twin-file half is void now that #9 is fixed | `build.mjs`; `render_map.rs` `list:zones#2:array` |
+| 12 | Two-route builds work end to end (entryPoints + routes + per-route `ssrEntryPoints`) — but the island BYPRODUCT cleanup (`*.islands.js`) had to be repeated **per entry**, and the second occurrence of a reused list binding gets the `#N` suffix across a page, not across the build | **HALF FIXED** (build 0.2.0 no longer emits the byproducts; scrub deleted 2026-08-06, replaced by a build-time assertion that they stay gone). The `#N`-is-per-page fact stands, and the twin-file half is void now that #9 is fixed. **The `#N` tail clause grew teeth on 2026-08-26** — it is not a naming curiosity, it is a silent second list with its own field set: see **#23** | `build.mjs`; `render_nocturne.rs` `list:nGameRows#2:array` |
 | 13 | TWO core/server findings behind the mapper learn-flow bugs (2026-08-05): **(a)** forma-server's CSP nonce-locks `style-src`, and per spec a nonce there makes browsers ignore inline-style semantics — every `style=""` ATTRIBUTE dies, including the ones forma's own compiled list bindings emit (#11!): all 25 zone hit-areas collapsed into a 2 px pile at the stage's top-left (the "corrupted glyph"), and the countdown bar's width never moved. **(b)** `@getforma/core`'s ADOPTION-path show effect (`setupShowEffect` in hydrate.ts) materializes re-toggled branches inside its own `internalEffect` run with no `createRoot`/`untrack` — every binding created there is owned by that run and disposed on the next re-run: stale modal prompts on reopen, empty flash boxes, a conflict dialog that never renders (the reported frozen-modal repro). The runtime-path `createShow` already does it right | **FIXED upstream, ADOPTED 2026-08-09**: forma-server 0.2.0 adds `style-src-attr 'unsafe-inline'` while keeping `style-src` nonce-locked; core 2.0.0 creates adopted show branches under `createRoot` + `untrack`. `relax_style_src`, the bundle rewrite and both `__ksxShowBranch` installers are deleted; tests pin the upstream contracts | `crates/ksx-studio/src/server.rs` closure note/test; `studio-ui/build.mjs`; `map.ts`/`status.ts` closure notes |
 | 14 | **CLOSED WITH #4** (2026-08-06); kept because the measurement is the argument that closed it. The `show:createShow` positional seam did not just risk drift — it **priced** UI work. The v6 pass added 6 shows to the mapper (18) and 1 to the status page (17); each one is a four-file edit (island tree, twin Page declaration, `*_SHOW_ORDER` label, boolean position in `show_values`) whose only guard is our own count assertion, and an insertion in the MIDDLE of the document silently shifts every show after it. Named show slots would make all four edits one. **v7 update**: the whole multi-select feature cost exactly ONE new show (19) — because it was APPENDED as the last element of the document rather than placed where it belongs visually (it is `position: fixed`, so it could be). That is the seam shaping the markup: a bar that renders at the bottom of the page is written at the bottom of the tree to avoid renumbering 15 booleans | reinforces the **OPEN ASK** in #4 with a cost measurement: 3 pages of seam is no longer hypothetical, and it now influences where elements are authored | `render_map.rs` MAP_SHOW_ORDER (19); `render.rs` SHOW_ORDER (17) |
 | 15 | Good news, and the pattern that made the v6 mapper affordable: **a per-item member read can carry a whole interaction**, not just presentation. The legend's ✕ clear accelerator is `h("span", { class: "lclear", "data-clear": l.fn, title: l.cleartitle }, l.clear)` — a bare `param.field` per #11, so SSR emits it and the client re-derives it per poll, and `map.ts` reads `data-clear` by delegation. Empty string = CSS-hidden, which is how "only offer the ✕ where clearing does something" costs zero shows. Same trick disables controls: `cls` carries `z-dead`/`l-dead` instead of a `disabled` attribute (which would swallow the click that owes the user an explanation) | confirms #11's contract holds for interaction attrs too — worth including in the upstream ask | `MapIsland.ts` legend list; `render_map.rs` `legend_rows` |
 | 16 | Ledger #13(b)'s patched show seam held under a much heavier load: the v6 mapper nests shows THREE deep inside a re-toggled branch (`modalOpen` → `modalListening` / `modalBound` / `modalConflict`) and re-toggles them dozens of times per session with no stale prompts or empty boxes. The `__ksxShowBranch` unowned-root rewrite is the reason; without it this design would have been unbuildable | **CLOSED with #13(b)**: this was the evidence for the fix now shipped by core 2.0.0; the local rewrite has been removed | `build.mjs` ledger-#13 closure note |
 | 17 | Good news with a catch, and what made v9's no-JavaScript mapper buildable: **`...CONST.map((x) => h(…))` spreads are EXPANDED AT COMPILE TIME** into static markup (`extractFileConstants` → `emitSpreadChild` → `substituteProperties`), so a 122-option `<select>` can be authored once and rendered on all 25 legend rows without a nested list (which the item-body seam does not offer) and without 122 literals per select. Three constraints, all silent when broken: (a) the constants are read from the **root `*Page` file only** — the same blind spot as #9 — and from plain top-level `const` declarations, so `export const` is invisible (declare bare, `export { … }` separately, import back from the island: single-sourced, unlike the signals); (b) substitution reaches **children only, not attribute values** — `h("option", { value: x.k }, x.t)` compiles the text but leaves `value` as an EMPTY dyn-attr slot, i.e. `<option value="">` on every option, which for a form is silently wrong data rather than missing decoration (we render `h("option", null, x.k)` and lean on HTML's option-text-is-the-value rule); (c) an unexpandable spread falls back to an ISLAND placeholder — the tell is the build line, `24 islands` where the page has one | **EDGES 1 AND 2 FIXED upstream** (compiler 0.3.1, 2026-08-06 — verified here by probe): constants declared in an ISLAND file now expand, and member reads now substitute into ATTRIBUTE values, so `h("option", { value: x.k }, x.t)` finally emits the value. Edge 3 (an unexpandable spread degrades to an island placeholder with no warning) is still **OURS-TO-SEND**. ksx keeps the tables in MapPage.ts for now — they work, and moving 250 lines buys nothing | `studio-ui/src/MapPage.ts` key tables; `MapIsland.ts` legend row form |
 | 18 | Good news, and the reason v16's diagonal grid cost nothing structurally: **a list can grow a NEW SIBLING list without touching the show seam at all.** The macro grid's group band is a fourth `createList` inside `.macscroll` (`list:macroGroups:array`), and because 0.2.0 names lists from their binding (#3), adding it in the middle of the document renamed nothing — the only edit was one constant and one line in the seam-order assertion, versus #14's four-file cost for a single `createShow`. It also confirms #11/#15 one more time under a 37-column grid: `{ class: g.cls }` spans the band by CLASS (`macgrp g9`) rather than an inline `grid-column`, which #13(a) would have eaten anyway | reinforces #4's ask by CONTRAST: named list slots are already what named show slots should be | `render_map.rs` `LIST_SLOT_MACRO_GROUPS`; `MapIsland.ts` `.macgrps` |
-| 19 | **The gap native island props leave.** With #8 fixed, `data-forma-props` carries the RENDERED SLOT VALUES (`vigemLine`, `show:canStart`, `list:padTiles:array`). ksx's clients own a MODEL over the SOURCE payload — `map.ts` keeps `lastPayload` and derives conflicts, macro drafts, undo and the learn flow from it — and no slot carries that, so a data block is still needed. Second half: inline props are not optional and not small. The walker emits them whenever `slot_ids` is non-empty and the compiler always picks `propsMode=Inline`, so `/map` gained a **106 557-character** attribute on a 320 397-character page (33%) — an escaped duplicate of markup already on the page, which this app cannot use and cannot turn off | **(b) FIXED UPSTREAM, ADOPTED — verified by measurement 2026-08-12.** forma-ir 0.2.0 added `INLINE_PROPS_MAX_BYTES = 1024`: props whose JSON exceeds 1 KiB spill from the attribute into the shared `__forma_islands` block, and `loadIslandProps` already read the block as a fallback, so it needed no client change. **`/map` went from 320,397 bytes to 44,409** and carries NO `data-forma-props` at all. The 106,557-character attribute is gone. **(a) is still OURS-TO-SEND**, and is now the larger half — see the measurement below | `render.rs` `PAYLOAD_SCRIPT_ID`; `status.ts`/`map.ts` `embeddedPayload()` |
-| 21 | **The two derivations of every page have no gate.** #5's design emits the same data twice — SSR slots and `__ksx-payload` — so every sentence is derived once in Rust and once in TypeScript with nothing checking that they match. Verified drift: with a session RUNNING, `/map` painted `Use "Pause emulation & map" above` and hydration replaced it with `Use the Pause button above` — a visible flash whose surviving copy named a control that is not on the page | **OURS — FOUND AND FIXED 2026-08-06**: client wording corrected to the server's; `pwtest/ssr-hydration-parity.test.mjs` now diffs SSR against post-hydration DOM on all 8 routes plus `/map?slot=1`, across 3 session states (27 checks). Upstream half is #19's: a channel for server→island state would delete the second derivation | `MapIsland.ts` `reason()`; `render_map.rs` `reason_line` |
-| 22 | The #20 fix folds a literal concatenation into an **anonymous slot's default** (`attr:title#2`, `text:0`) rather than into static markup the way a module const now does (#10) — so `/map` carries 5 extra slots, all inside the 106 KB props attribute, under document-order positional names; and a concatenation with a non-literal operand still lands there with an EMPTY default, which is #20(a) unchanged | **OURS-TO-SEND**: fold wholly-literal concatenations into the string table; warn when one is kept as a slot with an empty default. Locally pinned by `assert_island_slot_contract` (exact anonymous set + non-empty defaults) | `render_map.rs` `MAP_ANONYMOUS_SLOTS` |
-| 20 | Two string-concatenation defects, reported 2026-08-05 and fixed overnight. **(a) attribute position**: `title: "a" + "b"` compiled to an empty slot — the attribute was emitted **with no value at all**, silently. Both 360 motion buttons and the macro Enable switch shipped with no tooltip until a pwtest case read the titles back and found `null`. **(b) child position**: `h("span", null, "a" + "b")` was a BinaryExpression the h-tree walker could not fold, so it emitted an anonymous SECOND ISLAND — caught only because our layout test asserts "exactly one island" | **FIXED upstream** (compiler 0.3.1) — **ADOPTED 2026-08-06**: both workarounds reverted (the one-giant-literal titles are wrapped concatenations again, `.macstephint` is one concatenated child), and `concatenated_strings_render_in_attributes_and_children` now pins the folded output so the silent failure mode cannot come back | `MapIsland.ts` motion buttons + `.macstephint`; `render_map.rs` |
+| 19 | **The gap native island props leave.** With #8 fixed, `data-forma-props` carries the RENDERED SLOT VALUES (`vigemLine`, `show:canStart`, `list:padTiles:array`). ksx's clients own a MODEL over the SOURCE payload — `map.ts` keeps `lastPayload` and derives conflicts, macro drafts, undo and the learn flow from it — and no slot carries that, so a data block is still needed. Second half: inline props are not optional and not small. The walker emits them whenever `slot_ids` is non-empty and the compiler always picks `propsMode=Inline`, so `/map` gained a **106 557-character** attribute on a 320 397-character page (33%) — an escaped duplicate of markup already on the page, which this app cannot use and cannot turn off | **(b) FIXED UPSTREAM, ADOPTED — verified by measurement 2026-08-12.** forma-ir 0.2.0 added `INLINE_PROPS_MAX_BYTES = 1024`: props whose JSON exceeds 1 KiB spill from the attribute into the shared `__forma_islands` block, and `loadIslandProps` already read the block as a fallback, so it needed no client change. **`/map` went from 320,397 bytes to 44,409** and carries NO `data-forma-props` at all. The 106,557-character attribute is gone. **(a) is still OURS-TO-SEND. Re-measured 2026-08-26 on the post-cutover pages** (all four routes, live daemon): the spill fix scales to 479 `slot_ids` and still emits no `data-forma-props` anywhere, but half (a)'s headline moved — `__ksx-payload` is **11.8% of `/nocturne`** and the dominant cost there is 570 KB of MARKUP, which is ksx's problem, not Forma's. `/devices` at 49.5% is the last page with the old shape | `render.rs` `PAYLOAD_SCRIPT_ID`; `nocturne.ts` `embeddedPayload()` |
+| 21 | **The two derivations of every page have no gate.** #5's design emits the same data twice — SSR slots and `__ksx-payload` — so every sentence is derived once in Rust and once in TypeScript with nothing checking that they match. Verified drift: with a session RUNNING, `/map` painted `Use "Pause emulation & map" above` and hydration replaced it with `Use the Pause button above` — a visible flash whose surviving copy named a control that is not on the page | **OURS — FOUND AND FIXED 2026-08-06**: client wording corrected to the server's; `pwtest/ssr-hydration-parity.test.mjs` diffs SSR against post-hydration DOM on every served path across 3 session states — nine variants and 27 checks when written, **five and 15 since the 2026-08-25 cutover** (see the parity-check paragraph below for why fewer variants is not less coverage). Upstream half is #19's: a channel for server→island state would delete the second derivation | `NocturneIsland.ts`; `render_nocturne.rs` |
+| 22 | The #20 fix folds a literal concatenation into an **anonymous slot's default** (`attr:title#2`, `text:0`) rather than into static markup the way a module const now does (#10) — so `/map` carried 5 extra slots, all inside the 106 KB props attribute, under positional names; and a concatenation with a non-literal operand still lands there with an EMPTY default, which is #20(a) unchanged | **STILL OURS-TO-SEND, and REPRODUCED on `/nocturne` 2026-08-26** by an author who had never read this entry: three `"literal " + "literal"` text children minted `text:0`/`text:0#2`/`text:0#3`, each default holding the whole folded sentence (101/196/137 bytes, read out of the committed IR). **The page rendered correctly** — the cost was 474 bytes of props on every response and a slot nobody could classify, not wrong output. Three corrections in the detail section: the names are NOT document-order, half the ask is already shipped for attributes, and the ask now has a line number (`index.js:2911–2924`) | `render_nocturne.rs` `nocturne_slots_are_classified_exactly`; `ANONYMOUS_SLOTS` in `render_check.rs`/`render_devices.rs`/`render_pads.rs` |
+| 20 | Two string-concatenation defects, reported 2026-08-05 and fixed overnight. **(a) attribute position**: `title: "a" + "b"` compiled to an empty slot — the attribute was emitted **with no value at all**, silently. Both 360 motion buttons and the macro Enable switch shipped with no tooltip until a pwtest case read the titles back and found `null`. **(b) child position**: `h("span", null, "a" + "b")` was a BinaryExpression the h-tree walker could not fold, so it emitted an anonymous SECOND ISLAND — caught only because our layout test asserts "exactly one island" | **(a) FIXED upstream** (compiler 0.3.1) — ADOPTED 2026-08-06; **(b) SCOPED AND REOPENED 2026-08-26**: 0.3.1 fixed the child position only for a concatenation whose operands are ALL literals (and it fixes it into a slot, which is #22). **Any non-literal operand still emits the empty island shell**, unchanged — `h("summary", …, "Edit " + r.title + "…")` on `/nocturne` hit it exactly. The guard this row named — `concatenated_strings_render_in_attributes_and_children` — was deleted with `/map` in `fcf71d0` and does not exist anywhere in the tree; what caught the recurrence was `studio-ui/build.mjs`'s fatal-warning gate | `studio-ui/build.mjs:315-350` (the gate); `NocturneIsland.ts` |
+| 23 | **A reused list binding is TWO lists, and the compiler says nothing.** Two `createList(() => nGameRows(), …)` calls on `/nocturne` mint `list:nGameRows:*` and `list:nGameRows#2:*` — **14 slots, every one `SOURCE_SERVER`** — and the member field sets are collected PER OCCURRENCE, so the second list's are `revision`/`path`/`arguments`/`slots`/`preset` and the two overlap only on `title`. Serve the unsuffixed name and the suffixed list renders ZERO ROWS server-side, filling only after adoption: a flash for everyone, permanently empty for a no-JS user. There is no build-time signal at all — the only tell is forma-ir's per-render `warn!` in the daemon log | **OURS-TO-SEND, and it is a three-line fix.** The compiler ALREADY warns for the identical collision on the signal path (`index.js:2118-2124`, *"is also declared in another scope on this page, so this one gets the slot name '…' — inject it under that exact name"*) and calls the SAME `uniqueName` for lists at `index.js:3142` in silence. Ask: emit that wording when `base !== derivedName`. Strictly more urgent than the signal case — signal slots are `SOURCE_CLIENT` and render a default; list slots are `SOURCE_SERVER` and render nothing | `render_nocturne.rs` `LIST_SLOT_GAMES_EDIT` + `SERVED_LIST_PREFIXES`; `game_row` (the UNION of both field sets) |
 
 ## Details for filing — mechanism, upstream location, local repro
 
@@ -522,6 +532,48 @@ Not acted on here beyond the measurement. Shrinking it means deciding, per
 page, whether the client can rebuild its model from slot values plus one poll
 rather than from an embedded copy — a real design question, not a tidy-up.
 
+### #19 re-measured after the cutover — (b) scales, (a)'s headline moved (2026-08-26)
+
+The table above is entirely stale: every route in it except `/devices` 404s
+today. Re-measured with four read-only `GET`s against the **live `real=4460`
+lane** (the one with hardware attached; nothing stopped, started or restarted,
+and `status.ps1` still reported `real` as `managed / running` afterwards). All
+four returned HTTP 200. Byte counts are of the response body; each JSON block is
+measured between its `<script id="…" type="application/json">` and `</script>`:
+
+| page | total | markup | `__forma_islands` (forma) | `__ksx-payload` (ours) | `data-forma-props` |
+|---|---:|---:|---:|---:|---:|
+| `/nocturne` | 679,028 | 569,975 (83.9%) | 28,639 (4.2%) | 80,414 (**11.8%**) | 0 |
+| `/devices` | 103,134 | 34,483 (33.4%) | 17,556 (17.0%) | 51,095 (**49.5%**) | 0 |
+| `/pads` | 22,497 | 12,706 (56.5%) | 5,593 (24.9%) | 4,198 (18.7%) | 0 |
+| `/check` | 12,910 | 9,552 (74.0%) | 2,468 (19.1%) | 890 (6.9%) | 0 |
+
+Three things worth recording, and one caveat the 2026-08-12 table should have
+carried:
+
+- **(b) holds on a far bigger page.** Parsing `/nocturne`'s served
+  `__forma_islands` block gives its single island **479 prop entries** — one per
+  registered `slot_id`, since `build_island_props` keys by slot name — in a
+  28,639-byte block, i.e. 28× `INLINE_PROPS_MAX_BYTES` (1,024). It spilled,
+  exactly as designed, and `data-forma-props` appears NOWHERE on any of the four
+  routes. The spill fix scales past a page with 479 slots on it, which is more
+  than double the `/map` it was measured on.
+- **(a)'s headline moved.** This section said our payload was "57% of `/start`,
+  52% of `/devices`" and was "now the larger half". On the page that is now the
+  product it is **11.8%**, and the dominant cost is **markup — 570 KB of it**,
+  which is a ksx problem and not a Forma one. `/devices` at 49.5% is the sole
+  surviving instance of the old shape. The ask does not change; the claim that
+  it is the biggest remaining cost does, and this document should not keep
+  implying otherwise.
+- **The props channel is clean.** Of the 479 prop entries, **zero** are
+  anonymous (`text:` / `attr:`) — #22's three are gone — and both
+  `list:nGameRows:array` and `list:nGameRows#2:array` are present and served
+  (`[]` on this daemon, which has no saved games). That is #23's fix, observed
+  on the wire.
+- **Caveat:** this is the real lane, with hardware attached and a live session
+  state. The 2026-08-12 table never named WHICH lane it measured, and page size
+  moves with session state. Both tables should say; this one does.
+
 ### #20 — the two concatenation defects (reported 2026-08-05, fixed overnight)
 **(a) attribute position.** `title: "a" + "b"` compiled to an empty slot and
 the attribute was emitted with NO VALUE. Silent: no warning, no error, just a
@@ -539,9 +591,61 @@ component nothing registers.
 Both fixed in 0.3.1 and both workarounds reverted here, deliberately, as the
 test: the motion titles are wrapped concatenations again and `.macstephint` is
 one concatenated child. `concatenated_strings_render_in_attributes_and_children`
-asserts the folded text reaches the SSR markup and that no `title=""` exists
+asserted the folded text reaches the SSR markup and that no `title=""` exists
 anywhere on the page, because "the attribute is missing" is not something a
 human notices in review.
+
+#### #20(b) update — the fix is narrower than this entry claimed (2026-08-26)
+
+**"Fixed" meant "fixed when every operand is a literal."** Read `emitChild` in
+the shipped compiler and the boundary is explicit. A `StringLiteral` child emits
+`OP_TEXT` + `ctx.addString` (`index.js:2871-2873`). A foldable expression is
+evaluated by `evalNode` and, if it folds, put in an anonymous slot
+(`index.js:2911-2924` — that branch is #22). Everything else falls through to
+`index.js:2978`:
+
+```js
+warnDegraded(walkCtx, `child ${describeNode(child)}`,
+  ISLAND_CONSEQUENCE + " — wrap it in a function (`() => …`) …");
+emitIsland(ctx);
+```
+
+with `ISLAND_CONSEQUENCE` (`index.js:2241`) reading *"emitted as an empty island
+shell, so it renders nothing server-side and only appears once the client bundle
+hydrates"* and `describeNode` (`index.js:2233`) rendering a `BinaryExpression`
+as *"a bare '+' expression (not wrapped in a function)"*. `evalNode` cannot fold
+`"Edit " + r.title + "…"`, so **that is the 2026-08-05 mechanism, intact, on the
+2026-08-26 product page.** `dcfc794` wrote exactly that expression into a
+`<summary>` and it degraded exactly as described.
+
+So the status is scoped, not reopened wholesale: 0.3.1 moved the literal-only
+case from an island to a slot, and left the non-literal case where it was. The
+honest upstream ask for (b) is now the same one as #22's second half — **warn
+loudly, or better, keep the static prefix as `OP_TEXT` and slot only the dynamic
+operand**, which is what an author writing `"Edit " + r.title` obviously means.
+
+**What caught it, and what did not.** This entry named
+`concatenated_strings_render_in_attributes_and_children` as the guard that made
+the silent failure mode uncomeback-able. That test was deleted with `/map` in
+`fcf71d0` on 2026-08-25; `grep` over the whole tree finds the name only inside
+this document. The failure mode returned the next day. What actually stopped it
+is `studio-ui/build.mjs:315-350`, added in `ff16a9e` for an unrelated reason:
+**every compiler warning that is not one recognised benign class throws.** The
+one benign class is `is initialized with a \w+ the compiler cannot evaluate`
+(the ArrayExpression note on list signals), and it is COUNTED into a single
+summary line rather than printed, precisely so that warning number twenty-one
+cannot arrive invisible. That gate is the direct institutionalisation of this
+ledger's closing lesson, it had never been written down here, and it is now the
+only thing between an unfoldable concatenation and a shipped empty island.
+
+**And there is a gap under it.** `/nocturne` asserts nothing about island count.
+`assert_eq!(islands.len(), 1, "expected exactly one island")` lives in
+`render.rs:441` inside `assert_island_slot_contract`, and in the layout tests of
+`render_check.rs`, `render_devices.rs` and `render_pads.rs` — the three TOOL
+pages. The product page calls none of them. The tripwire that originally caught
+#20(b) does not exist on the page that now IS the product; the build gate is
+standing in for it, and a build gate can only see what the compiler chooses to
+warn about.
 
 ### #21 — the mirror seam has no gate, and it had drifted (2026-08-06)
 **OURS, not upstream's — and the most expensive shape left in this design.**
@@ -625,18 +729,271 @@ That renders correctly, which is the fix. Three residues:
    are in the island's `slot_ids`, so they are also five more entries in the
    106 KB `data-forma-props` attribute #19 is about. A page pays slot-table and
    props cost for a string that is constant at build time.
-2. **The names are document-order positional** (`attr:title#3`), which is #3's
-   complaint in a new place. Harmless only because nothing can inject them.
+2. **The names are positional-looking** (`attr:title#3`). Harmless only because
+   nothing can inject them. What "positional" actually means is corrected below
+   — this entry originally called it "#3's complaint in a new place", and it is
+   a different mechanism.
 3. **The silent-empty shape survives one step over.** The default is the folded
    text only while every operand is a literal. `title: "a" + someSignal()` lands
    in the same anonymous slot with an EMPTY default — an attribute with no
-   value, no warning — which is #20(a) exactly. Locally pinned:
-   `render.rs`'s `assert_island_slot_contract` fails if the anonymous set
-   changes, or if any anonymous slot's default is empty.
+   value — which is #20(a) exactly. Locally pinned: `render.rs`'s
+   `assert_island_slot_contract` fails if the anonymous set changes, or if any
+   anonymous slot's default is empty.
 
 **Ask**: fold a wholly-literal concatenation into the string table like any
 other literal (no slot, no props weight), and warn when a concatenation is
 kept as a slot with nothing in its default.
+
+#### #22 reproduced on `/nocturne` — and three of its four sentences were wrong (2026-08-26)
+
+The entry above was written against `/map`. `/map` is gone. The residue is not,
+and the way it came back is the argument for the ask: an author who had never
+read this entry wrote three ordinary `"literal " + "literal"` paragraph texts on
+the new product page and got three anonymous slots, on the same pinned compiler,
+with no signal of any kind. Then `898ad32` split them into adjacent literal
+children — which is this entry's ask, hand-performed at the call site.
+
+**The measurement.** Both sides of `898ad32` read out of the committed IR blobs,
+not the build log:
+
+| | `898ad32^` (`nocturne.f6f48b3b.ir`) | `898ad32` (`nocturne.87ef78fd.ir`) |
+|---|---|---|
+| anonymous text slots | `text:0`, `text:0#2`, `text:0#3` | **none** |
+| IR bytes | 497,986 | 497,956 |
+
+and the defaults, with their `default_len` u16 read straight out of the slot
+table:
+
+- `text:0` — 101 bytes — *"A saved game remembers what to launch, how many
+  players it has, and which controller layout they use."*
+- `text:0#2` — 196 bytes — *"Renaming repoints every controller that uses the
+  layout, so nothing is left naming a layout that is not there. …"*
+- `text:0#3` — 137 bytes — *"Paste a configuration ksx exported. Leave the box
+  below unticked and nothing is written — you get a report of exactly what it
+  would do."*
+
+**The default held the complete folded string in all three cases, so the page
+rendered correctly with scripting on AND off.** That is the finding, and it is
+worth stating plainly because `898ad32`'s own commit message reads like a
+wrong-output bug and it was not one. The cost was structural: **474 bytes on
+every `/nocturne` response** — 31 B of keys and colons, 440 B of quoted values,
+3 commas — an escaped duplicate, inside `__forma_islands`, of three sentences
+that are constant at build time. `SlotData::new_from_defaults`
+(`forma-ir-0.2.0/src/slot.rs:392`) seeds client defaults into the runtime
+`SlotData` and `build_island_props` (`walker.rs:1158`) reads
+`slots.get(slot_id).to_json()`, so an anonymous slot's default is GUARANTEED to
+ride the props channel. There is no way to author around it and no way to
+opt out.
+
+**What caught it** was `nocturne_slots_are_classified_exactly`
+(`render_nocturne.rs:848`) — specifically its catch-all arm, *"unclassified
+named slot {name:?} — decide whether the seam serves it or the island owns it,
+then pin it"*. `text:0` matches no `SERVED_LIST_PREFIXES` entry and is in
+neither `SERVED_SLOTS` nor `CLIENT_ONLY_SLOTS`, so the test fails on the name
+alone. Verified 2026-08-26 against the current tree: `cargo test -p ksx-studio
+--lib nocturne_slots_are_classified_exactly` → `ok. 1 passed; 0 failed; 104
+filtered out; finished in 0.01s`.
+
+Note for anyone filing this: **`/nocturne` has no `ANONYMOUS_SLOTS` array and
+never calls `assert_island_slot_contract`.** Those `const ANONYMOUS_SLOTS: [&str;
+0] = []` pins live at `render_check.rs:66`, `render_devices.rs:77` and
+`render_pads.rs:69`. #22 is now pinned two different ways on two different kinds
+of surface, and the `Where` column named neither correctly until today.
+
+**Correction (i): the names are not document-order.** From the shipped compiler,
+`index.js:2472`:
+
+```js
+function textSlotName(childIndex, walkCtx) {
+  return uniqueName(walkCtx.textNames, `text:${childIndex - 2}`);
+}
+```
+
+`childIndex` is the `h()` argument index and children start at argument 2, so
+**the digit is the child's position within its own parent element**; page-wide
+uniqueness comes from `uniqueName` (`index.js:34`) appending `#N` on the second
+and later occurrence. The data proves it: three paragraphs in three unrelated
+sections of `/nocturne` all minted `text:0`. Under document-order naming they
+would have been `text:0`, `text:1`, `text:2`. By the same rule `attr:title#3`
+above was the third slot for the KEY `title`, not the third slot on the page.
+This entry should stop borrowing #3's framing — #3 is about which BINDING a name
+derives from; this is about a name that derives from nothing at all.
+
+**Correction (ii): "no warning" is wrong for the attribute half.** Against the
+pinned 0.3.1 the attribute path does warn (`index.js:2635-2638`):
+
+> attribute '\<key\>' on \<tag\> is a bare '+' expression (not wrapped in a
+> function), which the compiler cannot evaluate — the attribute is OMITTED from
+> the server-rendered HTML and hydration does not re-apply a non-function prop,
+> so it never appears — inline the literal, use a module-level const, or wrap it
+> in a function
+
+So **half of this entry's ask is already satisfied**: "warn when one is kept as a
+slot with nothing in its default" ships for attributes; only "fold a wholly
+literal concatenation into the string table" is outstanding, and the child
+position still has no equivalent warning for the folded case. Worth saying in
+the filing that this entry was written against 0.3.1 consumed as a `file:` dep
+while npm publishing was down, rather than calling the old line a mistake.
+
+**Correction (iii): the ask has a line number now.** `emitChild` already folds;
+it just files the result in the wrong place. `index.js:2911-2924`:
+
+```js
+const folded = evalNode(child, evalEnv(walkCtx));
+if (folded !== void 0) {
+  if (folded !== null && typeof folded !== "boolean") {
+    const slotId = ctx.addSlot(textSlotName(childIndex, walkCtx), TYPE_TEXT,
+                               SOURCE_CLIENT, defaultBytesFor(folded));
+    const markerId = ctx.nextMarker();
+    ctx.emit(OP_DYN_TEXT);
+```
+
+Twelve lines earlier the string-literal arm does the right thing already
+(`index.js:2871-2873`: `ctx.emit(OP_TEXT); ctx.emitU32(ctx.addString(...))`).
+A wholly-folded value is a string literal that arrived by a different route.
+One branch.
+
+**Good news worth filing alongside, because it de-risks the workaround.**
+Splitting a concatenation into adjacent literal children makes SSR emit ONE
+merged text node while the client renders N string children. That is safe:
+`@getforma/core@2.0.0`'s `adoptNode` tail (`dist/chunk-WMFMCSOW.js:1192`) is
+
+```js
+} else (typeof child == "string" || typeof child == "number") &&
+       cursor && cursor.nodeType === 3 && (cursor = cursor.nextSibling);
+```
+
+— a static string child advances the cursor and never writes, so the extra
+children are inert. In all three `/nocturne` cases the literals are the entire
+child list of their `<p>`, so the second and third advances find no text sibling
+and no-op. **The constraint, read off that same line and not yet exercised
+here:** each extra literal DOES consume a text-node cursor position when one is
+available, so adjacent literals followed by a DYNAMIC text child in the same
+parent would advance past the placeholder the dynamic binding wants. Keep the
+split literals last, or separated by an element. Recorded as a supported pattern
+beside #11/#15 because it is now the standing workaround for both #20(b) and
+#22 — and a workaround with a sharp edge should be documented before it is
+recommended.
+
+### #23 — a reused list binding is TWO lists, and the seam must serve BOTH (2026-08-26)
+
+**Upstream**: forma-tools → compiler `emitCreateList`. **Not a naming
+curiosity.** #12's tail clause has said since 2026-08-05 that "the second
+occurrence of a reused list binding gets the `#N` suffix across a page". What
+that sentence does not say is that the suffixed name is a whole second list,
+`SOURCE_SERVER`, with its OWN member field set, and that nothing anywhere tells
+you it exists.
+
+**Mechanism.** `emitCreateList` (`index.js:3139-3150`):
+
+```js
+const registry = walkCtx.listNames;
+registry.total += 1;
+const derivedName = deriveBindingName(node.arguments[0]) ?? (paramName !== "_" ? paramName : null);
+const base = derivedName === null ? `#${registry.total}` : uniqueName(registry.counts, derivedName);
+const arraySlotId = ctx.addSlot(`list:${base}:array`, TYPE_ARRAY, SOURCE_SERVER);
+const itemSlotId  = ctx.addSlot(`list:${base}:item`,  TYPE_OBJECT, SOURCE_SERVER);
+const propNames = new Set();
+collectMemberProps(bodyExpr, paramName, propNames);
+for (const propName of Array.from(propNames))
+  ctx.addSlot(`list:${base}:${propName}`, TYPE_TEXT, SOURCE_SERVER);
+```
+
+Two `createList(() => nGameRows(), …)` calls in `NocturneIsland.ts` — the
+load-this-game buttons and the edit/delete disclosures — therefore mint
+**fourteen slots, every one `SOURCE_SERVER`**, read out of the committed IR
+(`crates/ksx-studio/assets/nocturne.288c1416.ir`):
+
+```
+list:nGameRows:array      list:nGameRows#2:array
+list:nGameRows:item       list:nGameRows#2:item
+list:nGameRows:title      list:nGameRows#2:title
+list:nGameRows:cls        list:nGameRows#2:revision
+list:nGameRows:ico_cls    list:nGameRows#2:path
+list:nGameRows:meta       list:nGameRows#2:arguments
+                          list:nGameRows#2:slots
+                          list:nGameRows#2:preset
+```
+
+**The field sets are collected PER OCCURRENCE** by `collectMemberProps(bodyExpr,
+paramName)` — they overlap only on `title`. So "serve the suffixed name too" is
+necessary and not sufficient: the row object the seam builds has to be the
+UNION of what both item bodies read. `dcfc794` grew `render_nocturne.rs`'s
+`game_row` from four fields to nine (`revision`, `path`, `arguments`, `slots`,
+`preset` added for the second occurrence alone) and `list_values` from 44
+entries to 45. That authoring cost has been unrecorded anywhere until now.
+
+**The failure mode, and why it is worse than #3's.** The array slot is
+`SOURCE_SERVER`. Unserved, `SlotData` leaves it `Null` and forma-ir's
+`check_slot_source` (`walker.rs:184-193`, called from the LIST arm at
+`walker.rs:959`) logs
+
+> Server-sourced slot has no value at render time — handler may have a bug
+
+**once per page render, at warn level, in the daemon's log** — measured by the
+author at 13 occurrences in a session that had none the day before. The list
+then renders ZERO ROWS server-side and fills only after adoption. For this list
+that is every **Save changes** and **Remove this saved game** form absent from
+the server-rendered page: a flash for everyone, and permanently missing for a
+no-JS user, which is exactly the promise
+`nocturne_renders_the_served_configuration_menu`
+(`render_nocturne.rs:1231`) exists to pin.
+
+Contrast #22's anonymous slots, which are the same "compiler minted a name you
+did not ask for" shape with the opposite severity: those are `SOURCE_CLIENT`
+with a default, so they render SOMETHING. A `SOURCE_SERVER` list slot that
+nobody fills renders NOTHING — silently, at run time, with no build-time signal
+at all.
+
+**Ask, pinpointed — and it is three lines.** The compiler already warns for the
+identical collision on the signal path (`index.js:2118-2124`):
+
+```js
+const slotName = uniqueName(registry.names, name);
+if (slotName !== name) {
+  warnSignal(..., `signal '${name}' is also declared in another scope on this page, so this
+    one gets the slot name '${slotName}' — inject it under that exact name. …`);
+}
+```
+
+`emitCreateList` calls **the same `uniqueName`** at `index.js:3142` and says
+nothing. Emit that existing wording when `base !== derivedName`. It is strictly
+more urgent than the signal case it is copied from: signal slots are
+`SOURCE_CLIENT` and render their default, list slots are `SOURCE_SERVER` and
+render an empty list.
+
+**Guard history — one more instance of this ledger's own closing lesson.**
+Caught by a daemon log line that somebody happened to be watching on a live
+lane. The durable guard came five hours later in `898ad32`: the prefix
+`"list:nGameRows#2:"` pinned in `SERVED_LIST_PREFIXES`
+(`render_nocturne.rs:872-877`), carrying its own explanatory comment, so the
+classifier test fails if it is ever dropped. A log line is not a guard.
+
+### Ledger integrity — pins that had evaporated (2026-08-26)
+
+Two of this document's `Where` columns pointed at code deleted in the cutover,
+and both belonged to OPEN findings, which is the ledger failing at its one job:
+
+- **#22 → `render_map.rs` `MAP_ANONYMOUS_SLOTS`** — removed in `898ad32`;
+  `grep` finds the symbol nowhere under `crates/`. Re-pointed at
+  `nocturne_slots_are_classified_exactly` and the three `ANONYMOUS_SLOTS` pins.
+- **#20 → `concatenated_strings_render_in_attributes_and_children`** — deleted
+  with `/map` in `fcf71d0`; the name now appears only inside this file.
+  Re-pointed at `studio-ui/build.mjs`'s fatal-warning gate, which is what
+  actually caught the recurrence.
+
+#4, #14 and #18 also name `render_map.rs` symbols (`MAP_SHOW_ORDER`,
+`zone_rows`, `LIST_SLOT_MACRO_GROUPS`). `render_map.rs` survives as a shared
+library — `zones_for`, the macro tables — but `/map`'s seam and its layout test
+are gone. Those three findings are CLOSED, so this note is enough: their
+evidence lives in git history, at and before `fcf71d0`.
+
+There is a story in that rather than a bullet. **The guard #20 named as the
+reason "the silent failure mode cannot come back" was deleted on 2026-08-25,
+and the failure mode came back on 2026-08-26 — twice, in both of its shapes.**
+Neither recurrence was caught by anything #20 or #22 names. One was caught by a
+build gate added for an unrelated reason, the other by a slot classifier written
+for the cutover, and #23 was caught by a log line nobody was required to read.
 
 ---
 Process note: findings 1+2 were reported through the product owner and fixed upstream
@@ -644,15 +1001,39 @@ overnight — found in production Tuesday, fixed and adopted Wednesday. The
 second wave was bigger and the same shape: #4, #8, #9, #10, #17(edges 1+2) and
 both halves of #20 were reported on the 5th and adopted on the 6th.
 
-Still open, in the order they cost us: **#19**+**#21** (no channel for
-server→island data that is not a slot value,
-inline props cannot be turned off, and the duplicate derivation that leaves is
-now a measured flash rather than a theory), **#22** (a literal concatenation
-becomes an anonymous slot instead of markup), **#17 edge 3** (an unexpandable
-spread degrades to an island placeholder with no warning), **#3** (literal-source
-list names are still document-order positional), **#5**/**#11**/**#15**/**#18**
-(docs asks — the SSR-with-server-data recipe and the per-item member-read
-contract), and **#6** (create-app's `0.0.0.0` default).
+**A third batch is queued and NOT yet sent** (2026-08-26): #23, #22's three
+corrections, and #20(b)'s scoping. All three are one-branch or three-line
+changes in `@getforma/compiler`, all three have a mechanism, a line number and a
+measured local repro above, and none of them is a regression — the pinned
+versions have not moved since 2026-08-09.
+
+Still open, in the order they cost us (reordered 2026-08-26 — the top of this
+list is no longer where it was):
+
+- **#23** — a reused list binding silently mints a second `SOURCE_SERVER` list
+  with its own field set. Newly first because it is the only open finding whose
+  failure mode is *nothing renders*, with no build-time signal of any kind, on
+  the page that is now the product. Three lines upstream: call `warnSignal`'s
+  wording from `emitCreateList` when `uniqueName` renamed the base.
+- **#19**+**#21** — no channel for server→island data that is not a slot value;
+  inline props cannot be turned off (half (b) fixed and now proven at 479
+  `slot_ids`); and the duplicate derivation that leaves is a measured flash
+  rather than a theory. Still structural, still the deepest, but on `/nocturne`
+  it is no longer the biggest number on the wire — see the 2026-08-26 table.
+- **#22**+**#20(b)** — one family, not two entries. A wholly-literal
+  concatenation becomes an anonymous slot instead of markup (#22, reproduced on
+  a page that had never heard of it); a concatenation with any non-literal
+  operand still becomes an empty island shell (#20(b), scoped and reopened).
+  The ask for both is the same branch in `emitChild`.
+- **#17 edge 3** — an unexpandable spread degrades to an island placeholder
+  with no warning. Note that this is the SAME degradation as #20(b), reached by
+  a different path, and the same build gate is the only thing catching it.
+- **#3** — list names fall back to the map parameter and only reach positional
+  `#N` when that parameter is `_`; document the real chain.
+- **#5**/**#11**/**#15**/**#18** — docs asks: the SSR-with-server-data recipe,
+  the per-item member-read contract, and now (from #22) adjacent literal
+  children as a supported pattern, with its cursor-advance constraint.
+- **#6** — create-app's `0.0.0.0` default.
 
 The lesson from the 0.3.1 verification pass, worth more than any single
 finding: **every guard in this ledger that was a build-log line turned out not
@@ -662,3 +1043,22 @@ told the reader to ignore. What holds is an assertion that fails the gate — an
 the assertion has to test the thing that matters (does the island RENDER this
 slot?), not the thing that is easy to test (does the name exist?). The loop
 works; keep feeding it.
+
+**A second clause, earned the hard way on 2026-08-26: a guard that lives on a
+page can be deleted with the page.** `/map` carried the assertions for #20 and
+#22. `/map` was deleted on the 25th for good reasons that had nothing to do with
+either finding, and on the 26th both failure modes reappeared on `/nocturne`
+within hours of each other. The assertions did not fail — they were not there to
+fail. So the invariant has to be **re-homed with the markup**: when a surface
+moves, the guards that describe what the compiler does to that markup move with
+it, and the ledger row's `Where` column has to move too or it becomes a
+confident pointer at nothing. `/nocturne` still has the hole this argues about:
+it asserts its slot classification, and it does not assert its island count.
+
+**And the corollary for the ask list above.** #22 and #23 were both re-found by
+an author who had never read this file, on a pinned toolchain that had not
+moved. Every open entry here is therefore costed twice: once when it was found,
+and again every time the surface is rewritten by someone who does not know it is
+a known residue. That recurrence cost is the strongest part of the case
+upstream, and it is the reason these asks are worth a three-line warning even
+where the output is correct.

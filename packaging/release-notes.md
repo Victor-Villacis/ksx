@@ -17,21 +17,30 @@
 
 ## New in this release
 
-- **Studio is now one guided journey from hardware to Play.** Hardware,
-  controller, mapping, and gameplay are four visible stages instead of a set
-  of bulky pages the user has to interpret. Each stage shows what is complete,
-  what is blocked, and the one useful action to take next.
+- **Studio is one workspace instead of six pages.** Hardware, controllers,
+  mapping and play now share a single canvas you pan and zoom. The keyboard is
+  an object on that canvas, every controller is another, and selecting one
+  shows its bindings beside it. There is no longer a set of pages to walk in
+  order, and no half-finished state stranded on a page you have to remember to
+  go back to. The driver check, the pad list and the device picker stay as
+  their own small tool pages.
 
-- **Mapping is now a live visual workspace.** Physical keys and controller
-  inputs illuminate as they move. Click-to-bind, multi-key binding, conflict
-  resolution, undo, turbo, and macros stay in one focused surface, with clear
+- **Mapping happens on that canvas.** Physical keys and controller inputs
+  illuminate as they move. Click-to-bind, multi-key binding, conflict
+  resolution, undo, turbo, and macros are all in the one surface, with clear
   Save and Play actions and no hidden capture state.
 
-- **Every route shares the same polished Studio shell.** The responsive
-  light/dark interface carries consistent navigation, focus behavior, status,
-  and feedback from first setup through an active session. Controller choices
-  and readiness remain backend-owned, including the distinct ViGEmBus and
-  HIDMaestro requirements.
+- **Seven controller personas, five of them through HIDMaestro.** A slot can
+  present itself as an Xbox 360 pad or a PlayStation pad on the bundled
+  ViGEmBus driver, or as a DualSense, Switch Pro, Xbox Series X|S, SNES or
+  Genesis pad on HIDMaestro. A persona changes only the shape of the device
+  Windows sees: your keys, your bindings and your saved layouts do not move
+  with it, so trying one costs nothing and switching back costs nothing.
+  Slots 1-4 stay on Xbox 360 by default, because that is still the one pad
+  every XInput title since 2006 understands.
+
+- **The Studio's appearance is a setting.** Dark, light, and a Matrix theme,
+  picked in the Studio's own configuration menu under "How the Studio looks".
 
 ## Fixed in this release
 
@@ -62,15 +71,19 @@ The wizard offers two controller-driver tasks. **Install the bundled ViGEmBus
 controller driver** enables Xbox 360 and DS4 outputs. Its installer is bundled,
 nothing is downloaded, and ksx checks its SHA-256 and signature before running
 it. **Download and install the pinned HIDMaestro v1.6.1 controller driver**
-enables the USB DualSense output and requires internet access. Its official
-archive and required assemblies are hash-checked before the installer API is
-called. The install call finishes in its own worker before the verified
-temporary SDK is removed. You can clear either task and re-run this installer
-later.
+enables the DualSense, Switch Pro, Xbox Series, SNES and Genesis outputs, and
+requires internet access. Its official archive and required assemblies are
+hash-checked before the installer API is called. The install call finishes in
+its own worker before the verified temporary SDK is removed. You can clear
+either task and re-run this installer later.
 
-The HIDMaestro lane deliberately supports one plain-USB DualSense. It does not
-claim Switch Pro, Xbox Series, Bluetooth, or a second HIDMaestro controller.
-Those requests are refused rather than substituted.
+Those five personas are the whole of what HIDMaestro adds, and clearing that
+box leaves all five unavailable; the ViGEmBus Xbox 360 and PlayStation
+personas are not affected by it either way. A persona this build cannot create
+is refused by name rather than quietly substituted with a different pad, so a
+refusal here always tells you which one and why. ksx never connects a real
+controller over Bluetooth: every pad it creates is a virtual device on this
+machine.
 
 On a clean machine, the first-run screen can also prepare one exact supported
 USB keyboard for KSX's built-in Windows USB mode. It is not automatic. Before

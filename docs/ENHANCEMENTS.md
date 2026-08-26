@@ -262,9 +262,35 @@ performance and it is never required for the product to work.
 
 ### What ksx gives back (the dogfood loop)
 A systems daemon stresses Forma where no web app would, and each gap becomes a feature
-request with a real consumer: **server push (SSE/WS)**, **CSP extensibility**,
-**embedding ergonomics** (proof it drops into a non-web Rust binary), **Windows build
-validation** (first real Windows consumer), and **FMIR version alignment**.
+request with a real consumer. When this was written (2026-08-04) that was a list of
+guesses: server push, CSP extensibility, embedding ergonomics, Windows build validation,
+FMIR version alignment. **The loop has run since, and the guesses can be replaced with
+the record.**
+
+It lives in **`docs/FORMA-DOGFOOD.md`** — 23 numbered findings, each with a mechanism,
+an upstream file, a local repro and a specific ask. Two of the five guesses landed
+almost verbatim: **Windows build validation** became finding #1, an
+`execFileSync("npx")` ENOENT that only a Windows consumer could have hit, and **CSP
+extensibility** became #13(a), where the framework's own compiled `style:` bindings
+were being eaten by the framework's own default CSP. **Embedding ergonomics** is
+settled by the fact that Studio ships inside a systems daemon at all. **Server push**
+and **FMIR version alignment** produced no defect — the format held across a five-month
+npm/crates drift (#7), and the polling design never needed SSE. The rest of the ledger
+is what no list of guesses would have produced: slot naming, hydration ownership,
+island props, and what the compiler does with a `+`.
+
+**Thirteen defects have been reported, fixed upstream and adopted here**, plus a
+fourteenth fixed for its literal-only case — and the two big waves were both
+found-Tuesday, fixed-and-adopted-Wednesday. That is the argument E7 actually makes:
+not that a systems daemon is an unusual consumer, but that it is a consumer who reads
+the emitted IR, measures the wire, and files with a line number.
+
+The bet's live cost is on the same page. The ledger's "still open, in the order they
+cost us" list runs to seven bullets, and the 2026-08-26 batch now at the top of it is
+the instructive one: two of those findings were **re-found from scratch** by an author
+rewriting a surface, on a toolchain that had not moved, because a residue that produces
+CORRECT output leaves the next person nothing to trip over except the same afternoon of
+work. A dogfood loop that only reports wrong output undercounts what it is finding.
 
 **The demo that sells both**: open a phone at the cab → four virtual pads rendered live
 → mash the arcade panel → buttons light up instantly with real latency numbers → remap

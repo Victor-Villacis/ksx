@@ -558,8 +558,12 @@ jobs:
       # customer Start-menu entry, the desktop icon, the bundled ViGEmBus
       # driver folder, and an uninstaller.
       #
-      # Inno Setup ships preinstalled on windows-latest, so this needs no new
-      # dependency. ISCC is not on PATH, hence the explicit path.
+      # Inno Setup ships preinstalled on windows-2022 — this job's image, not
+      # `windows-latest`, which the comment used to name and which has meant
+      # Windows Server 2025 since September 2025. So this needs no new
+      # dependency. ISCC is not on PATH, hence the explicit path, and the
+      # `Test-Path` below is what turns "the image dropped it" into a named
+      # failure instead of a confusing ISCC-not-found stack.
       - name: Build installer
         id: installer
         shell: pwsh

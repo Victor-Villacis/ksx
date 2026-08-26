@@ -254,8 +254,12 @@ fn studio_routes() -> &'static BTreeSet<String> {
                 }
             }
         }
+        // Sentinels: the product page and one tool page. These were `/` and
+        // `/map` until those pages were deleted — if this reader ever stops
+        // finding BOTH, it is reading the wrong span again, not observing a
+        // smaller router.
         assert!(
-            out.len() >= 30 && out.contains("/") && out.contains("/map"),
+            out.len() >= 30 && out.contains("/nocturne") && out.contains("/check"),
             "the route scan found {} paths ({out:?}), which means it read the wrong \
              span of {SERVER}",
             out.len()
@@ -493,17 +497,20 @@ const ANCHORS: &[Anchors] = &[
         egui: &["Screen::FirstRun", "Ask::Stage"],
         // The two acts §2 requires be separable, plus the page they live on,
         // plus the one that gives a staged controller its BINDINGS. Naming
-        // all four is deliberate: a `/start` that could only save, or only
-        // play, would satisfy a one-anchor row while failing the requirement
-        // the row exists for — and a flow that could not map would satisfy
-        // both while playing a pad on which nothing works, which is what it
-        // did until `/start/controller/layout` existed.
+        // all four is deliberate: a page that could only save, or only play,
+        // would satisfy a one-anchor row while failing the requirement the row
+        // exists for — and a flow that could not map would satisfy both while
+        // playing a pad on which nothing works.
+        //
+        // These were the `/start/*` routes until that page was deleted and
+        // /nocturne became the product; `/nocturne/controller` is the
+        // add-with-a-layout verb the old `/start/controller/layout` was.
         studio: &[
-            "/start",
-            "/start/device/identify",
-            "/start/controller/layout",
-            "/start/save",
-            "/start/play",
+            "/nocturne",
+            "/nocturne/device/identify",
+            "/nocturne/controller",
+            "/nocturne/save",
+            "/nocturne/play",
         ],
     },
     Anchors {
@@ -519,7 +526,7 @@ const ANCHORS: &[Anchors] = &[
         // The names a cabinet mapper would take. Neither exists, which is what
         // makes the egui cell's "—" honest.
         egui: &["Screen::Mapper", "Ask::Bind"],
-        studio: &["/map", "/map/bind"],
+        studio: &["/nocturne", "/nocturne/bind/toggle"],
     },
     Anchors {
         capability: "Rename / delete a controller layout",
@@ -532,7 +539,7 @@ const ANCHORS: &[Anchors] = &[
         // that is what makes the egui cell honest: the cabinet is the surface
         // somebody uses while PLAYING, and renaming files is not that moment.
         egui: &["Screen::Layouts", "Ask::RenamePreset"],
-        studio: &["/profiles/preset/rename", "/profiles/preset/delete"],
+        studio: &["/nocturne/layout/rename", "/nocturne/layout/delete"],
     },
     Anchors {
         capability: "Measure simultaneous keyboard / encoder host signals",
@@ -552,13 +559,17 @@ const ANCHORS: &[Anchors] = &[
         // `Ask::Assign` IS the "slot→preset only" cell: the Presets screen
         // builds one, and `assign_destination` decides which file it lands in.
         egui: &["Ask::Assign"],
-        studio: &["/setup/slot", "/setup/import"],
+        studio: &["/nocturne/save", "/nocturne/import"],
     },
     Anchors {
         capability: "Create / update / delete profiles",
         cli: &["games new", "games update", "games delete"],
         egui: &["Screen::Profiles"],
-        studio: &["/profiles/new", "/profiles/update", "/profiles/delete"],
+        studio: &[
+            "/nocturne/game",
+            "/nocturne/game/update",
+            "/nocturne/game/delete",
+        ],
     },
     Anchors {
         capability: "Device pick / remove",
@@ -584,7 +595,7 @@ const ANCHORS: &[Anchors] = &[
         // Installed Studio gathers explicit device/certificate consent, then
         // crosses the narrow elevated helper boundary. The browser never
         // accepts provider paths, driver bytes, or arbitrary helper arguments.
-        studio: &["/start/capture/prepare", "/start/capture/release"],
+        studio: &["/nocturne/capture/prepare", "/nocturne/capture/release"],
     },
     Anchors {
         capability: "\"Press a button, see it light\"",
@@ -598,7 +609,7 @@ const ANCHORS: &[Anchors] = &[
         capability: "Is it working: pads, drivers",
         cli: &["doctor", "devices", "session status"],
         egui: &["Screen::Status"],
-        studio: &["/", "/api/status"],
+        studio: &["/nocturne", "/api/nocturne"],
     },
     Anchors {
         capability: "Spawn test pads / prune the bus",
@@ -632,7 +643,7 @@ const ANCHORS: &[Anchors] = &[
         // about". The cabinet does not even DISPLAY a slot's policy, so the
         // cell is "—" and not "view".
         egui: &[],
-        studio: &["/setup/slot"],
+        studio: &["/nocturne/controller/socd"],
     },
     Anchors {
         capability: "Split or freeze, after saving",
@@ -646,7 +657,7 @@ const ANCHORS: &[Anchors] = &[
         // and it is what makes the gap visible if somebody adds the flag later.
         cli: &[],
         egui: &["Ask::Blocking"],
-        studio: &["/setup/blocking"],
+        studio: &["/nocturne/blocking"],
     },
     Anchors {
         capability: "Studio theme",
@@ -657,7 +668,7 @@ const ANCHORS: &[Anchors] = &[
         // row exists to surface.
         cli: &[],
         egui: &["Ask::Theme"],
-        studio: &["/setup/theme"],
+        studio: &["/nocturne/theme"],
     },
     Anchors {
         capability: "Start ksx at sign-in",
@@ -672,7 +683,7 @@ const ANCHORS: &[Anchors] = &[
         // where this belongs next, since the machine it commissions is the one
         // the window is running on.
         egui: &["Ask::Autostart"],
-        studio: &["/start/autostart"],
+        studio: &["/nocturne/autostart"],
     },
     Anchors {
         capability: "Record / replay a session",
@@ -701,12 +712,7 @@ const ANCHORS: &[Anchors] = &[
             "session quit",
         ],
         egui: &["Screen::Session", "Ask::Start", "Ask::Stop"],
-        studio: &[
-            "/session/start",
-            "/session/stop",
-            "/api/session/resume",
-            "/profiles/switch",
-        ],
+        studio: &["/nocturne/play", "/nocturne/stop", "/nocturne/adopt"],
     },
 ];
 

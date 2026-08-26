@@ -1,35 +1,38 @@
-//! The render seam: embedded FMIR + per-request [`StatusSnapshot`] /
-//! [`SessionView`] → HTML, with the same data emitted twice — slots for the
-//! SSR first paint, the source payload for client hydration.
+//! The render seam: embedded FMIR + a per-request domain payload → HTML, with
+//! the same data emitted twice — slots for the SSR first paint, the source
+//! payload for client hydration.
+//!
+//! This module is SHARED INFRASTRUCTURE, not a page. It once rendered the
+//! status page; that page is gone and `/nocturne` is the product, but
+//! nineteen files still take [`with_theme`], [`payload_json`], [`art_for`] and
+//! [`assert_island_slot_contract`] from here. What follows describes the seam
+//! every surviving page renders through — `render_nocturne.rs` is the one to
+//! read alongside it.
 //!
 //! # SSR slots for first paint, a payload block for hydration (and why both)
 //!
-//! The page is one Forma ISLAND (`StatusIsland`, compiled between
-//! ISLAND_START/ISLAND_END opcodes). Per request this seam:
+//! A page is one Forma ISLAND (compiled between ISLAND_START/ISLAND_END
+//! opcodes). Per request this seam:
 //!
-//! 1. **Injects slots** exactly as v3 did — the compiler declares NAMED slots
-//!    in the FMIR slot table, [`SlotData`] is populated before the IR walk,
-//!    and the walker renders the full page server-side. This is what the
-//!    browser paints before (or without) any JavaScript — the no-JS
-//!    experience is still the complete v3 page, plus a `<noscript>` meta
-//!    refresh so it keeps updating.
-//! 2. **Emits the SAME data as the domain payload** — a [`StatusPayload`]
-//!    JSON in the [`PAYLOAD_SCRIPT_ID`] script block (a non-executing
+//! 1. **Injects slots** — the compiler declares NAMED slots in the FMIR slot
+//!    table, [`SlotData`] is populated before the IR walk, and the walker
+//!    renders the full page server-side. This is what the browser paints
+//!    before (or without) any JavaScript; the no-JS experience is the whole
+//!    page, not a shell.
+//! 2. **Emits the SAME data as the domain payload** — JSON in the
+//!    [`PAYLOAD_SCRIPT_ID`] script block (a non-executing
 //!    `type="application/json"` data block, so the strict CSP is untouched).
 //!    The client seeds its signals from it BEFORE adoption — dogfood ledger
 //!    #5: adoption binds effects that immediately write signal state into the
 //!    DOM, so plain hydration clobbers SSR values; seeding first is the one
-//!    sanctioned live path. After adoption a 2 s poller rewrites the same
-//!    signals from `GET /api/status`, which serves the identical
-//!    [`StatusPayload`] shape (parity pinned by
-//!    `the_payload_block_matches_the_api_payload_shape`).
+//!    sanctioned live path.
 //!
 //!    Keeping BOTH emissions is deliberate: slots alone give a correct first
 //!    paint but hydration would clobber it (ledger #5); the payload alone
 //!    would require client rendering and break the no-JS baseline. The
 //!    redundancy is the design, not an accident — same struct, same
-//!    serializer, one derivation mirror (StatusIsland.ts) covered by tests on
-//!    this side.
+//!    serializer, one derivation mirror on the TypeScript side covered by
+//!    tests on this one.
 //!
 //!    Since compiler 0.3.1 the walker ALSO emits `data-forma-props` on the
 //!    island root, built from the island's `slot_ids` (ledger #8 closed — the
@@ -37,19 +40,23 @@
 //!    Those native props carry the rendered SLOT values; the block above
 //!    carries the SOURCE payload the client's own model needs. Ledger #19.
 //!
-//! Three flavours of slot exist on this page:
+//! Three flavours of slot exist:
 //!
-//! - **Scalars** — every `createSignal` in `studio-ui/src/StatusIsland.ts`
-//!   becomes a slot named after the signal getter. Unique names, injected via
+//! - **Scalars** — every `createSignal` in the island's TypeScript becomes a
+//!   slot named after the signal getter. Unique names, injected via
 //!   [`SlotData::from_json`] (name-keyed, defaults preserved for misses).
 //!   Compiler 0.3.1 walks island component files for signal scopes, so the
-//!   twin re-declarations `StatusPage.ts` used to carry are gone (ledger #9).
-//! - **Lists** — every `createList` becomes an Array slot. Since the v4
-//!   lists read from named signals (`() => padTiles()`), compiler 0.2.0
-//!   derives the slot name from the BINDING (`list:padTiles:array`) instead
-//!   of the positional `list:#N:array` v3 lived with — reordering lists in
-//!   the page no longer shifts names (ledger #3, mostly resolved for us).
-//!   Injected by NAME; the `LIST_SLOT_*` constants pin the five names.
+//!   twin re-declarations the old `*Page.ts` files carried are gone
+//!   (ledger #9).
+//! - **Lists** — every `createList` becomes an Array slot. Since the lists
+//!   read from named signals (`() => padTiles()`), compiler 0.2.0 derives the
+//!   slot name from the BINDING (`list:padTiles:array`) instead of the
+//!   positional `list:#N:array` v3 lived with — reordering lists in the page
+//!   no longer shifts names (ledger #3, mostly resolved for us). **A binding
+//!   used by a SECOND `createList` gets an occurrence suffix**
+//!   (`list:padTiles#2:array`); serve that name too or the second list
+//!   renders empty server-side while the client fills it after adoption,
+//!   which reads as a flicker rather than a bug (trap #12).
 //! - **Shows** — every `createShow` becomes a Bool slot named after its
 //!   CONDITION binding (`createShow(() => canStart(), …)` →
 //!   `show:canStart`), so shows are injected by name like everything else
@@ -59,12 +66,12 @@
 //!   statically-styled variant renders), and after hydration the same pairs
 //!   flip live from client signals.
 //!
-//! `tests::embedded_ir_slot_layout_matches_the_seam` pins the exact list slot
-//! NAMES (order included), the exact show slot NAMES, and the island table
-//! including its non-empty `slot_ids` — a compiler bump that renames slots,
-//! or a StatusIsland.ts edit that adds/renames lists or shows, is a test
-//! failure, not a silently blank section. It then hands the whole slot table
-//! to [`assert_island_slot_contract`], which asserts the thing a name-exists
+//! Each page's own slot-layout test pins the exact list slot NAMES (order
+//! included), the exact show slot NAMES, and the island table including its
+//! non-empty `slot_ids` — a compiler bump that renames slots, or an island
+//! edit that adds or renames lists or shows, is a test failure, not a
+//! silently blank section. Those tests then hand the whole slot table to
+//! [`assert_island_slot_contract`], which asserts the thing a name-exists
 //! check cannot: that every name the seam injects is one the ISLAND RENDERS,
 //! and that every scalar the island renders is one the seam injects. Read that
 //! function before touching this seam — "the slot exists" was the assertion
@@ -72,23 +79,20 @@
 //!
 //! History: compiler 0.1.8 named EVERY list `list:array`, and this seam
 //! resolved lists positionally too (a `LIST_ORDER` table, since deleted).
-//! Per-instance slot naming was the upstream feature request this page
+//! Per-instance slot naming was the upstream feature request this seam
 //! dogfooded (docs/ENHANCEMENTS.md E7 loop); fixed upstream in
 //! `@getforma/compiler` 0.2.0, adopted 2026-08-05 — the E7 dogfood loop's
 //! first closed cycle. Per-instance `createShow` naming (ledger #4) and
 //! populated island `slot_ids` (ledger #8) landed in 0.3.1 and were adopted
 //! 2026-08-06; the same release stopped extracting signals from the root
-//! `*Page` file ONLY (ledger #9), which is why `StatusPage.ts` is now four
-//! lines instead of thirty declarations.
+//! `*Page` file ONLY (ledger #9), which is why the page entry modules are
+//! four lines instead of thirty declarations.
 
 use forma_ir::parser::IrModule;
-use forma_ir::slot::{SlotData, SlotValue};
-use forma_server::{render_page, AssetManifest, PageConfig, PageOutput, RenderMode};
+use forma_server::{AssetManifest, PageOutput};
 use rust_embed::Embed;
 
-use crate::control::SessionView;
 use crate::error::StudioError;
-use crate::snapshot::{StatusPayload, StatusSnapshot};
 
 /// The committed `studio-ui` build output (see the crate docs for the
 /// regeneration command — Node is never needed to build or run ksx).
@@ -251,32 +255,6 @@ pub(crate) fn assert_complete_head(route: &str, html: &str) {
     }
 }
 
-/// The island table this page compiles to: exactly one island — the whole
-/// screen — hydrated on load. Its name is the `activateIslands` registry key
-/// in `studio-ui/src/status.ts`; forma-ir stamps the id on the SSR root as
-/// `data-forma-island` and hangs the native props off the same element. The
-/// layout test pins both. Test-only since 2026-08-06: the id used to key the
-/// hand-emitted `__forma_islands` props object (ledger #8's workaround), and
-/// nothing in the request path needs it now that forma-ir emits the props.
-#[cfg(test)]
-const ISLAND_ID: u16 = 0;
-#[cfg(test)]
-const ISLAND_COMPONENT: &str = "StatusIsland";
-
-/// Bare-named slots this page renders and the seam deliberately never fills.
-/// EMPTY here, and that is the claim: every signal `StatusIsland.ts` binds to
-/// the DOM gets a server value on every request. See
-/// [`assert_island_slot_contract`] for what an unlisted one would cost.
-#[cfg(test)]
-const CLIENT_ONLY_SLOTS: [&str; 0] = [];
-
-/// Anonymous (`attr:`/`text:`) slots this page compiles to. EMPTY, and that is
-/// the strongest form of ledger #10/#20's guard: every attribute value and
-/// every text child on the status page is either a named signal binding or
-/// static markup — nothing renders from a default the seam cannot reach.
-#[cfg(test)]
-const ANONYMOUS_SLOTS: [&str; 0] = [];
-
 /// Seconds between full-page refreshes for the NO-JS fallback only (v4): the
 /// meta pragma now lives inside `<noscript>`, so browsers running the island
 /// poller never reload. Was 2 s while the page was read-only; a page with a
@@ -351,20 +329,6 @@ impl EmbeddedPage {
 /// page footers carry the visible credit (pinned by tests on both pages).
 pub(crate) const ART_XBOX: &str = "/_assets/pad-xbox.svg";
 pub(crate) const ART_DS4: &str = "/_assets/pad-ds4.svg";
-
-/// The exact command that starts a daemon for THIS machine's configuration.
-///
-/// The profile flag matters: on a cabinet whose slots live in games.toml,
-/// plain `ksx daemon` refuses to start ("nothing to run"), so printing it as
-/// the remedy would send the user in a circle. `SessionView::profile` carries
-/// the title — from the pipe when the daemon answers, and from the config when
-/// it does not, which is precisely the case this string exists for.
-pub(crate) fn daemon_command(session: &SessionView) -> String {
-    match session.profile.as_deref().map(str::trim) {
-        Some(profile) if !profile.is_empty() => format!("ksx daemon --game \"{profile}\""),
-        _ => "ksx daemon".to_owned(),
-    }
-}
 
 /// Pick the art for a PlayStation-family persona label or id. DualSense is a
 /// live HIDMaestro persona and therefore uses Sony vocabulary and the closest
@@ -591,4 +555,3 @@ fn payload_block<T: serde::Serialize>(payload: &T) -> String {
         payload_json(payload)
     )
 }
-

@@ -9551,8 +9551,8 @@ export function NocturneIsland() {
                 h(
                   "p",
                   { class: "nm-auto-note" },
-                  "A saved game remembers what to launch, how many players it has, and " +
-                    "which controller layout they use.",
+                  "A saved game remembers what to launch, how many players it has, and ",
+                  "which controller layout they use.",
                 ),
                 h("label", { class: "nm-gl" }, "Name",
                   h("input", { class: "nm-gi", name: "title", placeholder: "Street Fighter" })),
@@ -9580,9 +9580,9 @@ export function NocturneIsland() {
               h(
                 "p",
                 { class: "nm-auto-note" },
-                "Renaming repoints every controller that uses the layout, so nothing is " +
-                  "left naming a layout that is not there. A layout still in use cannot " +
-                  "be deleted until those controllers point somewhere else.",
+                "Renaming repoints every controller that uses the layout, so nothing is ",
+                "left naming a layout that is not there. A layout still in use cannot ",
+                "be deleted until those controllers point somewhere else.",
               ),
               h(
                 "form",
@@ -9627,8 +9627,8 @@ export function NocturneIsland() {
                 h(
                   "p",
                   { class: "nm-auto-note" },
-                  "Paste a configuration ksx exported. Leave the box below unticked and " +
-                    "nothing is written — you get a report of exactly what it would do.",
+                  "Paste a configuration ksx exported. Leave the box below unticked and ",
+                  "nothing is written — you get a report of exactly what it would do.",
                 ),
                 h("textarea", {
                   class: "nm-importbox",

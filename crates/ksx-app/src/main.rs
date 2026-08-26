@@ -16,8 +16,8 @@
 // If you are adding logic rather than a flag, it does not go in this file.
 use ksx_backend::{
     autostart, config_io, daemon, device_edit, device_scan, devices, doctor, input_test_cli,
-    install, logging, macro_cli, macro_trace, map, mapping, monitor, pads, play, preset_cli,
-    run, session, setup, slot_cli, stage_cli, winusb,
+    install, logging, macro_cli, macro_trace, map, mapping, monitor, pads, play, preset_cli, run,
+    session, setup, slot_cli, stage_cli, winusb,
 };
 // `console` is here rather than above because `ksx cabinet` is its only caller
 // in this file: the daemon detaches its own console from inside the backend.

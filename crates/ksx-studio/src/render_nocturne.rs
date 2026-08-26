@@ -848,7 +848,7 @@ mod tests {
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 43] = [
+        const SERVED_LIST_PREFIXES: [&str; 45] = [
             "list:nKeyRows:",
             "list:nAvailMain:",
             "list:nAvailNav:",
@@ -870,6 +870,11 @@ mod tests {
             "list:nDevRows:",
             "list:nDevExp:",
             "list:nGameRows:",
+            // The saved-games binding drives a SECOND `createList`, so the
+            // compiler gives that one an occurrence suffix. Both are served;
+            // leaving the suffixed name out renders the second list empty
+            // server-side and fills it only after adoption.
+            "list:nGameRows#2:",
             "list:nMacroRows:",
             "list:nLegend:",
             "list:nMacCols:",
@@ -891,6 +896,10 @@ mod tests {
             "list:nRackEmpty:",
             "list:nPersonaRows:",
             "list:nLayoutOpts:",
+            // The Studio theme picker, brought onto /nocturne when /setup was
+            // deleted: one row per shipped theme, served so the choice paints
+            // without scripting.
+            "list:nThemeRows:",
             "list:nSocdOpts:",
         ];
         const SERVED_SLOTS: [&str; 111] = [
@@ -1208,9 +1217,16 @@ mod tests {
     }
 
     /// The configuration menu is a native details, so its SERVED facts paint
-    /// on the SSR pass — the config identity, the games list, and the
-    /// sign-in task in /start's exact vocabulary — and its placeholder
-    /// sentence is gone for good.
+    /// on the SSR pass — the config identity, the games list, and the sign-in
+    /// task in the vocabulary the deleted /start page used to own — and its
+    /// placeholder sentence is gone for good.
+    ///
+    /// The verbs below are the ones that had to come WITH the deleted pages:
+    /// export and import (/setup), the saved-game and layout editors
+    /// (/profiles), the autostart task (/start), and the theme picker
+    /// (/setup). Every one of them posts to a /nocturne route now, and every
+    /// one works with scripting off — that is what makes the cutover a move
+    /// rather than a loss, so it is pinned here.
     #[test]
     fn nocturne_renders_the_served_configuration_menu() {
         let out = render_nocturne(&page(), &keyboard_payload(), None);
@@ -1223,7 +1239,20 @@ mod tests {
             // StartAutostartView's own words — one derivation, two surfaces.
             "ksx does not start on its own",
             "Start ksx when I sign in",
-            "/setup/export.json",
+            // Everything the deleted pages used to carry, on its new route.
+            "/nocturne/export.json",
+            "/nocturne/import",
+            "/nocturne/theme",
+            "/nocturne/game",
+            "/nocturne/game/update",
+            "/nocturne/game/delete",
+            "/nocturne/layout/rename",
+            "/nocturne/layout/delete",
+            "How the Studio looks",
+            "Import a configuration",
+            "Add a saved game",
+            // The import dry-run consent, which is the whole point of the box.
+            "nothing is written",
         ] {
             assert!(
                 out.html.contains(sentinel),

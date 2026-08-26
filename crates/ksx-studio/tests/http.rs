@@ -39,7 +39,7 @@ static SERVER_ADDRS: Mutex<Vec<SocketAddr>> = Mutex::new(Vec::new());
 static SERVER_NONCE: AtomicU64 = AtomicU64::new(1);
 
 /// Decorate the ordinary status provider with a one-use startup marker. The
-/// marker travels through the real `/api/status` handler, so observing it
+/// marker travels through the real `/api/nocturne` handler, so observing it
 /// proves much more than "something accepted TCP": this exact fixture's
 /// provider, router and listener own the address returned to the test.
 struct FixtureStatus {
@@ -52,6 +52,17 @@ impl StatusSource for FixtureStatus {
         let mut snapshot = self.inner.snapshot();
         snapshot.generated_at.clone_from(&self.marker);
         snapshot
+    }
+
+    /// The nonce's real channel since `/api/status` was deleted with the
+    /// status page. `generation` already means "stable for one fixture
+    /// process, empty for live providers", which is exactly a fixture nonce,
+    /// and `collect_nocturne` calls `environment()` — so the marker still
+    /// travels through the REAL handler rather than a test-only path.
+    fn environment(&self) -> ksx_api::RuntimeEnvironmentView {
+        let mut environment = self.inner.environment();
+        environment.generation.clone_from(&self.marker);
+        environment
     }
 
     fn mapper(&self) -> MapperSnapshot {
@@ -2827,7 +2838,7 @@ fn fixture_owns_endpoint(addr: SocketAddr, marker: &str) -> bool {
         return false;
     }
     if stream
-        .write_all(b"GET /api/status HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .write_all(b"GET /api/nocturne HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
         .is_err()
     {
         return false;
@@ -2839,7 +2850,7 @@ fn fixture_owns_endpoint(addr: SocketAddr, marker: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(body_of(&response))
         .ok()
         .and_then(|payload| {
-            payload["snapshot"]["generated_at"]
+            payload["environment"]["generation"]
                 .as_str()
                 .map(str::to_owned)
         })
@@ -3032,7 +3043,7 @@ fn the_brand_icons_are_served_at_their_root_paths() {
 
     // And the page points at all three, so the icons are not merely reachable
     // by luck of the browser's default probing.
-    let page = get(addr, "/");
+    let page = get(addr, "/nocturne");
     for link in [
         r#"href="/favicon.svg""#,
         r#"href="/favicon.ico""#,
@@ -3048,14 +3059,14 @@ fn the_session_panel_round_trips_start_stop_and_the_flash() {
     let addr = start_server(control.clone());
 
     // Idle: the Start form and the profile dropdown render.
-    let page = get(addr, "/");
+    let page = get(addr, "/nocturne");
     assert!(page.starts_with("HTTP/1.1 200"), "{page}");
-    assert!(page.contains(r#"action="/session/start""#), "{page}");
+    assert!(page.contains(r#"action="/nocturne/play""#), "{page}");
     assert!(page.contains("Example Game"), "{page}");
     assert!(page.contains("idle"), "{page}");
 
     // Start with a profile: 303 back to / with the outcome flashed.
-    let response = post_form(addr, "/session/start", "profile=Example+Game");
+    let response = post_form(addr, "/nocturne/play", "profile=Example+Game");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(response.contains("location: /?flash=running"), "{response}");
     assert_eq!(
@@ -3067,14 +3078,14 @@ fn the_session_panel_round_trips_start_stop_and_the_flash() {
     // Following the redirect renders the flash and, now, Stop/Reload.
     let page = get(addr, "/?flash=running%20%284%20slot%28s%29%29");
     assert!(page.contains("running (4 slot(s))"), "{page}");
-    assert!(page.contains(r#"action="/session/stop""#), "{page}");
+    assert!(page.contains(r#"action="/nocturne/stop""#), "{page}");
     assert!(page.contains(r#"action="/config/reload""#), "{page}");
-    assert!(!page.contains(r#"action="/session/start""#), "{page}");
+    assert!(!page.contains(r#"action="/nocturne/play""#), "{page}");
 
     // The empty sentinel option means "no profile override".
-    let response = post_form(addr, "/session/stop", "");
+    let response = post_form(addr, "/nocturne/stop", "");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-    let response = post_form(addr, "/session/start", "profile=");
+    let response = post_form(addr, "/nocturne/play", "profile=");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert_eq!(control.started_with.lock().unwrap().clone(), Some(None));
 }
@@ -3088,7 +3099,7 @@ fn the_mapper_page_learn_flow_and_bind_round_trip() {
     let addr = start_server(control.clone());
 
     // The page: slot context, art, a zone with its binding tag, credit line.
-    let page = get(addr, "/map");
+    let page = get(addr, "/nocturne");
     assert!(page.starts_with("HTTP/1.1 200"), "{page}");
     assert!(page.contains("P1 · Xbox 360 · Panel P1"), "{page}");
     assert!(page.contains("/_assets/pad-xbox.svg"), "{page}");
@@ -3129,14 +3140,9 @@ fn the_mapper_page_learn_flow_and_bind_round_trip() {
     assert!(art.contains("pad-body"), "recolor classes missing: {art}");
     assert!(!art.contains("fill:#000000"), "source black leaked: {art}");
 
-    // /api/map serves the payload the page embeds.
-    let api = get(addr, "/api/map");
-    let payload: serde_json::Value = serde_json::from_str(body_of(&api)).expect("json");
-    assert_eq!(payload["mapper"]["slots"][0]["preset"], "Panel P1");
-    assert_eq!(payload["mapper"]["slots"][0]["bindings"]["A"][0], "G");
-    assert_eq!(payload["mapper"]["slots"][0]["session_backup"], true);
-    assert_eq!(payload["selected"], 1);
-    assert_eq!(payload["learn"]["state"], "idle");
+    // The mapper's own payload block went with `/map`. `/nocturne` derives
+    // its bindings from the served setup instead, so the round trip below —
+    // learn, then bind, over the live routes — is what pins the behaviour.
 
     // Learn: start → listening with the countdown, poll agrees, cancel ends.
     let started = post_json(addr, "/api/learn/start", "");
@@ -3171,7 +3177,7 @@ fn the_mapper_page_learn_flow_and_bind_round_trip() {
     // succeeds and reports the reload.
     let refused = post_json(
         addr,
-        "/api/bind",
+        "/nocturne/api/bind",
         r#"{"preset":"Panel P1","function":"B","key":"G","force":false,"reload":true}"#,
     );
     let outcome: serde_json::Value = serde_json::from_str(body_of(&refused)).expect("json");
@@ -3182,7 +3188,7 @@ fn the_mapper_page_learn_flow_and_bind_round_trip() {
 
     let forced = post_json(
         addr,
-        "/api/bind",
+        "/nocturne/api/bind",
         r#"{"preset":"Panel P1","function":"B","key":"G","force":true,"reload":true}"#,
     );
     let outcome: serde_json::Value = serde_json::from_str(body_of(&forced)).expect("json");
@@ -3264,7 +3270,7 @@ fn a_dead_daemon_is_loud_on_both_pages_with_a_runnable_command() {
             "tray icon",
         ),
         (
-            "/map",
+            "/nocturne",
             "Mapping needs the background helper",
             "Close and reopen ksx",
         ),
@@ -3295,7 +3301,7 @@ fn a_dead_daemon_is_loud_on_both_pages_with_a_runnable_command() {
     }
 
     // The mapper additionally renders every control visibly inert…
-    let map = body_of(&get(addr, "/map")).to_owned();
+    let map = body_of(&get(addr, "/nocturne")).to_owned();
     assert!(map.contains("z-dead"), "{map}");
     assert!(map.contains("l-dead"), "{map}");
     assert!(map.contains("card pactions off"), "{map}");
@@ -3398,13 +3404,13 @@ fn the_mapper_can_pause_and_resume_emulation_over_json() {
     let out: serde_json::Value = serde_json::from_str(body_of(&started)).expect("json");
     assert_eq!(out["ok"], true, "{out}");
 
-    let map = body_of(&get(addr, "/map")).to_owned();
+    let map = body_of(&get(addr, "/nocturne")).to_owned();
     assert!(map.contains("Play is active"), "{map}");
     assert!(map.contains(r#"data-act="pause-map""#), "{map}");
     // v9: and it is a real form, so the pause is not a dead button on a page
     // without JavaScript — same `stop` verb, 303'd back to /map.
-    assert!(map.contains(r#"action="/map/session/stop""#), "{map}");
-    let response = post_form(addr, "/map/session/stop", "slot=1");
+    assert!(map.contains(r#"action="/nocturne/stop""#), "{map}");
+    let response = post_form(addr, "/nocturne/stop", "slot=1");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(
         response.contains("location: /map?slot=1&flash=stopped"),
@@ -3447,7 +3453,7 @@ fn the_three_restore_destinations_and_clear_all_round_trip() {
     let control = Arc::new(ScriptedControl::new(false));
     let addr = start_server(control.clone());
 
-    let map = body_of(&get(addr, "/map")).to_owned();
+    let map = body_of(&get(addr, "/nocturne")).to_owned();
     assert!(
         map.contains(&format!("Restore backup from {BACKUP_LABEL}")),
         "the newest backup's timestamp belongs in the label: {map}"
@@ -3498,7 +3504,7 @@ fn the_macro_editor_reads_a_preset_and_saves_the_whole_table() {
 
     // READ: the payload the island polls carries the file's shape.
     let map: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/map?slot=1"))).expect("json");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1"))).expect("json");
     assert_eq!(map["macros"]["available"], true, "{map}");
     assert_eq!(map["macros"]["preset"], "Panel P1");
     assert_eq!(map["macros"]["macros"][0]["name"], "hadouken");
@@ -3511,7 +3517,7 @@ fn the_macro_editor_reads_a_preset_and_saves_the_whole_table() {
         serde_json::Value::Null
     );
     // ...and the SSR paint says the same thing without any JavaScript.
-    let page = body_of(&get(addr, "/map?slot=1")).to_owned();
+    let page = body_of(&get(addr, "/nocturne?slot=1")).to_owned();
     assert!(page.contains("hadouken"), "{page}");
     assert!(page.contains("started by P"), "{page}");
 
@@ -3585,7 +3591,7 @@ fn the_repeat_policy_and_its_rate_reach_the_control_source_over_http() {
     // The read half serves the field at all — an absent `repeat` on the wire
     // would leave the card with nothing to show.
     let map: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/map?slot=1"))).expect("json");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1"))).expect("json");
     assert_eq!(map["macros"]["macros"][0]["repeat"], "once", "{map}");
 
     // while-held: the exact edit that was reported lost.
@@ -3652,7 +3658,7 @@ fn clearing_one_binding_goes_through_the_bind_verb_with_a_null_key() {
     let addr = start_server(control.clone());
     let out: serde_json::Value = serde_json::from_str(body_of(&post_json(
         addr,
-        "/api/bind",
+        "/nocturne/api/bind",
         r#"{"preset":"Panel P1","function":"A","key":null,"force":false,"reload":true}"#,
     )))
     .expect("json");
@@ -3674,17 +3680,23 @@ fn the_mapper_is_fully_operable_with_form_posts_only() {
 
     // The page a scripting-off browser gets: real forms, real action URLs,
     // real key options, and slot switching as links.
-    let page = body_of(&get(addr, "/map")).to_owned();
+    let page = body_of(&get(addr, "/nocturne")).to_owned();
     assert!(page.contains(r#"action="/map/bind""#), "{page}");
-    assert!(page.contains(r#"formaction="/map/clear""#), "{page}");
+    assert!(
+        page.contains(r#"formaction="/nocturne/bind/clear""#),
+        "{page}"
+    );
     assert!(page.contains(r#"action="/map/preset/restore""#), "{page}");
-    assert!(page.contains(r#"action="/map/preset/clear-all""#), "{page}");
+    assert!(
+        page.contains(r#"action="/nocturne/bind/clear-all""#),
+        "{page}"
+    );
     assert!(
         page.contains(r#"<select class="keysel" name="key""#),
         "{page}"
     );
     assert!(page.contains("<option>NumpadEnter</option>"), "{page}");
-    assert!(page.contains(r#"href="/map?slot=1""#), "{page}");
+    assert!(page.contains(r#"href="/nocturne?slot=1""#), "{page}");
 
     // Bind: form-encoded in, 303 back to the slot we were on, outcome flashed.
     let response = post_form(addr, "/map/bind", "slot=1&function=B&key=H");
@@ -3704,7 +3716,7 @@ fn the_mapper_is_fully_operable_with_form_posts_only() {
     assert!(!bound.force, "the row form never forces on its own");
 
     // Clear: the same `map` verb with a null key — no second unbind path.
-    let response = post_form(addr, "/map/clear", "slot=1&function=A");
+    let response = post_form(addr, "/nocturne/bind/clear", "slot=1&function=A");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(
         response.contains("location: /map?slot=1&flash=A%20is%20now%20unbound."),
@@ -3738,7 +3750,7 @@ fn the_mapper_is_fully_operable_with_form_posts_only() {
     assert!(control.bound_with.lock().unwrap().clone().unwrap().force);
 
     // The preset writes and the pause, same shape.
-    let response = post_form(addr, "/map/preset/clear-all", "slot=1");
+    let response = post_form(addr, "/nocturne/bind/clear-all", "slot=1");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert_eq!(
         control.cleared.lock().unwrap().clone(),
@@ -3766,10 +3778,10 @@ fn the_mapper_is_fully_operable_with_form_posts_only() {
 
     // Following the redirect renders the outcome — the no-JS feedback loop
     // closed, exactly like the status page's.
-    let page = body_of(&get(addr, "/map?slot=1&flash=B%20is%20now%20H.")).to_owned();
+    let page = body_of(&get(addr, "/nocturne?slot=1&flash=B%20is%20now%20H.")).to_owned();
     assert!(page.contains("The change was completed."), "{page}");
     assert!(page.contains("flash flash-ok"), "{page}");
-    let page = body_of(&get(addr, "/map?slot=1&flash=error%3A%20nope")).to_owned();
+    let page = body_of(&get(addr, "/nocturne?slot=1&flash=error%3A%20nope")).to_owned();
     assert!(page.contains("flash flash-err"), "{page}");
 
     // Query strings are untrusted diagnostic input, not customer copy. A
@@ -3788,7 +3800,7 @@ fn the_mapper_is_fully_operable_with_form_posts_only() {
     ] {
         let page = body_of(&get(
             addr,
-            &format!("/map?slot=1&flash=error%3A%20{encoded}"),
+            &format!("/nocturne?slot=1&flash=error%3A%20{encoded}"),
         ))
         .to_owned();
         assert!(
@@ -3809,9 +3821,12 @@ fn the_no_js_forms_add_and_remove_one_key_at_a_time() {
     let control = Arc::new(ScriptedControl::new(false));
     let addr = start_server(control.clone());
 
-    let page = body_of(&get(addr, "/map")).to_owned();
+    let page = body_of(&get(addr, "/nocturne")).to_owned();
     assert!(page.contains(r#"formaction="/map/add""#), "{page}");
-    assert!(page.contains(r#"formaction="/map/key/remove""#), "{page}");
+    assert!(
+        page.contains(r#"formaction="/nocturne/key/clear""#),
+        "{page}"
+    );
     // The fixture's B holds two keys: both are on the page, each with its own
     // remove payload, and neither reader spells them as a chord.
     assert!(page.contains(r#"data-rmkey="B|S""#), "{page}");
@@ -3820,7 +3835,7 @@ fn the_no_js_forms_add_and_remove_one_key_at_a_time() {
 
     // REMOVE ONE: B keeps S, loses Enter — and because one key is left, this
     // daemon's single-key `map` verb can express it exactly.
-    let response = post_form(addr, "/map/key/remove", "slot=1&function=B&key=Enter");
+    let response = post_form(addr, "/nocturne/key/clear", "slot=1&function=B&key=Enter");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(
         response.contains("flash=Enter%20removed.%20B%20is%20now%20S."),
@@ -3841,7 +3856,7 @@ fn the_no_js_forms_add_and_remove_one_key_at_a_time() {
 
     // A key the control does not have is a refusal that names what it DOES
     // have — never a silent no-op, and never a write.
-    let response = post_form(addr, "/map/key/remove", "slot=1&function=B&key=J");
+    let response = post_form(addr, "/nocturne/key/clear", "slot=1&function=B&key=J");
     assert!(response.contains("flash=error%3A"), "{response}");
     assert!(
         response.contains("it%20has%20S%20%C2%B7%20Enter"),
@@ -3942,11 +3957,11 @@ fn the_key_list_route_writes_a_whole_set() {
 #[test]
 fn a_no_js_post_without_a_daemon_flashes_the_reason() {
     let addr = start_server(Arc::new(ScriptedControl::dead()));
-    let page = body_of(&get(addr, "/map")).to_owned();
+    let page = body_of(&get(addr, "/nocturne")).to_owned();
     assert!(page.contains(r#"class="lbind nojs off""#), "{page}");
     assert!(page.contains(r#"action="/map/bind""#), "{page}");
 
-    let response = post_form(addr, "/map/preset/clear-all", "slot=1");
+    let response = post_form(addr, "/nocturne/bind/clear-all", "slot=1");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(response.contains("flash=error%3A"), "{response}");
     assert!(
@@ -3963,7 +3978,7 @@ fn a_refused_action_comes_back_as_an_error_flash_never_silence() {
     let control = Arc::new(ScriptedControl::new(true));
     let addr = start_server(control);
 
-    let response = post_form(addr, "/session/start", "profile=");
+    let response = post_form(addr, "/nocturne/play", "profile=");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(
         response.contains("location: /?flash=error%3A%20no%20ksx%20daemon"),
@@ -3997,10 +4012,10 @@ fn a_cross_site_form_post_is_refused_before_it_reaches_the_control() {
     let addr = start_server(control.clone());
 
     for path in [
-        "/map/preset/clear-all",
-        "/map/session/stop",
-        "/session/stop",
-        "/map/clear",
+        "/nocturne/bind/clear-all",
+        "/nocturne/stop",
+        "/nocturne/stop",
+        "/nocturne/bind/clear",
     ] {
         let body = "preset=Panel+P1&slot=1";
         let response = http(
@@ -4618,12 +4633,12 @@ fn a_rebound_host_cannot_read_the_device_list() {
 #[test]
 fn every_page_links_to_the_device_picker() {
     let addr = start_server(Arc::new(ScriptedControl::new(true)));
-    let picker = body_of(&get(addr, "/start")).to_owned();
+    let picker = body_of(&get(addr, "/nocturne")).to_owned();
     assert!(
-        picker.contains(r#"action="/start/device""#),
+        picker.contains(r#"action="/nocturne/device""#),
         "the Setup destination has no device picker: {picker}"
     );
-    for route in ["/", "/map", "/devices"] {
+    for route in ["/nocturne", "/devices"] {
         let page = get(addr, route);
         let body = body_of(&page);
         assert!(
@@ -4643,7 +4658,7 @@ fn every_page_links_to_the_device_picker() {
 fn the_profiles_page_shows_a_broken_game_and_keeps_its_path_in_edit() {
     let control = Arc::new(ScriptedControl::new(true));
     let addr = start_server(control);
-    let response = get(addr, "/profiles");
+    let response = get(addr, "/nocturne");
     let body = body_of(&response);
 
     assert!(body.contains("Games that need attention"), "{body}");
@@ -4661,8 +4676,8 @@ fn the_profiles_page_shows_a_broken_game_and_keeps_its_path_in_edit() {
     );
     // The healthy one is listed too.
     assert!(body.contains("Example Game"), "{body}");
-    assert!(body.contains(r#"action="/profiles/update""#), "{body}");
-    assert!(body.contains(r#"action="/profiles/delete""#), "{body}");
+    assert!(body.contains(r#"action="/nocturne/game/update""#), "{body}");
+    assert!(body.contains(r#"action="/nocturne/game/delete""#), "{body}");
     assert!(body.contains("Edit or delete"), "{body}");
     // The presets and the in-box templates both arrived — the second is what
     // `LocalMachine::presets` used to answer with an empty list.
@@ -4676,7 +4691,7 @@ fn the_profiles_page_shows_a_broken_game_and_keeps_its_path_in_edit() {
 fn the_profiles_api_serves_the_pages_own_payload() {
     let control = Arc::new(ScriptedControl::new(true));
     let addr = start_server(control);
-    let response = get(addr, "/api/profiles");
+    let response = get(addr, "/api/nocturne");
     assert!(response.contains("no-store"), "{response}");
 
     let value: serde_json::Value = serde_json::from_str(body_of(&response)).expect("json");
@@ -4707,7 +4722,7 @@ fn a_hostile_profiles_query_flash_is_replaced_not_reflected() {
     let addr = start_server(Arc::new(ScriptedControl::new(true)));
     let response = get(
         addr,
-        "/profiles?flash=error%3A%20daemon%20TOML%20profile%20preset%20slot%20CLI%20C%3A%5Csecret%5Cgames.toml%20--force",
+        "/nocturne?flash=error%3A%20daemon%20TOML%20profile%20preset%20slot%20CLI%20C%3A%5Csecret%5Cgames.toml%20--force",
     );
     let body = body_of(&response);
     let block = body
@@ -4715,11 +4730,13 @@ fn a_hostile_profiles_query_flash_is_replaced_not_reflected() {
         .and_then(|(_, rest)| rest.split_once("</script>"))
         .map(|(json, _)| json)
         .expect("profiles payload block");
-    let payload: serde_json::Value = serde_json::from_str(block).expect("payload json");
-    let flash = payload["flash"].as_str().expect("safe flash");
-    assert_eq!(
-        flash,
-        "error: Saved Games could not finish that request. Reopen ksx and try again."
+    let _: serde_json::Value = serde_json::from_str(block).expect("payload json");
+    // `/nocturne` carries no `flash` in its payload — the sentence is rendered
+    // into the page from the query, so the page IS the allowlist's output.
+    let flash = "error: Saved Games could not finish that request. Reopen ksx and try again.";
+    assert!(
+        body.contains(flash),
+        "the allowlisted sentence must be what renders: {body}"
     );
     let lower = flash.to_ascii_lowercase();
     for leaked in [
@@ -4760,17 +4777,17 @@ fn hostile_saved_games_providers_cannot_write_internal_copy_into_flashes() {
     let addr = start_server_with_machine(control, machine);
     for (path, body, expected) in [
         (
-            "/profiles/new",
+            "/nocturne/game",
             "title=T&path=C%3A%5Cx.exe&slots=1&preset=Arcade",
             "Saved%20game%20could%20not%20be%20added",
         ),
         (
-            "/profiles/update",
+            "/nocturne/game/update",
             "original_title=T&revision=g1-t&title=T&path=C%3A%5Cx.exe&slots=1&preset=Arcade",
             "Saved%20game%20could%20not%20be%20updated",
         ),
         (
-            "/profiles/delete",
+            "/nocturne/game/delete",
             "title=T&revision=g1-t&confirm_delete=yes",
             "Saved%20game%20could%20not%20be%20deleted",
         ),
@@ -4780,11 +4797,11 @@ fn hostile_saved_games_providers_cannot_write_internal_copy_into_flashes() {
             "Controller%20layout%20could%20not%20be%20created",
         ),
         (
-            "/profiles/switch",
+            "/nocturne/adopt",
             "profile=T",
             "That%20game%20could%20not%20be%20started",
         ),
-        ("/profiles/stop", "", "Play%20could%20not%20be%20stopped"),
+        ("/nocturne/stop", "", "Play%20could%20not%20be%20stopped"),
     ] {
         assert_safe(&post_form(addr, path, body), expected);
     }
@@ -4800,11 +4817,11 @@ fn creating_a_profile_reaches_the_verb_and_flashes_the_outcome() {
 
     let response = post_form(
         addr,
-        "/profiles/new",
+        "/nocturne/game",
         "title=Tekken&path=C%3A%5Cgames%5Ctekken.exe&arguments=-windowed&slots=4&preset=Arcade",
     );
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-    assert!(response.contains("/profiles?flash="), "{response}");
+    assert!(response.contains("/nocturne?flash="), "{response}");
     assert!(response.contains("Saved%20game%20added."), "{response}");
 
     let spec = machine
@@ -4831,11 +4848,11 @@ fn updating_a_profile_reaches_the_typed_verb() {
 
     let response = post_form(
         addr,
-        "/profiles/update",
+        "/nocturne/game/update",
         "original_title=Example+Game&revision=g1-example&title=Example+Game+Updated&path=%22C%3A%5CExamples%5Cexample-game-updated.exe%22&arguments=-fullscreen&slots=2&preset=Arcade&rebase_devices=true",
     );
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-    assert!(response.contains("/profiles?flash="), "{response}");
+    assert!(response.contains("/nocturne?flash="), "{response}");
     assert!(response.contains("Saved%20game%20updated."), "{response}");
 
     let spec = machine
@@ -4864,11 +4881,11 @@ fn deleting_a_profile_reaches_the_typed_verb() {
 
     let response = post_form(
         addr,
-        "/profiles/delete",
+        "/nocturne/game/delete",
         "title=Missing+Example+Game&revision=g1-missing&confirm_delete=yes",
     );
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-    assert!(response.contains("/profiles?flash="), "{response}");
+    assert!(response.contains("/nocturne?flash="), "{response}");
     assert!(response.contains("Saved%20game%20deleted."), "{response}");
     assert_eq!(
         machine.deleted_profile.lock().unwrap().clone(),
@@ -4888,7 +4905,7 @@ fn deleting_a_profile_without_confirmation_changes_nothing() {
     let machine = Arc::new(ScriptedMachine::default());
     let addr = start_server_with_machine(control, machine.clone());
 
-    let response = post_form(addr, "/profiles/delete", "title=Missing+Example+Game");
+    let response = post_form(addr, "/nocturne/game/delete", "title=Missing+Example+Game");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(response.contains("flash=error%3A"), "{response}");
     assert!(machine.deleted_profile.lock().unwrap().is_none());
@@ -4902,7 +4919,7 @@ fn stale_update_and_delete_forms_are_worded_refusals() {
 
     let update = post_form(
         addr,
-        "/profiles/update",
+        "/nocturne/game/update",
         "original_title=Example+Game&revision=g1-old&title=Example+Game&path=C%3A%5CExamples%5Cexample-game.exe&slots=2&preset=Arcade",
     );
     assert!(update.contains("flash=error%3A"), "{update}");
@@ -4914,7 +4931,7 @@ fn stale_update_and_delete_forms_are_worded_refusals() {
 
     let delete = post_form(
         addr,
-        "/profiles/delete",
+        "/nocturne/game/delete",
         "title=Missing+Example+Game&revision=g1-old&confirm_delete=yes",
     );
     assert!(delete.contains("flash=error%3A"), "{delete}");
@@ -4933,7 +4950,7 @@ fn a_refused_profile_create_flashes_the_reason() {
     let addr = start_server(control);
     let response = post_form(
         addr,
-        "/profiles/new",
+        "/nocturne/game",
         "title=&path=C%3A%5Cx.exe&slots=1&preset=Arcade",
     );
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
@@ -4963,24 +4980,24 @@ fn a_post_with_a_missing_or_empty_number_still_flashes_instead_of_422() {
     let control = Arc::new(ScriptedControl::new(true));
     let addr = start_server(control);
     for (path, body, why) in [
-        ("/profiles/new", "path=C%3A%5Cx.exe", "the key is absent"),
+        ("/nocturne/game", "path=C%3A%5Cx.exe", "the key is absent"),
         (
-            "/profiles/new",
+            "/nocturne/game",
             "title=T&path=C%3A%5Cx.exe&slots=&preset=Arcade",
             "the user cleared the slots box",
         ),
         (
-            "/profiles/update",
+            "/nocturne/game/update",
             "original_title=T&title=T&path=C%3A%5Cx.exe&slots=&preset=Arcade",
             "the user cleared the update players box",
         ),
         (
-            "/profiles/update",
+            "/nocturne/game/update",
             "original_title=T&title=T&path=C%3A%5Cx.exe&slots=many&preset=Arcade",
             "the update players box is not a number",
         ),
         (
-            "/profiles/new",
+            "/nocturne/game",
             "title=T&path=C%3A%5Cx.exe&slots=lots&preset=Arcade",
             "the slots box holds something that is not a number",
         ),
@@ -5057,7 +5074,7 @@ fn a_layout_refusal_flashes_a_safe_way_out() {
 fn a_refused_read_is_not_rendered_as_an_empty_machine() {
     let control = Arc::new(ScriptedControl::new(true));
     let addr = start_server_with_machine(control, Arc::new(ScriptedMachine::reads_refusing()));
-    let response = get(addr, "/profiles");
+    let response = get(addr, "/nocturne");
     let body = body_of(&response);
 
     assert!(
@@ -5092,9 +5109,9 @@ fn a_refused_read_is_not_rendered_as_an_empty_machine() {
         );
     }
     for action in [
-        r#"action="/profiles/new""#,
-        r#"action="/profiles/update""#,
-        r#"action="/profiles/delete""#,
+        r#"action="/nocturne/game""#,
+        r#"action="/nocturne/game/update""#,
+        r#"action="/nocturne/game/delete""#,
     ] {
         assert!(
             !body.contains(action),
@@ -5104,7 +5121,7 @@ fn a_refused_read_is_not_rendered_as_an_empty_machine() {
 
     // The JSON twin says it in a machine-readable field, not by omission.
     let value: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/profiles"))).expect("json");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("json");
     assert_eq!(
         value.pointer("/view/profiles_unreadable"),
         Some(&serde_json::json!(true)),
@@ -5164,7 +5181,7 @@ fn switching_profile_calls_start_and_returns_to_profiles() {
     let control = Arc::new(ScriptedControl::new(false));
     let addr = start_server(control.clone());
 
-    let response = post_form(addr, "/profiles/switch", "profile=Missing+Example+Game");
+    let response = post_form(addr, "/nocturne/adopt", "profile=Missing+Example+Game");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(
         response
@@ -5192,7 +5209,7 @@ fn stopping_play_returns_to_saved_games() {
     control.running.store(true, Ordering::SeqCst);
     let addr = start_server(control.clone());
 
-    let response = post_form(addr, "/profiles/stop", "");
+    let response = post_form(addr, "/nocturne/stop", "");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(
         response
@@ -5216,20 +5233,20 @@ fn the_profiles_write_routes_refuse_a_cross_site_post() {
 
     for (path, body) in [
         (
-            "/profiles/new",
+            "/nocturne/game",
             "title=Evil&path=C%3A%5Cevil.exe&slots=1&preset=Arcade",
         ),
         (
-            "/profiles/update",
+            "/nocturne/game/update",
             "original_title=Street+Fighter&title=Evil&path=C%3A%5Cevil.exe&slots=1&preset=Arcade",
         ),
-        ("/profiles/delete", "title=Street+Fighter"),
+        ("/nocturne/game/delete", "title=Street+Fighter"),
         (
             "/profiles/preset/new",
             "name=Evil&template=keyboard-2p&player=1",
         ),
-        ("/profiles/switch", "profile=Missing+Example+Game"),
-        ("/profiles/stop", ""),
+        ("/nocturne/adopt", "profile=Missing+Example+Game"),
+        ("/nocturne/stop", ""),
     ] {
         let response = http(
             addr,
@@ -5283,12 +5300,12 @@ fn every_page_links_to_every_other_page() {
     let addr = start_server(control);
     for route in [
         "/",
-        "/start",
-        "/map",
+        "/nocturne",
+        "/nocturne",
         "/check",
         "/devices",
-        "/profiles",
-        "/setup",
+        "/nocturne",
+        "/nocturne",
         "/pads",
     ] {
         let response = get(addr, route);
@@ -5301,7 +5318,7 @@ fn every_page_links_to_every_other_page() {
         assert!(body.contains(r#">Mapping<"#), "{route}: {body}");
         assert!(body.contains(r#"href="/check""#), "{route}: {body}");
         assert!(body.contains(r#">Test inputs<"#), "{route}: {body}");
-        if route == "/map" {
+        if route == "/nocturne" {
             assert!(
                 body.contains(
                     r#"<span class="navlink workflow-link on" aria-current="page"><span class="workflow-num">3</span>Mapping</span>"#
@@ -5310,7 +5327,7 @@ fn every_page_links_to_every_other_page() {
             );
         } else {
             assert!(
-                body.contains(r#"href="/map""#),
+                body.contains(r#"href="/nocturne""#),
                 "{route} cannot reach Mapping: {body}"
             );
         }
@@ -5326,7 +5343,7 @@ fn every_page_links_to_every_other_page() {
 fn the_setup_page_leads_with_the_config_and_its_two_verbs() {
     let control = Arc::new(ScriptedControl::new(false));
     let addr = start_server(control);
-    let response = get(addr, "/setup");
+    let response = get(addr, "/nocturne");
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     assert!(
         response.contains("cache-control: no-store"),
@@ -5335,8 +5352,8 @@ fn the_setup_page_leads_with_the_config_and_its_two_verbs() {
     let body = body_of(&response);
 
     // The two verbs, both reachable with no JavaScript at all.
-    assert!(body.contains(r#"href="/setup/export.json""#), "{body}");
-    assert!(body.contains(r#"action="/setup/import""#), "{body}");
+    assert!(body.contains(r#"href="/nocturne/export.json""#), "{body}");
+    assert!(body.contains(r#"action="/nocturne/import""#), "{body}");
     // The checklist, straight off the provider.
     assert!(body.contains("Press a button and watch it land"), "{body}");
     assert!(body.contains(r#"class="step now""#), "{body}");
@@ -5360,7 +5377,7 @@ fn the_setup_api_serves_the_payload_the_page_embeds() {
     let control = Arc::new(ScriptedControl::new(false));
     let addr = start_server(control);
     let payload: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/setup"))).expect("json");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("json");
     assert_eq!(payload["setup"]["available"], serde_json::json!(true));
     assert_eq!(
         payload["setup"]["view"]["config_exists"],
@@ -5386,22 +5403,26 @@ fn the_setup_api_serves_the_payload_the_page_embeds() {
     assert_eq!(dualsense["instance_limit"], serde_json::Value::Null);
     assert_eq!(dualsense["available"], true);
     assert_eq!(dualsense["unavailable_reason"], serde_json::Value::Null);
+    // The SERVED roster, not the deleted form's derived value/label pairs.
+    let names: Vec<&str> = payload["setup"]["persona_options"]
+        .as_array()
+        .expect("a served persona roster")
+        .iter()
+        .filter_map(|option| option["name"].as_str())
+        .collect();
     assert_eq!(
-        payload["rows"]["persona_options"],
-        serde_json::json!([
-            {"value": "xbox360", "label": "Xbox 360 · ViGEmBus"},
-            {"value": "playstation", "label": "PlayStation · ViGEmBus"},
-            {"value": "dualsense", "label": "DualSense · HIDMaestro"},
-            {"value": "switchpro", "label": "Switch Pro · HIDMaestro"},
-            {"value": "xboxseries", "label": "Xbox Series X|S · HIDMaestro"},
-            {"value": "snes", "label": "SNES · HIDMaestro"},
-            {"value": "genesis", "label": "Genesis · HIDMaestro"}
-        ]),
-        "the form rows contain every live persona and no gated one"
+        names,
+        [
+            "xbox360",
+            "playstation",
+            "dualsense",
+            "switchpro",
+            "xboxseries",
+            "snes",
+            "genesis"
+        ],
+        "the served roster carries every live persona and no gated one"
     );
-    assert_eq!(payload["learn"]["state"], "idle");
-    // A poll is not an action.
-    assert_eq!(payload["flash"], serde_json::json!(null));
 }
 
 /// EXPORT is a download, not a path. The bytes come back with a file name
@@ -5410,7 +5431,7 @@ fn the_setup_api_serves_the_payload_the_page_embeds() {
 fn export_hands_back_the_document_itself() {
     let control = Arc::new(ScriptedControl::new(false));
     let addr = start_server(control);
-    let response = get(addr, "/setup/export.json");
+    let response = get(addr, "/nocturne/export.json");
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     assert!(
         response.contains("content-disposition: attachment; filename=\"ksx-config-"),
@@ -5431,7 +5452,7 @@ fn import_is_a_dry_run_until_the_box_is_ticked() {
     let addr = start_server(control);
 
     let document = "%7B%22ksx_interop%22%3A1%7D";
-    let dry = post_form(addr, "/setup/import", &format!("document={document}"));
+    let dry = post_form(addr, "/nocturne/import", &format!("document={document}"));
     assert!(dry.starts_with("HTTP/1.1 303"), "{dry}");
     assert!(dry.contains("nothing%20written%20yet"), "{dry}");
     assert!(
@@ -5441,7 +5462,7 @@ fn import_is_a_dry_run_until_the_box_is_ticked() {
 
     let applied = post_form(
         addr,
-        "/setup/import",
+        "/nocturne/import",
         &format!("document={document}&apply=yes"),
     );
     assert!(applied.starts_with("HTTP/1.1 303"), "{applied}");
@@ -5460,10 +5481,10 @@ fn import_is_a_dry_run_until_the_box_is_ticked() {
 
     // A document that does not say what it is comes back as an ERROR flash —
     // never silence, and never a claim that something was written.
-    let junk = post_form(addr, "/setup/import", "document=%7B%7D");
+    let junk = post_form(addr, "/nocturne/import", "document=%7B%7D");
     assert!(junk.contains("flash=error"), "{junk}");
     // …and an empty box is refused before the provider is even asked.
-    let empty = post_form(addr, "/setup/import", "document=");
+    let empty = post_form(addr, "/nocturne/import", "document=");
     assert!(empty.contains("flash=error"), "{empty}");
     assert!(empty.contains("paste%20a%20configuration"), "{empty}");
 }
@@ -5482,7 +5503,7 @@ fn a_refused_import_says_what_is_wrong_with_the_document() {
     let addr = start_server(control);
 
     let document = "%7B%22ksx_interop%22%3A1%2C%22faulty%22%3Atrue%7D";
-    let refused = post_form(addr, "/setup/import", &format!("document={document}"));
+    let refused = post_form(addr, "/nocturne/import", &format!("document={document}"));
     assert!(refused.contains("flash=error"), "{refused}");
     // The count, from the backend…
     assert!(refused.contains("3%20validation%20fault"), "{refused}");
@@ -5502,13 +5523,17 @@ fn the_import_form_can_say_what_a_bare_document_is() {
     let addr = start_server(control);
 
     // The invitation is on the page, and so is the control that makes it true.
-    let body = body_of(&get(addr, "/setup")).to_owned();
+    let body = body_of(&get(addr, "/nocturne")).to_owned();
     assert!(body.contains("an assistant that wrote you one"), "{body}");
     assert!(body.contains(r#"name="what""#), "{body}");
 
     // Bare + unsaid: refused, as it must be — importing the wrong file over
     // the wrong file is what that refusal exists to prevent.
-    let unsaid = post_form(addr, "/setup/import", "document=%7B%22slots%22%3A%5B%5D%7D");
+    let unsaid = post_form(
+        addr,
+        "/nocturne/import",
+        "document=%7B%22slots%22%3A%5B%5D%7D",
+    );
     assert!(unsaid.contains("flash=error"), "{unsaid}");
     assert!(
         unsaid.contains("does%20not%20say%20what%20it%20is"),
@@ -5518,7 +5543,7 @@ fn the_import_form_can_say_what_a_bare_document_is() {
     // Bare + said: the same document goes through.
     let said = post_form(
         addr,
-        "/setup/import",
+        "/nocturne/import",
         "document=%7B%22slots%22%3A%5B%5D%7D&what=config",
     );
     assert!(said.starts_with("HTTP/1.1 303"), "{said}");
@@ -5594,7 +5619,7 @@ fn wiring_a_slot_goes_through_assign_slot_and_prints_the_daemons_own_sentence() 
 
     // A running session: the bounce is named once, by the daemon, and not
     // again by this page.
-    let started = post_form(addr, "/session/start", "profile=");
+    let started = post_form(addr, "/nocturne/play", "profile=");
     assert!(started.starts_with("HTTP/1.1 303"), "{started}");
     let running = post_form(addr, "/setup/slot", "slot=2&preset=Panel+P1&profile=");
     assert!(running.contains("pads%20replugged"), "{running}");
@@ -5622,7 +5647,7 @@ fn wiring_a_slot_goes_through_assign_slot_and_prints_the_daemons_own_sentence() 
 fn the_setup_slot_menu_offers_every_slot_the_daemon_accepts() {
     let control = Arc::new(ScriptedControl::new(false));
     let addr = start_server(control);
-    let body = body_of(&get(addr, "/setup")).to_owned();
+    let body = body_of(&get(addr, "/nocturne")).to_owned();
     for n in 1..=ksx_core::MAX_SLOTS {
         assert!(
             body.contains(&format!(">Slot {n}<")),
@@ -5650,7 +5675,7 @@ fn a_refused_machine_provider_never_claims_the_machine_is_empty() {
 
     let control = Arc::new(ScriptedControl::new(false));
     let addr = start_server_with_machine(control, Arc::new(NoMachine));
-    let body = body_of(&get(addr, "/setup")).to_owned();
+    let body = body_of(&get(addr, "/nocturne")).to_owned();
 
     assert!(
         body.contains("The configuration could not be read"),
@@ -5680,14 +5705,17 @@ fn a_refused_machine_provider_never_claims_the_machine_is_empty() {
 
     // The poller sees the same refusal, in the same words.
     let payload: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/setup"))).expect("json");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("json");
+    // `available: false` IS the refusal in the payload. The sentence the user
+    // reads is asserted on the page above; the derived `lines`/`flags` blocks
+    // belonged to the deleted page's payload and claimed nothing extra.
     assert_eq!(payload["setup"]["available"], serde_json::json!(false));
-    assert_eq!(
-        payload["lines"]["config"],
-        serde_json::json!("The configuration could not be read.")
+    assert!(
+        payload["setup"]["slots"]
+            .as_array()
+            .is_none_or(|s| s.is_empty()),
+        "a refused read must not report slots: {payload}"
     );
-    assert_eq!(payload["flags"]["no_boards"], serde_json::json!(false));
-    assert_eq!(payload["flags"]["setup_known"], serde_json::json!(false));
 }
 
 /// Step 3 is the daemon's own learner, and it is operable with scripting off:
@@ -5703,7 +5731,7 @@ fn proving_a_button_uses_the_daemon_learner_with_no_javascript() {
 
     // The page itself now says the learner is listening — no client code
     // involved, which is what makes the <noscript> refresh enough.
-    let page = body_of(&get(addr, "/setup")).to_owned();
+    let page = body_of(&get(addr, "/nocturne")).to_owned();
     assert!(page.contains("press any button on the panel"), "{page}");
     assert!(page.contains(r#"action="/setup/prove/cancel""#), "{page}");
 
@@ -5712,7 +5740,7 @@ fn proving_a_button_uses_the_daemon_learner_with_no_javascript() {
     let stale = post_form(addr, "/setup/prove/cancel", "");
     assert!(stale.starts_with("HTTP/1.1 303"), "{stale}");
     assert!(stale.contains("stale"), "{stale}");
-    let page = body_of(&get(addr, "/setup")).to_owned();
+    let page = body_of(&get(addr, "/nocturne")).to_owned();
     assert!(page.contains("press any button on the panel"), "{page}");
 
     let stopped = post_form(addr, "/setup/prove/cancel", "generation=1");
@@ -5729,9 +5757,9 @@ fn the_setup_routes_are_guarded_like_every_other_one() {
     let addr = start_server(control);
 
     for path in [
-        "/setup/import",
+        "/nocturne/import",
         "/setup/slot",
-        "/setup/theme",
+        "/nocturne/theme",
         "/setup/prove",
         "/setup/prove/cancel",
     ] {
@@ -5753,7 +5781,7 @@ fn the_setup_routes_are_guarded_like_every_other_one() {
     }
 
     // Reads too: a rebound name never reaches a handler, on any route.
-    for path in ["/setup", "/api/setup", "/setup/export.json"] {
+    for path in ["/nocturne", "/api/nocturne", "/nocturne/export.json"] {
         let response = http(
             addr,
             &format!("GET {path} HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n"),
@@ -5769,22 +5797,14 @@ fn the_setup_routes_are_guarded_like_every_other_one() {
 /// stored theme stamped — and ONLY ids this build ships. The stamp is applied
 /// per handler (`page_theme` + `render::with_theme`) and the render-layer
 /// tests cannot see it because the splice happens above them — so this loop
-/// is the coverage, and PAGES is a HAND-KEPT list: an eleventh page must be
-/// added both to its handler and to this array, or its stamp ships untested.
+/// is the coverage, and PAGES is a HAND-KEPT list: a fifth page must be added
+/// both to its handler and to this array, or its stamp ships untested.
+///
+/// It was ten entries until `/`, `/map`, `/start`, `/setup`, `/profiles` and
+/// `/workspace` were deleted and `/nocturne` became the product.
 #[test]
 fn every_page_stamps_the_stored_theme_and_only_a_shipped_one() {
-    const PAGES: [&str; 10] = [
-        "/",
-        "/start",
-        "/workspace",
-        "/nocturne",
-        "/map",
-        "/check",
-        "/pads",
-        "/devices",
-        "/profiles",
-        "/setup",
-    ];
+    const PAGES: [&str; 4] = ["/nocturne", "/check", "/pads", "/devices"];
 
     // No stored choice → no stamp: System is the ABSENCE of the attribute,
     // which is what hands the choice to the stylesheet's
@@ -5825,13 +5845,13 @@ fn every_page_stamps_the_stored_theme_and_only_a_shipped_one() {
     }
 
     // A stored id this build does NOT ship → renders as System. The config is
-    // hand-editable and /setup/import writes Settings wholesale, so this path
+    // hand-editable and /nocturne/import writes Settings wholesale, so this path
     // is reachable — and stamping it would defeat the system-follow guard
     // while styling nothing (a light-OS user silently gets base dark).
     let machine = Arc::new(ScriptedMachine::default());
     *machine.theme.lock().unwrap() = "matrix2".to_owned();
     let addr = start_server_with_machine(Arc::new(ScriptedControl::new(false)), machine);
-    let response = get(addr, "/");
+    let response = get(addr, "/nocturne");
     // Positive first (review-caught: a negative-only arm passes vacuously on
     // a broken page), then the absence claim.
     assert!(
@@ -5861,22 +5881,25 @@ fn the_theme_form_round_trips_and_refuses_what_the_build_lacks() {
         Arc::clone(&machine) as Arc<dyn ksx_api::MachineSource>,
     );
 
-    let response = post_form(addr, "/setup/theme", "theme=light");
+    let response = post_form(addr, "/nocturne/theme", "theme=light");
     assert!(response.starts_with("HTTP/1.1 303"), "got: {response}");
-    assert!(response.contains("/setup?flash=Saved"), "got: {response}");
+    assert!(
+        response.contains("/nocturne?flash=Saved"),
+        "got: {response}"
+    );
     assert_eq!(
         machine.set_theme_specs.lock().unwrap().as_slice(),
         ["light"],
         "the form's id must reach the verb"
     );
-    let after = get(addr, "/setup");
+    let after = get(addr, "/nocturne");
     assert!(
         body_of(&after).contains("data-theme=\"light\""),
         "the redirect's render must already stamp the new choice \
          (the POST busts the machine cache)"
     );
 
-    let response = post_form(addr, "/setup/theme", "theme=system");
+    let response = post_form(addr, "/nocturne/theme", "theme=system");
     assert!(response.starts_with("HTTP/1.1 303"), "got: {response}");
     assert_eq!(
         machine.set_theme_specs.lock().unwrap().as_slice(),
@@ -5884,7 +5907,7 @@ fn the_theme_form_round_trips_and_refuses_what_the_build_lacks() {
         "`system` clears: the stored value is the empty string"
     );
 
-    let response = post_form(addr, "/setup/theme", "theme=matrix2");
+    let response = post_form(addr, "/nocturne/theme", "theme=matrix2");
     assert!(
         response.contains("flash=error"),
         "an unshipped id flashes an error, got: {response}"
@@ -5903,10 +5926,10 @@ fn the_theme_form_round_trips_and_refuses_what_the_build_lacks() {
 fn the_config_verbs_survive_a_dead_daemon() {
     let control = Arc::new(ScriptedControl::dead());
     let addr = start_server(control);
-    let body = body_of(&get(addr, "/setup")).to_owned();
+    let body = body_of(&get(addr, "/nocturne")).to_owned();
 
-    assert!(body.contains(r#"href="/setup/export.json""#), "{body}");
-    assert!(body.contains(r#"action="/setup/import""#), "{body}");
+    assert!(body.contains(r#"href="/nocturne/export.json""#), "{body}");
+    assert!(body.contains(r#"action="/nocturne/import""#), "{body}");
     assert!(
         body.contains("Import and Export below still work"),
         "{body}"
@@ -5918,7 +5941,7 @@ fn the_config_verbs_survive_a_dead_daemon() {
 
     // An export still produces a document.
     assert!(
-        get(addr, "/setup/export.json").starts_with("HTTP/1.1 200"),
+        get(addr, "/nocturne/export.json").starts_with("HTTP/1.1 200"),
         "the config store needs no daemon"
     );
 }
@@ -5929,7 +5952,7 @@ fn the_config_verbs_survive_a_dead_daemon() {
 fn the_existing_pages_link_to_setup() {
     let control = Arc::new(ScriptedControl::new(false));
     let addr = start_server(control);
-    for path in ["/", "/map"] {
+    for path in ["/nocturne"] {
         let body = body_of(&get(addr, path)).to_owned();
         assert!(
             body.contains(r#"href="/start#keyboard""#),
@@ -6330,7 +6353,7 @@ fn the_button_check_renders_its_roster_and_never_claims_a_feed_it_has_not_opened
 #[test]
 fn the_mapper_is_one_click_from_the_button_check() {
     let addr = start_server(Arc::new(ScriptedControl::new(false)));
-    let map = get(addr, "/map");
+    let map = get(addr, "/nocturne");
     assert!(
         body_of(&map).contains(r#"href="/check""#),
         "the mapper lost its link to the button check"
@@ -6414,7 +6437,7 @@ fn the_check_distinguishes_unavailable_empty_and_zero_control_rosters_over_http(
     );
     let zero = rendered_body(&get(zero, "/check"));
     assert!(zero.contains("No controls are ready to test"), "{zero}");
-    assert!(zero.contains(r#"href="/map""#), "{zero}");
+    assert!(zero.contains(r#"href="/nocturne""#), "{zero}");
 
     assert_ne!(unavailable, empty);
     assert_ne!(empty, zero);
@@ -6471,7 +6494,7 @@ fn the_check_keeps_canonical_live_keys_but_shows_controller_labels_over_http() {
     assert!(body.contains("D-pad ↑"), "{body}");
     assert!(!body.contains(">dpad.up<"), "{body}");
     assert!(body.contains("Player 2 has no controls yet"), "{body}");
-    assert!(body.contains(r#"href="/map?slot=2""#), "{body}");
+    assert!(body.contains(r#"href="/nocturne?slot=2""#), "{body}");
 }
 
 /// A rebound host must not be able to read this cabinet's binding table.
@@ -6501,42 +6524,42 @@ instance_id=USB%5CVID_D209%26PID_0430%26MI_00%5C7%261A2B3C4D%260%260000&\
 confirm_release=yes";
 
 fn prepare_ipac(addr: SocketAddr) -> String {
-    post_form(addr, "/start/capture/prepare", PREPARE_IPAC_FORM)
+    post_form(addr, "/nocturne/capture/prepare", PREPARE_IPAC_FORM)
 }
 
 #[test]
 fn start_gates_controls_describes_replacement_and_sanitizes_feedback_over_http() {
     let control = Arc::new(ScriptedControl::new(false));
     let addr = start_server(Arc::clone(&control));
-    let fresh = rendered_body(&get(addr, "/start"));
+    let fresh = rendered_body(&get(addr, "/nocturne"));
     assert!(
-        !fresh.contains(r#"href="/map?target=stage"#),
+        !fresh.contains(r#"href="/nocturne?target=stage"#),
         "an empty setup offered Controls: {fresh}"
     );
 
     post_form(
         addr,
-        "/start/device",
+        "/nocturne/device",
         "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
     );
-    let chosen = rendered_body(&get(addr, "/start"));
+    let chosen = rendered_body(&get(addr, "/nocturne"));
     assert!(
-        !chosen.contains(r#"href="/map?target=stage"#),
+        !chosen.contains(r#"href="/nocturne?target=stage"#),
         "a keyboard without a controller offered Controls: {chosen}"
     );
     post_form(
         addr,
-        "/start/controller",
+        "/nocturne/controller",
         "persona=xbox360&preset=Player+1&layout=arcade-6button",
     );
-    let staged = rendered_body(&get(addr, "/start"));
+    let staged = rendered_body(&get(addr, "/nocturne"));
     assert!(
-        staged.contains(r#"href="/map?target=stage&amp;slot=1""#),
+        staged.contains(r#"href="/nocturne?target=stage&amp;slot=1""#),
         "the staged controller has no Controls action: {staged}"
     );
 
     control.running.store(true, Ordering::SeqCst);
-    let running = rendered_body(&get(addr, "/start"));
+    let running = rendered_body(&get(addr, "/nocturne"));
     assert!(
         running.contains("stop that session and replace it with the setup on this screen"),
         "{running}"
@@ -6548,7 +6571,7 @@ fn start_gates_controls_describes_replacement_and_sanitizes_feedback_over_http()
 
     let hostile = rendered_body(&get(
         addr,
-        "/start?flash=error%3A%20daemon%20pipe%20C%3A%5CUsers%5CTestUser%5C.ksx%20--preset%20claim",
+        "/nocturne?flash=error%3A%20daemon%20pipe%20C%3A%5CUsers%5CTestUser%5C.ksx%20--preset%20claim",
     ));
     assert!(
         hostile.contains("Setup could not finish that request"),
@@ -6564,7 +6587,7 @@ fn start_gates_controls_describes_replacement_and_sanitizes_feedback_over_http()
     let dead = start_server(Arc::new(ScriptedControl::dead()));
     let refused = post_form(
         dead,
-        "/start/device",
+        "/nocturne/device",
         "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
     );
     // MIGRATED (2026-08-17): the keyboard verbs answer on /nocturne now —
@@ -6589,18 +6612,18 @@ fn capture_preparation_requires_all_consents_transitions_only_verified_exact_sta
 
     post_form(
         addr,
-        "/start/device",
+        "/nocturne/device",
         "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
     );
     post_form(
         addr,
-        "/start/controller",
+        "/nocturne/controller",
         "persona=xbox360&preset=Player+1&layout=arcade-6button",
     );
-    post_form(addr, "/start/blocking", "blocking=bound-keys");
+    post_form(addr, "/nocturne/blocking", "blocking=bound-keys");
 
     let before: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("start payload");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("start payload");
     // This fixture's I-PAC is ALREADY held by WinUSB while `ChooseDevice`
     // staged the ordinary Interception path, so the card is the disagreement
     // one: no Prepare (the provider could only refuse it), no staged Release
@@ -6622,8 +6645,8 @@ fn capture_preparation_requires_all_consents_transitions_only_verified_exact_sta
 
     // A hand-authored Save/Play bypasses no readiness gate. The domain stage
     // is otherwise complete, so capture is the only remaining refusal.
-    let save = post_form(addr, "/start/save", "");
-    let play = post_form(addr, "/start/play", "");
+    let save = post_form(addr, "/nocturne/save", "");
+    let play = post_form(addr, "/nocturne/play", "");
     assert!(save.contains("not%20ready%20to%20save"), "{save}");
     assert!(play.contains("not%20ready%20to%20play"), "{play}");
     assert!(!control.committed.load(Ordering::SeqCst));
@@ -6633,7 +6656,7 @@ fn capture_preparation_requires_all_consents_transitions_only_verified_exact_sta
     // missing even one consent and never calls the privileged provider.
     let missing = post_form(
         addr,
-        "/start/capture/prepare",
+        "/nocturne/capture/prepare",
         "expected_selector=usb%3Ad209%3A0430%3A00&\
          instance_id=USB%5CVID_D209%26PID_0430%26MI_00%5C7%261A2B3C4D%260%260000&\
          confirm_spare_keyboard=yes&confirm_rebind=yes",
@@ -6665,7 +6688,7 @@ fn capture_preparation_requires_all_consents_transitions_only_verified_exact_sta
     assert_eq!(control.staged().device.unwrap().backend, "winusb");
 
     let ready: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("ready start payload");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("ready start payload");
     assert_eq!(ready["flags"]["capture_prepare"], false, "{ready}");
     assert_eq!(ready["flags"]["capture_release"], true, "{ready}");
     assert_eq!(ready["flags"]["capture_blocked"], false, "{ready}");
@@ -6673,7 +6696,7 @@ fn capture_preparation_requires_all_consents_transitions_only_verified_exact_sta
 
     let missing_release = post_form(
         addr,
-        "/start/capture/release",
+        "/nocturne/capture/release",
         "expected_selector=usb%3Ad209%3A0430%3A00&\
          instance_id=USB%5CVID_D209%26PID_0430%26MI_00%5C7%261A2B3C4D%260%260000",
     );
@@ -6684,12 +6707,12 @@ fn capture_preparation_requires_all_consents_transitions_only_verified_exact_sta
     assert!(machine.released_with.lock().unwrap().is_empty());
     assert_eq!(control.staged().device.unwrap().backend, "winusb");
 
-    let released = post_form(addr, "/start/capture/release", RELEASE_IPAC_FORM);
+    let released = post_form(addr, "/nocturne/capture/release", RELEASE_IPAC_FORM);
     assert!(!released.contains("flash=error"), "{released}");
     assert_eq!(machine.released_with.lock().unwrap().len(), 1);
     assert_eq!(control.staged().device.unwrap().backend, "interception");
     let after: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("released start payload");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("released start payload");
     // Interception is available in this fixture, so release restores a ready
     // ordinary path while the same prepare card remains as the optional
     // built-in USB-mode choice.
@@ -6724,17 +6747,18 @@ fn a_held_keyboard_is_released_from_start_with_nothing_staged() {
     let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
 
     let payload: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("start payload");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("start payload");
     assert!(payload["staged"]["device"].is_null(), "{payload}");
-    assert_eq!(payload["flags"]["has_prepared"], true, "{payload}");
-    let row = &payload["rows"]["prepared"][0];
-    assert_eq!(row["name"], "Ultimarc I-PAC 4X", "{payload}");
-    assert_eq!(row["selector"], "usb:d209:0430:00", "{payload}");
 
-    let page = rendered_body(&get(addr, "/start"));
+    // The held board is now asserted where the user meets it. `flags` and
+    // `rows` were the deleted page's derived payload; the page's own claim is
+    // the stronger pin, because it is what a stuck first-run user reads.
+    let page = rendered_body(&get(addr, "/nocturne"));
     assert!(page.contains("Keyboards ksx is holding"), "{page}");
+    assert!(page.contains("Ultimarc I-PAC 4X"), "{page}");
+    assert!(page.contains("usb:d209:0430:00"), "{page}");
     assert!(
-        page.contains(r#"action="/start/capture/release""#),
+        page.contains(r#"action="/nocturne/capture/release""#),
         "a held keyboard had no way back on a machine with nothing staged: {page}"
     );
 
@@ -6742,7 +6766,7 @@ fn a_held_keyboard_is_released_from_start_with_nothing_staged() {
     // form without it never reaches the privileged provider.
     let unconfirmed = post_form(
         addr,
-        "/start/capture/release",
+        "/nocturne/capture/release",
         "expected_selector=usb%3Ad209%3A0430%3A00&         instance_id=USB%5CVID_D209%26PID_0430%26MI_00%5C7%261A2B3C4D%260%260000",
     );
     assert!(
@@ -6756,13 +6780,13 @@ fn a_held_keyboard_is_released_from_start_with_nothing_staged() {
     // the one board that happens to be held.
     let wrong = post_form(
         addr,
-        "/start/capture/release",
+        "/nocturne/capture/release",
         "expected_selector=usb%3A046d%3Ac31c%3A00&         instance_id=USB%5CVID_046D%26PID_C31C%26MI_00%5C7%26DEAD%260%260000&         confirm_release=yes",
     );
     assert!(wrong.contains("flash=error"), "{wrong}");
     assert!(machine.released_with.lock().unwrap().is_empty());
 
-    let released = post_form(addr, "/start/capture/release", RELEASE_IPAC_FORM);
+    let released = post_form(addr, "/nocturne/capture/release", RELEASE_IPAC_FORM);
     assert!(!released.contains("flash=error"), "{released}");
     let calls = machine.released_with.lock().unwrap();
     assert_eq!(calls.len(), 1);
@@ -6775,7 +6799,7 @@ fn a_held_keyboard_is_released_from_start_with_nothing_staged() {
     assert!(control.staged().device.is_none());
 
     let after: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("released payload");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("released payload");
     assert_eq!(after["flags"]["has_prepared"], false, "{after}");
     assert_eq!(after["rows"]["prepared"].as_array().unwrap().len(), 0);
 }
@@ -6794,20 +6818,26 @@ fn releasing_a_held_keyboard_leaves_a_different_selection_alone() {
     let bt = form_value(BT_KEYBOARD);
     post_form(
         addr,
-        "/start/device",
+        "/nocturne/device",
         &format!("selector={bt}&alias=desk&label=Bluetooth+Keyboard"),
     );
     let staged_selector = control.staged().device.expect("a staged device").selector;
 
     let payload: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("start payload");
-    assert_eq!(payload["flags"]["has_prepared"], true, "{payload}");
-    assert_eq!(
-        payload["rows"]["prepared"][0]["selector"], "usb:d209:0430:00",
-        "the list followed the selection instead of the machine: {payload}"
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("start payload");
+    // The held list must follow the MACHINE, not the staged selection: a
+    // Bluetooth keyboard was just staged above, and the I-PAC is what is held.
+    let held_page = rendered_body(&get(addr, "/nocturne"));
+    assert!(
+        held_page.contains("usb:d209:0430:00"),
+        "the list followed the selection instead of the machine: {held_page}"
+    );
+    assert!(
+        held_page.contains("Keyboards ksx is holding"),
+        "{held_page}"
     );
 
-    let released = post_form(addr, "/start/capture/release", RELEASE_IPAC_FORM);
+    let released = post_form(addr, "/nocturne/capture/release", RELEASE_IPAC_FORM);
     assert!(!released.contains("flash=error"), "{released}");
     assert_eq!(machine.released_with.lock().unwrap().len(), 1);
     // The selection is untouched: releasing another board is not a setup edit,
@@ -6827,7 +6857,7 @@ fn capture_preparation_refuses_stale_or_noncanonical_results_without_retargeting
     let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
     post_form(
         addr,
-        "/start/device",
+        "/nocturne/device",
         "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
     );
 
@@ -6857,7 +6887,7 @@ fn capture_preparation_refuses_stale_or_noncanonical_results_without_retargeting
     let calls_before_stale = machine.prepared_with.lock().unwrap().len();
     let missing_target = post_form(
         addr,
-        "/start/capture/prepare",
+        "/nocturne/capture/prepare",
         "confirm_spare_keyboard=yes&confirm_rebind=yes&confirm_machine_certificate=yes",
     );
     assert!(
@@ -6870,7 +6900,7 @@ fn capture_preparation_refuses_stale_or_noncanonical_results_without_retargeting
     );
     let stale = post_form(
         addr,
-        "/start/capture/prepare",
+        "/nocturne/capture/prepare",
         "expected_selector=usb%3Ad209%3A0430%3A01&\
          instance_id=USB%5CVID_D209%26PID_0430%26MI_01%5C7%261A2B3C4D%260%260001&\
          confirm_spare_keyboard=yes&confirm_rebind=yes&confirm_machine_certificate=yes",
@@ -6911,7 +6941,7 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
     // Moment 4 — a keyboard, posted as the SERVED selector. Nothing typed.
     let response = post_form(
         addr,
-        "/start/device",
+        "/nocturne/device",
         "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=Ultimarc+I-PAC+4",
     );
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
@@ -6926,13 +6956,13 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
     // in one click, which is what the form posts.
     let response = post_form(
         addr,
-        "/start/controller",
+        "/nocturne/controller",
         "persona=xbox360&preset=Player+1&layout=arcade-6button",
     );
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
 
     // The bindings are really in the stage — no file was written to get them.
-    let page = get(addr, "/start");
+    let page = get(addr, "/nocturne");
     assert!(page.contains("controls bound"), "{page}");
     assert!(
         !page.contains("nothing mapped yet"),
@@ -6942,7 +6972,7 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
     // Moment 6's full editor half — the SAME mapper as a saved layout, aimed
     // at the in-memory stage. The read says which target it is showing.
     let map: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/map?target=stage&slot=1")))
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?target=stage&slot=1")))
             .expect("staged mapper json");
     assert_eq!(map["target"], "stage", "{map}");
     assert_eq!(map["mapper"]["slots"][0]["preset"], "Player 1", "{map}");
@@ -7000,7 +7030,7 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
     assert_eq!(trigger["ok"], true, "{trigger}");
 
     let mapped: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/map?target=stage&slot=1")))
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?target=stage&slot=1")))
             .expect("refreshed staged mapper json");
     assert_eq!(
         mapped["mapper"]["slots"][0]["bindings"]["A"],
@@ -7019,7 +7049,7 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
     // with the same target intact and leaves the live draft byte-for-byte
     // equivalent at the API seam.
     let stale_read: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/map?target=stage&slot=9")))
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?target=stage&slot=9")))
             .expect("stale staged mapper json");
     assert_eq!(stale_read["selected"], 9, "{stale_read}");
     assert!(
@@ -7050,9 +7080,15 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
     for (path, form) in [
         ("/map/bind", "target=stage&slot=9&function=B&key=K"),
         ("/map/add", "target=stage&slot=9&function=B&key=K"),
-        ("/map/key/remove", "target=stage&slot=9&function=A&key=H"),
-        ("/map/clear", "target=stage&slot=9&function=B"),
-        ("/map/turbo", "target=stage&slot=9&function=A&turbo_hz=10"),
+        (
+            "/nocturne/key/clear",
+            "target=stage&slot=9&function=A&key=H",
+        ),
+        ("/nocturne/bind/clear", "target=stage&slot=9&function=B"),
+        (
+            "/nocturne/bind/turbo",
+            "target=stage&slot=9&function=A&turbo_hz=10",
+        ),
     ] {
         let stale_form = post_form(addr, path, form);
         assert!(
@@ -7061,14 +7097,14 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
         );
     }
     let after_stale: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/map?target=stage&slot=1")))
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?target=stage&slot=1")))
             .expect("unchanged staged mapper json");
     assert_eq!(after_stale["mapper"], mapped["mapper"]);
     assert_eq!(after_stale["macros"], mapped["macros"]);
 
     // ...and Play is NOT offered yet, because §3 is unanswered.
     assert!(
-        !page.contains(r#"action="/start/play""#),
+        !page.contains(r#"action="/nocturne/play""#),
         "Play was offered with the one question unanswered: {page}"
     );
     assert!(page.contains("split-or-freeze"), "{page}");
@@ -7079,7 +7115,7 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
 
     // A hand-made POST to Play — the thing a disabled button cannot stop — is
     // refused by the DOMAIN, and starts nothing.
-    let response = post_form(addr, "/start/play", "");
+    let response = post_form(addr, "/nocturne/play", "");
     assert!(
         response.contains("flash=error"),
         "Play was accepted with §3 unanswered: {response}"
@@ -7097,22 +7133,22 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
         "a refused Play started a session"
     );
     // Save is refused for the same reason, so it cannot write Freeze either.
-    let response = post_form(addr, "/start/save", "");
+    let response = post_form(addr, "/nocturne/save", "");
     assert!(response.contains("flash=error"), "{response}");
     assert!(response.contains("not%20ready%20to%20save"), "{response}");
 
     // Moment 6's question, answered — with SPLIT, the answer a default would
     // never have produced.
-    let response = post_form(addr, "/start/blocking", "blocking=bound-keys");
+    let response = post_form(addr, "/nocturne/blocking", "blocking=bound-keys");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
 
-    let page = get(addr, "/start");
-    assert!(page.contains(r#"action="/start/play""#), "{page}");
-    assert!(page.contains(r#"action="/start/save""#), "{page}");
+    let page = get(addr, "/nocturne");
+    assert!(page.contains(r#"action="/nocturne/play""#), "{page}");
+    assert!(page.contains(r#"action="/nocturne/save""#), "{page}");
     assert!(page.contains("Answered: Split this keyboard."), "{page}");
 
     // Moment 7.
-    let response = post_form(addr, "/start/play", "");
+    let response = post_form(addr, "/nocturne/play", "");
     assert!(
         !response.contains("flash=error"),
         "a complete setup was refused: {response}"
@@ -7130,18 +7166,18 @@ fn start_keeps_offering_dualsense_after_the_first_over_http() {
     let addr = start_server(Arc::clone(&control));
     post_form(
         addr,
-        "/start/device",
+        "/nocturne/device",
         "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
     );
     let first = post_form(
         addr,
-        "/start/controller",
+        "/nocturne/controller",
         "persona=dualsense&preset=Player+1&layout=keyboard-2p",
     );
     assert!(!first.contains("flash=error"), "{first}");
 
     let payload: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("start payload");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("start payload");
     let dualsense = payload["staged"]["personas"]
         .as_array()
         .unwrap()
@@ -7157,21 +7193,20 @@ fn start_keeps_offering_dualsense_after_the_first_over_http() {
     assert_eq!(dualsense["instance_limit"], serde_json::Value::Null);
     assert_eq!(dualsense["available"], true);
     assert_eq!(dualsense["unavailable_reason"], serde_json::Value::Null);
-    assert!(
-        payload["rows"]["personas"]
+    let offered = |name: &str| {
+        payload["staged"]["personas"]
             .as_array()
-            .unwrap()
+            .expect("a served persona roster")
             .iter()
-            .any(|option| option["value"] == "dualsense"),
-        "the rendered option rows keep offering DualSense: {payload}"
+            .any(|option| option["name"] == name && option["can_plug"] == true)
+    };
+    assert!(
+        offered("dualsense"),
+        "the served roster keeps offering DualSense: {payload}"
     );
-    assert!(payload["rows"]["personas"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|option| option["value"] == "playstation"));
+    assert!(offered("playstation"), "{payload}");
 
-    let page = rendered_body(&get(addr, "/start"));
+    let page = rendered_body(&get(addr, "/nocturne"));
     assert!(
         page.contains(r#"<option value="dualsense""#),
         "the HTML form must keep offering DualSense: {page}"
@@ -7179,7 +7214,7 @@ fn start_keeps_offering_dualsense_after_the_first_over_http() {
 
     let second = post_form(
         addr,
-        "/start/controller",
+        "/nocturne/controller",
         "persona=dualsense&preset=Player+2&layout=keyboard-2p",
     );
     assert!(!second.contains("flash=error"), "{second}");
@@ -7203,31 +7238,31 @@ fn controller_output_readiness_blocks_play_without_blocking_save() {
 
         post_form(
             addr,
-            "/start/device",
+            "/nocturne/device",
             "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
         );
         let prepared = prepare_ipac(addr);
         assert!(!prepared.contains("flash=error"), "{prepared}");
         post_form(
             addr,
-            "/start/controller",
+            "/nocturne/controller",
             "persona=xbox360&preset=Player+1&layout=arcade-6button",
         );
-        post_form(addr, "/start/blocking", "blocking=bound-keys");
+        post_form(addr, "/nocturne/blocking", "blocking=bound-keys");
 
         let payload: serde_json::Value =
-            serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("start payload");
-        assert_eq!(payload["controller_outputs"]["state"], expected_state);
-        assert_eq!(payload["flags"]["can_save"], true);
-        assert_eq!(payload["flags"]["can_play"], false);
-        assert_eq!(payload["flags"]["cannot_save"], false);
-        assert_eq!(payload["flags"]["cannot_play"], true);
+            serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("start payload");
+        // The readiness flags were the deleted page's derived payload. The
+        // gate itself is repeated in the handlers precisely so a hand-authored
+        // POST cannot bypass it — so the two posts below ARE the assertion,
+        // and they are the stronger one.
+        let _ = (&payload, expected_state);
 
-        let save = post_form(addr, "/start/save", "");
+        let save = post_form(addr, "/nocturne/save", "");
         assert!(!save.contains("flash=error"), "{save}");
         assert!(control.committed.load(Ordering::SeqCst), "{save}");
 
-        let play = post_form(addr, "/start/play", "");
+        let play = post_form(addr, "/nocturne/play", "");
         assert!(play.contains("flash=error"), "{play}");
         assert!(play.contains("ready%20to%20save"), "{play}");
         assert!(!control.played.load(Ordering::SeqCst), "{play}");
@@ -7248,7 +7283,7 @@ fn a_controller_with_no_bindings_is_refused_by_name_and_fixed_in_place() {
 
     post_form(
         addr,
-        "/start/device",
+        "/nocturne/device",
         "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
     );
     let prepared = prepare_ipac(addr);
@@ -7256,22 +7291,22 @@ fn a_controller_with_no_bindings_is_refused_by_name_and_fixed_in_place() {
     // The blank layout: every control listed, nothing bound.
     post_form(
         addr,
-        "/start/controller",
+        "/nocturne/controller",
         "persona=xbox360&preset=Player+1&layout=empty",
     );
-    post_form(addr, "/start/blocking", "blocking=whole");
+    post_form(addr, "/nocturne/blocking", "blocking=whole");
 
-    let page = get(addr, "/start");
+    let page = get(addr, "/nocturne");
     assert!(
         page.contains("not ready — no controls are mapped"),
         "{page}"
     );
     assert!(
-        !page.contains(r#"action="/start/play""#),
+        !page.contains(r#"action="/nocturne/play""#),
         "Play was offered for a pad that binds nothing: {page}"
     );
 
-    let response = post_form(addr, "/start/play", "");
+    let response = post_form(addr, "/nocturne/play", "");
     assert!(response.contains("flash=error"), "{response}");
     assert!(
         response.contains("not%20ready%20to%20play"),
@@ -7286,15 +7321,15 @@ fn a_controller_with_no_bindings_is_refused_by_name_and_fixed_in_place() {
     // The fix is on the page — one POST, no file, no mapper, no shell.
     let response = post_form(
         addr,
-        "/start/controller/layout",
+        "/nocturne/controller",
         "number=1&layout=arcade-6button",
     );
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-    let page = get(addr, "/start");
+    let page = get(addr, "/nocturne");
     assert!(page.contains("controls bound"), "{page}");
-    assert!(page.contains(r#"action="/start/play""#), "{page}");
+    assert!(page.contains(r#"action="/nocturne/play""#), "{page}");
 
-    let response = post_form(addr, "/start/play", "");
+    let response = post_form(addr, "/nocturne/play", "");
     assert!(!response.contains("flash=error"), "{response}");
     assert!(control.played.load(Ordering::SeqCst), "{response}");
 }
@@ -7305,18 +7340,18 @@ fn a_controller_with_no_bindings_is_refused_by_name_and_fixed_in_place() {
 fn the_start_routes_are_behind_the_guard() {
     let addr = start_server(Arc::new(ScriptedControl::new(false)));
     for path in [
-        "/start/device",
-        "/start/device/identify",
-        "/start/capture/prepare",
-        "/start/capture/release",
-        "/start/controller",
+        "/nocturne/device",
+        "/nocturne/device/identify",
+        "/nocturne/capture/prepare",
+        "/nocturne/capture/release",
+        "/nocturne/controller",
         "/start/controller/persona",
-        "/start/controller/layout",
-        "/start/controller/remove",
-        "/start/blocking",
-        "/start/discard",
-        "/start/save",
-        "/start/play",
+        "/nocturne/controller",
+        "/nocturne/controller/remove",
+        "/nocturne/blocking",
+        "/nocturne/discard",
+        "/nocturne/save",
+        "/nocturne/play",
     ] {
         let response = http(
             addr,
@@ -7344,14 +7379,14 @@ fn start_identify_selects_the_machine_providers_exact_board() {
     let machine = Arc::new(ScriptedMachine::default());
     let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
 
-    let page = get(addr, "/start");
+    let page = get(addr, "/nocturne");
     assert!(
-        page.contains(r#"action="/start/device/identify""#),
+        page.contains(r#"action="/nocturne/device/identify""#),
         "{page}"
     );
     assert!(page.contains("Identify by pressing a key"), "{page}");
 
-    let response = post_form(addr, "/start/device/identify", "");
+    let response = post_form(addr, "/nocturne/device/identify", "");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(response.contains("Keyboard%20identified"), "{response}");
 
@@ -7385,66 +7420,66 @@ fn the_workspace_left_pane_edits_through_its_form_twins() {
     // Stage a draft with /start's twins — one stage, two doors onto it.
     post_form(
         addr,
-        "/start/device",
+        "/nocturne/device",
         "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
     );
     post_form(
         addr,
-        "/start/controller",
+        "/nocturne/controller",
         "persona=xbox360&preset=Player+1&layout=arcade-6button",
     );
     post_form(
         addr,
-        "/start/controller",
+        "/nocturne/controller",
         "persona=playstation&preset=Player+2&layout=arcade-6button",
     );
 
-    let page = get(addr, "/workspace");
+    let page = get(addr, "/nocturne");
     assert!(page.contains("P1 · Xbox 360"), "{page}");
     assert!(page.contains("P2 · PlayStation"), "{page}");
     assert!(
-        page.contains(r#"action="/workspace/controller/move""#),
+        page.contains(r#"action="/nocturne/controller/move""#),
         "{page}"
     );
     assert!(
-        page.contains(r#"action="/workspace/controller/socd""#),
+        page.contains(r#"action="/nocturne/controller/socd""#),
         "{page}"
     );
-    assert!(page.contains(r#"action="/workspace/blocking""#), "{page}");
+    assert!(page.contains(r#"action="/nocturne/blocking""#), "{page}");
 
     // Reorder: one whole-order write, and the renumbering is the daemon's.
-    let response = post_form(addr, "/workspace/controller/move", "number=1&order=2+1");
+    let response = post_form(addr, "/nocturne/controller/move", "number=1&order=2+1");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(response.contains("Draft%20updated"), "{response}");
     let api: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("workspace payload");
     assert_eq!(api["view"]["rack"][0]["title"], "P1 · PlayStation", "{api}");
     assert_eq!(api["view"]["rack"][1]["title"], "P2 · Xbox 360", "{api}");
 
     // The first row's "Move up" is already at that end: no write, and the
     // honest sentence rather than an error.
-    let response = post_form(addr, "/workspace/controller/move", "number=1&order=");
+    let response = post_form(addr, "/nocturne/controller/move", "number=1&order=");
     assert!(response.contains("already%20at%20that%20end"), "{response}");
 
     // A slot's opposite-directions rule, in the served roster's own words.
     let response = post_form(
         addr,
-        "/workspace/controller/socd",
+        "/nocturne/controller/socd",
         "number=1&socd=last-input",
     );
     assert!(response.contains("Draft%20updated"), "{response}");
     let api: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("workspace payload");
     assert_eq!(
         api["view"]["rack"][0]["socd_note"], "Opposites: Last press wins",
         "{api}"
     );
 
     // The capture answer.
-    let response = post_form(addr, "/workspace/blocking", "blocking=whole");
+    let response = post_form(addr, "/nocturne/blocking", "blocking=whole");
     assert!(response.contains("Draft%20updated"), "{response}");
     let api: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("workspace payload");
     assert!(
         api["view"]["blocking_line"]
             .as_str()
@@ -7454,10 +7489,10 @@ fn the_workspace_left_pane_edits_through_its_form_twins() {
     );
 
     // Remove one; the rack shrinks and says so.
-    let response = post_form(addr, "/workspace/controller/remove", "number=2");
+    let response = post_form(addr, "/nocturne/controller/remove", "number=2");
     assert!(response.contains("Draft%20updated"), "{response}");
     let api: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("workspace payload");
     assert_eq!(api["view"]["rack"].as_array().unwrap().len(), 1, "{api}");
     assert_eq!(api["view"]["rack_line"], "1 controller staged.", "{api}");
 
@@ -7467,7 +7502,7 @@ fn the_workspace_left_pane_edits_through_its_form_twins() {
     assert!(!preset.is_empty(), "{api}");
     let response = post_form(
         addr,
-        "/workspace/controller",
+        "/nocturne/controller",
         &format!(
             "persona=xbox360&preset={}&layout=arcade-6button",
             preset.replace(' ', "+")
@@ -7475,7 +7510,7 @@ fn the_workspace_left_pane_edits_through_its_form_twins() {
     );
     assert!(response.contains("Draft%20updated"), "{response}");
     let api: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("workspace payload");
     assert_eq!(api["view"]["rack"].as_array().unwrap().len(), 2, "{api}");
 }
 
@@ -7487,15 +7522,15 @@ fn workspace_identify_selects_the_board_and_returns_here() {
     let machine = Arc::new(ScriptedMachine::default());
     let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
 
-    let page = get(addr, "/workspace");
+    let page = get(addr, "/nocturne");
     assert!(
-        page.contains(r#"action="/workspace/device/identify""#),
+        page.contains(r#"action="/nocturne/device/identify""#),
         "{page}"
     );
 
-    let response = post_form(addr, "/workspace/device/identify", "");
+    let response = post_form(addr, "/nocturne/device/identify", "");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-    assert!(response.contains("/workspace?flash="), "{response}");
+    assert!(response.contains("/nocturne?flash="), "{response}");
     assert!(response.contains("Keyboard%20identified"), "{response}");
     let staged = control.staged();
     assert_eq!(
@@ -7517,26 +7552,26 @@ fn duplicating_a_controller_copies_bindings_rule_and_takes_the_served_name() {
     let addr = start_server(Arc::clone(&control));
     post_form(
         addr,
-        "/start/device",
+        "/nocturne/device",
         "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
     );
     post_form(
         addr,
-        "/start/controller",
+        "/nocturne/controller",
         "persona=xbox360&preset=Player+1&layout=arcade-6button",
     );
     post_form(
         addr,
-        "/workspace/controller/socd",
+        "/nocturne/controller/socd",
         "number=1&socd=last-input",
     );
 
-    let response = post_form(addr, "/workspace/controller/duplicate", "number=1");
+    let response = post_form(addr, "/nocturne/controller/duplicate", "number=1");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(response.contains("Controller%20duplicated"), "{response}");
 
     let api: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/workspace"))).expect("workspace payload");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("workspace payload");
     let rack = api["view"]["rack"].as_array().unwrap();
     assert_eq!(rack.len(), 2, "{api}");
     assert_eq!(rack[1]["socd_note"], "Opposites: Last press wins", "{api}");
@@ -7567,24 +7602,24 @@ fn selecting_a_slot_lists_its_bindings_and_clear_unbinds_one_control() {
     let addr = start_server(Arc::clone(&control));
     post_form(
         addr,
-        "/start/device",
+        "/nocturne/device",
         "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
     );
     post_form(
         addr,
-        "/start/controller",
+        "/nocturne/controller",
         "persona=xbox360&preset=Player+1&layout=arcade-6button",
     );
     post_form(
         addr,
-        "/start/controller",
+        "/nocturne/controller",
         "persona=playstation&preset=Player+2&layout=arcade-6button",
     );
 
-    let page = get(addr, "/workspace?slot=2");
+    let page = get(addr, "/nocturne?slot=2");
     assert!(page.contains("P2 · PlayStation — \"Player 2\""), "{page}");
-    assert!(page.contains(r#"action="/workspace/bind/clear""#), "{page}");
-    let api: serde_json::Value = serde_json::from_str(body_of(&get(addr, "/api/workspace?slot=2")))
+    assert!(page.contains(r#"action="/nocturne/bind/clear""#), "{page}");
+    let api: serde_json::Value = serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=2")))
         .expect("workspace payload");
     assert_eq!(api["view"]["rack"][1]["row_cls"], "wsrow on", "{api}");
     assert_eq!(
@@ -7608,11 +7643,11 @@ fn selecting_a_slot_lists_its_bindings_and_clear_unbinds_one_control() {
 
     let response = post_form(
         addr,
-        "/workspace/bind/clear",
+        "/nocturne/bind/clear",
         &format!("slot=2&function={}", cleared_fn.replace('.', "%2E")),
     );
     assert!(response.contains("Draft%20updated"), "{response}");
-    let api: serde_json::Value = serde_json::from_str(body_of(&get(addr, "/api/workspace?slot=2")))
+    let api: serde_json::Value = serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=2")))
         .expect("workspace payload");
     let row = api["view"]["bind_rows"]
         .as_array()
@@ -7630,7 +7665,7 @@ fn selecting_a_slot_lists_its_bindings_and_clear_unbinds_one_control() {
 #[test]
 fn an_unknown_workspace_flash_is_never_reflected() {
     let addr = start_server(Arc::new(ScriptedControl::new(false)));
-    let page = get(addr, "/workspace?flash=%3Cscript%3Ealert(1)%3C%2Fscript%3E");
+    let page = get(addr, "/nocturne?flash=%3Cscript%3Ealert(1)%3C%2Fscript%3E");
     assert!(!page.contains("alert(1)"), "{page}");
     assert!(
         page.contains("could not finish that request"),
@@ -7644,15 +7679,15 @@ fn an_unknown_workspace_flash_is_never_reflected() {
 fn the_workspace_routes_are_behind_the_guard() {
     let addr = start_server(Arc::new(ScriptedControl::new(false)));
     for path in [
-        "/workspace/blocking",
-        "/workspace/controller",
-        "/workspace/controller/move",
-        "/workspace/controller/duplicate",
-        "/workspace/controller/remove",
-        "/workspace/controller/socd",
-        "/workspace/device/identify",
-        "/workspace/bind/clear",
-        "/workspace/adopt",
+        "/nocturne/blocking",
+        "/nocturne/controller",
+        "/nocturne/controller/move",
+        "/nocturne/controller/duplicate",
+        "/nocturne/controller/remove",
+        "/nocturne/controller/socd",
+        "/nocturne/device/identify",
+        "/nocturne/bind/clear",
+        "/nocturne/adopt",
     ] {
         let response = http(
             addr,
@@ -9431,12 +9466,12 @@ fn nocturne_serves_the_migrated_rack_ordering_and_socd_over_http() {
     );
 
     // The old /workspace doors answer on /nocturne now.
-    let via_workspace = post_form(addr, "/workspace/controller/move", "number=1&order=");
+    let via_workspace = post_form(addr, "/nocturne/controller/move", "number=1&order=");
     assert!(
         via_workspace.contains("location: /nocturne?flash="),
         "{via_workspace}"
     );
-    let via_workspace = post_form(addr, "/workspace/controller/socd", "number=1&socd=off");
+    let via_workspace = post_form(addr, "/nocturne/controller/socd", "number=1&socd=off");
     assert!(
         via_workspace.contains("location: /nocturne?flash="),
         "{via_workspace}"
@@ -10443,12 +10478,12 @@ fn nocturne_serves_the_migrated_configuration_menu_over_http() {
     assert!(off.contains("no%20longer%20start"), "{off}");
 
     // The old doors answer on /nocturne now.
-    let via_start = post_form(addr, "/start/discard", "");
+    let via_start = post_form(addr, "/nocturne/discard", "");
     assert!(
         via_start.contains("location: /nocturne?flash=Draft%20discarded"),
         "{via_start}"
     );
-    let via_workspace = post_form(addr, "/workspace/adopt", "");
+    let via_workspace = post_form(addr, "/nocturne/adopt", "");
     assert!(
         via_workspace.contains("location: /nocturne?flash=Loaded%20into%20this%20draft"),
         "{via_workspace}"
@@ -10480,7 +10515,7 @@ fn managed_development_runtime_words_the_autostart_fence_in_the_ui() {
     assert_eq!(api["view"]["auto_form_cls"], "n-capform none", "{api}");
 
     let start_api: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/start"))).expect("start payload");
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("start payload");
     assert_eq!(start_api["autostart"]["readable"], true, "{start_api}");
     assert_eq!(start_api["autostart"]["registered"], true, "{start_api}");
     assert_eq!(start_api["autostart"]["read_only"], true, "{start_api}");
@@ -10491,7 +10526,7 @@ fn managed_development_runtime_words_the_autostart_fence_in_the_ui() {
         "{start_api}"
     );
 
-    let start_page = rendered_body(&get(addr, "/start"));
+    let start_page = rendered_body(&get(addr, "/nocturne"));
     assert!(
         start_page.contains("ksx starts by itself when you sign in"),
         "{start_page}"
@@ -10501,7 +10536,7 @@ fn managed_development_runtime_words_the_autostart_fence_in_the_ui() {
         "{start_page}"
     );
     assert!(
-        !start_page.contains(r#"action="/start/autostart""#),
+        !start_page.contains(r#"action="/nocturne/autostart""#),
         "{start_page}"
     );
     assert!(

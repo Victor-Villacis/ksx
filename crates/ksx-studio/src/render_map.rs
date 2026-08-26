@@ -57,50 +57,8 @@
 //! established applyStatus pattern); `zone_tables_cover_every_mappable_
 //! function` pins the art against the domain vocabulary.
 
-use forma_ir::parser::IrModule;
-use forma_ir::slot::{SlotData, SlotValue};
-use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
-
-use crate::render::{
-    art_for, body_prefix, daemon_command, with_icon_links, EmbeddedPage, PERSONALITY_CSS,
-};
-use crate::snapshot::{MacroStepView, MacroView, MapPayload, MapperSlot, ShelfKeyRow, ShelfView};
-
-#[cfg(test)]
-const ISLAND_COMPONENT: &str = "MapIsland";
-
-/// Bare-named slots the mapper renders and the seam deliberately never fills.
-///
-/// `modalTurboLine` is the learn modal's auto-fire sentence. It describes the
-/// control the USER just picked in a dialog that is never SSR-open
-/// (`show:modalOpen` is unconditionally false here), so the server has nothing
-/// to say about it and its authored `""` is the honest paint. Every other
-/// signal `MapIsland.ts` binds to the DOM is server-injected — see
-/// [`crate::render::assert_island_slot_contract`] for why that list has to be
-/// explicit rather than implied.
-#[cfg(test)]
-const MAP_CLIENT_ONLY_SLOTS: [&str; 1] = ["modalTurboLine"];
-
-/// The anonymous (`attr:`/`text:`) slots this page compiles to — every one of
-/// them a string CONCATENATION, and every one of them a live test of ledger
-/// #20's fix.
-///
-/// Compiler 0.3.1 folds `"a" + "b"` instead of dropping it, but it folds it
-/// into a slot's DEFAULT rather than into static markup: four concatenated
-/// `title` attributes (the two 360 motion buttons, the reverse 360, and the
-/// macro Enable switch) and one concatenated child (`.macstephint`). The seam
-/// can never inject these — they render their default or they render nothing —
-/// so the contract check pins the set AND asserts each default is non-empty.
-/// A concatenation with a non-literal operand would land here with an empty
-/// default, which is the silent failure #20(a) shipped.
-#[cfg(test)]
-const MAP_ANONYMOUS_SLOTS: [&str; 5] = [
-    "attr:title",
-    "attr:title#2",
-    "attr:title#3",
-    "attr:title#4",
-    "text:0",
-];
+use crate::render::art_for;
+use crate::snapshot::{MacroStepView, MacroView, MapperSlot};
 
 // The art `<img>` occupies the bottom 86% of the stage (`.padart` in
 // studio.css); the top band holds the shoulder chips. Zone Y values below
@@ -108,6 +66,16 @@ const MAP_ANONYMOUS_SLOTS: [&str; 5] = [
 
 /// One hit zone: canonical function, on-art identity label, identity palette,
 /// stage-percent box, css variant.
+///
+/// Only `fn_name` and `label` are read by Rust. The geometry and styling
+/// fields exist for the Rust -> Node handoff: `generated_zone_tokens_json`
+/// serialises them into `studio-ui/tokens/zones.json`, which the TypeScript
+/// side consumes to place the same zones on the canvas. That generator is
+/// `#[cfg(test)]` because `tools/studio-env/build-assets.ps1` runs it as an
+/// `--ignored` test, so a non-test build genuinely has no reader and
+/// `dead_code` fires on fields the asset build cannot do without. Deleting
+/// them is a silent break of zones.json, not a cleanup - hence the allow.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct Zone {
     pub fn_name: &'static str,
     /// What this control is CALLED on this persona — the identity drawn on the
@@ -358,26 +326,7 @@ pub(crate) fn legend_label_for_persona(persona: &str, z: &Zone) -> String {
     format!("{}{}", legend_group(z), label)
 }
 
-/// Hardware selectors identify machines; this table needs a customer label.
-fn input_label(input: &str) -> &str {
-    let input = input.trim();
-    if input.is_empty() || input == "(any)" {
-        return "Any keyboard";
-    }
-    let lower = input.to_ascii_lowercase();
-    if ["usb:", "hid:", "instance:", "device:"]
-        .iter()
-        .any(|prefix| lower.starts_with(prefix))
-        || input.contains('\\')
-        || lower.contains("vid_")
-        || lower.contains("pid_")
-        || lower.contains("#{")
-    {
-        "Assigned keyboard"
-    } else {
-        input
-    }
-}
+/// Hardware selectors identify machines;
 
 // ── v11/v12: THE MACRO EDITOR — the piano roll, and it SAVES ───────────────
 // docs/INPUT-TRANSFORMS.md §6.2, adopted from TAStudio: "rows = steps,
@@ -617,39 +566,6 @@ pub(crate) const MACRO_RING_LINE: &str =
      want may be off the edge; the band above the arrows names whichever you are looking at. \
      Use the same group as this controller layout so the game reads the motion. Each row spells \
      the direction pair beside its name.";
-
-/// The body "＋ New macro" writes: one real 50 ms step at the default
-/// policies. A macro with NO steps is refused by the loader and by the daemon
-/// (`mapping::macro_body_issues`), so a new table has to arrive with one.
-///
-/// The BUTTON lives in MapIsland.ts (`newMacroBody`) — creating a macro is a
-/// fetch, and this crate renders rather than writes. This mirror exists so the
-/// starter body can be pinned against the real loader in a test: a "New macro"
-/// the daemon would refuse is a dead button, and nobody would find out until a
-/// user pressed it.
-#[cfg(test)]
-pub(crate) fn new_macro_body(name: &str) -> MacroView {
-    MacroView {
-        name: name.to_owned(),
-        steps: vec![MacroStepView {
-            hold: Vec::new(),
-            ms: Some(50),
-            frames: None,
-            allow_short: false,
-        }],
-        on_release: "finish".to_owned(),
-        retrigger: "ignore".to_owned(),
-        interrupt: "none".to_owned(),
-        // A new macro runs ONCE. Auto-fire is asked for by name, never a
-        // default a starter body hands somebody who did not ask.
-        repeat: "once".to_owned(),
-        turbo_hz: None,
-        gap_ms: None,
-        triggers: Vec::new(),
-        // A new macro RUNS. Nobody creates one switched off.
-        disabled: false,
-    }
-}
 
 // ── v12: the frame arithmetic, on screen ───────────────────────────────────
 // The UX requirement asks directly: "a 60fps frame is only like sixteenth
@@ -1702,8 +1618,8 @@ pub(crate) fn macro_total_ms(mac: &MacroView) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use serde::Serialize;
+    use std::path::PathBuf;
 
     /// The committed Rust-to-TypeScript handoff. Struct field order is output
     /// order under serde, so the pretty JSON is deterministic without relying
@@ -1715,7 +1631,6 @@ mod tests {
         xbox: Vec<ZoneToken<'a>>,
         ds4: Vec<ZoneToken<'a>>,
     }
-
 
     fn zone_token(zone: &Zone) -> ZoneToken<'_> {
         ZoneToken {
@@ -1807,7 +1722,6 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../studio-ui/tokens/zones.json")
     }
 
-
     fn generated_zone_tokens_json() -> String {
         let mut functions: Vec<(ksx_core::Binding, String)> =
             ksx_core::preset::mappable_functions()
@@ -1830,6 +1744,29 @@ mod tests {
         let mut json = serde_json::to_string_pretty(&tokens).expect("zone tokens serialize");
         json.push('\n');
         json
+    }
+
+    /// The broken version hand-copied three TypeScript arrays. This gate makes
+    /// any vocabulary, spelling or art-table change fail until the one
+    /// committed handoff is explicitly regenerated.
+    ///
+    /// Lost when `/map` was deleted and restored here: `crates/ksx-app/tests/
+    /// docs.rs` pins its remediation sentence, so the contract verifier is what
+    /// noticed it was gone.
+    #[test]
+    fn generated_zone_tokens_json_is_current() {
+        let path = zone_tokens_path();
+        let actual = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "could not read generated zone tokens at {}: {error}; run tools/studio-env/build-assets.ps1",
+                path.display()
+            )
+        });
+        assert_eq!(
+            actual,
+            generated_zone_tokens_json(),
+            "generated zone tokens are stale; run tools/studio-env/build-assets.ps1"
+        );
     }
 
     /// Explicit source-tree writer for the committed language-boundary file.

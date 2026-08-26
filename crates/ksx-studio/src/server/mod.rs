@@ -74,13 +74,7 @@ use crate::render_check::render_check;
 
 use crate::render_devices::render_devices;
 
-
-
-
-
-use crate::snapshot::{
-    CheckPayload, DevicesPayload, PadsPayload, StatusSnapshot, StatusSource,
-};
+use crate::snapshot::{CheckPayload, DevicesPayload, PadsPayload, StatusSource};
 
 struct AppState {
     /// The static design-proof route (see `render_nocturne.rs`): loaded like
@@ -360,12 +354,6 @@ pub fn serve(
             .route("/nocturne/adopt", post(nocturne_form_adopt))
             .route("/nocturne/discard", post(nocturne_form_discard))
             .route("/nocturne/autostart", post(nocturne_form_autostart))
-            .route(
-                "/workspace/controller/duplicate",
-                post(nocturne_form_duplicate),
-            )
-            // MIGRATED (2026-08-17): adopt lives in nocturne.rs now; this
-            // page's button keeps working — the answer lands on /nocturne.
             // The mapper (v5): page + poll payload + the learn/bind verbs,
             // each a thin wrapper over one ControlSource method (= one pipe
             // verb — no GUI-only code paths).
@@ -499,29 +487,16 @@ pub fn serve(
             // Thirteen routes. The seven staging ones are ONE `ControlSource`
             // verb each and reach nothing outside the daemon's own memory — no
             // file, no driver, no session — which is what makes exploring free.
-            // `/start/save` is one config write (the same shape as
-            // `/setup/slot`) and `/start/play` starts a session from a plan
-            // built in memory. The two capture routes are the deliberately
-            // narrow exception to the old browser claim prohibition: an
-            // exact served interface, three explicit consents, and the local
-            // MachineSource's installed UAC helper. Studio never receives a
-            // backend choice or helper output from the browser.
+            // The capture routes (now `/nocturne/capture/*`) are the
+            // deliberately narrow exception to the browser claim prohibition:
+            // an exact served interface, three explicit consents, and the
+            // local MachineSource's installed UAC helper. Studio never
+            // receives a backend choice or helper output from the browser.
             //
-            // The RESCAN is deliberately not here. It is a link back to
-            // `/start`, because re-reading the machine writes nothing and a
-            // read wearing a POST is a lie the guard then has to work around
-            // (the same argument `/setup/export.json` makes).
-            // MIGRATED (2026-08-17): the keyboard verbs live in nocturne.rs
-            // now. The old paths stay registered so /start's intact frames
-            // keep working — pressing them lands the answer on /nocturne.
-            .route(
-                "/start/capture/prepare",
-                post(nocturne_form_capture_prepare),
-            )
-            .route(
-                "/start/capture/release",
-                post(nocturne_form_capture_release),
-            )
+            // The RESCAN is deliberately not a POST. Re-reading the machine
+            // writes nothing, and a read wearing a POST is a lie the guard
+            // then has to work around — the same argument that keeps
+            // `/nocturne/export.json` a GET.
             // Moment 6 IN THE STAGE: dress a staged controller in one of
             // ksx's in-box layouts. One `stage-edit`, so it reaches nothing
             // outside the daemon's memory — the bindings a first-run user
@@ -710,6 +685,8 @@ pub(crate) fn urlencode(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Read only by the null fixtures below; the lib itself no longer names it.
+    use crate::snapshot::StatusSnapshot;
 
     /// Ledger #13, closed upstream: ksx ships forma's CSP verbatim now.
     ///
@@ -816,5 +793,4 @@ mod tests {
         assert_eq!(urlencode("naïve"), "na%C3%AFve");
         assert_eq!(urlencode(&"x".repeat(1000)).len(), 300, "capped");
     }
-
 }

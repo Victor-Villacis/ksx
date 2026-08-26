@@ -35,3 +35,6 @@ $RECYCLE.BIN/
 # Scratch left by tooling; neither has a consumer.
 .dead.json
 *.stackdump
+
+# Playwright run artifacts.
+studio-ui/pwtest/test-results/

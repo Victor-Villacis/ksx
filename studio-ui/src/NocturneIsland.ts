@@ -793,6 +793,18 @@ interface MacroDraftTable {
 let macDraft: MacroDraftTable | null = null;
 let macDirty = false;
 let macBusy = false;
+/** Resolves when the act currently applying has finished, or null when the
+ *  thing in flight is a SAVE rather than an act.
+ *
+ *  A duration commits on `change`, which for a pointer user fires on the
+ *  mousedown that presses Save: the box blurs, `macAct("dur|…")` starts, and
+ *  the `click` a few milliseconds later meets a busy latch. Waiting for that
+ *  act is right. Dropping the press — no write, no question, no sentence, and
+ *  the macro still reading "Unsaved changes" — is the one outcome a busy latch
+ *  must never produce. Null during a save so a second press is still ignored:
+ *  one press, one write. */
+let macInFlight: Promise<void> | null = null;
+let macInFlightDone: (() => void) | null = null;
 /** Has the short-step question already been asked for THIS save? */
 let macAskedShort = false;
 /** The row the author last touched — what "allow a short step" is about. */
@@ -834,6 +846,9 @@ function macDirtyMark(): void {
 async function macAct(act: string): Promise<void> {
   if (!macDraft || macBusy) return;
   macBusy = true;
+  macInFlight = new Promise<void>((resolve) => {
+    macInFlightDone = resolve;
+  });
   // Which duration box has the caret, so the rebuild can hand it back.
   const focused = document.activeElement as HTMLElement | null;
   const keepRow = focused?.dataset?.macdur ?? null;
@@ -880,6 +895,9 @@ async function macAct(act: string): Promise<void> {
     macSay("The studio did not answer — is ksx still running?", "err");
   } finally {
     macBusy = false;
+    macInFlightDone?.();
+    macInFlight = null;
+    macInFlightDone = null;
   }
 }
 
@@ -887,7 +905,15 @@ async function macAct(act: string): Promise<void> {
  *  the sampling floor is never refused and never written silently: the first
  *  Save asks, and says which steps it is about. */
 async function macSave(): Promise<void> {
-  if (!macDraft || macBusy) return;
+  if (!macDraft) return;
+  if (macBusy) {
+    // A SAVE already writing: ignore the second press, one press one write.
+    if (!macInFlight) return;
+    // An ACT applying: it was almost certainly started by the same gesture
+    // that pressed this button. Hear the press.
+    await macInFlight;
+    if (!macDraft || macBusy) return;
+  }
   // `warn` is ALSO non-empty for a step naming two units or none — faults,
   // not short steps. The row now carries the answer itself.
   const short = nMacRows().filter((r) => r.short);

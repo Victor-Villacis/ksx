@@ -6622,7 +6622,10 @@ describe("the canvas navigation controls", () => {
         await page.waitForFunction(({ key, keyboardIdentity, device, epoch, count }) => {
           try {
             const store = JSON.parse(localStorage.getItem(key) ?? "null");
-            return store?.version === 3 && store?.hardwareEpochs?.[device] === epoch &&
+            // No `hardwareEpochs` check: the epoch ledger was chart authority,
+            // and chart authority left for PacBench. The DOCUMENT migration is
+            // ksx's and is what this test is about.
+            return store?.version === 3 &&
               store?.devices?.[keyboardIdentity]?.controls?.length === count &&
               document.querySelectorAll(".n-widget-surface .n-surface-control").length === count;
           } catch {
@@ -6640,8 +6643,13 @@ describe("the canvas navigation controls", () => {
         assert.equal(migrated.version, 3, `${scenario.label} is durably rewritten as v3`);
         assert.deepEqual(migrated.identities, [identity],
           `${scenario.label} keeps its device-scoped document`);
-        assert.equal(migrated.hardwareEpoch, scenario.epoch,
-          `${scenario.label} records the independently published hardware epoch`);
+        // "without reviving hardware authority" is the title, and this is it:
+        // migration must NOT bring a hardware epoch back with the document.
+        // Nothing in ksx publishes one any more — the chart read that did is
+        // PacBench's — so a migration that resurrected it would be reviving a
+        // claim this product can no longer stand behind.
+        assert.equal(migrated.hardwareEpoch, null,
+          `${scenario.label} does not revive hardware authority`);
         assert.equal(migrated.surface.open, true);
         assert.equal(migrated.surface.started, true);
         assert.equal(migrated.rendered.template, "custom");

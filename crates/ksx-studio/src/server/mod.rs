@@ -76,7 +76,7 @@ use crate::control::{BindOutcome, ControlSource, SessionView};
 
 use crate::error::StudioError;
 
-use crate::render::{Assets, BrandAssets, EmbeddedPage};
+use crate::render::{Assets, BrandAssets, LivePage};
 
 use crate::render_check::render_check;
 
@@ -87,10 +87,10 @@ use crate::snapshot::{CheckPayload, DevicesPayload, PadsPayload, StatusSource};
 struct AppState {
     /// The static design-proof route (see `render_nocturne.rs`): loaded like
     /// every page, rendered from defaults, backed by nothing.
-    nocturne_page: EmbeddedPage,
-    check_page: EmbeddedPage,
-    pads_page: EmbeddedPage,
-    devices_page: EmbeddedPage,
+    nocturne_page: LivePage,
+    check_page: LivePage,
+    pads_page: LivePage,
+    devices_page: LivePage,
     source: Box<dyn StatusSource>,
     control: Box<dyn ControlSource>,
     /// The MACHINE reads and writes that are not a `DaemonCommand`: the
@@ -274,10 +274,10 @@ pub fn serve(
     if !bind.ip().is_loopback() {
         return Err(StudioError::NonLoopbackBind { bind });
     }
-    let nocturne = EmbeddedPage::load("/nocturne")?;
-    let check = EmbeddedPage::load("/check")?;
-    let pads = EmbeddedPage::load("/pads")?;
-    let devices = EmbeddedPage::load("/devices")?;
+    let nocturne = LivePage::load("/nocturne")?;
+    let check = LivePage::load("/check")?;
+    let pads = LivePage::load("/pads")?;
+    let devices = LivePage::load("/devices")?;
     let state = Arc::new(AppState {
         nocturne_page: nocturne,
         check_page: check,

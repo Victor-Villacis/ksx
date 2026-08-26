@@ -87,7 +87,7 @@ pub(super) async fn pads_page(
     payload.flash = flash.map(str::to_owned);
     let theme = page_theme(&state).await;
     let out = crate::render::with_theme(
-        crate::render_pads::render_pads(&state.pads_page, &payload),
+        crate::render_pads::render_pads(&state.pads_page.get(), &payload),
         theme.as_deref(),
     );
     (

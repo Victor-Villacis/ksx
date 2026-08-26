@@ -723,7 +723,7 @@ pub(super) async fn nocturne_page_handler(
         .or_else(|| (!payload.staged.reachable).then(|| N_DAEMON_DOWN.to_owned()));
     let theme = page_theme(&state).await;
     let out = crate::render::with_theme(
-        render_nocturne(&state.nocturne_page, &payload, flash.as_deref()),
+        render_nocturne(&state.nocturne_page.get(), &payload, flash.as_deref()),
         theme.as_deref(),
     );
     (

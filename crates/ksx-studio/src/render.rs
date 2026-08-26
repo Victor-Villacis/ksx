@@ -328,6 +328,107 @@ impl EmbeddedPage {
     }
 }
 
+/// A page that notices when the asset build has moved underneath it.
+///
+/// **The bug this exists to remove.** `EmbeddedPage::load` resolves the
+/// manifest to a SPECIFIC hashed filename — `nocturne.8734f6b3.js` — and the
+/// four pages were loaded once into `AppState` and held for the life of the
+/// process. In a debug build `rust_embed` reads asset BYTES from disk per
+/// request, so the files stay live; the NAMES did not. Rebuilding assets under
+/// a running Studio therefore left the page emitting URLs that no longer
+/// existed, and `/nocturne` served a document whose script and stylesheet both
+/// 404'd — with nothing in any log to say why. It cost a real debugging
+/// session, and the documented workaround was "restart the lane", which is a
+/// note telling you to live with it rather than a fix.
+///
+/// So: in a debug build every render re-reads `manifest.json` (already a disk
+/// read there, already cheap) and reloads only when its bytes actually change.
+/// The expensive half — `IrModule::parse` over ~500 KB for `/nocturne` — is
+/// paid ONLY on a real rebuild, never per request.
+///
+/// In release this compiles to a clone of an `Arc`. `manifest.json` is baked
+/// into the binary and cannot change while the process runs, so there is
+/// nothing to check and nothing to pay for.
+pub(crate) struct LivePage {
+    route: &'static str,
+    /// `(fingerprint of manifest.json, the page built from it)`.
+    held: std::sync::RwLock<(u64, std::sync::Arc<EmbeddedPage>)>,
+}
+
+impl LivePage {
+    pub(crate) fn load(route: &'static str) -> Result<Self, StudioError> {
+        let page = EmbeddedPage::load(route)?;
+        Ok(Self {
+            route,
+            held: std::sync::RwLock::new((manifest_fingerprint(), std::sync::Arc::new(page))),
+        })
+    }
+
+    /// The page to render THIS request with.
+    #[cfg(not(debug_assertions))]
+    pub(crate) fn get(&self) -> std::sync::Arc<EmbeddedPage> {
+        std::sync::Arc::clone(&self.held.read().expect("live page lock").1)
+    }
+
+    /// The page to render THIS request with, reloading first if the asset
+    /// build has run since the last one.
+    ///
+    /// A reload FAILURE keeps serving the page we already have. A half-written
+    /// `manifest.json` — which the asset build produces for a moment every
+    /// time, since `build.mjs` clears the directory before it emits — must not
+    /// take the lane down; the next request picks up the finished build.
+    #[cfg(debug_assertions)]
+    pub(crate) fn get(&self) -> std::sync::Arc<EmbeddedPage> {
+        let now = manifest_fingerprint();
+        {
+            let held = self.held.read().expect("live page lock");
+            if held.0 == now {
+                return std::sync::Arc::clone(&held.1);
+            }
+        }
+        let mut held = self.held.write().expect("live page lock");
+        // Another request may have reloaded while this one waited.
+        if held.0 == now {
+            return std::sync::Arc::clone(&held.1);
+        }
+        match EmbeddedPage::load(self.route) {
+            Ok(page) => {
+                let page = std::sync::Arc::new(page);
+                *held = (now, std::sync::Arc::clone(&page));
+                tracing::info!(route = self.route, "assets changed on disk; page reloaded");
+                page
+            }
+            Err(error) => {
+                tracing::warn!(
+                    route = self.route,
+                    %error,
+                    "assets changed but the new build could not be read; \
+                     serving the page already loaded"
+                );
+                std::sync::Arc::clone(&held.1)
+            }
+        }
+    }
+}
+
+/// A cheap stand-in for "has the asset build run since we last looked".
+///
+/// The manifest names every hashed file, so any rebuild that changes an asset
+/// changes these bytes. In a debug build `Assets::get` reads it from disk; in
+/// release it is the embedded copy and never moves.
+fn manifest_fingerprint() -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    match Assets::get("manifest.json") {
+        Some(file) => file.data.hash(&mut hasher),
+        // Mid-rebuild: `build.mjs` clears the directory before emitting. Hash a
+        // constant so this transient state is not mistaken for a NEW build and
+        // does not trigger a reload that would only fail.
+        None => 0u64.hash(&mut hasher),
+    }
+    hasher.finish()
+}
+
 /// The vendored controller art, served from the embed (`/_assets/...`).
 /// Gamepad-Asset-Pack by AL2009man, MIT — see `studio-ui/art/README.md`; the
 /// page footers carry the visible credit (pinned by tests on both pages).

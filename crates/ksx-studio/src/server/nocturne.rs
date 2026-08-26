@@ -42,6 +42,13 @@ pub(super) const N_MOVE_AT_END: &str =
 pub(super) const N_APPLY_OK: &str = "Changes applied to the running session in place — the pads \
      stayed plugged. Nothing has been saved.";
 
+/// Tick-box refusals for the two destructive configuration verbs. Server-side,
+/// because a browser dialog is an interaction nicety and not a boundary.
+pub(super) const N_GAME_DELETE_UNCONFIRMED: &str =
+    "error: Tick the confirmation box to remove a saved game. Nothing was changed.";
+pub(super) const N_LAYOUT_DELETE_UNCONFIRMED: &str =
+    "error: Tick the confirmation box to delete a layout. Nothing was changed.";
+
 pub(super) const N_APPLY_RESTART: &str = "error: The draft changed more than bindings, so the \
      running session cannot take it in place. Press Play to replace the session; nothing was \
      changed.";
@@ -800,13 +807,23 @@ pub(super) struct NocturneGameDeleteForm {
     title: String,
     #[serde(default)]
     revision: String,
+    #[serde(default)]
+    confirm_delete: String,
 }
 
 /// POST /nocturne/game/delete — the served revision is the stale-screen guard.
+///
+/// The confirmation is SERVER-side. A browser dialog and a `required` checkbox
+/// improve the interaction, but neither is an authorization boundary for a
+/// destructive POST — a hand-written form reaches this handler directly. This
+/// guard was dropped when the verb moved off `/profiles`; it is back.
 pub(super) async fn nocturne_form_game_delete(
     State(state): State<Arc<AppState>>,
     Form(form): Form<NocturneGameDeleteForm>,
 ) -> Response {
+    if form.confirm_delete != "yes" {
+        return nocturne_redirect(N_GAME_DELETE_UNCONFIRMED);
+    }
     let outcome = tokio::task::spawn_blocking(move || {
         state.machine.profile_delete(&ksx_api::DeleteProfile {
             title: form.title,
@@ -846,19 +863,29 @@ pub(super) struct NocturnePresetDeleteForm {
     #[serde(default)]
     name: String,
     #[serde(default)]
-    force: bool,
+    confirm_delete: String,
 }
 
 /// POST /nocturne/layout/delete — a layout still in use cannot be deleted
 /// until those controllers point somewhere else; the backend says so by name.
+///
+/// **`force` is not the browser's to send.** `ksx preset delete --force` will
+/// delete a layout controllers still use and leave them pointing at nothing;
+/// a web form must not, so this handler hardcodes `force: false` rather than
+/// reading it from the request. The migrated version took it off the form,
+/// which handed a hand-authored POST the power to strand a cabinet in one
+/// request. Confirmation is server-side for the same reason.
 pub(super) async fn nocturne_form_preset_delete(
     State(state): State<Arc<AppState>>,
     Form(form): Form<NocturnePresetDeleteForm>,
 ) -> Response {
+    if form.confirm_delete != "yes" {
+        return nocturne_redirect(N_LAYOUT_DELETE_UNCONFIRMED);
+    }
     let outcome = tokio::task::spawn_blocking(move || {
         state.machine.preset_delete(&ksx_api::DeletePreset {
             name: form.name,
-            force: form.force,
+            force: false,
         })
     })
     .await;
@@ -874,9 +901,23 @@ fn verb_flash(
 ) -> String {
     match outcome {
         Ok(Ok(_)) => ok_line.to_owned(),
-        Ok(Err(refusal)) => refusal.message,
-        Err(_) => "that verb panicked; nothing was written".to_owned(),
+        Ok(Err(refusal)) => as_error(refusal.message),
+        Err(_) => as_error("that verb panicked; nothing was written".to_owned()),
     }
+}
+
+/// Mark a flash as a REFUSAL.
+///
+/// `applyFlash` in NocturneIsland.ts picks the red side on `startsWith("error")`
+/// and nothing else, so a refusal that arrives without this prefix renders in
+/// the success colour. Every hand-written refusal constant in this file already
+/// carries it; these two helpers compose their line at runtime and so have to
+/// add it here.
+fn as_error(line: String) -> String {
+    if line.trim_start().starts_with("error") {
+        return line;
+    }
+    format!("error: {line}")
 }
 
 /// GET /nocturne/export.json — the whole configuration as one file.
@@ -937,9 +978,10 @@ pub(super) async fn nocturne_form_import(
     form: Result<Form<ImportForm>, axum::extract::rejection::FormRejection>,
 ) -> Response {
     let Ok(Form(form)) = form else {
-        return nocturne_redirect(
-            "that document could not be read — it may be larger than this page accepts (8 MB)",
-        );
+        return nocturne_redirect(&as_error(
+            "that document could not be read — it may be larger than this page accepts (8 MB)"
+                .to_owned(),
+        ));
     };
     let request = ksx_api::ImportRequest {
         document: form.document.unwrap_or_default(),
@@ -948,7 +990,9 @@ pub(super) async fn nocturne_form_import(
         force: form.force.is_some(),
     };
     if request.document.trim().is_empty() {
-        return nocturne_redirect("nothing to import — paste a configuration into the box first");
+        return nocturne_redirect(&as_error(
+            "nothing to import — paste a configuration into the box first".to_owned(),
+        ));
     }
     let outcome = tokio::task::spawn_blocking(move || state.machine.config_import(&request))
         .await
@@ -959,8 +1003,12 @@ pub(super) async fn nocturne_form_import(
             ))
         });
     nocturne_redirect(&match outcome {
-        Ok(report) => import_flash(&report),
-        Err(refusal) => refusal.message,
+        // A dry run that reports faults is not a success, and the backend's
+        // own summary opens with "refused:" — which `applyFlash` does not
+        // recognise. Mark it, or a failed import renders in the success colour.
+        Ok(report) if report.ok => import_flash(&report),
+        Ok(report) => as_error(import_flash(&report)),
+        Err(refusal) => as_error(refusal.message),
     })
 }
 
@@ -2547,7 +2595,7 @@ fn stage_flash(
     fallback: &str,
 ) -> String {
     let Ok(outcome) = outcome else {
-        return "that verb panicked; nothing was written".to_owned();
+        return as_error("that verb panicked; nothing was written".to_owned());
     };
     if outcome.ok {
         return outcome.message.unwrap_or_else(|| ok_line.to_owned());
@@ -2559,7 +2607,7 @@ fn stage_flash(
     if let Some(remedy) = outcome.remedy.filter(|r| !r.trim().is_empty()) {
         line.push_str(&format!(" {remedy}"));
     }
-    line
+    as_error(line)
 }
 
 /// POST /nocturne/play — start a session from the staged setup, writing

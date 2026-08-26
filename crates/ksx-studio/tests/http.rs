@@ -4133,7 +4133,7 @@ fn deleting_a_profile_reaches_the_typed_verb() {
     );
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(response.contains("/nocturne?flash="), "{response}");
-    assert!(response.contains("Saved%20game%20deleted."), "{response}");
+    assert!(response.contains("Saved%20game%20removed."), "{response}");
     assert_eq!(
         machine.deleted_profile.lock().unwrap().clone(),
         Some(ksx_api::DeleteProfile {
@@ -4392,7 +4392,7 @@ fn a_refused_read_is_not_rendered_as_an_empty_machine() {
 /// — one backend verb, no second "switch" path — and it comes back to
 /// /profiles so the user keeps their place.
 #[test]
-fn switching_profile_calls_start_and_returns_to_profiles() {
+fn loading_a_saved_game_fills_the_draft_and_starts_nothing() {
     let control = Arc::new(ScriptedControl::new(false));
     let addr = start_server(control.clone());
 
@@ -4401,21 +4401,30 @@ fn switching_profile_calls_start_and_returns_to_profiles() {
     assert!(
         response
             .to_ascii_lowercase()
-            .contains("location: /profiles?flash="),
-        "the redirect must come back HERE, not to / like the status page's \
-         twin of this verb: {response}"
+            .contains("location: /nocturne?flash="),
+        "the redirect must come back HERE: {response}"
     );
-    assert!(response.contains("flash=Play%20started."), "{response}");
-    assert!(!response.contains("Missing%20Example%20Game"), "{response}");
     assert!(
-        !response.to_ascii_lowercase().contains("slot"),
+        response.contains("Nothing%20has%20been%20saved%20or%20started"),
         "{response}"
     );
-    assert_eq!(
-        control.started_with.lock().unwrap().clone(),
-        Some(Some("Missing Example Game".to_owned())),
-        "the profile the row named must reach `start`"
+
+    // The game the row named reached the DRAFT...
+    let staged = control.staged();
+    assert!(
+        staged
+            .slots
+            .iter()
+            .any(|slot| slot.preset == "Missing Example Game"),
+        "the profile the row named must reach the draft: {staged:?}"
     );
+
+    // ...and nothing was started by it.
+    assert!(
+        control.started_with.lock().unwrap().is_none(),
+        "loading a saved game must not start a session"
+    );
+    assert!(!control.running.load(Ordering::SeqCst));
 }
 
 #[test]
@@ -4429,7 +4438,7 @@ fn stopping_play_returns_to_saved_games() {
     assert!(
         response
             .to_ascii_lowercase()
-            .contains("location: /profiles?flash="),
+            .contains("location: /nocturne?flash="),
         "{response}"
     );
     assert!(response.contains("flash=Play%20stopped."), "{response}");
@@ -4887,7 +4896,7 @@ fn the_theme_form_round_trips_and_refuses_what_the_build_lacks() {
     let response = post_form(addr, "/nocturne/theme", "theme=light");
     assert!(response.starts_with("HTTP/1.1 303"), "got: {response}");
     assert!(
-        response.contains("/nocturne?flash=Saved"),
+        response.contains("/nocturne?flash=Studio%20theme%20updated."),
         "got: {response}"
     );
     assert_eq!(

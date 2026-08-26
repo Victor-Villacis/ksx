@@ -556,6 +556,151 @@ pub(super) struct NocturneBlockingForm {
     blocking: String,
 }
 
+pub(super) fn map_target(value: Option<&str>) -> &'static str {
+    if value == Some("stage") {
+        "stage"
+    } else {
+        "saved"
+    }
+}
+
+// ── Outlived their pages ───────────────────────────────────────────────────
+//
+// These were written for /map and /setup and are still used after those pages
+// were deleted: the consumer-vocabulary helpers dress this page's flashes, and
+// the import/export shapes are the configuration menu's. Re-homed rather than
+// duplicated, so there is still one spelling of each.
+
+pub(super) fn consumerize_bind(mut outcome: BindOutcome) -> BindOutcome {
+    if !outcome.ok {
+        outcome.error = Some(consumer_map_detail(
+            outcome.error.as_deref().unwrap_or(""),
+            "That control could not be changed. Nothing changed.",
+        ));
+    }
+    outcome
+}
+
+pub(super) fn consumerize_macro(
+    mut outcome: crate::control::MacroOutcome,
+) -> crate::control::MacroOutcome {
+    if !outcome.ok {
+        outcome.error = Some(consumer_map_detail(
+            outcome.error.as_deref().unwrap_or(""),
+            "The macro could not be changed. Nothing changed.",
+        ));
+    }
+    outcome.problems = outcome
+        .problems
+        .into_iter()
+        .map(|problem| consumer_map_detail(&problem, "One step or setting is not valid."))
+        .collect();
+    outcome.warnings = outcome
+        .warnings
+        .into_iter()
+        .map(|warning| {
+            consumer_map_detail(&warning, "One very short step may be missed by the game.")
+        })
+        .collect();
+    outcome
+}
+
+pub(super) fn macro_for_target(
+    control: &dyn ControlSource,
+    target: Option<&str>,
+    slot: Option<u8>,
+    write: &crate::control::MacroWrite,
+) -> crate::control::MacroOutcome {
+    if map_target(target) != "stage" {
+        return control.save_macro(write);
+    }
+
+    let Some(number) = slot else {
+        return crate::control::MacroOutcome {
+            ok: false,
+            error: Some("a staged macro write needs an exact controller slot".to_owned()),
+            code: Some(ksx_api::codes::BAD_SLOT.to_owned()),
+            ..crate::control::MacroOutcome::default()
+        };
+    };
+    control.stage_macro(&ksx_api::StagedMacroRequest {
+        number,
+        write: write.clone(),
+    })
+}
+
+/// Presentation boundary for Controls. Backend diagnostics remain available
+/// to logs and typed codes; the primary workflow never reflects command lines,
+/// storage addresses, or internal nouns into a flash/toast.
+pub(super) fn consumer_map_detail(raw: &str, fallback: &str) -> String {
+    // Provider text is diagnostic input, not customer copy. The Map surface
+    // gets structured conflicts/chords through their typed fields and uses an
+    // action-specific authored fallback for every scalar outcome. An
+    // allow-by-absence blacklist would inevitably leak a novel HID address,
+    // registry key, parser detail or storage path.
+    let _ = raw;
+    fallback.to_owned()
+}
+
+/// Comma-separated form words → the `what` list the api verbs take. Empty means
+/// "whatever the document carries" / "the whole root", which is what both verbs
+/// already document.
+pub(super) fn what_words(raw: Option<&str>) -> Vec<String> {
+    raw.unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|word| !word.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// One [`ksx_api::ImportReport`] as the sentence this page flashes.
+///
+/// The backend composes the fact and names no control (`onboard::import`); each
+/// surface adds its own. Here that is two things the report cannot know: the
+/// label on THIS page's consent box, and the first of the faults it is holding.
+pub(super) fn import_flash(report: &ksx_api::ImportReport) -> String {
+    let mut line = report.summary.clone();
+    if let Some(first) = report.faults.first() {
+        line.push_str(&format!(" First: {first}"));
+        let rest = report.faults.len() - 1;
+        if rest > 0 {
+            line.push_str(&format!(" (+{rest} more)"));
+        }
+    } else if report.ok && !report.applied {
+        // A clean dry run. The backend said what it WOULD do and that nothing
+        // was written; "write it" is the name of the box on this page and
+        // nowhere else.
+        line.push_str(" Tick \"write it\" and import again to apply.");
+    }
+    line
+}
+
+#[derive(Deserialize)]
+pub(super) struct ExportQuery {
+    /// `config,games,presets` — absent means the whole root.
+    pub(super) what: Option<String>,
+}
+
+/// Every field optional on purpose. A missing one is a REFUSAL WITH A SENTENCE
+/// (303 + `?flash=error: …`), not axum's 422 — this page's whole feedback
+/// channel with scripting off is the flash, and a bare status page would
+/// dead-end the user with nothing to read.
+#[derive(Deserialize)]
+pub(super) struct ImportForm {
+    #[serde(default)]
+    pub(super) document: Option<String>,
+    #[serde(default)]
+    pub(super) what: Option<String>,
+    /// The "write it" box. Present at all = ticked (HTML omits an unchecked box
+    /// entirely), so an absent field is a DRY RUN — which is the consent shape
+    /// `ksx config import` has always had, arriving here for free.
+    #[serde(default)]
+    pub(super) apply: Option<String>,
+    #[serde(default)]
+    pub(super) force: Option<String>,
+}
+
 // ── Saved games and layouts ────────────────────────────────────────────────
 //
 // Moved from `/profiles` when `/nocturne` became the product. Two differences

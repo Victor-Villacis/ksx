@@ -72,17 +72,11 @@ const exe = path.join(
  *  `/start` includes the scalar capture preparation branch, whose hidden
  *  exact-target values must survive adoption without a first-paint swap. */
 const ROUTES = [
-  "/start",
   "/nocturne",
   "/nocturne?slot=1&macro=hadouken",
-  "/",
-  "/map",
-  "/map?slot=1",
   "/check",
   "/pads",
   "/devices",
-  "/profiles",
-  "/setup",
 ];
 
 /** The session states the show pairs actually move between. `modal open` is

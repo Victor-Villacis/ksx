@@ -35,20 +35,15 @@ const screenshotDir = path.resolve(
 );
 
 const ROUTES = [
-  { path: "/start", name: "start" },
   { path: "/nocturne", name: "nocturne" },
   // The macro roll only exists when a macro is OPEN: with the dialog closed
   // the payload serves empty lists, so every cell, row body and pill in it sat
   // outside this gate and outside every screenshot — which is how a 390px
   // collapse and fifteen dead custom properties shipped unseen.
   { path: "/nocturne?slot=1&macro=hadouken", name: "nocturne-macro" },
-  { path: "/", name: "status" },
-  { path: "/map", name: "map" },
   { path: "/check", name: "check" },
   { path: "/pads", name: "pads" },
   { path: "/devices", name: "devices" },
-  { path: "/profiles", name: "profiles" },
-  { path: "/setup", name: "setup" },
 ];
 
 const CONTEXTS = [

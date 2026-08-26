@@ -614,20 +614,27 @@ try {
                 $IdleDetail = if ($IdleProbe.text) { $IdleProbe.text } else { "no typed daemon response" }
                 throw "managed development replacement did not remain idle: $IdleDetail"
             }
+            # Reads the config root from /api/nocturne. It used to come from
+            # /api/status, which went with the status page; this is the same
+            # fact from the surviving surface, so the check is unchanged in
+            # what it proves -- that the managed runtime opened the REAL
+            # %APPDATA%\ksx and not a portable or fixture root.
             $StatusResponse = Invoke-WebRequest `
                 -UseBasicParsing `
-                -Uri "http://127.0.0.1:$Port/api/status" `
+                -Uri "http://127.0.0.1:$Port/api/nocturne" `
                 -TimeoutSec 1
             if ($StatusResponse.StatusCode -ne 200) {
-                throw "status endpoint returned HTTP $($StatusResponse.StatusCode)"
+                throw "nocturne endpoint returned HTTP $($StatusResponse.StatusCode)"
             }
             $StatusPayload = $StatusResponse.Content | ConvertFrom-Json
             $ExpectedConfigRoot = [System.IO.Path]::GetFullPath(
                 (Join-Path ([Environment]::GetFolderPath("ApplicationData")) "ksx")
             )
-            $ActualConfigRoot = [System.IO.Path]::GetFullPath(
-                [string]$StatusPayload.snapshot.config_root
-            )
+            $ReportedConfigRoot = [string]$StatusPayload.setup.config_root
+            if ([string]::IsNullOrWhiteSpace($ReportedConfigRoot)) {
+                throw "nocturne payload carried no config root to verify"
+            }
+            $ActualConfigRoot = [System.IO.Path]::GetFullPath($ReportedConfigRoot)
             if (-not $ActualConfigRoot.Equals(
                 $ExpectedConfigRoot,
                 [System.StringComparison]::OrdinalIgnoreCase

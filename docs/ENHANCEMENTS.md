@@ -285,6 +285,15 @@ found-Tuesday, fixed-and-adopted-Wednesday. That is the argument E7 actually mak
 not that a systems daemon is an unusual consumer, but that it is a consumer who reads
 the emitted IR, measures the wire, and files with a line number.
 
+The 2026-08-26 batch added a fourth verb to that list: **it checks what the fix will
+do to consumers before the fix ships.** Finding #23 asks the compiler to warn on a
+slot-name collision it currently makes in silence — and the ask had to be amended in
+the filing, because the obvious implementation (reuse the sentence the signal path
+already emits) would land on a gate in this very repo that answers that sentence with
+the opposite remediation: *delete the duplicate*, when the correct fix for the list
+case is *serve the duplicate*. Only a consumer with the gate in front of them catches
+that, and it is worth more to upstream than the defect report it arrived attached to.
+
 The bet's live cost is on the same page. The ledger's "still open, in the order they
 cost us" list runs to seven bullets, and the 2026-08-26 batch now at the top of it is
 the instructive one: two of those findings were **re-found from scratch** by an author

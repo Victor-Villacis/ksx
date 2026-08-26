@@ -4793,7 +4793,14 @@ function renderControlSurfaceControls(): void {
             : verification === "expected"
             ? "PLAN?"
             : verification === "observed"
-            ? "LIVE"
+            // The third state, in the badge vocabulary this panel already
+            // speaks, where `?` has always meant "not verified" (`PLAN?`,
+            // and the bare `?` on a configured-but-unproven terminal). A mark
+            // that only exists in the accessible name is a mark a sighted user
+            // has to go looking for, and the whole point of keeping an
+            // unrecognised device's binding is that the person can SEE that
+            // ksx is not vouching for it while it keeps working.
+            ? (channel.deviceUnverified ? "LIVE?" : "LIVE")
             : "TEACH";
           keycap.append(key, state);
         }
@@ -4810,7 +4817,11 @@ function renderControlSurfaceControls(): void {
           : verification === "expected" && encoder
           ? `${encoder.terminalId.toLocaleUpperCase()} is expected to emit ${expectedKey}; read the complete hardware chart to confirm it`
           : verification === "observed"
-          ? `Windows Teach observed ${observedKey}`
+          ? `Windows Teach observed ${observedKey}${
+            channel.deviceUnverified
+              ? ". ksx does not recognise the device it came from, so the observation is kept and still splits keys, but nothing here vouches for it"
+              : ""
+          }`
           : "Link an encoder terminal or Teach this physical control";
         keycap.setAttribute("aria-hidden", "true");
         chain.append(keycap);

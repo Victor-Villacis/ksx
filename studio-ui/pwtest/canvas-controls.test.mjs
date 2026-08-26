@@ -6846,6 +6846,232 @@ describe("the canvas navigation controls", () => {
     }
   });
 
+  // THE THIRD STATE OF THE DEVICE AUTHORITY RULE, which the migration test
+  // above cannot reach: both devices it names are recognised (an I-PAC that
+  // ksx serves as `panel-encoder`, a G915 it serves as `keyboard`), so between
+  // them they exercise only the retire arm and the vouch arm.
+  //
+  // The arm tested here is the one the owner called load-bearing: a device ksx
+  // knows NOTHING about. Retiring its bindings would destroy a user's work on
+  // a hunch, and keeping them silently would assert an answer for a read that
+  // never happened. The only honest outcome is to keep the observation, which
+  // still splits keys exactly as before, and to say on the control itself that
+  // nothing stands behind it.
+  test("a swept claim on a device ksx cannot recognise is kept and marked, never retired", async () => {
+    await restoreFixturePanelSource();
+    const identity = "keyboard:usb:d209:0430:00";
+    // Served in the roster as `keyboard` (Logitech G915 TKL, usb:046d:c545:00).
+    const recognised = "HID\\VID_046D&PID_C545\\LEGACY-KEYBOARD";
+    // In none of the three served lists: no row anywhere carries this model.
+    const unrecognised = "HID\\VID_FEED&PID_BEEF\\NO-SUCH-BOARD";
+    const storageKey = "ksx-nocturne-control-surfaces1";
+    const legacy = {
+      version: 1,
+      devices: {
+        [identity]: {
+          open: true,
+          started: true,
+          name: "Mixed-provenance panel",
+          template: "custom",
+          stage: "route",
+          theme: "carbon-forge",
+          controls: [
+            {
+              id: "c1",
+              physicalId: "cabinet-known",
+              kind: "keycap",
+              label: "Known",
+              playerSlot: null,
+              origin: "manual",
+              x: 200,
+              y: 200,
+              width: 88,
+              height: 64,
+              channels: [{
+                id: "press",
+                label: "Press",
+                input: { kind: "keyboard", key: "K", device: recognised },
+              }],
+            },
+            {
+              id: "c2",
+              physicalId: "cabinet-stranger",
+              kind: "keycap",
+              label: "Stranger",
+              playerSlot: null,
+              origin: "manual",
+              x: 400,
+              y: 200,
+              width: 88,
+              height: 64,
+              channels: [{
+                id: "press",
+                label: "Press",
+                input: { kind: "keyboard", key: "L", device: unrecognised },
+              }],
+            },
+          ],
+          selectedControlId: "c1",
+          selectedChannelId: "press",
+          nextId: 3,
+        },
+      },
+      migratedWorkbench: {},
+    };
+
+    const page = await openCanvas({}, async (candidate) => {
+      await candidate.addInitScript((seed) => {
+        if (location.origin !== seed.expectedOrigin) return;
+        localStorage.setItem(seed.storageKey, JSON.stringify(seed.document));
+      }, { expectedOrigin: new URL(BASE).origin, storageKey, document: legacy });
+    });
+    try {
+      await page.waitForFunction(({ key, keyboardIdentity }) => {
+        try {
+          const store = JSON.parse(localStorage.getItem(key) ?? "null");
+          return store?.version === 3 &&
+            store?.devices?.[keyboardIdentity]?.controls?.length === 2 &&
+            document.querySelectorAll(".n-widget-surface .n-surface-control").length === 2;
+        } catch {
+          return false;
+        }
+      }, { key: storageKey, keyboardIdentity: identity }, { timeout: 20_000 });
+
+      const swept = await page.evaluate(({ key, keyboardIdentity }) => {
+        const surface = JSON.parse(localStorage.getItem(key) ?? "null")
+          ?.devices?.[keyboardIdentity] ?? null;
+        const controls = Array.from(
+          document.querySelectorAll(".n-widget-surface .n-surface-control"),
+        );
+        return {
+          stored: (surface?.controls ?? []).map((control) => ({
+            id: control.id,
+            input: control.channels[0].input,
+            unverified: control.channels[0].deviceUnverified ?? false,
+          })),
+          markedChains: document.querySelectorAll(
+            ".n-widget-surface .n-surface-signal-chain[data-device-unverified]",
+          ).length,
+          badges: controls.map((control) =>
+            control.querySelector(".n-surface-signal-keycap small")?.textContent ?? ""),
+          labels: controls.map((control) => control.getAttribute("aria-label") ?? ""),
+        };
+      }, { key: storageKey, keyboardIdentity: identity });
+
+      assert.deepEqual(swept.stored, [
+        {
+          id: "c1",
+          input: { kind: "keyboard", key: "K", device: recognised },
+          unverified: false,
+        },
+        {
+          id: "c2",
+          input: { kind: "keyboard", key: "L", device: unrecognised },
+          unverified: true,
+        },
+      ], "a keyboard's fixed output is vouched for; an unknown device's is kept unvouched");
+      assert.equal(swept.markedChains, 1,
+        "exactly the unrecognised channel carries the machine-readable mark");
+      assert.deepEqual(swept.badges, ["LIVE", "LIVE?"],
+        "the kept-but-unvouched key wears the panel's own not-verified badge, on screen");
+      assert.doesNotMatch(swept.labels[0], /does not recognise/i,
+        "a recognised keyboard is not hedged");
+      assert.match(swept.labels[1], /does not recognise the device/i,
+        "the kept-but-unvouched claim says so in its own accessible name");
+
+      // ...and the mark has to be able to GO. A Teach is ksx watching the key
+      // arrive through its own capture path, right now: it replaces the very
+      // sentence the sweep could not stand behind, so a panel still hedging it
+      // afterwards would be describing a read that has since happened.
+      let generation = 700;
+      let hitReady = false;
+      let learnStarted;
+      const selectedInput = await page.evaluate(() => {
+        const view = JSON.parse(
+          document.getElementById("__ksx-payload")?.textContent ?? "{}",
+        ).view ?? {};
+        return { selector: view.cap_selector ?? "", instance: view.cap_instance ?? "" };
+      });
+      assert.ok(selectedInput.instance, "the fixture serves the selected input's exact device");
+      await page.route("**/api/learn/start", async (route) => {
+        generation += 1;
+        hitReady = false;
+        learnStarted?.();
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            state: "listening",
+            generation,
+            remaining_ms: 10_000,
+            device: null,
+            key: null,
+            error: null,
+          }),
+        });
+      });
+      await page.route("**/api/learn", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            state: hitReady ? "hit" : "listening",
+            generation,
+            remaining_ms: hitReady ? null : 10_000,
+            device: hitReady ? selectedInput.instance : null,
+            selector: hitReady ? selectedInput.selector : null,
+            key: hitReady ? "M" : null,
+            error: null,
+          }),
+        });
+      });
+      const started = new Promise((resolve) => {
+        learnStarted = resolve;
+      });
+      await page.locator(
+        '.n-widget-surface .n-surface-control[data-surface-control-id="c2"]',
+      ).evaluate((control) => control.click());
+      await page.locator('.n-widget-surface [data-nx="surface-teach"]').evaluate(
+        (button) => button.click(),
+      );
+      await started;
+      hitReady = true;
+      await page.waitForFunction(() =>
+        document.querySelector(
+          '.n-widget-surface .n-surface-control[data-surface-control-id="c2"] .n-surface-channel-anchor',
+        )?.getAttribute("data-key") === "M");
+
+      const taught = await page.evaluate(({ key, keyboardIdentity }) => {
+        const surface = JSON.parse(localStorage.getItem(key) ?? "null")
+          ?.devices?.[keyboardIdentity] ?? null;
+        const stranger = (surface?.controls ?? []).find((control) => control.id === "c2");
+        const rendered = document.querySelector(
+          '.n-widget-surface .n-surface-control[data-surface-control-id="c2"]',
+        );
+        return {
+          key: stranger?.channels[0].input.key ?? "",
+          unverified: stranger?.channels[0].deviceUnverified ?? false,
+          markedChains: document.querySelectorAll(
+            ".n-widget-surface .n-surface-signal-chain[data-device-unverified]",
+          ).length,
+          badge: rendered?.querySelector(".n-surface-signal-keycap small")?.textContent ?? "",
+          label: rendered?.getAttribute("aria-label") ?? "",
+        };
+      }, { key: storageKey, keyboardIdentity: identity });
+      assert.equal(taught.key, "M", "the live observation is what the channel now claims");
+      assert.equal(taught.unverified, false,
+        "a Teach clears the mark it just made obsolete, durably");
+      assert.equal(taught.markedChains, 0);
+      assert.equal(taught.badge, "LIVE", "and stops hedging it on screen");
+      assert.doesNotMatch(taught.label, /does not recognise/i);
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
   // ── DELETED 2026-08-26: the ten encoder-chart tests ─────────────────────
   //
   // `3901990` ("cut ksx over to /nocturne — remove the encoder chart surface")

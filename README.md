@@ -40,6 +40,14 @@ the half-dozen beliefs about this codebase that turned out to be false.
 journey: install, choose a keyboard and controller, map it, choose split or
 freeze, then Save, Play, or both. It requires no terminal or file editing.
 
+**Changing it?**
+[`docs/DEVELOPMENT-PIPELINE.md`](docs/DEVELOPMENT-PIPELINE.md) is the
+operational contract: the five promotion lanes, how to start, iterate on and
+stop one, the two build failures that are this machine rather than your change,
+and — written against the tree on 2026-08-26 — the step-by-step workflow for
+**adding a new input device**, which names the exact tables, roles and tests
+involved. `tools/studio-env/` has its own README for the lane scripts alone.
+
 ## Why KSX
 
 Keyboard-to-controller software on current Windows needs a capture path with an
@@ -486,9 +494,10 @@ crates/ksx-fuzz           proptest byte-fuzzing of every parser that eats untrus
 crates/vigem-client       vendored CasualX/vigem-client (MIT)
 assets/brand/             the ksx mark: two master SVGs + every generated raster
 tools/icongen/            regenerates them (own cargo workspace — see assets/brand/README.md)
+tools/studio-env/         the lane scripts: start/iterate/stop a Studio environment (own README)
 packaging/                Inno Setup script
 examples/                 frontend wrapper scripts
-docs/                     architecture, integration, driver story, recovery, migration, research
+docs/                     architecture, development pipeline, integration, drivers, recovery, migration, research
 ```
 
 `cargo metadata` currently reports 16 workspace packages, and the sixteen

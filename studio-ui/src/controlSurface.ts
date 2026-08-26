@@ -363,6 +363,35 @@ function reconcileUnresolvedSignals(
   });
 }
 
+/** Replace a channel's claim about what emits it, and carry the unverified
+ * mark WITH the claim rather than with the channel.
+ *
+ * `deviceUnverified` describes one sentence — "device D emits key K" — and not
+ * the slot it is stored in. Every writer that swaps that sentence out has to
+ * decide what the new one is worth, because the two ways of getting it wrong
+ * are both silent: a `{...channel, input}` spread leaves a stale mark hedging
+ * an observation ksx made itself seconds ago, and dropping the mark while
+ * copying a claim onto a mirror launders an unvouched claim into a vouched
+ * one. Going through here forces the answer to be written down at the call
+ * site. */
+function withChannelInput(
+  channel: ControlSurfaceChannel,
+  input: ControlSurfaceInput,
+  unverified: boolean,
+): ControlSurfaceChannel {
+  const next: ControlSurfaceChannel = {
+    id: channel.id,
+    label: channel.label,
+    input: { ...input },
+  };
+  // The terminal link is not a claim about a device's output; it records WHICH
+  // physical terminal fed this channel and what the board was called when it
+  // was read. Re-teaching the key does not unlearn that, so it survives.
+  if (channel.encoder) next.encoder = { ...channel.encoder };
+  if (unverified && next.input.kind === "keyboard") next.deviceUnverified = true;
+  return next;
+}
+
 export function cloneControlSurfaceState(state: ControlSurfaceState): ControlSurfaceState {
   return {
     ...state,
@@ -731,7 +760,14 @@ function appendControl(
     input: { ...channel.input },
   })) ?? channelsForKind(kind);
   if (options.inputKey && channels[0]) {
-    channels[0].input = { kind: "keyboard", key: options.inputKey, device: options.device ?? "" };
+    // A generated control's key comes from the mapping projection for the
+    // device selected right now, so it arrives vouched — and must not inherit
+    // a mark from whichever channel shape it was cloned from.
+    channels[0] = withChannelInput(
+      channels[0],
+      { kind: "keyboard", key: options.inputKey, device: options.device ?? "" },
+      false,
+    );
   }
   const control = cleanControl({
     id,
@@ -1179,7 +1215,12 @@ export function resolveControlSurfaceSharedSignal(
             channels: resolution === "mirror"
               ? control.channels.map((candidate) =>
                   candidate.input.kind === "keyboard" && candidate.input.key === key
-                    ? { ...candidate, input: { ...channel.input } }
+                    // Declaring these views ONE physical switch copies the
+                    // taught claim onto every mirror — provenance included. A
+                    // mirror of an unvouched observation is still unvouched;
+                    // dropping the mark here would launder it into a vouched
+                    // one by way of a geometry decision.
+                    ? withChannelInput(candidate, channel.input, channel.deviceUnverified === true)
                     : candidate
                 )
               : control.channels,
@@ -1210,10 +1251,14 @@ export function teachControlSurfaceChannel(
           ...control,
           channels: control.channels.map((channel) =>
             channel.id === channelId
-              ? {
-                  ...channel,
-                  input: { kind: "keyboard" as const, key, device },
-                }
+              // A Teach IS the vouching a swept claim was missing: ksx watched
+              // this key arrive through its own capture path, just now, from
+              // the device it is about to name. That replaces the sentence the
+              // sweep could not stand behind, so the mark saying so goes with
+              // it — leaving it would hedge an observation two seconds old,
+              // which is the same species of dishonesty as vouching for a read
+              // that never happened, just pointing the other way.
+              ? withChannelInput(channel, { kind: "keyboard", key, device }, false)
               : channel
           ),
         }

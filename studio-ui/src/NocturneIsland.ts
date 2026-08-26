@@ -7825,8 +7825,13 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
     )?.target_revision?.trim() ?? "";
     if (!refreshedRevision || refreshedRevision === row.expectedTargetRevision?.trim()) {
       autoMap = null;
+      // **The bind landed; the follow-on did not.** `line` is success copy, and
+      // `applyFlash` reddens only on a leading "error" — so without this prefix
+      // the page painted GREEN while telling the user KSX could not confirm the
+      // write AND silently stopping auto-map. A flash the user must act on is
+      // not a success, whatever the first half of the sentence says.
       applyFlash(
-        `${line} Refresh the canvas before mapping another control; KSX could not confirm the new draft revision.`,
+        `error: ${line} KSX could not confirm the new draft revision, so mapping stopped — refresh the canvas before mapping another control.`,
       );
       return false;
     }

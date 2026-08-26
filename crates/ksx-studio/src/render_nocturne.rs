@@ -849,6 +849,62 @@ mod tests {
     /// `list_values` so it cannot drift from what the seam does, and the whole
     /// thing is handed to `assert_island_slot_contract` — the check that the
     /// injected name resolves to the slot the island actually RENDERS.
+    /// **Every `applyFlash` argument is either a refusal or a named success.**
+    ///
+    /// `applyFlash` in NocturneIsland.ts picks the red side on
+    /// `startsWith("error")` and nothing else, so the prefix IS the severity —
+    /// there is no third state. That makes a refusal one forgotten prefix away
+    /// from rendering in the success colour, which is exactly what shipped:
+    /// a bind that succeeded, then could not confirm the new draft revision,
+    /// flashed its success sentence plus the failure clause and painted green
+    /// while silently stopping auto-map.
+    ///
+    /// The seam cannot see TypeScript, so this reads the island as text — the
+    /// same trick `render_check.rs` uses to keep its empty-state copy in
+    /// lockstep. A new SUCCESS flash has to be added to the list below, which
+    /// makes it a review rather than a surprise; a new refusal just needs its
+    /// prefix and needs nothing here.
+    #[test]
+    fn every_flash_is_a_refusal_or_a_named_success() {
+        const NOCTURNE_ISLAND_TS: &str = include_str!("../../../studio-ui/src/NocturneIsland.ts");
+
+        /// A flash passed through as a VARIABLE, already classified where it
+        /// was built. Named one by one, because a variable is exactly how the
+        /// shipped bug got in: `applyFlash(line)` is a clean success, but
+        /// `applyFlash(`${line} …failure clause…`)` is a refusal wearing the
+        /// success sentence, and only the second needs the prefix.
+        const NAMED_PASS_THROUGH: [&str; 2] = ["line)", "out.flash ?? null)"];
+
+        /// Literal flashes that really are a clean success and render green on
+        /// purpose.
+        const NAMED_SUCCESSES: [&str; 1] = ["Auto-map finished"];
+
+        let mut unclassified: Vec<String> = Vec::new();
+        for (index, _) in NOCTURNE_ISLAND_TS.match_indices("applyFlash(") {
+            let rest = &NOCTURNE_ISLAND_TS[index + "applyFlash(".len()..];
+            let head: String = rest.chars().take(160).collect();
+            let trimmed = head.trim_start_matches(['\n', '\r', ' ']);
+
+            // The definition site itself: `applyFlash(flash: string | null)`.
+            if trimmed.starts_with("flash:") {
+                continue;
+            }
+            let refusal = trimmed.starts_with("\"error:") || trimmed.starts_with("`error:");
+            let pass_through = NAMED_PASS_THROUGH.iter().any(|n| trimmed.starts_with(n));
+            let success = NAMED_SUCCESSES.iter().any(|n| trimmed.contains(n));
+            if !refusal && !pass_through && !success {
+                unclassified.push(trimmed.lines().next().unwrap_or("").to_owned());
+            }
+        }
+        assert!(
+            unclassified.is_empty(),
+            "these applyFlash arguments are neither an `error:` refusal nor a \
+             named success, so they will render GREEN whatever they say. Add the \
+             prefix, or add the sentence to NAMED_SUCCESSES if it really is one: \
+             {unclassified:#?}"
+        );
+    }
+
     #[test]
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one

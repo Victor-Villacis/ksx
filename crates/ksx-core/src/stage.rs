@@ -1070,8 +1070,16 @@ mod tests {
     /// XInput ceiling first and this test is about the POOL.
     #[test]
     fn a_ninth_hidmaestro_pad_is_refused_before_it_can_reach_the_host() {
+        // Slot 1 is `staged()`'s Xbox360 pad — ViGEmBus, outside the pool — so
+        // the pool fills over slots 2..=MAX_HIDMAESTRO_PADS + 1 and the pad
+        // that overflows it is the one after that. Derived rather than spelled
+        // 9 and 10 because the panic below already counts "pad N of
+        // MAX_HIDMAESTRO_PADS": a loop bound that disagreed with it would stage
+        // the wrong number of pads while reporting the right one.
+        let last_in_pool = MAX_HIDMAESTRO_PADS + 1;
+        let overflow = last_in_pool + 1;
         let mut setup = staged();
-        for n in 2u8..=9 {
+        for n in 2u8..=last_in_pool {
             let persona = if n % 2 == 0 {
                 Persona::DualSense
             } else {
@@ -1082,21 +1090,30 @@ mod tests {
             });
         }
         let refused = setup
-            .add_slot(10, Persona::DualSense, preset("P10"))
+            .add_slot(overflow, Persona::DualSense, preset("P-overflow"))
             .unwrap_err();
         assert_eq!(refused.code(), "too-many-hidmaestro-pads");
         let message = refused.to_string();
-        assert!(message.contains("at most 8"), "{message}");
+        // The NUMBER comes from the constant that owns it; the words around it
+        // are this module's, and this line is the one place that locks them.
+        // Spelled "at most 8" it would be a fifth copy of a number ksx-config,
+        // ksx-backend and ksx-output also assert — raise the ceiling and each
+        // fails on its own, with nothing in any of the four messages saying
+        // they are the same fact.
+        assert!(
+            message.contains(&format!("at most {MAX_HIDMAESTRO_PADS} live pads")),
+            "{message}"
+        );
         assert!(message.contains("xbox360"), "{message}");
 
         // The same gate on the other door: repainting a ViGEm slot onto the
         // full pool is the ninth pad too.
         let with_other = setup
-            .add_slot(10, Persona::PlayStation, preset("P10"))
+            .add_slot(overflow, Persona::PlayStation, preset("P-overflow"))
             .unwrap();
         assert_eq!(
             with_other
-                .set_persona(10, Persona::DualSense)
+                .set_persona(overflow, Persona::DualSense)
                 .unwrap_err()
                 .code(),
             "too-many-hidmaestro-pads"

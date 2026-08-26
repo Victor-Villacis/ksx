@@ -35,6 +35,8 @@ adopt/reject rationale.
    # ...and then EXECUTE the union, because the clippy pass above runs no test
    cargo test -p ksx-app      --features studio,cabinet
    cargo test -p ksx-backend  --features studio,cabinet
+   cargo test --workspace --exclude vigem-client --examples   # example targets
+   cargo test -p ksx-platform --lib --features hidmaestro-fake-host-tests
    cargo check -p vigem-client --all-features
    tools/studio-env/build-assets.ps1      # deterministic: builds twice, byte-compares
    cd studio-ui/pwtest; npm test          # pinned-Chromium Studio suite
@@ -43,7 +45,51 @@ adopt/reject rationale.
    have reached `main` through that gap, and `profile_edit`'s tests sat red from
    `b652579` until 2026-08-12 because `cargo test --workspace` runs default
    features and never compiled them. Do **not** run the four-way matrix
-   locally — push the branch and let CI do it (`HANDOFF.md` §6).
+   locally — push the branch and let CI do it (`HANDOFF.md` §6). The
+   `--examples` and `ksx-platform` lines are the exception worth making: both
+   finish in seconds on a warm target directory, neither needs hardware, and
+   each covers a class the five above cannot see, so run them before you push
+   rather than after.
+
+   **How many tests the five hide, measured.** An audit on 2026-08-26 ran every
+   line above and diffed the counts. The local five execute 2,449 tests in 47
+   binaries (`--workspace --exclude vigem-client`, 0 failed, 5 ignored). The
+   lines below them execute **71 more that no local command reaches**:
+
+   | what the five miss | run | vs default |
+   |---|---|---|
+   | `ksx-backend` behind `any(studio, cabinet)` | 790 | 735 (**+55**) |
+   | `ksx-app` behind the same opt-in | 65 | 60 (**+5**) |
+   | tests *inside* example targets | 8 | 0 (**+8**) |
+   | `ksx-platform`'s elevation boundary | 262 | 259 (**+3**) |
+
+   Two of those four had no CI step at all until 2026-08-26. **`cargo test`
+   builds example targets and does not run them** — `--examples` is what turns
+   an example into a test binary — so the eight tests in
+   `crates/ksx-studio/examples/macro_fixture.rs`, the fixture the whole
+   Playwright gate launches, had never been executed by any gate. And
+   `ksx-platform`'s `hidmaestro-fake-host-tests` guards three assertions about
+   the fixed SDK-free child's session and privilege inheritance; the default
+   build compiles none of them. Both now have steps in `ci.yml`.
+
+   The reason this is worth four extra lines: **`ksx open` shipped a 404 with a
+   green suite.** `studio_launch::url()` returned the deleted `/start`, so the
+   desktop icon, the Start-menu entry and the tray all opened a chrome-less
+   window on a 404 with no address bar to correct it in — and a test in the same
+   file pinned the wrong value, so the suite agreed with the bug. It reached a
+   build because that file sits behind `--features studio` and no local run
+   compiled it (fixed in `ad520b4`). *A test that never runs and a test that
+   pins the wrong answer are indistinguishable from outside: both are green.*
+
+   > ⚠ **`cargo test --workspace` can fail with `LNK1104` while a studio-env
+   > lane is up**, and it is not your change. Default target selection *builds*
+   > examples, so it must relink `target/debug/examples/macro_fixture.exe` —
+   > which a running fixture lane holds open. Stop the lane
+   > (`tools/studio-env/teardown.ps1`) or add `--lib --bins --tests` to skip
+   > building examples. The `--examples` line is immune: it emits a separate
+   > `macro_fixture-<hash>.exe` test harness and never touches the locked file.
+   > (`STATUS_ACCESS_VIOLATION` and `LNK1201`/`LNK1207` are the *other*, unrelated
+   > local build failures — see `DEVELOPMENT-PIPELINE.md`.)
 5. **Live milestone exit test on the cabinet** per docs/ARCHITECTURE.md's table —
    a milestone is not done until its hardware gate passes.
 

@@ -2012,26 +2012,39 @@ preset = "default"
             socd: Socd::default(),
             macros: Default::default(),
         };
-        let eight = ConfigFile {
-            slots: (1u8..=8).map(slot).collect(),
+        // A full pool and the pad past it, both derived from the constant that
+        // decides them. Spelled 8 and 9, a raised ceiling fails this at
+        // `left: [], right: [TooManyHidMaestroPads { count: 9 }]` — an empty
+        // issue list against a count, saying nothing about the number that
+        // moved, in one of four crates failing the same way at once.
+        let pool = ksx_core::MAX_HIDMAESTRO_PADS;
+        let full = ConfigFile {
+            slots: (1u8..=pool).map(slot).collect(),
             ..ConfigFile::default()
         };
-        assert_eq!(validate(&eight, &[]), vec![], "eight pads fill the pool");
-        let nine = ConfigFile {
-            slots: (1u8..=9).map(slot).collect(),
+        assert_eq!(validate(&full, &[]), vec![], "a full pool is clean");
+        let over = ConfigFile {
+            slots: (1u8..=pool + 1).map(slot).collect(),
             ..ConfigFile::default()
         };
         assert_eq!(
-            validate(&nine, &[]),
-            vec![Issue::TooManyHidMaestroPads { count: 9 }]
+            validate(&over, &[]),
+            vec![Issue::TooManyHidMaestroPads {
+                count: usize::from(pool) + 1
+            }]
         );
-        let msg = validate(&nine, &[])[0].to_string();
-        assert!(msg.contains("at most 8"), "{msg}");
+        let msg = validate(&over, &[])[0].to_string();
+        // Built from the constant `Issue::TooManyHidMaestroPads` renders from,
+        // not spelled "at most 8". The ceiling is one fact that ksx-core,
+        // ksx-backend and ksx-output assert too; a literal here makes this the
+        // third or fourth place a raised ceiling fails, each on its own and
+        // none of them naming the number's owner.
+        assert!(msg.contains(&format!("at most {pool}")), "{msg}");
 
         use crate::games::GameSlotEntry;
         let mut games: GamesFile =
             toml::from_str("[[game]]\ntitle = \"PS5\"\npath = \"C:\\\\ps5.exe\"\n").unwrap();
-        games.games[0].slots = (1u8..=9)
+        games.games[0].slots = (1u8..=pool + 1)
             .map(|number| GameSlotEntry {
                 number,
                 user_index: None,
@@ -2051,14 +2064,14 @@ preset = "default"
             validate_games(&games, &[]),
             vec![Issue::GameTooManyHidMaestroPads {
                 game: "PS5".into(),
-                count: 9,
+                count: usize::from(pool) + 1,
             }]
         );
-        games.games[0].slots.truncate(8);
+        games.games[0].slots.truncate(usize::from(pool));
         assert_eq!(
             validate_games(&games, &[]),
             vec![],
-            "eight pads fill the pool cleanly"
+            "a full pool is clean per game too"
         );
     }
 

@@ -4976,118 +4976,39 @@ function createControlSurfaceItem(): HTMLElement {
   close.classList.add("quiet");
   head.append(heading, close);
 
-  const hardware = document.createElement("section");
-  hardware.className = "n-surface-hardware";
-  hardware.setAttribute("aria-labelledby", "n-surface-hardware-title");
-  hardware.dataset.state = "idle";
-  const hardwareHead = document.createElement("div");
-  hardwareHead.className = "n-surface-hardware-head";
-  const hardwareHeading = document.createElement("div");
-  const hardwareKicker = document.createElement("span");
-  hardwareKicker.className = "n-surface-hardware-kick";
-  hardwareKicker.textContent = "Selected encoder";
-  const hardwareName = document.createElement("strong");
-  hardwareName.id = "n-surface-hardware-title";
-  hardwareName.dataset.surfaceHardwareName = "";
-  hardwareName.textContent = "Status not inspected";
-  hardwareHeading.append(hardwareKicker, hardwareName);
-  const hardwareRefresh = makeKeyboardWorkbenchButton(
-    "Refresh status",
-    "surface-hardware-refresh",
-    "Read the selected encoder's identity, mode, and read-back capabilities without changing it",
-  );
-  hardwareRefresh.classList.add("quiet", "n-surface-hardware-refresh");
-  const hardwareActions = document.createElement("div");
-  hardwareActions.className = "n-surface-hardware-actions";
-  const encoderSetup = makeKeyboardWorkbenchButton(
-    "Inspect to continue",
-    "surface-encoder-open",
-    "Inspect this exact encoder before opening hardware configuration",
-  );
-  encoderSetup.classList.add("n-surface-encoder-open");
-  encoderSetup.setAttribute("aria-controls", "n-surface-programming");
-  encoderSetup.setAttribute("aria-expanded", "false");
-  hardwareActions.append(hardwareRefresh, encoderSetup);
-  hardwareHead.append(hardwareHeading, hardwareActions);
-
-  const hardwareStatus = document.createElement("div");
-  hardwareStatus.className = "n-surface-hardware-status";
-  hardwareStatus.setAttribute("role", "status");
-  hardwareStatus.setAttribute("aria-live", "polite");
-  hardwareStatus.setAttribute("aria-atomic", "true");
-  const hardwareIdentity = document.createElement("span");
-  hardwareIdentity.className = "n-surface-hardware-identity";
-  hardwareIdentity.dataset.surfaceHardwareIdentity = "";
-  const hardwareMode = document.createElement("span");
-  hardwareMode.className = "n-surface-hardware-mode";
-  hardwareMode.dataset.surfaceHardwareMode = "";
-  hardwareMode.dataset.tone = "neutral";
-  const hardwareSummary = document.createElement("p");
-  hardwareSummary.className = "n-surface-hardware-summary";
-  hardwareSummary.dataset.surfaceHardwareSummary = "";
-  const hardwareDetails = document.createElement("details");
-  hardwareDetails.className = "n-surface-hardware-details";
-  hardwareDetails.dataset.surfaceHardwareDetails = "";
-  hardwareDetails.hidden = true;
-  const hardwareDetailsSummary = document.createElement("summary");
-  hardwareDetailsSummary.textContent = "Inspection details";
-  const hardwareCapabilities = document.createElement("dl");
-  hardwareCapabilities.className = "n-surface-hardware-capabilities";
-  hardwareCapabilities.dataset.surfaceHardwareCapabilities = "";
-  hardwareCapabilities.hidden = true;
-  const hardwareAccessRow = document.createElement("div");
-  const hardwareAccessTerm = document.createElement("dt");
-  hardwareAccessTerm.textContent = "Inspection access";
-  const hardwareAccessValue = document.createElement("dd");
-  hardwareAccessValue.dataset.surfaceHardwareAccess = "";
-  hardwareAccessRow.append(hardwareAccessTerm, hardwareAccessValue);
-  const hardwareDriverRow = document.createElement("div");
-  const hardwareDriverTerm = document.createElement("dt");
-  hardwareDriverTerm.textContent = "Panel driver";
-  const hardwareDriverValue = document.createElement("dd");
-  hardwareDriverValue.dataset.surfaceHardwareDriver = "";
-  hardwareDriverRow.append(hardwareDriverTerm, hardwareDriverValue);
-  const hardwareConfigurationRow = document.createElement("div");
-  const hardwareConfigurationTerm = document.createElement("dt");
-  hardwareConfigurationTerm.textContent = "Configuration collection";
-  const hardwareConfigurationValue = document.createElement("dd");
-  hardwareConfigurationValue.dataset.surfaceHardwareConfiguration = "";
-  hardwareConfigurationRow.append(hardwareConfigurationTerm, hardwareConfigurationValue);
-  const hardwareChartRow = document.createElement("div");
-  const hardwareChartTerm = document.createElement("dt");
-  hardwareChartTerm.textContent = "Chart read-back";
-  const hardwareChartValue = document.createElement("dd");
-  const hardwareChartLabel = document.createElement("strong");
-  hardwareChartLabel.dataset.surfaceHardwareChart = "";
-  const hardwareChartDetail = document.createElement("small");
-  hardwareChartDetail.dataset.surfaceHardwareChartDetail = "";
-  hardwareChartValue.append(hardwareChartLabel, hardwareChartDetail);
-  hardwareChartRow.append(hardwareChartTerm, hardwareChartValue);
-  hardwareCapabilities.append(
-    hardwareAccessRow,
-    hardwareDriverRow,
-    hardwareConfigurationRow,
-    hardwareChartRow,
-  );
-  const hardwareRecommendation = document.createElement("p");
-  hardwareRecommendation.className = "n-surface-hardware-recommendation";
-  hardwareRecommendation.dataset.surfaceHardwareRecommendation = "";
-  const hardwareNote = document.createElement("p");
-  hardwareNote.className = "n-surface-hardware-note";
-  hardwareNote.dataset.surfaceHardwareNote = "";
-  hardwareDetails.append(
-    hardwareDetailsSummary,
-    hardwareCapabilities,
-    hardwareRecommendation,
-  );
-  hardwareStatus.append(
-    hardwareIdentity,
-    hardwareMode,
-    hardwareSummary,
-    hardwareDetails,
-    hardwareNote,
-  );
-  hardware.append(hardwareHead, hardwareStatus);
+  // ── THE ENCODER STATUS SURFACE STOOD HERE, REMOVED 2026-08-26 ───────────
+  //
+  // Between the builder's head and its programming form sat a
+  // `<section class="n-surface-hardware" data-state="idle">`: a "Selected
+  // encoder" kicker over a "Status not inspected" name, a quiet "Refresh
+  // status" button (`data-nx="surface-hardware-refresh"`), an "Inspect to
+  // continue" button (`data-nx="surface-encoder-open"`, `aria-controls` the
+  // programming section below), and a live-region status block with the
+  // board's identity, its mode, a summary line, a note, and an "Inspection
+  // details" disclosure listing inspection access, panel driver,
+  // configuration collection and chart read-back.
+  //
+  // Every one of those values could only be filled by READING A CHART, and
+  // `3901990` ("cut ksx over to /nocturne — remove the encoder chart
+  // surface") moved chart access out of this product into PacBench together
+  // with the ten `/api/panel/*` routes and the code that filled them. What
+  // was left was the FURNITURE: `data-state` was written "idle" once, on
+  // this line, and never again; neither `data-nx` token had a branch in the
+  // delegated dispatcher (which has no default arm, so both clicks were
+  // silently inert); and the shipped bundle issued zero `api/panel` requests,
+  // which is why the ten deleted chart tests in pwtest read as hangs rather
+  // than failures — they were waiting on a surface no code could ever move.
+  //
+  // That is worse than an absent feature. An enabled, styled, promising
+  // control panel next to the user's real I-PAC asserts that KSX can inspect
+  // it; a page must not advertise a capability it does not have.
+  //
+  // ⚠️ IT RETURNS WITH THE CHART VERBS. PacBench comes back to ksx one verb
+  // at a time, and the first verb that can READ a board is the one that makes
+  // this surface true again. Rebuild it then — wired to that verb, with the
+  // dispatcher branches and the CSS (base rules and the `width <= 900px` /
+  // `pointer: coarse` overrides) that went with it — not before. It was not
+  // lost by accident.
 
   const programming = document.createElement("section");
   programming.id = "n-surface-programming";
@@ -5533,8 +5454,16 @@ function createControlSurfaceItem(): HTMLElement {
   note.className = "n-surface-note";
   note.dataset.surfaceNote = "";
   note.textContent =
-    "Encoder setup is supervised: KSX reads and backs up the complete chart, previews an exact diff, then writes only after confirmation and byte-for-byte verification. Teach still proves what the physical wiring sends; Route writes the dynamic KSX mapping.";
-  content.append(head, hardware, programming, stages, status, starters, tools, workarea, note);
+    // This sentence opened with a promise `3901990` had already taken away —
+    // "KSX reads and backs up the complete chart, previews an exact diff,
+    // then writes only after confirmation and byte-for-byte verification" —
+    // describing the supervised chart write in the present tense on a build
+    // that cannot read a chart at all. It was the footer of the removed
+    // status surface above, and it went the same way and for the same reason.
+    // What remains is the part that is still true on every build: the two
+    // steps this builder does own, and the fact that they are separate.
+    "Teach proves what the physical wiring sends; Route writes the dynamic KSX mapping.";
+  content.append(head, programming, stages, status, starters, tools, workarea, note);
 
   const item = createCanvasItem({
     instanceId: "control-surface",
@@ -6131,6 +6060,28 @@ function controlSurfacePointerEnd(event: PointerEvent): void {
   }
 }
 
+/** The body a seat gets when the server named a family this bundle has no
+ *  master for — a visible, self-explaining failure instead of a guess.
+ *
+ *  Reachable exactly one way: a daemon newer than this bundle serving a
+ *  persona added after it was built, which the server resolves to the named
+ *  `"unknown"` family rather than inventing a silhouette for
+ *  (`UNKNOWN_PRESENTATION`, `crates/ksx-studio/src/snapshot.rs`). The seat
+ *  itself is real — it is staged, it binds keys, its controls are the wire
+ *  vocabulary — so it keeps its widget, its badge and its title, and only the
+ *  picture is missing. Saying so is the point: the previous behaviours were to
+ *  draw an Xbox pad, or to drop the widget and leave a controller the user
+ *  created with no representation anywhere and nothing logged. */
+function unrecognisedPadBody(family: string): HTMLElement {
+  const body = document.createElement("p");
+  body.className = "n-mini-unknown";
+  body.setAttribute("role", "status");
+  body.textContent = "No controller art for this device" +
+    (family && family !== "unknown" ? ` ("${family}")` : "") +
+    ". Its buttons still bind — update ksx Studio to see it drawn.";
+  return body;
+}
+
 /** Every staged controller as a canvas widget, rebuilt when the roster
  *  changes: the engine's own item factory around the same badge-and-clone
  *  card the pad grid used to build. Client-created on purpose (the padgrid
@@ -6162,16 +6113,29 @@ export function syncPadWidgets(): void {
     // The hidden masters, keyed by the family they draw — NOT by template
     // order: a third art (the DualSense) is exactly the change that makes an
     // index silently hand every PlayStation seat the wrong body.
+    //
+    // ⚠️ `pv.family` is READ, never re-decided. There used to be a hardcoded
+    // `Set(["xbox","ps","ps5","switchpro","xboxseries"])` here with an `: "xbox"`
+    // fallback, which is the same bug the comment above warns about wearing a
+    // different hat: it fixed the index by name and then re-introduced a
+    // five-name allowlist that answers "xbox" for anything outside it. The
+    // server had already made this decision ONCE, for every persona, in
+    // `PAD_PRESENTATIONS` (`crates/ksx-studio/src/snapshot.rs`) — a second
+    // opinion here can only ever disagree with it.
+    //
+    // A family with no master is now a VISIBLE failure. It reaches us exactly
+    // one way — a daemon newer than this bundle, whose persona the server
+    // resolved to the named `"unknown"` family — and the two wrong answers are
+    // to draw a controller we made up, or to `return` and let the seat vanish
+    // from the canvas with no error anywhere. Both were live: the fallback drew
+    // an Xbox pad, and the `if (!art) return` below dropped the widget.
     pads.forEach((pv, index) => {
-      const family = new Set(["xbox", "ps", "ps5", "switchpro", "xboxseries"]).has(pv.family)
-        ? pv.family
-        : "xbox";
+      const family = pv.family;
       const master = root.querySelector<HTMLElement>(
-        `.n-padwrap[data-pad-family="${family}"]`,
+        `.n-padwrap[data-pad-family="${CSS.escape(family)}"]`,
       );
       const art = master?.querySelector(".ps5a") ?? master?.querySelector("svg");
-      if (!art) return;
-      const artClone = art.cloneNode(true) as SVGSVGElement;
+      const artClone = art ? (art.cloneNode(true) as SVGSVGElement) : null;
       const storeKey = storeKeys.get(pv.slot) ?? "p:" + pv.preset;
       const content = document.createElement("div");
       content.className = "n-mini np" + pv.slot;
@@ -6189,7 +6153,7 @@ export function syncPadWidgets(): void {
       title.textContent = pv.title;
       head.append(badge, title);
       let variantControls: HTMLElement | null = null;
-      if (pv.family === "ps" && artClone.matches("svg.ds4premium")) {
+      if (artClone && pv.family === "ps" && artClone.matches("svg.ds4premium")) {
         const controls = document.createElement("div");
         controls.className = "n-ds4-variants";
         controls.setAttribute("role", "group");
@@ -6223,7 +6187,7 @@ export function syncPadWidgets(): void {
         variantControls = controls;
       } else {
         const config = premiumControllerConfig(family);
-        if (config && artClone.matches(config.selector)) {
+        if (artClone && config && artClone.matches(config.selector)) {
           const premiumFamily = family as PremiumControllerFamily;
           const controls = document.createElement("div");
           controls.className = "n-controller-variants";
@@ -6266,7 +6230,7 @@ export function syncPadWidgets(): void {
           variantControls = controls;
         }
       }
-      content.append(head, artClone);
+      content.append(head, artClone ?? unrecognisedPadBody(family));
       const item = createCanvasItem({
         instanceId: "pad-" + pv.slot,
         displayName: "P" + pv.slot + " \u00b7 " + pv.title,
@@ -10082,18 +10046,23 @@ export function NocturneIsland() {
                 ),
                 h("span", { class: "n-dev-dot" }),
               ),
-              h(
-                "button",
-                {
-                  type: "button",
-                  class: "n-encoder-setup",
-                  "data-nx": "encoder-select-setup",
-                  title: "Open this exact encoder's hardware outputs; KSX inspects proven capabilities before offering reads or writes",
-                  "data-encoder-selector": r.selector,
-                },
-                "Open outputs",
-                h("span", { class: "n-encoder-accessible-name" }, " ", r.name),
-              ),
+              // ── "Open outputs" STOOD HERE, REMOVED 2026-08-26 ────────────
+              //
+              // Every encoder row carried a second button —
+              // `data-nx="encoder-select-setup"`, carrying that board's
+              // `data-encoder-selector` — which opened this exact I-PAC's
+              // hardware-output surface. `3901990` deleted the handler along
+              // with the rest of the chart work and LEFT THE BUTTON: the
+              // delegated dispatcher below matches `[data-nx]` through a
+              // chain of `else if`s with no default arm, so an unknown token
+              // falls off the end and the click does nothing observable at
+              // all — no flash, no error, no focus move. Styled, enabled and
+              // titled "KSX inspects proven capabilities before offering
+              // reads or writes", sitting beside the user's real hardware.
+              //
+              // It returns with the status surface it opened, when a chart
+              // READ verb comes back from PacBench — see the note in
+              // `createControlSurfaceItem` for what that surface was.
             ),
         ),
         h(
@@ -10479,7 +10448,21 @@ export function NocturneIsland() {
             // It pointed at the Start page until 2026-08-25, and that page is
             // a 404 now: with scripting off this was the only sentence about
             // adding a controller, and it sent people to nowhere.
-            "Adding a controller here needs JavaScript, because the create dialog is where the persona, the layout and the opposite-directions rule are chosen together. Everything else on this page — picking a keyboard, loading a saved game, Save and Play — works without it.",
+            //
+            // And until 2026-08-26 it closed with "Everything else on this
+            // page … works without it", which was false for the one verb the
+            // page exists for. BINDING has no form twin: `/nocturne/api/bind`
+            // takes `axum::Json` only, and the Learn that precedes it needs a
+            // live listener watching the keyboard. Everything AROUND a
+            // binding does have a twin — `/nocturne/bind/clear`,
+            // `/nocturne/bind/clear-all`, `/nocturne/bind/turbo`,
+            // `/nocturne/bind/toggle` — so a reader with scripting off can
+            // clear, shape and reshape bindings all day and never once make
+            // one, and the old sentence told them the opposite. It is the
+            // one sentence on the page addressed EXACTLY to the people it
+            // misled, so it now names both exceptions and then enumerates
+            // what actually works rather than implying the remainder.
+            "Adding a controller here needs JavaScript, because the create dialog is where the persona, the layout and the opposite-directions rule are chosen together. Assigning a key needs it too: Learn has to watch your keyboard while you press, and the bind that follows is a JSON call with no form behind it. What does work without scripting, because each one is a plain form: picking a keyboard, loading a saved game, clearing one binding or every binding in a slot, Turbo, Hold/Toggle, Save, Play and Stop.",
           ),
         ),
         // The short undo window after a removal: the SERVER holds the

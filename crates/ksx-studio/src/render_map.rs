@@ -57,7 +57,12 @@
 //! established applyStatus pattern); `zone_tables_cover_every_mappable_
 //! function` pins the art against the domain vocabulary.
 
-use crate::render::art_for;
+// `art_for` is deliberately NOT imported any more. `zones_for` used to ask it
+// which art a persona drew and infer the zone table from the answer, which made
+// the geometry a consequence of an unrelated substring match: add a persona
+// that draws the Xbox body and it silently inherited the Xbox pad's two analog
+// sticks and two triggers. Both now come from the same
+// `PAD_PRESENTATIONS` row.
 use crate::snapshot::{MacroStepView, MacroView, MapperSlot};
 
 // The art `<img>` occupies the bottom 86% of the stage (`.padart` in
@@ -121,10 +126,12 @@ const fn zone(
 /// Lstick(24.0,29.9), Rstick(62.5,51.6), dpad(36.4,53.4) — art Y mapped to
 /// stage as 14 + y·0.86).
 ///
-/// Rects are pairwise DISJOINT (pinned by `zone_tables_cover_every_mappable_
-/// function`): face buttons sized to the drawn circles, and the four
-/// stick-direction wedges RING the stick with the L3/R3 click zone as the
-/// 8×10 center hub — adjacent, never covering it.
+/// Rects are pairwise DISJOINT (pinned by `zone_rects_are_pairwise_disjoint`,
+/// which checks every table in `PAD_PRESENTATIONS`, not just this one): face
+/// buttons sized to the drawn circles, and the four stick-direction wedges RING
+/// the stick with the L3/R3 click zone as the 8×10 center hub — adjacent, never
+/// covering it. **Adjacent is legal and intended**; the test allows a shared
+/// edge and refuses a shared area.
 pub(crate) const ZONE_XBOX: &[Zone] = &[
     // Shoulders (not drawn in the icon art): slim chips stacked trigger-over-
     // bumper like the real pad, anchored just above the body's top plateau
@@ -204,23 +211,128 @@ pub(crate) const ZONE_DS4: &[Zone] = &[
     zone("rx.max", "→", "dir", [72.85, 56.8, 5.5, 7.0], "chip"),
 ];
 
-/// The zone table a persona draws with.
+// ── THE DIGITAL RETRO PADS ────────────────────────────────────────────────
+//
+// [`ZONE_SNES`] and [`ZONE_GENESIS`] are TWELVE zones where the modern tables
+// are twenty-five, and that is the whole point of them.
+//
+// **What is missing, and why.** No `lt`/`rt`, no `lthumb`/`rthumb`, no `guide`,
+// and none of the eight stick directions. The reasoning is written out once, on
+// `ABSENT_ON_A_DIGITAL_RETRO_PAD` in `snapshot.rs`; the short version is that
+// each pinned retro descriptor carries exactly ONE axis pair and on both
+// physical pads that pair IS the D-pad — so a key bound to `lt` or `rx.max` on
+// one of these seats drives nothing at all.
+//
+// That matters because `zones_for` is what every authoring surface asks "which
+// controls does this seat have": the binding pane's rows and free chips, the
+// canvas control list, the macro grid's columns, and the readable names on the
+// keyboard. A SNES pad offering a right-stick column in the macro editor is not
+// a cosmetic wart — it is an editor inviting somebody to author a move that
+// cannot play, and then showing it back to them as if it had.
+//
+// **Geometry is the Xbox art's**, because the Xbox body is the stand-in both
+// retro personas draw (`PAD_PRESENTATIONS` — there is no SNES or Genesis art in
+// this tree and none is invented). The rects are copied from [`ZONE_XBOX`]
+// unchanged so the zones land on the drawn controls of the body actually on
+// screen, and `zone_rects_are_pairwise_disjoint` covers them like any other
+// table. `retro_tables_share_one_geometry` pins the two against each other, so
+// the shared shape stays ONE claim about retro hardware rather than two copies
+// free to drift.
+//
+// **Why two tables and not one plus a `legend` override.** The override list
+// exists for a persona that shares another's shape and renames one or two
+// controls (DualSense's Create, Switch Pro's ZL/ZR). Here almost every row's
+// word differs, and the two vocabularies are certain to different degrees — so
+// they are stated separately, each with its own evidence.
+//
+// The `idk` palette is `txt` on the faces rather than the Xbox
+// `xa`/`xb`/`xx`/`xy`: painting a SNES "B" in the Xbox A green would import one
+// console's color language onto another's pad.
+
+/// The SNES pad — the words that are printed on it.
+///
+/// Safe to state because `ksx_core::Persona::Snes`'s own doc carries the
+/// mapping this build measured: the identity is the iBuffalo Classic
+/// (0583:2060) with "positional faces (ksx A = bottom = SNES B)". Anchoring the
+/// diamond on that gives bottom→B, right→A, left→Y, top→X, which is the SNES
+/// pad as printed; L/R/Select/Start are what is written on the shell.
+pub(crate) const ZONE_SNES: &[Zone] = &[
+    // L and R are DIGITAL on this pad, so they are `lb`/`rb` and there is no
+    // trigger chip stacked above them.
+    zone("lb", "L", "sh", [34.0, 10.9, 11.0, 5.2], "bumper"),
+    zone("rb", "R", "sh", [66.0, 10.9, 11.0, 5.2], "bumper"),
+    zone("Y", "X", "txt", [75.2, 31.1, 7.2, 8.4], "round"),
+    zone("B", "A", "txt", [82.0, 39.6, 7.2, 8.4], "round"),
+    zone("A", "B", "txt", [75.3, 48.3, 7.2, 8.4], "round"),
+    zone("X", "Y", "txt", [68.7, 39.7, 7.2, 8.4], "round"),
+    // No guide zone above these two: the pad has no home button.
+    zone("back", "Select", "txt", [44.0, 39.0, 6.5, 8.0], "chip"),
+    zone("start", "Start", "txt", [56.0, 39.0, 6.5, 8.0], "chip"),
+    // The D-pad cross — the ONLY directional input this pad has, which is
+    // exactly why the stick wedges are absent rather than duplicated onto it.
+    zone("dpad.up", "↑", "dir", [36.4, 50.6, 7.0, 9.0], "chip"),
+    zone("dpad.down", "↓", "dir", [36.4, 69.2, 7.0, 9.0], "chip"),
+    zone("dpad.left", "←", "dir", [29.2, 59.9, 7.0, 9.0], "chip"),
+    zone("dpad.right", "→", "dir", [43.6, 59.9, 7.0, 9.0], "chip"),
+];
+
+/// The Genesis pad — the SHAPE, in ksx's own words.
+///
+/// ⚠️ **The letters are deliberately not SEGA's, and that is a decision rather
+/// than an oversight.** `docs/HIDMAESTRO-STATE.md` records the 2026-08-20 retro
+/// leg spawning this device and says in the same row: "Button-label tables
+/// remain PROVISIONAL until the joy.cpl press-check." On top of that, this ONE
+/// wire identity (DaemonBite 2341:8036) serves Genesis, Mega Drive AND Saturn
+/// — three different face layouts: a three-button row, a 2×3 six-button grid,
+/// and Saturn's six-plus-shoulders. There is no single set of printed letters
+/// this build can stand behind, so it prints none and keeps ksx's own function
+/// vocabulary, which claims nothing about anybody's shell.
+///
+/// What it DOES claim, and can: the shape. Nine buttons and one signed axis
+/// pair means no analog stick, no analog trigger, no stick click and no home
+/// button — so none is offered. Give this table Sega letters in the same commit
+/// as the press-check, not before.
+pub(crate) const ZONE_GENESIS: &[Zone] = &[
+    // "L"/"R" name a POSITION, not a console's branding — the shoulder pair
+    // this descriptor's nine buttons include.
+    zone("lb", "L", "sh", [34.0, 10.9, 11.0, 5.2], "bumper"),
+    zone("rb", "R", "sh", [66.0, 10.9, 11.0, 5.2], "bumper"),
+    zone("Y", "Y", "txt", [75.2, 31.1, 7.2, 8.4], "round"),
+    zone("B", "B", "txt", [82.0, 39.6, 7.2, 8.4], "round"),
+    zone("A", "A", "txt", [75.3, 48.3, 7.2, 8.4], "round"),
+    zone("X", "X", "txt", [68.7, 39.7, 7.2, 8.4], "round"),
+    // ksx's own names for these two, not "Select"/"Mode": a 3-button Genesis
+    // pad has neither, a 6-button has Mode, a Saturn pad has neither.
+    zone("back", "Back", "txt", [44.0, 39.0, 6.5, 8.0], "chip"),
+    zone("start", "Start", "txt", [56.0, 39.0, 6.5, 8.0], "chip"),
+    zone("dpad.up", "↑", "dir", [36.4, 50.6, 7.0, 9.0], "chip"),
+    zone("dpad.down", "↓", "dir", [36.4, 69.2, 7.0, 9.0], "chip"),
+    zone("dpad.left", "←", "dir", [29.2, 59.9, 7.0, 9.0], "chip"),
+    zone("dpad.right", "→", "dir", [43.6, 59.9, 7.0, 9.0], "chip"),
+];
+
+/// The zone table a persona draws with — the controls THIS pad has.
 ///
 /// Returns a SLICE, not a fixed-size array: the control vocabulary grows in
 /// M11-M19 (`docs/UNIVERSAL-IO.md`), and a `[Zone; 25]` return type made every
-/// caller a place the count had to be repeated. Nothing here derives from
-/// `ksx_core::preset::mappable_functions()` and nothing should — a `Zone`
-/// carries persona ART (label, geometry, kind), which this crate owns and
-/// ksx-core has no business knowing. The two are tied together by
-/// `zone_tables_cover_every_mappable_function` instead, which is a test, not a
-/// dependency: ksx-studio links ksx-core only as a dev-dependency and that
-/// boundary is deliberate (`docs/M9-DECISION.md` §6).
+/// caller a place the count had to be repeated. It is also no longer one count:
+/// the retro personas have twelve zones where the modern ones have
+/// twenty-five, and that difference is the point.
+///
+/// Nothing here derives from `ksx_core::preset::mappable_functions()` and
+/// nothing should — a `Zone` carries persona ART (label, geometry, kind), which
+/// this crate owns and ksx-core has no business knowing. The two are tied
+/// together by `zone_tables_cover_every_mappable_function` instead, which is a
+/// test, not a dependency: ksx-studio links ksx-core only as a dev-dependency
+/// and that boundary is deliberate (`docs/M9-DECISION.md` §6).
+///
+/// The persona → table decision itself is NOT made here. It lives with the art,
+/// the family and the legend in the one `PAD_PRESENTATIONS` record
+/// (`snapshot.rs`), because deciding those four things in four places is how
+/// one page came to draw the same controller as a DualShock in the pad grid and
+/// an Xbox pad in the mapper.
 pub(crate) fn zones_for(persona: &str) -> &'static [Zone] {
-    if art_for(persona) == crate::render::ART_DS4 {
-        ZONE_DS4
-    } else {
-        ZONE_XBOX
-    }
+    crate::snapshot::pad_presentation(persona).zones
 }
 
 /// Every key bound to `function`, in file order. The inert "None" placeholder
@@ -300,29 +412,21 @@ fn legend_group(z: &Zone) -> &'static str {
 ///
 /// Switch Pro intentionally reuses the Xbox hit geometry and DualSense reuses
 /// the DS4 geometry, but those shared shapes do not make their shoulder and
-/// system-button legends interchangeable. Keep the small vocabulary delta
-/// here instead of cloning two 25-row geometry tables and letting them drift.
+/// system-button legends interchangeable. The small vocabulary delta lives in
+/// the persona's `legend` list instead of cloning two 25-row geometry tables
+/// and letting them drift.
+///
+/// This used to substring-match `"switchpro"`, `"ds5"` and `"ps5"` against the
+/// persona and print Xbox words for anything else — which is why a SNES seat
+/// was labelled with an Xbox pad's vocabulary. The override list now comes from
+/// the same `PAD_PRESENTATIONS` row that chose the zone table it is overriding,
+/// so a table and its words can no longer be picked by two different rules.
 pub(crate) fn legend_label_for_persona(persona: &str, z: &Zone) -> String {
-    let lower = persona.to_ascii_lowercase();
-    let label = if lower.contains("switchpro") || lower.contains("switch pro") {
-        match z.fn_name {
-            "lt" => "ZL",
-            "lb" => "L",
-            "rb" => "R",
-            "rt" => "ZR",
-            "back" => "Capture",
-            "start" => "Plus",
-            "guide" => "Home",
-            _ => z.label,
-        }
-    } else if lower.contains("dualsense") || lower.contains("ds5") || lower.contains("ps5") {
-        match z.fn_name {
-            "back" => "Create",
-            _ => z.label,
-        }
-    } else {
-        z.label
-    };
+    let label = crate::snapshot::pad_presentation(persona)
+        .legend
+        .iter()
+        .find(|(function, _)| *function == z.fn_name)
+        .map_or(z.label, |(_, label)| *label);
     format!("{}{}", legend_group(z), label)
 }
 
@@ -1836,7 +1940,8 @@ mod tests {
         }
     }
 
-    /// **Both zone tables cover every mappable function, exactly.**
+    /// **Every persona's zone table accounts for every mappable function,
+    /// exactly once, as either DRAWN or explicitly ABSENT.**
     ///
     /// ADDED 2026-08-26. This test is cited by name in two places — the
     /// `zones_for` doc above ("The two are tied together by
@@ -1854,9 +1959,20 @@ mod tests {
     /// `build-assets.ps1`. The drift it catches is "the file is stale", never
     /// "the two vocabularies disagree".
     ///
-    /// The user-visible failure: a control they can bind in TOML and cannot
-    /// click on the pad art — or a zone drawn for a function the engine will
-    /// not route.
+    /// **Why `absent` exists rather than a plain "every table is total" rule.**
+    /// SNES and Genesis are digital pads: no analog stick, no analog trigger,
+    /// no stick click, no home button. Their tables are TWELVE zones, not
+    /// twenty-five, and a rule demanding twenty-five would force the mapper to
+    /// offer a right-stick column on a pad that has no right stick. So each
+    /// persona names the functions its device does not have, and this test
+    /// proves `drawn` and `absent` PARTITION the vocabulary. Adding a function
+    /// to ksx-core then fails here — loudly, per persona — instead of appearing
+    /// in the picker with no control behind it on some pads and no mention at
+    /// all on others.
+    ///
+    /// The user-visible failures this forbids, in both directions: a control
+    /// they can bind in TOML that no surface offers, and a control offered on a
+    /// pad that cannot express it.
     #[test]
     fn zone_tables_cover_every_mappable_function() {
         use std::collections::BTreeSet;
@@ -1870,30 +1986,120 @@ mod tests {
             "ksx_core::preset::mappable_functions() is empty — the oracle is gone"
         );
 
-        for (persona, table) in [("xbox", ZONE_XBOX), ("ds4", ZONE_DS4)] {
-            let drawn: BTreeSet<String> = table.iter().map(|z| z.fn_name.to_owned()).collect();
+        // Every row of the ONE table, plus the named unknown outcome — which
+        // has to satisfy the same rule, because it is the presentation a
+        // newer daemon's persona actually gets.
+        let rows = crate::snapshot::PAD_PRESENTATIONS
+            .iter()
+            .chain(std::iter::once(&crate::snapshot::UNKNOWN_PRESENTATION));
+
+        for row in rows {
+            let persona = if row.persona.is_empty() {
+                "<unknown>"
+            } else {
+                row.persona
+            };
+            let drawn: BTreeSet<String> = row.zones.iter().map(|z| z.fn_name.to_owned()).collect();
+            let absent: BTreeSet<String> = row.absent.iter().map(|f| (*f).to_owned()).collect();
 
             assert_eq!(
                 drawn.len(),
-                table.len(),
+                row.zones.len(),
                 "the {persona} zone table draws the same function twice — two \
                  hit zones for one control means one of them is unreachable"
             );
+            assert_eq!(
+                absent.len(),
+                row.absent.len(),
+                "{persona} names the same absent function twice"
+            );
 
-            let missing: Vec<&String> = mappable.difference(&drawn).collect();
+            let both: Vec<&String> = drawn.intersection(&absent).collect();
+            assert!(
+                both.is_empty(),
+                "{persona} both draws and disclaims {both:?} — the pad cannot \
+                 have a control and not have it"
+            );
+
+            let mut accounted = drawn.clone();
+            accounted.extend(absent.iter().cloned());
+
+            let missing: Vec<&String> = mappable.difference(&accounted).collect();
             assert!(
                 missing.is_empty(),
-                "{persona} art has no hit zone for {missing:?} — a user can \
-                 bind these in config.toml and cannot click them on the pad"
+                "{persona} says nothing about {missing:?} — either draw a zone \
+                 for it or add it to that persona's `absent` list with the \
+                 reason. Silence here is how a bindable control ends up with \
+                 no control on the pad and no explanation anywhere."
             );
 
-            let extra: Vec<&String> = drawn.difference(&mappable).collect();
+            let extra: Vec<&String> = accounted.difference(&mappable).collect();
             assert!(
                 extra.is_empty(),
-                "{persona} art draws {extra:?}, which ksx-core does not list as \
-                 mappable — the zone is either misspelled or bindable to \
-                 nothing"
+                "{persona} names {extra:?}, which ksx-core does not list as \
+                 mappable — the zone or the absent entry is either misspelled \
+                 or bindable to nothing"
             );
+        }
+    }
+
+    /// **No two hit zones on one pad overlap.**
+    ///
+    /// ADDED 2026-08-26, the second phantom citation on the zone tables: the
+    /// [`ZONE_XBOX`] doc says "Rects are pairwise DISJOINT (pinned by …)" and
+    /// named `zone_tables_cover_every_mappable_function`, which checked only
+    /// function NAMES and never looked at a rectangle. Nothing in the tree had
+    /// ever compared two rects.
+    ///
+    /// What an overlap costs: the zones are absolutely positioned buttons in
+    /// table order, so an overlap means the later one wins the pointer and a
+    /// click aimed at the covered control silently binds the covering one.
+    /// That is unfindable by inspection — the art underneath still shows the
+    /// button you aimed at.
+    ///
+    /// **A shared EDGE is legal and intended.** Both tables ring each stick's
+    /// L3/R3 hub with four wedges that butt directly against it ("adjacent,
+    /// never covering it"), so this refuses shared AREA, not contact. The
+    /// tolerance is not cosmetic: the DS4 wedges are authored as `33.8 ± 4.0`
+    /// against `27.05 ± 2.75`, whose edges meet at 29.8 in decimal and differ
+    /// by 3.5e-15 in binary floating point. A strict `>` comparison reports
+    /// those two pairs as overlapping by three femto-percent of the stage.
+    #[test]
+    fn zone_rects_are_pairwise_disjoint() {
+        // One hundred-thousandth of a stage percent: far below any pixel on
+        // any display, and eleven orders of magnitude above the f32/f64 dust
+        // that exact adjacency produces.
+        const TOUCHING: f32 = 1e-5;
+
+        let rows = crate::snapshot::PAD_PRESENTATIONS
+            .iter()
+            .chain(std::iter::once(&crate::snapshot::UNKNOWN_PRESENTATION));
+
+        for row in rows {
+            let persona = if row.persona.is_empty() {
+                "<unknown>"
+            } else {
+                row.persona
+            };
+            for (i, a) in row.zones.iter().enumerate() {
+                for b in row.zones.iter().skip(i + 1) {
+                    let overlap = |ac: f32, as_: f32, bc: f32, bs: f32| {
+                        (ac + as_ / 2.0).min(bc + bs / 2.0) - (ac - as_ / 2.0).max(bc - bs / 2.0)
+                    };
+                    let x = overlap(a.cx, a.w, b.cx, b.w);
+                    let y = overlap(a.cy, a.h, b.cy, b.h);
+                    assert!(
+                        x <= TOUCHING || y <= TOUCHING,
+                        "{persona}: the {} and {} zones overlap by {x:.3}×{y:.3} \
+                         stage percent. The later one in the table covers the \
+                         earlier, so a click aimed at {} binds {} instead.",
+                        a.fn_name,
+                        b.fn_name,
+                        a.fn_name,
+                        b.fn_name
+                    );
+                }
+            }
         }
     }
 

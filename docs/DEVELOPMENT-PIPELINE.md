@@ -121,9 +121,9 @@ Do not reinstall for each edit. The installed lane is reserved for acceptance
 of a coherent CI candidate and for installed-only Program Files/UAC/helper
 boundaries that a development copy intentionally cannot exercise.
 
-### Two build failures that are not your change
+### Three build failures that are not your change
 
-Both of these have cost time by being read as evidence about the tree. Neither
+All three have cost time by being read as evidence about the tree. None of them
 is.
 
 **A failed or interrupted asset build leaves tracked files deleted.**
@@ -154,6 +154,26 @@ failed this way. **Retry once before concluding anything.** Concluding that a
 change broke the build from a single 0xc0000005 is the failure mode `HANDOFF.md`
 §9 names — reporting a result the run did not actually produce. If it
 reproduces on a clean CI runner, then it is the tree.
+
+**`LNK1104: cannot open file …\examples\macro_fixture.exe` means a lane is
+running.** Not a corrupt PDB, not this machine's linker, not your change:
+`cargo test --workspace` *builds* example targets even though it never runs
+them, so it relinks `target/debug/examples/macro_fixture.exe` — the exact file
+a live seeded or first-run studio-env lane is holding open. The symptom is that
+the whole workspace test aborts on one crate that has nothing to do with what
+you edited. Confirm it before doing anything else:
+
+```powershell
+Get-Process -Name macro_fixture -ErrorAction SilentlyContinue
+```
+
+If that names a process, either stop the lane
+(`tools/studio-env/teardown.ps1 -Environment seeded`) or skip building examples
+for the run — `cargo test --workspace --exclude vigem-client --lib --bins
+--tests`. Note which one you want: the *gate* line `cargo test --workspace
+--exclude vigem-client --examples` is unaffected either way, because `--examples`
+emits a separate `macro_fixture-<hash>.exe` test harness and never writes the
+file the lane holds.
 
 ## Adding a new input device
 
@@ -417,9 +437,31 @@ In order, cheapest first:
    four combinations for `ksx-app` *and* `ksx-backend`, then executes the
    `studio,cabinet` union, which is the one that enables every gated module at
    once. Do not run the four-way matrix locally; push and let CI do it.
-5. **Studio assets plus the browser suite**, only if a rendered string changed:
+5. **The two lines the workspace gate cannot reach, which you *should* run
+   locally.**
+   ```
+   cargo test --workspace --exclude vigem-client --examples
+   cargo test -p ksx-platform --lib --features hidmaestro-fake-host-tests
+   ```
+   Both are seconds on a warm target directory and neither touches hardware.
+   The first exists because **`cargo test` builds example targets and then does
+   not run them**: `--examples` is the flag that turns an example into a test
+   binary. `crates/ksx-studio/examples/macro_fixture.rs` — the fixture the
+   browser suite below launches — carries eight tests that the workspace gate
+   never executed. The second enables `ksx-platform`'s
+   `hidmaestro-fake-host-tests`, which adds three assertions about the fixed
+   SDK-free child's session and privilege inheritance (259 → 262); `--lib` is
+   deliberate, because that crate's `live` and `wdi_provider` integration
+   targets read the real device tree and the workspace gate already runs them.
+
+   Both are also CI steps as of 2026-08-26. `PLAYBOOK.md` §4 carries the full
+   measured table — 71 tests sat outside the local five — and the `ksx open`
+   incident that is the argument for all of it: a shipping 404 with a green
+   suite, because the file was behind `--features studio` and no local run
+   compiled it.
+6. **Studio assets plus the browser suite**, only if a rendered string changed:
    `tools/studio-env/build-assets.ps1`, then `cd studio-ui/pwtest && npm test`.
-6. **Physical confirmation.** Nothing above proves recognition on real silicon.
+7. **Physical confirmation.** Nothing above proves recognition on real silicon.
    Plug the board in on 4460, run `ksx device scan --all`, and confirm the name,
    the role and the keyboard interface against what Windows reports. A green
    suite over synthetic `BoardRow` literals is evidence about the code, not

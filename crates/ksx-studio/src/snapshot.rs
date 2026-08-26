@@ -1397,6 +1397,63 @@ fn workspace_bind_rows(
             }
         })
         .collect();
+
+    // ── CONTROLS THIS PAD DOES NOT HAVE, THAT THIS PRESET STILL BINDS ──────
+    //
+    // `zones` is what the CONTROLLER has. A preset is what the FILE says, and
+    // the two are allowed to disagree — `ksx_core::persona`'s module doc makes
+    // it a rule: "Re-persona-ing a slot must never require editing its preset."
+    // Move an Xbox seat to SNES and its `lx.max` binding is still in the TOML,
+    // still loading, and driving nothing, because a SNES pad has no stick.
+    //
+    // A list built from `zones` alone simply omits those rows, and that omission
+    // is the SAME silent-fallback failure the retro zone tables were narrowed to
+    // remove, pointed the other way: the key stays bound, quietly stops working,
+    // and the one page that could explain it shows nothing at all — not even a
+    // Clear to undo it with. So they are appended, in their own control's group,
+    // each carrying the sentence that says what happened.
+    //
+    // Empty for every persona that expresses the whole vocabulary, which is
+    // every persona but the retro pair — so this costs nothing until it is the
+    // only thing standing between a player and a control that went missing.
+    let mut rows = rows;
+    let mut stranded: Vec<(&String, &Vec<String>)> = mapper
+        .bindings
+        .iter()
+        .filter(|(function, keys)| {
+            !keys.is_empty()
+                && !zones
+                    .iter()
+                    .any(|zone| zone.fn_name.eq_ignore_ascii_case(function))
+        })
+        .collect();
+    stranded.sort_by_key(|(function, _)| (*function).clone());
+    for (function, _) in stranded {
+        rows.push(WorkspaceBindRow {
+            function: function.clone(),
+            // No zone means no persona word for it; the canonical name is the
+            // only honest label, and it is also what the user's TOML says.
+            label: function.clone(),
+            keys: crate::render_map::key_tag(&mapper, function),
+            notes: String::new(),
+            cls: "wsbind".to_owned(),
+            share_note: format!(
+                "{} has no such control — this key is still bound and drives \
+                 nothing. Clear it, or give this player a controller that has \
+                 one.",
+                slot.persona_label
+            ),
+            clear: "Clear".to_owned(),
+            slot: slot.number.to_string(),
+            turbo_hz: mapper
+                .turbo
+                .get(function)
+                .map(|hz| hz.to_string())
+                .unwrap_or_default(),
+            toggle: mapper.toggle.contains(function),
+        });
+    }
+
     let bound = rows.iter().filter(|row| row.keys != "—").count();
     // A key is SHARED when it drives more than one control — counted once,
     // by inverting the binding table, so a key that merely sits beside a
@@ -1978,7 +2035,13 @@ pub struct NocturneDerived {
     /// The hidden masters' family classes (`"n-padwrap"` / `"n-padwrap
     /// none"`): with JS the masters are clone templates and the class is
     /// moot, but WITHOUT JS the canvas relaxes into a document and the
-    /// served class is what picks which body shows. Exactly one is visible.
+    /// served class is what picks which body shows.
+    ///
+    /// AT MOST one is visible, and the gap is deliberate: a persona this build
+    /// does not recognise resolves to the `"unknown"` family
+    /// ([`UNKNOWN_PRESENTATION`]), which names no master, so the no-JS page
+    /// draws NO body rather than confidently drawing the wrong one. Every
+    /// persona in `Persona::ALL` names exactly one.
     pub pad_xbox_cls: String,
     pub pad_ps_cls: String,
     pub pad_ps5_cls: String,
@@ -2130,29 +2193,382 @@ const NOCTURNE_CONTROL_GROUPS: [&str; 6] = [
     "system",
 ];
 
-/// Which drawn body a seat wears — the ONE rule, read by both the per-slot
-/// pad views (what each canvas widget clones) and the no-JS master classes.
+/// **Everything a surface needs to draw ONE persona, in ONE record.**
 ///
-/// Keyed on the persona rather than on `is_xinput`, because a DualSense is
-/// not a DualShock: it has its own shell, its own Create/Options pair and its
-/// own touchpad, and drawing it as a PS4 pad is a picture that lies about the
-/// device Windows just gained.
+/// The table below ([`PAD_PRESENTATIONS`]) is the single persona →
+/// presentation decision in ksx Studio. Before it there were FIVE, none of
+/// which knew about the other four and none of which mentioned `snes` or
+/// `genesis`:
 ///
-fn pad_art_family(persona: Option<&str>, slot: Option<&ksx_api::StagedSlotView>) -> &'static str {
-    match persona {
-        Some("dualsense") => "ps5",
-        Some("switchpro") => "switchpro",
-        Some("xboxseries") => "xboxseries",
-        _ => {
-            if slot.is_some_and(|slot| slot.is_xinput) {
-                "xbox"
-            } else if slot.is_some() {
-                "ps"
-            } else {
-                // An empty roster keeps the neutral Xbox outline as ground.
-                "xbox"
+/// - `pad_art_family` matched three persona names and then fell through to
+///   `slot.is_xinput`, so a staged SNES seat (plain HID, `is_xinput == false`)
+///   became `"ps"` — a DualShock 4;
+/// - [`crate::render::art_for`] substring-matched seven PlayStation tokens and
+///   fell through to the Xbox art, so the SAME seat became an Xbox pad;
+/// - [`crate::render_map::zones_for`] delegated to `art_for` and so handed that
+///   seat `ZONE_XBOX` — two analog sticks, two analog triggers, an L3/R3 and a
+///   guide button, none of which exist on the device;
+/// - [`crate::render_map::legend_label_for_persona`] substring-matched Switch
+///   and PS5 and printed Xbox words for everything else;
+/// - `NocturneIsland.ts` re-decided the whole thing from a hardcoded
+///   five-name `Set` and fell back to `"xbox"`.
+///
+/// Every one of the five failed by SILENT FALLBACK, and two of them fell
+/// different ways, which is why one page could draw the same controller as a
+/// DualShock in the pad grid and an Xbox pad in the mapper.
+///
+/// **The rule this record replaces them with.** The mapping is TOTAL: a
+/// persona string either matches a row or it resolves to
+/// [`UNKNOWN_PRESENTATION`], which is a *named* outcome carrying the family
+/// `"unknown"` — not a fall-through to Xbox. The browser reads
+/// [`NocturnePadView::family`] and never re-decides; an unknown family there is
+/// a visible placeholder, not a silhouette we made up.
+///
+/// **Why the key is a STRING and not a `Persona`.** `render_map.rs` links
+/// ksx-core only as a dev-dependency and that boundary is deliberate
+/// (`docs/M9-DECISION.md` §6, argued at length above `zones_for`). So the match
+/// keys off the SERVED persona name — `StagedSlotView::persona` is documented
+/// as the canonical [`ksx_core::Persona::as_str`] spelling — and exhaustiveness
+/// cannot come from the compiler. It comes from
+/// `every_persona_resolves_to_a_presentation`, which walks `Persona::ALL`
+/// through the dev-dependency and fails if any persona has no row.
+pub(crate) struct PadPresentation {
+    /// The canonical persona name, exactly as `Persona::as_str` spells it.
+    pub persona: &'static str,
+    /// Spellings other than the canonical one that must resolve to this row.
+    ///
+    /// Kept because the functions this record replaced were *substring*
+    /// matchers: `art_for` answered DS4 for anything containing `ds4`, `ps4`,
+    /// `ps5`, `dualshock`… and callers outside the staged-slot path are not all
+    /// proven to pass a canonical name. Pinned against ksx-core's own
+    /// [`FromStr`](std::str::FromStr) by `presentation_aliases_match_ksx_core`,
+    /// so this list can never come to mean something the engine disagrees with.
+    pub aliases: &'static [&'static str],
+    /// Which drawn body a seat wears: the master the canvas clones, and the
+    /// no-JS page's visible `.n-padwrap`.
+    pub family: &'static str,
+    /// The vendored `<img>` art for the surfaces that serve a URL (`/pads`
+    /// tiles, and `/check`'s PlayStation-vocabulary test).
+    pub art: &'static str,
+    /// The controls this pad HAS — the authoring vocabulary for every surface
+    /// that asks "what can this seat bind": the binding pane's rows and free
+    /// chips, the canvas's control list, the macro grid's columns, and the
+    /// readable names on the keyboard.
+    pub zones: &'static [crate::render_map::Zone],
+    /// Function → the word THIS persona prints, for personas that share a
+    /// geometry table with another but not its vocabulary (Switch Pro over the
+    /// Xbox table, DualSense over the DS4 one). A persona whose whole
+    /// vocabulary differs gets its own table instead and leaves this empty.
+    pub legend: &'static [(&'static str, &'static str)],
+    /// Mappable functions this controller DOES NOT HAVE, named one by one.
+    ///
+    /// Derivable as `mappable_functions() - zones` and stated anyway, because
+    /// the two say different things. A missing zone is an absence; this list is
+    /// a DECISION, and `zone_tables_cover_every_mappable_function` proves the
+    /// two are exactly complementary — so a function added to ksx-core cannot
+    /// quietly become "absent everywhere", it fails until somebody says which
+    /// of these pads has it.
+    ///
+    /// Read only by that test, hence the allow — the same arrangement, and the
+    /// same reason, as `Zone`'s geometry fields: this exists to be CHECKED, and
+    /// deleting it to silence `dead_code` would delete the check with it. A
+    /// runtime reader arrives the day a surface says "this controller has no
+    /// right stick" out loud instead of simply not offering one.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub absent: &'static [&'static str],
+}
+
+/// No vocabulary delta — this persona's own zone table already prints the
+/// words it wants.
+const LEGEND_SAME_AS_TABLE: &[(&str, &str)] = &[];
+
+/// DualSense over the DS4 geometry: one button was renamed between the
+/// generations, and that is the whole delta.
+const LEGEND_DUALSENSE: &[(&str, &str)] = &[("back", "Create")];
+
+/// Switch Pro over the Xbox geometry: same physical layout, Nintendo words.
+const LEGEND_SWITCHPRO: &[(&str, &str)] = &[
+    ("lt", "ZL"),
+    ("lb", "L"),
+    ("rb", "R"),
+    ("rt", "ZR"),
+    ("back", "Capture"),
+    ("start", "Plus"),
+    ("guide", "Home"),
+];
+
+/// The ten analog functions neither retro pad can express, and the three
+/// buttons neither pad physically has.
+///
+/// **This is a shape claim, not a bit-order one**, and every part of it is
+/// already measured in the tree:
+///
+/// - `ibuffalo-snes` (0583:2060) is a **3-byte report: X/Y + 8 buttons**;
+///   `daemonbite-genesis` (2341:8036) is **9 buttons + signed X/Y**
+///   (`docs/HIDMAESTRO-STATE.md`, retro scope call 2026-08-20, and the doc
+///   comments on `ksx_core::Persona::{Snes, Genesis}`).
+/// - ksx needs SIX analog roles (`ksx_hidmaestro::axis::AxisRole::ALL`: two
+///   sticks and two triggers). Each retro descriptor carries exactly ONE axis
+///   pair, and on both physical pads that pair IS the D-pad. So the right
+///   stick and both analog triggers have nowhere on the wire to land, and the
+///   left stick would only be a second name for a direction the D-pad already
+///   drives.
+/// - `lthumb`/`rthumb` are stick CLICKS and neither pad has a stick to click.
+///   `guide` is a home button and neither pad has one — the SNES pad's eight
+///   are B/A/Y/X/L/R/Select/Start, and the DaemonBite adapter's nine are the
+///   Saturn/MD6 set.
+///
+/// L and R on both pads are DIGITAL, so they are already `lb`/`rb`; a player
+/// who binds a key to `lt` on one of these seats is binding a key to nothing.
+/// That is the whole reason this list exists rather than a truncated table
+/// with no explanation beside it.
+const ABSENT_ON_A_DIGITAL_RETRO_PAD: &[&str] = &[
+    "lt", "rt", "lthumb", "rthumb", "guide", "lx.min", "lx.max", "ly.min", "ly.max", "rx.min",
+    "rx.max", "ry.min", "ry.max",
+];
+
+/// Nothing is missing: this persona expresses ksx's whole control vocabulary.
+const ABSENT_NOTHING: &[&str] = &[];
+
+/// **The one persona → presentation table.** One row per
+/// [`ksx_core::Persona`], plus [`UNKNOWN_PRESENTATION`] for a name this build
+/// does not recognise.
+///
+/// ⚠️ ART: ksx ships exactly TWO vendored body drawings — `pad-xbox.svg` and
+/// `pad-ds4.svg` (`studio-ui/art/README.md`; the five inline `.n-padwrap`
+/// masters on /nocturne are xbox, ps, ps5, switchpro and xboxseries). **There is
+/// no SNES art and no Genesis art in this tree, and none is invented here.**
+/// Both retro rows therefore name the Xbox body as a DELIBERATE stand-in, which
+/// is a different thing from the fall-through they used to get: it is written
+/// down, it is the neutral outline the page already uses as empty-roster
+/// ground, and it is the closer of the two — a cross D-pad, a four-button face
+/// cluster and two shoulder chips, where the DS4 body has four separate D-pad
+/// arrows and a touchpad. The seat's own title still says "SNES", and the
+/// ZONES are the retro ones, so the picture is a stand-in while every control
+/// the page offers is real.
+pub(crate) const PAD_PRESENTATIONS: &[PadPresentation] = &[
+    PadPresentation {
+        persona: "xbox360",
+        aliases: &["x360", "xbox", "360", "xinput"],
+        family: "xbox",
+        art: crate::render::ART_XBOX,
+        zones: crate::render_map::ZONE_XBOX,
+        legend: LEGEND_SAME_AS_TABLE,
+        absent: ABSENT_NOTHING,
+    },
+    PadPresentation {
+        persona: "playstation",
+        aliases: &["ps", "ds4", "ps4", "dualshock", "dualshock4", "sony"],
+        family: "ps",
+        art: crate::render::ART_DS4,
+        zones: crate::render_map::ZONE_DS4,
+        legend: LEGEND_SAME_AS_TABLE,
+        absent: ABSENT_NOTHING,
+    },
+    PadPresentation {
+        // Its OWN family: a DualSense is not a DualShock — its own shell, its
+        // own Create/Options pair, its own touchpad. It borrows the DS4 hit
+        // geometry (same physical layout) and renames the one button Sony
+        // renamed.
+        persona: "dualsense",
+        aliases: &["ds5", "ps5", "dualsense5"],
+        family: "ps5",
+        art: crate::render::ART_DS4,
+        zones: crate::render_map::ZONE_DS4,
+        legend: LEGEND_DUALSENSE,
+        absent: ABSENT_NOTHING,
+    },
+    PadPresentation {
+        persona: "switchpro",
+        aliases: &["switch", "procontroller", "switchprocontroller", "nintendo"],
+        family: "switchpro",
+        art: crate::render::ART_XBOX,
+        zones: crate::render_map::ZONE_XBOX,
+        legend: LEGEND_SWITCHPRO,
+        absent: ABSENT_NOTHING,
+    },
+    PadPresentation {
+        persona: "xboxseries",
+        aliases: &[
+            "xboxseriesx",
+            "xboxseriess",
+            // `Persona::label()` for this one is "Xbox Series X|S", the string
+            // a surface holding a label rather than an id would pass in. Every
+            // other persona's label normalizes to its canonical name already.
+            "xboxseriesx|s",
+            "xboxseriesxs",
+            "xboxseriesxsbt",
+            "series",
+            "xsx",
+        ],
+        family: "xboxseries",
+        art: crate::render::ART_XBOX,
+        zones: crate::render_map::ZONE_XBOX,
+        legend: LEGEND_SAME_AS_TABLE,
+        absent: ABSENT_NOTHING,
+    },
+    PadPresentation {
+        // The SNES words are safe to print: `Persona::Snes`'s own doc states
+        // the anchor this build measured — "positional faces (ksx A = bottom =
+        // SNES B)" — and L/R/Select/Start are what is written on the shell.
+        // They live in `ZONE_SNES`'s own label column, so there is no override
+        // list here.
+        persona: "snes",
+        aliases: &["supernintendo", "superfamicom", "sfc"],
+        family: "xbox",
+        art: crate::render::ART_XBOX,
+        zones: crate::render_map::ZONE_SNES,
+        legend: LEGEND_SAME_AS_TABLE,
+        absent: ABSENT_ON_A_DIGITAL_RETRO_PAD,
+    },
+    PadPresentation {
+        // ⚠️ Its own table, printing ksx's function vocabulary rather than
+        // SEGA letters — a DECISION, argued in full on `ZONE_GENESIS`: the
+        // button-label table is recorded PROVISIONAL until the joy.cpl
+        // press-check, and this one wire identity serves three different face
+        // layouts (Genesis, Mega Drive, Saturn). The SHAPE is certain and is
+        // what the table states; the letters are not, so it prints none.
+        persona: "genesis",
+        aliases: &[
+            "megadrive",
+            "md",
+            "sega",
+            "saturn",
+            "segagenesis",
+            "segamegadrive",
+            "segasaturn",
+            "megadrive6b",
+        ],
+        family: "xbox",
+        art: crate::render::ART_XBOX,
+        zones: crate::render_map::ZONE_GENESIS,
+        legend: LEGEND_SAME_AS_TABLE,
+        absent: ABSENT_ON_A_DIGITAL_RETRO_PAD,
+    },
+];
+
+/// **The named outcome for a persona string this build does not recognise.**
+///
+/// Reachable exactly one way: a daemon newer than this Studio serving a
+/// persona added after this binary was built. The old behavior for that case
+/// was to draw a DualShock 4 (via `is_xinput == false`) and label it with Xbox
+/// words, which is a confident answer to a question we cannot answer.
+///
+/// What each field says, and why:
+///
+/// - `family: "unknown"` — the ONE field the browser reads. No `.n-padwrap`
+///   master carries that value, so the no-JS page deliberately draws NO body
+///   rather than a wrong one, and the canvas renders a visible placeholder
+///   naming the family instead of a silhouette.
+/// - `zones: ZONE_XBOX` — not a guess about the device. ksx's wire vocabulary
+///   is Xbox-flavored for EVERY persona (`ksx_core::persona` module doc: "the
+///   wire vocabulary stays Xbox-flavored everywhere… ✕○△□ are display aliases,
+///   not a second binding language"), so the Xbox table is the vocabulary
+///   itself with no relabeling applied — the only table that claims nothing
+///   about the hardware.
+/// - `absent: &[]` — we must not claim a control is MISSING on a device we do
+///   not recognise. "We do not know this pad" and "this pad has no right
+///   stick" are different statements.
+/// - `art: ART_XBOX` — `/pads` needs a URL for its tile and the Xbox line
+///   drawing is the neutral one; the tile prints the persona name beside it.
+pub(crate) const UNKNOWN_PRESENTATION: PadPresentation = PadPresentation {
+    persona: "",
+    aliases: &[],
+    family: "unknown",
+    art: crate::render::ART_XBOX,
+    zones: crate::render_map::ZONE_XBOX,
+    legend: LEGEND_SAME_AS_TABLE,
+    absent: ABSENT_NOTHING,
+};
+
+/// Resolve a served persona name to its presentation. **Total** — every input
+/// has an answer, and the answer for an unrecognised name is
+/// [`UNKNOWN_PRESENTATION`], which says so.
+///
+/// Normalized the way `ksx_core::Persona::from_str` normalizes (drop spaces,
+/// hyphens and underscores; lowercase) so a hand-edited `Xbox 360` and a
+/// catalog slug `xbox-series-xs-bt` both land where the engine would put them.
+///
+/// **Two passes, and both are EXACT.**
+///
+/// 1. The name as given. Every machine-name caller lands here —
+///    `StagedSlotView::persona` and `MapperSlot::persona` are documented as the
+///    canonical [`ksx_core::Persona::as_str`] spelling.
+///
+/// 2. The name with its DECORATION removed — a parenthesised aside and a
+///    trailing noun — matched exactly again. This exists for exactly one
+///    caller: `/pads` does not serve persona ids at all. It lists what is on
+///    the ViGEm bus, classified from hardware ids, and serves
+///    `ksx_platform::PersonaGuess::label()` — the human strings `"Xbox 360
+///    pad"` and `"PlayStation (DS4) pad"` — straight into `art_for`. Those drew
+///    the right art only because the substring matcher this table replaced
+///    happened to accept them, so dropping to one exact pass would have handed
+///    every live DualShock 4 on that page an Xbox body: the very bug this
+///    record exists to remove, reintroduced by its removal.
+///    `a_human_label_still_finds_its_pad` pins those strings.
+///
+/// ⚠️ It is `strip_suffix`, deliberately NOT `contains`. A `contains` pass over
+/// the canonical names resolves a future `"playstation6"` to the PlayStation
+/// row and draws a PS6 as a DualShock 4 — silently, and for exactly the reason
+/// this whole record was written. Extending a name must NOT inherit its
+/// presentation; only stripping a word that is not part of any name may.
+pub(crate) fn pad_presentation(persona: &str) -> &'static PadPresentation {
+    /// Nouns a display name puts after the controller's actual name. None of
+    /// them appears inside a canonical persona name or alias, which is what
+    /// makes removing one safe.
+    const DECORATIONS: [&str; 3] = ["pad", "gamepad", "controller"];
+
+    let normalized: String = persona
+        .chars()
+        .filter(|c| !matches!(c, ' ' | '-' | '_'))
+        .flat_map(char::to_lowercase)
+        .collect();
+    let row_for = |name: &str| -> Option<&'static PadPresentation> {
+        PAD_PRESENTATIONS
+            .iter()
+            .find(|row| row.persona == name || row.aliases.contains(&name))
+    };
+    if let Some(exact) = row_for(&normalized) {
+        return exact;
+    }
+    // Drop any parenthesised aside ("PlayStation (DS4) pad"), then one
+    // trailing noun, and ask again — still an exact question.
+    let mut bare = String::with_capacity(normalized.len());
+    let mut depth = 0usize;
+    for c in normalized.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => bare.push(c),
+            _ => {}
+        }
+    }
+    for noun in DECORATIONS {
+        if let Some(stem) = bare.strip_suffix(noun) {
+            if let Some(row) = row_for(stem) {
+                return row;
             }
         }
+    }
+    row_for(&bare).unwrap_or(&UNKNOWN_PRESENTATION)
+}
+
+/// Which drawn body a seat wears — read by both the per-slot pad views (what
+/// each canvas widget clones) and the no-JS master classes.
+///
+/// One line of decision, because the decision is [`pad_presentation`]'s. The
+/// `is_xinput` fall-through this used to end in is gone: it was a question
+/// about Windows' four XInput slots being asked to answer "what does this
+/// controller look like", and it answered "DualShock 4" for every plain-HID
+/// persona ksx has added since.
+///
+/// `None` is the EMPTY ROSTER — no seat to draw — and keeps the neutral Xbox
+/// outline as ground. That is a different case from an unrecognised persona,
+/// which resolves to the `"unknown"` family instead.
+fn pad_art_family(persona: Option<&str>) -> &'static str {
+    match persona {
+        Some(persona) => pad_presentation(persona).family,
+        None => "xbox",
     }
 }
 
@@ -2739,7 +3155,7 @@ impl NocturneDerived {
         // ⚠️Keyed on the PERSONA, not on `is_xinput`: a DualSense has its
         // own body, and drawing every non-XInput seat as a DualShock is how
         // modern controllers ended up wearing another generation's art.
-        let pad_family = pad_art_family(selected.map(|slot| slot.persona.as_str()), selected);
+        let pad_family = pad_art_family(selected.map(|slot| slot.persona.as_str()));
         let wrap_cls = |family: &str| {
             if pad_family == family {
                 "n-padwrap".to_owned()
@@ -2949,7 +3365,7 @@ impl NocturneDerived {
                 NocturnePadView {
                     slot: slot.number,
                     target_revision: slot.target_revision.clone(),
-                    family: pad_art_family(Some(slot.persona.as_str()), Some(slot)).to_owned(),
+                    family: pad_art_family(Some(slot.persona.as_str())).to_owned(),
                     preset: slot.preset.clone(),
                     title: format!("{} — \"{}\" preset", slot.persona_label, slot.preset),
                     fn_keys,
@@ -3779,6 +4195,427 @@ impl NocturneDerived {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Every persona ksx ships has a presentation, and no two share a row.**
+    ///
+    /// ADDED 2026-08-26. This is the exhaustiveness the compiler cannot give
+    /// us. `PAD_PRESENTATIONS` is keyed by STRING on purpose — `render_map.rs`
+    /// links ksx-core only as a dev-dependency (`docs/M9-DECISION.md` §6) — so
+    /// a `match` on `Persona` is not available and a new variant cannot make
+    /// the build fail. It makes THIS fail instead.
+    ///
+    /// What it would have caught: `Persona::ALL` grew `snes` and `genesis` on
+    /// 2026-08-20 and `PadBackend::supports` returned true for both, so both
+    /// appeared in /nocturne's create-controller grid the same day. The string
+    /// "snes" appeared in zero of the five surfaces that decide how a
+    /// controller is drawn, and every one of the five answered anyway.
+    #[test]
+    fn every_persona_resolves_to_a_presentation() {
+        use std::collections::BTreeSet;
+
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        for persona in ksx_core::Persona::ALL.iter().copied() {
+            let name = persona.as_str();
+            let row = pad_presentation(name);
+            assert_eq!(
+                row.persona, name,
+                "persona '{name}' has no row in PAD_PRESENTATIONS — it \
+                 resolved to '{}' (family '{}'). Add the row: art, zone table, \
+                 legend, family and the controls the device does not have.",
+                row.persona, row.family
+            );
+            assert!(seen.insert(row.persona), "two rows claim '{name}'");
+        }
+        assert_eq!(
+            seen.len(),
+            PAD_PRESENTATIONS.len(),
+            "PAD_PRESENTATIONS holds a row for a persona ksx-core does not \
+             ship: {:?}",
+            PAD_PRESENTATIONS
+                .iter()
+                .map(|row| row.persona)
+                .filter(|name| !seen.contains(name))
+                .collect::<Vec<_>>()
+        );
+
+        // Every row also has to name a body the page can actually draw. The
+        // five `.n-padwrap` masters are the whole set of drawn bodies; a row
+        // naming a sixth would resolve to nothing on the no-JS page and to the
+        // unknown-family placeholder in the browser.
+        const DRAWN_BODIES: [&str; 5] = ["xbox", "ps", "ps5", "switchpro", "xboxseries"];
+        for row in PAD_PRESENTATIONS {
+            assert!(
+                DRAWN_BODIES.contains(&row.family),
+                "{}'s family '{}' is not one of the served masters {DRAWN_BODIES:?}",
+                row.persona,
+                row.family
+            );
+        }
+    }
+
+    /// **An unrecognised persona is a NAMED outcome, never a quiet Xbox pad.**
+    ///
+    /// The case is real: ksx Studio reads its roster over `ksx-api`, so a
+    /// daemon newer than this binary can serve a persona added after it was
+    /// built. The old code answered that with `slot.is_xinput` — false for any
+    /// plain-HID pad — and drew a DualShock 4.
+    #[test]
+    fn an_unknown_persona_is_named_rather_than_guessed() {
+        for made_up in ["gamecube", "n64", "", "xbox361", "playstation-6"] {
+            let row = pad_presentation(made_up);
+            assert_eq!(
+                row.family, "unknown",
+                "'{made_up}' resolved to the '{}' body — an unrecognised \
+                 controller must not be drawn as a controller we know",
+                row.family
+            );
+            assert!(
+                row.absent.is_empty(),
+                "'{made_up}' claims {:?} are missing from a device this build \
+                 does not recognise; not knowing a pad is not the same as \
+                 knowing what it lacks",
+                row.absent
+            );
+        }
+        // ...and the empty roster is a DIFFERENT case with its own answer: no
+        // seat to draw, so the neutral outline stays as ground.
+        assert_eq!(pad_art_family(None), "xbox");
+        // The one that matters most, because it is the exact shape of the bug:
+        // a plain-HID persona this build DOES know must keep its own body and
+        // must never be inferred from `is_xinput`.
+        assert_eq!(pad_art_family(Some("dualsense")), "ps5");
+        assert_eq!(pad_art_family(Some("snes")), "xbox");
+        assert_eq!(pad_art_family(Some("genesis")), "xbox");
+    }
+
+    /// **The alias column can never come to mean something ksx-core disagrees
+    /// with.**
+    ///
+    /// `pad_presentation` accepts spellings other than the canonical name
+    /// because the substring matchers it replaced did (`art_for` answered DS4
+    /// for anything containing `ds4`/`ps4`/`ps5`/`dualshock`). Tolerance is
+    /// fine; tolerance that DISAGREES with the parser is a page drawing one
+    /// controller for a config that loads as another. So every alias is fed to
+    /// the real `Persona::from_str`.
+    #[test]
+    fn presentation_aliases_match_ksx_core() {
+        for row in PAD_PRESENTATIONS {
+            let canonical: ksx_core::Persona = row
+                .persona
+                .parse()
+                .unwrap_or_else(|e| panic!("{}: {e}", row.persona));
+            for alias in row.aliases {
+                let parsed: ksx_core::Persona = alias
+                    .parse()
+                    .unwrap_or_else(|e| panic!("{}: alias '{alias}': {e}", row.persona));
+                assert_eq!(
+                    parsed, canonical,
+                    "'{alias}' is presented as {} but ksx-core parses it as \
+                     {parsed} — the page would draw one controller for a \
+                     config that loads as another",
+                    row.persona
+                );
+            }
+            // Separator and case tolerance is the parser's, so it must be
+            // this table's too: `Xbox 360` and `xbox-series-xs-bt` are both
+            // spellings a human or a catalog slug produces.
+            assert_eq!(
+                pad_presentation(&row.persona.to_uppercase()).persona,
+                row.persona
+            );
+        }
+        assert_eq!(pad_presentation("Xbox 360").persona, "xbox360");
+        assert_eq!(pad_presentation("xbox-series-xs-bt").persona, "xboxseries");
+        assert_eq!(pad_presentation("Sega Mega Drive").persona, "genesis");
+    }
+
+    /// **The surfaces that hold a LABEL rather than an id still find the right
+    /// pad.**
+    ///
+    /// Nearly every caller passes a canonical persona name, and it would be
+    /// easy to believe all of them do. `/pads` does not: it lists what is
+    /// actually on the ViGEm bus, classified from hardware ids, and serves
+    /// `ksx_platform::PersonaGuess::label()` — human strings with a noun on the
+    /// end. `render_pads.rs` hands one of those straight to `art_for`.
+    ///
+    /// The substring matcher this table replaced accepted them by accident.
+    /// Exact matching alone would have drawn every live DualShock 4 on that
+    /// page as an Xbox pad — a fresh instance of the bug being fixed,
+    /// introduced by the fix. Hence stage 2 of `pad_presentation`, and hence
+    /// these strings written out literally.
+    ///
+    /// They are copied rather than imported because ksx-studio does not link
+    /// ksx-platform, even in tests. If `PersonaGuess::label()` is reworded,
+    /// this test keeps passing and the page quietly loses its art — so the
+    /// wording is named here as the thing to re-check.
+    #[test]
+    fn a_human_label_still_finds_its_pad() {
+        // ksx_platform::PersonaGuess::label(), verbatim (2026-08-26).
+        assert_eq!(pad_presentation("Xbox 360 pad").persona, "xbox360");
+        assert_eq!(
+            pad_presentation("PlayStation (DS4) pad").persona,
+            "playstation"
+        );
+        assert_eq!(
+            crate::render::art_for("PlayStation (DS4) pad"),
+            crate::render::ART_DS4
+        );
+        // ...and the third guess is genuinely unknown, so it must stay that
+        // way rather than matching something by luck.
+        assert_eq!(pad_presentation("unknown pad").family, "unknown");
+
+        // ksx_core::Persona::label() for every persona, which is what any
+        // surface holding a display name would pass.
+        for persona in ksx_core::Persona::ALL.iter().copied() {
+            assert_eq!(
+                pad_presentation(persona.label()).persona,
+                persona.as_str(),
+                "the label {:?} must find {}'s own row",
+                persona.label(),
+                persona
+            );
+        }
+
+        // ⚠️ The reason the second pass strips rather than searches. A future
+        // persona whose name EXTENDS an existing one must not inherit its
+        // body: `contains` resolves every one of these to an older pad and
+        // draws it, silently, which is the entire bug this record removes.
+        for extension in [
+            "playstation6",
+            "playstation-6",
+            "xbox360x",
+            "snes2",
+            "dualsense2",
+            "genesis32x",
+        ] {
+            assert_eq!(
+                pad_presentation(extension).family,
+                "unknown",
+                "'{extension}' extends a name we know and must NOT inherit its \
+                 art — that is how a new console gets drawn as an old one"
+            );
+        }
+        // ...and a string naming two controllers is not an answer either.
+        assert_eq!(pad_presentation("xbox360 or playstation").family, "unknown");
+    }
+
+    /// **The five surfaces answer with ONE voice.**
+    ///
+    /// The bug this closes was not any single wrong answer — it was two
+    /// surfaces on the same page disagreeing about the same seat: a staged
+    /// SNES pad drawn as a DualShock 4 in the pad grid (`pad_art_family` fell
+    /// through `is_xinput` to `"ps"`) and as an Xbox pad in the mapper
+    /// (`art_for` fell through to `ART_XBOX`, and `zones_for` read `art_for`).
+    ///
+    /// So this checks agreement, not values: the family a seat is drawn with
+    /// must belong to the same row as the art it is served and the zone table
+    /// it is authored against.
+    #[test]
+    fn art_family_and_zones_come_from_one_row() {
+        for persona in ksx_core::Persona::ALL.iter().copied() {
+            let name = persona.as_str();
+            let row = pad_presentation(name);
+            assert_eq!(pad_art_family(Some(name)), row.family, "{name}");
+            assert_eq!(crate::render::art_for(name), row.art, "{name}");
+            assert!(
+                std::ptr::eq(crate::render_map::zones_for(name), row.zones),
+                "{name}: zones_for returned a different table than its row names"
+            );
+            // A PlayStation-family body is served the PlayStation art and a
+            // PlayStation vocabulary; anything else is the two disagreeing.
+            let sony_body = matches!(row.family, "ps" | "ps5");
+            assert_eq!(
+                row.art == crate::render::ART_DS4,
+                sony_body,
+                "{name} is drawn as '{}' but served {} — the art and the body \
+                 must be the same decision",
+                row.family,
+                row.art
+            );
+        }
+    }
+
+    /// **The retro pads offer no control their hardware does not have.**
+    ///
+    /// Stated as literals rather than derived from `absent`, because a test
+    /// that recomputed the production list would agree with any list. These
+    /// are the four things a player would notice: no analog trigger to pull,
+    /// no stick to push, no stick to click, no home button — and, positively,
+    /// a D-pad and four faces that DO exist and must stay bindable.
+    #[test]
+    fn a_snes_pad_offers_no_stick_and_no_trigger() {
+        for persona in ["snes", "genesis"] {
+            let drawn: Vec<&str> = crate::render_map::zones_for(persona)
+                .iter()
+                .map(|zone| zone.fn_name)
+                .collect();
+            for gone in [
+                "lt", "rt", "lthumb", "rthumb", "guide", "lx.min", "lx.max", "ly.min", "ly.max",
+                "rx.min", "rx.max", "ry.min", "ry.max",
+            ] {
+                assert!(
+                    !drawn.contains(&gone),
+                    "{persona} offers '{gone}', which the pinned descriptor \
+                     cannot express — a key bound there drives nothing"
+                );
+            }
+            for kept in [
+                "A",
+                "B",
+                "X",
+                "Y",
+                "lb",
+                "rb",
+                "start",
+                "dpad.up",
+                "dpad.down",
+                "dpad.left",
+                "dpad.right",
+            ] {
+                assert!(drawn.contains(&kept), "{persona} lost '{kept}'");
+            }
+        }
+        // The SNES pad prints its own words, anchored on the one mapping this
+        // build measured (`Persona::Snes`: "positional faces (ksx A = bottom =
+        // SNES B)"). Read through `legend_label_for_persona`, which is what
+        // every surface calls.
+        let label = |persona: &str, function: &str| -> String {
+            let zone = crate::render_map::zones_for(persona)
+                .iter()
+                .find(|zone| zone.fn_name == function)
+                .unwrap_or_else(|| panic!("{persona} has no {function}"));
+            crate::render_map::legend_label_for_persona(persona, zone)
+        };
+        assert_eq!(label("snes", "A"), "B");
+        assert_eq!(label("snes", "B"), "A");
+        assert_eq!(label("snes", "X"), "Y");
+        assert_eq!(label("snes", "Y"), "X");
+        assert_eq!(label("snes", "back"), "Select");
+        // Genesis deliberately prints NO Sega letters: one wire identity serves
+        // Genesis, Mega Drive and Saturn, and the button-label table is
+        // recorded as PROVISIONAL until the joy.cpl press-check
+        // (docs/HIDMAESTRO-STATE.md, 2026-08-20). It prints ksx's own function
+        // names, which claim nothing about anybody's shell. Change these four
+        // in the commit that lands the press-check, not before.
+        assert_eq!(label("genesis", "A"), "A");
+        assert_eq!(label("genesis", "B"), "B");
+        assert_eq!(label("genesis", "X"), "X");
+        assert_eq!(label("genesis", "Y"), "Y");
+        // …and the two retro personas must NOT have quietly become the same
+        // pad: identical geometry is intended, identical WORDS would mean one
+        // of the two vocabularies was never stated.
+        assert_ne!(label("snes", "A"), label("genesis", "A"));
+    }
+
+    /// **Narrowing a pad's controls must not silently swallow the bindings a
+    /// preset already holds for them.**
+    ///
+    /// The other half of the retro decision, and the half that is easy to get
+    /// wrong while feeling correct. `ksx_core::persona`'s module doc makes it a
+    /// rule that "re-persona-ing a slot must never require editing its preset",
+    /// so a seat moved from Xbox 360 to SNES keeps its `lx.max` binding in the
+    /// TOML — pointing at a stick that pad does not have.
+    ///
+    /// The binding pane is built from `zones_for`, so narrowing the SNES table
+    /// removes that row by construction: the key stays bound, quietly does
+    /// nothing, and the page cannot even offer a Clear. That is the same
+    /// silent-fallback class the narrowing exists to remove, so the row is
+    /// appended with the sentence that explains it.
+    #[test]
+    fn a_binding_the_new_pad_cannot_express_is_shown_not_swallowed() {
+        let staged_slot = |persona: &str, label: &str| ksx_api::StagedSlotView {
+            number: 1,
+            persona: persona.to_owned(),
+            persona_label: label.to_owned(),
+            preset: "Player 1".to_owned(),
+            authoring: Some(ksx_config::PresetFile {
+                name: "Player 1".to_owned(),
+                bindings: [
+                    (
+                        "A".to_owned(),
+                        ksx_config::BindingEntry::Key("G".to_owned()),
+                    ),
+                    // The control a SNES pad does not have.
+                    (
+                        "lx.max".to_owned(),
+                        ksx_config::BindingEntry::Key("K".to_owned()),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+                macros: Default::default(),
+            }),
+            ..Default::default()
+        };
+        let rows_for = |persona: &str, label: &str| -> Vec<WorkspaceBindRow> {
+            let slot = staged_slot(persona, label);
+            let staged = ksx_api::StagedSetupView {
+                reachable: true,
+                slots: vec![slot.clone()],
+                ..Default::default()
+            };
+            workspace_bind_rows(&staged, Some(&slot)).rows
+        };
+
+        // An Xbox seat HAS a left stick, so the row is an ordinary one and
+        // carries no apology.
+        let xbox = rows_for("xbox360", "Xbox 360");
+        let xbox_row = xbox
+            .iter()
+            .find(|row| row.function == "lx.max")
+            .expect("an Xbox pad has a left stick");
+        assert_eq!(xbox_row.keys, "K");
+        assert!(xbox_row.share_note.is_empty(), "{:?}", xbox_row.share_note);
+        assert_eq!(xbox_row.label, "LS →", "the persona names its own control");
+
+        // The same preset on a SNES seat: still listed, still clearable, and
+        // now saying why it does nothing.
+        let snes = rows_for("snes", "SNES");
+        let stranded = snes
+            .iter()
+            .find(|row| row.function == "lx.max")
+            .expect("the binding is still in the preset and must still be shown");
+        assert_eq!(stranded.keys, "K");
+        assert_eq!(stranded.clear, "Clear", "it must be undoable from here");
+        assert!(
+            stranded.share_note.contains("SNES") && stranded.share_note.contains("drives nothing"),
+            "the row must say what happened: {:?}",
+            stranded.share_note
+        );
+        // ...and the pad still offers no NEW stick control to bind.
+        assert!(
+            !snes.iter().any(|row| row.function == "lx.min"),
+            "an unbound stick direction must not be offered on a pad with no stick"
+        );
+        assert!(
+            snes.iter().any(|row| row.function == "A"),
+            "the controls the pad DOES have are untouched"
+        );
+    }
+
+    /// **One shape claim about retro hardware, not two copies of it.**
+    ///
+    /// `ZONE_SNES` and `ZONE_GENESIS` deliberately hold the same twelve
+    /// controls at the same coordinates — they draw the same stand-in body and
+    /// they make the same claim about what a digital retro pad has. Only the
+    /// printed words differ. Without this, editing one table's geometry leaves
+    /// the other's silently behind, and the shared claim quietly becomes two
+    /// different ones.
+    #[test]
+    fn retro_tables_share_one_geometry() {
+        let snes = crate::render_map::ZONE_SNES;
+        let genesis = crate::render_map::ZONE_GENESIS;
+        assert_eq!(snes.len(), genesis.len(), "retro tables differ in length");
+        for (a, b) in snes.iter().zip(genesis.iter()) {
+            assert_eq!(a.fn_name, b.fn_name, "retro tables list different controls");
+            assert_eq!(
+                (a.cx, a.cy, a.w, a.h, a.kind),
+                (b.cx, b.cy, b.w, b.h, b.kind),
+                "the {} zone has drifted between the two retro tables",
+                a.fn_name
+            );
+        }
+    }
 
     #[test]
     fn nocturne_environment_provenance_survives_derivation() {

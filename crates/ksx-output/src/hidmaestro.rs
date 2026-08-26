@@ -334,7 +334,16 @@ mod tests {
             .plug_persona(Persona::DualSense)
             .expect_err("a 9th pad must be refused");
         let msg = err.to_string();
-        assert!(msg.contains("at most 8"), "{msg}");
+        // From `HOST_CONTROLLER_LIMIT` — the constant this crate's refusal is
+        // actually built from — rather than the literal 8. The tie back to
+        // `ksx_core::MAX_HIDMAESTRO_PADS` is its own assertion below
+        // (`the_runtime_limits_match_the_ones_staging_validates_against`), so
+        // the number lives in exactly one place per layer and the layers are
+        // pinned together once, on purpose, where that is the point.
+        assert!(
+            msg.contains(&format!("at most {HOST_CONTROLLER_LIMIT}")),
+            "{msg}"
+        );
         assert!(msg.contains("live controllers"), "{msg}");
         // THE POINT OF REFUSING LOCALLY: a host Fault poisons the whole one-use
         // session, so a 9th create reaching the host would tear down the eight
@@ -400,7 +409,11 @@ mod tests {
             .plug_persona(Persona::SwitchPro)
             .expect_err("the 9th pad must be refused")
             .to_string();
-        assert!(msg.contains("at most 8"), "{msg}");
+        // Same constant, same reason as the pool refusal above.
+        assert!(
+            msg.contains(&format!("at most {HOST_CONTROLLER_LIMIT}")),
+            "{msg}"
+        );
         assert!(!msg.contains("slotless"), "{msg}");
     }
 

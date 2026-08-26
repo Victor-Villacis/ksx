@@ -1298,7 +1298,13 @@ mod tests {
     fn a_ninth_hidmaestro_pad_is_refused_before_the_config_is_written() {
         let root = TempRoot::new("hidmaestro-pool");
         let store = root.store();
-        for slot in 1u8..=8 {
+        // The pool size is `ksx_core::MAX_HIDMAESTRO_PADS`, not the 8 this
+        // test used to spell three times over. Spelled, a raised ceiling makes
+        // this test fail on `unwrap_err()` returning `Ok(AppliedSlot { slot: 9,
+        // .. })` — a message that names a slot number and says nothing about
+        // the number that moved, in one of four crates failing the same way.
+        let pool = ksx_core::MAX_HIDMAESTRO_PADS;
+        for slot in 1u8..=pool {
             let persona = if slot % 2 == 0 {
                 Persona::DualSense
             } else {
@@ -1316,12 +1322,12 @@ mod tests {
                     socd: None,
                 },
             )
-            .unwrap_or_else(|err| panic!("pad {slot} of 8 must write: {err}"));
+            .unwrap_or_else(|err| panic!("pad {slot} of {pool} must write: {err}"));
         }
         let err = assign(
             &store,
             &SlotSpec {
-                slot: 9,
+                slot: pool + 1,
                 preset: Some("Panel P1".into()),
                 profile: None,
                 persona: Some(Persona::DualSense),
@@ -1331,9 +1337,17 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code(), "too-many-hidmaestro-pads");
         let message = err.to_string();
-        assert!(message.contains("at most 8"), "{message}");
+        // From the constant `SlotError::TooManyHidMaestroPads` renders, not the
+        // literal 8. The ceiling belongs to `ksx_core::MAX_HIDMAESTRO_PADS`,
+        // which `check_hidmaestro_pool` above already gates on — this line is
+        // here to prove the refusal QUOTES the ceiling, not to re-decide it.
+        assert!(message.contains(&format!("at most {pool}")), "{message}");
         let config = store.load_config().unwrap().value;
-        assert_eq!(config.slots.len(), 8, "a refusal writes nothing");
+        assert_eq!(
+            config.slots.len(),
+            usize::from(pool),
+            "a refusal writes nothing"
+        );
     }
 
     /// A fifth XInput slot is refused the way `ksx pads` refuses a fifth pad.

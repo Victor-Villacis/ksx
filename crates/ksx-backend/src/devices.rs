@@ -1592,7 +1592,14 @@ mod tests {
             1,
             "one fault, one warning:\n{text}"
         );
-        assert!(text.contains("no USB interface to bind"), "{text}");
+        // The whole sentence from `ksx_core`, not a fragment of it: this
+        // asserts that the transport fact survived into the rendered `[WARN]`
+        // line, which is the property. The wording belongs to the constant,
+        // and ksx-core's test is the one place that guards it.
+        assert!(
+            text.contains(ksx_core::transport::WINUSB_NEEDS_A_USB_INTERFACE),
+            "{text}"
+        );
         assert!(
             !text.contains("no USB interface has that instance path"),
             "the unmatched wording must not appear beside it:\n{text}"

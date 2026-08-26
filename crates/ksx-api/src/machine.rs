@@ -4312,8 +4312,12 @@ mod tests {
         }]);
         let line = &bt.configured[0].health_line;
         assert!(line.contains("Bluetooth"), "{line}");
+        // Against the constant `device_health` already composes this line
+        // from, not against a fragment of it. The property is "the transport
+        // fact is IN the health line"; the words are ksx-core's to choose, and
+        // its own test is what fails if they change.
         assert!(
-            line.contains("no USB interface to bind"),
+            line.contains(ksx_core::transport::WINUSB_NEEDS_A_USB_INTERFACE),
             "the transport fact, not a vague 'unsupported': {line}"
         );
         assert!(

@@ -1028,22 +1028,37 @@ enum Command {
     /// answered, or no browser could be started).
     #[cfg(feature = "studio")]
     Open,
-    /// Serve the ksx Studio page on 127.0.0.1: cabinet status + session control
+    /// Serve ksx Studio on 127.0.0.1: the product page, plus three tool pages
     ///
-    /// One auto-refreshing page. The SESSION panel talks to a running `ksx
-    /// daemon` over its control pipe (the same surface as `ksx session` and
-    /// the tray menu): current state, a games.toml profile dropdown, and
-    /// Start / Stop / Reload buttons as plain HTML forms — every button is
-    /// one backend verb, no GUI-only code paths. With no daemon on the pipe
-    /// the controls render disabled and say so; this command never starts a
-    /// daemon or captures anything itself.
+    /// This is the SERVER. `ksx open` is the friendly way in — it starts what
+    /// is missing and opens a window; this command only binds the port and
+    /// serves, so it is what you run when you want the browser you already
+    /// have, on the port you chose.
     ///
-    /// Below it, the status sections re-run the same read-only collectors
-    /// `ksx doctor` uses per request: driver health, the virtual pads the
-    /// bus is exposing, autostart registration, the games.toml profiles.
-    /// Status rows are point-in-time snapshots; session state is live from
-    /// the pipe. Localhost only — there is no LAN option; that arrives with
-    /// the pairing token.
+    /// `/nocturne` is the product: one page that owns the keyboard choice,
+    /// the controllers, the mapper, macros, saved games and the configuration
+    /// menu (Export, Import) as stages within it rather than as a sequence of
+    /// URLs. `/check`, `/pads` and `/devices` are the tools — the wiring echo,
+    /// the virtual pads the bus is exposing, and the machine's input devices —
+    /// each one deliberate action away. This help described a single
+    /// auto-refreshing status dashboard until 2026-08-25; `/`, `/start`,
+    /// `/map`, `/setup` and `/profiles` were deleted in that cutover and now
+    /// 404 with no redirect, deliberately (docs/SURFACES.md §6).
+    ///
+    /// Session control talks to a running `ksx daemon` over its control pipe —
+    /// the same surface as `ksx session` and the tray menu. Play, Stop and
+    /// Apply are plain HTML forms — every button is one backend verb, no
+    /// GUI-only code paths — and Apply is the one worth knowing: it hands the
+    /// draft's binding changes to the LIVE session without unplugging a pad,
+    /// and refuses with `needs-restart` when the change is structural. With no
+    /// daemon on the pipe the controls render disabled and say why; this
+    /// command never starts a daemon or captures anything itself.
+    ///
+    /// The tool pages re-run the same read-only collectors `ksx doctor` uses,
+    /// per request: driver health, virtual pads, autostart registration, the
+    /// games.toml profiles. Those rows are point-in-time snapshots; session
+    /// state is live from the pipe. Localhost only — there is no LAN option;
+    /// that arrives with the pairing token.
     ///
     /// Exit codes: 0 = clean stop, 1 = error (bind failed, embedded UI
     /// rejected).

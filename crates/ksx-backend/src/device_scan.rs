@@ -907,8 +907,13 @@ mod tests {
             .expect("the Bluetooth row has a backends line");
         assert!(bt.contains("interception: yes"), "{bt}");
         assert!(bt.contains("never"), "{bt}");
+        // The whole sentence from the constant `ksx_core::Reach::line`
+        // interpolates, not a fragment of it. The row is built through
+        // `ksx_core::Reach` on purpose (see `row` above), so the property this
+        // holds is that the composed backends line carries the reason intact —
+        // the wording is ksx-core's, and its test is what a reword breaks.
         assert!(
-            bt.contains("no USB interface to bind"),
+            bt.contains(ksx_core::transport::WINUSB_NEEDS_A_USB_INTERFACE),
             "the transport fact, not a vague refusal: {bt}"
         );
         assert!(
@@ -988,7 +993,11 @@ mod tests {
         assert!(bt.pickable);
         assert!(bt.interception_eligible);
         assert!(!bt.winusb_eligible);
-        assert!(bt.backends.contains("no USB interface to bind"), "{bt:?}");
+        assert!(
+            bt.backends
+                .contains(ksx_core::transport::WINUSB_NEEDS_A_USB_INTERFACE),
+            "{bt:?}"
+        );
         // No elevated command: a claim on this device refuses every time, and
         // a page that printed one would be handing out a dead command.
         assert!(bt.claim_command.is_none());

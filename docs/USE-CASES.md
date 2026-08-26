@@ -59,8 +59,10 @@ The product path for a new user begins in Studio:
   it as the original, unelevated Windows user. It opens the product page, not a
   diagnostic. (The contrast used to be `/start` versus Status; since 2026-08-25
   there is one product page, `/nocturne`, and no status page to land on by
-  mistake — the launcher's own target still names the deleted `/start` and must
-  be corrected before this bullet is true.)
+  mistake. The launcher's own target named the deleted `/start` for a day after
+  that cutover, which made this bullet false and the first customer window a
+  404; `ad520b4` corrected `studio_launch.rs` to `/nocturne` and pinned it with
+  a test, so the bullet is now true of the build and not only of the design.)
 - An empty configuration starts an idle background service with no capture,
   virtual controllers, or session. Setup can therefore hold a fresh in-memory
   draft instead of deadlocking on the absence of a saved controller.

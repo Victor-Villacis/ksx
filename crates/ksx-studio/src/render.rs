@@ -334,24 +334,20 @@ impl EmbeddedPage {
 pub(crate) const ART_XBOX: &str = "/_assets/pad-xbox.svg";
 pub(crate) const ART_DS4: &str = "/_assets/pad-ds4.svg";
 
-/// Pick the art for a PlayStation-family persona label or id. DualSense is a
-/// live HIDMaestro persona and therefore uses Sony vocabulary and the closest
-/// bundled PlayStation diagram rather than silently falling through to Xbox.
-/// Anything outside that family renders as the cabinet's default Xbox pad.
+/// The vendored body drawing a persona is served with.
+///
+/// One line, because the decision is not made here: it is one field of the
+/// persona's row in `PAD_PRESENTATIONS` ([`crate::snapshot::pad_presentation`]),
+/// beside the family, the zone table and the legend that must agree with it.
+///
+/// This used to substring-match seven PlayStation tokens and return
+/// [`ART_XBOX`] for everything else, which is a fall-through and not a
+/// decision — a persona nobody had thought about got the Xbox pad silently,
+/// while `pad_art_family`'s own fall-through gave the SAME persona a DualShock
+/// on the SAME page. Two silent fallbacks disagreeing is the bug class the
+/// single record exists to make unrepresentable.
 pub(crate) fn art_for(persona: &str) -> &'static str {
-    let lower = persona.to_ascii_lowercase();
-    if lower.contains("playstation")
-        || lower.contains("dualsense")
-        || lower.contains("dualshock")
-        || lower.contains("ds4")
-        || lower.contains("ds5")
-        || lower.contains("ps4")
-        || lower.contains("ps5")
-    {
-        ART_DS4
-    } else {
-        ART_XBOX
-    }
+    crate::snapshot::pad_presentation(persona).art
 }
 
 /// The id of the DOMAIN PAYLOAD data block — ksx's own channel, not Forma's.

@@ -2752,8 +2752,15 @@ mod tests {
         assert!(message.contains("never"), "{message}");
 
         let advice = err.advice();
+        // The whole sentence from the constant that owns it, not the fragment
+        // "no USB interface to bind". What this test is here to hold is that
+        // the transport fact REACHED the advice string; how that fact is
+        // worded is ksx-core's business, and `transport.rs` locks the wording
+        // there. Spelling the fragment here too would mean a reword breaks
+        // five crates at once, each with a message that says nothing about
+        // which one of them decided the words.
         assert!(
-            advice.contains("no USB interface to bind"),
+            advice.contains(ksx_core::transport::WINUSB_NEEDS_A_USB_INTERFACE),
             "the transport fact, not a vague refusal: {advice}"
         );
         assert!(

@@ -167,6 +167,63 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "$p tests failed with features studio,cabinet" }
             Write-Host '::endgroup::'
           }
+      # The SAME class of blind spot, one crate over, and it is not a feature
+      # gate this time — it is a TARGET gate. `cargo test` builds example
+      # targets and then does not run them: `--examples` is what turns an
+      # example into a test binary and executes its `#[test]`s. So
+      # `crates/ksx-studio/examples/macro_fixture.rs` — the fixture the
+      # Playwright suite launches, which is to say the thing that decides
+      # whether the browser gate is testing the product or testing a stale
+      # fixture — carried eight tests that no gate anywhere ran. Measured
+      # 2026-08-26: eight, all green, and green by accident.
+      #
+      # The incident this exists for is `ksx open`. `studio_launch::url()`
+      # returned the deleted `/start`, so every shortcut, the Start-menu entry
+      # and the tray opened a chrome-less 404 with no address bar to correct
+      # it in — and a test in the same file PINNED the wrong value, so the
+      # suite reported success. It reached a shipping build because that file
+      # lives behind `--features studio` and no local run compiled it
+      # (ad520b4). A test that never runs and a test that pins the wrong
+      # answer fail identically from outside: both are green.
+      #
+      # DERIVED, not enumerated — `--workspace` rather than `-p ksx-studio` —
+      # for the reason the Format step above derives its member list: today
+      # only `macro_fixture` has tests, and a step naming it is a step that
+      # silently ignores the next example somebody writes. The other eight
+      # examples are hardware probes; running them as TEST binaries executes
+      # libtest's main and never their own `fn main`, so nothing here touches
+      # a driver, a device or the bus. Verified locally: nine example
+      # harnesses, 8 passed / 0 failed, exit 0.
+      - name: Run the tests inside example targets (`cargo test` builds them but never runs them)
+        run: cargo test --workspace --exclude vigem-client --examples
+      # Third instance of the same class, back to a feature gate.
+      # `ksx-platform`'s `hidmaestro-fake-host-tests` compiles the fixed
+      # SDK-free child used by the HIDMaestro Windows transport, and with it
+      # three tests that state the rules that child must obey — that fake
+      # admission is a distinct child TYPE and not a privilege-downgrade bool,
+      # that it inherits the parent's session and privilege even in session 0,
+      # and that its launch has no fallible post-spawn identity edge. Those are
+      # elevation-boundary assertions; the default build compiles none of
+      # them, so `cargo test --workspace` runs 259 where the feature runs 262.
+      #
+      # Same incident, same shape as the `ksx open` 404 above: code behind a
+      # feature flag that nothing local compiles is code whose tests report
+      # success by never executing. These three had never run in CI.
+      #
+      # `--lib` is load-bearing, not tidiness. `ksx-platform` also owns the
+      # `live` and `wdi_provider` integration targets, which collect from the
+      # real device tree and call the real libwdi DLL; `cargo test --workspace`
+      # already runs those, and re-running them here under a feature that has
+      # nothing to do with them would only add hardware-shaped flake.
+      #
+      # NOT the sibling crate. `ksx-hidmaestro` spells the same feature name,
+      # but its one gated test needs the .NET fake-host apphost quartet built
+      # and copied beside the test executable first — run bare it panics. That
+      # crate is covered by the `hidmaestro-contracts` job below, which does
+      # the build-and-copy and then names that single test exactly. Do not
+      # "simplify" this step by widening it to both crates.
+      - name: Test the elevation-boundary code behind ksx-platform's fake-host feature
+        run: cargo test -p ksx-platform --lib --features hidmaestro-fake-host-tests
       - name: Check vendored vigem-client compiles
         run: cargo check -p vigem-client --all-features
       - name: Compile the hardware-only output tests without running them

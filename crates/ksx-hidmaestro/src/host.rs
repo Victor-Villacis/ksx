@@ -3009,8 +3009,16 @@ mod tests {
     /// before a host can accidentally expose it under elevation.
     #[test]
     fn play_time_vocabulary_contains_no_provisioning_escape_hatch() {
+        // The wire ceiling is frozen at 16 here on purpose: the product
+        // constant `MAX_SLOTS` may move, and this V1 contract must not follow
+        // it silently (see the doc on `MAX_CONTROLLERS_PER_SESSION`).
+        //
+        // What is NOT re-asserted here is `MAX_SLOTS <= MAX_CONTROLLERS_PER_SESSION`.
+        // That is a `const _: () = assert!(...)` at the top of this file, so a
+        // product ceiling past the wire ceiling fails the BUILD — this test
+        // binary could never be linked to run the check, which made the runtime
+        // copy of it a line that could not fail and therefore could not report.
         assert_eq!(MAX_CONTROLLERS_PER_SESSION, 16);
-        assert!(MAX_SLOTS as usize <= MAX_CONTROLLERS_PER_SESSION);
         assert_eq!(
             MessageKind::ALL,
             &[

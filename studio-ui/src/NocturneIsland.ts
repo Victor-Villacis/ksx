@@ -2437,6 +2437,20 @@ function saveControlSurfacePrefs(): void {
     // Rebase against the in-memory copy when the main document cannot be read;
     // the write below still decides whether this edit can become durable.
   }
+  // **Fold the live document into the store before writing it.**
+  //
+  // `controlSurfaceStore` is the per-device MAP; `controlSurfaceState` is the
+  // document being edited. `withControlSurfaceState` is the only thing that
+  // moves one into the other, and this function used to write the map without
+  // calling it — so every panel built after load was serialized away and the
+  // reload restored whatever the map last held. It also computed `latestStore`
+  // and then dropped it on the floor, losing the rebase the surrounding code
+  // was clearly written to perform.
+  controlSurfaceStore = withControlSurfaceState(
+    latestStore,
+    controlSurfaceIdentity,
+    controlSurfaceState,
+  );
   try {
     window.localStorage.setItem(
       CONTROL_SURFACE_STORAGE_KEY,
@@ -2897,6 +2911,64 @@ function setMappingPathMode(mode: MappingPathMode): void {
   syncMappingFlow(true);
 }
 
+/** The encoder ROW for the currently selected input, or undefined for a keyboard.
+ *
+ * Rebuilt after the encoder chart surface left for PacBench. The original asked
+ * `panelProgrammingState.inspection.chart.board_name` first — a chart read, which
+ * is exactly the part that left — so this asks the served roster instead. That
+ * is the better source anyway: identifying the key SOURCE never needed a chart.
+ *
+ * `cls` carries `on` for the chosen board (snapshot.rs sets it from the staged
+ * selector), so the selection is read, not inferred. */
+function selectedEncoderRow(): NocturneDeviceRowView | undefined {
+  const rows = nDevEncoders();
+  const chosen = rows.find((row) => row.cls.split(/\s+/u).includes("on"));
+  if (chosen) {
+    lastProvenEncoderRow = chosen;
+    return chosen;
+  }
+  if (nKbTitle().trim().startsWith("No keyboard selected")) {
+    lastProvenEncoderRow = undefined;
+    return undefined;
+  }
+  const live = nCapSelector().trim().toLocaleUpperCase();
+  if (live) {
+    // A concrete selector is authoritative in BOTH directions: present in the
+    // encoder roster means encoder, absent means the user picked a keyboard.
+    lastProvenEncoderRow = rows.find(
+      (row) => row.selector.trim().toLocaleUpperCase() === live,
+    );
+    return lastProvenEncoderRow;
+  }
+  // An unavailable scan serves neither a selector nor encoder rows. Hold the
+  // last proven kind through that transient state, or a panel flashes back
+  // into a keyboard — fake QWERTY art and all — while the read retries.
+  return rows.length === 0 ? lastProvenEncoderRow : undefined;
+}
+
+let lastProvenEncoderRow: NocturneDeviceRowView | undefined;
+
+function selectedInputIsPanelEncoder(): boolean {
+  return Boolean(selectedEncoderRow());
+}
+
+function selectedEncoderShortName(): string {
+  const row = selectedEncoderRow();
+  const name = (row?.name || row?.label || "").replace(/^Ultimarc\s+/iu, "").trim();
+  return name || "Encoder";
+}
+
+/** Two or three characters for a navigator box, which has room for nothing else. */
+function selectedEncoderNavigatorLabel(): string {
+  const name = selectedEncoderShortName();
+  if (/I-PAC\s*4/iu.test(name)) return "I-PAC";
+  if (/I-PAC\s*2/iu.test(name)) return "IP2";
+  if (/MINI-?PAC/iu.test(name)) return "MINI";
+  if (/J-?PAC/iu.test(name)) return "J-PAC";
+  if (/U-?HID/iu.test(name)) return "U-HID";
+  return "ENC";
+}
+
 /** Name the markers on the map. The engine draws one box per widget and
  *  gives it a title and an aria-label; what it cannot know is that on THIS
  *  page a box is a seat — so the boxes get the seat's short name and the
@@ -2911,10 +2983,26 @@ function labelCanvasMarkers(): void {
   for (const marker of Array.from(markers)) {
     const id = marker.dataset.instanceId ?? "";
     if (id === "keyboard") {
-      marker.textContent = "KB";
+      // **This widget is the physical KEY SOURCE, which is not always a
+      // keyboard.** On an arcade cabinet it is usually an I-PAC, and calling
+      // that "Keyboard" is the one place this page tells the user their panel
+      // is something it is not.
+      //
+      // The encoder-chart surface leaving for PacBench took these three
+      // helpers with it, because they happened to live beside it — but naming
+      // the source is not chart programming, and ksx still splits an I-PAC's
+      // keys. Restored on the served roster instead of a chart read.
+      const isEncoder = selectedInputIsPanelEncoder();
+      const encoderName = selectedEncoderShortName();
+      marker.textContent = isEncoder ? selectedEncoderNavigatorLabel() : "KB";
       marker.classList.add("nm-kb");
-      marker.title = "Keyboard · physical key source";
-      marker.setAttribute("aria-label", "Focus Keyboard");
+      marker.title = isEncoder
+        ? `${encoderName} Signals · terminal and keyboard host-signal source`
+        : "Keyboard · physical key source";
+      marker.setAttribute(
+        "aria-label",
+        isEncoder ? `Focus ${encoderName} Signals` : "Focus Keyboard",
+      );
       continue;
     }
     if (id === "key-workbench") {
@@ -3724,9 +3812,15 @@ function syncKeyboardWorkbenchWidget(reveal: boolean): void {
   if (!canvas) return;
   // An encoder may have an old keyboard-arranger preference from builds that
   // misclassified it as a keyboard. Preserve that saved layout for migration
-  // or later inspection, but never mount it over the truthful I-PAC signal
-  // source or let routing cords prefer its fake keycaps.
-  const suppressedForEncoder = false;
+  // or later inspection, but never mount it over an encoder or let routing
+  // cords prefer its fake keycaps: an I-PAC's terminals are not QWERTY keys,
+  // and drawing them as keycaps is the page asserting a layout the hardware
+  // does not have.
+  //
+  // This was stubbed to `false` when the encoder chart surface left for
+  // PacBench — the comment above it survived, describing a guard that no
+  // longer ran. Naming the key source was never chart programming.
+  const suppressedForEncoder = selectedInputIsPanelEncoder();
   if (
     keyboardWorkbenchItem &&
     (!keyboardWorkbenchState.open || suppressedForEncoder ||

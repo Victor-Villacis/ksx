@@ -296,6 +296,12 @@ export interface NocturneGameRowView {
   meta: string;
   cls: string;
   ico_cls: string;
+  /** The stale-screen guard every edit and delete echoes back. */
+  revision: string;
+  path: string;
+  arguments: string;
+  slots: string;
+  preset: string;
 }
 
 export interface NocturneBindRowView {
@@ -9491,6 +9497,111 @@ export function NocturneIsland() {
               ),
           ),
           h("p", { class: "nm-auto-note nm-pad" }, () => nGamesNote()),
+          // Edit and remove live behind a disclosure per game so the common
+          // act — load this game's controllers — stays one click, and the
+          // destructive one is never adjacent to it by accident.
+          createList(
+            () => nGameRows(),
+            (r) => "edit|" + r.title + "|" + r.revision,
+            (r) =>
+              h(
+                "details",
+                { class: "nm-sub" },
+                h("summary", { class: "nm-item nm-sub-t" }, "Edit ", r.title, "…"),
+                h(
+                  "div",
+                  { class: "nm-subbody" },
+                  h(
+                    "form",
+                    { class: "nm-gameform", method: "post", action: "/nocturne/game/update" },
+                    h("input", { type: "hidden", name: "original_title", value: r.title }),
+                    h("input", { type: "hidden", name: "revision", value: r.revision }),
+                    h("label", { class: "nm-gl" }, "Name",
+                      h("input", { class: "nm-gi", name: "title", value: r.title })),
+                    h("label", { class: "nm-gl" }, "Program to launch",
+                      h("input", { class: "nm-gi", name: "path", value: r.path })),
+                    h("label", { class: "nm-gl" }, "Arguments",
+                      h("input", { class: "nm-gi", name: "arguments", value: r.arguments })),
+                    h("label", { class: "nm-gl" }, "Players",
+                      h("input", { class: "nm-gi", type: "number", min: "1", name: "slots", value: r.slots })),
+                    h("label", { class: "nm-gl" }, "Controller layout",
+                      h("input", { class: "nm-gi", name: "preset", value: r.preset })),
+                    h("button", { type: "submit", class: "nm-item nm-go" }, "Save changes"),
+                  ),
+                  h(
+                    "form",
+                    { class: "nm-gameform", method: "post", action: "/nocturne/game/delete" },
+                    h("input", { type: "hidden", name: "title", value: r.title }),
+                    h("input", { type: "hidden", name: "revision", value: r.revision }),
+                    h("button", { type: "submit", class: "nm-item nm-danger" }, "Remove this saved game"),
+                  ),
+                ),
+              ),
+          ),
+          h(
+            "details",
+            { class: "nm-sub" },
+            h("summary", { class: "nm-item" }, "Add a saved game…"),
+            h(
+              "div",
+              { class: "nm-subbody" },
+              h(
+                "form",
+                { class: "nm-gameform", method: "post", action: "/nocturne/game" },
+                h(
+                  "p",
+                  { class: "nm-auto-note" },
+                  "A saved game remembers what to launch, how many players it has, and " +
+                    "which controller layout they use.",
+                ),
+                h("label", { class: "nm-gl" }, "Name",
+                  h("input", { class: "nm-gi", name: "title", placeholder: "Street Fighter" })),
+                h("label", { class: "nm-gl" }, "Program to launch",
+                  h("input", { class: "nm-gi", name: "path", placeholder: "C:\Games\game.exe" })),
+                h("label", { class: "nm-gl" }, "Arguments",
+                  h("input", { class: "nm-gi", name: "arguments" })),
+                h("label", { class: "nm-gl" }, "Players",
+                  h("input", { class: "nm-gi", type: "number", min: "1", name: "slots", value: "2" })),
+                h("label", { class: "nm-gl" }, "Controller layout",
+                  h("input", { class: "nm-gi", name: "preset" })),
+                h("button", { type: "submit", class: "nm-item nm-go" }, "Save this game"),
+              ),
+            ),
+          ),
+          h("div", { class: "nm-div" }),
+          h("div", { class: "nm-kick" }, "Controller layouts"),
+          h(
+            "details",
+            { class: "nm-sub" },
+            h("summary", { class: "nm-item" }, "Rename or delete a layout…"),
+            h(
+              "div",
+              { class: "nm-subbody" },
+              h(
+                "p",
+                { class: "nm-auto-note" },
+                "Renaming repoints every controller that uses the layout, so nothing is " +
+                  "left naming a layout that is not there. A layout still in use cannot " +
+                  "be deleted until those controllers point somewhere else.",
+              ),
+              h(
+                "form",
+                { class: "nm-gameform", method: "post", action: "/nocturne/layout/rename" },
+                h("label", { class: "nm-gl" }, "Rename",
+                  h("input", { class: "nm-gi", name: "from", placeholder: "existing name" })),
+                h("label", { class: "nm-gl" }, "to",
+                  h("input", { class: "nm-gi", name: "to", placeholder: "new name" })),
+                h("button", { type: "submit", class: "nm-item nm-go" }, "Rename layout"),
+              ),
+              h(
+                "form",
+                { class: "nm-gameform", method: "post", action: "/nocturne/layout/delete" },
+                h("label", { class: "nm-gl" }, "Delete",
+                  h("input", { class: "nm-gi", name: "name", placeholder: "layout name" })),
+                h("button", { type: "submit", class: "nm-item nm-danger" }, "Delete layout"),
+              ),
+            ),
+          ),
           h("div", { class: "nm-div" }),
           h("div", { class: "nm-kick" }, "Maintenance"),
           h(

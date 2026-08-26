@@ -31,6 +31,12 @@ const LIST_SLOT_EXP: &str = "list:nDevExp:array";
 const LIST_SLOT_OTHER: &str = "list:nDevOther:array";
 const LIST_SLOT_MODES: &str = "list:nModeRows:array";
 const LIST_SLOT_THEMES: &str = "list:nThemeRows:array";
+/// The SECOND `createList` over the same binding. Forma names a reused list
+/// binding with an occurrence suffix (docs/FORMA-DOGFOOD.md #12), so the edit
+/// disclosures under the saved-games menu are a distinct slot that must be
+/// served with the same rows — otherwise the walker warns "server-sourced slot
+/// has no value at render time" and the section renders empty server-side.
+const LIST_SLOT_GAMES_EDIT: &str = "list:nGameRows#2:array";
 const LIST_SLOT_RACK: &str = "list:nRackRows:array";
 const LIST_SLOT_RACK_EMPTY: &str = "list:nRackEmpty:array";
 const LIST_SLOT_PERSONAS: &str = "list:nPersonaRows:array";
@@ -441,6 +447,14 @@ fn game_row(row: &NocturneGameRow) -> SlotValue {
         ("meta".to_owned(), SlotValue::Text(row.meta.clone())),
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
         ("ico_cls".to_owned(), SlotValue::Text(row.ico_cls.clone())),
+        ("revision".to_owned(), SlotValue::Text(row.revision.clone())),
+        ("path".to_owned(), SlotValue::Text(row.path.clone())),
+        (
+            "arguments".to_owned(),
+            SlotValue::Text(row.arguments.clone()),
+        ),
+        ("slots".to_owned(), SlotValue::Text(row.slots.clone())),
+        ("preset".to_owned(), SlotValue::Text(row.preset.clone())),
     ])
 }
 
@@ -477,7 +491,7 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 44] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 45] {
     let view = &payload.view;
     [
         (
@@ -655,6 +669,10 @@ fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 44] {
         (
             LIST_SLOT_THEMES,
             SlotValue::array(view.theme_rows.iter().map(mode_row).collect()),
+        ),
+        (
+            LIST_SLOT_GAMES_EDIT,
+            SlotValue::array(view.game_rows.iter().map(game_row).collect()),
         ),
     ]
 }
@@ -1096,6 +1114,7 @@ mod tests {
             LIST_SLOT_KB[6],
             LIST_SLOT_MODES,
             LIST_SLOT_THEMES,
+            LIST_SLOT_GAMES_EDIT,
             LIST_SLOT_RACK,
             LIST_SLOT_RACK_EMPTY,
             LIST_SLOT_PERSONAS,

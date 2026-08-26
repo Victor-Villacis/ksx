@@ -3674,6 +3674,16 @@ pub struct NocturneGameRow {
     /// `"nm-game"` (+" broken").
     pub cls: String,
     pub ico_cls: String,
+    /// The opaque revision served with this row — the stale-screen guard every
+    /// edit and delete echoes back, so a second window cannot overwrite a
+    /// change it never saw.
+    pub revision: String,
+    /// The editable facts, served so the edit form opens already filled in
+    /// rather than making someone retype what the page is showing them.
+    pub path: String,
+    pub arguments: String,
+    pub slots: String,
+    pub preset: String,
 }
 
 /// One FREE control in the By-control view's per-group strip: click it,
@@ -5314,6 +5324,11 @@ impl NocturneDerived {
                             },
                             cls: if broken { "nm-game broken" } else { "nm-game" }.to_owned(),
                             ico_cls: if broken { "nm-gico broken" } else { "nm-gico" }.to_owned(),
+                            revision: game.revision.clone(),
+                            path: game.path.clone(),
+                            arguments: game.arguments.clone(),
+                            slots: game.slots.to_string(),
+                            preset: game.presets.first().cloned().unwrap_or_default(),
                         }
                     })
                     .collect();

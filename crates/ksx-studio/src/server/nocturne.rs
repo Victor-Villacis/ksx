@@ -556,6 +556,184 @@ pub(super) struct NocturneBlockingForm {
     blocking: String,
 }
 
+// ── Saved games and layouts ────────────────────────────────────────────────
+//
+// Moved from `/profiles` when `/nocturne` became the product. Two differences
+// from that page, both deliberate:
+//
+//  - The refusal SENTENCE survives. `/profiles` ran every verb through
+//    `machine_act`, which kept only `is_ok()` and flashed a canned line per
+//    action. Here the backend's own words reach the page, because a refusal
+//    that names its reason is the only kind worth showing.
+//  - Numbers arrive as text and are parsed here. An empty `<input
+//    type="number">` must become a worded refusal, never an extractor-level
+//    422 that dead-ends someone with nothing to read.
+
+/// Parse a player count that the form carries as text.
+fn game_slots(raw: &str) -> Result<u8, &'static str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        // Not a default this layer may pick: "how many players" is the user's
+        // answer, and the planner refuses 0 by name.
+        return Ok(0);
+    }
+    trimmed
+        .parse::<u8>()
+        .map_err(|_| "how many players must be a whole number")
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturneGameForm {
+    #[serde(default)]
+    original_title: String,
+    #[serde(default)]
+    revision: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    arguments: String,
+    #[serde(default)]
+    slots: String,
+    #[serde(default)]
+    preset: String,
+    #[serde(default)]
+    rebase_devices: bool,
+}
+
+/// POST /nocturne/game — save a new launch target.
+pub(super) async fn nocturne_form_game_new(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneGameForm>,
+) -> Response {
+    let slots = match game_slots(&form.slots) {
+        Ok(value) => value,
+        Err(message) => return nocturne_redirect(message),
+    };
+    let outcome = tokio::task::spawn_blocking(move || {
+        state.machine.profile_new(&ksx_api::NewProfile {
+            title: form.title,
+            path: form.path,
+            arguments: form.arguments,
+            slots,
+            preset: form.preset,
+        })
+    })
+    .await;
+    nocturne_redirect(&verb_flash(outcome, "Saved game added."))
+}
+
+/// POST /nocturne/game/update — edit one in place.
+pub(super) async fn nocturne_form_game_update(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneGameForm>,
+) -> Response {
+    let slots = match game_slots(&form.slots) {
+        Ok(value) => value,
+        Err(message) => return nocturne_redirect(message),
+    };
+    let outcome = tokio::task::spawn_blocking(move || {
+        state.machine.profile_update(&ksx_api::UpdateProfile {
+            original_title: form.original_title,
+            revision: form.revision,
+            title: form.title,
+            path: form.path,
+            arguments: form.arguments,
+            slots,
+            preset: form.preset,
+            rebase_devices: form.rebase_devices,
+        })
+    })
+    .await;
+    nocturne_redirect(&verb_flash(outcome, "Saved game updated."))
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturneGameDeleteForm {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    revision: String,
+}
+
+/// POST /nocturne/game/delete — the served revision is the stale-screen guard.
+pub(super) async fn nocturne_form_game_delete(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneGameDeleteForm>,
+) -> Response {
+    let outcome = tokio::task::spawn_blocking(move || {
+        state.machine.profile_delete(&ksx_api::DeleteProfile {
+            title: form.title,
+            revision: form.revision,
+        })
+    })
+    .await;
+    nocturne_redirect(&verb_flash(outcome, "Saved game removed."))
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturnePresetRenameForm {
+    #[serde(default)]
+    from: String,
+    #[serde(default)]
+    to: String,
+}
+
+/// POST /nocturne/layout/rename — renaming REPOINTS every controller that uses
+/// the layout, so nothing is left naming a layout that is not there.
+pub(super) async fn nocturne_form_preset_rename(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturnePresetRenameForm>,
+) -> Response {
+    let outcome = tokio::task::spawn_blocking(move || {
+        state.machine.preset_rename(&ksx_api::RenamePreset {
+            from: form.from,
+            to: form.to,
+        })
+    })
+    .await;
+    nocturne_redirect(&verb_flash(outcome, "Layout renamed."))
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturnePresetDeleteForm {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    force: bool,
+}
+
+/// POST /nocturne/layout/delete — a layout still in use cannot be deleted
+/// until those controllers point somewhere else; the backend says so by name.
+pub(super) async fn nocturne_form_preset_delete(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturnePresetDeleteForm>,
+) -> Response {
+    let outcome = tokio::task::spawn_blocking(move || {
+        state.machine.preset_delete(&ksx_api::DeletePreset {
+            name: form.name,
+            force: form.force,
+        })
+    })
+    .await;
+    nocturne_redirect(&verb_flash(outcome, "Layout deleted."))
+}
+
+/// One machine outcome as the sentence this page flashes: the backend's own
+/// words on refusal, a short confirmation on success, and an honest line when
+/// the blocking task itself died.
+fn verb_flash(
+    outcome: Result<Result<String, ksx_api::Refusal>, tokio::task::JoinError>,
+    ok_line: &str,
+) -> String {
+    match outcome {
+        Ok(Ok(_)) => ok_line.to_owned(),
+        Ok(Err(refusal)) => refusal.message,
+        Err(_) => "that verb panicked; nothing was written".to_owned(),
+    }
+}
+
 /// GET /nocturne/export.json — the whole configuration as one file.
 ///
 /// Moved from `/setup` when `/nocturne` became the product. A download, not a

@@ -42,6 +42,41 @@ pub(super) const N_MOVE_AT_END: &str =
 pub(super) const N_APPLY_OK: &str = "Changes applied to the running session in place — the pads \
      stayed plugged. Nothing has been saved.";
 
+/// Success lines for the migrated saved-game and layout verbs. Named rather
+/// than written at the call site so they can sit in [`N_FLASH_ALLOWLIST`] —
+/// a flash that is not on that list renders as the generic fallback with
+/// scripting off, which is how every one of these verbs silently lost its
+/// sentence when it moved onto /nocturne.
+pub(super) const N_GAME_ADD_OK: &str = "Saved game added.";
+pub(super) const N_GAME_UPDATE_OK: &str = "Saved game updated.";
+pub(super) const N_GAME_DELETE_OK: &str = "Saved game removed.";
+pub(super) const N_LAYOUT_RENAME_OK: &str = "Layout renamed.";
+pub(super) const N_LAYOUT_DELETE_OK: &str = "Layout deleted.";
+pub(super) const N_IMPORT_UNREADABLE: &str =
+    "error: That document could not be read — it may be larger than this page accepts (8 MB).";
+pub(super) const N_IMPORT_EMPTY: &str =
+    "error: Nothing to import — paste a configuration into the box first.";
+
+/// Owned copy for the saved-game and layout verbs. Every one of these was a
+/// constant on the deleted /profiles page, and they come back with the verbs:
+/// a surface presents its OWN sentence for an outcome, never the provider's.
+pub(super) const N_GAME_ADD_ERROR: &str = "error: Saved game could not be added. Check the game \
+     name, program location, players, and controller layout; nothing was changed.";
+pub(super) const N_GAME_UPDATE_ERROR: &str = "error: Saved game could not be updated. Reopen this \
+     screen, then check its details; nothing was changed.";
+pub(super) const N_GAME_DELETE_ERROR: &str = "error: Saved game could not be removed. Reopen this \
+     screen and try again; nothing was changed.";
+pub(super) const N_LAYOUT_RENAME_ERROR: &str = "error: Controller layout could not be renamed. \
+     Choose a new name that is not already taken; nothing was changed.";
+/// Names the guard, not a generic failure: with no force on this form, a
+/// delete that fails is a delete something still uses, and "point those
+/// controllers elsewhere" is the step that unblocks it.
+pub(super) const N_LAYOUT_DELETE_ERROR: &str = "error: Controller layout could not be deleted. \
+     Controllers still using it must be pointed at another layout first; nothing was changed.";
+
+pub(super) const N_THEME_UNKNOWN: &str = "error: That is not a theme this build ships. Pick one \
+     from the list in this menu; nothing was changed.";
+
 /// Tick-box refusals for the two destructive configuration verbs. Server-side,
 /// because a browser dialog is an interaction nicety and not a boundary.
 pub(super) const N_GAME_DELETE_UNCONFIRMED: &str =
@@ -215,7 +250,27 @@ pub(super) const N_AUTOSTART_DEV_RUNTIME: &str = "error: This development build 
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 61] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 77] = [
+    // The verbs migrated from /setup and /profiles. Absent from this list,
+    // each rendered as N_UNKNOWN_FLASH_ERROR with scripting off — the page
+    // said "that request could not be finished" after a write that had in
+    // fact succeeded.
+    N_GAME_ADD_OK,
+    N_GAME_UPDATE_OK,
+    N_GAME_DELETE_OK,
+    N_LAYOUT_RENAME_OK,
+    N_LAYOUT_DELETE_OK,
+    N_THEME_OK,
+    N_GAME_ADD_ERROR,
+    N_GAME_UPDATE_ERROR,
+    N_GAME_DELETE_ERROR,
+    N_LAYOUT_RENAME_ERROR,
+    N_LAYOUT_DELETE_ERROR,
+    N_GAME_DELETE_UNCONFIRMED,
+    N_LAYOUT_DELETE_UNCONFIRMED,
+    N_THEME_UNKNOWN,
+    N_IMPORT_UNREADABLE,
+    N_IMPORT_EMPTY,
     N_MOVE_AT_END,
     N_TOGGLE_OLD_DAEMON,
     N_CLEAR_ALL_OK,
@@ -773,7 +828,7 @@ pub(super) async fn nocturne_form_game_new(
         })
     })
     .await;
-    nocturne_redirect(&verb_flash(outcome, "Saved game added."))
+    nocturne_redirect(&verb_flash(outcome, N_GAME_ADD_OK, N_GAME_ADD_ERROR))
 }
 
 /// POST /nocturne/game/update — edit one in place.
@@ -798,7 +853,7 @@ pub(super) async fn nocturne_form_game_update(
         })
     })
     .await;
-    nocturne_redirect(&verb_flash(outcome, "Saved game updated."))
+    nocturne_redirect(&verb_flash(outcome, N_GAME_UPDATE_OK, N_GAME_UPDATE_ERROR))
 }
 
 #[derive(Deserialize)]
@@ -831,7 +886,7 @@ pub(super) async fn nocturne_form_game_delete(
         })
     })
     .await;
-    nocturne_redirect(&verb_flash(outcome, "Saved game removed."))
+    nocturne_redirect(&verb_flash(outcome, N_GAME_DELETE_OK, N_GAME_DELETE_ERROR))
 }
 
 #[derive(Deserialize)]
@@ -855,7 +910,11 @@ pub(super) async fn nocturne_form_preset_rename(
         })
     })
     .await;
-    nocturne_redirect(&verb_flash(outcome, "Layout renamed."))
+    nocturne_redirect(&verb_flash(
+        outcome,
+        N_LAYOUT_RENAME_OK,
+        N_LAYOUT_RENAME_ERROR,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -889,7 +948,11 @@ pub(super) async fn nocturne_form_preset_delete(
         })
     })
     .await;
-    nocturne_redirect(&verb_flash(outcome, "Layout deleted."))
+    nocturne_redirect(&verb_flash(
+        outcome,
+        N_LAYOUT_DELETE_OK,
+        N_LAYOUT_DELETE_ERROR,
+    ))
 }
 
 /// One machine outcome as the sentence this page flashes: the backend's own
@@ -898,11 +961,17 @@ pub(super) async fn nocturne_form_preset_delete(
 fn verb_flash(
     outcome: Result<Result<String, ksx_api::Refusal>, tokio::task::JoinError>,
     ok_line: &str,
+    error_line: &str,
 ) -> String {
     match outcome {
         Ok(Ok(_)) => ok_line.to_owned(),
-        Ok(Err(refusal)) => as_error(refusal.message),
-        Err(_) => as_error("that verb panicked; nothing was written".to_owned()),
+        // **Provider text is not customer copy.** A refusal message names
+        // paths, files and verbs — `C:\…\games.toml`, `--force`, "daemon" —
+        // which is right for a log and wrong for a sentence under a form. The
+        // deleted /profiles page owned one line per action for exactly this
+        // reason; carrying the verb over lost the boundary, and a hostile or
+        // merely chatty provider could write straight onto the page.
+        Ok(Err(_)) | Err(_) => error_line.to_owned(),
     }
 }
 
@@ -978,10 +1047,7 @@ pub(super) async fn nocturne_form_import(
     form: Result<Form<ImportForm>, axum::extract::rejection::FormRejection>,
 ) -> Response {
     let Ok(Form(form)) = form else {
-        return nocturne_redirect(&as_error(
-            "that document could not be read — it may be larger than this page accepts (8 MB)"
-                .to_owned(),
-        ));
+        return nocturne_redirect(N_IMPORT_UNREADABLE);
     };
     let request = ksx_api::ImportRequest {
         document: form.document.unwrap_or_default(),
@@ -990,9 +1056,7 @@ pub(super) async fn nocturne_form_import(
         force: form.force.is_some(),
     };
     if request.document.trim().is_empty() {
-        return nocturne_redirect(&as_error(
-            "nothing to import — paste a configuration into the box first".to_owned(),
-        ));
+        return nocturne_redirect(N_IMPORT_EMPTY);
     }
     let outcome = tokio::task::spawn_blocking(move || state.machine.config_import(&request))
         .await
@@ -1037,7 +1101,7 @@ pub(super) async fn nocturne_form_theme(
     } else if let Some(meta) = crate::theme_tokens::THEMES.iter().find(|t| t.id == wanted) {
         meta.id.to_owned()
     } else {
-        return nocturne_redirect("that is not a theme this build ships — pick one on the page");
+        return nocturne_redirect(N_THEME_UNKNOWN);
     };
     let ok = tokio::task::spawn_blocking(move || {
         state
@@ -1397,7 +1461,7 @@ pub(super) struct NocturneAddForm {
     socd: Option<String>,
 }
 
-/// POST /nocturne/controller (and /workspace/controller) — add the next
+/// POST /nocturne/controller — add the next
 /// controller, with the create form's opposite-directions answer applied to
 /// the fresh slot in the same request.
 pub(super) async fn nocturne_form_add(
@@ -2541,7 +2605,7 @@ pub(super) struct NocturneClearForm {
     function: String,
 }
 
-/// POST /nocturne/bind/clear (and /workspace/bind/clear) — one control back
+/// POST /nocturne/bind/clear — one control back
 /// to unbound on the staged slot, via the daemon's own staged-bind verb with
 /// the canonical clear placeholder. Moved from /workspace verbatim.
 pub(super) async fn nocturne_form_bind_clear(

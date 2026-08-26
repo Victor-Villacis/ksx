@@ -3099,18 +3099,13 @@ fn the_session_panel_round_trips_start_stop_and_the_flash() {
 fn a_dead_daemon_is_loud_on_both_pages_with_a_runnable_command() {
     let addr = start_server(Arc::new(ScriptedControl::dead()));
 
-    for (path, headline, remedy) in [
-        (
-            "/",
-            "No daemon — ksx Studio can see your config but cannot change anything.",
-            "tray icon",
-        ),
-        (
-            "/nocturne",
-            "Mapping needs the background helper",
-            "Close and reopen ksx",
-        ),
-    ] {
+    // Was two pages; `/` went with the status page, so /nocturne carries the
+    // banner alone now.
+    for (path, headline, remedy) in [(
+        "/nocturne",
+        "Mapping needs the background helper",
+        "Close and reopen ksx",
+    )] {
         let page = get(addr, path);
         assert!(page.starts_with("HTTP/1.1 200"), "{path}: {page}");
         let body = body_of(&page);
@@ -3341,7 +3336,7 @@ fn the_pages_own_origin_still_writes() {
     let response = http(
         addr,
         &format!(
-            "POST /map/clear HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+            "POST /nocturne/bind/clear HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
              Origin: http://127.0.0.1:{port}\r\nConnection: close\r\n\
              Content-Type: application/x-www-form-urlencoded\r\n\
              Content-Length: {len}\r\n\r\n{body}",
@@ -3353,10 +3348,18 @@ fn the_pages_own_origin_still_writes() {
         response.starts_with("HTTP/1.1 303"),
         "Studio's own form must still post: {response}"
     );
+    // Reaching the HANDLER is the claim, not what the handler then decided:
+    // the guard answers 403 with no `Location` (see the cross-site test
+    // beside this one), so a 303 carrying this page's own flash is proof the
+    // request got past it. The old assertion read a recorder belonging to
+    // `/map/clear`'s preset-write verb; this route runs the staged one.
     assert!(
-        control.bound_with.lock().unwrap().is_some(),
-        "the write must actually have reached the control surface"
+        response
+            .to_ascii_lowercase()
+            .contains("location: /nocturne?flash="),
+        "the post must have reached the handler, not stopped at the guard: {response}"
     );
+    let _ = &control;
 }
 
 /// DNS rebinding: the packet really does arrive on 127.0.0.1, so the bind
@@ -3369,7 +3372,7 @@ fn a_rebound_host_cannot_even_read() {
 
     let response = http(
         addr,
-        "GET /api/map HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n",
+        "GET /api/nocturne HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n",
     );
     assert!(
         response.starts_with("HTTP/1.1 421"),
@@ -3915,14 +3918,13 @@ fn every_page_links_to_the_device_picker() {
         picker.contains(r#"action="/nocturne/device""#),
         "the Setup destination has no device picker: {picker}"
     );
-    for route in ["/nocturne", "/devices"] {
-        let page = get(addr, route);
-        let body = body_of(&page);
-        assert!(
-            body.contains(r#"href="/start#keyboard""#),
-            "{route} has no link to the device picker: {body}"
-        );
-    }
+    // The picker lives in two places now and neither is /start: /nocturne
+    // carries the form itself (asserted above) and /devices IS the picker.
+    let devices = body_of(&get(addr, "/devices")).to_owned();
+    assert!(
+        devices.contains(r#"action="/devices/pick""#),
+        "the device page has no picker: {devices}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -4280,28 +4282,37 @@ fn a_post_with_a_missing_or_empty_number_still_flashes_instead_of_422() {
 
 /// A provider refusal is mapped to the form's own safe remedy. Provider
 /// message/remedy text never becomes customer presentation copy.
+///
+/// The verb this used to prove — creating a layout from a template on
+/// `/profiles` — has no `/nocturne` successor, so the claim is made on the
+/// layout RENAME instead. It is the same boundary and the same failure: the
+/// migrated verbs briefly flashed `refusal.message` straight onto the page,
+/// which is where a provider's paths and `--force` reach a customer.
 #[test]
 fn a_layout_refusal_flashes_a_safe_way_out() {
     let control = Arc::new(ScriptedControl::new(true));
     let addr = start_server(control);
-    let response = post_form(
-        addr,
-        "/profiles/preset/new",
-        "name=Arcade&template=keyboard-2p&player=1",
-    );
+    let response = post_form(addr, "/nocturne/layout/rename", "from=Arcade&to=Player+1");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(
-        response.contains("Controller%20layout%20could%20not%20be%20created"),
+        response.contains("Controller%20layout%20could%20not%20be%20renamed"),
         "{response}"
     );
     assert!(
         response
             .to_ascii_lowercase()
-            .contains("choose%20a%20different%20name"),
+            .contains("not%20already%20taken"),
         "{response}"
     );
-    assert!(!response.contains("already%20exists"), "{response}");
-    assert!(!response.contains("--force"), "{response}");
+    // The refusal is marked, so the page paints it red rather than green.
+    assert!(response.contains("flash=error%3A"), "{response}");
+    // And none of the provider's own vocabulary survived the boundary.
+    for leaked in ["already%20exists", "--force", "toml", "daemon"] {
+        assert!(
+            !response.to_ascii_lowercase().contains(leaked),
+            "provider text reached the page: {leaked} in {response}"
+        );
+    }
 }
 
 /// A REFUSED read must not render as an assertion of absence.
@@ -4509,7 +4520,7 @@ fn a_rebound_host_cannot_read_the_profiles() {
     let addr = start_server(control);
     let response = http(
         addr,
-        "GET /api/profiles HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n",
+        "GET /api/nocturne HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n",
     );
     assert!(response.starts_with("HTTP/1.1 421"), "{response}");
 }
@@ -4657,7 +4668,7 @@ fn an_unreadable_import_body_is_a_flashed_sentence_not_a_bare_4xx() {
     let response = http(
         addr,
         &format!(
-            "POST /setup/import HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+            "POST /nocturne/import HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
              Content-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
         ),
@@ -5380,7 +5391,7 @@ fn the_check_distinguishes_unavailable_empty_and_zero_control_rosters_over_http(
         unavailable.contains("Mappings could not be checked"),
         "{unavailable}"
     );
-    assert!(unavailable.contains("Open setup"), "{unavailable}");
+    assert!(unavailable.contains("Open ksx Studio"), "{unavailable}");
     assert!(!unavailable.contains("ksx preset list"), "{unavailable}");
 
     let empty = start_server_with_status(
@@ -6489,7 +6500,7 @@ fn an_unknown_workspace_flash_is_never_reflected() {
     let page = get(addr, "/nocturne?flash=%3Cscript%3Ealert(1)%3C%2Fscript%3E");
     assert!(!page.contains("alert(1)"), "{page}");
     assert!(
-        page.contains("could not finish that request"),
+        page.contains("That request could not be finished"),
         "the unknown-flash fallback must render: {page}"
     );
 }

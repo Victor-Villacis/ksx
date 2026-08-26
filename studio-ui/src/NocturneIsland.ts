@@ -2589,6 +2589,16 @@ function maybeMigrateKeyboardWorkbenchSurface(): boolean {
 }
 
 function loadControlSurfacePrefs(): void {
+  // The version the document arrived as, read BEFORE sanitizing — which is
+  // the only moment it is knowable, because `sanitizeControlSurfaceStore`
+  // returns v3 whatever it was handed.
+  let arrivedAs: unknown = null;
+  try {
+    const raw = window.localStorage.getItem(CONTROL_SURFACE_STORAGE_KEY);
+    if (raw) arrivedAs = (JSON.parse(raw) as { version?: unknown }).version;
+  } catch {
+    arrivedAs = null;
+  }
   try {
     controlSurfaceStore = sanitizeControlSurfaceStore(
       window.localStorage.getItem(CONTROL_SURFACE_STORAGE_KEY),
@@ -2608,7 +2618,17 @@ function loadControlSurfacePrefs(): void {
     keyboardWorkbenchState.theme,
   );
   maybeMigrateKeyboardWorkbenchSurface();
-  applyControlSurfaceState(controlSurfaceState, false);
+  // **Persist a document that arrived legacy.** Sanitizing upgraded it to v3
+  // in memory; without this write the upgrade is redone on every load and the
+  // copy on disk stays v1 forever — so anything that reads the raw store
+  // (another tab, a later build, this test) still sees the old shape.
+  //
+  // This argument used to be `reconciled.changed` from the hardware-epoch
+  // reconciliation, and the write rode along with it. That reconciliation
+  // left for PacBench and the argument was stubbed to `false`, taking the
+  // document migration with it — the migration is ksx's, not the chart's.
+  const arrivedLegacy = arrivedAs === 1 || arrivedAs === 2;
+  applyControlSurfaceState(controlSurfaceState, arrivedLegacy);
   installControlSurfaceStorageSync();
 }
 

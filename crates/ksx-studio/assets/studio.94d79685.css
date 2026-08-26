@@ -12998,8 +12998,41 @@ button.n-keychip:hover {
   color: var(--n-text);
 }
 
+/* The ANSWER state, wired 2026-08-26. It was designed with the listening
+   state and then never written by anything — `applyNocturneUi` only ever
+   emitted `n-idbox listen` / `n-idbox none`, so identify's outcome existed
+   only as one fixed sentence in the flash bar at the top of the page, and the
+   box under the button (where the user is actually looking) just vanished.
+   It carries the same padded shell as `.listen` so the box does not change
+   SHAPE at the moment it changes meaning — only its colour settles and its
+   pulsing dot goes away. */
 .n-idbox.done {
+  padding: 10px 12px;
+  border-radius: 9px;
+  box-shadow: inset 0 0 0 1px var(--n-accent-line);
   color: var(--n-accent-2);
+}
+
+/* "Identified" — a STATIC label authored in the island tree, so it is in the
+   SSR bytes and the hydrated tree alike, and shown only in the answer state.
+   Without it the box would read as a bare device name with no claim attached;
+   the name alone does not say what happened to it. */
+.n-idlabel {
+  display: none;
+}
+
+.n-idbox.done .n-idlabel {
+  display: inline;
+  flex: none;
+  color: var(--n-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 9.5px;
+  line-height: 1.6;
+}
+
+.n-idbox.done .n-idtxt {
+  font-weight: 600;
 }
 
 .n-idot {
@@ -13052,6 +13085,19 @@ button.n-keychip:hover {
 
 .n-devform button.n-dev {
   display: flex;
+}
+
+/* The chosen row is where the page already IS, not somewhere to go.
+   It keeps its submit — the no-JS contract needs every verb to survive a plain
+   POST, and a crafted or cached one has to land on the same server guard
+   anyway — but it stops advertising itself as a live target. Until 2026-08-26
+   the only thing separating it from the other rows was the background above:
+   it looked exactly as pressable as they did, and pressing it re-staged the
+   board and silently threw away a WinUSB preparation. The server now makes
+   that press a no-op that keeps the preparation; this is the half that stops
+   inviting it. */
+.n-devform button.n-dev.on {
+  cursor: default;
 }
 
 .n-encoder-form {

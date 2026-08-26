@@ -29,6 +29,18 @@ use crate::snapshot::NocturnePayload;
 
 pub(super) const N_DEVICE_OK: &str = "Keyboard selected. Nothing has been saved or started.";
 
+/// The answer to choosing the board that is already chosen. **Not a refusal**
+/// — nothing went wrong and nothing needs a remedy; the page is in the state
+/// the press asked for. It says "still" rather than "already" because the
+/// second half is the part that matters: `choose_device_preserving_
+/// preparation` skipped the write precisely so a WinUSB preparation would
+/// survive the press, and a sentence that only said "already selected" would
+/// leave the user unable to tell that from a write that happened to be
+/// idempotent.
+pub(super) const N_DEVICE_ALREADY_OK: &str =
+    "That keyboard is still the selected one. Nothing changed — any preparation it \
+     already has was kept.";
+
 pub(super) const N_BLOCKING_OK: &str =
     "Capture behaviour updated. Nothing has been saved or started.";
 
@@ -338,7 +350,7 @@ pub(super) const N_PLAY_OUTPUT_UNKNOWN: &str = "error: Play cannot start — ksx
      the controller outputs this setup needs, and it will not plug a pad it cannot vouch for. \
      The setup is still ready to save; reopen ksx and try again. Nothing was started.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 91] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 92] = [
     // Save and Play's own refusals. They are composed from a stable daemon
     // CODE rather than from the daemon's sentence, precisely so they can sit
     // on this list — a refusal that only exists at runtime cannot be
@@ -409,6 +421,7 @@ pub(super) const N_FLASH_ALLOWLIST: [&str; 91] = [
     N_TOGGLE_OK,
     N_TOGGLE_UNBOUND_ERROR,
     N_DEVICE_OK,
+    N_DEVICE_ALREADY_OK,
     N_BLOCKING_OK,
     N_EDIT_OK,
     N_ADD_LAYOUT_ERROR,
@@ -812,6 +825,74 @@ pub(super) struct NocturneDeviceForm {
 
 /// POST /nocturne/device (and /start/device) — replaces any earlier choice,
 /// freely. One staged value in the daemon and nothing else.
+/// What [`choose_device_preserving_preparation`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DeviceChoice {
+    /// This board is already the staged one; nothing was written.
+    Unchanged,
+    /// The stage now holds this board.
+    Chosen,
+    /// The daemon refused the edit.
+    Refused,
+}
+
+/// Choose the input device — but never RE-choose the one already staged.
+///
+/// **The reason is a silent data loss, not tidiness.**
+/// `StageEdit::ChooseDevice` builds a whole `StagedDevice` and hands it to
+/// `StagedSetup::choose_device`, which REPLACES the previous one wholesale
+/// (`ksx-core/src/stage.rs`: "Replaces any earlier choice — freely, because
+/// nothing was written"). The stage is a pure value and knows nothing about
+/// drivers, so the device it builds always carries
+/// `StageCaptureBackend::Interception` (`ksx-api/src/stage.rs`). That is the
+/// right default for a board nobody has prepared, and it is destructive for
+/// one somebody has: prepare a keyboard for WinUSB through a UAC prompt, then
+/// choose that same board again, and the staged backend silently drops back to
+/// `interception` while Windows still holds it on the built-in path. The two
+/// then disagree, `StartCaptureMode` reads `Held`, and both Save and Play
+/// refuse — with the way out being the held-keyboard list rather than the row
+/// that was pressed.
+///
+/// Re-choosing arrives by two ordinary doors, neither of them a mistake the
+/// user could see coming:
+///  - the device row itself. It is not disabled and carries no selected state
+///    beyond a class, so after a Rescan or a poll it is the obvious "make sure
+///    it is still selected" gesture.
+///  - Identify by key, pressed on the board that is already staged — which is
+///    exactly what someone does to confirm they picked the right one.
+///
+/// So the guard lives here, at the one place both doors pass through, rather
+/// than in either caller. It is a READ then a compare: if the selector the
+/// caller is asking for is already the staged device's, nothing is written and
+/// the preparation survives. The comparison is on the SELECTOR alone —
+/// `[[device]] id` is the identity a saved config refers to; alias and label
+/// are naming, and re-choosing to rename is not a thing any surface offers.
+fn choose_device_preserving_preparation(
+    state: &AppState,
+    selector: String,
+    alias: String,
+    label: String,
+) -> DeviceChoice {
+    if state.control.staged().device.is_some_and(|staged| {
+        !staged.selector.trim().is_empty() && staged.selector.trim() == selector.trim()
+    }) {
+        return DeviceChoice::Unchanged;
+    }
+    if state
+        .control
+        .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+            selector,
+            alias,
+            label,
+        })
+        .ok
+    {
+        DeviceChoice::Chosen
+    } else {
+        DeviceChoice::Refused
+    }
+}
+
 pub(super) async fn nocturne_form_device(
     State(state): State<Arc<AppState>>,
     form: NocturneForm<NocturneDeviceForm>,
@@ -819,19 +900,20 @@ pub(super) async fn nocturne_form_device(
     let Ok(Form(form)) = form else {
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
-    let ok = tokio::task::spawn_blocking(move || {
-        state
-            .control
-            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
-                selector: form.selector,
-                alias: form.alias,
-                label: form.label,
-            })
-            .ok
+    let outcome = tokio::task::spawn_blocking(move || {
+        choose_device_preserving_preparation(&state, form.selector, form.alias, form.label)
     })
     .await
-    .unwrap_or(false);
-    nocturne_redirect(if ok { N_DEVICE_OK } else { N_EDIT_ERROR })
+    .unwrap_or(DeviceChoice::Refused);
+    nocturne_redirect(match outcome {
+        // Not a refusal: the user asked for a state the page is already in,
+        // and it is in it. Saying so is the honest answer, and it is the one
+        // the no-JS reader needs — with scripting off this sentence is the
+        // ONLY evidence that the press did anything at all.
+        DeviceChoice::Unchanged => N_DEVICE_ALREADY_OK,
+        DeviceChoice::Chosen => N_DEVICE_OK,
+        DeviceChoice::Refused => N_EDIT_ERROR,
+    })
 }
 
 /// POST /nocturne/device/identify (and /start/device/identify) — one
@@ -3196,15 +3278,25 @@ pub(super) async fn identify_and_stage(state: Arc<AppState>) -> StartIdentifyRes
                         Ok(identified) => identified,
                         Err(_) => return StartIdentifyResult::Failed,
                     };
-                    let outcome = state.control.stage_edit(&ksx_api::StageEdit::ChooseDevice {
-                        selector: identified.selector,
-                        alias: identified.alias,
-                        label: identified.label,
-                    });
-                    return if outcome.ok {
-                        StartIdentifyResult::Selected
-                    } else {
-                        StartIdentifyResult::Failed
+                    // Identifying the board that is ALREADY staged is not a
+                    // no-op the user is doing by accident — it is the natural
+                    // way to confirm the right keyboard is selected. Going
+                    // through the shared guard means that confirmation cannot
+                    // cost them a WinUSB preparation; see
+                    // `choose_device_preserving_preparation` for what a
+                    // re-choose destroys. Either way the ANSWER is the same:
+                    // a keyboard answered and it is the staged one, which is
+                    // precisely what `N_IDENTIFY_OK` says.
+                    return match choose_device_preserving_preparation(
+                        &state,
+                        identified.selector,
+                        identified.alias,
+                        identified.label,
+                    ) {
+                        DeviceChoice::Chosen | DeviceChoice::Unchanged => {
+                            StartIdentifyResult::Selected
+                        }
+                        DeviceChoice::Refused => StartIdentifyResult::Failed,
                     };
                 }
                 "listening" => {
@@ -3232,4 +3324,75 @@ pub(super) enum StartIdentifyResult {
     Selected,
     TimedOut,
     Failed,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The island reads the flash to tell identify's success from its two
+    /// refusals, so the sentence is a contract between the two languages.**
+    ///
+    /// The flash string is this page's outcome channel — it is what survives
+    /// the no-JS 303, and with scripting on it is the only thing `applyFlash`
+    /// is handed. Identify's answer box (`.n-idbox.done`, wired 2026-08-26)
+    /// opens on `N_IDENTIFY_OK` and on nothing else; the two `error:`
+    /// sentences collapse it, because a reddened flash IS their answer.
+    ///
+    /// Matching a served sentence by literal is the cheap way to do that and
+    /// the easy way to break it: reword `N_IDENTIFY_OK` and the box silently
+    /// stops opening, with nothing failing and no error anywhere — identify
+    /// would go back to answering only in a 32 px bar at the top of the page,
+    /// which is the complaint the box exists to answer. So the two literals
+    /// are pinned to each other here. If this fails, change BOTH.
+    #[test]
+    fn the_identify_success_sentence_is_the_one_the_island_matches() {
+        const NOCTURNE_ISLAND_TS: &str = include_str!("../../../../studio-ui/src/NocturneIsland.ts");
+
+        assert!(
+            NOCTURNE_ISLAND_TS.contains(N_IDENTIFY_OK),
+            "NocturneIsland.ts no longer carries N_IDENTIFY_OK verbatim ({N_IDENTIFY_OK:?}). \
+             Its `IDENTIFY_OK_FLASH` compares against this exact string to decide whether \
+             identify answered; a reworded sentence makes that comparison quietly false and \
+             the answer box stops opening.",
+        );
+        // …and it is the one the COMPARISON uses, not merely a string that
+        // happens to appear somewhere in a 12,000-line file.
+        let at = NOCTURNE_ISLAND_TS
+            .find("const IDENTIFY_OK_FLASH")
+            .expect("NocturneIsland.ts to declare IDENTIFY_OK_FLASH");
+        let decl = &NOCTURNE_ISLAND_TS[at..(at + 400).min(NOCTURNE_ISLAND_TS.len())];
+        assert!(
+            decl.contains(N_IDENTIFY_OK),
+            "IDENTIFY_OK_FLASH is declared, but not from N_IDENTIFY_OK's words: {decl}",
+        );
+
+        // The refusals must stay refusals. `applyFlash` reddens on the
+        // `error:` prefix alone, and identify's box reads the same prefix to
+        // know it must NOT open — one dropped prefix would both paint a
+        // failure green and pop an answer box naming whatever was staged
+        // before.
+        for refusal in [N_IDENTIFY_TIMEOUT, N_IDENTIFY_ERROR] {
+            assert!(
+                refusal.starts_with("error:"),
+                "identify refusal {refusal:?} lost its prefix — it would render green and be \
+                 indistinguishable from the success the answer box opens on",
+            );
+            assert_ne!(
+                refusal, N_IDENTIFY_OK,
+                "a refusal and the success sentence cannot be the same string",
+            );
+        }
+
+        // All three still ride the no-JS path: the outcome of a verb has to
+        // render with scripting off, and only allowlisted sentences survive
+        // the 303 → `?flash=` round trip.
+        for sentence in [N_IDENTIFY_OK, N_IDENTIFY_TIMEOUT, N_IDENTIFY_ERROR] {
+            assert!(
+                N_FLASH_ALLOWLIST.contains(&sentence),
+                "{sentence:?} is not on N_FLASH_ALLOWLIST — with scripting off it would \
+                 render as the generic error instead of identify's own answer",
+            );
+        }
+    }
 }

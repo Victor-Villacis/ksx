@@ -215,6 +215,11 @@ fn device_row(row: &NocturneDeviceRow) -> SlotValue {
         ("selector".to_owned(), SlotValue::Text(row.selector.clone())),
         ("alias".to_owned(), SlotValue::Text(row.alias.clone())),
         ("label".to_owned(), SlotValue::Text(row.label.clone())),
+        (
+            "aria_current".to_owned(),
+            SlotValue::Text(row.aria_current.clone()),
+        ),
+        ("title".to_owned(), SlotValue::Text(row.title.clone())),
     ])
 }
 
@@ -1300,6 +1305,256 @@ mod tests {
         assert!(
             !out.html.contains("arrive with the configuration pass"),
             "the menu's placeholder sentence is back",
+        );
+    }
+
+    /// **The device row is this page's "add to canvas", and it says so.**
+    ///
+    /// `POST /nocturne/device` is the verb that decides which board
+    /// `/nocturne` is about — the widget on the canvas draws THAT keyboard's
+    /// title, its bindings and its ownership bands. There is no second "add"
+    /// gesture and there should not be one: a second device list would be two
+    /// sources of truth for one daemon field, and it would not work with
+    /// scripting off.
+    ///
+    /// What was missing was not the verb but its ANSWER. Until 2026-08-26 the
+    /// only difference between the chosen row and the rest was `n-dev on` — a
+    /// background colour. No word said the press had landed, no word said what
+    /// pressing another one costs, and assistive technology was told nothing
+    /// at all. Worse, the chosen row still looked exactly as pressable as its
+    /// neighbours, and pressing it re-ran `StageEdit::ChooseDevice`, which
+    /// rebuilds the staged device with `backend: interception` and so silently
+    /// threw away a WinUSB preparation bought with a UAC prompt.
+    ///
+    /// All three sentences here are SERVED (`SURFACES.md` §1a): a browser that
+    /// composed "replaces the current one" out of a class name would be
+    /// deriving policy from decoration.
+    #[test]
+    fn nocturne_device_rows_say_which_one_is_on_the_canvas() {
+        // A SECOND pickable board, so both halves of the claim are on the
+        // page: the base fixture holds only the staged I-PAC and one
+        // selector-less composite, and a list with a single row cannot show
+        // what an unchosen row says.
+        let mut payload = keyboard_payload();
+        payload.scan.boards.push(ksx_api::BoardRow {
+            name: "Logitech G915 TKL".to_owned(),
+            role: ksx_api::BoardRole::Keyboard,
+            transport_label: "Bluetooth".to_owned(),
+            selector: Some("usb:046d:c545:00".to_owned()),
+            alias_hint: "g915".to_owned(),
+            keyboard: Some("HID\\VID_046D&PID_C545\\1".to_owned()),
+            interception_eligible: true,
+            can_type: true,
+            pickable: true,
+            looks_like_a_keyboard: true,
+            ..Default::default()
+        });
+        // Re-derive: `keyboard_payload()` hands back an already-derived
+        // payload, and the rows the page renders come from `payload.view`.
+        let out = render_nocturne(&page(), &payload.derived(), None);
+
+        // The chosen row names its own state, in the meta line the user is
+        // already reading — not in a tooltip and not only in a colour. Matched
+        // with its tag delimiters so this reads the RENDERED row rather than
+        // the embedded payload JSON, which carries every sentence too.
+        assert!(
+            out.html
+                .contains(">USB · Connected · outputs not checked · on the canvas<"),
+            "the staged board's row does not say it is the one on the canvas",
+        );
+        // …and exactly one row claims it. Two would mean the page is showing a
+        // second device the stage cannot hold (`StagedSetup.device` is a
+        // singular `Option`), which is the failure mode a "multiple keyboards"
+        // canvas would ship. `aria-current` is the countable form: the payload
+        // JSON spells the field `aria_current`, so the hyphen is the rendered
+        // attribute and nothing else.
+        assert_eq!(
+            out.html.matches(r#"aria-current="true""#).count(),
+            1,
+            "the chosen device row is not the one and only aria-current row",
+        );
+        assert!(
+            out.html.contains(r#"aria-current="false""#),
+            "unchosen device rows carry no aria-current at all — `false` is the honest \
+             encoding here, because an empty served string still SETS the attribute",
+        );
+
+        // Both titles are the server's words, and they are the two halves of
+        // the model: what this row is, and what pressing another one costs.
+        for sentence in [
+            "This board is the one on the canvas. Pressing it again changes nothing",
+            "Put this board on the canvas — it replaces the current one.",
+            "Nothing is saved or started.",
+        ] {
+            assert!(
+                out.html.contains(sentence),
+                "SSR of the device list is missing the served sentence {sentence:?}",
+            );
+        }
+
+        // And the whole thing survives with scripting off: these are plain
+        // POST forms with served attributes, not a JS affordance.
+        assert!(out.html.contains(r#"method="post" action="/nocturne/device""#));
+    }
+
+    /// **Choosing the board that is already chosen must not un-prepare it.**
+    ///
+    /// `StageEdit::ChooseDevice` REPLACES the staged device wholesale, and the
+    /// device it builds always carries `StageCaptureBackend::Interception` —
+    /// the stage is a pure value and knows nothing about drivers. So the
+    /// obvious "make sure it is still selected" press, and the equally obvious
+    /// "identify it again to be sure", both cost a WinUSB preparation bought
+    /// through a UAC prompt: the staged backend drops to `interception` while
+    /// Windows still holds the board on the built-in path, `StartCaptureMode`
+    /// reads `Held`, and Save and Play both refuse.
+    ///
+    /// This pins the DEFECT, at the layer the guard has to defend against —
+    /// so that if `ChooseDevice` ever becomes backend-preserving on its own,
+    /// this fails and `choose_device_preserving_preparation` can be deleted
+    /// rather than left as a second, silent opinion.
+    #[test]
+    fn re_choosing_a_prepared_device_is_what_would_lose_the_preparation() {
+        let device = ksx_core::stage::StagedDevice {
+            selector: ksx_core::DeviceSelector::parse("usb:d209:0430:00")
+                .expect("a selector the scan would print"),
+            alias: "ipac".to_owned(),
+            label: "Ultimarc I-PAC 4".to_owned(),
+            backend: ksx_core::stage::StageCaptureBackend::Interception,
+        };
+        let staged = ksx_core::stage::StagedSetup::default()
+            .choose_device(device)
+            .expect("choosing a board with a usable alias");
+        let prepared = staged
+            .set_device_backend(
+                &ksx_core::DeviceSelector::parse("usb:d209:0430:00").unwrap(),
+                ksx_core::stage::StageCaptureBackend::Winusb,
+            )
+            .expect("preparing the board that is staged");
+        assert_eq!(
+            ksx_api::StagedSetupView::of(&prepared)
+                .device
+                .expect("a staged device")
+                .backend,
+            "winusb",
+        );
+
+        // The press. Same board, same alias, same label — and the preparation
+        // is gone, with nothing on screen saying so.
+        let re_chosen = ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".to_owned(),
+            alias: "ipac".to_owned(),
+            label: "Ultimarc I-PAC 4".to_owned(),
+        }
+        .apply(&prepared)
+        .expect("re-choosing the staged board is accepted, which is the whole problem");
+        assert_eq!(
+            ksx_api::StagedSetupView::of(&re_chosen)
+                .device
+                .expect("a staged device")
+                .backend,
+            "interception",
+            "ChooseDevice no longer resets the capture backend — if that is deliberate, \
+             `choose_device_preserving_preparation` in server/nocturne.rs is now a second \
+             opinion about the same rule and should be removed",
+        );
+    }
+
+    /// **The theme picker offers every theme, and every row is PAINTED.**
+    ///
+    /// The gate that was missing. `http.rs`'s
+    /// `the_theme_form_round_trips_and_refuses_what_the_build_lacks` walks the
+    /// whole server path — POST, 303, stamp, refusal — and never looks at the
+    /// markup; the sentinel above asserts only that the string
+    /// `"/nocturne/theme"` appears at all. Between them sat a picker that
+    /// rendered four rows of which `.pill-none { display: none }` hid three,
+    /// so whatever theme you were on was the only one you could see, and its
+    /// button re-posted the value you already had.
+    ///
+    /// The lesson is that `cls` on these rows is not decoration: it IS the
+    /// control. A row whose class the sheet does not lay out is a verb that
+    /// cannot be reached, and reachability has to be a claim, not a hope.
+    #[test]
+    fn nocturne_paints_every_theme_row_not_only_the_current_one() {
+        let out = render_nocturne(&page(), &keyboard_payload(), None);
+
+        // Isolate each theme form's own bytes so an assertion about "a theme
+        // button" cannot be satisfied (or broken) by some other card's markup.
+        let forms: Vec<&str> = out
+            .html
+            .match_indices(r#"action="/nocturne/theme""#)
+            .map(|(at, _)| {
+                let rest = &out.html[at..];
+                let end = rest.find("</form>").expect("a theme form to close");
+                &rest[..end]
+            })
+            .collect();
+
+        // System + every theme in the generated roster. Composed in
+        // `snapshot::theme_rows`, so shipping a theme adds a row here for free
+        // — and this count is what catches the reverse: a roster that grew
+        // while the picker did not.
+        let expected = 1 + crate::theme_tokens::THEMES.len();
+        assert_eq!(
+            forms.len(),
+            expected,
+            "the theme picker serves {} forms, not the {expected} the roster has",
+            forms.len(),
+        );
+
+        for want in std::iter::once("system").chain(crate::theme_tokens::THEMES.iter().map(|t| t.id))
+        {
+            let hidden = format!(r#"name="theme" value="{want}""#);
+            assert!(
+                forms.iter().any(|f| f.contains(&hidden)),
+                "no theme form posts {want:?}",
+            );
+        }
+
+        // The defect itself, unrepresentable from here on. `pill-none` is
+        // `display: none` by design — it belongs to the device-health chip
+        // whose one deliberately-invisible level is "none" — and any theme
+        // button wearing it is an unreachable control.
+        for form in &forms {
+            assert!(
+                !form.contains("pill"),
+                "a theme row's submit button carries a `pill` class; that vocabulary \
+                 came from the deleted /setup page, where it painted a chip BESIDE the \
+                 row rather than the row's own button, and `.pill-none` is display:none: \
+                 {form}",
+            );
+            assert!(
+                form.contains(r#"class="n-radio"#),
+                "a theme row's submit button is not an `n-radio`; only \
+                 `.n-modeform button.n-radio` gets a layout: {form}",
+            );
+        }
+
+        // Exactly one row is marked current — the same claim the blocking card
+        // makes, from the same idiom.
+        let marked = forms
+            .iter()
+            .filter(|f| f.contains(r#"class="n-radio on""#))
+            .count();
+        assert_eq!(marked, 1, "{marked} theme rows claim to be the current one");
+
+        // Each row says something a person could choose BETWEEN. Dark and
+        // Matrix are both dark-scheme themes; when the sentence was derived
+        // from the scheme they read identically, which only looked harmless
+        // while two of them were invisible.
+        for meta in crate::theme_tokens::THEMES {
+            assert!(
+                out.html.contains(meta.blurb),
+                "SSR of the theme picker is missing {}'s own sentence {:?}",
+                meta.id,
+                meta.blurb,
+            );
+        }
+        let blurbs: std::collections::BTreeSet<&str> =
+            crate::theme_tokens::THEMES.iter().map(|t| t.blurb).collect();
+        assert_eq!(
+            blurbs.len(),
+            crate::theme_tokens::THEMES.len(),
+            "two themes describe themselves in the same words",
         );
     }
 

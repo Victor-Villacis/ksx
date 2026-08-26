@@ -124,6 +124,14 @@ export interface NocturneDeviceRowView {
   selector: string;
   alias: string;
   label: string;
+  /** `"true"` on the staged board, `"false"` on every other row. A WORD, not
+   *  a flag: an empty string still sets an attribute in the runtime's generic
+   *  path, so "absent" is not expressible from a list row — and
+   *  `aria-current="false"` is valid ARIA that says exactly this. */
+  aria_current: string;
+  /** The server's sentence about what pressing this row does. Rendered as the
+   *  button's `title`; never composed here. */
+  title: string;
 }
 
 export interface NocturneOtherRowView {
@@ -1209,6 +1217,15 @@ export function applyNocturne(p: NocturnePayload): void {
       `Macro “${previouslyOpenMacro.macro}” is no longer available.`,
     );
     restoreDialogFocus();
+  }
+  // Identify's answer lands HERE, on the first poll after the success flash,
+  // and at the END of the apply so the device lists this reads have already
+  // taken the values above. The flash proved a keyboard answered; only this
+  // read carries WHICH one. Consumed once — a later background poll must not
+  // resurrect an answer the user has already read.
+  if (identifyAwaitingAnswer) {
+    identifyAwaitingAnswer = false;
+    identifyDone(v.kb_title);
   }
 }
 
@@ -6436,9 +6453,36 @@ export function applyNocturneUnreachable(): void {
   setNDevNote("ksx could not be reached — this list may be stale. Reopen ksx.");
 }
 
+/** The one sentence `nocturne_form_identify` redirects with when a keyboard
+ *  actually answered (`server/nocturne.rs` `N_IDENTIFY_OK`). Matched, not
+ *  parsed: the flash string IS this page's outcome channel, and it is already
+ *  the thing that tells success from the two `error:` refusals. Kept as a
+ *  literal here rather than derived, because the served copy and this
+ *  comparison are pinned together by `nocturne_identify_success_sentence_is_
+ *  the_one_the_island_matches` in `render_nocturne.rs`. */
+const IDENTIFY_OK_FLASH =
+  "Keyboard identified and selected. Nothing has been captured, saved, or started.";
+
+/** Set by `applyFlash` when identify succeeded, read and cleared by the very
+ *  next `applyNocturne`. The answer is deliberately staged through the POLL
+ *  rather than shown straight from the flash: the flash proves the daemon
+ *  staged SOMETHING, but only the poll carries WHAT — `kb_title` — and naming
+ *  a device from anywhere but the served value is how a page ends up claiming
+ *  a selection the daemon does not have. `submitForm` fires that poll
+ *  immediately after `applyFlash`, so the wait is one round trip. */
+let identifyAwaitingAnswer = false;
+
 /** Report one action outcome (the redirect's allowlisted ?flash= copy), and
  *  settle any in-flight identify banner. */
 export function applyFlash(flash: string | null): void {
+  // Whatever the answer is, the keyboard belongs to the user again: the
+  // round trip is over, so the guard that was swallowing their keypresses
+  // comes off here, at the one place every identify outcome passes through.
+  if (ui.identify === "listening") disarmFocusGuard();
+  const identified = ui.identify === "listening" && flash === IDENTIFY_OK_FLASH;
+  identifyAwaitingAnswer = identified;
+  // A refusal collapses the box exactly as before — the reddened flash IS the
+  // answer, and holding a "done" box open beside it would be two answers.
   ui.identify = false;
   // A dialog or menu whose form just answered is done — the flash line and
   // the refreshed panes are the answer now.
@@ -6449,6 +6493,78 @@ export function applyFlash(flash: string | null): void {
   const err = flash.startsWith("error");
   setNFlashLine(flash.replace(/^error:\s*/, ""));
   setNFlashCls(err ? "n-flash err" : "n-flash ok");
+}
+
+/** How long the answer stays on screen. Long enough to read a device name
+ *  after looking up from the keyboard you just pressed; short enough that the
+ *  box is a report and not a second, permanent piece of chrome. */
+const IDENTIFY_DONE_MS = 6000;
+let identifyDoneTimer: number | undefined;
+
+/** The answer, settled: the box directly under the Identify button stops
+ *  pulsing, turns to the accent, and says which keyboard answered — using the
+ *  SERVED `kb_title` the source widget's header is already showing.
+ *
+ *  This is the second half of the 2026-08-26 fix. The first half stopped the
+ *  page lurching; this one gives the verb a visible outcome. `.n-idbox.done`
+ *  and `.n-idbox.done .n-idot { display: none }` were designed for exactly
+ *  this and had never been written by anything — `grep -c "n-idbox done"` on
+ *  the built bundle was 0.
+ *
+ *  Called from `applyNocturne`, i.e. from the poll, so `title` is a value the
+ *  daemon just served rather than a sentence this file composed. */
+function identifyDone(title: string): void {
+  const name = title.trim();
+  // A staged device the poll cannot name is not an answer worth holding open.
+  // `kb_title` reads "No keyboard selected — pick one on the left" when
+  // nothing is staged, and echoing that under a success flash would be the
+  // page contradicting itself.
+  if (!name || name.startsWith("No keyboard selected")) return;
+  ui.identify = "done";
+  applyNocturneUi();
+  // AFTER applyNocturneUi, which writes the prompt for every other state.
+  setNIdText(name);
+  if (identifyDoneTimer !== undefined) window.clearTimeout(identifyDoneTimer);
+  identifyDoneTimer = window.setTimeout(() => {
+    identifyDoneTimer = undefined;
+    if (ui.identify !== "done") return;
+    ui.identify = false;
+    applyNocturneUi();
+  }, IDENTIFY_DONE_MS);
+  announceIdentified(name);
+  // One frame later: the caller has just written the device-list signals, and
+  // the row this wants to pulse does not exist until the engine reconciles
+  // them. Querying now would find the PREVIOUS chosen row, or none.
+  window.requestAnimationFrame(() => pulseChosenDeviceRow());
+}
+
+/** Say it once to a screen reader too — the box is a colour change and a
+ *  pulse stopping, neither of which announces itself. Reuses the island's one
+ *  live region (`liveAnnounce`), so the page still has exactly one. */
+function announceIdentified(name: string): void {
+  liveAnnounce(`Identified ${name}.`);
+}
+
+/** The other half of "show me what I identified": the row in the left pane
+ *  that is now the chosen one pulses, using the same `.locate` animation
+ *  `locateBindRow` and `locateKeyRow` already use.
+ *
+ *  Found BY SELECTOR, deliberately. The device lists are `createList`s whose
+ *  key includes `cls`, so the row that just became `n-dev on` was destroyed
+ *  and rebuilt by the poll that named it — a node reference taken before the
+ *  poll points at a corpse. `block: "nearest"` is a no-op when the row is
+ *  already visible, which after the key guard landed it usually is. */
+function pulseChosenDeviceRow(): void {
+  const row = learnRoot?.querySelector<HTMLElement>(".n-left .n-devform button.n-dev.on");
+  if (!row) return;
+  row.scrollIntoView({
+    block: "nearest",
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+  });
+  row.classList.remove("locate");
+  void row.offsetWidth;
+  row.classList.add("locate");
+  window.setTimeout(() => row.classList.remove("locate"), 3600);
 }
 
 // ── CLIENT-ONLY UI state: dialogs, rails, the identify banner ──────────────
@@ -6470,7 +6586,18 @@ const ui: {
   dlg: boolean;
   leftRail: boolean;
   rightRail: boolean;
-  identify: boolean;
+  /** Identify's three states, not two. `"listening"` is the in-flight round
+   *  trip (the box pulses, the key guard is armed); `"done"` is the ANSWER,
+   *  held on screen for a few seconds so the verb has a visible outcome where
+   *  the user's eyes already are; `false` is the collapsed box.
+   *
+   *  It was a boolean until 2026-08-26, and the missing state was the whole
+   *  complaint: the answer only ever appeared as one fixed sentence in the
+   *  32 px flash bar at the top of the page — "Keyboard identified and
+   *  selected." — which never names the device that answered, while the box
+   *  under the button (whose `.n-idbox.done` styling has existed all along,
+   *  unwritten by anything) simply vanished. */
+  identify: false | "listening" | "done";
   rightView: "controls" | "keys";
   kbSolo: boolean;
 } = {
@@ -6509,9 +6636,20 @@ function applyNocturneUi(): void {
         .map((pv) => ` mute${pv.slot}`)
         .join(""),
   );
-  setNIdLinkCls(ui.identify ? "n-link on" : "n-link");
-  setNIdBoxCls(ui.identify ? "n-idbox listen" : "n-idbox none");
-  setNIdText("Press a key on the keyboard you want to use");
+  // Only the LISTENING state lights the button — "done" is an answer, not an
+  // armed verb, and a lit button beside a settled answer reads as still-armed.
+  setNIdLinkCls(ui.identify === "listening" ? "n-link on" : "n-link");
+  setNIdBoxCls(
+    ui.identify === "listening"
+      ? "n-idbox listen"
+      : ui.identify === "done"
+        ? "n-idbox done"
+        : "n-idbox none",
+  );
+  // The prompt is this function's to write; the ANSWER is not. `identifyDone`
+  // sets `nIdText` from the SERVED `kb_title` and is the only writer of the
+  // done wording, so the box can never name a device the daemon did not stage.
+  if (ui.identify !== "done") setNIdText("Press a key on the keyboard you want to use");
 }
 
 // ── Chrome preferences that survive a refresh ──────────────────────────────
@@ -7087,9 +7225,41 @@ function stopLearnTimer(): void {
 /** While armed the panel's keys reach Windows and therefore this page; a
  *  letter would type into anything focusable and Space would "click" the
  *  button that armed the learn. Swallow everything at the capture phase —
- *  except Escape, which cancels. */
+ *  except Escape, which cancels.
+ *
+ *  **Identify arms this too, and it always should have.** Identify asks the
+ *  user to press a real key while the server listens for up to 11 s; that key
+ *  reaches this page exactly the way a learn's does. It went unguarded until
+ *  2026-08-26, and the measured result was ugly: `submitForm` disables the
+ *  button it just submitted, Chrome blurs it to `<body>`, and the next
+ *  keypress runs its default scroll action against `.n-left` — the page's only
+ *  scroller, because `.nocturne { height: 100vh; overflow: hidden }` means the
+ *  document itself cannot scroll. One Space moved the pane 327 px and carried
+ *  the Identify button, and the answer box directly under it, off the top.
+ *
+ *  The two arming verbs want DIFFERENT strengths, so this reads the arm rather
+ *  than assuming learn's:
+ *   - learn swallows the event whole (`stopPropagation`), because a learn owns
+ *     the keyboard until it binds, refuses or is cancelled;
+ *   - identify only `preventDefault`s. That is enough to kill the scroll — the
+ *     canvas's document-level Space-pan handler already checks
+ *     `!event.defaultPrevented` — while leaving the page's own Escape handling
+ *     and every other listener intact, so an 11 s round trip can never trap
+ *     someone inside a modal-feeling page with no way out.
+ *
+ *  Identify's Escape releases the guard and nothing else. It deliberately does
+ *  NOT route into `cancelLearn`/`autoMapAdvance` (those are learn's, and would
+ *  cancel a learn identify never started), and it cannot cancel the POST: the
+ *  learner generation lives inside `identify_and_stage` on the server, so the
+ *  transaction runs to its own deadline regardless. Releasing the guard is the
+ *  honest thing Escape CAN do — it hands the keyboard back. */
 function guardLearnKeys(ev: KeyboardEvent): void {
-  if (!learnRow) return;
+  if (!learnRow) {
+    if (ui.identify !== "listening") return;
+    ev.preventDefault();
+    if (ev.key === "Escape") disarmFocusGuard();
+    return;
+  }
   ev.preventDefault();
   ev.stopPropagation();
   if (ev.key === "Escape") {
@@ -8928,8 +9098,17 @@ export function nocturneWire(root: HTMLElement): void {
       return;
     }
     if (form && form.classList.contains("n-idform")) {
-      ui.identify = true;
+      ui.identify = "listening";
       applyNocturneUi();
+      // Take the keyboard BEFORE `wireForms`'s own submit listener disables
+      // this button (which blurs it to `<body>`) and before the user's real
+      // keypress arrives. Without this the keypress runs its default scroll
+      // action against `.n-left`, the page's only scroller, and carries the
+      // button and its answer box off the top of the pane — measured at
+      // 327 px for a single Space. `armFocusGuard`'s pre-emptive blur is
+      // harmless here; `submitForm` blurs the same button a tick later
+      // anyway. `applyFlash` disarms it on every outcome.
+      armFocusGuard();
     }
     if (
       form instanceof HTMLFormElement &&
@@ -10026,7 +10205,7 @@ export function NocturneIsland() {
         ),
         createList(
           () => nDevEncoders(),
-          (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta + "|" + r.role,
+          (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta + "|" + r.role + "|" + r.aria_current + "|" + r.title,
           (r) =>
             h(
               "form",
@@ -10036,7 +10215,17 @@ export function NocturneIsland() {
               h("input", { type: "hidden", name: "label", value: r.label }),
               h(
                 "button",
-                { type: "submit", class: r.cls },
+                {
+                  type: "submit",
+                  class: r.cls,
+                  // Both SERVED. `aria-current` is the assistive half of
+                  // `n-dev on`; `title` is the server's sentence about what
+                  // this press does. Neither is composed here — the row is
+                  // this page's "add to canvas" verb, and what a verb costs
+                  // is derivation, not decoration (SURFACES.md §1a).
+                  "aria-current": r.aria_current,
+                  title: r.title,
+                },
                 h("span", { class: "n-dev-ico" }, "▦"),
                 h(
                   "span",
@@ -10074,7 +10263,7 @@ export function NocturneIsland() {
         // Device rows — the row IS the /nocturne/device form's button.
         createList(
           () => nDevRows(),
-          (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta,
+          (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta + "|" + r.aria_current + "|" + r.title,
           (r) =>
             h(
               "form",
@@ -10084,7 +10273,12 @@ export function NocturneIsland() {
               h("input", { type: "hidden", name: "label", value: r.label }),
               h(
                 "button",
-                { type: "submit", class: r.cls },
+                {
+                  type: "submit",
+                  class: r.cls,
+                  "aria-current": r.aria_current,
+                  title: r.title,
+                },
                 h("span", { class: "n-dev-ico" }, "⌨"),
                 h(
                   "span",
@@ -10110,7 +10304,7 @@ export function NocturneIsland() {
           ),
           createList(
             () => nDevExp(),
-            (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta,
+            (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta + "|" + r.aria_current + "|" + r.title,
             (r) =>
               h(
                 "form",
@@ -10120,7 +10314,12 @@ export function NocturneIsland() {
                 h("input", { type: "hidden", name: "label", value: r.label }),
                 h(
                   "button",
-                  { type: "submit", class: r.cls },
+                  {
+                    type: "submit",
+                    class: r.cls,
+                    "aria-current": r.aria_current,
+                    title: r.title,
+                  },
                   h("span", { class: "n-dev-ico" }, "⚙"),
                   h(
                     "span",
@@ -10182,6 +10381,13 @@ export function NocturneIsland() {
           "div",
           { class: () => nIdBoxCls() },
           h("span", { class: "n-idot" }),
+          // A static claim beside the served value. `n-idtxt` holds either the
+          // prompt or — in the answer state — the SERVED `kb_title`, verbatim;
+          // this word is what turns that bare device name into a sentence. It
+          // is static markup on purpose: it is in the SSR pass too, so nothing
+          // about the box's shape is JS-only, and the CSS shows it in the
+          // `.done` state alone.
+          h("span", { class: "n-idlabel" }, "Identified"),
           h("span", { class: "n-idtxt" }, () => nIdText()),
         ),
         h(

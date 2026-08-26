@@ -461,11 +461,34 @@ pub fn theme_rows(setup: &SetupSnapshot) -> Vec<SetupThemeRowView> {
     let readable = setup.available;
     let system_set = readable && view.theme.is_empty();
     let system_fallback = readable && !view.theme.is_empty() && !known;
+    // `chosen_cls` is not a status chip — it is the CLASS OF THE ROW'S OWN
+    // SUBMIT BUTTON (`render_nocturne.rs` pushes these rows through `mode_row`,
+    // the same serializer the blocking rows use, and the island renders
+    // `h("button", { type: "submit", class: r.cls }, …)`). So it must speak the
+    // surviving surface's idiom, `n-radio`, the way the doc comment above has
+    // always claimed it does.
+    //
+    // It said "pill pill-ok" / "pill pill-none" until 2026-08-26, inherited
+    // verbatim from the DELETED `/setup` page where the same string painted a
+    // SEPARATE chip beside the row and the row's button had a class of its own.
+    // Migrated onto /nocturne it became the whole control's class, and
+    // `.pill-none { display: none }` — a rule written for a device-health chip
+    // whose one deliberately-invisible level is "none" — hid every unchosen
+    // theme. The picker rendered exactly one row, the one you were already on,
+    // whose button re-posted the value you already had: "I click on it and
+    // nothing happens" and "where is it?" were the same defect. The nocturne
+    // cutover's signature failure mode — a verb that survives migration while
+    // the CSS that painted it does not.
+    //
+    // `.n-modeform button.n-radio { display: flex }` is what restores the
+    // layout, and it matches `.n-radio` only; the guard in
+    // `render_nocturne.rs` now asserts no theme button ever carries `pill-none`
+    // again.
     let mark = |chosen: bool| {
         if chosen {
-            "pill pill-ok".to_owned()
+            "n-radio on".to_owned()
         } else {
-            "pill pill-none".to_owned()
+            "n-radio".to_owned()
         }
     };
     let mut rows = vec![SetupThemeRowView {
@@ -488,11 +511,14 @@ pub fn theme_rows(setup: &SetupSnapshot) -> Vec<SetupThemeRowView> {
         SetupThemeRowView {
             value: meta.id.to_owned(),
             title: meta.label.to_owned(),
-            detail: if meta.scheme == "light" {
-                "Every page renders light, whatever the system prefers.".to_owned()
-            } else {
-                "Every page renders dark, whatever the system prefers.".to_owned()
-            },
+            // The theme's OWN sentence, authored beside its palette in
+            // `studio-ui/tokens/` and generated into the roster. Derived from
+            // `meta.scheme` until 2026-08-26, which read fine while three of
+            // the four rows were invisible and became a bug the moment they
+            // were not: Dark and Matrix are both `scheme: "dark"`, so they
+            // described themselves in identical words. `build-tokens.mjs`
+            // refuses to emit a theme without a blurb.
+            detail: meta.blurb.to_owned(),
             chosen_cls: mark(chosen),
             button: if chosen {
                 "This is how it is set".to_owned()
@@ -1577,6 +1603,26 @@ pub struct NocturneDeviceRow {
     pub selector: String,
     pub alias: String,
     pub label: String,
+    /// `"true"` on the staged board, `"false"` on every other row — the
+    /// ASSISTIVE half of what `cls: "n-dev on"` says visually.
+    ///
+    /// Served as a word rather than a flag because the attribute is written
+    /// from a list row: an empty string still SETS an attribute in the
+    /// runtime's generic-attribute path, so "absent" is not expressible here.
+    /// `aria-current="false"` is valid ARIA and means exactly what it says, so
+    /// the two-word vocabulary is the honest encoding rather than a
+    /// workaround.
+    #[serde(default)]
+    pub aria_current: String,
+    /// What pressing this row does, in the server's words — the `title` the
+    /// row carries. The chosen row explains why pressing it changes nothing;
+    /// the others say what choosing them costs (a replacement, and nothing
+    /// else).
+    ///
+    /// `docs/SURFACES.md` §1a: rendered copy is logic too. The browser has no
+    /// business composing "replaces the current one" out of a class name.
+    #[serde(default)]
+    pub title: String,
 }
 
 /// One board that cannot be picked, and why — kept visible, never hidden:
@@ -2719,7 +2765,33 @@ impl NocturneDerived {
                         "n-dev".to_owned()
                     },
                     name: b.name.clone(),
-                    meta: format!("{} · {}", b.transport_label, verdict),
+                    // The chosen row says WHERE it is, not just what it is.
+                    //
+                    // This row IS the page's "add to canvas": `POST
+                    // /nocturne/device` is the verb that decides which board
+                    // `/nocturne` is about, and the centre widget's header is
+                    // this board's name. Until 2026-08-26 the only difference
+                    // between the chosen row and the rest was a class — no
+                    // word anywhere said the press had landed, and no word
+                    // said what pressing another one would cost. Both are
+                    // sentences, so both are the server's (`SURFACES.md`
+                    // §1a); the browser reads them.
+                    meta: if is_chosen {
+                        format!("{} · {} · on the canvas", b.transport_label, verdict)
+                    } else {
+                        format!("{} · {}", b.transport_label, verdict)
+                    },
+                    aria_current: if is_chosen { "true" } else { "false" }.to_owned(),
+                    title: if is_chosen {
+                        "This board is the one on the canvas. Pressing it again changes \
+                         nothing — and deliberately does not re-stage it, so a keyboard \
+                         prepared for play keeps its preparation."
+                            .to_owned()
+                    } else {
+                        "Put this board on the canvas — it replaces the current one. \
+                         Nothing is saved or started."
+                            .to_owned()
+                    },
                     role: b.role.code().to_owned(),
                     selector,
                     alias: b.alias_hint.clone(),
@@ -4786,13 +4858,37 @@ mod tests {
     /// The theme card's three states, pinned (TK2/TK3 review finding: the
     /// first cut marked System "in use" on a config nothing had READ, and
     /// claimed "this is how it is set" about a config that said otherwise).
+    ///
+    /// **And the vocabulary itself is pinned, because it was wrong for months
+    /// while this test stayed green.** `chosen_cls` is the class of the row's
+    /// own submit button, and it carried `pill pill-ok` / `pill pill-none`
+    /// inherited from the deleted `/setup` page, where the same string painted
+    /// a separate chip. `.pill-none { display: none }` therefore hid every
+    /// unchosen theme on `/nocturne`. This test asserted the marking was
+    /// CORRECT without asserting it was RENDERABLE — so it agreed, in detail,
+    /// with a picker that showed one row. Both halves are now claims.
     #[test]
     fn the_theme_rows_and_line_say_only_what_the_read_supports() {
         let marked = |rows: &[SetupThemeRowView]| {
             rows.iter()
-                .filter(|r| r.chosen_cls == "pill pill-ok")
+                .filter(|r| r.chosen_cls == "n-radio on")
                 .map(|r| r.value.clone())
                 .collect::<Vec<_>>()
+        };
+        // Every row must be a paintable control in EVERY state, marked or not.
+        // `.n-modeform button.n-radio { display: flex }` is what gives these
+        // buttons their layout, and it matches `.n-radio` only.
+        let renderable = |rows: &[SetupThemeRowView]| {
+            for r in rows {
+                assert!(
+                    r.chosen_cls == "n-radio" || r.chosen_cls == "n-radio on",
+                    "theme row '{}' has chosen_cls '{}' — it is the submit button's own \
+                     class, so anything but the n-radio idiom is either unstyled or (as \
+                     with pill-none) display:none",
+                    r.value,
+                    r.chosen_cls,
+                );
+            }
         };
 
         // Nothing stored: System is genuinely how it is set.
@@ -4800,6 +4896,29 @@ mod tests {
         let rows = theme_rows(&snap);
         assert_eq!(marked(&rows), ["system"]);
         assert_eq!(rows[0].button, "This is how it is set");
+        renderable(&rows);
+
+        // Every row describes itself in its own words. `scheme` cannot supply
+        // this sentence: Dark and Matrix are both `scheme: "dark"`, and while
+        // three rows were invisible nobody could see them say the same thing.
+        let details: std::collections::BTreeSet<&str> =
+            rows.iter().map(|r| r.detail.as_str()).collect();
+        assert_eq!(
+            details.len(),
+            rows.len(),
+            "two theme rows share a detail sentence — a picker cannot offer a choice it \
+             refuses to describe: {:?}",
+            rows.iter()
+                .map(|r| (r.value.as_str(), r.detail.as_str()))
+                .collect::<Vec<_>>(),
+        );
+        for r in &rows {
+            assert!(
+                !r.detail.trim().is_empty(),
+                "theme row '{}' has no detail sentence",
+                r.value,
+            );
+        }
 
         // A shipped id: that row is marked; System offers its action.
         let snap = SetupSnapshot::ready(ksx_api::SetupView {
@@ -4812,6 +4931,7 @@ mod tests {
         assert!(rows
             .iter()
             .any(|r| r.value == "light" && r.button == "This is how it is set"));
+        renderable(&rows);
 
         // An id this build does not ship: System IS what renders (the pill is
         // true) but NOT what is set — the button offers the useful act.
@@ -4822,12 +4942,16 @@ mod tests {
         let rows = theme_rows(&snap);
         assert_eq!(marked(&rows), ["system"]);
         assert_eq!(rows[0].button, "Follow the operating system instead");
+        renderable(&rows);
 
         // A config nothing could read: no row claims anything about it.
         let snap = SetupSnapshot::unavailable("the store refused");
         let rows = theme_rows(&snap);
         assert_eq!(marked(&rows), Vec::<String>::new());
         assert!(rows.iter().all(|r| r.button != "This is how it is set"));
+        // Even with nothing marked, all four stay clickable and painted —
+        // this is the state where the picker is the ONLY way out.
+        renderable(&rows);
     }
 
     // DELETED 2026-08-26: `the_setup_rows_are_composed_once_from_the_view`

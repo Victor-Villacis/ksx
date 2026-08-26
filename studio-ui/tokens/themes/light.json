@@ -2,6 +2,7 @@
   "id": "light",
   "label": "Light",
   "scheme": "light",
+  "blurb": "Every page renders light, whatever the system prefers.",
   "note": "/* ── Light: warm paper, not cool grey — the same violet family read as a\n   tint rather than a ground. Every colored role here is DARKER than its\n   pre-purple value, because a cream ground has less luminance headroom than\n   the blue-white one it replaces; the numbers are in DESIGN-SYSTEM §3. ─── */",
   "tokens": [
     {

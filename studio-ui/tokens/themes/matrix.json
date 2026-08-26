@@ -2,6 +2,7 @@
   "id": "matrix",
   "label": "Matrix",
   "scheme": "dark",
+  "blurb": "Phosphor green on near-black, in a monospace face — dark, whatever the system prefers.",
   "note": "/* ── Matrix: phosphor green on near-black — the terminal the cabinet\n   pretends to be. TK3's proof theme: one JSON file, zero component edits.\n   The hue roles invert the KSX default on purpose (green IS the accent\n   here; ok leans teal so state and liveness stay two different words), the\n   UI face goes mono, and motion tightens. Every pair below passes the same\n   contrast gate as the base palette or is pinned there as an exemption. ── */",
   "tokens": [
     { "cssName": "color-scheme", "$value": "dark", "$type": "other" },

@@ -139,6 +139,17 @@ export interface NocturneOtherRowView {
   meta: string;
 }
 
+/** One stop on the setup spine. Served, never derived here — the server
+ *  decides what the steps ARE and which one is current, because a step is a
+ *  claim about the draft and the daemon owns the draft. */
+export interface NocturneJourneyStepView {
+  key: string;
+  title: string;
+  detail: string;
+  badge: string;
+  cls: string;
+}
+
 export interface NocturneChoiceRowView {
   name: string;
   title: string;
@@ -379,6 +390,8 @@ export interface NocturneView {
   chip_text: string;
   save_text: string;
   escape_line: string;
+  journey: NocturneJourneyStepView[];
+  journey_line: string;
   play_cls: string;
   stop_cls: string;
   apply_cls: string;
@@ -607,6 +620,8 @@ function reconcileFixtureGeneration(v: NocturneView): boolean {
 const [nChipText, setNChipText] = createSignal("");
 const [nSaveText, setNSaveText] = createSignal("");
 const [nEscapeLine, setNEscapeLine] = createSignal("");
+const [nJourney, setNJourney] = createSignal<NocturneJourneyStepView[]>([]);
+const [nJourneyLine, setNJourneyLine] = createSignal("");
 const [nPlayCls, setNPlayCls] = createSignal("n-play");
 const [nStopCls, setNStopCls] = createSignal("n-stop none");
 const [nApplyCls, setNApplyCls] = createSignal("n-apply none");
@@ -1045,6 +1060,8 @@ export function applyNocturne(p: NocturnePayload): void {
   setNChipText(v.chip_text);
   setNSaveText(v.save_text);
   setNEscapeLine(v.escape_line);
+  setNJourney(v.journey ?? []);
+  setNJourneyLine(v.journey_line ?? "");
   setNPlayCls(v.play_cls);
   setNStopCls(v.stop_cls);
   setNApplyCls(v.apply_cls);
@@ -10190,6 +10207,40 @@ export function NocturneIsland() {
           { class: "n-rail" },
           h("button", { class: "n-collapse", type: "button", "data-nx": "pane-left" }, "›"),
           h("button", { class: "n-pbadge plus", type: "button", "data-nx": "slot-new" }, "+"),
+        ),
+        // ── The setup spine ────────────────────────────────────────────
+        //
+        // `pick an input -> make controllers -> bind -> play`, with ONE extra
+        // stop for an arcade panel: describe it. A keyboard describes itself
+        // — Windows hands over a layout — so its keys are known the moment it
+        // is picked. A panel is switches wired to an encoder, and the host
+        // only ever learns that a key arrived, never which button sent it.
+        //
+        // Every step here is SERVED. The order, the wording and which one is
+        // current are claims about the draft, and the daemon owns the draft;
+        // re-deriving any of it here is how two surfaces start disagreeing.
+        // The `describe` step is simply ABSENT for a keyboard rather than
+        // greyed out — a stop that never applies is not one somebody skipped.
+        h(
+          "nav",
+          { class: "n-journey", "aria-label": "Setup steps" },
+          h("p", { class: "n-journey-line" }, () => nJourneyLine()),
+          createList(
+            () => nJourney(),
+            (r) => r.key + "|" + r.badge + "|" + r.cls,
+            (r) =>
+              h(
+                "div",
+                { class: r.cls, "data-journey-step": r.key, title: r.detail },
+                h("span", { class: "n-jbadge" }, r.badge),
+                h(
+                  "span",
+                  { class: "n-jtxt" },
+                  h("span", { class: "n-jtitle" }, r.title),
+                  h("span", { class: "n-jdetail" }, r.detail),
+                ),
+              ),
+          ),
         ),
         h(
           "div",

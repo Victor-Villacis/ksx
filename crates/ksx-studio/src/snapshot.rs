@@ -2099,6 +2099,11 @@ pub struct NocturneDerived {
     /// and the system row. Six served lists because a list body is one
     /// flat template — the group headers live in the island markup, each
     /// with its served "N of M bound" count beside it.
+    /// The setup spine, branched on the staged device's kind. See
+    /// [`NocturneJourneyStep`].
+    pub journey: Vec<NocturneJourneyStep>,
+    /// One sentence above the rail: where you are.
+    pub journey_line: String,
     pub bind_face: Vec<NocturneBindRow>,
     pub bind_dpad: Vec<NocturneBindRow>,
     pub bind_shoulders: Vec<NocturneBindRow>,
@@ -2717,12 +2722,191 @@ fn nocturne_control_authoring(
         .collect()
 }
 
+/// One stop on the setup spine, as the page tells it.
+///
+/// **The spine is `pick a device -> make controllers -> bind -> play`, and an
+/// arcade panel needs one more stop than a keyboard does.** A keyboard
+/// describes itself: Windows hands over a layout, so the keys are known the
+/// moment it is picked. A panel does not. It is a board of switches wired to
+/// an encoder, and all the host ever learns is that *some keyboard sent G* —
+/// which button that was, and whether two buttons that both send G are one
+/// switch or two, exists nowhere except in the head of the person who can
+/// press them. So a panel gets a `describe` stop between picking and binding,
+/// and a keyboard never sees it.
+///
+/// `state` is the fact; `badge` and `cls` are how this page says it. A step
+/// the server cannot judge says so rather than guessing — see
+/// [`NocturneJourneyState::Needed`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneJourneyStep {
+    /// Stable id for the client: `device`, `describe`, `controller`,
+    /// `mapping`, `play`. Never shown.
+    pub key: String,
+    pub title: String,
+    /// The whole sentence, and the accessible description.
+    pub detail: String,
+    /// The glanceable word: `Done`, `Now`, `Next`, `Needed`.
+    pub badge: String,
+    pub cls: String,
+}
+
+/// What the server can honestly say about one stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NocturneJourneyState {
+    /// Finished, and the read that proves it completed.
+    Done,
+    /// The next thing to do.
+    Now,
+    /// Real, but something earlier has to happen first.
+    Later,
+    /// **Required, and the server cannot see whether it is finished.** The
+    /// Control Surface document lives in browser storage alone (SURFACES.md
+    /// §1 admits this), so the daemon cannot know whether a panel has been
+    /// described. Claiming `Done` would assert a read that never happened —
+    /// this project's signature bug — and claiming `Now` forever would nag
+    /// someone who finished an hour ago. The page says it is needed, and the
+    /// island, which CAN read that document, is free to say more.
+    Needed,
+}
+
+impl NocturneJourneyState {
+    fn badge(self) -> &'static str {
+        match self {
+            Self::Done => "Done",
+            Self::Now => "Now",
+            Self::Later => "Next",
+            Self::Needed => "Needed",
+        }
+    }
+
+    fn cls(self) -> &'static str {
+        match self {
+            Self::Done => "n-jstep done",
+            Self::Now => "n-jstep now",
+            Self::Later => "n-jstep later",
+            Self::Needed => "n-jstep needed",
+        }
+    }
+}
+
+fn journey_step(
+    key: &str,
+    title: &str,
+    detail: &str,
+    state: NocturneJourneyState,
+) -> NocturneJourneyStep {
+    NocturneJourneyStep {
+        key: key.to_owned(),
+        title: title.to_owned(),
+        detail: detail.to_owned(),
+        badge: state.badge().to_owned(),
+        cls: state.cls().to_owned(),
+    }
+}
+
+/// The spine, branched on what kind of device is staged.
+///
+/// `describe` is present ONLY for a panel encoder. It is not disabled or
+/// greyed for a keyboard — it is absent, because a step that never applies is
+/// not a step somebody failed to do.
+fn nocturne_journey(
+    staged: &ksx_api::StagedSetupView,
+    encoder_staged: bool,
+    running: bool,
+) -> (Vec<NocturneJourneyStep>, String) {
+    use NocturneJourneyState::{Done, Later, Needed, Now};
+
+    let picked = staged.device.is_some();
+    let made = !staged.slots.is_empty();
+    let bound = staged.slots.iter().any(|slot| {
+        slot.authoring
+            .as_ref()
+            .is_some_and(|preset| !preset.bindings.is_empty())
+    });
+
+    let mut steps = Vec::new();
+
+    steps.push(journey_step(
+        "device",
+        "Pick the input",
+        "Choose the keyboard or arcade encoder whose keys this setup splits.          Nothing is saved or started by choosing.",
+        if picked { Done } else { Now },
+    ));
+
+    if encoder_staged {
+        steps.push(journey_step(
+            "describe",
+            "Describe the panel",
+            "An encoder does not describe itself: the host only ever learns              that a key arrived, never which button sent it. Lay the panel out              and press each control once, so ksx knows what is where — and so              two buttons that send the same key are known to be two.",
+            if picked { Needed } else { Later },
+        ));
+    }
+
+    steps.push(journey_step(
+        "controller",
+        "Add controllers",
+        "Make the virtual controllers this input drives. Up to sixteen, each          with its own identity.",
+        if made {
+            Done
+        } else if picked {
+            Now
+        } else {
+            Later
+        },
+    ));
+
+    steps.push(journey_step(
+        "mapping",
+        "Bind the keys",
+        "Say which key drives which control. A ready-made layout does most of          it; the rest is pressing a key and picking what it should do.",
+        if bound {
+            Done
+        } else if made {
+            Now
+        } else {
+            Later
+        },
+    ));
+
+    steps.push(journey_step(
+        "play",
+        "Play",
+        "Create the controllers and take the keys. Stop returns the keyboard          to normal.",
+        if running {
+            Done
+        } else if bound {
+            Now
+        } else {
+            Later
+        },
+    ));
+
+    // The one sentence above the rail: where you are, not what exists.
+    let line = if !staged.reachable {
+        "The draft could not be read, so this list cannot say where you are.".to_owned()
+    } else if running {
+        "Playing. Stop returns the keyboard to normal.".to_owned()
+    } else if let Some(next) = steps
+        .iter()
+        .find(|step| step.badge == "Now" || step.badge == "Needed")
+    {
+        format!("Next: {}.", next.title.to_lowercase())
+    } else {
+        "Everything here is done.".to_owned()
+    };
+
+    (steps, line)
+}
+
 impl NocturneDerived {
     fn of(p: &NocturnePayload) -> Self {
         let staged = &p.staged;
         let scan_read = p.scan_read();
         let chosen = staged.device.as_ref().map(|d| d.selector.as_str());
 
+        // Set inside the roster loop below, where a board's role and the
+        // staged selector are both available.
+        let mut encoder_staged = false;
         let mut dev_encoders = Vec::new();
         let mut dev_rows = Vec::new();
         let mut dev_exp = Vec::new();
@@ -2744,6 +2928,13 @@ impl NocturneDerived {
                     continue;
                 };
                 let is_chosen = chosen == Some(selector.as_str());
+                // The staged device's KIND, captured at the one place the
+                // roster and the staged selector are both in hand. The journey
+                // branches on it: a panel needs describing, a keyboard does
+                // not.
+                if is_chosen && b.role == ksx_api::BoardRole::PanelEncoder {
+                    encoder_staged = true;
+                }
                 let verdict = if b.claimed {
                     "Held by ksx"
                 } else if b.role == ksx_api::BoardRole::PanelEncoder {
@@ -2983,6 +3174,7 @@ impl NocturneDerived {
         };
         let escape_line = ksx_api::stage::ESCAPE_HATCH_LINE.to_owned();
         let running = p.session.reachable && p.session.running;
+        let (journey, journey_line) = nocturne_journey(staged, encoder_staged, running);
         let play_cls = if running { "n-play none" } else { "n-play" }.to_owned();
         let stop_cls = if running { "n-stop" } else { "n-stop none" }.to_owned();
         // Apply-in-place is offered exactly when it can mean something: a
@@ -4167,6 +4359,8 @@ impl NocturneDerived {
             pad_switchpro_cls,
             pad_xboxseries_cls,
             bind_title: binds.title,
+            journey,
+            journey_line,
             bind_face,
             bind_dpad,
             bind_shoulders,

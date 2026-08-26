@@ -29,6 +29,7 @@ const LIST_SLOT_ENCODERS: &str = "list:nDevEncoders:array";
 const LIST_SLOT_DEVICES: &str = "list:nDevRows:array";
 const LIST_SLOT_EXP: &str = "list:nDevExp:array";
 const LIST_SLOT_OTHER: &str = "list:nDevOther:array";
+const LIST_SLOT_JOURNEY: &str = "list:nJourney:array";
 const LIST_SLOT_MODES: &str = "list:nModeRows:array";
 const LIST_SLOT_THEMES: &str = "list:nThemeRows:array";
 /// The SECOND `createList` over the same binding. Forma names a reused list
@@ -106,6 +107,7 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nChipText": payload.view.chip_text,
         "nSaveText": payload.view.save_text,
         "nEscapeLine": payload.view.escape_line,
+        "nJourneyLine": payload.view.journey_line,
         "nPlayCls": payload.view.play_cls,
         "nStopCls": payload.view.stop_cls,
         "nApplyCls": payload.view.apply_cls,
@@ -227,6 +229,16 @@ fn other_row(row: &NocturneOtherRow) -> SlotValue {
     SlotValue::object(vec![
         ("name".to_owned(), SlotValue::Text(row.name.clone())),
         ("meta".to_owned(), SlotValue::Text(row.meta.clone())),
+    ])
+}
+
+fn journey_row(row: &crate::snapshot::NocturneJourneyStep) -> SlotValue {
+    SlotValue::object(vec![
+        ("key".to_owned(), SlotValue::Text(row.key.clone())),
+        ("title".to_owned(), SlotValue::Text(row.title.clone())),
+        ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
+        ("badge".to_owned(), SlotValue::Text(row.badge.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
     ])
 }
 
@@ -496,7 +508,7 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 45] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 46] {
     let view = &payload.view;
     [
         (
@@ -666,6 +678,10 @@ fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 45] {
         (
             LIST_SLOT_OTHER,
             SlotValue::array(view.dev_other.iter().map(other_row).collect()),
+        ),
+        (
+            LIST_SLOT_JOURNEY,
+            SlotValue::array(view.journey.iter().map(journey_row).collect()),
         ),
         (
             LIST_SLOT_MODES,
@@ -910,11 +926,83 @@ mod tests {
         );
     }
 
+    /// **A panel gets one more stop than a keyboard, and the extra stop is
+    /// ABSENT rather than greyed out.**
+    ///
+    /// The spine is `pick an input -> make controllers -> bind -> play`. A
+    /// keyboard describes itself: Windows hands over a layout, so its keys are
+    /// known the moment it is picked. An arcade panel does not — it is
+    /// switches wired to an encoder, and the host only ever learns that a key
+    /// arrived, never which button sent it. That asymmetry is the whole reason
+    /// `describe` exists, and it is the one thing about this rail worth
+    /// pinning: a keyboard user must never be shown a step they cannot do, and
+    /// a panel user must never be left to guess that describing comes first.
+    ///
+    /// Rendering a disabled `describe` for a keyboard would read as a step
+    /// somebody skipped. It is not skipped; it does not apply.
+    #[test]
+    fn the_spine_gains_a_stop_for_a_panel_and_never_for_a_keyboard() {
+        // `keyboard_payload` is named for the page it exercises, not the
+        // hardware: it stages an Ultimarc I-PAC 4 whose role is PanelEncoder.
+        // That makes it the PANEL case, and the keyboard case has to be built
+        // by changing the one thing the branch reads.
+        let panel = render_nocturne(&page(), &keyboard_payload(), None).html;
+
+        for stop in ["Pick the input", "Add controllers", "Bind the keys", "Play"] {
+            assert!(panel.contains(stop), "the spine is missing {stop:?}");
+        }
+        assert!(
+            panel.contains("Describe the panel"),
+            "a staged PANEL was not told to describe it — the host only ever              learns that a key arrived, never which button sent it: {panel}"
+        );
+
+        // `derived()` is a consuming rebuild, so the roles have to change
+        // BEFORE the view is recomposed — mutating a derived payload leaves
+        // the old answer in place, which is its own small lesson.
+        let mut keyboard = keyboard_payload();
+        for board in &mut keyboard.scan.boards {
+            board.role = ksx_api::BoardRole::Keyboard;
+        }
+        let keyboard = render_nocturne(&page(), &keyboard.derived(), None).html;
+
+        for stop in ["Pick the input", "Add controllers", "Bind the keys", "Play"] {
+            assert!(keyboard.contains(stop), "the spine is missing {stop:?}");
+        }
+        assert!(
+            !keyboard.contains("Describe the panel"),
+            "a keyboard was offered a step only a panel needs: {keyboard}"
+        );
+        assert!(
+            !keyboard.contains(r#"data-journey-step="describe""#),
+            "the describe stop must be ABSENT for a keyboard, not rendered and              hidden — a hidden step reads as one somebody failed to do"
+        );
+
+        // Every stop carries its whole sentence, not just a title: the rail is
+        // read by someone who does not yet know what these words mean.
+        assert!(
+            keyboard.contains("Nothing is saved or started by choosing"),
+            "the first stop does not say what picking costs"
+        );
+    }
+
+    /// The rail says where you ARE, not merely what exists.
+    #[test]
+    fn the_spine_names_the_next_thing_to_do() {
+        let html = render_nocturne(&page(), &keyboard_payload(), None).html;
+        // The fixture stages a keyboard and no controllers, so the next thing
+        // is adding one. Whatever the fixture's state, the line must name a
+        // stop rather than describe the tree.
+        assert!(
+            html.contains("Next:") || html.contains("Playing.") || html.contains("done."),
+            "the rail does not say where the user is: {html}"
+        );
+    }
+
     #[test]
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 45] = [
+        const SERVED_LIST_PREFIXES: [&str; 46] = [
             "list:nKeyRows:",
             "list:nAvailMain:",
             "list:nAvailNav:",
@@ -957,6 +1045,9 @@ mod tests {
             "list:nKbRow6:",
             "list:nKbTray:",
             "list:nDevOther:",
+            // The setup spine. Served, because the order and which step is
+            // current are claims about the draft and the daemon owns it.
+            "list:nJourney:",
             "list:nModeRows:",
             "list:nRackRows:",
             "list:nRackEmpty:",
@@ -1394,7 +1485,9 @@ mod tests {
 
         // And the whole thing survives with scripting off: these are plain
         // POST forms with served attributes, not a JS affordance.
-        assert!(out.html.contains(r#"method="post" action="/nocturne/device""#));
+        assert!(out
+            .html
+            .contains(r#"method="post" action="/nocturne/device""#));
     }
 
     /// **Choosing the board that is already chosen must not un-prepare it.**
@@ -1501,7 +1594,8 @@ mod tests {
             forms.len(),
         );
 
-        for want in std::iter::once("system").chain(crate::theme_tokens::THEMES.iter().map(|t| t.id))
+        for want in
+            std::iter::once("system").chain(crate::theme_tokens::THEMES.iter().map(|t| t.id))
         {
             let hidden = format!(r#"name="theme" value="{want}""#);
             assert!(
@@ -1549,8 +1643,10 @@ mod tests {
                 meta.blurb,
             );
         }
-        let blurbs: std::collections::BTreeSet<&str> =
-            crate::theme_tokens::THEMES.iter().map(|t| t.blurb).collect();
+        let blurbs: std::collections::BTreeSet<&str> = crate::theme_tokens::THEMES
+            .iter()
+            .map(|t| t.blurb)
+            .collect();
         assert_eq!(
             blurbs.len(),
             crate::theme_tokens::THEMES.len(),

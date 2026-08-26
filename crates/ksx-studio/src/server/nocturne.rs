@@ -3347,7 +3347,8 @@ mod tests {
     /// are pinned to each other here. If this fails, change BOTH.
     #[test]
     fn the_identify_success_sentence_is_the_one_the_island_matches() {
-        const NOCTURNE_ISLAND_TS: &str = include_str!("../../../../studio-ui/src/NocturneIsland.ts");
+        const NOCTURNE_ISLAND_TS: &str =
+            include_str!("../../../../studio-ui/src/NocturneIsland.ts");
 
         assert!(
             NOCTURNE_ISLAND_TS.contains(N_IDENTIFY_OK),

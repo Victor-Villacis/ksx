@@ -18,7 +18,7 @@ adopt/reject rationale.
    typed fixtures and regression tests, (b) crash/hang/recovery safety (what happens on kill,
    hang, unplug, driver absence). Their only job: find why the code does not work.
    Mechanical fixes they may apply; semantic divergences they report.
-4. **The gate** (all must be green before commit):
+4. **The gate.** These five must be green before commit:
    ```
    cargo fmt --all -- --check
    cargo clippy --workspace --exclude vigem-client --all-targets -- -D warnings
@@ -26,6 +26,24 @@ adopt/reject rationale.
    cargo check --workspace
    cargo check -p ksx-output --features cab-tests --all-targets   # must compile, never runs in CI
    ```
+   **They are not the whole gate, and the part they omit is the part that keeps
+   breaking.** `.github/workflows/ci.yml` also runs, and a green local five does
+   not predict any of them:
+   ```
+   # the four feature combinations, for BOTH crates that spell the opt-in
+   foreach ($p in 'ksx-app','ksx-backend') { foreach ($f in '','studio','cabinet','studio,cabinet') { ... } }
+   # ...and then EXECUTE the union, because the clippy pass above runs no test
+   cargo test -p ksx-app      --features studio,cabinet
+   cargo test -p ksx-backend  --features studio,cabinet
+   cargo check -p vigem-client --all-features
+   tools/studio-env/build-assets.ps1      # deterministic: builds twice, byte-compares
+   cd studio-ui/pwtest; npm test          # pinned-Chromium Studio suite
+   ```
+   The default build compiles neither `studio` nor `cabinet`; five breakages
+   have reached `main` through that gap, and `profile_edit`'s tests sat red from
+   `b652579` until 2026-08-12 because `cargo test --workspace` runs default
+   features and never compiled them. Do **not** run the four-way matrix
+   locally — push the branch and let CI do it (`HANDOFF.md` §6).
 5. **Live milestone exit test on the cabinet** per docs/ARCHITECTURE.md's table —
    a milestone is not done until its hardware gate passes.
 
@@ -58,6 +76,14 @@ its own measurements and tests:
 - **Driver safety**: no Windows feature updates on the cabinet until M6 removes
   the Interception dependency (audit→enforcement CI-policy cliff);
   `docs/RECOVERY.md` before any capture-layer experiment.
+- **Device support grows outward, one verb at a time.** Core keyboard splitting
+  gets made right first; a new board is added by itself, gated by itself, and
+  confirmed on real silicon by itself. The single-dump extraction of the encoder
+  chart surface is the counter-example this rule exists for — it removed four
+  behaviours in one pass and each was found separately afterwards. Never claim a
+  capability ksx cannot currently perform, and never retire an unknown device's
+  bindings on a hunch: keep it and mark it unverified.
+  `docs/DEVELOPMENT-PIPELINE.md`, "Adding a new input device", is the workflow.
 - **Driver bindings are supervised, never incidental.** Nothing in ksx or in an
   agent session rebinds a device, runs `pnputil`, or installs an INF as a side
   effect of something else. `ksx winusb claim`/`release` are dry runs by default
@@ -68,9 +94,15 @@ its own measurements and tests:
 
 ## Conventions
 
-- Commits: imperative subject, body explains what/why, trailer
-  `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
-- Milestone commits land as one commit per milestone (plus doc commits as needed);
-  push to `origin main` (SSH).
+- Commits: imperative subject, body explains what/why, then the two trailers
+  the current tree actually uses — `Co-Authored-By:` naming the model, and
+  `Claude-Session:` with the session URL. Copy the trailers off `git log -1`
+  rather than from here; the model name changes and a stale convention in a doc
+  is worse than no convention.
+- Milestone commits land as one commit per milestone (plus doc commits as
+  needed). **Push a branch, not `main`.** `main` blocks force-push and deletion
+  and requires the repository ruleset's checks
+  (`DEVELOPMENT-PIPELINE.md`, "Repository controls"), so a direct push is
+  refused; release promotion goes through a merge and then a CLI-pushed tag.
 - Research artifacts live in `docs/research/`; machine-verified facts beat docs —
   when they disagree, re-verify live and update the doc.

@@ -27,7 +27,7 @@ performs it on**. There is no "egui first or web first" question.
 
 Before opening, restarting, or judging a Nocturne page, read
 [`docs/STUDIO-ENVIRONMENTS.md`](docs/STUDIO-ENVIRONMENTS.md). Port 4460 is the
-real-machine QA process; 4476, 4520, and 4521 are distinct synthetic fixtures.
+real-machine QA process; 4476 and 4520 are distinct synthetic fixtures.
 The dev/candidate/installed-QA/production promotion contract is
 [`docs/DEVELOPMENT-PIPELINE.md`](docs/DEVELOPMENT-PIPELINE.md).
 The default Playwright ports and ranges recorded in that document are test-owned
@@ -44,7 +44,7 @@ real-hardware iteration does not require reinstalling. A full candidate install
 is still required to test protected Program Files-only WinUSB/HIDMaestro paths.
 For daily iteration use `tools/studio-env/watch.ps1 -Environment real`; it
 keeps the last healthy 4460 pair on build failure and defers replacement while
-Play or panel programming owns the hardware boundary. Use
+Play owns the hardware boundary. Use
 `status.ps1 -Environment real -RequireHealthy -RequireCurrent` as the automation gate.
 
 | you want | it is here |
@@ -256,8 +256,6 @@ that is sitting right there.
 | Studio's visual language | `docs/DESIGN-SYSTEM.md` |
 | why there is no native config UI | `docs/M9-DECISION.md` |
 | the enhancement/idea ledger | `docs/ENHANCEMENTS.md` |
-| panel encoder discovery/programming evidence and current state | `docs/PANEL-PROGRAMMING-STATE.md` |
-| encoder families, open-source evidence, licensing boundary and provider admission | `docs/ENCODER-ECOSYSTEM.md` |
 
 ## Working style here
 

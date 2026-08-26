@@ -396,7 +396,7 @@ jobs:
           if ($after.Count -ne 1 -or [string]$after[0].State -cne 'stopped') {
             throw 'fixture teardown did not return seeded to the stopped state'
           }
-      - name: Exercise the documented one-shot watcher on a blank encoder
+      - name: Exercise the documented one-shot watcher on a seeded fixture
         shell: powershell
         timeout-minutes: 15
         run: |
@@ -405,12 +405,12 @@ jobs:
           $status = Join-Path $PWD 'tools/studio-env/status.ps1'
           $teardown = Join-Path $PWD 'tools/studio-env/teardown.ps1'
           try {
-            & $watch -Environment blank-encoder -Once
+            & $watch -Environment seeded -Once
             if ($LASTEXITCODE -ne 0) { throw "one-shot watcher exited $LASTEXITCODE" }
-            & $status -Environment blank-encoder -RequireHealthy -RequireCurrent
+            & $status -Environment seeded -RequireHealthy -RequireCurrent
             if ($LASTEXITCODE -ne 0) { throw "watched fixture status exited $LASTEXITCODE" }
           } finally {
-            & $teardown -Environment blank-encoder -AllowMissing
+            & $teardown -Environment seeded -AllowMissing
             if ($LASTEXITCODE -ne 0) { throw "watched fixture teardown exited $LASTEXITCODE" }
           }
 

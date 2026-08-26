@@ -40,6 +40,14 @@ the half-dozen beliefs about this codebase that turned out to be false.
 journey: install, choose a keyboard and controller, map it, choose split or
 freeze, then Save, Play, or both. It requires no terminal or file editing.
 
+**Changing it?**
+[`docs/DEVELOPMENT-PIPELINE.md`](docs/DEVELOPMENT-PIPELINE.md) is the
+operational contract: the five promotion lanes, how to start, iterate on and
+stop one, the two build failures that are this machine rather than your change,
+and — written against the tree on 2026-08-26 — the step-by-step workflow for
+**adding a new input device**, which names the exact tables, roles and tests
+involved. `tools/studio-env/` has its own README for the lane scripts alone.
+
 ## Why KSX
 
 Keyboard-to-controller software on current Windows needs a capture path with an
@@ -339,10 +347,11 @@ failed, installer missing, elevation needed), 3 the installer ran and failed.
 #### Built-in Windows USB mode — escape the 2026 driver cliff
 
 The supported customer path is in installed Studio. Pick one exact supported
-USB keyboard on `/start`, then choose **Prepare selected keyboard** (or the
-secondary **Use KSX's built-in Windows USB mode** option when a shared
-Interception installation is already usable). Before Windows elevation begins,
-the page requires three separate confirmations:
+USB keyboard on `/nocturne`, then choose **Prepare selected keyboard** on the
+capture card beside it. Where a shared Interception installation is already
+usable the same card offers the built-in path as an option rather than a
+blocker. Before Windows elevation begins, the page requires three separate
+confirmations:
 
 1. a different keyboard is connected and was tested typing;
 2. the selected keyboard will stop ordinary typing until Release; and
@@ -441,10 +450,12 @@ LaunchBox and RetroBat wiring, plus a wrapper that always stops ksx:
 
 ## Status
 
-The current tree is the **KSX 0.4.1 release line**. Studio now carries one
-guided Hardware -> Controller -> Mapping -> Play workspace, with live input
-feedback, controller-aware readiness, conflict-safe binding, and a responsive
-light/dark interface across every route. The same release retains saved games,
+The current tree is the **KSX 0.4.1 release line**. Studio is now **one product
+page plus three tool pages**: `/nocturne` carries the whole guided Hardware ->
+Controller -> Mapping -> Play workspace, and `/check` (test inputs), `/pads`
+(virtual controllers) and `/devices` (hardware) sit beside it behind one Tools
+menu. Live input feedback, controller-aware readiness, conflict-safe binding
+and a responsive light/dark interface hold across all four. The same release retains saved games,
 recovery, packaging, and one installed USB DualSense through the bounded
 HIDMaestro backend. The supervised cabinet and controller checks in
 [`docs/GATES.md`](docs/GATES.md) remain the authority for physical hardware
@@ -454,8 +465,8 @@ evidence. Current implementation state and known limits are in
 
 CI now exercises the clean-runner provider smoke, the exact HIDMaestro A/B
 build and byte-only artifact inspection, the portable distribution, the
-installer's safety and repeat-install paths, and Studio's eight-route browser
-matrix. A pushed release tag repeats that whole pipeline before publishing.
+installer's safety and repeat-install paths, and Studio's browser matrix — five
+path variants across three session states since the pages were consolidated. A pushed release tag repeats that whole pipeline before publishing.
 Those results are software and distribution evidence; a local build is not,
 and physical Gates 1–4 remain open until their ledgers name supervised hardware
 results.
@@ -468,6 +479,7 @@ crates/ksx-config         TOML config + presets
 crates/ksx-api            the typed control API every front end consumes (no HTTP, no async)
 crates/ksx-capture        CaptureBackend: interception / winusb / rawinput-identify
 crates/ksx-output         VirtualPadBackend: ViGEmBus + production DualSense HIDMaestro routing
+crates/ksx-hidmaestro     the bounded elevated host behind the plain-USB DualSense persona
 crates/ksx-platform       driver health, install, autostart, WinUSB rebind, SendInput
 crates/ksx-games          game launch + exit detection (launcher hand-off)
 crates/ksx-app            the `ksx` binary: clap definitions and verb dispatch, nothing else
@@ -478,18 +490,23 @@ tools/hidmaestro-host     installed-only elevated one-DualSense runtime host
 tools/hidmaestro-driver-installer explicit pinned driver install/repair boundary
 crates/ksx-studio         ksx Studio, the optional localhost UI (feature `studio`)
 crates/ksx-cabinet        the operate-only 10-foot egui surface
+crates/ksx-fuzz           proptest byte-fuzzing of every parser that eats untrusted bytes
 crates/vigem-client       vendored CasualX/vigem-client (MIT)
 assets/brand/             the ksx mark: two master SVGs + every generated raster
 tools/icongen/            regenerates them (own cargo workspace — see assets/brand/README.md)
+tools/studio-env/         the lane scripts: start/iterate/stop a Studio environment (own README)
 packaging/                Inno Setup script
 examples/                 frontend wrapper scripts
-docs/                     architecture, integration, driver story, recovery, migration, research
+docs/                     architecture, development pipeline, integration, drivers, recovery, migration, research
 ```
 
-`cargo metadata` currently reports 16 workspace packages. The helper is the
-16th current member after the legacy-import crate was removed; the C libwdi
-provider is corresponding source built by the release workflow, not a Rust
-workspace package.
+`cargo metadata` currently reports 16 workspace packages, and the sixteen
+`crates/` entries listed above are exactly those packages — `tools/` holds
+build/installer helpers that are not workspace members. `ksx-fuzz` is a member
+but not a shipped binary; `vigem-client` is a member excluded from
+`default-members` because its integration tests need the ViGEmBus driver. The C
+libwdi provider is corresponding source built by the release workflow, not a
+Rust workspace package.
 
 ### The icon
 

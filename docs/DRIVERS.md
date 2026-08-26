@@ -218,7 +218,8 @@ which is what `ksx doctor` already tells people to fix this way.
 
 ### Built-in Windows USB mode (backend: `winusb`)
 
-The supported product path is the installed Studio `/start` page, not a WDK,
+The supported product path is the installed Studio product page `/nocturne`
+(the capture card beside the keyboard you selected), not a WDK,
 Zadig, Device Manager, or a command the customer types. A user selects one exact
 supported USB keyboard and confirms all three facts before anything elevated
 runs:

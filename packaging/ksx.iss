@@ -30,7 +30,16 @@
 ; bottom for why it is that verb and not the .exe, and why a failure there
 ; cannot fail this install.
 ;
-; DOES: offer HIDMaestro as its own checked task for the DualSense persona.
+; DOES: offer HIDMaestro as its own checked task for every persona ViGEmBus
+; cannot express. That was one persona when this task was written and is five
+; now: DualSense, Switch Pro, Xbox Series X|S, SNES and Genesis, each arming
+; itself in `PadBackend::supports` (`crates/ksx-core/src/persona.rs`). The
+; checkbox label below has to keep naming ALL of them, because clearing this
+; box is a decision a user makes once, in the wizard, before ksx has ever run:
+; a label that says only "DualSense" tells the person who bought ksx for a
+; Switch or SNES pad that this driver is not for them, and the cost of
+; believing it is a second trip through setup.
+;
 ; That task runs the pinned installer-only bootstrap packaged beside the fixed
 ; runtime host. The bootstrap downloads the exact official v1.6.1 archive at
 ; install time and rejects any byte or API-shape mismatch, so this task requires
@@ -195,7 +204,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; ASCII ONLY: this file has no UTF-8 BOM, so user-visible text is interpreted
 ; in the system code page. Comments may keep their punctuation.
 Name: "vigembus"; Description: "Install the bundled ViGEmBus controller driver (required to create virtual controllers; no download)"; GroupDescription: "Controller drivers:"
-Name: "hidmaestro"; Description: "Download and install the pinned HIDMaestro v1.6.1 controller driver (required for DualSense; internet required)"; GroupDescription: "Controller drivers:"
+Name: "hidmaestro"; Description: "Download and install the pinned HIDMaestro v1.6.1 controller driver (required for DualSense, Switch Pro, Xbox Series, SNES and Genesis; internet required)"; GroupDescription: "Controller drivers:"
 ; CHECKED, deliberately — docs/FIRST-RUN.md §4 bullet 1. It used to carry
 ; `Flags: unchecked`, and the audit's finding was concrete: this installer's
 ; only other hand-off is the "run it now" checkbox at the end, so a user who

@@ -62,7 +62,6 @@ import {
   DEFAULT_CONTROL_SURFACE_STATE,
   addControlSurfaceControl,
   applyControlSurfaceTemplate,
-  assignControlSurfaceTerminal,
   cloneControlSurfaceState,
   controlSurfaceStateForDevice,
   controlSurfaceWorkbenchMigrated,
@@ -72,56 +71,24 @@ import {
   removeControlSurfaceControl,
   renameControlSurfaceControl,
   resolveControlSurfaceSharedSignal,
+  retireControlSurfaceStoreDeviceClaims,
   sanitizeControlSurfaceStore,
   selectControlSurfaceControl,
   setControlSurfacePlayerSlot,
   setControlSurfaceStage,
   teachControlSurfaceChannel,
-  invalidateControlSurfaceEncoderVerification,
-  invalidateControlSurfaceHardwareObservations,
   withControlSurfaceState,
   withControlSurfaceWorkbenchMigrated,
   type ControlSurfaceChannel,
   type ControlSurfaceControl,
   type ControlSurfaceControlKind,
-  type ControlSurfaceEncoderRecord,
+  type ControlSurfaceDeviceKind,
   type ControlSurfaceMappingRecord,
   type ControlSurfaceStage,
   type ControlSurfaceState,
   type ControlSurfaceStore,
   type ControlSurfaceTemplate,
 } from "./controlSurface";
-import {
-  createPanelProgrammingState,
-  panelAssignmentConflicts,
-  panelChartAuthority,
-  panelPlanInvalidation,
-  panelProgramLayoutForMode,
-  panelProgrammingCapabilitiesFromChart,
-  panelProgrammingCapability,
-  type PanelAssignmentMode,
-  type PanelBackupView,
-  type PanelBackupsPayload,
-  type PanelChartPayload,
-  type PanelChartTerminalView,
-  type PanelChartView,
-  type PanelHardwareProfile,
-  type PanelHardwareProfileDeleteSpec,
-  type PanelHardwareProfileMutationPayload,
-  type PanelHardwareProfileSaveSpec,
-  type PanelHardwareProfilesPayload,
-  type PanelHardwareTerminal,
-  type PanelHardwareTerminalDraft,
-  type PanelPlanPayload,
-  type PanelPlanView,
-  type PanelProgramOutcomeView,
-  type PanelProgramPayload,
-  type PanelProgramRequest,
-  type PanelProgrammingQualificationState,
-  type PanelRestorePayload,
-  type PanelTerminalDraftAssignment,
-  type PanelTerminalEdit,
-} from "./panelProgramming";
 import {
   MappingFlowLayer,
   mappingPathModeIsValid,
@@ -331,6 +298,12 @@ export interface NocturneGameRowView {
   meta: string;
   cls: string;
   ico_cls: string;
+  /** The stale-screen guard every edit and delete echoes back. */
+  revision: string;
+  path: string;
+  arguments: string;
+  slots: string;
+  preset: string;
 }
 
 export interface NocturneBindRowView {
@@ -380,6 +353,7 @@ export interface NocturneView {
   other_head: string;
   other_fold_cls: string;
   mode_rows: NocturneChoiceRowView[];
+  theme_rows: NocturneChoiceRowView[];
   cap_line: string;
   capd_cls: string;
   cap_sw_cls: string;
@@ -553,64 +527,6 @@ export interface NocturnePayload {
   };
 }
 
-interface PanelStatusRowView {
-  board_id: string;
-  name: string;
-  identity: string;
-  vendor_id: number;
-  product_id: number;
-  family_id?: string | null;
-  family_label?: string | null;
-  bcd_device: number;
-  firmware_label?: string | null;
-  firmware_detail?: string;
-  profile_terminal_count?: number | null;
-  serial?: string | null;
-  driver: string;
-  driver_supported: boolean;
-  driver_label: string;
-  observed_mode: string;
-  mode_detail: string;
-  observed_mode_label: string;
-  mode_read_supported: boolean;
-  capabilities?: {
-    can_identify: boolean;
-    can_report_mode: boolean;
-    can_read_chart: boolean;
-    can_write_chart: boolean;
-    write_is_persistent: boolean;
-  };
-  chart_state: string;
-  chart_attempted: boolean;
-  chart_detail: string;
-  chart_label: string;
-  configuration_collection_state: string;
-  configuration_collection?: string | null;
-  configuration_collection_detail: string;
-  recommendation: string;
-  programming_recovery_required?: boolean;
-  programming_recovery_detail?: string;
-  interfaces: unknown[];
-  hid_collections: unknown[];
-}
-
-interface PanelStatusView {
-  generated_at: string;
-  usb_available: boolean;
-  hid_available: boolean;
-  summary: string;
-  access_detail: string;
-  panels: PanelStatusRowView[];
-  inspection_note: string;
-  notes: string[];
-}
-
-interface PanelStatusPayload {
-  target_selector: string | null;
-  unavailable: string | null;
-  view: PanelStatusView | null;
-}
-
 // ── SERVED signals — copiers, never derivers ───────────────────────────────
 
 const [nDevCount, setNDevCount] = createSignal("");
@@ -627,6 +543,7 @@ const [nExpFoldCls, setNExpFoldCls] = createSignal("n-devfold none");
 const [nOtherHead, setNOtherHead] = createSignal("");
 const [nOtherFoldCls, setNOtherFoldCls] = createSignal("n-devfold none");
 const [nModeRows, setNModeRows] = createSignal<NocturneChoiceRowView[]>([]);
+const [nThemeRows, setNThemeRows] = createSignal<NocturneChoiceRowView[]>([]);
 const [nKbTitle, setNKbTitle] = createSignal("");
 const [nCapLine, setNCapLine] = createSignal("");
 const [nCapdCls, setNCapdCls] = createSignal("n-capd none");
@@ -878,6 +795,18 @@ interface MacroDraftTable {
 let macDraft: MacroDraftTable | null = null;
 let macDirty = false;
 let macBusy = false;
+/** Resolves when the act currently applying has finished, or null when the
+ *  thing in flight is a SAVE rather than an act.
+ *
+ *  A duration commits on `change`, which for a pointer user fires on the
+ *  mousedown that presses Save: the box blurs, `macAct("dur|…")` starts, and
+ *  the `click` a few milliseconds later meets a busy latch. Waiting for that
+ *  act is right. Dropping the press — no write, no question, no sentence, and
+ *  the macro still reading "Unsaved changes" — is the one outcome a busy latch
+ *  must never produce. Null during a save so a second press is still ignored:
+ *  one press, one write. */
+let macInFlight: Promise<void> | null = null;
+let macInFlightDone: (() => void) | null = null;
 /** Has the short-step question already been asked for THIS save? */
 let macAskedShort = false;
 /** The row the author last touched — what "allow a short step" is about. */
@@ -919,6 +848,9 @@ function macDirtyMark(): void {
 async function macAct(act: string): Promise<void> {
   if (!macDraft || macBusy) return;
   macBusy = true;
+  macInFlight = new Promise<void>((resolve) => {
+    macInFlightDone = resolve;
+  });
   // Which duration box has the caret, so the rebuild can hand it back.
   const focused = document.activeElement as HTMLElement | null;
   const keepRow = focused?.dataset?.macdur ?? null;
@@ -965,6 +897,9 @@ async function macAct(act: string): Promise<void> {
     macSay("The studio did not answer — is ksx still running?", "err");
   } finally {
     macBusy = false;
+    macInFlightDone?.();
+    macInFlight = null;
+    macInFlightDone = null;
   }
 }
 
@@ -972,7 +907,15 @@ async function macAct(act: string): Promise<void> {
  *  the sampling floor is never refused and never written silently: the first
  *  Save asks, and says which steps it is about. */
 async function macSave(): Promise<void> {
-  if (!macDraft || macBusy) return;
+  if (!macDraft) return;
+  if (macBusy) {
+    // A SAVE already writing: ignore the second press, one press one write.
+    if (!macInFlight) return;
+    // An ACT applying: it was almost certainly started by the same gesture
+    // that pressed this button. Hear the press.
+    await macInFlight;
+    if (!macDraft || macBusy) return;
+  }
   // `warn` is ALSO non-empty for a step naming two units or none — faults,
   // not short steps. The row now carries the answer itself.
   const short = nMacRows().filter((r) => r.short);
@@ -1078,6 +1021,7 @@ export function applyNocturne(p: NocturnePayload): void {
   setNOtherFoldCls(v.other_fold_cls);
   setNModeNote(v.mode_note);
   setNModeRows(v.mode_rows);
+  setNThemeRows(v.theme_rows ?? []);
   setNCapLine(v.cap_line);
   setNCapdCls(v.capd_cls);
   setNCapSwCls(v.cap_sw_cls);
@@ -1226,9 +1170,6 @@ export function applyNocturne(p: NocturnePayload): void {
     reconcileControlSurfaceIdentity();
     syncPadWidgets();
     syncMappingFlow();
-    syncPanelProgrammingJourneyAndTest();
-    syncPanelEncoderRailStatus();
-    syncIpacSignalSource();
     // Reorders move controllers between seats: the identity colors, the
     // mute classes and the legend follow their presets to the new numbers.
     pruneHiddenStrips();
@@ -1268,15 +1209,6 @@ export function applyNocturne(p: NocturnePayload): void {
       `Macro “${previouslyOpenMacro.macro}” is no longer available.`,
     );
     restoreDialogFocus();
-  }
-  if (pendingPanelSetupSelector && nCapInstance().trim() &&
-      pendingPanelSetupSelector.toLocaleUpperCase() === nCapSelector().trim().toLocaleUpperCase()) {
-    pendingPanelSetupSelector = "";
-    if (pendingPanelSetupTimeout !== undefined) {
-      window.clearTimeout(pendingPanelSetupTimeout);
-      pendingPanelSetupTimeout = undefined;
-    }
-    window.requestAnimationFrame(() => openControlSurfaceBuilder(true));
   }
 }
 
@@ -1424,7 +1356,6 @@ let keyboardWorkbenchStore: KeyboardWorkbenchStore = {
 let keyboardWorkbenchState = cloneKeyboardWorkbenchState(DEFAULT_KEYBOARD_WORKBENCH_STATE);
 let keyboardWorkbenchIdentity = canonicalKeyboardDeviceIdentity("");
 let keyboardWorkbenchLastSelector = "";
-let selectedPanelEncoderLastSelector = "";
 let keyboardWorkbenchItem: HTMLElement | null = null;
 let keyboardWorkbenchItemIdentity = "";
 let keyboardWorkbenchSelectedKey = "";
@@ -1453,132 +1384,23 @@ const CONTROL_SURFACE_HARDWARE_EPOCH_STORAGE_PREFIX =
   "ksx-nocturne-control-surface-hardware-epoch2:";
 const CONTROL_SURFACE_HARDWARE_EPOCH_VERSION = 2 as const;
 const CONTROL_SURFACE_HARDWARE_EPOCH_DEVICE_LIMIT = 64;
-type ControlSurfaceHardwareEpochPhase = "pending" | "settled";
-interface ControlSurfaceHardwareEpochRecord {
-  epoch: string;
-  boardFingerprint: string;
-  selector: string;
-  phase: ControlSurfaceHardwareEpochPhase;
-}
-interface ControlSurfaceHardwareEpochLedger {
-  version: typeof CONTROL_SURFACE_HARDWARE_EPOCH_VERSION;
-  devices: Record<string, ControlSurfaceHardwareEpochRecord>;
-}
-interface ControlSurfaceHardwareEpochMutation {
-  device: string;
-  epoch: string;
-  boardFingerprint: string;
-  selector: string;
-}
 let controlSurfaceStorageSyncInstalled = false;
 /** Epochs actually consumed by this document's in-memory surface. Keep this
  * separate from incoming localStorage: a stale whole-store event is data to
  * reconcile, never proof that this tab already retired its own observations. */
-let controlSurfaceAppliedHardwareEpochs: Record<string, string> = {};
-let controlSurfaceLocallyOwnedHardwareEpoch: ControlSurfaceHardwareEpochMutation | null = null;
-let controlSurfaceActiveHardwareEpoch: ControlSurfaceHardwareEpochMutation | null = null;
 let controlSurfaceState = cloneControlSurfaceState(DEFAULT_CONTROL_SURFACE_STATE);
 let controlSurfaceIdentity = canonicalKeyboardDeviceIdentity("");
 let controlSurfaceItem: HTMLElement | null = null;
 let controlSurfaceItemIdentity = "";
 let controlSurfaceChoosingTemplate = false;
 let controlSurfacePendingTemplate: ControlSurfaceTemplate | null = null;
-/** A detected encoder can enter its guarded hardware setup before a physical
- * surface exists. This is presentation state only; the staged selector in
- * the daemon remains the sole hardware authority. */
-let controlSurfaceEncoderSetupEntry = false;
-let pendingPanelSetupSelector = "";
-let pendingPanelSetupTimeout: number | undefined;
 let controlSurfaceUndoState: ControlSurfaceState | null = null;
 let controlSurfaceUndoIdentity = "";
 let controlSurfaceUndoAfterFingerprint = "";
 let controlSurfaceReturnFocus: HTMLElement | null = null;
-let controlSurfaceReturnEncoderSelector = "";
 let controlSurfaceInspectorPrint = "";
 let controlSurfaceSaveFailed = false;
-let controlSurfaceHardwarePhase: "idle" | "loading" | "ready" | "error" = "idle";
-let controlSurfaceHardwarePayload: PanelStatusPayload | null = null;
-let controlSurfaceHardwareError = "";
-let controlSurfaceHardwareRequestGeneration = 0;
-let controlSurfaceHardwareAbort: AbortController | null = null;
-let controlSurfaceHardwareTargetFingerprint = "";
-type PanelRecoveryProbeState =
-  | "checking"
-  | "indeterminate"
-  | "settled"
-  | "recovery-required";
-let panelRecoveryProbeState: PanelRecoveryProbeState = "indeterminate";
-let panelRecoveryProbeTarget = "";
-let panelRecoveryProbeDetail = "";
 const PANEL_RECOVERY_PROBE_RETRY_DELAYS_MS = [750, 1500] as const;
-let panelRecoveryProbeRetryTimer: number | undefined;
-let panelProgrammingState = createPanelProgrammingState();
-let panelProgrammingBackups: PanelBackupView[] = [];
-let panelProgrammingMessage = "";
-let panelProgrammingBusy = false;
-// Web Locks are asynchronous. Record the read intent before awaiting the
-// browser lock so two gestures in this document cannot both reach the chart
-// endpoint during that otherwise-unobservable gap.
-let panelProgrammingReadPending = false;
-// Persistent writes have the same asynchronous lock-acquisition gap. Latch the
-// user's Apply intent before awaiting Web Locks so a second gesture in this
-// document cannot enqueue another writer or replace the active status message.
-let panelProgrammingApplyPending = false;
-let panelProgrammingGeneration = 0;
-
-function panelProgrammingInteractionBusy(): boolean {
-  return panelProgrammingReadPending || panelProgrammingApplyPending || panelProgrammingBusy;
-}
-// Selector strings are staging handles, not physical-device identities. Keep
-// every reviewed plan and in-flight outcome pinned to the selector + live
-// Windows instance that owned it so a re-enumerated replacement cannot inherit
-// the first board's UI authority.
-let panelProgrammingPlanTargetFingerprint = "";
-let panelProgrammingTransactionTargetFingerprint = "";
-let panelProgrammingProgramRequest: PanelProgramRequest | null = null;
-let panelProgrammingRestoreRequest: {
-  expected_selector: string;
-  backup_id: string;
-  expected_current_sha256: string;
-} | null = null;
-let panelProgrammingDialog: HTMLDialogElement | null = null;
-let panelProgrammingReturnFocus: HTMLElement | null = null;
-let panelProgrammingConfirmed = false;
-let panelProgrammingRecoveryReady = false;
-// Hardware transactions can finish after the user selects another device.
-// Key recovery by selector + Windows instance (never selector alone), and keep
-// invalidation outside the single visible editor state so returning to that
-// exact encoder cannot resurrect pre-write Teach evidence before a fresh read.
-const panelProgrammingRecoveryTargets = new Map<string, string>();
-const panelProgrammingUntrustedBoards = new Set<string>();
-type PanelProgrammingDraftSource = "current" | "recommended" | "blank" | "saved" | "panel-links";
-interface PanelProgrammingCachedDraft {
-  chartIdentity: string;
-  draft: PanelHardwareTerminalDraft[];
-  source: PanelProgrammingDraftSource;
-  baseline: string;
-  assignmentMode: PanelAssignmentMode;
-  selectedProfileId: string;
-}
-let panelProgrammingTerminalDraft: PanelHardwareTerminalDraft[] = [];
-let panelProgrammingDraftSource: PanelProgrammingDraftSource = "current";
-let panelProgrammingDraftBaseline = "";
-const panelProgrammingDraftCache = new Map<string, PanelProgrammingCachedDraft>();
-let panelProgrammingAdvancedOpen = false;
-let panelProgrammingProfiles: PanelHardwareProfile[] = [];
-let panelProgrammingProfilesSignature = "";
-let panelProgrammingSelectedProfileId = "";
-let panelProgrammingProfilesBusy = false;
-let panelProgrammingProfilesMessage = "";
-let panelProgrammingLastTest: {
-  key: string;
-  device: string;
-  terminalIds: string[];
-} | null = null;
-let panelProgrammingWorkspacePreviousRightRail: boolean | null = null;
-let panelProgrammingWorkspacePreviousFocusId = "";
-let panelProgrammingWorkspaceOwnsFocus = false;
-let ipacSignalSourceFingerprint = "";
 let controlSurfaceDrag: {
   pointerId: number;
   controlId: string;
@@ -1966,1220 +1788,6 @@ function keyboardWorkbenchAnnounce(message: string): void {
   const sr = learnRoot?.querySelector<HTMLElement>(".n-live-sr");
   if (sr) sr.textContent = message;
 }
-
-// ── PHYSICAL CONTROL-SURFACE DOCUMENT ──────────────────────────────────
-// The selected keyboard/encoder supplies an identity and observed host
-// signals. This document owns only component geometry and those observations;
-// controller routing remains the backend-owned mapping projection above.
-
-function cancelControlSurfaceHardwareStatus(clear: boolean): void {
-  controlSurfaceHardwareRequestGeneration += 1;
-  controlSurfaceHardwareAbort?.abort();
-  controlSurfaceHardwareAbort = null;
-  if (panelRecoveryProbeRetryTimer !== undefined) {
-    window.clearTimeout(panelRecoveryProbeRetryTimer);
-    panelRecoveryProbeRetryTimer = undefined;
-  }
-  if (clear) {
-    controlSurfaceHardwarePhase = "idle";
-    controlSurfaceHardwarePayload = null;
-    controlSurfaceHardwareError = "";
-  }
-  syncControlSurfaceHardwareCard();
-}
-
-function selectedEncoderRosterRow(): NocturneDeviceRowView | null {
-  const selector = nCapSelector().trim().toLocaleUpperCase();
-  if (!selector) return null;
-  return nDevEncoders().find(
-    (row) => row.selector.trim().toLocaleUpperCase() === selector,
-  ) ?? null;
-}
-
-function selectedPanelStatusBoard(): PanelStatusRowView | null {
-  const selector = nCapSelector().trim();
-  const payload = controlSurfaceHardwarePayload;
-  if (!selector || payload?.target_selector?.trim() !== selector) return null;
-  return payload.view?.panels[0] ?? null;
-}
-
-function panelBoardCanReadChart(board: PanelStatusRowView | null): boolean {
-  return board?.capabilities?.can_read_chart ?? board?.driver_supported ?? false;
-}
-
-function panelBoardCanWriteChart(board: PanelStatusRowView | null): boolean {
-  return board?.capabilities?.can_write_chart ?? board?.driver_supported ?? false;
-}
-
-function panelBoardChartAccessReady(board: PanelStatusRowView | null): boolean {
-  const mode = board?.observed_mode?.trim().toLocaleLowerCase() ?? "";
-  return panelBoardCanReadChart(board) &&
-    (mode === "keyboard-compatible" || mode === "keyboard") &&
-    board?.configuration_collection_state === "available-unopened" &&
-    Boolean(board.configuration_collection?.trim());
-}
-
-function panelBoardChartAccessGuidance(board: PanelStatusRowView | null): string {
-  const name = selectedEncoderShortName();
-  if (!panelBoardCanReadChart(board)) {
-    return `${name} is recognized, but this exact model and firmware do not have a measured chart driver. Build its physical panel, Teach its live signals, and Route them normally.`;
-  }
-  const mode = board?.observed_mode?.trim().toLocaleLowerCase() ?? "";
-  if (mode !== "keyboard-compatible" && mode !== "keyboard") {
-    return `${name} has a measured chart driver, but keyboard-compatible input is not present. Restore keyboard mode, then refresh its hardware outputs.`;
-  }
-  return `${name} has a measured chart driver, but one exact configuration collection is not currently available. Reconnect or resolve the reported HID collection issue, then refresh status.`;
-}
-
-function selectedEncoderDisplayName(): string {
-  const board = selectedPanelStatusBoard();
-  const chartMatches = panelProgrammingState.inspection.target_selector.trim() ===
-    panelProgrammingTarget().trim();
-  return (chartMatches ? panelProgrammingState.inspection.chart?.board_name.trim() : "") ||
-    board?.family_label?.trim() || board?.name.trim() ||
-    selectedEncoderRosterRow()?.name.trim() || "Panel encoder";
-}
-
-function selectedEncoderShortName(): string {
-  return selectedEncoderDisplayName().replace(/^Ultimarc\s+/iu, "").trim() || "Encoder";
-}
-
-function selectedEncoderNavigatorLabel(): string {
-  const name = selectedEncoderShortName();
-  if (/I-PAC\s*4/iu.test(name)) return "I-PAC";
-  if (/I-PAC\s*2/iu.test(name)) return "IP2";
-  if (/MINI-?PAC/iu.test(name)) return "MINI";
-  if (/J-?PAC/iu.test(name)) return "J-PAC";
-  if (/U-?HID/iu.test(name)) return "U-HID";
-  return "ENC";
-}
-
-function syncControlSurfaceHardwareCard(): void {
-  const card = controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-hardware");
-  if (!card) return;
-  const name = card.querySelector<HTMLElement>("[data-surface-hardware-name]");
-  const identity = card.querySelector<HTMLElement>("[data-surface-hardware-identity]");
-  const mode = card.querySelector<HTMLElement>("[data-surface-hardware-mode]");
-  const summary = card.querySelector<HTMLElement>("[data-surface-hardware-summary]");
-  const details = card.querySelector<HTMLDetailsElement>("[data-surface-hardware-details]");
-  const capabilities = card.querySelector<HTMLElement>("[data-surface-hardware-capabilities]");
-  const access = card.querySelector<HTMLElement>("[data-surface-hardware-access]");
-  const driver = card.querySelector<HTMLElement>("[data-surface-hardware-driver]");
-  const configuration = card.querySelector<HTMLElement>("[data-surface-hardware-configuration]");
-  const chart = card.querySelector<HTMLElement>("[data-surface-hardware-chart]");
-  const chartDetail = card.querySelector<HTMLElement>("[data-surface-hardware-chart-detail]");
-  const recommendation = card.querySelector<HTMLElement>("[data-surface-hardware-recommendation]");
-  const note = card.querySelector<HTMLElement>("[data-surface-hardware-note]");
-  const refresh = card.querySelector<HTMLButtonElement>('[data-nx="surface-hardware-refresh"]');
-  const setup = card.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-open"]');
-  if (
-    !name || !identity || !mode || !summary || !details || !capabilities || !access || !driver ||
-    !configuration || !chart || !chartDetail || !recommendation || !note || !refresh || !setup
-  ) return;
-
-  const selected = nCapSelector().trim();
-  const payload = controlSurfaceHardwarePayload;
-  const target = payload?.target_selector?.trim() ?? "";
-  const view = payload?.view ?? null;
-  const board = target ? view?.panels[0] ?? null : null;
-  const unavailable = payload?.unavailable?.trim() ?? "";
-  let cardState = controlSurfaceHardwarePhase;
-  let modeTone = "neutral";
-  let titleCopy = selected ? "Status not inspected" : "No encoder selected";
-  let identityCopy = selected
-    ? "Open or refresh this inspection to identify the selected hardware."
-    : "Choose a keyboard-mode encoder in the device pane at left.";
-  let modeCopy = "Mode not inspected";
-  let summaryCopy = selected
-    ? "This read-only card has not inspected the selected encoder yet."
-    : "Teach and Route become exact-device operations after a keyboard-mode encoder is selected.";
-  let accessCopy = "Not inspected";
-  let driverCopy = "Not inspected";
-  let configurationCopy = "Not inspected";
-  let chartCopy = "Not inspected";
-  let chartDetailCopy = "No chart read-back was attempted.";
-  let recommendationCopy = "Keyboard mode keeps the physical panel available to Teach, Route, macros, and dynamic KSX output profiles.";
-  let noteCopy = "Inspection only. KSX did not program or change this encoder.";
-  let showCapabilities = false;
-  let observedMode = "unknown";
-  let chartState = "not-inspected";
-  let canReadChart = false;
-  let canWriteChart = false;
-  let chartAccessReady = false;
-
-  if (controlSurfaceHardwarePhase === "loading") {
-    titleCopy = "Inspecting selected encoder…";
-    identityCopy = selected || "Reading the current device selection.";
-    modeCopy = "Reading mode…";
-    summaryCopy = "KSX is reading hardware status once for this Builder view.";
-  } else if (controlSurfaceHardwarePhase === "error") {
-    cardState = "error";
-    titleCopy = "Could not inspect the selected encoder";
-    identityCopy = selected || "No current encoder identity was available.";
-    modeCopy = "Mode unavailable";
-    summaryCopy = controlSurfaceHardwareError || "Hardware status is unavailable. Nothing was changed.";
-  } else if (unavailable) {
-    cardState = "unavailable";
-    titleCopy = "Encoder inspection unavailable";
-    identityCopy = selected || "No current encoder identity was available.";
-    modeCopy = "Mode unavailable";
-    summaryCopy = unavailable;
-    noteCopy = view?.inspection_note?.trim() || noteCopy;
-  } else if (controlSurfaceHardwarePhase === "ready" && !selected) {
-    cardState = "empty";
-    titleCopy = "No encoder selected";
-    identityCopy = "Choose a keyboard-mode encoder in the device pane at left.";
-    modeCopy = "No selected mode";
-    summaryCopy = view?.summary?.trim() || summaryCopy;
-    noteCopy = view?.inspection_note?.trim() || noteCopy;
-  } else if (controlSurfaceHardwarePhase === "ready" && board) {
-    canReadChart = panelBoardCanReadChart(board);
-    canWriteChart = panelBoardCanWriteChart(board);
-    chartAccessReady = panelBoardChartAccessReady(board);
-    cardState = chartAccessReady ? "ready" : canReadChart
-      ? "blocked"
-      : board.capabilities?.can_identify || board.family_id
-      ? "recognized"
-      : "unsupported";
-    titleCopy = board.name.trim() || "Selected encoder";
-    identityCopy = board.identity.trim() || board.board_id;
-    modeCopy = board.observed_mode_label.trim() || "Mode unknown";
-    summaryCopy = view?.summary?.trim() || "Selected encoder inspected.";
-    accessCopy = view?.access_detail.trim() || "Inspection access was not reported.";
-    driverCopy = board.driver_label.trim() || board.driver.trim() || "Driver not reported";
-    configurationCopy = board.configuration_collection_detail.trim() ||
-      "Configuration collection was not reported.";
-    chartCopy = board.chart_label.trim() || "Chart read-back not reported";
-    chartDetailCopy = board.chart_detail.trim() || (board.chart_attempted
-      ? "Chart read-back was attempted, but no detail was reported."
-      : "Chart read-back was not attempted.");
-    recommendationCopy = board.recommendation.trim() || recommendationCopy;
-    noteCopy = view?.inspection_note?.trim() || noteCopy;
-    observedMode = board.observed_mode.trim() || "unknown";
-    chartState = board.chart_state.trim() || "unknown";
-    modeTone = (observedMode === "keyboard-compatible" || observedMode === "keyboard") &&
-        board.driver_supported
-      ? "recommended"
-      : "warning";
-    showCapabilities = true;
-  } else if (controlSurfaceHardwarePhase === "ready") {
-    cardState = "missing";
-    titleCopy = "Selected encoder was not found";
-    identityCopy = selected;
-    modeCopy = "Mode not observed";
-    summaryCopy = view?.summary?.trim() || "The inspection did not return this exact selected encoder. Refresh after the device list settles.";
-    noteCopy = view?.inspection_note?.trim() || noteCopy;
-  }
-
-  card.dataset.state = cardState;
-  card.dataset.mode = observedMode;
-  card.dataset.chartState = chartState;
-  card.setAttribute("aria-busy", String(controlSurfaceHardwarePhase === "loading"));
-  mode.dataset.tone = modeTone;
-  name.textContent = titleCopy;
-  identity.textContent = identityCopy;
-  mode.textContent = modeCopy;
-  summary.textContent = summaryCopy;
-  details.hidden = !showCapabilities;
-  capabilities.hidden = !showCapabilities;
-  access.textContent = accessCopy;
-  driver.textContent = driverCopy;
-  configuration.textContent = configurationCopy;
-  chart.textContent = chartCopy;
-  chartDetail.textContent = chartDetailCopy;
-  recommendation.textContent = recommendationCopy;
-  note.textContent = noteCopy;
-  refresh.textContent = controlSurfaceHardwarePhase === "loading"
-    ? "Inspecting…"
-    : controlSurfaceHardwarePhase === "error" || unavailable
-    ? "Retry status"
-    : "Refresh status";
-  refresh.setAttribute("aria-label", `${refresh.textContent} for the selected encoder`);
-  refresh.disabled = panelProgrammingTransactionActive();
-  setup.disabled = panelProgrammingTransactionActive() || controlSurfaceHardwarePhase !== "ready" ||
-    !chartAccessReady;
-  setup.textContent = chartAccessReady
-    ? canWriteChart
-      ? "Open hardware outputs…"
-      : "Read device…"
-    : canReadChart
-    ? "Resolve hardware first"
-    : controlSurfaceHardwarePhase === "ready" && board
-    ? "Recognition only"
-    : "Inspect to continue";
-  setup.title = chartAccessReady
-    ? canWriteChart
-      ? `Open the complete hardware chart for ${selectedEncoderDisplayName()}, including reviewed persistent programming`
-      : `Open the read-only hardware chart for ${selectedEncoderDisplayName()}`
-    : canReadChart
-    ? `Hardware outputs require keyboard-compatible input and one available configuration collection for ${selectedEncoderDisplayName()}; recover or reconnect the board, then refresh status`
-    : board?.family_id
-    ? `${selectedEncoderDisplayName()} is recognized, but this exact model and firmware do not have a measured chart driver yet. Teach, Route, and Control Surface Builder remain available.`
-    : "Inspect this exact encoder before opening hardware configuration";
-  if (panelProgrammingRoutingAuthoritySuspended()) {
-    // Recovery authority is a second, fail-closed dimension. Do not erase a
-    // more specific inspection result (unavailable, stale HTTP error, active
-    // loading, and so on) merely because routes are also withheld. A settled
-    // hardware card can still take the error tone for a real recovery lock.
-    if (!["loading", "error", "unavailable", "empty", "missing", "unsupported"]
-      .includes(cardState)) {
-      card.dataset.state = "error";
-    }
-    note.textContent = board?.programming_recovery_detail?.trim() ||
-      panelRecoveryProbeDetail ||
-      "This encoder's saved signal evidence predates a hardware transaction. Routes and chart-derived actions stay locked until KSX reads the complete current chart or verifies a restore.";
-  } else if (panelProgrammingState.transaction.phase === "recovery-required") {
-    note.textContent =
-      "A transaction for the previously selected encoder needs recovery. This currently selected encoder was not changed.";
-  } else if (panelProgrammingState.transaction.phase === "verified" &&
-      panelProgrammingTransactionBelongsToCurrentTarget()) {
-    note.textContent = "The last hardware transaction was read back byte-for-byte. Use Teach to verify the physical wiring and emitted keys.";
-  } else if (panelProgrammingState.transaction.phase === "verified") {
-    note.textContent =
-      "A transaction for the previously selected encoder verified. This currently selected encoder was not changed.";
-  } else if (panelProgrammingState.inspection.chart) {
-    note.textContent = panelProgrammingState.capability.reason;
-  }
-  syncPanelProgrammingUi();
-}
-
-async function refreshControlSurfaceHardwareStatus(retryAttempt = 0): Promise<void> {
-  cancelControlSurfaceHardwareStatus(false);
-  const generation = controlSurfaceHardwareRequestGeneration;
-  const selector = nCapSelector().trim();
-  const requestTargetFingerprint = currentControlSurfaceHardwareFingerprint();
-  if (panelRecoveryProbePossible()) beginPanelRecoveryProbe();
-  const controller = new AbortController();
-  controlSurfaceHardwareAbort = controller;
-  controlSurfaceHardwarePhase = "loading";
-  controlSurfaceHardwarePayload = null;
-  controlSurfaceHardwareError = "";
-  syncControlSurfaceHardwareCard();
-
-  try {
-    const response = await fetch("/api/panel/status", {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      cache: "no-store",
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`Panel status request returned HTTP ${response.status}.`);
-    }
-    const payload = await response.json() as PanelStatusPayload;
-    if (controller.signal.aborted || generation !== controlSurfaceHardwareRequestGeneration) return;
-    controlSurfaceHardwareAbort = null;
-    const currentSelector = nCapSelector().trim();
-    const targetSelector = payload.target_selector?.trim() ?? "";
-    if (currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint) return;
-    if (currentSelector !== selector || targetSelector !== selector) {
-      if (currentSelector === selector) {
-        controlSurfaceHardwarePhase = "error";
-        controlSurfaceHardwarePayload = null;
-        controlSurfaceHardwareError =
-          "The selected encoder changed before this inspection finished. Refresh to inspect the current selection.";
-        syncControlSurfaceHardwareCard();
-      }
-      return;
-    }
-    controlSurfaceHardwarePayload = payload;
-    controlSurfaceHardwarePhase = "ready";
-    if (panelRecoveryProbePossible() &&
-        requestTargetFingerprint === currentControlSurfaceHardwareFingerprint()) {
-      const board = payload.view?.panels[0] ?? null;
-      const recoveryRequired = board?.programming_recovery_required;
-      const recoveryDetail = board?.programming_recovery_detail?.trim() ?? "";
-      const leaseBusy = recoveryRequired === true && /hardware lease/i.test(recoveryDetail);
-      if (recoveryRequired === false) {
-        setPanelRecoveryProbe(requestTargetFingerprint, "settled");
-      } else if (recoveryRequired === true && !leaseBusy) {
-        setPanelRecoveryProbe(
-          requestTargetFingerprint,
-          "recovery-required",
-          recoveryDetail,
-        );
-      } else {
-        const detail = recoveryRequired === undefined
-          ? "This KSX server did not report recovery authority for the selected encoder."
-          : recoveryDetail ||
-            "Another hardware operation temporarily owns this encoder's recovery check.";
-        schedulePanelRecoveryProbeRetry(requestTargetFingerprint, retryAttempt);
-        setPanelRecoveryProbe(requestTargetFingerprint, "indeterminate", detail);
-      }
-    }
-    syncControlSurfaceHardwareCard();
-  } catch (error) {
-    if (controller.signal.aborted || generation !== controlSurfaceHardwareRequestGeneration) return;
-    controlSurfaceHardwareAbort = null;
-    if (currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint) return;
-    controlSurfaceHardwarePayload = null;
-    controlSurfaceHardwarePhase = "error";
-    controlSurfaceHardwareError = error instanceof Error
-      ? `${error.message} Nothing was changed.`
-      : "Hardware status could not be read. Nothing was changed.";
-    if (panelRecoveryProbePossible() &&
-        requestTargetFingerprint === currentControlSurfaceHardwareFingerprint()) {
-      schedulePanelRecoveryProbeRetry(requestTargetFingerprint, retryAttempt);
-      setPanelRecoveryProbe(
-        requestTargetFingerprint,
-        "indeterminate",
-        controlSurfaceHardwareError,
-      );
-    }
-    syncControlSurfaceHardwareCard();
-  }
-}
-
-function panelProgrammingTransactionActive(): boolean {
-  return panelProgrammingState.transaction.phase === "writing" ||
-    panelProgrammingState.transaction.phase === "verifying";
-}
-
-function panelProgrammingTransactionBelongsToCurrentTarget(): boolean {
-  return Boolean(panelProgrammingTransactionTargetFingerprint) &&
-    panelProgrammingTransactionTargetFingerprint === currentControlSurfaceHardwareFingerprint();
-}
-
-function panelRecoveryAuthorityRelevant(): boolean {
-  return selectedInputIsPanelEncoder();
-}
-
-function panelRecoveryProbePossible(): boolean {
-  return panelRecoveryAuthorityRelevant() && Boolean(
-    nCapSelector().trim() && nCapInstance().trim(),
-  );
-}
-
-function setPanelRecoveryProbe(
-  target: string,
-  state: PanelRecoveryProbeState,
-  detail = "",
-): void {
-  if (state !== "indeterminate" &&
-      panelRecoveryProbeRetryTimer !== undefined) {
-    window.clearTimeout(panelRecoveryProbeRetryTimer);
-    panelRecoveryProbeRetryTimer = undefined;
-  }
-  panelRecoveryProbeTarget = target;
-  panelRecoveryProbeState = state;
-  panelRecoveryProbeDetail = detail;
-  // The compatibility mapper can already be listening, or can be holding a
-  // key for a controller click, when a machine-scoped recovery probe changes
-  // underneath it. Those are routing intents just as surely as the Builder's
-  // Route button. Retire them before repainting the source as unavailable so
-  // neither can commit an unproven encoder signal after this transition.
-  if (state !== "settled" && panelRecoveryAuthorityRelevant()) {
-    if (learnRow && (learnRow.purpose ?? "binding") === "binding") {
-      autoMap = null;
-      void cancelLearn();
-    }
-    if (assignKey) cancelAssign();
-  }
-  // Recovery authority changes source availability, not merely the hardware
-  // card. Repaint even when the Builder is closed and that card does not
-  // exist, then let the flow layer re-measure the shelf endpoints.
-  syncIpacSignalSource();
-  if (controlSurfaceItem) syncControlSurfaceWidget(false);
-  else mappingFlowLayer?.scheduleLayout();
-}
-
-function beginPanelRecoveryProbe(): void {
-  const target = currentControlSurfaceHardwareFingerprint();
-  if (panelRecoveryProbePossible()) {
-    setPanelRecoveryProbe(target, "checking");
-  } else {
-    setPanelRecoveryProbe(
-      target,
-      "indeterminate",
-      "KSX is waiting for the selected encoder's exact device identity before checking recovery.",
-    );
-  }
-}
-
-function schedulePanelRecoveryProbeRetry(target: string, retryAttempt: number): void {
-  if (retryAttempt >= PANEL_RECOVERY_PROBE_RETRY_DELAYS_MS.length) return;
-  const delay = PANEL_RECOVERY_PROBE_RETRY_DELAYS_MS[retryAttempt];
-  panelRecoveryProbeRetryTimer = window.setTimeout(() => {
-    panelRecoveryProbeRetryTimer = undefined;
-    if (
-      panelRecoveryProbeState !== "indeterminate" ||
-      panelRecoveryProbeTarget !== target ||
-      currentControlSurfaceHardwareFingerprint() !== target ||
-      !panelRecoveryProbePossible()
-    ) return;
-    void refreshControlSurfaceHardwareStatus(retryAttempt + 1);
-  }, delay);
-}
-
-function panelProgrammingRoutingAuthoritySuspended(): boolean {
-  const targetFingerprint = currentControlSurfaceHardwareFingerprint();
-  const chartBoard = panelProgrammingState.inspection.chart?.board_fingerprint
-    .trim().toLocaleUpperCase() ?? "";
-  const pendingHardware = pendingControlSurfaceHardwareEpochs();
-  const pendingHardwareSuspends = selectedInputIsPanelEncoder() && (
-    pendingHardware === null ? true : pendingHardware.length > 0
-  );
-  // A selected encoder is not allowed to become a keyboard source during the
-  // page-load gap before passive status has checked this exact selector and
-  // instance against the durable journal. This also covers a brand-new I-PAC
-  // with no surface links yet but pre-existing mapping-derived key sources.
-  const probeRelevant = panelRecoveryAuthorityRelevant();
-  const recoveryProbeSuspends = probeRelevant && (
-    panelRecoveryProbeTarget !== currentControlSurfaceHardwareFingerprint() ||
-    panelRecoveryProbeState !== "settled"
-  );
-  return Boolean(targetFingerprint && panelProgrammingRecoveryTargets.has(targetFingerprint)) ||
-    Boolean(chartBoard && panelProgrammingUntrustedBoards.has(chartBoard)) ||
-    pendingHardwareSuspends ||
-    selectedPanelStatusBoard()?.programming_recovery_required === true ||
-    recoveryProbeSuspends ||
-    (panelProgrammingTransactionActive() && panelProgrammingTransactionBelongsToCurrentTarget()) ||
-    (panelProgrammingState.transaction.phase === "recovery-required" &&
-      panelProgrammingTransactionBelongsToCurrentTarget());
-}
-
-function panelProgrammingTarget(): string {
-  return nCapSelector().trim();
-}
-
-type PanelChartCoverage = "unknown" | "empty" | "partial" | "configured";
-
-function panelProgrammingShiftLayerState(
-  chart: PanelChartView | null,
-): "active" | "dormant" | "unknown" {
-  if (chart?.terminals.some((terminal) => terminal.shift_state === "enabled")) return "active";
-  if (chart?.terminals.some((terminal) => terminal.shift_state === "opaque")) return "unknown";
-  return "dormant";
-}
-
-function panelProgrammingShiftLayerActive(chart: PanelChartView | null): boolean {
-  return panelProgrammingShiftLayerState(chart) === "active";
-}
-
-function panelProgrammingTerminalKeys(
-  terminal: PanelChartTerminalView,
-  includeShifted = true,
-): string[] {
-  return [terminal.normal.key, includeShifted ? terminal.shifted.key : null]
-    .map((key) => key?.trim() ?? "")
-    .filter((key, index, keys) => Boolean(key) && keys.indexOf(key) === index);
-}
-
-function panelProgrammingAssignedCount(chart: PanelChartView | null): number {
-  if (!chart) return 0;
-  const includeShifted = panelProgrammingShiftLayerActive(chart);
-  return chart.terminals.filter(
-    (terminal) => panelProgrammingTerminalKeys(terminal, includeShifted).length > 0,
-  ).length;
-}
-
-function panelProgrammingSignalCount(chart: PanelChartView | null): number {
-  const includeShifted = panelProgrammingShiftLayerActive(chart);
-  return chart?.terminals.reduce(
-    (count, terminal) => count + panelProgrammingTerminalKeys(terminal, includeShifted).length,
-    0,
-  ) ?? 0;
-}
-
-function panelProgrammingChartCoverage(chart: PanelChartView | null): PanelChartCoverage {
-  if (!chart) return "unknown";
-  const assigned = panelProgrammingAssignedCount(chart);
-  if (assigned === 0) return "empty";
-  return assigned === chart.terminals.length ? "configured" : "partial";
-}
-
-function panelProgrammingTaskCopy(chart: PanelChartView | null): {
-  kicker: string;
-  title: string;
-  action: string;
-  summary: string;
-} {
-  const assigned = panelProgrammingAssignedCount(chart);
-  const total = chart?.terminals.length ?? 56;
-  switch (panelProgrammingChartCoverage(chart)) {
-    case "empty":
-      return {
-        kicker: "No assigned hardware outputs",
-        title: "Assign keyboard outputs so cabinet controls can reach KSX",
-        action: "Open outputs",
-        summary: `This chart has ${assigned} of ${total} Windows key outputs. Initialize it with a complete layout before testing or routing controls.`,
-      };
-    case "partial":
-      return {
-        kicker: "Hardware outputs assigned",
-        title: "Review the terminal-to-key chart and test the controls you wired",
-        action: "Open outputs",
-        summary: `${assigned} of ${total} terminals currently have a supported Windows key assignment. Unused terminals may remain unassigned by design.`,
-      };
-    case "configured":
-      return {
-        kicker: "All hardware outputs assigned",
-        title: "Use, test, or reconfigure the outputs already on this board",
-        action: "Open outputs",
-        summary: `All ${total} terminals currently have supported Windows key outputs. Hardware can stay unchanged while you test and route them in KSX.`,
-      };
-    default:
-      return {
-        kicker: "Hardware outputs not read",
-        title: "Read the board before choosing what to change",
-        action: "Open outputs",
-        summary: "KSX has not read the persistent terminal-to-key chart in this browser session.",
-      };
-  }
-}
-
-function syncPanelEncoderRailStatus(): void {
-  const selector = panelProgrammingTarget();
-  if (!selector || !learnRoot) return;
-  const setup = learnRoot.querySelector<HTMLElement>(
-    `[data-nx="encoder-select-setup"][data-encoder-selector="${CSS.escape(selector)}"]`,
-  );
-  const form = setup?.closest<HTMLElement>(".n-encoder-form");
-  const meta = form?.querySelector<HTMLElement>(".n-dev-meta");
-  if (!meta) return;
-  if (!meta.dataset.encoderBaseMeta) meta.dataset.encoderBaseMeta = meta.textContent?.trim() ?? "USB";
-  const transport = (meta.dataset.encoderBaseMeta.split(" · ")[0] || "USB").trim();
-  const chart = panelProgrammingState.inspection.chart;
-  const task = panelProgrammingTaskCopy(chart);
-  const board = selectedPanelStatusBoard();
-  const canOpenChart = panelBoardChartAccessReady(board);
-  if (setup) {
-    const label = Array.from(setup.childNodes).find((node) => node.nodeType === Node.TEXT_NODE);
-    const returning = controlSurfaceState.open && controlSurfaceEncoderSetupEntry;
-    if (label) label.textContent = returning ? "Return to outputs" : "Open outputs";
-    setup.title = canOpenChart
-      ? `${returning ? "Return to" : "Open"} this ${selectedEncoderShortName()}'s hardware outputs. ${task.summary}`
-      : panelBoardCanReadChart(board)
-      ? panelBoardChartAccessGuidance(board)
-      : board?.family_id
-      ? `Open ${selectedEncoderShortName()} in Control Surface Builder; this exact model and firmware are recognition-only`
-      : "Open this exact encoder workspace and inspect its proven capabilities";
-  }
-  const transaction = panelProgrammingState.transaction;
-  if (transaction.phase === "recovery-required" && panelProgrammingTransactionBelongsToCurrentTarget()) {
-    meta.textContent = `${transport} · Recovery required`;
-    return;
-  }
-  if (panelProgrammingState.inspection.phase === "loading") {
-    meta.textContent = `${transport} · Reading hardware outputs…`;
-    return;
-  }
-  if (panelProgrammingState.inspection.phase === "unavailable") {
-    const interfaceBusy = panelProgrammingState.inspection.refusal_code ===
-      "panel-interface-busy";
-    meta.textContent = interfaceBusy
-      ? `${transport} · Configuration interface busy`
-      : `${transport} · Outputs unavailable`;
-    if (setup && interfaceBusy) {
-      setup.title =
-        "Another app owns this I-PAC's configuration interface. Close WinIPAC or the other encoder tool, return to Hardware outputs, then choose Read board again. Keyboard input can continue.";
-    }
-    return;
-  }
-  if (!chart) {
-    meta.textContent = `${transport} · Connected · outputs not read`;
-    return;
-  }
-  const assigned = panelProgrammingAssignedCount(chart);
-  meta.textContent = `${transport} · ${assigned}/${chart.terminals.length} outputs assigned${panelProgrammingLastTest?.terminalIds.length ? " · signal observed" : ""}`;
-}
-
-function panelProgrammingMappedKeyCount(chart: PanelChartView | null): number {
-  if (!chart) return 0;
-  const includeShifted = panelProgrammingShiftLayerActive(chart);
-  const hardwareKeys = new Set(chart.terminals
-    .flatMap((terminal) => panelProgrammingTerminalKeys(terminal, includeShifted))
-    .map((key) => key.toLocaleUpperCase()));
-  const routed = new Set<string>();
-  for (const pad of lastBindView?.pads ?? []) {
-    if (pad.mapping_available !== false) {
-      for (const joinedKeys of Object.values(pad.fn_keys)) {
-        for (const candidate of joinedKeys.split(/\s*·\s*/u)) {
-          const key = candidate.trim().toLocaleUpperCase();
-          if (hardwareKeys.has(key)) routed.add(key);
-        }
-      }
-    }
-    if (pad.macro_available !== false) {
-      for (const macro of pad.macros) {
-        if (macro.disabled || macro.outputs.length === 0) continue;
-        for (const trigger of macro.triggers) {
-          const key = trigger.trim().toLocaleUpperCase();
-          if (hardwareKeys.has(key)) routed.add(key);
-        }
-      }
-    }
-  }
-  return routed.size;
-}
-
-function syncPanelProgrammingJourneyAndTest(): void {
-  const item = controlSurfaceItem;
-  if (!item) return;
-  const chart = panelProgrammingState.inspection.chart;
-  const routingAuthoritySuspended = panelProgrammingRoutingAuthoritySuspended();
-  const assigned = routingAuthoritySuspended ? 0 : panelProgrammingAssignedCount(chart);
-  const signalCount = routingAuthoritySuspended ? 0 : panelProgrammingSignalCount(chart);
-  const mapped = routingAuthoritySuspended ? 0 : panelProgrammingMappedKeyCount(chart);
-  const encoderName = selectedEncoderShortName();
-  const encoderJourneyLabel = item.querySelector<HTMLElement>(
-    "[data-panel-journey-encoder-label]",
-  );
-  if (encoderJourneyLabel) encoderJourneyLabel.textContent = encoderName;
-  const journeyOrder = ["physical", "encoder", "keys", "mapping", "controller", "game"] as const;
-  const actualCompletion: Record<(typeof journeyOrder)[number], boolean> = {
-    // A firmware assignment proves an encoder output, not that a cabinet
-    // button exists or is wired. Physical is complete only when the user has
-    // drawn the panel or an exact-device output test observed a chart terminal.
-    physical: controlSurfaceState.controls.length > 0 ||
-      Boolean(panelProgrammingLastTest?.terminalIds.length),
-    encoder: Boolean(chart),
-    keys: assigned > 0,
-    mapping: mapped > 0,
-    controller: mapped > 0,
-    // A saved route proves the virtual destination, not that a particular game
-    // is currently receiving it. Game remains the honest open end of the chain.
-    game: false,
-  };
-  const currentStep = journeyOrder.find((step) => !actualCompletion[step]) ?? "game";
-  const states: Record<string, "active" | "complete" | "upcoming"> = Object.fromEntries(
-    journeyOrder.map((step) => [
-      step,
-      actualCompletion[step] ? "complete" : step === currentStep ? "active" : "upcoming",
-    ]),
-  );
-  for (const step of Array.from(item.querySelectorAll<HTMLElement>(
-    "[data-panel-journey-step]",
-  ))) {
-    const state = states[step.dataset.panelJourneyStep ?? ""] ?? "upcoming";
-    step.dataset.state = state;
-    if (state === "active") step.setAttribute("aria-current", "step");
-    else step.removeAttribute("aria-current");
-    const label = step.querySelector("strong")?.textContent?.trim() ?? "Journey step";
-    step.setAttribute(
-      "aria-label",
-      `${label}: ${state === "complete" ? "complete" : state === "active" ? "current" : "upcoming"}`,
-    );
-  }
-
-  const status = item.querySelector<HTMLElement>("[data-panel-output-test-status]");
-  const copy = item.querySelector<HTMLElement>("[data-panel-output-test-copy]");
-  const grid = item.querySelector<HTMLElement>("[data-panel-signal-grid]");
-  const test = item.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-test"]');
-  const buildPanel = item.querySelector<HTMLButtonElement>(
-    '[data-nx="surface-encoder-build-panel"]',
-  );
-  const designPanel = item.querySelector<HTMLButtonElement>(
-    '[data-nx="surface-encoder-design-panel"]',
-  );
-  const route = item.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-route"]');
-  const routeCopy = item.querySelector<HTMLElement>("[data-panel-route-copy]");
-  const listening = learnRow?.purpose === "panel-test";
-  const draftPending = Boolean(chart) &&
-    (panelProgrammingDraftSource !== "current" || panelProgrammingDraftDirty());
-  if (status) {
-    status.textContent = listening
-      ? "Listening for one cabinet control…"
-      : panelProgrammingLastTest
-      ? panelProgrammingLastTest.terminalIds.length > 0
-        ? `${panelProgrammingLastTest.terminalIds.join(" / ")} emitted ${panelProgrammingLastTest.key}`
-        : `${panelProgrammingLastTest.key} was received, but it is not in this chart`
-      : signalCount > 0
-      ? `${signalCount} hardware ${signalCount === 1 ? "signal" : "signals"} available to test`
-      : "Program or load at least one output first";
-  }
-  if (copy) {
-    copy.textContent = assigned > 0
-      ? draftPending
-        ? `The draft is not written. Test current board listens to the outputs that are on the ${encoderName} now; it does not test the keys shown only in this draft.`
-        : `Press any wired cabinet control. KSX identifies the Windows key and every matching ${encoderName} terminal without changing mappings.`
-      : `This ${encoderName} currently emits no supported Windows keys, so wired controls cannot reach KSX yet. Choose a hardware layout above first.`;
-  }
-  if (test) {
-    test.disabled = assigned === 0 || panelProgrammingInteractionBusy() ||
-      panelProgrammingTransactionActive() ||
-      routingAuthoritySuspended;
-    test.textContent = listening ? "Stop listening" : draftPending ? "Test current board" : "Test wiring";
-    test.setAttribute("aria-pressed", String(listening));
-  }
-  if (route) {
-    route.disabled = assigned === 0 || panelProgrammingInteractionBusy() ||
-      panelProgrammingTransactionActive() ||
-      routingAuthoritySuspended ||
-      Boolean(panelProgrammingLastTest && panelProgrammingLastTest.terminalIds.length === 0);
-  }
-  if (buildPanel) {
-    buildPanel.disabled = assigned === 0 || panelProgrammingInteractionBusy() ||
-      panelProgrammingTransactionActive() ||
-      routingAuthoritySuspended;
-    buildPanel.textContent = controlSurfaceState.started
-      ? "Replace panel from chart…"
-      : "Build physical panel";
-    buildPanel.title = controlSurfaceState.started
-      ? `Replace the current physical panel only after confirming a chart-derived ${encoderName} layout`
-      : `Draw physical joysticks and buttons from the terminal-to-key chart currently stored on ${encoderName}`;
-  }
-  if (designPanel) {
-    designPanel.hidden = assigned > 0;
-    designPanel.disabled = !chart || panelProgrammingInteractionBusy() ||
-      panelProgrammingTransactionActive() ||
-      routingAuthoritySuspended;
-    designPanel.title = chart
-      ? `Design the physical cabinet first, then link its controls to ${encoderName} terminals and choose the Windows keys the board will emit`
-      : `Read ${encoderName} before designing a terminal-linked physical panel`;
-  }
-  if (routeCopy) {
-    routeCopy.textContent = panelProgrammingLastTest && panelProgrammingLastTest.terminalIds.length === 0
-      ? `${panelProgrammingLastTest.key} came from this device but is absent from the chart KSX read. Read the board again before routing.`
-      : mapped > 0
-      ? `${mapped} ${encoderName} ${mapped === 1 ? "signal is" : "signals are"} already routed in KSX. Continue to inspect or extend those routes.`
-      : assigned > 0
-      ? "Hardware output is only the source. Build a physical panel view for this cabinet, or continue directly to KSX routing."
-      : `Start with the physical cabinet or assign the ${encoderName} outputs first. Both paths meet at terminal → Windows key, before KSX routing.`;
-  }
-  if (!grid) return;
-  grid.replaceChildren();
-  if (!chart || assigned === 0) {
-    const empty = document.createElement("p");
-    empty.textContent = chart
-      ? "No terminal-to-key signals are available yet."
-      : `Read the ${encoderName} to see its terminal-to-key signals.`;
-    grid.append(empty);
-    return;
-  }
-  const matched = new Set(panelProgrammingLastTest?.terminalIds ?? []);
-  const matchedKey = panelProgrammingLastTest?.key.trim().toLocaleUpperCase() ?? "";
-  const shiftState = panelProgrammingShiftLayerState(chart);
-  const shiftActive = shiftState === "active";
-  for (let player = 1; player <= 4; player += 1) {
-    const group = document.createElement("section");
-    group.className = `np${player}`;
-    const heading = document.createElement("strong");
-    heading.textContent = `P${player}`;
-    const signals = document.createElement("div");
-    for (const terminal of chart.terminals.filter((candidate) => candidate.player === player)) {
-      for (const [layer, assignment] of [
-        ["normal", terminal.normal],
-        ["shifted", terminal.shifted],
-      ] as const) {
-        if (!assignment.key) continue;
-        const chip = document.createElement("span");
-        chip.dataset.panelSignalTerminal = terminal.terminal_id;
-        chip.dataset.panelSignalLayer = layer;
-        const unavailableShift = layer === "shifted" && !shiftActive;
-        chip.dataset.shiftReachability = layer === "shifted" ? shiftState : "active";
-        chip.dataset.hit = String(
-          !unavailableShift && matched.has(terminal.terminal_id) &&
-            assignment.key.trim().toLocaleUpperCase() === matchedKey,
-        );
-        const terminalLabel = document.createElement("small");
-        terminalLabel.textContent = layer === "shifted"
-          ? `${terminal.terminal_id.toLocaleUpperCase()} · ${terminal.terminal_label} · Shift${shiftState === "dormant" ? " · dormant" : shiftState === "unknown" ? " · reachability unknown" : ""}`
-          : `${terminal.terminal_id.toLocaleUpperCase()} · ${terminal.terminal_label}`;
-        const key = document.createElement("strong");
-        key.textContent = assignment.label;
-        chip.append(terminalLabel, key);
-        signals.append(chip);
-      }
-    }
-    group.append(heading, signals);
-    grid.append(group);
-  }
-}
-
-function syncIpacSignalSource(): void {
-  // nocturneWire runs against the served tree before Forma adopts it. The
-  // passive recovery request may answer during that window; inserting the
-  // client-only signal shelf then shifts hydration anchors and duplicates the
-  // keyboard case. Cache the probe state, but do not mutate this subtree until
-  // initNocturneCanvas confirms adoption is complete.
-  if (!nCanvas) return;
-  const keyboard = learnRoot?.querySelector<HTMLElement>(
-    '.n-canvas [data-instance-id="keyboard"]',
-  );
-  if (!keyboard) return;
-  const isEncoder = selectedInputIsPanelEncoder();
-  keyboard.dataset.inputKind = isEncoder ? "panel-encoder" : "keyboard";
-  const encoderName = selectedEncoderShortName();
-  // The navigator exists outside the widget subtree, so keep its identity in
-  // lockstep with the source layer whenever device selection changes.
-  labelCanvasMarkers();
-  const source = keyboard.querySelector<HTMLElement>(".n-ipac-signal-source");
-  if (!isEncoder) {
-    source?.replaceChildren();
-    ipacSignalSourceFingerprint = "";
-    syncKeyboardSourceCaps();
-    mappingFlowLayer?.scheduleLayout();
-    return;
-  }
-
-  type SignalGroup = {
-    key: string;
-    label: string;
-    terminalIds: Set<string>;
-    terminalLabels: Set<string>;
-    players: Set<number>;
-  };
-  const chart = panelProgrammingState.inspection.chart;
-  const routingAuthoritySuspended = panelProgrammingRoutingAuthoritySuspended();
-  const shiftedLayerState = panelProgrammingShiftLayerState(chart);
-  const shiftedLayerActive = shiftedLayerState === "active";
-  const unavailableShiftedAssignments = chart?.terminals.filter(
-    (terminal) => Boolean(terminal.shifted.key) && shiftedLayerState !== "active",
-  ).length ?? 0;
-  const byKey = new Map<string, SignalGroup>();
-  const addSignal = (
-    key: string,
-    label: string,
-    terminalId = "",
-    terminalLabel = "Terminal not read",
-    player = 0,
-  ): void => {
-    const canonical = key.trim().toLocaleUpperCase();
-    if (!canonical) return;
-    let signal = byKey.get(canonical);
-    if (!signal) {
-      signal = {
-        key: key.trim(),
-        label: label.trim() || key.trim(),
-        terminalIds: new Set(),
-        terminalLabels: new Set(),
-        players: new Set(),
-      };
-      byKey.set(canonical, signal);
-    }
-    if (terminalId) signal.terminalIds.add(terminalId);
-    if (terminalLabel) signal.terminalLabels.add(terminalLabel);
-    if (player > 0) signal.players.add(player);
-  };
-  if (chart && !routingAuthoritySuspended) {
-    for (const terminal of chart.terminals) {
-      if (terminal.normal.key) {
-        addSignal(
-          terminal.normal.key,
-          terminal.normal.label,
-          terminal.terminal_id,
-          `${terminal.terminal_id.toLocaleUpperCase()} · ${terminal.terminal_label}`,
-          terminal.player,
-        );
-      }
-      if (terminal.shifted.key && shiftedLayerActive) {
-        addSignal(
-          terminal.shifted.key,
-          terminal.shifted.label,
-          terminal.terminal_id,
-          `${terminal.terminal_id.toLocaleUpperCase()} · ${terminal.terminal_label} · Shift`,
-          terminal.player,
-        );
-      }
-    }
-  } else if (!routingAuthoritySuspended) {
-    for (const pad of lastBindView?.pads ?? []) {
-      if (pad.mapping_available !== false) {
-        for (const control of pad.controls ?? []) {
-          for (const key of control.keys) addSignal(key, key);
-        }
-        // fn_keys is the mapper's raw spelling and can contain a partial-axis
-        // binding that has not yet been projected into a served control row.
-        // Keep those real Windows sources visible so the path can still land on
-        // its controller hook instead of becoming falsely unresolved.
-        for (const joinedKeys of Object.values(pad.fn_keys ?? {})) {
-          for (const key of joinedKeys.split(/\s*·\s*/u)) addSignal(key, key);
-        }
-      }
-      if (pad.macro_available !== false) {
-        for (const macro of pad.macros) {
-          for (const key of macro.triggers) addSignal(key, key);
-        }
-      }
-    }
-  }
-  const groups = [...byKey.values()].sort((left, right) =>
-    left.key.localeCompare(right.key, undefined, { numeric: true, sensitivity: "base" })
-  );
-  const routedSlotsByKey = new Map<string, Set<number>>();
-  const noteRoutedKey = (value: string, slot: number): void => {
-    const key = value.trim().toLocaleUpperCase();
-    if (!key) return;
-    let slots = routedSlotsByKey.get(key);
-    if (!slots) {
-      slots = new Set<number>();
-      routedSlotsByKey.set(key, slots);
-    }
-    slots.add(slot);
-  };
-  for (const pad of lastBindView?.pads ?? []) {
-    if (pad.mapping_available !== false) {
-      for (const control of pad.controls ?? []) {
-        for (const key of control.keys) noteRoutedKey(key, pad.slot);
-      }
-      for (const joinedKeys of Object.values(pad.fn_keys ?? {})) {
-        for (const key of joinedKeys.split(/\s*·\s*/u)) noteRoutedKey(key, pad.slot);
-      }
-    }
-    if (pad.macro_available !== false) {
-      for (const macro of pad.macros) {
-        for (const key of macro.triggers) noteRoutedKey(key, pad.slot);
-      }
-    }
-  }
-  const surfaceFlowTokens = new Set(
-    controlSurfaceState.controls.flatMap((control) =>
-      control.channels
-        .filter((channel) => !chart || channel.encoder?.boardFingerprint === chart.board_fingerprint)
-        .flatMap((channel) => {
-          const key = controlSurfaceSignalTruth(channel).flowKey.trim().toLocaleUpperCase();
-          return key ? [`${key}\u0000${control.playerSlot ?? 0}`] : [];
-        })
-    ),
-  );
-  const surfaceCovers = (key: string, slot: number): boolean =>
-    surfaceFlowTokens.has(`${key}\u00000`) || surfaceFlowTokens.has(`${key}\u0000${slot}`);
-  const surfaceWorkarea = controlSurfaceItem?.querySelector<HTMLElement>(
-    ".n-surface-workarea",
-  );
-  const panelOwnsSignalLayer = Boolean(
-    chart && controlSurfaceState.open && controlSurfaceItem?.isConnected &&
-      surfaceWorkarea && !surfaceWorkarea.hidden &&
-      controlSurfaceState.started && groups.length > 0,
-  ) && groups.every((signal) => {
-    const key = signal.key.trim().toLocaleUpperCase();
-    const requiredSlots = new Set([
-      ...signal.players,
-      ...(routedSlotsByKey.get(key) ?? []),
-    ]);
-    if (requiredSlots.size === 0) {
-      return [...surfaceFlowTokens].some((token) => token.startsWith(`${key}\u0000`));
-    }
-    return [...requiredSlots].every((slot) => surfaceCovers(key, slot));
-  });
-  const fingerprint = JSON.stringify({
-    selector: panelProgrammingTarget(),
-    image: chart?.image_sha256 ?? "unread",
-    groups: groups.map((signal) => [
-      signal.key,
-      [...signal.terminalIds],
-      [...signal.terminalLabels],
-      [...signal.players],
-    ]),
-    panelOwnsSignalLayer,
-    surfaceFlowKeys: [...surfaceFlowTokens].sort(),
-    routingAuthoritySuspended,
-    recoveryProbeState: panelRecoveryProbeState,
-    recoveryProbeDetail: panelRecoveryProbeDetail,
-  });
-  if (source?.isConnected && fingerprint === ipacSignalSourceFingerprint) return;
-  if (!source) return;
-  ipacSignalSourceFingerprint = fingerprint;
-  source.replaceChildren();
-  const head = document.createElement("header");
-  const heading = document.createElement("div");
-  const kicker = document.createElement("span");
-  kicker.textContent = "Input signal layer";
-  const title = document.createElement("strong");
-  title.textContent = `${encoderName} terminal → Host signal`;
-  heading.append(kicker, title);
-  const badge = document.createElement("span");
-  badge.className = "n-ipac-source-badge";
-  badge.textContent = selectedPanelStatusBoard()?.observed_mode_label?.trim() ||
-    "Keyboard-compatible input";
-  head.append(heading, badge);
-  const copy = document.createElement("p");
-  copy.textContent = routingAuthoritySuspended
-    ? panelRecoveryProbeState === "checking"
-      ? `KSX is checking this exact ${encoderName} against its machine recovery journal. Routes stay unresolved until that passive check finishes.`
-      : panelRecoveryProbeState === "indeterminate"
-      ? `KSX could not complete this exact ${encoderName} recovery check. Routes stay unresolved.${panelRecoveryProbeRetryTimer !== undefined ? " KSX will retry automatically." : " Open hardware outputs or refresh status when the encoder is available."}${panelRecoveryProbeDetail ? ` ${panelRecoveryProbeDetail}` : ""}`
-      : `KSX cannot prove which keys the ${encoderName} emits after the interrupted hardware transaction. Routes stay unresolved until the complete chart is read again or a verified backup is restored.`
-    : chart
-    ? `The ${encoderName} emits these keyboard host signals to Windows. ${panelOwnsSignalLayer ? "The physical panel now carries each terminal/key token, so KSX paths start there; this shelf stays available as a fallback." : "Until a physical panel owns every signal, KSX paths leave from the terminal/key shelf below."} Shared assignments stay one traceable signal because Windows cannot distinguish their source terminal.${unavailableShiftedAssignments > 0 ? shiftedLayerState === "unknown" ? ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but not exposed as a route because an opaque Shift role makes reachability unknown.` : ` ${unavailableShiftedAssignments} shifted ${unavailableShiftedAssignments === 1 ? "assignment is" : "assignments are"} stored but dormant until an encoder Shift terminal is enabled.` : ""}`
-    : `KSX routes currently reference these keyboard host signals. KSX has not read the ${encoderName} hardware-output chart yet, so it has not proven which physical terminals emit them. Read the device chart to establish terminal → host-signal ownership.`;
-  source.append(head, copy);
-  if (groups.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "n-ipac-source-empty";
-    empty.textContent = routingAuthoritySuspended
-      ? `Current ${encoderName} outputs are intentionally hidden until hardware recovery establishes a complete verified chart.`
-      : chart
-      ? unavailableShiftedAssignments > 0
-        ? shiftedLayerState === "unknown"
-          ? `This chart has ${unavailableShiftedAssignments} stored shifted ${unavailableShiftedAssignments === 1 ? "assignment" : "assignments"}, but opaque Shift state leaves their reachability unknown.`
-          : `This chart has ${unavailableShiftedAssignments} stored shifted ${unavailableShiftedAssignments === 1 ? "assignment" : "assignments"}, but no enabled Shift terminal can emit them.`
-        : "The chart KSX read contains 0 supported Windows key assignments. This is chart data, not a live-input observation."
-      : `No routed key signals are visible yet. Open ${encoderName} hardware outputs to read the on-device chart.`;
-    source.append(empty);
-    mappingFlowLayer?.scheduleLayout();
-    return;
-  }
-  // The primary shelf is the only visible source layer, so it cannot be
-  // collapsible. Only the redundant fallback shelf uses native <details>.
-  const rosterShell = document.createElement(panelOwnsSignalLayer ? "details" : "section");
-  rosterShell.className = "n-ipac-signal-roster-shell";
-  rosterShell.dataset.panelFallback = String(panelOwnsSignalLayer);
-  rosterShell.toggleAttribute("open", !panelOwnsSignalLayer);
-  const rosterSummary = document.createElement(panelOwnsSignalLayer ? "summary" : "header");
-  rosterSummary.className = "n-ipac-signal-roster-summary";
-  const rosterTitle = document.createElement("strong");
-  rosterTitle.textContent = panelOwnsSignalLayer
-    ? "Fallback signal shelf"
-    : "Terminal signal shelf";
-  const rosterNote = document.createElement("span");
-  rosterNote.textContent = panelOwnsSignalLayer
-    ? `${groups.length} ${groups.length === 1 ? "key is" : "keys are"} attached to the physical panel · open to inspect`
-    : `${groups.length} ${groups.length === 1 ? "Windows output" : "Windows outputs"}`;
-  rosterSummary.append(rosterTitle, rosterNote);
-  rosterShell.append(rosterSummary);
-  const roster = document.createElement("div");
-  roster.className = "n-ipac-signal-roster";
-  const sections = chart ? [1, 2, 3, 4, 0] : [0];
-  for (const player of sections) {
-    const signals = groups.filter((signal) =>
-      player === 0 ? signal.players.size !== 1 : signal.players.size === 1 && signal.players.has(player)
-    );
-    if (signals.length === 0) continue;
-    const group = document.createElement("section");
-    group.className = `n-ipac-signal-player${player > 0 ? ` np${player}` : " shared"}`;
-    const groupHead = document.createElement("header");
-    const playerLabel = document.createElement("strong");
-    playerLabel.textContent = player > 0
-      ? `Player ${player}`
-      : chart
-      ? "Shared signals"
-      : "Mapped Windows signals";
-    const count = document.createElement("span");
-    count.textContent = `${signals.length} ${signals.length === 1 ? "output" : "outputs"}`;
-    groupHead.append(playerLabel, count);
-    const rows = document.createElement("div");
-    rows.className = "n-kbrow";
-    for (const model of signals) {
-      const signal = document.createElement("button");
-      signal.type = "button";
-      signal.className = "n-key n-ipac-signal";
-      signal.dataset.key = model.key;
-      if (player > 0) signal.dataset.playerSlot = String(player);
-      if (model.terminalIds.size > 0) {
-        signal.dataset.panelTerminals = [...model.terminalIds].join(" ");
-      }
-      const terminals = [...model.terminalLabels].join(" / ");
-      signal.title = `${terminals} emits ${model.label} · inspect this Windows key's KSX routes`;
-      signal.setAttribute("aria-label", signal.title);
-      const terminalLabel = document.createElement("span");
-      terminalLabel.textContent = terminals;
-      const arrow = document.createElement("i");
-      arrow.textContent = "→";
-      const key = document.createElement("strong");
-      key.textContent = model.label;
-      signal.append(terminalLabel, arrow, key);
-      rows.append(signal);
-    }
-    group.append(groupHead, rows);
-    roster.append(group);
-  }
-  rosterShell.append(roster);
-  source.append(rosterShell);
-  mappingFlowLayer?.scheduleLayout();
-}
-
-function panelProgrammingSetMessage(message: string): void {
-  panelProgrammingMessage = message;
-  syncPanelProgrammingUi();
-  if (message) keyboardWorkbenchAnnounce(message);
-}
-
-function panelProgrammingCloseDialog(restoreFocus = true, forcePendingClose = false): void {
-  if ((!forcePendingClose && panelProgrammingApplyPending) ||
-      panelProgrammingTransactionActive()) return;
-  if (panelProgrammingDialog?.open) panelProgrammingDialog.close();
-  if (restoreFocus) {
-    const target = panelProgrammingReturnFocus?.isConnected
-      ? panelProgrammingReturnFocus
-      : controlSurfaceItem?.querySelector<HTMLElement>('[data-nx="surface-encoder-open"]') ?? null;
-    window.requestAnimationFrame(() => target?.focus({ preventScroll: true }));
-  }
-  panelProgrammingReturnFocus = null;
-  panelProgrammingConfirmed = false;
-  panelProgrammingRecoveryReady = false;
-}
-
-function resetPanelProgramming(targetChanged: boolean): void {
-  if (targetChanged) cacheCurrentPanelProgrammingDraft();
-  panelProgrammingGeneration += 1;
-  panelProgrammingBusy = false;
-  panelProgrammingBackups = [];
-  panelProgrammingMessage = targetChanged
-    ? "The selected encoder changed. Read its complete chart before reviewing hardware changes."
-    : "";
-  panelProgrammingPlanTargetFingerprint = "";
-  panelProgrammingProgramRequest = null;
-  panelProgrammingRestoreRequest = null;
-  panelProgrammingConfirmed = false;
-  panelProgrammingRecoveryReady = false;
-  panelProgrammingTerminalDraft = [];
-  panelProgrammingDraftSource = "current";
-  panelProgrammingDraftBaseline = "";
-  panelProgrammingProfiles = [];
-  panelProgrammingProfilesSignature = "";
-  panelProgrammingSelectedProfileId = "";
-  panelProgrammingProfilesBusy = false;
-  panelProgrammingProfilesMessage = "";
-  panelProgrammingLastTest = null;
-  if (targetChanged && !panelProgrammingTransactionActive()) {
-    exitPanelProgrammingWorkspace();
-  }
-  if (!panelProgrammingTransactionActive()) {
-    panelProgrammingTransactionTargetFingerprint = "";
-    panelProgrammingCloseDialog(false, targetChanged);
-    panelProgrammingState = createPanelProgrammingState();
-    if (targetChanged) panelProgrammingState.inspection.phase = "changed";
-  } else {
-    panelProgrammingState = {
-      ...panelProgrammingState,
-      inspection: {
-        ...panelProgrammingState.inspection,
-        phase: "changed",
-        target_selector: panelProgrammingTarget(),
-        chart: null,
-        error: panelProgrammingMessage,
-      },
-      capability: panelProgrammingCapability(null),
-      editor: {
-        ...panelProgrammingState.editor,
-        phase: "assign",
-        plan_expected_selector: "",
-        plan: null,
-      },
-    };
-  }
-  syncPanelProgrammingUi();
-  if (panelProgrammingDialog?.open) renderPanelProgrammingDialog();
-}
-
-async function panelProgrammingJSON<T>(
-  url: string,
-  method: "GET" | "POST",
-  body?: unknown,
-): Promise<T> {
-  const response = await fetch(url, {
-    method,
-    headers: method === "POST"
-      ? { Accept: "application/json", "Content-Type": "application/json" }
-      : { Accept: "application/json" },
-    cache: "no-store",
-    body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
-  });
-  const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
-  if (!response.ok) {
-    const detail = typeof payload?.unavailable === "string"
-      ? payload.unavailable
-      : typeof payload?.error === "string"
-      ? payload.error
-      : `Panel request returned HTTP ${response.status}.`;
-    throw new Error(detail);
-  }
-  if (!payload) throw new Error("Panel request returned no JSON body.");
-  return payload as T;
-}
-
 interface NocturneInputTestView {
   ok: boolean;
   state: "idle" | "listening" | "timeout" | "cancelled" | "failed" | "unavailable" | "unknown";
@@ -3206,7 +1814,6 @@ let inputTestTimer: number | undefined;
 let inputTestRequest = 0;
 let inputTestSelector = "";
 let inputTestSourceName = "Selected input";
-let inputTestEncoder = false;
 let inputTestExpectedCount = 0;
 let inputTestStarting = false;
 let inputTestRecovering = false;
@@ -3245,34 +1852,9 @@ async function inputTestJSON(
   return { ...payload, state: inputTestState(payload.state) };
 }
 
-function inputTestTerminalLabels(key: string): string[] {
-  const chart = panelProgrammingState.inspection.chart;
-  const chartSelector = panelProgrammingState.inspection.target_selector.trim();
-  if (!inputTestEncoder || !chart || panelProgrammingRoutingAuthoritySuspended() ||
-      chartSelector !== inputTestSelector || panelProgrammingTarget() !== inputTestSelector) {
-    return [];
-  }
-  const shiftState = panelProgrammingShiftLayerState(chart);
-  return chart.terminals.flatMap((terminal) => {
-    const labels: string[] = [];
-    if (terminal.normal.supported && samePanelKey(terminal.normal.key, key)) {
-      labels.push(`${terminal.terminal_label} · normal`);
-    }
-    if (terminal.shifted.supported && samePanelKey(terminal.shifted.key, key)) {
-      const reachability = shiftState === "active"
-        ? "shifted"
-        : shiftState === "dormant"
-        ? "shifted (stored; Shift inactive)"
-        : "shifted (stored; Shift state unknown)";
-      labels.push(`${terminal.terminal_label} · ${reachability}`);
-    }
-    return labels;
-  });
-}
-
 function appendInputTestSignals(container: HTMLElement, keys: readonly string[]): void {
   const document_ = container.ownerDocument;
-  const signals = keys.map((key) => ({ key, terminals: inputTestTerminalLabels(key) }));
+  const signals = keys.map((key) => ({ key, terminals: [] as string[] }));
   const fingerprint = JSON.stringify(signals);
   if (container.dataset.inputTestFingerprint === fingerprint) return;
   container.dataset.inputTestFingerprint = fingerprint;
@@ -3764,10 +2346,7 @@ function openInputTest(): void {
     ? document.activeElement
     : null;
   inputTestSelector = selector;
-  inputTestEncoder = selectedInputIsPanelEncoder();
-  inputTestSourceName = inputTestEncoder
-    ? selectedEncoderDisplayName()
-    : nKbTitle().trim() || "Selected keyboard";
+  inputTestSourceName = nKbTitle().trim() || "Selected keyboard";
   const request = ++inputTestRequest;
   if (inputTestTimer !== undefined) window.clearTimeout(inputTestTimer);
   inputTestTimer = undefined;
@@ -3804,172 +2383,6 @@ async function closeInputTest(): Promise<void> {
   }
 }
 
-function panelProgrammingTerminal(terminalId: string): PanelChartTerminalView | null {
-  return panelProgrammingState.inspection.chart?.terminals.find(
-    (terminal) => terminal.terminal_id === terminalId,
-  ) ?? null;
-}
-
-function panelProgrammingDraftTerminal(
-  terminalId: string,
-): PanelHardwareTerminalDraft | null {
-  return panelProgrammingTerminalDraft.find(
-    (terminal) => terminal.terminal_id === terminalId,
-  ) ?? null;
-}
-
-/** The complete terminal draft is the one authoring authority. Reflect a
- * normal-layer edit into every visual control linked to that physical board
- * terminal so the canvas can never advertise a different expected key. */
-function synchronizePanelProgrammingTerminalKey(
-  terminalId: string,
-  expectedKey: string,
-): number {
-  const chart = panelProgrammingState.inspection.chart;
-  const terminal = panelProgrammingTerminal(terminalId);
-  if (!chart || !terminal) return 0;
-  const linked = controlSurfaceState.controls.flatMap((control) =>
-    control.channels
-      .filter((channel) =>
-        channel.encoder?.boardFingerprint === chart.board_fingerprint &&
-        channel.encoder.terminalId === terminalId
-      )
-      .map((channel) => ({ control, channel }))
-  );
-  const first = linked[0];
-  if (!first) return 0;
-  const selectedControlId = controlSurfaceState.selectedControlId;
-  const selectedChannelId = controlSurfaceState.selectedChannelId;
-  const next = assignControlSurfaceTerminal(
-    controlSurfaceState,
-    first.control.id,
-    first.channel.id,
-    {
-      driver: chart.driver,
-      boardFingerprint: chart.board_fingerprint,
-      terminalId: terminal.terminal_id,
-      terminalLabel: terminal.terminal_label,
-      expectedKey,
-    },
-  );
-  applyControlSurfaceState(
-    { ...next, selectedControlId, selectedChannelId },
-    true,
-  );
-  return new Set(linked.map(({ control }) => control.id)).size;
-}
-
-/** Whole-draft sources (current chart, recommendations, blank layouts and
- * saved profiles) are also terminal authority. Reconcile every linked normal
- * channel in one state write so loading a profile cannot leave stale canvas
- * expectations behind. */
-function synchronizePanelProgrammingDraftKeys(): void {
-  const chart = panelProgrammingState.inspection.chart;
-  if (!chart) return;
-  const draft = new Map(
-    panelProgrammingTerminalDraft.map((terminal) => [terminal.terminal_id, terminal]),
-  );
-  const selectedControlId = controlSurfaceState.selectedControlId;
-  const selectedChannelId = controlSurfaceState.selectedChannelId;
-  const seen = new Set<string>();
-  let next = controlSurfaceState;
-  for (const control of controlSurfaceState.controls) {
-    for (const channel of control.channels) {
-      const encoder = channel.encoder;
-      if (!encoder || encoder.boardFingerprint !== chart.board_fingerprint ||
-          seen.has(encoder.terminalId)) continue;
-      const terminalDraft = draft.get(encoder.terminalId);
-      const terminal = panelProgrammingTerminal(encoder.terminalId);
-      if (!terminalDraft || !terminal) continue;
-      seen.add(encoder.terminalId);
-      next = assignControlSurfaceTerminal(next, control.id, channel.id, {
-        driver: chart.driver,
-        boardFingerprint: chart.board_fingerprint,
-        terminalId: terminal.terminal_id,
-        terminalLabel: terminal.terminal_label,
-        expectedKey: terminalDraft.normal_key ?? "",
-      });
-    }
-  }
-  if (seen.size > 0) {
-    applyControlSurfaceState(
-      { ...next, selectedControlId, selectedChannelId },
-      true,
-    );
-  }
-}
-
-/** Missing qualification metadata is deliberately fail-closed. A frontend
- * served by an older backend must never make a full-chart write look ready. */
-function panelProgrammingQualificationState(
-  chart: PanelChartView | null = panelProgrammingState.inspection.chart,
-): PanelProgrammingQualificationState {
-  return chart?.qualification_state === "validation-written" ||
-      chart?.qualification_state === "validation-recovery" ||
-      chart?.qualification_state === "qualified"
-    ? chart.qualification_state
-    : "required";
-}
-
-function panelProgrammingQualificationNeedsRestore(
-  state = panelProgrammingQualificationState(),
-): boolean {
-  return state === "validation-written" || state === "validation-recovery";
-}
-
-function panelProgrammingExactQualificationBackupId(): string {
-  if (!panelProgrammingQualificationNeedsRestore()) return "";
-  return panelProgrammingState.inspection.chart?.qualification_restore_backup_id?.trim() ||
-    (panelProgrammingState.transaction.operation === "program"
-      ? panelProgrammingState.transaction.outcome?.backup.backup_id ?? ""
-      : "");
-}
-
-async function openPanelQualificationRestoreReview(backupId: string): Promise<void> {
-  // A verified write immediately starts a fresh complete-chart read. Keep the
-  // primary handoff deterministic if the user acts before that read settles.
-  while (panelProgrammingInteractionBusy() && !panelProgrammingTransactionActive()) {
-    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-  }
-  if (!backupId || !panelProgrammingQualificationNeedsRestore()) {
-    panelProgrammingSetMessage(
-      "KSX could not resolve the pending qualification restore. Read the complete chart again before continuing.",
-    );
-    return;
-  }
-  panelProgrammingCloseDialog(false);
-  await requestPanelRestorePlan(backupId);
-}
-
-async function reopenPanelQualificationAfterRecovery(): Promise<void> {
-  while (panelProgrammingInteractionBusy() && !panelProgrammingTransactionActive()) {
-    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-  }
-  if (panelProgrammingQualificationState() !== "required") {
-    panelProgrammingSetMessage(
-      "KSX restored the recovery backup, but the fresh chart has not returned to writer-check step 1. Read the complete chart again before continuing.",
-    );
-    return;
-  }
-  panelProgrammingCloseDialog(false);
-  panelProgrammingDropPlan();
-  panelProgrammingSetMessage(
-    "The interrupted validation chart was restored exactly. Repeat the one-terminal writer check; full layouts remain locked.",
-  );
-  const picker = controlSurfaceItem?.querySelector<HTMLElement>(
-    '[data-nx="surface-qualification-terminal"], [data-nx="surface-encoder-terminal"]',
-  ) ?? null;
-  picker?.focus({ preventScroll: true });
-  if (document.activeElement !== picker) {
-    window.requestAnimationFrame(() => picker?.focus({ preventScroll: true }));
-  }
-}
-
-function samePanelKey(left: string | null | undefined, right: string | null | undefined): boolean {
-  return (left ?? "").trim().toLocaleUpperCase() ===
-    (right ?? "").trim().toLocaleUpperCase();
-}
-
 type ControlSurfaceFlowAuthority =
   | "unassigned"
   | "expected"
@@ -4001,26 +2414,18 @@ type ControlSurfaceSignalTruth = {
 function controlSurfaceSignalTruth(
   channel: ControlSurfaceChannel,
 ): ControlSurfaceSignalTruth {
-  const encoder = channel.encoder;
+  // With no device chart to consult, the only signal truth is what Teach
+  // actually observed arriving from this control.
   const observedKey = channel.input.kind === "keyboard" ? channel.input.key.trim() : "";
-  const selectedDevice = nCapInstance().trim().toLocaleUpperCase();
-  const observedDevice = channel.input.kind === "keyboard"
-    ? channel.input.device.trim().toLocaleUpperCase()
-    : "";
-  // The selector owns the reusable drawing, not the physical Windows
-  // instance. When an encoder re-enumerates, retain its old Teach value as
-  // labelled history but never let that value route the replacement device.
-  const observationBelongsToSelectedDevice = !selectedInputIsPanelEncoder() || Boolean(
-    selectedDevice && observedDevice && selectedDevice === observedDevice,
-  );
-  // Mapping-generated panels predate Teach and intentionally store the staged
-  // selector as their source marker. Preserve those unlinked projections;
-  // actual Teach hits always carry the exact learner device instance.
-  const isSelectorProjection = !encoder && Boolean(
-    observedDevice && observedDevice === nCapSelector().trim().toLocaleUpperCase(),
-  );
-  const observationCanRoute = observationBelongsToSelectedDevice || isSelectorProjection;
-  if (panelProgrammingRoutingAuthoritySuspended()) {
+  if (channel.encoder) {
+    // ⚠️ A LINKED CHANNEL IS FED BY A PROGRAMMABLE TERMINAL, and ksx has no
+    // reader for one. Whatever Teach saw was true of the chart the board
+    // carried at the time; the board may have been rewritten since, by ksx's
+    // own removed writer or by WinIPAC, and nothing here can tell. So the
+    // observation is kept and SHOWN — `observedKey` still dresses the keycap
+    // and its hover sentence — but it is not route authority, and no cord may
+    // anchor to it. `verification` is the seam: when a chart verb returns and
+    // can prove `matched`, this is the one branch that has to change.
     return {
       authority: "unassigned",
       flowAuthority: "unassigned",
@@ -4031,123 +2436,16 @@ function controlSurfaceSignalTruth(
       flowKey: "",
     };
   }
-  if (!encoder) {
-    return {
-      authority: observedKey && observationCanRoute ? "observed" : "unassigned",
-      flowAuthority: observedKey && observationCanRoute ? "observed" : "unassigned",
-      configuredKnown: false,
-      configuredKey: "",
-      plannedKey: "",
-      observedKey,
-      flowKey: observationCanRoute ? observedKey : "",
-    };
-  }
-
-  const plannedKey = encoder.expectedKey.trim();
-  const chart = panelProgrammingState.inspection.chart;
-  const configuredTerminal = chart?.board_fingerprint === encoder.boardFingerprint
-    ? chart.terminals.find((terminal) => terminal.terminal_id === encoder.terminalId)
-    : undefined;
-  // A known-different board/terminal disproves the persisted physical link,
-  // while an ambiguous write disproves every pre-write chart byte. Retain the
-  // historical observation for recovery copy, but expose no current route.
-  if (chart && !configuredTerminal) {
-    return {
-      authority: "unassigned",
-      flowAuthority: "unassigned",
-      configuredKnown: false,
-      configuredKey: "",
-      plannedKey: "",
-      observedKey,
-      flowKey: "",
-    };
-  }
-  const configuredKnown = Boolean(configuredTerminal);
-  const configuredKey = configuredTerminal?.normal.supported
-    ? configuredTerminal.normal.key?.trim() ?? ""
-    : "";
-
-  // Draft edits invalidate prior verification in assignControlSurfaceTerminal,
-  // so matched/mismatch here means Teach observed this physical channel after
-  // the current draft was prepared. That live Windows evidence outranks the
-  // unwritten plan for routing, while plannedKey remains available separately.
-  // Recompute the label against the complete current chart: the persisted enum
-  // is the freshness marker, not permission to compare against a future byte.
-  if (configuredKnown && observedKey && observationBelongsToSelectedDevice &&
-      (encoder.verification === "matched" || encoder.verification === "mismatch")) {
-    const verification = samePanelKey(configuredKey, observedKey) ? "matched" : "mismatch";
-    return {
-      authority: verification,
-      flowAuthority: verification,
-      configuredKnown,
-      configuredKey,
-      plannedKey,
-      observedKey,
-      flowKey: observedKey,
-    };
-  }
-
-  // Editing the future chart changes expectedKey before any USB write. With no
-  // fresh post-edit Teach observation, routes continue to leave from the
-  // current chart output and the keycap says that the new value is only planned.
-  if (configuredKnown && !samePanelKey(plannedKey, configuredKey)) {
-    return {
-      authority: "planned",
-      // The visible route still represents the firmware key from the last
-      // complete read; the plan is separately labelled and is not live yet.
-      flowAuthority: configuredKey ? "configured" : "planned",
-      configuredKnown,
-      configuredKey,
-      plannedKey,
-      observedKey,
-      flowKey: configuredKey,
-    };
-  }
-
-  // A prior Teach observation survives a browser reload, but its comparison
-  // cannot remain authoritative while this session has no complete chart for
-  // the exact board. Keep routing from what Windows observed and promote the
-  // retained match/mismatch only after a fresh chart read proves the firmware
-  // side of that comparison again.
-  if (observedKey && observationBelongsToSelectedDevice &&
-      (encoder.verification === "matched" || encoder.verification === "mismatch")) {
-    return {
-      authority: "observed",
-      flowAuthority: "observed",
-      configuredKnown,
-      configuredKey,
-      plannedKey,
-      observedKey,
-      flowKey: observedKey,
-    };
-  }
-
-  if (configuredKnown) {
-    return {
-      authority: configuredKey ? "configured" : "unassigned",
-      flowAuthority: configuredKey ? "configured" : "unassigned",
-      configuredKnown,
-      configuredKey,
-      plannedKey,
-      observedKey,
-      flowKey: configuredKey,
-    };
-  }
-
   return {
-    authority: plannedKey ? "expected" : "unassigned",
-    flowAuthority: plannedKey ? "expected" : "unassigned",
-    configuredKnown,
-    configuredKey,
-    plannedKey,
+    authority: observedKey ? "observed" : "unassigned",
+    flowAuthority: observedKey ? "observed" : "unassigned",
+    configuredKnown: false,
+    configuredKey: "",
+    plannedKey: "",
     observedKey,
-    // expectedKey is a planning hint until a complete current-board read
-    // proves it. It may have come from an abandoned draft, so it never owns a
-    // cord without either chart authority or a Windows observation.
-    flowKey: "",
+    flowKey: observedKey,
   };
 }
-
 function controlSurfaceRouteKey(channel: ControlSurfaceChannel): string {
   const truth = controlSurfaceSignalTruth(channel);
   return truth.authority === "observed" || truth.authority === "matched" ||
@@ -4155,3235 +2453,6 @@ function controlSurfaceRouteKey(channel: ControlSurfaceChannel): string {
     ? truth.observedKey
     : "";
 }
-
-/** Reconcile every linked physical channel from the complete chart, including
- * terminals whose bytes were unchanged in the most recent plan. A plan diff
- * is intentionally sparse; using it as the assignment source caused linked
- * canonical terminals outside the diff to retain stale expected keys. */
-function reconcilePanelProgrammingChart(chart: PanelChartView, forceUnverified: boolean): void {
-  const terminals = new Map(chart.terminals.map((terminal) => [terminal.terminal_id, terminal]));
-  const linked = controlSurfaceState.controls.flatMap((control) =>
-    control.channels
-      .filter((channel) => channel.encoder?.boardFingerprint === chart.board_fingerprint)
-      .map((channel) => ({ controlId: control.id, channel }))
-  );
-  const selectedControlId = controlSurfaceState.selectedControlId;
-  const selectedChannelId = controlSurfaceState.selectedChannelId;
-  let next = controlSurfaceState;
-  for (const { controlId, channel } of linked) {
-    const encoder = channel.encoder;
-    const terminal = encoder ? terminals.get(encoder.terminalId) : null;
-    if (!encoder || !terminal) continue;
-    next = assignControlSurfaceTerminal(next, controlId, channel.id, {
-      driver: chart.driver,
-      boardFingerprint: chart.board_fingerprint,
-      terminalId: terminal.terminal_id,
-      terminalLabel: terminal.terminal_label,
-      // An opaque/vendor action is real chart state, not permission to keep a
-      // stale previously-observed key. Clearing it makes Custom visibly
-      // incomplete until the user deliberately chooses a supported action.
-      expectedKey: terminal.normal.supported ? terminal.normal.key ?? "" : "",
-    });
-  }
-  if (forceUnverified) {
-    next = invalidateControlSurfaceEncoderVerification(next, chart.board_fingerprint);
-  }
-  if (next !== controlSurfaceState) {
-    applyControlSurfaceState(
-      { ...next, selectedControlId, selectedChannelId },
-      true,
-    );
-  }
-}
-
-function panelProgrammingSurfaceAssignments(): PanelTerminalDraftAssignment[] {
-  const chart = panelProgrammingState.inspection.chart;
-  if (!chart) return [];
-  const assignments = new Map<string, {
-    assignment: PanelTerminalDraftAssignment;
-    linkedViews: number;
-  }>();
-  for (const control of controlSurfaceState.controls) {
-    for (const channel of control.channels) {
-      const encoder = channel.encoder;
-      if (!encoder || encoder.boardFingerprint !== chart.board_fingerprint) continue;
-      const identity = encoder.terminalId.toLocaleLowerCase();
-      const existing = assignments.get(identity);
-      if (existing) {
-        existing.linkedViews += 1;
-        continue;
-      }
-      assignments.set(identity, {
-        linkedViews: 1,
-        assignment: {
-          physical_id: control.physicalId,
-          channel_id: channel.id,
-          component_label: `${control.label} · ${channel.label}`,
-          player_slot: control.playerSlot,
-          terminal_id: encoder.terminalId,
-          layer_id: "normal",
-          requested_key: encoder.expectedKey,
-          allow_shared_key: panelProgrammingDraftTerminal(encoder.terminalId)
-            ?.allow_shared_key === true,
-        },
-      });
-    }
-  }
-  return [...assignments.values()].map(({ assignment, linkedViews }) => ({
-    ...assignment,
-    component_label: linkedViews > 1
-      ? `${assignment.component_label} · ${linkedViews} linked views of one terminal`
-      : assignment.component_label,
-  }));
-}
-
-function panelProgrammingDraftFingerprint(
-  draft: readonly PanelHardwareTerminalDraft[] = panelProgrammingTerminalDraft,
-): string {
-  return JSON.stringify(draft.map((terminal) => ({
-    terminal_id: terminal.terminal_id,
-    normal_key: terminal.normal_key,
-    shifted_key: terminal.shifted_key,
-    is_shift: terminal.is_shift,
-    allow_shared_key: terminal.allow_shared_key,
-  })));
-}
-
-function panelProgrammingDraftDirty(): boolean {
-  return Boolean(panelProgrammingDraftBaseline) &&
-    panelProgrammingDraftFingerprint() !== panelProgrammingDraftBaseline;
-}
-
-function clonePanelProgrammingDraft(
-  draft: readonly PanelHardwareTerminalDraft[],
-): PanelHardwareTerminalDraft[] {
-  return draft.map((terminal) => ({ ...terminal }));
-}
-
-function panelProgrammingChartDraftIdentity(chart: PanelChartView): string {
-  return JSON.stringify({
-    driver: chart.driver,
-    protocol_profile: chart.protocol_profile,
-    terminals: chart.terminals.map((terminal) => terminal.terminal_id).sort(),
-  });
-}
-
-function cacheCurrentPanelProgrammingDraft(): void {
-  const chart = panelProgrammingState.inspection.chart;
-  if (!chart) return;
-  if (!panelProgrammingDraftDirty()) {
-    panelProgrammingDraftCache.delete(chart.board_fingerprint);
-    return;
-  }
-  panelProgrammingDraftCache.set(chart.board_fingerprint, {
-    chartIdentity: panelProgrammingChartDraftIdentity(chart),
-    draft: clonePanelProgrammingDraft(panelProgrammingTerminalDraft),
-    source: panelProgrammingDraftSource,
-    baseline: panelProgrammingDraftBaseline,
-    assignmentMode: panelProgrammingState.editor.assignment_mode,
-    selectedProfileId: panelProgrammingSelectedProfileId,
-  });
-}
-
-function cachedPanelProgrammingDraft(chart: PanelChartView): PanelProgrammingCachedDraft | null {
-  const cached = panelProgrammingDraftCache.get(chart.board_fingerprint);
-  if (!cached) return null;
-  if (cached.chartIdentity !== panelProgrammingChartDraftIdentity(chart) ||
-      panelProgrammingDraftFingerprint(cached.draft) === cached.baseline) {
-    panelProgrammingDraftCache.delete(chart.board_fingerprint);
-    return null;
-  }
-  return cached;
-}
-
-function forgetCurrentPanelProgrammingDraft(): void {
-  const fingerprint = panelProgrammingState.inspection.chart?.board_fingerprint;
-  if (fingerprint) panelProgrammingDraftCache.delete(fingerprint);
-}
-
-function confirmPanelProgrammingDraftReplacement(replacement: string): boolean {
-  if (!panelProgrammingDraftDirty()) return true;
-  const terminalCount = panelProgrammingState.inspection.chart?.terminals.length ||
-    panelProgrammingTerminalDraft.length || 56;
-  const confirmed = window.confirm(
-    `Discard the unsaved ${terminalCount}-terminal draft changes and ${replacement}? ` +
-      "This replaces only the browser draft; the I-PAC and saved hardware layouts stay unchanged.",
-  );
-  if (confirmed) forgetCurrentPanelProgrammingDraft();
-  return confirmed;
-}
-
-function panelProgrammingDraftFromTerminals(
-  terminals: readonly PanelChartTerminalView[],
-): PanelHardwareTerminalDraft[] {
-  return terminals.map((terminal) => ({
-    terminal_id: terminal.terminal_id,
-    normal_key: terminal.normal.supported ? terminal.normal.key ?? "" : undefined,
-    shifted_key: terminal.shifted.supported ? terminal.shifted.key ?? "" : undefined,
-    is_shift: terminal.shift_state === "opaque" ? undefined : terminal.is_shift,
-    allow_shared_key: false,
-  }));
-}
-
-function panelProgrammingDraftFromChart(chart: PanelChartView): PanelHardwareTerminalDraft[] {
-  return panelProgrammingDraftFromTerminals(chart.terminals);
-}
-
-function panelProgrammingRecommendationAvailable(
-  chart: PanelChartView | null,
-): chart is PanelChartView & { recommended_terminals: PanelChartTerminalView[] } {
-  if (!chart || !chart.recommended_terminals ||
-      chart.recommended_terminals.length !== chart.terminals.length) return false;
-  const expected = new Set(chart.terminals.map((terminal) => terminal.terminal_id));
-  const served = new Set(chart.recommended_terminals.map((terminal) => terminal.terminal_id));
-  return served.size === expected.size && Array.from(expected).every((id) => served.has(id));
-}
-
-function panelProgrammingBlankDraft(chart: PanelChartView): PanelHardwareTerminalDraft[] {
-  return chart.terminals.map((terminal) => ({
-    terminal_id: terminal.terminal_id,
-    normal_key: terminal.normal.supported ? "" : undefined,
-    shifted_key: terminal.shifted.supported ? "" : undefined,
-    is_shift: terminal.shift_state === "opaque" ? undefined : false,
-    allow_shared_key: false,
-  }));
-}
-
-function panelProgrammingProfileDraft(profile: PanelHardwareProfile): PanelHardwareTerminalDraft[] {
-  const rows = new Map(profile.terminals.map((terminal) => [terminal.terminal_id, terminal]));
-  return (panelProgrammingState.inspection.chart?.terminals ?? []).map((terminal) => {
-    const saved = rows.get(terminal.terminal_id);
-    return {
-      terminal_id: terminal.terminal_id,
-      normal_key: saved?.normal_key ?? "",
-      shifted_key: saved?.shifted_key ?? "",
-      is_shift: saved?.is_shift ?? false,
-      allow_shared_key: saved?.allow_shared_key ?? false,
-    };
-  });
-}
-
-function panelProgrammingUseDraft(
-  draft: PanelHardwareTerminalDraft[],
-  source: PanelProgrammingDraftSource,
-  mode: PanelAssignmentMode,
-): void {
-  panelProgrammingTerminalDraft = draft;
-  panelProgrammingDraftSource = source;
-  panelProgrammingDraftBaseline = panelProgrammingDraftFingerprint(draft);
-  panelProgrammingState.editor.assignment_mode = mode;
-  panelProgrammingDropPlan();
-  synchronizePanelProgrammingDraftKeys();
-}
-
-function panelProgrammingImportSurfaceDraft(): void {
-  const chart = panelProgrammingState.inspection.chart;
-  if (!chart) return;
-  const draft = panelProgrammingDraftFromChart(chart);
-  const rows = new Map(draft.map((terminal) => [terminal.terminal_id, terminal]));
-  for (const assignment of panelProgrammingSurfaceAssignments()) {
-    const terminal = rows.get(assignment.terminal_id);
-    if (!terminal) continue;
-    terminal.normal_key = assignment.requested_key;
-    terminal.allow_shared_key ||= assignment.allow_shared_key;
-  }
-  panelProgrammingUseDraft(draft, "panel-links", "custom");
-}
-
-function panelProgrammingDraftAssignments(): PanelTerminalDraftAssignment[] {
-  const chart = panelProgrammingState.inspection.chart;
-  if (!chart) return [];
-  const labels = new Map(chart.terminals.map((terminal) => [
-    terminal.terminal_id,
-    terminal.terminal_label,
-  ]));
-  const assignments: PanelTerminalDraftAssignment[] = [];
-  for (const terminal of panelProgrammingTerminalDraft) {
-    for (const [layer, key] of [
-      ["normal", terminal.normal_key],
-      ["shifted", terminal.shifted_key],
-    ] as const) {
-      if (!key?.trim()) continue;
-      assignments.push({
-        physical_id: `terminal:${terminal.terminal_id}`,
-        channel_id: layer,
-        component_label: `${labels.get(terminal.terminal_id) ?? terminal.terminal_id} · ${layer}`,
-        player_slot: Number.parseInt(terminal.terminal_id, 10) || null,
-        terminal_id: terminal.terminal_id,
-        layer_id: layer,
-        requested_key: key,
-        allow_shared_key: terminal.allow_shared_key,
-      });
-    }
-  }
-  return assignments;
-}
-
-function panelProgrammingConflicts(): ReturnType<typeof panelAssignmentConflicts> {
-  const chart = panelProgrammingState.inspection.chart;
-  return panelAssignmentConflicts(panelProgrammingDraftAssignments(), {
-    supported_keys: chart?.key_options.map((option) => option.key) ?? [],
-  });
-}
-
-function panelProgrammingEdits(): PanelTerminalEdit[] {
-  return panelProgrammingTerminalDraft.map((terminal) => ({
-    terminal_id: terminal.terminal_id,
-    ...(terminal.normal_key !== undefined
-      ? { normal_key: terminal.normal_key ?? "" }
-      : {}),
-    ...(terminal.shifted_key !== undefined
-      ? { shifted_key: terminal.shifted_key ?? "" }
-      : {}),
-    ...(terminal.is_shift !== undefined ? { is_shift: terminal.is_shift } : {}),
-    allow_shared_key: terminal.allow_shared_key,
-  }));
-}
-
-/** The first live transaction is intentionally tiny and reversible. Return
- * only semantic normal-plane changes; unchanged linked controls are useful
- * surface documentation but are not part of the qualification write. */
-function panelProgrammingQualificationEdits(): PanelTerminalEdit[] {
-  const terminalId = panelProgrammingState.editor.qualification_terminal_id.trim();
-  const key = panelProgrammingState.editor.qualification_key.trim();
-  let changed: PanelTerminalEdit[];
-  if (terminalId || key) {
-    changed = [{ terminal_id: terminalId, normal_key: key }];
-  } else {
-    const terminalEdits = new Map<string, PanelTerminalEdit>();
-    const divergent: PanelTerminalEdit[] = [];
-    for (const assignment of panelProgrammingSurfaceAssignments()) {
-      const edit: PanelTerminalEdit = {
-        terminal_id: assignment.terminal_id,
-        normal_key: assignment.requested_key,
-        allow_shared_key: assignment.allow_shared_key,
-      };
-      const previous = terminalEdits.get(edit.terminal_id);
-      if (!previous) {
-        terminalEdits.set(edit.terminal_id, edit);
-      } else if (samePanelKey(previous.normal_key, edit.normal_key)) {
-        // Several drawings may intentionally describe one physical terminal.
-        // They are one qualification edit, not several hardware channels.
-        previous.allow_shared_key ||= edit.allow_shared_key;
-      } else {
-        // The control-surface sanitizer should make this unreachable. Keep
-        // both rows so qualification fails closed if a divergent document
-        // reaches this boundary anyway.
-        divergent.push(previous, edit);
-      }
-    }
-    if (divergent.length > 0) return divergent;
-    changed = [...terminalEdits.values()].filter((edit) => {
-      const terminal = panelProgrammingTerminal(edit.terminal_id);
-      return terminal && !samePanelKey(edit.normal_key, terminal.normal.key);
-    });
-  }
-  if (changed.length !== 1) return changed;
-  const requested = changed[0].normal_key?.trim() ?? "";
-  if (!requested) return changed;
-  const owners = (panelProgrammingState.inspection.chart?.terminals ?? []).filter(
-    (terminal) => terminal.terminal_id !== changed[0].terminal_id &&
-      samePanelKey(terminal.normal.key, requested),
-  );
-  if (owners.length === 0) return changed;
-  return [
-    { ...changed[0], allow_shared_key: true },
-    ...owners.map((terminal) => ({
-      terminal_id: terminal.terminal_id,
-      normal_key: terminal.normal.key,
-      allow_shared_key: true,
-    })),
-  ];
-}
-
-function panelProgrammingQualificationChangedEdits(
-  edits: readonly PanelTerminalEdit[],
-): PanelTerminalEdit[] {
-  const terminalCounts = new Map<string, number>();
-  for (const edit of edits) {
-    terminalCounts.set(edit.terminal_id, (terminalCounts.get(edit.terminal_id) ?? 0) + 1);
-  }
-  return edits.filter((edit) => {
-    const terminal = panelProgrammingTerminal(edit.terminal_id);
-    return (terminalCounts.get(edit.terminal_id) ?? 0) > 1 ||
-      Boolean(terminal && !samePanelKey(edit.normal_key, terminal.normal.key));
-  });
-}
-
-function panelProgrammingQualificationEditIsEligible(edit: PanelTerminalEdit | undefined): boolean {
-  const terminal = edit ? panelProgrammingTerminal(edit.terminal_id) : null;
-  const key = edit?.normal_key?.trim() ?? "";
-  const chart = panelProgrammingState.inspection.chart;
-  return Boolean(terminal && panelProgrammingQualificationTerminalIsEligible(terminal) && key &&
-    !samePanelKey(key, terminal.normal.key) &&
-    chart?.key_options.some((option) => option.safe_for_qualification === true &&
-      samePanelKey(option.key, key)));
-}
-
-function panelProgrammingQualificationTerminalIsEligible(
-  terminal: PanelChartTerminalView,
-): boolean {
-  return terminal.kind === "button" && /^\d+sw\d+$/i.test(terminal.terminal_id) &&
-    terminal.normal.supported && terminal.shift_state === "disabled";
-}
-
-function panelProgrammingDropPlan(): void {
-  panelProgrammingPlanTargetFingerprint = "";
-  panelProgrammingProgramRequest = null;
-  panelProgrammingRestoreRequest = null;
-  panelProgrammingConfirmed = false;
-  panelProgrammingRecoveryReady = false;
-  panelProgrammingState = {
-    ...panelProgrammingState,
-    editor: {
-      ...panelProgrammingState.editor,
-      // Linking a visible Design control to a terminal changes the retained
-      // draft, but must not silently reopen Hardware Setup and hide the next
-      // control the user intends to link.
-      phase: panelProgrammingState.editor.phase === "closed" ? "closed" : "assign",
-      assignments: panelProgrammingDraftAssignments(),
-      plan_expected_selector: "",
-      plan: null,
-    },
-  };
-}
-
-function panelProgrammingProfileCompatible(profile: PanelHardwareProfile): boolean {
-  const chart = panelProgrammingState.inspection.chart;
-  const profileIds = new Set(profile.terminals.map((terminal) => terminal.terminal_id));
-  return Boolean(chart && profile.terminals.length === chart.terminals.length &&
-    chart.terminals.every((terminal) => profileIds.has(terminal.terminal_id)) &&
-    profile.driver === chart.driver &&
-    profile.protocol_profile === chart.protocol_profile &&
-    (!panelProgrammingProfilesSignature ||
-      profile.terminal_signature === panelProgrammingProfilesSignature));
-}
-
-function panelProgrammingProfileTerminals(): PanelHardwareTerminal[] | null {
-  const chart = panelProgrammingState.inspection.chart;
-  if (!chart || panelProgrammingTerminalDraft.length !== chart.terminals.length) return null;
-  const rows: PanelHardwareTerminal[] = [];
-  for (const draft of panelProgrammingTerminalDraft) {
-    if (draft.normal_key === undefined || draft.shifted_key === undefined) return null;
-    rows.push({
-      terminal_id: draft.terminal_id,
-      normal_key: draft.normal_key || null,
-      shifted_key: draft.shifted_key || null,
-      // ShiftOpaque means the byte is not semantically readable, not that a
-      // portable profile is impossible. The backend preserves that opaque
-      // baseline when this semantic false is later applied.
-      is_shift: draft.is_shift ?? false,
-      allow_shared_key: draft.allow_shared_key,
-    });
-  }
-  return rows;
-}
-
-function panelProgrammingSourceLabel(): string {
-  if (panelProgrammingDraftSource === "recommended") return "KSX four-player layout";
-  if (panelProgrammingDraftSource === "blank") return "Clear-all draft";
-  if (panelProgrammingDraftSource === "panel-links") return "Imported panel links";
-  if (panelProgrammingDraftSource === "saved") {
-    return panelProgrammingProfiles.find(
-      (profile) => profile.profile_id === panelProgrammingSelectedProfileId,
-    )?.name ?? "Saved layout";
-  }
-  return "Current board chart";
-}
-
-function makePanelProgrammingKeySelect(
-  terminalId: string,
-  field: "normal" | "shifted",
-  value: string | null | undefined,
-): HTMLSelectElement {
-  const select = document.createElement("select");
-  select.dataset.nx = "surface-terminal-key";
-  select.dataset.panelTerminal = terminalId;
-  select.dataset.panelField = field;
-  select.setAttribute("aria-label", `${terminalId} ${field} assignment`);
-  const baseline = panelProgrammingTerminal(terminalId);
-  const baselinePlane = field === "shifted" ? baseline?.shifted : baseline?.normal;
-  if (value === undefined || baselinePlane?.supported === false) {
-    const preserve = document.createElement("option");
-    preserve.value = "__preserve__";
-    preserve.textContent = "Opaque · preserve current byte";
-    select.append(preserve);
-  }
-  const unassigned = document.createElement("option");
-  unassigned.value = "";
-  unassigned.textContent = "Unassigned";
-  select.append(unassigned);
-  for (const option of panelProgrammingState.inspection.chart?.key_options ?? []) {
-    const row = document.createElement("option");
-    row.value = option.key;
-    row.textContent = option.label;
-    select.append(row);
-  }
-  select.value = value === undefined ? "__preserve__" : value ?? "";
-  return select;
-}
-
-function renderPanelProgrammingTerminalEditor(): void {
-  const section = controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-terminal-editor");
-  const grid = section?.querySelector<HTMLElement>("[data-surface-terminal-grid]");
-  const note = section?.querySelector<HTMLElement>("[data-surface-terminal-note]");
-  const advanced = section?.querySelector<HTMLInputElement>(
-    '[data-nx="surface-terminal-advanced"]',
-  );
-  const chart = panelProgrammingState.inspection.chart;
-  if (!section || !grid || !note || !advanced) return;
-  const qualificationState = panelProgrammingQualificationState(chart);
-  section.hidden = !chart || qualificationState !== "qualified";
-  advanced.checked = panelProgrammingAdvancedOpen;
-  if (!chart || section.hidden) {
-    grid.replaceChildren();
-    return;
-  }
-  grid.dataset.advanced = String(panelProgrammingAdvancedOpen);
-  grid.replaceChildren();
-  if (panelProgrammingDraftSource === "recommended" &&
-      (!panelProgrammingRecommendationAvailable(chart) ||
-        panelProgrammingTerminalDraft.length !== chart.terminals.length)) {
-    const unavailable = document.createElement("div");
-    unavailable.className = "n-surface-terminal-generated";
-    const title = document.createElement("strong");
-    title.textContent = "Recommendation preview unavailable";
-    const copy = document.createElement("p");
-    copy.textContent =
-      "Refresh Studio before programming. This browser will not invent terminal assignments that the backend did not serve.";
-    unavailable.append(title, copy);
-    grid.append(unavailable);
-    advanced.disabled = true;
-    return;
-  }
-  advanced.disabled = panelProgrammingInteractionBusy() || panelProgrammingTransactionActive();
-  const drafts = new Map(panelProgrammingTerminalDraft.map((row) => [row.terminal_id, row]));
-  for (let player = 1; player <= 4; player += 1) {
-    const playerTerminals = chart.terminals.filter((candidate) => candidate.player === player);
-    const group = document.createElement("section");
-    group.className = `n-surface-terminal-player np${player}`;
-    const heading = document.createElement("header");
-    const playerLabel = document.createElement("strong");
-    playerLabel.textContent = `Player ${player}`;
-    const count = document.createElement("span");
-    count.textContent = `${playerTerminals.length} ${playerTerminals.length === 1 ? "terminal" : "terminals"}`;
-    heading.append(playerLabel, count);
-    const tableWrap = document.createElement("div");
-    tableWrap.className = "n-surface-terminal-table-wrap";
-    const table = document.createElement("table");
-    const head = document.createElement("thead");
-    const headRow = document.createElement("tr");
-    for (const [label, advancedColumn] of [
-      ["Terminal", false],
-      ["Normal assignment", false],
-      ["Shifted assignment", true],
-      ["Acts as Shift", true],
-      ["Shared", false],
-    ] as const) {
-      const th = document.createElement("th");
-      th.scope = "col";
-      th.textContent = label;
-      if (advancedColumn) th.className = "advanced";
-      headRow.append(th);
-    }
-    head.append(headRow);
-    const body = document.createElement("tbody");
-    for (const terminal of playerTerminals) {
-      const draft = drafts.get(terminal.terminal_id) ?? {
-        terminal_id: terminal.terminal_id,
-        allow_shared_key: false,
-      };
-      const row = document.createElement("tr");
-      row.dataset.panelTerminalRow = terminal.terminal_id;
-      const labelCell = document.createElement("th");
-      labelCell.scope = "row";
-      const label = document.createElement("strong");
-      label.textContent = terminal.terminal_label;
-      const id = document.createElement("small");
-      id.textContent = terminal.terminal_id;
-      labelCell.append(label, id);
-      const normalCell = document.createElement("td");
-      normalCell.append(makePanelProgrammingKeySelect(
-        terminal.terminal_id,
-        "normal",
-        draft.normal_key,
-      ));
-      const shiftedCell = document.createElement("td");
-      shiftedCell.className = "advanced";
-      shiftedCell.append(makePanelProgrammingKeySelect(
-        terminal.terminal_id,
-        "shifted",
-        draft.shifted_key,
-      ));
-      const shiftCell = document.createElement("td");
-      shiftCell.className = "advanced";
-      const shiftLabel = document.createElement("label");
-      const shift = document.createElement("input");
-      shift.type = "checkbox";
-      shift.dataset.nx = "surface-terminal-shift";
-      shift.dataset.panelTerminal = terminal.terminal_id;
-      shift.checked = draft.is_shift === true;
-      shift.indeterminate = draft.is_shift === undefined;
-      const shiftText = document.createElement("span");
-      shiftText.textContent = draft.is_shift === undefined ? "Preserve" : "Shift";
-      shiftLabel.append(shift, shiftText);
-      shiftCell.append(shiftLabel);
-      const sharedCell = document.createElement("td");
-      const sharedLabel = document.createElement("label");
-      const shared = document.createElement("input");
-      shared.type = "checkbox";
-      shared.dataset.nx = "surface-terminal-shared";
-      shared.dataset.panelTerminal = terminal.terminal_id;
-      shared.checked = draft.allow_shared_key;
-      const sharedText = document.createElement("span");
-      sharedText.textContent = "Allow";
-      sharedLabel.title = "Allow this key to be deliberately shared with another physical terminal";
-      sharedLabel.append(shared, sharedText);
-      sharedCell.append(sharedLabel);
-      row.append(labelCell, normalCell, shiftedCell, shiftCell, sharedCell);
-      body.append(row);
-    }
-    table.append(head, body);
-    tableWrap.append(table);
-    group.append(heading, tableWrap);
-    grid.append(group);
-  }
-  note.textContent = panelProgrammingDraftSource === "recommended"
-    ? "Exact preview from the backend: 56 unique Windows key signals arranged for four players. Review this table before programming; choose Current outputs for a directly editable chart."
-    : panelProgrammingAdvancedOpen
-    ? "Advanced is open. Shifted assignments and Acts as Shift are persistent I-PAC behavior; leave opaque values on Preserve unless you intend to replace them."
-    : "Windows key outputs are what KSX receives. Open Advanced only for the I-PAC shifted layer and terminal Shift roles.";
-  const locked = panelProgrammingInteractionBusy() || panelProgrammingTransactionActive() ||
-    panelProgrammingState.capability.kind !== "programmable" ||
-    panelProgrammingDraftSource === "recommended";
-  for (const control of Array.from(grid.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
-    "input, select",
-  ))) control.disabled = locked;
-}
-
-function syncPanelHardwareProfilesUi(): void {
-  const section = controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-hardware-profiles");
-  if (!section) return;
-  section.hidden = !panelProgrammingState.inspection.chart ||
-    panelProgrammingQualificationState() !== "qualified";
-  if (section.hidden) return;
-  const select = section.querySelector<HTMLSelectElement>("[data-surface-profile]");
-  const summary = section.querySelector<HTMLElement>("[data-surface-profiles-summary]");
-  const message = section.querySelector<HTMLElement>("[data-surface-profiles-message]");
-  const name = section.querySelector<HTMLInputElement>("[data-surface-profile-name]");
-  const description = section.querySelector<HTMLInputElement>(
-    "[data-surface-profile-description]",
-  );
-  if (select) {
-    const selected = panelProgrammingSelectedProfileId;
-    select.replaceChildren();
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = panelProgrammingProfiles.length > 0
-      ? "Choose a saved layout"
-      : "No saved hardware layouts";
-    select.append(placeholder);
-    for (const profile of panelProgrammingProfiles) {
-      const option = document.createElement("option");
-      option.value = profile.profile_id;
-      const compatible = panelProgrammingProfileCompatible(profile);
-      option.disabled = !compatible;
-      option.textContent = compatible ? profile.name : `${profile.name} · incompatible`;
-      select.append(option);
-    }
-    if (panelProgrammingProfiles.some((profile) => profile.profile_id === selected)) {
-      select.value = selected;
-      panelProgrammingSelectedProfileId = selected;
-    }
-    select.disabled = panelProgrammingProfilesBusy || panelProgrammingProfiles.length === 0;
-  }
-  const selectedProfile = panelProgrammingProfiles.find(
-    (profile) => profile.profile_id === panelProgrammingSelectedProfileId,
-  );
-  if (summary) {
-    summary.textContent = panelProgrammingProfilesBusy
-      ? "Working…"
-      : `${panelProgrammingProfiles.length} saved ${panelProgrammingProfiles.length === 1 ? "layout" : "layouts"}`;
-  }
-  if (message) message.textContent = panelProgrammingProfilesMessage;
-  const complete = panelProgrammingProfileTerminals() !== null;
-  const profileName = name?.value.trim() ?? "";
-  for (const button of Array.from(section.querySelectorAll<HTMLButtonElement>("[data-nx]"))) {
-    const action = button.dataset.nx;
-    button.disabled = panelProgrammingProfilesBusy ||
-      (action === "surface-profile-use" && (!selectedProfile ||
-        !panelProgrammingProfileCompatible(selectedProfile))) ||
-      (action === "surface-profile-save" && (!complete || !profileName)) ||
-      ((action === "surface-profile-update" || action === "surface-profile-delete") &&
-        !selectedProfile) ||
-      (action === "surface-profile-update" && (!complete || !profileName));
-  }
-  if (name) name.disabled = panelProgrammingProfilesBusy;
-  if (description) description.disabled = panelProgrammingProfilesBusy;
-}
-
-function syncPanelProgrammingUi(): void {
-  // A chart reread can reveal a same-selector replacement or different image
-  // without changing the ordinary Nocturne poll payload. Mapping gestures are
-  // pinned to that exact hardware proof, so reconcile them here too.
-  reconcileBindingActionAuthority();
-  const item = controlSurfaceItem;
-  if (!item) return;
-  const section = item.querySelector<HTMLElement>(".n-surface-programming");
-  const summary = section?.querySelector<HTMLElement>("[data-surface-programming-summary]");
-  const review = section?.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-review"]');
-  const restore = section?.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-restore"]');
-  const reread = section?.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-read"]');
-  const close = section?.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-close"]');
-  const backupSelect = section?.querySelector<HTMLSelectElement>("[data-surface-backup]");
-  const backupLabel = section?.querySelector<HTMLElement>("[data-surface-backup-label]");
-  const conflictList = section?.querySelector<HTMLUListElement>("[data-surface-programming-conflicts]");
-  const qualification = section?.querySelector<HTMLElement>(
-    "[data-surface-programming-qualification]",
-  );
-  const qualificationPicker = section?.querySelector<HTMLElement>(
-    "[data-surface-qualification-picker]",
-  );
-  const qualificationTerminal = section?.querySelector<HTMLSelectElement>(
-    '[data-nx="surface-qualification-terminal"]',
-  );
-  const qualificationKey = section?.querySelector<HTMLSelectElement>(
-    '[data-nx="surface-qualification-key"]',
-  );
-  const qualificationSelection = section?.querySelector<HTMLElement>(
-    "[data-surface-qualification-selection]",
-  );
-  const programmingKicker = section?.querySelector<HTMLElement>(
-    "[data-surface-programming-kicker]",
-  );
-  const programmingTitle = section?.querySelector<HTMLElement>(
-    "[data-surface-programming-title]",
-  );
-  const programmingDevice = section?.querySelector<HTMLElement>(
-    "[data-surface-programming-device]",
-  );
-  const terminalStatus = section?.querySelector<HTMLElement>(
-    "[data-surface-terminal-status]",
-  );
-  const chart = panelProgrammingState.inspection.chart;
-  const statusTarget = controlSurfaceHardwarePayload?.target_selector?.trim() ?? "";
-  const statusBoard = statusTarget && statusTarget === panelProgrammingTarget()
-    ? controlSurfaceHardwarePayload?.view?.panels[0] ?? null
-    : null;
-  const task = panelProgrammingTaskCopy(chart);
-  const authority = currentPanelChartAuthority();
-  const capability = panelProgrammingState.capability;
-  const recoveryRequired = panelProgrammingState.transaction.phase === "recovery-required";
-  const qualificationState = panelProgrammingQualificationState(chart);
-  const qualificationNeedsRestore = panelProgrammingQualificationNeedsRestore(
-    qualificationState,
-  );
-  const qualificationEdits = qualificationState === "required"
-    ? panelProgrammingQualificationEdits()
-    : [];
-  const qualificationChangedEdits = panelProgrammingQualificationChangedEdits(
-    qualificationEdits,
-  );
-  const exactQualificationBackup = qualificationNeedsRestore && chart
-    ? chart.qualification_restore_backup_id?.trim() ||
-      (panelProgrammingState.transaction.operation === "program"
-        ? panelProgrammingState.transaction.outcome?.backup.backup_id ?? ""
-        : "")
-    : "";
-  const open = panelProgrammingState.editor.phase !== "closed";
-  if (programmingKicker) {
-    programmingKicker.textContent = task.kicker;
-  }
-  if (programmingTitle) {
-    programmingTitle.textContent = qualificationState === "qualified" || !chart
-      ? task.title
-      : "Verify this I-PAC writer, then choose its hardware outputs";
-  }
-  if (section) {
-    section.hidden = !open;
-    section.dataset.capability = capability.kind;
-    section.dataset.qualification = chart ? qualificationState : "unread";
-    section.dataset.dirty = String(panelProgrammingDraftDirty());
-    section.dataset.draftSource = panelProgrammingDraftSource;
-    section.setAttribute("aria-busy", String(panelProgrammingInteractionBusy()));
-  }
-  if (programmingDevice) {
-    programmingDevice.replaceChildren();
-    const facts = [
-      {
-        key: "board",
-        label: "Board",
-        value: chart?.board_name ?? statusBoard?.name?.trim() ?? "Not read",
-        detail: statusBoard?.identity?.trim() || "Read the hardware chart to identify this encoder.",
-      },
-      {
-        key: "firmware",
-        label: "Board firmware",
-        value: statusBoard?.firmware_label?.trim() || "Not identified",
-        detail: statusBoard?.firmware_detail?.trim() ||
-          "No exact measured firmware profile is available for this status response.",
-      },
-      {
-        key: "input",
-        label: "Input observed",
-        value: statusBoard?.observed_mode_label?.trim() || "Not inspected",
-        detail: statusBoard?.mode_detail?.trim() ||
-          "KSX has not inspected the selected encoder's input collections.",
-      },
-      {
-        key: "outputs",
-        label: "Windows key outputs",
-        value: chart ? `${panelProgrammingAssignedCount(chart)} of ${chart.terminals.length}` : "—",
-        detail: chart
-          ? `${chart.terminals.length}-terminal chart read back${chart.backup ? "; backup ready" : ""}; KSX profile ${chart.protocol_profile}`
-          : statusBoard?.profile_terminal_count
-          ? `${statusBoard.profile_terminal_count}-terminal profile capacity; chart not read`
-          : "Read the chart to inspect terminal assignments.",
-      },
-      {
-        key: "routes",
-        label: "KSX routes",
-        value: chart ? `${panelProgrammingMappedKeyCount(chart)} hardware keys mapped` : "—",
-        detail: qualificationState === "qualified"
-          ? "Hardware writer verified; mappings remain dynamic in KSX."
-          : "One-time hardware-writer check still required.",
-      },
-    ] as const;
-    for (const fact of facts) {
-      const row = document.createElement("div");
-      row.dataset.surfaceBoardFact = fact.key;
-      const dt = document.createElement("dt");
-      const dd = document.createElement("dd");
-      const value = document.createElement("strong");
-      const detail = document.createElement("small");
-      dt.textContent = fact.label;
-      value.dataset.surfaceBoardFactValue = "";
-      value.textContent = fact.value;
-      detail.dataset.surfaceBoardFactDetail = "";
-      detail.textContent = fact.detail;
-      dd.title = `${fact.value} — ${fact.detail}`;
-      dd.append(value, detail);
-      row.append(dt, dd);
-      programmingDevice.append(row);
-    }
-  }
-  if (qualification) {
-    qualification.hidden = !chart || qualificationState === "qualified";
-    qualification.dataset.state = qualificationState;
-    const title = qualification.querySelector<HTMLElement>(
-      "[data-surface-qualification-title]",
-    );
-    const detail = qualification.querySelector<HTMLElement>(
-      "[data-surface-qualification-detail]",
-    );
-    const step = qualification.querySelector<HTMLElement>(
-      "[data-surface-qualification-step]",
-    );
-    if (qualificationState === "validation-recovery") {
-      if (title) title.textContent = "Recover the validation write, then repeat the check";
-      if (detail) detail.textContent =
-        `KSX could not prove the first test write completed cleanly. Restore its exact safety backup before doing anything else. A verified restore returns this encoder to step 1—it does not unlock full layouts.${chart?.qualification_detail ? ` ${chart.qualification_detail}` : ""}`;
-      if (step) step.textContent = "Writer check · recovery";
-    } else if (qualificationState === "validation-written") {
-      if (title) title.textContent = "Validation write verified — restore its safety backup";
-      if (detail) detail.textContent =
-        `Do not prepare another write. Restore the exact safety backup captured immediately before the validation write; KSX will read it back before unlocking full layouts.${chart?.qualification_detail ? ` ${chart.qualification_detail}` : ""}`;
-      if (step) step.textContent = "Writer check · step 2 of 2";
-    } else {
-      if (title) title.textContent = "Verify this I-PAC writer once";
-      if (detail) detail.textContent =
-        `Choose one noncritical SW action button—not a direction, Start, or Coin—with its Shift state explicitly disabled, then choose one temporary safe key. Exactly one desired byte differs, but the I-PAC protocol retransmits the complete 256-byte chart as all 64 HID reports. KSX backs up the board, verifies the reversible write, and requires that exact backup to be restored before complete layouts unlock.${chart?.qualification_detail ? ` ${chart.qualification_detail}` : ""}`;
-      if (step) step.textContent = "Writer check · step 1 of 2";
-    }
-  }
-  if (qualificationPicker) {
-    qualificationPicker.hidden = !chart || qualificationState !== "required";
-  }
-  if (qualificationTerminal) {
-    const selected = panelProgrammingState.editor.qualification_terminal_id;
-    qualificationTerminal.replaceChildren();
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = "Choose a wired noncritical SW terminal";
-    qualificationTerminal.append(placeholder);
-    for (const terminal of chart?.terminals ?? []) {
-      if (!panelProgrammingQualificationTerminalIsEligible(terminal)) continue;
-      const option = document.createElement("option");
-      option.value = terminal.terminal_id;
-      option.textContent = `${terminal.terminal_label} · P${terminal.player} action · currently ${terminal.normal.label}`;
-      qualificationTerminal.append(option);
-    }
-    qualificationTerminal.value = [...qualificationTerminal.options].some(
-      (option) => option.value === selected,
-    ) ? selected : "";
-    qualificationTerminal.disabled = panelProgrammingInteractionBusy() ||
-      panelProgrammingTransactionActive() || recoveryRequired || !chart;
-  }
-  if (qualificationKey) {
-    const selected = panelProgrammingState.editor.qualification_key;
-    const selectedTerminal = panelProgrammingTerminal(
-      panelProgrammingState.editor.qualification_terminal_id,
-    );
-    qualificationKey.replaceChildren();
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = "Choose a temporary safe key";
-    qualificationKey.append(placeholder);
-    for (const key of chart?.key_options ?? []) {
-      if (key.safe_for_qualification !== true ||
-          samePanelKey(key.key, selectedTerminal?.normal.key)) continue;
-      const option = document.createElement("option");
-      option.value = key.key;
-      option.textContent = key.label;
-      qualificationKey.append(option);
-    }
-    qualificationKey.value = [...qualificationKey.options].some(
-      (option) => option.value === selected,
-    ) ? selected : "";
-    qualificationKey.disabled = panelProgrammingInteractionBusy() ||
-      panelProgrammingTransactionActive() || recoveryRequired || !chart;
-  }
-  if (qualificationSelection) {
-    const terminal = panelProgrammingTerminal(
-      panelProgrammingState.editor.qualification_terminal_id,
-    );
-    const key = chart?.key_options.find(
-      (candidate) => candidate.key === panelProgrammingState.editor.qualification_key,
-    );
-    const sharedOwners = Math.max(0, qualificationEdits.length - 1);
-    qualificationSelection.textContent = terminal && key
-      ? `${terminal.terminal_label} will temporarily change from ${terminal.normal.label} to ${key.label}.${sharedOwners > 0 ? ` ${sharedOwners} existing ${key.label} ${sharedOwners === 1 ? "owner is" : "owners are"} acknowledged as deliberate sharing; only this terminal changes.` : ""} Nothing is written until you review and confirm the complete diff.`
-      : "Choose both values to prepare the reversible safety review.";
-  }
-  for (const button of Array.from(
-    section?.querySelectorAll<HTMLButtonElement>("[data-surface-programming-mode]") ?? [],
-  )) {
-    const mode = button.dataset.surfaceProgrammingMode as PanelAssignmentMode | undefined;
-    if (mode === "custom") {
-      button.hidden = !controlSurfaceState.started;
-    }
-    const sourceSelected = qualificationState !== "qualified"
-      ? mode === "custom" && panelProgrammingState.editor.assignment_mode === "custom"
-      : mode === "recommended"
-      ? panelProgrammingDraftSource === "recommended"
-      : mode === "blank"
-      ? panelProgrammingDraftSource === "blank"
-      : mode === "keep-current"
-      ? panelProgrammingDraftSource === "current"
-      : panelProgrammingDraftSource === "panel-links";
-    button.setAttribute("aria-pressed", String(sourceSelected));
-    const qualificationLocksMode = mode === "recommended" || mode === "blank"
-      ? qualificationState !== "qualified"
-      : mode === "custom" && qualificationNeedsRestore;
-    const recommendationUnavailable = mode === "recommended" &&
-      !panelProgrammingRecommendationAvailable(chart);
-    button.disabled = panelProgrammingInteractionBusy() || panelProgrammingTransactionActive() ||
-      recoveryRequired || !chart || qualificationLocksMode || recommendationUnavailable ||
-      (mode !== "keep-current" && capability.kind !== "programmable");
-    if ((mode === "recommended" || mode === "blank") && qualificationState !== "qualified") {
-      button.title = qualificationState === "validation-recovery"
-        ? `Restore the recovery image, then repeat the one-terminal writer check. This recovery restore does not unlock ${mode === "recommended" ? "Recommended" : "Clear assignments"}.`
-        : "Available after the one-terminal writer check is complete.";
-    } else if (recommendationUnavailable) {
-      button.title =
-        "Unavailable: this backend did not serve the complete semantic terminal preview. Refresh Studio or update the backend.";
-    } else if (mode === "custom" && qualificationNeedsRestore) {
-      button.title = qualificationState === "validation-recovery"
-        ? "Restore the interrupted validation write's exact safety backup, then repeat the writer check."
-        : "Restore the validation write's exact safety backup before preparing another program operation.";
-    } else {
-      button.title = button.dataset.surfaceProgrammingDescription ?? "";
-    }
-  }
-  // Writer qualification is deliberately independent of any saved or
-  // partially-authored surface. A stale surface conflict must never prevent
-  // proving one reversible terminal write on a newly installed encoder.
-  const conflicts = panelProgramLayoutForMode(panelProgrammingState.editor.assignment_mode) ===
-      "custom" &&
-      qualificationState !== "required"
-    ? panelProgrammingConflicts()
-    : [];
-  if (summary) {
-    summary.textContent = panelProgrammingMessage || (chart
-      ? `${task.summary} ${panelProgrammingSourceLabel()} is open below.${conflicts.length > 0 ? ` ${conflicts.length} assignment ${conflicts.length === 1 ? "conflict needs" : "conflicts need"} attention.` : ""}`
-      : task.summary);
-  }
-  if (terminalStatus) {
-    terminalStatus.textContent = !chart
-      ? "No chart loaded"
-      : panelProgrammingDraftSource === "recommended"
-      ? "Generated layout · not written"
-      : panelProgrammingDraftSource === "current" && !panelProgrammingDraftDirty()
-      ? "Matches the last board read"
-      : `${panelProgrammingSourceLabel()} · draft not written`;
-  }
-  if (conflictList) {
-    conflictList.replaceChildren();
-    conflictList.hidden = conflicts.length === 0;
-    for (const conflict of conflicts) {
-      const item = document.createElement("li");
-      item.textContent = conflict.message;
-      conflictList.append(item);
-    }
-  }
-  if (review) {
-    const layout = panelProgramLayoutForMode(panelProgrammingState.editor.assignment_mode);
-    const qualificationReady = qualificationState !== "required" ||
-      (layout === "custom" && qualificationChangedEdits.length === 1 &&
-        panelProgrammingQualificationEditIsEligible(qualificationChangedEdits[0]));
-    const customReady = layout !== "custom" || qualificationState === "required"
-      ? qualificationReady
-      : conflicts.length === 0 && panelProgrammingTerminalDraft.length === chart?.terminals.length;
-    const recommendationReady = layout !== "canonical-four-player" ||
-      (panelProgrammingRecommendationAvailable(chart) &&
-        panelProgrammingTerminalDraft.length === chart?.terminals.length);
-    const unchangedCurrent = panelProgrammingDraftSource === "current" &&
-      !panelProgrammingDraftDirty() && qualificationState === "qualified";
-    review.disabled = panelProgrammingInteractionBusy() || recoveryRequired ||
-      capability.kind !== "programmable" || !chart || !authority ||
-      qualificationNeedsRestore ||
-      !layout || !qualificationReady || !customReady || !recommendationReady || unchangedCurrent;
-    review.textContent = panelProgrammingInteractionBusy()
-      ? "Preparing review…"
-      : qualificationState === "validation-recovery"
-      ? "Restore safety backup, then retry"
-      : qualificationState === "validation-written"
-      ? "Restore safety backup to finish"
-      : qualificationState === "required"
-      ? `Review one-terminal test${qualificationChangedEdits.length > 1
-        ? ` (${qualificationChangedEdits.length} changed)`
-        : ""}`
-      : unchangedCurrent
-      ? "No board changes"
-      : panelProgrammingDraftSource === "blank" && !panelProgrammingDraftDirty()
-      ? "Review clear assignments"
-      : "Review & program board";
-  }
-  if (backupSelect) {
-    const selected = backupSelect.value;
-    backupSelect.replaceChildren();
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = panelProgrammingBackups.length > 0
-      ? "Choose a verified backup"
-      : "No verified backups yet";
-    backupSelect.append(placeholder);
-    for (const backup of panelProgrammingBackups) {
-      const option = document.createElement("option");
-      option.value = backup.backup_id;
-      option.textContent = `${backup.label} · ${backup.created_at}`;
-      backupSelect.append(option);
-    }
-    const preferred = exactQualificationBackup || selected;
-    if (panelProgrammingBackups.some((backup) => backup.backup_id === preferred)) {
-      backupSelect.value = preferred;
-    }
-    backupSelect.disabled = panelProgrammingInteractionBusy() || panelProgrammingBackups.length === 0 ||
-      qualificationState === "required";
-  }
-  if (backupLabel) {
-    backupLabel.textContent = qualificationState === "validation-recovery"
-      ? "Required recovery restore"
-      : qualificationState === "validation-written"
-      ? "Required qualification restore"
-      : qualificationState === "required"
-      ? "Restore available after the writer check begins"
-      : "Restore a verified backup";
-  }
-  if (restore) {
-    const recoveryHasCurrentHash = !recoveryRequired || Boolean(
-      panelProgrammingState.transaction.outcome?.observed_sha256,
-    );
-    restore.disabled = panelProgrammingInteractionBusy() || panelProgrammingTransactionActive() ||
-      capability.kind !== "programmable" || !recoveryHasCurrentHash ||
-      qualificationState === "required" || !chart || !backupSelect?.value ||
-      (Boolean(exactQualificationBackup) &&
-        backupSelect.value !== exactQualificationBackup);
-    restore.textContent = qualificationState === "validation-recovery"
-      ? "Review recovery restore…"
-      : qualificationState === "validation-written"
-      ? "Review required restore…"
-      : "Review restore…";
-  }
-  if (reread) {
-    // Keep the visible read action focusable while its first read is running;
-    // readPanelProgrammingChart() is the single-flight authority.
-    reread.disabled = panelProgrammingTransactionActive();
-    reread.setAttribute(
-      "aria-disabled",
-      String(panelProgrammingInteractionBusy() || reread.disabled),
-    );
-  }
-  if (close) {
-    close.disabled = panelProgrammingTransactionActive();
-    close.textContent = controlSurfaceEncoderSetupEntry
-      ? "Back to panel builder"
-      : "Close setup";
-  }
-  const setupButton = item.querySelector<HTMLButtonElement>('[data-nx="surface-encoder-open"]');
-  if (setupButton) {
-    const canOpenChart = panelBoardChartAccessReady(statusBoard);
-    setupButton.disabled = panelProgrammingInteractionBusy() ||
-      panelProgrammingTransactionActive() ||
-      !panelProgrammingTarget() || !canOpenChart;
-    setupButton.textContent = open
-      ? `${selectedEncoderShortName()} hardware open`
-      : canOpenChart
-      ? "Open hardware outputs…"
-      : panelBoardCanReadChart(statusBoard)
-      ? "Resolve hardware first"
-      : statusBoard?.family_id
-      ? "Recognition only"
-      : "Inspect to continue";
-    setupButton.title = canOpenChart
-      ? `Open ${selectedEncoderShortName()}'s complete hardware chart`
-      : panelBoardCanReadChart(statusBoard)
-      ? `Hardware outputs require keyboard-compatible input and one available configuration collection for ${selectedEncoderShortName()}`
-      : statusBoard?.family_id
-      ? `${selectedEncoderShortName()} is recognized, but this exact model and firmware do not have a measured chart driver yet`
-      : "Inspect this exact encoder before opening hardware configuration";
-    setupButton.setAttribute("aria-expanded", String(open));
-  }
-  renderPanelProgrammingTerminalEditor();
-  syncPanelHardwareProfilesUi();
-  syncPanelProgrammingJourneyAndTest();
-  syncPanelEncoderRailStatus();
-  syncIpacSignalSource();
-  syncControlSurfaceInspector();
-}
-
-async function readPanelProgrammingChart(
-  backup: boolean,
-  browserLockHeld = false,
-): Promise<void> {
-  if (!browserLockHeld) {
-    if (panelProgrammingInteractionBusy() || panelProgrammingTransactionActive()) return;
-    panelProgrammingReadPending = true;
-    try {
-      syncPanelProgrammingUi();
-      const requestTargetFingerprint = currentControlSurfaceHardwareFingerprint();
-      const preferredDevice = nCapInstance().trim();
-      const preferredBoard = panelProgrammingState.inspection.chart?.board_fingerprint ?? "";
-      const lockIdentities = controlSurfaceHardwareLockIdentities(preferredDevice, preferredBoard);
-      if (lockIdentities.length === 0 || !navigator.locks) {
-        panelProgrammingSetMessage(
-          "KSX cannot coordinate this encoder across windows. Close other KSX windows or use Web Locks, then read the chart again. Nothing changed.",
-        );
-        return;
-      }
-      const acquired = await withControlSurfaceHardwareLocks(
-        lockIdentities,
-        async () => {
-          if (currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint) {
-            panelProgrammingSetMessage(
-              "The encoder changed while KSX waited for its lock. Nothing was read; open hardware outputs for the current device.",
-            );
-            return;
-          }
-          await readPanelProgrammingChart(backup, true);
-        },
-      );
-      if (!acquired) {
-        panelProgrammingSetMessage(
-          "Another KSX window is using this encoder. Wait for it to finish, then read the chart again. Nothing changed.",
-        );
-      }
-    } catch (error) {
-      panelProgrammingSetMessage(
-        `${error instanceof Error ? error.message : "The browser hardware lock failed."} Nothing was changed.`,
-      );
-    } finally {
-      panelProgrammingReadPending = false;
-      syncPanelProgrammingUi();
-    }
-    return;
-  }
-  const selector = panelProgrammingTarget();
-  if (!selector || panelProgrammingBusy || panelProgrammingTransactionActive()) return;
-  const requestTargetFingerprint = currentControlSurfaceHardwareFingerprint();
-  const hardwareAuthoritySignature = controlSurfaceHardwareEpochAuthoritySignature();
-  if (hardwareAuthoritySignature === null) {
-    panelProgrammingSetMessage(
-      "KSX could not verify the cross-window hardware journal, so it refused the chart read. Restore browser storage access and try again. Nothing was changed.",
-    );
-    return;
-  }
-  // A pending browser intent is not settled by an ordinary chart read. Carry
-  // its exact token to the backend so the server can order this recovery read
-  // against an apply whose initiating document may already have disappeared:
-  // recovery-first permanently cancels that token; apply-first is awaited.
-  const pendingAtRequest = pendingControlSurfaceHardwareEpochs();
-  if (pendingAtRequest === null) {
-    panelProgrammingSetMessage(
-      "KSX could not verify the cross-window hardware journal, so it refused the chart read. Restore browser storage access and try again. Nothing was changed.",
-    );
-    return;
-  }
-  const normalizedSelector = selector.trim().toLocaleUpperCase();
-  const normalizedDevice = normalizedControlSurfaceHardwareDevice(nCapInstance());
-  const recoveryBoard = (panelProgrammingRecoveryTargets.get(requestTargetFingerprint) ??
-    panelProgrammingState.inspection.chart?.board_fingerprint ?? "")
-    .trim().toLocaleUpperCase();
-  let recoveryCandidates = pendingAtRequest.filter(
-    (mutation) => mutation.selector === normalizedSelector,
-  );
-  if (recoveryBoard) {
-    recoveryCandidates = recoveryCandidates.filter(
-      (mutation) => mutation.boardFingerprint === recoveryBoard,
-    );
-  } else {
-    const exactDevice = recoveryCandidates.filter(
-      (mutation) => mutation.device === normalizedDevice,
-    );
-    if (exactDevice.length > 0) recoveryCandidates = exactDevice;
-  }
-  const recoveryMutation = recoveryCandidates.length === 1
-    ? recoveryCandidates[0]
-    : null;
-  panelProgrammingLastTest = null;
-  const generation = ++panelProgrammingGeneration;
-  panelProgrammingPlanTargetFingerprint = "";
-  panelProgrammingBusy = true;
-  panelProgrammingMessage = backup
-    ? "Reading the complete encoder chart and creating a lossless backup…"
-    : "Reading the complete encoder chart…";
-  panelProgrammingState = {
-    ...panelProgrammingState,
-    inspection: {
-      ...panelProgrammingState.inspection,
-      phase: "loading",
-      target_selector: selector,
-      chart: null,
-      error: "",
-      refusal_code: "",
-      remedy: "",
-    },
-    capability: panelProgrammingCapability(null),
-    editor: {
-      ...panelProgrammingState.editor,
-      phase: "assign",
-      plan_expected_selector: "",
-      plan: null,
-    },
-  };
-  syncPanelProgrammingUi();
-  try {
-    const payload = await panelProgrammingJSON<PanelChartPayload>(
-      "/api/panel/chart",
-      "POST",
-      {
-        expected_selector: selector,
-        backup,
-        hardware_epoch: recoveryMutation?.epoch ?? null,
-        expected_board_fingerprint: recoveryMutation?.boardFingerprint ?? null,
-      },
-    );
-    if (generation !== panelProgrammingGeneration) return;
-    if (controlSurfaceHardwareEpochAuthoritySignature() !== hardwareAuthoritySignature) {
-      const reconciled = reconcileControlSurfaceHardwareEpoch(
-        controlSurfaceState,
-        controlSurfaceStore,
-        controlSurfaceAppliedHardwareEpochs,
-      );
-      consumeControlSurfaceHardwareReconciliation(reconciled);
-      saveControlSurfacePrefs();
-      panelProgrammingSetMessage(
-        "Another KSX window changed this encoder while its chart was being read. That stale response was ignored; read the complete chart again after the transaction finishes.",
-      );
-      return;
-    }
-    const current = panelProgrammingTarget();
-    if (!payload.target_selector || payload.target_selector !== selector || current !== selector ||
-        currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint) {
-      resetPanelProgramming(true);
-      return;
-    }
-    if (payload.unavailable || !payload.view) {
-      const remedy = payload.remedy?.trim() ?? "";
-      panelProgrammingState.inspection.phase = "unavailable";
-      panelProgrammingState.inspection.error = payload.unavailable || "The complete chart was unavailable.";
-      panelProgrammingState.inspection.refusal_code = payload.refusal_code?.trim() ?? "";
-      panelProgrammingState.inspection.remedy = remedy;
-      panelProgrammingMessage = remedy
-        ? `${panelProgrammingState.inspection.error} ${remedy}`
-        : `${panelProgrammingState.inspection.error} Nothing was written.`;
-      return;
-    }
-    const chart = payload.view;
-    if (!panelChartAuthority(payload)) {
-      panelProgrammingState.inspection.phase = "unavailable";
-      panelProgrammingState.inspection.error =
-        "The complete chart did not include stable board and image hashes.";
-      panelProgrammingMessage = `${panelProgrammingState.inspection.error} Nothing was written.`;
-      return;
-    }
-    const readBoard = chart.board_fingerprint.trim().toLocaleUpperCase();
-    const chartStillNeedsRecovery = chart.programming_state === "recovery-required";
-    let browserEpochRecoveryDetail = "";
-    const pendingBeforeSettlement = pendingControlSurfaceHardwareEpochs();
-    if (pendingBeforeSettlement === null) {
-      browserEpochRecoveryDetail =
-        "KSX read the board but could not verify its cross-window hardware journal. Restore browser storage access, then read the complete chart again.";
-    } else if (pendingBeforeSettlement.length > 0) {
-      const matchingPending = pendingBeforeSettlement.filter(
-        (mutation) => mutation.boardFingerprint === readBoard,
-      );
-      if (matchingPending.length === 1 && pendingBeforeSettlement.length === 1) {
-        const matchingRecovery = recoveryMutation &&
-          matchingPending[0].device === recoveryMutation.device &&
-          matchingPending[0].epoch === recoveryMutation.epoch &&
-          matchingPending[0].selector === recoveryMutation.selector &&
-          payload.hardware_epoch === recoveryMutation.epoch &&
-          payload.hardware_fence === "settled";
-        if (matchingRecovery) {
-          const settled = settleControlSurfaceHardwareEpoch(matchingPending[0]);
-          if (settled) consumeLocallyPublishedControlSurfaceHardwareEpoch(settled);
-          else {
-            browserEpochRecoveryDetail =
-              "KSX read the board but could not publish cross-window completion. The pending hardware lock remains; restore browser storage access, then read again.";
-          }
-        } else {
-          browserEpochRecoveryDetail =
-            "KSX read the board, but the backend did not return the matching ordered recovery proof. The pending hardware lock remains so a delayed write cannot make this chart stale.";
-        }
-      } else {
-        browserEpochRecoveryDetail =
-          "The complete chart belongs to a different or ambiguous pending encoder transaction. Reconnect the affected board and read it before routing.";
-      }
-    }
-    const pendingAfterSettlement = pendingControlSurfaceHardwareEpochs();
-    const browserEpochStillPending = pendingAfterSettlement === null ||
-      pendingAfterSettlement.length > 0;
-    if (chartStillNeedsRecovery || browserEpochStillPending) {
-      panelProgrammingRecoveryTargets.set(requestTargetFingerprint, readBoard);
-      panelProgrammingUntrustedBoards.add(readBoard);
-    } else {
-      // Selector+instance keys are transient aliases. A complete authoritative
-      // read which says this physical board has no unresolved journal settles
-      // every stale alias for that same board, including the instance which
-      // existed before Windows re-enumerated it.
-      for (const [target, board] of panelProgrammingRecoveryTargets) {
-        if (board === readBoard) panelProgrammingRecoveryTargets.delete(target);
-      }
-      panelProgrammingUntrustedBoards.delete(readBoard);
-    }
-    const statusBoard = selectedPanelStatusBoard();
-    if (statusBoard) {
-      statusBoard.programming_recovery_required = chartStillNeedsRecovery;
-      statusBoard.programming_recovery_detail = chartStillNeedsRecovery
-        ? chart.programming_detail
-        : "";
-    }
-    if (panelRecoveryProbePossible()) {
-      setPanelRecoveryProbe(
-        requestTargetFingerprint,
-        chartStillNeedsRecovery
-          ? "recovery-required"
-          : browserEpochStillPending
-          ? "checking"
-          : "settled",
-        chartStillNeedsRecovery
-          ? chart.programming_detail
-          : browserEpochStillPending
-          ? browserEpochRecoveryDetail
-          : "",
-      );
-    }
-    const qualificationState = panelProgrammingQualificationState(chart);
-    const cachedDraft = cachedPanelProgrammingDraft(chart);
-    const assignmentMode: PanelAssignmentMode = cachedDraft?.assignmentMode ??
-      (qualificationState === "qualified" ? "keep-current" : "custom");
-    const qualificationTerminalId = qualificationState === "required" && chart.terminals.some(
-      (terminal) => terminal.terminal_id ===
-          panelProgrammingState.editor.qualification_terminal_id &&
-        panelProgrammingQualificationTerminalIsEligible(terminal),
-    )
-      ? panelProgrammingState.editor.qualification_terminal_id
-      : "";
-    const qualificationKey = qualificationState === "required" && chart.key_options.some(
-      (option) => option.key === panelProgrammingState.editor.qualification_key &&
-        option.safe_for_qualification === true,
-    )
-      ? panelProgrammingState.editor.qualification_key
-      : "";
-    panelProgrammingState = {
-      ...panelProgrammingState,
-      inspection: {
-        ...panelProgrammingState.inspection,
-        phase: "ready",
-        target_selector: selector,
-        chart,
-        error: "",
-        refusal_code: "",
-        remedy: "",
-      },
-      capability: panelProgrammingCapability(panelProgrammingCapabilitiesFromChart(chart)),
-      editor: {
-        ...panelProgrammingState.editor,
-        assignment_mode: assignmentMode,
-        phase: panelProgrammingState.editor.phase === "closed" ? "closed" : "assign",
-        assignments: [],
-        qualification_terminal_id: qualificationTerminalId,
-        qualification_key: qualificationKey,
-        plan_expected_selector: "",
-        plan: null,
-      },
-      transaction: panelProgrammingState.transaction.phase === "recovery-required" &&
-          !chartStillNeedsRecovery
-        ? { phase: "idle", operation: null, target_selector: "", outcome: null }
-        : panelProgrammingState.transaction,
-    };
-    if (panelProgrammingState.transaction.phase === "idle") {
-      panelProgrammingTransactionTargetFingerprint = "";
-    }
-    const currentDraft = panelProgrammingDraftFromChart(chart);
-    panelProgrammingTerminalDraft = cachedDraft
-      ? clonePanelProgrammingDraft(cachedDraft.draft)
-      : currentDraft;
-    panelProgrammingDraftSource = cachedDraft?.source ?? "current";
-    // Dirty means "different from the chart that was just read", even when
-    // the edit was recovered from a prior view of this same physical board.
-    panelProgrammingDraftBaseline = panelProgrammingDraftFingerprint(currentDraft);
-    panelProgrammingSelectedProfileId = cachedDraft?.selectedProfileId ?? "";
-    panelProgrammingState.editor.assignments = panelProgrammingDraftAssignments();
-    if (chart.backup && !panelProgrammingBackups.some(
-      (candidate) => candidate.backup_id === chart.backup?.backup_id,
-    )) {
-      panelProgrammingBackups.unshift(chart.backup);
-    }
-    reconcilePanelProgrammingChart(
-      chart,
-      panelProgrammingState.transaction.phase === "verified",
-    );
-    if (cachedDraft) synchronizePanelProgrammingDraftKeys();
-    panelProgrammingMessage = browserEpochStillPending
-      ? browserEpochRecoveryDetail ||
-        "This encoder still has a pending cross-window hardware transaction. Read it again after that transaction finishes."
-      : cachedDraft
-      ? `Recovered your unsaved ${cachedDraft.draft.length}-terminal draft for this exact I-PAC. The fresh read did not change the board; review the recovered draft against its current chart before programming.`
-      : panelProgrammingTaskCopy(chart).summary;
-    void loadPanelProgrammingBackups();
-    void loadPanelHardwareProfiles();
-  } catch (error) {
-    if (generation !== panelProgrammingGeneration) return;
-    if (currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint) {
-      resetPanelProgramming(true);
-      return;
-    }
-    panelProgrammingState.inspection.phase = "unavailable";
-    panelProgrammingState.inspection.error = error instanceof Error ? error.message : "Chart read failed.";
-    panelProgrammingState.inspection.refusal_code = "";
-    panelProgrammingState.inspection.remedy = "";
-    panelProgrammingMessage = `${panelProgrammingState.inspection.error} Nothing was written.`;
-  } finally {
-    if (generation === panelProgrammingGeneration) {
-      panelProgrammingBusy = false;
-      syncPanelProgrammingUi();
-      if (panelProgrammingDialog?.open &&
-          panelProgrammingState.transaction.phase === "verified") {
-        // Qualification is backend-owned. A recovery restore changes it back
-        // to Required; refresh the still-open result instead of leaving stale
-        // post-restore actions rendered from the pre-read chart.
-        renderPanelProgrammingDialog();
-      }
-      if (controlSurfaceEncoderSetupEntry &&
-          panelProgrammingQualificationState() === "required") {
-        window.requestAnimationFrame(() => {
-          const current = document.activeElement;
-          const setup = controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-programming");
-          if (!setup || (current instanceof HTMLElement && setup.contains(current) &&
-              !current.matches('[data-nx="surface-encoder-read"]'))) {
-            return;
-          }
-          setup.querySelector<HTMLSelectElement>(
-            '[data-nx="surface-qualification-terminal"]',
-          )?.focus({ preventScroll: true });
-        });
-      }
-    }
-  }
-}
-
-async function loadPanelProgrammingBackups(): Promise<void> {
-  const selector = panelProgrammingTarget();
-  if (!selector) return;
-  const generation = panelProgrammingGeneration;
-  try {
-    const payload = await panelProgrammingJSON<PanelBackupsPayload>(
-      "/api/panel/backups",
-      "GET",
-    );
-    if (generation !== panelProgrammingGeneration || panelProgrammingTarget() !== selector) return;
-    if (payload.target_selector === selector && !payload.unavailable && payload.view) {
-      panelProgrammingBackups = payload.view.backups;
-      syncPanelProgrammingUi();
-    }
-  } catch {
-    // A missing backup list does not erase a backup already returned by chart
-    // read or a verified mutation outcome. Program planning will still refuse
-    // server-side if its durable backup store is unavailable.
-  }
-}
-
-async function loadPanelHardwareProfiles(): Promise<void> {
-  if (panelProgrammingProfilesBusy) return;
-  panelProgrammingProfilesBusy = true;
-  panelProgrammingProfilesMessage = "Loading saved KSX hardware layouts…";
-  syncPanelHardwareProfilesUi();
-  try {
-    const payload = await panelProgrammingJSON<PanelHardwareProfilesPayload>(
-      "/api/panel/profiles",
-      "GET",
-    );
-    if (payload.unavailable || !payload.view) {
-      throw new Error(payload.remedy
-        ? `${payload.unavailable || "Saved hardware layouts are unavailable."} ${payload.remedy}`
-        : payload.unavailable || "Saved hardware layouts are unavailable.");
-    }
-    panelProgrammingProfiles = payload.view.profiles;
-    panelProgrammingProfilesSignature = payload.view.terminal_signature;
-    if (panelProgrammingSelectedProfileId && !panelProgrammingProfiles.some(
-      (profile) => profile.profile_id === panelProgrammingSelectedProfileId,
-    )) panelProgrammingSelectedProfileId = "";
-    panelProgrammingProfilesMessage = payload.view.summary;
-  } catch (error) {
-    panelProgrammingProfilesMessage = error instanceof Error
-      ? error.message
-      : "Saved hardware layouts could not be loaded.";
-  } finally {
-    panelProgrammingProfilesBusy = false;
-    syncPanelHardwareProfilesUi();
-  }
-}
-
-function selectPanelHardwareProfile(profileId: string): void {
-  panelProgrammingSelectedProfileId = profileId;
-  const profile = panelProgrammingProfiles.find((candidate) => candidate.profile_id === profileId);
-  const section = controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-hardware-profiles");
-  const name = section?.querySelector<HTMLInputElement>("[data-surface-profile-name]");
-  const description = section?.querySelector<HTMLInputElement>(
-    "[data-surface-profile-description]",
-  );
-  if (name) name.value = profile?.name ?? "";
-  if (description) description.value = profile?.description ?? "";
-  panelProgrammingProfilesMessage = profile
-    ? panelProgrammingProfileCompatible(profile)
-      ? `${profile.name} is compatible. Use saved loads it as a draft; the I-PAC is unchanged.`
-      : `${profile.name} targets a different terminal vocabulary and cannot be loaded on this board.`
-    : "Choose a saved layout, or name this draft and save it as new.";
-  syncPanelHardwareProfilesUi();
-}
-
-function useSelectedPanelHardwareProfile(): void {
-  const profile = panelProgrammingProfiles.find(
-    (candidate) => candidate.profile_id === panelProgrammingSelectedProfileId,
-  );
-  if (!profile || !panelProgrammingProfileCompatible(profile) ||
-      !panelProgrammingState.inspection.chart) return;
-  if (!confirmPanelProgrammingDraftReplacement(`load saved layout “${profile.name}”`)) return;
-  panelProgrammingUseDraft(panelProgrammingProfileDraft(profile), "saved", "custom");
-  panelProgrammingMessage =
-    `${profile.name} is loaded as a 56-terminal draft. Nothing has been written to the I-PAC.`;
-  panelProgrammingProfilesMessage = "Edit, review, or update this saved layout.";
-  syncPanelProgrammingUi();
-}
-
-async function savePanelHardwareProfile(update: boolean): Promise<void> {
-  if (panelProgrammingProfilesBusy) return;
-  const section = controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-hardware-profiles");
-  const name = section?.querySelector<HTMLInputElement>("[data-surface-profile-name]")
-    ?.value.trim() ?? "";
-  const description = section?.querySelector<HTMLInputElement>(
-    "[data-surface-profile-description]",
-  )?.value.trim() ?? "";
-  const terminals = panelProgrammingProfileTerminals();
-  const selected = panelProgrammingProfiles.find(
-    (profile) => profile.profile_id === panelProgrammingSelectedProfileId,
-  );
-  if (!name || !terminals || (update && !selected)) {
-    panelProgrammingProfilesMessage = !terminals
-      ? "This chart contains a vendor action that has no portable key meaning. Preserve it in the raw board history, or replace that action deliberately before saving a semantic layout."
-      : "Enter a layout name and choose the saved layout to update.";
-    syncPanelHardwareProfilesUi();
-    return;
-  }
-  const spec: PanelHardwareProfileSaveSpec = {
-    ...(update && selected
-      ? { profile_id: selected.profile_id, expected_revision: selected.revision }
-      : {}),
-    name,
-    description,
-    terminals,
-  };
-  panelProgrammingProfilesBusy = true;
-  panelProgrammingProfilesMessage = update ? "Updating saved layout…" : "Saving new layout…";
-  syncPanelHardwareProfilesUi();
-  try {
-    const payload = await panelProgrammingJSON<PanelHardwareProfileMutationPayload>(
-      "/api/panel/profiles/save",
-      "POST",
-      spec,
-    );
-    if (payload.unavailable || !payload.mutation) {
-      throw new Error(payload.remedy
-        ? `${payload.unavailable || "The layout was not saved."} ${payload.remedy}`
-        : payload.unavailable || "The layout was not saved.");
-    }
-    panelProgrammingSelectedProfileId = payload.mutation.profile_id;
-    panelProgrammingProfilesMessage = payload.mutation.summary;
-    panelProgrammingProfilesBusy = false;
-    await loadPanelHardwareProfiles();
-  } catch (error) {
-    panelProgrammingProfilesMessage = error instanceof Error
-      ? error.message
-      : "The layout was not saved.";
-  } finally {
-    panelProgrammingProfilesBusy = false;
-    syncPanelHardwareProfilesUi();
-  }
-}
-
-async function deleteSelectedPanelHardwareProfile(): Promise<void> {
-  if (panelProgrammingProfilesBusy) return;
-  const profile = panelProgrammingProfiles.find(
-    (candidate) => candidate.profile_id === panelProgrammingSelectedProfileId,
-  );
-  if (!profile || !window.confirm(
-    `Delete saved hardware layout “${profile.name}”? This does not change the I-PAC.`,
-  )) return;
-  const spec: PanelHardwareProfileDeleteSpec = {
-    profile_id: profile.profile_id,
-    expected_revision: profile.revision,
-  };
-  panelProgrammingProfilesBusy = true;
-  panelProgrammingProfilesMessage = `Deleting ${profile.name}…`;
-  syncPanelHardwareProfilesUi();
-  try {
-    const payload = await panelProgrammingJSON<PanelHardwareProfileMutationPayload>(
-      "/api/panel/profiles/delete",
-      "POST",
-      spec,
-    );
-    if (payload.unavailable || !payload.mutation) {
-      throw new Error(payload.remedy
-        ? `${payload.unavailable || "The layout was not deleted."} ${payload.remedy}`
-        : payload.unavailable || "The layout was not deleted.");
-    }
-    panelProgrammingSelectedProfileId = "";
-    const name = controlSurfaceItem?.querySelector<HTMLInputElement>(
-      "[data-surface-profile-name]",
-    );
-    const description = controlSurfaceItem?.querySelector<HTMLInputElement>(
-      "[data-surface-profile-description]",
-    );
-    if (name) name.value = "";
-    if (description) description.value = "";
-    panelProgrammingProfilesMessage = payload.mutation.summary;
-    panelProgrammingProfilesBusy = false;
-    await loadPanelHardwareProfiles();
-  } catch (error) {
-    panelProgrammingProfilesMessage = error instanceof Error
-      ? error.message
-      : "The layout was not deleted.";
-  } finally {
-    panelProgrammingProfilesBusy = false;
-    syncPanelHardwareProfilesUi();
-  }
-}
-
-function togglePanelProgrammingOutputTest(): void {
-  if (learnRow?.purpose === "panel-test") {
-    void cancelLearn().finally(() => syncPanelProgrammingJourneyAndTest());
-    return;
-  }
-  const chart = panelProgrammingState.inspection.chart;
-  if (!chart || panelProgrammingAssignedCount(chart) === 0 ||
-      panelProgrammingInteractionBusy() || panelProgrammingTransactionActive() ||
-      panelProgrammingRoutingAuthoritySuspended()) return;
-  const expectedSelector = nCapSelector().trim();
-  const expectedInstance = nCapInstance().trim();
-  if (!expectedSelector || !expectedInstance) {
-    panelProgrammingLastTest = null;
-    panelProgrammingMessage =
-      "KSX cannot test this wiring until the selected I-PAC has one exact Windows device identity. Refresh the hardware status; nothing was changed.";
-    syncPanelProgrammingUi();
-    return;
-  }
-  panelProgrammingLastTest = null;
-  panelProgrammingMessage =
-    "Listening to the selected I-PAC. Press one wired cabinet control; this test will not change a mapping.";
-  void startLearn({
-    fn: "",
-    label: "I-PAC output",
-    slot: "",
-    mode: "replace",
-    purpose: "panel-test",
-    expectedDevice: expectedSelector,
-    expectedInstance,
-  });
-  syncPanelProgrammingUi();
-}
-
-function continueFromPanelHardwareToRouting(): void {
-  const chart = panelProgrammingState.inspection.chart;
-  if (!chart || panelProgrammingInteractionBusy() ||
-      panelProgrammingAssignedCount(chart) === 0 ||
-      panelProgrammingRoutingAuthoritySuspended()) return;
-  if (panelProgrammingLastTest && panelProgrammingLastTest.terminalIds.length === 0) {
-    panelProgrammingSetMessage(
-      `${panelProgrammingLastTest.key} was observed from this I-PAC but is absent from the chart KSX read. Read the board again before routing so the hardware source cannot be silently retargeted.`,
-    );
-    return;
-  }
-  if (learnRow?.purpose === "panel-test") void cancelLearn();
-  const hasPhysicalPanel = controlSurfaceState.started;
-  closePanelProgrammingSetup(false, hasPhysicalPanel ? "surface" : "none");
-  if (!hasPhysicalPanel) closeControlSurfaceBuilder(true);
-  ui.rightView = "controls";
-  ui.rightRail = false;
-  applyNocturneUi();
-  const testedSignal = panelProgrammingLastTest?.terminalIds.length
-    ? panelProgrammingLastTest.key.trim()
-    : "";
-  const includeShifted = panelProgrammingShiftLayerActive(chart);
-  const firstSignal = testedSignal || (
-    chart.terminals
-      .flatMap((terminal) => panelProgrammingTerminalKeys(terminal, includeShifted))
-      .find(Boolean) ?? ""
-  );
-  if (firstSignal) setInspectorContext({ kind: "key", key: firstSignal });
-  saveUiPrefs();
-  if (hasPhysicalPanel) {
-    applyControlSurfaceState(setControlSurfaceStage(controlSurfaceState, "route"), true, true);
-    keyboardWorkbenchAnnounce(
-      "Hardware outputs are ready. Route each taught I-PAC signal through KSX to a virtual controller.",
-    );
-  } else {
-    keyboardWorkbenchAnnounce(
-      "Hardware outputs are ready. Choose a virtual controller control, then learn or add its I-PAC key in the Mapping Inspector.",
-    );
-    nCanvas?.fitAll();
-  }
-}
-
-function buildPhysicalPanelFromEncoderChart(): void {
-  const chart = panelProgrammingState.inspection.chart;
-  const records = controlSurfaceEncoderRecords();
-  if (panelProgrammingInteractionBusy()) return;
-  if (!chart || records.length === 0 || panelProgrammingRoutingAuthoritySuspended()) {
-    panelProgrammingSetMessage(
-      `The ${selectedEncoderShortName()} chart has no assigned terminal-to-key outputs to draw yet. Configure or load at least one hardware output first.`,
-    );
-    return;
-  }
-  if (learnRow?.purpose === "panel-test") void cancelLearn();
-  const replacing = controlSurfaceState.started;
-  closePanelProgrammingSetup(false, "surface");
-  controlSurfaceChoosingTemplate = replacing;
-  controlSurfacePendingTemplate = null;
-  syncControlSurfaceChrome();
-  chooseControlSurfaceTemplate("encoder-current");
-}
-
-/** Start with the cabinet the user is physically building, even when a new
- * encoder has no key chart yet. The chart remains loaded and untouched; after
- * choosing a panel template, Hardware Setup can link each control to a real
- * terminal and program the Windows-key layer. */
-function designPhysicalPanelBeforeEncoderKeys(): void {
-  const chart = panelProgrammingState.inspection.chart;
-  if (!chart || panelProgrammingInteractionBusy() ||
-      panelProgrammingTransactionActive() ||
-      panelProgrammingRoutingAuthoritySuspended()) return;
-  if (learnRow?.purpose === "panel-test") void cancelLearn();
-  closePanelProgrammingSetup(false, "surface");
-  controlSurfaceChoosingTemplate = true;
-  controlSurfacePendingTemplate = null;
-  syncControlSurfaceChrome();
-  keyboardWorkbenchAnnounce(
-    `Choose the physical cabinet first. Then link each control to a ${selectedEncoderShortName()} terminal and choose the Windows key that terminal will emit. The board has not been changed.`,
-  );
-  window.requestAnimationFrame(() => {
-    controlSurfaceItem
-      ?.querySelector<HTMLButtonElement>("[data-surface-template]")
-      ?.focus({ preventScroll: true });
-  });
-}
-
-function enterPanelProgrammingWorkspace(): void {
-  if (panelProgrammingWorkspacePreviousRightRail === null) {
-    panelProgrammingWorkspacePreviousRightRail = ui.rightRail;
-  }
-  ui.rightRail = true;
-  applyNocturneUi();
-  const item = controlSurfaceItem;
-  item?.closest<HTMLElement>(".forma-canvas-viewport")
-    ?.classList.add("is-panel-programming-workspace");
-  if (item && nCanvas && !nCanvas.isFocusModeActive(item)) {
-    const viewport = item.closest<HTMLElement>(".forma-canvas-viewport");
-    if (nCanvas.isFocusModeActive()) {
-      panelProgrammingWorkspacePreviousFocusId = viewport?.dataset.widgetFocusInstanceId ?? "";
-      // Focus is a single canvas session. End the prior session explicitly so
-      // toggleFocusMode can actually frame the hardware workspace rather than
-      // merely selecting an inert item inside somebody else's focus session.
-      nCanvas.exitFocusMode();
-    } else {
-      panelProgrammingWorkspacePreviousFocusId = "";
-    }
-    nCanvas.toggleFocusMode(item, PANEL_PROGRAMMING_FOCUS_OPTIONS);
-    panelProgrammingWorkspaceOwnsFocus = nCanvas.isFocusModeActive(item);
-  }
-  if (item && nCanvas?.isFocusModeActive(item)) {
-    nCanvas.focusItem(item, PANEL_PROGRAMMING_FOCUS_OPTIONS);
-  }
-  syncWidgetSelection();
-}
-
-type PanelProgrammingFocusExit = "restore" | "surface" | "none";
-
-function exitPanelProgrammingWorkspace(focusExit: PanelProgrammingFocusExit = "restore"): void {
-  (controlSurfaceItem?.closest<HTMLElement>(".forma-canvas-viewport") ??
-    learnRoot?.querySelector<HTMLElement>(".forma-canvas-viewport"))
-    ?.classList.remove("is-panel-programming-workspace");
-  const surfaceFocused = Boolean(nCanvas?.isFocusModeActive(controlSurfaceItem));
-  if (surfaceFocused && focusExit !== "surface") {
-    nCanvas?.exitFocusMode();
-    if (focusExit === "restore" && panelProgrammingWorkspaceOwnsFocus) {
-      const previous = panelProgrammingWorkspacePreviousFocusId
-        ? learnRoot?.querySelector<HTMLElement>(
-            `.widget-instance[data-instance-id="${CSS.escape(panelProgrammingWorkspacePreviousFocusId)}"]`,
-          ) ?? null
-        : null;
-      if (previous) nCanvas?.toggleFocusMode(previous);
-    }
-  }
-  if (focusExit !== "surface" || !surfaceFocused) {
-    panelProgrammingWorkspaceOwnsFocus = false;
-    panelProgrammingWorkspacePreviousFocusId = "";
-  }
-  if (panelProgrammingWorkspacePreviousRightRail !== null) {
-    ui.rightRail = panelProgrammingWorkspacePreviousRightRail;
-    panelProgrammingWorkspacePreviousRightRail = null;
-    applyNocturneUi();
-  }
-  syncWidgetSelection();
-}
-
-function openPanelProgrammingSetup(): void {
-  if (panelProgrammingTransactionActive()) return;
-  panelProgrammingReturnFocus = document.activeElement instanceof HTMLElement
-    ? document.activeElement
-    : null;
-  panelProgrammingState = {
-    ...panelProgrammingState,
-    editor: { ...panelProgrammingState.editor, phase: "assign" },
-  };
-  enterPanelProgrammingWorkspace();
-  syncControlSurfaceChrome();
-  syncPanelProgrammingUi();
-  // A selector transition can already have started the guarded chart read.
-  // The workspace still opens immediately so a second Set up gesture focuses
-  // the in-flight task instead of looking like a dead button.
-  if (panelProgrammingInteractionBusy()) return;
-  if (!panelProgrammingState.inspection.chart ||
-      panelProgrammingState.inspection.target_selector !== panelProgrammingTarget()) {
-    void readPanelProgrammingChart(true);
-  } else {
-    void loadPanelProgrammingBackups();
-    void loadPanelHardwareProfiles();
-  }
-}
-
-/** Honor a visible Configure-device gesture even when a just-arrived device
- * identity poll has invalidated the status object one task earlier. The
- * button is normally disabled during that refresh, but a click already in
- * flight must not disappear: refresh the exact target once, then either open
- * its current chart or explain the measured blocker. */
-async function openPanelProgrammingSetupFromGesture(): Promise<void> {
-  if (panelProgrammingTransactionActive()) return;
-  const target = currentControlSurfaceHardwareFingerprint();
-  const openIfReady = (): boolean => {
-    if (target !== currentControlSurfaceHardwareFingerprint() ||
-        !controlSurfaceState.open) return false;
-    const board = selectedPanelStatusBoard();
-    if (!panelBoardChartAccessReady(board)) return false;
-    openPanelProgrammingSetup();
-    return true;
-  };
-  if (!selectedInputIsPanelEncoder() || !nCapSelector().trim()) {
-    keyboardWorkbenchAnnounce(
-      panelBoardChartAccessGuidance(selectedPanelStatusBoard()),
-    );
-    return;
-  }
-  keyboardWorkbenchAnnounce(
-    `Confirming this exact ${selectedEncoderShortName()} before Hardware outputs opens…`,
-  );
-  await refreshControlSurfaceHardwareStatus();
-  if (openIfReady()) return;
-  if (target === currentControlSurfaceHardwareFingerprint() && controlSurfaceState.open) {
-    keyboardWorkbenchAnnounce(
-      panelBoardChartAccessGuidance(selectedPanelStatusBoard()),
-    );
-  }
-}
-
-function closePanelProgrammingSetup(
-  restoreFocus = true,
-  focusExit: PanelProgrammingFocusExit = "surface",
-): void {
-  if (panelProgrammingTransactionActive()) return;
-  if (learnRow?.purpose === "panel-test") void cancelLearn();
-  const leavingFirstRun = controlSurfaceEncoderSetupEntry;
-  panelProgrammingState = {
-    ...panelProgrammingState,
-    editor: {
-      ...panelProgrammingState.editor,
-      phase: "closed",
-      plan_expected_selector: "",
-      plan: null,
-    },
-  };
-  panelProgrammingProgramRequest = null;
-  panelProgrammingRestoreRequest = null;
-  panelProgrammingMessage = "";
-  exitPanelProgrammingWorkspace(focusExit);
-  if (leavingFirstRun) {
-    controlSurfaceEncoderSetupEntry = false;
-    controlSurfaceChoosingTemplate = !controlSurfaceState.started;
-  }
-  syncControlSurfaceChrome();
-  syncPanelProgrammingUi();
-  if (focusExit === "surface") {
-    // Hardware Setup hides the corner navigator while it owns the focused
-    // workspace. When that map returns it reduces the usable viewport; frame
-    // the panel again after layout so its controls cannot be stranded beneath
-    // the navigator and become impossible to click.
-    window.requestAnimationFrame(() => syncControlSurfaceWidget(true));
-  }
-  if (restoreFocus) {
-    const target = leavingFirstRun
-      ? controlSurfaceItem?.querySelector<HTMLElement>(
-          controlSurfaceState.started
-            ? ".n-surface-control.selected, .n-surface-control"
-            : "[data-surface-template]",
-        ) ?? null
-      : panelProgrammingReturnFocus?.isConnected
-      ? panelProgrammingReturnFocus
-      : controlSurfaceItem?.querySelector<HTMLElement>('[data-nx="surface-encoder-open"]') ?? null;
-    window.requestAnimationFrame(() => target?.focus({ preventScroll: true }));
-  }
-  if (leavingFirstRun) {
-    keyboardWorkbenchAnnounce(
-      controlSurfaceState.started
-        ? "I-PAC Setup closed. The existing physical panel is ready for Design, Teach, or Route."
-        : "I-PAC Setup closed. Choose a physical panel only when you are ready to model the cabinet.",
-    );
-  }
-}
-
-function choosePanelProgrammingMode(mode: PanelAssignmentMode): void {
-  if (panelProgrammingInteractionBusy() || panelProgrammingTransactionActive() ||
-      panelProgrammingState.transaction.phase === "recovery-required") return;
-  const qualificationState = panelProgrammingQualificationState();
-  if ((mode === "recommended" || mode === "blank") && qualificationState !== "qualified") {
-    panelProgrammingSetMessage(
-      qualificationState === "validation-recovery"
-        ? "Restore the recovery image, then repeat the one-terminal writer check."
-        : `${mode === "blank" ? "Clear assignments" : "Recommended"} unlocks after the one-terminal writer check is complete.`,
-    );
-    return;
-  }
-  if (mode === "custom" && panelProgrammingQualificationNeedsRestore(qualificationState)) {
-    panelProgrammingSetMessage(
-      qualificationState === "validation-recovery"
-        ? "Restore the interrupted validation write's exact safety backup, then repeat the one-terminal writer check. This restore will not unlock full layouts."
-        : "Restore the validation write's exact safety backup before preparing another hardware change.",
-    );
-    return;
-  }
-  const chart = panelProgrammingState.inspection.chart;
-  if (!chart) return;
-  const replacement = mode === "recommended"
-    ? "start from the KSX four-player layout"
-    : mode === "blank"
-    ? "prepare Disable all hardware outputs"
-    : mode === "keep-current"
-    ? "reload the current board outputs"
-    : "re-import the drawn panel links";
-  if (!confirmPanelProgrammingDraftReplacement(replacement)) return;
-  panelProgrammingSelectedProfileId = "";
-  if (mode === "recommended") {
-    if (!panelProgrammingRecommendationAvailable(chart)) {
-      panelProgrammingSetMessage(
-        "KSX four-player is unavailable because this backend did not serve a complete semantic terminal preview. Refresh Studio or update the backend; this browser will not invent persistent hardware assignments.",
-      );
-      return;
-    }
-    const preview = panelProgrammingDraftFromTerminals(chart.recommended_terminals);
-    panelProgrammingUseDraft(preview, "recommended", "recommended");
-    panelProgrammingMessage =
-      "The exact backend-generated four-player chart is open below. It gives every terminal a unique Windows key signal; nothing has been written.";
-  } else if (mode === "blank") {
-    panelProgrammingUseDraft(panelProgrammingBlankDraft(chart), "blank", "blank");
-    panelProgrammingMessage =
-      "All readable terminal actions are prepared as Unassigned and known Shift roles are cleared. Opaque vendor Shift bytes stay preserved. Nothing has been written.";
-  } else if (mode === "keep-current") {
-    panelProgrammingUseDraft(panelProgrammingDraftFromChart(chart), "current", "keep-current");
-    panelProgrammingMessage =
-      "The complete chart currently on this I-PAC is open for editing. Nothing changes on hardware until Review & program board is confirmed.";
-  } else {
-    panelProgrammingImportSurfaceDraft();
-    const linked = panelProgrammingSurfaceAssignments().length;
-    panelProgrammingMessage = linked > 0
-      ? `${linked} drawn panel ${linked === 1 ? "link was" : "links were"} imported over the current chart. Review all 56 terminals before programming.`
-      : "No drawn panel links target this I-PAC yet. The current 56-terminal chart is open; you can edit it directly.";
-    if (linked === 0) {
-      panelProgrammingTerminalDraft = panelProgrammingDraftFromChart(chart);
-      panelProgrammingDraftSource = "panel-links";
-      panelProgrammingDraftBaseline = panelProgrammingDraftFingerprint();
-    }
-  }
-  syncControlSurfaceChrome();
-  syncPanelProgrammingUi();
-}
-
-function updatePanelProgrammingTerminalDraft(
-  terminalId: string,
-  field: "normal_key" | "shifted_key" | "is_shift" | "allow_shared_key",
-  value: string | boolean | undefined,
-): void {
-  if (panelProgrammingInteractionBusy() || panelProgrammingTransactionActive() ||
-      panelProgrammingState.capability.kind !== "programmable") return;
-  const terminal = panelProgrammingTerminalDraft.find(
-    (candidate) => candidate.terminal_id === terminalId,
-  );
-  if (!terminal) return;
-  if (field === "normal_key" || field === "shifted_key") {
-    terminal[field] = typeof value === "string" ? value : undefined;
-  } else if (field === "is_shift") {
-    terminal.is_shift = typeof value === "boolean" ? value : undefined;
-  } else {
-    terminal.allow_shared_key = value === true;
-  }
-  // Shared-key consent describes this terminal row, not any one drawing of
-  // it. A normal-key change needs a fresh deliberate acknowledgement.
-  if (field === "normal_key") terminal.allow_shared_key = false;
-  const linkedViews = field === "normal_key"
-    ? synchronizePanelProgrammingTerminalKey(
-        terminalId,
-        typeof value === "string" ? value : "",
-      )
-    : 0;
-  if (panelProgrammingState.editor.assignment_mode === "blank") {
-    panelProgrammingState.editor.assignment_mode = "custom";
-  }
-  panelProgrammingDropPlan();
-  panelProgrammingMessage = linkedViews > 1
-    ? `${panelProgrammingTerminal(terminalId)?.terminal_label ?? terminalId} updated across all ${linkedViews} linked controls. The I-PAC is unchanged until you review and confirm Program board.`
-    : `${panelProgrammingTerminal(terminalId)?.terminal_label ?? terminalId} updated in the draft. The I-PAC is unchanged until you review and confirm Program board.`;
-  syncPanelProgrammingUi();
-}
-
-function choosePanelQualificationTerminal(terminalId: string): void {
-  if (panelProgrammingInteractionBusy() || panelProgrammingTransactionActive() ||
-      panelProgrammingQualificationState() !== "required") return;
-  const terminal = panelProgrammingTerminal(terminalId);
-  if (terminalId && (!terminal || !panelProgrammingQualificationTerminalIsEligible(terminal))) {
-    return;
-  }
-  panelProgrammingDropPlan();
-  panelProgrammingState.editor.qualification_terminal_id = terminalId;
-  if (terminal && samePanelKey(
-    panelProgrammingState.editor.qualification_key,
-    terminal.normal.key,
-  )) {
-    panelProgrammingState.editor.qualification_key = "";
-  }
-  panelProgrammingMessage = terminalId
-    ? `Safety test terminal ${terminal?.terminal_label ?? terminalId} selected. Choose one temporary safe key; no emitted key or panel drawing is required.`
-    : "Choose one wired, noncritical SW terminal for the reversible writer check.";
-  syncPanelProgrammingUi();
-}
-
-function choosePanelQualificationKey(key: string): void {
-  if (panelProgrammingInteractionBusy() || panelProgrammingTransactionActive() ||
-      panelProgrammingQualificationState() !== "required") return;
-  const option = panelProgrammingState.inspection.chart?.key_options.find(
-    (candidate) => candidate.key === key && candidate.safe_for_qualification === true,
-  );
-  if (key && !option) return;
-  panelProgrammingDropPlan();
-  panelProgrammingState.editor.qualification_key = key;
-  panelProgrammingMessage = key
-    ? `Temporary test key ${option?.label ?? key} selected. Review the one-terminal diff before anything is written.`
-    : "Choose one safe letter or top-row number for the reversible writer check.";
-  syncPanelProgrammingUi();
-}
-
-function assignSelectedPanelTerminal(terminalId: string): void {
-  const chart = panelProgrammingState.inspection.chart;
-  const control = selectedControlSurfaceControl();
-  const channel = selectedControlSurfaceChannel();
-  if (!chart || !control || !channel || panelProgrammingInteractionBusy() ||
-      panelProgrammingState.transaction.phase === "recovery-required") return;
-  if (!terminalId) {
-    applyControlSurfaceState(
-      assignControlSurfaceTerminal(controlSurfaceState, control.id, channel.id, null),
-      true,
-    );
-    panelProgrammingDropPlan();
-    syncPanelProgrammingUi();
-    return;
-  }
-  const terminal = panelProgrammingTerminal(terminalId);
-  if (!terminal) return;
-  const linkedTerminal = controlSurfaceState.controls
-    .filter((candidate) => candidate.physicalId !== control.physicalId)
-    .flatMap((candidate) => candidate.channels)
-    .find((candidate) =>
-      candidate.encoder?.boardFingerprint === chart.board_fingerprint &&
-      candidate.encoder.terminalId === terminalId
-    )?.encoder;
-  const draftTerminal = panelProgrammingDraftTerminal(terminalId);
-  const currentKey = draftTerminal
-    ? draftTerminal.normal_key ?? ""
-    : channel.encoder?.boardFingerprint === chart.board_fingerprint &&
-      channel.encoder.terminalId === terminalId
-    ? channel.encoder.expectedKey
-    : linkedTerminal
-    ? linkedTerminal.expectedKey
-    : terminal.normal.supported ? terminal.normal.key ?? "" : "";
-  applyControlSurfaceState(
-    assignControlSurfaceTerminal(controlSurfaceState, control.id, channel.id, {
-      driver: chart.driver,
-      boardFingerprint: chart.board_fingerprint,
-      terminalId: terminal.terminal_id,
-      terminalLabel: terminal.terminal_label,
-      expectedKey: currentKey,
-    }),
-    true,
-  );
-  if (panelProgrammingDraftSource === "panel-links") {
-    const draft = panelProgrammingTerminalDraft.find(
-      (candidate) => candidate.terminal_id === terminal.terminal_id,
-    );
-    if (draft) draft.normal_key = currentKey;
-  }
-  const linkedViews = controlSurfaceState.controls.filter((candidate) =>
-    candidate.channels.some((candidateChannel) =>
-      candidateChannel.encoder?.boardFingerprint === chart.board_fingerprint &&
-      candidateChannel.encoder.terminalId === terminal.terminal_id
-    )
-  ).length;
-  const message = linkedViews > 1
-    ? `${terminal.terminal_label} is one physical channel. Its ${currentKey || "Unassigned"} output is synchronized across all ${linkedViews} linked controls.`
-    : `${terminal.terminal_label} linked to ${control.label}. Choose the Windows key this physical channel should emit.`;
-  panelProgrammingDropPlan();
-  panelProgrammingSetMessage(message);
-}
-
-function assignSelectedPanelKey(key: string): void {
-  const chart = panelProgrammingState.inspection.chart;
-  const control = selectedControlSurfaceControl();
-  const channel = selectedControlSurfaceChannel();
-  const terminal = channel?.encoder ? panelProgrammingTerminal(channel.encoder.terminalId) : null;
-  if (!chart || !control || !channel || !terminal || panelProgrammingInteractionBusy() ||
-      panelProgrammingState.transaction.phase === "recovery-required") return;
-  if (!chart.key_options.some((option) => option.key === key)) return;
-  applyControlSurfaceState(
-    assignControlSurfaceTerminal(controlSurfaceState, control.id, channel.id, {
-      driver: chart.driver,
-      boardFingerprint: chart.board_fingerprint,
-      terminalId: terminal.terminal_id,
-      terminalLabel: terminal.terminal_label,
-      expectedKey: key,
-    }),
-    true,
-  );
-  if (panelProgrammingDraftSource === "panel-links") {
-    const draft = panelProgrammingTerminalDraft.find(
-      (candidate) => candidate.terminal_id === terminal.terminal_id,
-    );
-    if (draft) {
-      draft.normal_key = key;
-      draft.allow_shared_key = false;
-    }
-  }
-  const linkedViews = controlSurfaceState.controls.filter((candidate) =>
-    candidate.channels.some((candidateChannel) =>
-      candidateChannel.encoder?.boardFingerprint === chart.board_fingerprint &&
-      candidateChannel.encoder.terminalId === terminal.terminal_id
-    )
-  ).length;
-  const message = linkedViews > 1
-    ? `Draft: ${terminal.terminal_label} will emit ${key} for all ${linkedViews} linked controls after a verified program.`
-    : `Draft: ${terminal.terminal_label} will emit ${key} after a verified program.`;
-  panelProgrammingDropPlan();
-  panelProgrammingSetMessage(message);
-}
-
-function currentPanelChartAuthority() {
-  const chart = panelProgrammingState.inspection.chart;
-  if (!chart) return null;
-  return panelChartAuthority({
-    target_selector: panelProgrammingState.inspection.target_selector,
-    unavailable: null,
-    view: chart,
-  });
-}
-
-function panelProgrammingPlanIsCurrent(plan: PanelPlanView): boolean {
-  return panelPlanInvalidation(
-    plan,
-    currentPanelChartAuthority(),
-    panelProgrammingState.editor.plan_expected_selector,
-  ) === null;
-}
-
-function panelProgrammingHash(value: string): string {
-  return value.length > 16 ? `${value.slice(0, 8)}…${value.slice(-8)}` : value;
-}
-
-function ensurePanelProgrammingDialog(): HTMLDialogElement {
-  if (panelProgrammingDialog?.isConnected) return panelProgrammingDialog;
-  const dialog = document.createElement("dialog");
-  dialog.className = "n-panel-program-dialog";
-  dialog.setAttribute("aria-labelledby", "n-panel-program-title");
-  dialog.addEventListener("cancel", (event) => {
-    event.preventDefault();
-    if (!panelProgrammingApplyPending && !panelProgrammingTransactionActive()) {
-      panelProgrammingCloseDialog();
-    }
-  });
-  dialog.addEventListener("change", (event) => {
-    const target = event.target as HTMLInputElement | null;
-    if (!target) return;
-    if (target.matches('[data-panel-program-confirm]')) {
-      panelProgrammingConfirmed = target.checked;
-    } else if (target.matches('[data-panel-program-supervised]')) {
-      panelProgrammingRecoveryReady = target.checked;
-    } else {
-      return;
-    }
-    const apply = dialog.querySelector<HTMLButtonElement>('[data-panel-dialog-action="apply"]');
-    const plan = panelProgrammingState.editor.plan;
-    if (apply) {
-      apply.disabled = panelProgrammingApplyPending ||
-        !panelProgrammingConfirmed || !panelProgrammingRecoveryReady ||
-        !plan || plan.blockers.length > 0 || plan.byte_diff.length === 0 ||
-        !panelProgrammingPlanIsCurrent(plan);
-    }
-  });
-  dialog.addEventListener("click", (event) => {
-    const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>(
-      "[data-panel-dialog-action]",
-    );
-    if (!button) return;
-    const action = button.dataset.panelDialogAction;
-    if (action === "close") {
-      panelProgrammingCloseDialog();
-    } else if (action === "apply") {
-      void applyPanelProgrammingPlan();
-    } else if (action === "restore-validation") {
-      const backupId = panelProgrammingExactQualificationBackupId();
-      if (backupId) {
-        button.disabled = true;
-        void openPanelQualificationRestoreReview(backupId);
-      } else {
-        panelProgrammingSetMessage(
-          "KSX could not resolve the exact qualification safety backup. Read the complete chart again before continuing.",
-        );
-      }
-    } else if (action === "restart-validation") {
-      button.disabled = true;
-      void reopenPanelQualificationAfterRecovery();
-    } else if (action === "teach") {
-      panelProgrammingCloseDialog(false);
-      closePanelProgrammingSetup(false);
-      controlSurfaceEncoderSetupEntry = false;
-      if (controlSurfaceState.started) {
-        chooseControlSurfaceStage("teach");
-        keyboardWorkbenchAnnounce(
-          "Encoder programming was verified. Teach each physical control to verify the signal Windows receives.",
-        );
-        controlSurfaceItem?.querySelector<HTMLElement>(".n-surface-control.selected")
-          ?.focus({ preventScroll: true });
-      } else {
-        controlSurfaceChoosingTemplate = true;
-        syncControlSurfaceChrome();
-        keyboardWorkbenchAnnounce(
-          "The I-PAC chart is verified. Now choose a physical panel shape; this does not change the hardware or create mappings.",
-        );
-        controlSurfaceItem?.querySelector<HTMLElement>("[data-surface-template]")
-          ?.focus({ preventScroll: true });
-      }
-    } else if (action === "recover-read") {
-      panelProgrammingCloseDialog(false);
-      void readPanelProgrammingChart(true);
-      window.requestAnimationFrame(() => controlSurfaceItem
-        ?.querySelector<HTMLElement>('[data-nx="surface-encoder-read"]')
-        ?.focus({ preventScroll: true }));
-    }
-  });
-  document.body.append(dialog);
-  panelProgrammingDialog = dialog;
-  return dialog;
-}
-
-function renderPanelProgrammingDialog(): void {
-  const dialog = ensurePanelProgrammingDialog();
-  const transaction = panelProgrammingState.transaction;
-  const plan = panelProgrammingState.editor.plan;
-  const applyPending = panelProgrammingApplyPending;
-  const detachedTransactionResult =
-    (transaction.phase === "verified" || transaction.phase === "recovery-required") &&
-    !panelProgrammingTransactionBelongsToCurrentTarget();
-  dialog.replaceChildren();
-  dialog.dataset.phase = transaction.phase;
-  dialog.setAttribute("aria-busy", String(applyPending || panelProgrammingTransactionActive()));
-
-  const shell = document.createElement("div");
-  shell.className = "n-panel-program-shell";
-  const head = document.createElement("header");
-  const kicker = document.createElement("span");
-  kicker.className = "n-panel-program-kick";
-  kicker.textContent = transaction.operation === "restore" ? "Restore encoder" : "Program encoder";
-  const title = document.createElement("h2");
-  title.id = "n-panel-program-title";
-  const intro = document.createElement("p");
-  head.append(kicker, title, intro);
-  shell.append(head);
-
-  if (panelProgrammingTransactionActive()) {
-    title.textContent = "Guarded hardware transaction in progress…";
-    intro.textContent =
-      "KSX is revalidating the board and chart, preserving a durable recovery point, applying the reviewed bytes, then reading every byte back. Keep the encoder connected.";
-    const progress = document.createElement("div");
-    progress.className = "n-panel-program-progress";
-    progress.setAttribute("role", "progressbar");
-    progress.setAttribute("aria-label", title.textContent);
-    progress.append(document.createElement("span"));
-    shell.append(progress);
-  } else if (transaction.phase === "verified" && transaction.outcome) {
-    const qualificationState = panelProgrammingQualificationState();
-    const recoveryRestoreCompleted = transaction.operation === "restore" &&
-      (qualificationState === "validation-recovery" || qualificationState === "required");
-    const qualificationRestoreRequired = transaction.operation === "program" &&
-      panelProgrammingQualificationNeedsRestore(qualificationState);
-    const exactQualificationBackupId = qualificationRestoreRequired
-      ? panelProgrammingExactQualificationBackupId()
-      : "";
-    const restoredBackup = panelProgrammingRestoreRequest
-      ? panelProgrammingBackups.find((backup) =>
-          backup.backup_id === panelProgrammingRestoreRequest?.backup_id)
-      : null;
-    title.textContent = detachedTransactionResult
-      ? "Previous encoder transaction verified"
-      : recoveryRestoreCompleted
-      ? "Recovery restore verified — repeat writer check"
-      : qualificationRestoreRequired
-      ? qualificationState === "validation-recovery"
-        ? "Validation write recovered — restore still required"
-        : "Validation write verified — restore required"
-      : transaction.operation === "restore"
-      ? restoredBackup?.reason === "initial-capture"
-        ? "Earliest retained configuration restored and verified"
-        : "Selected backup restored and verified"
-      : "Encoder programmed and verified";
-    intro.textContent = detachedTransactionResult
-      ? `${transaction.outcome.summary} This result belongs to ${transaction.target_selector || "the previously selected encoder"}; the current canvas target was not changed.`
-      : recoveryRestoreCompleted
-      ? `${transaction.outcome.summary} This recovery proves the backup was restored, but it does not qualify the writer.`
-      : qualificationRestoreRequired
-      ? `${transaction.outcome.summary} The writer check is not complete until KSX restores and verifies the exact safety backup.`
-      : transaction.outcome.summary;
-    const proof = document.createElement("dl");
-    proof.className = "n-panel-program-proof";
-    const proofRows: [string, string][] = [];
-    if (detachedTransactionResult) {
-      proofRows.push(["Transaction target", transaction.target_selector || "Previously selected encoder"]);
-    }
-    proofRows.push(
-      ["Verified image", panelProgrammingHash(transaction.outcome.expected_sha256)],
-      ["Safety backup", transaction.outcome.backup.label],
-      ["Verified at", transaction.outcome.verified_at],
-    );
-    for (const [label, value] of proofRows) {
-      const row = document.createElement("div");
-      const dt = document.createElement("dt");
-      const dd = document.createElement("dd");
-      dt.textContent = label;
-      dd.textContent = value;
-      row.append(dt, dd);
-      proof.append(row);
-    }
-    const next = document.createElement("p");
-    next.className = "n-panel-program-next";
-    next.textContent = detachedTransactionResult
-      ? "Close this result. Reopen Encoder setup for the currently selected hardware before teaching, restoring, or programming anything else."
-      : recoveryRestoreCompleted
-      ? "Return to step 1 and perform a fresh one-terminal validation write. Recommended and full-chart programming remain locked."
-      : qualificationRestoreRequired
-      ? qualificationState === "validation-recovery"
-        ? `Review and restore ${exactQualificationBackupId || "the exact safety backup"}. This returns the encoder to step 1 for a fresh validation; it does not unlock full layouts.`
-        : `Review and restore ${exactQualificationBackupId || "the exact safety backup"}. Only its verified restore completes writer qualification and unlocks full layouts.`
-      : transaction.outcome.next_step ||
-        "Teach the physical controls now; a verified chart does not prove the wiring.";
-    const actions = document.createElement("footer");
-    const close = document.createElement("button");
-    close.type = "button";
-    close.dataset.panelDialogAction = "close";
-    close.textContent = "Close";
-    if (detachedTransactionResult) {
-      actions.append(close);
-    } else if (recoveryRestoreCompleted) {
-      const restart = document.createElement("button");
-      restart.type = "button";
-      restart.className = "primary";
-      restart.dataset.panelDialogAction = "restart-validation";
-      restart.textContent = "Repeat writer check";
-      actions.append(close, restart);
-    } else if (qualificationRestoreRequired) {
-      const restore = document.createElement("button");
-      restore.type = "button";
-      restore.className = "primary";
-      restore.dataset.panelDialogAction = "restore-validation";
-      restore.textContent = "Review required restore";
-      restore.disabled = !exactQualificationBackupId;
-      actions.append(close, restore);
-    } else {
-      const teach = document.createElement("button");
-      teach.type = "button";
-      teach.className = "primary";
-      teach.dataset.panelDialogAction = "teach";
-      teach.textContent = controlSurfaceState.started
-        ? "Verify inputs in Teach"
-        : "Build the physical panel";
-      actions.append(teach, close);
-    }
-    shell.append(proof, next, actions);
-  } else if (transaction.phase === "recovery-required") {
-    title.textContent = detachedTransactionResult
-      ? "Previous encoder transaction needs recovery"
-      : "Verification did not prove the write";
-    intro.textContent = detachedTransactionResult
-      ? `${transaction.outcome?.summary || "KSX could not prove the hardware transaction completed."} This result belongs to ${transaction.target_selector || "the previously selected encoder"}; the current canvas target was not changed.`
-      : transaction.outcome?.summary || panelProgrammingMessage ||
-        "KSX cannot prove the encoder's complete current chart. New programming is locked until the device is read again or a verified backup is restored.";
-    const alert = document.createElement("div");
-    alert.className = "n-panel-program-alert danger";
-    alert.setAttribute("role", "alert");
-    alert.textContent = detachedTransactionResult
-      ? "Reselect the transaction's encoder before reading or restoring it. Do not run recovery against the currently selected hardware."
-      : transaction.outcome?.next_step ||
-        "Keep the encoder connected and read its complete chart again. Restore remains locked until KSX knows the current hash.";
-    const actions = document.createElement("footer");
-    const reread = document.createElement("button");
-    reread.type = "button";
-    reread.className = "primary";
-    reread.dataset.panelDialogAction = "recover-read";
-    reread.textContent = "Read chart & back up again";
-    const close = document.createElement("button");
-    close.type = "button";
-    close.dataset.panelDialogAction = "close";
-    close.textContent = transaction.outcome?.observed_sha256 ? "Choose a backup" : "Close";
-    if (detachedTransactionResult) {
-      close.textContent = "Close";
-      actions.append(close);
-    } else {
-      actions.append(close, reread);
-    }
-    shell.append(alert, actions);
-  } else if (plan) {
-    const operation = panelProgrammingRestoreRequest ? "restore" : "program";
-    const stale = !panelProgrammingPlanIsCurrent(plan);
-    title.textContent = operation === "restore"
-      ? "Review the exact restore"
-      : "Review the exact hardware changes";
-    intro.textContent = plan.summary;
-    if (panelProgrammingMessage) {
-      const reviewStatus = document.createElement("p");
-      reviewStatus.className = "n-panel-program-review-status";
-      reviewStatus.setAttribute("role", "status");
-      reviewStatus.textContent = panelProgrammingMessage;
-      shell.append(reviewStatus);
-    }
-
-    const facts = document.createElement("dl");
-    facts.className = "n-panel-program-proof";
-    const factRows: [string, string][] = [
-      ["Encoder", plan.board_name],
-      ["Protocol profile", plan.protocol_profile],
-      ["Current chart", panelProgrammingHash(plan.base_sha256)],
-      ["Planned chart", panelProgrammingHash(plan.desired_sha256)],
-      ["Changed bytes", String(plan.byte_diff.length)],
-      ["Preserved bytes", String(plan.preserved_byte_count)],
-    ];
-    for (const [label, value] of factRows) {
-      const row = document.createElement("div");
-      const dt = document.createElement("dt");
-      const dd = document.createElement("dd");
-      dt.textContent = label;
-      dd.textContent = value;
-      row.append(dt, dd);
-      facts.append(row);
-    }
-    shell.append(facts);
-
-    if (stale || plan.blockers.length > 0) {
-      const blockers = document.createElement("div");
-      blockers.className = "n-panel-program-alert danger";
-      blockers.setAttribute("role", "alert");
-      const strong = document.createElement("strong");
-      strong.textContent = stale ? "This review is stale." : "This plan cannot be applied.";
-      const list = document.createElement("ul");
-      for (const blocker of stale
-        ? ["The selected device or complete chart changed. Close this review and read it again."]
-        : plan.blockers) {
-        const item = document.createElement("li");
-        item.textContent = blocker;
-        list.append(item);
-      }
-      blockers.append(strong, list);
-      shell.append(blockers);
-    }
-
-    const changes = document.createElement("section");
-    changes.className = "n-panel-program-changes";
-    const changesTitle = document.createElement("h3");
-    changesTitle.textContent = `Terminal changes (${plan.terminal_diff.length})`;
-    changes.append(changesTitle);
-    if (plan.terminal_diff.length === 0) {
-      const unchanged = document.createElement("p");
-      unchanged.textContent = "The requested terminal chart already matches this encoder.";
-      changes.append(unchanged);
-    } else {
-      const tableWrap = document.createElement("div");
-      tableWrap.className = "n-panel-program-table-wrap";
-      const table = document.createElement("table");
-      table.innerHTML = "<thead><tr><th scope=\"col\">Terminal</th><th scope=\"col\">Layer</th><th scope=\"col\">Before</th><th scope=\"col\">After</th></tr></thead>";
-      const body = document.createElement("tbody");
-      for (const diff of plan.terminal_diff) {
-        const row = document.createElement("tr");
-        for (const value of [diff.terminal_label, diff.layer, diff.before || "Unassigned", diff.after || "Unassigned"]) {
-          const cell = document.createElement("td");
-          cell.textContent = value;
-          row.append(cell);
-        }
-        body.append(row);
-      }
-      table.append(body);
-      tableWrap.append(table);
-      changes.append(tableWrap);
-    }
-    shell.append(changes);
-
-    const bytes = document.createElement("details");
-    bytes.className = "n-panel-program-bytes";
-    const bytesSummary = document.createElement("summary");
-    bytesSummary.textContent = `Inspect ${plan.byte_diff.length} changed ${plan.byte_diff.length === 1 ? "byte" : "bytes"}`;
-    const byteTableWrap = document.createElement("div");
-    byteTableWrap.className = "n-panel-program-table-wrap";
-    const byteTable = document.createElement("table");
-    byteTable.innerHTML = "<thead><tr><th scope=\"col\">Offset</th><th scope=\"col\">Before</th><th scope=\"col\">After</th><th scope=\"col\">Meaning</th></tr></thead>";
-    const byteBody = document.createElement("tbody");
-    for (const diff of plan.byte_diff) {
-      const row = document.createElement("tr");
-      for (const value of [String(diff.offset), String(diff.before), String(diff.after), diff.meaning]) {
-        const cell = document.createElement("td");
-        cell.textContent = value;
-        row.append(cell);
-      }
-      byteBody.append(row);
-    }
-    byteTable.append(byteBody);
-    byteTableWrap.append(byteTable);
-    bytes.append(bytesSummary, byteTableWrap);
-    shell.append(bytes);
-
-    const confirmation = document.createElement("label");
-    confirmation.className = "n-panel-program-confirm";
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.dataset.panelProgramConfirm = "";
-    checkbox.checked = panelProgrammingConfirmed;
-    checkbox.disabled = applyPending || stale || plan.blockers.length > 0 ||
-      plan.byte_diff.length === 0;
-    const confirmationCopy = document.createElement("span");
-    confirmationCopy.textContent = plan.confirmation;
-    confirmation.append(checkbox, confirmationCopy);
-    shell.append(confirmation);
-
-    const supervised = document.createElement("label");
-    supervised.className = "n-panel-program-confirm";
-    const supervisedCheckbox = document.createElement("input");
-    supervisedCheckbox.type = "checkbox";
-    supervisedCheckbox.dataset.panelProgramSupervised = "";
-    supervisedCheckbox.checked = panelProgrammingRecoveryReady;
-    supervisedCheckbox.disabled = applyPending || stale || plan.blockers.length > 0 ||
-      plan.byte_diff.length === 0;
-    const supervisedCopy = document.createElement("span");
-    supervisedCopy.textContent =
-      "I am at this cabinet, WinIPAC is closed, and I have a separate keyboard or recovery path if the encoder stops responding.";
-    supervised.append(supervisedCheckbox, supervisedCopy);
-    shell.append(supervised);
-
-    const actions = document.createElement("footer");
-    const cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.dataset.panelDialogAction = "close";
-    cancel.textContent = "Back to assignments";
-    cancel.disabled = applyPending;
-    const apply = document.createElement("button");
-    apply.type = "button";
-    apply.className = "primary danger";
-    apply.dataset.panelDialogAction = "apply";
-    apply.textContent = operation === "restore" ? "Restore and verify" : "Program and verify";
-    apply.disabled = applyPending || !panelProgrammingConfirmed ||
-      !panelProgrammingRecoveryReady || stale ||
-      plan.blockers.length > 0 || plan.byte_diff.length === 0;
-    actions.append(cancel, apply);
-    shell.append(actions);
-  } else {
-    title.textContent = "No hardware plan to review";
-    intro.textContent = "Return to Encoder setup and generate a fresh plan from the complete current chart.";
-    const close = document.createElement("button");
-    close.type = "button";
-    close.dataset.panelDialogAction = "close";
-    close.textContent = "Close";
-    shell.append(close);
-  }
-
-  dialog.append(shell);
-}
-
-function openPanelProgrammingDialog(): void {
-  const dialog = ensurePanelProgrammingDialog();
-  if (document.activeElement instanceof HTMLElement && !dialog.contains(document.activeElement)) {
-    panelProgrammingReturnFocus = document.activeElement;
-  }
-  panelProgrammingConfirmed = false;
-  panelProgrammingRecoveryReady = false;
-  renderPanelProgrammingDialog();
-  if (!dialog.open) dialog.showModal();
-  window.requestAnimationFrame(() => {
-    dialog.querySelector<HTMLElement>(
-      '[data-panel-program-confirm], [data-panel-dialog-action="teach"], [data-panel-dialog-action="recover-read"], [data-panel-dialog-action="close"]',
-    )?.focus({ preventScroll: true });
-  });
-}
-
-async function requestPanelProgrammingPlan(): Promise<void> {
-  const chart = panelProgrammingState.inspection.chart;
-  const authority = currentPanelChartAuthority();
-  const requestTargetFingerprint = currentControlSurfaceHardwareFingerprint();
-  const layout = panelProgramLayoutForMode(panelProgrammingState.editor.assignment_mode);
-  const conflicts = panelProgrammingConflicts();
-  const qualificationState = panelProgrammingQualificationState(chart);
-  const qualificationEdits = panelProgrammingQualificationEdits();
-  const qualificationChangedEdits = panelProgrammingQualificationChangedEdits(
-    qualificationEdits,
-  );
-  if (!chart || !authority || !layout || panelProgrammingInteractionBusy() ||
-      panelProgrammingTransactionActive() ||
-      panelProgrammingState.transaction.phase === "recovery-required") return;
-  if (panelProgrammingQualificationNeedsRestore(qualificationState)) {
-    panelProgrammingSetMessage(
-      qualificationState === "validation-recovery"
-        ? "Restore the interrupted validation write's exact safety backup, then repeat the one-terminal writer check. This restore will not unlock full layouts."
-        : "Restore the validation write's exact safety backup before preparing another hardware change.",
-    );
-    return;
-  }
-  if (qualificationState === "required" &&
-      (layout !== "custom" || qualificationChangedEdits.length !== 1 ||
-        !panelProgrammingQualificationEditIsEligible(qualificationChangedEdits[0]))) {
-    panelProgrammingSetMessage(
-      "Writer qualification requires one safe letter or top-row number on one noncritical SW action button whose current normal assignment is readable and Shift state is explicitly disabled. Directions, Start, Coin, clears, command keys, opaque actions, and opaque Shift states are not eligible.",
-    );
-    return;
-  }
-  if (layout === "custom" && qualificationState !== "required" && conflicts.length > 0) {
-    panelProgrammingSetMessage(conflicts[0].message);
-    return;
-  }
-  const request: PanelProgramRequest = {
-    expected_selector: authority.target_selector,
-    expected_base_sha256: authority.base_sha256,
-    layout,
-    edits: layout === "custom"
-      ? qualificationState === "required"
-        ? qualificationEdits
-        : panelProgrammingEdits()
-      : [],
-  };
-  panelProgrammingBusy = true;
-  panelProgrammingMessage = "Asking the backend to compute the exact hardware diff…";
-  panelProgrammingDropPlan();
-  syncPanelProgrammingUi();
-  try {
-    const payload = await panelProgrammingJSON<PanelPlanPayload>(
-      "/api/panel/program/plan",
-      "POST",
-      request,
-    );
-    if (currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint) return;
-    if (payload.target_selector !== authority.target_selector || payload.unavailable || !payload.plan) {
-      const unavailable = payload.unavailable || "A complete program plan was unavailable.";
-      const remedy = payload.remedy?.trim() ?? "";
-      throw new Error(remedy ? `${unavailable} ${remedy}` : unavailable);
-    }
-    if (panelPlanInvalidation(payload.plan, currentPanelChartAuthority(), authority.target_selector)) {
-      throw new Error("The encoder or its chart changed while the plan was prepared. Read it again.");
-    }
-    panelProgrammingProgramRequest = request;
-    panelProgrammingRestoreRequest = null;
-    panelProgrammingPlanTargetFingerprint = requestTargetFingerprint;
-    panelProgrammingState = {
-      ...panelProgrammingState,
-      editor: {
-        ...panelProgrammingState.editor,
-        phase: "review",
-        assignments: panelProgrammingDraftAssignments(),
-        plan_expected_selector: authority.target_selector,
-        plan: payload.plan,
-      },
-      transaction: {
-        phase: "idle",
-        operation: "program",
-        target_selector: authority.target_selector,
-        outcome: null,
-      },
-    };
-    panelProgrammingMessage = "Review every terminal and changed byte before confirming.";
-    openPanelProgrammingDialog();
-  } catch (error) {
-    panelProgrammingMessage = `${error instanceof Error ? error.message : "The hardware plan failed."} Nothing was written.`;
-  } finally {
-    panelProgrammingBusy = false;
-    syncPanelProgrammingUi();
-  }
-}
-
-async function requestPanelRestorePlan(backupId: string): Promise<void> {
-  const authority = currentPanelChartAuthority();
-  const requestTargetFingerprint = currentControlSurfaceHardwareFingerprint();
-  if (!authority || !backupId || panelProgrammingInteractionBusy() ||
-      panelProgrammingTransactionActive() ||
-      panelProgrammingState.capability.kind !== "programmable") return;
-  const qualificationState = panelProgrammingQualificationState();
-  if (qualificationState === "required") {
-    panelProgrammingSetMessage(
-      "This encoder has not begun its writer check, so there is no validation write to restore. Complete the one-terminal test first.",
-    );
-    return;
-  }
-  const exactQualificationBackup = panelProgrammingQualificationNeedsRestore(
-    qualificationState,
-  ) && panelProgrammingState.inspection.chart
-    ? panelProgrammingState.inspection.chart.qualification_restore_backup_id?.trim() ||
-      (panelProgrammingState.transaction.operation === "program"
-        ? panelProgrammingState.transaction.outcome?.backup.backup_id ?? ""
-        : "")
-    : "";
-  if (exactQualificationBackup && backupId !== exactQualificationBackup) {
-    panelProgrammingSetMessage(
-      qualificationState === "validation-recovery"
-        ? "Recover the interrupted writer check with its exact safety backup. After restore, repeat the one-terminal test; full layouts remain locked."
-        : "Finish writer qualification by restoring the exact safety backup captured immediately before the validation write.",
-    );
-    return;
-  }
-  const request = {
-    expected_selector: authority.target_selector,
-    backup_id: backupId,
-    expected_current_sha256: authority.base_sha256,
-  };
-  panelProgrammingBusy = true;
-  panelProgrammingMessage = "Comparing the verified backup with the encoder's complete current chart…";
-  panelProgrammingDropPlan();
-  syncPanelProgrammingUi();
-  try {
-    const payload = await panelProgrammingJSON<PanelPlanPayload>(
-      "/api/panel/restore/plan",
-      "POST",
-      request,
-    );
-    if (currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint) return;
-    if (payload.target_selector !== authority.target_selector || payload.unavailable || !payload.plan) {
-      const unavailable = payload.unavailable || "A complete restore plan was unavailable.";
-      const remedy = payload.remedy?.trim() ?? "";
-      throw new Error(remedy ? `${unavailable} ${remedy}` : unavailable);
-    }
-    if (panelPlanInvalidation(payload.plan, currentPanelChartAuthority(), authority.target_selector)) {
-      throw new Error("The encoder or its chart changed while the restore was prepared. Read it again.");
-    }
-    panelProgrammingProgramRequest = null;
-    panelProgrammingRestoreRequest = request;
-    panelProgrammingPlanTargetFingerprint = requestTargetFingerprint;
-    panelProgrammingState = {
-      ...panelProgrammingState,
-      editor: {
-        ...panelProgrammingState.editor,
-        phase: "review",
-        plan_expected_selector: authority.target_selector,
-        plan: payload.plan,
-      },
-      transaction: {
-        phase: "idle",
-        operation: "restore",
-        target_selector: authority.target_selector,
-        outcome: null,
-      },
-    };
-    panelProgrammingMessage = "Review the exact restore diff before confirming.";
-    openPanelProgrammingDialog();
-  } catch (error) {
-    panelProgrammingMessage = `${error instanceof Error ? error.message : "The restore plan failed."} Nothing was written.`;
-  } finally {
-    panelProgrammingBusy = false;
-    syncPanelProgrammingUi();
-  }
-}
-
-function reconcilePanelProgrammingOutcome(
-  plan: PanelPlanView,
-  outcome: PanelProgramOutcomeView,
-): void {
-  const chart = panelProgrammingState.inspection.chart;
-  const normalByTerminal = new Map(
-    plan.terminal_diff
-      .filter((diff) => diff.layer.toLocaleLowerCase() === "normal")
-      .map((diff) => [diff.terminal_id, diff.after] as const),
-  );
-  const linked = controlSurfaceState.controls.flatMap((control) =>
-    control.channels
-      .filter((channel) => channel.encoder?.boardFingerprint === outcome.board_fingerprint)
-      .map((channel) => ({ controlId: control.id, channel }))
-  );
-  const selectedControlId = controlSurfaceState.selectedControlId;
-  const selectedChannelId = controlSurfaceState.selectedChannelId;
-  let next = controlSurfaceState;
-  for (const { controlId, channel } of linked) {
-    const encoder = channel.encoder;
-    if (!encoder || !normalByTerminal.has(encoder.terminalId)) continue;
-    const after = normalByTerminal.get(encoder.terminalId) ?? "";
-    const option = chart?.key_options.find((candidate) =>
-      candidate.key === after || candidate.label === after
-    );
-    next = assignControlSurfaceTerminal(next, controlId, channel.id, {
-      driver: chart?.driver ?? encoder.driver,
-      boardFingerprint: outcome.board_fingerprint,
-      terminalId: encoder.terminalId,
-      terminalLabel: encoder.terminalLabel,
-      expectedKey: option?.key ?? after,
-    });
-  }
-  next = invalidateControlSurfaceEncoderVerification(next, outcome.board_fingerprint);
-  applyControlSurfaceState(
-    { ...next, selectedControlId, selectedChannelId },
-    true,
-  );
-}
-
-async function applyPanelProgrammingPlan(browserLockHeld = false): Promise<void> {
-  if (!browserLockHeld) {
-    const candidatePlan = panelProgrammingState.editor.plan;
-    if (!candidatePlan || panelProgrammingInteractionBusy() || panelProgrammingTransactionActive()) return;
-    if (panelProgrammingRoutingAuthoritySuspended()) {
-      panelProgrammingSetMessage(
-        "This encoder is still being changed or recovered. Read its complete chart before reviewing another hardware write.",
-      );
-      renderPanelProgrammingDialog();
-      return;
-    }
-    const preferredDevice = nCapInstance().trim();
-    const lockIdentities = controlSurfaceHardwareLockIdentities(
-      preferredDevice,
-      candidatePlan.board_fingerprint,
-    );
-    if (lockIdentities.length === 0 || !navigator.locks) {
-      panelProgrammingSetMessage(
-        "KSX cannot safely coordinate this persistent write across browser windows. Close other KSX windows or use a browser with Web Locks support, then review again. Nothing was written.",
-      );
-      renderPanelProgrammingDialog();
-      return;
-    }
-    // Establish same-document ownership before the first await. Web Locks
-    // serialize browser documents; this latch also serializes gestures inside
-    // this document while the lock callback is still queued.
-    panelProgrammingApplyPending = true;
-    let acquired = false;
-    try {
-      renderPanelProgrammingDialog();
-      syncPanelProgrammingUi();
-      acquired = await withControlSurfaceHardwareLocks(
-        lockIdentities,
-        async () => applyPanelProgrammingPlan(true),
-      );
-    } catch (error) {
-      panelProgrammingSetMessage(
-        `${error instanceof Error ? error.message : "The browser hardware lock failed."} Nothing was written.`,
-      );
-      return;
-    } finally {
-      panelProgrammingApplyPending = false;
-      renderPanelProgrammingDialog();
-      syncPanelProgrammingUi();
-    }
-    if (!acquired) {
-      panelProgrammingSetMessage(
-        "Another KSX window owns this encoder's hardware transaction. Wait for it to finish, read the complete chart, then review again. Nothing was written.",
-      );
-      renderPanelProgrammingDialog();
-    }
-    return;
-  }
-  // The outer authority check happened before waiting for the Web Locks. A
-  // different document may have published its pending epoch and then died
-  // while this callback was queued. Reconcile again *inside* both locks and
-  // refuse rather than replacing that writer's durable intent with ours.
-  if (!controlSurfaceHardwareAuthorityCurrentForAction() ||
-      panelProgrammingRoutingAuthoritySuspended()) {
-    panelProgrammingSetMessage(
-      "Another encoder transaction began while this review was waiting. Its pending hardware lock was preserved; read the complete chart after that transaction finishes, then review again. Nothing was written from this window.",
-    );
-    renderPanelProgrammingDialog();
-    return;
-  }
-  const plan = panelProgrammingState.editor.plan;
-  if (!plan || !panelProgrammingConfirmed || !panelProgrammingRecoveryReady ||
-      panelProgrammingReadPending || panelProgrammingBusy ||
-      panelProgrammingTransactionActive() || plan.blockers.length > 0 ||
-      !panelProgrammingPlanIsCurrent(plan) || !panelProgrammingPlanTargetFingerprint ||
-      panelProgrammingPlanTargetFingerprint !== currentControlSurfaceHardwareFingerprint() ||
-      !nCapInstance().trim()) return;
-  const operation = panelProgrammingRestoreRequest ? "restore" : "program";
-  if (operation === "program" && !panelProgrammingProgramRequest) return;
-  const expectedSelector = panelProgrammingState.editor.plan_expected_selector;
-  const requestTargetFingerprint = panelProgrammingPlanTargetFingerprint;
-  const requestDeviceInstance = nCapInstance().trim();
-  // This document does not receive its own storage event. Retire every local
-  // action that could finish with pre-write signal authority before publishing
-  // the epoch other documents consume.
-  if (learnRow?.purpose === "surface" || learnRow?.purpose === "panel-test") {
-    void cancelLearn();
-  }
-  if (assignKey) cancelAssign();
-  // This sidecar is written before either the main browser document or USB.
-  // Unlike the selector-scoped layout store, an exact-device epoch cannot be
-  // resurrected by another open tab saving an older whole-document snapshot.
-  const hardwareEpochMutation = beginControlSurfaceHardwareEpoch(
-    requestDeviceInstance,
-    plan.board_fingerprint,
-    expectedSelector,
-  );
-  if (!hardwareEpochMutation) {
-    panelProgrammingConfirmed = false;
-    panelProgrammingRecoveryReady = false;
-    panelProgrammingMessage =
-      "KSX could not publish the cross-window hardware invalidation because browser storage is unavailable or its 64-device safety ledger is full. Nothing was written. Restore storage access or clear this site's saved KSX data, then review and confirm again.";
-    renderPanelProgrammingDialog();
-    syncPanelProgrammingUi();
-    keyboardWorkbenchAnnounce(panelProgrammingMessage);
-    return;
-  }
-  controlSurfaceActiveHardwareEpoch = hardwareEpochMutation;
-  panelProgrammingRecoveryTargets.set(
-    requestTargetFingerprint,
-    hardwareEpochMutation.boardFingerprint,
-  );
-  panelProgrammingUntrustedBoards.add(hardwareEpochMutation.boardFingerprint);
-  let refreshVerifiedTarget = false;
-  // Close the browser/backend crash window before the request can mutate the
-  // encoder. A verified backend response also settles its durable journal, so
-  // a reload that loses that response must not be able to revive pre-write
-  // Teach evidence from this browser's saved Control Surface document.
-  controlSurfaceLocallyOwnedHardwareEpoch = hardwareEpochMutation;
-  try {
-    applyControlSurfaceState(
-      invalidateControlSurfaceHardwareObservations(
-        controlSurfaceState,
-        plan.board_fingerprint,
-        requestDeviceInstance,
-      ),
-      true,
-    );
-  } catch (error) {
-    controlSurfaceActiveHardwareEpoch = null;
-    throw error;
-  } finally {
-    controlSurfaceLocallyOwnedHardwareEpoch = null;
-  }
-  if (controlSurfaceSaveFailed) {
-    // The old main document may still be durable, but the independent epoch
-    // makes it stale. Do not restore observations in memory: another tab may
-    // already own the backend lease and mutate this board after our refusal.
-    panelProgrammingConfirmed = false;
-    panelProgrammingRecoveryReady = false;
-    const browserEpochSettled = publishNoWriteControlSurfaceHardwareSettlement(
-      hardwareEpochMutation,
-      requestTargetFingerprint,
-    );
-    panelProgrammingMessage =
-      "KSX could not save the pre-write Teach invalidation because browser storage is unavailable. Nothing was written from this window. The earlier Teach evidence remains retired; restore browser storage access, then Teach and review again.";
-    if (!browserEpochSettled) {
-      panelProgrammingMessage +=
-        " KSX also could not publish cross-window completion, so the pending hardware lock remains until a complete recovery read.";
-    }
-    renderPanelProgrammingDialog();
-    syncPanelProgrammingUi();
-    keyboardWorkbenchAnnounce(panelProgrammingMessage);
-    controlSurfaceActiveHardwareEpoch = null;
-    return;
-  }
-  if (!controlSurfaceHardwareEpochIsCurrent(hardwareEpochMutation)) {
-    panelProgrammingConfirmed = false;
-    panelProgrammingRecoveryReady = false;
-    panelProgrammingMessage =
-      "Another KSX window began changing this encoder before the USB request. Nothing was written from this window; wait for that operation, then inspect and review again.";
-    renderPanelProgrammingDialog();
-    syncPanelProgrammingUi();
-    keyboardWorkbenchAnnounce(panelProgrammingMessage);
-    controlSurfaceActiveHardwareEpoch = null;
-    return;
-  }
-  panelProgrammingBusy = true;
-  panelProgrammingTransactionTargetFingerprint = requestTargetFingerprint;
-  panelProgrammingState = {
-    ...panelProgrammingState,
-    transaction: { phase: "writing", operation, target_selector: expectedSelector, outcome: null },
-  };
-  panelProgrammingMessage = operation === "restore"
-    ? "Restoring and verifying the reviewed backup…"
-    : "Programming the I-PAC and verifying every chart byte…";
-  renderPanelProgrammingDialog();
-  syncPanelProgrammingUi();
-  let browserEpochCompletionFailed = false;
-  try {
-    const payload = operation === "restore"
-      ? await panelProgrammingJSON<PanelRestorePayload>(
-          "/api/panel/restore/apply",
-          "POST",
-          {
-            hardware_epoch: hardwareEpochMutation.epoch,
-            expected_selector: panelProgrammingRestoreRequest!.expected_selector,
-            restore: {
-              backup_id: panelProgrammingRestoreRequest!.backup_id,
-              expected_current_sha256: panelProgrammingRestoreRequest!.expected_current_sha256,
-            },
-            expected_board_fingerprint: plan.board_fingerprint,
-            expected_protocol_profile: plan.protocol_profile,
-            expected_desired_sha256: plan.desired_sha256,
-            confirm: true,
-            supervised: true,
-          },
-        )
-      : await panelProgrammingJSON<PanelProgramPayload>(
-          "/api/panel/program/apply",
-          "POST",
-          {
-            hardware_epoch: hardwareEpochMutation.epoch,
-            expected_selector: panelProgrammingProgramRequest!.expected_selector,
-            program: {
-              expected_base_sha256: panelProgrammingProgramRequest!.expected_base_sha256,
-              layout: panelProgrammingProgramRequest!.layout,
-              edits: panelProgrammingProgramRequest!.edits,
-            },
-            expected_board_fingerprint: plan.board_fingerprint,
-            expected_protocol_profile: plan.protocol_profile,
-            expected_desired_sha256: plan.desired_sha256,
-            confirm: true,
-            supervised: true,
-          },
-        );
-    if (payload.hardware_epoch !== hardwareEpochMutation.epoch) {
-      throw new Error(
-        "The backend did not bind its hardware outcome to this browser's exact mutation token.",
-      );
-    }
-    const detachedFromCurrentTarget =
-      currentControlSurfaceHardwareFingerprint() !== requestTargetFingerprint;
-    if (payload.target_selector !== expectedSelector) {
-      if (payload.mutation_disposition === "not-started") {
-        browserEpochCompletionFailed = !publishSettledControlSurfaceHardwareEpoch(
-          hardwareEpochMutation,
-        );
-        panelProgrammingTransactionTargetFingerprint = "";
-        panelProgrammingState.transaction = {
-          phase: "idle",
-          operation,
-          target_selector: expectedSelector,
-          outcome: null,
-        };
-        panelProgrammingConfirmed = false;
-        panelProgrammingRecoveryReady = false;
-        panelProgrammingMessage = payload.unavailable ||
-          "The selected encoder changed before programming began. Nothing was written from this request; Teach evidence remains retired because another window may own the hardware transaction.";
-        if (browserEpochCompletionFailed) {
-          panelProgrammingMessage +=
-            " KSX could not publish cross-window completion, so the pending hardware lock remains until a complete recovery read.";
-        }
-        return;
-      }
-      throw new Error(payload.unavailable ||
-        "The response did not identify the reviewed encoder after the hardware transaction began.");
-    }
-    if (payload.unavailable && payload.mutation_disposition === "not-started") {
-      browserEpochCompletionFailed = !publishSettledControlSurfaceHardwareEpoch(
-        hardwareEpochMutation,
-      );
-      panelProgrammingTransactionTargetFingerprint = "";
-      panelProgrammingState.transaction = {
-        phase: "idle",
-        operation,
-        target_selector: expectedSelector,
-        outcome: null,
-      };
-      panelProgrammingConfirmed = false;
-      panelProgrammingRecoveryReady = false;
-      panelProgrammingMessage = payload.remedy
-        ? `${payload.unavailable} ${payload.remedy}`
-        : payload.unavailable;
-      if (!detachedFromCurrentTarget) {
-        panelProgrammingMessage +=
-          " Teach evidence remains retired because another window may own the hardware transaction.";
-      }
-      if (browserEpochCompletionFailed) {
-        panelProgrammingMessage +=
-          " KSX could not publish cross-window completion, so the pending hardware lock remains until a complete recovery read.";
-      }
-      return;
-    }
-    if (payload.unavailable || !payload.outcome) {
-      throw new Error(payload.unavailable || "The backend did not return a verified hardware outcome.");
-    }
-    const outcome = payload.outcome;
-    if ((outcome.state !== "verified" && outcome.state !== "recovery-required") ||
-        payload.mutation_disposition !== outcome.state ||
-        outcome.board_fingerprint.toLocaleUpperCase() !== plan.board_fingerprint.toLocaleUpperCase() ||
-        outcome.expected_sha256.toLocaleUpperCase() !== plan.desired_sha256.toLocaleUpperCase() ||
-        (outcome.state === "verified" && (!outcome.observed_sha256 ||
-          outcome.observed_sha256.toLocaleUpperCase() !== plan.desired_sha256.toLocaleUpperCase()))) {
-      throw new Error("The hardware outcome did not match the reviewed board and target hashes.");
-    }
-    // The response is now definitive. Publish completion before any
-    // nonessential UI reconciliation can throw; failure leaves the original
-    // pending record intact and therefore fail-closed in every window.
-    browserEpochCompletionFailed = !publishSettledControlSurfaceHardwareEpoch(
-      hardwareEpochMutation,
-    );
-    const changedBoard = outcome.board_fingerprint.trim().toLocaleUpperCase();
-    panelProgrammingUntrustedBoards.add(changedBoard);
-    // Even a byte-verified write invalidates the browser's pre-write chart.
-    // Keep this exact selector+instance locked until its automatic complete
-    // chart read returns; a replacement instance sharing the selector must not
-    // inherit either that lock or the old board's recovery state.
-    panelProgrammingRecoveryTargets.set(requestTargetFingerprint, changedBoard);
-    if (!detachedFromCurrentTarget && panelRecoveryProbePossible()) {
-      if (outcome.state === "recovery-required") {
-        setPanelRecoveryProbe(
-          currentControlSurfaceHardwareFingerprint(),
-          "recovery-required",
-          outcome.summary,
-        );
-      } else {
-        beginPanelRecoveryProbe();
-      }
-    }
-    if (!detachedFromCurrentTarget && outcome.backup && !panelProgrammingBackups.some(
-      (candidate) => candidate.backup_id === outcome.backup.backup_id,
-    )) panelProgrammingBackups.unshift(outcome.backup);
-    panelProgrammingState = {
-      ...panelProgrammingState,
-      transaction: {
-        phase: outcome.state,
-        operation,
-        target_selector: expectedSelector,
-        outcome,
-      },
-    };
-    panelProgrammingMessage = detachedFromCurrentTarget
-      ? `${outcome.summary} This result belongs to the previously selected encoder; the current canvas target was not changed.`
-      : outcome.summary;
-    if (browserEpochCompletionFailed) {
-      panelProgrammingMessage +=
-        " Hardware verification finished, but KSX could not publish cross-window completion. Routes remain locked until a complete recovery read settles the browser journal.";
-    }
-    if (outcome.state === "verified" && !detachedFromCurrentTarget) {
-      panelProgrammingDraftCache.delete(outcome.board_fingerprint);
-      reconcilePanelProgrammingOutcome(plan, outcome);
-      refreshVerifiedTarget = true;
-      if (panelProgrammingState.inspection.chart) {
-        const beginsQualificationRestore = operation === "program" &&
-          panelProgrammingQualificationState(panelProgrammingState.inspection.chart) === "required";
-        panelProgrammingState.inspection.chart = {
-          ...panelProgrammingState.inspection.chart,
-          image_sha256: outcome.observed_sha256!,
-          ...(beginsQualificationRestore
-            ? {
-                qualification_state: "validation-written" as const,
-                qualification_detail:
-                  `The one-terminal validation write was verified. Restore exact safety backup ${outcome.backup.backup_id} before another program operation.`,
-                qualification_restore_backup_id: outcome.backup.backup_id,
-              }
-            : {}),
-        };
-      }
-    } else if (!detachedFromCurrentTarget) {
-      if (outcome.observed_sha256 && panelProgrammingState.inspection.chart) {
-        panelProgrammingState.inspection.chart = {
-          ...panelProgrammingState.inspection.chart,
-          image_sha256: outcome.observed_sha256,
-        };
-      }
-      applyControlSurfaceState(
-        invalidateControlSurfaceEncoderVerification(controlSurfaceState, outcome.board_fingerprint),
-        true,
-      );
-    }
-  } catch (error) {
-    const failedBoard = plan.board_fingerprint.trim().toLocaleUpperCase();
-    panelProgrammingRecoveryTargets.set(
-      requestTargetFingerprint,
-      failedBoard,
-    );
-    panelProgrammingUntrustedBoards.add(failedBoard);
-    if (currentControlSurfaceHardwareFingerprint() === requestTargetFingerprint &&
-        panelRecoveryProbePossible()) {
-      setPanelRecoveryProbe(
-        currentControlSurfaceHardwareFingerprint(),
-        "recovery-required",
-        error instanceof Error ? error.message : "The hardware transaction was interrupted.",
-      );
-    }
-    applyControlSurfaceState(
-      invalidateControlSurfaceEncoderVerification(controlSurfaceState, plan.board_fingerprint),
-      true,
-    );
-    panelProgrammingState = {
-      ...panelProgrammingState,
-      transaction: {
-        phase: "recovery-required",
-        operation,
-        target_selector: expectedSelector,
-        outcome: null,
-      },
-    };
-    panelProgrammingMessage = `${error instanceof Error ? error.message : "The hardware transaction was interrupted."} KSX cannot prove the current chart; restore a verified backup before programming again.`;
-  } finally {
-    panelProgrammingBusy = false;
-    controlSurfaceActiveHardwareEpoch = null;
-    renderPanelProgrammingDialog();
-    syncPanelProgrammingUi();
-    if (panelProgrammingState.transaction.phase === "verified" && refreshVerifiedTarget) {
-      window.setTimeout(() => void readPanelProgrammingChart(false), 0);
-    } else if (panelProgrammingState.transaction.phase !== "verified") {
-      void loadPanelProgrammingBackups();
-    }
-  }
-}
-
 function controlSurfaceDocumentFingerprint(state: ControlSurfaceState): string {
   return JSON.stringify({
     name: state.name,
@@ -7399,718 +2468,6 @@ function clearControlSurfaceUndo(): void {
   controlSurfaceUndoIdentity = "";
   controlSurfaceUndoAfterFingerprint = "";
 }
-
-function normalizedControlSurfaceHardwareDevice(value: string): string {
-  return value.trim().slice(0, 240).toLocaleUpperCase();
-}
-
-function emptyControlSurfaceHardwareEpochLedger(): ControlSurfaceHardwareEpochLedger {
-  return { version: CONTROL_SURFACE_HARDWARE_EPOCH_VERSION, devices: {} };
-}
-
-function controlSurfaceHardwareEpochStorageKey(device: string): string {
-  return CONTROL_SURFACE_HARDWARE_EPOCH_STORAGE_PREFIX + encodeURIComponent(device);
-}
-
-function sanitizeControlSurfaceHardwareEpochRecord(
-  value: unknown,
-  expectedDevice: string,
-): ControlSurfaceHardwareEpochRecord | null {
-  let candidate = value;
-  if (typeof candidate === "string") {
-    try {
-      candidate = JSON.parse(candidate) as unknown;
-    } catch {
-      return null;
-    }
-  }
-  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
-  const record = candidate as Record<string, unknown>;
-  const device = typeof record.device === "string"
-    ? normalizedControlSurfaceHardwareDevice(record.device)
-    : "";
-  const epoch = typeof record.epoch === "string" ? record.epoch.trim().slice(0, 160) : "";
-  const boardFingerprint = typeof record.boardFingerprint === "string"
-    ? record.boardFingerprint.trim().slice(0, 240).toLocaleUpperCase()
-    : "";
-  const selector = typeof record.selector === "string"
-    ? record.selector.trim().slice(0, 480).toLocaleUpperCase()
-    : "";
-  const phase = record.phase === "pending" || record.phase === "settled"
-    ? record.phase
-    : "";
-  return record.version === CONTROL_SURFACE_HARDWARE_EPOCH_VERSION &&
-      device === expectedDevice && Boolean(epoch) && Boolean(boardFingerprint) &&
-      Boolean(selector) && Boolean(phase)
-    ? { epoch, boardFingerprint, selector, phase }
-    : null;
-}
-
-/** Missing is a valid first-run ledger. Malformed or inaccessible is not: the
- * caller must fail closed instead of guessing that old Teach evidence is safe. */
-function readControlSurfaceHardwareEpochLedger(
-  requiredDevices: readonly string[] = [],
-): ControlSurfaceHardwareEpochLedger | null {
-  try {
-    const ledger = emptyControlSurfaceHardwareEpochLedger();
-    const keys = new Set<string>();
-    for (let index = 0; index < window.localStorage.length; index += 1) {
-      const key = window.localStorage.key(index);
-      if (key?.startsWith(CONTROL_SURFACE_HARDWARE_EPOCH_STORAGE_PREFIX)) keys.add(key);
-    }
-    for (const rawDevice of requiredDevices) {
-      const device = normalizedControlSurfaceHardwareDevice(rawDevice);
-      if (device) keys.add(controlSurfaceHardwareEpochStorageKey(device));
-    }
-    for (const key of keys) {
-      const suffix = key.slice(CONTROL_SURFACE_HARDWARE_EPOCH_STORAGE_PREFIX.length);
-      let device = "";
-      try {
-        device = normalizedControlSurfaceHardwareDevice(decodeURIComponent(suffix));
-      } catch {
-        return null;
-      }
-      const raw = window.localStorage.getItem(key);
-      if (raw === null) continue;
-      const record = sanitizeControlSurfaceHardwareEpochRecord(raw, device);
-      if (!device || !record || ledger.devices[device]) return null;
-      if (Object.keys(ledger.devices).length >= CONTROL_SURFACE_HARDWARE_EPOCH_DEVICE_LIMIT) {
-        return null;
-      }
-      ledger.devices[device] = record;
-    }
-    return ledger;
-  } catch {
-    return null;
-  }
-}
-
-function newControlSurfaceHardwareEpoch(): string {
-  try {
-    if (typeof window.crypto?.randomUUID === "function") return window.crypto.randomUUID();
-    const words = new Uint32Array(4);
-    window.crypto.getRandomValues(words);
-    return Array.from(words, (word) => word.toString(16).padStart(8, "0")).join("");
-  } catch {
-    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-  }
-}
-
-function beginControlSurfaceHardwareEpoch(
-  rawDevice: string,
-  rawBoardFingerprint: string,
-  rawSelector: string,
-): ControlSurfaceHardwareEpochMutation | null {
-  const device = normalizedControlSurfaceHardwareDevice(rawDevice);
-  const boardFingerprint = rawBoardFingerprint.trim().slice(0, 240).toLocaleUpperCase();
-  const selector = rawSelector.trim().slice(0, 480).toLocaleUpperCase();
-  const previous = readControlSurfaceHardwareEpochLedger();
-  if (!device || !boardFingerprint || !selector || !previous) return null;
-  // The caller owns the device Web Lock, so this is a real storage CAS among
-  // cooperating KSX documents. Never overwrite a crash-surviving pending
-  // intent: its backend task may still be capable of writing.
-  if (previous.devices[device]?.phase === "pending") return null;
-  const epoch = newControlSurfaceHardwareEpoch();
-  if (!previous.devices[device] &&
-      Object.keys(previous.devices).length >= CONTROL_SURFACE_HARDWARE_EPOCH_DEVICE_LIMIT) {
-    return null;
-  }
-  try {
-    window.localStorage.setItem(
-      controlSurfaceHardwareEpochStorageKey(device),
-      JSON.stringify({
-        version: CONTROL_SURFACE_HARDWARE_EPOCH_VERSION,
-        device,
-        epoch,
-        boardFingerprint,
-        selector,
-        phase: "pending",
-      }),
-    );
-    return { device, epoch, boardFingerprint, selector };
-  } catch {
-    return null;
-  }
-}
-
-function controlSurfaceHardwareEpochIsCurrent(
-  mutation: ControlSurfaceHardwareEpochMutation,
-): boolean {
-  const ledger = readControlSurfaceHardwareEpochLedger([mutation.device]);
-  const record = ledger?.devices[mutation.device];
-  return record?.epoch === mutation.epoch && record.phase === "pending" &&
-    record.boardFingerprint === mutation.boardFingerprint &&
-    record.selector === mutation.selector;
-}
-
-/** Publish completion only for the pending intent owned by the Web Lock
- * holder. The lock is the cross-document CAS; without it this read/set pair
- * would be able to overwrite a newer writer's pending record. */
-function settleControlSurfaceHardwareEpoch(
-  mutation: ControlSurfaceHardwareEpochMutation,
-): ControlSurfaceHardwareEpochMutation | null {
-  const ledger = readControlSurfaceHardwareEpochLedger([mutation.device]);
-  const current = ledger?.devices[mutation.device];
-  if (!current || current.epoch !== mutation.epoch || current.phase !== "pending" ||
-      current.boardFingerprint !== mutation.boardFingerprint ||
-      current.selector !== mutation.selector) return null;
-  const settled: ControlSurfaceHardwareEpochMutation = {
-    ...mutation,
-    epoch: newControlSurfaceHardwareEpoch(),
-  };
-  try {
-    window.localStorage.setItem(
-      controlSurfaceHardwareEpochStorageKey(mutation.device),
-      JSON.stringify({
-        version: CONTROL_SURFACE_HARDWARE_EPOCH_VERSION,
-        device: settled.device,
-        epoch: settled.epoch,
-        boardFingerprint: settled.boardFingerprint,
-        selector: settled.selector,
-        phase: "settled",
-      }),
-    );
-    return settled;
-  } catch {
-    return null;
-  }
-}
-
-function controlSurfaceRelevantHardwareBoards(): Set<string> {
-  const boards = new Set<string>();
-  const collect = (state: ControlSurfaceState): void => {
-    for (const control of state.controls) {
-      for (const channel of control.channels) {
-        const board = channel.encoder?.boardFingerprint.trim().toLocaleUpperCase() ?? "";
-        if (board) boards.add(board);
-      }
-    }
-  };
-  collect(controlSurfaceState);
-  for (const candidate of [
-    panelProgrammingState.inspection.chart?.board_fingerprint,
-    panelProgrammingState.editor.plan?.board_fingerprint,
-    panelProgrammingState.transaction.outcome?.board_fingerprint,
-  ]) {
-    const board = candidate?.trim().toLocaleUpperCase() ?? "";
-    if (board) boards.add(board);
-  }
-  return boards;
-}
-
-function relevantControlSurfaceHardwareEpochs(
-  ledger: ControlSurfaceHardwareEpochLedger,
-): { device: string; record: ControlSurfaceHardwareEpochRecord }[] {
-  const selectedDevice = normalizedControlSurfaceHardwareDevice(nCapInstance());
-  const selectedSelector = nCapSelector().trim().toLocaleUpperCase();
-  const boards = controlSurfaceRelevantHardwareBoards();
-  return Object.entries(ledger.devices)
-    .filter(([device, record]) =>
-      device === selectedDevice || boards.has(record.boardFingerprint) ||
-      Boolean(selectedSelector && record.selector === selectedSelector)
-    )
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([device, record]) => ({ device, record }));
-}
-
-function pendingControlSurfaceHardwareEpochs(): ControlSurfaceHardwareEpochMutation[] | null {
-  const selectedDevice = normalizedControlSurfaceHardwareDevice(nCapInstance());
-  const ledger = readControlSurfaceHardwareEpochLedger(selectedDevice ? [selectedDevice] : []);
-  if (!ledger) return null;
-  return relevantControlSurfaceHardwareEpochs(ledger)
-    .filter(({ record }) => record.phase === "pending")
-    .map(({ device, record }) => ({
-      device,
-      epoch: record.epoch,
-      boardFingerprint: record.boardFingerprint,
-      selector: record.selector,
-    }));
-}
-
-function controlSurfaceHardwareEpochAuthoritySignature(): string | null {
-  const selectedDevice = normalizedControlSurfaceHardwareDevice(nCapInstance());
-  const ledger = readControlSurfaceHardwareEpochLedger(selectedDevice ? [selectedDevice] : []);
-  if (!ledger) return null;
-  return JSON.stringify(relevantControlSurfaceHardwareEpochs(ledger).map(({ device, record }) => [
-    device,
-    record.epoch,
-    record.phase,
-    record.boardFingerprint,
-    record.selector,
-  ]));
-}
-
-function controlSurfaceHardwareLockIdentities(
-  rawPreferredDevice: string,
-  rawPreferredBoard = "",
-): string[] {
-  const pending = pendingControlSurfaceHardwareEpochs();
-  if (!pending) return [];
-  const identities = new Set<string>();
-  for (const mutation of pending) {
-    identities.add(`device:${mutation.device}`);
-    identities.add(`board:${mutation.boardFingerprint}`);
-  }
-  const preferredBoard = rawPreferredBoard.trim().toLocaleUpperCase();
-  const device = normalizedControlSurfaceHardwareDevice(rawPreferredDevice);
-  if (preferredBoard) identities.add(`board:${preferredBoard}`);
-  if (device) identities.add(`device:${device}`);
-  return Array.from(identities).sort((left, right) => left.localeCompare(right));
-}
-
-function controlSurfaceHardwareLockName(identity: string): string {
-  return `ksx-panel-hardware-v1:${identity}`;
-}
-
-/** Acquire both exact-device and stable-board locks in lexical order. The
- * device lock makes the per-device localStorage read/set a CAS; the board lock
- * keeps that guarantee across Windows re-enumeration. */
-async function withControlSurfaceHardwareLocks(
-  identities: readonly string[],
-  action: () => Promise<void>,
-): Promise<boolean> {
-  if (!navigator.locks || identities.length === 0) return false;
-  const acquire = async (index: number): Promise<boolean> => {
-    if (index >= identities.length) {
-      await action();
-      return true;
-    }
-    return navigator.locks.request(
-      controlSurfaceHardwareLockName(identities[index]),
-      { mode: "exclusive", ifAvailable: true },
-      async (lock) => lock ? acquire(index + 1) : false,
-    );
-  };
-  return acquire(0);
-}
-
-/** This tab gets no `storage` event for its own phase transition. Consume and
- * persist it synchronously while suppressing only the editor reset that would
- * otherwise mistake our own reviewed transaction for an external one. */
-function consumeLocallyPublishedControlSurfaceHardwareEpoch(
-  mutation: ControlSurfaceHardwareEpochMutation,
-): void {
-  controlSurfaceLocallyOwnedHardwareEpoch = mutation;
-  try {
-    const reconciled = reconcileControlSurfaceHardwareEpoch(
-      controlSurfaceState,
-      controlSurfaceStore,
-      controlSurfaceAppliedHardwareEpochs,
-    );
-    consumeControlSurfaceHardwareReconciliation(reconciled);
-    applyControlSurfaceState(controlSurfaceState, true);
-  } finally {
-    controlSurfaceLocallyOwnedHardwareEpoch = null;
-  }
-}
-
-function publishSettledControlSurfaceHardwareEpoch(
-  mutation: ControlSurfaceHardwareEpochMutation,
-): ControlSurfaceHardwareEpochMutation | null {
-  const settled = settleControlSurfaceHardwareEpoch(mutation);
-  if (!settled) return null;
-  controlSurfaceActiveHardwareEpoch = settled;
-  consumeLocallyPublishedControlSurfaceHardwareEpoch(settled);
-  return settled;
-}
-
-/** The lock holder can distinguish a refusal before packet zero from an
- * ambiguous write. Keep Teach retired, but retain this tab's reviewed chart
- * and draft because the hardware bytes provably did not change. */
-function publishNoWriteControlSurfaceHardwareSettlement(
-  mutation: ControlSurfaceHardwareEpochMutation,
-  targetFingerprint: string,
-): ControlSurfaceHardwareEpochMutation | null {
-  const settled = publishSettledControlSurfaceHardwareEpoch(mutation);
-  if (!settled) return null;
-  panelProgrammingRecoveryTargets.delete(targetFingerprint);
-  const boardStillPending = pendingControlSurfaceHardwareEpochs()?.some(
-    (pending) => pending.boardFingerprint === mutation.boardFingerprint,
-  ) ?? true;
-  const boardStillRecovering = Array.from(panelProgrammingRecoveryTargets.values()).some(
-    (board) => board === mutation.boardFingerprint,
-  );
-  if (!boardStillPending && !boardStillRecovering) {
-    panelProgrammingUntrustedBoards.delete(mutation.boardFingerprint);
-  }
-  if (currentControlSurfaceHardwareFingerprint() === targetFingerprint &&
-      panelRecoveryProbePossible()) {
-    setPanelRecoveryProbe(targetFingerprint, "settled", "");
-  }
-  return settled;
-}
-
-function invalidateAllControlSurfaceHardwareObservations(
-  state: ControlSurfaceState,
-  device: string,
-): ControlSurfaceState {
-  let next = invalidateControlSurfaceHardwareObservations(state, "", device);
-  const boards = new Set(
-    next.controls.flatMap((control) => control.channels.flatMap((channel) =>
-      channel.encoder?.boardFingerprint ? [channel.encoder.boardFingerprint] : []
-    )),
-  );
-  for (const board of boards) next = invalidateControlSurfaceEncoderVerification(next, board);
-  return next;
-}
-
-function controlSurfaceHardwareEpochSnapshot(
-  ledger: ControlSurfaceHardwareEpochLedger | null,
-): Record<string, string> {
-  if (!ledger) return {};
-  return Object.fromEntries(
-    Object.entries(ledger.devices)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([device, record]) => [device, record.epoch]),
-  );
-}
-
-function reconcileControlSurfaceStateHardwareEpochs(
-  state: ControlSurfaceState,
-  appliedEpochs: Readonly<Record<string, string>>,
-  ledger: ControlSurfaceHardwareEpochLedger | null,
-  selectedDevice: string,
-): ControlSurfaceState {
-  let next = state;
-  const devices = new Set([
-    ...Object.keys(appliedEpochs),
-    ...Object.keys(ledger?.devices ?? {}),
-    ...(selectedDevice ? [selectedDevice] : []),
-  ]);
-  for (const device of devices) {
-    const record = ledger?.devices[device];
-    if (ledger && (record?.epoch ?? "") === (appliedEpochs[device] ?? "")) continue;
-    next = record
-      ? invalidateControlSurfaceHardwareObservations(next, record.boardFingerprint, device)
-      : invalidateAllControlSurfaceHardwareObservations(next, device);
-  }
-  return next;
-}
-
-function reconcileControlSurfaceStoreHardwareEpochs(
-  store: ControlSurfaceStore,
-  ledger: ControlSurfaceHardwareEpochLedger | null,
-  selectedDevice: string,
-): ControlSurfaceStore {
-  const safe = sanitizeControlSurfaceStore(store);
-  const devicesToCheck = new Set([
-    ...Object.keys(safe.hardwareEpochs),
-    ...Object.keys(ledger?.devices ?? {}),
-    ...(selectedDevice ? [selectedDevice] : []),
-  ]);
-  const devices = { ...safe.devices };
-  for (const [identity, state] of Object.entries(devices)) {
-    let next = state;
-    for (const device of devicesToCheck) {
-      const record = ledger?.devices[device];
-      if (ledger && (record?.epoch ?? "") === (safe.hardwareEpochs[device] ?? "")) continue;
-      next = record
-        ? invalidateControlSurfaceHardwareObservations(next, record.boardFingerprint, device)
-        : invalidateAllControlSurfaceHardwareObservations(next, device);
-    }
-    devices[identity] = next;
-  }
-  return {
-    ...safe,
-    devices,
-    hardwareEpochs: controlSurfaceHardwareEpochSnapshot(ledger),
-  };
-}
-
-function controlSurfaceHardwareObservationDevices(
-  state: ControlSurfaceState,
-  store: ControlSurfaceStore,
-): string[] {
-  const devices = new Set<string>();
-  const collect = (candidate: ControlSurfaceState): void => {
-    for (const control of candidate.controls) {
-      for (const channel of control.channels) {
-        if (channel.input.kind !== "keyboard") continue;
-        const device = normalizedControlSurfaceHardwareDevice(channel.input.device);
-        if (device) devices.add(device);
-      }
-    }
-  };
-  collect(state);
-  for (const candidate of Object.values(store.devices)) collect(candidate);
-  return Array.from(devices);
-}
-
-function reconcileControlSurfaceHardwareEpoch(
-  state: ControlSurfaceState,
-  baseStore: ControlSurfaceStore,
-  locallyAppliedEpochs: Readonly<Record<string, string>>,
-): {
-  state: ControlSurfaceState;
-  store: ControlSurfaceStore;
-  appliedEpochs: Record<string, string>;
-  changedHardware: {
-    device: string;
-    boardFingerprint: string;
-    phase: ControlSurfaceHardwareEpochPhase;
-  }[];
-  pendingHardware: ControlSurfaceHardwareEpochMutation[];
-  changed: boolean;
-  ledgerReadable: boolean;
-} {
-  const device = normalizedControlSurfaceHardwareDevice(nCapInstance());
-  const safeStore = sanitizeControlSurfaceStore(baseStore);
-  const ledger = readControlSurfaceHardwareEpochLedger([
-    ...Object.keys(locallyAppliedEpochs),
-    ...Object.keys(safeStore.hardwareEpochs),
-    ...controlSurfaceHardwareObservationDevices(state, safeStore),
-    ...(device ? [device] : []),
-  ]);
-  const changedHardware = Array.from(new Set([
-    ...Object.keys(locallyAppliedEpochs),
-    ...Object.keys(ledger?.devices ?? {}),
-    ...(device ? [device] : []),
-  ])).flatMap((candidate) => {
-    const record = ledger?.devices[candidate];
-    return !ledger || (record?.epoch ?? "") !== (locallyAppliedEpochs[candidate] ?? "")
-      ? [{
-          device: candidate,
-          boardFingerprint: record?.boardFingerprint ?? "",
-          phase: record?.phase ?? ("pending" as const),
-        }]
-      : [];
-  });
-  const pendingHardware = ledger
-    ? relevantControlSurfaceHardwareEpochs(ledger)
-        .filter(({ record }) => record.phase === "pending")
-        .map(({ device: pendingDevice, record }) => ({
-          device: pendingDevice,
-          epoch: record.epoch,
-          boardFingerprint: record.boardFingerprint,
-          selector: record.selector,
-        }))
-    : [];
-  const nextState = reconcileControlSurfaceStateHardwareEpochs(
-    state,
-    locallyAppliedEpochs,
-    ledger,
-    device,
-  );
-  const nextStore = reconcileControlSurfaceStoreHardwareEpochs(safeStore, ledger, device);
-  const appliedEpochs = controlSurfaceHardwareEpochSnapshot(ledger);
-  return {
-    state: nextState,
-    store: nextStore,
-    appliedEpochs,
-    changedHardware,
-    pendingHardware,
-    changed: JSON.stringify(nextState) !== JSON.stringify(state) ||
-      JSON.stringify(nextStore) !== JSON.stringify(safeStore) ||
-      JSON.stringify(appliedEpochs) !== JSON.stringify(locallyAppliedEpochs),
-    ledgerReadable: Boolean(ledger),
-  };
-}
-
-function invalidatePanelProgrammingForExternalHardwareEpoch(
-  boardFingerprint: string,
-): void {
-  const target = currentControlSurfaceHardwareFingerprint();
-  const retiredDraftBoards = new Set([
-    boardFingerprint,
-    panelProgrammingState.inspection.chart?.board_fingerprint ?? "",
-    panelProgrammingState.editor.plan?.board_fingerprint ?? "",
-    panelProgrammingState.transaction.outcome?.board_fingerprint ?? "",
-  ].map((candidate) => candidate.trim().toLocaleUpperCase()).filter(Boolean));
-  const board = boardFingerprint.trim().toLocaleUpperCase() ||
-    panelProgrammingState.inspection.chart?.board_fingerprint.trim().toLocaleUpperCase() || "";
-  if (target && board) panelProgrammingRecoveryTargets.set(target, board);
-  if (board) panelProgrammingUntrustedBoards.add(board);
-  resetPanelProgramming(true);
-  // resetPanelProgramming normally caches a dirty draft while changing
-  // targets. An external hardware epoch is different: that draft predates a
-  // potentially real write, so resurrecting it after the recovery read would
-  // falsely present stale bytes as a current unsaved edit.
-  for (const retiredBoard of retiredDraftBoards) {
-    panelProgrammingDraftCache.delete(retiredBoard);
-  }
-  panelProgrammingMessage =
-    "Another KSX window began a hardware transaction for this encoder. Its prior chart, draft, wiring test and routes were retired. Read the complete board again after that transaction finishes.";
-  panelProgrammingState = {
-    ...panelProgrammingState,
-    inspection: {
-      ...panelProgrammingState.inspection,
-      phase: "changed",
-      target_selector: panelProgrammingTarget(),
-      chart: null,
-      error: panelProgrammingMessage,
-    },
-    capability: panelProgrammingCapability(null),
-    editor: {
-      ...panelProgrammingState.editor,
-      phase: "closed",
-      plan_expected_selector: "",
-      plan: null,
-    },
-  };
-  if (target) setPanelRecoveryProbe(target, "checking", panelProgrammingMessage);
-  syncPanelProgrammingUi();
-}
-
-function consumeControlSurfaceHardwareReconciliation(
-  reconciled: ReturnType<typeof reconcileControlSurfaceHardwareEpoch>,
-): void {
-  const selectedDevice = normalizedControlSurfaceHardwareDevice(nCapInstance());
-  const relevantBoards = new Set([
-    ...reconciled.state.controls.flatMap((control) => control.channels.flatMap((channel) =>
-      channel.encoder?.boardFingerprint
-        ? [channel.encoder.boardFingerprint.trim().toLocaleUpperCase()]
-        : []
-    )),
-    panelProgrammingState.inspection.chart?.board_fingerprint.trim().toLocaleUpperCase() ?? "",
-    panelProgrammingState.editor.plan?.board_fingerprint.trim().toLocaleUpperCase() ?? "",
-    panelProgrammingState.transaction.outcome?.board_fingerprint.trim().toLocaleUpperCase() ?? "",
-  ].filter(Boolean));
-  controlSurfaceState = reconciled.state;
-  controlSurfaceStore = withControlSurfaceState(
-    reconciled.store,
-    controlSurfaceIdentity,
-    controlSurfaceState,
-  );
-  if (reconciled.changedHardware.length > 0 || reconciled.pendingHardware.length > 0) {
-    const relevantEncoderAuthorityChange = selectedInputIsPanelEncoder() && [
-      ...reconciled.changedHardware,
-      ...reconciled.pendingHardware,
-    ].some((change) => {
-      const board = change.boardFingerprint.trim().toLocaleUpperCase();
-      return change.device === selectedDevice || Boolean(board && relevantBoards.has(board));
-    });
-    const learnPurpose = learnRow?.purpose ?? "binding";
-    if (learnRow && (
-      learnPurpose === "surface" || learnPurpose === "panel-test" ||
-      (learnPurpose === "binding" && relevantEncoderAuthorityChange)
-    )) {
-      if (learnPurpose === "binding") autoMap = null;
-      void cancelLearn();
-    }
-    if (assignKey) cancelAssign();
-    pendingConflict = null;
-    setNConfOpen(false);
-    clearControlSurfaceUndo();
-    const isExternalRelevant = (change: {
-      device: string;
-      boardFingerprint: string;
-      epoch?: string;
-    }): boolean => {
-      const localMutation = controlSurfaceLocallyOwnedHardwareEpoch ??
-        controlSurfaceActiveHardwareEpoch;
-      const locallyOwned = localMutation?.device === change.device &&
-        reconciled.appliedEpochs[change.device] === localMutation.epoch;
-      const board = change.boardFingerprint.trim().toLocaleUpperCase();
-      return !locallyOwned &&
-        (change.device === selectedDevice || Boolean(board && relevantBoards.has(board)));
-    };
-    const externalRelevantChange = reconciled.changedHardware.find(isExternalRelevant);
-    const externalRelevantPending = reconciled.pendingHardware.find((change) => {
-      if (!isExternalRelevant(change)) return false;
-      const board = change.boardFingerprint.trim().toLocaleUpperCase();
-      const target = currentControlSurfaceHardwareFingerprint();
-      return !board || !panelProgrammingUntrustedBoards.has(board) ||
-        (change.device === selectedDevice && panelProgrammingRecoveryTargets.get(target) !== board);
-    });
-    const externalAuthorityChange = externalRelevantChange ?? externalRelevantPending;
-    if (externalAuthorityChange) {
-      invalidatePanelProgrammingForExternalHardwareEpoch(
-        externalAuthorityChange.boardFingerprint,
-      );
-    }
-  }
-  // Advance this proof only after every authority-bearing side effect above.
-  // A later storage event may now see no delta, so it cannot be responsible
-  // for cleanup that a save or user gesture skipped.
-  controlSurfaceAppliedHardwareEpochs = reconciled.appliedEpochs;
-}
-
-/** A user gesture can run before another document's queued `storage` event.
- * Read the sidecar synchronously at every action that could turn a signal into
- * routing authority, consume any missed epoch, and make the user retry. */
-function controlSurfaceHardwareAuthorityCurrentForAction(): boolean {
-  const reconciled = reconcileControlSurfaceHardwareEpoch(
-    controlSurfaceState,
-    controlSurfaceStore,
-    controlSurfaceAppliedHardwareEpochs,
-  );
-  if (reconciled.changedHardware.length === 0 && reconciled.pendingHardware.length === 0 &&
-      reconciled.ledgerReadable) return true;
-  consumeControlSurfaceHardwareReconciliation(reconciled);
-  saveControlSurfacePrefs();
-  syncControlSurfaceWidget(false);
-  syncIpacSignalSource();
-  mappingFlowLayer?.scheduleLayout();
-  keyboardWorkbenchAnnounce(
-    reconciled.ledgerReadable
-      ? reconciled.pendingHardware.length > 0
-        ? "This encoder has a pending hardware transaction. Wait for it to finish, then read the complete chart before teaching or routing."
-        : "Another KSX window changed this encoder. The old signal was retired; inspect or Teach it again before routing."
-      : "KSX could not verify the shared hardware epoch. Signal authority was retired for safety.",
-  );
-  return false;
-}
-
-/** The old contextual mapper and the Control Surface Builder ultimately write
- * the same KSX route. For a selected encoder, both therefore require the same
- * browser epoch *and* machine recovery authority at the last user-action
- * boundary. Ordinary keyboards deliberately bypass this hardware-only gate. */
-interface PanelEncoderBindAuthority {
-  expected_selector: string;
-  expected_instance: string;
-  expected_board_fingerprint: string;
-  expected_chart_sha256: string;
-}
-
-function selectedProgrammableEncoderNeedsBindAuthority(): boolean {
-  if (!selectedInputIsPanelEncoder()) return false;
-  const board = selectedPanelStatusBoard();
-  const chart = panelProgrammingState.inspection.chart;
-  const selector = nCapSelector().trim();
-  const chartMatches = Boolean(chart) &&
-    panelProgrammingState.inspection.target_selector.trim().toLocaleUpperCase() ===
-      selector.toLocaleUpperCase();
-  return Boolean(
-    chartMatches ||
-    (board?.capabilities?.can_write_chart && board.capabilities.write_is_persistent),
-  );
-}
-
-function selectedPanelEncoderBindAuthority(): PanelEncoderBindAuthority | null {
-  const selector = nCapSelector().trim();
-  const instance = nCapInstance().trim();
-  const chart = panelProgrammingState.inspection.chart;
-  if (!selector || !instance || !chart ||
-      panelProgrammingState.inspection.target_selector.trim().toLocaleUpperCase() !==
-        selector.toLocaleUpperCase() ||
-      !chart.board_fingerprint.trim() || !chart.image_sha256.trim()) return null;
-  return {
-    expected_selector: selector,
-    expected_instance: instance,
-    expected_board_fingerprint: chart.board_fingerprint,
-    expected_chart_sha256: chart.image_sha256,
-  };
-}
-
-function selectedPanelEncoderRoutingAuthorityCurrent(): boolean {
-  if (!selectedInputIsPanelEncoder()) return true;
-  if (!controlSurfaceHardwareAuthorityCurrentForAction()) return false;
-  if (panelProgrammingRoutingAuthoritySuspended()) {
-    keyboardWorkbenchAnnounce(
-      "This encoder is being changed or recovered. Read its complete chart after the transaction finishes before mapping its keys.",
-    );
-    return false;
-  }
-  if (selectedProgrammableEncoderNeedsBindAuthority() &&
-      !selectedPanelEncoderBindAuthority()) {
-    keyboardWorkbenchAnnounce(
-      "Read this programmable encoder's complete chart before mapping one of its keys.",
-    );
-    return false;
-  }
-  return true;
-}
-
 function saveControlSurfacePrefs(): void {
   if (
     controlSurfaceUndoAfterFingerprint &&
@@ -8127,12 +2484,20 @@ function saveControlSurfacePrefs(): void {
     // Rebase against the in-memory copy when the main document cannot be read;
     // the write below still decides whether this edit can become durable.
   }
-  const reconciled = reconcileControlSurfaceHardwareEpoch(
-    controlSurfaceState,
+  // **Fold the live document into the store before writing it.**
+  //
+  // `controlSurfaceStore` is the per-device MAP; `controlSurfaceState` is the
+  // document being edited. `withControlSurfaceState` is the only thing that
+  // moves one into the other, and this function used to write the map without
+  // calling it — so every panel built after load was serialized away and the
+  // reload restored whatever the map last held. It also computed `latestStore`
+  // and then dropped it on the floor, losing the rebase the surrounding code
+  // was clearly written to perform.
+  controlSurfaceStore = withControlSurfaceState(
     latestStore,
-    controlSurfaceAppliedHardwareEpochs,
+    controlSurfaceIdentity,
+    controlSurfaceState,
   );
-  consumeControlSurfaceHardwareReconciliation(reconciled);
   try {
     window.localStorage.setItem(
       CONTROL_SURFACE_STORAGE_KEY,
@@ -8173,27 +2538,6 @@ function controlSurfaceMappingRecords(): ControlSurfaceMappingRecord[] {
     }
   }
   return records;
-}
-
-function controlSurfaceEncoderRecords(): ControlSurfaceEncoderRecord[] {
-  const chart = panelProgrammingState.inspection.chart;
-  if (!chart || panelProgrammingRoutingAuthoritySuspended() ||
-      panelProgrammingState.inspection.target_selector.trim() !== panelProgrammingTarget()) {
-    return [];
-  }
-  return chart.terminals.flatMap((terminal) => {
-    const expectedKey = terminal.normal.supported ? terminal.normal.key?.trim() ?? "" : "";
-    if (!expectedKey) return [];
-    return [{
-      driver: chart.driver,
-      boardFingerprint: chart.board_fingerprint,
-      terminalId: terminal.terminal_id,
-      terminalLabel: terminal.terminal_label,
-      playerSlot: terminal.player,
-      kind: terminal.kind,
-      expectedKey,
-    }];
-  });
 }
 
 function maybeMigrateKeyboardWorkbenchSurface(): boolean {
@@ -8266,6 +2610,16 @@ function maybeMigrateKeyboardWorkbenchSurface(): boolean {
 }
 
 function loadControlSurfacePrefs(): void {
+  // The version the document arrived as, read BEFORE sanitizing — which is
+  // the only moment it is knowable, because `sanitizeControlSurfaceStore`
+  // returns v3 whatever it was handed.
+  let arrivedAs: unknown = null;
+  try {
+    const raw = window.localStorage.getItem(CONTROL_SURFACE_STORAGE_KEY);
+    if (raw) arrivedAs = (JSON.parse(raw) as { version?: unknown }).version;
+  } catch {
+    arrivedAs = null;
+  }
   try {
     controlSurfaceStore = sanitizeControlSurfaceStore(
       window.localStorage.getItem(CONTROL_SURFACE_STORAGE_KEY),
@@ -8278,26 +2632,57 @@ function loadControlSurfacePrefs(): void {
       hardwareEpochs: {},
     };
   }
+  const arrivedLegacy = arrivedAs === 1 || arrivedAs === 2;
+  if (arrivedLegacy) {
+    // **THE THREE-STATE DEVICE AUTHORITY SWEEP, run exactly once.**
+    //
+    // Gated on legacy ARRIVAL rather than run on every load for the reason
+    // spelled out over `retireControlSurfaceDeviceClaims`: this is an upgrade
+    // step, not an invariant. A v3 document has already been through it, and
+    // re-running the rule would re-retire a key the user has since taught on
+    // an encoder they just read — destroying work to re-derive an answer that
+    // was already recorded.
+    //
+    // It runs BEFORE the identity and document are read out of the store, and
+    // writes the swept store itself, because `saveControlSurfacePrefs` rebases
+    // every save against whatever is on disk and folds in only the CURRENT
+    // device's document. Leaving the write to it would have published a v3
+    // store in which every other keyboard's legacy claims were laundered
+    // forward unswept — and, the version having moved, never looked at again.
+    controlSurfaceStore = retireControlSurfaceStoreDeviceClaims(
+      controlSurfaceStore,
+      controlSurfaceDeviceKind,
+    );
+    try {
+      window.localStorage.setItem(
+        CONTROL_SURFACE_STORAGE_KEY,
+        JSON.stringify(controlSurfaceStore),
+      );
+    } catch {
+      controlSurfaceSaveFailed = true;
+      // The sweep still governs this session. A browser that cannot store it
+      // simply arrives legacy again next time and sweeps again, which is the
+      // correct outcome: nothing durable claims more than ksx can vouch for.
+    }
+  }
   controlSurfaceIdentity = currentKeyboardWorkbenchIdentity();
   controlSurfaceState = controlSurfaceStateForDevice(
     controlSurfaceStore,
     controlSurfaceIdentity,
     keyboardWorkbenchState.theme,
   );
-  controlSurfaceAppliedHardwareEpochs = { ...controlSurfaceStore.hardwareEpochs };
-  const reconciled = reconcileControlSurfaceHardwareEpoch(
-    controlSurfaceState,
-    controlSurfaceStore,
-    controlSurfaceAppliedHardwareEpochs,
-  );
-  consumeControlSurfaceHardwareReconciliation(reconciled);
-  controlSurfaceHardwareTargetFingerprint = currentControlSurfaceHardwareFingerprint();
   maybeMigrateKeyboardWorkbenchSurface();
-  applyControlSurfaceState(controlSurfaceState, reconciled.changed);
+  // **Persist a document that arrived legacy.** Sanitizing upgraded it to v3
+  // in memory; without this write the upgrade is redone on every load and the
+  // copy on disk stays v1 forever — so anything that reads the raw store
+  // (another tab, a later build, this test) still sees the old shape.
+  //
+  // This argument used to be `reconciled.changed` from the hardware-epoch
+  // reconciliation, and the write rode along with it. That reconciliation
+  // left for PacBench and the argument was stubbed to `false`, taking the
+  // document migration with it — the migration is ksx's, not the chart's.
+  applyControlSurfaceState(controlSurfaceState, arrivedLegacy);
   installControlSurfaceStorageSync();
-  if (controlSurfaceState.open || panelRecoveryProbePossible()) {
-    void refreshControlSurfaceHardwareStatus();
-  }
 }
 
 /** `storage` fires in every other document sharing this origin. Hardware
@@ -8329,41 +2714,17 @@ function installControlSurfaceStorageSync(): void {
         };
       }
     }
-    const reconciled = reconcileControlSurfaceHardwareEpoch(
-      controlSurfaceState,
-      sourceStore,
-      controlSurfaceAppliedHardwareEpochs,
-    );
-    consumeControlSurfaceHardwareReconciliation(reconciled);
-    if (reconciled.changedHardware.length > 0) {
-      keyboardWorkbenchAnnounce(
-        reconciled.ledgerReadable
-          ? "Another KSX window changed this encoder. Its earlier Teach observations were retired before they could route or be saved again."
-          : "KSX could not verify the shared hardware epoch. Encoder Teach observations were retired for safety.",
-      );
-    }
     syncControlSurfaceWidget(false);
-    syncIpacSignalSource();
-    mappingFlowLayer?.scheduleLayout();
+      mappingFlowLayer?.scheduleLayout();
   });
-}
-
-function currentControlSurfaceHardwareFingerprint(): string {
-  return `${nCapSelector().trim()}\n${nCapInstance().trim().toLocaleUpperCase()}`;
 }
 
 function reconcileControlSurfaceIdentity(): void {
   const identity = currentKeyboardWorkbenchIdentity();
   const changed = identity !== controlSurfaceIdentity;
-  const hardwareTargetFingerprint = currentControlSurfaceHardwareFingerprint();
-  const hardwareTargetChanged = hardwareTargetFingerprint !== controlSurfaceHardwareTargetFingerprint;
-  if (changed || hardwareTargetChanged) {
-    if (learnRow?.purpose === "surface" || learnRow?.purpose === "panel-test") {
-      void cancelLearn();
-    }
-    cancelControlSurfaceHardwareStatus(true);
-    controlSurfaceHardwareTargetFingerprint = hardwareTargetFingerprint;
-    resetPanelProgramming(true);
+  const hardwareTargetChanged = false;
+  if (changed) {
+    if (learnRow?.purpose === "surface") void cancelLearn();
   }
   if (changed) {
     if (assignKey) cancelAssign();
@@ -8379,29 +2740,9 @@ function reconcileControlSurfaceIdentity(): void {
       identity,
       keyboardWorkbenchState.theme,
     );
-    controlSurfaceAppliedHardwareEpochs = { ...controlSurfaceStore.hardwareEpochs };
-  }
-  if (changed || hardwareTargetChanged) {
-    const reconciled = reconcileControlSurfaceHardwareEpoch(
-      controlSurfaceState,
-      controlSurfaceStore,
-      controlSurfaceAppliedHardwareEpochs,
-    );
-    consumeControlSurfaceHardwareReconciliation(reconciled);
-    if (reconciled.changed) {
-      clearControlSurfaceUndo();
-      saveControlSurfacePrefs();
     }
-  }
   maybeMigrateKeyboardWorkbenchSurface();
   syncControlSurfaceWidget(false);
-  if (changed || hardwareTargetChanged) {
-    beginPanelRecoveryProbe();
-  }
-  if ((changed || hardwareTargetChanged) &&
-      (controlSurfaceState.open || panelRecoveryProbePossible())) {
-    void refreshControlSurfaceHardwareStatus();
-  }
 }
 
 /** Repaint a premium controller without moving a single source-authored path
@@ -8669,6 +3010,117 @@ function setMappingPathMode(mode: MappingPathMode): void {
   syncMappingFlow(true);
 }
 
+/** The encoder ROW for the currently selected input, or undefined for a keyboard.
+ *
+ * Rebuilt after the encoder chart surface left for PacBench. The original asked
+ * `panelProgrammingState.inspection.chart.board_name` first — a chart read, which
+ * is exactly the part that left — so this asks the served roster instead. That
+ * is the better source anyway: identifying the key SOURCE never needed a chart.
+ *
+ * `cls` carries `on` for the chosen board (snapshot.rs sets it from the staged
+ * selector), so the selection is read, not inferred. */
+function selectedEncoderRow(): NocturneDeviceRowView | undefined {
+  const rows = nDevEncoders();
+  const chosen = rows.find((row) => row.cls.split(/\s+/u).includes("on"));
+  if (chosen) {
+    lastProvenEncoderRow = chosen;
+    return chosen;
+  }
+  if (nKbTitle().trim().startsWith("No keyboard selected")) {
+    lastProvenEncoderRow = undefined;
+    return undefined;
+  }
+  const live = nCapSelector().trim().toLocaleUpperCase();
+  if (live) {
+    // A concrete selector is authoritative in BOTH directions: present in the
+    // encoder roster means encoder, absent means the user picked a keyboard.
+    lastProvenEncoderRow = rows.find(
+      (row) => row.selector.trim().toLocaleUpperCase() === live,
+    );
+    return lastProvenEncoderRow;
+  }
+  // An unavailable scan serves neither a selector nor encoder rows. Hold the
+  // last proven kind through that transient state, or a panel flashes back
+  // into a keyboard — fake QWERTY art and all — while the read retries.
+  return rows.length === 0 ? lastProvenEncoderRow : undefined;
+}
+
+let lastProvenEncoderRow: NocturneDeviceRowView | undefined;
+
+function selectedInputIsPanelEncoder(): boolean {
+  return Boolean(selectedEncoderRow());
+}
+
+/** Reduce any spelling of one physical board to `VID:PID`, or "" if the value
+ * names no USB device at all.
+ *
+ * The two vocabularies that have to meet here never overlap textually. A
+ * stored `input.device` is whatever the LEARNER reported — an exact Windows
+ * instance path such as `HID\VID_D209&PID_0430\7&1A2B3C&0&0000` — while the
+ * served roster carries ksx SELECTORS (`usb:d209:0430:00`). Documents also
+ * hold the surface's own device identity (`keyboard:usb:d209:0430:00`) where
+ * no exact instance was ever observed, so all three spellings are accepted.
+ *
+ * ⚠️ VID/PID IS THE RIGHT WIDTH, not merely the available one. The KIND of a
+ * device is a property of the MODEL: an I-PAC's terminals are programmable
+ * whichever USB port it is in, and a keyboard's scan codes are burned in
+ * whoever owns it. The instance path is deliberately narrower than that — it
+ * moves with the port on some boards and survives a port move on others (an
+ * I-PAC's path is serial-anchored) — so matching on it would make the kind
+ * rule answer "unknown" for the very board sitting in the roster. Two
+ * different boards that share a VID/PID share a kind too, which is exactly
+ * the claim being made and costs nothing. */
+function deviceModelToken(value: string): string {
+  const text = value.trim().toLocaleUpperCase();
+  const instance = /VID_([0-9A-F]{4})&PID_([0-9A-F]{4})/u.exec(text);
+  if (instance) return `${instance[1]}:${instance[2]}`;
+  const selector = /(?:^|:)USB:([0-9A-F]{4}):([0-9A-F]{4})(?::|$)/u.exec(text);
+  return selector ? `${selector[1]}:${selector[2]}` : "";
+}
+
+/** THE LOOKUP HALF of the three-state device authority rule; the TRANSFORM
+ * half is `retireControlSurfaceDeviceClaims` in the pure module.
+ *
+ * Every pickable board reaches the browser in exactly one of the three served
+ * lists, and each row carries the role snapshot.rs read off
+ * `ksx_api::BoardRole`. Ask the ROW rather than which list it landed in: the
+ * lists are a presentation split (encoders get their own first-run lane, and
+ * non-keyboards get the experimentation fold), while `role` is the served
+ * fact.
+ *
+ * A device with no matching row answers `unknown`, and so does the served
+ * `other` role. That is not a failure mode to be defended against — it is the
+ * third state working. An unreadable machine scan serves no rows at all, and
+ * the honest consequence is that a sweep during that window vouches for
+ * nothing and MARKS everything, rather than retiring a panel because a read
+ * did not land. */
+function controlSurfaceDeviceKind(device: string): ControlSurfaceDeviceKind {
+  const model = deviceModelToken(device);
+  if (!model) return "unknown";
+  const row = [...nDevEncoders(), ...nDevRows(), ...nDevExp()].find(
+    (candidate) => deviceModelToken(candidate.selector) === model,
+  );
+  if (row?.role === "panel-encoder") return "panel-encoder";
+  return row?.role === "keyboard" ? "keyboard" : "unknown";
+}
+
+function selectedEncoderShortName(): string {
+  const row = selectedEncoderRow();
+  const name = (row?.name || row?.label || "").replace(/^Ultimarc\s+/iu, "").trim();
+  return name || "Encoder";
+}
+
+/** Two or three characters for a navigator box, which has room for nothing else. */
+function selectedEncoderNavigatorLabel(): string {
+  const name = selectedEncoderShortName();
+  if (/I-PAC\s*4/iu.test(name)) return "I-PAC";
+  if (/I-PAC\s*2/iu.test(name)) return "IP2";
+  if (/MINI-?PAC/iu.test(name)) return "MINI";
+  if (/J-?PAC/iu.test(name)) return "J-PAC";
+  if (/U-?HID/iu.test(name)) return "U-HID";
+  return "ENC";
+}
+
 /** Name the markers on the map. The engine draws one box per widget and
  *  gives it a title and an aria-label; what it cannot know is that on THIS
  *  page a box is a seat — so the boxes get the seat's short name and the
@@ -8683,15 +3135,26 @@ function labelCanvasMarkers(): void {
   for (const marker of Array.from(markers)) {
     const id = marker.dataset.instanceId ?? "";
     if (id === "keyboard") {
+      // **This widget is the physical KEY SOURCE, which is not always a
+      // keyboard.** On an arcade cabinet it is usually an I-PAC, and calling
+      // that "Keyboard" is the one place this page tells the user their panel
+      // is something it is not.
+      //
+      // The encoder-chart surface leaving for PacBench took these three
+      // helpers with it, because they happened to live beside it — but naming
+      // the source is not chart programming, and ksx still splits an I-PAC's
+      // keys. Restored on the served roster instead of a chart read.
       const isEncoder = selectedInputIsPanelEncoder();
       const encoderName = selectedEncoderShortName();
       marker.textContent = isEncoder ? selectedEncoderNavigatorLabel() : "KB";
       marker.classList.add("nm-kb");
-      marker.classList.toggle("nm-ipac", isEncoder);
       marker.title = isEncoder
         ? `${encoderName} Signals · terminal and keyboard host-signal source`
         : "Keyboard · physical key source";
-      marker.setAttribute("aria-label", isEncoder ? `Focus ${encoderName} Signals` : "Focus Keyboard");
+      marker.setAttribute(
+        "aria-label",
+        isEncoder ? `Focus ${encoderName} Signals` : "Focus Keyboard",
+      );
       continue;
     }
     if (id === "key-workbench") {
@@ -9501,8 +3964,14 @@ function syncKeyboardWorkbenchWidget(reveal: boolean): void {
   if (!canvas) return;
   // An encoder may have an old keyboard-arranger preference from builds that
   // misclassified it as a keyboard. Preserve that saved layout for migration
-  // or later inspection, but never mount it over the truthful I-PAC signal
-  // source or let routing cords prefer its fake keycaps.
+  // or later inspection, but never mount it over an encoder or let routing
+  // cords prefer its fake keycaps: an I-PAC's terminals are not QWERTY keys,
+  // and drawing them as keycaps is the page asserting a layout the hardware
+  // does not have.
+  //
+  // This was stubbed to `false` when the encoder chart surface left for
+  // PacBench — the comment above it survived, describing a guard that no
+  // longer ran. Naming the key source was never chart programming.
   const suppressedForEncoder = selectedInputIsPanelEncoder();
   if (
     keyboardWorkbenchItem &&
@@ -9832,7 +4301,6 @@ function syncControlSurfaceInspector(): void {
   const control = selectedControlSurfaceControl();
   const channel = selectedControlSurfaceChannel();
   const relationship = control ? controlSurfaceRelationship(control) : "single";
-  const routingAuthoritySuspended = panelProgrammingRoutingAuthoritySuspended();
   const routeFlowKey = channel ? controlSurfaceSignalTruth(channel).flowKey : "";
   const routeRows = controlSurfaceRoutesForKey(routeFlowKey);
   const print = JSON.stringify({
@@ -9842,22 +4310,6 @@ function syncControlSurfaceInspector(): void {
     routeRows,
     stage: controlSurfaceState.stage,
     selectedDevice: nCapInstance(),
-    encoderSetup: {
-      phase: panelProgrammingState.editor.phase,
-      mode: panelProgrammingState.editor.assignment_mode,
-      chart: panelProgrammingState.inspection.chart?.image_sha256 ?? "",
-      capability: panelProgrammingState.capability.kind,
-      message: panelProgrammingMessage,
-      busy: panelProgrammingInteractionBusy(),
-      transaction: panelProgrammingState.transaction.phase,
-      routingAuthoritySuspended,
-      deliberateSharedKey: control && channel
-        ? channel.encoder?.boardFingerprint ===
-            panelProgrammingState.inspection.chart?.board_fingerprint &&
-          panelProgrammingDraftTerminal(channel.encoder?.terminalId ?? "")
-            ?.allow_shared_key === true
-        : false,
-    },
   });
   if (print === controlSurfaceInspectorPrint && inspector.childElementCount > 0) return;
   controlSurfaceInspectorPrint = print;
@@ -9949,172 +4401,6 @@ function syncControlSurfaceInspector(): void {
     channels.append(button);
   }
 
-  const encoderAssignment = document.createElement("section");
-  encoderAssignment.className = "n-surface-encoder-assignment";
-  const encoderAssignmentTitle = document.createElement("strong");
-  encoderAssignmentTitle.textContent = "Physical encoder channel";
-  const chart = panelProgrammingState.inspection.chart;
-  // Once a chart has been read, terminal linking remains available in the
-  // normal Design inspector. Hardware Setup may be closed so the physical
-  // controls are visible; reopening Setup later reviews/programs the same
-  // draft. Treating this as setup-only made the control-to-terminal path
-  // visually present but impossible to reach.
-  if (chart) {
-    const qualificationState = panelProgrammingQualificationState(chart);
-    const qualificationAwaitingRestore = panelProgrammingQualificationNeedsRestore(
-      qualificationState,
-    );
-    const encoderCopy = document.createElement("p");
-    encoderCopy.textContent = routingAuthoritySuspended
-      ? "KSX cannot prove this panel's current hardware chart after the last programming transaction. Read the complete chart or restore a verified backup before editing terminal links."
-      : qualificationAwaitingRestore
-      ? qualificationState === "validation-recovery"
-        ? "The first test write was interrupted or could not be proven. Restore its exact safety backup, then repeat the one-terminal check; this restore will not unlock full layouts."
-        : "The one-terminal validation write is complete. Restore its exact safety backup before editing terminal assignments; verified restore unlocks full layouts."
-      : qualificationState === "required"
-      ? "For the writer check, choose one noncritical SW action button—not a direction, Start, or Coin—whose normal assignment is readable and Shift state is explicitly disabled; then choose one safe letter or top-row number."
-      : panelProgrammingState.editor.assignment_mode === "recommended"
-      ? "Match this physical control to the terminal printed on the I-PAC. KSX allocates the key in the reviewed four-player chart."
-      : "Match this physical control to its printed terminal, then choose the key that terminal should emit.";
-    const terminalLabel = document.createElement("label");
-    terminalLabel.textContent = "Encoder terminal";
-    const terminalSelect = document.createElement("select");
-    terminalSelect.dataset.nx = "surface-encoder-terminal";
-    terminalSelect.dataset.surfaceControlId = control.id;
-    terminalSelect.dataset.surfaceChannelId = channel.id;
-    terminalSelect.setAttribute("aria-label", `${control.label} encoder terminal`);
-    const terminalPlaceholder = document.createElement("option");
-    terminalPlaceholder.value = "";
-    terminalPlaceholder.textContent = "Not linked to a terminal";
-    terminalSelect.append(terminalPlaceholder);
-    for (const terminal of chart.terminals) {
-      const option = document.createElement("option");
-      option.value = terminal.terminal_id;
-      const unavailableForQualification = qualificationState === "required" &&
-        !panelProgrammingQualificationTerminalIsEligible(terminal);
-      const qualificationReason = !unavailableForQualification
-        ? ""
-        : terminal.shift_state === "opaque"
-        ? "opaque Shift state preserved"
-        : terminal.shift_state === "enabled"
-        ? "Shift enabled"
-        : !terminal.normal.supported
-        ? "normal action opaque"
-        : "not an SW action button";
-      option.textContent = `${terminal.terminal_label} · P${terminal.player} ${terminal.kind}${qualificationReason ? ` · ${qualificationReason}` : ""}`;
-      option.disabled = unavailableForQualification;
-      terminalSelect.append(option);
-    }
-    terminalSelect.value = channel.encoder?.boardFingerprint === chart.board_fingerprint
-      ? channel.encoder.terminalId
-      : "";
-    const selectedTerminal = chart.terminals.find(
-      (terminal) => terminal.terminal_id === terminalSelect.value,
-    );
-    const qualificationTerminalIneligible = qualificationState === "required" &&
-      Boolean(selectedTerminal &&
-        !panelProgrammingQualificationTerminalIsEligible(selectedTerminal));
-    terminalSelect.disabled = routingAuthoritySuspended || panelProgrammingInteractionBusy() ||
-      panelProgrammingTransactionActive() ||
-      qualificationAwaitingRestore;
-    terminalLabel.append(terminalSelect);
-
-    const keyLabel = document.createElement("label");
-    keyLabel.textContent = "Key emitted in keyboard mode";
-    const keySelect = document.createElement("select");
-    keySelect.dataset.nx = "surface-encoder-key";
-    keySelect.dataset.surfaceControlId = control.id;
-    keySelect.dataset.surfaceChannelId = channel.id;
-    keySelect.setAttribute("aria-label", `${control.label} emitted key`);
-    const keyPlaceholder = document.createElement("option");
-    keyPlaceholder.value = "";
-    keyPlaceholder.textContent = panelProgrammingState.editor.assignment_mode === "recommended"
-      ? "Allocated by the recommended plan"
-      : "Choose a supported key";
-    keySelect.append(keyPlaceholder);
-    for (const optionView of chart.key_options) {
-      const option = document.createElement("option");
-      option.value = optionView.key;
-      const unavailableForQualification = qualificationState === "required" &&
-        optionView.safe_for_qualification !== true;
-      option.textContent = unavailableForQualification
-        ? `${optionView.label} · available after writer check`
-        : optionView.label;
-      option.disabled = unavailableForQualification;
-      keySelect.append(option);
-    }
-    const encoderMatchesChart = channel.encoder?.boardFingerprint === chart.board_fingerprint;
-    keySelect.value = encoderMatchesChart && chart.key_options.some(
-      (option) => option.key === channel.encoder?.expectedKey,
-    ) ? channel.encoder?.expectedKey ?? "" : "";
-    keySelect.disabled = routingAuthoritySuspended || panelProgrammingInteractionBusy() ||
-      panelProgrammingTransactionActive() ||
-      qualificationAwaitingRestore || qualificationTerminalIneligible ||
-      panelProgrammingState.editor.assignment_mode !== "custom" || !terminalSelect.value;
-    keyLabel.append(keySelect);
-
-    const sharedKey = document.createElement("label");
-    sharedKey.className = "n-surface-encoder-share";
-    const sharedKeyCheckbox = document.createElement("input");
-    sharedKeyCheckbox.type = "checkbox";
-    sharedKeyCheckbox.dataset.nx = "surface-encoder-share";
-    sharedKeyCheckbox.dataset.surfaceControlId = control.id;
-    sharedKeyCheckbox.dataset.surfaceChannelId = channel.id;
-    sharedKeyCheckbox.checked = encoderMatchesChart && panelProgrammingDraftTerminal(
-      channel.encoder?.terminalId ?? "",
-    )?.allow_shared_key === true;
-    sharedKeyCheckbox.disabled = routingAuthoritySuspended || panelProgrammingInteractionBusy() ||
-      panelProgrammingTransactionActive() ||
-      qualificationAwaitingRestore || qualificationTerminalIneligible ||
-      panelProgrammingState.editor.assignment_mode !== "custom" || !keySelect.value;
-    const sharedKeyCopy = document.createElement("span");
-    sharedKeyCopy.textContent = "Allow this terminal's key to be deliberately shared with another terminal";
-    sharedKey.append(sharedKeyCheckbox, sharedKeyCopy);
-
-    const verification = document.createElement("div");
-    verification.className = "n-surface-encoder-verification";
-    const signalTruth = controlSurfaceSignalTruth(channel);
-    const verificationTone = encoderMatchesChart &&
-        (signalTruth.authority === "matched" || signalTruth.authority === "mismatch")
-      ? signalTruth.authority
-      : "unverified";
-    const pendingPlan = signalTruth.configuredKnown &&
-      !samePanelKey(signalTruth.plannedKey, signalTruth.configuredKey);
-    verification.dataset.state = verificationTone;
-    const expected = encoderMatchesChart ? channel.encoder?.expectedKey.trim() ?? "" : "";
-    verification.textContent = routingAuthoritySuspended
-      ? "Hardware authority is suspended. The terminal and key shown above are the last reviewed values, not a claim about what the board emits now. Read the complete chart again before teaching or routing."
-      : !terminalSelect.value
-      ? "Link a terminal before preparing a custom chart."
-      : qualificationTerminalIneligible
-      ? "This terminal stays visible as part of the complete chart, but it cannot be the first writer check. Choose an ordinary SW action button whose Shift state is explicitly disabled."
-      : signalTruth.authority === "planned"
-      ? `Board currently emits ${signalTruth.configuredKey || "Disabled"}. Draft plans ${signalTruth.plannedKey || "Disabled"}; it is not written yet.`
-      : verificationTone === "matched"
-      ? pendingPlan
-        ? `Teach verified the current board key ${signalTruth.configuredKey || "Disabled"} on this physical channel. The draft still plans ${signalTruth.plannedKey || "Disabled"}; it is not written yet.`
-        : `Teach verified ${expected || "the programmed signal"} on this physical channel.`
-      : verificationTone === "mismatch"
-      ? pendingPlan
-        ? `Teach observed ${signalTruth.observedKey}, different from the current board key ${signalTruth.configuredKey || "Disabled"}. The draft still plans ${signalTruth.plannedKey || "Disabled"}; it is not written yet.`
-        : `Teach observed a different key than ${expected || "the programmed chart"}. Check the wiring or restore the chart.`
-      : signalTruth.observedKey
-      ? `Board is configured for ${signalTruth.configuredKey || expected || "Disabled"}. Last Teach observed ${signalTruth.observedKey}, but that evidence no longer verifies this chart; Teach again.`
-      : `Configured ${signalTruth.configuredKey || expected || "Disabled"} · verify it in Teach after programming.`;
-    encoderAssignment.append(
-      encoderAssignmentTitle,
-      encoderCopy,
-      terminalLabel,
-      keyLabel,
-      sharedKey,
-      verification,
-    );
-  } else {
-    const encoderCopy = document.createElement("p");
-    encoderCopy.textContent = "Open Encoder setup above to link this physical channel to an I-PAC terminal. This is optional; Teach works with the current chart.";
-    encoderAssignment.append(encoderAssignmentTitle, encoderCopy);
-  }
-
   const signal = document.createElement("div");
   signal.className = "n-surface-signal";
   const signalLabel = document.createElement("span");
@@ -10142,17 +4428,13 @@ function syncControlSurfaceInspector(): void {
     "surface-teach",
     "Listen for the signal Windows receives from this physical control without changing any mapping",
   );
-  teach.disabled = routingAuthoritySuspended;
-  if (routingAuthoritySuspended) {
-    teach.title =
-      "Read this encoder's complete current chart before teaching a physical input";
-  }
+  teach.disabled = false;
   const route = makeKeyboardWorkbenchButton(
     "Route in KSX",
     "surface-route",
     "Hold this learned signal, then choose one or more virtual-controller controls on the canvas",
   );
-  route.disabled = routingAuthoritySuspended || !routeKey;
+  route.disabled = !routeKey;
   if (!routeKey && channel.input.kind === "keyboard") {
     route.title = "Teach this physical input again before routing; its retained observation is not authoritative for the current hardware chart";
   }
@@ -10233,9 +4515,9 @@ function syncControlSurfaceInspector(): void {
         "Confirm that each unresolved view carrying this signal is independently wired",
       ),
     );
-    inspector.append(kicker, title, copy, identity, owner, channels, encoderAssignment, signal, actions, routes, position, resolution, copies);
+    inspector.append(kicker, title, copy, identity, owner, channels, signal, actions, routes, position, resolution, copies);
   } else {
-    inspector.append(kicker, title, copy, identity, owner, channels, encoderAssignment, signal, actions, routes, position, copies);
+    inspector.append(kicker, title, copy, identity, owner, channels, signal, actions, routes, position, copies);
   }
   if (relationship !== "shared-signal") {
     copies.append(
@@ -10305,6 +4587,10 @@ function renderControlSurfaceControls(): void {
     existing.delete(control.id);
     const relationship = controlSurfaceRelationship(control);
     const selected = control.id === controlSurfaceState.selectedControlId;
+    // A preserved terminal link is the only thing that still says "a key is
+    // EXPECTED here" — the chart that would confirm it is PacBench's now, so
+    // `verifiedEncoderChannels` stays empty until a chart verb returns and
+    // `controlSurfaceSignalTruth` can answer `matched` for a linked channel.
     const encoderChannels = control.channels.filter((channel) => Boolean(channel.encoder));
     const verifiedEncoderChannels = encoderChannels.filter((channel) => {
       const authority = controlSurfaceSignalTruth(channel).authority;
@@ -10350,6 +4636,9 @@ function renderControlSurfaceControls(): void {
       .map((channel) => {
         const truth = controlSurfaceSignalTruth(channel);
         const terminal = channel.encoder?.terminalId.toLocaleUpperCase() ?? "";
+        if (terminal) {
+          return `${channel.label}: ${terminal} is a programmable encoder terminal${truth.observedKey ? `, last observed emitting ${truth.observedKey}` : ""}; ksx cannot read this board, so it routes nothing`;
+        }
         if (truth.authority === "planned") {
           return `${channel.label}: ${terminal} currently emits ${truth.configuredKey || "Disabled"}; draft plans ${truth.plannedKey || "Disabled"}, not written`;
         }
@@ -10366,7 +4655,12 @@ function renderControlSurfaceControls(): void {
           return `${channel.label}: ${terminal} is expected to emit ${truth.plannedKey}; read the board to confirm`;
         }
         if (truth.authority === "observed") {
-          return `${channel.label}: Windows observed ${truth.observedKey}`;
+          // The third state of the device authority rule, said out loud. The
+          // observation is real and still splits keys; what ksx cannot do is
+          // vouch that the device it names is still the thing emitting it.
+          return channel.deviceUnverified
+            ? `${channel.label}: Windows observed ${truth.observedKey}; ksx does not recognise the device it came from, so this is kept unverified`
+            : `${channel.label}: Windows observed ${truth.observedKey}`;
         }
         return `${channel.label}: unassigned`;
       })
@@ -10397,18 +4691,26 @@ function renderControlSurfaceControls(): void {
       signal.replaceChildren();
       signal.dataset.channelCount = String(control.channels.length);
       for (const channel of control.channels) {
+        // The preserved terminal link, when a legacy document carried one. It
+        // dresses the chain — the terminal chip names P3 UP instead of
+        // UNLINKED — and nothing else: every authority branch below reads
+        // `truth`, which refuses to draw any from a link (see
+        // `controlSurfaceSignalTruth`).
         const encoder = channel.encoder;
         const truth = controlSurfaceSignalTruth(channel);
         const expectedKey = truth.plannedKey;
         const observedKey = truth.observedKey;
         const verification = truth.authority;
         const flowKey = truth.flowKey;
-        const pendingPlan = truth.configuredKnown &&
-          !samePanelKey(expectedKey, truth.configuredKey);
+        const pendingPlan = false;
         const chain = document.createElement("span");
         chain.className = `n-surface-signal-chain channel-${channel.id}`;
         chain.dataset.surfaceChannelId = channel.id;
         chain.dataset.verification = verification;
+        // Machine-readable half of the same statement: a swept channel whose
+        // device ksx could not recognise is marked, never silently kept.
+        if (channel.deviceUnverified) chain.dataset.deviceUnverified = "";
+        else delete chain.dataset.deviceUnverified;
         if (encoder?.terminalId) chain.dataset.terminalId = encoder.terminalId;
 
         const stem = document.createElement("span");
@@ -10427,9 +4729,7 @@ function renderControlSurfaceControls(): void {
           terminal.textContent = encoder?.terminalId
             ? encoder.terminalId.toLocaleUpperCase().replace(/^([1-4])/, "P$1 ")
             : "UNLINKED";
-          terminal.title = encoder
-            ? `${selectedEncoderShortName()} ${encoder.terminalId.toLocaleUpperCase()} · ${encoder.terminalLabel}`
-            : "No encoder terminal is linked to this physical channel";
+          terminal.title = "No encoder terminal is linked to this physical channel";
           chain.append(stem, terminal);
           const arrow = document.createElement("span");
           arrow.className = "n-surface-signal-arrow";
@@ -10493,11 +4793,20 @@ function renderControlSurfaceControls(): void {
             : verification === "expected"
             ? "PLAN?"
             : verification === "observed"
-            ? "LIVE"
+            // The third state, in the badge vocabulary this panel already
+            // speaks, where `?` has always meant "not verified" (`PLAN?`,
+            // and the bare `?` on a configured-but-unproven terminal). A mark
+            // that only exists in the accessible name is a mark a sighted user
+            // has to go looking for, and the whole point of keeping an
+            // unrecognised device's binding is that the person can SEE that
+            // ksx is not vouching for it while it keeps working.
+            ? (channel.deviceUnverified ? "LIVE?" : "LIVE")
             : "TEACH";
           keycap.append(key, state);
         }
-        keycap.title = verification === "planned" && encoder
+        keycap.title = encoder
+          ? `${encoder.terminalId.toLocaleUpperCase()} is a programmable encoder terminal${observedKey ? `; Windows Teach once observed ${observedKey}` : ""}. ksx cannot read this board's outputs, so nothing here is treated as a route.`
+          : verification === "planned" && encoder
           ? `${encoder.terminalId.toLocaleUpperCase()} currently emits ${truth.configuredKey || "Disabled"}; the draft proposes ${expectedKey || "Disabled"}. Nothing changes until Program board verifies the write.`
           : verification === "matched" && encoder
           ? `${encoder.terminalId.toLocaleUpperCase()} is configured for ${truth.configuredKey || expectedKey}; Windows Teach verified the same key${pendingPlan ? `; the draft still proposes ${expectedKey || "Disabled"}` : ""}`
@@ -10508,7 +4817,11 @@ function renderControlSurfaceControls(): void {
           : verification === "expected" && encoder
           ? `${encoder.terminalId.toLocaleUpperCase()} is expected to emit ${expectedKey}; read the complete hardware chart to confirm it`
           : verification === "observed"
-          ? `Windows Teach observed ${observedKey}`
+          ? `Windows Teach observed ${observedKey}${
+            channel.deviceUnverified
+              ? ". ksx does not recognise the device it came from, so the observation is kept and still splits keys, but nothing here vouches for it"
+              : ""
+          }`
           : "Link an encoder terminal or Teach this physical control";
         keycap.setAttribute("aria-hidden", "true");
         chain.append(keycap);
@@ -10538,56 +4851,39 @@ function renderControlSurfaceControls(): void {
   // Once a chart-linked physical panel owns every signal, fold the separate
   // encoder roster into its recoverable fallback shelf. Re-run when Teach or a
   // panel edit changes ownership so unresolved keys never disappear.
-  syncIpacSignalSource();
   mappingFlowLayer?.scheduleLayout();
 }
 
 function syncControlSurfaceChrome(): void {
   const item = controlSurfaceItem;
   if (!item) return;
-  const hardwareWorkspace = panelProgrammingState.editor.phase !== "closed";
   const choosing = !controlSurfaceState.started || controlSurfaceChoosingTemplate;
-  const panelLinkingWorkspace = hardwareWorkspace && controlSurfaceState.started &&
-    panelProgrammingState.editor.assignment_mode === "custom" &&
-    panelProgrammingQualificationState() === "qualified";
   const starters = item.querySelector<HTMLElement>(".n-surface-starters");
   const workarea = item.querySelector<HTMLElement>(".n-surface-workarea");
   const tools = item.querySelector<HTMLElement>(".n-surface-tools");
   const stages = item.querySelector<HTMLElement>(".n-surface-stages");
-  const hardware = item.querySelector<HTMLElement>(".n-surface-hardware");
   const heading = item.querySelector<HTMLElement>("[data-surface-widget-kicker]");
   const sub = item.querySelector<HTMLElement>("[data-surface-widget-sub]");
   const note = item.querySelector<HTMLElement>("[data-surface-note]");
-  const encoderName = selectedEncoderShortName();
-  item.dataset.entry = hardwareWorkspace ? "encoder-setup" : "builder";
-  const widgetName = hardwareWorkspace ? `${encoderName} · Hardware outputs` : "Control Surface Builder";
+  const widgetName = "Control Surface Builder";
+  item.dataset.entry = "builder";
   item.dataset.widgetName = widgetName;
   item.setAttribute("aria-label", widgetName);
   item.querySelector<HTMLElement>(".widget-drag-handle")
     ?.setAttribute("aria-label", `Move ${widgetName}`);
   if (heading) heading.textContent = widgetName;
-  if (sub) sub.textContent = hardwareWorkspace
-    ? `${encoderName} terminal → host signal (keyboard key) → KSX transformation → virtual controller → game`
-    : "Arrange physical appearance · host signal → KSX route stays separate";
-  if (hardware) hardware.hidden = hardwareWorkspace;
-  if (starters) starters.hidden = hardwareWorkspace || !choosing;
-  if (workarea) workarea.hidden = (hardwareWorkspace && !panelLinkingWorkspace) || choosing;
-  if (tools) tools.hidden = hardwareWorkspace || choosing;
-  if (stages) stages.hidden = hardwareWorkspace;
-  if (note) note.textContent = panelLinkingWorkspace
-    ? `Panel-linking view: select a drawn physical control, associate its ${encoderName} terminal and expected keyboard host signal in the inspector, then review the complete device chart above. These links do not write KSX controller mappings.`
-    : hardwareWorkspace
-    ? `The ${encoderName} stores terminal-to-key outputs in the device. Windows exposes each as a keyboard host signal; KSX then applies dynamic mappings, macros, and virtual-controller output. A physical panel drawing is optional.`
-    : selectedInputIsPanelEncoder() && panelBoardChartAccessReady(selectedPanelStatusBoard()) &&
-        panelBoardCanWriteChart(selectedPanelStatusBoard())
-    ? "Encoder setup is supervised: KSX reads and backs up the complete chart, previews an exact diff, then writes only after confirmation and byte-for-byte verification. Teach still proves what the physical wiring sends; Route writes the dynamic KSX mapping."
-    : selectedInputIsPanelEncoder() && panelBoardCanReadChart(selectedPanelStatusBoard())
-    ? panelBoardChartAccessGuidance(selectedPanelStatusBoard())
-    : selectedInputIsPanelEncoder() && selectedPanelStatusBoard()?.capabilities?.can_identify
-    ? panelBoardChartAccessGuidance(selectedPanelStatusBoard())
-    : "Arrange the physical controls independently of their signal source. Teach host signals observes what each control sends; Route in KSX connects that signal to virtual controllers.";
+  if (sub) {
+    sub.textContent = "Arrange physical appearance · host signal → KSX route stays separate";
+  }
+  if (starters) starters.hidden = !choosing;
+  if (workarea) workarea.hidden = choosing;
+  if (tools) tools.hidden = choosing;
+  if (stages) stages.hidden = false;
+  if (note) {
+    note.textContent =
+      "Arrange the physical controls independently of their signal source. Teach host signals observes what each control sends; Route in KSX connects that signal to virtual controllers.";
+  }
   const mappingRecords = controlSurfaceMappingRecords();
-  const encoderRecords = controlSurfaceEncoderRecords();
   const selectedSlot = Number(nSlotVal() || "1");
   for (const card of Array.from(item.querySelectorAll<HTMLButtonElement>("[data-surface-template]"))) {
     const template = card.dataset.surfaceTemplate as ControlSurfaceTemplate | undefined;
@@ -10601,12 +4897,7 @@ function syncControlSurfaceChrome(): void {
         ? `Confirm replacement · ${descriptor?.label ?? template}`
         : `${controlSurfaceState.started ? "Replace with " : ""}${descriptor?.label ?? template}`;
     }
-    if (template === "encoder-current") {
-      card.disabled = encoderRecords.length === 0;
-      card.title = encoderRecords.length > 0
-        ? `Build a physical panel from ${encoderRecords.length} terminal-to-key assignments read from ${selectedEncoderDisplayName()}`
-        : "Read a supported encoder chart in Hardware outputs before generating its physical panel";
-    } else if (template === "mapping-selected") {
+    if (template === "mapping-selected") {
       card.disabled = !mappingRecords.some((record) => record.slot === selectedSlot);
     } else if (template === "mapping-four") {
       card.disabled = !mappingRecords.some((record) => record.slot >= 1 && record.slot <= 4);
@@ -10627,7 +4918,7 @@ function syncControlSurfaceChrome(): void {
   }
   const status = item.querySelector<HTMLElement>(".n-surface-status");
   if (status) {
-    status.hidden = hardwareWorkspace;
+    status.hidden = false;
     const physical = new Map<string, ControlSurfaceControl>();
     for (const control of controlSurfaceState.controls) {
       if (!physical.has(control.physicalId)) physical.set(control.physicalId, control);
@@ -10657,7 +4948,6 @@ function syncControlSurfaceChrome(): void {
         }${controlSurfaceSaveFailed ? " · Not saved: browser storage is unavailable" : " · Browser draft saved locally"}`;
     if (status.textContent !== nextStatus) status.textContent = nextStatus;
   }
-  syncControlSurfaceHardwareCard();
   renderControlSurfaceControls();
 }
 
@@ -11311,18 +5601,6 @@ function focusControlSurfacePrimary(): void {
   window.requestAnimationFrame(() => {
     const item = controlSurfaceItem;
     if (!item) return;
-    if (controlSurfaceEncoderSetupEntry) {
-      controlSurfaceFocusable([
-        '[data-nx="surface-qualification-terminal"]',
-        '[data-nx="surface-qualification-key"]',
-        '[data-nx="surface-encoder-review"]',
-        '[data-nx="surface-encoder-read"]',
-        '[data-surface-programming-mode="custom"]',
-        '[data-surface-programming-mode="keep-current"]',
-        '[data-nx="surface-encoder-close"]',
-      ])?.focus({ preventScroll: true });
-      return;
-    }
     const choosing = !controlSurfaceState.started || controlSurfaceChoosingTemplate;
     const target = choosing
       ? item.querySelector<HTMLButtonElement>("[data-surface-template]")
@@ -11414,107 +5692,43 @@ function syncControlSurfaceWidget(reveal: boolean): void {
   }
 }
 
-function openControlSurfaceBuilder(encoderSetup = false): void {
-  if (encoderSetup && panelProgrammingTransactionActive()) return;
+function openControlSurfaceBuilder(): void {
   if (document.activeElement instanceof HTMLElement) {
     controlSurfaceReturnFocus = document.activeElement;
-  }
-  if (encoderSetup && controlSurfaceReturnEncoderSelector) {
-    controlSurfaceReturnFocus = learnRoot?.querySelector<HTMLElement>(
-      `[data-nx="encoder-select-setup"][data-encoder-selector="${CSS.escape(controlSurfaceReturnEncoderSelector)}"]`,
-    ) ?? controlSurfaceReturnFocus;
   }
   autoMap = null;
   void cancelLearn();
   cancelAssign();
-  controlSurfaceEncoderSetupEntry = encoderSetup;
-  controlSurfaceChoosingTemplate = !encoderSetup && !controlSurfaceState.started;
+  controlSurfaceChoosingTemplate = !controlSurfaceState.started;
   controlSurfacePendingTemplate = null;
-  controlSurfaceHardwareTargetFingerprint = currentControlSurfaceHardwareFingerprint();
-  // Hardware Setup owns a restorable focus session. Do not run the ordinary
-  // one-shot reveal first or its intermediate camera would become the
-  // session's false "before" view.
-  applyControlSurfaceState({ ...controlSurfaceState, open: true }, true, !encoderSetup);
-  const inspection = refreshControlSurfaceHardwareStatus();
-  if (encoderSetup) {
-    keyboardWorkbenchAnnounce(
-      "Inspecting this exact encoder before KSX offers any hardware operation…",
-    );
-    void inspection.then(() => {
-      if (!controlSurfaceState.open || !selectedInputIsPanelEncoder()) return;
-      const board = selectedPanelStatusBoard();
-      if (controlSurfaceHardwarePhase === "ready" && panelBoardChartAccessReady(board)) {
-        openPanelProgrammingSetup();
-        keyboardWorkbenchAnnounce(
-          `${selectedEncoderShortName()} hardware outputs opened. KSX is reading the complete output chart and creating a recovery point; no emitted key or panel drawing is required.`,
-        );
-        focusControlSurfacePrimary();
-        return;
-      }
-      controlSurfaceEncoderSetupEntry = false;
-      controlSurfaceChoosingTemplate = !controlSurfaceState.started;
-      syncControlSurfaceWidget(true);
-      keyboardWorkbenchAnnounce(
-        board?.family_id || panelBoardCanReadChart(board)
-          ? panelBoardChartAccessGuidance(board)
-          : "KSX could not prove a chart driver for this encoder. Nothing was sent; Control Surface Builder and live Teach remain available.",
-      );
-    });
-  } else {
-    keyboardWorkbenchAnnounce(
-      controlSurfaceState.started
-        ? "Control Surface Builder opened with its saved physical panel."
-        : "Control Surface Builder opened. Choose a blank panel, a hardware template, or generate from existing mappings.",
-    );
-  }
+  applyControlSurfaceState({ ...controlSurfaceState, open: true }, true, true);
+  keyboardWorkbenchAnnounce(
+    controlSurfaceState.started
+      ? "Control Surface Builder opened with its saved physical panel."
+      : "Control Surface Builder opened. Choose a blank panel, a hardware template, or generate from existing mappings.",
+  );
 }
 
-function closeControlSurfaceBuilder(preservePanelChart = true): void {
-  if (panelProgrammingTransactionActive()) {
-    keyboardWorkbenchAnnounce("The encoder write and verification must finish before the Builder can close.");
-    return;
-  }
-  exitPanelProgrammingWorkspace();
-  const needsRecoveryProbe = panelRecoveryProbePossible();
-  if (!needsRecoveryProbe) cancelControlSurfaceHardwareStatus(true);
-  if (!preservePanelChart) resetPanelProgramming(false);
-  if (learnRow?.purpose === "surface" || learnRow?.purpose === "panel-test") void cancelLearn();
+function closeControlSurfaceBuilder(): void {
+  if (learnRow?.purpose === "surface") void cancelLearn();
   if (assignKey) cancelAssign();
   controlSurfaceChoosingTemplate = false;
   controlSurfacePendingTemplate = null;
-  controlSurfaceEncoderSetupEntry = false;
   applyControlSurfaceState({ ...controlSurfaceState, open: false }, true);
-  if (needsRecoveryProbe &&
-      (panelRecoveryProbeState === "checking" ||
-        panelRecoveryProbeState === "indeterminate") &&
-      !controlSurfaceHardwareAbort && panelRecoveryProbeRetryTimer === undefined) {
-    void refreshControlSurfaceHardwareStatus();
-  }
-  // Once the physical panel leaves the canvas its keycap endpoints no longer
-  // exist. Re-open the keyboard widget's fallback shelf immediately so no
-  // saved route is stranded on an invisible source.
-  syncIpacSignalSource();
   keyboardWorkbenchAnnounce(
     controlSurfaceSaveFailed
       ? "Control Surface Builder closed. Browser storage is unavailable, so this draft lasts only for this session."
       : "Control Surface Builder closed. Its draft is saved in this browser.",
   );
-  const encoderReturn = controlSurfaceReturnEncoderSelector
-    ? learnRoot?.querySelector<HTMLElement>(
-        `[data-nx="encoder-select-setup"][data-encoder-selector="${CSS.escape(controlSurfaceReturnEncoderSelector)}"]`,
-      ) ?? null
-    : null;
-  const restore = encoderReturn ?? (controlSurfaceReturnFocus?.isConnected
+  const restore = controlSurfaceReturnFocus?.isConnected
     ? controlSurfaceReturnFocus
-    : learnRoot?.querySelector<HTMLElement>('[data-nx="surface-open"]') ?? null);
+    : learnRoot?.querySelector<HTMLElement>('[data-nx="surface-open"]') ?? null;
   controlSurfaceReturnFocus = null;
-  controlSurfaceReturnEncoderSelector = "";
   window.requestAnimationFrame(() => restore?.focus({ preventScroll: true }));
 }
 
 function chooseControlSurfaceTemplate(template: ControlSurfaceTemplate): void {
   const records = controlSurfaceMappingRecords();
-  const encoderRecords = controlSurfaceEncoderRecords();
   const selectedSlot = Number(nSlotVal() || "1");
   const generatedRecords = template === "mapping-selected"
     ? records.filter((record) => record.slot === selectedSlot)
@@ -11527,12 +5741,6 @@ function chooseControlSurfaceTemplate(template: ControlSurfaceTemplate): void {
   if (generatedCount > CONTROL_SURFACE_MAX_CONTROLS) {
     keyboardWorkbenchAnnounce(
       `This mapping would create ${generatedCount} visual controls, above the ${CONTROL_SURFACE_MAX_CONTROLS}-control safety limit. The current panel was kept intact.`,
-    );
-    return;
-  }
-  if (template === "encoder-current" && encoderRecords.length === 0) {
-    keyboardWorkbenchAnnounce(
-      "No readable terminal-to-key chart is loaded for this encoder. Open Hardware outputs and read a supported board first; the current panel was kept intact.",
     );
     return;
   }
@@ -11573,16 +5781,13 @@ function chooseControlSurfaceTemplate(template: ControlSurfaceTemplate): void {
       records,
       selectedSlot,
       nCapSelector().trim() || controlSurfaceIdentity,
-      encoderRecords,
     ),
     true,
     true,
   );
   finishControlSurfaceUndoArm();
   keyboardWorkbenchAnnounce(
-    template === "encoder-current"
-      ? `Physical panel generated from ${selectedEncoderShortName()}'s current hardware chart. Terminal → key labels are expectations; Teach verifies the real wiring before those controls own KSX routes.`
-      : template.startsWith("mapping-")
+    template.startsWith("mapping-")
       ? "Panel generated from backend-owned mappings. Repeated signals stay visibly unresolved until the physical wiring is identified."
       : `${CONTROL_SURFACE_TEMPLATES.find((candidate) => candidate.slug === template)?.label ?? "Panel"} created with unassigned physical inputs.`,
   );
@@ -11727,13 +5932,6 @@ function resolveSelectedControlSurfaceSignal(resolution: "mirror" | "duplicate")
 }
 
 function startControlSurfaceTeach(): void {
-  if (!controlSurfaceHardwareAuthorityCurrentForAction()) return;
-  if (panelProgrammingRoutingAuthoritySuspended()) {
-    keyboardWorkbenchAnnounce(
-      "This encoder is being changed or recovered. Read its complete chart after the transaction finishes, then Teach the physical input again.",
-    );
-    return;
-  }
   const control = selectedControlSurfaceControl();
   const channel = selectedControlSurfaceChannel();
   if (!control || !channel) {
@@ -11772,13 +5970,6 @@ function teachSelectedControlSurfaceWithKey(
   key: string,
   expectedInstance: string,
 ): boolean {
-  if (!controlSurfaceHardwareAuthorityCurrentForAction()) return false;
-  if (panelProgrammingRoutingAuthoritySuspended()) {
-    keyboardWorkbenchAnnounce(
-      `Ignored ${key}: this encoder is being changed or recovered. Read its complete chart after the transaction finishes, then Teach again.`,
-    );
-    return false;
-  }
   const control = controlSurfaceState.controls.find((candidate) => candidate.id === controlId);
   if (
     identity !== controlSurfaceIdentity ||
@@ -11815,7 +6006,6 @@ function teachSelectedControlSurfaceWithKey(
 }
 
 function routeSelectedControlSurfaceChannel(): void {
-  if (!controlSurfaceHardwareAuthorityCurrentForAction()) return;
   const channel = selectedControlSurfaceChannel();
   const key = channel ? controlSurfaceRouteKey(channel) : "";
   if (!channel || !key) {
@@ -12231,7 +6421,6 @@ export function initNocturneCanvas(root: HTMLElement, attempt = 0): void {
   syncPadWidgets();
   syncKeyboardWorkbenchWidget(false);
   syncControlSurfaceWidget(false);
-  syncIpacSignalSource();
   if (flowLines && flowPorts && flowNodes) {
     mappingFlowLayer?.dispose();
     mappingFlowLayer = new MappingFlowLayer(
@@ -12335,41 +6524,6 @@ type InspectorContext =
   | { kind: "control"; slot: string; preset: string; functionName: string };
 
 let inspectorContext: InspectorContext = { kind: "overview" };
-
-function selectedInputIsPanelEncoder(): boolean {
-  const liveSelector = nCapSelector().trim();
-  const title = nKbTitle().trim();
-  // A failed staged read clears cap_selector, but it does not turn a known
-  // encoder into a keyboard. Mirror the arranger identity's transient-state
-  // rule and retain the last concrete selector until the server explicitly
-  // says no device is selected.
-  const selector = (liveSelector || (
-    keyboardWorkbenchLastSelector && !title.startsWith("No keyboard selected")
-      ? keyboardWorkbenchLastSelector
-      : ""
-  )).toLocaleUpperCase();
-  const rosterMatch = Boolean(selector) && nDevEncoders().some(
-    (row) => row.selector.trim().toLocaleUpperCase() === selector,
-  );
-  if (rosterMatch) {
-    selectedPanelEncoderLastSelector = selector;
-    return true;
-  }
-  if (title.startsWith("No keyboard selected")) {
-    selectedPanelEncoderLastSelector = "";
-    return false;
-  }
-  if (liveSelector) {
-    // A concrete selector absent from the concrete encoder roster means the
-    // user selected an ordinary keyboard; that is authoritative.
-    selectedPanelEncoderLastSelector = "";
-    return false;
-  }
-  // An unavailable scan deliberately serves neither selector nor encoder
-  // rows. Preserve the last proven kind through that transient state so fake
-  // QWERTY art and a legacy arranger cannot reappear.
-  return Boolean(selector) && selector === selectedPanelEncoderLastSelector;
-}
 
 function applyNocturneUi(): void {
   setNDlgOpen(ui.dlg);
@@ -12727,7 +6881,6 @@ interface LearnTarget {
   purpose?: "binding" | "surface" | "panel-test";
   expectedDevice?: string;
   expectedInstance?: string;
-  encoderAuthority?: PanelEncoderBindAuthority | null;
   surfaceIdentity?: string;
   surfaceControlId?: string;
   surfaceChannelId?: string;
@@ -12738,16 +6891,13 @@ interface BindingSourcePin {
   bindingAuthorityPinned: true;
   expectedDevice: string;
   expectedInstance: string;
-  encoderAuthority: PanelEncoderBindAuthority | null;
 }
 
 function captureBindingSourcePin(): BindingSourcePin {
-  const authority = selectedPanelEncoderBindAuthority();
   return {
     bindingAuthorityPinned: true,
     expectedDevice: nCapSelector().trim(),
     expectedInstance: nCapInstance().trim(),
-    encoderAuthority: authority ? { ...authority } : null,
   };
 }
 
@@ -12869,27 +7019,14 @@ function learnHitBelongsToPinnedSource(row: LearnTarget, learn: NocturneLearnVie
   return selectorMatches || exactInstanceMatches;
 }
 
-function sameEncoderBindAuthority(
-  left: PanelEncoderBindAuthority | null | undefined,
-  right: PanelEncoderBindAuthority | null,
-): boolean {
-  if (!left || !right) return (left ?? null) === (right ?? null);
-  return sameBindingIdentity(left.expected_selector, right.expected_selector) &&
-    sameBindingIdentity(left.expected_instance, right.expected_instance) &&
-    sameBindingIdentity(left.expected_board_fingerprint, right.expected_board_fingerprint) &&
-    sameBindingIdentity(left.expected_chart_sha256, right.expected_chart_sha256);
-}
-
 function bindingSourceAuthorityCurrent(row: {
   bindingAuthorityPinned?: boolean;
   expectedDevice?: string;
   expectedInstance?: string;
-  encoderAuthority?: PanelEncoderBindAuthority | null;
 }): boolean {
   if (!row.bindingAuthorityPinned) return true;
   return sameBindingIdentity(row.expectedDevice, nCapSelector()) &&
-    sameBindingIdentity(row.expectedInstance, nCapInstance()) &&
-    sameEncoderBindAuthority(row.encoderAuthority, selectedPanelEncoderBindAuthority());
+    sameBindingIdentity(row.expectedInstance, nCapInstance());
 }
 
 function bindingTargetAuthorityCurrent(row: LearnTarget): boolean {
@@ -12946,7 +7083,6 @@ function reopenBindingTarget(
     bindingAuthorityPinned: undefined,
     expectedDevice: undefined,
     expectedInstance: undefined,
-    encoderAuthority: undefined,
   };
 }
 
@@ -13074,21 +7210,6 @@ function setRailGlow(on: boolean): void {
 }
 
 function armLearnUi(row: LearnTarget): void {
-  if (row.purpose === "panel-test") {
-    setNLearnCls("n-learnbar listen");
-    setNLearnText("Test I-PAC output");
-    setNLearnSub(
-      "Press any wired cabinet control. KSX identifies its terminal and Windows key; no mapping changes. Esc cancels.",
-    );
-    setNLearnSkipCls("n-bbtn sm none");
-    setNChainCls("n-chain none");
-    setNKeyCueCls("n-key-cue");
-    setNKeyCueText("Listening to this I-PAC — press one wired control");
-    markArmedRow(null);
-    setRailGlow(true);
-    syncPanelProgrammingJourneyAndTest();
-    return;
-  }
   if (row.purpose === "surface") {
     setNLearnCls("n-learnbar listen");
     setNLearnText(`Teach physical input · ${row.label}`);
@@ -13145,7 +7266,6 @@ function retireLearn(): void {
   daemonGen = null;
   disarmFocusGuard();
   disarmLearnUi();
-  if (wasPanelTest) syncPanelProgrammingJourneyAndTest();
 }
 
 async function startLearn(row: LearnTarget): Promise<void> {
@@ -13160,21 +7280,15 @@ async function startLearn(row: LearnTarget): Promise<void> {
   row = pinned;
   if (!row.expectedDevice?.trim() || !row.expectedInstance?.trim()) {
     autoMap = null;
-    if (row.purpose === "panel-test") {
-      panelProgrammingLastTest = null;
-      panelProgrammingMessage =
-        "KSX cannot test this wiring until the selected I-PAC has a canonical selector and exact Windows device identity. Nothing changed.";
-      syncPanelProgrammingUi();
-    } else {
       applyFlash(
         "error: Select an input with a verified Windows device identity before listening for a key. Nothing changed.",
       );
-    }
+    
+
     return;
   }
   if ((row.purpose ?? "binding") === "binding" &&
-      (!bindingTargetAuthorityCurrent(row) ||
-       !selectedPanelEncoderRoutingAuthorityCurrent())) {
+      (!bindingTargetAuthorityCurrent(row))) {
     autoMap = null;
     applyFlash(
       "error: This encoder is being changed or recovered. Read its complete chart before mapping another control.",
@@ -13193,8 +7307,7 @@ async function startLearn(row: LearnTarget): Promise<void> {
     learnRow.surfacePhysicalId === row.surfacePhysicalId &&
     learnRow.expectedTargetRevision === row.expectedTargetRevision &&
     learnRow.expectedDevice === row.expectedDevice &&
-    learnRow.expectedInstance === row.expectedInstance &&
-    sameEncoderBindAuthority(learnRow.encoderAuthority, row.encoderAuthority ?? null)
+    learnRow.expectedInstance === row.expectedInstance
   ) {
     await cancelLearn();
     return;
@@ -13309,12 +7422,7 @@ async function pollLearn(observed?: NocturneLearnView): Promise<void> {
       if (!learn.key) break;
       if (!learnHitBelongsToPinnedSource(row, learn)) {
         const observed = learn.device?.trim() || "an unresolved Windows input";
-        if (row.purpose === "panel-test") {
-          panelProgrammingLastTest = null;
-          panelProgrammingMessage =
-            `Ignored ${learn.key} from ${observed}: it did not resolve to the exact selected I-PAC. Nothing was mapped; refresh status, then press a control wired to this encoder.`;
-          syncPanelProgrammingUi();
-        } else if (row.purpose === "surface") {
+        if (row.purpose === "surface") {
           keyboardWorkbenchAnnounce(
             `Ignored ${learn.key}: Windows reported ${observed}, not the selected keyboard or encoder. Nothing changed.`,
           );
@@ -13324,29 +7432,6 @@ async function pollLearn(observed?: NocturneLearnView): Promise<void> {
             `error: Ignored ${learn.key} from another or unresolved keyboard. The selected controller binding was not changed.`,
           );
         }
-        break;
-      }
-      if (row.purpose === "panel-test") {
-        const wanted = learn.key.trim().toLocaleUpperCase();
-        const chart = panelProgrammingState.inspection.chart;
-        const includeShifted = panelProgrammingShiftLayerActive(chart);
-        const terminalIds = (chart?.terminals ?? [])
-          .filter((terminal) =>
-            panelProgrammingTerminalKeys(terminal, includeShifted).some(
-              (key) => key.toLocaleUpperCase() === wanted,
-            )
-          )
-          .map((terminal) => terminal.terminal_id);
-        panelProgrammingLastTest = {
-          key: learn.key,
-          device: row.expectedInstance ?? "",
-          terminalIds,
-        };
-        panelProgrammingMessage = terminalIds.length > 0
-          ? `${terminalIds.join(" / ")} emitted ${learn.key}. The hardware signal was observed; no KSX mapping changed.`
-          : `${learn.key} was received from this I-PAC, but no current terminal assignment uses it. No KSX mapping changed.`;
-        syncPanelProgrammingUi();
-        keyboardWorkbenchAnnounce(panelProgrammingMessage);
         break;
       }
       if (row.purpose === "surface") {
@@ -13376,11 +7461,7 @@ async function pollLearn(observed?: NocturneLearnView): Promise<void> {
     }
     case "timeout":
       retireLearn();
-      if (row.purpose === "panel-test") {
-        panelProgrammingMessage =
-          "No I-PAC signal was received before the test timed out. Nothing changed.";
-        syncPanelProgrammingUi();
-      } else if (row.purpose === "surface") {
+      if (row.purpose === "surface") {
         applyFlash(
           `error: Timed out — no physical input was received for ${row.label}. Nothing changed.`,
         );
@@ -13676,8 +7757,7 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
   // change after any earlier arm or dialog opened, so no caller can safely
   // substitute an arm-time check for this one.
   if ((row.purpose ?? "binding") === "binding" &&
-      (!bindingTargetAuthorityCurrent(row) ||
-       !selectedPanelEncoderRoutingAuthorityCurrent())) {
+      (!bindingTargetAuthorityCurrent(row))) {
     autoMap = null;
     pendingConflict = null;
     setNConfOpen(false);
@@ -13690,7 +7770,6 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
   // A conflict confirmation therefore sends the same instance/fingerprint/
   // chart proof the user originally saw, while the checks above reject it if
   // that authority is no longer current.
-  const encoderAuthority = row.encoderAuthority;
   let outcome: NocturneBindOutcome;
   try {
     outcome = await fetchJSON<NocturneBindOutcome>("/nocturne/api/bind", {
@@ -13703,7 +7782,6 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
         key,
         mode: row.mode,
         force,
-        encoder_authority: encoderAuthority ?? undefined,
       }),
     });
   } catch {
@@ -14529,140 +8607,6 @@ export function nocturneWire(root: HTMLElement): void {
   // A duration is committed when the author leaves it or presses Enter —
   // never on every keystroke, so typing is never interrupted by a round trip.
   root.addEventListener("change", (ev) => {
-    const terminalAdvanced = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>(
-      '[data-nx="surface-terminal-advanced"]',
-    );
-    if (terminalAdvanced) {
-      panelProgrammingAdvancedOpen = terminalAdvanced.checked;
-      renderPanelProgrammingTerminalEditor();
-      return;
-    }
-    const terminalKey = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
-      '[data-nx="surface-terminal-key"][data-panel-terminal][data-panel-field]',
-    );
-    if (terminalKey) {
-      const terminalId = terminalKey.dataset.panelTerminal ?? "";
-      const field = terminalKey.dataset.panelField === "shifted" ? "shifted_key" : "normal_key";
-      updatePanelProgrammingTerminalDraft(
-        terminalId,
-        field,
-        terminalKey.value === "__preserve__" ? undefined : terminalKey.value,
-      );
-      window.requestAnimationFrame(() => Array.from(
-        controlSurfaceItem?.querySelectorAll<HTMLSelectElement>(
-          `[data-nx="surface-terminal-key"][data-panel-field="${terminalKey.dataset.panelField ?? "normal"}"]`,
-        ) ?? [],
-      ).find((candidate) => candidate.dataset.panelTerminal === terminalId)
-        ?.focus({ preventScroll: true }));
-      return;
-    }
-    const terminalShift = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>(
-      '[data-nx="surface-terminal-shift"][data-panel-terminal]',
-    );
-    if (terminalShift) {
-      const terminalId = terminalShift.dataset.panelTerminal ?? "";
-      updatePanelProgrammingTerminalDraft(terminalId, "is_shift", terminalShift.checked);
-      window.requestAnimationFrame(() => Array.from(
-        controlSurfaceItem?.querySelectorAll<HTMLInputElement>(
-          '[data-nx="surface-terminal-shift"]',
-        ) ?? [],
-      ).find((candidate) => candidate.dataset.panelTerminal === terminalId)
-        ?.focus({ preventScroll: true }));
-      return;
-    }
-    const terminalShared = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>(
-      '[data-nx="surface-terminal-shared"][data-panel-terminal]',
-    );
-    if (terminalShared) {
-      const terminalId = terminalShared.dataset.panelTerminal ?? "";
-      updatePanelProgrammingTerminalDraft(
-        terminalId,
-        "allow_shared_key",
-        terminalShared.checked,
-      );
-      window.requestAnimationFrame(() => Array.from(
-        controlSurfaceItem?.querySelectorAll<HTMLInputElement>(
-          '[data-nx="surface-terminal-shared"]',
-        ) ?? [],
-      ).find((candidate) => candidate.dataset.panelTerminal === terminalId)
-        ?.focus({ preventScroll: true }));
-      return;
-    }
-    const hardwareProfile = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
-      "[data-surface-profile]",
-    );
-    if (hardwareProfile) {
-      selectPanelHardwareProfile(hardwareProfile.value);
-      return;
-    }
-    const hardwareProfileField = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>(
-      "[data-surface-profile-name], [data-surface-profile-description]",
-    );
-    if (hardwareProfileField) {
-      syncPanelHardwareProfilesUi();
-      return;
-    }
-    const qualificationTerminal = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
-      '[data-nx="surface-qualification-terminal"]',
-    );
-    if (qualificationTerminal) {
-      choosePanelQualificationTerminal(qualificationTerminal.value);
-      return;
-    }
-    const qualificationKey = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
-      '[data-nx="surface-qualification-key"]',
-    );
-    if (qualificationKey) {
-      choosePanelQualificationKey(qualificationKey.value);
-      return;
-    }
-    const encoderTerminal = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
-      '[data-nx="surface-encoder-terminal"][data-surface-control-id][data-surface-channel-id]',
-    );
-    if (encoderTerminal) {
-      selectControlSurfaceChannel(
-        encoderTerminal.dataset.surfaceControlId ?? "",
-        encoderTerminal.dataset.surfaceChannelId ?? "",
-      );
-      assignSelectedPanelTerminal(encoderTerminal.value);
-      return;
-    }
-    const encoderKey = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
-      '[data-nx="surface-encoder-key"][data-surface-control-id][data-surface-channel-id]',
-    );
-    if (encoderKey) {
-      selectControlSurfaceChannel(
-        encoderKey.dataset.surfaceControlId ?? "",
-        encoderKey.dataset.surfaceChannelId ?? "",
-      );
-      assignSelectedPanelKey(encoderKey.value);
-      return;
-    }
-    const encoderShare = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>(
-      '[data-nx="surface-encoder-share"][data-surface-control-id][data-surface-channel-id]',
-    );
-    if (encoderShare) {
-      const controlId = encoderShare.dataset.surfaceControlId ?? "";
-      const channelId = encoderShare.dataset.surfaceChannelId ?? "";
-      const control = controlSurfaceState.controls.find((candidate) => candidate.id === controlId);
-      const channel = control?.channels.find((candidate) => candidate.id === channelId);
-      if (control && channel?.encoder?.boardFingerprint ===
-          panelProgrammingState.inspection.chart?.board_fingerprint) {
-        updatePanelProgrammingTerminalDraft(
-          channel.encoder.terminalId,
-          "allow_shared_key",
-          encoderShare.checked,
-        );
-      }
-      return;
-    }
-    const backup = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>(
-      "[data-surface-backup]",
-    );
-    if (backup) {
-      syncPanelProgrammingUi();
-      return;
-    }
     const surfaceLabel = (ev.target as HTMLElement | null)?.closest<HTMLInputElement>(
       '[data-nx="surface-label"][data-surface-control-id]',
     );
@@ -15034,11 +8978,7 @@ export function nocturneWire(root: HTMLElement): void {
   });
   root.addEventListener("input", (ev) => {
     const t = ev.target as HTMLElement | null;
-    if (t instanceof HTMLInputElement &&
-        (t.matches("[data-surface-profile-name]") ||
-          t.matches("[data-surface-profile-description]"))) {
-      syncPanelHardwareProfilesUi();
-    } else if (t instanceof HTMLInputElement && t.classList.contains("n-filter-in")) {
+    if (t instanceof HTMLInputElement && t.classList.contains("n-filter-in")) {
       if (inspectorContext.kind !== "overview") clearInspectorContext(true);
       applyNocturneFilter(root, t.value);
       // The filter is page state: it rides ?q= (debounced), so a refresh
@@ -15158,16 +9098,6 @@ export function nocturneWire(root: HTMLElement): void {
         functionName: padCanonical ?? fnName,
       });
       if (assignKey && fnName) {
-        // A second window can publish a hardware epoch after this key was
-        // armed but before the pad click. Recheck synchronously so an old
-        // physical observation can never cross that transaction boundary.
-        if (!selectedPanelEncoderRoutingAuthorityCurrent()) {
-          cancelAssign();
-          applyFlash(
-            "error: This encoder is being changed or recovered. Its unproven key was not mapped.",
-          );
-          return;
-        }
         // The pad IS the picker: give the chosen control this key.
         const held = assignKey;
         const mode = assignMode;
@@ -15423,12 +9353,7 @@ export function nocturneWire(root: HTMLElement): void {
         else if (hit === "w-zoom-out") nCanvas.adjustItemScale(widget, -1);
         else if (hit === "w-scale-reset") nCanvas.resetItemScale(widget);
         else if (hit === "w-center") nCanvas.centerItem(widget);
-        else if (
-          widget === controlSurfaceItem &&
-          panelProgrammingState.editor.phase !== "closed"
-        ) {
-          nCanvas.toggleFocusMode(widget, PANEL_PROGRAMMING_FOCUS_OPTIONS);
-        } else nCanvas.toggleFocusMode(widget);
+        else nCanvas.toggleFocusMode(widget);
         syncWidgetSelection();
       }
     } else if (hit === "kb-colors") {
@@ -15445,90 +9370,12 @@ export function nocturneWire(root: HTMLElement): void {
       const theme = target?.closest<HTMLElement>("[data-keyboard-theme]")
         ?.dataset.keyboardTheme ?? "";
       chooseKeyboardTheme(theme);
-    } else if (hit === "encoder-select-setup") {
-      const button = target?.closest<HTMLButtonElement>("[data-encoder-selector]");
-      const selector = button?.dataset.encoderSelector?.trim() ?? "";
-      ev.preventDefault();
-      if (!selector) {
-        keyboardWorkbenchAnnounce("This encoder row did not carry a selectable hardware identity. Rescan and try again.");
-      } else if (selector.toLocaleUpperCase() === nCapSelector().trim().toLocaleUpperCase()) {
-        controlSurfaceReturnEncoderSelector = selector;
-        pendingPanelSetupSelector = "";
-        if (pendingPanelSetupTimeout !== undefined) {
-          window.clearTimeout(pendingPanelSetupTimeout);
-          pendingPanelSetupTimeout = undefined;
-        }
-        openControlSurfaceBuilder(true);
-      } else {
-        controlSurfaceReturnEncoderSelector = selector;
-        pendingPanelSetupSelector = selector;
-        if (pendingPanelSetupTimeout !== undefined) window.clearTimeout(pendingPanelSetupTimeout);
-        pendingPanelSetupTimeout = window.setTimeout(() => {
-          if (pendingPanelSetupSelector === selector) {
-            pendingPanelSetupSelector = "";
-            if (controlSurfaceReturnEncoderSelector === selector) {
-              controlSurfaceReturnEncoderSelector = "";
-            }
-            keyboardWorkbenchAnnounce(
-              "The encoder was not selected in time. Nothing was changed; choose Open again after the device list settles.",
-            );
-          }
-          pendingPanelSetupTimeout = undefined;
-        }, 10_000);
-        keyboardWorkbenchAnnounce(
-          "Selecting this exact encoder, then inspecting which hardware operations are proven…",
-        );
-        // Submit only after the setup intent is recorded. This makes the
-        // selector transition deterministic instead of depending on the
-        // browser's default submit ordering for a second submit button.
-        button?.closest<HTMLFormElement>("form")?.requestSubmit();
-      }
     } else if (hit === "surface-open") {
       openControlSurfaceBuilder();
     } else if (hit === "surface-close") {
       closeControlSurfaceBuilder();
-    } else if (hit === "surface-hardware-refresh") {
-      void refreshControlSurfaceHardwareStatus();
-    } else if (hit === "surface-encoder-open") {
-      void openPanelProgrammingSetupFromGesture();
-    } else if (hit === "surface-encoder-close") {
-      closePanelProgrammingSetup();
-    } else if (hit === "surface-encoder-read") {
-      if (!panelProgrammingInteractionBusy() &&
-          confirmPanelProgrammingDraftReplacement("read the board again")) {
-        void readPanelProgrammingChart(true);
-      }
-    } else if (hit === "surface-encoder-test") {
-      togglePanelProgrammingOutputTest();
     } else if (hit === "input-test-open") {
       openInputTest();
-    } else if (hit === "surface-encoder-build-panel") {
-      buildPhysicalPanelFromEncoderChart();
-    } else if (hit === "surface-encoder-design-panel") {
-      designPhysicalPanelBeforeEncoderKeys();
-    } else if (hit === "surface-encoder-route") {
-      continueFromPanelHardwareToRouting();
-    } else if (hit === "surface-encoder-mode") {
-      const mode = target?.closest<HTMLElement>("[data-surface-programming-mode]")
-        ?.dataset.surfaceProgrammingMode as PanelAssignmentMode | undefined;
-      if (mode === "recommended" || mode === "custom" || mode === "keep-current" ||
-          mode === "blank") {
-        choosePanelProgrammingMode(mode);
-      }
-    } else if (hit === "surface-encoder-review") {
-      void requestPanelProgrammingPlan();
-    } else if (hit === "surface-encoder-restore") {
-      const backup = controlSurfaceItem?.querySelector<HTMLSelectElement>("[data-surface-backup]")
-        ?.value ?? "";
-      if (backup) void requestPanelRestorePlan(backup);
-    } else if (hit === "surface-profile-use") {
-      useSelectedPanelHardwareProfile();
-    } else if (hit === "surface-profile-save") {
-      void savePanelHardwareProfile(false);
-    } else if (hit === "surface-profile-update") {
-      void savePanelHardwareProfile(true);
-    } else if (hit === "surface-profile-delete") {
-      void deleteSelectedPanelHardwareProfile();
     } else if (hit === "surface-template") {
       const template = target?.closest<HTMLElement>("[data-surface-template]")
         ?.dataset.surfaceTemplate as ControlSurfaceTemplate | undefined;
@@ -15604,12 +9451,6 @@ export function nocturneWire(root: HTMLElement): void {
     } else if (hit === "surface-remove") {
       removeSelectedControlSurfaceControl();
     } else if (hit === "kb-workbench") {
-      if (selectedInputIsPanelEncoder()) {
-        keyboardWorkbenchAnnounce(
-          "Arcade encoder terminals belong in Hardware outputs or Control Surface Builder; Keyboard Arranger is for a physical keyboard.",
-        );
-        return;
-      }
       const opening = !keyboardWorkbenchState.open;
       if (opening) {
         // Pull mode and learn mode both claim the next key. Entering the
@@ -15936,17 +9777,197 @@ export function NocturneIsland() {
               ),
           ),
           h("p", { class: "nm-auto-note nm-pad" }, () => nGamesNote()),
+          // Edit and remove live behind a disclosure per game so the common
+          // act — load this game's controllers — stays one click, and the
+          // destructive one is never adjacent to it by accident.
+          createList(
+            () => nGameRows(),
+            (r) => "edit|" + r.title + "|" + r.revision,
+            (r) =>
+              h(
+                "details",
+                { class: "nm-sub" },
+                h("summary", { class: "nm-item nm-sub-t" }, "Edit ", r.title, "…"),
+                h(
+                  "div",
+                  { class: "nm-subbody" },
+                  h(
+                    "form",
+                    { class: "nm-gameform", method: "post", action: "/nocturne/game/update" },
+                    h("input", { type: "hidden", name: "original_title", value: r.title }),
+                    h("input", { type: "hidden", name: "revision", value: r.revision }),
+                    h("label", { class: "nm-gl" }, "Name",
+                      h("input", { class: "nm-gi", name: "title", value: r.title })),
+                    h("label", { class: "nm-gl" }, "Program to launch",
+                      h("input", { class: "nm-gi", name: "path", value: r.path })),
+                    h("label", { class: "nm-gl" }, "Arguments",
+                      h("input", { class: "nm-gi", name: "arguments", value: r.arguments })),
+                    h("label", { class: "nm-gl" }, "Players",
+                      h("input", { class: "nm-gi", type: "number", min: "1", name: "slots", value: r.slots })),
+                    h("label", { class: "nm-gl" }, "Controller layout",
+                      h("input", { class: "nm-gi", name: "preset", value: r.preset })),
+                    h("button", { type: "submit", class: "nm-item nm-go" }, "Save changes"),
+                  ),
+                  h(
+                    "form",
+                    { class: "nm-gameform", method: "post", action: "/nocturne/game/delete" },
+                    h("input", { type: "hidden", name: "title", value: r.title }),
+                    h("input", { type: "hidden", name: "revision", value: r.revision }),
+                    h(
+                      "label",
+                      { class: "nm-importcheck" },
+                      h("input", { type: "checkbox", name: "confirm_delete", value: "yes", required: "required" }),
+                      h("span", {}, "Yes, remove it"),
+                    ),
+                    h("button", { type: "submit", class: "nm-item nm-danger" }, "Remove this saved game"),
+                  ),
+                ),
+              ),
+          ),
+          h(
+            "details",
+            { class: "nm-sub" },
+            h("summary", { class: "nm-item" }, "Add a saved game…"),
+            h(
+              "div",
+              { class: "nm-subbody" },
+              h(
+                "form",
+                { class: "nm-gameform", method: "post", action: "/nocturne/game" },
+                h(
+                  "p",
+                  { class: "nm-auto-note" },
+                  "A saved game remembers what to launch, how many players it has, and ",
+                  "which controller layout they use.",
+                ),
+                h("label", { class: "nm-gl" }, "Name",
+                  h("input", { class: "nm-gi", name: "title", placeholder: "Street Fighter" })),
+                h("label", { class: "nm-gl" }, "Program to launch",
+                  h("input", { class: "nm-gi", name: "path", placeholder: "C:\Games\game.exe" })),
+                h("label", { class: "nm-gl" }, "Arguments",
+                  h("input", { class: "nm-gi", name: "arguments" })),
+                h("label", { class: "nm-gl" }, "Players",
+                  h("input", { class: "nm-gi", type: "number", min: "1", name: "slots", value: "2" })),
+                h("label", { class: "nm-gl" }, "Controller layout",
+                  h("input", { class: "nm-gi", name: "preset" })),
+                h("button", { type: "submit", class: "nm-item nm-go" }, "Save this game"),
+              ),
+            ),
+          ),
+          h("div", { class: "nm-div" }),
+          h("div", { class: "nm-kick" }, "Controller layouts"),
+          h(
+            "details",
+            { class: "nm-sub" },
+            h("summary", { class: "nm-item" }, "Rename or delete a layout…"),
+            h(
+              "div",
+              { class: "nm-subbody" },
+              h(
+                "p",
+                { class: "nm-auto-note" },
+                "Renaming repoints every controller that uses the layout, so nothing is ",
+                "left naming a layout that is not there. A layout still in use cannot ",
+                "be deleted until those controllers point somewhere else.",
+              ),
+              h(
+                "form",
+                { class: "nm-gameform", method: "post", action: "/nocturne/layout/rename" },
+                h("label", { class: "nm-gl" }, "Rename",
+                  h("input", { class: "nm-gi", name: "from", placeholder: "existing name" })),
+                h("label", { class: "nm-gl" }, "to",
+                  h("input", { class: "nm-gi", name: "to", placeholder: "new name" })),
+                h("button", { type: "submit", class: "nm-item nm-go" }, "Rename layout"),
+              ),
+              h(
+                "form",
+                { class: "nm-gameform", method: "post", action: "/nocturne/layout/delete" },
+                h("label", { class: "nm-gl" }, "Delete",
+                  h("input", { class: "nm-gi", name: "name", placeholder: "layout name" })),
+                h(
+                  "label",
+                  { class: "nm-importcheck" },
+                  h("input", { type: "checkbox", name: "confirm_delete", value: "yes", required: "required" }),
+                  h("span", {}, "Yes, delete it"),
+                ),
+                h("button", { type: "submit", class: "nm-item nm-danger" }, "Delete layout"),
+              ),
+            ),
+          ),
           h("div", { class: "nm-div" }),
           h("div", { class: "nm-kick" }, "Maintenance"),
           h(
             "a",
-            { class: "nm-item nm-link", href: "/setup/export.json" },
+            { class: "nm-item nm-link", href: "/nocturne/export.json" },
             "Export the configuration (download)",
           ),
+          // Import is a details/summary rather than a link because the consent
+          // shape matters more than the chrome: the "write it" box absent is a
+          // DRY RUN, so opening this and submitting reports what it WOULD do
+          // and changes nothing. That is the same contract `ksx config import`
+          // has always had, and it survives with scripting switched off.
           h(
-            "a",
-            { class: "nm-item nm-link", href: "/setup" },
-            "Import — opens the consent flow on Setup",
+            "details",
+            { class: "nm-sub" },
+            h("summary", { class: "nm-item" }, "Import a configuration…"),
+            h(
+              "div",
+              { class: "nm-subbody" },
+              h(
+                "form",
+                { class: "nm-importform", method: "post", action: "/nocturne/import" },
+                h(
+                  "p",
+                  { class: "nm-auto-note" },
+                  "Paste a configuration ksx exported — from this machine, another one, ",
+                  "or an assistant that wrote you one. Leave the box below unticked and ",
+                  "nothing is written: you get a report of exactly what it would do.",
+                ),
+                h("textarea", {
+                  class: "nm-importbox",
+                  name: "document",
+                  rows: "6",
+                  "aria-label": "the configuration, as JSON",
+                  placeholder: "{ … }",
+                }),
+                // A document ksx exported says what it is (`"ksx_interop": 1`)
+                // and this stays on "(the document says)". A BARE document —
+                // the one an assistant writes you, which the sentence above
+                // invites — carries no envelope, and `read_bundle` refuses it
+                // in exactly those words. Without this control the card's own
+                // invitation was an unfixable dead end: the only refusal it
+                // could produce had no answer anywhere on the page.
+                h(
+                  "label",
+                  { class: "nm-gl" },
+                  "if it is not a ksx export, what is it?",
+                  h(
+                    "select",
+                    { class: "nm-gi", name: "what" },
+                    h("option", { value: "" }, "(the document says)"),
+                    h("option", { value: "config" }, "settings, boards and slots"),
+                    h("option", { value: "games" }, "game profiles"),
+                    h("option", { value: "presets" }, "controller layouts"),
+                  ),
+                ),
+                h(
+                  "label",
+                  { class: "nm-importcheck" },
+                  h("input", { type: "checkbox", name: "apply", value: "1" }),
+                  h("span", {}, "write it"),
+                ),
+                // The escape hatch for a document that is right and does not
+                // validate. Separate from "write it" on purpose: forcing is a
+                // second decision, and `ImportForm` has always carried both.
+                h(
+                  "label",
+                  { class: "nm-importcheck" },
+                  h("input", { type: "checkbox", name: "force", value: "yes" }),
+                  h("span", {}, "write it even if it does not validate"),
+                ),
+                h("button", { type: "submit", class: "nm-item nm-go" }, "Import"),
+              ),
+            ),
           ),
           h("div", { class: "nm-div" }),
           // The sign-in task, off the SAME derivation /start's card uses.
@@ -16227,6 +10248,37 @@ export function NocturneIsland() {
         h(
           "div",
           { class: "n-kick-row" },
+          h("span", { class: "n-kick" }, "How the Studio looks"),
+        ),
+        h(
+          "p",
+          { class: "n-devnote" },
+          "Pages follow the operating system's light or dark choice unless you pick one here.",
+        ),
+        createList(
+          () => nThemeRows(),
+          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls,
+          (r) =>
+            h(
+              "form",
+              { class: "n-modeform", method: "post", action: "/nocturne/theme" },
+              h("input", { type: "hidden", name: "theme", value: r.name }),
+              h(
+                "button",
+                { type: "submit", class: r.cls },
+                h("span", { class: "n-radio-dot" }),
+                h(
+                  "span",
+                  { class: "n-radio-txt" },
+                  h("span", { class: "n-radio-title" }, r.title),
+                  h("span", { class: "n-radio-detail" }, r.detail),
+                ),
+              ),
+            ),
+        ),
+        h(
+          "div",
+          { class: "n-kick-row" },
           h("span", { class: "n-kick" }, "Virtual controllers"),
           h("span", { class: "n-kick-n" }, () => nRackCaption()),
         ),
@@ -16419,7 +10471,10 @@ export function NocturneIsland() {
           h(
             "p",
             { class: "n-foot" },
-            "Adding a controller here needs JavaScript — the Start page's add form works without it.",
+            // It pointed at the Start page until 2026-08-25, and that page is
+            // a 404 now: with scripting off this was the only sentence about
+            // adding a controller, and it sent people to nowhere.
+            "Adding a controller here needs JavaScript, because the create dialog is where the persona, the layout and the opposite-directions rule are chosen together. Everything else on this page — picking a keyboard, loading a saved game, Save and Play — works without it.",
           ),
         ),
         // The short undo window after a removal: the SERVER holds the
@@ -17471,11 +11526,6 @@ export function NocturneIsland() {
                     "data-forma-runtime-host": "",
                     "aria-hidden": "false",
                   },
-                  h("section", {
-                    class: "n-ipac-signal-source",
-                    "data-client-subtree": "",
-                    "aria-label": "Encoder terminal and keyboard host signals",
-                  }),
                   h(
                     "div",
                     { class: "n-kbhead" },

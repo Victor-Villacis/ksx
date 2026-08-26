@@ -1,3 +1,42 @@
+<#
+.SYNOPSIS
+    Build and start the real-hardware QA lane on 4460. THE ONLY LANE THAT TOUCHES
+    REAL DEVICES.
+
+.DESCRIPTION
+    Builds a matched daemon + Studio pair under the machine-wide build-graph
+    lock and starts them against the ACTUAL USB inventory, the real
+    %APPDATA%\ksx config root, the real backups and any physical encoder
+    attached to this machine. Confirmed hardware actions on this instance can
+    change what a device IS to Windows.
+
+    It proves the daemon is stopped before replacing anything, so a running game
+    becomes a visible deferred state rather than a surprise restart, and it
+    records a managed process generation that status.ps1 and teardown.ps1
+    validate against. The banner reads DEV BUILD - REAL HARDWARE: a matched
+    source-tree artifact reading this computer, not an installed candidate.
+
+    4460 is never seeded. This script holds the complementary reserved list to
+    seed.ps1's, so a mistyped port is refused rather than served.
+
+    Stop the lane with teardown.ps1 -Environment real. See
+    tools/studio-env/README.md.
+
+.PARAMETER SkipBuild
+    Intentionally unavailable here and throws. The disposable runtime must be
+    rebuilt so it is guaranteed to carry the current machine-lifecycle safety
+    fences; use -SkipBuild only with isolated fixtures (seed.ps1).
+
+.PARAMETER LaunchReason
+    Recorded in the managed receipt, so a later reader can tell a manual start
+    from a watcher-driven replacement. watch.ps1 passes "watch:<reason>".
+
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/start-real.ps1
+
+.LINK
+    docs/STUDIO-ENVIRONMENTS.md
+#>
 [CmdletBinding()]
 param(
     [switch]$SkipBuild,
@@ -22,7 +61,15 @@ $BinRoot = Join-Path $RuntimeRoot "bin"
 $LogRoot = Join-Path $RuntimeRoot "logs"
 $BuildRoot = Join-Path $RepoRoot "target\studio-env-real"
 $Port = 4460
-$ReservedNonRealPorts = @(4476, 4478, 4479, 4488, 4489, 4490, 4496, 4500, 4510, 4511, 4512, 4520, 4521)
+# Every port some OTHER lane owns, so a mistyped $Port above is refused rather
+# than served -- real hardware must never answer where a fixture is expected.
+# This is exactly 4460's complement of the environment table in status.ps1, and
+# it has to be read that way: a port listed here that no lane can start is a
+# false claim about what this repo runs. 4521 was such a claim. It belonged to
+# the blank-encoder fixture lane, which left with the encoder surfaces; every
+# other roster (seed.ps1, status.ps1, teardown.ps1, watch.ps1, the docs) had
+# already dropped it and this line was the last place still naming it.
+$ReservedNonRealPorts = @(4476, 4478, 4479, 4488, 4489, 4490, 4496, 4500, 4510, 4511, 4512, 4520)
 if ($ReservedNonRealPorts -contains $Port) {
     throw "Real-hardware QA is assigned reserved fixture/test port $Port. Correct the environment roster instead of starting it."
 }
@@ -218,26 +265,7 @@ function Invoke-RealHardwarePreBuildPreflight {
         [Parameter(Mandatory = $true)][string]$RecordPath
     )
 
-    $Lease = $null
-    $Held = $false
-    try {
-        try {
-            $Lease = [System.Threading.Mutex]::new(
-                $false,
-                "Global\KeyboardSplitterXboxPro.PanelProgramming.v1"
-            )
-        } catch [System.UnauthorizedAccessException] {
-            throw "KSX_WATCH_DEFERRED: the hardware transition lease belongs to another Windows identity."
-        }
-        try {
-            $Held = $Lease.WaitOne(0)
-        } catch [System.Threading.AbandonedMutexException] {
-            $Held = $true
-        }
-        if (-not $Held) {
-            throw "KSX_WATCH_DEFERRED: an I-PAC programming or Play transition is active; the current real-hardware runtime was left running."
-        }
-        if ($ProbeExecutable) {
+    if ($ProbeExecutable) {
             Assert-RealDaemonSafeForReplacement `
                 -Executable $ProbeExecutable `
                 -RecordPath $RecordPath `
@@ -257,21 +285,8 @@ function Invoke-RealHardwarePreBuildPreflight {
             if ([int]$ControlServerPid -ne 0 -or [int]$LiveServerPid -ne 0) {
                 throw "Refusing real-hardware replacement before build: a daemon pipe exists but no compatible executable is available for the required typed status probe (control=$ControlServerPid, live=$LiveServerPid)."
             }
-            Write-Verbose "No prior KSX client exists; the first build will provide the typed pre-swap probe."
-        }
-    } finally {
-        if ($Held) {
-            $Lease.ReleaseMutex()
-        }
-        if ($Lease) {
-            $Lease.Dispose()
-        }
+        Write-Verbose "No prior KSX client exists; the first build will provide the typed pre-swap probe."
     }
-}
-
-$WinIpac = Get-Process WinIPAC -ErrorAction SilentlyContinue
-if ($WinIpac) {
-    Write-Warning "WinIPAC is open. KSX can observe keyboard input, but I-PAC chart reads may be blocked until WinIPAC releases MI_02. This script will not close it."
 }
 
 $TransitionMutex = $null
@@ -287,8 +302,6 @@ try {
 }
 $TransitionLockHeld = $false
 $BuildGraphLock = $null
-$HardwareLease = $null
-$HardwareLeaseHeld = $false
 $LocationPushed = $false
 $RecordPath = Join-Path $RuntimeRoot "real.json"
 $RecordWritten = $false
@@ -388,26 +401,9 @@ try {
         throw "Refusing the managed real-QA copy because ksx.toml would change portable config-root discovery. Launch the portable ksx.exe in place on port 4460 instead."
     }
 
-    # Programming the I-PAC and transitioning Play use this same cross-process
-    # lease. Reacquire it after compilation and repeat the typed probe while
-    # holding it. This is the authoritative authorization for teardown; the
-    # cheap pre-build pass deliberately did not span a long Cargo build.
-    try {
-        $HardwareLease = [System.Threading.Mutex]::new(
-            $false,
-            "Global\KeyboardSplitterXboxPro.PanelProgramming.v1"
-        )
-    } catch [System.UnauthorizedAccessException] {
-        throw "KSX_WATCH_DEFERRED: the hardware transition lease belongs to another Windows identity."
-    }
-    try {
-        $HardwareLeaseHeld = $HardwareLease.WaitOne(0)
-    } catch [System.Threading.AbandonedMutexException] {
-        $HardwareLeaseHeld = $true
-    }
-    if (-not $HardwareLeaseHeld) {
-        throw "KSX_WATCH_DEFERRED: an I-PAC programming or Play transition is active; the current real-hardware runtime was left running."
-    }
+    # Repeat the typed probe after compilation: this is the authoritative
+    # authorization for teardown, and the cheap pre-build pass deliberately
+    # did not span a long Cargo build.
     Assert-RealDaemonSafeForReplacement `
         -Executable $BuiltExe `
         -RecordPath $RecordPath `
@@ -431,6 +427,38 @@ try {
     $LaunchId = $Stamp
     $RuntimeExe = Join-Path $BinRoot "ksx-real-$Stamp.exe"
     Copy-Item -LiteralPath $BuiltExe -Destination $RuntimeExe
+    # `interception.dll` is a RUNTIME dependency loaded BY NAME, so Windows
+    # looks for it beside the RUNNING image -- this managed copy, not wherever
+    # it happens to sit in the tree. Without it the daemon refuses to start at
+    # all once config.toml names an Interception-backed device, and the message
+    # reads "the Interception driver/DLL is not installed on this machine",
+    # which sends someone to reinstall a driver that is already working.
+    #
+    # It is not tracked in this repository and cargo does not emit it, so this
+    # searches the places a working machine actually has one. Copied, never
+    # linked: the managed copy must stay disposable, and a symlink would make
+    # teardown's exact-file checks ambiguous.
+    $InterceptionSources = @(
+        (Join-Path (Split-Path -Parent $BuiltExe) "interception.dll"),
+        (Join-Path $RepoRoot "target\debug\interception.dll"),
+        (Join-Path $env:ProgramFiles "ksx\interception.dll"),
+        (Join-Path $env:SystemRoot "System32\interception.dll")
+    )
+    $InterceptionSource = $InterceptionSources | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    $RuntimeInterception = Join-Path $BinRoot "interception.dll"
+    if ($InterceptionSource) {
+        try {
+            Copy-Item -LiteralPath $InterceptionSource -Destination $RuntimeInterception -Force -ErrorAction Stop
+        } catch [System.IO.IOException] {
+            # A previous managed daemon may still hold it. The bytes are the
+            # same file every time, so an in-use copy is already correct.
+            if (-not (Test-Path -LiteralPath $RuntimeInterception -PathType Leaf)) { throw }
+        }
+    } elseif (-not (Test-Path -LiteralPath $RuntimeInterception -PathType Leaf)) {
+        # Say it here, once, rather than leaving the daemon's refusal to be
+        # read as a broken driver install.
+        Write-Warning "interception.dll was not found in any of: $($InterceptionSources -join '; '). Interception-backed capture will refuse; WinUSB-backed sessions are unaffected."
+    }
     $DisposableExecutables = @($RuntimeExe)
     $ArtifactHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $BuiltExe).Hash
     if ((Get-FileHash -Algorithm SHA256 -LiteralPath $RuntimeExe).Hash -ne $ArtifactHash) {
@@ -633,20 +661,44 @@ try {
                 $IdleDetail = if ($IdleProbe.text) { $IdleProbe.text } else { "no typed daemon response" }
                 throw "managed development replacement did not remain idle: $IdleDetail"
             }
-            $StatusResponse = Invoke-WebRequest `
-                -UseBasicParsing `
-                -Uri "http://127.0.0.1:$Port/api/status" `
-                -TimeoutSec 1
-            if ($StatusResponse.StatusCode -ne 200) {
-                throw "status endpoint returned HTTP $($StatusResponse.StatusCode)"
-            }
-            $StatusPayload = $StatusResponse.Content | ConvertFrom-Json
+            # The config root is read from the SAME snapshot as everything
+            # above it. It used to come from /api/status, and when the status
+            # page went away the read was repointed at /api/nocturne -- which
+            # is the same fact from the surviving surface, so what this proves
+            # never changed: that the managed runtime opened the REAL
+            # %APPDATA%\ksx and not a portable or fixture root. What did change
+            # is that the repoint left a second GET against an endpoint this
+            # attempt had already fetched. That cost an extra round trip on
+            # every one of the 160 attempts, and it split the gate across two
+            # snapshots -- staged.reachable proven against request one, the
+            # config root against request two, with a save in between free to
+            # make them disagree. One payload, one verdict.
             $ExpectedConfigRoot = [System.IO.Path]::GetFullPath(
                 (Join-Path ([Environment]::GetFolderPath("ApplicationData")) "ksx")
             )
-            $ActualConfigRoot = [System.IO.Path]::GetFullPath(
-                [string]$StatusPayload.snapshot.config_root
-            )
+            # `setup` is an Option: it serializes to null whenever the config
+            # read REFUSED, and the sentence explaining why lands in
+            # `setup_error` instead. Reaching through that null for
+            # `config_root` under Set-StrictMode does not return empty, it
+            # THROWS -- "The property 'config_root' cannot be found on this
+            # object" -- so the IsNullOrWhiteSpace guard below never sees the
+            # case it was written for, the retry loop swallows the reflection
+            # message for twenty seconds, and the failure path then tears down
+            # a healthy daemon/Studio pair citing a PowerShell diagnostic
+            # instead of the refusal. Ask about the null first, and quote the
+            # refusal the payload actually carried.
+            if ($null -eq $Payload.setup) {
+                $SetupRefusal = [string]$Payload.setup_error
+                if ([string]::IsNullOrWhiteSpace($SetupRefusal)) {
+                    $SetupRefusal = "the payload carried no reason"
+                }
+                throw "Studio could not read the configuration to verify its root: $SetupRefusal"
+            }
+            $ReportedConfigRoot = [string]$Payload.setup.config_root
+            if ([string]::IsNullOrWhiteSpace($ReportedConfigRoot)) {
+                throw "nocturne payload carried no config root to verify"
+            }
+            $ActualConfigRoot = [System.IO.Path]::GetFullPath($ReportedConfigRoot)
             if (-not $ActualConfigRoot.Equals(
                 $ExpectedConfigRoot,
                 [System.StringComparison]::OrdinalIgnoreCase
@@ -673,20 +725,13 @@ try {
     $Record.state = "ready"
     Write-ManagedRecord -Record $Record -Path $RecordPath
 
-    # Keep the cross-process hardware lease through the complete matched-pair
-    # launch. If Studio startup fails, no panel write can begin in the narrow
-    # window before cleanup has stopped the new processes.
-    $HardwareLease.ReleaseMutex()
-    $HardwareLeaseHeld = $false
-    $HardwareLease.Dispose()
-    $HardwareLease = $null
-
     Write-Host "Started a matched real-hardware QA artifact built by this invocation (source $SourceRevision)."
     Write-Host "Daemon PID $($DaemonProcess.Id) and Studio PID $($StudioProcess.Id) share artifact $($ArtifactHash.Substring(0, 12))."
     Write-Host "Config: $($Record.config_root)"
     Write-Host "Build graph: source $($SourceGraphHash.Substring(0, 12)); assets $($AssetGraphHash.Substring(0, 12)); reason $LaunchReason."
     Write-Host "Open: http://127.0.0.1:$Port/nocturne"
     Write-Host "Warning: confirmed hardware actions on this instance can affect the selected physical device."
+    Write-Host "Stop it with: tools/studio-env/teardown.ps1 -Environment real"
 } catch {
     $Failure = $_
     if ($RecordWritten -and (Test-Path -LiteralPath $RecordPath -PathType Leaf)) {
@@ -773,12 +818,6 @@ try {
     }
     if ($LocationPushed) {
         Pop-Location
-    }
-    if ($HardwareLeaseHeld) {
-        $HardwareLease.ReleaseMutex()
-    }
-    if ($HardwareLease) {
-        $HardwareLease.Dispose()
     }
     if ($BuildGraphLock) {
         Exit-KsxStudioBuildGraphLock -Lock $BuildGraphLock

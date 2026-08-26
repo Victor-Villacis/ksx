@@ -1970,7 +1970,12 @@ export class MappingFlowLayer {
       controls: new Map(),
       pads: new Map(),
     };
-    this.#layoutProcessors(matrix, inverse, scale, observedAnchors, anchors, true);
+    // Endpoint boxes are measured BEFORE the cards are placed, because where a
+    // card may go depends on where its lens's own endpoints are. `#resolveEndpoint`
+    // fills the shared anchor cache, so the resolution loop below re-uses these
+    // lookups rather than repeating them.
+    const endpoints = this.#liveEndpointRects(anchors);
+    this.#layoutProcessors(matrix, inverse, scale, observedAnchors, anchors, true, endpoints);
     const directLanes = new Map<number, number>();
     const macroLanes = new Map<number, number>();
     const directTotals = new Map<number, number>();
@@ -2107,7 +2112,12 @@ export class MappingFlowLayer {
     if (!matrix) return;
     const inverse = matrix.inverse();
     const scale = Math.max(0.01, Math.hypot(matrix.a, matrix.b));
-    this.#layoutProcessors(matrix, inverse, scale, new Set(), null, false);
+    // No endpoint set during an interpolated camera: every key and hook is
+    // moving this frame, so measuring them all would cost the whole saving this
+    // path exists for — and a measurement one frame stale is worse than none.
+    // Cards keep the previous rung's answer while the camera flies and take
+    // their endpoint-aware lane in the full layout that follows the last frame.
+    this.#layoutProcessors(matrix, inverse, scale, new Set(), null, false, null);
     for (const entry of this.#entries.values()) {
       if (entry.route.kind === "binding") continue;
       this.#positionEntry(
@@ -2164,6 +2174,37 @@ export class MappingFlowLayer {
     return this.#worldPoint(elementCenter(element), inverse);
   }
 
+  /** Every element the lens is currently drawing a cord to or from, measured
+   *  in screen space.
+   *
+   *  These are the boxes a processor card must never cover: a key you hover to
+   *  light its routes, a control hook you hover to see what drives it. A macro
+   *  endpoint is deliberately absent — that is a processor CARD, and cards
+   *  already keep each other at arm's length through `placedProcessors`, so
+   *  including them here would only make a card an obstacle to itself.
+   *
+   *  A pad used as a whole-widget fallback anchor is absent for the opposite
+   *  reason: it is the size of the widget, and treating it as an endpoint would
+   *  re-import exactly the "widgets are absolute" rule whose collapse this
+   *  set exists to replace. */
+  #liveEndpointRects(anchors: MappingAnchorCache): DOMRect[] {
+    const measured = new Set<Element>();
+    const rects: DOMRect[] = [];
+    const add = (element: Element | null): void => {
+      if (!element || measured.has(element)) return;
+      measured.add(element);
+      const rect = element.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) rects.push(rect);
+    };
+    for (const entry of this.#entries.values()) {
+      for (const endpoint of [entry.route.source, entry.route.target]) {
+        if (endpoint.kind !== "key" && endpoint.kind !== "control") continue;
+        add(this.#resolveEndpoint(endpoint, entry.route.slot, anchors));
+      }
+    }
+    return rects;
+  }
+
   #layoutProcessors(
     matrix: DOMMatrix,
     inverse: DOMMatrix,
@@ -2171,6 +2212,7 @@ export class MappingFlowLayer {
     observedAnchors: Set<Element>,
     anchors: MappingAnchorCache | null,
     refreshAnchors: boolean,
+    endpoints: readonly DOMRect[] | null,
   ): void {
     this.#captureProcessorFocus();
     const peers = new Map<number, MacroProcessorFlow[]>();
@@ -2264,7 +2306,8 @@ export class MappingFlowLayer {
         y: source.y + (target.y - source.y) * 0.52 + (vertical ? 0 : fan),
       };
       entry.automaticPosition = automaticPosition;
-      const offset = entry.previewOffset ?? entry.manualOffset ?? { x: 0, y: 0 };
+      const placed = entry.previewOffset ?? entry.manualOffset;
+      const offset = placed ?? { x: 0, y: 0 };
       const position = this.#processorPositionAvoidingOverlays(
         shell,
         {
@@ -2277,6 +2320,8 @@ export class MappingFlowLayer {
         widgetObstacles,
         navigator,
         viewport,
+        placed ? "manual" : "auto",
+        endpoints,
       );
       if (!position) {
         shell.hidden = true;
@@ -2323,6 +2368,8 @@ export class MappingFlowLayer {
       widgetObstacles,
       navigator,
       viewport,
+      "auto",
+      endpoints,
     );
     // If the chrome and visible cards leave no honest lane for the bank,
     // fold the last visible card into it and retry. With zero visible cards
@@ -2346,6 +2393,8 @@ export class MappingFlowLayer {
         widgetObstacles,
         navigator,
         viewport,
+        "auto",
+        endpoints,
       );
     }
     if (!bankPosition) {
@@ -2370,6 +2419,8 @@ export class MappingFlowLayer {
     widgets: readonly DOMRect[],
     navigator: DOMRect | undefined,
     viewport: DOMRect,
+    placement: "auto" | "manual",
+    endpoints: readonly DOMRect[] | null,
   ): DOMPoint | null {
     const margin = 12;
     // Desktop cards are 176px wide; the compact phone treatment is 136px so
@@ -2392,60 +2443,207 @@ export class MappingFlowLayer {
       y: clamp(screen.y, minY, maxY),
     };
     const hardObstacles = [...widgets, ...placedProcessors];
-    const intersects = (x: number, y: number, rect: DOMRect) =>
-      x + halfWidth + margin > rect.left &&
-      x - halfWidth - margin < rect.right &&
-      y + halfHeight + margin > rect.top &&
-      y - halfHeight - margin < rect.bottom;
-    const nearestClear = (obstacles: readonly DOMRect[]): { x: number; y: number } | null => {
-      // Walk outward from the desired midpoint and stop at the first clear
-      // screen-space lane. The old obstacle-boundary Cartesian product built
-      // and sorted O(N²) candidates, then scanned O(N) obstacles for every
-      // processor on every animation frame. This walk is bounded by viewport
-      // size, allocates no candidate cloud, and short-circuits immediately.
-      const stepX = Math.max(48, halfWidth * 2 + margin * 2);
-      const stepY = Math.max(40, halfHeight * 2 + margin * 2);
-      const maxRadius = Math.max(
-        1,
-        Math.ceil(Math.max(viewport.width / stepX, viewport.height / stepY)) + 1,
-      );
+    // `pad` is the clearance demanded around the rect, and it is not always the
+    // card-to-card margin: an ENDPOINT is only ever asked not to be COVERED
+    // (pad 0). The lane a card belongs in — between the keyboard's last key row
+    // and the pads' first hooks — measures ~119px on a fitted 1600x1000 canvas
+    // against a 98px card, so a 12px cushion on both sides would price the card
+    // out of the one place it is meant to live.
+    const intersects = (x: number, y: number, rect: DOMRect, pad = margin) =>
+      x + halfWidth + pad > rect.left &&
+      x - halfWidth - pad < rect.right &&
+      y + halfHeight + pad > rect.top &&
+      y - halfHeight - pad < rect.bottom;
+    // Walk outward from the desired midpoint over a bounded screen-space
+    // lattice. The old obstacle-boundary Cartesian product built and sorted
+    // O(N²) candidates, then scanned O(N) obstacles for every processor on
+    // every animation frame. This walk is bounded by viewport size, allocates
+    // no candidate cloud, and can short-circuit immediately.
+    const stepX = Math.max(48, halfWidth * 2 + margin * 2);
+    const stepY = Math.max(40, halfHeight * 2 + margin * 2);
+    const maxRadius = Math.max(
+      1,
+      Math.ceil(Math.max(viewport.width / stepX, viewport.height / stepY)) + 1,
+    );
+    /** Offer every distinct lattice point, nearest the ideal first, until the
+     *  visitor claims one by returning `true`. */
+    const walkLattice = (visit: (x: number, y: number) => boolean): void => {
       const seen = new Set<string>();
-      const clearAt = (dx: number, dy: number): { x: number; y: number } | null => {
+      const offer = (dx: number, dy: number): boolean => {
         const x = clamp(ideal.x + dx * stepX, minX, maxX);
         const y = clamp(ideal.y + dy * stepY, minY, maxY);
         const token = x.toFixed(2) + ":" + y.toFixed(2);
-        if (seen.has(token)) return null;
+        if (seen.has(token)) return false;
         seen.add(token);
-        return obstacles.some((rect) => intersects(x, y, rect)) ? null : { x, y };
+        return visit(x, y);
       };
       for (let radius = 0; radius <= maxRadius; radius += 1) {
         if (radius === 0) {
-          const center = clearAt(0, 0);
-          if (center) return center;
+          if (offer(0, 0)) return;
           continue;
         }
         for (let dx = -radius; dx <= radius; dx += 1) {
-          const top = clearAt(dx, -radius);
-          if (top) return top;
-          const bottom = clearAt(dx, radius);
-          if (bottom) return bottom;
+          if (offer(dx, -radius)) return;
+          if (offer(dx, radius)) return;
         }
         for (let dy = -radius + 1; dy < radius; dy += 1) {
-          const left = clearAt(-radius, dy);
-          if (left) return left;
-          const right = clearAt(radius, dy);
-          if (right) return right;
+          if (offer(-radius, dy)) return;
+          if (offer(radius, dy)) return;
         }
       }
-      return null;
+    };
+    const nearestClear = (obstacles: readonly DOMRect[]): { x: number; y: number } | null => {
+      let clear: { x: number; y: number } | null = null;
+      walkLattice((x, y) => {
+        if (obstacles.some((rect) => intersects(x, y, rect))) return false;
+        clear = { x, y };
+        return true;
+      });
+      return clear;
+    };
+    /** Slide the card along ONE axis until nothing in `covered` is underneath
+     *  it and nothing in `spaced` is within the ordinary margin of it, and
+     *  keep whichever of the two slides is shorter.
+     *
+     *  WHY A SLIDE AND NOT ANOTHER LATTICE WALK: the lattice's step IS the
+     *  card (200x122 here), because it exists to lay cards out beside each
+     *  other. The lane a card has to reach is narrower than one step — on a
+     *  fitted 1600x1000 desktop the keyboard's last key row ends at y≈526 and
+     *  the pads' first hooks begin at y≈645, so every position that covers no
+     *  endpoint at all lies inside a 20px window that no lattice ring can
+     *  land on. Asking for the nearest FREE COORDINATE instead of the nearest
+     *  lattice point costs one pass over the obstacles and lands in the lane.
+     *
+     *  Only axis-aligned slides are considered. An L-shaped move would open a
+     *  much larger search for a card that has, by construction, already failed
+     *  to find any fully clear lane; a slide that fails simply falls through to
+     *  the rung below, which is the behaviour this one improves on. */
+    const slideClear = (
+      covered: readonly DOMRect[],
+      spaced: readonly DOMRect[],
+    ): { x: number; y: number } | null => {
+      const blocked = (x: number, y: number): boolean =>
+        covered.some((rect) => intersects(x, y, rect, 0)) ||
+        spaced.some((rect) => intersects(x, y, rect));
+      /** The nearest value to `centre` inside [`min`, `max`] that no forbidden
+       *  interval contains. Every candidate is an interval EDGE — the shortest
+       *  move that clears an obstacle always stops exactly against one. */
+      const nearestFree = (
+        centre: number,
+        min: number,
+        max: number,
+        intervals: readonly (readonly [number, number])[],
+      ): number | null => {
+        if (min > max) return null;
+        const free = (value: number): boolean =>
+          intervals.every(([low, high]) => value <= low || value >= high);
+        let best: number | null = null;
+        const consider = (value: number): void => {
+          const candidate = clamp(value, min, max);
+          if (!free(candidate)) return;
+          if (best === null || Math.abs(candidate - centre) < Math.abs(best - centre)) {
+            best = candidate;
+          }
+        };
+        consider(centre);
+        for (const [low, high] of intervals) {
+          consider(low);
+          consider(high);
+        }
+        return best;
+      };
+      // Project only what actually stands in the way of THIS slide: a rect the
+      // card would pass beside rather than through constrains nothing.
+      const forbidden = (
+        axis: "x" | "y",
+      ): (readonly [number, number])[] => {
+        const half = axis === "x" ? halfWidth : halfHeight;
+        const otherHalf = axis === "x" ? halfHeight : halfWidth;
+        const otherCentre = axis === "x" ? ideal.y : ideal.x;
+        const intervals: (readonly [number, number])[] = [];
+        for (const [rects, pad] of [[covered, 0], [spaced, margin]] as const) {
+          for (const rect of rects) {
+            const otherLow = axis === "x" ? rect.top : rect.left;
+            const otherHigh = axis === "x" ? rect.bottom : rect.right;
+            if (otherCentre + otherHalf + pad <= otherLow) continue;
+            if (otherCentre - otherHalf - pad >= otherHigh) continue;
+            const low = axis === "x" ? rect.left : rect.top;
+            const high = axis === "x" ? rect.right : rect.bottom;
+            intervals.push([low - half - pad, high + half + pad] as const);
+          }
+        }
+        return intervals;
+      };
+      const x = nearestFree(ideal.x, minX, maxX, forbidden("x"));
+      const y = nearestFree(ideal.y, minY, maxY, forbidden("y"));
+      const candidates = [
+        y === null ? null : { x: ideal.x, y },
+        x === null ? null : { x, y: ideal.y },
+      ].filter((candidate): candidate is { x: number; y: number } =>
+        candidate !== null && !blocked(candidate.x, candidate.y));
+      let best: { x: number; y: number } | null = null;
+      let bestDistance = Infinity;
+      for (const candidate of candidates) {
+        const distance = Math.hypot(candidate.x - ideal.x, candidate.y - ideal.y);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best = candidate;
+        }
+      }
+      return best;
     };
     // Widget chrome remains operable even when the map forces the ideal node
     // away from the midpoint. On a phone all three boxes may not fit at once;
     // in that case the passive navigator may sit under the reachable card.
+    //
+    // ⚠️ A CARD MAY COVER A WIDGET'S QUIET ART; IT MAY NOT COVER A LIVE
+    // ENDPOINT. When no lane cleared every widget, this used to re-run the walk
+    // with the widgets dropped from the obstacle list, which hands back the
+    // clamped ideal: the midpoint between a key and the pad control it drives,
+    // i.e. somewhere on the biggest widget on the canvas. A 176x98 anchor then
+    // sat on the keyboard and swallowed every pointer event underneath it, so
+    // hovering the very key the card is wired FROM did nothing at all — no cord
+    // lit, no hook painted, and no way to tell that from a mapping that had
+    // silently stopped working. (Measured: with the lens in All scope, Player
+    // 2's card landed on the G key, whose two cords the card itself is drawn
+    // beside.) Whether a fully clear lane exists is a property of the CAMERA,
+    // not of the mapping: a fitted canvas whose widgets fill it has none, and
+    // that is an ordinary desktop at 1600x1000, not a pathological case.
+    //
+    // So the fallback narrows the claim instead of dropping it. What breaks
+    // when a card lands on a widget is not "pixels are hidden" but "an endpoint
+    // this lens is actively drawing a cord to can no longer be hovered, focused
+    // or clicked". `endpoints` is exactly that set — the resolved key and
+    // control elements of the routes on screen — and it stays absolute while
+    // the widget BODIES become negotiable. A card in the lane between the last
+    // key row and the first hook covers nothing that answers a pointer.
+    //
+    // ⚠️ SCORING EVERY CANDIDATE BY BURIED WIDGET AREA WAS TRIED AND WITHDRAWN.
+    // It reads as the obvious generalisation, and it is worse in both
+    // directions: the global minimum of that score is a canvas CORNER, so a
+    // card teleports away from the route it annotates, and because
+    // `#movementBaseOffset` continues from the position the user can see, the
+    // first nudge then persists the teleport — a measured `{x: -265, y: 402}`
+    // written by pressing "Move right" once. A rule that both loses the card
+    // and lies about where the user put it is not an improvement on covering a
+    // key; it is a second bug wearing the first one's clothes.
+    //
+    // ⚠️ ONLY AN AUTOMATIC CARD MAY BE RE-AIMED. A manual one is where a human
+    // dragged or nudged it, having LOOKED at this canvas; "you covered a key"
+    // is information they already had, and answering it by sliding the card
+    // somewhere else is overruling an explicit instruction — and, because the
+    // resolved position is what gets persisted, it also writes the override
+    // back as if it were the user's own choice. So a manual card keeps the
+    // original last two rungs exactly: hold the requested point, and give up
+    // only the navigator to do it.
+    const spareNavigator = navigator ? [...placedProcessors, navigator] : placedProcessors;
+    const live = placement === "auto" ? endpoints ?? [] : [];
     const adjustedScreen = nearestClear(navigator ? [...hardObstacles, navigator] : hardObstacles) ??
       nearestClear(hardObstacles) ??
-      nearestClear(navigator ? [...placedProcessors, navigator] : placedProcessors) ??
-      nearestClear(placedProcessors);
+      (live.length > 0
+        ? slideClear(live, spareNavigator) ?? slideClear(live, placedProcessors)
+        : null) ??
+      nearestClear(spareNavigator) ?? nearestClear(placedProcessors);
     if (!adjustedScreen) return null;
 
     const adjusted = this.#lines.createSVGPoint();

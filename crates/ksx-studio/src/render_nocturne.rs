@@ -30,6 +30,13 @@ const LIST_SLOT_DEVICES: &str = "list:nDevRows:array";
 const LIST_SLOT_EXP: &str = "list:nDevExp:array";
 const LIST_SLOT_OTHER: &str = "list:nDevOther:array";
 const LIST_SLOT_MODES: &str = "list:nModeRows:array";
+const LIST_SLOT_THEMES: &str = "list:nThemeRows:array";
+/// The SECOND `createList` over the same binding. Forma names a reused list
+/// binding with an occurrence suffix (docs/FORMA-DOGFOOD.md #12), so the edit
+/// disclosures under the saved-games menu are a distinct slot that must be
+/// served with the same rows — otherwise the walker warns "server-sourced slot
+/// has no value at render time" and the section renders empty server-side.
+const LIST_SLOT_GAMES_EDIT: &str = "list:nGameRows#2:array";
 const LIST_SLOT_RACK: &str = "list:nRackRows:array";
 const LIST_SLOT_RACK_EMPTY: &str = "list:nRackEmpty:array";
 const LIST_SLOT_PERSONAS: &str = "list:nPersonaRows:array";
@@ -440,6 +447,14 @@ fn game_row(row: &NocturneGameRow) -> SlotValue {
         ("meta".to_owned(), SlotValue::Text(row.meta.clone())),
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
         ("ico_cls".to_owned(), SlotValue::Text(row.ico_cls.clone())),
+        ("revision".to_owned(), SlotValue::Text(row.revision.clone())),
+        ("path".to_owned(), SlotValue::Text(row.path.clone())),
+        (
+            "arguments".to_owned(),
+            SlotValue::Text(row.arguments.clone()),
+        ),
+        ("slots".to_owned(), SlotValue::Text(row.slots.clone())),
+        ("preset".to_owned(), SlotValue::Text(row.preset.clone())),
     ])
 }
 
@@ -476,7 +491,7 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 43] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 45] {
     let view = &payload.view;
     [
         (
@@ -650,6 +665,14 @@ fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 43] {
         (
             LIST_SLOT_MODES,
             SlotValue::array(view.mode_rows.iter().map(mode_row).collect()),
+        ),
+        (
+            LIST_SLOT_THEMES,
+            SlotValue::array(view.theme_rows.iter().map(mode_row).collect()),
+        ),
+        (
+            LIST_SLOT_GAMES_EDIT,
+            SlotValue::array(view.game_rows.iter().map(game_row).collect()),
         ),
     ]
 }
@@ -825,7 +848,7 @@ mod tests {
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 43] = [
+        const SERVED_LIST_PREFIXES: [&str; 45] = [
             "list:nKeyRows:",
             "list:nAvailMain:",
             "list:nAvailNav:",
@@ -847,6 +870,11 @@ mod tests {
             "list:nDevRows:",
             "list:nDevExp:",
             "list:nGameRows:",
+            // The saved-games binding drives a SECOND `createList`, so the
+            // compiler gives that one an occurrence suffix. Both are served;
+            // leaving the suffixed name out renders the second list empty
+            // server-side and fills it only after adoption.
+            "list:nGameRows#2:",
             "list:nMacroRows:",
             "list:nLegend:",
             "list:nMacCols:",
@@ -868,6 +896,10 @@ mod tests {
             "list:nRackEmpty:",
             "list:nPersonaRows:",
             "list:nLayoutOpts:",
+            // The Studio theme picker, brought onto /nocturne when /setup was
+            // deleted: one row per shipped theme, served so the choice paints
+            // without scripting.
+            "list:nThemeRows:",
             "list:nSocdOpts:",
         ];
         const SERVED_SLOTS: [&str; 111] = [
@@ -1090,6 +1122,8 @@ mod tests {
             LIST_SLOT_KB[0],
             LIST_SLOT_KB[6],
             LIST_SLOT_MODES,
+            LIST_SLOT_THEMES,
+            LIST_SLOT_GAMES_EDIT,
             LIST_SLOT_RACK,
             LIST_SLOT_RACK_EMPTY,
             LIST_SLOT_PERSONAS,
@@ -1183,9 +1217,16 @@ mod tests {
     }
 
     /// The configuration menu is a native details, so its SERVED facts paint
-    /// on the SSR pass — the config identity, the games list, and the
-    /// sign-in task in /start's exact vocabulary — and its placeholder
-    /// sentence is gone for good.
+    /// on the SSR pass — the config identity, the games list, and the sign-in
+    /// task in the vocabulary the deleted /start page used to own — and its
+    /// placeholder sentence is gone for good.
+    ///
+    /// The verbs below are the ones that had to come WITH the deleted pages:
+    /// export and import (/setup), the saved-game and layout editors
+    /// (/profiles), the autostart task (/start), and the theme picker
+    /// (/setup). Every one of them posts to a /nocturne route now, and every
+    /// one works with scripting off — that is what makes the cutover a move
+    /// rather than a loss, so it is pinned here.
     #[test]
     fn nocturne_renders_the_served_configuration_menu() {
         let out = render_nocturne(&page(), &keyboard_payload(), None);
@@ -1198,7 +1239,20 @@ mod tests {
             // StartAutostartView's own words — one derivation, two surfaces.
             "ksx does not start on its own",
             "Start ksx when I sign in",
-            "/setup/export.json",
+            // Everything the deleted pages used to carry, on its new route.
+            "/nocturne/export.json",
+            "/nocturne/import",
+            "/nocturne/theme",
+            "/nocturne/game",
+            "/nocturne/game/update",
+            "/nocturne/game/delete",
+            "/nocturne/layout/rename",
+            "/nocturne/layout/delete",
+            "How the Studio looks",
+            "Import a configuration",
+            "Add a saved game",
+            // The import dry-run consent, which is the whole point of the box.
+            "nothing is written",
         ] {
             assert!(
                 out.html.contains(sentinel),

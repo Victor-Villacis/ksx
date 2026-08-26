@@ -1681,20 +1681,30 @@ mod tests {
     fn the_nav_reaches_every_sibling_page() {
         let page = EmbeddedPage::load("/devices").unwrap();
         let out = render_devices(&page, &cabinet(), None);
+        // One page owns the workflow now, so the four numbered steps that
+        // pointed at /start, /map and / are a single link.
         assert!(
-            out.html.contains(
-                r#"<a class="navlink workflow-link" href="/start#keyboard"><span class="workflow-num">1</span>Keyboard</a>"#
-            ),
+            out.html
+                .contains(r#"<a class="navlink workflow-link" href="/nocturne">"#),
             "{}",
             out.html
         );
-        assert!(
-            out.html.contains(
-                r#"<a class="navlink workflow-link" href="/map"><span class="workflow-num">3</span>Mapping</a>"#
-            ),
-            "{}",
-            out.html
-        );
+        // And nothing on this page may still point into a deleted one.
+        for dead in [
+            r#"href="/""#,
+            r#"href="/start"#,
+            r#"href="/map"#,
+            r#"href="/setup"#,
+            r#"href="/profiles"#,
+            r#"href="/workspace"#,
+        ] {
+            assert!(
+                !out.html.contains(dead),
+                "dead link {} still renders: {}",
+                dead,
+                out.html
+            );
+        }
         assert!(
             out.html
                 .contains(r#"<a href="/devices" aria-current="page">"#),

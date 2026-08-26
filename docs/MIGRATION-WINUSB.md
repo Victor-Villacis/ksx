@@ -54,12 +54,15 @@ only current path for it.
 
 ## Prepare in Studio
 
-1. Open KSX and go to `/start`.
-2. Pick the keyboard by its human-readable row. Picking changes only the
-   in-memory stage and never prepares a device.
-3. On a clean machine, open **Prepare this keyboard for play**. If a shared
-   Interception installation is already healthy, Play remains ready and the
-   secondary card reads **Use KSX's built-in Windows USB mode**.
+1. Open KSX. It lands on `/nocturne`, the one product page.
+2. Pick the keyboard by its human-readable row in the left pane's **Input
+   hardware** list. Picking changes only the in-memory stage and never prepares
+   a device.
+3. On a clean machine, the capture card beside that keyboard reads **Prepare
+   for play — Windows stops this keyboard's ordinary typing until it is
+   released here.** If a shared Interception installation is already healthy,
+   Play remains ready and the same card reads **Typing normally — the shared
+   driver is ready; preparing the built-in path is optional.** instead.
 4. Read and tick all three separate confirmations:
    - the different connected keyboard was tested typing;
    - this selected keyboard will stop ordinary typing until Release; and
@@ -147,8 +150,13 @@ exact installer hash and physical results.
 
 ## Release
 
-On `/start`, a freshly verified prepared keyboard shows **Release selected
-keyboard**. Tick the release confirmation and approve UAC. Release uses the
+On `/nocturne`, a freshly verified prepared keyboard shows **Release selected
+keyboard** on its capture card. ⚠ Only the keyboard currently selected shows
+that control: the stage-independent "keyboards ksx is holding" list did not
+survive the 2026-08-25 single-page cutover, so on a fresh install — where
+nothing is selected yet — there is no Release control on the page at all. Until
+that is restored, `docs/RECOVERY.md` §2b is the route back for a held board you
+cannot select. Tick the release confirmation and approve UAC. Release uses the
 ownership receipt; it does not accept a package name from the browser.
 
 The helper removes affected WinUSB devnodes, deletes only the receipt's exact

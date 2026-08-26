@@ -632,9 +632,12 @@ surface can still *read* everything. A mapper UI for macros is a later pass.
 
 #### What did not ship
 
-- ~~**No macro in the Studio mapper UI**~~ — shipped: the `/map` page has the
-  piano-roll editor, and since 2026-08-06 the `repeat` policy and its rate
-  with it.
+- ~~**No macro in the Studio mapper UI**~~ — shipped: the mapper's macro tabs
+  have the piano-roll editor, and since 2026-08-06 the `repeat` policy and its
+  rate with it. (That was the `/map` page then; since 2026-08-25 the mapper is
+  the centre and right panes of `/nocturne` and the editor came with it —
+  `/nocturne/macro/new`, `/nocturne/macro/delete`, `/nocturne/api/macro/edit`
+  and `/api/macro/save`.)
 - **No chord that starts a macro.** `macro.x = { key = "P", when = ["Q"] }`
   is refused rather than half-implemented; the guard would have to compose
   with consumption, and nothing asked for it yet.
@@ -712,9 +715,9 @@ Ordered by value on *this* machine, not by novelty.
 13. **Per-game auto-switching** of transforms, not just slots — the
     games.toml profile already exists; transforms should live at that
     layer too (a fighting profile with macros, a shmup profile with turbo).
-14. **Input display / recording.** Training-mode input history on the
-    Studio page: what the panel sent, what the pad published, side by
-    side. Doubles as the debugging tool for everything in this document
+14. **Input display / recording.** Training-mode input history on `/check`,
+    which is already the page that watches the live feed: what the panel
+    sent, what the pad published, side by side. Doubles as the debugging tool for everything in this document
     and reuses the replay-corpus machinery from M3.
 
 ### 2.6. SOCD cleaning — SHIPPED

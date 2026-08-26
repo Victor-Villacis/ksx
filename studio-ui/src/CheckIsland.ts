@@ -159,8 +159,8 @@ const [generatedAt, setGeneratedAt] = createSignal("");
 const [sourceLine, setSourceLine] = createSignal("");
 const [emptyHeading, setEmptyHeading] = createSignal("");
 const [emptyLine, setEmptyLine] = createSignal("");
-const [emptyHref, setEmptyHref] = createSignal("/start");
-const [emptyAction, setEmptyAction] = createSignal("Open setup");
+const [emptyHref, setEmptyHref] = createSignal("/nocturne");
+const [emptyAction, setEmptyAction] = createSignal("Open ksx Studio");
 const [feedHint, setFeedHint] = createSignal("");
 const [sessionLine, setSessionLine] = createSignal("");
 /** The FEED's own state line — the daemon's `unavailable` sentence, or this
@@ -207,26 +207,26 @@ function emptyState(mapper: MapperSnapshot): EmptyState | null {
     return {
       heading: "Mappings could not be checked",
       line:
-        "Reopen ksx, then use setup to confirm a controller and Mapping to check its buttons. Nothing was changed.",
-      href: "/start",
-      action: "Open setup",
+        "Reopen ksx, then set up a controller and check its buttons. Nothing was changed.",
+      href: "/nocturne",
+      action: "Open ksx Studio",
     };
   }
   if (mapper.slots.length === 0) {
     return {
       heading: "No controller is ready to test",
-      line: "Add a controller in setup, then come back to test its buttons.",
-      href: "/start",
-      action: "Open setup",
+      line: "Add a controller in ksx Studio, then come back to test its buttons.",
+      href: "/nocturne",
+      action: "Open ksx Studio",
     };
   }
   if (mapper.slots.every((slot) => Object.keys(slot.bindings).length === 0)) {
     return {
       heading: "No controls are ready to test",
       line:
-        "Open Mapping and choose a ready-made layout or add button keys, then come back here.",
-      href: "/map",
-      action: "Open Mapping",
+        "Open ksx Studio and choose a ready-made layout or add button keys, then come back here.",
+      href: "/nocturne",
+      action: "Open ksx Studio",
     };
   }
   return null;
@@ -293,8 +293,8 @@ export function applyCheck(p: CheckPayload): void {
   const empty = emptyState(p.mapper);
   setEmptyHeading(empty?.heading ?? "");
   setEmptyLine(empty?.line ?? "");
-  setEmptyHref(empty?.href ?? "/start");
-  setEmptyAction(empty?.action ?? "Open setup");
+  setEmptyHref(empty?.href ?? "/nocturne");
+  setEmptyAction(empty?.action ?? "Open ksx Studio");
 
   const rows: ControlChip[] = [];
   const missing: EmptyPlayerRow[] = [];
@@ -302,9 +302,9 @@ export function applyCheck(p: CheckPayload): void {
     if (Object.keys(slot.bindings).length === 0) {
       missing.push({
         player: `Player ${slot.number} has no controls yet`,
-        line: "Open Mapping and choose a ready-made layout or add button keys for this player.",
-        href: `/map?slot=${slot.number}`,
-        action: "Open Mapping",
+        line: "Open ksx Studio and choose a ready-made layout or add button keys for this player.",
+        href: `/nocturne?slot=${slot.number}`,
+        action: "Open ksx Studio",
       });
     }
     for (const control of Object.keys(slot.bindings)) {
@@ -366,10 +366,10 @@ export function CheckIsland() {
       h(
         "nav",
         { class: "topnav workflow-nav", "aria-label": "Set up and play" },
-        h("a", { class: "navlink workflow-link", href: "/start#keyboard" }, h("span", { class: "workflow-num" }, "1"), "Keyboard"),
-        h("a", { class: "navlink workflow-link", href: "/start#controller" }, h("span", { class: "workflow-num" }, "2"), "Controller"),
-        h("a", { class: "navlink workflow-link", href: "/map" }, h("span", { class: "workflow-num" }, "3"), "Mapping"),
-        h("a", { class: "navlink workflow-link", href: "/" }, h("span", { class: "workflow-num" }, "4"), "Play"),
+        // One page now owns the whole set-up-and-play workflow, so the four
+        // numbered steps that pointed at /start, /map and / collapse into the
+        // single link that actually goes somewhere.
+        h("a", { class: "navlink workflow-link", href: "/nocturne" }, "Set up & play"),
       ),
       h(
         "details",
@@ -379,10 +379,9 @@ export function CheckIsland() {
           "nav",
           { class: "appmenu-panel", "aria-label": "Studio tools" },
           h("a", { href: "/check", "aria-current": "page" }, h("span", null, "Test inputs"), h("small", null, "Live controller feedback")),
-          h("a", { href: "/profiles" }, h("span", null, "Game library"), h("small", null, "Saved launch profiles")),
           h("a", { href: "/devices" }, h("span", null, "Hardware"), h("small", null, "Devices and recovery")),
           h("a", { href: "/pads" }, h("span", null, "Virtual controllers"), h("small", null, "Inspect and test pads")),
-          h("a", { href: "/setup" }, h("span", null, "Import & recovery"), h("small", null, "Advanced configuration")),
+          h("a", { href: "/nocturne" }, h("span", null, "Set up & play"), h("small", null, "Keyboard, controllers, games and configuration")),
         ),
       ),
     ),
@@ -399,7 +398,7 @@ export function CheckIsland() {
           h("p", { class: "sub" }, () => sourceLine()),
           h("p", { class: "product-hidden" }, () => generatedAt()),
         ),
-        h("a", { class: "btn", href: "/map" }, "Edit mapping"),
+        h("a", { class: "btn", href: "/nocturne" }, "Edit mapping"),
       ),
 
     // **The no-JS truth, first and unmissable.** This whole page is a live

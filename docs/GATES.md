@@ -27,9 +27,12 @@ gate should follow it top to bottom and never improvise past a failed step.
 
 ## Shared rules (cabinet gates 1–3)
 
-- **conhost, not Windows Terminal.** Windows Terminal 1.24/1.25 fail-fasts when
-  virtual pads send input — even as a background window — taking every tab with
-  it, ksx included (`RECOVERY.md`, "Known environment hazard"). `Win+R` →
+- **conhost, not Windows Terminal.** Affected Windows Terminal builds fail-fast
+  when virtual pads send input — even as a background window — taking every tab
+  with it, ksx included (`RECOVERY.md`, "Known upstream hazard: affected Windows
+  Terminal builds can exit on gamepad input", which names the upstream issues
+  and says to use a release containing the fix). Do not run this gate on a
+  build you have not checked: `Win+R` →
   `conhost.exe`, run ksx there. The tray daemon
   and the frontend wrapper are immune (no Terminal attachment); every
   *interactive* ksx command in these gates is not.
@@ -315,7 +318,7 @@ they are never touched.
 
 The synthetic path above is observer evidence, never a value the user types or
 pastes. A real instance may be serial-derived or topology-derived. Record what
-the survey prints, then identify the same human-named row in `/start` and choose
+the survey prints, then identify the same human-named row in `/nocturne` and choose
 it there.
 
 **ABORT if:** count is 1 (Prepare would refuse anyway — fix the spare first);
@@ -325,10 +328,20 @@ disconnect the twin and rescan.
 
 ## Step 2 — read and prove the three confirmations
 
-With the exact row selected, a clean machine must show **Prepare this keyboard
-for play**. A machine that retains a healthy shared Interception installation
-must stay Play-ready but still show the secondary **Use KSX's built-in Windows
-USB mode** card.
+With the exact row selected, a clean machine must show the capture card in its
+prepare branch — summary *"Prepare for play — Windows stops this keyboard's
+ordinary typing until it is released here."*, button **Prepare selected
+keyboard**. A machine that retains a healthy shared Interception installation
+must stay Play-ready but still offer the built-in path as an option, with the
+summary reading *"Typing normally — the shared driver is ready; preparing the
+built-in path is optional."*
+
+(These are quotations from `snapshot.rs`'s `cap_line` match, checked 2026-08-25.
+Earlier revisions of this file quoted **Prepare this keyboard for play** and
+**Use KSX's built-in Windows USB mode**, neither of which is a string the
+product has ever rendered — an operator following the old wording would have
+looked for buttons that were not there and had no way to tell a renamed control
+from a missing one.)
 
 First submit with each checkbox omitted in turn. **Expect:** a safe refusal,
 no UAC prompt, unchanged stage, unchanged device binding and no new receipt.
@@ -381,7 +394,7 @@ untouched — `RECOVERY.md` §2f).
 
 ## Step 5 — prove the guarded staged transition
 
-Return to `/start` without saving. **Expect:** the same human-named device is
+Return to `/nocturne` without saving. **Expect:** the same human-named device is
 selected, the capture card is the verified Release branch, and Save/Play
 readiness now treats capture as ready. The observer may export the in-memory
 API payload and confirm `staged.device.backend == "winusb"`; the browser form
@@ -401,7 +414,7 @@ the fresh exact WinUSB survey.
 ## Step 6 — verify capture
 
 Still without saving, add four controllers from the known in-box four-player
-layout, answer split-or-freeze, and choose **Play now**. Press a handful of
+layout, answer split-or-freeze, and choose **▷ Play**. Press a handful of
 panel keys in Game Controllers.
 
 **Expect:** the configured virtual controls move and every press releases. Stop
@@ -445,7 +458,7 @@ worthy findings, not things to live with.
 
 ## Step 8 — release
 
-On `/start`, tick the distinct Release confirmation and choose **Release
+On `/nocturne`, tick the distinct Release confirmation and choose **Release
 selected keyboard**. Approve UAC.
 
 **Expect:** one UAC prompt, no console, then owned copy saying the keyboard was
@@ -673,8 +686,16 @@ admit an empty implicit setup as an idle control host; API and HTTP tests cover
 three server-validated consents, exact revalidation, canonical
 `prepared`/`released`, guarded backend transitions, staged bindings, macros,
 Play-before-Save and profile create/update/delete/switch;
-template and Studio tests pin the two default Guide keys and the direct Game Bar
-Settings link.
+template and Studio tests pin the two default Guide keys — P1 `LeftWindows` and
+P2 Numpad `*` — in `crates/ksx-api/src/stage.rs` and
+`crates/ksx-core/src/templates.rs`.
+
+They do **not** pin a Game Bar Settings link, because there is not one. A grep
+for `gamebar` / `ms-settings` across `crates/`, `studio-ui/src`,
+`studio-ui/pwtest` and `packaging/` returns four prose comments and no control,
+no URL and no test. Phase 5 step 1 below says the same thing and is the
+authority; this paragraph used to claim the coverage that step says is missing,
+which is the exact shape of error this section exists to prevent.
 
 Those tests cannot prove that UAC returned to the original user, no console
 flashed, the machine-local certificate/package worked on this Windows machine,
@@ -710,7 +731,7 @@ substitute for this physical run.
   user; its controller setting starts disabled so the on-screen prerequisite
   and remedy are exercised.
 - Screen-record from before the installer Finish button through the first
-  `/start` paint if possible. A two-second console flash is a failure that a
+  `/nocturne` paint if possible. A two-second console flash is a failure that a
   screenshot taken afterward cannot capture.
 - The observer records the pre-run controller list, process list and ksx file
   state. These are observations, not instructions shown to the test user.
@@ -753,15 +774,23 @@ does not pass this release gate.
 
 1. Leave **Launch ksx** ticked on Finish and click Finish. Watch the whole
    handoff. **No console window may appear, even briefly.**
-2. The customer gets one chrome-less ksx app window at `/start`, not a terminal,
-   the status dashboard or a normal browser tab. It has no address bar and does
-   not ask the user to choose a URL.
+2. The customer gets one chrome-less ksx app window at `/nocturne`, not a
+   terminal and not a normal browser tab. It has no address bar and does not ask
+   the user to choose a URL. *(Since the 2026-08-25 cutover there is no second
+   page it could land on by mistake — there is one product page. That cutover
+   did briefly leave `ksx open` requesting the deleted `/start`, which put the
+   customer's first window on a 404 with no way to type a different address;
+   fixed in `ad520b4` on 2026-08-26, and `crates/ksx-backend/src/studio_launch.rs`
+   now returns `/nocturne` in both the URL builder and the `--app=` argument,
+   with a test pinning it. Confirm the address in the window title/history
+   anyway — every phase below starts from this window, and this is the second
+   time this exact target has been wrong.)*
 3. In Task Manager's **User name** and **Command line** columns, confirm both
    surviving `ksx.exe` children — `daemon` and `studio --port 4460` — belong to
    the fresh standard user, not the administrator whose credentials satisfied
    UAC. Confirm the browser profile was created below that user's
    `%LOCALAPPDATA%\ksx`, not the administrator's profile.
-4. With no `[[slot]]` configured, `/start` must report the daemon reachable and
+4. With no `[[slot]]` configured, `/nocturne` must report the daemon reachable and
    idle. The process stays alive as the staging control host, while no keyboard
    is captured and no virtual controller exists. The keyboard still types and
    Game Controllers shows zero ksx pads.
@@ -770,7 +799,7 @@ does not pass this release gate.
    either to operate. Neither disabled item may create a window, capture a key
    or plug a pad.
 6. Close the app window, use the desktop shortcut once and the single Start-menu
-   entry once. Each opens `/start` without a console flash; neither creates a
+   entry once. Each opens `/nocturne` without a console flash; neither creates a
    second customer-facing product entry or asks for elevation.
 
 **PASS Phase 2:** the elevated installer has handed off to the original
@@ -779,9 +808,11 @@ healthy idle first-run state rather than a daemon startup refusal.
 
 ## Phase 3 — author in memory, Play before Save, then prove Save parity
 
-1. On `/start`, choose Keyboard A by its human-readable name. Because
-   Interception is absent, Save/Play must remain blocked by **Prepare this
-   keyboard for play**. Verify omitted confirmations refuse without UAC. Tick
+1. On `/nocturne`, choose Keyboard A by its human-readable name. Because
+   Interception is absent, Save/Play must remain blocked by the capture card,
+   whose summary reads *"Prepare for play — Windows stops this keyboard's
+   ordinary typing until it is released here."* and whose button is **Prepare
+   selected keyboard**. Verify omitted confirmations refuse without UAC. Tick
    the tested-Keyboard-B, typing-consequence/identical-model, and machine-local
    certificate confirmations, then approve UAC with the separate administrator.
    No console may flash. Keyboard A stops ordinary typing; B still types.
@@ -792,18 +823,19 @@ healthy idle first-run state rather than a daemon startup refusal.
    standard user. Add two Xbox 360
    controllers using the in-box two-player keyboard layout. Do not click Save.
 3. Open each staged controller's mapper. Change one ordinary binding and create
-   a small, visibly testable macro plus its trigger. Return to `/start` and
+   a small, visibly testable macro plus its trigger. Return to the top of
+   `/nocturne` and
    answer **split or freeze**. Change one choice and change it back once: looking
    and reconsidering must remain free.
 4. The observer compares `config.toml`, the preset directory and backups with
    the pre-run state. Staging bindings and macros must have written none of
    them. A refusal, if deliberately exercised with a duplicate key, must leave
    the staged view unchanged.
-5. Click **Play now** without ever clicking Save. Two controllers must appear.
+5. Click **▷ Play** without ever clicking Save. Two controllers must appear.
    In Game Controllers and the known game, verify the changed binding and macro
    exactly match what the staged mapper showed. Confirm no config, preset or
    backup was created by Play.
-6. Stop the session from Studio. Click **Save this setup** once, close ksx, and
+6. Stop the session from Studio (**⏹ Stop**). Click **Save** once, close ksx, and
    launch it again from the customer shortcut. Start the saved setup and verify
    the same devices, personas, binding, macro and split/freeze choice. Saving is
    now allowed to create the config/preset files; restarting must not translate
@@ -814,57 +846,77 @@ worked with one UAC/no console and the spare intact; staged editing and Play
 were memory-only; the staged mapper was the behavior that ran; and the first
 explicit Save survives a complete stop/relaunch with identical output.
 
-## Phase 4 — profile create, switch, edit, refresh and delete in Studio
+## Phase 4 — saved-game create, switch, edit, refresh and delete in Studio
 
-1. From `/profiles`, create a profile for the known game, select the saved
-   **controller layout** and choose two players. Do not open TOML or a terminal.
-   Immediately switch to that profile and start it: a Studio-created profile
-   must be runnable because its slots inherited the working base device
-   selectors.
-2. Edit that profile's title, program/game link or arguments, player count and
-   controller layout through the visible form. Leave **Use the device choices
-   currently saved in Setup** unchecked. Save, reopen the editor and start it
-   again; the existing Keyboard A selectors must have been preserved.
-3. Stop the session. Return to `/start`, confirm **Release selected keyboard**,
+> **Step 4 cannot currently be performed and this phase cannot pass.** The
+> explicit device-refresh choice has no control on `/nocturne`. The backend
+> capability is intact — `UpdateProfile::rebase_devices` still exists and
+> `nocturne_form_game_update` still reads a `rebase_devices` form field — but
+> the edit form renders Name, Program to launch, Arguments, Players and
+> Controller layout and nothing else, so the field always arrives at its
+> default and the refresh can never be asked for. Restore the checkbox (and its
+> label) in Studio before scheduling this phase; do not "pass" it by skipping
+> the step, because step 4 is the only one of the five that proves the refresh
+> semantics rather than the preservation ones.
+
+1. Open the Configuration menu (the **▣** chip in the top bar), find **Saved
+   games**, and use **Add a saved game…** to create one for the known game:
+   fill Name, Program to launch, Players = 2 and Controller layout, then **Save
+   this game**. Do not open TOML or a terminal. Immediately load it (click its
+   row) and start it: a Studio-created saved game must be runnable because its
+   slots inherited the working base device selectors.
+2. Edit that saved game's title, program link or arguments, player count and
+   controller layout through **Edit &lt;title&gt;…** → **Save changes**. Reopen the
+   editor and start it again; the existing Keyboard A selectors must have been
+   preserved.
+3. Stop the session. Return to `/nocturne`, confirm **Release selected keyboard**,
    approve UAC and prove Keyboard A is HidUsb/typing with its package and exact
-   certificate/key artifacts absent. Then choose **Start over**, select Keyboard
+   certificate/key artifacts absent. Then use the Configuration menu's **Start
+   over…** → **Discard this draft**, select Keyboard
    B, and repeat all three Prepare confirmations with A now serving as the
    tested spare. Approve UAC; B stops ordinary typing and A remains usable.
    Stage the same two controllers, layout and split/freeze answer. Repeat the
    deliberately changed binding and macro from Phase 3 before Save so this
-   device-only test does not replace the behavior already proved. Click **Save
-   this setup**. The observer now uses `/setup`'s **Export — download this
-   configuration** control and keeps the JSON as `before-rebase`; this is
+   device-only test does not replace the behavior already proved. Click
+   **Save**. The observer now uses the Configuration menu's **Export the
+   configuration (download)** link and keeps the JSON as `before-rebase`; this is
    technical evidence, not a document the customer has to read or edit. Require
    the base slots to name Keyboard B while the target profile still names
    Keyboard A.
-4. Reopen the profile editor, change no ordinary field, tick **Use the device
-   choices currently saved in Setup**, and save. The observer exports again as
-   `after-rebase` and compares the two documents. In exactly the target profile,
-   each slot's `keyboard`/`mouse` selectors must now match the corresponding
-   Keyboard B base slot. Its `persona`, `socd`, `macros` and controller-layout
-   (`preset`) values must be byte-for-byte unchanged, as must every unrelated
-   profile. A success flash or unchanged visible row is not evidence for this
-   step; the exported before/after values are.
-5. Delete the renamed profile using its confirmation. Exactly that profile
-   disappears; unrelated profiles and the selected controller layout remain.
-   Refresh the page and restart ksx once to prove the result was not only
-   browser state.
+4. Reopen the saved-game editor, change no ordinary field, tick the explicit
+   device-refresh box, and save. The observer exports again as `after-rebase`
+   and compares the two documents. In exactly the target profile, each slot's
+   `keyboard`/`mouse` selectors must now match the corresponding Keyboard B base
+   slot. Its `persona`, `socd`, `macros` and controller-layout (`preset`) values
+   must be byte-for-byte unchanged, as must every unrelated profile. A success
+   flash or unchanged visible row is not evidence for this step; the exported
+   before/after values are. **Blocked — see the note above: that box is not
+   rendered today.**
+5. Delete the renamed saved game with **Edit &lt;title&gt;…** → **Yes, remove it** →
+   **Remove this saved game**. Exactly that game disappears; unrelated games and
+   the selected controller layout remain. Refresh the page and restart ksx once
+   to prove the result was not only browser state.
 
 **PASS Phase 4:** create → switch/play → edit → explicit device refresh → delete
 is complete in Studio, with no config-file editing or CLI remedy. The two
 exports prove creation/preservation/refresh semantics rather than asking the
-normal profile row to expose device-selector jargon.
+normal saved-game row to expose device-selector jargon.
 
 ## Phase 5 — real pad output and the Game Bar prerequisite
 
-1. Return to `/start` and use **Open Windows Game Bar settings**. It must open
+1. Return to `/nocturne` and use the on-page control that opens
    `ms-settings:gaming-gamebar` directly. Confirm ksx did not silently change
    the preference, then enable **Allow your controller to open Game Bar** for
-   this user.
+   this user. **Blocked:** no such control exists on any page — a grep for
+   `gamebar` / `ms-settings` across `crates/ksx-studio` and `studio-ui` finds
+   nothing, and `StartDerived::guide_line` is a field with no writer.
+   `FIRST-RUN.md` §7 requires the remedy; it has never shipped. Until it does,
+   enable the setting by hand and record the step as UNPROVEN rather than PASS,
+   because "the user reached this setting without being told what to do next by
+   us" is the thing this step measures.
 2. Play the saved two-controller setup on Keyboard B. Confirm both virtual
-   controllers move in Game Controllers and the known XInput game, not only on
-   ksx's own status page.
+   controllers move in Game Controllers and the known XInput game, not only in
+   ksx's own reading of its pads.
 3. Press Player 1's default **Left Windows = Guide** key and observe Game Bar
    open from the virtual controller. Close it. Press Player 2's default
    **Numpad `*` = Guide** key and observe it open again. Seeing the mapping in
@@ -931,7 +983,7 @@ new hash, and restart this gate from Phase 1.
 - Helper/provider/source/ProgramData ACL and read-only-receipt evidence:
 - Start + desktop shortcut targets / extra customer shortcuts:
 - Original-user process + browser-profile evidence / console-flash result:
-- Empty-config idle `/start` / capture state / initial pad count:
+- Empty-config idle `/nocturne` / capture state / initial pad count:
 - Keyboard A three consents/UAC/no-console/receipt/package/public-only cert/private-key absence:
 - Keyboard A Release cleanup / Keyboard B Prepare repeat:
 - Staged binding + macro / before-Play disk comparison / Play result:

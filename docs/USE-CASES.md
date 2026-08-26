@@ -56,16 +56,22 @@ encoder models are the honest supported workaround.
 The product path for a new user begins in Studio:
 
 - The installer creates one console-free customer launcher and optionally runs
-  it as the original, unelevated Windows user. It opens `/start`, not Status.
+  it as the original, unelevated Windows user. It opens the product page, not a
+  diagnostic. (The contrast used to be `/start` versus Status; since 2026-08-25
+  there is one product page, `/nocturne`, and no status page to land on by
+  mistake — the launcher's own target still names the deleted `/start` and must
+  be corrected before this bullet is true.)
 - An empty configuration starts an idle background service with no capture,
   virtual controllers, or session. Setup can therefore hold a fresh in-memory
   draft instead of deadlocking on the absence of a saved controller.
 - Setup lists ordinary keyboards first and unusual HID-capable devices in a
   separate optional disclosure. Device choice, controller type, layout, and
   split/freeze answer remain drafts until Save or Play.
-- `/map?target=stage` reuses the complete visual mapper for bindings, multiple
-  keys, auto-fire, and macros. Staged writes are exact-slot, atomic operations;
-  a refusal leaves the draft unchanged.
+- The same page reuses the complete visual mapper for bindings, multiple keys,
+  auto-fire, and macros — `/nocturne?slot=N` points it at one player. (It was
+  `/map?target=stage` until the cutover; there is only one target now.) Staged
+  writes are exact-slot, atomic operations; a refusal leaves the draft
+  unchanged.
 - Save and Play are separate. Play can use the draft without writing it; Save
   does not start a session.
 - Saved Games supports create, switch, edit, optional device rebase, and delete

@@ -317,7 +317,18 @@ jobs:
           $notes = $notes.Replace('{{MANIFEST_NAME}}', $env:MANIFEST_NAME)
           $notes = $notes.Replace('{{MANIFEST_SHA256}}', $env:MANIFEST_SHA256)
           $notes = $notes.Replace('{{COMMIT}}', $env:GITHUB_SHA)
-          if ($notes -match '\{\{([A-Z_]+)\}\}') {
+          # `0-9` is load-bearing, and its absence made this guard a no-op for
+          # the three placeholders most worth guarding. The class used to be
+          # `[A-Z_]+`, which cannot match `SETUP_SHA256`, `PORTABLE_SHA256` or
+          # `MANIFEST_SHA256` — i.e. every hash on the page, the exact text the
+          # "Verify it" section tells a stranger to compare against. Five of
+          # the template's eight placeholders were checked and the three that
+          # carry the verification story were not. The Rust test above is the
+          # gate that actually catches a newly added placeholder; this is the
+          # last line of defence on the runner, and a last line of defence that
+          # silently skips the interesting cases is worse than none, because it
+          # reads like coverage.
+          if ($notes -match '\{\{([A-Z0-9_]+)\}\}') {
             throw "packaging/release-notes.md still holds an unsubstituted placeholder: {{$($Matches[1])}}"
           }
           Set-Content -Path 'notes.md' -Value $notes -Encoding utf8
@@ -414,13 +425,24 @@ jobs:
           if (-not [bool]$remote.isDraft -or $remoteAssets.Count -ne $expected.Count) {
             throw 'release upload did not leave one private draft with exactly three assets'
           }
+          # `$found`, NOT `$matches`. PowerShell variable names are
+          # case-insensitive, so `$matches` IS the automatic `$Matches` that
+          # `-match` and `switch -regex` overwrite. It happens to work today
+          # because nothing between the assignment and the read runs `-match`
+          # — verified on pwsh 7.6.5 — but that is a property of the current
+          # body of this loop, not of the language, and the failure it invites
+          # is the worst kind available here: a later `-match` anywhere above
+          # the read leaves `$matches` holding regex groups, `.Count` becomes
+          # the group count, and a mismatched or duplicated asset sails
+          # through the last check standing between a bad upload and an
+          # IMMUTABLE public release. Renaming costs nothing.
           foreach ($entry in $expected.GetEnumerator()) {
-            $matches = @($remoteAssets | Where-Object {
+            $found = @($remoteAssets | Where-Object {
               [string]$_.name -ceq [string]$entry.Key -and
                 [long]$_.size -eq [long]$entry.Value.size -and
                 [string]$_.digest -ieq [string]$entry.Value.digest
             })
-            if ($matches.Count -ne 1) {
+            if ($found.Count -ne 1) {
               throw "draft asset '$($entry.Key)' is missing, duplicated, or has the wrong size/digest"
             }
           }

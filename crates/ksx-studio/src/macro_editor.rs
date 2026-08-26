@@ -597,7 +597,7 @@ impl NocturneMacroEditor {
                 }
                 _ => format!("/nocturne?slot={number}"),
             },
-            map_href: format!("/map?target=stage&slot={number}&macro={}", mac.name),
+            map_href: format!("/nocturne?slot={number}&macro={}", mac.name),
             cols,
             groups,
             rows,

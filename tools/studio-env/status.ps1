@@ -1,3 +1,58 @@
+<#
+.SYNOPSIS
+    What is running on every lane, whether it is healthy, and whether it is
+    current. Read-only.
+
+.DESCRIPTION
+    Lists every manual and default Playwright port with its state, watcher
+    state and provenance. Three separate facts, and conflating them is how a
+    stale page becomes QA evidence:
+
+      Healthy             the recorded processes, listener, fixture/live
+                          identity and daemon endpoints all agree.
+      ProvenanceComplete  the managed receipt carries all four exact
+                          identities: runtime source graph, Studio authoring
+                          graph, Rust zone-producer graph, generated assets.
+      Current             stricter -- those four identities must equal the
+                          checkout NOW, and the generated files on disk must
+                          still hash to their receipt. A healthy previous
+                          artifact can therefore stay usable while a new edit
+                          builds, without being mislabeled current.
+
+    Safe to run at any time, including in the middle of a build: assets/ is
+    deleted and rewritten by every asset build, and this report is written to
+    survive that window rather than to report a torn read as a failure.
+
+.PARAMETER Environment
+    Report one lane instead of the whole table. The test-* names are
+    Playwright-owned; they are listed so a stray process is visible, never so a
+    person starts one.
+
+.PARAMETER Json
+    Stable automation output. The table is for people; both include watcher
+    state.
+
+.PARAMETER RequireHealthy
+    Exit nonzero unless every selected lane is healthy.
+
+.PARAMETER RequireCurrent
+    Exit nonzero unless every selected lane is current. Independent of
+    -RequireHealthy on purpose -- see the three facts above.
+
+.PARAMETER SkipCurrentVerification
+    For watch mode only, which already hashes the source graph itself. Keeps its
+    health reconciliation cheap while people and deployment gates keep the
+    default exact-current audit.
+
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/status.ps1
+
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/status.ps1 -Environment real -RequireHealthy -RequireCurrent
+
+.LINK
+    docs/STUDIO-ENVIRONMENTS.md
+#>
 [CmdletBinding()]
 param(
     [ValidateSet(
@@ -13,8 +68,7 @@ param(
         "test-theme-dark",
         "test-theme-light",
         "test-theme-matrix",
-        "first-run",
-        "blank-encoder"
+        "first-run"
     )]
     [string]$Environment,
 
@@ -52,8 +106,40 @@ $Definitions = @(
     @{ Name = "test-theme-light"; Port = 4511; Id = "fixture-seeded-demo"; Fixture = $true; TestOwned = $true }
     @{ Name = "test-theme-matrix"; Port = 4512; Id = "fixture-seeded-demo"; Fixture = $true; TestOwned = $true }
     @{ Name = "first-run"; Port = 4520; Id = "fixture-first-run"; Fixture = $true; Record = "first-run" }
-    @{ Name = "blank-encoder"; Port = 4521; Id = "fixture-blank-encoder"; Fixture = $true; Record = "blank-encoder" }
 )
+# The three theme lanes above are hand-kept, but nothing hand-keeps the
+# fixtures that occupy them: studio-ui/pwtest/visual-smoke.test.mjs spawns one
+# per entry in crates/ksx-studio/assets/themes.json, at KSX_PWTEST_THEME_PORT
+# (default 4510) plus that entry's index. Add a fourth theme and a fourth
+# fixture appears on 4513 -- a port this table cannot report, and one no other
+# roster reserves either. The lane names are also -Environment's ValidateSet
+# values, so this table cannot simply be derived from that file; the honest
+# alternative is to notice the drift out loud the first time anyone asks for
+# status. Warn rather than throw, and only when the file is actually readable:
+# assets/ is deleted and rewritten by every build (see build-assets.ps1), and a
+# status report must survive being run in the middle of one.
+try {
+    $ThemesManifest = Join-Path $RepoRoot "crates\ksx-studio\assets\themes.json"
+    if (Test-Path -LiteralPath $ThemesManifest -PathType Leaf) {
+        $ThemeFirstPort = 4510
+        $ManifestThemes = @((Get-Content -LiteralPath $ThemesManifest -Raw | ConvertFrom-Json).themes)
+        $ExpectedThemeLanes = @(
+            for ($ThemeIndex = 0; $ThemeIndex -lt $ManifestThemes.Count; $ThemeIndex += 1) {
+                "test-theme-$([string]$ManifestThemes[$ThemeIndex].id):$($ThemeFirstPort + $ThemeIndex)"
+            }
+        )
+        $ListedThemeLanes = @(
+            $Definitions |
+                Where-Object { [string]$_.Name -like "test-theme-*" } |
+                ForEach-Object { "$([string]$_.Name):$([int]$_.Port)" }
+        )
+        if (($ExpectedThemeLanes -join ", ") -cne ($ListedThemeLanes -join ", ")) {
+            Write-Warning "Theme lane roster is stale: themes.json spawns [$($ExpectedThemeLanes -join ', ')] but this roster reports [$($ListedThemeLanes -join ', ')]. Fixtures on unlisted ports are invisible here. Update the table above, -Environment's ValidateSet, and docs/STUDIO-ENVIRONMENTS.md."
+        }
+    }
+} catch {
+    Write-Warning "Theme lane roster could not be checked against themes.json: $($_.Exception.Message)"
+}
 if (($RequireHealthy -or $RequireCurrent) -and [string]::IsNullOrWhiteSpace($Environment)) {
     throw "-RequireHealthy and -RequireCurrent require one explicit -Environment so stopped, test-owned ports are never treated as an implicit deployment gate."
 }

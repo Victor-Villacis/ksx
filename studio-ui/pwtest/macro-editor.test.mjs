@@ -1,17 +1,84 @@
 // The macro editor's duration controls, in a real browser.
 //
 // WHY THIS LEVEL: everything that went wrong here lives in the client island
-// and nowhere else — which step the editor points at, the unit that step was
-// authored in, and the 2 s poll that re-seeds the draft from the file. Rust
-// cannot see any of it (the server only serves the preset), and neither can a
-// render test. So these drive the real page against a real ksx Studio, wired
-// to a fixed preset by `cargo run -p ksx-studio --example macro_fixture`.
+// and nowhere else — which unit a step was authored in, the 2 s poll that
+// re-seeds the draft from the staged setup, and what the row says it holds.
+// Rust cannot see any of it (the server only serves the table), and neither
+// can a render test. So these drive the real page against a real ksx Studio,
+// wired to a fixed staged setup by `cargo run -p ksx-studio --example
+// macro_fixture`.
 //
 // Regression covered here: selecting a step was not treated as an edit, so the
 // poll's re-seed treated the draft as untouched and cleared the selection two
 // seconds later. With no step selected, the unit control had nothing to
 // describe; `macroSetUnit` found nothing to set, and the sync after the poll
 // wrote "ms" back over the author's choice just as the pointer arrived.
+//
+// ── THE 2026-08-25 CUTOVER, and what it did to this file ───────────────────
+//
+// This suite was written against `/map`, which no longer exists — `/nocturne`
+// is the whole product now and `/map` answers 404. The macro editor did not
+// go with it: it MOVED, from a `<details>` card on the mapper into a dialog on
+// `/nocturne` opened by the URL itself (`?slot=1&macro=<name>`), with every
+// class renamed to an `n-` prefix. The behaviour under test is the same code
+// path, so nearly every test here is a port, not a rewrite. Three things did
+// genuinely change shape, and each one cost a test or an assertion:
+//
+//  1. PER-STEP SELECTION IS GONE. There is no `sel|N` verb and no "step 1 of
+//     3 — 140 ms" line; the duration boxes live on the rows, so there is
+//     nothing left for a selection to point at. The test that guarded the
+//     selection across the poll is DELETED — its own comment already said the
+//     boxes-on-rows fix had made selection non-load-bearing — and the
+//     `selectedRow` / `stepLine` assertions elsewhere went with it.
+//
+//  2. THE TOAST + UNDO SYSTEM IS GONE. The editor answers on ONE `role=status`
+//     line (`.n-macsay`, plus `.n-macsay warn` / `.n-macsay err`) fed by
+//     `macSay()`, and nothing hands back an 8-second undo closure. Every
+//     "…and it says so" assertion is re-pointed at that line — the sentences
+//     are still produced, by `macro_draft.rs`, and several changed wording, so
+//     they are asserted against what the server actually says today. The test
+//     whose ENTIRE subject was an undo closure outliving a macro switch is
+//     DELETED: no undo, and only one macro exists to switch to.
+//
+//  3. THE THREE-BUTTON SHORT-STEP CONFIRMATION IS GONE. `.macconfirm` with
+//     "Not yet" / "Save anyway" is now PRESS-SAVE-AGAIN: the first Save says
+//     what is short on `.n-macsay warn` and relabels the button "Save it
+//     anyway", the second writes. "Not yet" has no button, so that leg is
+//     asserted the way the product now offers it — any further edit re-arms
+//     the question (`macAct` clears `macAskedShort`), so the next Save asks
+//     again instead of writing behind the author's back.
+//
+// ── ⚠️ THE FIXTURE DATA THIS FILE NO LONGER HAS ────────────────────────────
+//
+// `macro_fixture.rs`'s `seed_macros()` — `piano` (a step authored in `ms` and
+// a step authored in `frames`) and `written-by-hand` (five hand-authored
+// holds) — reached the page through `StatusSource::macros()`. NOTHING in
+// ksx-studio calls `macros()` any more; `/nocturne` reads its macros from the
+// STAGED SETUP, which the fixture seeds with exactly one three-step macro,
+// `hadouken`:
+//
+//     1. dpad.down                    ms 50
+//     2. dpad.down + dpad.right       ms 50     ← a hand-authored canonical pair
+//     3. X                            ms 80
+//
+// That is enough for almost everything, because step 2 is itself a pair NOBODY
+// MADE THROUGH THIS PAGE — it comes out of the fixture's staged setup, which is
+// the same round trip a hand-edited preset takes. What it does NOT supply is a
+// step authored in `frames`, a PARTIAL deflection (`ly.-16384 + lx.max`), a
+// contradictory hold, or the hat+stick double-binding. Three of those four are
+// reachable through the grid and are asserted where they are built; the partial
+// deflection is not reachable through any door this fixture opens (`/nocturne/
+// import` goes through `config_import`, which the fixture does not implement),
+// so the assertion that an INEXACT diagonal is labelled `approx` rather than
+// rewritten has NO SUBJECT HERE and has been removed rather than faked. It
+// wants either `seed_macros()`'s rows moved into the staged setup or a Rust
+// test over `hold_expand` — both outside this file.
+//
+// WHAT PERSISTS BETWEEN TESTS. Only a Save. Each test opens its own page and
+// the draft re-seeds from the stage, so an unsaved edit dies with the page;
+// but the fixture keeps what Save wrote, which is what makes "survives a
+// reload" testable at all. Four tests below save, and they are ordered so the
+// ones that assert an untouched `hadouken` run first. Moving them is not free.
 //
 // Run: cargo build -p ksx-studio --example macro_fixture && npm test
 
@@ -30,8 +97,16 @@ import { stopFixtureProcess } from "./fixture-process.mjs";
  *  reason). */
 const PORT = Number(process.env.KSX_PWTEST_PORT ?? 4478);
 const BASE = `http://127.0.0.1:${PORT}`;
-/** map.ts's POLL_MS is 2000; anything above it has crossed at least one poll. */
+/** nocturne.ts's POLL_MS is 2000; anything above it has crossed at least one
+ *  poll. The poll is what re-seeds a CLEAN draft from the staged setup, which
+ *  is the thing several tests here exist to survive. */
 const PAST_ONE_POLL = 2600;
+
+/** The one macro the fixture stages, and the slot it belongs to. The editor is
+ *  opened BY URL now — there is no card to expand and no tab to click — so the
+ *  vehicle is a query string rather than a gesture. */
+const MACRO = "hadouken";
+const EDITOR_URL = `${BASE}/nocturne?slot=1&macro=${MACRO}`;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -51,7 +126,12 @@ async function waitForServer(deadlineMs = 120_000) {
   const until = Date.now() + deadlineMs;
   for (;;) {
     try {
-      const res = await fetch(`${BASE}/api/map`);
+      // `/api/nocturne`, not `/api/map`: the mapper's API was deleted in the
+      // cutover, so a probe on it answers 404 forever. `r.ok` never becomes
+      // true, the loop spins to its deadline, and the failure text says
+      // "never answered" — naming the symptom and hiding the cause, which is
+      // exactly how this suite spent months reporting 21 cancelled tests.
+      const res = await fetch(`${BASE}/api/nocturne`);
       if (res.ok) return;
     } catch {
       // not up yet
@@ -65,7 +145,7 @@ before(async () => {
   // Refuse to test against somebody else's server. A stale fixture — or a real
   // `ksx studio` — answering here would make every assertion below a story
   // about the wrong build.
-  const squatter = await fetch(`${BASE}/api/map`).then(
+  const squatter = await fetch(`${BASE}/api/nocturne`).then(
     () => true,
     () => false,
   );
@@ -105,75 +185,67 @@ after(async () => {
   }
 });
 
-/** A page with the macro card OPEN — it ships collapsed (`<details>`), and
- *  everything under test is inside it. */
-async function openEditor() {
+/** A page with the macro editor OPEN. The dialog is served in the markup and
+ *  opened by the `?macro=` in the URL, so there is nothing to click first —
+ *  but the ISLAND still has to be live before any of this is real, and on
+ *  `/nocturne` the "JavaScript is live" marker is on `.nocturne` itself. */
+async function openEditor(url = EDITOR_URL) {
   const page = await browser.newPage({ viewport: { width: 1600, height: 1200 } });
-  await page.goto(`${BASE}/map`, { waitUntil: "domcontentloaded" });
-  // The island is live once map.ts marks it; before that the editor is the
-  // no-JS surface and none of this exists.
-  await page.waitForFunction(() => document.querySelector(".studio.mapper")?.classList.contains("js"));
-  await page.locator(".macrocard > summary").click();
-  // FIX 2: the duration editor is ON THE ROWS now, not one field in the panel
-  // under the grid, so the row's own box is what says the editor is live.
-  await page.waitForSelector(".macrowbar .macrowdur", { state: "visible" });
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.querySelector(".nocturne")?.classList.contains("js"), null, {
+    timeout: 20_000,
+  });
+  // The duration editor is ON THE ROWS — one box per step — so a row's own box
+  // is what says the editor is live rather than a panel under the grid.
+  await page.waitForSelector(".n-macbar .n-macdur", { state: "visible" });
   return page;
 }
 
 /** Everything an assertion here cares about, read off the live DOM. */
 function editorState(page) {
   return page.evaluate(() => ({
-    // FIX 2: per ROW — a duration and its unit belong to the step they time,
-    // and there is no "the selected one" any more.
-    units: [...document.querySelectorAll(".macrowbar .macrowunit")].map((b) => b.textContent),
-    durations: [...document.querySelectorAll(".macrowbar .macrowdur")].map((i) => i.value),
-    durClasses: [...document.querySelectorAll(".macrowbar .macrowdur")].map(
-      (i) => i.className,
+    // per ROW — a duration and its unit belong to the step they time, and
+    // there is no "the selected one" any more.
+    units: [...document.querySelectorAll(".n-macbar .n-macunit")].map((b) => b.textContent),
+    durations: [...document.querySelectorAll(".n-macbar .n-macdur")].map((i) => i.value),
+    durClasses: [...document.querySelectorAll(".n-macbar .n-macdur")].map((i) => i.className),
+    // The row's own sentence: what it holds, for how long, in which unit, and
+    // what the engine will actually run it for. This is what replaced the
+    // single "step 1 of 3 — 140 ms" line the panel used to carry.
+    durTitles: [...document.querySelectorAll(".n-macbar .n-macdur")].map((i) =>
+      i.getAttribute("title"),
     ),
-    delTitles: [...document.querySelectorAll(".macrowbar .macdel")].map((b) =>
+    delTitles: [...document.querySelectorAll(".n-macbar .n-macbtn.del")].map((b) =>
       b.getAttribute("title"),
     ),
-    selectedRow: [...document.querySelectorAll(".macrow")].findIndex((r) =>
-      r.classList.contains("sel"),
-    ),
-    stepLine: document.querySelector(".macsteplbl")?.textContent ?? "",
     activeClass: document.activeElement?.className ?? "",
-    // FIX 1: the plain-language readout on every row — what this step holds.
-    holds: [...document.querySelectorAll(".macrowbar .machold")].map((h) => h.textContent),
-    holdClasses: [...document.querySelectorAll(".macrowbar .machold")].map(
-      (h) => h.className,
+    // the plain-language readout on every row — what this step holds.
+    holds: [...document.querySelectorAll(".n-macbar .n-machold")].map((h) => h.textContent),
+    holdClasses: [...document.querySelectorAll(".n-macbar .n-machold")].map((h) => h.className),
+    // THE LEDGER: the pair each diagonal on that row is STORED as.
+    expands: [...document.querySelectorAll(".n-macbar .n-macexp")].map((e) => e.textContent),
+    expandClasses: [...document.querySelectorAll(".n-macbar .n-macexp")].map((e) => e.className),
+    // The editor's ONE answer line — what the toast stack became.
+    say: document.querySelector(".n-macsay")?.textContent ?? "",
+    sayClass: document.querySelector(".n-macsay")?.className ?? "",
+    // "Save this macro" until a short step is questioned; "Save it anyway"
+    // while the question stands. The label IS the confirmation state now.
+    saveLabel: document.querySelector(".n-macsave")?.textContent ?? "",
+    toml: document.querySelector(".n-mactomlbox")?.textContent ?? "",
+    warnTitles: [...document.querySelectorAll(".n-macbar .n-macwarn")].map((w) =>
+      w.getAttribute("title"),
     ),
-    // v16, THE LEDGER: the pair each diagonal on that row is STORED as.
-    expands: [...document.querySelectorAll(".macrowbar .macexp")].map((e) => e.textContent),
-    expandClasses: [...document.querySelectorAll(".macrowbar .macexp")].map(
-      (e) => e.className,
-    ),
-    toasts: [...document.querySelectorAll(".toasts .tmsg")].map((t) => t.textContent),
-    undoable: document.querySelectorAll(".toasts [data-undo]:not(.off)").length,
-    toml: document.querySelector(".mactoml")?.textContent ?? "",
-    confirmClass: document.querySelector(".macconfirm")?.className ?? "",
-    confirmLine: document.querySelector(".macconfirmline")?.textContent ?? "",
-    shortRows: document.querySelectorAll(".macrow.short").length,
-    dirty: document.querySelector(".macdirty")?.textContent ?? "",
+    shortRows: document.querySelectorAll(".n-macbar .n-macrow.short").length,
+    dirty: document.querySelector(".n-macdirty")?.textContent ?? "",
   }));
 }
 
-/** The same page, pointed at the fixture's `written-by-hand` macro — the steps
- *  NOBODY MADE THROUGH THIS PAGE. Switching macros is a real route, so this
- *  goes through the tab the way a reader would. */
-async function openHandwritten() {
-  const page = await openEditor();
-  await page.locator('[data-macro="written-by-hand"]').click();
-  await page.waitForFunction(
-    () => (document.querySelector(".machead")?.textContent ?? "").startsWith("written-by-hand"),
-  );
-  return page;
-}
-
-/** One cell's class + mark + title, by its `data-cell` payload. */
+/** One cell's class + mark + title, by its `data-maccell` payload. The payload
+ *  format survived the move byte for byte — `0|diag:dpad:dr` still means step
+ *  1's D-pad ↘ column — which is why the diagonal tests port unchanged. */
 function cellState(page, cell) {
   return page.evaluate((sel) => {
-    const el = document.querySelector(`[data-cell="${sel}"]`);
+    const el = document.querySelector(`[data-maccell="${sel}"]`);
     return el === null
       ? null
       : { cls: el.className, mark: el.textContent, title: el.getAttribute("title") };
@@ -182,37 +254,86 @@ function cellState(page, cell) {
 
 const settle = (page) => page.waitForTimeout(PAST_ONE_POLL);
 
-/** Row `i`'s own duration box and unit toggle — FIX 2's whole point is that
- *  these are addressable per row, with nothing selected first. */
-const durBox = (page, i) => page.locator(`.macrowdur[data-durrow="${i}"]`);
+/** Row `i`'s own duration box and unit toggle — the whole point of the
+ *  boxes-on-rows fix is that these are addressable per row, with nothing
+ *  selected first. */
+const durBox = (page, i) => page.locator(`.n-macdur[data-macdur="${i}"]`);
 const unitBtn = (page, i) => page.locator(`[data-macact="unit|${i}"]`);
+const cellAt = (page, cell) => page.locator(`[data-maccell="${cell}"]`);
+const saveBtn = (page) => page.locator('[data-macact="save"]');
+
+/** Type a duration and LEAVE THE FIELD, the way a person does, then wait for
+ *  the round trip that commits it.
+ *
+ *  A duration is committed on `change` — i.e. on blur or Enter — and the act
+ *  is a POST to `/nocturne/api/macro/edit`. Waiting for the draft to actually
+ *  carry the number is not politeness: `macSave()` and `macAct()` share one
+ *  `macBusy` latch, so a Save pressed while the duration act is still in
+ *  flight is DROPPED. That is a real defect, and it has its own test below
+ *  ("Save is not swallowed…"); every other test here commits first so that it
+ *  is testing its own subject and not that one. */
+async function commitDuration(page, i, value) {
+  const box = durBox(page, i);
+  await box.click();
+  await box.fill(String(value));
+  await box.blur();
+  // Wait on the ROW'S TITLE, not on the box's own value. The value is what the
+  // browser typed and is true the instant `fill` returns; the title is
+  // composed by `macro_editor.rs` from the draft the server just applied, so
+  // it is the only thing on the page that proves the round trip finished.
+  // Waiting on the value (or on the dirty mark, which a previous act may have
+  // already set) returns early and hands the next gesture a busy latch.
+  await page.waitForFunction(
+    ({ row, want }) =>
+      new RegExp(`for ${want} (ms|fr)\\b`).test(
+        document.querySelector(`.n-macdur[data-macdur="${row}"]`)?.getAttribute("title") ?? "",
+      ),
+    { row: i, want: value },
+    { timeout: 10_000 },
+  );
+}
+
+/** Press Save until it writes, and answer the short-step question if it is
+ *  asked. Returns how many presses it took — 1 for an ordinary save, 2 when a
+ *  step under the sampling floor had to be consented to. */
+async function saveMacro(page, { expectQuestion = null } = {}) {
+  await saveBtn(page).click();
+  const first = await editorState(page);
+  const asked = /\bwarn\b/.test(first.sayClass);
+  if (expectQuestion !== null) {
+    assert.equal(
+      asked,
+      expectQuestion,
+      expectQuestion
+        ? `Save wrote a short step silently: ${JSON.stringify(first.say)}`
+        : `an ordinary save asked a question it had no reason to ask: ${JSON.stringify(first.say)}`,
+    );
+  }
+  if (asked) await saveBtn(page).click();
+  await page.waitForFunction(
+    () => (document.querySelector(".n-macsay")?.textContent ?? "").startsWith("Saved"),
+    null,
+    { timeout: 15_000 },
+  );
+  return asked ? 2 : 1;
+}
+
+/** Hover the things a pointer actually crosses on the way to a control, ALL of
+ *  which re-derive their lists on every poll. The pad and the key legend are
+ *  behind the modal now, so the hover targets moved inside the dialog — which
+ *  is where the rebuilding lists that could destroy an edit live anyway. */
+async function hoverAround(page) {
+  await page.locator(".n-macedit .n-bbtn").first().hover();
+  await page.locator(".n-macrow").first().hover();
+  await page.locator(".n-macmot").first().hover();
+}
 
 describe("the macro editor's duration controls", () => {
-  test("the focused step survives the 2 s poll", async () => {
-    // The root cause: the poll re-seeded every CLEAN draft, and the re-seed
-    // dropped the selection — so the duration editor quietly let go of the
-    // step the author had just picked, with nothing on screen to say so.
-    // Selection can no longer lose an edit (the boxes are on the rows), but it
-    // still points the frame maths at a step, and it still has to hold still.
-    const page = await openEditor();
-    try {
-      await page.locator('[data-macact="sel|0"]').click();
-      assert.equal((await editorState(page)).selectedRow, 0);
-
-      await settle(page);
-
-      const after = await editorState(page);
-      assert.equal(after.selectedRow, 0, "the poll let go of the focused step");
-      assert.match(after.stepLine, /^step 1 of 3/);
-    } finally {
-      await page.close();
-    }
-  });
-
   test("the authored unit survives a poll, then a hover", async () => {
     const page = await openEditor();
     try {
-      // Step 1 is authored in ms in the preset — and says so on its own row.
+      // Step 1 is authored in ms in the staged setup — and says so on its own
+      // row, before anybody has pointed at that row.
       assert.equal((await editorState(page)).units[0], "ms");
 
       // The pause that used to be fatal: a poll lands between reaching for the
@@ -220,16 +341,20 @@ describe("the macro editor's duration controls", () => {
       await settle(page);
 
       await unitBtn(page, 0).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-macact="unit|0"]')?.textContent === "fr",
+      );
       const picked = await editorState(page);
       assert.equal(picked.units[0], "fr", "the unit toggle snapped back on its own");
       // CONVERTED, not reinterpreted: 50 ms is 3 frames, not 50 of them.
       assert.equal(picked.durations[0], "3");
-      assert.match(picked.stepLine, /3 fr/);
+      assert.match(picked.durTitles[0], /3 fr/);
+      // …and the length itself is untouched, which is the whole promise of the
+      // toggle: the row still says the engine runs it for 50 ms.
+      assert.match(picked.durTitles[0], /the engine runs it for 50 ms/);
 
       // …and now the pointer arrives, which used to reset the unit.
-      await page.locator(".macedit").hover();
-      await page.locator(".macrow").first().hover();
-      await page.locator("[data-fn]").first().hover();
+      await hoverAround(page);
       assert.equal((await editorState(page)).units[0], "fr", "a hover reset the unit");
 
       // …and a poll after that.
@@ -245,22 +370,33 @@ describe("the macro editor's duration controls", () => {
   test("a hover never steals focus or rewrites a duration being typed", async () => {
     const page = await openEditor();
     try {
-      await unitBtn(page, 1).click(); // step 2 is authored in frames — take it to ms
+      // Take step 2 out to frames and back, which leaves it in ms exactly as
+      // authored AND leaves the draft dirty — the state in which the poll must
+      // keep its hands off. (On `/map` this row arrived authored in frames and
+      // one click took it to ms; the staged setup has no frames step to start
+      // from, so the round trip does the same job.)
+      await unitBtn(page, 1).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-macact="unit|1"]')?.textContent === "fr",
+      );
+      await unitBtn(page, 1).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-macact="unit|1"]')?.textContent === "ms",
+      );
       assert.equal((await editorState(page)).units[1], "ms");
 
       const box = durBox(page, 1);
       await box.click();
       await box.fill("120");
-      assert.equal((await editorState(page)).activeClass, "macrowdur");
+      assert.match((await editorState(page)).activeClass, /\bn-macdur\b/);
 
-      // Hover the zones and the legend — both re-derive their lists, which is
-      // what a rebuild under the caret would destroy.
-      await page.locator("[data-fn]").first().hover();
-      await page.locator(".macrow").first().hover();
+      // Hover the toolbar, a row and a motion button — all of which re-derive
+      // their lists, which is what a rebuild under the caret would destroy.
+      await hoverAround(page);
       await settle(page);
 
       const held = await editorState(page);
-      assert.equal(held.activeClass, "macrowdur", "focus was taken mid-edit");
+      assert.match(held.activeClass, /\bn-macdur\b/, "focus was taken mid-edit");
       assert.equal(held.durations[1], "120", "the box was rewritten mid-edit");
       assert.equal(held.units[1], "ms");
     } finally {
@@ -268,61 +404,66 @@ describe("the macro editor's duration controls", () => {
     }
   });
 
+  // ⚠️ SAVES. Step 3 leaves this test authored in frames, and stays that way
+  // for the rest of the file — the fixture keeps what Save wrote, which is the
+  // only reason "survives a reload" means anything.
   test("the authored unit survives Save and a reload", async () => {
     const page = await openEditor();
     try {
       await unitBtn(page, 2).click(); // step 3, authored in ms
+      await page.waitForFunction(
+        () => document.querySelector('[data-macact="unit|2"]')?.textContent === "fr",
+      );
       assert.equal((await editorState(page)).units[2], "fr");
 
-      await page.locator('[data-act="macro-save"]').click();
-      await page.waitForFunction(() =>
-        (document.querySelector(".macdirty")?.textContent ?? "").startsWith("saved"),
-      );
-      assert.equal((await editorState(page)).units[2], "fr", "the save round trip lost the unit");
+      await saveMacro(page, { expectQuestion: false });
+      const written = await editorState(page);
+      assert.equal(written.units[2], "fr", "the save round trip lost the unit");
+      assert.equal(written.dirty, "", "a saved macro still reads as unsaved");
+      assert.equal(written.say, `Saved “${MACRO}”.`);
 
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.waitForFunction(() =>
-        document.querySelector(".studio.mapper")?.classList.contains("js"),
+        document.querySelector(".nocturne")?.classList.contains("js"),
       );
-      await page.locator(".macrocard > summary").click();
+      await page.waitForSelector(".n-macbar .n-macdur", { state: "visible" });
       // NOTHING is clicked before reading it back: the unit is a fact about
-      // the step in the file, and the row states it whether or not anybody has
-      // pointed at that row.
+      // the step in the staged setup, and the row states it whether or not
+      // anybody has pointed at that row.
       assert.equal(
         (await editorState(page)).units[2],
         "fr",
-        "the reloaded preset came back in ms",
+        "the reloaded macro came back in ms",
       );
     } finally {
       await page.close();
     }
   });
 
-  // ── FIX 2: the select-then-edit MODE is gone ─────────────────────────────
-  // The old select-then-edit mode used one duration field under
-  // the grid, pointed at whichever row had last been clicked, so changing a
-  // time was a two-part gesture and anything that dropped the selection
-  // dropped the edit with it. Now the field is ON the row.
+  // ── the select-then-edit MODE is gone ────────────────────────────────────
+  // The old select-then-edit mode used one duration field under the grid,
+  // pointed at whichever row had last been clicked, so changing a time was a
+  // two-part gesture and anything that dropped the selection dropped the edit
+  // with it. Now the field is ON the row — and after the cutover there is no
+  // selection left at all, so the assertions that watched one are gone too.
 
   test("a duration is edited without selecting anything first", async () => {
     const page = await openEditor();
     try {
-      // NOTHING is selected — this is a page nobody has clicked in yet.
+      // This is a page nobody has clicked in yet.
       const fresh = await editorState(page);
-      assert.equal(fresh.selectedRow, -1, "the page opened with a step already selected");
-      assert.match(fresh.stepLine, /its own box on its own row/);
       assert.equal(fresh.units[0], "ms", "step 1 is the ms-authored one");
+      assert.equal(fresh.dirty, "", "the page opened already dirty");
 
       // Straight into the first row's box. No ⏱, no row click, no mode.
-      const box = durBox(page, 0);
-      await box.click();
-      await box.fill("140");
-      await box.blur();
+      await commitDuration(page, 0, 140);
 
       const after = await editorState(page);
       assert.equal(after.durations[0], "140");
       assert.match(after.toml, /ms = 140/, "the draft did not take the typed duration");
-      assert.match(after.dirty, /unsaved/);
+      assert.match(after.dirty, /Unsaved/);
+      // The row's own sentence describes the row that was typed in.
+      assert.match(after.durTitles[0], /for 140 ms/);
       // The other rows are untouched — the box writes to ITS step, which is
       // what the row index on the element is for.
       assert.deepEqual(
@@ -330,10 +471,6 @@ describe("the macro editor's duration controls", () => {
         fresh.durations.slice(1),
         "typing in one row retimed another",
       );
-      // Selection FOLLOWED the edit rather than gating it: the frame maths now
-      // describes the row that was typed in.
-      assert.equal(after.selectedRow, 0);
-      assert.match(after.stepLine, /^step 1 of 3 — 140 ms/);
 
       // And it survives the poll, like every other draft edit.
       await settle(page);
@@ -344,13 +481,13 @@ describe("the macro editor's duration controls", () => {
   });
 });
 
-// ── FIX 1: a row can hold several controls, and it SAYS so ─────────────────
+// ── a row can hold several controls, and it SAYS so ────────────────────────
 // A sequence with rows ↓ then → then X has no diagonal at all, because a
-// diagonal is not a separate input in storage — it IS
-// down+forward held together, i.e. ONE ROW HOLDING TWO CONTROLS. The piano
-// roll never taught that, and two lit cells twelve columns apart never will.
-// The readout has to be LIVE: it is only a teacher if it changes under the
-// finger that is ticking the cells.
+// diagonal is not a separate input in storage — it IS down+forward held
+// together, i.e. ONE ROW HOLDING TWO CONTROLS. The piano roll never taught
+// that, and two lit cells twelve columns apart never will. The readout has to
+// be LIVE: it is only a teacher if it changes under the finger that is ticking
+// the cells.
 
 describe("what a step holds, in words", () => {
   test("the readout updates as cells are toggled", async () => {
@@ -359,28 +496,36 @@ describe("what a step holds, in words", () => {
       // The fixture's step 1 holds one direction, and says so.
       const start = await editorState(page);
       assert.equal(start.holds[0], "D-pad ↓");
-      assert.equal(start.holdClasses[0], "machold");
+      assert.equal(start.holdClasses[0], "n-machold");
 
       // Tick a SECOND control into the SAME row. It is a diagonal now, so the
       // row reads as the ONE control a player means by it — and spells out the
       // two names the file will carry, so nothing is hidden.
-      await page.locator('[data-cell="0|dpad.right"]').click();
+      await cellAt(page, "0|dpad.right").click();
+      await page.waitForFunction(
+        () => document.querySelector(".n-macbar .n-machold")?.textContent === "D-pad ↘",
+      );
       const chord = await editorState(page);
       assert.equal(chord.holds[0], "D-pad ↘", "the pair did not read as the diagonal");
       assert.equal(
         chord.holdClasses[0],
-        "machold",
+        "n-machold",
         "a diagonal is ONE presented control, not two",
       );
       assert.equal(chord.expands[0], "↘ = dpad.down + dpad.right");
 
       // Untick both and the row reads as what it now is: a neutral gap, not a
       // row somebody forgot to fill in.
-      await page.locator('[data-cell="0|dpad.right"]').click();
-      await page.locator('[data-cell="0|dpad.down"]').click();
+      await cellAt(page, "0|dpad.right").click();
+      await cellAt(page, "0|dpad.down").click();
+      await page.waitForFunction(
+        () =>
+          document.querySelector(".n-macbar .n-machold")?.textContent ===
+          "(nothing — neutral gap)",
+      );
       const empty = await editorState(page);
       assert.equal(empty.holds[0], "(nothing — neutral gap)");
-      assert.equal(empty.holdClasses[0], "machold none");
+      assert.equal(empty.holdClasses[0], "n-machold none");
 
       // And it survives a poll, like every other draft edit.
       await settle(page);
@@ -395,26 +540,30 @@ describe("what a step holds, in words", () => {
     try {
       const before = (await editorState(page)).holds.length;
       await page.locator('[data-macmotion="qcf"]').click();
+      await page.waitForFunction(
+        (n) => document.querySelectorAll(".n-macbar .n-machold").length === n + 3,
+        before,
+      );
       const after = await editorState(page);
       assert.equal(after.holds.length, before + 3, "a quarter-circle is three steps");
 
       // The three appended steps, in order — the middle one is the diagonal.
       const added = after.holds.slice(before);
       assert.deepEqual(added, ["D-pad ↓", "D-pad ↘", "D-pad →"]);
-      assert.equal(after.holdClasses[before + 1], "machold");
+      assert.equal(after.holdClasses[before + 1], "n-machold");
       assert.equal(after.expands[before + 1], "↘ = dpad.down + dpad.right");
 
       // Generated ABOVE the sampling floor: a helper that seeded steps the
       // sampler cannot see would teach the exact mistake it exists to prevent.
       assert.equal(after.shortRows, 0, "the generated steps are below the floor");
-      assert.match(after.dirty, /unsaved/);
+      assert.match(after.dirty, /Unsaved/);
     } finally {
       await page.close();
     }
   });
 });
 
-// ── v16: DIAGONALS AS PRESENTATION ─────────────────────────────────────────
+// ── DIAGONALS AS PRESENTATION ──────────────────────────────────────────────
 // Players select a diagonal as one concept; storage still represents it as the
 // two cardinal directions held together.
 //
@@ -434,7 +583,10 @@ describe("diagonals are a lens over the stored pair", () => {
       assert.doesNotMatch(before.cls, /\bon\b/);
       assert.match(before.title, /does not hold D-pad ↘ \(down-right\)/);
 
-      await page.locator('[data-cell="0|diag:dpad:dr"]').click();
+      await cellAt(page, "0|diag:dpad:dr").click();
+      await page.waitForFunction(
+        () => document.querySelector(".n-macbar .n-machold")?.textContent === "D-pad ↘",
+      );
 
       // THE PAIR IS WHAT IS STORED. Not a new binding shape, not a new verb —
       // the same two ordinary names a hand-edited file would carry, which is
@@ -450,25 +602,28 @@ describe("diagonals are a lens over the stored pair", () => {
       assert.equal((await cellState(page, "0|dpad.down")).cls.includes("part"), true);
       assert.equal((await cellState(page, "0|dpad.right")).mark, "·");
 
-      // It REPORTS, with undo — the one click on this grid whose effect is not
-      // literally the cell you hit.
-      assert.ok(
-        after.toasts.some((t) => /ksx wrote dpad\.down \+ dpad\.right/.test(t)),
-        `no toast named what was written: ${JSON.stringify(after.toasts)}`,
+      // It REPORTS — the one click on this grid whose effect is not literally
+      // the cell you hit, so the sentence names what was written instead.
+      assert.match(
+        after.say,
+        /ksx wrote dpad\.down \+ dpad\.right/,
+        `nothing named what was written: ${JSON.stringify(after.say)}`,
       );
-      assert.ok(after.undoable >= 1, "the diagonal pick offered no undo");
-      await page.locator(".toasts [data-undo]").first().click();
-      await page.waitForFunction(
-        () => (document.querySelector(".macrowbar .machold")?.textContent ?? "") === "D-pad ↓",
-      );
-      assert.equal((await editorState(page)).holds[0], "D-pad ↓", "undo did not put it back");
+      assert.match(after.say, /because that is what a diagonal is in the file/);
+      assert.equal(after.sayClass, "n-macsay", "a plain report was coloured as a fault");
 
-      // Ticking it again and then UNticking it removes exactly the two.
-      await page.locator('[data-cell="0|diag:dpad:dr"]').click();
-      await page.locator('[data-cell="0|diag:dpad:dr"]').click();
+      // UNticking it removes exactly the two — and says which two, from the
+      // hold as written.
+      await cellAt(page, "0|diag:dpad:dr").click();
+      await page.waitForFunction(
+        () =>
+          document.querySelector(".n-macbar .n-machold")?.textContent ===
+          "(nothing — neutral gap)",
+      );
       const cleared = await editorState(page);
       assert.equal(cleared.holds[0], "(nothing — neutral gap)");
       assert.match(cleared.toml, /hold = \[\]/);
+      assert.match(cleared.say, /cleared D-pad ↘ — removed dpad\.down \+ dpad\.right/);
     } finally {
       await page.close();
     }
@@ -482,92 +637,98 @@ describe("diagonals are a lens over the stored pair", () => {
     // used to be SILENT, and it is the surprising one. Four things happen on
     // that second click: the cell just clicked drops to a subordinate `·`
     // instead of a filled mark, a cell twelve columns away lights up, the row's
-    // words change from "D-pad ↓" to "D-pad ↘", and a ledger line appears. From
-    // that, with nothing said, the two available conclusions are "the grid is
-    // broken" and "ksx rewrote my input". The truth — their two holds ARE a
-    // diagonal, and the file still spells both — is what has to be said.
+    // words change from "X + D-pad ↓" to "D-pad ↘ + X", and a ledger line
+    // appears. From that, with nothing said, the two available conclusions are
+    // "the grid is broken" and "ksx rewrote my input". The truth — their two
+    // holds ARE a diagonal, and the file still spells both — is what has to be
+    // said.
     const page = await openEditor();
     try {
-      // Step 2 holds `A` and nothing else. Add ↓: an ordinary quiet toggle.
-      await page.locator('[data-cell="1|dpad.down"]').click();
-      const one = await editorState(page);
-      assert.equal(one.holds[1], "A + D-pad ↓");
-      assert.equal(one.toasts.filter((t) => t !== "").length, 0, "a plain tick spoke");
-
-      // Now →. The two are a diagonal, and the page must SAY so.
-      await page.locator('[data-cell="1|dpad.right"]').click();
-      const two = await editorState(page);
-      assert.equal(two.holds[1], "D-pad ↘ + A", "the fold did not happen");
-      assert.equal(two.expands[1], "↘ = dpad.down + dpad.right");
-
-      const said = two.toasts.find((t) => /IS the diagonal/.test(t));
-      assert.ok(said, `the fold was silent: ${JSON.stringify(two.toasts)}`);
-      assert.match(said, /dpad\.down and dpad\.right/, "it did not name the two holds");
-      assert.match(said, /Nothing was rewritten/, "it did not say the storage is unchanged");
-      assert.match(said, /the file still says dpad\.down \+ dpad\.right/);
-      // The cell that was clicked is now a HALF — which is why this needs
-      // saying at all.
-      assert.match((await cellState(page, "1|dpad.right")).cls, /\bpart\b/);
-      assert.match((await cellState(page, "1|diag:dpad:dr")).cls, /\bon\b/);
-
-      // …and it is undoable, like every other write on this page.
-      await page.locator(".toasts [data-undo]:not(.off)").first().click();
+      // Step 3 holds `X` and nothing else. Add ↓: an ordinary quiet toggle.
+      await cellAt(page, "2|dpad.down").click();
       await page.waitForFunction(
         () =>
-          [...document.querySelectorAll(".macrowbar .machold")][1]?.textContent === "A + D-pad ↓",
+          [...document.querySelectorAll(".n-macbar .n-machold")][2]?.textContent ===
+          "X + D-pad ↓",
       );
+      const one = await editorState(page);
+      assert.equal(one.holds[2], "X + D-pad ↓");
+      assert.equal(one.say, "", "a plain tick spoke");
 
-      // BREAKING one is reported the same way round.
-      await page.locator('[data-cell="1|dpad.right"]').click();
-      await page.locator('[data-cell="1|dpad.right"]').click();
+      // Now →. The two are a diagonal, and the page must SAY so.
+      await cellAt(page, "2|dpad.right").click();
+      await page.waitForFunction(
+        () =>
+          [...document.querySelectorAll(".n-macbar .n-machold")][2]?.textContent ===
+          "D-pad ↘ + X",
+      );
+      const two = await editorState(page);
+      assert.equal(two.holds[2], "D-pad ↘ + X", "the fold did not happen");
+      assert.equal(two.expands[2], "↘ = dpad.down + dpad.right");
+
+      assert.match(two.say, /are D-pad ↘/, `the fold was silent: ${JSON.stringify(two.say)}`);
+      assert.match(two.say, /dpad\.down and dpad\.right/, "it did not name the two holds");
+      assert.match(
+        two.say,
+        /the file still spells both/,
+        "it did not say the storage is unchanged",
+      );
+      // The cell that was clicked is now a HALF — which is why this needs
+      // saying at all.
+      assert.match((await cellState(page, "2|dpad.right")).cls, /\bpart\b/);
+      assert.match((await cellState(page, "2|diag:dpad:dr")).cls, /\bon\b/);
+
+      // BREAKING one is reported the same way round, and names what is left.
+      await cellAt(page, "2|dpad.right").click();
+      await page.waitForFunction(
+        () =>
+          [...document.querySelectorAll(".n-macbar .n-machold")][2]?.textContent ===
+          "X + D-pad ↓",
+      );
       const broke = await editorState(page);
-      const undone = broke.toasts.find((t) => /is no longer a diagonal/.test(t));
-      assert.ok(undone, `breaking a diagonal was silent: ${JSON.stringify(broke.toasts)}`);
-      assert.match(undone, /is left holding dpad\.down/);
+      assert.match(
+        broke.say,
+        /came apart/,
+        `breaking a diagonal was silent: ${JSON.stringify(broke.say)}`,
+      );
+      assert.match(broke.say, /dpad\.down is what is left/);
     } finally {
       await page.close();
     }
   });
 
   test("a hand-written pair reads back as ↘", async () => {
-    // The round trip that matters: these steps were never made through this
-    // page. Somebody typed them into the preset, or imported them, and the
-    // grid still has to show what they ARE.
-    const page = await openHandwritten();
+    // The round trip that matters: step 2 was never made through this page.
+    // It comes out of the fixture's staged setup as two ordinary bindings held
+    // together — exactly what somebody typing into a preset, or importing one,
+    // would leave behind — and the grid still has to show what it IS.
+    //
+    // ⚠️ The three other hand-written shapes this test used to cover — a
+    // PARTIAL deflection (`ly.-16384 + lx.max`), a contradictory hold, and the
+    // hat+stick double-binding — lived in `seed_macros()`, which nothing reads
+    // any more (see the header). Two of them are reachable through the grid and
+    // are asserted in the tests that build them; the partial deflection is not
+    // reachable at all from this fixture, and its assertion is gone rather than
+    // faked.
+    const page = await openEditor();
     try {
       const state = await editorState(page);
-      assert.equal(state.holds[0], "D-pad ↘", "the canonical pair did not fold");
-      assert.equal(state.expands[0], "↘ = dpad.down + dpad.right");
-      assert.match((await cellState(page, "0|diag:dpad:dr")).cls, /\bon\b/);
+      assert.equal(state.holds[1], "D-pad ↘", "the canonical pair did not fold");
+      assert.equal(state.expands[1], "↘ = dpad.down + dpad.right");
+      assert.equal(state.expandClasses[1], "n-macexp");
+      assert.match((await cellState(page, "1|diag:dpad:dr")).cls, /\bon\b/);
+      assert.match((await cellState(page, "1|diag:dpad:dr")).title, /holds D-pad ↘ \(down-right\)/);
 
-      // A PARTIAL deflection is still the diagonal — labelled, never rewritten.
-      assert.equal(state.holds[1], "LS ↘");
-      assert.equal(state.expands[1], "↘ = ly.-16384 + lx.max");
-      const inexact = await cellState(page, "1|diag:ls:dr");
-      assert.match(inexact.cls, /\bapprox\b/, "an inexact diagonal is not labelled");
-      assert.match(inexact.title, /not at full deflection/);
-      assert.match(state.toml, /ly\.-16384/, "the exact value was rewritten");
-
-      // CONTRADICTORY — `down + forward + up`. Never folded, never guessed:
-      // which diagonal would it be, and what the pad publishes depends on the
-      // slot's socd policy, which this page cannot see.
-      assert.equal(state.holds[3], "D-pad ↓ + D-pad → + D-pad ↑");
-      assert.equal(state.expandClasses[3], "macexp off");
-      assert.doesNotMatch((await cellState(page, "3|diag:dpad:dr")).cls, /\bon\b/);
-      assert.doesNotMatch((await cellState(page, "3|diag:dpad:ur")).cls, /\bon\b/);
-
-      // The hat+stick double-binding EVERY in-box template writes: one
-      // diagonal, naming both mechanisms, lit on both groups — joined by "and".
-      // `+` on this row means ANOTHER CONTROL ("D-pad ↘ + A"), so "D-pad + LS ↘"
-      // read as a control called "D-pad" holding no direction plus a control
-      // called "LS ↘": one control drawn as two, on the row that holds the most
-      // bindings on the card and gets no "· together" tail (it folds to one).
-      assert.equal(state.holds[4], "D-pad and LS ↘");
-      assert.match((await cellState(page, "4|diag:dpad:dr")).cls, /\bon\b/);
-      assert.match((await cellState(page, "4|diag:ls:dr")).cls, /\bon\b/);
+      // The two cardinals it is spelled with are drawn as halves, and say so.
+      for (const half of ["1|dpad.down", "1|dpad.right"]) {
+        const cell = await cellState(page, half);
+        assert.match(cell.cls, /\bpart\b/, `${half} is not drawn as half of the diagonal`);
+        assert.match(cell.title, /as half of ↘ — the ↘ column beside it is the pick/);
+      }
 
       // …and the file is untouched by any of this looking at it.
-      assert.match(state.dirty, /^$|saved/, `reading a macro marked it dirty: ${state.dirty}`);
+      assert.equal(state.dirty, "", `reading a macro marked it dirty: ${state.dirty}`);
+      assert.match(state.toml, /hold = \["dpad\.down", "dpad\.right"\]/);
     } finally {
       await page.close();
     }
@@ -583,104 +744,72 @@ describe("diagonals are a lens over the stored pair", () => {
     // `↓ + → + ↑` contains down and right, so a contains-both toggle calls the
     // cell already-on and CLEARS; but the cell is drawn off (it must be: which
     // diagonal `↓ + → + ↑` means depends on the slot's socd policy, which this
-    // page cannot see). The user gets an empty row, no diagonal, and a toast
+    // page cannot see). The user gets an empty row, no diagonal, and a sentence
     // naming two holds it did not remove.
     //
-    // Reached without a hand-written file too: tick ←, then tick →, then reach
-    // for ↘ to sort the mess out. Step 4 of `written-by-hand` is that state
-    // already, so the assertion is on the fixture the lens exists to explain.
-    const page = await openHandwritten();
+    // The old fixture carried that state hand-written. It is also two clicks
+    // away from any step, and the test's own reasoning always said so — "tick
+    // ←, then tick →, then reach for ↘ to sort the mess out" — so it is built
+    // here rather than seeded.
+    const page = await openEditor();
     try {
-      const before = await editorState(page);
-      assert.equal(before.holds[3], "D-pad ↓ + D-pad → + D-pad ↑", "the fixture moved");
-      const off = await cellState(page, "3|diag:dpad:dr");
-      assert.doesNotMatch(off.cls, /\bon\b/, "the contradictory step lights no diagonal");
+      await cellAt(page, "2|X").click();
+      await cellAt(page, "2|dpad.down").click();
+      await cellAt(page, "2|dpad.right").click();
+      await cellAt(page, "2|dpad.up").click();
+      await page.waitForFunction(
+        () =>
+          [...document.querySelectorAll(".n-macbar .n-machold")][2]?.textContent ===
+          "D-pad ↓ + D-pad → + D-pad ↑",
+      );
 
-      await page.locator('[data-cell="3|diag:dpad:dr"]').click();
+      const before = await editorState(page);
+      assert.equal(before.holds[2], "D-pad ↓ + D-pad → + D-pad ↑");
+      // No ledger line: there is no diagonal to spell out, so the row must not
+      // pretend there is one.
+      assert.equal(before.expandClasses[2], "n-macexp none");
+      const off = await cellState(page, "2|diag:dpad:dr");
+      assert.doesNotMatch(off.cls, /\bon\b/, "the contradictory step lights a diagonal");
+      const offUp = await cellState(page, "2|diag:dpad:ur");
+      assert.doesNotMatch(offUp.cls, /\bon\b/, "the contradictory step lights a diagonal");
+
+      await cellAt(page, "2|diag:dpad:dr").click();
+      await page.waitForFunction(
+        () =>
+          [...document.querySelectorAll(".n-macbar .n-machold")][2]?.textContent === "D-pad ↘",
+      );
 
       const after = await editorState(page);
       assert.equal(
-        after.holds[3],
+        after.holds[2],
         "D-pad ↘",
         "clicking an unlit ↘ did not turn it on — the click and the paint disagree",
       );
-      assert.equal(after.expands[3], "↘ = dpad.down + dpad.right");
-      assert.match((await cellState(page, "3|diag:dpad:dr")).cls, /\bon\b/);
+      assert.equal(after.expands[2], "↘ = dpad.down + dpad.right");
+      assert.match((await cellState(page, "2|diag:dpad:dr")).cls, /\bon\b/);
       assert.match(
         after.toml,
-        /hold = \["dpad\.down", "dpad\.right"\], ms = 50/,
+        /hold = \["dpad\.down", "dpad\.right"\]/,
         "the pair was not written",
       );
 
       // And it SAYS what it displaced — the contradiction it resolved, not a
       // pair it left in place.
-      assert.ok(
-        after.toasts.some((t) => /Replaced dpad\.up on the dpad/.test(t)),
-        `the toast did not name what it displaced: ${JSON.stringify(after.toasts)}`,
+      assert.match(
+        after.say,
+        /Replaced dpad\.up on the dpad/,
+        `it did not name what it displaced: ${JSON.stringify(after.say)}`,
       );
-
-      // Undo puts the contradiction back byte for byte: a lens never rewrites
-      // what it looked at, and neither does the road back from a pick.
-      await page.locator(".toasts [data-undo]").first().click();
-      await page.waitForFunction(
-        () =>
-          [...document.querySelectorAll(".macrowbar .machold")][3]?.textContent ===
-          "D-pad ↓ + D-pad → + D-pad ↑",
-      );
-      assert.match((await editorState(page)).toml, /hold = \["dpad\.down", "dpad\.right", "dpad\.up"\]/);
 
       // The SECOND click is the untick, and it removes the mechanism's
       // directions — nothing else on the step.
-      await page.locator('[data-cell="3|diag:dpad:dr"]').click();
-      await page.locator('[data-cell="3|diag:dpad:dr"]').click();
-      const cleared = await editorState(page);
-      assert.equal(cleared.holds[3], "(nothing — neutral gap)");
-    } finally {
-      await page.close();
-    }
-  });
-
-  test("the undo of a pick never lands in a macro nobody picked", async () => {
-    // A diagonal pick is the first cell click on this grid that hands back an
-    // UNDO, and an undo is a closure that outlives the click by 8 seconds. In
-    // those 8 seconds the draft it was about can be replaced — a macro tab, a
-    // slot switch, "Revert to file" all seed a fresh one — and `macroRestoreHold`
-    // only ever asked "does step N exist?". Step N exists in the NEXT macro too.
-    //
-    // So: pick ↗ on `piano` step 1, switch to `written-by-hand` (which the
-    // editor lets you do while dirty — it warns and discards), then press Undo.
-    // The hold it puts back belongs to a different sequence entirely, it lands
-    // silently, it marks the new macro dirty, and the toast says "Undone."
-    const page = await openEditor();
-    try {
-      await page.locator('[data-cell="0|diag:dpad:ur"]').click();
-      assert.equal((await editorState(page)).holds[0], "D-pad ↗", "the pick did not land");
-
-      await page.locator('[data-macro="written-by-hand"]').click();
-      await page.waitForFunction(() =>
-        (document.querySelector(".machead")?.textContent ?? "").startsWith("written-by-hand"),
+      await cellAt(page, "2|diag:dpad:dr").click();
+      await page.waitForFunction(
+        () =>
+          [...document.querySelectorAll(".n-macbar .n-machold")][2]?.textContent ===
+          "(nothing — neutral gap)",
       );
-      assert.equal((await editorState(page)).holds[0], "D-pad ↘", "the other macro moved");
-
-      // The undo button still on screen belongs to `piano`.
-      await page.locator(".toasts [data-undo]:not(.off)").first().click();
-      await page.waitForFunction(() =>
-        [...document.querySelectorAll(".toasts .tmsg")].some((t) =>
-          /undo FAILED|Undone/.test(t.textContent ?? ""),
-        ),
-      );
-
-      const after = await editorState(page);
-      assert.equal(
-        after.holds[0],
-        "D-pad ↘",
-        "undo wrote piano's hold into written-by-hand — the step index matched, the macro did not",
-      );
-      assert.ok(
-        after.toasts.some((t) => /undo FAILED/.test(t)),
-        `the undo claimed success on a draft that had moved on: ${JSON.stringify(after.toasts)}`,
-      );
-      assert.match(after.dirty, /^$|saved/, "a refused undo still marked the macro dirty");
+      assert.equal((await editorState(page)).holds[2], "(nothing — neutral gap)");
     } finally {
       await page.close();
     }
@@ -690,22 +819,35 @@ describe("diagonals are a lens over the stored pair", () => {
     // The single most common macro step in existence — the attack that ends a
     // motion. Exact-set matching on the whole step would have failed it, which
     // is what settles the whole recognition rule.
-    const page = await openHandwritten();
+    const page = await openEditor();
     try {
+      // Step 2 arrives from the staged setup as the bare diagonal. Add the
+      // attack to it: the button is a passenger, and the diagonal survives it.
+      await cellAt(page, "1|A").click();
+      await page.waitForFunction(
+        () =>
+          [...document.querySelectorAll(".n-macbar .n-machold")][1]?.textContent ===
+          "D-pad ↘ + A",
+      );
       const state = await editorState(page);
-      assert.equal(state.holds[2], "D-pad ↘ + A");
+      assert.equal(state.holds[1], "D-pad ↘ + A");
       assert.equal(
-        state.holdClasses[2],
-        "machold both",
+        state.holdClasses[1],
+        "n-machold both",
         "a diagonal AND a button is genuinely two presented controls",
       );
-      assert.equal(state.expands[2], "↘ = dpad.down + dpad.right");
-      assert.match((await cellState(page, "2|diag:dpad:dr")).cls, /\bon\b/);
-      assert.match((await cellState(page, "2|A")).cls, /\bon\b/);
+      assert.equal(state.expands[1], "↘ = dpad.down + dpad.right");
+      assert.match((await cellState(page, "1|diag:dpad:dr")).cls, /\bon\b/);
+      assert.match((await cellState(page, "1|A")).cls, /\bon\b/);
+      assert.equal((await cellState(page, "1|A")).mark, "●");
 
-      // Adding the attack to a bare diagonal does the same thing live — the
-      // button is a passenger, and the diagonal survives it.
-      await page.locator('[data-cell="0|B"]').click();
+      // The same thing built the other way round: a bare step that becomes a
+      // diagonal and then takes a button.
+      await cellAt(page, "0|diag:dpad:dr").click();
+      await cellAt(page, "0|B").click();
+      await page.waitForFunction(
+        () => document.querySelector(".n-macbar .n-machold")?.textContent === "D-pad ↘ + B",
+      );
       const after = await editorState(page);
       assert.equal(after.holds[0], "D-pad ↘ + B");
       assert.equal(after.expands[0], "↘ = dpad.down + dpad.right");
@@ -737,13 +879,20 @@ describe("diagonals are a lens over the stored pair", () => {
       };
       const glyph = { ul: "↖", ur: "↗", dl: "↙", dr: "↘" };
       const group = { dpad: "D-pad", ls: "LS", rs: "RS" };
+      const readsAs = (text) =>
+        page.waitForFunction(
+          (want) => document.querySelector(".n-macbar .n-machold")?.textContent === want,
+          text,
+        );
+
       // Start from a clean row, so each pick is the only thing in it.
-      await page.locator('[data-cell="0|dpad.down"]').click();
-      assert.equal((await editorState(page)).holds[0], "(nothing — neutral gap)");
+      await cellAt(page, "0|dpad.down").click();
+      await readsAs("(nothing — neutral gap)");
 
       for (const [token, pair] of Object.entries(want)) {
         const [, mech, d] = token.split(":");
-        await page.locator(`[data-cell="0|${token}"]`).click();
+        await cellAt(page, `0|${token}`).click();
+        await readsAs(`${group[mech]} ${glyph[d]}`);
         const on = await editorState(page);
         assert.equal(
           on.holds[0],
@@ -758,8 +907,8 @@ describe("diagonals are a lens over the stored pair", () => {
         // Picking the NEXT diagonal on the same mechanism replaces this one
         // rather than contradicting it; a different mechanism would not, which
         // is why each is unticked before moving on.
-        await page.locator(`[data-cell="0|${token}"]`).click();
-        assert.equal((await editorState(page)).holds[0], "(nothing — neutral gap)");
+        await cellAt(page, `0|${token}`).click();
+        await readsAs("(nothing — neutral gap)");
       }
     } finally {
       await page.close();
@@ -775,6 +924,10 @@ describe("diagonals are a lens over the stored pair", () => {
     try {
       const before = (await editorState(page)).holds.length;
       await page.locator('[data-macmotion="spdf"]').click();
+      await page.waitForFunction(
+        (n) => document.querySelectorAll(".n-macbar .n-machold").length === n + 8,
+        before,
+      );
       const after = await editorState(page);
       assert.equal(after.holds.length, before + 8, "a 360 is eight steps");
       assert.deepEqual(after.holds.slice(before), [
@@ -800,6 +953,10 @@ describe("diagonals are a lens over the stored pair", () => {
       try {
         const n = (await editorState(page2)).holds.length;
         await page2.locator('[data-macmotion="spdb"]').click();
+        await page2.waitForFunction(
+          (want) => document.querySelectorAll(".n-macbar .n-machold").length === want + 8,
+          n,
+        );
         assert.deepEqual((await editorState(page2)).holds.slice(n), [
           "D-pad ←",
           "D-pad ↙",
@@ -819,16 +976,20 @@ describe("diagonals are a lens over the stored pair", () => {
   });
 
   test("the grid is three rings, and the SSR paint already says so", async () => {
-    // The mirror: MapIsland.ts re-derives every list on each poll, so the
+    // The mirror: NocturneIsland.ts re-derives every list on each poll, so the
     // hydrated grid and the server's first paint have to agree column for
     // column — the same rule the zone tables live under.
-    const ssr = await fetch(`${BASE}/map`).then((r) => r.text());
+    const ssr = await fetch(EDITOR_URL).then((r) => r.text());
     const page = await openEditor();
     try {
       const live = await page.evaluate(() => ({
-        columns: [...document.querySelectorAll(".maccols .maccolid")].map((c) => c.textContent),
-        bands: [...document.querySelectorAll(".macgrps .macgrp")].map((g) => g.textContent),
-        spans: [...document.querySelectorAll(".macgrps .macgrp")].map((g) => g.className),
+        columns: [...document.querySelectorAll(".n-maccols .n-maccol")].map((c) => c.textContent),
+        // The band label and its count are separate spans now, so the band's
+        // NAME is read off the label rather than the whole cell's text.
+        bands: [...document.querySelectorAll(".n-macgrps .n-macgrp .n-macgrp-l")].map(
+          (g) => g.textContent,
+        ),
+        spans: [...document.querySelectorAll(".n-macgrps .n-macgrp")].map((g) => g.className),
       }));
       assert.equal(live.columns.length, 37, "25 zones → 37 columns");
       // Ring order — ↑ ↖ ← ↙ ↓ ↘ → ↗ — three times, which is what makes a
@@ -838,25 +999,25 @@ describe("diagonals are a lens over the stored pair", () => {
       assert.deepEqual(live.columns.slice(20, 28), ring, "the d-pad's ring");
       assert.deepEqual(live.columns.slice(29, 37), ring, "the right stick's ring");
       assert.deepEqual(live.bands, [
-        "SHOULDERS",
-        "FACE",
-        "SYSTEM",
-        "LEFT STICK",
-        "D-PAD",
-        "RIGHT STICK",
+        "Shoulders & triggers",
+        "Face buttons",
+        "System",
+        "Left stick",
+        "D-pad",
+        "Right stick",
       ]);
       assert.deepEqual(live.spans, [
-        "macgrp g4",
-        "macgrp g4",
-        "macgrp g3",
-        "macgrp g9",
-        "macgrp g8",
-        "macgrp g9",
+        "n-macgrp g4",
+        "n-macgrp g4",
+        "n-macgrp g3",
+        "n-macgrp g9",
+        "n-macgrp g8",
+        "n-macgrp g9",
       ]);
       // The no-JS page carries the same columns and the ring line that
       // explains them — it cannot tick a cell, but it can still read what a
       // diagonal pick means before JavaScript takes over.
-      assert.ok(ssr.includes('data-cell="0|diag:dpad:dr"'), "SSR has no diagonal column");
+      assert.ok(ssr.includes('data-maccell="0|diag:dpad:dr"'), "SSR has no diagonal column");
       assert.ok(ssr.includes("↑ ↖ ← ↙ ↓ ↘ → ↗ (numpad 8 7 4 1 2 3 6 9)"), "SSR has no ring line");
       assert.ok(ssr.includes("combines down and right in one step"));
     } finally {
@@ -865,7 +1026,7 @@ describe("diagonals are a lens over the stored pair", () => {
   });
 });
 
-// ── FIX 2: a below-floor step cannot be missed ─────────────────────────────
+// ── a below-floor step cannot be missed ────────────────────────────────────
 // The advisory existed and read as decoration, so the 1-frame steps went in
 // anyway. It is now on the offending FIELD, on the ROW, and between the click
 // and the write — but it never refuses, because a short step is legal.
@@ -875,10 +1036,10 @@ describe("a step shorter than the sampling floor", () => {
     const page = await openEditor();
     try {
       await unitBtn(page, 0).click();
-      const box = durBox(page, 0);
-      await box.click();
-      await box.fill("1");
-      await box.blur();
+      await page.waitForFunction(
+        () => document.querySelector('[data-macact="unit|0"]')?.textContent === "fr",
+      );
+      await commitDuration(page, 0, 1);
 
       const state = await editorState(page);
       assert.equal(state.durations[0], "1");
@@ -886,95 +1047,173 @@ describe("a step shorter than the sampling floor", () => {
       assert.equal(state.shortRows, 1, "the row is not marked");
       // Answered in the unit it was AUTHORED in — not "16 ms", a number this
       // author never typed.
-      assert.match(state.stepLine, /1 frame is shorter than the reliable 2-frame minimum/);
+      assert.match(
+        state.warnTitles[0],
+        /1 frame is shorter than the reliable 2-frame minimum/,
+        `the row said: ${JSON.stringify(state.warnTitles[0])}`,
+      );
+      // …and the row's own sentence says what the engine will really do with
+      // it, which is the part an advisory alone never made concrete.
+      assert.match(state.durTitles[0], /the engine runs it for 33 ms/);
 
       // Back above the floor and every mark goes away.
-      await durBox(page, 0).fill("3");
-      await durBox(page, 0).blur();
+      await commitDuration(page, 0, 3);
       const fixed = await editorState(page);
-      assert.equal(fixed.durClasses[0], "macrowdur");
+      assert.equal(fixed.durClasses[0], "n-macdur");
       assert.equal(fixed.shortRows, 0);
+      assert.equal(fixed.warnTitles[0], "");
     } finally {
       await page.close();
     }
   });
 
-  // Runs BEFORE the test that saves a short step: the fixture keeps what Save
-  // wrote (that is what makes "survives a reload" testable at all), so an
-  // "ordinary save" case has to be asserted while the preset is still ordinary.
+  // ⚠️ SAVES. Runs BEFORE the test that saves a short step: the fixture keeps
+  // what Save wrote (that is what makes "survives a reload" testable at all),
+  // so an "ordinary save" case has to be asserted while the macro is still
+  // ordinary.
   test("a macro with nothing short saves on the first click", async () => {
     const page = await openEditor();
     try {
-      const box = durBox(page, 0); // 50 ms, authored in ms
-      await box.click();
-      await box.fill("60");
-      await box.blur();
+      await commitDuration(page, 0, 60); // 50 ms, authored in ms
       assert.equal((await editorState(page)).shortRows, 0);
 
-      await page.locator('[data-act="macro-save"]').click();
-      await page.waitForFunction(() =>
-        (document.querySelector(".macdirty")?.textContent ?? "").startsWith("saved"),
-      );
-      assert.match(
-        (await editorState(page)).confirmClass,
-        /\boff\b/,
-        "an ordinary save asked a question it had no reason to ask",
-      );
+      const presses = await saveMacro(page, { expectQuestion: false });
+      assert.equal(presses, 1, "an ordinary save took more than one press");
+      const saved = await editorState(page);
+      assert.equal(saved.saveLabel, "Save this macro", "the button stayed in its asking state");
+      assert.equal(saved.dirty, "", "a saved macro still reads as unsaved");
     } finally {
       await page.close();
     }
   });
 
+  // ⚠️ SAVES a 1-frame step 1, which every later test inherits.
   test("Save asks before it writes one, and never refuses", async () => {
     const page = await openEditor();
     try {
       await unitBtn(page, 0).click();
-      const box = durBox(page, 0);
-      await box.click();
-      await box.fill("1");
-      await box.blur();
+      await page.waitForFunction(
+        () => document.querySelector('[data-macact="unit|0"]')?.textContent === "fr",
+      );
+      await commitDuration(page, 0, 1);
 
-      // FIRST click: the question, not the write.
-      await page.locator('[data-act="macro-save"]').click();
+      // FIRST press: the question, not the write.
+      await saveBtn(page).click();
+      await page.waitForFunction(() =>
+        (document.querySelector(".n-macsay")?.className ?? "").includes("warn"),
+      );
       const asked = await editorState(page);
-      assert.doesNotMatch(asked.confirmClass, /\boff\b/, "Save wrote it silently");
-      assert.match(asked.confirmLine, /1 step is shorter than ~33 ms \(2 frames at 60 Hz\)/);
-      assert.match(asked.confirmLine, /Save anyway\?$/);
-      assert.match(asked.dirty, /unsaved/, "the draft was written while being asked about");
+      assert.match(asked.sayClass, /\bwarn\b/, "Save wrote it silently");
+      assert.match(asked.say, /Step 1 is shorter than the 60 Hz floor/);
+      assert.match(asked.say, /press Save again to write it\.$/);
+      // The button IS the confirmation state now — it must say what the next
+      // press will do, or "press Save again" is an instruction to press a
+      // button that still claims it merely saves.
+      assert.equal(asked.saveLabel, "Save it anyway");
+      assert.match(asked.dirty, /Unsaved/, "the draft was written while being asked about");
 
-      // The question survives the 2 s poll — a dialog that vanishes on its own
-      // is the same silent save with extra steps.
+      // The question survives the 2 s poll — a question that vanishes on its
+      // own is the same silent save with extra steps.
       await settle(page);
-      assert.doesNotMatch(
-        (await editorState(page)).confirmClass,
-        /\boff\b/,
-        "the poll took the question down",
+      const held = await editorState(page);
+      assert.match(held.sayClass, /\bwarn\b/, "the poll took the question down");
+      assert.equal(held.saveLabel, "Save it anyway");
+
+      // THE "NOT YET" LEG, as this page now offers it. There is no cancel
+      // button; instead any further edit RE-ARMS the question (`macAct` clears
+      // `macAskedShort`), so the next Save asks again rather than writing
+      // behind the author's back — which is the promise the cancel button used
+      // to keep. The edit takes the question's sentence down, exactly as
+      // pressing "Not yet" used to.
+      //
+      // ⚠️ The SAVE BUTTON'S LABEL does not come back with it: `macAct` clears
+      // the flag but only `macSave` ever rewrites the text, so the button goes
+      // on reading "Save it anyway" while the next press will in fact ask
+      // again. That is cosmetic — it errs towards asking, never towards a
+      // silent write — so it is named here rather than pinned, and the
+      // assertion below is on the half that protects the author.
+      await cellAt(page, "2|B").click();
+      await page.waitForFunction(
+        () => (document.querySelector(".n-macsay")?.className ?? "") === "n-macsay none",
+      );
+      const rearmed = await editorState(page);
+      assert.match(rearmed.dirty, /Unsaved/, "an edit after the question wrote the macro");
+      await saveBtn(page).click();
+      await page.waitForFunction(() =>
+        (document.querySelector(".n-macsay")?.className ?? "").includes("warn"),
+      );
+      assert.match(
+        (await editorState(page)).sayClass,
+        /\bwarn\b/,
+        "an edit after the question let the next Save write the short step unasked",
       );
 
-      // "Not yet" takes it down and leaves the preset alone.
-      await page.locator('[data-act="macro-save-cancel"]').click();
-      const cancelled = await editorState(page);
-      assert.match(cancelled.confirmClass, /\boff\b/);
-      assert.match(cancelled.dirty, /unsaved/, "cancelling wrote the macro");
-
-      // Ask again, then answer it: the save goes through exactly as authored.
-      await page.locator('[data-act="macro-save"]').click();
-      assert.doesNotMatch((await editorState(page)).confirmClass, /\boff\b/);
-      await page.locator('[data-act="macro-save-anyway"]').click();
+      // Answer it: the save goes through exactly as authored.
+      await saveBtn(page).click();
       await page.waitForFunction(() =>
-        (document.querySelector(".macdirty")?.textContent ?? "").startsWith("saved"),
+        (document.querySelector(".n-macsay")?.textContent ?? "").startsWith("Saved"),
       );
       const saved = await editorState(page);
-      assert.match(saved.confirmClass, /\boff\b/, "the question outlived the answer");
+      assert.equal(saved.say, `Saved “${MACRO}”.`);
+      assert.equal(saved.sayClass, "n-macsay", "a successful save was coloured as a fault");
+      assert.equal(saved.saveLabel, "Save this macro", "the question outlived the answer");
+      assert.equal(saved.dirty, "");
       // The short step is still short — the save never rewrote it.
       assert.equal(saved.shortRows, 1);
     } finally {
       await page.close();
     }
   });
+
+  test("Save is not swallowed by the duration edit that preceded it", async () => {
+    // ⚠️ A LIVE DEFECT, pinned here rather than worked around.
+    //
+    // A duration commits on `change`, which for a pointer user fires on the
+    // MOUSEDOWN THAT PRESSES SAVE — the box blurs, `macAct("dur|…")` starts,
+    // and `macBusy` goes true. The `click` that follows a few milliseconds
+    // later reaches `macSave()`, which opens with `if (!macDraft || macBusy)
+    // return;` and drops the press ON THE FLOOR: no write, no question, no
+    // sentence on `.n-macsay`, and the macro still reads "Unsaved changes".
+    // Measured on the fixture: the first press produces exactly one request,
+    // `POST /nocturne/api/macro/edit`, and none to `/api/macro/save`.
+    //
+    // Type a duration, reach for Save, nothing happens — the single most
+    // ordinary gesture in this editor. The guard is there to stop two ACTS
+    // overlapping; a Save is not an act, and dropping it silently is the one
+    // outcome a busy latch must never produce. The fix belongs in
+    // `NocturneIsland.ts` (`macSave` should wait for the in-flight act instead
+    // of returning), not here.
+    //
+    // The contract asserted is only that THE PRESS IS HEARD: after it, the
+    // editor has either written the macro or said why it will not.
+    const page = await openEditor();
+    try {
+      const box = durBox(page, 1);
+      await box.click();
+      await box.fill("70");
+      // NO blur, NO wait — straight from the field to the button, which is
+      // what a person does and what every other test here deliberately avoids.
+      await saveBtn(page).click();
+      await page.waitForFunction(
+        () => (document.querySelector(".n-macsay")?.className ?? "") !== "n-macsay none",
+        null,
+        { timeout: 10_000 },
+      );
+      const after = await editorState(page);
+      assert.notEqual(
+        after.say,
+        "",
+        "the Save press was swallowed by the duration edit it followed: the editor " +
+          "neither wrote the macro nor said why not",
+      );
+      assert.equal(after.durations[1], "70", "the duration typed before Save was lost");
+    } finally {
+      await page.close();
+    }
+  });
 });
 
-// ── FIX 1: the editor cannot be emptied into a dead end ────────────────────
+// ── the editor cannot be emptied into a dead end ───────────────────────────
 // Every add affordance once lived on a row (＋↑ / ＋↓), so the last ✕
 // took the last row AND every way to get one back, and the grid became a blank
 // box with nothing to click.
@@ -983,10 +1222,11 @@ describe("a step shorter than the sampling floor", () => {
 // zero steps is REFUSED by the writer (`mapping::save_macro` — empty steps is
 // a refusal, not a delete), so the editor must not be able to construct one.
 // The ✕ on the last remaining step empties that step instead of removing it —
-// a neutral gap, which is a legal, meaningful thing to hold — and the "＋ Add
+// a neutral gap, which is a legal, meaningful thing to hold — and the "Add
 // step" toolbar above the grid belongs to no row at all.
 
 describe("a macro can never be emptied into a dead end", () => {
+  // ⚠️ SAVES a two-step macro, which is what the last test in this file sees.
   test("the last ✕ clears the step instead of deleting it, and Add step grows it back", async () => {
     const page = await openEditor();
     try {
@@ -994,29 +1234,45 @@ describe("a macro can never be emptied into a dead end", () => {
 
       // Two ordinary deletes. Nothing surprising: the row goes.
       await page.locator('[data-macact="del|2"]').click();
+      await page.waitForFunction(
+        () => document.querySelectorAll(".n-macbar .n-machold").length === 2,
+      );
       await page.locator('[data-macact="del|1"]').click();
+      await page.waitForFunction(
+        () => document.querySelectorAll(".n-macbar .n-machold").length === 1,
+      );
       const one = await editorState(page);
       assert.equal(one.holds.length, 1, "the deletes did not land");
       // …and the last remaining ✕ now says what it will really do, so it does
       // not read as a delete that stopped working.
-      assert.deepEqual(one.delTitles.length, 1);
-      assert.match(one.delTitles[0], /^clear this step \(a macro needs at least one/);
+      assert.equal(one.delTitles.length, 1);
+      assert.match(one.delTitles[0], /^Clear this step — a macro needs at least one/);
 
       // THE PRESS THAT USED TO END THE SESSION.
       await page.locator('[data-macact="del|0"]').click();
+      await page.waitForFunction(
+        () =>
+          document.querySelector(".n-macbar .n-machold")?.textContent ===
+          "(nothing — neutral gap)",
+      );
       const cleared = await editorState(page);
       assert.equal(cleared.holds.length, 1, "the last step was removed — the dead end is back");
       assert.equal(cleared.holds[0], "(nothing — neutral gap)", "the step was not emptied");
       assert.match(cleared.toml, /hold = \[\]/, "the draft is not the empty step it shows");
+      assert.match(cleared.say, /it was cleared rather than removed/);
 
       // …and pressing it again is idempotent, not a way to sneak past it.
       await page.locator('[data-macact="del|0"]').click();
+      await page.waitForTimeout(400);
       assert.equal((await editorState(page)).holds.length, 1);
 
       // The road out: a toolbar button that never depended on a row existing.
-      await page.locator('[data-act="macro-addstep"]').click();
+      await page.locator('[data-macact="add"]').click();
+      await page.waitForFunction(
+        () => document.querySelectorAll(".n-macbar .n-machold").length === 2,
+      );
       const grown = await editorState(page);
-      assert.equal(grown.holds.length, 2, "＋ Add step did not add a step");
+      assert.equal(grown.holds.length, 2, "Add step did not add a step");
       assert.equal(grown.durations[1], "50", "a new step did not arrive at 50 ms");
       assert.equal(grown.units[1], "ms");
       assert.doesNotMatch(
@@ -1027,30 +1283,25 @@ describe("a macro can never be emptied into a dead end", () => {
 
       // The macro the editor now holds is one the writer will take — which is
       // the whole reason zero steps is unreachable rather than merely ugly.
-      // (Earlier cases in this file save a deliberately short step into this
-      // fixture, so Save may still have its short-step question to ask; the
-      // point here is that it asks rather than refuses.)
-      await page.locator('[data-cell="1|A"]').click();
-      await page.locator('[data-act="macro-save"]').click();
-      if (!/\boff\b/.test((await editorState(page)).confirmClass)) {
-        await page.locator('[data-act="macro-save-anyway"]').click();
-      }
-      await page.waitForFunction(() =>
-        (document.querySelector(".macdirty")?.textContent ?? "").startsWith("saved"),
+      // (An earlier case in this file saved a deliberately short step into this
+      // fixture, so Save still has its short-step question to ask; the point
+      // here is that it ASKS rather than refuses.)
+      await cellAt(page, "1|A").click();
+      await page.waitForFunction(
+        () => [...document.querySelectorAll(".n-macbar .n-machold")][1]?.textContent === "A",
       );
+      await saveMacro(page);
       const saved = await editorState(page);
       assert.equal(saved.holds.length, 2);
-      assert.ok(
-        !saved.toasts.some((t) => /refus|error/i.test(t)),
-        `the save was refused: ${JSON.stringify(saved.toasts)}`,
-      );
+      assert.equal(saved.say, `Saved “${MACRO}”.`);
+      assert.doesNotMatch(saved.sayClass, /\berr\b/, `the save was refused: ${saved.say}`);
     } finally {
       await page.close();
     }
   });
 });
 
-// ── FIX 3: the motion buttons speak diagonals ──────────────────────────────
+// ── the motion buttons speak diagonals ─────────────────────────────────────
 // The labels used to spell the pair — "¼ → · ↓ · ↓+→ · →" — because an earlier
 // pass wanted them to teach that one row can hold several controls at once.
 // First-class diagonals landed since: the grid has a ↘ column, the row readout
@@ -1089,15 +1340,20 @@ describe("motion labels speak diagonals, not pairs", () => {
       // there the moment a motion is used: the row's own ledger.
       const before = (await editorState(page)).holds.length;
       await page.locator('[data-macmotion="qcf"]').click();
+      await page.waitForFunction(
+        (n) => document.querySelectorAll(".n-macbar .n-machold").length === n + 3,
+        before,
+      );
       const after = await editorState(page);
       assert.deepEqual(after.holds.slice(before), ["D-pad ↓", "D-pad ↘", "D-pad →"]);
       assert.equal(after.expands[before + 1], "↘ = dpad.down + dpad.right");
-      assert.equal(after.expandClasses[before + 1], "macexp");
-      // The toast reports the SHAPE and points at that ledger rather than
+      assert.equal(after.expandClasses[before + 1], "n-macexp");
+      // The report names the SHAPE and points at that ledger rather than
       // repeating the pair a third time.
-      assert.ok(
-        after.toasts.some((t) => /spells the pair it stores beside its name/.test(t)),
-        `the toast did not point at the row ledger: ${JSON.stringify(after.toasts)}`,
+      assert.match(
+        after.say,
+        /spells the pair it stores beside its name/,
+        `it did not point at the row ledger: ${JSON.stringify(after.say)}`,
       );
     } finally {
       await page.close();

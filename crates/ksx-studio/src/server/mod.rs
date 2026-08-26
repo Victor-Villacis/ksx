@@ -1,13 +1,21 @@
 //! The blocking axum server around the render seam.
 //!
-//! GET / renders the page (SSR + island props); GET /api/status serves the
-//! same [`StatusPayload`] as JSON for the island's 2 s poller (same-origin
-//! only — the CSP's `connect-src 'self'` is exactly what permits the fetch).
-//! The three POST routes each perform one [`ControlSource`] verb and
-//! 303-redirect back to /, carrying the outcome in a `flash` query parameter
-//! — plain HTML forms remain the baseline (`form-action 'self'`), which the
-//! client optionally upgrades to fetch-submits that read the redirect's
-//! flash without a reload.
+//! GET /nocturne renders THE page — one product surface that owns setup,
+//! mapping, saved games and configuration — as SSR plus island props. GET
+//! /api/nocturne serves the same payload as JSON for the island's poller
+//! (same-origin only — the CSP's `connect-src 'self'` is exactly what permits
+//! the fetch). Every mutating route performs one verb and 303-redirects back
+//! to /nocturne, carrying the outcome in a `flash` query parameter that
+//! `nocturne_flash_from_query` resolves against an ALLOWLIST rather than
+//! reflecting. Plain HTML forms remain the baseline (`form-action 'self'`),
+//! which the client optionally upgrades to fetch-submits that read the
+//! redirect's flash without a reload.
+//!
+//! Three tool pages sit beside it: /check (the button check), /pads (the
+//! ViGEm bus) and /devices (the picker). `/`, `/map`, `/start`, `/setup`,
+//! `/profiles` and `/workspace` were deleted in the 2026-08-25 cutover and
+//! now 404; so did `/api/status`, `/api/map`, `/api/setup`, `/api/profiles`
+//! and `/api/workspace`.
 //!
 //! v15 adds `/pads`, and it takes its facts from a THIRD provider:
 //! [`ksx_api::MachineSource`], beside the existing status and control ones.
@@ -39,27 +47,14 @@
 
 mod check;
 mod devices;
-mod map;
 mod nocturne;
 mod pads;
-mod profiles;
 mod session;
-mod setup;
-mod start;
-mod status;
-mod workspace;
 
 use check::*;
 use devices::*;
-use map::*;
 use nocturne::*;
 use pads::*;
-use profiles::*;
-use session::*;
-use setup::*;
-use start::*;
-use status::*;
-use workspace::*;
 
 use std::net::SocketAddr;
 
@@ -77,42 +72,25 @@ use axum::Router;
 
 use serde::Deserialize;
 
-use crate::control::{BindOutcome, BindRequest, ControlSource, SessionView};
+use crate::control::{BindOutcome, ControlSource, SessionView};
 
 use crate::error::StudioError;
 
-use crate::render::{render_status, Assets, BrandAssets, EmbeddedPage};
+use crate::render::{Assets, BrandAssets, EmbeddedPage};
 
 use crate::render_check::render_check;
 
 use crate::render_devices::render_devices;
 
-use crate::render_map::render_map;
-
-use crate::render_setup::render_setup;
-
-use crate::render_start::render_start;
-
-use crate::render_workspace::render_workspace;
-
-use crate::snapshot::{
-    CheckPayload, DevicesPayload, MapPayload, PadsPayload, ProfilesPayload, SetupPayload,
-    SetupSnapshot, StartPayload, StatusPayload, StatusSnapshot, StatusSource, WorkspacePayload,
-};
+use crate::snapshot::{CheckPayload, DevicesPayload, PadsPayload, StatusSource};
 
 struct AppState {
-    page: EmbeddedPage,
-    workspace_page: EmbeddedPage,
     /// The static design-proof route (see `render_nocturne.rs`): loaded like
     /// every page, rendered from defaults, backed by nothing.
     nocturne_page: EmbeddedPage,
-    map_page: EmbeddedPage,
     check_page: EmbeddedPage,
     pads_page: EmbeddedPage,
     devices_page: EmbeddedPage,
-    profiles_page: EmbeddedPage,
-    setup_page: EmbeddedPage,
-    start_page: EmbeddedPage,
     source: Box<dyn StatusSource>,
     control: Box<dyn ControlSource>,
     /// The MACHINE reads and writes that are not a `DaemonCommand`: the
@@ -141,12 +119,6 @@ struct AppState {
     /// `Arc`, not `Box`, because every SSE connection hands a handle to its own
     /// blocking bridge thread.
     live: Arc<dyn ksx_api::LiveSource>,
-    /// Process-local ordering fence for browser-declared physical encoder
-    /// mutations. The browser's Web Locks cannot survive a tab crash, while a
-    /// queued `spawn_blocking` task can; this fence makes recovery reads and
-    /// those already-admitted tasks agree on one epoch order before either
-    /// reaches the machine provider.
-    panel_hardware_fence: Arc<nocturne::PanelHardwareFence>,
     /// The last REMOVED controller, held SERVER-side for the rack's short
     /// undo window — the browser is shown a chip and a verb, never the
     /// authoring table (`server/nocturne.rs`).
@@ -302,32 +274,19 @@ pub fn serve(
     if !bind.ip().is_loopback() {
         return Err(StudioError::NonLoopbackBind { bind });
     }
-    let page = EmbeddedPage::load("/")?;
-    let workspace = EmbeddedPage::load("/workspace")?;
     let nocturne = EmbeddedPage::load("/nocturne")?;
-    let mapper = EmbeddedPage::load("/map")?;
     let check = EmbeddedPage::load("/check")?;
     let pads = EmbeddedPage::load("/pads")?;
     let devices = EmbeddedPage::load("/devices")?;
-    let profiles = EmbeddedPage::load("/profiles")?;
-    let setup = EmbeddedPage::load("/setup")?;
-    let start = EmbeddedPage::load("/start")?;
     let state = Arc::new(AppState {
-        page,
-        workspace_page: workspace,
         nocturne_page: nocturne,
-        map_page: mapper,
         check_page: check,
         pads_page: pads,
         devices_page: devices,
-        profiles_page: profiles,
-        setup_page: setup,
-        start_page: start,
         source,
         control,
         machine,
         live,
-        panel_hardware_fence: Arc::new(nocturne::PanelHardwareFence::new()),
         nocturne_undo: std::sync::Mutex::new(None),
         machine_cache: MachineCache::new(),
     });
@@ -345,13 +304,10 @@ pub fn serve(
             .await
             .map_err(|source| StudioError::Bind { bind, source })?;
         let app = Router::new()
-            .route("/", get(status_page))
-            .route("/api/status", get(api_status))
             // ── /workspace — the Nocturne workspace (M2: left-pane verbs) ─
             // The reads, plus the left pane's form twins — each ONE staging
             // verb, 303 → /workspace?flash=. The center and right panes'
             // verbs arrive with M3–M4.
-            .route("/workspace", get(workspace_page))
             // ── /nocturne — the Nocturne front end. The keyboard section
             // is MIGRATED product surface (reads + verbs in nocturne.rs);
             // the rest is still the design proof's placeholder.
@@ -360,16 +316,6 @@ pub fn serve(
             // On-demand hardware context for Control Surface Builder. Kept
             // out of `/api/nocturne`'s 2 s poll: passive HID enumeration is a
             // deliberate inspection, not background canvas state.
-            .route("/api/panel/status", get(api_panel_status))
-            .route("/api/panel/chart", post(api_panel_chart))
-            .route("/api/panel/backups", get(api_panel_backups))
-            .route("/api/panel/profiles", get(api_panel_profiles))
-            .route("/api/panel/profiles/save", post(api_panel_profile_save))
-            .route("/api/panel/profiles/delete", post(api_panel_profile_delete))
-            .route("/api/panel/program/plan", post(api_panel_program_plan))
-            .route("/api/panel/program/apply", post(api_panel_program_apply))
-            .route("/api/panel/restore/plan", post(api_panel_restore_plan))
-            .route("/api/panel/restore/apply", post(api_panel_restore_apply))
             .route("/nocturne/device", post(nocturne_form_device))
             .route("/nocturne/device/identify", post(nocturne_form_identify))
             .route(
@@ -381,6 +327,25 @@ pub fn serve(
                 post(nocturne_form_capture_release),
             )
             .route("/nocturne/blocking", post(nocturne_form_blocking))
+            .route("/nocturne/theme", post(nocturne_form_theme))
+            .route("/nocturne/export.json", get(nocturne_export))
+            // 8 MB, restored: this limit was a per-route layer on
+            // `/setup/import` and did NOT travel with the verb when it moved
+            // here, so the real ceiling silently became axum's 2 MB default
+            // while `N_IMPORT_UNREADABLE` went on promising 8 MB. A whole
+            // cabinet — config, every games.toml profile and every preset in
+            // one interop document — can exceed 2 MB, and the cost was a bare
+            // 413 with no `Location` and no way back to the page.
+            .route(
+                "/nocturne/import",
+                post(nocturne_form_import)
+                    .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
+            )
+            .route("/nocturne/game", post(nocturne_form_game_new))
+            .route("/nocturne/game/update", post(nocturne_form_game_update))
+            .route("/nocturne/game/delete", post(nocturne_form_game_delete))
+            .route("/nocturne/layout/rename", post(nocturne_form_preset_rename))
+            .route("/nocturne/layout/delete", post(nocturne_form_preset_delete))
             .route("/nocturne/controller", post(nocturne_form_add))
             .route("/nocturne/controller/remove", post(nocturne_form_remove))
             .route("/nocturne/controller/undo", post(nocturne_form_undo))
@@ -408,65 +373,38 @@ pub fn serve(
             .route("/nocturne/adopt", post(nocturne_form_adopt))
             .route("/nocturne/discard", post(nocturne_form_discard))
             .route("/nocturne/autostart", post(nocturne_form_autostart))
-            .route("/api/workspace", get(api_workspace))
-            .route("/workspace/blocking", post(workspace_form_blocking))
-            .route("/workspace/controller/move", post(nocturne_form_move))
-            .route("/workspace/controller/remove", post(nocturne_form_remove))
-            .route("/workspace/controller/socd", post(nocturne_form_socd))
-            .route(
-                "/workspace/controller/duplicate",
-                post(nocturne_form_duplicate),
-            )
-            .route("/workspace/controller", post(nocturne_form_add))
-            .route("/workspace/device/identify", post(workspace_form_identify))
-            .route("/workspace/bind/clear", post(nocturne_form_bind_clear))
-            // MIGRATED (2026-08-17): adopt lives in nocturne.rs now; this
-            // page's button keeps working — the answer lands on /nocturne.
-            .route("/workspace/adopt", post(nocturne_form_adopt))
-            .route("/session/start", post(session_start))
-            .route("/session/stop", post(session_stop))
-            .route("/config/reload", post(config_reload))
             // The mapper (v5): page + poll payload + the learn/bind verbs,
             // each a thin wrapper over one ControlSource method (= one pipe
             // verb — no GUI-only code paths).
-            .route("/map", get(map_page))
-            .route("/api/map", get(api_map))
             .route("/api/learn", get(api_learn_poll))
             .route("/api/learn/start", post(api_learn_start))
             .route("/api/learn/cancel", post(api_learn_cancel))
             .route("/api/input-test", get(api_input_test_poll))
             .route("/api/input-test/start", post(api_input_test_start))
             .route("/api/input-test/cancel", post(api_input_test_cancel))
-            .route("/api/bind", post(api_bind))
             // v10: write a control's WHOLE key list (many keys → one
             // control). The island computes the new set from the payload it
             // is already polling — add = ∪ {k}, per-key ✕ = ∖ {k} — and posts
             // it here; `bind_keys` is what knows how to spell that on the
             // wire. Not a new daemon verb: today it composes the same `map`
             // the button beside it uses.
-            .route("/api/bind/keys", post(api_bind_keys))
             // v11: the macro editor's SAVE — one whole `[macros.<name>]`
             // table per call, through `ControlSource::save_macro` (= the
             // daemon's `map-macro` verb, = the `ksx macro` CLI's writer). No
             // GUI-only path, and no second macro schema: the steps on the wire
             // are the MacroStepView rows the read side already served.
             .route("/api/macro/save", post(api_macro_save))
-            .route("/api/preset/restore", post(api_preset_restore))
-            .route("/api/preset/clear-all", post(api_preset_clear_all))
             // The mapper's own session controls (FIX 0): "Pause emulation &
             // map" and "Resume emulation" are the SAME ControlSource verbs
             // the status page's forms use — one pipe verb each, no GUI-only
             // path — served as JSON so the mapper never navigates away and
             // loses the user's place.
-            .route("/api/session/stop", post(api_session_stop))
-            .route("/api/session/start", post(api_session_start))
             // ...and Resume is `ControlSource::resume`, NOT a start with a
             // remembered profile. This page cannot know whether it paused a
             // games.toml profile or an unsaved staged setup — a staged session
             // has no profile at all — and a start is defined as the config on
             // disk, so resuming that way put back the wrong session (or none).
             // The daemon knows what it started; this route asks it.
-            .route("/api/session/resume", post(api_session_resume))
             // v9 — the NO-JAVASCRIPT write path. Same verbs, same
             // ControlSource methods as the /api/* routes beside them; the
             // only difference is the wire shape (form-encoded in, 303 out
@@ -474,19 +412,11 @@ pub fn serve(
             // switched off can bind, clear, restore and pause with these,
             // and the island fetch-enhances them on top (map.ts) so a page
             // WITH scripting never navigates.
-            .route("/map/bind", post(map_form_bind))
             // v10 — MANY KEYS → ONE CONTROL, without JavaScript. Same row
             // form, same key picker, two more submits: `add` appends the
             // picked key to the control's list, `key/remove` takes just that
             // one off it. Both are read-modify-write on the key SET and land
             // through `ControlSource::bind_keys` — no new daemon verb.
-            .route("/map/add", post(map_form_add))
-            .route("/map/key/remove", post(map_form_remove_key))
-            .route("/map/clear", post(map_form_clear))
-            .route("/map/turbo", post(map_form_turbo))
-            .route("/map/preset/restore", post(map_form_restore))
-            .route("/map/preset/clear-all", post(map_form_clear_all))
-            .route("/map/session/stop", post(map_form_session_stop))
             // v15 — the PADS page: what is on the ViGEm bus, a bounded pad
             // test, and the prune that clears ghosts. Three routes, one
             // `MachineSource` verb each, and the arming step is a GET
@@ -528,125 +458,40 @@ pub fn serve(
                 "/devices/certificates/sweep",
                 post(devices_form_sweep_certificates),
             )
-            // PROFILES & PRESETS. The read is `MachineSource::profiles`
-            // (games.toml with `ksx_games::preflight` already run, so a
-            // profile whose .exe moved is a broken ROW instead of a cabinet
-            // that does nothing when the button is pressed) plus
-            // `MachineSource::presets`. The three writes are one backend verb
-            // each: `profile_new`, `preset_new`, and — for "switch to this" —
-            // the SAME `ControlSource::start` the status page's forms post,
-            // 303-ing back here so the user keeps their place, exactly as
-            // `/map/session/stop` reuses `stop`.
-            .route("/profiles", get(profiles_page))
-            .route("/api/profiles", get(api_profiles))
-            .route("/profiles/new", post(profiles_form_new))
-            .route("/profiles/update", post(profiles_form_update))
-            .route("/profiles/delete", post(profiles_form_delete))
-            .route("/profiles/switch", post(profiles_form_switch))
-            .route("/profiles/stop", post(profiles_form_stop))
-            .route("/profiles/preset/new", post(profiles_form_preset_new))
-            .route("/profiles/preset/rename", post(profiles_form_preset_rename))
-            .route("/profiles/preset/delete", post(profiles_form_preset_delete))
-            // ── /setup — the CONFIG FIRST, and the first run ───────────────
-            // Two verbs a person sees (Export, Import) and three steps, each
-            // one backend verb. No route here takes a filesystem path, in or
-            // out: the export IS the bytes and the import IS the document, so
-            // nothing on this page ever asks anyone to name a file.
-            .route("/setup", get(setup_screen))
-            .route("/api/setup", get(api_setup))
-            // A GET on purpose: it writes nothing, and `guard.rs` decides what
-            // to police by METHOD — a read wearing a POST would be a lie the
-            // guard then has to work around. The Host check still covers it.
-            .route("/setup/export.json", get(setup_export))
-            // DRY RUN unless the form's "write it" box is ticked
-            // (`ksx_api::ImportRequest::apply`), which is the CLI's consent
-            // shape and not a web-only ceremony.
+            // ── What used to be five pages ─────────────────────────────
             //
-            // The one route with its own body limit. axum's default is 2 MB,
-            // and a whole cabinet — config, every games.toml profile and every
-            // preset in one interop document — can exceed it; the cost of the
-            // default was a bare 413 with no way back to the page. 8 MB is
-            // roomy for a configuration and still a bound, and the handler
-            // turns the rejection into a flashed sentence either way.
-            .route(
-                "/setup/import",
-                post(setup_form_import)
-                    .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
-            )
-            // Step 2: one `ControlSource::assign_slot` — the same pipe verb
-            // `ksx slot assign` performs. It BOUNCES the pads, which the page
-            // says before the click, not after it.
-            .route("/setup/slot", post(setup_form_slot))
-            .route("/setup/blocking", post(setup_form_blocking))
-            // The Studio theme: a config write like blocking, but read per
-            // page render rather than by the daemon — "saved" IS "in effect".
-            .route("/setup/theme", post(setup_form_theme))
-            // Step 3: the daemon's own learner, the two verbs the mapper
-            // already uses. The page renders `learn_poll` per request, so this
-            // step works with scripting switched off.
-            .route("/setup/prove", post(setup_form_prove))
-            .route("/setup/prove/cancel", post(setup_form_prove_cancel))
-            // ── /start — THE FIRST RUN (docs/FIRST-RUN.md moments 4–7) ─────
+            // Saved games, controller layouts, the configuration verbs, the
+            // theme, the first-run staging flow and the mapper all had their
+            // own page and their own route block here. They are one page now
+            // and their handlers live in `nocturne.rs`; what follows is the
+            // rationale that OUTLIVED the pages, because it still constrains
+            // the verbs wherever they live.
             //
-            // A new page rather than a rebuilt `/setup`, and the split is the
-            // contract, not the layout: every `/setup` step reads config.toml
-            // and writes to it, and NOTHING here touches a file until
-            // `/start/save`. One screen holding both rules would be a screen
-            // where the user cannot tell which controls commit — which is the
-            // whole thing staging exists to fix (`render_start.rs` has the
-            // longer version).
+            // **Staging touches no file until Save.** Every staging verb is
+            // one `ControlSource` call reaching nothing outside the daemon's
+            // own memory — no file, no driver, no session — which is what
+            // makes exploring free. That was the whole reason first-run was a
+            // separate page from the configuration editor: one screen holding
+            // both rules is a screen where the user cannot tell which controls
+            // commit. On one page the rule has to be carried by the VERBS, so
+            // `/nocturne/save` is the only staging route that writes.
             //
-            // Thirteen routes. The seven staging ones are ONE `ControlSource`
-            // verb each and reach nothing outside the daemon's own memory — no
-            // file, no driver, no session — which is what makes exploring free.
-            // `/start/save` is one config write (the same shape as
-            // `/setup/slot`) and `/start/play` starts a session from a plan
-            // built in memory. The two capture routes are the deliberately
-            // narrow exception to the old browser claim prohibition: an
-            // exact served interface, three explicit consents, and the local
-            // MachineSource's installed UAC helper. Studio never receives a
-            // backend choice or helper output from the browser.
+            // **The capture routes are the narrow exception** to the browser
+            // claim prohibition: an exact served interface, three explicit
+            // consents, and the local MachineSource's installed UAC helper.
+            // Studio never receives a backend choice or helper output from the
+            // browser.
             //
-            // The RESCAN is deliberately not here. It is a link back to
-            // `/start`, because re-reading the machine writes nothing and a
-            // read wearing a POST is a lie the guard then has to work around
-            // (the same argument `/setup/export.json` makes).
-            .route("/start", get(start_page))
-            .route("/api/start", get(api_start))
-            // MIGRATED (2026-08-17): the keyboard verbs live in nocturne.rs
-            // now. The old paths stay registered so /start's intact frames
-            // keep working — pressing them lands the answer on /nocturne.
-            .route("/start/device", post(nocturne_form_device))
-            .route("/start/device/identify", post(nocturne_form_identify))
-            .route(
-                "/start/capture/prepare",
-                post(nocturne_form_capture_prepare),
-            )
-            .route(
-                "/start/capture/release",
-                post(nocturne_form_capture_release),
-            )
-            .route("/start/controller", post(start_form_controller))
-            .route(
-                "/start/controller/persona",
-                post(start_form_controller_persona),
-            )
-            // Moment 6 IN THE STAGE: dress a staged controller in one of
-            // ksx's in-box layouts. One `stage-edit`, so it reaches nothing
-            // outside the daemon's memory — the bindings a first-run user
-            // needs arrive without a file write and without the mapper, which
-            // edits FILES and could therefore never have been step 3 of a flow
-            // that has not saved anything yet.
-            .route("/start/controller/layout", post(start_form_layout))
-            .route("/start/controller/remove", post(start_form_remove))
-            .route("/start/blocking", post(nocturne_form_blocking))
-            // MIGRATED (2026-08-17): the sign-in task and "Start over" live
-            // in nocturne.rs now; these cards keep working — the answers
-            // land on /nocturne.
-            .route("/start/autostart", post(nocturne_form_autostart))
-            .route("/start/discard", post(nocturne_form_discard))
-            .route("/start/save", post(start_form_save))
-            .route("/start/play", post(start_form_play))
+            // **Reads do not wear POST.** `/nocturne/export.json` is a GET
+            // because it writes nothing, and `guard.rs` polices by METHOD — a
+            // read wearing a POST is a lie the guard then has to work around.
+            // The Host check still covers it. Import is the mirror: a DRY RUN
+            // unless the form's "write it" box is ticked, which is the CLI's
+            // consent shape and not a web-only ceremony.
+            //
+            // **No route here takes a filesystem path**, in or out: the export
+            // IS the bytes and the import IS the document, so nothing ever
+            // asks anyone to name a file.
             // Canon helper: correct no-cache + Service-Worker-Allowed
             // headers for free (replaced a hand-rolled handler).
             .route("/sw.js", get(forma_server::sw::serve_sw::<Assets>))
@@ -727,67 +572,6 @@ where
     }
 }
 
-/// One [`crate::control::SlotOutcome`] as the sentence this page flashes.
-///
-/// **The canonical formatters, not a second reconstruction.**
-/// [`ksx_api::SlotOutcome::headline`] is the designated one-line renderer and
-/// is what the cabinet (`ksx-cabinet/src/app.rs`) and the daemon
-/// (`ksx-backend/src/daemon/pipe.rs`) print; `refusal()` is the matching one for
-/// the error arm, and it carries the CODE and the remedy that a hand-built
-/// `unwrap_or` throws away.
-///
-/// This used to rebuild the sentence from flags — `message` then `if restarted
-/// { push(" The pads replugged.") }` — which is the exact re-derivation
-/// `control.rs::a_slot_outcome_prints_what_the_daemon_said_rather_than_re_deriving_it`
-/// forbids by name. It went wrong three ways: it double-named the bounce when
-/// the daemon's own sentence already named it, it lost slot/preset/`unchanged`
-/// when there was no sentence, and it had no way to say "nothing was running,
-/// so nothing had to restart" — which is the state this page's own wire form is
-/// offered in, because it turns on `reachable`, not `running`.
-fn slot_flash(outcome: crate::control::SlotOutcome) -> Result<String, String> {
-    match outcome.refusal() {
-        Some(refusal) => Err(refusal.message),
-        None => Ok(outcome.headline()),
-    }
-}
-
-fn learn_flash(view: crate::control::LearnView, done: &str) -> Result<String, String> {
-    match view.refusal() {
-        Some(refusal) => Err(refusal.message),
-        None => Ok(done.to_owned()),
-    }
-}
-
-#[derive(Deserialize)]
-struct StartForm {
-    profile: Option<String>,
-}
-
-async fn session_start(
-    State(state): State<Arc<AppState>>,
-    Form(form): Form<StartForm>,
-) -> Response {
-    // "" is the dropdown's "(config default)" sentinel — no override.
-    let profile = form
-        .profile
-        .as_deref()
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .map(str::to_owned);
-    act(state, move |control| {
-        control.start(profile.as_deref()).map_err(flash_of)
-    })
-    .await
-}
-
-async fn session_stop(State(state): State<Arc<AppState>>) -> Response {
-    act(state, |control| control.stop().map_err(flash_of)).await
-}
-
-async fn config_reload(State(state): State<Arc<AppState>>) -> Response {
-    act(state, |control| control.reload().map_err(flash_of)).await
-}
-
 /// One [`ksx_api::Refusal`] as the sentence a page flashes — message AND
 /// remedy.
 ///
@@ -809,23 +593,6 @@ fn flash_of(refusal: ksx_api::Refusal) -> String {
         Some(remedy) => format!("{} — {remedy}", refusal.message),
         None => refusal.message,
     }
-}
-
-/// Run one control verb off the async workers (the pipe client blocks), then
-/// 303 back to / with the outcome as the flash. Errors are flashed too —
-/// never a silent failure, never an error page dead-ending the refresh loop.
-async fn act<F>(state: Arc<AppState>, verb: F) -> Response
-where
-    F: FnOnce(&dyn ControlSource) -> Result<String, String> + Send + 'static,
-{
-    let outcome = tokio::task::spawn_blocking(move || verb(state.control.as_ref()))
-        .await
-        .unwrap_or_else(|_| Err("the control call panicked".to_owned()));
-    let flash = match outcome {
-        Ok(message) => message,
-        Err(error) => format!("error: {error}"),
-    };
-    Redirect::to(&format!("/?flash={}", urlencode(&flash))).into_response()
 }
 
 /// One embedded brand icon, with a real content type.
@@ -904,6 +671,8 @@ pub(crate) fn urlencode(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Read only by the null fixtures below; the lib itself no longer names it.
+    use crate::snapshot::StatusSnapshot;
 
     /// Ledger #13, closed upstream: ksx ships forma's CSP verbatim now.
     ///
@@ -1009,117 +778,5 @@ mod tests {
         assert_eq!(urlencode("a&b=c?d#e"), "a%26b%3Dc%3Fd%23e");
         assert_eq!(urlencode("naïve"), "na%C3%AFve");
         assert_eq!(urlencode(&"x".repeat(1000)).len(), 300, "capped");
-    }
-
-    /// The one Edit refusal that carries an action the user can take, end to
-    /// end: from the domain that writes it to the copy the page shows.
-    ///
-    /// The refusal is TAKEN FROM `StageEdit::apply`, never typed here. The
-    /// classifier matches on this workspace's own wording ("player block"),
-    /// so a reword upstream has to fail this test rather than quietly demote a
-    /// four-player user back to "Reopen ksx and try again" - which is what
-    /// shipped, and what made the third controller on a four-player panel
-    /// look like a broken app instead of a menu with a better answer in it.
-    #[test]
-    fn a_layout_with_no_block_for_this_player_says_so_instead_of_try_again() {
-        let setup = ksx_api::StageEdit::ChooseDevice {
-            selector: "usb:d209:0430:00".to_owned(),
-            alias: "panel".to_owned(),
-            label: "Ultimarc I-PAC 4".to_owned(),
-        }
-        .apply(&ksx_core::stage::StagedSetup::new())
-        .expect("staging the panel");
-
-        let refusal = ksx_api::StageEdit::AddSlot {
-            number: Some(3),
-            persona: "xbox360".to_owned(),
-            preset: "Player 3".to_owned(),
-            layout: Some("keyboard-2p".to_owned()),
-        }
-        .apply(&setup)
-        .expect_err("a two-block layout has nothing for player 3");
-
-        assert!(
-            refusal.message.contains("player block"),
-            "the classifier keys off this wording: {}",
-            refusal.message
-        );
-        assert_eq!(
-            start_action_flash(StartAction::Edit, &Err(refusal.message.clone())),
-            START_EDIT_NO_PLAYER_BLOCK,
-        );
-        // And it still survives the query-string round trip, which is the only
-        // way a flash ever reaches the page.
-        assert_eq!(
-            start_flash_from_query(Some(START_EDIT_NO_PLAYER_BLOCK)).as_deref(),
-            Some(START_EDIT_NO_PLAYER_BLOCK)
-        );
-    }
-    #[test]
-    fn start_action_feedback_never_reflects_provider_or_query_text() {
-        let raw = r#"daemon pipe refused --preset C:\Users\TestUser\.ksx\claim.toml"#;
-        let edit = Err(raw.to_owned());
-        assert_eq!(
-            start_action_flash(StartAction::Edit, &edit),
-            START_EDIT_ERROR
-        );
-        let play = Err("a session is already running in the daemon".to_owned());
-        assert_eq!(
-            start_action_flash(StartAction::Play, &play),
-            START_PLAY_ACTIVE
-        );
-        let incomplete = Err("slot 1 has no controls mapped".to_owned());
-        assert_eq!(
-            start_action_flash(StartAction::Play, &incomplete),
-            START_PLAY_NOT_READY
-        );
-
-        assert_eq!(
-            start_flash_from_query(Some(raw)).as_deref(),
-            Some(START_UNKNOWN_FLASH_ERROR)
-        );
-        assert_eq!(
-            start_flash_from_query(Some(START_SAVE_OK)).as_deref(),
-            Some(START_SAVE_OK)
-        );
-
-        for safe in START_FLASH_ALLOWLIST {
-            let lower = safe.to_ascii_lowercase();
-            for forbidden in ["daemon", "pipe", "--", r"c:\", "preset", "claim"] {
-                assert!(
-                    !lower.contains(forbidden),
-                    "customer action feedback exposed {forbidden:?}: {safe}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn start_redirect_location_contains_only_presented_copy() {
-        let raw = r#"daemon pipe at C:\Users\TestUser\.ksx refused `ksx daemon`"#;
-        let response = start_redirect(StartAction::Play, Err(raw.to_owned()));
-        let location = response
-            .headers()
-            .get(header::LOCATION)
-            .and_then(|value| value.to_str().ok())
-            .expect("start redirect location");
-        assert!(location.starts_with("/start?flash=error"), "{location}");
-        for leaked in ["daemon", "pipe", "TestUser", "preset", "claim"] {
-            assert!(!location.contains(leaked), "{leaked} leaked: {location}");
-        }
-    }
-
-    #[test]
-    fn map_feedback_never_reflects_unmodeled_provider_text() {
-        let fallback = "That change could not be completed. Nothing changed.";
-        for hostile in [
-            r"C:\Users\TestUser\secret",
-            r"HID\VID_D209&PID_0430",
-            r"HKLM\SYSTEM\CurrentControlSet",
-            "expected a sequence at line 4 column 9",
-            r#"{"verb":"map","key":"A"}"#,
-        ] {
-            assert_eq!(consumer_map_detail(hostile, fallback), fallback);
-        }
     }
 }

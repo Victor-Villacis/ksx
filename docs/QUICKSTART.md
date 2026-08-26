@@ -24,21 +24,28 @@ The release notes publish the installer SHA-256 so the download can be checked.
 
 ## 2. Choose the keyboard or arcade panel
 
-ksx opens directly to **Setup** and scans the machine.
+ksx opens directly to **Set up & play** — one page that holds everything below —
+and scans the machine as it loads. The **Input hardware** list is on the left.
 
-1. Find the keyboard or arcade encoder by its ordinary device name.
-2. Select **Use this device**.
-3. If the device does not identify itself as a keyboard, open **Other devices
-   (optional)**. That list is deliberately separate from the normal path.
+1. Find the keyboard or arcade encoder by its ordinary device name under
+   **Keyboards**. Encoders appear above it in their own group.
+2. Click its row. The row *is* the choice; there is no separate confirm button.
+3. Not sure which board is which? Choose **Identify by key** and press a key on
+   it. **Rescan** re-reads the machine if you just plugged something in.
+4. If the device does not identify itself as a keyboard, open **Not keyboards —
+   experimental**. Boards with no keyboard interface at all are listed under
+   **Unavailable devices**, so "why is my device not here" has an answer.
 
 This choice is only a draft. Selecting a device does not disconnect it, create
 a controller, or write anything to disk.
 
-## 3. Prepare keyboard capture when Setup asks
+## 3. Prepare keyboard capture when ksx asks
 
-On a clean Windows installation, Setup asks before it prepares the selected
-USB keyboard for KSX's built-in Windows USB mode. This is an installed-app
-feature; the advanced portable ZIP cannot prepare or release a keyboard.
+On a clean Windows installation, ksx asks before it prepares the selected USB
+keyboard for its built-in Windows USB mode. The card sits with the keyboard you
+chose and reads **Prepare for play — Windows stops this keyboard's ordinary
+typing until it is released here.** This is an installed-app feature; the
+advanced portable ZIP cannot prepare or release a keyboard.
 
 1. Connect and test a different keyboard that can still type.
 2. Confirm that the selected keyboard will stop ordinary typing until it is
@@ -56,8 +63,11 @@ Windows associates the generated package with the keyboard model, so use
 later, unplug it first, then Release; removing the shared package returns that
 twin to ordinary typing when it is reconnected.
 
-If a compatible shared capture driver is already available, Setup remains
-ready and offers the built-in USB mode as an optional secondary action.
+If a compatible shared capture driver is already available, ksx remains ready
+and the same card offers the built-in USB mode as an optional extra — it reads
+**Typing normally — the shared driver is ready; preparing the built-in path is
+optional.**
+
 Bluetooth capture is not available on a genuinely clean installation; choose a
 supported USB keyboard. A refusal leaves the draft and saved files unchanged.
 
@@ -67,13 +77,13 @@ Pick the virtual controller the keyboard should become, then add it. You can
 change its type or remove it while the setup is still a draft.
 
 The current rich-controller lane supports one DualSense per session. Additional
-players can use Xbox 360 or PlayStation personas; Setup refuses a second
+players can use Xbox 360 or PlayStation personas; ksx refuses a second
 DualSense before saving or plugging anything.
 
 ksx supports as many as 16 players. Xbox-style controllers occupy the four
 places Windows games normally expose through XInput; supported additional
-players use PlayStation-style controllers. The Setup screen shows the exact
-capacity of the installed build instead of assuming four players.
+players use PlayStation-style controllers. The page shows the exact capacity of
+the installed build instead of assuming four players.
 
 Choose a ready-made controller layout that resembles the physical controls.
 The default two-player keyboard layout includes:
@@ -83,12 +93,15 @@ The default two-player keyboard layout includes:
 
 ## 5. Map the controls
 
-Select **Map controls** on a player, or open **Controls**.
+The middle of the page IS the mapper, and the panel on the right is the
+**Mapping inspector**. Pick a player in the left-hand **Virtual controllers**
+list to point them at it.
 
 - Click a controller control, then press the physical key for it.
 - Add more than one key to a control when useful.
 - Configure chords, auto-fire, and macros in the same editor.
-- Use the player tabs to move between controllers.
+- Switch players from the left-hand list; **Find mappings** (Ctrl K) searches
+  keys, controls and macros.
 
 While editing this unsaved setup, changes remain in the background service's
 draft. They do not write controller-layout files. A refused edit leaves the
@@ -96,7 +109,7 @@ draft unchanged.
 
 ## 6. Decide whether to split or freeze the keyboard
 
-Return to **Setup** and answer the required question:
+Answer the required question on the same page:
 
 - **Split it:** only mapped keys become controller input; unused keys can still
   type or be assigned to another player.
@@ -109,46 +122,55 @@ Ctrl+Alt+Del to end Play.
 
 ## 7. Save, Play, or both
 
-These are separate actions:
+These are separate actions, and they live in the bar across the top of the page
+with a line beside them saying whether what is on screen has been saved:
 
-- **Save this setup** keeps the keyboard, controllers, layouts, and split/freeze
-  choice for later. It does not start Play.
-- **Play now** uses exactly what is on the screen without saving it first.
+- **Save** keeps the keyboard, controllers, layouts, and split/freeze choice for
+  later. It does not start Play.
+- **▷ Play** uses exactly what is on the screen without saving it first.
+- **⏹ Stop** ends Play. **⟳ Apply** appears only while Play is running and you
+  have changed something, and applies the change without restarting.
 
 When Play begins, the virtual controllers appear and the chosen keyboard starts
-driving them. Open **Test** to see short and long presses light up.
+driving them. Open **Tools ▸ Test inputs** to see short and long presses light
+up.
 
 Guide/Home opens Xbox Game Bar only when Game Bar is available and Windows'
-**Allow your controller to open Game Bar** setting is enabled. Setup includes
-an **Open Windows Game Bar settings** button. ksx never changes that Windows
-setting silently.
+**Allow your controller to open Game Bar** setting is enabled. ksx never
+changes that Windows setting silently — and it does not yet offer a shortcut to
+it either, so open **Settings ▸ Gaming ▸ Game Bar** yourself for now.
 
 ## 8. Save a game (optional)
 
-Open **Manage saved games** from the bottom of Setup when ksx should remember a
-program or launcher link.
+Open the **▣** menu in the top bar and find **Saved games**, then **Add a saved
+game…**, when ksx should remember a program or launcher link.
 
-1. Enter a game name.
-2. Paste the program path or launcher link. Surrounding quotation marks are
-   accepted and removed safely.
-3. Choose the player count and controller layout.
-4. Select **Save game**.
+1. Enter a name.
+2. Paste the program path or launcher link into **Program to launch**.
+   Surrounding quotation marks are accepted and removed safely.
+3. Choose **Players** and the **Controller layout**.
+4. Select **Save this game**.
 
-Each player inherits the corresponding device choice from the saved Setup, so
-the saved game is runnable rather than an empty controller shell. Existing
-saved games can be switched, edited, rebased to the latest Setup device
-choices, or deleted entirely in Studio. Controller layouts are kept when a
-saved game is deleted.
+Afterwards each saved game is one click in that menu: clicking it loads that
+game's controllers into what you are working on. Play stays a separate step, so
+loading a game never starts one. **Edit &lt;name&gt;…** opens its fields again, and
+removing it takes a tick plus **Remove this saved game**.
 
-## If Setup says the background service is unavailable
+Each player inherits the corresponding device choice from the saved
+configuration, so the saved game is runnable rather than an empty controller
+shell. Existing saved games can be loaded, edited or deleted entirely in ksx,
+and controller layouts are kept when a saved game is deleted. (Rebasing a saved
+game onto the device choices you have since saved is a feature the app can
+perform but currently offers no control for; it is being restored.)
+
+## If ksx says the background service is unavailable
 
 Close the ksx window and reopen **ksx** from the desktop or Start menu. If ksx
-is already in the notification area, choose **Open Studio** there. No terminal
+is already in the notification area, choose **Open ksx** there. No terminal
 command is part of the customer recovery path.
 
-The Setup and Saved Games screens keep raw device paths and read errors inside
-**Technical details** or **Support details** disclosures. Include those details
-when reporting a problem.
+Raw device paths and read errors stay inside support disclosures rather than in
+the ordinary sentences. Include those details when reporting a problem.
 
 ## What still requires physical release acceptance
 

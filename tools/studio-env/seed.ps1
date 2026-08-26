@@ -1,7 +1,43 @@
+<#
+.SYNOPSIS
+    Build and start ONE disposable fixture lane: 'seeded' (4476) or
+    'first-run' (4520).
+
+.DESCRIPTION
+    Builds the macro_fixture example under the machine-wide build-graph lock,
+    copies it to a stamped disposable executable, starts it on its assigned
+    port, and records a managed process generation that status.ps1 and
+    teardown.ps1 validate against.
+
+    Every device, chart, session and saved configuration a fixture serves is
+    SYNTHETIC, and the Studio banner says so. That is why this script cannot be
+    pointed at 4460: -Environment accepts only the two fixture lanes, and the
+    body refuses a second time if a definition's port is 4460 or one of the ten
+    Playwright-owned test ports. A fixture answering on the real-hardware port
+    would put an invented device list in front of someone about to claim a
+    keyboard.
+
+    Stop the lane with teardown.ps1. See tools/studio-env/README.md.
+
+.PARAMETER Environment
+    'seeded' -- controllers, mappings and macros already present (UI work and
+    screenshots). 'first-run' -- KSX has no saved configuration (onboarding QA).
+
+.PARAMETER SkipBuild
+    Reuse the existing fixture build. Legitimate here and refused by
+    start-real.ps1: a fixture touches no hardware, so a stale build costs
+    nothing but a stale screenshot.
+
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/seed.ps1 -Environment seeded
+
+.LINK
+    docs/STUDIO-ENVIRONMENTS.md
+#>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("seeded", "first-run", "blank-encoder")]
+    [ValidateSet("seeded", "first-run")]
     [string]$Environment,
 
     [switch]$SkipBuild
@@ -22,8 +58,7 @@ $CopiedExe = Join-Path $BinRoot "macro_fixture-$Environment-$Stamp.exe"
 
 $Definitions = @{
     "seeded" = @{ Port = 4476; Arguments = @(); Label = "seeded demo"; Id = "fixture-seeded-demo" }
-    "first-run" = @{ Port = 4520; Arguments = @("--first-run"); Label = "first-run with preconfigured encoder"; Id = "fixture-first-run" }
-    "blank-encoder" = @{ Port = 4521; Arguments = @("--blank-panel"); Label = "first-run with blank encoder chart"; Id = "fixture-blank-encoder" }
+    "first-run" = @{ Port = 4520; Arguments = @("--first-run"); Label = "first KSX visit, nothing configured"; Id = "fixture-first-run" }
 }
 $Definition = $Definitions[$Environment]
 $Port = [int]$Definition.Port
@@ -309,6 +344,7 @@ try {
     Write-Host "Seeded $Environment ($($Definition.Label))."
     Write-Host "Open: http://127.0.0.1:$Port/nocturne"
     Write-Host "Banner: fixture provenance is embedded by the server."
+    Write-Host "Stop it with: tools/studio-env/teardown.ps1 -Environment $Environment"
 } finally {
     if ($LocationPushed) {
         Pop-Location

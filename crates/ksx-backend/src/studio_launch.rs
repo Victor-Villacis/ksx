@@ -65,10 +65,12 @@ pub const PORT: u16 = 4460;
 /// "type this on your phone" is frequently the *useful* outcome, and a UI that
 /// only knows how to launch a local browser cannot offer it.
 pub fn url() -> String {
-    // The product opens on the guided setup. The status dashboard remains at
-    // `/` for returning users who deliberately choose Health, but it is not a
-    // useful first screen on an unconfigured machine.
-    format!("http://127.0.0.1:{PORT}/start")
+    // `/nocturne` IS the product: one page that owns setup, mapping, saved
+    // games and configuration. This used to open `/start` and name `/` as the
+    // returning-user dashboard; both pages were deleted in the cutover, so
+    // this function spent that time handing out a 404 — to the browser it
+    // launches AND to the cabinet user told to type it on their phone.
+    format!("http://127.0.0.1:{PORT}/nocturne")
 }
 
 // ---------------------------------------------------------------------------
@@ -536,7 +538,7 @@ mod tests {
         assert_eq!(
             argv,
             vec![
-                "--app=http://127.0.0.1:4460/start".to_owned(),
+                "--app=http://127.0.0.1:4460/nocturne".to_owned(),
                 r"--user-data-dir=C:\Users\TestUser\AppData\Local\ksx\browser-profile".to_owned(),
                 "--no-first-run".to_owned(),
                 "--no-default-browser-check".to_owned(),
@@ -639,7 +641,7 @@ mod tests {
     /// telling the user a working address.
     #[test]
     fn the_window_opens_the_address_the_module_publishes() {
-        assert_eq!(url(), format!("http://127.0.0.1:{PORT}/start"));
+        assert_eq!(url(), format!("http://127.0.0.1:{PORT}/nocturne"));
         let argv = app_argv(&url(), Path::new(r"C:\p"));
         assert_eq!(argv[0], format!("--app={}", url()));
         assert!(argv[0].contains(&PORT.to_string()));

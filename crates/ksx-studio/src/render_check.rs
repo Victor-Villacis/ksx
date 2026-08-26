@@ -99,27 +99,27 @@ fn empty_state(mapper: &ksx_api::MapperSnapshot) -> Option<CheckEmptyState> {
     if mapper.generated_at == "(unavailable)" || mapper.config_root == "(unavailable)" {
         return Some(CheckEmptyState {
             heading: "Mappings could not be checked",
-            line: "Reopen ksx, then use setup to confirm a controller and Mapping to check its \
-                   buttons. Nothing was changed.",
-            href: "/start",
-            action: "Open setup",
+            line: "Reopen ksx, then set up a controller and check its buttons. \
+                   Nothing was changed.",
+            href: "/nocturne",
+            action: "Open ksx Studio",
         });
     }
     if mapper.slots.is_empty() {
         return Some(CheckEmptyState {
             heading: "No controller is ready to test",
-            line: "Add a controller in setup, then come back to test its buttons.",
-            href: "/start",
-            action: "Open setup",
+            line: "Add a controller in ksx Studio, then come back to test its buttons.",
+            href: "/nocturne",
+            action: "Open ksx Studio",
         });
     }
     if mapper.slots.iter().all(|slot| slot.bindings.is_empty()) {
         return Some(CheckEmptyState {
             heading: "No controls are ready to test",
-            line: "Open Mapping and choose a ready-made layout or add button keys, then come \
-                   back here.",
-            href: "/map",
-            action: "Open Mapping",
+            line: "Open ksx Studio and choose a ready-made layout or add button keys, \
+                   then come back here.",
+            href: "/nocturne",
+            action: "Open ksx Studio",
         });
     }
     None
@@ -201,8 +201,8 @@ fn scalar_slots(payload: &CheckPayload) -> serde_json::Value {
         "sourceLine": "Press a keyboard or panel key and watch every controller action it drives.",
         "emptyHeading": empty.map_or("", |state| state.heading),
         "emptyLine": empty.map_or("", |state| state.line),
-        "emptyHref": empty.map_or("/start", |state| state.href),
-        "emptyAction": empty.map_or("Open setup", |state| state.action),
+        "emptyHref": empty.map_or("/nocturne", |state| state.href),
+        "emptyAction": empty.map_or("Open ksx Studio", |state| state.action),
         "feedHint": payload.feed_hint,
         "sessionLine": if payload.session.running {
             "Play is active."
@@ -287,7 +287,7 @@ fn empty_player_values(payload: &CheckPayload) -> SlotValue {
                     ),
                     (
                         "href".to_owned(),
-                        SlotValue::Text(format!("/map?slot={}", slot.number)),
+                        SlotValue::Text(format!("/nocturne?slot={}", slot.number)),
                     ),
                     (
                         "action".to_owned(),
@@ -566,8 +566,8 @@ mod tests {
             "{unavailable_html}"
         );
         assert!(
-            unavailable_html.contains(r#"href="/start""#)
-                && unavailable_html.contains("Open setup"),
+            unavailable_html.contains(r#"href="/nocturne""#)
+                && unavailable_html.contains("Open ksx Studio"),
             "{unavailable_html}"
         );
         assert!(
@@ -583,7 +583,7 @@ mod tests {
             "{empty_html}"
         );
         assert!(
-            empty_html.contains("Add a controller in setup"),
+            empty_html.contains("Add a controller in ksx Studio"),
             "{empty_html}"
         );
 
@@ -595,7 +595,7 @@ mod tests {
             "{zero_html}"
         );
         assert!(
-            zero_html.contains(r#"href="/map""#) && zero_html.contains("Open Mapping"),
+            zero_html.contains(r#"href="/nocturne""#) && zero_html.contains("Open ksx Studio"),
             "{zero_html}"
         );
 
@@ -644,7 +644,7 @@ mod tests {
         assert!(html.contains(r#"data-slot="1""#), "{html}");
         assert!(html.contains("Player 2 has no controls yet"), "{html}");
         assert!(
-            html.contains(r#"href="/map?slot=2""#) && html.contains("Open Mapping"),
+            html.contains(r#"href="/nocturne?slot=2""#) && html.contains("Open ksx Studio"),
             "{html}"
         );
         assert!(
@@ -700,7 +700,7 @@ mod tests {
         for mixed_literal in [
             "has no controls yet",
             "add button keys for this player",
-            "Open Mapping",
+            "Open ksx Studio",
         ] {
             assert!(
                 CHECK_ISLAND_TS.contains(mixed_literal),
@@ -745,18 +745,26 @@ mod tests {
     fn the_nav_reaches_every_sibling_page() {
         let page = EmbeddedPage::load("/check").unwrap();
         let html = render_check(&page, &cabinet()).html;
+        // One page owns the workflow now, so the four numbered steps that
+        // pointed at /start, /map and / are a single link.
         assert!(
-            html.contains(
-                r#"<a class="navlink workflow-link" href="/start#keyboard"><span class="workflow-num">1</span>Keyboard</a>"#
-            ),
+            html.contains(r#"<a class="navlink workflow-link" href="/nocturne">"#),
             "{html}"
         );
-        assert!(
-            html.contains(
-                r#"<a class="navlink workflow-link" href="/map"><span class="workflow-num">3</span>Mapping</a>"#
-            ),
-            "{html}"
-        );
+        // And nothing on this page may still point into a deleted one.
+        for dead in [
+            r#"href="/""#,
+            r#"href="/start"#,
+            r#"href="/map"#,
+            r#"href="/setup"#,
+            r#"href="/profiles"#,
+            r#"href="/workspace"#,
+        ] {
+            assert!(
+                !html.contains(dead),
+                "dead link {dead} still renders: {html}"
+            );
+        }
         assert!(
             html.contains(r#"<a href="/check" aria-current="page">"#),
             "{html}"

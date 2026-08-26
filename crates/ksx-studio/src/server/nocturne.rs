@@ -32,6 +32,8 @@ pub(super) const N_DEVICE_OK: &str = "Keyboard selected. Nothing has been saved 
 pub(super) const N_BLOCKING_OK: &str =
     "Capture behaviour updated. Nothing has been saved or started.";
 
+pub(super) const N_THEME_OK: &str = "Studio theme updated.";
+
 pub(super) const N_EDIT_OK: &str = "Draft updated. Nothing has been saved or started.";
 
 pub(super) const N_MOVE_AT_END: &str =
@@ -39,6 +41,48 @@ pub(super) const N_MOVE_AT_END: &str =
 
 pub(super) const N_APPLY_OK: &str = "Changes applied to the running session in place — the pads \
      stayed plugged. Nothing has been saved.";
+
+/// Success lines for the migrated saved-game and layout verbs. Named rather
+/// than written at the call site so they can sit in [`N_FLASH_ALLOWLIST`] —
+/// a flash that is not on that list renders as the generic fallback with
+/// scripting off, which is how every one of these verbs silently lost its
+/// sentence when it moved onto /nocturne.
+pub(super) const N_GAME_ADD_OK: &str = "Saved game added.";
+pub(super) const N_GAME_UPDATE_OK: &str = "Saved game updated.";
+pub(super) const N_GAME_DELETE_OK: &str = "Saved game removed.";
+pub(super) const N_LAYOUT_RENAME_OK: &str = "Layout renamed.";
+pub(super) const N_LAYOUT_DELETE_OK: &str = "Layout deleted.";
+pub(super) const N_IMPORT_UNREADABLE: &str =
+    "error: That document could not be read — it may be larger than this page accepts (8 MB).";
+pub(super) const N_IMPORT_EMPTY: &str =
+    "error: Nothing to import — paste a configuration into the box first.";
+
+/// Owned copy for the saved-game and layout verbs. Every one of these was a
+/// constant on the deleted /profiles page, and they come back with the verbs:
+/// a surface presents its OWN sentence for an outcome, never the provider's.
+pub(super) const N_GAME_ADD_ERROR: &str = "error: Saved game could not be added. Check the game \
+     name, program location, players, and controller layout; nothing was changed.";
+pub(super) const N_GAME_UPDATE_ERROR: &str = "error: Saved game could not be updated. Reopen this \
+     screen, then check its details; nothing was changed.";
+pub(super) const N_GAME_DELETE_ERROR: &str = "error: Saved game could not be removed. Reopen this \
+     screen and try again; nothing was changed.";
+pub(super) const N_LAYOUT_RENAME_ERROR: &str = "error: Controller layout could not be renamed. \
+     Choose a new name that is not already taken; nothing was changed.";
+/// Names the guard, not a generic failure: with no force on this form, a
+/// delete that fails is a delete something still uses, and "point those
+/// controllers elsewhere" is the step that unblocks it.
+pub(super) const N_LAYOUT_DELETE_ERROR: &str = "error: Controller layout could not be deleted. \
+     Controllers still using it must be pointed at another layout first; nothing was changed.";
+
+pub(super) const N_THEME_UNKNOWN: &str = "error: That is not a theme this build ships. Pick one \
+     from the list in this menu; nothing was changed.";
+
+/// Tick-box refusals for the two destructive configuration verbs. Server-side,
+/// because a browser dialog is an interaction nicety and not a boundary.
+pub(super) const N_GAME_DELETE_UNCONFIRMED: &str =
+    "error: Tick the confirmation box to remove a saved game. Nothing was changed.";
+pub(super) const N_LAYOUT_DELETE_UNCONFIRMED: &str =
+    "error: Tick the confirmation box to delete a layout. Nothing was changed.";
 
 pub(super) const N_APPLY_RESTART: &str = "error: The draft changed more than bindings, so the \
      running session cannot take it in place. Press Play to replace the session; nothing was \
@@ -206,7 +250,133 @@ pub(super) const N_AUTOSTART_DEV_RUNTIME: &str = "error: This development build 
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 61] = [
+/// "How many players" arrives as TEXT so an empty box can be answered in
+/// words rather than by the extractor. Two things the migrated version lost:
+/// the `error:` marker (`applyFlash` picks the red side on that alone, so a
+/// rejected player count painted in the SUCCESS colour) and a place on
+/// [`N_FLASH_ALLOWLIST`] (without which a browser with scripting off reads
+/// the generic "could not be finished" instead of the one thing that is
+/// actually wrong with the form in front of it).
+pub(super) const N_GAME_SLOTS_ERROR: &str =
+    "error: How many players must be a whole number. Nothing was changed.";
+
+/// A body this page could not read AT ALL — a hidden `number` field served
+/// empty because no slot is selected, a truncated post, the wrong content
+/// type. Every form here answers through the flash, and axum's own 422
+/// carries no `Location`: the island reads its outcome out of the redirect's
+/// `?flash=`, so a 422 renders as nothing whatsoever and the user is left
+/// pressing a button that appears to do nothing. That is the failure this
+/// whole screen replaced, and it must not come back through the extractor.
+pub(super) const N_FORM_UNREADABLE: &str = "error: That request could not be read. Reopen this \
+     screen and try again; nothing was changed.";
+
+// ── Save and Play refuse in THIS page's words ──────────────────────────────
+//
+// The daemon composes a refusal with an `error`, a stable `code` and often a
+// `remedy`, and all three are written for an operator: `StageRefusal` names
+// `slot 1`, `Persona::backend()`, `ksx_core::MAX_SLOTS` and file paths. Those
+// are right for a log and wrong for the sentence under a button. Worse, they
+// are not on the allowlist, so with scripting off the specific reason
+// degraded to the generic "could not be finished" anyway — the boundary was
+// costing us the sentence AND leaking the internals.
+//
+// So the CODE selects one of this page's own sentences. Save and Play get
+// separate copy for every code deliberately: the promise at the end differs
+// ("nothing was written" / "nothing was started"), and a shared line would
+// have to drop the half that says what did not happen.
+
+pub(super) const N_SAVE_BLOCKING: &str = "error: This setup is not ready to save — the keyboard \
+     question on this screen has not been answered yet. Nothing was written.";
+pub(super) const N_PLAY_BLOCKING: &str = "error: This setup is not ready to play — the keyboard \
+     question on this screen has not been answered yet. Nothing was started.";
+
+pub(super) const N_SAVE_NO_BINDINGS: &str = "error: This setup is not ready to save — one \
+     controller has no keys mapped to it. Give it a starting layout, or bind a control on this \
+     screen; nothing was written.";
+pub(super) const N_PLAY_NO_BINDINGS: &str = "error: This setup is not ready to play — one \
+     controller has no keys mapped to it, so its pad would do nothing. Give it a starting \
+     layout, or bind a control on this screen; nothing was started.";
+
+pub(super) const N_SAVE_NO_DEVICE: &str = "error: This setup is not ready to save — no keyboard \
+     has been chosen yet. Pick one on this screen; nothing was written.";
+pub(super) const N_PLAY_NO_DEVICE: &str = "error: This setup is not ready to play — no keyboard \
+     has been chosen yet, so there is nothing for the controllers to listen to. Pick one on this \
+     screen; nothing was started.";
+
+pub(super) const N_SAVE_NO_SLOTS: &str = "error: This setup is not ready to save — no controller \
+     has been added yet. Add one on this screen; nothing was written.";
+pub(super) const N_PLAY_NO_SLOTS: &str = "error: This setup is not ready to play — no controller \
+     has been added yet. Add one on this screen; nothing was started.";
+
+/// The capture disagreement, said by the two writing verbs.
+///
+/// The staged keyboard and the MACHINE disagree about who is holding it: the
+/// draft names the ordinary Windows path over a board Windows has already
+/// bound to `winusb.sys`, or names the built-in path over a board that is not
+/// prepared. Either way the pads would plug and nothing would reach them.
+/// This gate used to live in `SetupFlags::can_save`/`can_play` on the deleted
+/// `/start` page; it is repeated in the HANDLERS so a hand-authored POST
+/// cannot walk past a button the page did not offer.
+pub(super) const N_SAVE_CAPTURE: &str = "error: This setup is not ready to save — the chosen \
+     keyboard is not prepared the way this draft says it is. Use the keyboard card on this \
+     screen to prepare or release it; nothing was written.";
+pub(super) const N_PLAY_CAPTURE: &str = "error: This setup is not ready to play — the chosen \
+     keyboard is not prepared the way this draft says it is. Use the keyboard card on this \
+     screen to prepare or release it; nothing was started.";
+
+/// **Play has the stricter gate; Save deliberately does not.** Committing the
+/// staged files is safe and useful on a machine whose controller driver is
+/// missing or could not be read — Play is what would plug a pad that
+/// materializes nothing, so the readiness of the required OUTPUT backends is
+/// consulted here and only here. Both sentences say the setup is still ready
+/// to save, because it is: the missing half is the machine's, not the draft's.
+pub(super) const N_PLAY_OUTPUT_BLOCKED: &str = "error: Play cannot start — a controller this \
+     setup needs has no working output on this machine, so its pad would plug and stay dead. \
+     The setup is still ready to save; install the missing controller support, then Play. \
+     Nothing was started.";
+pub(super) const N_PLAY_OUTPUT_UNKNOWN: &str = "error: Play cannot start — ksx could not check \
+     the controller outputs this setup needs, and it will not plug a pad it cannot vouch for. \
+     The setup is still ready to save; reopen ksx and try again. Nothing was started.";
+
+pub(super) const N_FLASH_ALLOWLIST: [&str; 91] = [
+    // Save and Play's own refusals. They are composed from a stable daemon
+    // CODE rather than from the daemon's sentence, precisely so they can sit
+    // on this list — a refusal that only exists at runtime cannot be
+    // reflected, and every one of these was invisible with scripting off.
+    N_SAVE_BLOCKING,
+    N_PLAY_BLOCKING,
+    N_SAVE_NO_BINDINGS,
+    N_PLAY_NO_BINDINGS,
+    N_SAVE_NO_DEVICE,
+    N_PLAY_NO_DEVICE,
+    N_SAVE_NO_SLOTS,
+    N_PLAY_NO_SLOTS,
+    N_SAVE_CAPTURE,
+    N_PLAY_CAPTURE,
+    N_PLAY_OUTPUT_BLOCKED,
+    N_PLAY_OUTPUT_UNKNOWN,
+    N_GAME_SLOTS_ERROR,
+    N_FORM_UNREADABLE,
+    // The verbs migrated from /setup and /profiles. Absent from this list,
+    // each rendered as N_UNKNOWN_FLASH_ERROR with scripting off — the page
+    // said "that request could not be finished" after a write that had in
+    // fact succeeded.
+    N_GAME_ADD_OK,
+    N_GAME_UPDATE_OK,
+    N_GAME_DELETE_OK,
+    N_LAYOUT_RENAME_OK,
+    N_LAYOUT_DELETE_OK,
+    N_THEME_OK,
+    N_GAME_ADD_ERROR,
+    N_GAME_UPDATE_ERROR,
+    N_GAME_DELETE_ERROR,
+    N_LAYOUT_RENAME_ERROR,
+    N_LAYOUT_DELETE_ERROR,
+    N_GAME_DELETE_UNCONFIRMED,
+    N_LAYOUT_DELETE_UNCONFIRMED,
+    N_THEME_UNKNOWN,
+    N_IMPORT_UNREADABLE,
+    N_IMPORT_EMPTY,
     N_MOVE_AT_END,
     N_TOGGLE_OLD_DAEMON,
     N_CLEAR_ALL_OK,
@@ -284,9 +454,61 @@ pub(super) fn nocturne_flash_from_query(flash: Option<&str>) -> Option<String> {
     )
 }
 
+/// A form this page might not be able to read.
+///
+/// **Not pedantry.** The island fetch-submits and reads its outcome out of the
+/// redirect's `?flash=`; axum's own rejection is a 422 with NO `Location`, so
+/// the page shows nothing whatsoever and the user is left pressing a button
+/// that appears to do nothing. And the bodies that take that arm are ones
+/// this page SERVES: `<input type="hidden" name="number" value="">` on the
+/// clear-all fold whenever no slot is selected, the same on the macro
+/// lifecycle forms and the SOCD editor. Every handler whose form has a
+/// required field takes this instead of `Form<T>` and answers in a sentence.
+type NocturneForm<T> = Result<Form<T>, axum::extract::rejection::FormRejection>;
+
 fn nocturne_redirect(flash: &str) -> Response {
     Redirect::to(&format!("/nocturne?flash={}", urlencode(flash))).into_response()
 }
+
+// ── The page's own words for a read that refused ───────────────────────────
+//
+// A refused read is NOT an empty machine, and it is not a place to print the
+// provider's diagnostics either. `flash_of` composes an operator's line —
+// it appends the refusal's `remedy` to a `message` that, for
+// `Refusal::not_here`, already ENDS in that same remedy, so the config menu
+// read `… is not available on this surface — run \`ksx setup\` — run \`ksx
+// setup\`` on screen. A TOML parse failure printed `expected \`=\` at line 4`
+// under the saved-games list. Both are the same defect: the provider's text
+// crossing the presentation boundary (`verb_flash`'s rule, applied to the
+// READS as well as to the writes).
+//
+// These sentences say which resource could not be read and what to do, and
+// nothing else. The typed detail stays available to the poller through the
+// payload's own `scan` / `setup` / `games` / `autostart_read` being empty or
+// null beside a non-empty `*_error`, which is how a machine tells a refused
+// read from an empty one.
+
+pub(super) const N_READ_SCAN_ERROR: &str =
+    "The device list could not be read. Reopen ksx and try again.";
+pub(super) const N_READ_SETUP_ERROR: &str =
+    "Configuration could not be read. Reopen ksx and try again.";
+pub(super) const N_READ_GAMES_ERROR: &str =
+    "Saved games could not be read. Reopen ksx and try again.";
+pub(super) const N_READ_AUTOSTART_ERROR: &str =
+    "What happens at sign-in could not be read. Reopen ksx and try again.";
+
+/// The daemon-down banner, in the page's one status region.
+///
+/// FIX 1's rule survived the cutover as a requirement and not as code: quit
+/// the helper and `/nocturne` still opened onto a live-looking device list, an
+/// empty rack, and one collapsed `<details>` chip reading "Draft unavailable".
+/// Nothing above the fold said the thing the whole page edits is gone. This
+/// sentence is served into `nFlashLine` — `role="status"`, immediately above
+/// `<main>` — whenever the draft cannot be reached and no action flash of its
+/// own is competing for the slot.
+pub(super) const N_DAEMON_DOWN: &str = "error: This screen needs the ksx background helper, and \
+     it is not answering. Close and reopen ksx; nothing on this page has been changed, and \
+     nothing you do here can take effect until it is back.";
 
 // ── The reads ───────────────────────────────────────────────────────────────
 
@@ -310,22 +532,32 @@ pub(super) async fn collect_nocturne(
         let session = state.control.session();
         let (scan, unavailable) = match state.machine_cache.device_scan(&*state.machine) {
             Ok(scan) => (scan, String::new()),
-            Err(refusal) => (ksx_api::DeviceScanView::default(), flash_of(refusal)),
+            // Same boundary as the three reads below: `unavailable` non-empty
+            // is what makes every count on the left pane say "unavailable"
+            // instead of zero, and its TEXT is printed under the device list.
+            Err(_) => (
+                ksx_api::DeviceScanView::default(),
+                N_READ_SCAN_ERROR.to_owned(),
+            ),
         };
         // The configuration menu's three reads, each degrading to its own
         // honest sentence rather than an empty pane (SURFACES.md §1b).
+        // The refusal itself is dropped on purpose: it is a diagnostic, and
+        // every one of these strings is rendered as primary customer copy
+        // (the config-menu meta line, the note under the saved-games list,
+        // the sign-in fold). See the three constants above.
         let (setup, setup_error) = match state.machine_cache.setup_state(&*state.machine) {
             Ok(view) => (Some(view), String::new()),
-            Err(refusal) => (None, flash_of(refusal)),
+            Err(_) => (None, N_READ_SETUP_ERROR.to_owned()),
         };
         let (games, games_error) = match state.machine_cache.profiles(&*state.machine) {
             Ok(view) => (Some(view), String::new()),
-            Err(refusal) => (None, flash_of(refusal)),
+            Err(_) => (None, N_READ_GAMES_ERROR.to_owned()),
         };
         let (autostart_read, autostart_error) = match state.machine_cache.autostart(&*state.machine)
         {
             Ok(view) => (Some(view), String::new()),
-            Err(refusal) => (None, flash_of(refusal)),
+            Err(_) => (None, N_READ_AUTOSTART_ERROR.to_owned()),
         };
         // The undo chip: composed from the SERVER-held stash while its
         // window is open; an expired stash is dropped here so a late click
@@ -345,7 +577,7 @@ pub(super) async fn collect_nocturne(
                 )
             })
         };
-        NocturnePayload {
+        let payload = NocturnePayload {
             environment,
             staged,
             scan,
@@ -362,8 +594,8 @@ pub(super) async fn collect_nocturne(
             autostart_read,
             autostart_error,
             view: Default::default(),
-        }
-        .derived()
+        };
+        offer_held_release(payload.derived())
     })
     .await
     .unwrap_or_else(|_| {
@@ -372,14 +604,19 @@ pub(super) async fn collect_nocturne(
             staged: ksx_api::StagedSetupView::unreachable("the nocturne collection panicked"),
             scan: ksx_api::DeviceScanView::default(),
             session: SessionView::unreachable("the nocturne collection panicked"),
-            unavailable: "the device scan panicked — nothing below is a reading of this machine"
-                .to_owned(),
+            // A collection that panicked is still a read that did not
+            // happen, and these four strings are rendered as customer copy —
+            // "the games read panicked" under the saved-games list is the
+            // same boundary violation as printing a TOML parse error there.
+            // The `staged`/`session` unreachable reasons above stay diagnostic
+            // because nothing paints them as prose.
+            unavailable: N_READ_SCAN_ERROR.to_owned(),
             setup: None,
-            setup_error: "the configuration read panicked".to_owned(),
+            setup_error: N_READ_SETUP_ERROR.to_owned(),
             games: None,
-            games_error: "the games read panicked".to_owned(),
+            games_error: N_READ_GAMES_ERROR.to_owned(),
             autostart_read: None,
-            autostart_error: "the sign-in read panicked".to_owned(),
+            autostart_error: N_READ_AUTOSTART_ERROR.to_owned(),
             selected: None,
             q: None,
             macro_selected: None,
@@ -388,6 +625,59 @@ pub(super) async fn collect_nocturne(
         }
         .derived()
     })
+}
+
+/// **The way back does not go through the staged setup.**
+///
+/// A keyboard Windows has bound to `winusb.sys` does not type. Until it is
+/// released it is not a keyboard at all — and on a fresh install, or after a
+/// QA reset that moves `config.toml` aside, NOTHING is staged, because the
+/// binding is Windows's and not the configuration's. The capture card is
+/// composed from the STAGE (`StartCaptureView::from_parts`), so in that state
+/// its release control is not merely hidden: it does not exist, and the only
+/// documented exit is `docs/RECOVERY.md` and an elevated shell
+/// (`docs/FIRST-RUN.md` §6). That is the 2026-08-11 QA report verbatim: "the
+/// release button only comes up once I select a keyboard to bind... but the
+/// ipac was already bound and it was not showing the unrelease."
+///
+/// The deleted `/start` page answered it with a second, MACHINE-keyed list
+/// (`StartRows::prepared`). This page has one capture card, so the card is
+/// re-pointed instead: when it is offering neither action of its own and the
+/// scan says some board is held, it becomes that board's way back. Prepare
+/// stays stage-keyed — it edits the draft — while Release is machine-keyed,
+/// which is exactly how [`capture_target`] already resolves the release
+/// direction on the POST side. The two halves now agree.
+fn offer_held_release(mut payload: NocturnePayload) -> NocturnePayload {
+    // The stage is already offering something for this keyboard; a machine
+    // fact must not silently replace an action the user was reading.
+    if payload.view.cap_prepare || payload.view.cap_release {
+        return payload;
+    }
+    let held = payload.scan.boards.iter().find(|board| {
+        board.claimed
+            && board
+                .selector
+                .as_deref()
+                .is_some_and(|selector| !selector.trim().is_empty())
+            && board
+                .keyboard
+                .as_deref()
+                .is_some_and(|instance| !instance.trim().is_empty())
+    });
+    let Some(board) = held else {
+        return payload;
+    };
+    let selector = board.selector.clone().unwrap_or_default();
+    payload.view.cap_instance = board.keyboard.clone().unwrap_or_default();
+    payload.view.cap_line = format!(
+        "Keyboards ksx is holding: {} ({selector}). It cannot type until it is released here.",
+        board.name
+    );
+    payload.view.cap_selector = selector;
+    payload.view.cap_release = true;
+    payload.view.capd_cls = "n-capd".to_owned();
+    payload.view.cap_sw_cls = "n-capsw on".to_owned();
+    payload
 }
 
 /// `GET /nocturne` — the page, server-rendered from the real keyboard facts.
@@ -424,7 +714,13 @@ pub(super) async fn nocturne_page_handler(
         query.macro_name.clone(),
     )
     .await;
-    let flash = nocturne_flash_from_query(query.flash.as_deref());
+    // FIX 1, kept: an unreachable draft is announced ABOVE `<main>`, in the
+    // page's one `role="status"` region, and not left to a collapsed chip
+    // three folds down. An action flash always wins the slot — it is the
+    // answer to something the user just did, and this state is still visible
+    // in every inert control underneath.
+    let flash = nocturne_flash_from_query(query.flash.as_deref())
+        .or_else(|| (!payload.staged.reachable).then(|| N_DAEMON_DOWN.to_owned()));
     let theme = page_theme(&state).await;
     let out = crate::render::with_theme(
         render_nocturne(&state.nocturne_page, &payload, flash.as_deref()),
@@ -502,1543 +798,6 @@ pub(super) async fn api_nocturne(
         .into_response()
 }
 
-/// The Control Surface Builder's selected-encoder context.
-///
-/// The daemon-held staged device is the authority, exactly as it is for Teach
-/// and Route. Programming requests echo the selector they were composed for,
-/// but that value is only a stale-screen guard: the server rejects a mismatch
-/// and always builds the machine request from the current staged target. This
-/// is intentionally outside [`collect_nocturne`], so the 2 s canvas poll never
-/// opens a HID metadata handle.
-#[derive(serde::Serialize)]
-pub(super) struct PanelStatusPayload {
-    /// Echo of the server-selected target. The island rejects a response whose
-    /// target no longer equals the live staged selector.
-    target_selector: Option<String>,
-    /// A provider refusal or task failure. Distinct from an unsupported panel
-    /// returned successfully in `view`, and from no selected device at all.
-    unavailable: Option<String>,
-    view: Option<ksx_api::PanelStatusView>,
-}
-
-/// A browser Web Lock ends when its document dies; the blocking hardware task
-/// it dispatched does not. This bounded, process-local table closes that gap.
-///
-/// Entries are intentionally never evicted or reused during this Studio
-/// process. In particular, a recovery read can install a `Canceled` tombstone
-/// before a delayed apply handler arrives, and that apply must keep refusing
-/// forever rather than become admissible after an LRU pass. At capacity the
-/// next operation fails closed and asks for a Studio restart.
-const PANEL_HARDWARE_FENCE_CAPACITY: usize = 1024;
-const PANEL_HARDWARE_EPOCH_MAX_BYTES: usize = 128;
-const PANEL_HARDWARE_IDENTITY_MAX_BYTES: usize = 480;
-const PANEL_HARDWARE_FENCE_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct PanelHardwareFenceBinding {
-    selector: String,
-    board_fingerprint: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PanelHardwareFencePhase {
-    Queued,
-    Running,
-    Routing,
-    Finished,
-    Canceled,
-}
-
-#[derive(Debug)]
-struct PanelHardwareFenceEntry {
-    binding: PanelHardwareFenceBinding,
-    phase: PanelHardwareFencePhase,
-}
-
-struct PanelHardwareFenceRefusal {
-    message: String,
-    mutation_disposition: &'static str,
-}
-
-/// Shared by every route in one Studio process. This is not a replacement for
-/// the backend's machine-wide lease: it orders an admitted HTTP mutation
-/// against a crash-recovery chart read *before* either blocking task can race
-/// to that lease.
-pub(super) struct PanelHardwareFence {
-    entries: std::sync::Mutex<std::collections::BTreeMap<String, PanelHardwareFenceEntry>>,
-    next_route: std::sync::atomic::AtomicU64,
-    changed: std::sync::Condvar,
-}
-
-impl PanelHardwareFence {
-    pub(super) fn new() -> Self {
-        Self {
-            entries: std::sync::Mutex::new(std::collections::BTreeMap::new()),
-            next_route: std::sync::atomic::AtomicU64::new(1),
-            changed: std::sync::Condvar::new(),
-        }
-    }
-
-    fn register(
-        self: &Arc<Self>,
-        hardware_epoch: String,
-        binding: PanelHardwareFenceBinding,
-    ) -> Result<PanelHardwareReservation, PanelHardwareFenceRefusal> {
-        let mut entries = self.entries.lock().map_err(|_| PanelHardwareFenceRefusal {
-            message: "the Studio hardware-ordering fence is unavailable; restart Studio before changing this encoder"
-                .to_owned(),
-            mutation_disposition: "unknown",
-        })?;
-        if entries.values().any(|entry| {
-            entry.binding == binding && entry.phase == PanelHardwareFencePhase::Routing
-        }) {
-            return Err(PanelHardwareFenceRefusal {
-                message: "this encoder is committing a key route; the hardware transaction was not started"
-                    .to_owned(),
-                mutation_disposition: "not-started",
-            });
-        }
-        if let Some(existing) = entries.get(&hardware_epoch) {
-            let detail = if existing.binding == binding {
-                "this hardware transaction epoch was already admitted or retired"
-            } else {
-                "this hardware transaction epoch is already bound to a different encoder"
-            };
-            let mutation_disposition = if matches!(
-                existing.phase,
-                PanelHardwareFencePhase::Queued | PanelHardwareFencePhase::Running
-            ) {
-                // A different request carrying this token is still capable of
-                // writing. Calling this duplicate "not-started" would let its
-                // browser settle the shared epoch underneath that writer.
-                "unknown"
-            } else {
-                "not-started"
-            };
-            return Err(PanelHardwareFenceRefusal {
-                message: format!("{detail}; nothing was changed from this request"),
-                mutation_disposition,
-            });
-        }
-        if entries.len() >= PANEL_HARDWARE_FENCE_CAPACITY {
-            return Err(PanelHardwareFenceRefusal {
-                message: "the Studio hardware-ordering fence is full; restart Studio before changing this encoder; nothing was changed"
-                    .to_owned(),
-                // The server could not retain a permanent token tombstone, so
-                // the browser must keep its durable pending record.
-                mutation_disposition: "unknown",
-            });
-        }
-        entries.insert(
-            hardware_epoch.clone(),
-            PanelHardwareFenceEntry {
-                binding,
-                phase: PanelHardwareFencePhase::Queued,
-            },
-        );
-        drop(entries);
-        Ok(PanelHardwareReservation {
-            fence: Arc::clone(self),
-            hardware_epoch,
-            armed: true,
-        })
-    }
-
-    /// Reserve one exact encoder for a route commit before acquiring the
-    /// cross-process programming lease. This closes the in-process queue gap:
-    /// an already admitted writer wins, while a route admitted first prevents
-    /// a later writer from overtaking it before `stage_bind` settles.
-    fn register_route(
-        self: &Arc<Self>,
-        binding: PanelHardwareFenceBinding,
-    ) -> Result<PanelHardwareRouteReservation, String> {
-        let mut entries = self.entries.lock().map_err(|_| {
-            "the Studio hardware-ordering fence is unavailable; this encoder key was not mapped"
-                .to_owned()
-        })?;
-        if entries.values().any(|entry| {
-            entry.binding == binding
-                && matches!(
-                    entry.phase,
-                    PanelHardwareFencePhase::Queued | PanelHardwareFencePhase::Running
-                )
-        }) {
-            return Err(
-                "this encoder is being programmed or recovered; its key was not mapped".to_owned(),
-            );
-        }
-        if entries.len() >= PANEL_HARDWARE_FENCE_CAPACITY {
-            return Err(
-                "the Studio hardware-ordering fence is full; restart Studio before mapping this encoder"
-                    .to_owned(),
-            );
-        }
-        let id = self
-            .next_route
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let route_id = format!("route:{id}");
-        entries.insert(
-            route_id.clone(),
-            PanelHardwareFenceEntry {
-                binding,
-                phase: PanelHardwareFencePhase::Routing,
-            },
-        );
-        Ok(PanelHardwareRouteReservation {
-            fence: Arc::clone(self),
-            route_id,
-        })
-    }
-
-    fn begin(
-        self: &Arc<Self>,
-        mut reservation: PanelHardwareReservation,
-    ) -> Result<PanelHardwareRunning, String> {
-        let mut entries = self.entries.lock().map_err(|_| {
-            "the Studio hardware-ordering fence became unavailable before programming; nothing was changed"
-                .to_owned()
-        })?;
-        let entry = entries
-            .get_mut(&reservation.hardware_epoch)
-            .ok_or_else(|| {
-                "the Studio lost the admitted hardware transaction; nothing was changed".to_owned()
-            })?;
-        match entry.phase {
-            PanelHardwareFencePhase::Queued => {
-                entry.phase = PanelHardwareFencePhase::Running;
-                reservation.armed = false;
-                Ok(PanelHardwareRunning {
-                    fence: Arc::clone(self),
-                    hardware_epoch: reservation.hardware_epoch.clone(),
-                })
-            }
-            PanelHardwareFencePhase::Canceled => Err(
-                "a recovery read retired this hardware transaction before it started; nothing was changed"
-                    .to_owned(),
-            ),
-            PanelHardwareFencePhase::Running
-            | PanelHardwareFencePhase::Routing
-            | PanelHardwareFencePhase::Finished => Err(
-                "this hardware transaction epoch was already used; nothing was changed".to_owned(),
-            ),
-        }
-    }
-
-    /// Establish recovery order for one exact token+selector+board. An unseen
-    /// epoch becomes a permanent cancel tombstone; a queued one is canceled;
-    /// and a running one is waited out before the caller is allowed to read.
-    fn settle_for_recovery_read(
-        &self,
-        hardware_epoch: &str,
-        binding: &PanelHardwareFenceBinding,
-    ) -> Result<(), String> {
-        let mut entries = self.entries.lock().map_err(|_| {
-            "the Studio hardware-ordering fence is unavailable; the recovery read was not trusted"
-                .to_owned()
-        })?;
-        if !entries.contains_key(hardware_epoch) {
-            if entries.len() >= PANEL_HARDWARE_FENCE_CAPACITY {
-                return Err(
-                    "the Studio hardware-ordering fence is full; restart Studio before recovering this encoder"
-                        .to_owned(),
-                );
-            }
-            entries.insert(
-                hardware_epoch.to_owned(),
-                PanelHardwareFenceEntry {
-                    binding: binding.clone(),
-                    phase: PanelHardwareFencePhase::Canceled,
-                },
-            );
-            self.changed.notify_all();
-            return Ok(());
-        }
-
-        let deadline = std::time::Instant::now() + PANEL_HARDWARE_FENCE_WAIT;
-        loop {
-            let entry = entries.get_mut(hardware_epoch).ok_or_else(|| {
-                "the Studio lost the recovery fence entry; the chart was not read".to_owned()
-            })?;
-            if entry.binding != *binding {
-                return Err(
-                    "the hardware transaction epoch belongs to a different encoder; the chart was not read"
-                        .to_owned(),
-                );
-            }
-            match entry.phase {
-                PanelHardwareFencePhase::Queued => {
-                    entry.phase = PanelHardwareFencePhase::Canceled;
-                    self.changed.notify_all();
-                    return Ok(());
-                }
-                PanelHardwareFencePhase::Canceled | PanelHardwareFencePhase::Finished => {
-                    return Ok(())
-                }
-                PanelHardwareFencePhase::Running | PanelHardwareFencePhase::Routing => {
-                    let now = std::time::Instant::now();
-                    if now >= deadline {
-                        return Err(
-                            "the admitted encoder transaction is still running; the recovery chart was not read"
-                                .to_owned(),
-                        );
-                    }
-                    let remaining = deadline.saturating_duration_since(now);
-                    let (next, timeout) = self.changed.wait_timeout(entries, remaining).map_err(|_| {
-                        "the Studio hardware-ordering fence became unavailable while waiting; the recovery chart was not read"
-                            .to_owned()
-                    })?;
-                    entries = next;
-                    if timeout.timed_out() {
-                        return Err(
-                            "the admitted encoder transaction is still running; the recovery chart was not read"
-                                .to_owned(),
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    fn finish(&self, hardware_epoch: &str) {
-        // A poisoned fence already makes every new operation fail closed, but
-        // waking a recovery waiter is still the least surprising shutdown path
-        // for the mutation which owned this guard.
-        let mut entries = self
-            .entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(entry) = entries.get_mut(hardware_epoch) {
-            if matches!(
-                entry.phase,
-                PanelHardwareFencePhase::Queued | PanelHardwareFencePhase::Running
-            ) {
-                entry.phase = PanelHardwareFencePhase::Finished;
-            }
-        }
-        self.changed.notify_all();
-    }
-
-    fn finish_route(&self, route_id: &str) {
-        let mut entries = self
-            .entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        entries.remove(route_id);
-        self.changed.notify_all();
-    }
-}
-
-/// Owns the Studio-process side of one encoder route transaction. The backend
-/// guard nested inside it owns the machine-wide side.
-struct PanelHardwareRouteReservation {
-    fence: Arc<PanelHardwareFence>,
-    route_id: String,
-}
-
-impl Drop for PanelHardwareRouteReservation {
-    fn drop(&mut self) {
-        self.fence.finish_route(&self.route_id);
-    }
-}
-
-/// Owns an admitted-but-not-yet-running epoch across all async validation.
-/// Dropping the handler cannot leave it queued forever.
-struct PanelHardwareReservation {
-    fence: Arc<PanelHardwareFence>,
-    hardware_epoch: String,
-    armed: bool,
-}
-
-impl Drop for PanelHardwareReservation {
-    fn drop(&mut self) {
-        if self.armed {
-            self.fence.finish(&self.hardware_epoch);
-        }
-    }
-}
-
-/// Once this guard exists the machine call may start. Its drop is the wake-up
-/// edge a recovery chart waits for, including refusal and panic unwinding.
-struct PanelHardwareRunning {
-    fence: Arc<PanelHardwareFence>,
-    hardware_epoch: String,
-}
-
-impl Drop for PanelHardwareRunning {
-    fn drop(&mut self) {
-        self.fence.finish(&self.hardware_epoch);
-    }
-}
-
-fn checked_hardware_epoch(raw: &str) -> Result<String, String> {
-    let value = raw.trim();
-    if value.is_empty()
-        || value.len() > PANEL_HARDWARE_EPOCH_MAX_BYTES
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
-        return Err(
-            "the hardware transaction epoch is missing or malformed; nothing was changed"
-                .to_owned(),
-        );
-    }
-    Ok(value.to_owned())
-}
-
-fn checked_hardware_fence_binding(
-    selector: &str,
-    board_fingerprint: &str,
-) -> Result<PanelHardwareFenceBinding, String> {
-    let selector = selector.trim();
-    let board_fingerprint = board_fingerprint.trim();
-    if selector.is_empty()
-        || board_fingerprint.is_empty()
-        || selector.len() > PANEL_HARDWARE_IDENTITY_MAX_BYTES
-        || board_fingerprint.len() > PANEL_HARDWARE_IDENTITY_MAX_BYTES
-        || !selector.bytes().all(|byte| byte.is_ascii_graphic())
-        || !board_fingerprint
-            .bytes()
-            .all(|byte| byte.is_ascii_graphic())
-    {
-        return Err(
-            "the hardware transaction identity is missing or malformed; nothing was changed"
-                .to_owned(),
-        );
-    }
-    Ok(PanelHardwareFenceBinding {
-        selector: selector.to_ascii_uppercase(),
-        board_fingerprint: board_fingerprint.to_ascii_uppercase(),
-    })
-}
-
-fn panel_status_json(payload: PanelStatusPayload) -> Response {
-    let body = serde_json::to_string(&payload).unwrap_or_else(|_| {
-        "{\"target_selector\":null,\"unavailable\":\"panel status could not be encoded\",\"view\":null}".to_owned()
-    });
-    (
-        [
-            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
-            (
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
-            ),
-        ],
-        body,
-    )
-        .into_response()
-}
-
-fn panel_envelope_json<T: serde::Serialize>(
-    target_selector: Option<String>,
-    unavailable: Option<String>,
-    field: &'static str,
-    value: Option<T>,
-) -> Response {
-    let mut body = serde_json::Map::new();
-    body.insert(
-        "target_selector".to_owned(),
-        serde_json::to_value(target_selector).unwrap_or(serde_json::Value::Null),
-    );
-    body.insert(
-        "unavailable".to_owned(),
-        serde_json::to_value(unavailable).unwrap_or_else(|_| {
-            serde_json::Value::String("the panel response could not be encoded".to_owned())
-        }),
-    );
-    body.insert(
-        field.to_owned(),
-        serde_json::to_value(value).unwrap_or(serde_json::Value::Null),
-    );
-    (
-        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
-        axum::Json(serde_json::Value::Object(body)),
-    )
-        .into_response()
-}
-
-fn panel_refusal_envelope_json<T: serde::Serialize>(
-    target_selector: Option<String>,
-    refusal: ksx_api::Refusal,
-    field: &'static str,
-) -> Response {
-    let mut body = serde_json::Map::new();
-    for (key, value) in [
-        (
-            "target_selector",
-            serde_json::to_value(target_selector).unwrap_or(serde_json::Value::Null),
-        ),
-        (
-            "unavailable",
-            serde_json::to_value(Some(refusal.message)).unwrap_or_else(|_| {
-                serde_json::Value::String("the panel response could not be encoded".to_owned())
-            }),
-        ),
-        (
-            "refusal_code",
-            serde_json::to_value(Some(refusal.code)).unwrap_or(serde_json::Value::Null),
-        ),
-        (
-            "remedy",
-            serde_json::to_value(refusal.remedy).unwrap_or(serde_json::Value::Null),
-        ),
-        (field, serde_json::to_value(Option::<T>::None).unwrap()),
-    ] {
-        body.insert(key.to_owned(), value);
-    }
-    (
-        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
-        axum::Json(serde_json::Value::Object(body)),
-    )
-        .into_response()
-}
-
-/// A crash-recovery chart can retire the browser journal only when these two
-/// fields echo the exact epoch and prove the server ordered the read after any
-/// already-admitted mutation. Ordinary chart reads deliberately return nulls.
-fn panel_chart_envelope_json(
-    target_selector: Option<String>,
-    unavailable: Option<String>,
-    refusal_code: Option<String>,
-    remedy: Option<String>,
-    view: Option<ksx_api::PanelChartView>,
-    hardware_epoch: Option<String>,
-    hardware_fence: Option<&'static str>,
-) -> Response {
-    let mut body = serde_json::Map::new();
-    for (key, value) in [
-        (
-            "target_selector",
-            serde_json::to_value(target_selector).unwrap_or(serde_json::Value::Null),
-        ),
-        (
-            "unavailable",
-            serde_json::to_value(unavailable).unwrap_or_else(|_| {
-                serde_json::Value::String("the panel response could not be encoded".to_owned())
-            }),
-        ),
-        (
-            "refusal_code",
-            serde_json::to_value(refusal_code).unwrap_or(serde_json::Value::Null),
-        ),
-        (
-            "remedy",
-            serde_json::to_value(remedy).unwrap_or(serde_json::Value::Null),
-        ),
-        (
-            "view",
-            serde_json::to_value(view).unwrap_or(serde_json::Value::Null),
-        ),
-        (
-            "hardware_epoch",
-            serde_json::to_value(hardware_epoch).unwrap_or(serde_json::Value::Null),
-        ),
-        (
-            "hardware_fence",
-            serde_json::to_value(hardware_fence).unwrap_or(serde_json::Value::Null),
-        ),
-    ] {
-        body.insert(key.to_owned(), value);
-    }
-    (
-        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
-        axum::Json(serde_json::Value::Object(body)),
-    )
-        .into_response()
-}
-
-/// Mutation responses carry a machine-readable disposition. The island must
-/// never decide whether packet zero was crossed by matching refusal prose.
-fn panel_mutation_envelope_json(
-    target_selector: Option<String>,
-    unavailable: Option<String>,
-    refusal_code: Option<String>,
-    remedy: Option<String>,
-    hardware_epoch: Option<String>,
-    mutation_disposition: &'static str,
-    outcome: Option<ksx_api::PanelProgramOutcome>,
-) -> Response {
-    let mut body = serde_json::Map::new();
-    for (key, value) in [
-        (
-            "target_selector",
-            serde_json::to_value(target_selector).unwrap_or(serde_json::Value::Null),
-        ),
-        (
-            "unavailable",
-            serde_json::to_value(unavailable).unwrap_or_else(|_| {
-                serde_json::Value::String("the panel response could not be encoded".to_owned())
-            }),
-        ),
-        (
-            "refusal_code",
-            serde_json::to_value(refusal_code).unwrap_or(serde_json::Value::Null),
-        ),
-        (
-            "remedy",
-            serde_json::to_value(remedy).unwrap_or(serde_json::Value::Null),
-        ),
-        (
-            "hardware_epoch",
-            serde_json::to_value(hardware_epoch).unwrap_or(serde_json::Value::Null),
-        ),
-        (
-            "mutation_disposition",
-            serde_json::Value::String(mutation_disposition.to_owned()),
-        ),
-        (
-            "outcome",
-            serde_json::to_value(outcome).unwrap_or(serde_json::Value::Null),
-        ),
-    ] {
-        body.insert(key.to_owned(), value);
-    }
-    (
-        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
-        axum::Json(serde_json::Value::Object(body)),
-    )
-        .into_response()
-}
-
-fn panel_mutation_refusal_json(
-    target_selector: Option<String>,
-    refusal: ksx_api::Refusal,
-    hardware_epoch: Option<String>,
-) -> Response {
-    let disposition = if refusal.code == ksx_api::codes::RECOVERY_REQUIRED {
-        "recovery-required"
-    } else {
-        "not-started"
-    };
-    panel_mutation_envelope_json(
-        target_selector,
-        Some(refusal.message),
-        Some(refusal.code),
-        refusal.remedy,
-        hardware_epoch,
-        disposition,
-        None,
-    )
-}
-
-/// Portable saved layouts are not tied to the currently staged encoder, so
-/// their transport deliberately has no `target_selector`. The compatibility
-/// contract travels in the backend-owned view/profile (`driver`, protocol and
-/// terminal signature) instead of being inferred by the browser.
-#[derive(serde::Serialize)]
-struct PanelHardwareProfilesPayload {
-    unavailable: Option<String>,
-    refusal_code: Option<String>,
-    remedy: Option<String>,
-    view: Option<ksx_api::PanelHardwareProfilesView>,
-}
-
-#[derive(serde::Serialize)]
-struct PanelHardwareProfileMutationPayload {
-    unavailable: Option<String>,
-    refusal_code: Option<String>,
-    remedy: Option<String>,
-    mutation: Option<ksx_api::PanelHardwareProfileMutationView>,
-}
-
-fn panel_hardware_profiles_json(payload: PanelHardwareProfilesPayload) -> Response {
-    (
-        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
-        axum::Json(payload),
-    )
-        .into_response()
-}
-
-fn panel_hardware_profile_mutation_json(payload: PanelHardwareProfileMutationPayload) -> Response {
-    (
-        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
-        axum::Json(payload),
-    )
-        .into_response()
-}
-
-/// Read the one panel target owned by the daemon-held draft. No browser value
-/// participates in selection and no USB/HID operation occurs here.
-async fn selected_panel_target(state: &Arc<AppState>) -> Result<Option<String>, String> {
-    let stage_state = Arc::clone(state);
-    let staged = tokio::task::spawn_blocking(move || {
-        let staged = stage_state.control.staged();
-        let target = staged
-            .device
-            .map(|device| device.selector.trim().to_owned())
-            .filter(|selector| !selector.is_empty());
-        (staged.reachable, staged.error, target)
-    })
-    .await
-    .map_err(|_| "the selected encoder could not be resolved; nothing was changed".to_owned())?;
-    if staged.0 {
-        Ok(staged.2)
-    } else {
-        Err(staged.1.unwrap_or_else(|| {
-            "the selected encoder is unavailable because the staged setup could not be read"
-                .to_owned()
-        }))
-    }
-}
-
-fn checked_panel_target(selected: Option<String>, expected: &str) -> Result<String, String> {
-    let Some(selected) = selected else {
-        return Err("select an encoder before opening its hardware setup".to_owned());
-    };
-    if expected.trim().is_empty() || !selected.eq_ignore_ascii_case(expected.trim()) {
-        return Err(
-            "the selected encoder changed after this screen was opened; refresh it before continuing"
-                .to_owned(),
-        );
-    }
-    Ok(selected)
-}
-
-pub(super) async fn api_panel_status(State(state): State<Arc<AppState>>) -> Response {
-    let target_selector = match selected_panel_target(&state).await {
-        Ok(target) => target,
-        Err(unavailable) => {
-            return panel_status_json(PanelStatusPayload {
-                target_selector: None,
-                unavailable: Some(unavailable),
-                view: None,
-            });
-        }
-    };
-    let Some(selector) = target_selector else {
-        // Absence is a real, successful reading of the staged draft. Do not
-        // call the machine provider and do not turn it into a fake empty USB
-        // inventory; the card has a dedicated no-selection state.
-        return panel_status_json(PanelStatusPayload {
-            target_selector: None,
-            unavailable: None,
-            view: None,
-        });
-    };
-
-    let target_selector = Some(selector.clone());
-    let result = tokio::task::spawn_blocking(move || {
-        state.machine.panel_status(&ksx_api::PanelStatusSpec {
-            device: Some(selector),
-        })
-    })
-    .await;
-    match result {
-        Ok(Ok(view)) => panel_status_json(PanelStatusPayload {
-            target_selector,
-            unavailable: None,
-            view: Some(view),
-        }),
-        Ok(Err(refusal)) => panel_status_json(PanelStatusPayload {
-            target_selector,
-            unavailable: Some(refusal.message),
-            view: None,
-        }),
-        Err(_) => panel_status_json(PanelStatusPayload {
-            target_selector,
-            unavailable: Some(
-                "the selected encoder could not be inspected; nothing was changed".to_owned(),
-            ),
-            view: None,
-        }),
-    }
-}
-
-#[derive(Deserialize)]
-pub(super) struct PanelChartRequest {
-    expected_selector: String,
-    #[serde(default)]
-    backup: bool,
-    /// Present only when a browser is recovering a durable pending hardware
-    /// journal. Both recovery fields are required together.
-    #[serde(default)]
-    hardware_epoch: Option<String>,
-    #[serde(default)]
-    expected_board_fingerprint: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub(super) struct PanelProgramPlanRequest {
-    expected_selector: String,
-    expected_base_sha256: String,
-    layout: String,
-    #[serde(default)]
-    edits: Vec<ksx_api::PanelTerminalEdit>,
-}
-
-#[derive(Deserialize)]
-pub(super) struct PanelProgramApplyRequest {
-    hardware_epoch: String,
-    expected_selector: String,
-    program: PanelProgramBody,
-    expected_board_fingerprint: String,
-    expected_protocol_profile: String,
-    expected_desired_sha256: String,
-    #[serde(default)]
-    confirm: bool,
-    #[serde(default)]
-    supervised: bool,
-}
-
-#[derive(Deserialize)]
-pub(super) struct PanelProgramBody {
-    expected_base_sha256: String,
-    layout: String,
-    #[serde(default)]
-    edits: Vec<ksx_api::PanelTerminalEdit>,
-}
-
-#[derive(Deserialize)]
-pub(super) struct PanelRestorePlanRequest {
-    expected_selector: String,
-    backup_id: String,
-    expected_current_sha256: String,
-}
-
-#[derive(Deserialize)]
-pub(super) struct PanelRestoreApplyRequest {
-    hardware_epoch: String,
-    expected_selector: String,
-    restore: PanelRestoreBody,
-    expected_board_fingerprint: String,
-    expected_protocol_profile: String,
-    expected_desired_sha256: String,
-    #[serde(default)]
-    confirm: bool,
-    #[serde(default)]
-    supervised: bool,
-}
-
-#[derive(Deserialize)]
-pub(super) struct PanelRestoreBody {
-    backup_id: String,
-    expected_current_sha256: String,
-}
-
-pub(super) async fn api_panel_chart(
-    State(state): State<Arc<AppState>>,
-    axum::Json(request): axum::Json<PanelChartRequest>,
-) -> Response {
-    let recovery = match (
-        request.hardware_epoch.as_deref(),
-        request.expected_board_fingerprint.as_deref(),
-    ) {
-        (None, None) => None,
-        (Some(raw_epoch), Some(board_fingerprint)) => {
-            let hardware_epoch = match checked_hardware_epoch(raw_epoch) {
-                Ok(hardware_epoch) => hardware_epoch,
-                Err(unavailable) => {
-                    return panel_chart_envelope_json(
-                        None,
-                        Some(unavailable),
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                    )
-                }
-            };
-            let binding = match checked_hardware_fence_binding(
-                &request.expected_selector,
-                board_fingerprint,
-            ) {
-                Ok(binding) => binding,
-                Err(unavailable) => {
-                    return panel_chart_envelope_json(
-                        None,
-                        Some(unavailable),
-                        None,
-                        None,
-                        None,
-                        Some(hardware_epoch),
-                        None,
-                    )
-                }
-            };
-            Some((hardware_epoch, binding))
-        }
-        _ => {
-            return panel_chart_envelope_json(
-                None,
-                Some(
-                    "a recovery chart requires both hardware_epoch and expected_board_fingerprint; the chart was not read"
-                        .to_owned(),
-                ),
-                None,
-                None,
-                None,
-                request
-                    .hardware_epoch
-                    .as_deref()
-                    .and_then(|value| checked_hardware_epoch(value).ok()),
-                None,
-            )
-        }
-    };
-    let response_epoch = recovery
-        .as_ref()
-        .map(|(hardware_epoch, _)| hardware_epoch.clone());
-    let selected = match selected_panel_target(&state).await {
-        Ok(selected) => selected,
-        Err(unavailable) => {
-            return panel_chart_envelope_json(
-                None,
-                Some(unavailable),
-                None,
-                None,
-                None,
-                response_epoch,
-                None,
-            );
-        }
-    };
-    let selector = match checked_panel_target(selected, &request.expected_selector) {
-        Ok(selector) => selector,
-        Err(unavailable) => {
-            return panel_chart_envelope_json(
-                None,
-                Some(unavailable),
-                None,
-                None,
-                None,
-                response_epoch,
-                None,
-            );
-        }
-    };
-    let target = Some(selector.clone());
-    let recovery_task = recovery.clone();
-    let fence = Arc::clone(&state.panel_hardware_fence);
-    let result = tokio::task::spawn_blocking(move || {
-        if let Some((hardware_epoch, binding)) = &recovery_task {
-            fence
-                .settle_for_recovery_read(hardware_epoch, binding)
-                .map_err(|message| {
-                    ksx_api::Refusal::with_remedy(
-                        ksx_api::codes::REFUSED,
-                        message,
-                        "wait for the hardware transaction to finish, then read the complete chart again",
-                    )
-                })?;
-        }
-        let view = state.machine.panel_chart(&ksx_api::PanelChartSpec {
-            device: Some(selector),
-            backup: request.backup,
-        })?;
-        if let Some((_, binding)) = &recovery_task {
-            if view.board_fingerprint.trim().to_ascii_uppercase() != binding.board_fingerprint {
-                return Err(ksx_api::Refusal::with_remedy(
-                    ksx_api::codes::REFUSED,
-                    "the recovery chart identified a different physical encoder; the pending hardware epoch remains unsettled",
-                    "reconnect the encoder named by the pending transaction, then read its complete chart",
-                ));
-            }
-        }
-        Ok(view)
-    })
-    .await;
-    match result {
-        Ok(Ok(view)) => panel_chart_envelope_json(
-            target,
-            None,
-            None,
-            None,
-            Some(view),
-            response_epoch,
-            recovery.as_ref().map(|_| "settled"),
-        ),
-        Ok(Err(refusal)) => panel_chart_envelope_json(
-            target,
-            Some(refusal.message),
-            Some(refusal.code),
-            refusal.remedy,
-            None,
-            response_epoch,
-            None,
-        ),
-        Err(_) => panel_chart_envelope_json(
-            target,
-            Some(
-                "the encoder chart task stopped before completing; nothing was changed".to_owned(),
-            ),
-            None,
-            None,
-            None,
-            response_epoch,
-            None,
-        ),
-    }
-}
-
-pub(super) async fn api_panel_backups(State(state): State<Arc<AppState>>) -> Response {
-    let selector = match selected_panel_target(&state).await {
-        Ok(Some(selector)) => selector,
-        Ok(None) => {
-            return panel_envelope_json::<ksx_api::PanelBackupsView>(
-                None,
-                Some("select an encoder before viewing its restore points".to_owned()),
-                "view",
-                None,
-            );
-        }
-        Err(unavailable) => {
-            return panel_envelope_json::<ksx_api::PanelBackupsView>(
-                None,
-                Some(unavailable),
-                "view",
-                None,
-            );
-        }
-    };
-    let target = Some(selector.clone());
-    let result = tokio::task::spawn_blocking(move || {
-        state.machine.panel_backups(&ksx_api::PanelBackupsSpec {
-            device: Some(selector),
-        })
-    })
-    .await;
-    match result {
-        Ok(Ok(view)) => panel_envelope_json(target, None, "view", Some(view)),
-        Ok(Err(refusal)) => panel_envelope_json::<ksx_api::PanelBackupsView>(
-            target,
-            Some(refusal.message),
-            "view",
-            None,
-        ),
-        Err(_) => panel_envelope_json::<ksx_api::PanelBackupsView>(
-            target,
-            Some("the restore-point list could not be read; nothing was changed".to_owned()),
-            "view",
-            None,
-        ),
-    }
-}
-
-/// List complete semantic layouts saved under KSX's config root. This does
-/// not inspect or select hardware: profiles are intentionally portable across
-/// boards admitted by the compatibility fields returned in the view.
-pub(super) async fn api_panel_profiles(State(state): State<Arc<AppState>>) -> Response {
-    let result = tokio::task::spawn_blocking(move || state.machine.panel_hardware_profiles()).await;
-    match result {
-        Ok(Ok(view)) => panel_hardware_profiles_json(PanelHardwareProfilesPayload {
-            unavailable: None,
-            refusal_code: None,
-            remedy: None,
-            view: Some(view),
-        }),
-        Ok(Err(refusal)) => panel_hardware_profiles_json(PanelHardwareProfilesPayload {
-            unavailable: Some(refusal.message),
-            refusal_code: Some(refusal.code),
-            remedy: refusal.remedy,
-            view: None,
-        }),
-        Err(_) => panel_hardware_profiles_json(PanelHardwareProfilesPayload {
-            unavailable: Some(
-                "the saved encoder layouts could not be read; reload Encoder setup to try again"
-                    .to_owned(),
-            ),
-            refusal_code: None,
-            remedy: None,
-            view: None,
-        }),
-    }
-}
-
-/// Create or revision-guarded update one portable hardware layout. The JSON
-/// body is the API spec itself so a surface cannot smuggle hardware identity,
-/// driver, protocol, timestamps or revision values into a newly saved file.
-pub(super) async fn api_panel_profile_save(
-    State(state): State<Arc<AppState>>,
-    axum::Json(spec): axum::Json<ksx_api::PanelHardwareProfileSaveSpec>,
-) -> Response {
-    let result =
-        tokio::task::spawn_blocking(move || state.machine.panel_hardware_profile_save(&spec)).await;
-    match result {
-        Ok(Ok(mutation)) => {
-            panel_hardware_profile_mutation_json(PanelHardwareProfileMutationPayload {
-                unavailable: None,
-                refusal_code: None,
-                remedy: None,
-                mutation: Some(mutation),
-            })
-        }
-        Ok(Err(refusal)) => {
-            panel_hardware_profile_mutation_json(PanelHardwareProfileMutationPayload {
-                unavailable: Some(refusal.message),
-                refusal_code: Some(refusal.code),
-                remedy: refusal.remedy,
-                mutation: None,
-            })
-        }
-        Err(_) => panel_hardware_profile_mutation_json(PanelHardwareProfileMutationPayload {
-            unavailable: Some(
-                "the saved-layout operation stopped before reporting completion; reload the saved layouts before retrying"
-                    .to_owned(),
-            ),
-            refusal_code: None,
-            remedy: None,
-            mutation: None,
-        }),
-    }
-}
-
-/// Delete a saved layout using the revision the browser actually reviewed.
-/// This never clears or writes the physical encoder; `/program/*` is the only
-/// hardware mutation surface.
-pub(super) async fn api_panel_profile_delete(
-    State(state): State<Arc<AppState>>,
-    axum::Json(spec): axum::Json<ksx_api::PanelHardwareProfileDeleteSpec>,
-) -> Response {
-    let result =
-        tokio::task::spawn_blocking(move || state.machine.panel_hardware_profile_delete(&spec))
-            .await;
-    match result {
-        Ok(Ok(mutation)) => {
-            panel_hardware_profile_mutation_json(PanelHardwareProfileMutationPayload {
-                unavailable: None,
-                refusal_code: None,
-                remedy: None,
-                mutation: Some(mutation),
-            })
-        }
-        Ok(Err(refusal)) => {
-            panel_hardware_profile_mutation_json(PanelHardwareProfileMutationPayload {
-                unavailable: Some(refusal.message),
-                refusal_code: Some(refusal.code),
-                remedy: refusal.remedy,
-                mutation: None,
-            })
-        }
-        Err(_) => panel_hardware_profile_mutation_json(PanelHardwareProfileMutationPayload {
-            unavailable: Some(
-                "the saved-layout delete stopped before reporting completion; reload the saved layouts before retrying"
-                    .to_owned(),
-            ),
-            refusal_code: None,
-            remedy: None,
-            mutation: None,
-        }),
-    }
-}
-
-pub(super) async fn api_panel_program_plan(
-    State(state): State<Arc<AppState>>,
-    axum::Json(request): axum::Json<PanelProgramPlanRequest>,
-) -> Response {
-    let selected = match selected_panel_target(&state).await {
-        Ok(selected) => selected,
-        Err(unavailable) => {
-            return panel_envelope_json::<ksx_api::PanelProgramPlanView>(
-                None,
-                Some(unavailable),
-                "plan",
-                None,
-            );
-        }
-    };
-    let selector = match checked_panel_target(selected, &request.expected_selector) {
-        Ok(selector) => selector,
-        Err(unavailable) => {
-            return panel_envelope_json::<ksx_api::PanelProgramPlanView>(
-                None,
-                Some(unavailable),
-                "plan",
-                None,
-            );
-        }
-    };
-    let target = Some(selector.clone());
-    let spec = ksx_api::PanelProgramSpec {
-        device: Some(selector),
-        expected_base_sha256: request.expected_base_sha256,
-        layout: request.layout,
-        edits: request.edits,
-    };
-    let result = tokio::task::spawn_blocking(move || state.machine.panel_program_plan(&spec)).await;
-    match result {
-        Ok(Ok(plan)) => panel_envelope_json(target, None, "plan", Some(plan)),
-        Ok(Err(refusal)) => {
-            panel_refusal_envelope_json::<ksx_api::PanelProgramPlanView>(target, refusal, "plan")
-        }
-        Err(_) => panel_envelope_json::<ksx_api::PanelProgramPlanView>(
-            target,
-            Some("the hardware-diff plan could not be built; nothing was changed".to_owned()),
-            "plan",
-            None,
-        ),
-    }
-}
-
-pub(super) async fn api_panel_program_apply(
-    State(state): State<Arc<AppState>>,
-    axum::Json(request): axum::Json<PanelProgramApplyRequest>,
-) -> Response {
-    let hardware_epoch = match checked_hardware_epoch(&request.hardware_epoch) {
-        Ok(hardware_epoch) => hardware_epoch,
-        Err(unavailable) => {
-            return panel_mutation_envelope_json(
-                None,
-                Some(unavailable),
-                Some(ksx_api::codes::REFUSED.to_owned()),
-                Some("rebuild and reconfirm the hardware diff before retrying".to_owned()),
-                None,
-                "not-started",
-                None,
-            )
-        }
-    };
-    let fence_binding = match checked_hardware_fence_binding(
-        &request.expected_selector,
-        &request.expected_board_fingerprint,
-    ) {
-        Ok(binding) => binding,
-        Err(unavailable) => {
-            return panel_mutation_envelope_json(
-                None,
-                Some(unavailable),
-                Some(ksx_api::codes::REFUSED.to_owned()),
-                Some("rebuild and reconfirm the hardware diff before retrying".to_owned()),
-                None,
-                "not-started",
-                None,
-            )
-        }
-    };
-    // Claim the epoch before any await. If this handler is canceled while it
-    // checks the staged target, the reservation's Drop makes the epoch
-    // terminal; a recovery read or delayed duplicate can never overtake it.
-    let reservation =
-        match state
-            .panel_hardware_fence
-            .register(hardware_epoch.clone(), fence_binding)
-        {
-            Ok(reservation) => reservation,
-            Err(refusal) => return panel_mutation_envelope_json(
-                None,
-                Some(refusal.message),
-                Some(ksx_api::codes::REFUSED.to_owned()),
-                Some(
-                    "read the complete encoder chart before starting another hardware transaction"
-                        .to_owned(),
-                ),
-                Some(hardware_epoch),
-                refusal.mutation_disposition,
-                None,
-            ),
-        };
-    let selected = match selected_panel_target(&state).await {
-        Ok(selected) => selected,
-        Err(unavailable) => {
-            return panel_mutation_envelope_json(
-                None,
-                Some(unavailable),
-                None,
-                None,
-                Some(hardware_epoch),
-                "not-started",
-                None,
-            );
-        }
-    };
-    let selector = match checked_panel_target(selected, &request.expected_selector) {
-        Ok(selector) => selector,
-        Err(unavailable) => {
-            return panel_mutation_envelope_json(
-                None,
-                Some(unavailable),
-                None,
-                None,
-                Some(hardware_epoch),
-                "not-started",
-                None,
-            );
-        }
-    };
-    let target = Some(selector.clone());
-    let spec = ksx_api::PanelProgramApplySpec {
-        program: ksx_api::PanelProgramSpec {
-            device: Some(selector),
-            expected_base_sha256: request.program.expected_base_sha256,
-            layout: request.program.layout,
-            edits: request.program.edits,
-        },
-        expected_board_fingerprint: request.expected_board_fingerprint,
-        expected_protocol_profile: request.expected_protocol_profile,
-        expected_desired_sha256: request.expected_desired_sha256,
-        confirm: request.confirm,
-        supervised: request.supervised,
-    };
-    let fence = Arc::clone(&state.panel_hardware_fence);
-    let result = tokio::task::spawn_blocking(move || {
-        let _running = fence.begin(reservation).map_err(|message| {
-            ksx_api::Refusal::with_remedy(
-                ksx_api::codes::REFUSED,
-                message,
-                "read the complete encoder chart before starting another hardware transaction",
-            )
-        })?;
-        let session = state.control.session();
-        if !session.reachable {
-            return Err(ksx_api::Refusal::with_remedy(
-                ksx_api::codes::REFUSED,
-                format!(
-                    "KSX cannot prove Play is stopped because the daemon did not answer ({}); nothing was changed",
-                    session.line
-                ),
-                "start or reconnect the KSX daemon, prove the session is stopped, then rebuild the hardware diff",
-            ));
-        }
-        if session.running {
-            return Err(ksx_api::Refusal::with_remedy(
-                ksx_api::codes::REFUSED,
-                "stop Play before programming the physical encoder; nothing was changed",
-                "stop the running session, review the hardware diff again, then Program",
-            ));
-        }
-        state.machine.panel_program(&spec)
-    })
-    .await;
-    match result {
-        Ok(Ok(outcome)) => {
-            let disposition = if outcome.state == "verified" {
-                "verified"
-            } else {
-                "recovery-required"
-            };
-            panel_mutation_envelope_json(
-                target,
-                None,
-                None,
-                None,
-                Some(hardware_epoch),
-                disposition,
-                Some(outcome),
-            )
-        }
-        Ok(Err(refusal)) => {
-            panel_mutation_refusal_json(target, refusal, Some(hardware_epoch))
-        }
-        Err(_) => panel_mutation_envelope_json(
-            target,
-            Some(
-                "the programming task stopped unexpectedly; use the last backup before trying again"
-                    .to_owned(),
-            ),
-            Some(ksx_api::codes::RECOVERY_REQUIRED.to_owned()),
-            Some("do not retry blindly; inspect the encoder and its verified backups".to_owned()),
-            Some(hardware_epoch),
-            "unknown",
-            None,
-        ),
-    }
-}
-
-pub(super) async fn api_panel_restore_plan(
-    State(state): State<Arc<AppState>>,
-    axum::Json(request): axum::Json<PanelRestorePlanRequest>,
-) -> Response {
-    let selected = match selected_panel_target(&state).await {
-        Ok(selected) => selected,
-        Err(unavailable) => {
-            return panel_envelope_json::<ksx_api::PanelProgramPlanView>(
-                None,
-                Some(unavailable),
-                "plan",
-                None,
-            );
-        }
-    };
-    let selector = match checked_panel_target(selected, &request.expected_selector) {
-        Ok(selector) => selector,
-        Err(unavailable) => {
-            return panel_envelope_json::<ksx_api::PanelProgramPlanView>(
-                None,
-                Some(unavailable),
-                "plan",
-                None,
-            );
-        }
-    };
-    let target = Some(selector.clone());
-    let spec = ksx_api::PanelRestoreSpec {
-        device: Some(selector),
-        backup_id: request.backup_id,
-        expected_current_sha256: request.expected_current_sha256,
-    };
-    let result = tokio::task::spawn_blocking(move || state.machine.panel_restore_plan(&spec)).await;
-    match result {
-        Ok(Ok(plan)) => panel_envelope_json(target, None, "plan", Some(plan)),
-        Ok(Err(refusal)) => {
-            panel_refusal_envelope_json::<ksx_api::PanelProgramPlanView>(target, refusal, "plan")
-        }
-        Err(_) => panel_envelope_json::<ksx_api::PanelProgramPlanView>(
-            target,
-            Some("the restore diff could not be built; nothing was changed".to_owned()),
-            "plan",
-            None,
-        ),
-    }
-}
-
-pub(super) async fn api_panel_restore_apply(
-    State(state): State<Arc<AppState>>,
-    axum::Json(request): axum::Json<PanelRestoreApplyRequest>,
-) -> Response {
-    let hardware_epoch = match checked_hardware_epoch(&request.hardware_epoch) {
-        Ok(hardware_epoch) => hardware_epoch,
-        Err(unavailable) => {
-            return panel_mutation_envelope_json(
-                None,
-                Some(unavailable),
-                Some(ksx_api::codes::REFUSED.to_owned()),
-                Some("rebuild and reconfirm the restore diff before retrying".to_owned()),
-                None,
-                "not-started",
-                None,
-            )
-        }
-    };
-    let fence_binding = match checked_hardware_fence_binding(
-        &request.expected_selector,
-        &request.expected_board_fingerprint,
-    ) {
-        Ok(binding) => binding,
-        Err(unavailable) => {
-            return panel_mutation_envelope_json(
-                None,
-                Some(unavailable),
-                Some(ksx_api::codes::REFUSED.to_owned()),
-                Some("rebuild and reconfirm the restore diff before retrying".to_owned()),
-                None,
-                "not-started",
-                None,
-            )
-        }
-    };
-    let reservation =
-        match state
-            .panel_hardware_fence
-            .register(hardware_epoch.clone(), fence_binding)
-        {
-            Ok(reservation) => reservation,
-            Err(refusal) => return panel_mutation_envelope_json(
-                None,
-                Some(refusal.message),
-                Some(ksx_api::codes::REFUSED.to_owned()),
-                Some(
-                    "read the complete encoder chart before starting another hardware transaction"
-                        .to_owned(),
-                ),
-                Some(hardware_epoch),
-                refusal.mutation_disposition,
-                None,
-            ),
-        };
-    let selected = match selected_panel_target(&state).await {
-        Ok(selected) => selected,
-        Err(unavailable) => {
-            return panel_mutation_envelope_json(
-                None,
-                Some(unavailable),
-                None,
-                None,
-                Some(hardware_epoch),
-                "not-started",
-                None,
-            );
-        }
-    };
-    let selector = match checked_panel_target(selected, &request.expected_selector) {
-        Ok(selector) => selector,
-        Err(unavailable) => {
-            return panel_mutation_envelope_json(
-                None,
-                Some(unavailable),
-                None,
-                None,
-                Some(hardware_epoch),
-                "not-started",
-                None,
-            );
-        }
-    };
-    let target = Some(selector.clone());
-    let spec = ksx_api::PanelRestoreApplySpec {
-        restore: ksx_api::PanelRestoreSpec {
-            device: Some(selector),
-            backup_id: request.restore.backup_id,
-            expected_current_sha256: request.restore.expected_current_sha256,
-        },
-        expected_board_fingerprint: request.expected_board_fingerprint,
-        expected_protocol_profile: request.expected_protocol_profile,
-        expected_desired_sha256: request.expected_desired_sha256,
-        confirm: request.confirm,
-        supervised: request.supervised,
-    };
-    let fence = Arc::clone(&state.panel_hardware_fence);
-    let result = tokio::task::spawn_blocking(move || {
-        let _running = fence.begin(reservation).map_err(|message| {
-            ksx_api::Refusal::with_remedy(
-                ksx_api::codes::REFUSED,
-                message,
-                "read the complete encoder chart before starting another hardware transaction",
-            )
-        })?;
-        let session = state.control.session();
-        if !session.reachable {
-            return Err(ksx_api::Refusal::with_remedy(
-                ksx_api::codes::REFUSED,
-                format!(
-                    "KSX cannot prove Play is stopped because the daemon did not answer ({}); nothing was changed",
-                    session.line
-                ),
-                "start or reconnect the KSX daemon, prove the session is stopped, then rebuild the restore diff",
-            ));
-        }
-        if session.running {
-            return Err(ksx_api::Refusal::with_remedy(
-                ksx_api::codes::REFUSED,
-                "stop Play before restoring the physical encoder; nothing was changed",
-                "stop the running session, review the restore diff again, then Restore",
-            ));
-        }
-        state.machine.panel_restore(&spec)
-    })
-    .await;
-    match result {
-        Ok(Ok(outcome)) => {
-            let disposition = if outcome.state == "verified" {
-                "verified"
-            } else {
-                "recovery-required"
-            };
-            panel_mutation_envelope_json(
-                target,
-                None,
-                None,
-                None,
-                Some(hardware_epoch),
-                disposition,
-                Some(outcome),
-            )
-        }
-        Ok(Err(refusal)) => panel_mutation_refusal_json(target, refusal, Some(hardware_epoch)),
-        Err(_) => panel_mutation_envelope_json(
-            target,
-            Some(
-                "the restore task stopped unexpectedly; the pre-restore backup remains available"
-                    .to_owned(),
-            ),
-            Some(ksx_api::codes::RECOVERY_REQUIRED.to_owned()),
-            Some("do not retry blindly; inspect the encoder and its verified backups".to_owned()),
-            Some(hardware_epoch),
-            "unknown",
-            None,
-        ),
-    }
-}
-
 // ── The device pick (moved from /start, moment 4) ───────────────────────────
 
 #[derive(Deserialize)]
@@ -2055,8 +814,11 @@ pub(super) struct NocturneDeviceForm {
 /// freely. One staged value in the daemon and nothing else.
 pub(super) async fn nocturne_form_device(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneDeviceForm>,
+    form: NocturneForm<NocturneDeviceForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let ok = tokio::task::spawn_blocking(move || {
         state
             .control
@@ -2091,12 +853,509 @@ pub(super) struct NocturneBlockingForm {
     blocking: String,
 }
 
+pub(super) fn map_target(value: Option<&str>) -> &'static str {
+    if value == Some("stage") {
+        "stage"
+    } else {
+        "saved"
+    }
+}
+
+// ── Outlived their pages ───────────────────────────────────────────────────
+//
+// These were written for /map and /setup and are still used after those pages
+// were deleted: the consumer-vocabulary helpers dress this page's flashes, and
+// the import/export shapes are the configuration menu's. Re-homed rather than
+// duplicated, so there is still one spelling of each.
+
+pub(super) fn consumerize_bind(mut outcome: BindOutcome) -> BindOutcome {
+    if !outcome.ok {
+        outcome.error = Some(consumer_map_detail(
+            outcome.error.as_deref().unwrap_or(""),
+            "That control could not be changed. Nothing changed.",
+        ));
+    }
+    outcome
+}
+
+pub(super) fn consumerize_macro(
+    mut outcome: crate::control::MacroOutcome,
+) -> crate::control::MacroOutcome {
+    if !outcome.ok {
+        outcome.error = Some(consumer_map_detail(
+            outcome.error.as_deref().unwrap_or(""),
+            "The macro could not be changed. Nothing changed.",
+        ));
+    }
+    outcome.problems = outcome
+        .problems
+        .into_iter()
+        .map(|problem| consumer_map_detail(&problem, "One step or setting is not valid."))
+        .collect();
+    outcome.warnings = outcome
+        .warnings
+        .into_iter()
+        .map(|warning| {
+            consumer_map_detail(&warning, "One very short step may be missed by the game.")
+        })
+        .collect();
+    outcome
+}
+
+pub(super) fn macro_for_target(
+    control: &dyn ControlSource,
+    target: Option<&str>,
+    slot: Option<u8>,
+    write: &crate::control::MacroWrite,
+) -> crate::control::MacroOutcome {
+    if map_target(target) != "stage" {
+        return control.save_macro(write);
+    }
+
+    let Some(number) = slot else {
+        return crate::control::MacroOutcome {
+            ok: false,
+            error: Some("a staged macro write needs an exact controller slot".to_owned()),
+            code: Some(ksx_api::codes::BAD_SLOT.to_owned()),
+            ..crate::control::MacroOutcome::default()
+        };
+    };
+    control.stage_macro(&ksx_api::StagedMacroRequest {
+        number,
+        write: write.clone(),
+    })
+}
+
+/// Presentation boundary for Controls. Backend diagnostics remain available
+/// to logs and typed codes; the primary workflow never reflects command lines,
+/// storage addresses, or internal nouns into a flash/toast.
+pub(super) fn consumer_map_detail(raw: &str, fallback: &str) -> String {
+    // Provider text is diagnostic input, not customer copy. The Map surface
+    // gets structured conflicts/chords through their typed fields and uses an
+    // action-specific authored fallback for every scalar outcome. An
+    // allow-by-absence blacklist would inevitably leak a novel HID address,
+    // registry key, parser detail or storage path.
+    let _ = raw;
+    fallback.to_owned()
+}
+
+/// Comma-separated form words → the `what` list the api verbs take. Empty means
+/// "whatever the document carries" / "the whole root", which is what both verbs
+/// already document.
+pub(super) fn what_words(raw: Option<&str>) -> Vec<String> {
+    raw.unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|word| !word.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// One [`ksx_api::ImportReport`] as the sentence this page flashes.
+///
+/// The backend composes the fact and names no control (`onboard::import`); each
+/// surface adds its own. Here that is two things the report cannot know: the
+/// label on THIS page's consent box, and the first of the faults it is holding.
+pub(super) fn import_flash(report: &ksx_api::ImportReport) -> String {
+    let mut line = report.summary.clone();
+    if let Some(first) = report.faults.first() {
+        line.push_str(&format!(" First: {first}"));
+        let rest = report.faults.len() - 1;
+        if rest > 0 {
+            line.push_str(&format!(" (+{rest} more)"));
+        }
+    } else if report.ok && !report.applied {
+        // A clean dry run. The backend said what it WOULD do and that nothing
+        // was written; "write it" is the name of the box on this page and
+        // nowhere else.
+        line.push_str(" Tick \"write it\" and import again to apply.");
+    }
+    line
+}
+
+#[derive(Deserialize)]
+pub(super) struct ExportQuery {
+    /// `config,games,presets` — absent means the whole root.
+    pub(super) what: Option<String>,
+}
+
+/// Every field optional on purpose. A missing one is a REFUSAL WITH A SENTENCE
+/// (303 + `?flash=error: …`), not axum's 422 — this page's whole feedback
+/// channel with scripting off is the flash, and a bare status page would
+/// dead-end the user with nothing to read.
+#[derive(Deserialize)]
+pub(super) struct ImportForm {
+    #[serde(default)]
+    pub(super) document: Option<String>,
+    #[serde(default)]
+    pub(super) what: Option<String>,
+    /// The "write it" box. Present at all = ticked (HTML omits an unchecked box
+    /// entirely), so an absent field is a DRY RUN — which is the consent shape
+    /// `ksx config import` has always had, arriving here for free.
+    #[serde(default)]
+    pub(super) apply: Option<String>,
+    #[serde(default)]
+    pub(super) force: Option<String>,
+}
+
+// ── Saved games and layouts ────────────────────────────────────────────────
+//
+// Moved from `/profiles` when `/nocturne` became the product. Two differences
+// from that page, both deliberate:
+//
+//  - The refusal SENTENCE survives. `/profiles` ran every verb through
+//    `machine_act`, which kept only `is_ok()` and flashed a canned line per
+//    action. Here the backend's own words reach the page, because a refusal
+//    that names its reason is the only kind worth showing.
+//  - Numbers arrive as text and are parsed here. An empty `<input
+//    type="number">` must become a worded refusal, never an extractor-level
+//    422 that dead-ends someone with nothing to read.
+
+/// Parse a player count that the form carries as text.
+fn game_slots(raw: &str) -> Result<u8, &'static str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        // Not a default this layer may pick: "how many players" is the user's
+        // answer, and the planner refuses 0 by name.
+        return Ok(0);
+    }
+    trimmed.parse::<u8>().map_err(|_| N_GAME_SLOTS_ERROR)
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturneGameForm {
+    #[serde(default)]
+    original_title: String,
+    #[serde(default)]
+    revision: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    arguments: String,
+    #[serde(default)]
+    slots: String,
+    #[serde(default)]
+    preset: String,
+    #[serde(default)]
+    rebase_devices: bool,
+}
+
+/// POST /nocturne/game — save a new launch target.
+pub(super) async fn nocturne_form_game_new(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneGameForm>,
+) -> Response {
+    let slots = match game_slots(&form.slots) {
+        Ok(value) => value,
+        Err(message) => return nocturne_redirect(message),
+    };
+    let outcome = tokio::task::spawn_blocking(move || {
+        state.machine.profile_new(&ksx_api::NewProfile {
+            title: form.title,
+            path: form.path,
+            arguments: form.arguments,
+            slots,
+            preset: form.preset,
+        })
+    })
+    .await;
+    nocturne_redirect(&verb_flash(outcome, N_GAME_ADD_OK, N_GAME_ADD_ERROR))
+}
+
+/// POST /nocturne/game/update — edit one in place.
+pub(super) async fn nocturne_form_game_update(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneGameForm>,
+) -> Response {
+    let slots = match game_slots(&form.slots) {
+        Ok(value) => value,
+        Err(message) => return nocturne_redirect(message),
+    };
+    let outcome = tokio::task::spawn_blocking(move || {
+        state.machine.profile_update(&ksx_api::UpdateProfile {
+            original_title: form.original_title,
+            revision: form.revision,
+            title: form.title,
+            path: form.path,
+            arguments: form.arguments,
+            slots,
+            preset: form.preset,
+            rebase_devices: form.rebase_devices,
+        })
+    })
+    .await;
+    nocturne_redirect(&verb_flash(outcome, N_GAME_UPDATE_OK, N_GAME_UPDATE_ERROR))
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturneGameDeleteForm {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    revision: String,
+    #[serde(default)]
+    confirm_delete: String,
+}
+
+/// POST /nocturne/game/delete — the served revision is the stale-screen guard.
+///
+/// The confirmation is SERVER-side. A browser dialog and a `required` checkbox
+/// improve the interaction, but neither is an authorization boundary for a
+/// destructive POST — a hand-written form reaches this handler directly. This
+/// guard was dropped when the verb moved off `/profiles`; it is back.
+pub(super) async fn nocturne_form_game_delete(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneGameDeleteForm>,
+) -> Response {
+    if form.confirm_delete != "yes" {
+        return nocturne_redirect(N_GAME_DELETE_UNCONFIRMED);
+    }
+    let outcome = tokio::task::spawn_blocking(move || {
+        state.machine.profile_delete(&ksx_api::DeleteProfile {
+            title: form.title,
+            revision: form.revision,
+        })
+    })
+    .await;
+    nocturne_redirect(&verb_flash(outcome, N_GAME_DELETE_OK, N_GAME_DELETE_ERROR))
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturnePresetRenameForm {
+    #[serde(default)]
+    from: String,
+    #[serde(default)]
+    to: String,
+}
+
+/// POST /nocturne/layout/rename — renaming REPOINTS every controller that uses
+/// the layout, so nothing is left naming a layout that is not there.
+pub(super) async fn nocturne_form_preset_rename(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturnePresetRenameForm>,
+) -> Response {
+    let outcome = tokio::task::spawn_blocking(move || {
+        state.machine.preset_rename(&ksx_api::RenamePreset {
+            from: form.from,
+            to: form.to,
+        })
+    })
+    .await;
+    nocturne_redirect(&verb_flash(
+        outcome,
+        N_LAYOUT_RENAME_OK,
+        N_LAYOUT_RENAME_ERROR,
+    ))
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturnePresetDeleteForm {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    confirm_delete: String,
+}
+
+/// POST /nocturne/layout/delete — a layout still in use cannot be deleted
+/// until those controllers point somewhere else; the backend says so by name.
+///
+/// **`force` is not the browser's to send.** `ksx preset delete --force` will
+/// delete a layout controllers still use and leave them pointing at nothing;
+/// a web form must not, so this handler hardcodes `force: false` rather than
+/// reading it from the request. The migrated version took it off the form,
+/// which handed a hand-authored POST the power to strand a cabinet in one
+/// request. Confirmation is server-side for the same reason.
+pub(super) async fn nocturne_form_preset_delete(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturnePresetDeleteForm>,
+) -> Response {
+    if form.confirm_delete != "yes" {
+        return nocturne_redirect(N_LAYOUT_DELETE_UNCONFIRMED);
+    }
+    let outcome = tokio::task::spawn_blocking(move || {
+        state.machine.preset_delete(&ksx_api::DeletePreset {
+            name: form.name,
+            force: false,
+        })
+    })
+    .await;
+    nocturne_redirect(&verb_flash(
+        outcome,
+        N_LAYOUT_DELETE_OK,
+        N_LAYOUT_DELETE_ERROR,
+    ))
+}
+
+/// One machine outcome as the sentence this page flashes: the backend's own
+/// words on refusal, a short confirmation on success, and an honest line when
+/// the blocking task itself died.
+fn verb_flash(
+    outcome: Result<Result<String, ksx_api::Refusal>, tokio::task::JoinError>,
+    ok_line: &str,
+    error_line: &str,
+) -> String {
+    match outcome {
+        Ok(Ok(_)) => ok_line.to_owned(),
+        // **Provider text is not customer copy.** A refusal message names
+        // paths, files and verbs — `C:\…\games.toml`, `--force`, "daemon" —
+        // which is right for a log and wrong for a sentence under a form. The
+        // deleted /profiles page owned one line per action for exactly this
+        // reason; carrying the verb over lost the boundary, and a hostile or
+        // merely chatty provider could write straight onto the page.
+        Ok(Err(_)) | Err(_) => error_line.to_owned(),
+    }
+}
+
+/// Mark a flash as a REFUSAL.
+///
+/// `applyFlash` in NocturneIsland.ts picks the red side on `startsWith("error")`
+/// and nothing else, so a refusal that arrives without this prefix renders in
+/// the success colour. Every hand-written refusal constant in this file already
+/// carries it; these two helpers compose their line at runtime and so have to
+/// add it here.
+fn as_error(line: String) -> String {
+    if line.trim_start().starts_with("error") {
+        return line;
+    }
+    format!("error: {line}")
+}
+
+/// GET /nocturne/export.json — the whole configuration as one file.
+///
+/// Moved from `/setup` when `/nocturne` became the product. A download, not a
+/// page: the browser saves it and the user keeps it. On refusal the answer
+/// goes back to the page the link was on, because that is where someone can
+/// read it — a bare error body would dead-end them.
+pub(super) async fn nocturne_export(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ExportQuery>,
+) -> Response {
+    let what = what_words(query.what.as_deref());
+    let outcome = tokio::task::spawn_blocking(move || {
+        state
+            .machine
+            .config_export(&ksx_api::ExportRequest { what })
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(ksx_api::Refusal::new(
+            ksx_api::codes::REFUSED,
+            "the export panicked",
+        ))
+    });
+    let export = match outcome {
+        Ok(export) => export,
+        Err(refusal) => return nocturne_redirect(&refusal.message),
+    };
+    let disposition = format!("attachment; filename=\"{}\"", export.filename);
+    let mut response = export.document.into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&disposition)
+            .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+}
+
+/// POST /nocturne/import — bring a configuration back.
+///
+/// The consent shape is inherited whole and is worth restating: the "write it"
+/// box absent means DRY RUN, because HTML omits an unchecked box entirely. So
+/// the default action of this form reports what it WOULD do and writes
+/// nothing, which is the same contract `ksx config import` has always had.
+pub(super) async fn nocturne_form_import(
+    State(state): State<Arc<AppState>>,
+    form: Result<Form<ImportForm>, axum::extract::rejection::FormRejection>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_IMPORT_UNREADABLE);
+    };
+    let request = ksx_api::ImportRequest {
+        document: form.document.unwrap_or_default(),
+        what: what_words(form.what.as_deref()),
+        apply: form.apply.is_some(),
+        force: form.force.is_some(),
+    };
+    if request.document.trim().is_empty() {
+        return nocturne_redirect(N_IMPORT_EMPTY);
+    }
+    let outcome = tokio::task::spawn_blocking(move || state.machine.config_import(&request))
+        .await
+        .unwrap_or_else(|_| {
+            Err(ksx_api::Refusal::new(
+                ksx_api::codes::REFUSED,
+                "the import panicked",
+            ))
+        });
+    nocturne_redirect(&match outcome {
+        // A dry run that reports faults is not a success, and the backend's
+        // own summary opens with "refused:" — which `applyFlash` does not
+        // recognise. Mark it, or a failed import renders in the success colour.
+        Ok(report) if report.ok => import_flash(&report),
+        Ok(report) => as_error(import_flash(&report)),
+        Err(refusal) => as_error(refusal.message),
+    })
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturneThemeForm {
+    theme: Option<String>,
+}
+
+/// POST /nocturne/theme — the Studio theme, moved here from `/setup` when
+/// `/nocturne` became the product. A config write like blocking, but read per
+/// page render rather than by the daemon, so "saved" IS "in effect".
+///
+/// `system` is stored as the EMPTY id deliberately: absence means "follow the
+/// operating system", so there is no third state to keep in step, and an id
+/// this build does not ship is refused rather than written.
+pub(super) async fn nocturne_form_theme(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneThemeForm>,
+) -> Response {
+    let Some(field) = form.theme else {
+        return nocturne_redirect("the form did not say which theme — pick one on the page");
+    };
+    let wanted = field.trim().to_owned();
+    let stored = if wanted == "system" {
+        String::new()
+    } else if let Some(meta) = crate::theme_tokens::THEMES.iter().find(|t| t.id == wanted) {
+        meta.id.to_owned()
+    } else {
+        return nocturne_redirect(N_THEME_UNKNOWN);
+    };
+    let ok = tokio::task::spawn_blocking(move || {
+        state
+            .machine
+            .set_theme(&ksx_api::ThemeSpec { theme: stored })
+            .is_ok()
+    })
+    .await
+    .unwrap_or(false);
+    nocturne_redirect(if ok { N_THEME_OK } else { N_EDIT_ERROR })
+}
+
 /// POST /nocturne/blocking (and /start/blocking) — the capture answer,
 /// changed as often as wanted.
 pub(super) async fn nocturne_form_blocking(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneBlockingForm>,
+    form: NocturneForm<NocturneBlockingForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let ok = tokio::task::spawn_blocking(move || {
         state
             .control
@@ -2438,13 +1697,16 @@ pub(super) struct NocturneAddForm {
     socd: Option<String>,
 }
 
-/// POST /nocturne/controller (and /workspace/controller) — add the next
+/// POST /nocturne/controller — add the next
 /// controller, with the create form's opposite-directions answer applied to
 /// the fresh slot in the same request.
 pub(super) async fn nocturne_form_add(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneAddForm>,
+    form: NocturneForm<NocturneAddForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let flash = tokio::task::spawn_blocking(move || {
         let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
             number: None,
@@ -2503,8 +1765,11 @@ pub(super) async fn nocturne_form_add(
 /// the server cannot keep.
 pub(super) async fn nocturne_form_remove(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneSlotForm>,
+    form: NocturneForm<NocturneSlotForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let flash = tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
         let stash = staged
@@ -2603,8 +1868,11 @@ pub(super) struct NocturneMoveForm {
 /// lands on /nocturne.
 pub(super) async fn nocturne_form_move(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneMoveForm>,
+    form: NocturneForm<NocturneMoveForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let numbers: Vec<u8> = form
         .order
         .split_whitespace()
@@ -2627,8 +1895,11 @@ pub(super) struct NocturneSocdForm {
 /// Moved from /workspace with the move verb above.
 pub(super) async fn nocturne_form_socd(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneSocdForm>,
+    form: NocturneForm<NocturneSocdForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     nocturne_stage_edit(
         state,
         ksx_api::StageEdit::SetSocd {
@@ -2691,8 +1962,11 @@ pub(super) async fn nocturne_api_apply(State(state): State<Arc<AppState>>) -> Re
 /// their steps). One SetBindings, so a refusal changes nothing.
 pub(super) async fn nocturne_form_clear_all(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneSlotForm>,
+    form: NocturneForm<NocturneSlotForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let flash = tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
         let Some(slot) = staged.slots.iter().find(|slot| slot.number == form.number) else {
@@ -2730,8 +2004,11 @@ pub(super) struct NocturneKeyClearForm {
 /// (force: shrinking a key list consents to nothing new).
 pub(super) async fn nocturne_form_key_clear(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneKeyClearForm>,
+    form: NocturneForm<NocturneKeyClearForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let flash = tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
         let Some(slot) = staged.slots.iter().find(|s| s.number == form.number) else {
@@ -2818,8 +2095,11 @@ pub(super) async fn nocturne_form_key_clear(
 /// removed again if the middle step refuses. Moved from /workspace verbatim.
 pub(super) async fn nocturne_form_duplicate(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneSlotForm>,
+    form: NocturneForm<NocturneSlotForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let flash = tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
         let Some(source) = staged.slots.iter().find(|slot| slot.number == form.number) else {
@@ -3072,18 +2352,6 @@ pub(super) async fn nocturne_api_macro_edit(
 }
 
 #[derive(Deserialize)]
-pub(super) struct NocturneEncoderRoutingAuthorityBody {
-    #[serde(default)]
-    expected_selector: Option<String>,
-    #[serde(default)]
-    expected_instance: Option<String>,
-    #[serde(default)]
-    expected_board_fingerprint: Option<String>,
-    #[serde(default)]
-    expected_chart_sha256: Option<String>,
-}
-
-#[derive(Deserialize)]
 pub(super) struct NocturneBindBody {
     slot: u8,
     /// Opaque revision from the exact controller row the browser acted on.
@@ -3097,8 +2365,6 @@ pub(super) struct NocturneBindBody {
     mode: Option<String>,
     #[serde(default)]
     force: bool,
-    #[serde(default)]
-    encoder_authority: Option<NocturneEncoderRoutingAuthorityBody>,
 }
 
 pub(super) async fn nocturne_api_bind(
@@ -3146,92 +2412,6 @@ pub(super) async fn nocturne_api_bind(
             .as_ref()
             .map(|device| device.selector.clone())
             .unwrap_or_default();
-        // `expected_target_revision` came from the browser-observed row and
-        // was checked above before the potentially slow HID proof. Carry the
-        // exact same token into `stage_bind`, where the daemon checks it again
-        // while holding the staged-state lock.
-        let routing_spec = ksx_api::PanelRoutingAuthoritySpec {
-            device: expected_device.clone(),
-            expected_selector: body
-                .encoder_authority
-                .as_ref()
-                .and_then(|authority| authority.expected_selector.clone()),
-            expected_instance: body
-                .encoder_authority
-                .as_ref()
-                .and_then(|authority| authority.expected_instance.clone()),
-            expected_board_fingerprint: body
-                .encoder_authority
-                .as_ref()
-                .and_then(|authority| authority.expected_board_fingerprint.clone()),
-            expected_chart_sha256: body
-                .encoder_authority
-                .as_ref()
-                .and_then(|authority| authority.expected_chart_sha256.clone()),
-        };
-        // Studio's process fence is acquired first, then the backend's
-        // cross-process machine lease, and only then the daemon state lock in
-        // `stage_bind`. Never invert this order: the hardware packet-zero
-        // guard may query the daemon while a programmer owns the machine
-        // lease.
-        let _route_reservation = if let Some(authority) = body.encoder_authority.as_ref() {
-            if !authority
-                .expected_selector
-                .as_deref()
-                .is_some_and(|selector| selector.trim().eq_ignore_ascii_case(&expected_device))
-            {
-                return BindOutcome {
-                    ok: false,
-                    error: Some(
-                        "The encoder authority belongs to a different staged input. Nothing changed."
-                            .to_owned(),
-                    ),
-                    code: Some(ksx_api::codes::BAD_REQUEST.to_owned()),
-                    ..BindOutcome::default()
-                };
-            }
-            let binding = match checked_hardware_fence_binding(
-                authority.expected_selector.as_deref().unwrap_or_default(),
-                authority
-                    .expected_board_fingerprint
-                    .as_deref()
-                    .unwrap_or_default(),
-            ) {
-                Ok(binding) => binding,
-                Err(message) => {
-                    return BindOutcome {
-                        ok: false,
-                        error: Some(message),
-                        code: Some(ksx_api::codes::BAD_REQUEST.to_owned()),
-                        ..BindOutcome::default()
-                    }
-                }
-            };
-            match state.panel_hardware_fence.register_route(binding) {
-                Ok(reservation) => Some(reservation),
-                Err(message) => {
-                    return BindOutcome {
-                        ok: false,
-                        error: Some(message),
-                        code: Some(ksx_api::codes::REFUSED.to_owned()),
-                        ..BindOutcome::default()
-                    }
-                }
-            }
-        } else {
-            None
-        };
-        let _machine_guard = match state.machine.panel_routing_guard(&routing_spec) {
-            Ok(guard) => guard,
-            Err(refusal) => {
-                return BindOutcome {
-                    ok: false,
-                    error: Some(refusal.message),
-                    code: Some(refusal.code),
-                    ..BindOutcome::default()
-                }
-            }
-        };
         let (keys, force) = if body.mode.as_deref() == Some("add") {
             let current = nocturne_current_keys(&staged, slot, &body.function);
             if current.iter().any(|k| k.eq_ignore_ascii_case(key)) {
@@ -3359,8 +2539,11 @@ pub(super) struct NocturneTurboForm {
 /// never a silent clear (docs/INPUT-TRANSFORMS.md §3, /map's rule kept).
 pub(super) async fn nocturne_form_bind_turbo(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneTurboForm>,
+    form: NocturneForm<NocturneTurboForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let raw = form.turbo_hz.as_deref().map(str::trim).unwrap_or("");
     let Ok(hz) = raw.parse::<u32>() else {
         return nocturne_redirect(N_TURBO_INPUT_ERROR);
@@ -3419,8 +2602,11 @@ pub(super) struct NocturneToggleForm {
 /// only thing that changes (docs/INPUT-TRANSFORMS.md §3b).
 pub(super) async fn nocturne_form_bind_toggle(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneToggleForm>,
+    form: NocturneForm<NocturneToggleForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let latch = match form.mode.as_str() {
         "toggle" => true,
         "hold" => false,
@@ -3570,8 +2756,11 @@ async fn nocturne_macro_write(
 /// disabling instead of deleting.
 pub(super) async fn nocturne_form_macro_toggle(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneMacroForm>,
+    form: NocturneForm<NocturneMacroForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let enable = checked(form.enable.as_deref());
     nocturne_macro_write(
         state,
@@ -3592,8 +2781,11 @@ pub(super) async fn nocturne_form_macro_toggle(
 /// editor opens on it.
 pub(super) async fn nocturne_form_macro_new(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneMacroForm>,
+    form: NocturneForm<NocturneMacroForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let name = form.name.trim().to_owned();
     if name.is_empty() {
         return nocturne_redirect(N_MACRO_NAME);
@@ -3661,8 +2853,11 @@ pub(super) async fn nocturne_form_macro_new(
 /// until Save.
 pub(super) async fn nocturne_form_macro_delete(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneMacroForm>,
+    form: NocturneForm<NocturneMacroForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     nocturne_macro_write(
         state,
         form.slot,
@@ -3682,13 +2877,16 @@ pub(super) struct NocturneClearForm {
     function: String,
 }
 
-/// POST /nocturne/bind/clear (and /workspace/bind/clear) — one control back
+/// POST /nocturne/bind/clear — one control back
 /// to unbound on the staged slot, via the daemon's own staged-bind verb with
 /// the canonical clear placeholder. Moved from /workspace verbatim.
 pub(super) async fn nocturne_form_bind_clear(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneClearForm>,
+    form: NocturneForm<NocturneClearForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let ok = tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
         let Some(slot) = staged.slots.iter().find(|s| s.number == form.slot) else {
@@ -3719,20 +2917,147 @@ pub(super) async fn nocturne_form_bind_clear(
 }
 
 /// POST /nocturne/save — the ONE writing verb: stage-commit.
+///
+/// Save's gate is deliberately the WEAKER one. Committing the staged files is
+/// safe and useful on a machine whose controller driver is missing or could
+/// not be read, so the output readiness Play consults is not consulted here;
+/// only the capture disagreement is, because a saved draft that names the
+/// wrong capture path would replay the same dead session tomorrow.
 pub(super) async fn nocturne_form_save(State(state): State<Arc<AppState>>) -> Response {
-    let ok = tokio::task::spawn_blocking(move || state.control.stage_commit().ok)
-        .await
-        .unwrap_or(false);
-    nocturne_redirect(if ok { N_SAVE_OK } else { N_SAVE_ERROR })
+    let disagrees = {
+        let state = Arc::clone(&state);
+        tokio::task::spawn_blocking(move || capture_disagrees(&state))
+            .await
+            .unwrap_or(false)
+    };
+    if disagrees {
+        return nocturne_redirect(N_SAVE_CAPTURE);
+    }
+    let outcome = tokio::task::spawn_blocking(move || state.control.stage_commit()).await;
+    nocturne_redirect(stage_flash(outcome, StageVerb::Save))
+}
+
+/// Which of the two writing verbs a refusal belongs to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StageVerb {
+    Save,
+    Play,
+}
+
+/// One [`ksx_api::StageOutcome`] as the sentence this page flashes.
+///
+/// **The CODE decides, never the daemon's sentence.** A `StageRefusal` is
+/// written for an operator: it names `slot 1`, `Persona::backend()`,
+/// `ksx_core::MAX_SLOTS` and file paths, and carrying it verbatim put all of
+/// that under a button on the product page. It also cost us the thing the
+/// carrying was supposed to preserve — a runtime-composed sentence cannot be
+/// on [`N_FLASH_ALLOWLIST`], so with scripting off every one of these refusals
+/// degraded to the generic "could not be finished" anyway. Selecting one of
+/// this page's own sentences off the stable code keeps the specific reason on
+/// BOTH doors and leaks nothing (`verb_flash`'s rule, applied to the stage).
+///
+/// The success line is this page's too: `stage_commit` answers "saved to
+/// config.toml" and `stage_play` "the staged setup is playing", which are the
+/// daemon's nouns and are likewise unreflectable.
+fn stage_flash(
+    outcome: Result<ksx_api::StageOutcome, tokio::task::JoinError>,
+    verb: StageVerb,
+) -> &'static str {
+    let Ok(outcome) = outcome else {
+        return match verb {
+            StageVerb::Save => N_SAVE_ERROR,
+            StageVerb::Play => N_PLAY_ERROR,
+        };
+    };
+    if outcome.ok {
+        return match verb {
+            StageVerb::Save => N_SAVE_OK,
+            StageVerb::Play => N_PLAY_OK,
+        };
+    }
+    match (verb, outcome.code.as_deref().unwrap_or_default()) {
+        (StageVerb::Save, "blocking-unanswered") => N_SAVE_BLOCKING,
+        (StageVerb::Play, "blocking-unanswered") => N_PLAY_BLOCKING,
+        (StageVerb::Save, "no-bindings") => N_SAVE_NO_BINDINGS,
+        (StageVerb::Play, "no-bindings") => N_PLAY_NO_BINDINGS,
+        (StageVerb::Save, "no-device") => N_SAVE_NO_DEVICE,
+        (StageVerb::Play, "no-device") => N_PLAY_NO_DEVICE,
+        (StageVerb::Save, "no-slots") => N_SAVE_NO_SLOTS,
+        (StageVerb::Play, "no-slots") => N_PLAY_NO_SLOTS,
+        (StageVerb::Save, _) => N_SAVE_ERROR,
+        (StageVerb::Play, _) => N_PLAY_ERROR,
+    }
+}
+
+/// **The capture gate, repeated in the handlers.**
+///
+/// The staged keyboard and the machine can disagree about who is holding it:
+/// the draft names the ordinary Windows path over a board `winusb.sys` has
+/// already taken, or names the built-in path over a board nothing has
+/// prepared. Either way the pads plug and no key reaches them. This lived in
+/// `SetupFlags::can_save`/`can_play` on the deleted `/start` page — i.e. in
+/// the BUTTON — and a hand-authored POST walked straight past it. Both
+/// writing verbs consult it now, before they touch the daemon.
+///
+/// A scan that could not be read does not gate anything: an unreadable
+/// machine is not evidence of a disagreement, and refusing Play over it would
+/// turn a temporary read failure into a locked-out cabinet.
+fn capture_disagrees(state: &AppState) -> bool {
+    let staged = state.control.staged();
+    let Some(device) = staged.device.as_ref().filter(|_| staged.reachable) else {
+        return false;
+    };
+    let Ok(scan) = state.machine.device_scan() else {
+        return false;
+    };
+    let Some(board) = scan
+        .boards
+        .iter()
+        .find(|board| board.selector.as_deref() == Some(device.selector.as_str()))
+    else {
+        return false;
+    };
+    match device.backend.as_str() {
+        "winusb" => !board.claimed,
+        "interception" => board.claimed,
+        // Any other backend name is not a capture transition this page owns.
+        _ => false,
+    }
 }
 
 /// POST /nocturne/play — start a session from the staged setup, writing
-/// nothing. The daemon gates readiness; a refusal flashes without a start.
+/// nothing. Three gates, in the order that costs least: the capture
+/// disagreement (a cheap re-read), the required controller OUTPUTS (Play's
+/// own gate — see [`N_PLAY_OUTPUT_BLOCKED`]), and then the domain's.
 pub(super) async fn nocturne_form_play(State(state): State<Arc<AppState>>) -> Response {
-    let ok = tokio::task::spawn_blocking(move || state.control.stage_play().ok)
+    let gate = {
+        let state = Arc::clone(&state);
+        tokio::task::spawn_blocking(move || {
+            if capture_disagrees(&state) {
+                return Some(N_PLAY_CAPTURE);
+            }
+            // A machine that cannot answer at all is `unknown`, which is
+            // exactly the state that must not plug a pad it cannot vouch for.
+            let outputs = state
+                .machine
+                .controller_outputs(&state.control.staged())
+                .unwrap_or_default();
+            if outputs.blocked {
+                Some(N_PLAY_OUTPUT_BLOCKED)
+            } else if outputs.unknown {
+                Some(N_PLAY_OUTPUT_UNKNOWN)
+            } else {
+                None
+            }
+        })
         .await
-        .unwrap_or(false);
-    nocturne_redirect(if ok { N_PLAY_OK } else { N_PLAY_ERROR })
+        .unwrap_or(Some(N_PLAY_ERROR))
+    };
+    if let Some(refusal) = gate {
+        return nocturne_redirect(refusal);
+    }
+    let outcome = tokio::task::spawn_blocking(move || state.control.stage_play()).await;
+    nocturne_redirect(stage_flash(outcome, StageVerb::Play))
 }
 
 /// POST /nocturne/stop — end the session; keyboards type normally again.

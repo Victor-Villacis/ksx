@@ -262,9 +262,44 @@ performance and it is never required for the product to work.
 
 ### What ksx gives back (the dogfood loop)
 A systems daemon stresses Forma where no web app would, and each gap becomes a feature
-request with a real consumer: **server push (SSE/WS)**, **CSP extensibility**,
-**embedding ergonomics** (proof it drops into a non-web Rust binary), **Windows build
-validation** (first real Windows consumer), and **FMIR version alignment**.
+request with a real consumer. When this was written (2026-08-04) that was a list of
+guesses: server push, CSP extensibility, embedding ergonomics, Windows build validation,
+FMIR version alignment. **The loop has run since, and the guesses can be replaced with
+the record.**
+
+It lives in **`docs/FORMA-DOGFOOD.md`** — 23 numbered findings, each with a mechanism,
+an upstream file, a local repro and a specific ask. Two of the five guesses landed
+almost verbatim: **Windows build validation** became finding #1, an
+`execFileSync("npx")` ENOENT that only a Windows consumer could have hit, and **CSP
+extensibility** became #13(a), where the framework's own compiled `style:` bindings
+were being eaten by the framework's own default CSP. **Embedding ergonomics** is
+settled by the fact that Studio ships inside a systems daemon at all. **Server push**
+and **FMIR version alignment** produced no defect — the format held across a five-month
+npm/crates drift (#7), and the polling design never needed SSE. The rest of the ledger
+is what no list of guesses would have produced: slot naming, hydration ownership,
+island props, and what the compiler does with a `+`.
+
+**Thirteen defects have been reported, fixed upstream and adopted here**, plus a
+fourteenth fixed for its literal-only case — and the two big waves were both
+found-Tuesday, fixed-and-adopted-Wednesday. That is the argument E7 actually makes:
+not that a systems daemon is an unusual consumer, but that it is a consumer who reads
+the emitted IR, measures the wire, and files with a line number.
+
+The 2026-08-26 batch added a fourth verb to that list: **it checks what the fix will
+do to consumers before the fix ships.** Finding #23 asks the compiler to warn on a
+slot-name collision it currently makes in silence — and the ask had to be amended in
+the filing, because the obvious implementation (reuse the sentence the signal path
+already emits) would land on a gate in this very repo that answers that sentence with
+the opposite remediation: *delete the duplicate*, when the correct fix for the list
+case is *serve the duplicate*. Only a consumer with the gate in front of them catches
+that, and it is worth more to upstream than the defect report it arrived attached to.
+
+The bet's live cost is on the same page. The ledger's "still open, in the order they
+cost us" list runs to seven bullets, and the 2026-08-26 batch now at the top of it is
+the instructive one: two of those findings were **re-found from scratch** by an author
+rewriting a surface, on a toolchain that had not moved, because a residue that produces
+CORRECT output leaves the next person nothing to trip over except the same afternoon of
+work. A dogfood loop that only reports wrong output undercounts what it is finding.
 
 **The demo that sells both**: open a phone at the cab → four virtual pads rendered live
 → mash the arcade panel → buttons light up instantly with real latency numbers → remap
@@ -428,8 +463,18 @@ The config root is `%APPDATA%\ksx` and appears in none of those rows. So
 `ksx device pick` writing a `[[device]]` entry and a board being held are
 independent facts, a board can be held with no entry naming it, and moving
 `config.toml` aside for a clean-machine QA run releases exactly nothing. That
-is why the held-keyboard list reads `BoardRow::claimed` off the live scan and
-why it belongs on `/start` rather than on the config page.
+is why the held-keyboard list reads `BoardRow::claimed` off the live scan.
+
+The placement half of that argument was "on `/start` rather than on the config
+page", and it needs restating now that both pages are gone. The finding is
+unchanged and the rule it implies is stronger: the list belongs wherever a
+person whose keyboard has stopped working will be, which since 2026-08-25 is the
+one product page — `/nocturne` — and specifically NOT `/devices`, which reads
+and writes `[[device]]` entries and is therefore about configuration, the one
+thing this paragraph proves cannot answer the question. ⚠ The list is not on
+`/nocturne` today: the read survived the cutover and the face did not
+(`SURFACES.md` §3a). That is a regression against this finding, not a revision
+of it.
 
 **Shipped contract.** `/devices` and `ksx winusb sweep-certificates` report
 receipt and certificate residue without elevation. The consented sweep invokes
@@ -443,228 +488,40 @@ binding, configuration, or receipt is changed by this verb.
 
 ---
 
-## E10 — ksx reads and programs the panel encoder (implementation candidate; hardware gate remains)
+## E10 — ksx reads and programs the panel encoder (EXTRACTED — no longer ksx)
 
-**Recorded 2026-08-22 20:24 EDT; implementation candidate updated 2026-08-23
-01:54 EDT.** The current evidence, corrections and work log live in
-[`PANEL-PROGRAMMING-STATE.md`](PANEL-PROGRAMMING-STATE.md). This entry is the
-product decision; that file is the implementation state.
+**Recorded 2026-08-22. Shipped in PR #30. Extracted 2026-08-25.**
 
-**The user story.**
+This capability now lives in its own product, **PacBench**, and is no longer
+part of ksx. The entry is kept so the ledger's numbering and the decision
+history survive the move.
 
-> *I wired a new player-3 button to SW9. In Control Surface Builder I select
-> the exact encoder, read and back up its complete chart, then either keep its
-> current keys, ask KSX for a safe four-player layout, or assign SW9 myself. I
-> review the terminal and byte diff before anything changes. After I confirm,
-> KSX backs up the fresh state, programs the board, reads every byte back and
-> tells me whether it verified. I then Teach the real button so the app proves
-> what Windows receives. If I change my mind, I can review and restore the
-> exact pre-program safety backup with the same verification. KSX still owns profiles, macros,
-> turbo, chords, SOCD and whichever controller persona the game needs.*
+**Why it left.** Chart access is vendor- and firmware-specific: it needs an
+exact measured protocol profile per board model, which costs a supervised
+hardware session on hardware you own. ksx's own capability needs no vendor
+knowledge and works on devices neither product has ever seen. Those are
+different cost curves, so they are different programs.
 
-**The decision.** Keyboard mode is the default I-PAC source substrate. Its
-persistent pin-to-key chart provides a stable, per-device input vocabulary;
-ksx remains the dynamic layer that transforms those inputs and emits virtual
-controllers. Programming the chart complements ksx. It does not replace the
-engine or move per-game behavior into EEPROM.
+Two measurements settled it:
 
-### Mode boundary
+- **A chart read cannot detect a macro collision, even in principle.** Onboard
+  macros are vendor-owned bytes that are preserved verbatim and never parsed,
+  so a macro'd terminal is indistinguishable from an unassigned one.
+- **Writing does not fix that either**, because a write preserves the macro
+  bytes it does not understand. A perfect 56-key chart can still contain a
+  terminal that fires two other players' buttons.
 
-I-PAC XInput mode is an **optional hardware bypass**, not the default source
-path and not part of the first implementation. On applicable I-PAC4 firmware,
-the board can expose four gamepads, consuming the four system-wide XInput
-positions ksx otherwise uses for Xbox 360 personas. Ultimarc also documents
-important restrictions on reconfiguration while an I-PAC4/Mini-PAC4 is in its
-quad XInput mode. Those are model- and firmware-scoped facts, not a universal
-statement about every Ultimarc board.
+So the question people actually have — *"which of my buttons collide?"* — is
+answered by observing what arrives, not by reading the board. That answer
+belongs in ksx and works on every encoder; changing what a board emits is a
+separate, hardware-bound job.
 
-The current keyboard-capture enumerator accepts HID-class interfaces only, so
-an XUSB presentation is not a keyboard-capture candidate. A future `ksx panel`
-inventory may still identify the physical USB parent and explain how to return
-it to keyboard mode. That diagnostic is different from routing the resulting
-XInput pads back through ksx, which remains out of scope. The exact
-mid-session behavior after a hardware mode switch is **unverified**; do not
-promise `XinputBusFull`, a clean unplug or automatic recovery until the cabinet
-measures it.
+**What ksx keeps.** An I-PAC remains an ordinary keyboard-emitting input
+device: it is recognised (`BoardRole::PanelEncoder`), named, claimed and split
+exactly as before. What ksx no longer has is any way to read or write the
+board's stored configuration.
 
-### The key vocabulary is per device
-
-`KeyEvent` carries both `DeviceId` and `Key`, and the engine tracks held keys
-per device. The same key on two encoders is therefore two distinct sources.
-There is no global requirement for 16 players to occupy 16 disjoint keyboard
-alphabets; `MAX_SLOTS = 16` explicitly budgets four four-player I-PAC boards.
-
-There is still a real compatibility boundary to report. The WinUSB HID usage
-translator currently maps 106 usages onto 105 distinct set-1 keys, and usages
-without a set-1 equivalent — including F13–F24 — intentionally produce no
-event. Chart key choice matters because every programmed usage must be
-representable on the selected capture backend, and because passthrough or
-direct MAME use sees the stored keys without ksx's transforms.
-
-### Implemented surface and end-to-end UX
-
-The implementation candidate retains passive `ksx panel status`, then adds one
-explicit, supervised command family:
-
-- `chart [--backup]` performs the complete on-demand report read and can save
-  the exact raw image;
-- `backups` lists verified, board-specific restore points;
-- `program` accepts either the deterministic four-player allocator or semantic
-  terminal/normal/shift edits; and
-- `restore` targets one verified backup.
-
-The Recommended allocator assigns all 56 normal keys and clears all 56
-alternate assignments and shift roles so KSX owns dynamic behavior; opaque
-macro/vendor bytes outside those planes remain byte-preserved.
-
-Program and restore are non-mutating plans by default: planning issues the
-chart query/read but writes no chart data or EEPROM. Apply requires the desired
-SHA-256, exact board fingerprint, `ipac4-pac256-v1` profile, `--supervised` and
-`--yes` from that review. Each apply rereads the chart, rejects a stale base
-hash, saves and reopens a complete immutable backup before packet zero, writes
-the complete image, then rereads and compares every byte. Human output and
-typed JSON share the same backend contract.
-
-The Control Surface Builder presents the same model as a short task:
-
-1. **Read & back up** the selected encoder.
-2. On an unqualified hardware/profile pair, make one reversible normal-key
-   change on a noncritical SW terminal. Exactly one desired byte differs, but
-   KSX explicitly warns that the device protocol retransmits all 64 reports /
-   the complete 256-byte chart.
-3. Program and fully reread that validation chart, then restore and verify the
-   exact safety backup. Only that round trip unlocks **Recommended KSX layout**,
-   unrestricted **Customize terminals**, and other verified backups. An
-   interrupted or partial validation instead requires the same exact restore
-   and returns to the unqualified state.
-4. Review the semantic changes, expandable byte diff, preserved-byte count,
-   blockers and base/desired hashes.
-5. Confirm both the exact reviewed change and physical recovery readiness
-   (present at the cabinet, WinIPAC closed, separate keyboard/recovery path),
-   then choose **Program and verify** or **Restore and verify**.
-6. On a verified readback, continue to **Teach inputs** to prove the physical
-   wiring and Windows signal; byte verification never impersonates that test.
-
-The staged encoder held by the daemon is authoritative. Browser selectors are
-stale-screen guards, plans are bound to selector + board fingerprint + protocol
-profile + hashes, and changing any of them invalidates confirmation. Physical
-USB bus/port topology, rather than Ultimarc's low-entropy serial, anchors the
-fingerprint; moving an encoder therefore requires a future supervised
-backup-adoption flow rather than silently sharing restore points. A global
-cross-process lease is shared by Play startup and the complete maintenance
-transaction, closing the packet-zero race. A durable pre-packet journal blocks
-replacement transactions until reread reconciliation or the named restore
-resolves it. Interrupted or unverifiable transactions enter a named
-`recovery-required` state with the backup retained. Raw images never enter the
-browser, URL or control-surface document; only UI preferences may persist in
-browser storage.
-
-The recovery store is machine authority, not portable-profile state:
-production always uses the installed per-account KSX configuration
-directory's `panel-backups` root. Play/start takes the same global lease and
-fails closed when that root contains an unresolved or unreadable journal,
-cannot be traversed, or contains a symlink/junction/wrong-kind substitute at a
-recovery level. Only an actually absent root is clean.
-
-### Protocol evidence and the safety boundary
-
-Ultimarc's [official I-PAC 4 product page](https://www.ultimarc.com/control-interfaces/i-pacs/i-pac4-board/)
-establishes the product behavior: 56 inputs, persistent programmable keys,
-shifted assignments, generic Windows USB operation and model/firmware-scoped
-keyboard/gamepad modes.
-
-The GPLv2 `Ultimarc-linux` implementation was inspected at immutable commit
-`20b8c56a3e6f94034b8529eddd777306f5b6152b` only for protocol facts:
-
-- [`common.h`](https://github.com/katie-snow/Ultimarc-linux/blob/20b8c56a3e6f94034b8529eddd777306f5b6152b/src/libs/common.h)
-  records HID class request `0x21/9`;
-- [`ipacseries.h`](https://github.com/katie-snow/Ultimarc-linux/blob/20b8c56a3e6f94034b8529eddd777306f5b6152b/src/libs/ipacseries.h)
-  records older generic value `0x0203`, five-byte messages, a 260-byte buffer
-  and generation-specific configuration interfaces; and
-- [`ipac.c`](https://github.com/katie-snow/Ultimarc-linux/blob/20b8c56a3e6f94034b8529eddd777306f5b6152b/src/libs/ipac.c)
-  records an older generic writer; it has no chart-read path and does not prove
-  the measured D209:0430 release-0056 MI_02 topology.
-
-The pinned QtPyUltimarc commit
-`6f1f5a285201143e6260f0a1451ca469a54ee768` supplies the direct I-PAC4 PAC256
-evidence: [`ipac4.py`](https://github.com/katie-snow/QtPyUltimarc/blob/6f1f5a285201143e6260f0a1451ca469a54ee768/ultimarc/devices/ipac4.py)
-identifies interface 2 and the query/read path,
-[`_structures.py`](https://github.com/katie-snow/QtPyUltimarc/blob/6f1f5a285201143e6260f0a1451ca469a54ee768/ultimarc/devices/_structures.py)
-defines exactly 256 bytes, and
-[`_device.py`](https://github.com/katie-snow/QtPyUltimarc/blob/6f1f5a285201143e6260f0a1451ca469a54ee768/ultimarc/devices/_device.py)
-records four payload bytes per five-byte report for read/write loops.
-
-KSX's implementation was independently authored from those facts, official
-product behavior, Windows HID APIs and KSX's typed domain seams. No source code
-was copied; neither research project is a dependency, linked, vendored or
-shipped material. `NOTICE` therefore
-does not gain an entry under its copied/vendored/embedded/bundled-material
-policy. The pinned links and
-[`PANEL-PROGRAMMING-STATE.md`](PANEL-PROGRAMMING-STATE.md) retain the research
-attribution and GPLv2 license context.
-
-Persistent encoder configuration is a fourth lifetime alongside the driver
-binding, transaction receipt and signing residue in E9. The implementation now
-enforces the planned safeguards: exact D209:0430/raw-bcd0056/MI_02 path and
-five-byte admission including vendor collection usage `FF00:0001`, two
-independent matching PAC256 reads, complete raw-image authority, opaque-byte
-preservation, immutable verified backup before packet zero,
-profile/fingerprint/hash-bound consent, stale reread, a durable transaction
-journal, a two-second killable helper-process boundary around each otherwise
-uncancellable Windows output call, full write, complete reread equality and
-explicit recovery state with phase/packet context. Restore first backs up the
-current chart and is itself verified. First-use qualification proves a
-reversible one-terminal write and exact restore before general programming is
-exposed.
-
-Those are synthetic software guarantees, not target-firmware proof. The live
-cabinet has received no chart query or output report from this work. The first
-hardware program remains a supervised, user-initiated gate: verify exact
-identity and read/backup, review a no-op plan, then change one noncritical
-terminal, require full readback plus physical Teach verification, and restore
-the exact pre-program safety backup. A no-op still issues the chart query/read
-but emits no chart-data write packet, so it cannot by itself prove the
-programming path.
-Sequential-packet atomicity,
-re-enumeration and persistence remain unverified firmware behavior.
-
-### One command family, capability-specific hardware drivers
-
-`ksx panel` should route through a small driver per hardware family/model, not
-pretend one universal encoder protocol exists. Each driver declares only what
-it can prove: `can_identify`, `can_report_mode`, `can_read_chart`,
-`can_write_chart` and whether a write is persistent. An unknown or
-non-programmable device remains useful in status output and refuses unsupported
-verbs.
-
-Mini-PAC belongs to the Ultimarc protocol family subject to model-layout
-differences. PacDrive is an LED/output controller and remains E8 work. Xin-Mo
-and “Zero Delay” boards may have no writable configuration surface at all.
-Arduino, Adafruit and RP2040 are platforms rather than one protocol; they are
-easy only when ksx owns the exact firmware and can define its contract.
-
-### Feature order
-
-1. **Status/discovery — implemented and passively measured 2026-08-22:** stable
-   human/JSON output and the selected-encoder Studio card.
-2. **Chart/backup/program/restore domain — implementation candidate
-   2026-08-23:** complete raw-image model, semantic edit layer, immutable
-   backup store and transaction/recovery rules, exercised with synthetic I/O.
-3. **Windows transport and typed surfaces — integration-verified candidate
-   2026-08-23:** exact five-byte HID transport, MachineSource contract, CLI and
-   Studio review/confirm/verify flow. Final local Rust, HTTP and browser gates
-   pass, including 682 backend tests (1 ignored hardware-only), 137 Studio HTTP
-   tests and 45 canvas browser tests; deterministic assets match across two
-   builds. A clean runner remains normal post-merge release evidence.
-4. **Supervised cabinet proof — required before hardware-ready:** explicit
-   read/backup, one reversible terminal write, complete reread, physical signal
-   check, verified restore, then a separate persistence measurement.
-5. **Additional encoder drivers — future:** each family declares its real
-   capabilities behind the same command/model; unsupported hardware continues
-   to refuse rather than guess.
-
-**Verdict: the product and software design are implemented; hardware readiness
-remains gated.** Keep keyboard mode as the power path, keep persistent board
-configuration separate from KSX's dynamic transforms, and do not promote
-synthetic transaction coverage into a real-I-PAC write claim. The living state
-document owns the exact test evidence and supervised first-program procedure.
+**What replaces it.** Encoder awareness returns incrementally, built on the
+observation flow ksx already owns — the simultaneous-input diagnostic and the
+auto-map walk — so it works on any encoder with no vendor profile. See the
+extraction plan for the staged design.

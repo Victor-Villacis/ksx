@@ -8,12 +8,25 @@ Import-Module (Join-Path $PSHOME "Modules\Microsoft.PowerShell.Utility\Microsoft
 function Invoke-KsxDaemonStatusProbe {
     param([Parameter(Mandatory = $true)][string]$Executable)
 
-    $Lines = @(& $Executable session status --json 2>&1)
+    # Parse STDOUT ONLY. `ksx` writes its logging banner to stderr on purpose,
+    # precisely so stdout stays valid `--json` (see `announce` in
+    # crates/ksx-backend/src/logging.rs: "stdout belongs to --json"). Joining
+    # both streams and parsing the union made EVERY probe unparseable as soon
+    # as a banner appeared, and a caller holding the correct typed answer in
+    # `text` would then refuse with "daemon state is ambiguous".
+    $Captured = @(& $Executable session status --json 2>&1)
     $ExitCode = $LASTEXITCODE
-    $Text = $Lines -join "`n"
+    $StdOut = @(
+        $Captured |
+            Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] } |
+            ForEach-Object { [string]$_ }
+    )
+    # `text` keeps BOTH streams: whoever diagnoses an ambiguous probe needs the
+    # stderr line as much as the payload.
+    $Text = (@($Captured | ForEach-Object { [string]$_ })) -join "`n"
     $Payload = $null
     try {
-        $Payload = $Text | ConvertFrom-Json
+        $Payload = ($StdOut -join "`n") | ConvertFrom-Json
     } catch {
         # Callers inspect exit code plus raw text when a responder is absent,
         # incompatible, or otherwise ambiguous.

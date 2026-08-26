@@ -7,10 +7,8 @@
 // spawned via execFileSync without shell:true, ENOENT — was fixed in 0.1.9,
 // so a `tailwind: true` cssEntry would now work if ever wanted.)
 //
-// TEN routes — "/start" (the first run), "/workspace" (the Nocturne
-// workspace shell, growing toward v0.5's single main screen), "/" (status),
-// "/map" (the mapper), "/check", "/pads", "/devices", "/profiles" and
-// "/setup" (the configuration: import, export, first run) — plus the vendored
+// FOUR routes — "/nocturne" (the product), "/check", "/pads" and
+// "/devices" (the tool pages) — plus the vendored
 // controller art copied (cleaned) from art/ into the embed.
 //
 // Adding a route is THREE edits in this file and none of them is optional:
@@ -266,29 +264,17 @@ writeFileSync(normalizedCss, authoredCss, "utf8");
 try {
   await build({
     entryPoints: [
-      { entry: "src/start.ts", outfile: "start.js" },
-      { entry: "src/workspace.ts", outfile: "workspace.js" },
       { entry: "src/nocturne.ts", outfile: "nocturne.js" },
-      { entry: "src/status.ts", outfile: "status.js" },
-      { entry: "src/map.ts", outfile: "map.js" },
       { entry: "src/check.ts", outfile: "check.js" },
       { entry: "src/pads.ts", outfile: "pads.js" },
       { entry: "src/devices.ts", outfile: "devices.js" },
-      { entry: "src/profiles.ts", outfile: "profiles.js" },
-      { entry: "src/setup.ts", outfile: "setup.js" },
     ],
     cssEntries: [{ input: [tokensCssTmp, canvasCssTmp, normalizedCss], outfile: "studio.css" }],
     routes: {
-      "/start": { js: ["start"], css: ["studio"] },
-      "/workspace": { js: ["workspace"], css: ["studio"] },
       "/nocturne": { js: ["nocturne"], css: ["studio"] },
-      "/": { js: ["status"], css: ["studio"] },
-      "/map": { js: ["map"], css: ["studio"] },
       "/check": { js: ["check"], css: ["studio"] },
       "/pads": { js: ["pads"], css: ["studio"] },
       "/devices": { js: ["devices"], css: ["studio"] },
-      "/profiles": { js: ["profiles"], css: ["studio"] },
-      "/setup": { js: ["setup"], css: ["studio"] },
     },
     outputDir,
     // The mapping-flow lens, contextual Inspector, Keyboard Arranger, physical
@@ -304,16 +290,10 @@ try {
     budgetThreshold: 282_500,
     ssr: true,
     ssrEntryPoints: {
-      start: "src/start.ts",
-      workspace: "src/workspace.ts",
       nocturne: "src/nocturne.ts",
-      status: "src/status.ts",
-      map: "src/map.ts",
       check: "src/check.ts",
       pads: "src/pads.ts",
       devices: "src/devices.ts",
-      profiles: "src/profiles.ts",
-      setup: "src/setup.ts",
     },
   });
 } finally {

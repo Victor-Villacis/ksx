@@ -10,6 +10,17 @@ git tag v0.5.0
 git push origin v0.5.0
 ```
 
+**Check whether the bump is already there before you make one.** The version
+in the tree is not a record of what shipped; it is a claim about what the next
+tag will be, and it is routinely raised in the commit that starts a cycle
+rather than the one that ends it. So compare `git tag --list 'v*'` against
+`#define AppVersion` before touching either version field: when the tree
+already carries a version that has never been tagged, the whole first half of
+that snippet is a no-op and the release is just the two `git tag` lines. A
+reflex bump there does not merely waste a number — it abandons a version that
+the .iss, `Cargo.lock`, and the release notes have already been written
+against, and every one of them has to be moved again.
+
 The Release workflow first proves the tag is exactly the current
 `origin/main` HEAD, executes the complete clean-runner CI, and builds the
 installer and portable ZIP once. Publication then waits at the protected

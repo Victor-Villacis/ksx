@@ -380,6 +380,38 @@ try {
     $LaunchId = $Stamp
     $RuntimeExe = Join-Path $BinRoot "ksx-real-$Stamp.exe"
     Copy-Item -LiteralPath $BuiltExe -Destination $RuntimeExe
+    # `interception.dll` is a RUNTIME dependency loaded BY NAME, so Windows
+    # looks for it beside the RUNNING image -- this managed copy, not wherever
+    # it happens to sit in the tree. Without it the daemon refuses to start at
+    # all once config.toml names an Interception-backed device, and the message
+    # reads "the Interception driver/DLL is not installed on this machine",
+    # which sends someone to reinstall a driver that is already working.
+    #
+    # It is not tracked in this repository and cargo does not emit it, so this
+    # searches the places a working machine actually has one. Copied, never
+    # linked: the managed copy must stay disposable, and a symlink would make
+    # teardown's exact-file checks ambiguous.
+    $InterceptionSources = @(
+        (Join-Path (Split-Path -Parent $BuiltExe) "interception.dll"),
+        (Join-Path $RepoRoot "target\debug\interception.dll"),
+        (Join-Path $env:ProgramFiles "ksx\interception.dll"),
+        (Join-Path $env:SystemRoot "System32\interception.dll")
+    )
+    $InterceptionSource = $InterceptionSources | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    $RuntimeInterception = Join-Path $BinRoot "interception.dll"
+    if ($InterceptionSource) {
+        try {
+            Copy-Item -LiteralPath $InterceptionSource -Destination $RuntimeInterception -Force -ErrorAction Stop
+        } catch [System.IO.IOException] {
+            # A previous managed daemon may still hold it. The bytes are the
+            # same file every time, so an in-use copy is already correct.
+            if (-not (Test-Path -LiteralPath $RuntimeInterception -PathType Leaf)) { throw }
+        }
+    } elseif (-not (Test-Path -LiteralPath $RuntimeInterception -PathType Leaf)) {
+        # Say it here, once, rather than leaving the daemon's refusal to be
+        # read as a broken driver install.
+        Write-Warning "interception.dll was not found in any of: $($InterceptionSources -join '; '). Interception-backed capture will refuse; WinUSB-backed sessions are unaffected."
+    }
     $DisposableExecutables = @($RuntimeExe)
     $ArtifactHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $BuiltExe).Hash
     if ((Get-FileHash -Algorithm SHA256 -LiteralPath $RuntimeExe).Hash -ne $ArtifactHash) {

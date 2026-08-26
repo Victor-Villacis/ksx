@@ -2386,19 +2386,42 @@ pub(super) async fn nocturne_form_bind_clear(
 
 /// POST /nocturne/save — the ONE writing verb: stage-commit.
 pub(super) async fn nocturne_form_save(State(state): State<Arc<AppState>>) -> Response {
-    let ok = tokio::task::spawn_blocking(move || state.control.stage_commit().ok)
-        .await
-        .unwrap_or(false);
-    nocturne_redirect(if ok { N_SAVE_OK } else { N_SAVE_ERROR })
+    let outcome = tokio::task::spawn_blocking(move || state.control.stage_commit()).await;
+    nocturne_redirect(&stage_flash(outcome, N_SAVE_OK, N_SAVE_ERROR))
+}
+
+/// One [`ksx_api::StageOutcome`] as the sentence this page flashes.
+///
+/// The daemon composes a refusal with an `error`, a stable `code` and often a
+/// `remedy` — the verb that works anyway. All three were being dropped for a
+/// canned line, which is how "The setup could not be saved" managed to say
+/// nothing about why. Carry the daemon's own words, and the remedy after them.
+fn stage_flash(
+    outcome: Result<ksx_api::StageOutcome, tokio::task::JoinError>,
+    ok_line: &str,
+    fallback: &str,
+) -> String {
+    let Ok(outcome) = outcome else {
+        return "that verb panicked; nothing was written".to_owned();
+    };
+    if outcome.ok {
+        return outcome.message.unwrap_or_else(|| ok_line.to_owned());
+    }
+    let mut line = outcome
+        .error
+        .or(outcome.message)
+        .unwrap_or_else(|| fallback.to_owned());
+    if let Some(remedy) = outcome.remedy.filter(|r| !r.trim().is_empty()) {
+        line.push_str(&format!(" {remedy}"));
+    }
+    line
 }
 
 /// POST /nocturne/play — start a session from the staged setup, writing
 /// nothing. The daemon gates readiness; a refusal flashes without a start.
 pub(super) async fn nocturne_form_play(State(state): State<Arc<AppState>>) -> Response {
-    let ok = tokio::task::spawn_blocking(move || state.control.stage_play().ok)
-        .await
-        .unwrap_or(false);
-    nocturne_redirect(if ok { N_PLAY_OK } else { N_PLAY_ERROR })
+    let outcome = tokio::task::spawn_blocking(move || state.control.stage_play()).await;
+    nocturne_redirect(&stage_flash(outcome, N_PLAY_OK, N_PLAY_ERROR))
 }
 
 /// POST /nocturne/stop — end the session; keyboards type normally again.

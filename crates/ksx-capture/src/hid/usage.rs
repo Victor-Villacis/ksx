@@ -271,12 +271,22 @@ mod tests {
     /// `LeftCtrl x5` and `Ctrl+Alt+Del` must be expressible from HID usages —
     /// they are the escape hatch, and an escape hatch that only works on the
     /// old backend is not an escape hatch.
+    ///
+    /// The modifier rows are pinned next door by `modifiers_split_left_and_right`,
+    /// so what this adds is `Delete` — and specifically the **extended**
+    /// Delete, which is the key `Ctrl+Alt+Del` means. The keypad's Del rides
+    /// the same set-1 code `0x53` without the `E0` prefix and is a different
+    /// key everywhere it matters (`ksx_core::escape` gives `NumpadDelete` its
+    /// own slot), so a table that dropped the prefix would leave the gesture
+    /// unreachable while every other test in this file stayed green.
     #[test]
     fn the_escape_gestures_are_reachable_from_usages() {
-        assert_eq!(key_of(0xE0, true), Some(Key::LeftControl));
-        assert_eq!(key_of(0xE2, true), Some(Key::LeftAlt));
         assert_eq!(key_of(0x4C, true), Some(Key::Delete));
-        assert_eq!(key_of(0xE4, true), Some(Key::RightControl));
+        assert_eq!(
+            key_of(0x63, true),
+            Some(Key::NumpadDelete),
+            "the keypad's Del is not the Del of Ctrl+Alt+Del"
+        );
     }
 
     #[test]

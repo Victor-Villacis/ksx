@@ -509,19 +509,61 @@ mod tests {
         assert_eq!(qualified_id(path, 0, false), path);
     }
 
+    /// A synthetic id names an interface whose devnode could not be found. It
+    /// must be visibly unusable, because the one thing worse than "ksx cannot
+    /// see this interface" is a config entry that looks bindable and binds to
+    /// nothing.
+    ///
+    /// `!id.ends_with("MI_01")` used to stand here and could never fire —
+    /// `synthetic_id` always ends `\<NOT-ENUMERATED>`. The assertion that
+    /// matters is the one below: whatever a user copies out of a listing must
+    /// not resolve against a real device.
     #[test]
     fn synthetic_ids_are_visibly_unusable() {
+        use ksx_core::{DeviceFacts, DeviceSelector};
+
         let id = synthetic_id(0xD209, 0x0430, 1);
         assert!(id.contains("<NOT-ENUMERATED>"));
-        assert!(!id.ends_with("MI_01"), "must not look like a real instance");
+
+        // The real board this synthetic id was minted for, present and well.
+        let real = candidate(
+            r"USB\VID_D209&PID_0430&MI_01\7&1A2B3C4D&0&0001",
+            0x03,
+            1,
+            1,
+            0xD209,
+        )
+        .facts();
+        // Parsed as an instance path (the only thing this shape could be), it
+        // must find nothing at all.
+        let selector = DeviceSelector::parse(&id).expect(&id);
+        assert_eq!(
+            selector.match_against(std::slice::from_ref(&real)).id(),
+            None,
+            "a placeholder id resolved to a real interface: {id}"
+        );
+        // ...and it is not the id that interface answers to either.
+        assert_ne!(DeviceFacts::instance_of(&id), real.instance);
     }
 
     /// Live, read-only: enumeration must not panic on this machine's real USB
     /// tree, and every candidate must carry a usable identity. Nothing is
     /// opened or claimed — see the module docs.
+    ///
+    /// Every assertion below is inside a loop over what happens to be plugged
+    /// in — the uniqueness check included, since an empty list has no
+    /// duplicates. On a VM with no USB devices this test therefore proves
+    /// nothing, and says so rather than reporting a pass it did not make. The
+    /// property it exists for is pinned without hardware by
+    /// `twin_boards_round_trip_through_the_selector_ksx_would_write`.
     #[test]
     fn enumeration_is_safe_and_well_formed_on_real_hardware() {
         let found = candidates().expect("nusb enumeration");
+        if found.is_empty() {
+            println!("SKIP: no USB interfaces enumerated on this machine");
+            return;
+        }
+        println!("checked {} live USB interfaces", found.len());
         for c in &found {
             assert!(!c.id.as_str().is_empty());
             assert!(
@@ -571,13 +613,75 @@ mod tests {
         assert_eq!(facts.instance, "7&1A2B3C4D&0&0000");
     }
 
+    /// **The property the live test above exists for, without the hardware.**
+    ///
+    /// Two identical boards is the case that matters and the case nobody can
+    /// run: it needs two physical I-PACs, so on CI and on every developer
+    /// machine the live round-trip below walks a list where every board is
+    /// unique and the model rung is always enough. The interesting rungs are
+    /// never exercised.
+    ///
+    /// So build the twins here, out of the enumerator's OWN
+    /// [`UsbCandidate::facts`] rather than hand-written `DeviceFacts` — the
+    /// rung logic itself is ksx-core's to test
+    /// (`selector::tests::strongest_for_climbs_only_as_far_as_it_must`); what
+    /// this pins is the handoff, that the facts this crate produces still
+    /// separate two boards a user cannot tell apart.
+    ///
+    /// Breaks against any `facts()` that stops filling `instance` with the
+    /// per-board tail: both twins would then answer to one port selector,
+    /// `match_against` returns `Ambiguous`, and "capture this device" is
+    /// ambiguous again — the exact T4 defect this backend exists to remove.
+    #[test]
+    fn twin_boards_round_trip_through_the_selector_ksx_would_write() {
+        use ksx_core::DeviceSelector;
+
+        // Two I-PACs, same VID/PID/interface, and — measured on this cabinet —
+        // the same one-character serial. Only the instance tail differs.
+        let a = candidate(
+            r"USB\VID_D209&PID_0430&MI_00\7&1A2B3C4D&0&0000",
+            0x03,
+            1,
+            1,
+            0xD209,
+        )
+        .facts();
+        let b = candidate(
+            r"USB\VID_D209&PID_0430&MI_00\6&1B2C3D4E&0&0000",
+            0x03,
+            1,
+            1,
+            0xD209,
+        )
+        .facts();
+        assert_eq!(a.serial, b.serial, "the twins share a serial, as they do");
+        assert_ne!(a.instance, b.instance, "...and differ only by socket");
+
+        let both = [a.clone(), b.clone()];
+        for one in &both {
+            let selector = DeviceSelector::strongest_for(one, &both);
+            let text = selector.to_string();
+            let reparsed = DeviceSelector::parse(&text).expect(&text);
+            assert_eq!(reparsed, selector, "selector text must round-trip: {text}");
+            assert_eq!(
+                reparsed.match_against(&both).id(),
+                Some(&one.id),
+                "the selector ksx would write for {} finds the other board, or both ({text})",
+                one.id
+            );
+        }
+    }
+
     /// Live, read-only. Every candidate must produce facts a selector can use,
     /// and the selector ksx would WRITE for it must find it again — on this
     /// machine's actual USB tree, not a fixture.
     ///
     /// This is the test that would have caught the shipped defect: the id in
     /// the config was a port-specific path, and nothing checked that the
-    /// identity ksx persists is one it can re-resolve.
+    /// identity ksx persists is one it can re-resolve. It is the belt to the
+    /// fixture above's braces: the fixture runs everywhere and covers the twin
+    /// case; this one covers whatever is really plugged in, which no fixture
+    /// can predict.
     #[test]
     fn every_real_candidate_round_trips_through_the_selector_ksx_would_write() {
         use ksx_core::DeviceSelector;
@@ -603,12 +707,16 @@ mod tests {
     /// machine DO report a serial, and it is a one-character constant.
     ///
     /// Skips when no Ultimarc board is connected — this is a note about
-    /// hardware, not a requirement on it.
+    /// hardware, not a requirement on it, and it means one thing on the
+    /// cabinet and nothing on CI. It now says which, out loud, because a check
+    /// that reports a pass it never made is worse than no check.
     #[test]
     fn ultimarc_serials_are_low_entropy_and_that_is_why_the_port_rung_exists() {
         let found = candidates().expect("nusb enumeration");
+        let mut checked = 0;
         for c in found.iter().filter(|c| c.is_ultimarc()) {
             if let Some(serial) = &c.serial {
+                checked += 1;
                 assert!(
                     serial.len() <= 4,
                     "if an Ultimarc board ever ships a REAL per-unit serial ({serial}), \
@@ -616,6 +724,14 @@ mod tests {
                      would then be trustworthy for twins"
                 );
             }
+        }
+        if checked == 0 {
+            println!(
+                "SKIP: no Ultimarc board with a serial on this machine — the measurement \
+                 behind docs/DEVICE-IDENTITY.md §3 was not re-taken"
+            );
+        } else {
+            println!("checked {checked} live Ultimarc interface serials");
         }
     }
 }

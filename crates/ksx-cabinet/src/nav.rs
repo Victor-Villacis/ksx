@@ -355,13 +355,11 @@ mod tests {
             let down = target;
             let up = rows - target;
             let presses = down.min(up);
-            assert!(
-                presses <= rows / 2,
-                "slot {} takes {presses} presses to reach",
-                target + 1
-            );
+            // NOT `assert!(presses <= rows / 2)` — that was `min(t, n-t) <=
+            // n/2`, true for every integer with no production code in the
+            // expression at all. The claim is about `Focus::apply`, so the
+            // walk below is the assertion.
 
-            // ...and the short way round actually lands there.
             let mut focus = on(Screen::Presets, rows);
             let nav = if down <= up { Nav::Down } else { Nav::Up };
             for _ in 0..presses {
@@ -373,6 +371,17 @@ mod tests {
                 "{presses} x {nav:?} missed slot {target}"
             );
         }
+
+        // ...and the wrap is what makes the half-list bound true at all: the
+        // LAST row is one press from the top, not fifteen.
+        let mut focus = on(Screen::Presets, rows);
+        focus.apply(Nav::Up);
+        assert_eq!(
+            focus.row(),
+            rows - 1,
+            "the list stopped wrapping, so slot {rows} is now {} presses away",
+            rows - 1
+        );
     }
 
     #[test]
@@ -455,12 +464,61 @@ mod tests {
 
     /// Every screen has a label and a subtitle, and none of them is a noun
     /// nobody at a cabinet would say.
+    ///
+    /// The second half of that sentence used to be a claim with no check
+    /// behind it: this asserted `!label().is_empty()` and `subtitle().len() >
+    /// 12`, which `"aaaaaaaaaaaaaaa"` satisfies. The copy rule is
+    /// docs/SURFACES.md §4 — this surface is read standing, from six feet, by
+    /// somebody who did not install ksx — so the words below are the ones the
+    /// implementation vocabulary leaks, and a subtitle is a SENTENCE.
+    ///
+    /// The rendering half (that these strings actually reach the frame rather
+    /// than merely existing) is `screens.rs`'s
+    /// `every_screens_own_words_are_drawn_on_the_panel`.
     #[test]
     fn every_screen_says_what_it_is_for() {
+        // Vocabulary from inside ksx, which nobody at a cabinet has read.
+        const JARGON: [&str; 9] = [
+            "devnode",
+            "TOML",
+            "selector",
+            "daemon",
+            "persona",
+            "instance path",
+            "VID_",
+            "HID",
+            "IOCTL",
+        ];
+        let mut labels: Vec<&str> = Vec::new();
         for screen in Screen::ALL {
-            assert!(!screen.label().is_empty());
-            assert!(screen.subtitle().len() > 12, "{:?}", screen);
+            let label = screen.label();
+            let subtitle = screen.subtitle();
+            assert!(!label.is_empty(), "{screen:?} has no label");
+            assert!(
+                !labels.contains(&label),
+                "two screens are both called {label:?} — the tab strip would be unreadable"
+            );
+            labels.push(label);
+
+            // A subtitle is a sentence: it says what the screen is FOR, so it
+            // ends the way a sentence ends and is not one word long.
+            assert!(
+                subtitle.ends_with('.') || subtitle.ends_with('?'),
+                "{screen:?}'s subtitle is not a sentence: {subtitle:?}"
+            );
+            assert!(
+                subtitle.split_whitespace().count() >= 4,
+                "{screen:?}'s subtitle is not a sentence: {subtitle:?}"
+            );
+            for word in JARGON {
+                assert!(
+                    !label.contains(word) && !subtitle.contains(word),
+                    "{screen:?} says {word:?}, which is ksx's vocabulary and not the cabinet's: \
+                     {label:?} / {subtitle:?}"
+                );
+            }
         }
         assert_eq!(Screen::ALL.len(), 5);
+        assert_eq!(labels.len(), Screen::ALL.len());
     }
 }

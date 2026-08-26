@@ -3039,12 +3039,51 @@ steps = [{ hold = ["A"], ms = 50 }]
         );
     }
 
+    /// **This test reads the machine's live process list, and only one of the
+    /// two branches exists on any given run.** `daemon_check` calls
+    /// `ksx_platform::process::snapshot()` itself, so whether a ksx daemon (or
+    /// a `ksx run` session, or another developer's `cargo run`) happens to be
+    /// alive decides which sentence is under test here. Both branches contain
+    /// the words "Session panel", which is why the assertion that used to be
+    /// the whole of this test — `detail.contains("Session panel")` — passed on
+    /// either road and told you nothing about which one you were on.
+    ///
+    /// So the wording is now bound to the ANSWER. A branch that reports
+    /// liveness with the no-daemon sentence (or the reverse) is the failure
+    /// this catches: the row would tell a user their daemon is dead while the
+    /// flag beside it says otherwise.
+    ///
+    /// The untaken branch is still unasserted, and no test in this file can fix
+    /// that: it needs `daemon_check` to take the process list as a PARAMETER
+    /// instead of reading it. That is a change to the function, not to its
+    /// test, and it would let both sentences be checked against injected lists
+    /// with no machine dependency at all.
     #[test]
     fn daemon_check_is_honest_about_its_mechanism() {
-        // Cannot assert liveness (depends on the machine), but the wording
-        // must always disclose the mechanism's limit and point at the pipe.
-        let (_, detail) = daemon_check();
+        let (alive, detail) = daemon_check();
+        // Whichever branch this machine takes, the row must disclose the limit
+        // of a process-list check and point at the authoritative view.
         assert!(detail.contains("Session panel"), "{detail}");
+        if alive {
+            assert!(
+                detail.contains("ksx.exe alive (pid"),
+                "a live answer must name the pids it is claiming: {detail}"
+            );
+            assert!(
+                detail.contains("daemon or session"),
+                "a process list cannot tell a tray daemon from a foreground run, and the \
+                 row must not pretend otherwise: {detail}"
+            );
+        } else {
+            assert!(
+                detail.contains("no other ksx.exe process"),
+                "a not-alive answer must say what was looked for: {detail}"
+            );
+            assert!(
+                detail.contains("process-list check"),
+                "the mechanism is named so a user knows what the absence proves: {detail}"
+            );
+        }
     }
 
     /// One pickable board shaped like the measured machine: USB interface

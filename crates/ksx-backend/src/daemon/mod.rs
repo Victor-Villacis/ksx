@@ -3852,23 +3852,39 @@ mod tests {
     /// "the state is not Quitting" a proof about the icon in the test above,
     /// and it is asserted over the source because a tray cannot be created in
     /// a test process.
+    ///
+    /// **Comment lines are stripped before the scan.** `tray.rs` opens with
+    /// thirty lines of prose about exactly this separation, and a scan of the
+    /// raw text forbids the words it needs to explain itself with: one sentence
+    /// saying "the cabinet window cannot reach this thread" would fail the gate
+    /// for documenting the invariant the gate enforces. (`winusb.rs`'s
+    /// `shipping_cli_has_only_the_journaled_helper_mutation_authority` records
+    /// the same lesson learned the expensive way — a source scan that read its
+    /// own test text and shipped unsatisfiable.) Stripping comments also
+    /// strengthens the two positive
+    /// assertions: a *mention* of `RunState::Quitting` no longer satisfies them,
+    /// only a use.
     #[test]
     fn the_tray_icon_leaves_only_on_quit_or_a_quitting_state() {
-        let source = include_str!("tray.rs");
+        let code: String = include_str!("tray.rs")
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
-            source.contains("RunState::Quitting"),
+            code.contains("RunState::Quitting"),
             "the tray's state-driven quit must still be RunState::Quitting, or the liveness \
              assertion in the test above is meaningless"
         );
         assert!(
-            source.contains("PostQuitMessage"),
+            code.contains("PostQuitMessage"),
             "WM_QUIT is the only way out of the pump"
         );
         // The tray knows nothing about either window. No import, no handle, no
         // path from a closed surface to the icon's removal.
         for foreign in ["cabinet", "eframe", "winit", "run_on_any_thread"] {
             assert!(
-                !source.contains(foreign),
+                !code.contains(foreign),
                 "the tray must not know '{foreign}' exists: a window that can reach the tray \
                  is a window that can take the icon with it"
             );

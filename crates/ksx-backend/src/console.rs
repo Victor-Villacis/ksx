@@ -243,9 +243,14 @@ mod tests {
             notice.contains(r"C:\cfg\ksx\logs\ksx.2026-08-04.log"),
             "the user must be told where to look: {notice}"
         );
+        // The bound has to be *told to the user*, not just enforced: "how far
+        // back does this go" is the first question anyone asks of a log
+        // directory. Read from the constant the pruner obeys, so raising or
+        // lowering retention without re-wording the notice fails here.
         assert!(
-            notice.contains("14 days kept"),
-            "the retention bound is stated, not implied: {notice}"
+            notice.contains(&format!("{} days kept", crate::logging::KEEP_DAYS)),
+            "the retention bound is stated, not implied, and it must be the bound \
+             `logging::KEEP_DAYS` actually prunes to: {notice}"
         );
         assert!(
             notice.contains("panic"),

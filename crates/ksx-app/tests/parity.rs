@@ -682,7 +682,7 @@ const ANCHORS: &[Anchors] = &[
         // THE ROW WITH NO CLI VERB, and it is here on purpose. Until now this
         // capability had no verb on ANY surface: `stage::apply` wrote
         // `settings.block_keyboards` during first run and nothing could ever
-        // write it again. `every_cli_verb_is_claimed_by_a_row_or_exempt` walks
+        // write it again. `every_cli_verb_is_claimed_by_a_row_or_exempt_with_a_reason` walks
         // the CLI tree and asks which surface performs each verb, so a config
         // concept nobody had given a verb to was invisible to this guard by
         // construction. An empty `cli` is the honest cell, not an oversight -
@@ -819,19 +819,20 @@ const EXEMPT: &[Exempt] = &[
 /// **The guard's own blind spot, stated so it is not rediscovered.**
 ///
 /// `EXEMPT` gates and the two feature-gated verbs above are only visible when
-/// the test binary was built with that feature on, and CI's test step is
-/// `cargo test --workspace` with default features — where `studio` and
-/// `cabinet` are off (`CLAUDE.md`: "the default build compiles neither"). So
-/// `ksx open`, `ksx studio` and `ksx cabinet` are checked by this file only
-/// when somebody runs it with the feature enabled. `ksx open` sat unaccounted
-/// for exactly that reason until 2026-08-08 and CI stayed green throughout.
+/// the test binary was built with that feature on. A plain `cargo test
+/// --workspace` builds with default features — where `studio` and `cabinet` are
+/// off (`CLAUDE.md`: "the default build compiles neither") — so **a local green
+/// run has NOT checked `ksx open`, `ksx studio` or `ksx cabinet`.** `ksx open`
+/// sat unaccounted for exactly that reason until 2026-08-08.
 ///
-/// The fix is a feature-enabled test job, not a change here; it is written down
-/// rather than done because widening the CI matrix is its own change with its
-/// own runtime cost, and a note that names the hole is better than a guard that
-/// quietly checks less than it claims.
+/// That hole used to say "the fix is a feature-enabled test job… written down
+/// rather than done". **It is done**: `.github/workflows/ci.yml` runs
+/// `cargo test -p $p --features studio,cabinet` as its own step, so the three
+/// verbs above ARE checked on every CI run. What remains true is only the local
+/// half: if you are reading a green terminal rather than a green CI run, these
+/// three verbs were skipped, and the difference is four tests.
 #[cfg(test)]
-const _FEATURE_GATED_VERBS_ARE_ONLY_CHECKED_WITH_THE_FEATURE_ON: () = ();
+const _FEATURE_GATED_VERBS_ARE_CHECKED_IN_CI_NOT_IN_A_LOCAL_RUN: () = ();
 
 fn gate_is_on(feature: &str) -> bool {
     match feature {
@@ -1000,6 +1001,85 @@ fn every_cell_claiming_nothing_is_there_is_right() {
         "{} capability cell(s) say nothing is there when something is:\n\n{}",
         problems.len(),
         problems.join("\n\n")
+    );
+}
+
+/// Every backticked token in a matrix cell, parentheticals included.
+fn backticked(cell: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = cell;
+    while let Some(open) = rest.find('`') {
+        rest = &rest[open + 1..];
+        let Some(close) = rest.find('`') else { break };
+        out.push(&rest[..close]);
+        rest = &rest[close + 1..];
+    }
+    out
+}
+
+/// **The blind spot `classify` documents, closed.**
+///
+/// `classify` reads only a cell's FIRST word, so everything in a parenthetical
+/// is invisible to the two tests above. That is not theoretical: on 2026-08-25
+/// Studio deleted five pages, and six §3 cells went on naming `/start`,
+/// `/setup` or `/profiles` in their parentheticals for a fortnight while every
+/// test in this file stayed green — the anchor table had been migrated, the
+/// prose beside it had not. The cells are clean today, and until now nothing
+/// held them there.
+///
+/// So: pull every `` `/…` `` token out of a cell that classifies as `Shipped`
+/// and require [`studio_routes`] to contain it. A route named in prose is a
+/// promise a reader will follow, and a promise that 404s is worse than a blank
+/// cell.
+#[test]
+fn every_route_named_in_a_shipped_cell_still_resolves() {
+    let routes = studio_routes();
+    let mut named = 0;
+    let mut problems = Vec::new();
+
+    for row in matrix() {
+        for (surface, cell) in [
+            ("CLI", &row.cli),
+            ("egui", &row.egui),
+            ("Studio", &row.studio),
+        ] {
+            if classify(cell) != Claim::Shipped {
+                continue;
+            }
+            for token in backticked(cell) {
+                if !token.starts_with('/') {
+                    continue;
+                }
+                named += 1;
+                if !routes.contains(token) {
+                    problems.push(format!(
+                        "docs/SURFACES.md §3 — {capability}\n  \
+                         the {surface} cell names `{token}`, and no such route is in \
+                         crates/ksx-studio/src/server/mod.rs.\n  \
+                         Either the page moved and the prose did not, or the page was \
+                         deleted (five were, on 2026-08-25) and the cell still sends a \
+                         reader to a 404.",
+                        capability = row.capability,
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "{} cell(s) name a route that does not exist:\n\n{}",
+        problems.len(),
+        problems.join("\n\n")
+    );
+    // ...and the premise: §3's cells DO name routes in their parentheticals.
+    // If they ever stop, this guard passes by finding nothing — which is
+    // exactly the state the tests above were in for that fortnight.
+    assert!(
+        named >= 6,
+        "only {named} route(s) named across §3's shipped cells, so this guard is \
+         checking almost nothing. Either the table stopped naming routes, or \
+         `backticked` no longer reads the parentheticals."
     );
 }
 

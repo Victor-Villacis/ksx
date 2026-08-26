@@ -7,7 +7,10 @@
 //! (`held`, `consumed`, `blocked`, `scan`) is sized in `EngineTables::build`.
 //!
 //! Single `#[test]` per binary, for the same reason as `engine_alloc.rs`: the
-//! allocation counter is process-global.
+//! allocation counter is process-global. Do not add a second one here.
+//!
+//! Scope: ONE chorded slot. The sixteen-slot cabinet with a chord on every
+//! slot — plus macros, turbo and toggle — is `engine_scheduler_alloc.rs`.
 
 mod common;
 

@@ -312,6 +312,15 @@ preset = "street-fighter-p1"
         assert_eq!(cfg.slots[0].preset, "street-fighter-p1");
     }
 
+    /// Serializing and parsing must be inverses, not merely stable.
+    ///
+    /// Not covered by `tests/emission.rs::populated_config_shape`, which
+    /// snapshots the emitted TEXT: a field that emits one way and parses back
+    /// as a DIFFERENT value leaves the text unchanged, so the snapshot stays
+    /// green and pins the lossy bytes. `Blocking` is the live example — it
+    /// emits as a bool and parses from a bool or a string, so the two
+    /// directions can drift apart without a byte moving. This is the only
+    /// test that would notice.
     #[test]
     fn round_trips_through_toml() {
         let cfg: ConfigFile = toml::from_str(DOC_EXAMPLE).unwrap();

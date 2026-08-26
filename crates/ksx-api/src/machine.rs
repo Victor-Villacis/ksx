@@ -3819,7 +3819,74 @@ mod tests {
                     .config_import(&ImportRequest::default())
                     .unwrap_err(),
             ),
+            // ---- added 2026-08-26 -------------------------------------
+            // The list below was missing from a hand-maintained vec while the
+            // trait had grown the methods. That is precisely the bug this
+            // test exists to catch — a `MachineSource` method whose default
+            // refuses, reached through a provider that never implemented it —
+            // and it was invisible because nothing tied the list to the
+            // trait. Ten verbs were unguarded. See EXPECTED_REFUSING_VERBS.
+            (
+                "ksx setup",
+                Nothing.device_identify("HID\\VID_0000").unwrap_err(),
+            ),
+            (
+                "ksx preset rename",
+                Nothing.preset_rename(&RenamePreset::default()).unwrap_err(),
+            ),
+            (
+                "ksx preset delete",
+                Nothing.preset_delete(&DeletePreset::default()).unwrap_err(),
+            ),
+            (
+                "ksx autostart",
+                Nothing
+                    .set_autostart(&AutostartSpec::default())
+                    .unwrap_err(),
+            ),
+            (
+                "the first-run screen",
+                Nothing
+                    .set_blocking(&BlockingSpec::default(), false)
+                    .unwrap_err(),
+            ),
+            (
+                "the Studio's configuration page",
+                Nothing.set_theme(&ThemeSpec::default()).unwrap_err(),
+            ),
+            ("ksx studio", Nothing.open_studio().unwrap_err()),
+            ("ksx doctor", {
+                Nothing
+                    .controller_outputs(&crate::StagedSetupView::default())
+                    .unwrap_err()
+            }),
+            ("ksx winusb repair", Nothing.winusb_residue().unwrap_err()),
+            (
+                "ksx winusb sweep-certificates",
+                Nothing
+                    .winusb_sweep_certificates(&WinusbCertificateSweepSpec::default())
+                    .unwrap_err(),
+            ),
         ];
+
+        /// Every `MachineSource` method whose default body refuses.
+        ///
+        /// The forcing function this test lacked. The list above is written
+        /// by hand, so a new method with a silent `Ok(default())` — or a new
+        /// refusing method nobody added here — used to sail straight past.
+        /// `panel_routing_guard` is the one method that deliberately defaults
+        /// to `Ok(None)` rather than refusing (a provider with no panel
+        /// support has no managed encoder class to guard), so the trait's
+        /// method count is this number plus one.
+        const EXPECTED_REFUSING_VERBS: usize = 42;
+        assert_eq!(
+            checks.len(),
+            EXPECTED_REFUSING_VERBS,
+            "a MachineSource verb was added or removed without updating this list. \
+             If the new method refuses by default, add it here. If it returns a \
+             silent Ok(default) instead, that is the bug this test is for."
+        );
+
         for (command, refusal) in checks {
             assert_eq!(refusal.code, crate::refusal::codes::NOT_HERE);
             let remedy = refusal.remedy.as_deref().unwrap_or_default();

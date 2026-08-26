@@ -1323,6 +1323,62 @@ mod tests {
         );
     }
 
+    /// Every line of text the top dock actually drew, with `screen` current.
+    fn head_text(screen: Screen) -> Vec<String> {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut app = App::new(&ctx, crate::demo::cabinet());
+        app.focus.screen = screen;
+        let slow = app.slow();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
+            ..Default::default()
+        };
+        let mut output = None;
+        for _ in 0..2 {
+            output = Some(ctx.run(input.clone(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| head(ui, &app, &slow));
+            }));
+        }
+        let mut words = Vec::new();
+        for clipped in output.expect("two frames were run").shapes {
+            collect_text(&clipped.shape, &mut words);
+        }
+        words
+    }
+
+    /// **Trap D at the copy layer.** `nav.rs`'s `every_screen_says_what_it_is_for`
+    /// proves the five screens have good words; it cannot prove anybody ever
+    /// sees them. A label that exists and never reaches a galley is a blank
+    /// dock, and "the slot exists" was exactly the assertion that let a dead
+    /// slot through the gate in `render.rs`.
+    ///
+    /// So this reads the strings back out of a real frame's own text shapes:
+    /// the current screen's label AND its subtitle, plus every screen's label
+    /// in the tab strip — because the strip is the only thing telling somebody
+    /// at a cabinet that the other four screens are there at all.
+    #[test]
+    fn every_screens_own_words_are_drawn_on_the_panel() {
+        for screen in Screen::ALL {
+            let words = head_text(screen);
+            assert!(
+                words.iter().any(|line| line == screen.label()),
+                "{screen:?}'s title never reached the frame: {words:?}"
+            );
+            assert!(
+                words.iter().any(|line| line == screen.subtitle()),
+                "{screen:?}'s subtitle never reached the frame: {words:?}"
+            );
+            for other in Screen::ALL {
+                assert!(
+                    words.iter().any(|line| line == other.label()),
+                    "the tab strip on {screen:?} is missing {other:?}, so it cannot be \
+                     reached from here: {words:?}"
+                );
+            }
+        }
+    }
+
     /// How many rows one page of `count` shows with the cursor on `focus`, and
     /// every line of text the frame drew.
     fn paged_text(count: usize, focus: usize) -> (usize, Vec<String>) {

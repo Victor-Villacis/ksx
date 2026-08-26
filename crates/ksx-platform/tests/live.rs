@@ -22,23 +22,25 @@ fn collect_runs_and_serializes() {
         assert!(json.get(section).is_some(), "missing section {section}");
     }
 
-    // Consistency: a bus reported installed has service info; not-installed has none.
-    for bus in [&report.vigembus, &report.scpvbus] {
-        assert_eq!(bus.installed, bus.service.is_some());
-    }
-    // filter_active must agree with the raw UpperFilters list it derives from.
-    let kbd = &report.interception.keyboard;
-    assert_eq!(
-        kbd.filter_active,
-        kbd.upper_filters
-            .iter()
-            .any(|f| f.eq_ignore_ascii_case("keyboard"))
-    );
-    // installed = hooked + file on disk, by definition.
-    assert_eq!(
-        report.interception.installed,
-        kbd.filter_active && kbd.driver_file.is_some()
-    );
+    // Three assertions used to sit here and have been removed rather than
+    // fixed, because each re-derived, character for character, the line of
+    // `win/mod.rs` that produced the field it was checking:
+    //
+    //   installed == filter_active && driver_file.is_some()   (interception)
+    //   filter_active == upper_filters.any(eq "keyboard")     (class_filter)
+    //   bus.installed == bus.service.is_some()                (bus_driver)
+    //
+    // A test that recomputes the code under test can only agree with it. Worse,
+    // each was measured to be constant on the two machines that run this file:
+    // this cabinet has both halves of the interception pair true and
+    // `windows-latest` has both false, so flipping `&&` to `||` in production
+    // ships green in both places. Fixtures covering all four combinations are
+    // what would catch that, and they need the derivation lifted out of
+    // `collect()` into a pure function first (`fn interception_installed(&
+    // ClassFilterReport) -> bool`), which is a production change this test file
+    // cannot make. What remains below is the honest part: the collector runs on a
+    // real machine, and its output is internally coherent in ways not spelled
+    // by a single production expression.
 
     // The ghost-pad section: count mirrors the rows, and a pad without a bus
     // devnode to hang off is impossible by construction.
@@ -160,6 +162,13 @@ fn winusb_survey_runs_and_is_internally_consistent() {
 /// deleted and expired certificates were waved through wholesale. So the same
 /// signature is re-judged with the countersignature removed, and must flip to
 /// refused. That is what proves the acceptance came from the timestamp.
+///
+/// It used to return silently when the file was absent. That made it the only
+/// verification of `installer::EXPECTED_SHA256` against the real bytes *and*
+/// something that could vanish without a word — a comment called it "a source
+/// checkout without the release asset", but `git ls-files drivers/` lists the
+/// installer, so there is no such checkout. It is asserted now: if the bundle
+/// stops being committed, the pin stops being verified, and that must be loud.
 #[test]
 fn the_bundled_installer_is_accepted_because_of_its_timestamp() {
     use ksx_platform::installer::{self, SignatureVerdict};
@@ -167,11 +176,12 @@ fn the_bundled_installer_is_accepted_because_of_its_timestamp() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../drivers")
         .join(installer::INSTALLER_FILE_NAME);
-    if !path.is_file() {
-        // A source checkout without the release asset. `install-drivers`
-        // reports `installer-missing` for this, which is its own tested state.
-        return;
-    }
+    assert!(
+        path.is_file(),
+        "the bundled installer is committed to drivers/ and is the only thing that \
+         verifies EXPECTED_SHA256 against real bytes; it is missing at {}",
+        path.display()
+    );
 
     let (_sealed, verification) = installer::seal_and_verify(&path).expect("the bundle seals");
     assert!(

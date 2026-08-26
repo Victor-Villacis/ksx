@@ -514,6 +514,19 @@ mod tests {
     /// Asserted over the source because there is no way to observe "this handle
     /// is not a lock guard" from a unit test, and the mistake is a one-character
     /// edit away.
+    ///
+    /// The scan is over CODE only — comment lines are stripped first — for two
+    /// reasons, both of which have already cost this repo a test: `run_live`'s
+    /// own comment says the words "NOT `.lock()`" (a scan of the raw text could
+    /// only ever fail on the sentence explaining the invariant, cf.
+    /// `winusb.rs`'s note about a source scan that shipped unsatisfiable), and
+    /// the forbidden substring has to be the loose `.lock()` rather than
+    /// `().lock()`. The tight one is a one-line detour away:
+    ///
+    /// ```ignore
+    /// let mut out = std::io::stdout();
+    /// let guard = out.lock();   // no "().lock()" anywhere — and deadlocked
+    /// ```
     #[test]
     fn the_session_writer_never_holds_a_std_stream_lock() {
         let source = include_str!("mod.rs");
@@ -524,12 +537,28 @@ mod tests {
             + source[start..]
                 .find("\nfn report")
                 .expect("report() follows run_live");
-        let body = &source[start..end];
+        let code: String = source[start..end]
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
-            !body.contains("().lock()"),
+            !code.contains(".lock()"),
             "run_live must pass UNLOCKED std handles to supervise(): a stream lock held \
              across the session deadlocks the capture thread's tracing write with the \
              keyboard filter armed"
+        );
+        // The positive half: the handles it does pass are the owned, unlocked
+        // ones. Without this, deleting the `supervise` call entirely — or
+        // handing it something else — satisfies the assertion above.
+        assert!(
+            code.contains("std::io::stderr()") && code.contains("std::io::stdout()"),
+            "run_live still has to hand supervise() an owned std handle in both modes \
+             (stderr for a human run, stdout for --json)"
+        );
+        assert!(
+            code.contains("supervise("),
+            "the writer under test is the one the session runs on"
         );
     }
 

@@ -242,9 +242,20 @@ preset = "Panel P2"
         assert!(!toml::to_string(&plain).unwrap().contains("process_name"));
     }
 
+    /// Serializing and parsing must be inverses, on a RICHER fixture than the
+    /// emission snapshot sees.
+    ///
+    /// `tests/emission.rs::games_shape` pins one game with ONE slot and no
+    /// `block_keyboards` / `block_mice`. `EXAMPLE` here carries two slots and
+    /// both blocking fields, so this is the only coverage that a multi-slot
+    /// game and the per-game blocking overrides survive a save and a reload.
+    /// It is also the only check that emit and parse are inverses rather than
+    /// merely stable — a snapshot cannot see a field that emits one way and
+    /// parses back as another.
     #[test]
     fn round_trips_through_toml() {
         let games: GamesFile = toml::from_str(EXAMPLE).unwrap();
+        assert_eq!(games.games[0].slots.len(), 2, "fixture must stay rich");
         let serialized = toml::to_string(&games).unwrap();
         let reparsed: GamesFile = toml::from_str(&serialized).unwrap();
         assert_eq!(games, reparsed);

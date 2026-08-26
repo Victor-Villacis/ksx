@@ -141,24 +141,15 @@ mod tests {
     ///
     /// Whatever the panel's height turns out to be on a given cabinet, every
     /// slot has to be on screen when the cursor is on it. Asserted for every
-    /// page size a real panel could produce, not just the one this machine has.
-    #[test]
-    fn every_one_of_sixteen_slots_is_on_screen_when_the_cursor_is_on_it() {
-        for per_page in 1..=16 {
-            for focus in 0..16 {
-                let window = window(16, focus, per_page);
-                assert!(
-                    window.contains(&focus),
-                    "slot {} is unreachable: with {per_page} row(s) on screen the panel shows \
-                     {window:?}",
-                    focus + 1
-                );
-            }
-        }
-    }
-
-    /// The same property, for every list length any screen here can produce —
-    /// profiles, presets on disk, slots — against every page size.
+    /// list length any screen here can produce — profiles, presets on disk,
+    /// slots — against every page size, not just the one this machine has.
+    ///
+    /// (A `count == 16` version of this walk lived beside it until 2026-08-26.
+    /// It was a strict subset of the loop below and asserted less; the
+    /// paragraph above is the half that was worth keeping. The *rendered*
+    /// form of the same defect is pinned separately in `screens.rs` —
+    /// `every_slot_row_is_inside_the_panel_it_is_drawn_on` — which is a
+    /// different layer and stays.)
     #[test]
     fn the_window_always_contains_the_cursor() {
         for count in 0..40_usize {

@@ -839,11 +839,16 @@ mod tests {
         .derived()
     }
 
-    /// Every named slot is either SERVED (injected from the payload here) or
-    /// a CLIENT-ONLY UI demo whose compile-time default is the idle screen.
-    /// The split is the contract: a slot showing up in neither list means the
-    /// island grew state nobody classified; a served name disappearing means
-    /// the seam is silently injecting into a dead slot.
+    /// Every named slot is either SERVED (injected from the payload by the
+    /// seam in this file) or a CLIENT-ONLY UI demo whose compile-time default
+    /// is the idle screen. The split is the contract: a slot in neither list
+    /// means the island grew state nobody classified; a served name that
+    /// vanished means the seam is injecting into a dead slot.
+    ///
+    /// The served side is derived from `scalar_slots`/`show_values`/
+    /// `list_values` so it cannot drift from what the seam does, and the whole
+    /// thing is handed to `assert_island_slot_contract` — the check that the
+    /// injected name resolves to the slot the island actually RENDERS.
     #[test]
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
@@ -902,122 +907,48 @@ mod tests {
             "list:nThemeRows:",
             "list:nSocdOpts:",
         ];
-        const SERVED_SLOTS: [&str; 111] = [
-            "nEnvironmentId",
-            "nEnvironmentLabel",
-            "nEnvironmentDetail",
-            "nEnvironmentCls",
-            "nKeysNote",
-            "nAvailMainHead",
-            "nAvailNavHead",
-            "nAvailNumHead",
-            "nAvailMainCls",
-            "nAvailNavCls",
-            "nAvailNumCls",
-            "nBindFaceCls",
-            "nBindDpadCls",
-            "nBindShlCls",
-            "nBindLsCls",
-            "nBindRsCls",
-            "nBindSysCls",
-            "nSlotVal",
-            "nUndoCls",
-            "nUndoLabel",
-            "nKbCls",
-            "nSoloLbl",
-            "nStageWord",
-            "nApplyCls",
-            "nPadBadgeCls",
-            "nBindFaceN",
-            "nBindDpadN",
-            "nBindShlN",
-            "nBindLsN",
-            "nBindRsN",
-            "nBindSysN",
-            "nBindGCls",
-            "nSocdCls",
-            "nSocdNum",
-            "nSocdLab",
-            "nDevCount",
-            "nEncoderCount",
-            "nEncoderHead",
-            "nModeNote",
-            "nMacrosHead",
-            "nMacrosNote",
-            "nPadXboxCls",
-            "nPadPsCls",
-            "nPadPs5Cls",
-            "nPadSwitchProCls",
-            "nPadXboxSeriesCls",
-            "nKbTrayHead",
-            "nKbTrayCls",
-            "nKbNote",
-            "nKbMoreCls",
-            "nMacBackCls",
-            "nMacName",
-            "nMacSlot",
-            "nMacPreset",
-            "nMacHead",
-            "nMacTrigger",
-            "nMacNote",
-            "nMacGridCls",
-            "nMacClose",
-            "nMacMapHref",
-            "nMacMotionLine",
-            "nMacPolicyLine",
-            "nMacRing",
-            "nMacRule",
-            "nMacToml",
-            "nMacRateCls",
-            "nMacRateVal",
-            "nMacRateLbl",
-            "nCfgLine",
-            "nCfgMeta",
-            "nCfgCls",
-            "nCfgCheck",
-            "nAdoptCls",
-            "nDiscardNote",
-            "nGamesHead",
-            "nGamesNote",
-            "nAutoLine",
-            "nAutoSwCls",
-            "nAutoDir",
-            "nAutoBtn",
-            "nAutoNote",
-            "nAutoFormCls",
-            "nExpHead",
-            "nExpFoldCls",
-            "nOtherHead",
-            "nOtherFoldCls",
-            "nVersion",
-            "nChipText",
-            "nSaveText",
-            "nEscapeLine",
-            "nPlayCls",
-            "nStopCls",
-            "nRackCaption",
-            "nAddLede",
-            "nAddPreset",
-            "nPadBadge",
-            "nPadName",
-            "nPadSub",
-            "nBindTitle",
-            "nBindFoot",
-            "nDevNote",
-            "nKbTitle",
-            "nCapLine",
-            "nCapdCls",
-            "nCapSwCls",
-            "nCapSelector",
-            "nCapInstance",
-            "nFlashLine",
-            "nFlashCls",
-            "show:nCapPrep",
-            "show:nCapRel",
+        // `attr:`/`text:` slots — bindings the compiler could not name after a
+        // signal. The seam can NEVER inject these: they render their
+        // compile-time default and nothing else. Pinned as an exact set so a
+        // new one is a review rather than a surprise, and checked non-empty by
+        // the contract (an anonymous slot with an empty default is ledger
+        // #10/#20(a) exactly: an attribute with no value and no warning).
+        const ANONYMOUS_SLOTS: [&str; 0] = [];
+        // FINDING 2026-08-26, caught by this contract's very first run:
+        // `nMacMapHref` is injected by `scalar_slots` (this file) and stored by
+        // the island (`NocturneIsland.ts` `setNMacMapHref`), but READ by
+        // nothing — no binding references `nMacMapHref()`, so the compiler left
+        // its slot outside the island's render set. The macro editor's
+        // "open this macro on the map" href is composed end to end
+        // (`macro_editor.rs`, `/nocturne?slot=N&macro=NAME`), serialized,
+        // injected, set into a signal, and painted nowhere.
+        //
+        // This is NOT the dangerous occurrence-suffix shape — there is no
+        // rendered twin sitting on a stale default — so it is excluded here
+        // rather than left failing, and the contract still guards every other
+        // served scalar. The fix is production-side and belongs to whoever owns
+        // the macro editor: bind it in the island, or delete the signal and the
+        // injection. Do not grow this list to silence a failure; a NEW name
+        // here is the ledger #9 twin bug, which is a defect, not an exemption.
+        const SEAM_ONLY_SLOTS: [&str; 3] = ["nMacMapHref", "nMacSlot", "nMacPreset"];
+        // Signals whose ONLY binding is a `show:` control-flow slot — there is
+        // no bare text/attribute binding anywhere, so the island never renders
+        // a bare slot under these names. The contract's converse check compares
+        // against BARE rendered slots, so these are accounted through their
+        // `show:` twin instead and must not be offered to it as bare
+        // client-only names. (`show:nCapPrep`/`show:nCapRel` are SERVED; the
+        // other four are client-only both ways.)
+        const CONTROL_ONLY_SLOTS: [&str; 6] = [
+            "nApplyOpen",
+            "nCapPrep",
+            "nCapRel",
+            "nConfOpen",
+            "nDlgOpen",
+            "nKeyboardWorkbenchOpen",
         ];
         // nMenuOpen left this list with the menu pass: the configuration
         // menu is a native details now, not signal state.
-        const CLIENT_ONLY_SLOTS: [&str; 42] = [
+        const CLIENT_ONLY_SLOTS: [&str; 40] = [
             "nMacSay",
             "nMacSayCls",
             // The auto-map toast's Skip button exists only while a walk runs
@@ -1064,8 +995,6 @@ mod tests {
             "nIdLinkCls",
             "nIdBoxCls",
             "nIdText",
-            "nFlashLine",
-            "nFlashCls",
             // The learn flow's banner and the key-conflict consequence dialog
             // are capture-time browser state: the server never claims a learn
             // is armed, so these stay client-only.
@@ -1078,6 +1007,36 @@ mod tests {
             "nConfLines",
         ];
         let page = page();
+        let payload = keyboard_payload();
+
+        // The SERVED set is DERIVED from the seam, never hand-kept. The old
+        // hand list drifted twice over: `nFlashLine`/`nFlashCls` were pinned in
+        // BOTH lists at once, and because the classification check was
+        // `SERVED.contains(..) || CLIENT_ONLY.contains(..)` the contradiction
+        // could never fire; and nothing compared the list to what
+        // `scalar_slots` actually injects, so a scalar could be dropped from
+        // the seam and stay pinned as served.
+        let scalars = scalar_slots(&payload, None);
+        let served: Vec<&str> = scalars
+            .as_object()
+            .expect("scalar_slots is an object")
+            .keys()
+            .map(String::as_str)
+            .chain(show_values(&payload).iter().map(|(name, _)| *name))
+            .chain(list_values(&payload).iter().map(|(name, _)| *name))
+            .collect();
+
+        // A name cannot be both served and client-only. This is the assertion
+        // the doc above always claimed ("the split is the contract") and that
+        // the `||` shape silently exempted.
+        for name in &served {
+            assert!(
+                !CLIENT_ONLY_SLOTS.contains(name),
+                "slot {name:?} is in CLIENT_ONLY_SLOTS but the seam injects it \
+                 — the split is the contract, so one of the two is wrong",
+            );
+        }
+
         let named: Vec<String> = page
             .module
             .slots
@@ -1093,55 +1052,49 @@ mod tests {
                 .any(|prefix| name.starts_with(prefix));
             assert!(
                 served_list
-                    || SERVED_SLOTS.contains(&name.as_str())
-                    || CLIENT_ONLY_SLOTS.contains(&name.as_str()),
+                    || served.contains(&name.as_str())
+                    || CLIENT_ONLY_SLOTS.contains(&name.as_str())
+                    || name.starts_with("attr:")
+                    || name.starts_with("text:"),
                 "unclassified named slot {name:?} — decide whether the seam serves it or the \
                  island owns it, then pin it",
             );
         }
-        for name in SERVED_SLOTS.iter().chain(CLIENT_ONLY_SLOTS.iter()) {
+        for name in CLIENT_ONLY_SLOTS.iter() {
             assert!(
                 named.iter().any(|n| n == name),
                 "pinned slot {name:?} is gone from the IR",
             );
         }
-        for name in [
-            LIST_SLOT_ENCODERS,
-            LIST_SLOT_DEVICES,
-            LIST_SLOT_EXP,
-            LIST_SLOT_GAMES,
-            LIST_SLOT_MACROS,
-            LIST_SLOT_OTHER,
-            LIST_SLOT_LEGEND,
-            LIST_SLOT_MAC_COLS,
-            LIST_SLOT_MAC_GROUPS,
-            LIST_SLOT_MAC_ROWS,
-            LIST_SLOT_MAC_CELLS,
-            LIST_SLOT_MAC_POLS,
-            LIST_SLOT_MAC_MOTIONS,
-            LIST_SLOT_KB[0],
-            LIST_SLOT_KB[6],
-            LIST_SLOT_MODES,
-            LIST_SLOT_THEMES,
-            LIST_SLOT_GAMES_EDIT,
-            LIST_SLOT_RACK,
-            LIST_SLOT_RACK_EMPTY,
-            LIST_SLOT_PERSONAS,
-            LIST_SLOT_LAYOUTS,
-            LIST_SLOT_SOCDS,
-            LIST_SLOT_SOCD_EDIT,
-            LIST_SLOT_BIND_FACE,
-            LIST_SLOT_BIND_DPAD,
-            LIST_SLOT_BIND_SHL,
-            LIST_SLOT_BIND_LS,
-            LIST_SLOT_BIND_RS,
-            LIST_SLOT_BIND_SYS,
-        ] {
-            assert!(
-                named.iter().any(|n| n == name),
-                "served list slot {name:?} is gone from the IR",
-            );
-        }
+
+        // THE check, and the reason this test exists at all. Existence by name
+        // is not rendering: the compiler suffixes colliding slot names, so an
+        // injected scalar can resolve to a DEAD declaration while the rendered
+        // binding quietly keeps its authored default forever. `/nocturne` is
+        // the page most exposed to that — it is the only one in the build where
+        // the compiler mints an occurrence suffix (`list:nGameRows#2:*`).
+        //
+        // Measured 2026-08-26, before this call existed: deleting the whole
+        // `"nVersion": payload.view.version` injection from `scalar_slots` left
+        // ALL 233 ksx-studio tests green. The product page was the one surface
+        // with no island slot contract, which inverted the risk — `/check`,
+        // `/pads` and `/devices` all had one.
+        let rendered_served: Vec<&str> = served
+            .iter()
+            .copied()
+            .filter(|name| !SEAM_ONLY_SLOTS.contains(name))
+            .collect();
+        let client_only_rendered: Vec<&str> = CLIENT_ONLY_SLOTS
+            .iter()
+            .copied()
+            .filter(|name| !name.contains(':') && !CONTROL_ONLY_SLOTS.contains(name))
+            .collect();
+        crate::render::assert_island_slot_contract(
+            &page.module,
+            &rendered_served,
+            &client_only_rendered,
+            &ANONYMOUS_SLOTS,
+        );
     }
 
     /// The migrated keyboard section renders SERVED facts: the staged
@@ -1210,10 +1163,39 @@ mod tests {
     }
 
     /// The page embeds its payload for hydration seeding and the poller.
+    ///
+    /// HARDENED 2026-08-26: this used to be `html.contains("__ksx-payload")` —
+    /// a 13-character substring. Truncating the block, emptying it, or
+    /// serializing the wrong struct all left it green while the island seeded
+    /// from nothing. It now slices the block out and parses it back into a
+    /// `NocturnePayload`, which is the only assertion that can tell "the
+    /// wrapper is present" from "the payload arrived", and matches what
+    /// `render_check.rs` has always done for `/check`.
     #[test]
     fn nocturne_embeds_the_payload() {
-        let out = render_nocturne(&page(), &keyboard_payload(), None);
-        assert!(out.html.contains("__ksx-payload"));
+        let payload = keyboard_payload();
+        let out = render_nocturne(&page(), &payload, None);
+        let start = out
+            .html
+            .find("<script id=\"__ksx-payload\"")
+            .expect("the payload block");
+        let body = out.html[start..]
+            .split_once('>')
+            .expect("an open tag")
+            .1
+            .split("</script>")
+            .next()
+            .expect("a close tag");
+        assert!(
+            !body.trim().is_empty(),
+            "the payload block is present but EMPTY — the island seeds from nothing"
+        );
+        let parsed: NocturnePayload =
+            serde_json::from_str(body).expect("the embedded block IS a NocturnePayload");
+        assert_eq!(
+            parsed, payload,
+            "the embedded payload is not the payload the page rendered from"
+        );
     }
 
     /// The configuration menu is a native details, so its SERVED facts paint

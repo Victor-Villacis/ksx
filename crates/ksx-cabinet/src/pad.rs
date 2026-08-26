@@ -362,14 +362,59 @@ mod tests {
 
     /// On a machine with no pads at all, polling is silent and says so —
     /// never a cursor that appears to work and does not.
+    ///
+    /// This used to call `poll` and wrap every assertion in
+    /// `if !pads.any_pad_seen()`. `poll` calls the real `XInputGetState`, so on
+    /// any developer box with a pad plugged in — including ksx's OWN ViGEm pads
+    /// while a session is live — the body was skipped and the test passed
+    /// having asserted nothing. It only ever asserted on Linux/CI, where
+    /// `read_pad` is the `cfg(not(windows))` stub, i.e. it tested a stub.
+    ///
+    /// The no-pad path is now driven directly: `poll` merges every index into
+    /// one [`Reading`] and hands it to [`PadNav::edges`], so a machine with
+    /// nothing plugged in produces exactly the call below, on every OS.
     #[test]
     fn with_no_pads_connected_nothing_is_produced_and_the_fact_is_reportable() {
         let mut pads = PadNav::new();
-        // On CI (and on Linux) `read_pad` answers None for every index.
+        // The state `screens::footer` reads to decide whether to print the
+        // "no pads" WARN instead of a panel that silently does nothing.
+        assert!(!pads.any_pad_seen());
+        assert_eq!(pads.connected_count(), 0);
+
+        assert!(pads
+            .edges(Reading::default(), Reading::default(), Instant::now())
+            .is_empty());
+        assert!(
+            !pads.any_pad_seen(),
+            "edge detection must never invent a pad that never answered"
+        );
+        assert_eq!(pads.connected_count(), 0);
+    }
+
+    /// The two counters must agree about reality, whatever this machine has
+    /// plugged into it.
+    ///
+    /// Deliberately tolerant of the host: `poll` reads real XInput, so the
+    /// pad count here is global machine state (trap C). Both branches assert —
+    /// the point is that `any_pad_seen` and `connected_count` can never
+    /// disagree, because `screens::footer` prints one and the slot list trusts
+    /// the other.
+    #[test]
+    fn poll_never_claims_a_pad_it_did_not_hear_from() {
+        let mut pads = PadNav::new();
         let moves = pads.poll(Instant::now());
-        if !pads.any_pad_seen() {
-            assert!(moves.is_empty());
+        assert!(pads.connected_count() <= MAX_PADS as usize);
+        if pads.any_pad_seen() {
+            assert!(
+                pads.connected_count() > 0,
+                "a pad answered this poll, so it must be counted as connected"
+            );
+        } else {
             assert_eq!(pads.connected_count(), 0);
+            assert!(
+                moves.is_empty(),
+                "nothing answered, so nothing can have moved the cursor"
+            );
         }
     }
 }

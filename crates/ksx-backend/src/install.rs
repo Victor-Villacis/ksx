@@ -188,10 +188,17 @@ mod tests {
     use super::*;
 
     /// Exit codes are the contract a provisioning script reads.
+    ///
+    /// Both halves are asserted as a CONTRACT with `run`, never as a literal:
+    /// "2 = refused, nothing was written" and "3 = it ran and failed" have to
+    /// mean the same thing whichever ksx command a script called, and a literal
+    /// here would let one command's meaning of 3 drift away from the rest.
+    /// `run::tests::exit_codes_are_the_documented_values` is where the numbers
+    /// themselves are pinned.
     #[test]
     fn refusal_matches_every_other_cannot_start() {
         assert_eq!(EXIT_REFUSED, crate::run::EXIT_CANNOT_START);
-        assert_eq!(EXIT_INSTALLER_FAILED, 3);
+        assert_eq!(EXIT_INSTALLER_FAILED, crate::run::EXIT_RUNTIME_FAILURE);
     }
 
     fn pinned_digest() -> [u8; 32] {

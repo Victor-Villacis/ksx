@@ -499,16 +499,10 @@ mod tests {
         );
     }
 
-    /// The bound has to be *told to the user*, not just enforced: "how far back
-    /// does this go" is the first question anyone asks of a log directory.
-    #[test]
-    fn the_retention_bound_is_stated_where_a_user_will_read_it() {
-        let notice = crate::console::detach_notice(Some(Path::new(r"C:\logs\ksx.log")));
-        assert!(
-            notice.contains(&format!("{KEEP_DAYS} days kept")),
-            "{notice}"
-        );
-    }
+    // That the bound is *told to the user* — not just enforced — is asserted
+    // against the same `KEEP_DAYS` in the module that owns the sentence:
+    // `console::tests::the_notice_points_at_the_log_file_and_the_live_tooltip`
+    // checks it beside the five other claims that notice has to make.
 
     // -----------------------------------------------------------------
     // Filter policy
@@ -533,6 +527,16 @@ mod tests {
     ///
     /// `None` deliberately: this test must not write into the developer's real
     /// `%APPDATA%\ksx\logs\`.
+    ///
+    /// **The reason inside `StderrOnly` is bound, not ignored.** `init` returns
+    /// that same variant for two very different outcomes — "no file, because no
+    /// root" (this call did install the subscriber) and "no file, because a
+    /// subscriber was ALREADY installed" (this call installed nothing). A bare
+    /// `matches!(sink, LogSink::StderrOnly(_))` is satisfied by the second one,
+    /// which is the shape where the central claim of this test — that `init`
+    /// installs a subscriber — is being proved by somebody else's subscriber.
+    /// Only `the_child_that_panics` (`#[ignore]`d, and run in a CHILD process)
+    /// also calls `init`, so in this process this call is the first one.
     #[test]
     fn a_subscriber_is_installed_at_info() {
         use tracing::level_filters::LevelFilter;
@@ -541,9 +545,13 @@ mod tests {
         // level, and that must not read as "no subscriber".
         let configured = std::env::var("RUST_LOG").ok();
         let sink = init(None);
+        let LogSink::StderrOnly(ref why) = sink else {
+            panic!("no root means no file: {sink:?}");
+        };
         assert!(
-            matches!(sink, LogSink::StderrOnly(_)),
-            "no root means no file: {sink:?}"
+            why.contains("no config root"),
+            "this call has to be the one that installed the subscriber, or the level \
+             assertions below are about somebody else's: {why}"
         );
         assert_ne!(
             LevelFilter::current(),

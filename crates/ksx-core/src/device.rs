@@ -114,15 +114,56 @@ mod tests {
         assert_eq!(original, separate);
     }
 
+    /// Every field participates in equality — including `t`.
+    ///
+    /// Hardened 2026-08-26: this used to vary only `down`, which tested the
+    /// `#[derive(PartialEq)]` and nothing else. The property worth pinning is
+    /// that NO field is ignored, because dozens of daemon tests
+    /// (`ksx-backend/src/daemon/observe.rs`, `panel_tests.rs`) assert captured
+    /// events with `assert_eq!`. A hand-written `PartialEq` that skipped `t` —
+    /// the obvious "simplification" if someone ever wants to dedup repeats —
+    /// would silently stop every one of those assertions from checking the
+    /// timestamp, and each would keep passing.
     #[test]
-    fn key_event_equality() {
-        let ev = |down: bool| KeyEvent {
-            device: DeviceId::new("X"),
+    fn key_event_equality_ignores_no_field() {
+        let base = KeyEvent {
+            device: DeviceId::new(r"HID\VID_D209&PID_0430&MI_00\8&A1B2C3D4&0&0000"),
             key: Key::A,
-            down,
+            down: true,
             t: 42,
         };
-        assert_eq!(ev(true), ev(true));
-        assert_ne!(ev(true), ev(false));
+        assert_eq!(base, base.clone());
+
+        let other_device = KeyEvent {
+            device: DeviceId::new(r"HID\VID_D209&PID_0430&MI_00\8&FFFFFFFF&0&0000"),
+            ..base.clone()
+        };
+        assert_ne!(base, other_device, "the capturing device must distinguish");
+
+        assert_ne!(
+            base,
+            KeyEvent {
+                key: Key::B,
+                ..base.clone()
+            },
+            "the key must distinguish",
+        );
+        assert_ne!(
+            base,
+            KeyEvent {
+                down: false,
+                ..base.clone()
+            },
+            "press and release must distinguish",
+        );
+        assert_ne!(
+            base,
+            KeyEvent {
+                t: 43,
+                ..base.clone()
+            },
+            "the capture tick must distinguish — two presses of the same key on \
+             the same board are different events",
+        );
     }
 }

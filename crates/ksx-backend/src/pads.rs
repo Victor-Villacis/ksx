@@ -1887,10 +1887,12 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn exit_code_for_missing_driver_is_2() {
-        assert_eq!(EXIT_DRIVER_MISSING, 2);
-    }
+    // The value of `EXIT_DRIVER_MISSING` is pinned where it is a CONTRACT
+    // between modules rather than a literal:
+    // `run::tests::exit_codes_are_the_documented_values` asserts
+    // `run::EXIT_CANNOT_START == 2` and `== pads::EXIT_DRIVER_MISSING`, so "2
+    // means the same thing across every ksx command" is checked in one place
+    // instead of once per module.
 
     #[test]
     fn pattern_is_deterministic() {

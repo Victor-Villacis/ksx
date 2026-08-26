@@ -180,6 +180,14 @@ fn version_and_devices_run_from_a_directory_with_no_interception_dll() {
         !dir.join("interception.dll").exists(),
         "the point of this test is that the DLL is NOT here"
     );
+    // The portable marker (`ksx_config::paths::PORTABLE_MARKER`), for the same
+    // reason `parity.rs`'s clap walk writes one: `ksx` initialises logging
+    // BEFORE `Cli::parse()`, so without a marker beside the exe
+    // `ConfigRoot::resolve` falls through to discovery and these runs append
+    // log lines to the config root of whoever is running the tests — which on
+    // this machine may be the live daemon's. With it, the two runs below write
+    // into this directory and are deleted with it.
+    std::fs::write(dir.join("ksx.toml"), "schema_version = 1\n").expect("portable marker");
 
     for args in [vec!["--version"], vec!["devices", "--json"]] {
         let out = std::process::Command::new(&exe)

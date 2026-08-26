@@ -3805,73 +3805,16 @@ mod tests {
             .contains("no physical device"));
     }
 
-    /// **The saved answer is marked, and an unconfigured machine claims
-    /// nothing.**
-    ///
-    /// The three answers come from `BlockingOption::roster()` - the same list
-    /// `/start` asks with - so this pins the part that is genuinely this page's
-    /// own: which one is chosen, and what the line says when there is nothing
-    /// to choose from yet. An unconfigured machine has a default in MEMORY,
-    /// and printing that as though somebody had picked it sends a person
-    /// hunting for a setting they never set.
-    #[test]
-    fn the_saved_split_or_freeze_answer_is_the_marked_one() {
-        let configured = ksx_api::SetupView {
-            config_exists: true,
-            blocking: "whole".to_owned(),
-            blocking_options: ksx_api::BlockingOption::roster(),
-            ..ksx_api::SetupView::default()
-        };
-        let rows = SetupRows::of(&SetupSnapshot::ready(configured.clone())).blocking;
-        assert_eq!(
-            rows.len(),
-            3,
-            "every answer is offered, not just the others"
-        );
-        let chosen: Vec<&str> = rows
-            .iter()
-            .filter(|r| r.chosen_cls.contains("pill-ok"))
-            .map(|r| r.name.as_str())
-            .collect();
-        assert_eq!(chosen, ["whole"], "exactly the saved answer is marked");
-        assert!(
-            rows.iter()
-                .find(|r| r.name == "whole")
-                .is_some_and(|r| r.button.contains("how it is set")),
-            "the current answer does not invite a no-op write"
-        );
-
-        // Nothing is configured: no answer is reported, and none is invented.
-        let fresh = ksx_api::SetupView {
-            config_exists: false,
-            blocking: String::new(),
-            blocking_options: ksx_api::BlockingOption::roster(),
-            ..ksx_api::SetupView::default()
-        };
-        assert!(
-            SetupRows::of(&SetupSnapshot::ready(fresh))
-                .blocking
-                .iter()
-                .all(|r| !r.chosen_cls.contains("pill-ok")),
-            "an unset machine has chosen none of the three"
-        );
-
-        // A value this build does not know (an older or hand-edited config) is
-        // NOT smoothed over into one of the three it does know.
-        let strange = ksx_api::SetupView {
-            config_exists: true,
-            blocking: "half-on".to_owned(),
-            blocking_options: ksx_api::BlockingOption::roster(),
-            ..ksx_api::SetupView::default()
-        };
-        assert!(
-            SetupRows::of(&SetupSnapshot::ready(strange))
-                .blocking
-                .iter()
-                .all(|r| !r.chosen_cls.contains("pill-ok")),
-            "an unknown value marks none of the three as in use"
-        );
-    }
+    // DELETED 2026-08-26: `the_saved_split_or_freeze_answer_is_the_marked_one`
+    // (STALE + DUPLICATE). It asserted `SetupRows::of(..).blocking` ->
+    // `SetupBlockingRowView` / `pill pill-ok`, the DELETED `/setup` page's
+    // composer. `/nocturne` derives its blocking rows from an INDEPENDENT
+    // implementation in this file (`NocturneChoiceRow`, `n-radio on`), so this
+    // test defended the dead twin and could not have caught a live break.
+    // Every claim it made is pinned on the live path in `tests/http.rs`:
+    // unanswered -> no row is `n-radio on`; answered -> exactly one is; and a
+    // value this build does not know is refused at the verb rather than being
+    // smoothed over into one of the three it does know.
 
     /// **A stale registration offers the REPAIR, not the removal.**
     ///
@@ -4017,7 +3960,7 @@ mod tests {
 
         // Nothing stored: System is genuinely how it is set.
         let snap = SetupSnapshot::ready(ksx_api::SetupView::default());
-        let rows = SetupRows::of(&snap).themes;
+        let rows = theme_rows(&snap);
         assert_eq!(marked(&rows), ["system"]);
         assert_eq!(rows[0].button, "This is how it is set");
 
@@ -4026,7 +3969,7 @@ mod tests {
             theme: "light".to_owned(),
             ..Default::default()
         });
-        let rows = SetupRows::of(&snap).themes;
+        let rows = theme_rows(&snap);
         assert_eq!(marked(&rows), ["light"]);
         assert_eq!(rows[0].button, "Match the operating system");
         assert!(rows
@@ -4039,84 +3982,29 @@ mod tests {
             theme: "matrix2".to_owned(),
             ..Default::default()
         });
-        let rows = SetupRows::of(&snap).themes;
+        let rows = theme_rows(&snap);
         assert_eq!(marked(&rows), ["system"]);
         assert_eq!(rows[0].button, "Follow the operating system instead");
 
         // A config nothing could read: no row claims anything about it.
         let snap = SetupSnapshot::unavailable("the store refused");
-        let rows = SetupRows::of(&snap).themes;
+        let rows = theme_rows(&snap);
         assert_eq!(marked(&rows), Vec::<String>::new());
         assert!(rows.iter().all(|r| r.button != "This is how it is set"));
     }
 
-    #[test]
-    fn the_setup_rows_are_composed_once_from_the_view() {
-        let view = ksx_api::SetupView {
-            devices: vec![ksx_api::SetupDeviceRow {
-                alias: "P1 board".to_owned(),
-                id: "usb:d209:0430:00".to_owned(),
-                backend: "interception".to_owned(),
-            }],
-            slots: vec![ksx_api::SetupSlotRow {
-                number: 3,
-                device: "P1 board".to_owned(),
-                preset: "Panel P1".to_owned(),
-                persona: "Xbox 360 pad".to_owned(),
-                socd: String::new(),
-                source: "config.toml".to_owned(),
-            }],
-            presets: vec!["Panel P1".to_owned()],
-            profiles: vec!["Example Game".to_owned()],
-            steps: vec![ksx_api::SetupStep {
-                id: ksx_api::setup_steps::SLOT.to_owned(),
-                title: "Wire a slot".to_owned(),
-                detail: "One slot is wired.".to_owned(),
-                state: ksx_api::setup_states::NOW.to_owned(),
-            }],
-            notes: vec!["a note".to_owned()],
-            ..ksx_api::SetupView::default()
-        };
-        let rows = SetupRows::of(&SetupSnapshot::ready(view));
-
-        assert_eq!(rows.steps[0].badge, "1");
-        assert_eq!(rows.steps[0].cls, "step now");
-        assert_eq!(rows.devices[0].title, "P1 board");
-        assert_eq!(rows.devices[0].detail, "interception · usb:d209:0430:00");
-        assert_eq!(rows.slots[0].title, "Slot 3 — Panel P1");
-        assert_eq!(
-            rows.slots[0].detail,
-            "P1 board · Xbox 360 pad · config.toml"
-        );
-        assert_eq!(rows.preset_options[0].text, "Panel P1");
-        assert_eq!(
-            rows.persona_options
-                .iter()
-                .map(|option| option.value.as_str())
-                .collect::<Vec<_>>(),
-            [
-                "xbox360",
-                "playstation",
-                "dualsense",
-                "switchpro",
-                "xboxseries",
-                "snes",
-                "genesis"
-            ],
-            "the maintenance menu offers every live persona and no gated one"
-        );
-        assert_eq!(rows.persona_options[0].label, "Xbox 360 · ViGEmBus");
-        assert_eq!(rows.persona_options[2].label, "DualSense · HIDMaestro");
-        assert_eq!(rows.profile_options[0].text, "Example Game");
-        assert_eq!(rows.notes[0].text, "a note");
-
-        // The menu is 1..=the ceiling the BACKEND serves — never a literal in
-        // a view layer (the shipped page held `SLOT_CHOICES = 8` in two
-        // languages while `ksx_core::MAX_SLOTS` was 16).
-        assert_eq!(rows.slot_options.len(), usize::from(ksx_core::MAX_SLOTS));
-        assert_eq!(rows.slot_options[0].value, "1");
-        assert_eq!(rows.slot_options[0].label, "Slot 1");
-        let last = rows.slot_options.last().unwrap();
-        assert_eq!(last.value, ksx_core::MAX_SLOTS.to_string());
-    }
+    // DELETED 2026-08-26: `the_setup_rows_are_composed_once_from_the_view`
+    // (STALE). It exercised `SetupRows::of`, the DELETED `/setup` page's row
+    // composer, which has no production call site — only `lib.rs`'s `pub use`
+    // keeps it from tripping `dead_code`. None of `steps`/`devices`/`slots`/
+    // `preset_options`/`profile_options`/`notes` render on any surface.
+    // What replaced each half, so nothing was silently dropped:
+    //  - the persona roster -> `/nocturne` serves `view.persona_rows`, pinned
+    //    live in `tests/http.rs` (the `nd-card sel` / `nd-card off` marking).
+    //  - the slot ceiling, and the defect it recorded (the shipped page held
+    //    `SLOT_CHOICES = 8` in two languages while `ksx_core::MAX_SLOTS` was
+    //    16) -> pinned at the source by `ksx-api`'s
+    //    `the_slot_ceiling_a_surface_renders_is_this_builds_max_slots`
+    //    (machine.rs) and `the_slot_assign_refusals_quote_max_slots_not_a_literal`
+    //    (wire.rs). Studio no longer renders a slot menu at all.
 }

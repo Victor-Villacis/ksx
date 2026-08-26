@@ -744,6 +744,83 @@ dpad.up = "I"
         assert_eq!(file, reparsed);
     }
 
+    /// The regression guarantee the transform features owe every preset that
+    /// does not use them: a plain preset makes the round trip through
+    /// `Preset` and comes back as the SAME BYTES.
+    ///
+    /// Chords, turbo, toggle and macros each added an optional field to the
+    /// binding row. Any of them emitting its empty case — `when = []`,
+    /// `turbo_hz = 0`, `toggle = false`, a `[macros]` table — rewrites every
+    /// user's preset file the next time ksx saves it, and turns the one-line
+    /// shorthand (`A = "S"`) into a table. The assertion is the WHOLE TEXT,
+    /// so it sees all four at once, and it sees the shorthand collapse too.
+    ///
+    /// Replaces four loops over `Preset::builtins()` that asserted `when` /
+    /// `turbo_hz` / `toggle` / `macro` were absent from the two built-ins.
+    /// Neither built-in has a chord, a rate, a latch or a macro, so the
+    /// emission code those loops named never ran and they could not fail:
+    /// making `from_core` emit no chords, no rates and no macro triggers at
+    /// all left every one of them green (2026-08-26 audit).
+    #[test]
+    fn a_plain_preset_survives_the_core_hop_byte_for_byte() {
+        // Canonical emitted spelling: flat quoted function keys, sorted.
+        const CANONICAL: &str = "name = \"street-fighter-p1\"\n\n[bindings]\nA = \"S\"\nB = \"D\"\n\"dpad.up\" = \"I\"\nlt = \"Q\"\n\"lx.-16384\" = \"None\"\n\"lx.min\" = \"Left\"\n";
+        let file: PresetFile = toml::from_str(CANONICAL).unwrap();
+        assert_eq!(
+            toml::to_string(&file).unwrap(),
+            CANONICAL,
+            "the fixture is not the canonical emission any more"
+        );
+        let core = file.to_core().unwrap();
+        assert!(
+            core.chords.is_empty() && core.turbo.is_empty() && core.toggle.is_empty(),
+            "the fixture must stay plain or this pins nothing: {core:?}"
+        );
+        assert_eq!(
+            toml::to_string(&PresetFile::from_core(&core)).unwrap(),
+            CANONICAL,
+            "a plain preset grew bytes crossing PresetFile -> Preset -> PresetFile"
+        );
+    }
+
+    /// The one rewrite the core hop really does perform, pinned so it stays
+    /// the ONLY one: the nested spelling `dpad.up = "I"` (which TOML parses
+    /// as a sub-table, and which `DOC_EXAMPLE` and docs/INPUT-TRANSFORMS.md
+    /// both use) survives as a `Group` through a pure file round trip, but
+    /// comes back FLAT as `"dpad.up" = "I"` once it has been through
+    /// `Preset` — because `Preset` holds a function, not the user's
+    /// punctuation.
+    ///
+    /// Found 2026-08-26 while replacing the four vacuous absence loops. Both
+    /// spellings parse to the same bindings, so this is text churn and not
+    /// data loss: a user who wrote the nested form sees ksx rewrite it the
+    /// first time it saves the preset, and stable thereafter. Pinned rather
+    /// than fixed so that if anyone teaches `from_core` to preserve the
+    /// grouping, this test tells them the churn is gone instead of staying
+    /// silent.
+    #[test]
+    fn the_nested_dpad_spelling_is_normalised_flat_by_the_core_hop() {
+        let file: PresetFile =
+            toml::from_str("name = \"p\"\n[bindings]\ndpad.up = \"I\"\n").unwrap();
+        let nested = toml::to_string(&file).unwrap();
+        assert!(
+            nested.contains("[bindings.dpad]"),
+            "a pure file round trip keeps the group: {nested}"
+        );
+        let flat = toml::to_string(&PresetFile::from_core(&file.to_core().unwrap())).unwrap();
+        assert!(
+            flat.contains(r#""dpad.up" = "I""#) && !flat.contains("[bindings.dpad]"),
+            "the core hop flattens the group: {flat}"
+        );
+        // Whichever spelling is on disk, the bindings are identical — that is
+        // what makes this churn and not a defect.
+        let reparsed: PresetFile = toml::from_str(&flat).unwrap();
+        assert_eq!(
+            reparsed.to_core().unwrap().entries,
+            file.to_core().unwrap().entries
+        );
+    }
+
     #[test]
     fn arrays_mean_many_to_one() {
         let file: PresetFile = toml::from_str(
@@ -931,18 +1008,6 @@ lb = { key = "A", when = ["B", "C"], unless = ["LeftShift"] }
         assert_eq!(core.entries, vec![(Key::G, Binding::Button(XButton::A))]);
     }
 
-    /// The regression guarantee at the file layer: a preset without chords
-    /// emits exactly the bytes it always did — no guard syntax anywhere.
-    #[test]
-    fn a_chordless_preset_emits_no_guard_syntax() {
-        for preset in Preset::builtins() {
-            let text = toml::to_string(&PresetFile::from_core(&preset)).unwrap();
-            assert!(!text.contains("when"), "{text}");
-            assert!(!text.contains("unless"), "{text}");
-            assert!(!text.contains("key ="), "{text}");
-        }
-    }
-
     // ---- per-binding turbo (docs/INPUT-TRANSFORMS.md §3) ------------------
 
     /// The headline spelling: a rate on a plain binding row. It is NOT a chord
@@ -1046,16 +1111,6 @@ steps = [{ hold = ["A"], ms = 50 }]
             file.to_core(),
             Err(ConfigError::TurboOnMacroTrigger(_))
         ));
-    }
-
-    /// The regression guarantee at the file layer: a preset without turbo
-    /// serializes to exactly the bytes it always did.
-    #[test]
-    fn a_turbo_free_preset_emits_no_rate() {
-        for preset in Preset::builtins() {
-            let text = toml::to_string(&PresetFile::from_core(&preset)).unwrap();
-            assert!(!text.contains("turbo_hz"), "{text}");
-        }
     }
 
     // ---- per-binding toggle (docs/INPUT-TRANSFORMS.md §2 item 8) ----------
@@ -1198,16 +1253,6 @@ steps = [{ hold = ["A"], ms = 50 }]
             file.to_core(),
             Err(ConfigError::ToggleOnMacroTrigger(_))
         ));
-    }
-
-    /// The regression guarantee: a preset without a latch serializes to
-    /// exactly the bytes it always did.
-    #[test]
-    fn a_toggle_free_preset_emits_no_latch() {
-        for preset in Preset::builtins() {
-            let text = toml::to_string(&PresetFile::from_core(&preset)).unwrap();
-            assert!(!text.contains("toggle"), "{text}");
-        }
     }
 
     // ---- consume-only chords (docs/INPUT-TRANSFORMS.md §2.6) --------------
@@ -1409,16 +1454,6 @@ steps = [
             file.to_core(),
             Err(ConfigError::GuardedMacroTrigger(_))
         ));
-    }
-
-    /// The regression guarantee at the file layer: a preset without macros
-    /// emits exactly the bytes it always did.
-    #[test]
-    fn a_macro_free_preset_emits_no_macro_syntax() {
-        for preset in Preset::builtins() {
-            let text = toml::to_string(&PresetFile::from_core(&preset)).unwrap();
-            assert!(!text.contains("macro"), "{text}");
-        }
     }
 
     #[test]

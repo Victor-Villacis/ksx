@@ -3230,22 +3230,23 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         assert!(v["tooltip"].as_str().unwrap().contains("running, 4 pad(s)"));
     }
 
+    /// The INTENT, as one exact string: three ACEs, `P` for a protected DACL
+    /// (no inherited grant can be added to it), and nothing else.
+    ///
+    /// This is a change detector and nothing more — it says what we meant to
+    /// ask Windows for, not what Windows did. The assertions that used to
+    /// follow it (`sddl.contains(";;;SY)")`, and four "no broad SID" loops)
+    /// were derived from the equality above and could only ever agree with it.
+    /// What the KERNEL actually put on the pipe is asserted end to end by
+    /// `transport::the_served_pipe_carries_the_acl_and_no_broad_sid`, which is
+    /// the assertion that matters: `PipeSecurity::new` can fail, and a failure
+    /// there is a pipe created with the DEFAULT descriptor.
     #[cfg(windows)]
     #[test]
     fn control_pipe_acl_is_creator_system_and_administrators_only() {
-        let sddl = server::CONTROL_PIPE_SDDL;
-        assert_eq!(sddl, "D:P(A;;GA;;;OW)(A;;GA;;;SY)(A;;GA;;;BA)");
-        for broad_sid in ["WD", "AU", "BU", "IU"] {
-            assert!(
-                !sddl.contains(&format!(";;;{broad_sid})")),
-                "unrelated low-privilege users must not drive daemon mutations: {sddl}"
-            );
-        }
-        assert!(sddl.contains(";;;OW)"), "creator/owner access");
-        assert!(sddl.contains(";;;SY)"), "SYSTEM access");
-        assert!(
-            sddl.contains(";;;BA)"),
-            "a different credentialed administrator must be able to quiesce uninstall"
+        assert_eq!(
+            server::CONTROL_PIPE_SDDL,
+            "D:P(A;;GA;;;OW)(A;;GA;;;SY)(A;;GA;;;BA)"
         );
     }
 
@@ -4975,6 +4976,11 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         assert_eq!(spec.body.interrupt, ksx_core::Interrupt::Opposing);
     }
 
+    /// Every junk line names the refusal it earns — see
+    /// `map_validates_its_fields_before_touching_the_writer` for the experiment
+    /// that showed why. This one was measured the same way on 2026-08-26: with
+    /// the `"map-macro" =>` arm renamed, all six lines passed on the strength of
+    /// `{"error":"unknown verb 'map-macro' (…)"}`.
     #[test]
     fn map_macro_validates_its_fields_before_touching_the_writer() {
         let state = shared(RunState::Stopped);
@@ -4982,21 +4988,46 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         let seen = Arc::new(Mutex::new(Vec::new()));
         let mut d = deps(tx, state, no_profiles());
         d.save_macro = scripted_macro(seen.clone());
-        for junk in [
-            r#"{"verb":"map-macro"}"#.to_owned(),
-            r#"{"verb":"map-macro","preset":"Panel P1"}"#.to_owned(),
+        for (junk, refusal) in [
+            (r#"{"verb":"map-macro"}"#, r#"map-macro needs a "preset""#),
+            (
+                r#"{"verb":"map-macro","preset":"Panel P1"}"#,
+                r#"map-macro needs a "name" (the [macros.<name>] table)"#,
+            ),
             // No "steps" and no "delete": a misspelled field, not a deletion.
-            r#"{"verb":"map-macro","preset":"Panel P1","name":"hadouken"}"#.to_owned(),
-            // Bodies the preset file itself would refuse.
-            r#"{"verb":"map-macro","preset":"P","name":"m","steps":[{"hold":["A"],"ms":"soon"}]}"#
-                .to_owned(),
-            r#"{"verb":"map-macro","preset":"P","name":"m","steps":[{"hold":["A"],"ms":50}],"on_release":"maybe"}"#
-                .to_owned(),
-            r#"{"verb":"map-macro","preset":"P","name":"m","steps":[{"hold":["A"],"ms":50,"nope":1}]}"#
-                .to_owned(),
+            (
+                r#"{"verb":"map-macro","preset":"Panel P1","name":"hadouken"}"#,
+                r#"map-macro needs "steps""#,
+            ),
+            // Bodies the preset file itself would refuse. The serde detail is
+            // asserted too — "could not read the macro body" alone would let
+            // any three of these stand in for each other, and the field that
+            // was wrong is the only useful half of the sentence.
+            (
+                r#"{"verb":"map-macro","preset":"P","name":"m","steps":[{"hold":["A"],"ms":"soon"}]}"#,
+                "soon",
+            ),
+            (
+                r#"{"verb":"map-macro","preset":"P","name":"m","steps":[{"hold":["A"],"ms":50}],"on_release":"maybe"}"#,
+                "maybe",
+            ),
+            (
+                r#"{"verb":"map-macro","preset":"P","name":"m","steps":[{"hold":["A"],"ms":50,"nope":1}]}"#,
+                "nope",
+            ),
         ] {
-            let v = handle_request(&junk, &d, FAST);
+            let v = handle_request(junk, &d, FAST);
             assert_eq!(v["ok"], false, "{junk} → {v}");
+            let error = v["error"].as_str().unwrap_or_default();
+            assert!(
+                error.contains(refusal),
+                "the refusal this line earns is not the one it got: {junk} → {v}"
+            );
+            assert!(
+                error.starts_with("map-macro"),
+                "a refusal that does not start with the verb is a refusal from somewhere \
+                 else — an unrouted verb answers 'unknown verb …': {junk} → {v}"
+            );
         }
         assert!(
             seen.lock().unwrap().is_empty(),
@@ -5150,6 +5181,18 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         assert_eq!(v["problems"][0], "step 0 holds 'warp'", "{v}");
     }
 
+    /// Each junk line is paired with the refusal it EARNS, because
+    /// `ok == false` on its own is a hole the size of the verb.
+    ///
+    /// Measured 2026-08-26: with the dispatch arm at `"map" =>` renamed, every
+    /// one of these six lines still answered `{"ok":false}` — as
+    /// `{"error":"unknown verb 'map' (…)"}` — and the `seen.is_empty()` backstop
+    /// still held, because a request that never routes never reaches the writer
+    /// either. The test agreed, six times, that a verb that no longer existed
+    /// was validating its fields correctly. (Same shape as the guard test that
+    /// POSTed to a Studio route with no handler and was answered 403 by the
+    /// CSRF layer before routing.) Pinning the sentence closes it: the first
+    /// case fails the moment the verb stops being dispatched.
     #[test]
     fn map_validates_its_fields_before_touching_the_writer() {
         let state = shared(RunState::Stopped);
@@ -5157,18 +5200,42 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         let seen = Arc::new(Mutex::new(Vec::new()));
         let mut d = deps(tx, state, no_profiles());
         d.map = scripted_map(applied_ok, seen.clone());
-        for junk in [
-            r#"{"verb":"map"}"#,
-            r#"{"verb":"map","preset":"Panel P1"}"#,
-            r#"{"verb":"map","preset":"Panel P1","function":"A"}"#,
-            r#"{"verb":"map","preset":"Panel P1","function":"A","key":"G","clear":true}"#,
+        for (junk, refusal) in [
+            (r#"{"verb":"map"}"#, r#"map needs a "preset""#),
+            (
+                r#"{"verb":"map","preset":"Panel P1"}"#,
+                r#"map needs a "function""#,
+            ),
+            (
+                r#"{"verb":"map","preset":"Panel P1","function":"A"}"#,
+                r#"map needs a "key" (or "keys", or "clear": true)"#,
+            ),
+            (
+                r#"{"verb":"map","preset":"Panel P1","function":"A","key":"G","clear":true}"#,
+                r#"map takes either "key"/"keys" or "clear", not both"#,
+            ),
             // "key" and "keys" are two spellings of one field: both together
             // would mean ignoring one, so the verb refuses instead.
-            r#"{"verb":"map","preset":"Panel P1","function":"A","key":"G","keys":["S"]}"#,
-            r#"{"verb":"map","preset":"Panel P1","function":"A","keys":["S"],"clear":true}"#,
+            (
+                r#"{"verb":"map","preset":"Panel P1","function":"A","key":"G","keys":["S"]}"#,
+                r#"map takes either "key" or "keys", not both"#,
+            ),
+            (
+                r#"{"verb":"map","preset":"Panel P1","function":"A","keys":["S"],"clear":true}"#,
+                r#"map takes either "key"/"keys" or "clear", not both"#,
+            ),
         ] {
             let v = handle_request(junk, &d, FAST);
             assert_eq!(v["ok"], false, "{junk} → {v}");
+            // The words are `ksx_api::MapRequest::from_json`'s, which is the
+            // point of that reader existing: a client is refused in these exact
+            // words with no round trip, so the sentence is a contract and not
+            // an implementation detail.
+            assert_eq!(
+                v["error"].as_str(),
+                Some(refusal),
+                "the refusal this line earns is not the one it got: {junk} → {v}"
+            );
         }
         assert!(
             seen.lock().unwrap().is_empty(),
@@ -6020,16 +6087,100 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         handle_request(r#"{"verb":"input-test-cancel"}"#, &d, FAST);
     }
 
+    /// Four ways to say nothing, four different answers — and the answer has to
+    /// say WHICH.
+    ///
+    /// `ok == false` plus `error.is_string()` was true of all four before this
+    /// test named the sentences, and it is equally true of a daemon that
+    /// answers every one of them with the same shrug. "not JSON" and "a verb I
+    /// do not have" are different problems for whoever is holding the other end
+    /// of the pipe.
     #[test]
     fn junk_and_unknown_verbs_are_answered_not_dropped() {
         let state = shared(RunState::Stopped);
         let (tx, rx) = unbounded();
-        for junk in ["not json", "{}", r#"{"verb":"launch nukes"}"#, ""] {
+        for (junk, refusal) in [
+            ("not json", "request is not a JSON object"),
+            ("{}", r#"request has no "verb""#),
+            (r#"{"verb":"launch nukes"}"#, "unknown verb 'launch nukes'"),
+            // An empty line is not a JSON object either; the connection is
+            // still answered rather than dropped.
+            ("", "request is not a JSON object"),
+        ] {
             let v = handle_request(junk, &deps(tx.clone(), state.clone(), no_profiles()), FAST);
             assert_eq!(v["ok"], false, "{junk:?} → {v}");
-            assert!(v["error"].is_string(), "{junk:?} → {v}");
+            assert!(
+                v["error"].as_str().unwrap_or_default().contains(refusal),
+                "{junk:?} must be refused as {refusal:?}, not as something else → {v}"
+            );
         }
         assert!(rx.try_recv().is_err());
+    }
+
+    /// **The pipe's only discovery surface has to be TRUE.**
+    ///
+    /// A client that guesses wrong is handed a list of verbs, and that list is
+    /// hand-maintained in two string literals a long way from the `match` they
+    /// describe. This asserts the direction that can be checked from inside the
+    /// daemon: every verb either list NAMES is a verb the daemon dispatches. A
+    /// verb deleted from the `match` and left in the sentence is a daemon
+    /// advertising something it will refuse — which is how a caller ends up
+    /// debugging its own JSON.
+    ///
+    /// The other direction (every arm of the `match` appears in both lists) is
+    /// NOT asserted here, and on 2026-08-26 it does not hold: `resume`,
+    /// `stage-bind`, `stage-macro` and `stage-adopt` are dispatched and are
+    /// missing from the `unknown verb` list, and `stage-adopt` is missing from
+    /// the `has no "verb"` list too — all four shipping, all four with CLI
+    /// faces (`session.rs`, `stage_cli.rs`) and one with a section in
+    /// docs/CONTROL-SURFACE.md. Closing it needs one `const VERBS: &[&str]`
+    /// that the dispatch and both sentences share, which is a change to the
+    /// pipe itself rather than to its tests.
+    #[test]
+    fn every_verb_the_refusals_list_is_a_verb_the_pipe_dispatches() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let d = deps(tx, state, no_profiles());
+
+        // Both hand-written lists: the one for a request with no "verb" at all,
+        // and the one for a verb the match did not recognise.
+        let mut listed: Vec<String> = Vec::new();
+        for probe in ["{}", r#"{"verb":"launch nukes"}"#] {
+            let answer = handle_request(probe, &d, FAST);
+            let error = answer["error"].as_str().unwrap_or_default().to_owned();
+            let inside = error
+                .split_once('(')
+                .and_then(|(_, rest)| rest.rsplit_once(')'))
+                .map(|(inside, _)| inside.to_owned())
+                .unwrap_or_else(|| {
+                    panic!("the refusal for {probe} must offer the verbs in parentheses: {error}")
+                });
+            listed.extend(inside.split('|').map(|verb| verb.trim().to_owned()));
+        }
+        listed.sort();
+        listed.dedup();
+        assert!(
+            listed.len() > 20,
+            "the verb lists did not parse into verbs: {listed:?}"
+        );
+
+        for verb in listed {
+            // A fresh channel and a fresh state per verb: `start`, `stop` and
+            // `reload` enqueue a command, and nothing here is about what the
+            // control loop then does with it. Whatever each verb answers —
+            // refusal included — the one answer it may not give is "I have
+            // never heard of this".
+            let (tx, _rx) = unbounded();
+            let d = deps(tx, shared(RunState::Stopped), no_profiles());
+            let v = handle_request(&format!(r#"{{"verb":"{verb}"}}"#), &d, FAST);
+            assert!(
+                !v["error"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with("unknown verb"),
+                "the pipe offers '{verb}' and then does not dispatch it: {v}"
+            );
+        }
     }
 
     // -- transport, Windows only --------------------------------------------
@@ -6040,6 +6191,186 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
 
         fn unique_pipe(tag: &str) -> String {
             format!(r"\\.\pipe\ksx-test-{}-{tag}", std::process::id())
+        }
+
+        /// **The trust boundary, read back off the object the kernel made.**
+        ///
+        /// `control_pipe_acl_is_creator_system_and_administrators_only` pins the
+        /// SDDL *string*; a string is not an ACL. Between the two there is
+        /// `PipeSecurity::new`, which can fail
+        /// (`ConvertStringSecurityDescriptorToSecurityDescriptorW` returning 0),
+        /// and `create_raw`, which takes the descriptor as a pointer that could
+        /// just as easily be null — the live-feed pipe passes exactly that on
+        /// purpose. A pipe created with a null descriptor gets the DEFAULT DACL,
+        /// which is a completely different answer to "who may drive daemon
+        /// mutations", and every string assertion in this file would still pass.
+        ///
+        /// So: serve a real pipe, open it, and ask Windows who is on it.
+        ///
+        /// The rights masks are NOT compared. `GA` (generic all) is mapped to
+        /// the object's specific rights when the descriptor is applied, so the
+        /// string that comes back is not the string that went in — by design.
+        /// WHO holds an ACE is the security property, and it survives the
+        /// mapping.
+        ///
+        /// That these assertions DISCRIMINATE was measured, not assumed. A
+        /// named pipe created with a null descriptor on a stock Windows 11 box
+        /// (2026-08-26) comes back as:
+        ///
+        /// ```text
+        /// D:(A;;FR;;;WD)(A;;FR;;;AN)(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;S-1-5-21-…-1001)
+        /// ```
+        ///
+        /// which fails four assertions below independently: it is not `D:P`,
+        /// Everyone (`WD`) holds an ACE, OWNER RIGHTS holds none, and there are
+        /// five ACEs rather than three. A control pipe that silently lost its
+        /// descriptor cannot pass this test.
+        #[test]
+        fn the_served_pipe_carries_the_acl_and_no_broad_sid() {
+            use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, INVALID_HANDLE_VALUE};
+            use windows_sys::Win32::Security::Authorization::{
+                ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo,
+                SDDL_REVISION_1, SE_KERNEL_OBJECT,
+            };
+            use windows_sys::Win32::Security::{
+                ACL, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+            };
+            use windows_sys::Win32::Storage::FileSystem::{
+                CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE,
+                OPEN_EXISTING, READ_CONTROL,
+            };
+
+            let name = unique_pipe("acl");
+            let state = shared(RunState::Stopped);
+            let (tx, _rx) = unbounded();
+            server::spawn_with(
+                name.clone(),
+                deps(tx, state, no_profiles()),
+                Duration::from_millis(10),
+            );
+            // One round trip first: the server owns the name and a free
+            // instance is listening before the security query opens one.
+            let v = client::request(&name, &serde_json::json!({ "verb": "status" }))
+                .expect("the server under test is serving");
+            assert_eq!(v["ok"], true, "{v}");
+
+            let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+            // READ_CONTROL only: this handle asks the object manager a question
+            // about the pipe, it does not speak the protocol.
+            //
+            // SAFETY: `wide` is NUL-terminated and outlives the call; the
+            // handle is closed below.
+            let handle = unsafe {
+                CreateFileW(
+                    wide.as_ptr(),
+                    READ_CONTROL,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL,
+                    std::ptr::null_mut(),
+                )
+            };
+            assert!(
+                handle != INVALID_HANDLE_VALUE && !handle.is_null(),
+                "the creating account must be able to open its own control pipe"
+            );
+
+            let mut dacl: *mut ACL = std::ptr::null_mut();
+            let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+            // SAFETY: output pointers are valid for the call; `descriptor` is
+            // LocalFree'd below, and the ACL points into it.
+            let status = unsafe {
+                GetSecurityInfo(
+                    handle,
+                    SE_KERNEL_OBJECT,
+                    DACL_SECURITY_INFORMATION,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &mut dacl,
+                    std::ptr::null_mut(),
+                    &mut descriptor,
+                )
+            };
+            assert_eq!(status, 0, "reading the pipe's DACL failed ({status})");
+            assert!(!descriptor.is_null() && !dacl.is_null());
+
+            let mut text: windows_sys::core::PWSTR = std::ptr::null_mut();
+            let mut len = 0u32;
+            // SAFETY: `descriptor` is the live descriptor read above; the
+            // returned string is LocalFree'd below.
+            let ok = unsafe {
+                ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                    descriptor,
+                    SDDL_REVISION_1,
+                    DACL_SECURITY_INFORMATION,
+                    &mut text,
+                    &mut len,
+                )
+            };
+            let sddl = if ok != 0 && !text.is_null() {
+                // SAFETY: a NUL-terminated wide string of `len` characters,
+                // allocated by the call above.
+                let slice = unsafe { std::slice::from_raw_parts(text, len as usize) };
+                String::from_utf16_lossy(slice)
+            } else {
+                String::new()
+            };
+            // SAFETY: each pointer was allocated by the call that produced it
+            // and is freed exactly once.
+            unsafe {
+                if !text.is_null() {
+                    LocalFree(text.cast());
+                }
+                LocalFree(descriptor);
+                CloseHandle(handle);
+            }
+            assert!(ok != 0, "the pipe's DACL could not be rendered as SDDL");
+
+            // A PROTECTED DACL: no inherited ACE can widen it later.
+            assert!(
+                sddl.starts_with("D:P"),
+                "the served pipe's DACL is not protected: {sddl}"
+            );
+            // The three trustees, by SID — abbreviation or raw, whichever
+            // spelling this Windows renders.
+            for (who, abbreviation, sid) in [
+                ("OWNER RIGHTS", "OW", "S-1-3-4"),
+                ("SYSTEM", "SY", "S-1-5-18"),
+                ("Administrators", "BA", "S-1-5-32-544"),
+            ] {
+                assert!(
+                    sddl.contains(&format!(";;;{abbreviation})"))
+                        || sddl.contains(&format!(";;;{sid})")),
+                    "{who} has no ACE on the served pipe, so the descriptor the daemon \
+                         built is not the one the kernel applied: {sddl}"
+                );
+            }
+            // And nobody else: Everyone, Authenticated Users, Users,
+            // Interactive. This is the half that a default DACL fails.
+            for (who, abbreviation, sid) in [
+                ("Everyone", "WD", "S-1-1-0"),
+                ("Authenticated Users", "AU", "S-1-5-11"),
+                ("Users", "BU", "S-1-5-32-545"),
+                ("Interactive", "IU", "S-1-5-4"),
+            ] {
+                assert!(
+                    !sddl.contains(&format!(";;;{abbreviation})"))
+                        && !sddl.contains(&format!(";;;{sid})")),
+                    "{who} can reach the control pipe: {sddl}"
+                );
+            }
+            // Exactly three ACEs, all of them grants.
+            assert_eq!(
+                sddl.matches("(A;").count(),
+                3,
+                "the served DACL has ACEs the daemon did not ask for: {sddl}"
+            );
+            assert_eq!(
+                sddl.matches("(D;").count(),
+                0,
+                "no deny ACE is asked for: {sddl}"
+            );
         }
 
         #[test]

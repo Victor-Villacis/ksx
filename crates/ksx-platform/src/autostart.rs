@@ -1017,27 +1017,24 @@ mod tests {
         );
     }
 
+    /// `command_line` is `arguments` behind a quoted exe path, and the four
+    /// mode×game combinations are already pinned one test up by
+    /// `arguments_compose_the_mode_verb_with_the_game_for_all_four_combinations`.
+    /// Re-running them here only re-tested `arguments`. What is left — and what
+    /// this now covers — is the exe half.
     #[test]
-    fn command_line_is_the_quoted_exe_plus_arguments_in_every_combination() {
-        for (mode, game, want) in [
-            (TaskMode::Daemon, None, "daemon"),
-            (
-                TaskMode::Daemon,
-                Some("ExampleLauncher"),
-                "daemon --game ExampleLauncher",
-            ),
-            (TaskMode::Run, None, "run"),
-            (
-                TaskMode::Run,
-                Some("ExampleLauncher"),
-                "run --game ExampleLauncher",
-            ),
-        ] {
-            assert_eq!(
-                spec(mode, game).command_line(),
-                format!(r#""C:\Program Files\ksx\ksx.exe" {want}"#)
-            );
-        }
+    fn command_line_quotes_the_exe_whether_or_not_its_path_has_spaces() {
+        assert_eq!(
+            spec(TaskMode::Daemon, Some("ExampleLauncher")).command_line(),
+            r#""C:\Program Files\ksx\ksx.exe" daemon --game ExampleLauncher"#
+        );
+        // A path with no spaces is quoted too. Task Scheduler splits an
+        // unquoted command line on whitespace, so the rule cannot be
+        // conditional on today's install location: put ksx somewhere with a
+        // space later and an un-quoted path silently runs `C:\Program`.
+        let mut plain = spec(TaskMode::Run, None);
+        plain.exe = PathBuf::from(r"C:\ksx\ksx.exe");
+        assert_eq!(plain.command_line(), r#""C:\ksx\ksx.exe" run"#);
     }
 
     /// The daemon is the default mode: a registered `ksx run` captures the

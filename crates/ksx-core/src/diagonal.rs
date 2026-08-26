@@ -709,8 +709,44 @@ mod tests {
         }
     }
 
+    /// All four rows of all four notations, frozen as literals.
+    ///
+    /// Hardened 2026-08-26: it pinned `numpad()` for four diagonals but
+    /// `glyph()`, `words()` and `move_list()` for `DownRight` only — three of
+    /// four rows of three of four notations were free to be wrong, and each of
+    /// them is a string a player reads in the Studio macro grid.
+    ///
+    /// Renamed, too. Only part of this table is doc-backed and the old name
+    /// claimed all of it: `docs/MAPPER-UX.md` §"eight columns" and
+    /// `docs/INPUT-TRANSFORMS.md` carry the glyph set `↖ ↗ ↙ ↘` and the
+    /// compass-not-`d/f` naming rule (`MAPPER-UX.md:230`) as prose; the numpad
+    /// digits and the move-list spellings appear in no doc table, so this file
+    /// is their only witness. Nothing here reads a doc — do not restore a name
+    /// that implies it does.
     #[test]
-    fn the_notation_table_is_the_one_in_the_docs() {
+    fn every_diagonal_renders_in_all_four_notations() {
+        // (diagonal, glyph, numpad digit, compass words, move-list spelling)
+        let table: [(Diag, &str, u8, &str, &str); 4] = [
+            (Diag::UpLeft, "↖", 7, "up-left", "u/b"),
+            (Diag::UpRight, "↗", 9, "up-right", "u/f"),
+            (Diag::DownLeft, "↙", 1, "down-left", "d/b"),
+            (Diag::DownRight, "↘", 3, "down-right", "d/f"),
+        ];
+        assert_eq!(table.len(), Diag::ALL.len(), "a diagonal escaped the table");
+
+        for (diag, glyph, numpad, words, move_list) in table {
+            assert_eq!(diag.glyph(), glyph, "{diag:?} glyph");
+            assert_eq!(diag.numpad(), numpad, "{diag:?} numpad");
+            assert_eq!(diag.words(), words, "{diag:?} words");
+            assert_eq!(diag.move_list(), move_list, "{diag:?} move list");
+            // The compass spelling is facing-neutral and the move-list one is
+            // not; swapping them would tell player 2 their stick's up-left is
+            // "up-forward". They must never be the same string.
+            assert_ne!(diag.words(), diag.move_list(), "{diag:?}");
+        }
+
+        // Declaration order is what `Diag::ALL` promises, and the Studio grid
+        // lays its columns out in it.
         assert_eq!(
             Diag::ALL.iter().map(|d| d.numpad()).collect::<Vec<_>>(),
             vec![7, 9, 1, 3]
@@ -718,8 +754,5 @@ mod tests {
         for &d in Diag::ALL {
             assert_eq!(Diag::from_halves(d.halves().0, d.halves().1), d);
         }
-        assert_eq!(Diag::DownRight.glyph(), "↘");
-        assert_eq!(Diag::DownRight.words(), "down-right");
-        assert_eq!(Diag::DownRight.move_list(), "d/f");
     }
 }

@@ -564,3 +564,161 @@ fn payload_block<T: serde::Serialize>(payload: &T) -> String {
         payload_json(payload)
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The embed ships exactly the four live routes, and every one of them
+    /// parses.**
+    ///
+    /// REPLACES 2026-08-26 three copies of `embedded_page_loads_and_ir_is_fmir_v2`
+    /// (`render_check.rs`, `render_devices.rs`, `render_pads.rs`), each of
+    /// which was `EmbeddedPage::load(route)` followed by
+    /// `assert_eq!(page.module.header.version, 2)`. That assertion was
+    /// TAUTOLOGICAL: `IrModule::parse` begins with `IrHeader::parse`, which
+    /// rejects a version mismatch outright (`IrError::UnsupportedVersion` —
+    /// see the note in `EmbeddedPage::load` above). Any module that reached
+    /// the `assert_eq!` had already passed the identical comparison, so it
+    /// could only ever agree, and the per-page "does it load" half is
+    /// re-exercised by every other test in those files.
+    ///
+    /// What is NOT tautological, and is what this pins instead: WHICH routes
+    /// the embed carries. `/`, `/map`, `/start`, `/setup`, `/profiles` and
+    /// `/workspace` were deleted in the 2026-08-25 cutover. A stale manifest
+    /// that still shipped one of their IR modules would let a route come back
+    /// from the dead with no handler behind it, and `EmbeddedPage::load`'s own
+    /// doc warns that the old `"/"` and `"/map"` examples would now panic at
+    /// every call site.
+    /// **No page links into a deleted one, and every page can reach the
+    /// product page.**
+    ///
+    /// REPLACES 2026-08-26 three byte-identical copies — `render_check.rs` and
+    /// `render_devices.rs` both had `the_nav_reaches_every_sibling_page`, and
+    /// `render_pads.rs` had `the_nav_reaches_the_other_screens`. They differed
+    /// only in which page they rendered. Both names also overclaimed: there
+    /// are no sibling pages any more, only one workflow link plus this
+    /// blocklist.
+    ///
+    /// Folding them closes a real gap rather than just saving runtime.
+    /// `/nocturne` had NO dead-link blocklist at all — the one page that
+    /// absorbed all five deleted surfaces, and therefore has by far the most
+    /// links and by far the most chances to keep pointing at one of them, was
+    /// the only page nothing checked. It is clean today; it was simply
+    /// unguarded.
+    ///
+    /// The dead set is the 2026-08-25 cutover: `/`, `/map`, `/start`,
+    /// `/setup`, `/profiles` and `/workspace` all 404 now.
+    #[test]
+    fn no_page_links_into_a_deleted_surface() {
+        const DEAD: [&str; 6] = [
+            r#"href="/""#,
+            r#"href="/start"#,
+            r#"href="/map"#,
+            r#"href="/setup"#,
+            r#"href="/profiles"#,
+            r#"href="/workspace"#,
+        ];
+
+        let pages: [(&str, String); 4] = [
+            (
+                "/nocturne",
+                crate::render_nocturne::render_nocturne(
+                    &EmbeddedPage::load("/nocturne").unwrap(),
+                    &crate::snapshot::NocturnePayload::default(),
+                    None,
+                )
+                .html,
+            ),
+            (
+                "/check",
+                crate::render_check::render_check(
+                    &EmbeddedPage::load("/check").unwrap(),
+                    &crate::snapshot::CheckPayload::default(),
+                )
+                .html,
+            ),
+            (
+                "/pads",
+                crate::render_pads::render_pads(
+                    &EmbeddedPage::load("/pads").unwrap(),
+                    &crate::snapshot::PadsPayload::default(),
+                )
+                .html,
+            ),
+            (
+                "/devices",
+                crate::render_devices::render_devices(
+                    &EmbeddedPage::load("/devices").unwrap(),
+                    &crate::snapshot::DevicesPayload::default(),
+                    None,
+                )
+                .html,
+            ),
+        ];
+
+        for (route, html) in &pages {
+            for dead in DEAD {
+                assert!(
+                    !html.contains(dead),
+                    "{route} still renders the dead link {dead} — that surface 404s"
+                );
+            }
+        }
+
+        // The three tool pages carry the rail: one link to the page that owns
+        // the workflow, and their own entry marked as current. `/nocturne` IS
+        // the workflow, so it links to itself from nothing.
+        for (route, html) in pages.iter().filter(|(r, _)| *r != "/nocturne") {
+            assert!(
+                html.contains(r#"<a class="navlink workflow-link" href="/nocturne">"#),
+                "{route} cannot reach the product page"
+            );
+            assert!(
+                html.contains(&format!(r#"<a href="{route}" aria-current="page">"#)),
+                "{route} does not mark itself as the current page"
+            );
+        }
+    }
+
+    #[test]
+    fn the_embed_ships_exactly_the_live_routes() {
+        const LIVE: [&str; 4] = ["/nocturne", "/check", "/pads", "/devices"];
+        const DELETED: [&str; 6] = ["/", "/map", "/start", "/setup", "/profiles", "/workspace"];
+
+        let raw = Assets::get("manifest.json").expect("manifest.json is embedded");
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&raw.data).expect("manifest.json parses");
+        let routes = manifest["routes"]
+            .as_object()
+            .expect("the manifest carries a route table");
+
+        let mut names: Vec<&str> = routes.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        let mut expected = LIVE.to_vec();
+        expected.sort_unstable();
+        assert_eq!(
+            names, expected,
+            "the embed's route table is not the set of live pages"
+        );
+
+        for route in DELETED {
+            assert!(
+                !routes.contains_key(route),
+                "deleted route {route:?} is back in the manifest — it 404s in the \
+                 router, so shipping IR for it is a page nobody can reach"
+            );
+        }
+
+        // Every live route's IR actually loads and parses. This is the real
+        // content of the three deleted tests, stated once.
+        for route in LIVE {
+            let page = EmbeddedPage::load(route)
+                .unwrap_or_else(|e| panic!("the embedded {route} page must load: {e:?}"));
+            assert!(
+                !page.module.slots.entries().is_empty(),
+                "{route} parsed to an IR module with no slots at all"
+            );
+        }
+    }
+}

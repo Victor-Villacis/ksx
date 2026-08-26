@@ -93,6 +93,13 @@ mod policy_tests {
             ["Read", "File"].concat(),
             ["Write", "File"].concat(),
             ["Device", "IoControl"].concat(),
+            // An access mask is the other half of the same rule: a handle
+            // opened for read or write can carry a report transaction even if
+            // none of the names above appears. The only open in this module
+            // asks for zero — see `metadata_handles_request_no_device_access`.
+            ["GENERIC", "_READ"].concat(),
+            ["GENERIC", "_WRITE"].concat(),
+            ["GENERIC", "_ALL"].concat(),
         ];
         for symbol in forbidden {
             assert!(
@@ -453,9 +460,39 @@ mod windows_impl {
     mod tests {
         use super::*;
 
+        /// The constant is zero **and the open actually passes it**.
+        ///
+        /// Only the first half used to be asserted, and a zero constant nobody
+        /// uses is not a safety property: spell an access mask inline at the
+        /// `CreateFileW` call instead and ksx opens, with read/write access, a
+        /// HID collection the game in front of the player already has open —
+        /// while `assert_eq!(HID_METADATA_DESIRED_ACCESS, 0)` stays green
+        /// forever. That is the existence-versus-rendering trap, in an access
+        /// mask.
         #[test]
         fn metadata_handles_request_no_device_access() {
             assert_eq!(HID_METADATA_DESIRED_ACCESS, 0);
+
+            let source = include_str!("hid.rs");
+            // Spelled in halves so this test cannot match itself.
+            let open = ["CreateFile", "W("].concat();
+            assert_eq!(
+                source.matches(&open).count(),
+                1,
+                "one metadata open, or this fence is reading the wrong one"
+            );
+            let desired = source
+                .split(&open)
+                .nth(1)
+                .expect("the metadata open")
+                .split(',')
+                .nth(1)
+                .map(str::trim)
+                .expect("a desired-access argument");
+            assert_eq!(
+                desired, "HID_METADATA_DESIRED_ACCESS",
+                "the metadata open must pass the pinned constant, not an inline mask"
+            );
         }
     }
 }

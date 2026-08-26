@@ -1835,10 +1835,19 @@ preset = "default"
         );
     }
 
-    /// A slot naming a persona nothing can build must be caught by `ksx check`
-    /// and `ksx run --dry-run`, not by a plug three steps later.
+    /// Every persona this build ships plugs, so `validate` gates none of them.
+    ///
+    /// Named for what it asserts. It used to be called
+    /// `a_persona_this_build_cannot_plug_is_refused_at_validate_time`, which
+    /// read as proof that the refusal path worked — but every persona plugs
+    /// now (the retro leg flip), so `persona_gap` returns `None` for all of
+    /// `Persona::ALL` and the `PersonaNotImplemented` push is unreachable.
+    /// Deleting both `issues.push(Issue::…NotImplemented { … })` bodies left
+    /// all 185 lib tests green (2026-08-26 audit). The refusal MESSAGE is
+    /// pinned directly instead, by
+    /// [`the_unpluggable_persona_refusal_says_installing_will_not_help`].
     #[test]
-    fn a_persona_this_build_cannot_plug_is_refused_at_validate_time() {
+    fn no_shipping_persona_is_gated_by_this_build() {
         let slot = |number: u8, persona: Persona| SlotEntry {
             number,
             keyboard: None,
@@ -1848,20 +1857,117 @@ preset = "default"
             socd: Socd::default(),
             macros: Default::default(),
         };
-        // Every shipping persona validates clean (retro leg flip); the
-        // PersonaNotImplemented issue re-arms with the next gated persona.
         for persona in Persona::ALL.iter().copied() {
             let cfg = ConfigFile {
                 slots: vec![slot(1, persona)],
                 ..ConfigFile::default()
             };
-            let issues = validate(&cfg, &[]);
-            assert!(
-                !issues
-                    .iter()
-                    .any(|i| matches!(i, Issue::PersonaNotImplemented { .. })),
-                "{persona}: {issues:?}"
-            );
+            // Stronger than "no PersonaNotImplemented": a lone slot on any
+            // shipping persona is a CLEAN config, full stop.
+            assert_eq!(validate(&cfg, &[]), vec![], "{persona}");
+            // The capability this is wired to (never a driver probe).
+            assert_eq!(persona_gap(persona), None, "{persona}");
+        }
+    }
+
+    /// The trap, stated as a test: this check may never consult the machine.
+    ///
+    /// A driver probe flips to "installed" the moment someone installs
+    /// HIDMaestro — at which point a probe-based check would go quiet while
+    /// the plug still failed, and the user would have installed a driver for
+    /// nothing. So the reason printed is the BUILD's, verbatim, and the
+    /// message must say the install does not help and name a persona that
+    /// does work.
+    ///
+    /// The push is unreachable today (see
+    /// [`no_shipping_persona_is_gated_by_this_build`]), so the issue is
+    /// constructed directly. This is the only thing standing between the next
+    /// gated persona and a message that sends the user off to install a
+    /// driver for nothing.
+    #[test]
+    fn the_unpluggable_persona_refusal_says_installing_will_not_help() {
+        let issue = Issue::PersonaNotImplemented {
+            slot: 3,
+            persona: "switch-pro".into(),
+            reason: "the HIDMaestro host does not carry a Switch Pro descriptor".into(),
+            instead: Persona::Xbox360.to_string(),
+        };
+        let msg = issue.to_string();
+        assert!(msg.contains("slot 3"), "{msg}");
+        assert!(msg.contains("switch-pro"), "{msg}");
+        // The build's own reason, carried verbatim — not re-derived.
+        assert!(
+            msg.contains("does not carry a Switch Pro descriptor"),
+            "{msg}"
+        );
+        // The "installing will not help" clause, in words a user reads.
+        assert!(msg.contains("cannot be plugged by this build"), "{msg}");
+        assert!(msg.contains("the file is fine"), "{msg}");
+        assert!(msg.contains("nothing behind it yet"), "{msg}");
+        // ...and the fix is IN the message: a persona that actually plugs.
+        assert!(msg.contains(&Persona::Xbox360.to_string()), "{msg}");
+        assert_eq!(persona_gap(Persona::Xbox360), None, "the remedy must plug");
+
+        // Same contract, scoped to one game profile.
+        let game = Issue::GamePersonaNotImplemented {
+            game: "Bloodborne".into(),
+            slot: 1,
+            persona: "switch-pro".into(),
+            reason: "the HIDMaestro host does not carry a Switch Pro descriptor".into(),
+            instead: Persona::PlayStation.to_string(),
+        };
+        let msg = game.to_string();
+        assert!(msg.contains("game 'Bloodborne'"), "{msg}");
+        assert!(msg.contains("slot 1"), "{msg}");
+        assert!(msg.contains("cannot be plugged by this build"), "{msg}");
+        assert!(
+            msg.contains("does not carry a Switch Pro descriptor"),
+            "{msg}"
+        );
+        assert!(msg.contains(&Persona::PlayStation.to_string()), "{msg}");
+        assert_eq!(
+            persona_gap(Persona::PlayStation),
+            None,
+            "the remedy must plug"
+        );
+    }
+
+    /// [`Issue::PersonaCapacity`] and [`Issue::GamePersonaCapacity`] are the
+    /// only two `Issue` variants no test mentioned (2026-08-26 audit).
+    ///
+    /// They are unreachable for the same reason the persona-gap pushes are:
+    /// `Persona::instance_limit()` returns `None` for every persona, so the
+    /// `let Some(limit) = … else { … }` guards short-circuit before the push.
+    /// Pinned directly so the sentence is correct on the day a persona grows
+    /// a limit — the count, the limit, and a remedy the user can act on.
+    #[test]
+    fn the_persona_capacity_refusal_names_the_count_the_limit_and_a_way_out() {
+        let issue = Issue::PersonaCapacity {
+            persona: "dualsense".into(),
+            count: 5,
+            limit: 4,
+        };
+        let msg = issue.to_string();
+        assert!(msg.contains("5 slots"), "{msg}");
+        assert!(msg.contains("dualsense"), "{msg}");
+        assert!(msg.contains("at most 4"), "{msg}");
+        assert!(msg.contains("another supported persona"), "{msg}");
+
+        let game = Issue::GamePersonaCapacity {
+            game: "MAME 8P".into(),
+            persona: "dualsense".into(),
+            count: 5,
+            limit: 4,
+        };
+        let msg = game.to_string();
+        assert!(msg.contains("game 'MAME 8P'"), "{msg}");
+        assert!(msg.contains("5 slots"), "{msg}");
+        assert!(msg.contains("at most 4"), "{msg}");
+
+        // The guard that makes both unreachable, pinned so the day it changes
+        // is a test change and not a surprise.
+        for persona in Persona::ALL.iter().copied() {
+            assert_eq!(persona.instance_limit(), None, "{persona}");
         }
     }
 
@@ -1956,51 +2062,33 @@ preset = "default"
         );
     }
 
+    /// Every shipping persona validates clean PER GAME too.
+    ///
+    /// Replaces `a_games_unbuildable_persona_is_reported_per_game`, whose name
+    /// promised a report that cannot happen: `GamePersonaNotImplemented` is
+    /// unreachable, so the test asserted the ABSENCE of the issue its name
+    /// promised. The per-game report SHAPE is pinned by
+    /// [`the_unpluggable_persona_refusal_says_installing_will_not_help`]; what
+    /// is worth keeping here is that a game slot on any shipping persona is
+    /// clean, across all of `Persona::ALL` rather than a hand-picked three.
     #[test]
-    fn a_games_unbuildable_persona_is_reported_per_game() {
+    fn no_shipping_persona_is_gated_per_game() {
         use crate::games::GameSlotEntry;
         let mut games: GamesFile =
             toml::from_str("[[game]]\ntitle = \"Bloodborne\"\npath = \"C:\\\\ps.exe\"\n").unwrap();
-        games.games[0].slots = vec![GameSlotEntry {
-            number: 1,
-            user_index: None,
-            keyboard: None,
-            mouse: None,
-            preset: "default".into(),
-            persona: Persona::XboxSeries,
-            socd: Socd::default(),
-            macros: Default::default(),
-        }];
-        // Every shipping persona validates clean per game (retro leg flip);
-        // the per-game report shape re-arms with the next gated persona.
-        for persona in [Persona::XboxSeries, Persona::Snes, Persona::Genesis] {
-            games.games[0].slots[0].persona = persona;
-            assert!(
-                !validate_games(&games, &[])
-                    .iter()
-                    .any(|i| matches!(i, Issue::GamePersonaNotImplemented { .. })),
-                "{persona}"
-            );
-        }
-    }
-
-    /// The trap, stated as a test: this check may never consult the machine.
-    ///
-    /// A driver probe flips to "installed" the moment someone installs
-    /// HIDMaestro — at which point a probe-based check would go quiet while the
-    /// plug still failed, and the user would have installed a driver for
-    /// nothing. So the reason printed here is the BUILD's, verbatim, and it
-    /// says the install does not help.
-    #[test]
-    fn the_persona_gap_is_a_build_fact_and_says_installing_will_not_help() {
-        // The check stays wired to the capability (never a probe): no
-        // persona carries a gap while everything plugs; it re-arms with the
-        // next gated persona.
         for persona in Persona::ALL.iter().copied() {
-            assert_eq!(persona_gap(persona), None, "{persona}");
+            games.games[0].slots = vec![GameSlotEntry {
+                number: 1,
+                user_index: None,
+                keyboard: None,
+                mouse: None,
+                preset: "default".into(),
+                persona,
+                socd: Socd::default(),
+                macros: Default::default(),
+            }];
+            assert_eq!(validate_games(&games, &[]), vec![], "{persona}");
         }
-        assert_eq!(persona_gap(Persona::PlayStation), None);
-        assert_eq!(persona_gap(Persona::DualSense), None);
     }
 
     #[test]
@@ -2676,6 +2764,489 @@ preset = "empty"
         );
         let json = serde_json_shape(&issue);
         assert!(json.contains("unknown_preset_ref"));
+    }
+
+    /// How many `Issue` variants there are. Bump it when you add one, and add
+    /// a representative to [`one_of_every_issue_variant`] — the exhaustive
+    /// `match` in [`expected_tag`] will already have refused to compile.
+    const ISSUE_VARIANTS: usize = 51;
+
+    /// The snake_case `kind` tag each variant serializes as, written out by
+    /// hand so this pins the wire word rather than re-deriving it.
+    ///
+    /// This `match` is exhaustive and lives in the defining crate, so
+    /// `#[non_exhaustive]` does not weaken it: **adding an `Issue` variant
+    /// fails the build here** until someone decides what it is called on the
+    /// wire, what it says, and whether it is advisory.
+    fn expected_tag(issue: &Issue) -> &'static str {
+        match issue {
+            Issue::MouseMoveDeadzoneOutOfRange { .. } => "mouse_move_deadzone_out_of_range",
+            Issue::StartingUserIndexOutOfRange { .. } => "starting_user_index_out_of_range",
+            Issue::DuplicateDeviceAlias { .. } => "duplicate_device_alias",
+            Issue::DuplicateSlotNumber { .. } => "duplicate_slot_number",
+            Issue::SlotNumberOutOfRange { .. } => "slot_number_out_of_range",
+            Issue::TooManyXinputSlots { .. } => "too_many_xinput_slots",
+            Issue::TooManyHidMaestroPads { .. } => "too_many_hid_maestro_pads",
+            Issue::PersonaCapacity { .. } => "persona_capacity",
+            Issue::PersonaNotImplemented { .. } => "persona_not_implemented",
+            Issue::GamePersonaNotImplemented { .. } => "game_persona_not_implemented",
+            Issue::GamePersonaCapacity { .. } => "game_persona_capacity",
+            Issue::UnknownPresetRef { .. } => "unknown_preset_ref",
+            Issue::UnknownDeviceRef { .. } => "unknown_device_ref",
+            Issue::UnknownFunction { .. } => "unknown_function",
+            Issue::InvalidAxisValue { .. } => "invalid_axis_value",
+            Issue::UnknownKeyName { .. } => "unknown_key_name",
+            Issue::UnknownGuardKey { .. } => "unknown_guard_key",
+            Issue::GuardIncludesTriggerKey { .. } => "guard_includes_trigger_key",
+            Issue::ContradictoryGuard { .. } => "contradictory_guard",
+            Issue::AmbiguousChords { .. } => "ambiguous_chords",
+            Issue::ChordConstituentAlsoBound { .. } => "chord_constituent_also_bound",
+            Issue::ConsumeWithoutGuard { .. } => "consume_without_guard",
+            Issue::EmptyMacro { .. } => "empty_macro",
+            Issue::MacroStepBadDuration { .. } => "macro_step_bad_duration",
+            Issue::UnknownMacroHold { .. } => "unknown_macro_hold",
+            Issue::UnknownMacroRef { .. } => "unknown_macro_ref",
+            Issue::GuardedMacroTrigger { .. } => "guarded_macro_trigger",
+            Issue::SharedMacroTrigger { .. } => "shared_macro_trigger",
+            Issue::MacroDisabled { .. } => "macro_disabled",
+            Issue::SlotMacrosOff { .. } => "slot_macros_off",
+            Issue::DuplicateMacroName { .. } => "duplicate_macro_name",
+            Issue::MacroStepRaised { .. } => "macro_step_raised",
+            Issue::MacroStepMayBeMissed { .. } => "macro_step_may_be_missed",
+            Issue::MacroHoldsOtherMechanism { .. } => "macro_holds_other_mechanism",
+            Issue::MacroTurboBadRate { .. } => "macro_turbo_bad_rate",
+            Issue::TurboRateClamped { .. } => "turbo_rate_clamped",
+            Issue::TurboGapRaised { .. } => "turbo_gap_raised",
+            Issue::TurboRateWithoutTurbo { .. } => "turbo_rate_without_turbo",
+            Issue::BindingTurboClamped { .. } => "binding_turbo_clamped",
+            Issue::ConflictingTurboRates { .. } => "conflicting_turbo_rates",
+            Issue::TurboOnConsume { .. } => "turbo_on_consume",
+            Issue::ToggleOnConsume { .. } => "toggle_on_consume",
+            Issue::GuardedMacroToggle { .. } => "guarded_macro_toggle",
+            Issue::GuardedMacroTurbo { .. } => "guarded_macro_turbo",
+            Issue::SocdShadowedByChord { .. } => "socd_shadowed_by_chord",
+            Issue::GameSlotNumberOutOfRange { .. } => "game_slot_number_out_of_range",
+            Issue::GameTooManyXinputSlots { .. } => "game_too_many_xinput_slots",
+            Issue::GameTooManyHidMaestroPads { .. } => "game_too_many_hid_maestro_pads",
+            Issue::GameDuplicateSlotNumber { .. } => "game_duplicate_slot_number",
+            Issue::GameUnknownPresetRef { .. } => "game_unknown_preset_ref",
+            Issue::GameUserIndexOutOfRange { .. } => "game_user_index_out_of_range",
+        }
+    }
+
+    /// One representative of every variant, with sentinel strings so a
+    /// message that drops a field it carries is visible.
+    fn one_of_every_issue_variant() -> Vec<Issue> {
+        let p = || "SENTINEL_PRESET".to_string();
+        let g = || "SENTINEL_GAME".to_string();
+        let f = || "SENTINEL_FUNCTION".to_string();
+        let k = || "SENTINEL_KEY".to_string();
+        let n = || "SENTINEL_MACRO".to_string();
+        vec![
+            Issue::MouseMoveDeadzoneOutOfRange { value: 90 },
+            Issue::StartingUserIndexOutOfRange { value: 91 },
+            Issue::DuplicateDeviceAlias {
+                alias: "SENTINEL_ALIAS".into(),
+            },
+            Issue::DuplicateSlotNumber { number: 92 },
+            Issue::SlotNumberOutOfRange { number: 93 },
+            Issue::TooManyXinputSlots { count: 94 },
+            Issue::TooManyHidMaestroPads { count: 95 },
+            Issue::PersonaCapacity {
+                persona: "SENTINEL_PERSONA".into(),
+                count: 5,
+                limit: 4,
+            },
+            Issue::PersonaNotImplemented {
+                slot: 3,
+                persona: "SENTINEL_PERSONA".into(),
+                reason: "SENTINEL_REASON".into(),
+                instead: "SENTINEL_INSTEAD".into(),
+            },
+            Issue::GamePersonaNotImplemented {
+                game: g(),
+                slot: 3,
+                persona: "SENTINEL_PERSONA".into(),
+                reason: "SENTINEL_REASON".into(),
+                instead: "SENTINEL_INSTEAD".into(),
+            },
+            Issue::GamePersonaCapacity {
+                game: g(),
+                persona: "SENTINEL_PERSONA".into(),
+                count: 5,
+                limit: 4,
+            },
+            Issue::UnknownPresetRef {
+                slot: 3,
+                preset: p(),
+            },
+            Issue::UnknownDeviceRef {
+                slot: 3,
+                reference: "SENTINEL_DEVICE".into(),
+            },
+            Issue::UnknownFunction {
+                preset: p(),
+                function: f(),
+            },
+            Issue::InvalidAxisValue {
+                preset: p(),
+                function: f(),
+            },
+            Issue::UnknownKeyName {
+                preset: p(),
+                function: f(),
+                key: k(),
+            },
+            Issue::UnknownGuardKey {
+                preset: p(),
+                function: f(),
+                key: k(),
+            },
+            Issue::GuardIncludesTriggerKey {
+                preset: p(),
+                function: f(),
+                key: k(),
+            },
+            Issue::ContradictoryGuard {
+                preset: p(),
+                function: f(),
+                key: k(),
+            },
+            Issue::AmbiguousChords {
+                preset: p(),
+                key: k(),
+                function: f(),
+                other: "SENTINEL_OTHER".into(),
+            },
+            Issue::ChordConstituentAlsoBound {
+                preset: p(),
+                function: f(),
+                key: k(),
+                bound_to: "SENTINEL_BOUND_TO".into(),
+            },
+            Issue::ConsumeWithoutGuard {
+                preset: p(),
+                key: k(),
+            },
+            Issue::EmptyMacro {
+                preset: p(),
+                name: n(),
+            },
+            Issue::MacroStepBadDuration {
+                preset: p(),
+                name: n(),
+                step: 2,
+                reason: "SENTINEL_REASON".into(),
+            },
+            Issue::UnknownMacroHold {
+                preset: p(),
+                name: n(),
+                step: 2,
+                function: f(),
+            },
+            Issue::UnknownMacroRef {
+                preset: p(),
+                function: f(),
+                name: n(),
+            },
+            Issue::GuardedMacroTrigger {
+                preset: p(),
+                name: n(),
+            },
+            Issue::SharedMacroTrigger {
+                preset: p(),
+                key: k(),
+                macros: vec!["SENTINEL_MACRO_A".into(), "SENTINEL_MACRO_B".into()],
+            },
+            Issue::MacroDisabled {
+                preset: p(),
+                name: n(),
+            },
+            Issue::SlotMacrosOff {
+                slot: 3,
+                preset: p(),
+                macros: 2,
+            },
+            Issue::DuplicateMacroName {
+                preset: p(),
+                name: n(),
+            },
+            Issue::MacroStepRaised {
+                preset: p(),
+                name: n(),
+                step: 2,
+                ms: 5,
+            },
+            Issue::MacroStepMayBeMissed {
+                preset: p(),
+                name: n(),
+                step: 2,
+                ms: 5,
+            },
+            Issue::MacroHoldsOtherMechanism {
+                preset: p(),
+                name: n(),
+                step: 2,
+                function: f(),
+                holds: "SENTINEL_HOLDS".into(),
+                preset_drives: "SENTINEL_DRIVES".into(),
+            },
+            Issue::MacroTurboBadRate {
+                preset: p(),
+                name: n(),
+                reason: "SENTINEL_REASON".into(),
+            },
+            Issue::TurboRateClamped {
+                preset: p(),
+                name: n(),
+                asked_hz: 99,
+                effective_hz: 30,
+            },
+            Issue::TurboGapRaised {
+                preset: p(),
+                name: n(),
+                ms: 5,
+                raised_to: 33,
+            },
+            Issue::TurboRateWithoutTurbo {
+                preset: p(),
+                name: n(),
+                repeat: "SENTINEL_REPEAT".into(),
+            },
+            Issue::BindingTurboClamped {
+                preset: p(),
+                function: f(),
+                asked_hz: 99,
+                effective_hz: 30,
+            },
+            Issue::ConflictingTurboRates {
+                preset: p(),
+                function: f(),
+                first_hz: 10,
+                other_hz: 20,
+            },
+            Issue::TurboOnConsume {
+                preset: p(),
+                function: f(),
+            },
+            Issue::ToggleOnConsume {
+                preset: p(),
+                function: f(),
+            },
+            Issue::GuardedMacroToggle {
+                preset: p(),
+                name: n(),
+            },
+            Issue::GuardedMacroTurbo {
+                preset: p(),
+                name: n(),
+            },
+            Issue::SocdShadowedByChord {
+                slot: 3,
+                preset: p(),
+                socd: "SENTINEL_SOCD".into(),
+                keys: "SENTINEL_KEYS".into(),
+                function: f(),
+            },
+            Issue::GameSlotNumberOutOfRange {
+                game: g(),
+                number: 93,
+            },
+            Issue::GameTooManyXinputSlots {
+                game: g(),
+                count: 94,
+            },
+            Issue::GameTooManyHidMaestroPads {
+                game: g(),
+                count: 95,
+            },
+            Issue::GameDuplicateSlotNumber {
+                game: g(),
+                number: 92,
+            },
+            Issue::GameUnknownPresetRef {
+                game: g(),
+                slot: 3,
+                preset: p(),
+            },
+            Issue::GameUserIndexOutOfRange {
+                game: g(),
+                slot: 3,
+                value: 5,
+            },
+        ]
+    }
+
+    /// Every `Issue` renders a message that names everything it carries, and
+    /// tags itself on the wire with the snake_case of its variant name.
+    ///
+    /// Replaces the existence half of [`issues_display_and_serialize`], which
+    /// pinned one variant's text and then only asked whether the serialized
+    /// form *contained* the string `unknown_preset_ref` — an existence check
+    /// standing in for a rendering check, on 1 of 51 variants (2026-08-26
+    /// audit). ~35 variants had no assertion on their text at all.
+    ///
+    /// The per-field rule is the valuable half: a `String` field that the
+    /// `Display` arm forgets to interpolate is a message that withholds the
+    /// one detail the user needs (which preset? which key?). That is a real
+    /// bug shape here — `Issue::PersonaNotImplemented` carries `reason`
+    /// precisely so `--json` and the text output print the same sentence.
+    #[test]
+    fn every_issue_variant_renders_and_tags_itself() {
+        let all = one_of_every_issue_variant();
+        assert_eq!(
+            all.len(),
+            ISSUE_VARIANTS,
+            "add a representative for the new variant"
+        );
+
+        let mut seen: Vec<&'static str> = Vec::new();
+        for issue in &all {
+            let tag = expected_tag(issue);
+            seen.push(tag);
+
+            // A sentence, not a stub. (Braces are NOT a placeholder tell here:
+            // several arms quote TOML at the user, e.g. `consume = { key =
+            // ... }`, and Rust would refuse to compile a real bad placeholder.)
+            let msg = issue.to_string();
+            assert!(
+                msg.len() > 20 && msg.contains(' '),
+                "{tag}: stub message: {msg}"
+            );
+
+            // The wire word, from the serde tag rather than from the type.
+            let wire = serde_json_shape(issue);
+            assert!(
+                wire.contains(&format!("kind = \"{tag}\"")),
+                "{tag}: wire tag is not '{tag}': {wire}"
+            );
+
+            // Every string field the variant carries must reach the message.
+            for sentinel in msg_fields(issue) {
+                assert!(
+                    msg.contains(&sentinel),
+                    "{tag}: message drops the field '{sentinel}': {msg}"
+                );
+            }
+        }
+
+        seen.sort_unstable();
+        let unique = seen.len();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            unique,
+            "two variants share a wire tag: {seen:?}"
+        );
+    }
+
+    /// Whether each variant is advisory, decided ONE VARIANT AT A TIME.
+    ///
+    /// Exhaustive on purpose: see [`every_issue_variant_was_weighed_for_advisory`].
+    fn expected_advisory(issue: &Issue) -> bool {
+        match issue {
+            // Advisory: the file is not wrong, the session starts, the user
+            // is told. (Mirrors the reasoning in `Issue::is_advisory`.)
+            Issue::ChordConstituentAlsoBound { .. }
+            | Issue::ConsumeWithoutGuard { .. }
+            | Issue::SocdShadowedByChord { .. }
+            | Issue::MacroStepRaised { .. }
+            | Issue::MacroStepMayBeMissed { .. }
+            | Issue::MacroHoldsOtherMechanism { .. }
+            | Issue::TurboRateClamped { .. }
+            | Issue::TurboGapRaised { .. }
+            | Issue::TurboRateWithoutTurbo { .. }
+            | Issue::BindingTurboClamped { .. }
+            | Issue::TurboOnConsume { .. }
+            | Issue::ToggleOnConsume { .. }
+            | Issue::SharedMacroTrigger { .. }
+            | Issue::MacroDisabled { .. }
+            | Issue::SlotMacrosOff { .. } => true,
+
+            // Faults: `ksx run` refuses to start. Either the config asks for
+            // something that cannot be built (capacity, personas, unknown
+            // refs) or the preset would silently do the wrong thing.
+            Issue::MouseMoveDeadzoneOutOfRange { .. }
+            | Issue::StartingUserIndexOutOfRange { .. }
+            | Issue::DuplicateDeviceAlias { .. }
+            | Issue::DuplicateSlotNumber { .. }
+            | Issue::SlotNumberOutOfRange { .. }
+            | Issue::TooManyXinputSlots { .. }
+            | Issue::TooManyHidMaestroPads { .. }
+            | Issue::PersonaCapacity { .. }
+            | Issue::PersonaNotImplemented { .. }
+            | Issue::GamePersonaNotImplemented { .. }
+            | Issue::GamePersonaCapacity { .. }
+            | Issue::UnknownPresetRef { .. }
+            | Issue::UnknownDeviceRef { .. }
+            | Issue::UnknownFunction { .. }
+            | Issue::InvalidAxisValue { .. }
+            | Issue::UnknownKeyName { .. }
+            | Issue::UnknownGuardKey { .. }
+            | Issue::GuardIncludesTriggerKey { .. }
+            | Issue::ContradictoryGuard { .. }
+            | Issue::AmbiguousChords { .. }
+            | Issue::EmptyMacro { .. }
+            | Issue::MacroStepBadDuration { .. }
+            | Issue::UnknownMacroHold { .. }
+            | Issue::UnknownMacroRef { .. }
+            | Issue::GuardedMacroTrigger { .. }
+            | Issue::DuplicateMacroName { .. }
+            | Issue::MacroTurboBadRate { .. }
+            | Issue::ConflictingTurboRates { .. }
+            | Issue::GuardedMacroToggle { .. }
+            | Issue::GuardedMacroTurbo { .. }
+            | Issue::GameSlotNumberOutOfRange { .. }
+            | Issue::GameTooManyXinputSlots { .. }
+            | Issue::GameTooManyHidMaestroPads { .. }
+            | Issue::GameDuplicateSlotNumber { .. }
+            | Issue::GameUnknownPresetRef { .. }
+            | Issue::GameUserIndexOutOfRange { .. } => false,
+        }
+    }
+
+    /// Adding an `Issue` variant must be a decision about whether `ksx run`
+    /// still starts — not a default.
+    ///
+    /// `Issue::is_advisory` is a `matches!` allow-list, so a variant nobody
+    /// thinks about is silently NOT advisory, and via
+    /// `ksx-backend/src/run/plan.rs` that turns a new warning into a reason
+    /// `ksx run` refuses to start. Several tests assert
+    /// `issues.iter().all(Issue::is_advisory)` for a particular fixture, but
+    /// before this nothing forced the question per variant (2026-08-26 audit).
+    ///
+    /// [`expected_advisory`] is an exhaustive `match`, so the build breaks
+    /// until the new variant is placed on one side or the other. This test is
+    /// then what checks the placement agrees with the shipping code.
+    #[test]
+    fn every_issue_variant_was_weighed_for_advisory() {
+        let all = one_of_every_issue_variant();
+        assert_eq!(all.len(), ISSUE_VARIANTS);
+        for issue in &all {
+            assert_eq!(
+                issue.is_advisory(),
+                expected_advisory(issue),
+                "{}: is_advisory disagrees with the decision recorded here",
+                expected_tag(issue)
+            );
+        }
+        // Both sides are populated: a wholesale flip of `is_advisory` (say to
+        // `true` or `false` for everything) cannot pass this test quietly.
+        assert!(all.iter().any(|i| i.is_advisory()));
+        assert!(all.iter().any(|i| !i.is_advisory()));
+    }
+
+    /// The string-valued fields of one issue, read back off its serialized
+    /// form so this needs no per-variant maintenance.
+    fn msg_fields(issue: &Issue) -> Vec<String> {
+        let text = serde_json_shape(issue);
+        let table: toml::Value = toml::from_str(&text).unwrap();
+        let table = table["issue"].as_table().unwrap();
+        table
+            .iter()
+            .filter(|(name, _)| *name != "kind")
+            .filter_map(|(_, value)| value.as_str().map(str::to_owned))
+            .collect()
     }
 
     // toml is the only serializer in-tree; shape-check via toml, which uses

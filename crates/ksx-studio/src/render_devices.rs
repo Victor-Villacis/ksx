@@ -843,11 +843,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn embedded_page_loads_and_ir_is_fmir_v2() {
-        let page = EmbeddedPage::load("/devices").expect("embedded page must load");
-        assert_eq!(page.module.header.version, 2);
-    }
+    // DELETED 2026-08-26: `embedded_page_loads_and_ir_is_fmir_v2` (TAUTOLOGICAL).
+    // `IrModule::parse` starts with `IrHeader::parse`, which already rejects a
+    // version mismatch, so `assert_eq!(header.version, 2)` after a successful
+    // load could only ever agree. Replaced by ONE cross-page test that pins
+    // something real: `render.rs::the_embed_ships_exactly_the_live_routes`,
+    // which checks the manifest carries the four live routes, none of the six
+    // deleted ones, and that each IR parses to a non-empty slot table.
 
     /// The gate every page must call. Pins the scalar names, the exact list
     /// slot names, the exact `show:` name set, the island table — and then the
@@ -1659,59 +1661,174 @@ mod tests {
 
     /// One struct, one serializer: the block the page embeds is the shape
     /// `GET /api/devices` serves, so the seed and every poll agree.
+    ///
+    /// HARDENED 2026-08-26. Two things were wrong. The comparison ran
+    /// `payload_json(&payload)` against `to_value(&payload)` — the same struct
+    /// through the same serializer, so it could only ever agree; and the only
+    /// claim it made about the RENDERED page was that the string
+    /// `id="__ksx-payload"` occurred in it, which is the wrapper existing, not
+    /// the payload arriving. Emptying or truncating the block left both green.
+    /// It now slices the block out of the rendered HTML and parses it, the way
+    /// `render_check.rs` and `render_pads.rs` already did.
     #[test]
     fn the_payload_block_matches_the_api_payload_shape() {
         let page = EmbeddedPage::load("/devices").unwrap();
         let payload = cabinet();
         let out = render_devices(&page, &payload, None);
-        let api = serde_json::to_value(&payload).unwrap();
-        let embedded = crate::render::payload_json(&payload).replace("\\u003c", "<");
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&embedded).unwrap(),
-            api
+
+        let start = out
+            .html
+            .find("<script id=\"__ksx-payload\"")
+            .expect("the payload block");
+        let body = out.html[start..]
+            .split_once('>')
+            .expect("an open tag")
+            .1
+            .split("</script>")
+            .next()
+            .expect("a close tag");
+        assert!(
+            !body.trim().is_empty(),
+            "the payload block is present but EMPTY — the island seeds from nothing"
         );
-        assert!(out.html.contains(r#"id="__ksx-payload""#), "{}", out.html);
+
+        // The block IS a DevicesPayload, and it is the one the page rendered
+        // from — not merely well-formed JSON that happens to sit there.
+        let parsed: DevicesPayload =
+            serde_json::from_str(body).expect("the embedded block IS a DevicesPayload");
+        assert_eq!(parsed, payload);
+
+        // ...and that shape is exactly what `GET /api/devices` serves.
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(body).unwrap(),
+            serde_json::to_value(&payload).unwrap(),
+        );
     }
 
-    /// Specialist screens keep the customer rail intact — the four-stage
-    /// guided workflow — and the Tools menu marks this page as current.
-    /// Devices remains reachable from the relevant setup affordance, not as
-    /// another primary-workflow stage.
+    // DELETED 2026-08-26: the per-page nav test (DUPLICATE — three byte-identical
+    // copies across render_check.rs, render_devices.rs and render_pads.rs).
+    // Replaced by `render.rs::no_page_links_into_a_deleted_surface`, which runs
+    // the same dead-link blocklist and rail assertions over ALL FOUR pages —
+    // including /nocturne, which had no blocklist at all despite absorbing every
+    // deleted surface.
+
+    /// **The certificate sweep is offered, blocked or absent — and the SSR
+    /// pass says which.**
+    ///
+    /// ADDED 2026-08-26 to replace what `tests/devices_source.rs`'s
+    /// `zero_and_blocked_states_cannot_render_the_actionable_form` was
+    /// standing in for. That test asserted the island's boolean SOURCE back at
+    /// itself (`ISLAND.contains("!residue.readable || leftoverCertificates > 0
+    /// || certificatesUnknown !== \"\"")`), which can detect a change but
+    /// never a wrongness: invert the condition in both places and it still
+    /// agrees; reorder the `||` harmlessly and it breaks.
+    ///
+    /// These three states are the actual contract, and they are observable on
+    /// the SERVER render because the seam injects
+    /// `show:showCertificateSweep` / `show:certificateSweepReady` /
+    /// `show:certificateSweepBlocked`. A destructive control that renders in
+    /// the wrong state is the failure that matters: offering "delete these
+    /// certificates" on a machine whose store could not even be READ.
     #[test]
-    fn the_nav_reaches_every_sibling_page() {
+    fn the_certificate_sweep_renders_the_state_the_residue_supports() {
         let page = EmbeddedPage::load("/devices").unwrap();
-        let out = render_devices(&page, &cabinet(), None);
-        // One page owns the workflow now, so the four numbered steps that
-        // pointed at /start, /map and / are a single link.
+        let sweep = |residue: ksx_api::WinusbResidueView| {
+            let payload = DevicesPayload {
+                residue,
+                ..cabinet()
+            };
+            render_devices(&page, &payload, None).html
+        };
+        let form = r#"action="/devices/certificates/sweep""#;
+        let unavailable = "Certificate cleanup unavailable";
+
+        // 1. Nothing left behind: no card, and above all no destructive form.
+        let clean = sweep(ksx_api::WinusbResidueView {
+            readable: true,
+            leftover_certificates: 0,
+            certificates_unknown: String::new(),
+            ..ksx_api::WinusbResidueView::default()
+        });
         assert!(
-            out.html
-                .contains(r#"<a class="navlink workflow-link" href="/nocturne">"#),
-            "{}",
-            out.html
+            !clean.contains(form),
+            "a machine with nothing left behind is offered a certificate \
+             DELETE: {clean}"
         );
-        // And nothing on this page may still point into a deleted one.
-        for dead in [
-            r#"href="/""#,
-            r#"href="/start"#,
-            r#"href="/map"#,
-            r#"href="/setup"#,
-            r#"href="/profiles"#,
-            r#"href="/workspace"#,
+
+        // 2. A readable store with leftovers and no unknowns: the actionable
+        //    form, and not the blocked notice.
+        let ready = sweep(ksx_api::WinusbResidueView {
+            readable: true,
+            leftover_certificates: 6,
+            certificates_unknown: String::new(),
+            certificates_line: "6 signing certificates are left over.".to_owned(),
+            ..ksx_api::WinusbResidueView::default()
+        });
+        assert!(ready.contains(form), "the sweep is not offered: {ready}");
+        assert!(
+            !ready.contains(unavailable),
+            "a ready sweep also rendered the blocked notice: {ready}"
+        );
+
+        // 3. A store that could not be READ: the blocked notice, and NEVER the
+        //    form. This is the state the old source-string test was really
+        //    guarding, and the one a user would be hurt by — ksx cannot know
+        //    what is safe to delete, so it must not offer to delete it.
+        let unreadable = sweep(ksx_api::WinusbResidueView {
+            readable: false,
+            error: "the certificate store refused".to_owned(),
+            ..ksx_api::WinusbResidueView::default()
+        });
+        assert!(
+            !unreadable.contains(form),
+            "an UNREADABLE certificate store still offered the destructive \
+             sweep: {unreadable}"
+        );
+        assert!(
+            unreadable.contains(unavailable),
+            "an unreadable store must say so rather than going quiet: {unreadable}"
+        );
+
+        // 4. Readable, with leftovers, but something in the store could not be
+        //    identified: also blocked, for the same reason.
+        //
+        //    `certificates_line` is carried because the BACKEND always carries
+        //    it in this state: `sources.rs` sets it to `certificates_unknown`
+        //    when that is non-empty, and to the leftover sentence otherwise.
+        //    That coupling is load-bearing here and is asserted below — the
+        //    sweep control is nested inside the residue card, and
+        //    `show:showResidue` is derived from `readable` / `drifted` /
+        //    `certificates_line` and NOT from `leftover_certificates`. A
+        //    payload with leftovers and an empty line would render the sweep
+        //    inside a hidden card, i.e. not at all.
+        let unknown = sweep(ksx_api::WinusbResidueView {
+            readable: true,
+            leftover_certificates: 6,
+            certificates_unknown: "2 certificates could not be identified".to_owned(),
+            certificates_line: "2 certificates could not be identified".to_owned(),
+            ..ksx_api::WinusbResidueView::default()
+        });
+        assert!(
+            !unknown.contains(form),
+            "an unidentified certificate must block the sweep: {unknown}"
+        );
+        assert!(unknown.contains(unavailable), "{unknown}");
+
+        // 5. The nesting invariant, stated once: whenever the sweep has
+        //    anything to say, the card that CONTAINS it is open. Without this
+        //    the three cases above could all pass while the control rendered
+        //    into a collapsed section no user ever sees.
+        for (state, html) in [
+            ("ready", &ready),
+            ("blocked", &unreadable),
+            ("unknown", &unknown),
         ] {
             assert!(
-                !out.html.contains(dead),
-                "dead link {} still renders: {}",
-                dead,
-                out.html
+                html.contains("dv-sweep"),
+                "the {state} sweep is not inside a rendered residue card — the \
+                 control exists in the IR and reaches no screen"
             );
         }
-        assert!(
-            out.html
-                .contains(r#"<a href="/devices" aria-current="page">"#),
-            "{}",
-            out.html
-        );
-        assert!(out.html.contains(r#"href="/check""#), "{}", out.html);
     }
 
     /// A running session keeps the devices it already opened. Writing config

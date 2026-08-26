@@ -6,6 +6,14 @@
 //! measured section runs. Events are pre-built because constructing a
 //! `KeyEvent` clones the device-id string (an allocation that belongs to the
 //! capture layer's arena, not to the engine).
+//!
+//! **Scope, stated so nobody mistakes this for the whole guarantee.** Four
+//! slots, and no macros, turbo or toggle — `common::preset()` leaves those
+//! empty, so `Engine::tick` returns on its first line and the scheduler is not
+//! measured here at all. The wide case (sixteen slots, every timed transform
+//! armed, plus `tick`, `cancel_macros` and `swap_tables`) is
+//! `engine_scheduler_alloc.rs`, in its own binary because the counter is
+//! process-global. This one stays as the narrow four-slot pin.
 
 mod common;
 

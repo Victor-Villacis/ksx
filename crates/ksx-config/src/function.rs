@@ -193,31 +193,49 @@ mod tests {
         }
     }
 
+    /// The five spellings a user actually types, pinned by hand.
+    ///
+    /// Renamed from `doc_example_names` (2026-08-26 audit): it reads no
+    /// document, so the old name implied a docs-vs-code parity guard that was
+    /// not running. The names here are hard-coded literals, which is the
+    /// right thing for a vocabulary pin — but it is a VOCABULARY pin, not a
+    /// docs pin, and the difference matters because
+    /// `docs/INPUT-TRANSFORMS.md` is cited by name in eleven comments across
+    /// this crate and nothing checks it against the code. The real parity
+    /// harness lives in `crates/ksx-app/tests/docs.rs`.
+    ///
+    /// `every_binding_round_trips_through_its_name` covers the whole space
+    /// generatively; what it cannot do is fix which SPELLING is canonical,
+    /// because it derives the name from the same table it parses with. That
+    /// is what the literals below are for — and why each one also asserts the
+    /// name ksx EMITS, so a renamed function has to be renamed here too.
     #[test]
-    fn doc_example_names() {
-        assert_eq!(parse_function("A").unwrap(), Binding::Button(XButton::A));
-        assert_eq!(
-            parse_function("lt").unwrap(),
-            Binding::Trigger(Trigger::Left)
-        );
-        assert_eq!(
-            parse_function("lx.min").unwrap(),
-            Binding::Axis {
-                axis: Axis::X,
-                value: AXIS_MIN
-            }
-        );
-        assert_eq!(
-            parse_function("lx.-16384").unwrap(),
-            Binding::Axis {
-                axis: Axis::X,
-                value: -16384
-            }
-        );
-        assert_eq!(
-            parse_function("dpad.up").unwrap(),
-            Binding::Dpad(DpadDirection::Up)
-        );
+    fn canonical_function_names_are_what_the_vocabulary_says() {
+        let cases: &[(&str, Binding)] = &[
+            ("A", Binding::Button(XButton::A)),
+            ("lt", Binding::Trigger(Trigger::Left)),
+            (
+                "lx.min",
+                Binding::Axis {
+                    axis: Axis::X,
+                    value: AXIS_MIN,
+                },
+            ),
+            (
+                "lx.-16384",
+                Binding::Axis {
+                    axis: Axis::X,
+                    value: -16384,
+                },
+            ),
+            ("dpad.up", Binding::Dpad(DpadDirection::Up)),
+        ];
+        for (name, binding) in cases {
+            assert_eq!(parse_function(name).unwrap(), *binding, "parsing '{name}'");
+            // ...and this is the spelling ksx WRITES back, so a rename shows
+            // up here rather than silently changing every user's preset file.
+            assert_eq!(function_name(binding), *name, "emitting '{name}'");
+        }
     }
 
     #[test]

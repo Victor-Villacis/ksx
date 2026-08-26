@@ -161,7 +161,29 @@ after(async () => {
       `${JSON.stringify(manifest, null, 2)}\n`,
       "utf8",
     );
-    assert.equal(records.length, expectedCount, "the screenshot artifact is incomplete");
+    // The completeness pin is what makes the artifact trustworthy in CI: a
+    // suite that captured 12 of 15 screenshots and said nothing is how a
+    // regression hides, so it stays ON by default and CI never sets the escape
+    // hatch below.
+    //
+    // The hatch exists because this hook is file-level: running ONE test by
+    // name (`--test-name-pattern`) still runs it, so teardown failed on every
+    // filtered run long after the test itself had passed. Detecting the filter
+    // from inside the test process is NOT possible — node's runner spawns each
+    // file as a child WITHOUT the runner's own flags, so `process.argv` here is
+    // just `[node, <file>]` (measured 2026-08-26; an earlier attempt to sniff
+    // argv was silently inert, which is worse than no fix). An explicit opt-in
+    // is the honest mechanism:
+    //
+    //     KSX_PARTIAL_SHOTS=1 node --test --test-name-pattern="…" visual-smoke.test.mjs
+    if (process.env.KSX_PARTIAL_SHOTS === "1") {
+      console.log(
+        `visual smoke: captured ${records.length} of ${expectedCount} screenshots ` +
+          "(KSX_PARTIAL_SHOTS=1, so the completeness pin is skipped)",
+      );
+    } else {
+      assert.equal(records.length, expectedCount, "the screenshot artifact is incomplete");
+    }
   } catch (error) {
     failures.push(error);
   }

@@ -705,4 +705,28 @@ mod tests {
             TrackOutcome::GaveUp(Unresolvable::HandoffTimedOut)
         );
     }
+
+    /// The two wire words `Unresolvable::code()` publishes.
+    ///
+    /// These strings are not decoration: they reach tracing fields and user
+    /// output via `ksx-backend/src/run/game.rs`, so renaming one silently
+    /// breaks whatever reads the log. Before 2026-08-26 the only assertion on
+    /// `code()` anywhere in the repo was
+    /// `assert!(!reason.code().is_empty())` in
+    /// `ksx-backend/src/run/supervisor.rs` — which passes for every possible
+    /// rename, including a typo.
+    ///
+    /// Also pinned: the two codes are DISTINCT. A `match` arm copy-pasted
+    /// without editing the string is the realistic way this breaks, and a
+    /// caller switching on the code would then treat a timeout as a missing
+    /// process name.
+    #[test]
+    fn the_give_up_reasons_publish_distinct_stable_codes() {
+        assert_eq!(Unresolvable::NoProcessName.code(), "no-process-name");
+        assert_eq!(Unresolvable::HandoffTimedOut.code(), "handoff-timed-out");
+        assert_ne!(
+            Unresolvable::NoProcessName.code(),
+            Unresolvable::HandoffTimedOut.code()
+        );
+    }
 }

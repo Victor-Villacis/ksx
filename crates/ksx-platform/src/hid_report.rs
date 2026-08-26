@@ -1184,10 +1184,25 @@ mod tests {
         );
     }
 
+    /// Explicit transport means: the caller names the device, ksx opens that
+    /// one path, and nothing here enumerates the machine or reaches for a
+    /// feature report.
+    ///
+    /// **The scope of this fence was the bug.** It used to read
+    /// `source.split("#[cfg(test)]").next()`, and the first `#[cfg(test)]` in
+    /// this file is the one nested inside `#[cfg(windows)] mod platform` — so
+    /// the scan stopped there, and the entire `#[cfg(not(windows))] mod
+    /// platform` below it, a second full set of open/send/read/worker entry
+    /// points, sat outside the fence. Every name below is spelled in two halves
+    /// so this test cannot match itself, which means the split bought nothing
+    /// in the first place: scan the whole file.
     #[test]
     fn explicit_transport_does_not_enumerate_or_use_feature_reports() {
-        let source = include_str!("hid_report.rs");
-        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+        // Normalized for the same reason `process.rs::no_kill_primitive_exists`
+        // normalizes: with git's core.autocrlf on (every fresh Windows clone,
+        // GitHub CI) this file is CRLF on disk and a `\n` in a marker below
+        // would never match.
+        let source = include_str!("hid_report.rs").replace("\r\n", "\n");
         let forbidden = [
             ["Setup", "Di"].concat(),
             ["HidD", "_SetFeature"].concat(),
@@ -1197,8 +1212,31 @@ mod tests {
         ];
         for symbol in forbidden {
             assert!(
-                !production.contains(&symbol),
+                !source.contains(&symbol),
                 "explicit transport gained out-of-scope primitive {symbol}"
+            );
+        }
+
+        // A fence goes blind when the file is reorganised out from under it, so
+        // prove it is still covering both implementations of the boundary.
+        for platform in [
+            "#[cfg(windows)]\nmod platform {",
+            "#[cfg(not(windows))]\nmod platform {",
+        ] {
+            assert!(
+                source.contains(platform),
+                "the fence must cover both platform modules; `{platform}` is gone"
+            );
+        }
+        for entry_point in [
+            "fn open_exact(",
+            "fn send_output_report(",
+            "fn read_input_report(",
+            "fn run_output_report_worker(",
+        ] {
+            assert!(
+                source.matches(entry_point).count() >= 2,
+                "{entry_point} should be defined in both platform modules"
             );
         }
     }

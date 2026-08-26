@@ -1744,6 +1744,159 @@ mod tests {
         json
     }
 
+    /// **The sampling floor really is `ksx_core::MIN_STEP_MS`.**
+    ///
+    /// ADDED 2026-08-26. Cited by name on `MIN_STEP_MS` above ("the number is
+    /// repeated here and pinned against the real one by
+    /// `the_sampling_floor_matches_ksx_core`") and absent from the tree. The
+    /// mirror happens to be right today — both are 33 — which is exactly why
+    /// nobody noticed the pin was missing.
+    ///
+    /// ksx-studio links no ksx crate at RUNTIME on purpose
+    /// (`docs/M9-DECISION.md` §6), so the constant is duplicated rather than
+    /// imported. That is a fine trade only while a test closes the loop
+    /// through the dev-dependency; without one, a change to the engine's floor
+    /// leaves this page quietly warning about the wrong number.
+    #[test]
+    fn the_sampling_floor_matches_ksx_core() {
+        assert_eq!(
+            MIN_STEP_MS,
+            ksx_core::MIN_STEP_MS,
+            "the mapper's sampling floor has drifted from the engine's"
+        );
+    }
+
+    /// **...and the frame arithmetic agrees with it.**
+    ///
+    /// ADDED 2026-08-26, the second phantom citation on this pair
+    /// (`the_sampling_floor_and_frame_maths_match_ksx_core`, cited on
+    /// `MIN_STEP_FRAMES`, never defined). `frames_ms(MIN_STEP_FRAMES)` must be
+    /// `MIN_STEP_MS` — a warning that says "at least 2 frames" and a warning
+    /// that says "at least 33 ms" have to be the same warning, or one of them
+    /// sends the reader to do a conversion that will not come out.
+    #[test]
+    fn the_sampling_floor_and_frame_maths_match_ksx_core() {
+        assert_eq!(frames_ms(MIN_STEP_FRAMES), MIN_STEP_MS);
+        assert_eq!(frames_ms(MIN_STEP_FRAMES), ksx_core::MIN_STEP_MS);
+        // Rounded ONCE, which is the whole reason `frames_ms` exists: three
+        // frames is 50 ms, not 3 x 17 = 51.
+        assert_eq!(frames_ms(3), 50);
+        // A frame count near the ceiling clamps rather than panicking a
+        // request — the studio hands this unsaved browser drafts.
+        assert_eq!(frames_ms(u32::MAX), frames_ms(u32::MAX));
+    }
+
+    /// **The diagonal lens is the engine's, spelled in function names.**
+    ///
+    /// ADDED 2026-08-26. `the_diagonal_lens_matches_ksx_core` is cited twice
+    /// in this file — on `Mechanism` and on the `Diag` block — and existed
+    /// nowhere. One citation is even split across a line break
+    /// (`the_diagonal_lens_matches_\n// ksx_core`), which is how it survived
+    /// earlier greps for the name.
+    ///
+    /// `Mechanism` mirrors `ksx_core::socd::DirMechanism` over FUNCTION NAMES
+    /// rather than `Binding`, because this crate links ksx-core only as a
+    /// dev-dependency. This is that dev-dependency doing its job.
+    #[test]
+    fn the_diagonal_lens_matches_ksx_core() {
+        // Same variants, same canonical order — the order a coalesced
+        // diagonal lists its mechanisms in, and the order the grid draws.
+        assert_eq!(
+            Mechanism::ALL.len(),
+            ksx_core::socd::DirMechanism::ALL.len()
+        );
+        for (mine, theirs) in Mechanism::ALL
+            .iter()
+            .zip(ksx_core::socd::DirMechanism::ALL.iter())
+        {
+            assert_eq!(
+                mine.describe(),
+                theirs.describe(),
+                "the mapper and the engine name this mechanism differently — \
+                 the wording is contractual, it appears in \
+                 `Issue::MacroHoldsOtherMechanism`"
+            );
+        }
+
+        // ...and the name-based classifier agrees with the engine's
+        // binding-based one on every mappable function. This is the half a
+        // variant-only comparison would miss: `Mechanism::of` reads a string
+        // prefix, and a renamed function silently classifies as `None`.
+        for binding in ksx_core::preset::mappable_functions().iter().copied() {
+            let name = ksx_config::function_name(&binding);
+            let mine = Mechanism::of(&name).map(Mechanism::describe);
+            let theirs = ksx_core::socd::DirMechanism::of(binding)
+                .map(ksx_core::socd::DirMechanism::describe);
+            assert_eq!(
+                mine, theirs,
+                "{name:?}: the mapper says {mine:?} and the engine says \
+                 {theirs:?} — a direction key that classifies differently on \
+                 the two sides drives the wrong control"
+            );
+        }
+    }
+
+    /// **Both zone tables cover every mappable function, exactly.**
+    ///
+    /// ADDED 2026-08-26. This test is cited by name in two places — the
+    /// `zones_for` doc above ("The two are tied together by
+    /// `zone_tables_cover_every_mappable_function` instead, which is a test,
+    /// not a dependency") and `studio-ui/art/README.md` — and it did not
+    /// exist. A comment promising a guard that does not run is worse than no
+    /// comment: the invariant read as covered for months while nothing checked
+    /// it.
+    ///
+    /// `generated_zone_tokens_json_is_current` cannot stand in for it. That
+    /// gate regenerates BOTH halves — `functions` and the two zone tables —
+    /// from the SAME run and compares the result to the committed file, so
+    /// adding a mappable function to ksx-core makes `functions` 26, leaves the
+    /// zone tables at 25, and the gate goes green the moment somebody runs
+    /// `build-assets.ps1`. The drift it catches is "the file is stale", never
+    /// "the two vocabularies disagree".
+    ///
+    /// The user-visible failure: a control they can bind in TOML and cannot
+    /// click on the pad art — or a zone drawn for a function the engine will
+    /// not route.
+    #[test]
+    fn zone_tables_cover_every_mappable_function() {
+        use std::collections::BTreeSet;
+
+        let mappable: BTreeSet<String> = ksx_core::preset::mappable_functions()
+            .iter()
+            .map(ksx_config::function_name)
+            .collect();
+        assert!(
+            !mappable.is_empty(),
+            "ksx_core::preset::mappable_functions() is empty — the oracle is gone"
+        );
+
+        for (persona, table) in [("xbox", ZONE_XBOX), ("ds4", ZONE_DS4)] {
+            let drawn: BTreeSet<String> = table.iter().map(|z| z.fn_name.to_owned()).collect();
+
+            assert_eq!(
+                drawn.len(),
+                table.len(),
+                "the {persona} zone table draws the same function twice — two \
+                 hit zones for one control means one of them is unreachable"
+            );
+
+            let missing: Vec<&String> = mappable.difference(&drawn).collect();
+            assert!(
+                missing.is_empty(),
+                "{persona} art has no hit zone for {missing:?} — a user can \
+                 bind these in config.toml and cannot click them on the pad"
+            );
+
+            let extra: Vec<&String> = drawn.difference(&mappable).collect();
+            assert!(
+                extra.is_empty(),
+                "{persona} art draws {extra:?}, which ksx-core does not list as \
+                 mappable — the zone is either misspelled or bindable to \
+                 nothing"
+            );
+        }
+    }
+
     /// The broken version hand-copied three TypeScript arrays. This gate makes
     /// any vocabulary, spelling or art-table change fail until the one
     /// committed handoff is explicitly regenerated.

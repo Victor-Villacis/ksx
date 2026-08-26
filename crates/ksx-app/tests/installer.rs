@@ -2080,3 +2080,105 @@ fn setup_closes_ksx_without_asking_and_keeps_a_log() {
          for the protected WinUSB store, which rolls the whole install back"
     );
 }
+
+/// **What uninstall LEAVES, which is the half nothing covered.**
+///
+/// `installer_initializes_state_from_the_installed_helper_and_uninstall_is_cleanup_gated`
+/// checks the gate exists, and `main.rs`'s
+/// `uninstall_quiesce_is_fixed_and_hidden_from_customer_help` checks the verb
+/// parses. Neither reads `[UninstallDelete]`, and that is the section where one
+/// wrong constant deletes something the user wanted to keep — a config root, a
+/// receipt store, somebody else's `{commonappdata}` subtree.
+///
+/// Two directions, both from the same table:
+///
+/// 1. **Everything the installer writes must be removable.** Every `[Files]`
+///    entry lands under `{app}`, which Inno removes wholesale — so no installed
+///    path needs (or gets) its own `[UninstallDelete]` line, and an entry that
+///    landed anywhere else would be left behind for ever with nobody to notice.
+/// 2. **Nothing outside KSX's own paths may be named for deletion.** The two
+///    non-`{app}` entries are `{commonappdata}\KSX\WinUSB` and `{commonappdata}\KSX`,
+///    and the parent may only go `dirifempty`: taking it out with
+///    `filesandordirs` would remove receipts belonging to a recovery somebody is
+///    still in the middle of.
+#[test]
+fn uninstall_removes_what_the_installer_wrote_and_nothing_outside_ksx() {
+    let text = script();
+
+    // (1) Everything installed lands under {app}.
+    for entry in section(&text, "[Files]") {
+        let Some(dest) = field(&entry, "DestDir") else {
+            // The one exception, and it is stated in the .iss: a second copy
+            // extracted to {tmp} for the read-only pre-install audit. It is
+            // never installed, so there is nothing to remove.
+            assert!(
+                field(&entry, "Flags").is_some_and(|f| f.contains("dontcopy")),
+                "a [Files] entry with no DestDir and no `dontcopy`: {entry}"
+            );
+            continue;
+        };
+        assert!(
+            dest == "{app}" || dest.starts_with("{app}\\"),
+            "[Files] installs to {dest:?}, outside {{app}}. Uninstall removes {{app}} and \
+             nothing else by default, so this path would survive the uninstall with \
+             nobody to notice it: {entry}"
+        );
+    }
+
+    // (2) Nothing outside KSX's own paths is named for deletion.
+    let deletes = section(&text, "[UninstallDelete]");
+    let mut outside = 0;
+    for entry in &deletes {
+        let name = field(entry, "Name")
+            .unwrap_or_else(|| panic!("[UninstallDelete] entry with no Name: {entry}"));
+        let kind = field(entry, "Type")
+            .unwrap_or_else(|| panic!("[UninstallDelete] entry with no Type: {entry}"));
+
+        if name.starts_with("{app}") {
+            continue;
+        }
+        outside += 1;
+        assert!(
+            name.starts_with(r"{commonappdata}\KSX"),
+            "[UninstallDelete] names {name:?}, which is neither under {{app}} nor under \
+             KSX's own {{commonappdata}} KSX directory. Every other root here belongs to \
+             the user or to Windows: {entry}"
+        );
+        if name == r"{commonappdata}\KSX" {
+            assert_eq!(
+                kind, "dirifempty",
+                "the {{commonappdata}} KSX PARENT directory may only be removed when \
+                 empty. Removing it outright takes the WinUSB receipts of a recovery \
+                 somebody may still be in the middle of: {entry}"
+            );
+        }
+    }
+    assert!(
+        outside >= 2,
+        "only {outside} [UninstallDelete] entries reach outside {{app}}, so the checks \
+         above ran against almost nothing. The parser found: {deletes:?}"
+    );
+
+    // (3) There is deliberately no [UninstallRun], and the REASON is an
+    // ordering one: its entries are replayed from the uninstall log while
+    // files are already being removed, far too late to stop anything. The
+    // scheduled task therefore goes through `uninstall-quiesce` in the
+    // usUninstall gate instead, before the driver rollback.
+    // A SECTION HEADER, not the literal anywhere: the comment recording why
+    // there is no such section names it, and matching that would make this
+    // assertion permanently red for saying the right thing.
+    assert!(
+        !text
+            .lines()
+            .any(|line| line.trim().eq_ignore_ascii_case("[UninstallRun]")),
+        "ksx.iss grew an [UninstallRun]. Whatever it runs happens AFTER Inno has begun \
+         deleting files, so it cannot abort an uninstall and cannot be sequenced before \
+         the driver rollback — which is exactly why the scheduled-task removal lives in \
+         the usUninstall gate in [Code]."
+    );
+    assert!(
+        text.contains("THERE IS DELIBERATELY NO [UninstallRun]"),
+        "the comment recording WHY there is no [UninstallRun] was removed; without it \
+         somebody adds one back as an obvious improvement"
+    );
+}

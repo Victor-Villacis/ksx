@@ -34,16 +34,24 @@ fn certificate_cleanup_is_one_confirmed_post_with_no_identity_fields() {
     }
 }
 
-#[test]
-fn zero_and_blocked_states_cannot_render_the_actionable_form() {
-    assert!(ISLAND
-        .contains("!residue.readable || leftoverCertificates > 0 || certificatesUnknown !== \"\""));
-    assert!(ISLAND.contains("leftoverCertificates > 0 && certificatesUnknown === \"\""));
-    assert!(ISLAND.contains("() => certificateSweepReady()"));
-    assert!(ISLAND.contains("() => certificateSweepBlocked()"));
-    assert!(ISLAND.contains("Certificate cleanup unavailable"));
-    assert!(ISLAND.contains(r#"disabled: """#));
-}
+// DELETED 2026-08-26: `zero_and_blocked_states_cannot_render_the_actionable_form`
+// (TAUTOLOGICAL). Its load-bearing line restated the island's own boolean
+// expression back at itself:
+//
+//     assert!(ISLAND.contains(
+//         "!residue.readable || leftoverCertificates > 0 || certificatesUnknown !== \"\""));
+//
+// A test that quotes the implementation can detect CHANGE but never
+// WRONGNESS: invert the condition in both places and it still agrees, and any
+// harmless reordering of the `||` breaks it for no reason.
+//
+// The behaviour it was standing in for is now pinned where it can actually
+// fail — `render_devices.rs::the_certificate_sweep_renders_the_state_the_residue_supports`
+// renders the page in all four residue states and asserts which control comes
+// out, including the one that matters: a store that could not be READ must
+// never be offered a destructive certificate delete. The sweep state is
+// server-injected (`show:certificateSweepReady` / `show:certificateSweepBlocked`),
+// so the SSR pass is a real oracle for it.
 
 #[test]
 fn certificate_only_residue_survives_hydration_and_refreshes_after_mutation() {

@@ -208,13 +208,10 @@ mod tests {
     const BT_AUDIO: &str = r"BTHENUM\Dev_02E1F2A3B4C5\7&A1B2C3D4&0&BluetoothDevice_02E1F2A3B4C5";
     const USB_PANEL: &str = r"USB\VID_D209&PID_0430&MI_00\7&1A2B3C4D&0&0000";
 
-    // ── Synthetic fixtures preserving the Windows instance shapes seen in the wild.
-    const SYNTHETIC_XBOX_HID: &str = r"BTHENUM\{00001124-0000-1000-8000-00805F9B34FB}_VID&0002045E_PID&02E0\7&B1C2D3E4&0&02B1C2D3E4F5_C00000000";
-    const SYNTHETIC_XBOX_DEV: &str =
-        r"BTHENUM\DEV_02B1C2D3E4F5\7&B1C2D3E4&0&BLUETOOTHDEVICE_02B1C2D3E4F5";
-    const SYNTHETIC_XBOX_ALT: &str = r"BTHENUM\{00001124-0000-1000-8000-00805F9B34FB}_VID&0002045E_PID&02E0\2&C1D2E3F4&0&02D1E2F3A4B5";
-    const SYNTHETIC_TOWER: &str =
-        r"BTHENUM\DEV_02C1D2E3F4A5\7&B1C2D3E4&0&BLUETOOTHDEVICE_02C1D2E3F4A5";
+    /// A synthetic node whose per-service `_` suffix is ITSELF twelve hex
+    /// digits — the address and the suffix ride the same `&` segment, and only
+    /// one of them names the device.
+    const SYNTHETIC_HEX_SUFFIX: &str = r"BTHENUM\{00001124-0000-1000-8000-00805F9B34FB}_VID&0002045E_PID&0800\7&A1B2C3D4&0&02A1B2C3D4E5_0123456789AB";
     /// Synthetic LOCAL-radio pseudo-devices: unrelated nodes sharing one
     /// all-zero "address".
     const SYNTHETIC_LOCAL_PERIPHERAL: &str = r"BTHENUM\{11111111-2222-4333-8444-555555555555}_LOCALMFG&0000\7&B1C2D3E4&0&000000000000_00000008";
@@ -278,30 +275,48 @@ mod tests {
         assert_eq!(bd_addr(&node(USB_PANEL, None, "x")), None);
     }
 
-    /// Three shape-preserving synthetic instance paths, including two that
-    /// name the SAME controller through different service nodes.
+    /// **The ambiguous-nonzero case**, which the all-zero test below does not
+    /// reach. Two facts collide inside one `&` segment:
     ///
-    /// Breaks against a parser written from one example: the `DEV_` form, the
-    /// `_C00000000`-suffixed service form and the bare `2&…&0&<addr>` form are
-    /// three different spellings of one fact.
+    /// * every device paired to one radio shares the `7&A1B2C3D4&0` stem, so
+    ///   the stem cannot be the identity; and
+    /// * the per-service `_` suffix can itself be twelve hex digits, so
+    ///   "twelve hex digits somewhere in the tail" is not enough either — the
+    ///   ADDRESS is the part before the first `_`.
+    ///
+    /// Breaks against `tail.split('_').last()` / `.rev().find(is_bd_addr)`,
+    /// which reads the suffix as the address: one device is filed under a name
+    /// no other node will ever produce, so its keyboard child never joins it
+    /// and the row goes silently unnamed. It also breaks against any join on
+    /// the stem, which merges every device on the radio into one row — the
+    /// SpinTrak-labelled-as-an-I-PAC failure this file is named after.
     #[test]
-    fn the_supported_synthetic_instance_shapes_all_parse() {
+    fn the_address_is_read_before_a_service_suffix_that_is_also_twelve_hex_digits() {
         assert_eq!(
-            bd_addr(&node(SYNTHETIC_XBOX_HID, None, "x")).as_deref(),
-            Some("02B1C2D3E4F5")
+            bd_addr(&node(SYNTHETIC_HEX_SUFFIX, None, "x")).as_deref(),
+            Some("02A1B2C3D4E5"),
+            "the service suffix is not the address"
         );
+        // ...so it groups with the plain spelling of the SAME device.
+        let same = from_nodes(&[
+            live(node(BT_KEYBOARD, None, "Bluetooth HID Device")),
+            live(node(SYNTHETIC_HEX_SUFFIX, None, "Bluetooth HID Device")),
+        ]);
+        assert_eq!(same.len(), 2, "two devnodes");
         assert_eq!(
-            bd_addr(&node(SYNTHETIC_XBOX_DEV, None, "x")).as_deref(),
-            Some("02B1C2D3E4F5"),
-            "the controller's DEV_ node and its HID service node are one device"
+            same[0].device, same[1].device,
+            "one device, two service nodes: {same:?}"
         );
-        assert_eq!(
-            bd_addr(&node(SYNTHETIC_XBOX_ALT, None, "x")).as_deref(),
-            Some("02D1E2F3A4B5")
-        );
-        assert_eq!(
-            bd_addr(&node(SYNTHETIC_TOWER, None, "x")).as_deref(),
-            Some("02C1D2E3F4A5")
+
+        // ...and two DIFFERENT devices on the same radio stay two devices.
+        let different = from_nodes(&[
+            live(keyboard_node(BT_KEYBOARD, "Bluetooth Keyboard")),
+            live(node(BT_AUDIO, None, "Example Bluetooth Speaker")),
+        ]);
+        assert_eq!(different.len(), 2);
+        assert_ne!(
+            different[0].device, different[1].device,
+            "one radio, two devices, two rows: {different:?}"
         );
     }
 
@@ -483,14 +498,25 @@ mod tests {
     /// Live, read-only: the real machine's tree must not panic this pass, and
     /// an empty tree must be reported as a FAILED READ rather than as a machine
     /// with no devices.
+    ///
+    /// A machine with no Bluetooth radio has nothing to enumerate, and then the
+    /// loop below runs zero times and asserts nothing — which is most CI
+    /// runners. It says so out loud rather than reporting a pass it did not
+    /// make; the shape assertions that run everywhere are the synthetic
+    /// fixtures above.
     #[test]
     #[cfg(windows)]
     fn enumeration_is_safe_and_well_formed_on_real_hardware() {
         let found = candidates().expect("the PnP tree is readable on a running machine");
+        if found.is_empty() {
+            println!("SKIP: no Bluetooth devices in this machine's PnP tree (no radio?)");
+            return;
+        }
         for c in &found {
             assert!(c.id.as_str().starts_with("BTHENUM\\"), "{}", c.id);
             assert_eq!(c.id.as_str(), c.id.as_str().to_uppercase());
             assert_eq!(c.can_type, c.trouble.is_none());
         }
+        println!("checked {} live Bluetooth device nodes", found.len());
     }
 }

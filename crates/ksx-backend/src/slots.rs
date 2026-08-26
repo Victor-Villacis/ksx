@@ -1254,9 +1254,16 @@ mod tests {
 
     /// Every shipping persona is writable (retro leg flip 2026-08-20); the
     /// refusal machinery re-arms with the next gated persona.
+    ///
+    /// Each persona is checked ON DISK, not by `assign` returning `Ok`. A no-op
+    /// `Ok` is a real path through this writer — see
+    /// `asking_for_the_persona_a_slot_already_has_writes_nothing` — so a writer
+    /// that silently skipped four of the five personas and left the slot on its
+    /// original one would satisfy every `unwrap()` below. Only the reload
+    /// separates "written" from "accepted and dropped".
     #[test]
     fn every_shipping_persona_is_writable() {
-        let root = TempRoot::new("cannot-plug");
+        let root = TempRoot::new("every-persona");
         let store = root.store();
         assign(&store, &spec(1, "Panel P1")).unwrap();
 
@@ -1265,17 +1272,22 @@ mod tests {
             Persona::SwitchPro,
             Persona::Snes,
             Persona::Genesis,
+            // The production DualSense path, walked last so the file ends on a
+            // persona no earlier iteration could have left behind.
+            Persona::DualSense,
         ] {
-            assign(&store, &persona_spec(1, persona))
+            let applied = assign(&store, &persona_spec(1, persona))
                 .unwrap_or_else(|err| panic!("{persona} must be writable: {err}"));
+            assert!(
+                !applied.unchanged,
+                "{persona} was accepted without writing anything"
+            );
+            assert_eq!(
+                store.load_config().unwrap().value.slots[0].persona,
+                persona,
+                "{persona} was reported written but the file on disk says otherwise"
+            );
         }
-        assign(&store, &persona_spec(1, Persona::DualSense))
-            .expect("the production DualSense path is writable");
-        // Nothing was written by any of them.
-        assert_eq!(
-            store.load_config().unwrap().value.slots[0].persona,
-            Persona::DualSense
-        );
     }
 
     /// The elevated SDK host carries eight live pads; the writer refuses the

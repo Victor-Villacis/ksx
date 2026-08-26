@@ -2240,13 +2240,31 @@ mod tests {
     #[test]
     fn diagnostic_text_is_bounded_before_it_becomes_a_frame() {
         let max = "x".repeat(MAX_FAULT_DETAIL_BYTES);
-        assert!(Fault::new(FaultCode::Internal, max).is_ok());
+        assert!(Fault::new(FaultCode::Internal, max.clone()).is_ok());
         let too_long = "x".repeat(MAX_FAULT_DETAIL_BYTES + 1);
         assert!(matches!(
             Fault::new(FaultCode::Internal, too_long),
             Err(ProtocolError::FaultDetailTooLong { .. })
         ));
-        assert_eq!(MAX_FRAME_BYTES, HEADER_BYTES + MAX_PAYLOAD_BYTES);
+
+        // The ceiling that matters is not `MAX_FRAME_BYTES == HEADER_BYTES +
+        // MAX_PAYLOAD_BYTES` (that is host.rs:50's own definition restated).
+        // It is that the LARGEST fault a privileged host may legally build
+        // still encodes to a frame this reader accepts: raise
+        // MAX_FAULT_DETAIL_BYTES past the payload ceiling and the host would
+        // emit a frame nothing on the wire could decode.
+        let encoded = Frame::new(
+            1,
+            Message::Fault(Fault::new(FaultCode::Internal, max).unwrap()),
+        )
+        .unwrap()
+        .encode();
+        assert!(
+            encoded.len() <= MAX_FRAME_BYTES,
+            "a max-detail fault encodes to {} bytes, over the {MAX_FRAME_BYTES}-byte ceiling",
+            encoded.len()
+        );
+        assert_eq!(Frame::decode(&encoded).unwrap().encode(), encoded);
     }
 
     #[test]

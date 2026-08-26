@@ -179,19 +179,29 @@ mod tests {
         }
     }
 
+    /// The positive half of [`HmProfile::validate`]: without it, a `validate`
+    /// that returned `Err` unconditionally would pass both refusal tests below.
+    ///
+    /// Deliberately does NOT re-assert the fixture's slug/vid/pid/descriptor
+    /// against the literals in its own constructor sixty lines up — those
+    /// assertions could only ever agree with themselves.
     #[test]
-    fn the_dualsense_conformance_profile_is_explicitly_a_valid_stub() {
+    fn a_complete_profile_is_accepted_and_reports_its_pid_ordering() {
         let p = dualsense_conformance_stub_profile();
         p.validate().unwrap();
-        assert_eq!(p.slug, "dualsense");
-        assert_eq!((p.vid, p.pid), (0x054C, 0x0CE6));
-        assert_eq!(p.transport, Transport::Usb);
-        assert!(p.axis_map.is_complete());
-        assert_eq!(p.descriptor, conformance_stub_descriptor(true));
+        assert!(p.is_deployable());
+        // The method must read the descriptor, not some other field.
         assert!(
             p.has_pid_block(),
             "the synthetic fixture requests PID ordering"
         );
+        let mut no_pid = p.clone();
+        no_pid.descriptor = conformance_stub_descriptor(false);
+        assert!(
+            !no_pid.has_pid_block(),
+            "dropping the signature from the descriptor must drop the ordering claim"
+        );
+        no_pid.validate().unwrap();
     }
 
     #[test]

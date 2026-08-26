@@ -2455,6 +2455,36 @@ mod tests {
         );
     }
 
+    /// **The other half of the prune consent shape**, which the parse test
+    /// above cannot see: `--prune` alone is a REPORT.
+    ///
+    /// `config_import_is_a_report_until_yes` and
+    /// `winusb_claim_and_release_take_a_device_and_default_to_not_acting` each
+    /// pin their verb's version of this. `pads --prune` is the one that
+    /// actually yanks controllers out from under a running game — it restarts
+    /// the ViGEmBus devnode, which drops every child pad with it — so the two
+    /// sentences that make it safe have to be in the text a person reads
+    /// before running it, not only in the code.
+    ///
+    /// Pinned as help text and not as behaviour on purpose: the only honest
+    /// end-to-end check would run `pads --prune` on the machine running the
+    /// tests, and that machine may have a live session on it.
+    #[test]
+    fn prune_help_says_it_is_a_dry_run_and_that_a_live_session_refuses_it() {
+        let mut cmd = Cli::command();
+        let pads = cmd.find_subcommand_mut("pads").unwrap();
+        let help = pads.render_long_help().to_string();
+        let flat = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        for needle in [
+            "A dry run unless `--yes` is given",
+            "refused outright while a session is running",
+            "those pads belong to whoever is playing",
+            "Without it, `--prune` only says what it would do",
+        ] {
+            assert!(flat.contains(needle), "missing '{needle}' in:\n{help}");
+        }
+    }
+
     #[test]
     fn pads_flags_parse() {
         let cli =
@@ -3200,6 +3230,54 @@ mod tests {
             "point-in-time",
             "Localhost only",
             "no LAN option",
+        ] {
+            assert!(flat.contains(needle), "missing '{needle}' in:\n{help}");
+        }
+    }
+
+    /// **`ksx open` had no test of any kind** until 2026-08-26 — not a parse
+    /// test, not a help pin — while being the verb the installer's desktop
+    /// shortcut and the Start-menu entry both run
+    /// (`tests/installer.rs::the_post_install_offer_uses_the_console_free_launcher`).
+    /// `tests/parity.rs`'s `EXEMPT` entry for it only evaluates with
+    /// `--features studio` on, which is why it sat unaccounted for until
+    /// 2026-08-08 with CI green throughout.
+    ///
+    /// It takes no arguments, and that is the point: the front door has no
+    /// knobs. Anything trailing it is a mistake worth refusing rather than
+    /// silently ignoring.
+    #[cfg(feature = "studio")]
+    #[test]
+    fn open_is_the_front_door_and_takes_no_arguments() {
+        let cli = Cli::try_parse_from(["ksx", "open"]).unwrap();
+        assert!(matches!(cli.command, Command::Open));
+        assert!(
+            Cli::try_parse_from(["ksx", "open", "--port", "4460"]).is_err(),
+            "`open` has no port: it opens whatever Studio is already serving"
+        );
+        assert!(
+            Cli::try_parse_from(["ksx", "open", "somewhere"]).is_err(),
+            "a stray argument to the front door must be refused, not ignored"
+        );
+    }
+
+    /// The promises `open`'s help makes, which are the ones a person double
+    /// clicking a shortcut cannot read anywhere else: a daemon that will not
+    /// start is a WARNING (Studio's read side needs none), and the window is a
+    /// chrome-less app window rather than a tab.
+    #[cfg(feature = "studio")]
+    #[test]
+    fn open_help_states_the_read_only_fallback_and_exit_codes() {
+        let mut cmd = Cli::command();
+        let open = cmd.find_subcommand_mut("open").unwrap();
+        let help = open.render_long_help().to_string();
+        let flat = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        for needle in [
+            "A daemon that will not start is a warning, not a failure",
+            "read-only",
+            "No daemon",
+            "0 = a window was opened",
+            "1 = it could not be",
         ] {
             assert!(flat.contains(needle), "missing '{needle}' in:\n{help}");
         }

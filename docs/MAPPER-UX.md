@@ -113,8 +113,10 @@ The replacement has four parts:
    destination control, because those settings apply to that control's
    combined incoming keys. Plain hold stays a direct cord.
 4. **A nonpersistent Connections table remains the accessible/no-script
-   escape hatch.** Native forms and consequence text survive there (and on
-   `/map`); they no longer reserve a quarter of the main canvas.
+   escape hatch.** Native forms and consequence text survive there (and in
+   `/nocturne`'s Connections table, which is where they live now that the
+   mapper has no page of its own); they no longer reserve a quarter of the
+   main canvas.
 
 ### Canvas route and processor placement contract (revised 2026-08-24)
 
@@ -233,14 +235,20 @@ family as its two parents would defeat the lens.
 
 **Build A — core shipped.** The visual controller, binding inspector, physical
 key inventory, multi-key editing, conflict handling, recovery actions, macros,
-persona-aware vocabulary, and direct live echo are in Studio. `/map` and
-`/check` consume the same read-only SSE feed. The mapper paints it only when
+persona-aware vocabulary, and direct live echo are in Studio. The mapper and
+`/check` consume the same read-only SSE feed — that was `/map` and `/check`
+until 2026-08-25, and it is the mapper region of `/nocturne` and `/check` now.
+The claim is unchanged: one feed, two readers, neither of them a writer. The mapper paints it only when
 the running session origin matches the saved config or staged draft currently
 on screen; matching player numbers alone are not enough. The remaining
 interaction polish is passive press-to-select.
 
-**Build B — product first run shipped.** `/start` holds a complete setup in the
-idle daemon, and `/map?target=stage&slot=N` points this same mapper at it.
+**Build B — product first run shipped.** `/nocturne` holds a complete setup in
+the idle daemon, and `?slot=N` points this same mapper at it. The point of this
+paragraph — that first run reuses the ordinary mapper instead of growing a
+second one — got stronger on 2026-08-25, not weaker: it used to be the same
+code reached through `/map?target=stage&slot=N`, and it is now literally the
+same page.
 Bindings, multiple keys, auto-fire, and macros remain in memory; refusals do
 not mutate the draft. Setup then asks split-or-freeze and keeps Save separate
 from Play. The older sequential `ksx setup` prompt remains a developer CLI
@@ -273,7 +281,7 @@ control name and the key that drives it. The roster is the BACKEND's —
 `MapperSlot::bindings`' key set, unbound controls included, because that is
 exactly the control somebody is standing at the cabinet trying to test.
 
-*Commandment 2 is now visible in place.* `/map` consumes the same read-only
+*Commandment 2 is now visible in place.* The mapper consumes the same read-only
 feed as `/check`, but paints it only after a fresh map/session-origin
 handshake proves the running setup matches the saved or staged target on
 screen. Controller hits and the selected keyboard's physical keys illuminate
@@ -319,7 +327,8 @@ the capabilities that stack only for us, ranked by leverage:
    → the assistant drives `ksx map`/the wizard and the page shows the
    result live. The mapper UI and the AI share one control surface by
    construction — no other tool in the field can say that.
-3. **QR-code handoff.** The status page (cab screen) shows a QR; the phone
+3. **QR-code handoff.** The cab screen shows a QR — on `/nocturne`, since the
+   status page this was written against no longer exists — and the phone
    scans it and lands in the mapper. When LAN mode ships (pairing token,
    E7), the QR carries the pairing — the 2026 answer to "type this IP on
    your phone". Zero cost to print the QR now for localhost-forwarded

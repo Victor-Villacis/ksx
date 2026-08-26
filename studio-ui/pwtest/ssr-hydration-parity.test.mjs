@@ -3,10 +3,11 @@
 // WHY THIS EXISTS. ksx Studio emits the same data twice — slots for the
 // server-rendered paint, the `__ksx-payload` block for the client — and the
 // two are produced by two different derivations in two different languages:
-// `render_map.rs`/`render.rs` on the server, `MapIsland.ts`/`StatusIsland.ts`
-// on the client. Nothing in either toolchain checks that they agree. When they
-// disagree the page paints one thing and replaces it milliseconds later: a
-// flash, in production, that no unit test on either side can see.
+// `render_nocturne.rs`/`render.rs` on the server, `NocturneIsland.ts` on the
+// client (and the same pairing again for `/check`, `/pads` and `/devices`).
+// Nothing in either toolchain checks that they agree. When they disagree the
+// page paints one thing and replaces it milliseconds later: a flash, in
+// production, that no unit test on either side can see.
 //
 // It is not hypothetical. This suite's first run (2026-08-06) found the mapper
 // telling a user with a running session to "Use the Pause button above" after
@@ -68,8 +69,8 @@ const exe = path.join(
   process.platform === "win32" ? "macro_fixture.exe" : "macro_fixture",
 );
 
-/** Every server-rendered route, plus the mapper's alternate slot view.
- *  `/start` includes the scalar capture preparation branch, whose hidden
+/** Every server-rendered route, plus the canvas's alternate slot view.
+ *  `/nocturne` includes the scalar capture preparation branch, whose hidden
  *  exact-target values must survive adoption without a first-paint swap. */
 const ROUTES = [
   "/nocturne",
@@ -272,7 +273,7 @@ before(async () => {
   // how the bind failure below became invisible in the first place.
   for (const session of SESSIONS) {
     const url = baseFor(session);
-    const squatter = await fetch(`${url}/api/map`).then(
+    const squatter = await fetch(`${url}/api/nocturne`).then(
       () => true,
       () => false,
     );
@@ -317,7 +318,7 @@ for (const session of SESSIONS) {
 
       const until = Date.now() + 60_000;
       for (;;) {
-        const up = await fetch(`${base}/api/map`).then(
+        const up = await fetch(`${base}/api/nocturne`).then(
           (r) => r.ok,
           () => false,
         );

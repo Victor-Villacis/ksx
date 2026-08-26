@@ -223,10 +223,26 @@ fn subcommands(help: &str) -> Vec<String> {
 
 /// Every path registered inside `Router::new()`, up to the guard layer.
 ///
-/// The cut is at `crate::guard::same_origin`'s `.layer()` and not at the first
-/// `.layer()` in the chain, because `/setup/import` carries its own
-/// `DefaultBodyLimit` — cutting at the first one would silently drop the six
-/// routes that follow it and report six missing faces.
+/// **The cut is at `crate::guard::same_origin`'s `.layer()`, and deliberately
+/// not at the first `.layer()` in the chain.** Anything after the guard is
+/// outside the CSRF and DNS-rebinding checks, so the guard layer is the honest
+/// boundary of "the routes this application serves under its own rules";
+/// stopping earlier would drop every route declared after whatever `.layer()`
+/// happened to come first and report each one as a missing face.
+///
+/// That was not a hypothetical when this reader was written. The import route
+/// carried its own `DefaultBodyLimit` layer partway down the chain, and cutting
+/// at the first `.layer()` would have hidden the six routes below it.
+///
+/// **That body limit is gone, and this comment is the last place in the tree
+/// that records it existed.** It disappeared with `/setup/import` in the
+/// 2026-08-25 cutover (`git log -S DefaultBodyLimit`); `grep -rn
+/// DefaultBodyLimit crates/` now finds only these lines. The successor route
+/// `/nocturne/import` runs on axum's 2 MB default while its refusal copy still
+/// promises 8 MB — which is exactly the failure the limit was added to prevent,
+/// arriving from the other direction. Restoring it is a Studio change; the cut
+/// point here is correct either way, and is now correct for the reason above
+/// rather than because of one route's layer.
 fn studio_routes() -> &'static BTreeSet<String> {
     static ROUTES: LazyLock<BTreeSet<String>> = LazyLock::new(|| {
         const SERVER: &str = "crates/ksx-studio/src/server/mod.rs";
@@ -370,6 +386,22 @@ enum Claim {
     Absent,
 }
 
+/// **The blind spot this creates, stated so it is not rediscovered a third
+/// time.**
+///
+/// Only the first word is read, so everything in a cell's parenthetical is
+/// invisible here. `every_section_cross_reference_points_at_a_section_about_that_row`
+/// closes half of that — a `(§N)` has to exist and be about the row — and
+/// nothing closes the other half: a ROUTE NAME in a parenthetical is checked by
+/// no test in this file.
+///
+/// That is not theoretical. On 2026-08-25 Studio deleted five pages, and six
+/// Studio cells went on naming `/start`, `/setup` or `/profiles` in their
+/// parentheticals for a fortnight while every test here stayed green — the
+/// anchor table below had been migrated, the prose beside it had not. The cheap
+/// guard, if one is wanted, is the same shape as the `(§N)` one: pull every
+/// `` `/…` `` token out of a cell that classifies as `Shipped` and require
+/// `studio_routes()` to contain it.
 fn classify(cell: &str) -> Claim {
     let plain = cell.replace("**", "").replace('`', "");
     let plain = plain.trim();
@@ -726,8 +758,9 @@ const ANCHORS: &[Anchors] = &[
 /// and it is a narrower test than "feels like plumbing". `ksx doctor` looks like
 /// an exemption and is not one: `StatusSnapshot` carries `vigem`,
 /// `interception`, `pads` and `autostart`, the egui's Status screen renders
-/// them and so does `/api/status`, which is precisely §3's "Is it working:
-/// pads, drivers" row. It is claimed there, not excused here.
+/// them and so does `/api/nocturne` (it was `/api/status` until that page was
+/// deleted), which is precisely §3's "Is it working: pads, drivers" row. It is
+/// claimed there, not excused here.
 struct Exempt {
     verb: &'static str,
     /// The cargo feature that has to be on for this verb to exist at all.
@@ -915,8 +948,14 @@ fn every_cell_claiming_a_shipped_face_has_one() {
 ///
 /// Breaks against the tree as committed at def1c31, where two Studio cells
 /// still said "planned" after `/devices/pick`, `/devices/remove`, `/setup/slot`
-/// and `/profiles/new` had all shipped. It also breaks the day someone adds
-/// `Screen::Devices` to the cabinet without touching §3 row 3.
+/// and `/profiles/new` had all shipped. Two of those four names no longer
+/// resolve — `/setup/slot` and `/profiles/new` were deleted in the 2026-08-25
+/// single-page cutover — but they are kept as written, because this paragraph
+/// is dated by a SHA and describes the tree at that SHA. A reader chasing
+/// `/setup/slot` today should know it is gone and that `assign_slot` lost its
+/// Studio caller with it (`docs/SURFACES.md` §3's corrections list). It also
+/// breaks the day someone adds `Screen::Devices` to the cabinet without
+/// touching §3 row 3.
 ///
 /// The limit is stated where the anchors are: this is a tripwire on the name a
 /// face would obviously take, not a proof that no face exists.
@@ -1039,9 +1078,16 @@ fn the_guard_is_still_bound_to_the_documents_and_the_tree_it_reads() {
     // Only where the ROW SAYS THE VERB IS THERE. A `planned` CLI cell anchored
     // on a name that does not resolve is not a stale anchor — it is the claim
     // (§3c). The egui and Studio columns have always worked this way:
-    // `Screen::Mapper` and `/winusb/claim` name nothing, which is exactly what
-    // makes their cells honest, and the CLI column was the odd one out until the
+    // `Screen::Mapper` and `/play` name nothing, which is exactly what makes
+    // their cells honest, and the CLI column was the odd one out until the
     // first row with a genuinely planned CLI half arrived.
+    //
+    // The Studio example used to be `/winusb/claim`, which stopped illustrating
+    // anything once the WinUSB row's Studio cell became Shipped on
+    // `/nocturne/capture/prepare|release`: a name that is not an anchor of any
+    // row proves nothing about how absent anchors are treated. `/play` is an
+    // anchor — the record/replay row's, beside `/recordings` — and it resolves
+    // to nothing, which is the property this paragraph is about.
     //
     // Nothing is lost by narrowing it. A `owns` cell whose verb was renamed or
     // deleted still fails, one test up, in
@@ -1208,10 +1254,11 @@ const CONFIG_SURFACES: &[ConfigSurface] = &[
     ConfigSurface {
         field: "macros",
         row: None,
-        why: "NO FACE for the SWITCH. The macro EDITOR ships (`/map`'s macro \
-              tabs write `[macros.<name>]` into a preset); what has no control \
-              is this per-slot on/off, so a cabinet can carry macros it cannot \
-              turn off without an editor.",
+        why: "NO FACE for the SWITCH. The macro EDITOR ships (`/nocturne`'s \
+              macro tabs write `[macros.<name>]` into a preset — the `/map` \
+              page they were on until 2026-08-25 is gone, the editor is not); \
+              what has no control is this per-slot on/off, so a cabinet can \
+              carry macros it cannot turn off without an editor.",
     },
 ];
 

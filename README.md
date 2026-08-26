@@ -339,10 +339,11 @@ failed, installer missing, elevation needed), 3 the installer ran and failed.
 #### Built-in Windows USB mode — escape the 2026 driver cliff
 
 The supported customer path is in installed Studio. Pick one exact supported
-USB keyboard on `/start`, then choose **Prepare selected keyboard** (or the
-secondary **Use KSX's built-in Windows USB mode** option when a shared
-Interception installation is already usable). Before Windows elevation begins,
-the page requires three separate confirmations:
+USB keyboard on `/nocturne`, then choose **Prepare selected keyboard** on the
+capture card beside it. Where a shared Interception installation is already
+usable the same card offers the built-in path as an option rather than a
+blocker. Before Windows elevation begins, the page requires three separate
+confirmations:
 
 1. a different keyboard is connected and was tested typing;
 2. the selected keyboard will stop ordinary typing until Release; and
@@ -441,10 +442,12 @@ LaunchBox and RetroBat wiring, plus a wrapper that always stops ksx:
 
 ## Status
 
-The current tree is the **KSX 0.4.1 release line**. Studio now carries one
-guided Hardware -> Controller -> Mapping -> Play workspace, with live input
-feedback, controller-aware readiness, conflict-safe binding, and a responsive
-light/dark interface across every route. The same release retains saved games,
+The current tree is the **KSX 0.4.1 release line**. Studio is now **one product
+page plus three tool pages**: `/nocturne` carries the whole guided Hardware ->
+Controller -> Mapping -> Play workspace, and `/check` (test inputs), `/pads`
+(virtual controllers) and `/devices` (hardware) sit beside it behind one Tools
+menu. Live input feedback, controller-aware readiness, conflict-safe binding
+and a responsive light/dark interface hold across all four. The same release retains saved games,
 recovery, packaging, and one installed USB DualSense through the bounded
 HIDMaestro backend. The supervised cabinet and controller checks in
 [`docs/GATES.md`](docs/GATES.md) remain the authority for physical hardware
@@ -454,8 +457,8 @@ evidence. Current implementation state and known limits are in
 
 CI now exercises the clean-runner provider smoke, the exact HIDMaestro A/B
 build and byte-only artifact inspection, the portable distribution, the
-installer's safety and repeat-install paths, and Studio's eight-route browser
-matrix. A pushed release tag repeats that whole pipeline before publishing.
+installer's safety and repeat-install paths, and Studio's browser matrix — five
+path variants across three session states since the pages were consolidated. A pushed release tag repeats that whole pipeline before publishing.
 Those results are software and distribution evidence; a local build is not,
 and physical Gates 1–4 remain open until their ledgers name supervised hardware
 results.

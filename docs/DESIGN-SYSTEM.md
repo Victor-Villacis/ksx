@@ -6,23 +6,32 @@ into the sheet at build time; TK0, see `docs/research/token-system-design.md`)
 plus `studio-ui/src/studio.css` (the components that consume them); this file
 is the reasoning. If they disagree, the CSS is the bug.
 
-Eight Studio routes use it. The stable product journey is **Keyboard**
-(`/start#keyboard`) → **Controller** (`/start#controller`) → **Mapping**
-(`/map`) → **Play** (`/`). Test inputs, the game library, hardware recovery,
-ViGEm pad diagnostics, and import/recovery stay one deliberate Tools action
-away; they do not compete with the primary path. Every route is viewed on a
-desk monitor *and* on an arcade cabinet panel from across a room, in a light and
-a dark theme, with and without JavaScript. Everything below is chosen against
-those constraints at once.
+Four Studio routes use it: the product page `/nocturne`, and the three tool
+pages `/check`, `/pads` and `/devices`. The stable product journey is unchanged
+in shape and has stopped being a sequence of URLs — **Keyboard** → **Controller**
+→ **Mapping** → **Play** are now stages *within* `/nocturne`, reached by working
+across its three panes rather than by navigating. (Until 2026-08-25 they were
+`/start#keyboard`, `/start#controller`, `/map` and `/`; that is where the
+anchors in older notes come from.) Test inputs, hardware recovery and ViGEm pad
+diagnostics stay one deliberate Tools action away; the game library and
+import/recovery moved *into* the product page's Configuration menu rather than
+out to a tool. Every route is viewed on a desk monitor *and* on an arcade
+cabinet panel from across a room, in a light and a dark theme, with and without
+JavaScript. Everything below is chosen against those constraints at once.
 
-The numbered rail is orientation, not a locked wizard: an expert can jump to
-any stage, and the staged setup remains the single source of truth. Page heroes
-state an outcome; cards carry one decision; advanced maintenance lives in a
-disclosure or the Tools menu. The Mapping route is the intentional exception to
-the ordinary single-column card stack: on a wide screen the controller remains
-dominant at left and the exact binding inventory is a contextual inspector at
-right. DOM order remains controller then inspector for narrow screens and
-assistive technology.
+The numbered rail is gone with the pages it numbered: the shell now carries one
+**Set up & play** link and a **Tools** menu, because four numbered steps that
+all resolve to the same destination teach a sequence the product no longer has.
+What the rail was *for* still has to happen, and it happens inside the page:
+orientation without a locked wizard, an expert free to start at any stage, and
+the staged setup as the single source of truth. Page heroes state an outcome;
+cards carry one decision; advanced maintenance lives in a disclosure or the
+Tools menu. Mapping is the intentional exception to the ordinary single-column
+card stack, and it is now the resting shape of the product page rather than one
+route's special case: on a wide screen the controller remains dominant in the
+centre and the exact binding inventory is a contextual inspector at right. DOM
+order remains controller then inspector for narrow screens and assistive
+technology.
 
 ---
 
@@ -158,7 +167,11 @@ below the list and at equal specificity, so the later rule won and **every
 field on every screen rendered 36 px on a touch panel** — /pads' three spawn
 selects, /profiles' six new-profile fields, /setup's five selects, /devices'
 alias box, all measured with touch emulation against the HTML the server
-actually sends. A custom property set on `:root` is not in the cascade with the
+actually sends *on 2026-08-08*. Two of those pages have since been deleted into
+`/nocturne`; the measurement is kept as it was taken, because the finding is
+about the cascade and not about which page happened to hold the fields. A list
+of components is false the moment somebody adds one, which is exactly what the
+cutover then did. A custom property set on `:root` is not in the cascade with the
 component rules that read it, so nothing added later can shadow it, and every
 consumer moves together — including §6.1's sticky `calc(var(--ctl-h) + …)`,
 which stays correct because the header it offsets grew by the same amount.
@@ -361,9 +374,20 @@ least room:
 
 #### Recorded exemption: disabled controls
 
-The status page's daemon-down block renders a dimmed `<select>` and a dimmed
-`Start` button (`.controls.off`, `opacity: 0.40`). The label measures
-**3.45:1** in dark and **2.36:1** in light, and both stay.
+A blocked-action block renders a dimmed control inside `.controls.off`
+(`opacity: 0.40`). The label measures **3.45:1** in dark and **2.36:1** in
+light, and both stay.
+
+*Where it lives moved, and the exemption moved with it rather than expiring.*
+The block was measured on the status page's daemon-down state — a dimmed
+`<select>` beside a dimmed `Start` — and that page was deleted on 2026-08-25.
+The pattern survived on `/pads`, where a refused spawn renders a disabled
+`Spawn` button with its reason beside it, over the same `.controls.off` rules
+and therefore at the same ratios. `crates/ksx-studio/tests/contrast.rs` pins
+`("dark", 3.45)`, `("light", 2.36)` and `("matrix", 3.66)` against the sheet, so
+the numbers below are still checked against something that renders. An
+accessibility exemption for a page that no longer exists would be the worst kind
+of stale note; this one is re-pointed, not retired.
 
 WCAG 2.2 SC 1.4.3 exempts text that is part of an *inactive* user interface
 component, and the exemption is the right call rather than a loophole here:
@@ -406,8 +430,9 @@ every `cargo test`:
   *not* restate the palette; a test that hardcodes the values is a second copy
   that drifts the same way), composites every tint over every ground, and
   checks every pair across every theme the sheet ships — since TK1 the gate
-  ENUMERATES themes (three today: dark, light, matrix; a user picks on `/setup`,
-  with System = follow-the-OS as the default) and a new theme passes the floors
+  ENUMERATES themes (three today: dark, light, matrix; a user picks in
+  `/nocturne`'s "How the Studio looks" panel → `POST /nocturne/theme`, with
+  System = follow-the-OS as the default) and a new theme passes the floors
   or records per-theme pins. It also cross-pins the token consumers
   that had **already drifted** back when they were hand copies: the anti-flash
   `PERSONALITY_CSS` — since TK0 generated into `theme_tokens.rs` from the same
@@ -630,8 +655,10 @@ Reading order top to bottom: **banners** (only when true) → **slot rail** →
 
 **No capability moved out of reach**, and no verb changed. The preset table is
 the *same* `slotTabs` array the rail is built from, rendered a second time —
-`list:slotTabs#2:array`, exactly the naming the status page's two profile-row
-lists already use.
+`list:slotTabs#2:array`, the `#N` suffix that says "this list again, in a second
+place". The convention was set by the status page's two profile-row lists; that
+page is gone and the convention outlived it, which is the point of naming a
+pattern rather than a page.
 
 ---
 

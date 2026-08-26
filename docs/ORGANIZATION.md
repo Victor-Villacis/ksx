@@ -62,7 +62,7 @@ is what the suffix rule in `CLAUDE.md` now exists to do.
 
 **`server.rs` split by page.** It carried 72 routes and 62 handlers in 4,241
 lines — the size at which two handlers quietly grow two different opinions
-about the same thing. Now one module per page, mirroring `render_*.rs`:
+about the same thing. It became one module per page, mirroring `render_*.rs`:
 
 ```
 server/mod.rs      838   AppState, the router, flash_of, act, urlencode, session verbs
@@ -80,6 +80,45 @@ server/session.rs   78
 Every item moved verbatim. No route changed, no test changed, and the 89 HTTP
 integration tests pass unmodified — which is the evidence that it was a move
 and not a rewrite.
+
+**Where that left the tree after the single-page cutover (measured 2026-08-25).**
+Five of those modules were deleted with their pages and their verbs moved onto
+one:
+
+```
+server/mod.rs      796   AppState, the router, flash_of, act, urlencode
+server/nocturne.rs 2856  the product page: reads plus ~40 verbs
+server/devices.rs   315
+server/pads.rs      204
+server/check.rs      81
+server/session.rs     4  ← a doc comment and nothing else
+```
+
+Two things in that listing are worth reading as findings rather than as sizes.
+
+`server/nocturne.rs` at 2,856 lines is more than a third of the way back to the
+4,241-line file this split existed to break up, and it got there in one commit.
+The split's premise was that a module boundary per page keeps handlers from
+growing two opinions about the same thing; with one page, that boundary is gone
+and nothing has replaced it. Whether it needs to be re-cut along some other seam
+— by verb family, say — is an open question, and the honest answer today is that
+nobody has decided.
+
+`server/session.rs` is four lines: a module doc comment reading *"The session
+JSON verbs: start, stop and resume"* over an empty file. Those verbs are on
+`/nocturne` now (`play`, `stop`) except `resume`, which has no Studio caller at
+all (`SURFACES.md` §3, the Resume row in `CONTROL-SURFACE.md`).
+
+**The `render_*.rs` mirror no longer holds either, and it is the more
+interesting half.** `render_map.rs` is still 1,782 lines and `render_check.rs`,
+`render_pads.rs` and `render_devices.rs` are 1,001 / 1,094 / 1,732 — but there
+is no `server/map.rs` for `render_map.rs` to mirror. The renderers outlived the
+page modules because a renderer is about a VIEW and a server module was about a
+URL, and only the URLs were merged. `render_nocturne.rs` (1,359) is the new
+product page's renderer and sits beside `render_map.rs` rather than replacing
+it: the mapper's server-side rendering is still its own file, still cited by
+`crates/ksx-app/tests/docs.rs`, and still the thing that makes the no-JS mapper
+work.
 
 **Orphaned WinUSB certificates now have a narrow cleaner.** The read-only
 machine view classifies KSX certificates against the signer reported by every

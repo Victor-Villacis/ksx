@@ -7,7 +7,7 @@
 //! this is the backend they drive it against: the same `ksx_studio::serve` the
 //! app uses, wired to a preset that never changes underfoot.
 //!
-//! Saves are kept in memory and served back by the next `/api/map` poll, which
+//! Saves are kept in memory and served back by the next `/api/nocturne` poll, which
 //! is what makes "the unit survives save and reload" testable at all.
 //!
 //! Loopback only, and the port is an argument so it can never collide with the
@@ -1031,7 +1031,10 @@ fn main() {
         scenario,
         generation.unwrap_or_else(default_fixture_generation),
     );
-    println!("macro fixture ({}) on http://{bind}/map", scenario.label());
+    println!(
+        "macro fixture ({}) on http://{bind}/nocturne",
+        scenario.label()
+    );
     // The fixture drives the MAPPER, so the machine provider is the trait's
     // own defaults: every method refuses in words and names the CLI verb that
     // works. /devices, /profiles, /setup and /pads under this fixture

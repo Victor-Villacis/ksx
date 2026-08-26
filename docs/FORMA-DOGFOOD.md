@@ -444,11 +444,14 @@ IR inspected, reverted):
   exactly once. **Not fixed — the `__ksxShowBranch` rewrite stays**, with a
   dated note saying why.
 
-**Parity check** (Playwright, against the macro fixture): all eight routes
-(`/`, `/start`, `/map`, `/check`, `/pads`, `/devices`, `/profiles`, `/setup`)
-plus `/map?slot=1` load twice each, once with the app bundle blocked and once
-with it live, and their DOMs are diffed after hydration in all three fixture
-session states (27 checks). They are identical apart from four by-design
+**Parity check** (Playwright, against the macro fixture): every served path
+loads twice, once with the app bundle blocked and once with it live, and their
+DOMs are diffed after hydration in all three fixture session states. That was
+nine path variants and 27 checks when this was written; since the 2026-08-25
+cutover it is **five variants and 15 checks** — `/nocturne`,
+`/nocturne?slot=1&macro=hadouken`, `/check`, `/pads`, `/devices`, each × idle /
+running / down. Fewer checks is not less coverage here: the four deleted pages
+were four separate islands and their states now have to be expressed on one. They are identical apart from four by-design
 differences — forma's own `data-forma-status` lifecycle attribute
 (`pending`→`active`), the client's `js` marker class, forma-ir's `U+200B`
 placeholders for empty dynamic text slots, and `map.ts` writing `value=""` into
@@ -564,16 +567,20 @@ A visible flash, and the surviving sentence was the wrong one: the button is
 labelled "Pause emulation & map", so the hydrated copy named a control that
 does not exist on the page. Fixed in `MapIsland.ts` (the server's wording won).
 
-**The guard.** `studio-ui/pwtest/ssr-hydration-parity.test.mjs`: all eight
-routes (`/`, `/start`, `/map`, `/check`, `/pads`, `/devices`, `/profiles`,
-`/setup`) plus `/map?slot=1` are loaded twice — once with the app bundle
-blocked at the network layer, so the island never hydrates, once normally —
-and the island subtrees are diffed after normalizing exactly four by-design
-differences (`data-forma-status`, the `js` class, `U+200B` text placeholders,
-and the client's own empty `value=""`). It runs in all three session states
-(`KSX_FIXTURE_SESSION=idle|running|down` — the fixture grew the switch for
-this), because the drift was in the state nobody had loaded. Nine path
-variants × three states is 27 checks. GitHub Actions installs the pinned
+**The guard.** `studio-ui/pwtest/ssr-hydration-parity.test.mjs`: every served
+path is loaded twice — once with the app bundle blocked at the network layer, so
+the island never hydrates, once normally — and the island subtrees are diffed
+after normalizing exactly four by-design differences (`data-forma-status`, the
+`js` class, `U+200B` text placeholders, and the client's own empty `value=""`).
+It runs in all three session states (`KSX_FIXTURE_SESSION=idle|running|down` —
+the fixture grew the switch for this), because the drift was in the state nobody
+had loaded. When this was written that was nine path variants — `/`, `/start`,
+`/map`, `/check`, `/pads`, `/devices`, `/profiles`, `/setup` and `/map?slot=1` —
+× three states, 27 checks. **Today the list is five and the arithmetic is 15**:
+`/nocturne`, `/nocturne?slot=1&macro=hadouken`, `/check`, `/pads`, `/devices`.
+The second entry is the direct descendant of `/map?slot=1` and earns its place
+the same way: it is the only variant that reaches an open editor, and an editor
+is where SSR and hydration are most likely to disagree. GitHub Actions installs the pinned
 Playwright Chromium runtime and runs this suite with the Studio visual-smoke
 capture in the `studio-browser` job. It always publishes the
 `studio-browser-screenshots` artifact for review; local browser execution is
@@ -587,9 +594,9 @@ no SSR side to disagree with.
 TWO-SLOT cabinet** (the parity fixture has one slot, and one slot cannot
 express this): the harness diffs the SSR paint against the HYDRATION seed, and
 the seed is the payload the server embedded — so anything that only goes wrong
-on the first `/api/map` POLL is invisible to it. `poll()` fetched `/api/map`
-with no `slot=`, and `collect_map` falls back to the FIRST slot when the query
-omits one. On `/map?slot=2` the SSR paint, the payload and the hydrated DOM all
+on the first POLL is invisible to it. `poll()` fetched `/api/map` (the poll is
+`/api/nocturne` now, and the blind spot is the same shape) with no `slot=`, and
+the collector falls back to the FIRST slot when the query omits one. On `/map?slot=2` the SSR paint, the payload and the hydrated DOM all
 agreed and were all correct; two seconds later the macro card silently swapped
 to slot 1's macro table while the rail, the stage and the legend still said P2
 — and `saveMacro` resolves the preset from the CLIENT's selection, so Save

@@ -250,7 +250,113 @@ pub(super) const N_AUTOSTART_DEV_RUNTIME: &str = "error: This development build 
 pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
     "error: That request could not be finished. Reopen ksx and try again.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 77] = [
+/// "How many players" arrives as TEXT so an empty box can be answered in
+/// words rather than by the extractor. Two things the migrated version lost:
+/// the `error:` marker (`applyFlash` picks the red side on that alone, so a
+/// rejected player count painted in the SUCCESS colour) and a place on
+/// [`N_FLASH_ALLOWLIST`] (without which a browser with scripting off reads
+/// the generic "could not be finished" instead of the one thing that is
+/// actually wrong with the form in front of it).
+pub(super) const N_GAME_SLOTS_ERROR: &str =
+    "error: How many players must be a whole number. Nothing was changed.";
+
+/// A body this page could not read AT ALL — a hidden `number` field served
+/// empty because no slot is selected, a truncated post, the wrong content
+/// type. Every form here answers through the flash, and axum's own 422
+/// carries no `Location`: the island reads its outcome out of the redirect's
+/// `?flash=`, so a 422 renders as nothing whatsoever and the user is left
+/// pressing a button that appears to do nothing. That is the failure this
+/// whole screen replaced, and it must not come back through the extractor.
+pub(super) const N_FORM_UNREADABLE: &str = "error: That request could not be read. Reopen this \
+     screen and try again; nothing was changed.";
+
+// ── Save and Play refuse in THIS page's words ──────────────────────────────
+//
+// The daemon composes a refusal with an `error`, a stable `code` and often a
+// `remedy`, and all three are written for an operator: `StageRefusal` names
+// `slot 1`, `Persona::backend()`, `ksx_core::MAX_SLOTS` and file paths. Those
+// are right for a log and wrong for the sentence under a button. Worse, they
+// are not on the allowlist, so with scripting off the specific reason
+// degraded to the generic "could not be finished" anyway — the boundary was
+// costing us the sentence AND leaking the internals.
+//
+// So the CODE selects one of this page's own sentences. Save and Play get
+// separate copy for every code deliberately: the promise at the end differs
+// ("nothing was written" / "nothing was started"), and a shared line would
+// have to drop the half that says what did not happen.
+
+pub(super) const N_SAVE_BLOCKING: &str = "error: This setup is not ready to save — the keyboard \
+     question on this screen has not been answered yet. Nothing was written.";
+pub(super) const N_PLAY_BLOCKING: &str = "error: This setup is not ready to play — the keyboard \
+     question on this screen has not been answered yet. Nothing was started.";
+
+pub(super) const N_SAVE_NO_BINDINGS: &str = "error: This setup is not ready to save — one \
+     controller has no keys mapped to it. Give it a starting layout, or bind a control on this \
+     screen; nothing was written.";
+pub(super) const N_PLAY_NO_BINDINGS: &str = "error: This setup is not ready to play — one \
+     controller has no keys mapped to it, so its pad would do nothing. Give it a starting \
+     layout, or bind a control on this screen; nothing was started.";
+
+pub(super) const N_SAVE_NO_DEVICE: &str = "error: This setup is not ready to save — no keyboard \
+     has been chosen yet. Pick one on this screen; nothing was written.";
+pub(super) const N_PLAY_NO_DEVICE: &str = "error: This setup is not ready to play — no keyboard \
+     has been chosen yet, so there is nothing for the controllers to listen to. Pick one on this \
+     screen; nothing was started.";
+
+pub(super) const N_SAVE_NO_SLOTS: &str = "error: This setup is not ready to save — no controller \
+     has been added yet. Add one on this screen; nothing was written.";
+pub(super) const N_PLAY_NO_SLOTS: &str = "error: This setup is not ready to play — no controller \
+     has been added yet. Add one on this screen; nothing was started.";
+
+/// The capture disagreement, said by the two writing verbs.
+///
+/// The staged keyboard and the MACHINE disagree about who is holding it: the
+/// draft names the ordinary Windows path over a board Windows has already
+/// bound to `winusb.sys`, or names the built-in path over a board that is not
+/// prepared. Either way the pads would plug and nothing would reach them.
+/// This gate used to live in `SetupFlags::can_save`/`can_play` on the deleted
+/// `/start` page; it is repeated in the HANDLERS so a hand-authored POST
+/// cannot walk past a button the page did not offer.
+pub(super) const N_SAVE_CAPTURE: &str = "error: This setup is not ready to save — the chosen \
+     keyboard is not prepared the way this draft says it is. Use the keyboard card on this \
+     screen to prepare or release it; nothing was written.";
+pub(super) const N_PLAY_CAPTURE: &str = "error: This setup is not ready to play — the chosen \
+     keyboard is not prepared the way this draft says it is. Use the keyboard card on this \
+     screen to prepare or release it; nothing was started.";
+
+/// **Play has the stricter gate; Save deliberately does not.** Committing the
+/// staged files is safe and useful on a machine whose controller driver is
+/// missing or could not be read — Play is what would plug a pad that
+/// materializes nothing, so the readiness of the required OUTPUT backends is
+/// consulted here and only here. Both sentences say the setup is still ready
+/// to save, because it is: the missing half is the machine's, not the draft's.
+pub(super) const N_PLAY_OUTPUT_BLOCKED: &str = "error: Play cannot start — a controller this \
+     setup needs has no working output on this machine, so its pad would plug and stay dead. \
+     The setup is still ready to save; install the missing controller support, then Play. \
+     Nothing was started.";
+pub(super) const N_PLAY_OUTPUT_UNKNOWN: &str = "error: Play cannot start — ksx could not check \
+     the controller outputs this setup needs, and it will not plug a pad it cannot vouch for. \
+     The setup is still ready to save; reopen ksx and try again. Nothing was started.";
+
+pub(super) const N_FLASH_ALLOWLIST: [&str; 91] = [
+    // Save and Play's own refusals. They are composed from a stable daemon
+    // CODE rather than from the daemon's sentence, precisely so they can sit
+    // on this list — a refusal that only exists at runtime cannot be
+    // reflected, and every one of these was invisible with scripting off.
+    N_SAVE_BLOCKING,
+    N_PLAY_BLOCKING,
+    N_SAVE_NO_BINDINGS,
+    N_PLAY_NO_BINDINGS,
+    N_SAVE_NO_DEVICE,
+    N_PLAY_NO_DEVICE,
+    N_SAVE_NO_SLOTS,
+    N_PLAY_NO_SLOTS,
+    N_SAVE_CAPTURE,
+    N_PLAY_CAPTURE,
+    N_PLAY_OUTPUT_BLOCKED,
+    N_PLAY_OUTPUT_UNKNOWN,
+    N_GAME_SLOTS_ERROR,
+    N_FORM_UNREADABLE,
     // The verbs migrated from /setup and /profiles. Absent from this list,
     // each rendered as N_UNKNOWN_FLASH_ERROR with scripting off — the page
     // said "that request could not be finished" after a write that had in
@@ -348,9 +454,61 @@ pub(super) fn nocturne_flash_from_query(flash: Option<&str>) -> Option<String> {
     )
 }
 
+/// A form this page might not be able to read.
+///
+/// **Not pedantry.** The island fetch-submits and reads its outcome out of the
+/// redirect's `?flash=`; axum's own rejection is a 422 with NO `Location`, so
+/// the page shows nothing whatsoever and the user is left pressing a button
+/// that appears to do nothing. And the bodies that take that arm are ones
+/// this page SERVES: `<input type="hidden" name="number" value="">` on the
+/// clear-all fold whenever no slot is selected, the same on the macro
+/// lifecycle forms and the SOCD editor. Every handler whose form has a
+/// required field takes this instead of `Form<T>` and answers in a sentence.
+type NocturneForm<T> = Result<Form<T>, axum::extract::rejection::FormRejection>;
+
 fn nocturne_redirect(flash: &str) -> Response {
     Redirect::to(&format!("/nocturne?flash={}", urlencode(flash))).into_response()
 }
+
+// ── The page's own words for a read that refused ───────────────────────────
+//
+// A refused read is NOT an empty machine, and it is not a place to print the
+// provider's diagnostics either. `flash_of` composes an operator's line —
+// it appends the refusal's `remedy` to a `message` that, for
+// `Refusal::not_here`, already ENDS in that same remedy, so the config menu
+// read `… is not available on this surface — run \`ksx setup\` — run \`ksx
+// setup\`` on screen. A TOML parse failure printed `expected \`=\` at line 4`
+// under the saved-games list. Both are the same defect: the provider's text
+// crossing the presentation boundary (`verb_flash`'s rule, applied to the
+// READS as well as to the writes).
+//
+// These sentences say which resource could not be read and what to do, and
+// nothing else. The typed detail stays available to the poller through the
+// payload's own `scan` / `setup` / `games` / `autostart_read` being empty or
+// null beside a non-empty `*_error`, which is how a machine tells a refused
+// read from an empty one.
+
+pub(super) const N_READ_SCAN_ERROR: &str =
+    "The device list could not be read. Reopen ksx and try again.";
+pub(super) const N_READ_SETUP_ERROR: &str =
+    "Configuration could not be read. Reopen ksx and try again.";
+pub(super) const N_READ_GAMES_ERROR: &str =
+    "Saved games could not be read. Reopen ksx and try again.";
+pub(super) const N_READ_AUTOSTART_ERROR: &str =
+    "What happens at sign-in could not be read. Reopen ksx and try again.";
+
+/// The daemon-down banner, in the page's one status region.
+///
+/// FIX 1's rule survived the cutover as a requirement and not as code: quit
+/// the helper and `/nocturne` still opened onto a live-looking device list, an
+/// empty rack, and one collapsed `<details>` chip reading "Draft unavailable".
+/// Nothing above the fold said the thing the whole page edits is gone. This
+/// sentence is served into `nFlashLine` — `role="status"`, immediately above
+/// `<main>` — whenever the draft cannot be reached and no action flash of its
+/// own is competing for the slot.
+pub(super) const N_DAEMON_DOWN: &str = "error: This screen needs the ksx background helper, and \
+     it is not answering. Close and reopen ksx; nothing on this page has been changed, and \
+     nothing you do here can take effect until it is back.";
 
 // ── The reads ───────────────────────────────────────────────────────────────
 
@@ -374,22 +532,32 @@ pub(super) async fn collect_nocturne(
         let session = state.control.session();
         let (scan, unavailable) = match state.machine_cache.device_scan(&*state.machine) {
             Ok(scan) => (scan, String::new()),
-            Err(refusal) => (ksx_api::DeviceScanView::default(), flash_of(refusal)),
+            // Same boundary as the three reads below: `unavailable` non-empty
+            // is what makes every count on the left pane say "unavailable"
+            // instead of zero, and its TEXT is printed under the device list.
+            Err(_) => (
+                ksx_api::DeviceScanView::default(),
+                N_READ_SCAN_ERROR.to_owned(),
+            ),
         };
         // The configuration menu's three reads, each degrading to its own
         // honest sentence rather than an empty pane (SURFACES.md §1b).
+        // The refusal itself is dropped on purpose: it is a diagnostic, and
+        // every one of these strings is rendered as primary customer copy
+        // (the config-menu meta line, the note under the saved-games list,
+        // the sign-in fold). See the three constants above.
         let (setup, setup_error) = match state.machine_cache.setup_state(&*state.machine) {
             Ok(view) => (Some(view), String::new()),
-            Err(refusal) => (None, flash_of(refusal)),
+            Err(_) => (None, N_READ_SETUP_ERROR.to_owned()),
         };
         let (games, games_error) = match state.machine_cache.profiles(&*state.machine) {
             Ok(view) => (Some(view), String::new()),
-            Err(refusal) => (None, flash_of(refusal)),
+            Err(_) => (None, N_READ_GAMES_ERROR.to_owned()),
         };
         let (autostart_read, autostart_error) = match state.machine_cache.autostart(&*state.machine)
         {
             Ok(view) => (Some(view), String::new()),
-            Err(refusal) => (None, flash_of(refusal)),
+            Err(_) => (None, N_READ_AUTOSTART_ERROR.to_owned()),
         };
         // The undo chip: composed from the SERVER-held stash while its
         // window is open; an expired stash is dropped here so a late click
@@ -409,7 +577,7 @@ pub(super) async fn collect_nocturne(
                 )
             })
         };
-        NocturnePayload {
+        let payload = NocturnePayload {
             environment,
             staged,
             scan,
@@ -426,8 +594,8 @@ pub(super) async fn collect_nocturne(
             autostart_read,
             autostart_error,
             view: Default::default(),
-        }
-        .derived()
+        };
+        offer_held_release(payload.derived())
     })
     .await
     .unwrap_or_else(|_| {
@@ -436,14 +604,19 @@ pub(super) async fn collect_nocturne(
             staged: ksx_api::StagedSetupView::unreachable("the nocturne collection panicked"),
             scan: ksx_api::DeviceScanView::default(),
             session: SessionView::unreachable("the nocturne collection panicked"),
-            unavailable: "the device scan panicked — nothing below is a reading of this machine"
-                .to_owned(),
+            // A collection that panicked is still a read that did not
+            // happen, and these four strings are rendered as customer copy —
+            // "the games read panicked" under the saved-games list is the
+            // same boundary violation as printing a TOML parse error there.
+            // The `staged`/`session` unreachable reasons above stay diagnostic
+            // because nothing paints them as prose.
+            unavailable: N_READ_SCAN_ERROR.to_owned(),
             setup: None,
-            setup_error: "the configuration read panicked".to_owned(),
+            setup_error: N_READ_SETUP_ERROR.to_owned(),
             games: None,
-            games_error: "the games read panicked".to_owned(),
+            games_error: N_READ_GAMES_ERROR.to_owned(),
             autostart_read: None,
-            autostart_error: "the sign-in read panicked".to_owned(),
+            autostart_error: N_READ_AUTOSTART_ERROR.to_owned(),
             selected: None,
             q: None,
             macro_selected: None,
@@ -452,6 +625,59 @@ pub(super) async fn collect_nocturne(
         }
         .derived()
     })
+}
+
+/// **The way back does not go through the staged setup.**
+///
+/// A keyboard Windows has bound to `winusb.sys` does not type. Until it is
+/// released it is not a keyboard at all — and on a fresh install, or after a
+/// QA reset that moves `config.toml` aside, NOTHING is staged, because the
+/// binding is Windows's and not the configuration's. The capture card is
+/// composed from the STAGE (`StartCaptureView::from_parts`), so in that state
+/// its release control is not merely hidden: it does not exist, and the only
+/// documented exit is `docs/RECOVERY.md` and an elevated shell
+/// (`docs/FIRST-RUN.md` §6). That is the 2026-08-11 QA report verbatim: "the
+/// release button only comes up once I select a keyboard to bind... but the
+/// ipac was already bound and it was not showing the unrelease."
+///
+/// The deleted `/start` page answered it with a second, MACHINE-keyed list
+/// (`StartRows::prepared`). This page has one capture card, so the card is
+/// re-pointed instead: when it is offering neither action of its own and the
+/// scan says some board is held, it becomes that board's way back. Prepare
+/// stays stage-keyed — it edits the draft — while Release is machine-keyed,
+/// which is exactly how [`capture_target`] already resolves the release
+/// direction on the POST side. The two halves now agree.
+fn offer_held_release(mut payload: NocturnePayload) -> NocturnePayload {
+    // The stage is already offering something for this keyboard; a machine
+    // fact must not silently replace an action the user was reading.
+    if payload.view.cap_prepare || payload.view.cap_release {
+        return payload;
+    }
+    let held = payload.scan.boards.iter().find(|board| {
+        board.claimed
+            && board
+                .selector
+                .as_deref()
+                .is_some_and(|selector| !selector.trim().is_empty())
+            && board
+                .keyboard
+                .as_deref()
+                .is_some_and(|instance| !instance.trim().is_empty())
+    });
+    let Some(board) = held else {
+        return payload;
+    };
+    let selector = board.selector.clone().unwrap_or_default();
+    payload.view.cap_instance = board.keyboard.clone().unwrap_or_default();
+    payload.view.cap_line = format!(
+        "Keyboards ksx is holding: {} ({selector}). It cannot type until it is released here.",
+        board.name
+    );
+    payload.view.cap_selector = selector;
+    payload.view.cap_release = true;
+    payload.view.capd_cls = "n-capd".to_owned();
+    payload.view.cap_sw_cls = "n-capsw on".to_owned();
+    payload
 }
 
 /// `GET /nocturne` — the page, server-rendered from the real keyboard facts.
@@ -488,7 +714,13 @@ pub(super) async fn nocturne_page_handler(
         query.macro_name.clone(),
     )
     .await;
-    let flash = nocturne_flash_from_query(query.flash.as_deref());
+    // FIX 1, kept: an unreachable draft is announced ABOVE `<main>`, in the
+    // page's one `role="status"` region, and not left to a collapsed chip
+    // three folds down. An action flash always wins the slot — it is the
+    // answer to something the user just did, and this state is still visible
+    // in every inert control underneath.
+    let flash = nocturne_flash_from_query(query.flash.as_deref())
+        .or_else(|| (!payload.staged.reachable).then(|| N_DAEMON_DOWN.to_owned()));
     let theme = page_theme(&state).await;
     let out = crate::render::with_theme(
         render_nocturne(&state.nocturne_page, &payload, flash.as_deref()),
@@ -582,8 +814,11 @@ pub(super) struct NocturneDeviceForm {
 /// freely. One staged value in the daemon and nothing else.
 pub(super) async fn nocturne_form_device(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneDeviceForm>,
+    form: NocturneForm<NocturneDeviceForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let ok = tokio::task::spawn_blocking(move || {
         state
             .control
@@ -784,9 +1019,7 @@ fn game_slots(raw: &str) -> Result<u8, &'static str> {
         // answer, and the planner refuses 0 by name.
         return Ok(0);
     }
-    trimmed
-        .parse::<u8>()
-        .map_err(|_| "how many players must be a whole number")
+    trimmed.parse::<u8>().map_err(|_| N_GAME_SLOTS_ERROR)
 }
 
 #[derive(Deserialize)]
@@ -1118,8 +1351,11 @@ pub(super) async fn nocturne_form_theme(
 /// changed as often as wanted.
 pub(super) async fn nocturne_form_blocking(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneBlockingForm>,
+    form: NocturneForm<NocturneBlockingForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let ok = tokio::task::spawn_blocking(move || {
         state
             .control
@@ -1466,8 +1702,11 @@ pub(super) struct NocturneAddForm {
 /// the fresh slot in the same request.
 pub(super) async fn nocturne_form_add(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneAddForm>,
+    form: NocturneForm<NocturneAddForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let flash = tokio::task::spawn_blocking(move || {
         let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
             number: None,
@@ -1526,8 +1765,11 @@ pub(super) async fn nocturne_form_add(
 /// the server cannot keep.
 pub(super) async fn nocturne_form_remove(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneSlotForm>,
+    form: NocturneForm<NocturneSlotForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let flash = tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
         let stash = staged
@@ -1626,8 +1868,11 @@ pub(super) struct NocturneMoveForm {
 /// lands on /nocturne.
 pub(super) async fn nocturne_form_move(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneMoveForm>,
+    form: NocturneForm<NocturneMoveForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let numbers: Vec<u8> = form
         .order
         .split_whitespace()
@@ -1650,8 +1895,11 @@ pub(super) struct NocturneSocdForm {
 /// Moved from /workspace with the move verb above.
 pub(super) async fn nocturne_form_socd(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneSocdForm>,
+    form: NocturneForm<NocturneSocdForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     nocturne_stage_edit(
         state,
         ksx_api::StageEdit::SetSocd {
@@ -1714,8 +1962,11 @@ pub(super) async fn nocturne_api_apply(State(state): State<Arc<AppState>>) -> Re
 /// their steps). One SetBindings, so a refusal changes nothing.
 pub(super) async fn nocturne_form_clear_all(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneSlotForm>,
+    form: NocturneForm<NocturneSlotForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let flash = tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
         let Some(slot) = staged.slots.iter().find(|slot| slot.number == form.number) else {
@@ -1753,8 +2004,11 @@ pub(super) struct NocturneKeyClearForm {
 /// (force: shrinking a key list consents to nothing new).
 pub(super) async fn nocturne_form_key_clear(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneKeyClearForm>,
+    form: NocturneForm<NocturneKeyClearForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let flash = tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
         let Some(slot) = staged.slots.iter().find(|s| s.number == form.number) else {
@@ -1841,8 +2095,11 @@ pub(super) async fn nocturne_form_key_clear(
 /// removed again if the middle step refuses. Moved from /workspace verbatim.
 pub(super) async fn nocturne_form_duplicate(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneSlotForm>,
+    form: NocturneForm<NocturneSlotForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let flash = tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
         let Some(source) = staged.slots.iter().find(|slot| slot.number == form.number) else {
@@ -2282,8 +2539,11 @@ pub(super) struct NocturneTurboForm {
 /// never a silent clear (docs/INPUT-TRANSFORMS.md §3, /map's rule kept).
 pub(super) async fn nocturne_form_bind_turbo(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneTurboForm>,
+    form: NocturneForm<NocturneTurboForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let raw = form.turbo_hz.as_deref().map(str::trim).unwrap_or("");
     let Ok(hz) = raw.parse::<u32>() else {
         return nocturne_redirect(N_TURBO_INPUT_ERROR);
@@ -2342,8 +2602,11 @@ pub(super) struct NocturneToggleForm {
 /// only thing that changes (docs/INPUT-TRANSFORMS.md §3b).
 pub(super) async fn nocturne_form_bind_toggle(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneToggleForm>,
+    form: NocturneForm<NocturneToggleForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let latch = match form.mode.as_str() {
         "toggle" => true,
         "hold" => false,
@@ -2493,8 +2756,11 @@ async fn nocturne_macro_write(
 /// disabling instead of deleting.
 pub(super) async fn nocturne_form_macro_toggle(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneMacroForm>,
+    form: NocturneForm<NocturneMacroForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let enable = checked(form.enable.as_deref());
     nocturne_macro_write(
         state,
@@ -2515,8 +2781,11 @@ pub(super) async fn nocturne_form_macro_toggle(
 /// editor opens on it.
 pub(super) async fn nocturne_form_macro_new(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneMacroForm>,
+    form: NocturneForm<NocturneMacroForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let name = form.name.trim().to_owned();
     if name.is_empty() {
         return nocturne_redirect(N_MACRO_NAME);
@@ -2584,8 +2853,11 @@ pub(super) async fn nocturne_form_macro_new(
 /// until Save.
 pub(super) async fn nocturne_form_macro_delete(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneMacroForm>,
+    form: NocturneForm<NocturneMacroForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     nocturne_macro_write(
         state,
         form.slot,
@@ -2610,8 +2882,11 @@ pub(super) struct NocturneClearForm {
 /// the canonical clear placeholder. Moved from /workspace verbatim.
 pub(super) async fn nocturne_form_bind_clear(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneClearForm>,
+    form: NocturneForm<NocturneClearForm>,
 ) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(N_FORM_UNREADABLE);
+    };
     let ok = tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
         let Some(slot) = staged.slots.iter().find(|s| s.number == form.slot) else {
@@ -2642,43 +2917,147 @@ pub(super) async fn nocturne_form_bind_clear(
 }
 
 /// POST /nocturne/save — the ONE writing verb: stage-commit.
+///
+/// Save's gate is deliberately the WEAKER one. Committing the staged files is
+/// safe and useful on a machine whose controller driver is missing or could
+/// not be read, so the output readiness Play consults is not consulted here;
+/// only the capture disagreement is, because a saved draft that names the
+/// wrong capture path would replay the same dead session tomorrow.
 pub(super) async fn nocturne_form_save(State(state): State<Arc<AppState>>) -> Response {
+    let disagrees = {
+        let state = Arc::clone(&state);
+        tokio::task::spawn_blocking(move || capture_disagrees(&state))
+            .await
+            .unwrap_or(false)
+    };
+    if disagrees {
+        return nocturne_redirect(N_SAVE_CAPTURE);
+    }
     let outcome = tokio::task::spawn_blocking(move || state.control.stage_commit()).await;
-    nocturne_redirect(&stage_flash(outcome, N_SAVE_OK, N_SAVE_ERROR))
+    nocturne_redirect(stage_flash(outcome, StageVerb::Save))
+}
+
+/// Which of the two writing verbs a refusal belongs to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StageVerb {
+    Save,
+    Play,
 }
 
 /// One [`ksx_api::StageOutcome`] as the sentence this page flashes.
 ///
-/// The daemon composes a refusal with an `error`, a stable `code` and often a
-/// `remedy` — the verb that works anyway. All three were being dropped for a
-/// canned line, which is how "The setup could not be saved" managed to say
-/// nothing about why. Carry the daemon's own words, and the remedy after them.
+/// **The CODE decides, never the daemon's sentence.** A `StageRefusal` is
+/// written for an operator: it names `slot 1`, `Persona::backend()`,
+/// `ksx_core::MAX_SLOTS` and file paths, and carrying it verbatim put all of
+/// that under a button on the product page. It also cost us the thing the
+/// carrying was supposed to preserve — a runtime-composed sentence cannot be
+/// on [`N_FLASH_ALLOWLIST`], so with scripting off every one of these refusals
+/// degraded to the generic "could not be finished" anyway. Selecting one of
+/// this page's own sentences off the stable code keeps the specific reason on
+/// BOTH doors and leaks nothing (`verb_flash`'s rule, applied to the stage).
+///
+/// The success line is this page's too: `stage_commit` answers "saved to
+/// config.toml" and `stage_play` "the staged setup is playing", which are the
+/// daemon's nouns and are likewise unreflectable.
 fn stage_flash(
     outcome: Result<ksx_api::StageOutcome, tokio::task::JoinError>,
-    ok_line: &str,
-    fallback: &str,
-) -> String {
+    verb: StageVerb,
+) -> &'static str {
     let Ok(outcome) = outcome else {
-        return as_error("that verb panicked; nothing was written".to_owned());
+        return match verb {
+            StageVerb::Save => N_SAVE_ERROR,
+            StageVerb::Play => N_PLAY_ERROR,
+        };
     };
     if outcome.ok {
-        return outcome.message.unwrap_or_else(|| ok_line.to_owned());
+        return match verb {
+            StageVerb::Save => N_SAVE_OK,
+            StageVerb::Play => N_PLAY_OK,
+        };
     }
-    let mut line = outcome
-        .error
-        .or(outcome.message)
-        .unwrap_or_else(|| fallback.to_owned());
-    if let Some(remedy) = outcome.remedy.filter(|r| !r.trim().is_empty()) {
-        line.push_str(&format!(" {remedy}"));
+    match (verb, outcome.code.as_deref().unwrap_or_default()) {
+        (StageVerb::Save, "blocking-unanswered") => N_SAVE_BLOCKING,
+        (StageVerb::Play, "blocking-unanswered") => N_PLAY_BLOCKING,
+        (StageVerb::Save, "no-bindings") => N_SAVE_NO_BINDINGS,
+        (StageVerb::Play, "no-bindings") => N_PLAY_NO_BINDINGS,
+        (StageVerb::Save, "no-device") => N_SAVE_NO_DEVICE,
+        (StageVerb::Play, "no-device") => N_PLAY_NO_DEVICE,
+        (StageVerb::Save, "no-slots") => N_SAVE_NO_SLOTS,
+        (StageVerb::Play, "no-slots") => N_PLAY_NO_SLOTS,
+        (StageVerb::Save, _) => N_SAVE_ERROR,
+        (StageVerb::Play, _) => N_PLAY_ERROR,
     }
-    as_error(line)
+}
+
+/// **The capture gate, repeated in the handlers.**
+///
+/// The staged keyboard and the machine can disagree about who is holding it:
+/// the draft names the ordinary Windows path over a board `winusb.sys` has
+/// already taken, or names the built-in path over a board nothing has
+/// prepared. Either way the pads plug and no key reaches them. This lived in
+/// `SetupFlags::can_save`/`can_play` on the deleted `/start` page — i.e. in
+/// the BUTTON — and a hand-authored POST walked straight past it. Both
+/// writing verbs consult it now, before they touch the daemon.
+///
+/// A scan that could not be read does not gate anything: an unreadable
+/// machine is not evidence of a disagreement, and refusing Play over it would
+/// turn a temporary read failure into a locked-out cabinet.
+fn capture_disagrees(state: &AppState) -> bool {
+    let staged = state.control.staged();
+    let Some(device) = staged.device.as_ref().filter(|_| staged.reachable) else {
+        return false;
+    };
+    let Ok(scan) = state.machine.device_scan() else {
+        return false;
+    };
+    let Some(board) = scan
+        .boards
+        .iter()
+        .find(|board| board.selector.as_deref() == Some(device.selector.as_str()))
+    else {
+        return false;
+    };
+    match device.backend.as_str() {
+        "winusb" => !board.claimed,
+        "interception" => board.claimed,
+        // Any other backend name is not a capture transition this page owns.
+        _ => false,
+    }
 }
 
 /// POST /nocturne/play — start a session from the staged setup, writing
-/// nothing. The daemon gates readiness; a refusal flashes without a start.
+/// nothing. Three gates, in the order that costs least: the capture
+/// disagreement (a cheap re-read), the required controller OUTPUTS (Play's
+/// own gate — see [`N_PLAY_OUTPUT_BLOCKED`]), and then the domain's.
 pub(super) async fn nocturne_form_play(State(state): State<Arc<AppState>>) -> Response {
+    let gate = {
+        let state = Arc::clone(&state);
+        tokio::task::spawn_blocking(move || {
+            if capture_disagrees(&state) {
+                return Some(N_PLAY_CAPTURE);
+            }
+            // A machine that cannot answer at all is `unknown`, which is
+            // exactly the state that must not plug a pad it cannot vouch for.
+            let outputs = state
+                .machine
+                .controller_outputs(&state.control.staged())
+                .unwrap_or_default();
+            if outputs.blocked {
+                Some(N_PLAY_OUTPUT_BLOCKED)
+            } else if outputs.unknown {
+                Some(N_PLAY_OUTPUT_UNKNOWN)
+            } else {
+                None
+            }
+        })
+        .await
+        .unwrap_or(Some(N_PLAY_ERROR))
+    };
+    if let Some(refusal) = gate {
+        return nocturne_redirect(refusal);
+    }
     let outcome = tokio::task::spawn_blocking(move || state.control.stage_play()).await;
-    nocturne_redirect(&stage_flash(outcome, N_PLAY_OK, N_PLAY_ERROR))
+    nocturne_redirect(stage_flash(outcome, StageVerb::Play))
 }
 
 /// POST /nocturne/stop — end the session; keyboards type normally again.

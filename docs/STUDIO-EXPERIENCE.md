@@ -4,13 +4,23 @@ This document is the product-level contract for KSX Studio: what the experience
 is for, how its screens fit together, how Mapping behaves, and how the current
 source must be validated before it is described as release-proven.
 
-> **Status snapshot — 2026-08-15.** The live worktree contains the experience
-> described below in TypeScript, CSS, Rust rendering seams, tests, and CI
-> configuration. In this document, **implemented / source-ready** means that
-> the behavior is represented in those current source files. It does not mean
-> the current worktree has compiled on a clean runner, that generated assets
-> have been independently observed to match the sources, or that a person has
-> completed the clean-machine Windows journey. Those are separate gates.
+> **Status snapshot — 2026-08-15, re-dated 2026-08-25.** The live worktree
+> contains the experience described below in TypeScript, CSS, Rust rendering
+> seams, tests, and CI configuration. In this document, **implemented /
+> source-ready** means that the behavior is represented in those current source
+> files. It does not mean the current worktree has compiled on a clean runner,
+> that generated assets have been independently observed to match the sources,
+> or that a person has completed the clean-machine Windows journey. Those are
+> separate gates.
+>
+> **What changed on 2026-08-25.** Studio cut over to a single product page.
+> `/nocturne` now carries the whole set-up-and-play workflow; `/`, `/start`,
+> `/map`, `/setup`, `/profiles` and `/workspace` were deleted and 404. The
+> tool pages `/check`, `/pads` and `/devices` are unchanged. The four-stage
+> journey below survives as **stages within one page** rather than four
+> destinations, and the sections that described the page BOUNDARY as the
+> mechanism have been rewritten rather than re-pointed — a boundary that no
+> longer exists cannot still be doing the work the old text credited it with.
 
 The existing product contracts remain authoritative for safety and backend
 behavior: [FIRST-RUN.md](FIRST-RUN.md), [SURFACES.md](SURFACES.md),
@@ -35,9 +45,12 @@ not be treated as synonyms.
 ### What is working in the current source
 
 - **One navigable product story.** Keyboard → Controller → Mapping → Play is
-  visible on every Studio route. On guided Setup, its server-owned markers
-  show done, next, blocked, ready, or active with an accessible explanation;
-  it remains navigation rather than a locked wizard.
+  the shape of the product page, and every tool page carries one **Set up &
+  play** link back to it. Progress markers are server-owned — done, next,
+  blocked, ready, active, each with an accessible explanation; it remains
+  navigation rather than a locked wizard. Until 2026-08-25 the four stages were
+  four routes and the rail was four numbered links; the stages did not change,
+  the destinations collapsed into one.
 - **Clear authority boundaries.** Browsing, selecting, and staged mapping are
   non-persistent. Save crosses the disk boundary. Play starts the staged value.
   Keyboard preparation is an explicit, separately consented machine action.
@@ -87,43 +100,79 @@ not be treated as synonyms.
 
 ### Primary rail
 
-| Stage | Destination | Purpose | Persistence boundary |
-| --- | --- | --- | --- |
-| 1 · Keyboard | /start#keyboard | Discover, identify, and choose the physical keyboard or panel. | Selection changes the in-memory stage only. |
-| 2 · Controller | /start#controller | Add a persona and starting layout for each player. | Controller choices remain staged. No pad is plugged. |
-| 3 · Mapping | /map, or /map?target=stage&slot=N | Author controls, keys, turbo, and macros for one player at a time. | Saved target writes the preset; staged target changes only the daemon-held draft. |
-| 4 · Play | / and the /start ready check | Save for later, start the current staged setup, or operate a saved session. | Save writes without starting. Play starts without implicitly saving. |
+All four stages are regions of `/nocturne`. The **Persistence boundary** column
+is the load-bearing one and is unchanged by the cutover — it was always a
+property of the staging contract, never of the URL.
 
-The numbered rail is always visible. Experts may jump directly to any stage;
-the interface does not trap them in a next/back wizard. Guided Setup composes
-its progress state on the server from the staged device, controller, mapping,
-capture, output-backend, and session facts. A compact badge shows **done**,
-**next**, **waiting**, **blocked**, **ready**, or **active**; the same link
-carries the full explanation for assistive technology. Page cards retain the
+| Stage | Where it lives on `/nocturne` | Purpose | Persistence boundary |
+| --- | --- | --- | --- |
+| 1 · Keyboard | Left pane — **Input hardware** → **Keyboards**, plus the prepared-for-play card | Discover, identify, and choose the physical keyboard or panel. | Selection changes the in-memory stage only. |
+| 2 · Controller | Left pane — **Virtual controllers**, and the "Create a virtual controller" form | Add a persona and starting layout for each player. | Controller choices remain staged. No pad is plugged. |
+| 3 · Mapping | Centre canvas + right pane (**Mapping inspector**); `?slot=N` selects the player | Author controls, keys, turbo, and macros for one player at a time. | The draft only. There is no second target any more — see below. |
+| 4 · Play | Top bar — **Save**, **⟳ Apply**, **▷ Play**, **⏹ Stop**, with the saved/unsaved line beside them | Save for later, start the current staged setup, or operate a running session. | Save writes without starting. Play starts without implicitly saving. |
+
+*Stage 3 lost a column of its own.* It used to read "Saved target writes the
+preset; staged target changes only the daemon-held draft", and `target=stage`
+in the URL is what chose between them. `/nocturne` has one subject, so the
+mapper always edits the draft and Save is the only thing that reaches a preset
+file. That is simpler to explain and it removes a whole class of "which one did
+I just edit?" — at the cost of the saved-preset editing path, which now has no
+direct face and arrives via adopt → edit → Save.
+
+Experts may start at any stage; the interface does not trap them in a next/back
+wizard. Progress state is composed on the server from the staged device,
+controller, mapping, capture, output-backend, and session facts. A compact badge
+shows **done**, **next**, **waiting**, **blocked**, **ready**, or **active**,
+and carries the full explanation for assistive technology. Cards retain the
 detailed recovery action rather than duplicating business logic in the rail.
 
 ### Tools
 
+The Tools menu is exactly four entries, and the fourth is the way back to the
+product (`CheckIsland.ts` / `DevicesIsland.ts` build the same list):
+
 | Label | Route | Job |
 | --- | --- | --- |
 | Test inputs | /check | Read-only live controller and key feedback. |
-| Game library | /profiles | Create, switch, update, rebase, and delete saved launch profiles. |
 | Hardware | /devices | Read, pick, remove, and recover device identities. |
 | Virtual controllers | /pads | Inspect ViGEm pads, spawn bounded test pads, and prune stale pads with explicit confirmation. |
-| Import & recovery | /setup | Maintain the saved configuration, prove a press, export, dry-run import, and perform advanced recovery. |
+| Set up & play | /nocturne | The product: keyboard, controllers, games and configuration. |
 
-Tools are one deliberate action away, but they do not compete with the
-four-stage journey in the top rail.
+Two entries left this table on 2026-08-25 and neither became a tool. **Game
+library** (`/profiles`) is now the **Saved games** section of `/nocturne`'s
+Configuration menu, and **Import & recovery** (`/setup`) is the Export/Import
+pair in that same menu. Moving them INWARD rather than sideways is the point:
+they are things you do to the configuration you are looking at, not separate
+instruments.
 
-### Two setup surfaces with different contracts
+### One page now holds two contracts, and that is the risk it took on
 
-- **/start is a staged proposal.** It does not seed its draft from the saved
-  configuration, and it does not write until Save.
-- **/setup is saved-configuration maintenance.** Each accepted action is a
-  complete backend act; there is no half-committed multi-page wizard.
+The version of this section written before the cutover described two surfaces:
 
-Making the pages visually related is useful. Making their persistence rules
-look interchangeable is a defect.
+- **/start was a staged proposal.** It did not seed its draft from the saved
+  configuration, and it did not write until Save.
+- **/setup was saved-configuration maintenance.** Each accepted action was a
+  complete backend act; there was no half-committed multi-page wizard.
+
+It ended: *"Making the pages visually related is useful. Making their
+persistence rules look interchangeable is a defect."*
+
+**That warning did not expire when the second page did — it got harder to
+obey.** Both contracts now live on `/nocturne`, side by side, with no URL to
+tell them apart. The staged half is everything in the three panes: choosing a
+keyboard, adding a controller, binding a key, answering split-or-freeze. The
+committed half is a short list and it is deliberately gathered in one place,
+the Configuration menu: **Load the saved configuration into this draft**,
+**Discard this draft**, the saved-game create/edit/delete rows, **Export the
+configuration (download)**, **Import a configuration…**, and the sign-in task.
+**Save** in the top bar is the one control that moves work from the first half
+to the second, and it is the only one.
+
+So the rule that replaces the page boundary is: *a control that commits is
+either the Save button or lives inside the Configuration menu.* A committing
+control that appears loose among the staging panes is a defect in exactly the
+way the old sentence meant, and there is no longer a URL that would have caught
+it for us.
 
 ### Shared shell
 
@@ -221,45 +270,62 @@ Goal: “Use this exact setup now, keep it for later, or both.”
 
 The ready check presents two equally explicit decisions:
 
-- **Save this setup** writes it for later and starts nothing.
-- **Start playing** uses the exact current stage and saves nothing.
+- **Save** writes it for later and starts nothing.
+- **▷ Play** uses the exact current stage and saves nothing.
 
-If another session is active, replacing it is stated before Play. Guide/Home
-links to the relevant Windows Game Bar setting rather than changing it.
-Starting over discards only the stage.
+Both sit in the top bar with the saved/unsaved line between them, alongside
+**⟳ Apply** (offered only while a session runs and the draft is dirty) and
+**⏹ Stop**. If another session is active, replacing it is stated before Play.
+Guide/Home is meant to link to the relevant Windows Game Bar setting rather than
+changing it — that link has never been built (`FIRST-RUN.md` §7). Starting over
+discards only the stage, behind **Start over…** → **Discard this draft** in the
+Configuration menu.
 
-The / route is the everyday operator surface for saved setups: it shows the
-gameplay state at cabinet distance, Start or Stop/Reload, active duration,
-capture/output facts, the emergency release, virtual-pad inventory, launch
-profiles, and quiet system evidence.
+The everyday operator surface for saved setups used to be its own route (`/`).
+It is the same page now: gameplay state at cabinet distance, Play or Stop,
+capture/output facts, virtual-pad inventory, saved games and quiet system
+evidence are all readings on `/nocturne`. The cabinet-distance argument for a
+dedicated operator screen did not go away with the route, and it is the strongest
+open objection to the single-page design — a person standing at a machine
+mid-evening wants the operating controls and none of the authoring ones.
 
 ## 5. Screen mental wireframes
 
 These diagrams describe hierarchy and reading order, not pixel dimensions.
 
-### Guided setup
+### The product page
+
+The single-column wireframe below is how guided setup read as its own route,
+before 2026-08-25. It is kept because it is still the right READING ORDER — what
+a first-run visitor must meet, and in what sequence — and because the shipped
+three-pane layout has to satisfy it on a narrow screen, where the panes stack.
 
 ~~~text
-┌ ksx Studio ─ [1 Keyboard] [2 Controller] [3 Mapping] [4 Play] ─ Tools ─ state ┐
-│ Guided setup                                                                │
+┌ ksx Studio ─ Set up & play ─ Tools ─ [▣ Configuration] [Save] [▷ Play] [⏹ Stop]┐
 │ Turn your keyboard into a controller                                        │
 │ [Nothing changes when you browse] [Hardware changes ask first] [Exact setup] │
 ├ Recovery: keyboards KSX is holding, when any exist                           ┤
-├ Step 1 · Hardware                                                            ┤
+├ Stage 1 · Input hardware                                                     ┤
 │ Identify by pressing a key · device rows · Other devices · Rescan            │
-├ Step 2 · Virtual controller                                                  ┤
-│ staged players · Map controls · change/remove · add persona/layout            │
-├ Step 3 · Mapping                                                             ┤
-│ choose layout · inspect layout expectations · open complete mapper            │
+├ Keyboard capture Prepare / Release / blocked card, exactly one state          ┤
+├ Stage 2 · Virtual controllers                                                ┤
+│ staged players · change/remove/duplicate · add persona + starting layout      │
+├ Stage 3 · Mapping                                                            ┤
+│ the canvas · the Mapping inspector · macros · turbo                           │
 ├ Required choice: Should this keyboard keep typing?                            ┤
 │ Split / Freeze · escape hatch · session-only scope                            │
 ├ Output readiness warning, only when true                                     ┤
-├ Keyboard capture Prepare / Release / blocked card, exactly one state          ┤
-├ Step 4 · Ready check                                                         ┤
-│ [Save this setup]                         [Start playing]                      │
-│ Game Bar remedy · Start over                                                  │
-└ Secondary disclosures: autostart and advanced paths                           ┘
+├ Stage 4 · Ready check (the top bar, which is sticky)                          ┤
+│ [Save]  saved/unsaved line                       [⟳ Apply] [▷ Play] [⏹ Stop] │
+└ Configuration menu: saved games · export/import · autostart · Start over…     ┘
 ~~~
+
+Two differences from the pre-cutover drawing are decisions, not drift. The
+capture card sits with the keyboard it belongs to rather than after the
+controller step, because it is a fact about that one board. And Stage 4 is the
+top bar rather than the bottom of the page: with authoring and committing on one
+surface, Save has to be visible from wherever you are editing, not reachable
+only by scrolling past everything you have not finished.
 
 ### Mapping on a wide screen
 
@@ -375,9 +441,10 @@ Mapping and Test consume the same read-only /api/live SSE feed.
 
 The mapper paints held and hit states only when:
 
-1. a fresh /api/map response identifies the session currently playing;
-2. that session origin matches the page target: saved setup versus staged
-   draft;
+1. a fresh /api/nocturne response identifies the session currently playing;
+2. that session origin matches what is on screen — which, since the cutover, is
+   always the staged draft, because there is no saved-setup target left to be
+   confused with;
 3. the accepted session fingerprint still matches; and
 4. the stream has not crossed a reconnect, stop, unavailable, in-flight
    generation invalidation, or changed-fingerprint boundary.
@@ -454,6 +521,13 @@ names are supplied independently.
 
 ## 8. State matrix
 
+The **Surface** column names a REGION of `/nocturne`, not a route. `Start`,
+`Map` and `Play` were three pages when this table was written and are the
+keyboard/controller area, the mapper, and the top bar now. The conditions and
+the allowed actions are unchanged — what changed is that moving between them is
+scrolling or clicking a pane, not navigating, so any row whose remedy used to be
+"go to the other page" now means "go to the other part of this one".
+
 | Surface | Condition | Presentation | Allowed action |
 | --- | --- | --- | --- |
 | Any server-rendered surface | Initial navigation or background refresh | Initial navigation waits for a complete server-rendered truth snapshot rather than showing an invented client skeleton. On a failed poll, retained last-successful inventory may remain visible, while current availability and readiness change to unknown or unavailable. | Wait or continue reading retained facts. Writes stay disabled until a successful refresh supplies fresh server state. |
@@ -471,13 +545,12 @@ names are supplied independently.
 | Start | Exact keyboard prepared | ready/release card | Play when otherwise ready; separately confirm Release. |
 | Start | Capture state unreadable or stale | blocked alarm | Do not prepare, release, save, or play from an unverifiable state. |
 | Start | Complete staged setup | Save and Play choices both visible | Save, Play, both in either order, Start over. |
-| Map | No controller | authored empty card | Return to setup and add one. |
+| Map | No controller | authored empty card | Add one from the left pane's **Virtual controllers**. |
 | Map | Daemon/learner unavailable | read-only banner; layout still readable | Use no-JS picker if supported or reopen KSX; no silent click. |
-| Map | Play active | warning with Pause & edit | Pause, then learn; do not pretend the learner can hear while Play owns capture. |
-| Map | Paused for editing | persistent paused banner | Edit and Resume Play. |
-| Map | Staged target | explicit unsaved-setup banner | Edit draft; Back to setup; no preset-file claim. |
+| Map | Play active | warning that the learner cannot hear while Play owns capture | Stop, then learn. *The **Pause & edit** / **Resume Play** pair this row described was deleted on 2026-08-25 along with `/api/session/resume`; there is no pause state to be in any more, and this row is a requirement waiting on a replacement rather than a description.* |
+| Map | Editing the draft | explicit unsaved-setup line beside **Save** | Edit; no preset-file claim. There is no saved target to switch to — adopt first, then edit. |
 | Map | Live inactive | visual status and one durable announcement | Start Play to activate echo. |
-| Map | Different setup playing | mismatch status; no paint | Navigate to or start the matching setup. |
+| Map | Different setup playing | mismatch status; no paint | Load or start the matching setup; the echo stays dark rather than painting the wrong one. |
 | Map | Stream connected, origin checking | transient visual status only | Wait for fresh map/session handshake. |
 | Map | Matching live session | controller, inspector, and selected-slot key shelf illuminate | Observe; mapping writes remain independent actions. |
 | Map | Learn listening | countdown dialog | Press a panel key, Escape, or click outside. |
@@ -485,8 +558,8 @@ names are supplied independently.
 | Map | Cross-player duplicate | conflict dialog naming the other use | Explicitly use here too or cancel; never remove the other binding. |
 | Map | Write accepted | fresh state plus success toast | Undo only when exact recovery is available. |
 | Map | Write refused | error toast naming what did not change | Retry after remedy; no optimistic local mutation. |
-| Play | Idle and startable | large idle state plus profile selector | Start playing. |
-| Play | Running | duration/capture/output/emergency facts | Stop playing or Reload config. |
+| Play | Idle and startable | ready line beside the top bar, saved games in the Configuration menu | Play. |
+| Play | Running | duration/capture/output/emergency facts | Stop, or Apply an edited draft in place. |
 | Tools | Destructive action armed | consequence-specific confirmation | Confirm exact action or cancel; no generic “Are you sure?” detached from scope. |
 
 ## 9. Microcopy
@@ -515,8 +588,8 @@ names are supplied independently.
 | Blocking choice | **Should this keyboard keep typing?** |
 | Mapping hero | **Select a control. Press a key. Keep moving.** |
 | Mapping unavailable | **Mapping needs the background helper** |
-| Play-owned learner | **Pause & edit** / **Resume Play** |
-| Stage 4 | **Save this setup** / **Start playing** |
+| Play-owned learner | **Pause & edit** / **Resume Play** — *retired: the pause-and-map flow and its `/api/session/resume` call were deleted on 2026-08-25, and `ControlSource::resume` now has no Studio caller* |
+| Stage 4 | **Save** / **▷ Play** (with **⟳ Apply** while a session runs and the draft is dirty, and **⏹ Stop**) |
 | Play hero | **Your controllers, ready when you are** |
 | Destructive session action | **Stop playing** |
 | Recovery | **Give this keyboard back to Windows** |
@@ -658,7 +731,10 @@ dedicated remote flow exist.
 
 The Studio browser job is configured for the pinned Windows 2022 runner, Node
 24.19.0 LTS, Playwright 1.62.1, and pinned Chromium. Its visual smoke source builds
-the Studio fixture and captures all eight routes in three contexts:
+the Studio fixture and captures every served path in three contexts. Since the
+cutover that is FIVE path variants — `/nocturne`,
+`/nocturne?slot=1&macro=hadouken`, `/check`, `/pads`, `/devices` — not the eight
+routes this section was written for:
 
 | Context | Viewport | Theme/input |
 | --- | --- | --- |
@@ -666,8 +742,11 @@ the Studio fixture and captures all eight routes in three contexts:
 | light-mobile | 390 × 844 | light, mobile touch/coarse pointer, reduced motion |
 | coarse-cabinet | 1280 × 800 | dark, touch/coarse pointer, reduced motion |
 
-That is 24 route-level images: Start, Play, Mapping, Test, Virtual controllers,
-Hardware, Game library, and Import & recovery in each context.
+That is 15 route-level images: the product page, the product page with a macro
+open on player 1, Test inputs, Virtual controllers and Hardware, in each of the
+three contexts. The macro variant earns its place for the same reason the old
+`/map?slot=1` variant did — it is the only way a dialog-bearing state reaches
+the capture.
 
 Before capture, the current test requires successful HTTP, active hydration,
 no page or console error, the intended pointer/theme media state, no global
@@ -712,11 +791,14 @@ old interface.
 The default fixture cannot represent the whole state matrix. Add deterministic
 named fixtures and capture at least:
 
+The three rows this table used to open with — `/start`, `/map` and `/` — are one
+route now, and its required states are the union of theirs. That is a real
+increase in what one fixture has to express, and it is the argument for named
+fixtures rather than against them: the states did not merge when the pages did.
+
 | Route | Required states |
 | --- | --- |
-| /start | clean empty stage; identified/chosen keyboard; output blocked; capture prepare; capture release; unreadable capture; complete ready stage; session replacement warning |
-| /map | saved target; staged target; no controller; no daemon/read-only; Play active; paused; live inactive; different setup; matching live input; learn listening; existing binding; cross-player conflict; multi-select bar; macros open |
-| / | idle/startable; running with active facts; no daemon; profile list empty; system prerequisite attention |
+| /nocturne | clean empty stage; identified/chosen keyboard; output blocked; capture prepare; capture release; unreadable capture; complete ready stage; session replacement warning; no controller; no daemon/read-only; Play active; live inactive; different setup; matching live input; learn listening; existing binding; cross-player conflict; multi-select bar; macros open; saved-games list empty; system prerequisite attention |
 | /check | live inactive; live fan-out; read unavailable; zero-control roster |
 | Tool routes | readable empty; populated; refused read; destructive confirmation where applicable |
 

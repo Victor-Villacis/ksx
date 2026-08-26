@@ -16271,13 +16271,18 @@ a.nm-link {
 
 .n-surface-head .n-keylab-button {
   margin-inline-start: auto;
-}@keyframes n-panel-signal-hit {
+}
+
+@keyframes n-panel-signal-hit {
   0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--panel-signal-color) 60%, transparent); }
   100% {
     box-shadow:
       0 0 0 2px color-mix(in srgb, var(--panel-signal-color) 24%, transparent),
       0 5px 14px color-mix(in srgb, var(--panel-signal-color) 16%, transparent);
-  }.n-surface-stages {
+  }
+}
+
+.n-surface-stages {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
@@ -17315,7 +17320,10 @@ a.nm-link {
 
   .n-input-test-expected {
     grid-template-columns: 1fr;
-  }@keyframes n-panel-program-progress {
+  }
+}
+
+@keyframes n-panel-program-progress {
   from { transform: translateX(-30%); }
   to { transform: translateX(190%); }
 }

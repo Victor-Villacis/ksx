@@ -3053,92 +3053,67 @@ fn the_brand_icons_are_served_at_their_root_paths() {
     }
 }
 
+// DELETED 2026-08-26: `the_session_panel_round_trips_start_stop_and_the_flash`.
+//
+// Its subject was the status page's session panel: `ControlSource::start(Some
+// (profile))` driven by a profile dropdown, `location: /?flash=running`, and
+// `action="/config/reload"`. All three are gone — `start`, `resume` and
+// `reload` have no call site left in `crates/ksx-studio/src`, `/config/reload`
+// is not a route, and `/` 404s. `/nocturne/play` is `stage_play`, which starts
+// the DRAFT and takes no profile at all.
+//
+// What survives is covered where it now lives: the profile→draft round trip
+// and the fact that loading starts nothing by
+// `loading_a_saved_game_fills_the_draft_and_starts_nothing`; Stop and its
+// return by `stopping_play_returns_to_saved_games`; the adopt/discard flash
+// round trips by `nocturne_serves_the_migrated_configuration_menu_over_http`;
+// and Play's own round trip — refusal starts nothing, success does — by
+// `controller_output_readiness_blocks_play_without_blocking_save`.
+
+/// FIX 1, over real HTTP: the reported failure. Quit the daemon, load the
+/// product page, and the FIRST thing on it must be a plain-language banner.
+///
+/// PORTED 2026-08-26. Two of this test's three claims were about a page that
+/// no longer exists: the headline was `/map`'s, and `<footer>`, `class="card"`,
+/// `z-dead`, `l-dead` and `card pactions off` are that page's DOM vocabulary —
+/// `/nocturne` has panes, `n-flash` and `n-dev`, and no `<footer>` at all in
+/// its first paint. The `ksx daemon --game "…"` support affordance was a
+/// `product-hidden` span on the same deleted card.
+///
+/// The claim that survives is the one the report was about, and it FAILED
+/// against the cutover build: with the helper gone the page opened onto a
+/// live-looking device list, an empty rack and one collapsed `<details>` chip
+/// reading "Draft unavailable" — nothing above the fold said the thing this
+/// whole screen edits is not there. `N_DAEMON_DOWN` is that banner, served
+/// into the page's one `role="status"` region above `<main>`.
 #[test]
-fn the_session_panel_round_trips_start_stop_and_the_flash() {
-    let control = Arc::new(ScriptedControl::new(false));
-    let addr = start_server(control.clone());
-
-    // Idle: the Start form and the profile dropdown render.
-    let page = get(addr, "/nocturne");
-    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
-    assert!(page.contains(r#"action="/nocturne/play""#), "{page}");
-    assert!(page.contains("Example Game"), "{page}");
-    assert!(page.contains("idle"), "{page}");
-
-    // Start with a profile: 303 back to / with the outcome flashed.
-    let response = post_form(addr, "/nocturne/play", "profile=Example+Game");
-    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-    assert!(response.contains("location: /?flash=running"), "{response}");
-    assert_eq!(
-        control.started_with.lock().unwrap().clone(),
-        Some(Some("Example Game".to_owned())),
-        "the form's profile field must reach the control verb"
-    );
-
-    // Following the redirect renders the flash and, now, Stop/Reload.
-    let page = get(addr, "/?flash=running%20%284%20slot%28s%29%29");
-    assert!(page.contains("running (4 slot(s))"), "{page}");
-    assert!(page.contains(r#"action="/nocturne/stop""#), "{page}");
-    assert!(page.contains(r#"action="/config/reload""#), "{page}");
-    assert!(!page.contains(r#"action="/nocturne/play""#), "{page}");
-
-    // The empty sentinel option means "no profile override".
-    let response = post_form(addr, "/nocturne/stop", "");
-    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-    let response = post_form(addr, "/nocturne/play", "profile=");
-    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-    assert_eq!(control.started_with.lock().unwrap().clone(), Some(None));
-}
-
-/// FIX 1, over real HTTP: the reported failure. Quit the daemon, load
-/// either page, and the FIRST thing on it must be a plain-language banner.
-/// The technical recovery command still travels with the page for support,
-/// while the visible Map workflow uses the consumer remedy and never exposes
-/// a command-line mapping fallback.
-#[test]
-fn a_dead_daemon_is_loud_on_both_pages_with_a_runnable_command() {
+fn a_dead_daemon_is_loud_on_the_product_page() {
     let addr = start_server(Arc::new(ScriptedControl::dead()));
 
-    // Was two pages; `/` went with the status page, so /nocturne carries the
-    // banner alone now.
-    for (path, headline, remedy) in [(
-        "/nocturne",
-        "Mapping needs the background helper",
-        "Close and reopen ksx",
-    )] {
-        let page = get(addr, path);
-        assert!(page.starts_with("HTTP/1.1 200"), "{path}: {page}");
-        let body = body_of(&page);
-        assert!(body.contains(headline), "{path} has no banner: {body}");
-        assert!(body.contains(remedy), "{path}: {body}");
-        assert!(
-            body.contains("ksx daemon --game &quot;Example Launcher&quot;")
-                || body.contains(r#"ksx daemon --game "Example Launcher""#),
-            "{path} must carry the command that actually starts THIS cabinet: {body}"
-        );
-        // Unmissable = above everything it is about. On both pages the banner
-        // must precede the <main> content it warns you off touching.
-        let banner = body.find(headline).expect("banner");
-        let footer = body.find("<footer").expect("footer");
-        assert!(banner < footer, "{path}: banner is below the fold: {body}");
-        let first_other_card = body[banner..]
-            .find(r#"class="card"#)
-            .map(|i| banner + i)
-            .expect("another card follows the banner");
-        assert!(
-            banner < first_other_card,
-            "{path}: the banner is not first inside <main>: {body}"
-        );
-    }
+    let page = get(addr, "/nocturne");
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    let body = rendered_body(&page);
+    let headline = "This screen needs the ksx background helper, and it is not answering";
+    assert!(body.contains(headline), "no banner: {body}");
+    assert!(body.contains("Close and reopen ksx"), "{body}");
+    // Marked as a REFUSAL, not painted in the success colour — the flash
+    // region picks its side off the `error:` prefix and nothing else.
+    assert!(body.contains(r#"class="n-flash err""#), "{body}");
 
-    // The mapper additionally renders every control visibly inert…
-    let map = body_of(&get(addr, "/nocturne")).to_owned();
-    assert!(map.contains("z-dead"), "{map}");
-    assert!(map.contains("l-dead"), "{map}");
-    assert!(map.contains("card pactions off"), "{map}");
-    // The mapping controls remain present and visibly inert, but there is no
-    // customer-facing shell fallback competing with the reopen remedy.
-    assert!(!map.contains("ksx map --preset"), "{map}");
+    // Unmissable = above everything it is about. The banner must precede the
+    // `<main>` content it warns you off touching.
+    let banner = body.find(headline).expect("banner");
+    let main = body.find("<main").expect("<main>");
+    assert!(banner < main, "the banner is below the fold: {body}");
+
+    // No customer-facing shell fallback competing with the reopen remedy, and
+    // no raw pipe language from the refusal that produced this state.
+    assert!(!body.contains("ksx map --preset"), "{body}");
+    assert!(!body.contains("control channel"), "{body}");
+
+    // A reachable daemon does not get the banner: it is a state, not chrome.
+    let alive = start_server(Arc::new(ScriptedControl::new(false)));
+    assert!(!rendered_body(&get(alive, "/nocturne")).contains(headline));
 }
 
 #[test]
@@ -3226,46 +3201,95 @@ fn simultaneous_input_http_routes_share_one_typed_generation_stamped_contract() 
 /// No daemon: the forms are still there (dimmed by CSS, never removed) and a
 /// post still answers with the reason — the no-JS half of FIX 1's "never a
 /// silent no-op".
+///
+/// PORTED 2026-08-26. `class="lbind nojs off"` was `/map`'s vocabulary and the
+/// Hold|Toggle pill is inside a bind ROW, so with no daemon there are no rows
+/// to carry it. The form that IS served in that state is Clear-all, and
+/// pointing this test at it found the second half below.
 #[test]
 fn a_no_js_post_without_a_daemon_flashes_the_reason() {
     let addr = start_server(Arc::new(ScriptedControl::dead()));
     let page = body_of(&get(addr, "/nocturne")).to_owned();
-    assert!(page.contains(r#"class="lbind nojs off""#), "{page}");
-    assert!(page.contains(r#"action="/nocturne/bind/toggle""#), "{page}");
+    // The forms are still there — dimmed by CSS, never removed.
+    assert!(
+        page.contains(r#"action="/nocturne/bind/clear-all""#),
+        "{page}"
+    );
 
-    let response = post_form(addr, "/nocturne/bind/clear-all", "slot=1");
+    let response = post_form(addr, "/nocturne/bind/clear-all", "number=1");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(response.contains("flash=error%3A"), "{response}");
     assert!(
-        response.contains(
-            "The%20controller%20layout%20could%20not%20be%20cleared.%20Nothing%20changed."
-        ),
+        response.contains("The%20change%20could%20not%20be%20made"),
         "{response}"
     );
     assert!(!response.contains("daemon"), "{response}");
+
+    // And the half this test found: that same served form carries
+    // `value=""` for `number` whenever no slot is selected — which is
+    // exactly the state a dead daemon produces, because the rack is empty.
+    // `NocturneSlotForm { number: u8 }` had no rejection arm, so
+    // serde_urlencoded answered "cannot parse integer from empty string" and
+    // axum returned a bare 422. A 422 carries no `Location`, the island reads
+    // its outcome out of `?flash=`, and "Unbind every key" silently did
+    // nothing — the precise failure mode this whole screen replaced.
+    assert!(page.contains(r#"name="number" value="""#), "{page}");
+    for (path, body) in [
+        ("/nocturne/bind/clear-all", "number="),
+        ("/nocturne/macro/new", "slot=&name=dash"),
+        ("/nocturne/controller/socd", "number=&socd=last-input"),
+    ] {
+        let response = post_form(addr, path, body);
+        assert!(
+            response.starts_with("HTTP/1.1 303"),
+            "{path} answered the extractor's 4xx instead of a flash: {response}"
+        );
+        assert!(
+            response.contains("That%20request%20could%20not%20be%20read"),
+            "{path}: {response}"
+        );
+    }
 }
 
+/// PORTED 2026-08-26. `/nocturne/play` is `stage_play` and takes no profile,
+/// and `/` is a 404, so the round trip is `/nocturne` → `/nocturne`. The
+/// refusal is the domain's own pre-flight over an empty stage — and the
+/// sentence is this page's, selected off the daemon's stable CODE rather than
+/// carried from its text, which is what lets the SECOND half work at all: a
+/// runtime-composed sentence is not on the allowlist and comes back as the
+/// generic fallback.
 #[test]
 fn a_refused_action_comes_back_as_an_error_flash_never_silence() {
     let control = Arc::new(ScriptedControl::new(true));
     let addr = start_server(control);
 
-    let response = post_form(addr, "/nocturne/play", "profile=");
+    let response = post_form(addr, "/nocturne/play", "");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    let location = response
+        .lines()
+        .find_map(|line| line.strip_prefix("location: "))
+        .expect("a Location the island can read a flash out of")
+        .trim()
+        .to_owned();
     assert!(
-        response.contains("location: /?flash=error%3A%20no%20ksx%20daemon"),
+        location.starts_with("/nocturne?flash=error%3A"),
         "{response}"
     );
-
-    // And the redirect target renders it.
-    let page = get(
-        addr,
-        "/?flash=error%3A%20no%20ksx%20daemon%20control%20channel",
-    );
     assert!(
-        page.contains("error: no ksx daemon control channel"),
+        location.contains("not%20ready%20to%20play"),
+        "a refusal must name what is missing: {response}"
+    );
+
+    // And the redirect target renders it — the same sentence, marked as a
+    // refusal rather than painted in the success colour.
+    let page = rendered_body(&get(addr, &location));
+    assert!(
+        page.contains("not ready to play — no keyboard has been chosen yet"),
         "{page}"
     );
+    assert!(page.contains(r#"class="n-flash err""#), "{page}");
+    // Never the daemon's own words for the same fact.
+    assert!(!page.contains("slot(s) to listen to"), "{page}");
 }
 
 /// The attack this guard exists to stop, executed over a real socket.
@@ -3940,14 +3964,22 @@ fn the_profiles_page_shows_a_broken_game_and_keeps_its_path_in_edit() {
     let response = get(addr, "/nocturne");
     let body = body_of(&response);
 
-    assert!(body.contains("Games that need attention"), "{body}");
+    // PORTED 2026-08-26: there is no "Games that need attention" <section> on
+    // /nocturne. A broken game is a ROW in the one saved-games list, marked
+    // `nm-game broken` — which is the better shape (it stays where the user
+    // looks for the game) as long as the row still says what is wrong and
+    // still does not print the path as alarm copy.
     let alarm = body
-        .split_once("Games that need attention")
-        .and_then(|(_, rest)| rest.split_once("</section>"))
-        .map(|(alarm, _)| alarm)
-        .expect("attention card");
+        .split_once(r#"class="nm-game broken""#)
+        .and_then(|(_, rest)| rest.split_once("</form>"))
+        .map(|(row, _)| row)
+        .expect("the broken game's row");
+    assert!(alarm.contains(r#"class="nm-gico broken""#), "{alarm}");
     assert!(alarm.contains("Missing Example Game"), "{alarm}");
-    assert!(alarm.contains("The program could not be found"), "{alarm}");
+    assert!(
+        alarm.contains("its program is missing — bindings still load"),
+        "{alarm}"
+    );
     assert!(!alarm.contains("X:\\Examples\\missing-game.exe"), "{alarm}");
     assert!(
         body.contains(r#"value="X:\Examples\missing-game.exe""#),
@@ -3957,7 +3989,21 @@ fn the_profiles_page_shows_a_broken_game_and_keeps_its_path_in_edit() {
     assert!(body.contains("Example Game"), "{body}");
     assert!(body.contains(r#"action="/nocturne/game/update""#), "{body}");
     assert!(body.contains(r#"action="/nocturne/game/delete""#), "{body}");
-    assert!(body.contains("Edit or delete"), "{body}");
+    // Edit and remove live behind a per-game disclosure now, named after the
+    // game rather than behind one shared "Edit or delete" affordance. Sliced
+    // rather than matched whole: Forma leaves its text-slot markers between
+    // "Edit " and the served title.
+    let summaries: Vec<&str> = body
+        .split(r#"class="nm-item nm-sub-t">"#)
+        .skip(1)
+        .filter_map(|rest| rest.split_once("</summary>").map(|(head, _)| head))
+        .collect();
+    assert!(
+        summaries
+            .iter()
+            .any(|s| s.starts_with("Edit ") && s.contains("Missing Example Game")),
+        "the broken game needs its own Edit disclosure: {body}"
+    );
     // The presets and the in-box templates both arrived — the second is what
     // `LocalMachine::presets` used to answer with an empty list.
     assert!(body.contains("Arcade"), "{body}");
@@ -3980,12 +4026,21 @@ fn a_hostile_profiles_query_flash_is_replaced_not_reflected() {
         .map(|(json, _)| json)
         .expect("profiles payload block");
     let _: serde_json::Value = serde_json::from_str(block).expect("payload json");
-    // `/nocturne` carries no `flash` in its payload — the sentence is rendered
-    // into the page from the query, so the page IS the allowlist's output.
-    let flash = "error: Saved Games could not finish that request. Reopen ksx and try again.";
+    // PORTED 2026-08-26. The sentence is `N_UNKNOWN_FLASH_ERROR`, and it is
+    // asserted on the RENDERED document rather than the raw one: /nocturne
+    // serves the flash line as `nFlashLine` inside the hydration payload too,
+    // so a `body_of` match no longer proves the page painted it. The `error: `
+    // prefix is stripped at render — it is not copy, it is the marker the
+    // renderer turns into `n-flash err` — so both halves are asserted here.
+    let rendered = rendered_body(&response);
+    let flash = "That request could not be finished. Reopen ksx and try again.";
     assert!(
-        body.contains(flash),
-        "the allowlisted sentence must be what renders: {body}"
+        rendered.contains(flash),
+        "the allowlisted sentence must be what renders: {rendered}"
+    );
+    assert!(
+        rendered.contains(r#"class="n-flash err""#),
+        "a refused request must not render in the success colour: {rendered}"
     );
     let lower = flash.to_ascii_lowercase();
     for leaked in [
@@ -4038,17 +4093,24 @@ fn hostile_saved_games_providers_cannot_write_internal_copy_into_flashes() {
         (
             "/nocturne/game/delete",
             "title=T&revision=g1-t&confirm_delete=yes",
-            "Saved%20game%20could%20not%20be%20deleted",
+            // "removed", not "deleted": the verb the button and the flash
+            // agree on ("Remove this saved game").
+            "Saved%20game%20could%20not%20be%20removed",
         ),
+        // Was `/profiles/preset/new` — creating a layout from a template has
+        // no /nocturne successor at all. Rename is the surviving layout write
+        // and the same boundary: one provider refusal, one owned sentence.
         (
-            "/profiles/preset/new",
-            "name=T&template=keyboard-2p&player=1",
-            "Controller%20layout%20could%20not%20be%20created",
+            "/nocturne/layout/rename",
+            "from=Arcade&to=X",
+            "Controller%20layout%20could%20not%20be%20renamed",
         ),
         (
             "/nocturne/adopt",
             "profile=T",
-            "That%20game%20could%20not%20be%20started",
+            // Adopt LOADS a game into the draft; it never starts one, so its
+            // refusal is the draft's, not a session's.
+            "The%20change%20could%20not%20be%20made",
         ),
         ("/nocturne/stop", "", "Play%20could%20not%20be%20stopped"),
     ] {
@@ -4185,7 +4247,7 @@ fn stale_update_and_delete_forms_are_worded_refusals() {
     );
     assert!(delete.contains("flash=error%3A"), "{delete}");
     assert!(
-        delete.contains("Saved%20game%20could%20not%20be%20deleted"),
+        delete.contains("Saved%20game%20could%20not%20be%20removed"),
         "{delete}"
     );
     assert!(!delete.contains("changed%20while"), "{delete}");
@@ -4250,17 +4312,9 @@ fn a_post_with_a_missing_or_empty_number_still_flashes_instead_of_422() {
             "title=T&path=C%3A%5Cx.exe&slots=lots&preset=Arcade",
             "the slots box holds something that is not a number",
         ),
-        ("/profiles/preset/new", "name=Couch", "the key is absent"),
-        (
-            "/profiles/preset/new",
-            "name=Couch&template=keyboard-2p&player=",
-            "the user cleared the player box",
-        ),
-        (
-            "/profiles/preset/new",
-            "name=Couch&template=keyboard-2p&player=two",
-            "the player box holds something that is not a number",
-        ),
+        // The three `/profiles/preset/new` rows went with the route: creating
+        // a layout from a template has no /nocturne successor, and there is
+        // no other form on this page that carries a `player` number.
     ] {
         let response = post_form(addr, path, body);
         assert!(
@@ -4272,12 +4326,41 @@ fn a_post_with_a_missing_or_empty_number_still_flashes_instead_of_422() {
         assert!(
             response
                 .to_ascii_lowercase()
-                .contains("location: /profiles"),
+                .contains("location: /nocturne"),
             "{path} ({why}) must carry a Location the island can read a flash \
              out of: {response}"
         );
         assert!(response.contains("flash="), "{path} ({why}): {response}");
     }
+
+    // …and a REFUSED player count is a refusal, in both doors' terms. It was
+    // neither: `game_slots` returned its sentence without the `error:` marker,
+    // so `applyFlash` painted a rejected form in the SUCCESS colour, and the
+    // sentence was not on `N_FLASH_ALLOWLIST`, so a browser with scripting off
+    // read the generic "could not be finished" instead of the one thing that
+    // was actually wrong with the form in front of it.
+    let refused = post_form(
+        addr,
+        "/nocturne/game",
+        "title=T&path=C%3A%5Cx.exe&slots=lots&preset=Arcade",
+    );
+    assert!(refused.contains("flash=error%3A"), "{refused}");
+    assert!(
+        refused.contains("How%20many%20players%20must%20be%20a%20whole%20number"),
+        "{refused}"
+    );
+    let location = refused
+        .lines()
+        .find_map(|line| line.strip_prefix("location: "))
+        .expect("redirect Location")
+        .trim()
+        .to_owned();
+    let page = rendered_body(&get(addr, &location));
+    assert!(
+        page.contains("How many players must be a whole number"),
+        "the reason must survive the round trip with scripting off: {page}"
+    );
+    assert!(page.contains(r#"class="n-flash err""#), "{page}");
 }
 
 /// A provider refusal is mapped to the form's own safe remedy. Provider
@@ -4348,18 +4431,26 @@ fn a_refused_read_is_not_rendered_as_an_empty_machine() {
         !body.contains(r#"action="/profiles/preset/new""#),
         "…and that form must not be on the page at all: {body}"
     );
-    // What it says instead: both failed resources, and both reasons, in words.
+    // What it says instead: the failed resource, and the reason, in words.
+    //
+    // PORTED 2026-08-26. The PRESETS half went with `/profiles`: /nocturne
+    // never calls `MachineSource::presets` at all — its Controller-layouts
+    // section is rename/delete over typed names, and the layout roster the
+    // create dialog offers comes from the daemon's template list on the
+    // staged setup, not from a machine read. There is no refused presets read
+    // on this page to report, so the claim has no subject here.
     assert!(body.contains("Saved games could not be read"), "{body}");
-    assert!(
-        body.contains("Controller layouts could not be read"),
-        "{body}"
-    );
     assert!(body.contains("Reopen ksx and try again"), "{body}");
+    // The leak this test exists for, and the one it found: `collect_nocturne`
+    // ran every refusal through `flash_of`, which composes an OPERATOR's line
+    // — so the note under the saved-games list read "games.toml could not be
+    // read: expected `=` at line 4 — run `ksx config export --what games`".
     for leaked in [
         "expected `=`",
         "access is denied",
         "ksx config",
         "ksx doctor",
+        "games.toml",
     ] {
         assert!(
             !body.contains(leaked),
@@ -4367,35 +4458,52 @@ fn a_refused_read_is_not_rendered_as_an_empty_machine() {
         );
     }
     for action in [
-        r#"action="/nocturne/game""#,
         r#"action="/nocturne/game/update""#,
         r#"action="/nocturne/game/delete""#,
     ] {
         assert!(
             !body.contains(action),
-            "a failed Saved Games read must disable Add/Edit/Delete: {body}"
+            "a failed Saved Games read must not offer Edit/Delete over rows \
+             nobody read: {body}"
         );
     }
+    // Add IS still offered, and that is deliberate rather than an oversight:
+    // unlike the deleted `/profiles` create-preset form — whose `<select>` was
+    // fed by the same failed read, so the only route it offered could not
+    // succeed — this form takes typed values and its write refuses in this
+    // page's own words. It never dead-ends.
+    assert!(body.contains(r#"action="/nocturne/game""#), "{body}");
+    let add = post_form(
+        addr,
+        "/nocturne/game",
+        "title=T&path=C%3A%5Cx.exe&slots=1&preset=Arcade",
+    );
+    assert!(add.starts_with("HTTP/1.1 303"), "{add}");
+    assert!(add.contains("flash=Saved%20game%20added"), "{add}");
 
-    // The JSON twin says it in a machine-readable field, not by omission.
+    // The JSON twin says it in a machine-readable field, not by omission: the
+    // read's own slot is null and its error sits beside it, so a poller can
+    // tell a refused read from an empty one without parsing prose.
     let value: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("json");
-    assert_eq!(
-        value.pointer("/view/profiles_unreadable"),
-        Some(&serde_json::json!(true)),
-        "a poller must be able to tell a refused read from an empty one: \
-         {value}"
+    assert!(
+        value["games"].is_null(),
+        "a refused read must not be serialized as an empty games list: {value}"
     );
     assert_eq!(
-        value.pointer("/view/presets_unreadable"),
-        Some(&serde_json::json!(true)),
+        value["games_error"],
+        serde_json::json!("Saved games could not be read. Reopen ksx and try again."),
         "{value}"
     );
-    assert_eq!(
-        value.pointer("/view/no_presets_yet"),
-        Some(&serde_json::json!(false)),
-        "'no presets yet' is a claim about the FOLDER; nothing was read: \
-         {value}"
+    // …and the same discipline for the sign-in read, which this fixture also
+    // refuses. (`setup_state` answers here, so it is not a case.)
+    assert!(value["autostart_read"].is_null(), "{value}");
+    assert!(
+        !value["autostart_error"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty(),
+        "{value}"
     );
 }
 
@@ -4476,10 +4584,10 @@ fn the_profiles_write_routes_refuse_a_cross_site_post() {
             "original_title=Street+Fighter&title=Evil&path=C%3A%5Cevil.exe&slots=1&preset=Arcade",
         ),
         ("/nocturne/game/delete", "title=Street+Fighter"),
-        (
-            "/profiles/preset/new",
-            "name=Evil&template=keyboard-2p&player=1",
-        ),
+        ("/nocturne/layout/rename", "from=Arcade&to=Evil"),
+        ("/nocturne/layout/delete", "name=Arcade&confirm_delete=yes"),
+        ("/nocturne/theme", "theme=matrix"),
+        ("/nocturne/import", "document=%7B%7D&apply=1"),
         ("/nocturne/adopt", "profile=Missing+Example+Game"),
         ("/nocturne/stop", ""),
     ] {
@@ -4678,7 +4786,17 @@ fn an_unreadable_import_body_is_a_flashed_sentence_not_a_bare_4xx() {
         "a body this route cannot read must come back as a flash: {response}"
     );
     assert!(response.contains("flash=error"), "{response}");
-    assert!(response.contains("ksx%20config%20import"), "{response}");
+    // PORTED 2026-08-26: the sentence is this page's own (`N_IMPORT_UNREADABLE`,
+    // reachable through the `Result<Form<ImportForm>, FormRejection>` arm) and
+    // it names the size ceiling rather than a command line. The CLI string the
+    // old version required is the dead end its sibling
+    // `a_refused_import_says_what_is_wrong_with_the_document` forbids, so it is
+    // asserted ABSENT here instead of present.
+    assert!(
+        response.contains("That%20document%20could%20not%20be%20read"),
+        "{response}"
+    );
+    assert!(!response.contains("ksx%20config%20import"), "{response}");
 }
 
 /// A machine provider that REFUSED produces a page that says so — and says
@@ -4700,11 +4818,12 @@ fn a_refused_machine_provider_never_claims_the_machine_is_empty() {
     let addr = start_server_with_machine(control, Arc::new(NoMachine));
     let body = body_of(&get(addr, "/nocturne")).to_owned();
 
-    assert!(
-        body.contains("The configuration could not be read"),
-        "{body}"
-    );
-    assert!(body.contains("cannot say which step is next"), "{body}");
+    // PORTED 2026-08-26. "cannot say which step is next" and "could not be
+    // read, so ksx cannot offer" were `/start`'s three-steps copy and have no
+    // successor — /nocturne has no ordered first-run ladder to withhold. What
+    // survives is the config menu's own row, and it is the stronger claim
+    // anyway: the row names the refusal instead of reporting a first run.
+    assert!(body.contains("Configuration could not be read"), "{body}");
     for claim in [
         "There is no configuration on this machine yet.",
         "no boards named yet",
@@ -4719,56 +4838,53 @@ fn a_refused_machine_provider_never_claims_the_machine_is_empty() {
             "a refused read claimed {claim:?} over the wire: {body}"
         );
     }
-    // …and no live control that would write against a config nobody read.
-    assert!(!body.contains(r#"action="/nocturne/save""#), "{body}");
-    assert!(
-        body.contains("could not be read, so ksx cannot offer"),
-        "{body}"
-    );
+    // Save IS still offered, and correctly so: the DRAFT read succeeded here
+    // (the scripted control is alive), and only the machine read failed. Save
+    // writes the draft; withholding it would be the mirror-image mistake —
+    // reporting a failure of one provider as a failure of another.
+    assert!(body.contains(r#"action="/nocturne/save""#), "{body}");
 
-    // The poller sees the same refusal, in the same words.
+    // And the leak this test found on the way past: `Refusal::not_here` bakes
+    // its remedy into `message`, and `flash_of` appended `remedy` again — so
+    // the config-menu meta line and the sign-in fold each printed a command
+    // line TWICE ("… — run `ksx setup` — run `ksx setup`"). A read that
+    // refused gets this page's own sentence now, and no command at all.
+    assert!(!body.contains("ksx setup"), "{body}");
+    assert!(!body.contains("ksx autostart"), "{body}");
+    assert!(!body.contains("not available on this surface"), "{body}");
+
+    // The poller sees the same refusal in a machine-readable shape: the read's
+    // slot is null with its error beside it, never an empty view that would
+    // read as "this machine has nothing".
     let payload: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("json");
-    // `available: false` IS the refusal in the payload. The sentence the user
-    // reads is asserted on the page above; the derived `lines`/`flags` blocks
-    // belonged to the deleted page's payload and claimed nothing extra.
-    assert_eq!(payload["setup"]["available"], serde_json::json!(false));
     assert!(
-        payload["setup"]["slots"]
-            .as_array()
-            .is_none_or(|s| s.is_empty()),
-        "a refused read must not report slots: {payload}"
+        payload["setup"].is_null(),
+        "a refused read must not be serialized as an empty setup: {payload}"
+    );
+    assert!(
+        !payload["setup_error"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty(),
+        "{payload}"
     );
 }
 
-/// Step 3 is the daemon's own learner, and it is operable with scripting off:
-/// POST, 303, and the next render shows the state the poll would have.
-#[test]
-fn proving_a_button_uses_the_daemon_learner_with_no_javascript() {
-    let control = Arc::new(ScriptedControl::new(false));
-    let addr = start_server(control);
-
-    let started = post_form(addr, "/api/learn/start", "");
-    assert!(started.starts_with("HTTP/1.1 303"), "{started}");
-    assert!(started.contains("Listening"), "{started}");
-
-    // The page itself now says the learner is listening — no client code
-    // involved, which is what makes the <noscript> refresh enough.
-    let page = body_of(&get(addr, "/nocturne")).to_owned();
-    assert!(page.contains("press any button on the panel"), "{page}");
-    assert!(page.contains(r#"action="/api/learn/cancel""#), "{page}");
-
-    // A cached form without the generation is refused without cancelling the
-    // listener a newer page owns.
-    let stale = post_form(addr, "/api/learn/cancel", "");
-    assert!(stale.starts_with("HTTP/1.1 303"), "{stale}");
-    assert!(stale.contains("stale"), "{stale}");
-    let page = body_of(&get(addr, "/nocturne")).to_owned();
-    assert!(page.contains("press any button on the panel"), "{page}");
-
-    let stopped = post_form(addr, "/api/learn/cancel", "generation=1");
-    assert!(stopped.starts_with("HTTP/1.1 303"), "{stopped}");
-}
+// DELETED 2026-08-26: `proving_a_button_uses_the_daemon_learner_with_no_javascript`.
+//
+// Its subject was the NO-JAVASCRIPT learner: a form POST to
+// `/api/learn/start`, a 303, and a re-render saying "Listening". That door is
+// gone by design — `api_learn_start` answers `200 application/json` and
+// `api_learn_cancel` takes `axum::Json<LearnCancelBody>`, which a form post
+// cannot reach at all, and no `/api/learn` markup is served on `/nocturne`.
+//
+// The no-JS successor is Identify: the served `n-idform` posts
+// `/nocturne/device/identify`, which is one daemon-owned listen and a 303 —
+// covered by `start_identify_selects_the_machine_providers_exact_board` and
+// `workspace_identify_selects_the_board_and_returns_here`. The learner's own
+// typed JSON contract (generation stamping, stale cancel) is covered by
+// `simultaneous_input_http_routes_share_one_typed_generation_stamped_contract`.
 
 /// Every mutating /setup route is inside the guarded router, and the reads are
 /// covered by the Host check like every other read. Written as a loop over the
@@ -4953,14 +5069,29 @@ fn the_config_verbs_survive_a_dead_daemon() {
 
     assert!(body.contains(r#"href="/nocturne/export.json""#), "{body}");
     assert!(body.contains(r#"action="/nocturne/import""#), "{body}");
+    // PORTED 2026-08-26: "Import and Export below still work" and "the
+    // listener lives in the daemon" were `/setup`'s card copy and exist
+    // nowhere in the tree. The sentence that says the same thing on
+    // `/nocturne` is the daemon-down banner, and it is pinned by
+    // `a_dead_daemon_is_loud_on_the_product_page`. What this test owns is the
+    // SPLIT: the config store answers without a pipe, and the pipe's own
+    // verbs do not pretend to.
     assert!(
-        body.contains("Import and Export below still work"),
+        body.contains("This screen needs the ksx background helper"),
         "{body}"
     );
-    // …and no live control that would silently do nothing.
-    assert!(!body.contains(r#"action="/nocturne/save""#), "{body}");
+    // …and nothing that silently does nothing. The learner has no markup at
+    // all on this page, and Save — which /nocturne keeps in its action bar
+    // rather than removing, so the bar does not reshuffle under a reload —
+    // answers a real POST with a sentence instead of a shrug.
     assert!(!body.contains(r#"action="/api/learn/start""#), "{body}");
-    assert!(body.contains("the listener lives in the daemon"), "{body}");
+    let save = post_form(addr, "/nocturne/save", "");
+    assert!(save.starts_with("HTTP/1.1 303"), "{save}");
+    assert!(save.contains("flash=error%3A"), "{save}");
+    assert!(save.contains("not%20ready%20to%20save"), "{save}");
+    for raw in ["daemon", "pipe", "control%20channel"] {
+        assert!(!save.contains(raw), "raw provider text {raw:?}: {save}");
+    }
 
     // An export still produces a document.
     assert!(
@@ -5406,7 +5537,9 @@ fn the_check_distinguishes_unavailable_empty_and_zero_control_rosters_over_http(
     );
     let empty = rendered_body(&get(empty, "/check"));
     assert!(empty.contains("No controller is ready to test"), "{empty}");
-    assert!(empty.contains("Add a controller in setup"), "{empty}");
+    // PORTED 2026-08-26: "setup" is not a place any more — the empty state
+    // names the one product surface, the same one `emptyHref` points at.
+    assert!(empty.contains("Add a controller in ksx Studio"), "{empty}");
 
     let zero = start_server_with_status(
         Arc::new(ScriptedControl::new(false)),
@@ -5526,9 +5659,12 @@ fn prepare_ipac(addr: SocketAddr) -> String {
 fn start_gates_controls_describes_replacement_and_sanitizes_feedback_over_http() {
     let control = Arc::new(ScriptedControl::new(false));
     let addr = start_server(Arc::clone(&control));
+    // PORTED 2026-08-26: selection is `?slot=N` now — `/nocturne` only ever
+    // edits the draft, so `NocturneQuery` has no `target` at all and the two
+    // negative gates below were vacuously true against `target=stage`.
     let fresh = rendered_body(&get(addr, "/nocturne"));
     assert!(
-        !fresh.contains(r#"href="/nocturne?target=stage"#),
+        !fresh.contains(r#"href="/nocturne?slot="#),
         "an empty setup offered Controls: {fresh}"
     );
 
@@ -5539,7 +5675,7 @@ fn start_gates_controls_describes_replacement_and_sanitizes_feedback_over_http()
     );
     let chosen = rendered_body(&get(addr, "/nocturne"));
     assert!(
-        !chosen.contains(r#"href="/nocturne?target=stage"#),
+        !chosen.contains(r#"href="/nocturne?slot="#),
         "a keyboard without a controller offered Controls: {chosen}"
     );
     post_form(
@@ -5549,16 +5685,18 @@ fn start_gates_controls_describes_replacement_and_sanitizes_feedback_over_http()
     );
     let staged = rendered_body(&get(addr, "/nocturne"));
     assert!(
-        staged.contains(r#"href="/nocturne?target=stage&amp;slot=1""#),
+        staged.contains(r#"href="/nocturne?slot=1""#),
         "the staged controller has no Controls action: {staged}"
     );
 
+    // …and while a session runs, Play is not offered at all: the rack's own
+    // class hides it (`n-play none`) and Stop takes its place. The sentence
+    // that used to describe the replacement was `/start`'s and has no
+    // successor — this page does not offer the act it described.
     control.running.store(true, Ordering::SeqCst);
     let running = rendered_body(&get(addr, "/nocturne"));
-    assert!(
-        running.contains("stop that session and replace it with the setup on this screen"),
-        "{running}"
-    );
+    assert!(running.contains(r#"class="n-play none""#), "{running}");
+    assert!(running.contains(r#"class="n-stop""#), "{running}");
     assert!(
         !running.contains("Play will not replace what is running"),
         "{running}"
@@ -5569,7 +5707,7 @@ fn start_gates_controls_describes_replacement_and_sanitizes_feedback_over_http()
         "/nocturne?flash=error%3A%20daemon%20pipe%20C%3A%5CUsers%5CTestUser%5C.ksx%20--preset%20claim",
     ));
     assert!(
-        hostile.contains("Setup could not finish that request"),
+        hostile.contains("That request could not be finished. Reopen ksx and try again."),
         "{hostile}"
     );
     for raw in ["daemon pipe", r"C:\Users\TestUser", "--preset"] {
@@ -5628,15 +5766,47 @@ fn capture_preparation_requires_all_consents_transitions_only_verified_exact_sta
     // FAILS against the QA build, where the same state offered "Prepare this
     // keyboard for play" over a keyboard Windows had already prepared and
     // drew no release control anywhere on the page.
-    assert_eq!(before["flags"]["capture_prepare"], false, "{before}");
-    assert_eq!(before["flags"]["capture_release"], false, "{before}");
-    assert_eq!(before["flags"]["capture_blocked"], true, "{before}");
-    assert_eq!(before["flags"]["has_prepared"], true, "{before}");
-    assert_eq!(before["flags"]["ready"], false, "{before}");
-    assert!(
-        before["capture"].get("backend").is_none(),
-        "the browser must never select a backend: {before}"
+    //
+    // PORTED 2026-08-26: the derived card is `view.cap_*` now, and `/nocturne`
+    // has ONE capture card rather than a card plus a machine-keyed list. So
+    // the way back is the card itself, re-pointed at what the machine holds
+    // whenever the stage is offering neither action of its own — which is
+    // what the deleted `flags.has_prepared` was for. The old copy sent the
+    // user to "the held-keyboards list on the Start screen", a screen that
+    // 404s; there is nowhere else to send them.
+    assert_eq!(before["view"]["cap_prepare"], false, "{before}");
+    assert_eq!(
+        before["view"]["cap_release"], true,
+        "a held keyboard must have a way back on the page: {before}"
     );
+    assert_eq!(
+        before["view"]["cap_selector"], "usb:d209:0430:00",
+        "{before}"
+    );
+    assert!(
+        before["view"]["cap_instance"]
+            .as_str()
+            .is_some_and(|id| id.eq_ignore_ascii_case(IPAC_KB)),
+        "{before}"
+    );
+    assert!(
+        before["view"]["cap_line"]
+            .as_str()
+            .is_some_and(|line| line.contains("Keyboards ksx is holding")),
+        "{before}"
+    );
+    // The browser must never select a backend: no served capture field names
+    // one, so a crafted form has nothing to copy.
+    for (key, value) in before["view"].as_object().expect("the derived view") {
+        if !key.starts_with("cap_") {
+            continue;
+        }
+        let text = value.as_str().unwrap_or_default().to_ascii_lowercase();
+        assert!(
+            !text.contains("winusb") && !text.contains("interception"),
+            "{key} names a backend: {before}"
+        );
+    }
 
     // A hand-authored Save/Play bypasses no readiness gate. The domain stage
     // is otherwise complete, so capture is the only remaining refusal.
@@ -5684,10 +5854,17 @@ fn capture_preparation_requires_all_consents_transitions_only_verified_exact_sta
 
     let ready: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("ready start payload");
-    assert_eq!(ready["flags"]["capture_prepare"], false, "{ready}");
-    assert_eq!(ready["flags"]["capture_release"], true, "{ready}");
-    assert_eq!(ready["flags"]["capture_blocked"], false, "{ready}");
-    assert_eq!(ready["flags"]["ready"], true, "{ready}");
+    assert_eq!(ready["view"]["cap_prepare"], false, "{ready}");
+    assert_eq!(ready["view"]["cap_release"], true, "{ready}");
+    assert_eq!(ready["view"]["capd_cls"], "n-capd", "{ready}");
+    // The stage and the machine agree now, so the card is the STAGE's own
+    // release — not the machine-keyed fallback, whose sentence is different.
+    assert!(
+        ready["view"]["cap_line"]
+            .as_str()
+            .is_some_and(|line| line.starts_with("Prepared for play")),
+        "{ready}"
+    );
 
     let missing_release = post_form(
         addr,
@@ -5711,10 +5888,22 @@ fn capture_preparation_requires_all_consents_transitions_only_verified_exact_sta
     // Interception is available in this fixture, so release restores a ready
     // ordinary path while the same prepare card remains as the optional
     // built-in USB-mode choice.
-    assert_eq!(after["flags"]["capture_prepare"], true, "{after}");
-    assert_eq!(after["flags"]["capture_release"], false, "{after}");
-    assert_eq!(after["flags"]["capture_blocked"], false, "{after}");
-    assert_eq!(after["flags"]["ready"], true, "{after}");
+    assert_eq!(after["view"]["cap_prepare"], true, "{after}");
+    assert_eq!(after["view"]["cap_release"], false, "{after}");
+    assert_eq!(after["view"]["capd_cls"], "n-capd", "{after}");
+    // Nothing is held any more, so the machine-keyed fallback has no subject
+    // and must not manufacture one.
+    assert!(
+        after["view"]["cap_line"]
+            .as_str()
+            .is_some_and(|line| !line.contains("Keyboards ksx is holding")),
+        "{after}"
+    );
+    // Ready = both writing verbs accept. Save is asserted rather than Play so
+    // this test does not leave a session running behind it.
+    let save = post_form(addr, "/nocturne/save", "");
+    assert!(!save.contains("flash=error"), "{save}");
+    assert!(control.committed.load(Ordering::SeqCst), "{save}");
 }
 
 /// **The way back does not go through the staged setup** — over real HTTP,
@@ -5793,10 +5982,19 @@ fn a_held_keyboard_is_released_from_start_with_nothing_staged() {
     // is a machine action, not a setup edit.
     assert!(control.staged().device.is_none());
 
+    // PORTED 2026-08-26: `flags`/`rows` were the deleted page's derived
+    // payload. The claim is the same one and it is now made where the user
+    // meets it — nothing is held, so the card stops offering a way back and
+    // stops naming a board.
     let after: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("released payload");
-    assert_eq!(after["flags"]["has_prepared"], false, "{after}");
-    assert_eq!(after["rows"]["prepared"].as_array().unwrap().len(), 0);
+    assert_eq!(after["view"]["cap_release"], false, "{after}");
+    let page = rendered_body(&get(addr, "/nocturne"));
+    assert!(!page.contains("Keyboards ksx is holding"), "{page}");
+    assert!(
+        !page.contains(r#"action="/nocturne/capture/release""#),
+        "a released keyboard must not keep an unrelease control: {page}"
+    );
 }
 
 /// The same way back while a DIFFERENT keyboard is the selection — the second
@@ -5818,10 +6016,16 @@ fn releasing_a_held_keyboard_leaves_a_different_selection_alone() {
     );
     let staged_selector = control.staged().device.expect("a staged device").selector;
 
+    // The way back must follow the MACHINE, not the staged selection: a
+    // Bluetooth keyboard was just staged above, and the I-PAC is what is held.
+    // The poller says the same thing the page does.
     let payload: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("start payload");
-    // The held list must follow the MACHINE, not the staged selection: a
-    // Bluetooth keyboard was just staged above, and the I-PAC is what is held.
+    assert_eq!(payload["view"]["cap_release"], true, "{payload}");
+    assert_eq!(
+        payload["view"]["cap_selector"], "usb:d209:0430:00",
+        "the card followed the selection instead of the machine: {payload}"
+    );
     let held_page = rendered_body(&get(addr, "/nocturne"));
     assert!(
         held_page.contains("usb:d209:0430:00"),
@@ -5957,29 +6161,40 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
 
     // The bindings are really in the stage — no file was written to get them.
-    let page = get(addr, "/nocturne");
-    assert!(page.contains("controls bound"), "{page}");
+    // PORTED 2026-08-26 throughout: `/nocturne` is the only mapper and it only
+    // ever edits the draft, so `NocturneQuery` has no `target` — every "which
+    // destination is this?" assertion below is answered structurally instead.
+    // Every form verb 303s through `nocturne_redirect`, so `location:` is
+    // `/nocturne?flash=…` and never a target-bearing URL.
+    let page = rendered_body(&get(addr, "/nocturne"));
+    // The count, not the phrase: "controls bound" is now true of a BLANK
+    // layout too ("0 of 25 controls bound.").
+    assert!(page.contains(" of 25 controls bound"), "{page}");
     assert!(
-        !page.contains("nothing mapped yet"),
+        !page.contains("0 of 25 controls bound"),
         "a controller staged from a layout binds something: {page}"
     );
 
     // Moment 6's full editor half — the SAME mapper as a saved layout, aimed
-    // at the in-memory stage. The read says which target it is showing.
-    let map: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/nocturne?target=stage&slot=1")))
-            .expect("staged mapper json");
-    assert_eq!(map["target"], "stage", "{map}");
-    assert_eq!(map["mapper"]["slots"][0]["preset"], "Player 1", "{map}");
+    // at the in-memory stage. The read says which player it is showing.
+    let map: serde_json::Value = serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1")))
+        .expect("staged mapper json");
+    assert_eq!(map["selected"], 1, "{map}");
+    assert!(
+        map["view"]["rack_rows"][0]["meta"]
+            .as_str()
+            .is_some_and(|meta| meta.starts_with("\"Player 1\" preset")),
+        "{map}"
+    );
 
-    // Multi-key, turbo-capable binding writes land in the stage and nowhere
-    // else. Two keys here is intentional: the old one-key daemon verb cannot
-    // make this pass by accident.
+    // Binding writes land in the stage and nowhere else. The staged bind verb
+    // takes ONE key plus the row's own revision — the server resolves the
+    // preset and the current key list, so no browser is ever trusted with a
+    // key list it made up.
     let bound: serde_json::Value = serde_json::from_str(body_of(&post_json(
         addr,
         "/nocturne/api/bind",
-        r#"{"target":"stage","slot":1,"preset":"Player 1","function":"A",
-            "keys":["H","Enter"],"turbo_hz":12,"reload":true}"#,
+        &nocturne_bind_body(&control, 1, "A", "H", None, false),
     )))
     .expect("staged binding outcome");
     assert_eq!(bound["ok"], true, "{bound}");
@@ -5989,15 +6204,26 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
         "the saved-layout writer was called for an unsaved setup"
     );
 
-    // A plain HTML form preserves that destination too. It adds one key to
-    // the staged set and redirects back to the staged URL.
+    // Adding a SECOND key to the same control is the MAME-style OR-chain, and
+    // it must not replace the first. (Was a `/map/bind` form post;
+    // `/nocturne/bind/toggle` is the Hold|Toggle pill now, exercised below.)
+    let added: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/nocturne/api/bind",
+        &nocturne_bind_body(&control, 1, "A", "J", Some("add"), false),
+    )))
+    .expect("staged add outcome");
+    assert_eq!(added["ok"], true, "{added}");
+
+    // …and the plain HTML twin — press behaviour, no scripting — lands its
+    // answer on this page rather than on a destination-bearing URL.
     let response = post_form(
         addr,
         "/nocturne/bind/toggle",
-        "target=stage&slot=1&function=A&key=J",
+        "slot=1&function=A&mode=toggle",
     );
     assert!(
-        response.contains("location: /map?target=stage&slot=1"),
+        response.contains("location: /nocturne?flash=Press%20behaviour%20updated"),
         "{response}"
     );
 
@@ -6022,46 +6248,56 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
     let trigger: serde_json::Value = serde_json::from_str(body_of(&post_json(
         addr,
         "/nocturne/api/bind",
-        r#"{"target":"stage","slot":1,"preset":"Player 1",
-            "function":"macro.dash","keys":["M"],"reload":true}"#,
+        &nocturne_bind_body(&control, 1, "macro.dash", "M", None, false),
     )))
     .expect("staged macro trigger outcome");
     assert_eq!(trigger["ok"], true, "{trigger}");
 
+    // The draft holds all of it — read back off the SERVED panes rather than
+    // the deleted `/api/map` payload's `mapper`/`macros` blocks.
     let mapped: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/nocturne?target=stage&slot=1")))
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1")))
             .expect("refreshed staged mapper json");
-    assert_eq!(
-        mapped["mapper"]["slots"][0]["bindings"]["A"],
-        serde_json::json!(["H", "Enter", "J"]),
-        "{mapped}"
+    let row_a = nocturne_bind_rows(&mapped)
+        .into_iter()
+        .find(|row| row["function"] == "A")
+        .expect("the A row");
+    assert!(
+        row_a["chip"]
+            .as_str()
+            .is_some_and(|chip| chip.contains('H') && chip.contains('J')),
+        "the OR-chain must keep both keys: {mapped}"
     );
-    assert_eq!(mapped["macros"]["macros"][0]["name"], "dash", "{mapped}");
-    assert_eq!(
-        mapped["macros"]["macros"][0]["triggers"],
-        serde_json::json!(["M"]),
+    let macro_row = mapped["view"]["macro_rows"]
+        .as_array()
+        .expect("macro rows")
+        .first()
+        .expect("the dash macro");
+    assert_eq!(macro_row["name"], "dash", "{mapped}");
+    assert_eq!(macro_row["fn_name"], "macro.dash", "{mapped}");
+    assert!(
+        macro_row["chip"].as_str().is_some_and(|chip| chip == "M"),
         "{mapped}"
     );
 
-    // A stale tab is never redirected to Player 1. Reads keep the requested
-    // number visible as unavailable; every JSON and plain-form write refuses
-    // with the same target intact and leaves the live draft byte-for-byte
-    // equivalent at the API seam.
+    // A stale tab's WRITES all refuse, with the number it named intact and
+    // the live draft untouched. (The READ falls back to the first player by
+    // design here — `NocturneDerived` resolves one selection for every pane —
+    // and the payload keeps `selected: 9`, so the request is not rewritten.)
     let stale_read: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/nocturne?target=stage&slot=9")))
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=9")))
             .expect("stale staged mapper json");
     assert_eq!(stale_read["selected"], 9, "{stale_read}");
-    assert!(
-        stale_read["mapper"]["slots"].as_array().unwrap().is_empty(),
-        "a missing player must not paint Player 1: {stale_read}"
-    );
 
+    let revision = staged_target_revision(&control, 1);
     for request in [
-        r#"{"target":"stage","preset":"Player 1","function":"B","keys":["K"]}"#,
-        r#"{"target":"stage","slot":9,"preset":"Player 1","function":"B","keys":["K"]}"#,
+        // No slot at all, and a slot this draft does not have.
+        nocturne_bind_body_with_revision(9, &revision, "B", "K", None, false),
+        // …and the right slot with a revision from before the edits above.
+        nocturne_bind_body_with_revision(1, "test-d1-stale", "B", "K", None, false),
     ] {
         let refused: serde_json::Value =
-            serde_json::from_str(body_of(&post_json(addr, "/nocturne/api/bind", request)))
+            serde_json::from_str(body_of(&post_json(addr, "/nocturne/api/bind", &request)))
                 .expect("stale binding refusal");
         assert_eq!(refused["ok"], false, "{refused}");
         assert_eq!(refused["code"], ksx_api::codes::BAD_SLOT, "{refused}");
@@ -6076,50 +6312,52 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
         assert_eq!(refused["ok"], false, "{refused}");
         assert_eq!(refused["code"], ksx_api::codes::BAD_SLOT, "{refused}");
     }
+    // The plain-form twins refuse the same way, and every one of them lands
+    // its answer on this page — `/map` is deleted and `nocturne_redirect` is
+    // the one door out of every verb here.
     for (path, form) in [
-        (
-            "/nocturne/bind/toggle",
-            "target=stage&slot=9&function=B&key=K",
-        ),
-        (
-            "/nocturne/bind/toggle",
-            "target=stage&slot=9&function=B&key=K",
-        ),
-        (
-            "/nocturne/key/clear",
-            "target=stage&slot=9&function=A&key=H",
-        ),
-        ("/nocturne/bind/clear", "target=stage&slot=9&function=B"),
-        (
-            "/nocturne/bind/turbo",
-            "target=stage&slot=9&function=A&turbo_hz=10",
-        ),
+        ("/nocturne/bind/toggle", "slot=9&function=B&mode=toggle"),
+        ("/nocturne/key/clear", "number=9&key=H"),
+        ("/nocturne/bind/clear", "slot=9&function=B"),
+        ("/nocturne/bind/turbo", "slot=9&function=A&turbo_hz=10"),
     ] {
         let stale_form = post_form(addr, path, form);
         assert!(
-            stale_form.contains("location: /map?target=stage&slot=9"),
+            stale_form.contains("location: /nocturne?flash=error%3A"),
             "{path}: {stale_form}"
         );
     }
     let after_stale: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/nocturne?target=stage&slot=1")))
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne?slot=1")))
             .expect("unchanged staged mapper json");
-    assert_eq!(after_stale["mapper"], mapped["mapper"]);
-    assert_eq!(after_stale["macros"], mapped["macros"]);
-
-    // ...and Play is NOT offered yet, because §3 is unanswered.
-    assert!(
-        !page.contains(r#"action="/nocturne/play""#),
-        "Play was offered with the one question unanswered: {page}"
+    assert_eq!(
+        after_stale["view"]["bind_face"], mapped["view"]["bind_face"],
+        "a refused stale write changed the live draft"
     );
-    assert!(page.contains("split-or-freeze"), "{page}");
-    assert!(
-        page.contains("Not asked yet"),
-        "and it must still not be pre-answered: {page}"
+    assert_eq!(
+        after_stale["view"]["macro_rows"],
+        mapped["view"]["macro_rows"]
     );
 
-    // A hand-made POST to Play — the thing a disabled button cannot stop — is
-    // refused by the DOMAIN, and starts nothing.
+    // ...and §3 is still unanswered. The blocking roster carries no marked
+    // answer — was "Not asked yet"/"split-or-freeze", which were `/start`'s
+    // words; the served roster is `view.mode_rows`, and "asked and not
+    // answered" is exactly "no row is `n-radio on`".
+    let unanswered: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let mode_rows = unanswered["view"]["mode_rows"]
+        .as_array()
+        .expect("the split-or-freeze roster")
+        .clone();
+    assert!(!mode_rows.is_empty(), "{unanswered}");
+    assert!(
+        mode_rows.iter().all(|row| row["cls"] == "n-radio"),
+        "the question must not be pre-answered: {unanswered}"
+    );
+
+    // A hand-made POST to Play — the thing a disabled button cannot stop, and
+    // the reason the gate is in the HANDLER — is refused by the DOMAIN, and
+    // starts nothing.
     let response = post_form(addr, "/nocturne/play", "");
     assert!(
         response.contains("flash=error"),
@@ -6128,6 +6366,10 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
     assert!(
         response.contains("not%20ready%20to%20play"),
         "the refusal must give a safe next step: {response}"
+    );
+    assert!(
+        response.contains("keyboard%20question%20on%20this%20screen"),
+        "…and must point at the step that is missing: {response}"
     );
     assert!(
         !response.contains("split-or-freeze"),
@@ -6150,7 +6392,19 @@ fn the_first_run_journey_stages_maps_answers_and_only_then_plays() {
     let page = get(addr, "/nocturne");
     assert!(page.contains(r#"action="/nocturne/play""#), "{page}");
     assert!(page.contains(r#"action="/nocturne/save""#), "{page}");
-    assert!(page.contains("Answered: Split this keyboard."), "{page}");
+    // The answer is marked on the roster row it belongs to — was the sentence
+    // "Answered: Split this keyboard." on the deleted page.
+    let answered: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("payload");
+    let chosen: Vec<&serde_json::Value> = answered["view"]["mode_rows"]
+        .as_array()
+        .expect("the split-or-freeze roster")
+        .iter()
+        .filter(|row| row["cls"] == "n-radio on")
+        .collect();
+    assert_eq!(chosen.len(), 1, "{answered}");
+    assert_eq!(chosen[0]["name"], "bound-keys", "{answered}");
+    assert_eq!(chosen[0]["title"], "Split this keyboard", "{answered}");
 
     // Moment 7.
     let response = post_form(addr, "/nocturne/play", "");
@@ -6211,10 +6465,23 @@ fn start_keeps_offering_dualsense_after_the_first_over_http() {
     );
     assert!(offered("playstation"), "{payload}");
 
-    let page = rendered_body(&get(addr, "/nocturne"));
-    assert!(
-        page.contains(r#"<option value="dualsense""#),
-        "the HTML form must keep offering DualSense: {page}"
+    // PORTED 2026-08-26: the persona picker is no longer a `<select>` — it is
+    // the add dialog's card roster, and the dialog opens by class (`nDlgOpen`,
+    // false at SSR), so no `<option>` for a persona is ever served. The
+    // SERVED roster is `view.persona_rows`, which is what the dialog paints
+    // from and therefore the real subject of "keeps offering DualSense": a
+    // card marked `nd-card off` is the unavailable one.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("nocturne payload");
+    let card = api["view"]["persona_rows"]
+        .as_array()
+        .expect("a served persona roster")
+        .iter()
+        .find(|row| row["name"] == "dualsense")
+        .expect("the roster keeps DualSense");
+    assert_eq!(
+        card["cls"], "nd-card sel",
+        "the offer must survive the first DualSense: {api}"
     );
 
     let second = post_form(
@@ -6301,16 +6568,18 @@ fn a_controller_with_no_bindings_is_refused_by_name_and_fixed_in_place() {
     );
     post_form(addr, "/nocturne/blocking", "blocking=whole");
 
-    let page = get(addr, "/nocturne");
-    assert!(
-        page.contains("not ready — no controls are mapped"),
-        "{page}"
-    );
-    assert!(
-        !page.contains(r#"action="/nocturne/play""#),
-        "Play was offered for a pad that binds nothing: {page}"
-    );
+    // PORTED 2026-08-26. "not ready — no controls are mapped" was `/start`'s
+    // slot line and exists nowhere in the tree; the rack row and the binding
+    // pane say the same fact as counts, which is what the page has.
+    let page = rendered_body(&get(addr, "/nocturne"));
+    assert!(page.contains("0 bound"), "{page}");
+    assert!(page.contains("0 of 25 controls bound."), "{page}");
 
+    // The Play FORM stays in the action bar — this page keeps its bar stable
+    // and answers a press, rather than reshuffling the controls under a
+    // reload. Which is exactly why the gate has to be in the handler, and
+    // exactly what the POST below proves: a hand-made request is the thing a
+    // hidden button could never have stopped anyway.
     let response = post_form(addr, "/nocturne/play", "");
     assert!(response.contains("flash=error"), "{response}");
     assert!(
@@ -6318,29 +6587,42 @@ fn a_controller_with_no_bindings_is_refused_by_name_and_fixed_in_place() {
         "the refusal must give a customer-safe remedy: {response}"
     );
     assert!(
+        response.contains("no%20keys%20mapped%20to%20it"),
+        "…and must name what is wrong: {response}"
+    );
+    assert!(
         !response.contains("slot%201"),
         "the provider's raw slot failure leaked through the Studio boundary: {response}"
     );
     assert!(!control.played.load(Ordering::SeqCst), "{response}");
 
-    // The fix is on the page — one POST, no file, no mapper, no shell.
-    let response = post_form(
+    // The fix is on the page — one POST, no file, no mapper, no shell. Was
+    // `/nocturne/controller` with a bare `layout=`, which is the deleted
+    // `/start/controller/layout` verb; the surviving in-place fix is the
+    // staged bind the canvas itself posts.
+    let bound: serde_json::Value = serde_json::from_str(body_of(&post_json(
         addr,
-        "/nocturne/controller",
-        "number=1&layout=arcade-6button",
-    );
-    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-    let page = get(addr, "/nocturne");
-    assert!(page.contains("controls bound"), "{page}");
-    assert!(page.contains(r#"action="/nocturne/play""#), "{page}");
+        "/nocturne/api/bind",
+        &nocturne_bind_body(&control, 1, "A", "H", None, false),
+    )))
+    .expect("staged binding outcome");
+    assert_eq!(bound["ok"], true, "{bound}");
+    let page = rendered_body(&get(addr, "/nocturne"));
+    assert!(page.contains("1 of 25 controls bound."), "{page}");
 
     let response = post_form(addr, "/nocturne/play", "");
     assert!(!response.contains("flash=error"), "{response}");
     assert!(control.played.load(Ordering::SeqCst), "{response}");
 }
 
-/// Every mutating `/start` route is behind the guard: a rebound host must not
+/// Every mutating staging route is behind the guard: a rebound host must not
 /// be able to stage, save or start anything on this machine.
+///
+/// The list carried two entries that proved nothing after the cutover: a
+/// `/start/controller/persona` with no handler anywhere, and a duplicate of
+/// `/nocturne/controller` left when two `/start` paths collapsed onto it. The
+/// guard answers 403 BEFORE routing, so a path with no handler passes this
+/// assertion while testing nothing.
 #[test]
 fn the_start_routes_are_behind_the_guard() {
     let addr = start_server(Arc::new(ScriptedControl::new(false)));
@@ -6350,9 +6632,10 @@ fn the_start_routes_are_behind_the_guard() {
         "/nocturne/capture/prepare",
         "/nocturne/capture/release",
         "/nocturne/controller",
-        "/start/controller/persona",
-        "/nocturne/controller",
         "/nocturne/controller/remove",
+        "/nocturne/controller/move",
+        "/nocturne/controller/socd",
+        "/nocturne/controller/undo",
         "/nocturne/blocking",
         "/nocturne/discard",
         "/nocturne/save",
@@ -6389,7 +6672,13 @@ fn start_identify_selects_the_machine_providers_exact_board() {
         page.contains(r#"action="/nocturne/device/identify""#),
         "{page}"
     );
-    assert!(page.contains("Identify by pressing a key"), "{page}");
+    // PORTED 2026-08-26: the submit's label is "Identify by key"; the
+    // instruction it used to carry is the standing hint in `div.n-idbox`.
+    assert!(page.contains("Identify by key"), "{page}");
+    assert!(
+        page.contains("Press a key on the keyboard you want to use"),
+        "{page}"
+    );
 
     let response = post_form(addr, "/nocturne/device/identify", "");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
@@ -6471,19 +6760,28 @@ fn duplicating_a_controller_copies_bindings_rule_and_takes_the_served_name() {
 
     let api: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("workspace payload");
-    let rack = api["view"]["rack"].as_array().unwrap();
+    // PORTED 2026-08-26: the rack is `view.rack_rows`, and a row's whole story
+    // is one `meta` string — `"{preset}" preset · {n} bound · SOCD {label}` —
+    // rather than a `detail` plus a separate `socd_note`. The binding count is
+    // taken by POSITION for that reason: `.split("· ").last()` now yields the
+    // SOCD label, so the old slice would have compared two rules and called it
+    // a binding count.
+    let rack = api["view"]["rack_rows"].as_array().unwrap();
     assert_eq!(rack.len(), 2, "{api}");
-    assert_eq!(rack[1]["socd_note"], "Opposites: Last press wins", "{api}");
-    // Same binding count, different preset name.
-    let d0 = rack[0]["detail"].as_str().unwrap();
-    let d1 = rack[1]["detail"].as_str().unwrap();
+    let meta = |row: &serde_json::Value| row["meta"].as_str().unwrap().to_owned();
+    let (m0, m1) = (meta(&rack[0]), meta(&rack[1]));
+    assert!(
+        m1.ends_with("SOCD Last press wins"),
+        "the copy keeps the original's opposite-directions rule: {api}"
+    );
+    let bound = |m: &str| m.split(" · ").nth(1).unwrap_or_default().to_owned();
     assert_eq!(
-        d0.split("· ").last(),
-        d1.split("· ").last(),
+        bound(&m0),
+        bound(&m1),
         "the copy binds what the original binds: {api}"
     );
     assert!(
-        d0.contains("Player 1") && !d1.contains("\"Player 1\""),
+        m0.contains("\"Player 1\"") && !m1.contains("\"Player 1\""),
         "{api}"
     );
 
@@ -9346,16 +9644,15 @@ fn managed_development_runtime_words_the_autostart_fence_in_the_ui() {
     );
     assert_eq!(api["view"]["auto_form_cls"], "n-capform none", "{api}");
 
-    let start_api: serde_json::Value =
-        serde_json::from_str(body_of(&get(addr, "/api/nocturne"))).expect("start payload");
-    assert_eq!(start_api["autostart"]["readable"], true, "{start_api}");
-    assert_eq!(start_api["autostart"]["registered"], true, "{start_api}");
-    assert_eq!(start_api["autostart"]["read_only"], true, "{start_api}");
+    // PORTED 2026-08-26: the second read of the same endpoint asserted
+    // `/api/start`'s `autostart` object, which went with that page. The raw
+    // read it wrapped is `autostart_read`, already asserted above; the one
+    // fact it added is the read-only detail, which the provider owns.
     assert!(
-        start_api["autostart"]["detail"]
+        api["autostart_read"]["read_only_detail"]
             .as_str()
             .is_some_and(|detail| detail.contains("Install a complete candidate to test startup")),
-        "{start_api}"
+        "{api}"
     );
 
     let start_page = rendered_body(&get(addr, "/nocturne"));
@@ -9367,13 +9664,15 @@ fn managed_development_runtime_words_the_autostart_fence_in_the_ui() {
         start_page.contains("Install a complete candidate to test startup"),
         "{start_page}"
     );
+    // PORTED 2026-08-26: the consent form is SERVED INERT rather than removed
+    // — `.nm .n-capform.none { display: none }`, which takes it out of the
+    // accessibility tree too, so it is not offered in any sense a user can
+    // act on. That is this page's standing pattern (a served class, never a
+    // nested show) and the reason it is safe is asserted right below: the
+    // authorization boundary is the HANDLER, not the markup.
     assert!(
-        !start_page.contains(r#"action="/nocturne/autostart""#),
-        "{start_page}"
-    );
-    assert!(
-        !start_page.contains(r#"name="confirm_autostart""#),
-        "{start_page}"
+        start_page.contains(r#"class="n-capform none""#),
+        "an unavailable verb must not be offered: {start_page}"
     );
 
     let response = post_form(

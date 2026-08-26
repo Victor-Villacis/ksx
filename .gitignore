@@ -31,3 +31,7 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 .DS_Store
+
+# Scratch left by tooling; neither has a consumer.
+.dead.json
+*.stackdump

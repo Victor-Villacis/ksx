@@ -22,7 +22,15 @@ $BinRoot = Join-Path $RuntimeRoot "bin"
 $LogRoot = Join-Path $RuntimeRoot "logs"
 $BuildRoot = Join-Path $RepoRoot "target\studio-env-real"
 $Port = 4460
-$ReservedNonRealPorts = @(4476, 4478, 4479, 4488, 4489, 4490, 4496, 4500, 4510, 4511, 4512, 4520, 4521)
+# Every port some OTHER lane owns, so a mistyped $Port above is refused rather
+# than served -- real hardware must never answer where a fixture is expected.
+# This is exactly 4460's complement of the environment table in status.ps1, and
+# it has to be read that way: a port listed here that no lane can start is a
+# false claim about what this repo runs. 4521 was such a claim. It belonged to
+# the blank-encoder fixture lane, which left with the encoder surfaces; every
+# other roster (seed.ps1, status.ps1, teardown.ps1, watch.ps1, the docs) had
+# already dropped it and this line was the last place still naming it.
+$ReservedNonRealPorts = @(4476, 4478, 4479, 4488, 4489, 4490, 4496, 4500, 4510, 4511, 4512, 4520)
 if ($ReservedNonRealPorts -contains $Port) {
     throw "Real-hardware QA is assigned reserved fixture/test port $Port. Correct the environment roster instead of starting it."
 }
@@ -614,23 +622,40 @@ try {
                 $IdleDetail = if ($IdleProbe.text) { $IdleProbe.text } else { "no typed daemon response" }
                 throw "managed development replacement did not remain idle: $IdleDetail"
             }
-            # Reads the config root from /api/nocturne. It used to come from
-            # /api/status, which went with the status page; this is the same
-            # fact from the surviving surface, so the check is unchanged in
-            # what it proves -- that the managed runtime opened the REAL
-            # %APPDATA%\ksx and not a portable or fixture root.
-            $StatusResponse = Invoke-WebRequest `
-                -UseBasicParsing `
-                -Uri "http://127.0.0.1:$Port/api/nocturne" `
-                -TimeoutSec 1
-            if ($StatusResponse.StatusCode -ne 200) {
-                throw "nocturne endpoint returned HTTP $($StatusResponse.StatusCode)"
-            }
-            $StatusPayload = $StatusResponse.Content | ConvertFrom-Json
+            # The config root is read from the SAME snapshot as everything
+            # above it. It used to come from /api/status, and when the status
+            # page went away the read was repointed at /api/nocturne -- which
+            # is the same fact from the surviving surface, so what this proves
+            # never changed: that the managed runtime opened the REAL
+            # %APPDATA%\ksx and not a portable or fixture root. What did change
+            # is that the repoint left a second GET against an endpoint this
+            # attempt had already fetched. That cost an extra round trip on
+            # every one of the 160 attempts, and it split the gate across two
+            # snapshots -- staged.reachable proven against request one, the
+            # config root against request two, with a save in between free to
+            # make them disagree. One payload, one verdict.
             $ExpectedConfigRoot = [System.IO.Path]::GetFullPath(
                 (Join-Path ([Environment]::GetFolderPath("ApplicationData")) "ksx")
             )
-            $ReportedConfigRoot = [string]$StatusPayload.setup.config_root
+            # `setup` is an Option: it serializes to null whenever the config
+            # read REFUSED, and the sentence explaining why lands in
+            # `setup_error` instead. Reaching through that null for
+            # `config_root` under Set-StrictMode does not return empty, it
+            # THROWS -- "The property 'config_root' cannot be found on this
+            # object" -- so the IsNullOrWhiteSpace guard below never sees the
+            # case it was written for, the retry loop swallows the reflection
+            # message for twenty seconds, and the failure path then tears down
+            # a healthy daemon/Studio pair citing a PowerShell diagnostic
+            # instead of the refusal. Ask about the null first, and quote the
+            # refusal the payload actually carried.
+            if ($null -eq $Payload.setup) {
+                $SetupRefusal = [string]$Payload.setup_error
+                if ([string]::IsNullOrWhiteSpace($SetupRefusal)) {
+                    $SetupRefusal = "the payload carried no reason"
+                }
+                throw "Studio could not read the configuration to verify its root: $SetupRefusal"
+            }
+            $ReportedConfigRoot = [string]$Payload.setup.config_root
             if ([string]::IsNullOrWhiteSpace($ReportedConfigRoot)) {
                 throw "nocturne payload carried no config root to verify"
             }

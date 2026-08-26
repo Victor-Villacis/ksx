@@ -52,6 +52,39 @@ $Definitions = @(
     @{ Name = "test-theme-matrix"; Port = 4512; Id = "fixture-seeded-demo"; Fixture = $true; TestOwned = $true }
     @{ Name = "first-run"; Port = 4520; Id = "fixture-first-run"; Fixture = $true; Record = "first-run" }
 )
+# The three theme lanes above are hand-kept, but nothing hand-keeps the
+# fixtures that occupy them: studio-ui/pwtest/visual-smoke.test.mjs spawns one
+# per entry in crates/ksx-studio/assets/themes.json, at KSX_PWTEST_THEME_PORT
+# (default 4510) plus that entry's index. Add a fourth theme and a fourth
+# fixture appears on 4513 -- a port this table cannot report, and one no other
+# roster reserves either. The lane names are also -Environment's ValidateSet
+# values, so this table cannot simply be derived from that file; the honest
+# alternative is to notice the drift out loud the first time anyone asks for
+# status. Warn rather than throw, and only when the file is actually readable:
+# assets/ is deleted and rewritten by every build (see build-assets.ps1), and a
+# status report must survive being run in the middle of one.
+try {
+    $ThemesManifest = Join-Path $RepoRoot "crates\ksx-studio\assets\themes.json"
+    if (Test-Path -LiteralPath $ThemesManifest -PathType Leaf) {
+        $ThemeFirstPort = 4510
+        $ManifestThemes = @((Get-Content -LiteralPath $ThemesManifest -Raw | ConvertFrom-Json).themes)
+        $ExpectedThemeLanes = @(
+            for ($ThemeIndex = 0; $ThemeIndex -lt $ManifestThemes.Count; $ThemeIndex += 1) {
+                "test-theme-$([string]$ManifestThemes[$ThemeIndex].id):$($ThemeFirstPort + $ThemeIndex)"
+            }
+        )
+        $ListedThemeLanes = @(
+            $Definitions |
+                Where-Object { [string]$_.Name -like "test-theme-*" } |
+                ForEach-Object { "$([string]$_.Name):$([int]$_.Port)" }
+        )
+        if (($ExpectedThemeLanes -join ", ") -cne ($ListedThemeLanes -join ", ")) {
+            Write-Warning "Theme lane roster is stale: themes.json spawns [$($ExpectedThemeLanes -join ', ')] but this roster reports [$($ListedThemeLanes -join ', ')]. Fixtures on unlisted ports are invisible here. Update the table above, -Environment's ValidateSet, and docs/STUDIO-ENVIRONMENTS.md."
+        }
+    }
+} catch {
+    Write-Warning "Theme lane roster could not be checked against themes.json: $($_.Exception.Message)"
+}
 if (($RequireHealthy -or $RequireCurrent) -and [string]::IsNullOrWhiteSpace($Environment)) {
     throw "-RequireHealthy and -RequireCurrent require one explicit -Environment so stopped, test-owned ports are never treated as an implicit deployment gate."
 }

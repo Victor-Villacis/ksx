@@ -84,8 +84,11 @@ source, not another Rust package.
   while `ksx stage` and `ksx games new|update|delete` remain planned
   (`docs/SURFACES.md` §3c and §10). The product does not require either CLI face
   (`docs/FIRST-RUN.md`).
-- **Studio** (browser) — the workbench. Authoring: mapping, devices, profiles,
-  the first-run flow. Better than immediate-mode GUI at a 25-binding preset.
+- **Studio** (browser) — the workbench: ONE product page plus three tool pages
+  since 2026-08-25. `/nocturne` carries the whole set-up-and-play flow — device
+  choice, controllers, mapping, saved games, configuration, Save and Play — and
+  `/check`, `/pads` and `/devices` are the tools beside it. Better than
+  immediate-mode GUI at a 25-binding preset, which is why the mapper lives here.
 - **egui cabinet panel** — the appliance. At a cabinet there is no mouse and no
   keyboard; the arcade panel *is* the input, and no browser UI can be driven by
   an arcade stick. That is why this surface cannot be deleted.
@@ -108,7 +111,7 @@ USB+Bluetooth device list, and multiple controller personas.
 **Current KSX candidate:** every customer shortcut and the
 post-install hand-off target `ksx-launcher.exe`, which starts the sibling
 console-subsystem `ksx.exe open` with `CREATE_NO_WINDOW`. `ksx open` starts and
-waits for a plain daemon, then opens Studio directly at `/start` in ksx's own
+waits for a plain daemon, then opens Studio directly at `/nocturne` in ksx's own
 Chromium app profile. An empty default configuration now starts an **idle
 control host** rather than exiting: no session, capture, claim or pad exists,
 but the pipe/tray remain available so first-run staging is possible.
@@ -126,23 +129,32 @@ proved. Both happen in `usUninstall` — after the user has confirmed the remova
 before Inno deletes its first file — so answering No to the confirmation costs
 nothing.
 
-`/start` now opens the full existing Forma mapper against an in-memory staged
-controller (`target=stage`) for chords, turbo and macros. Refused edits leave
+`/nocturne` opens the full existing Forma mapper against an in-memory staged
+controller for chords, turbo and macros — `?slot=N` picks which one. (It was
+`/map?target=stage&slot=N` until the cutover; with one page there is only ever
+the stage, so the `target` parameter went with the second subject it named.) Refused edits leave
 the stage unchanged; accepted edits touch no disk. Save and Play remain
-separate, including Play-before-Save. Studio's saved-game screen now creates,
-updates, deletes and switches profiles; creation inherits the working base
-device assignments, updates preserve them unless explicitly refreshed, and
-deletion keeps controller layouts. Pasted executable paths normalize one
+separate, including Play-before-Save. Studio's saved games — now the
+Configuration menu on that same page rather than a `/profiles` screen — create,
+update, delete and switch; creation inherits the working base device
+assignments, updates preserve them, and deletion keeps controller layouts. The
+"unless explicitly refreshed" half of that sentence is a backend capability with
+no face at the moment: `UpdateProfile::rebase_devices` and the form field that
+carries it both survive, but the edit form renders no checkbox for it, so it can
+never be asked for (`GATES.md` Phase 4 step 4 is blocked on exactly this). Pasted executable paths normalize one
 matching quote pair. Guide copy names both default keys, the Windows Game Bar
-controller prerequisite and a direct Settings link; ksx does not silently
-change the per-user Windows setting.
+controller prerequisite and, per `FIRST-RUN.md` §7, is meant to offer a direct
+`ms-settings:gaming-gamebar` link — **which has never shipped**; nothing in
+`crates/ksx-studio` or `studio-ui` mentions Game Bar or `ms-settings` at all.
+ksx does not silently change the per-user Windows setting.
 
 **Studio theming (TK0–TK3, 2026-08-20):** the whole palette lives in ONE
 source, `studio-ui/tokens/` (DTCG-flavored JSON compiled by
 `tokens/build-tokens.mjs` inside `node build.mjs` into the hashed sheet, the
 generated `theme_tokens.rs` and the pad-art sheet — the four hand-mirrored
-palette copies are gone). Themes are user-selectable at runtime: `/setup`
-carries the picker, the choice persists as `Settings.theme` in config.toml,
+palette copies are gone). Themes are user-selectable at runtime: `/nocturne`'s
+"How the Studio looks" panel carries the picker (`POST /nocturne/theme`), the
+choice persists as `Settings.theme` in config.toml,
 every page stamps `data-theme` on `<html>` (only roster ids; anything else
 renders as System = follow the OS), and the contrast gate enumerates every
 shipped theme with per-theme exemption pins. Three ship: dark (default),
@@ -180,8 +192,13 @@ code.
 person who has never seen ksx gets from the exact downloaded installer to a
 controller moving in a game, with no terminal, no file editing, and nobody
 telling them what to do next.* The missing staged mapper and wrong landing page
-described by the old handoff are closed: `/map?target=stage` routes bindings and
-macros into `StageEdit::SetBindings`, and `ksx open` lands on `/start`.
+described by the old handoff are half closed. The staged mapper works: `/nocturne`
+routes bindings and macros into `StageEdit::SetBindings`. **The landing page is
+wrong again**, and by the same mechanism as before — `studio_launch.rs` still
+asks for `/start`, which the 2026-08-25 cutover deleted, and the router has no
+fallback, so `ksx open` opens a chrome-less window on a 404. A test in that file
+pins the wrong value, which is why nothing went red. Read this paragraph as the
+requirement, not as a report.
 
 **Moment 4's built-in prepare and Moment 7 remain unverified on physical Windows
 hardware.** Software tests

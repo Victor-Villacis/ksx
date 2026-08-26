@@ -284,8 +284,12 @@ pub(crate) struct EmbeddedPage {
 }
 
 impl EmbeddedPage {
-    /// Load the embedded page for one manifest route (`"/"` = status,
-    /// `"/map"` = mapper).
+    /// Load the embedded page for one manifest route.
+    ///
+    /// The manifest holds exactly four: `"/nocturne"` (the product), and the
+    /// tool pages `"/check"`, `"/pads"` and `"/devices"`. The old examples
+    /// here were `"/"` and `"/map"`, both of which would now panic on the
+    /// `expect` at every call site.
     pub(crate) fn load(route: &str) -> Result<Self, StudioError> {
         let manifest_json = Assets::get("manifest.json")
             .ok_or_else(|| StudioError::Asset("manifest.json missing from embed".into()))?;

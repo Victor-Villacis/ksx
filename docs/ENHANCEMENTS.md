@@ -428,8 +428,18 @@ The config root is `%APPDATA%\ksx` and appears in none of those rows. So
 `ksx device pick` writing a `[[device]]` entry and a board being held are
 independent facts, a board can be held with no entry naming it, and moving
 `config.toml` aside for a clean-machine QA run releases exactly nothing. That
-is why the held-keyboard list reads `BoardRow::claimed` off the live scan and
-why it belongs on `/start` rather than on the config page.
+is why the held-keyboard list reads `BoardRow::claimed` off the live scan.
+
+The placement half of that argument was "on `/start` rather than on the config
+page", and it needs restating now that both pages are gone. The finding is
+unchanged and the rule it implies is stronger: the list belongs wherever a
+person whose keyboard has stopped working will be, which since 2026-08-25 is the
+one product page — `/nocturne` — and specifically NOT `/devices`, which reads
+and writes `[[device]]` entries and is therefore about configuration, the one
+thing this paragraph proves cannot answer the question. ⚠ The list is not on
+`/nocturne` today: the read survived the cutover and the face did not
+(`SURFACES.md` §3a). That is a regression against this finding, not a revision
+of it.
 
 **Shipped contract.** `/devices` and `ksx winusb sweep-certificates` report
 receipt and certificate residue without elevation. The consented sweep invokes

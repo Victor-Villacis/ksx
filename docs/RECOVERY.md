@@ -63,16 +63,32 @@ panel types during that run and is dark before and after it.
 The rest of this section is for when you want the interface back on the normal
 keyboard driver.
 
-**Try the app first — there is now a way back that is not a command.** Open ksx
-and look at the top of Setup: **Keyboards ksx is holding** lists every board on
-this machine that is bound to `winusb.sys`, each with its own Release. It reads
-the live device tree, so it appears with no config, with nothing staged, on a
-fresh install, and while some other keyboard is selected — a held board does not
-have to be *chosen* to be given back, and choosing one never releases it either.
-Until 2026-08-11 that control existed only on the selected keyboard's card, so
-in every one of those states this runbook and an elevated shell were the only
-exit, which `docs/FIRST-RUN.md` §6 says must never be true. The subsections below
-stay, because they are what you need when ksx itself will not start.
+**Try the app first — there is meant to be a way back that is not a command.**
+Open ksx, which puts you on the one product page, and look above the keyboard
+choice: **Keyboards ksx is holding** lists every board on this machine that is
+bound to `winusb.sys`, each with its own Release. It reads the live device tree,
+so it appears with no config, with nothing staged, on a fresh install, and while
+some other keyboard is selected — a held board does not have to be *chosen* to
+be given back, and choosing one never releases it either. Until 2026-08-11 that
+control existed only on the selected keyboard's card, so in every one of those
+states this runbook and an elevated shell were the only exit, which
+`docs/FIRST-RUN.md` §6 says must never be true.
+
+> 🔴 **As of 2026-08-25 that paragraph describes the design and not the build,
+> and if your keyboard is dead right now you should skip to §2b.** The
+> single-product-page cutover took two things with it. First, `ksx open` still
+> asks for `/start`, a page that was deleted, so the desktop icon, the Start-menu
+> entry and the tray's *Open ksx* all land on a 404 in a window with no address
+> bar — there is nowhere to type a correction. Second, the held-keyboards list
+> did not come across to the new page: the backend read is still there and
+> nothing draws it, and the only Release control on the page belongs to whichever
+> keyboard is currently selected, which on a fresh install is none of them. Both
+> are being fixed in Studio; neither is fixed by anything you can do from here.
+> Until they are, the subsections below are not the fallback — they are the
+> route.
+
+The subsections below stay in any case, because they are what you need when ksx
+itself will not start.
 
 ### 2a. The exact device tree on this cabinet
 

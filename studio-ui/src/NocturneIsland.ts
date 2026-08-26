@@ -9639,8 +9639,9 @@ export function NocturneIsland() {
                 h(
                   "p",
                   { class: "nm-auto-note" },
-                  "Paste a configuration ksx exported. Leave the box below unticked and ",
-                  "nothing is written — you get a report of exactly what it would do.",
+                  "Paste a configuration ksx exported — from this machine, another one, ",
+                  "or an assistant that wrote you one. Leave the box below unticked and ",
+                  "nothing is written: you get a report of exactly what it would do.",
                 ),
                 h("textarea", {
                   class: "nm-importbox",
@@ -9649,11 +9650,40 @@ export function NocturneIsland() {
                   "aria-label": "the configuration, as JSON",
                   placeholder: "{ … }",
                 }),
+                // A document ksx exported says what it is (`"ksx_interop": 1`)
+                // and this stays on "(the document says)". A BARE document —
+                // the one an assistant writes you, which the sentence above
+                // invites — carries no envelope, and `read_bundle` refuses it
+                // in exactly those words. Without this control the card's own
+                // invitation was an unfixable dead end: the only refusal it
+                // could produce had no answer anywhere on the page.
+                h(
+                  "label",
+                  { class: "nm-gl" },
+                  "if it is not a ksx export, what is it?",
+                  h(
+                    "select",
+                    { class: "nm-gi", name: "what" },
+                    h("option", { value: "" }, "(the document says)"),
+                    h("option", { value: "config" }, "settings, boards and slots"),
+                    h("option", { value: "games" }, "game profiles"),
+                    h("option", { value: "presets" }, "controller layouts"),
+                  ),
+                ),
                 h(
                   "label",
                   { class: "nm-importcheck" },
                   h("input", { type: "checkbox", name: "apply", value: "1" }),
                   h("span", {}, "write it"),
+                ),
+                // The escape hatch for a document that is right and does not
+                // validate. Separate from "write it" on purpose: forcing is a
+                // second decision, and `ImportForm` has always carried both.
+                h(
+                  "label",
+                  { class: "nm-importcheck" },
+                  h("input", { type: "checkbox", name: "force", value: "yes" }),
+                  h("span", {}, "write it even if it does not validate"),
                 ),
                 h("button", { type: "submit", class: "nm-item nm-go" }, "Import"),
               ),
@@ -10161,7 +10191,10 @@ export function NocturneIsland() {
           h(
             "p",
             { class: "n-foot" },
-            "Adding a controller here needs JavaScript — the Start page's add form works without it.",
+            // It pointed at the Start page until 2026-08-25, and that page is
+            // a 404 now: with scripting off this was the only sentence about
+            // adding a controller, and it sent people to nowhere.
+            "Adding a controller here needs JavaScript, because the create dialog is where the persona, the layout and the opposite-directions rule are chosen together. Everything else on this page — picking a keyboard, loading a saved game, Save and Play — works without it.",
           ),
         ),
         // The short undo window after a removal: the SERVER holds the

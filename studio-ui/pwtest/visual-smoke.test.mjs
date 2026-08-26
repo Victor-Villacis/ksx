@@ -91,7 +91,7 @@ const screenshotRecords = [];
 async function waitForServer(deadlineMs = 120_000) {
   const until = Date.now() + deadlineMs;
   for (;;) {
-    const up = await fetch(`${BASE}/api/map`).then(
+    const up = await fetch(`${BASE}/api/nocturne`).then(
       (response) => response.ok,
       () => false,
     );
@@ -113,7 +113,7 @@ before(async () => {
   await rm(screenshotDir, { recursive: true, force: true });
   await mkdir(screenshotDir, { recursive: true });
 
-  const squatter = await fetch(`${BASE}/api/map`).then(
+  const squatter = await fetch(`${BASE}/api/nocturne`).then(
     () => true,
     () => false,
   );
@@ -404,7 +404,7 @@ for (const [index, theme] of THEMES.entries()) {
     let context;
 
     before(async () => {
-      const squatter = await fetch(`${base}/api/map`).then(
+      const squatter = await fetch(`${base}/api/nocturne`).then(
         () => true,
         () => false,
       );
@@ -417,7 +417,7 @@ for (const [index, theme] of THEMES.entries()) {
       themedServer.stderr?.on("data", (chunk) => (themedStderr += chunk.toString()));
       const until = Date.now() + 120_000;
       for (;;) {
-        const up = await fetch(`${base}/api/map`).then(
+        const up = await fetch(`${base}/api/nocturne`).then(
           (response) => response.ok,
           () => false,
         );
@@ -488,16 +488,33 @@ ${themedStderr.trim() || "(it said nothing)"}`,
           `${route.path} painted the wrong ground for stamped ${theme.id}`,
         );
         if (painted.nocturneStage !== null) {
-          // The design-proof route deliberately ignores themes: its scoped
-          // --n-* palette covers the themed body and dies wholesale at M5
-          // (its own banner's contract). Pinning the frame's ground here
-          // turns "dark-only by design" into an asserted fact under every
-          // stamp, instead of the body assertion above proving only a paint
-          // the frame makes invisible.
+          // ⚠️ WHAT THIS PINS IS NO LONGER WHAT IT SAYS IT PINS.
+          //
+          // The rationale here used to be "the design-proof route deliberately
+          // ignores themes… and dies wholesale at M5 (its own banner's
+          // contract)". That route is now THE PRODUCT — `/nocturne` is the
+          // only page ksx Studio ships — and the frame still hard-codes its
+          // palette: `studio.css` sets `--n-bg: #161826` on `.nocturne` and
+          // paints `background: var(--n-bg)` on a `height: 100vh;
+          // overflow: hidden` frame. The theme stamp reaches `body` and
+          // nothing else, so the frame covers every pixel of the ground the
+          // assertion above just proved was themed.
+          //
+          // The consequence is a shipped theme picker (`/nocturne/theme`,
+          // `themes.json` = dark/light/matrix) that changes NOTHING A USER CAN
+          // SEE on the product page — and this assertion is what would fail
+          // first if somebody fixed it. It is left standing on purpose: the
+          // fact it states is true today, and deleting it would let the frame
+          // drift silently while the question is decided. But it is a
+          // REGRESSION GUARD OVER A DEFECT, not a contract, and whoever owns
+          // the token system should either theme `--n-bg` (and re-point this
+          // at `theme.bg`) or remove the picker.
           assert.equal(
             painted.nocturneStage,
             "rgb(22, 24, 38)",
-            `${route.path}'s .nocturne frame must keep its own --n-bg under stamped ${theme.id}`,
+            `${route.path}'s .nocturne frame still hard-codes --n-bg under stamped ${theme.id} ` +
+              `— if this failed because the frame learned the theme, that is the fix landing: ` +
+              `re-point this at hexToRgb(theme.bg)`,
           );
         }
         assert.deepEqual(

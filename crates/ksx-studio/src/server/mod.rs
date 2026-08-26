@@ -1,13 +1,21 @@
 //! The blocking axum server around the render seam.
 //!
-//! GET / renders the page (SSR + island props); GET /api/status serves the
-//! same [`StatusPayload`] as JSON for the island's 2 s poller (same-origin
-//! only — the CSP's `connect-src 'self'` is exactly what permits the fetch).
-//! The three POST routes each perform one [`ControlSource`] verb and
-//! 303-redirect back to /, carrying the outcome in a `flash` query parameter
-//! — plain HTML forms remain the baseline (`form-action 'self'`), which the
-//! client optionally upgrades to fetch-submits that read the redirect's
-//! flash without a reload.
+//! GET /nocturne renders THE page — one product surface that owns setup,
+//! mapping, saved games and configuration — as SSR plus island props. GET
+//! /api/nocturne serves the same payload as JSON for the island's poller
+//! (same-origin only — the CSP's `connect-src 'self'` is exactly what permits
+//! the fetch). Every mutating route performs one verb and 303-redirects back
+//! to /nocturne, carrying the outcome in a `flash` query parameter that
+//! `nocturne_flash_from_query` resolves against an ALLOWLIST rather than
+//! reflecting. Plain HTML forms remain the baseline (`form-action 'self'`),
+//! which the client optionally upgrades to fetch-submits that read the
+//! redirect's flash without a reload.
+//!
+//! Three tool pages sit beside it: /check (the button check), /pads (the
+//! ViGEm bus) and /devices (the picker). `/`, `/map`, `/start`, `/setup`,
+//! `/profiles` and `/workspace` were deleted in the 2026-08-25 cutover and
+//! now 404; so did `/api/status`, `/api/map`, `/api/setup`, `/api/profiles`
+//! and `/api/workspace`.
 //!
 //! v15 adds `/pads`, and it takes its facts from a THIRD provider:
 //! [`ksx_api::MachineSource`], beside the existing status and control ones.
@@ -321,7 +329,18 @@ pub fn serve(
             .route("/nocturne/blocking", post(nocturne_form_blocking))
             .route("/nocturne/theme", post(nocturne_form_theme))
             .route("/nocturne/export.json", get(nocturne_export))
-            .route("/nocturne/import", post(nocturne_form_import))
+            // 8 MB, restored: this limit was a per-route layer on
+            // `/setup/import` and did NOT travel with the verb when it moved
+            // here, so the real ceiling silently became axum's 2 MB default
+            // while `N_IMPORT_UNREADABLE` went on promising 8 MB. A whole
+            // cabinet — config, every games.toml profile and every preset in
+            // one interop document — can exceed 2 MB, and the cost was a bare
+            // 413 with no `Location` and no way back to the page.
+            .route(
+                "/nocturne/import",
+                post(nocturne_form_import)
+                    .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
+            )
             .route("/nocturne/game", post(nocturne_form_game_new))
             .route("/nocturne/game/update", post(nocturne_form_game_update))
             .route("/nocturne/game/delete", post(nocturne_form_game_delete))
@@ -439,73 +458,40 @@ pub fn serve(
                 "/devices/certificates/sweep",
                 post(devices_form_sweep_certificates),
             )
-            // PROFILES & PRESETS. The read is `MachineSource::profiles`
-            // (games.toml with `ksx_games::preflight` already run, so a
-            // profile whose .exe moved is a broken ROW instead of a cabinet
-            // that does nothing when the button is pressed) plus
-            // `MachineSource::presets`. The three writes are one backend verb
-            // each: `profile_new`, `preset_new`, and — for "switch to this" —
-            // the SAME `ControlSource::start` the status page's forms post,
-            // 303-ing back here so the user keeps their place, exactly as
-            // `/map/session/stop` reuses `stop`.
-            // ── /setup — the CONFIG FIRST, and the first run ───────────────
-            // Two verbs a person sees (Export, Import) and three steps, each
-            // one backend verb. No route here takes a filesystem path, in or
-            // out: the export IS the bytes and the import IS the document, so
-            // nothing on this page ever asks anyone to name a file.
-            // A GET on purpose: it writes nothing, and `guard.rs` decides what
-            // to police by METHOD — a read wearing a POST would be a lie the
-            // guard then has to work around. The Host check still covers it.
-            // DRY RUN unless the form's "write it" box is ticked
-            // (`ksx_api::ImportRequest::apply`), which is the CLI's consent
-            // shape and not a web-only ceremony.
+            // ── What used to be five pages ─────────────────────────────
             //
-            // The one route with its own body limit. axum's default is 2 MB,
-            // and a whole cabinet — config, every games.toml profile and every
-            // preset in one interop document — can exceed it; the cost of the
-            // default was a bare 413 with no way back to the page. 8 MB is
-            // roomy for a configuration and still a bound, and the handler
-            // turns the rejection into a flashed sentence either way.
-            // Step 2: one `ControlSource::assign_slot` — the same pipe verb
-            // `ksx slot assign` performs. It BOUNCES the pads, which the page
-            // says before the click, not after it.
-            // The Studio theme: a config write like blocking, but read per
-            // page render rather than by the daemon — "saved" IS "in effect".
-            // Step 3: the daemon's own learner, the two verbs the mapper
-            // already uses. The page renders `learn_poll` per request, so this
-            // step works with scripting switched off.
-            // ── /start — THE FIRST RUN (docs/FIRST-RUN.md moments 4–7) ─────
+            // Saved games, controller layouts, the configuration verbs, the
+            // theme, the first-run staging flow and the mapper all had their
+            // own page and their own route block here. They are one page now
+            // and their handlers live in `nocturne.rs`; what follows is the
+            // rationale that OUTLIVED the pages, because it still constrains
+            // the verbs wherever they live.
             //
-            // A new page rather than a rebuilt `/setup`, and the split is the
-            // contract, not the layout: every `/setup` step reads config.toml
-            // and writes to it, and NOTHING here touches a file until
-            // `/start/save`. One screen holding both rules would be a screen
-            // where the user cannot tell which controls commit — which is the
-            // whole thing staging exists to fix (`render_start.rs` has the
-            // longer version).
+            // **Staging touches no file until Save.** Every staging verb is
+            // one `ControlSource` call reaching nothing outside the daemon's
+            // own memory — no file, no driver, no session — which is what
+            // makes exploring free. That was the whole reason first-run was a
+            // separate page from the configuration editor: one screen holding
+            // both rules is a screen where the user cannot tell which controls
+            // commit. On one page the rule has to be carried by the VERBS, so
+            // `/nocturne/save` is the only staging route that writes.
             //
-            // Thirteen routes. The seven staging ones are ONE `ControlSource`
-            // verb each and reach nothing outside the daemon's own memory — no
-            // file, no driver, no session — which is what makes exploring free.
-            // The capture routes (now `/nocturne/capture/*`) are the
-            // deliberately narrow exception to the browser claim prohibition:
-            // an exact served interface, three explicit consents, and the
-            // local MachineSource's installed UAC helper. Studio never
-            // receives a backend choice or helper output from the browser.
+            // **The capture routes are the narrow exception** to the browser
+            // claim prohibition: an exact served interface, three explicit
+            // consents, and the local MachineSource's installed UAC helper.
+            // Studio never receives a backend choice or helper output from the
+            // browser.
             //
-            // The RESCAN is deliberately not a POST. Re-reading the machine
-            // writes nothing, and a read wearing a POST is a lie the guard
-            // then has to work around — the same argument that keeps
-            // `/nocturne/export.json` a GET.
-            // Moment 6 IN THE STAGE: dress a staged controller in one of
-            // ksx's in-box layouts. One `stage-edit`, so it reaches nothing
-            // outside the daemon's memory — the bindings a first-run user
-            // needs arrive without a file write and without the mapper, which
-            // edits FILES and could therefore never have been step 3 of a flow
-            // that has not saved anything yet.
-            // MIGRATED (2026-08-17): the sign-in task and "Start over" live
-            // in nocturne.rs now; these cards keep working — the answers
-            // land on /nocturne.
+            // **Reads do not wear POST.** `/nocturne/export.json` is a GET
+            // because it writes nothing, and `guard.rs` polices by METHOD — a
+            // read wearing a POST is a lie the guard then has to work around.
+            // The Host check still covers it. Import is the mirror: a DRY RUN
+            // unless the form's "write it" box is ticked, which is the CLI's
+            // consent shape and not a web-only ceremony.
+            //
+            // **No route here takes a filesystem path**, in or out: the export
+            // IS the bytes and the import IS the document, so nothing ever
+            // asks anyone to name a file.
             // Canon helper: correct no-cache + Service-Worker-Allowed
             // headers for free (replaced a hand-rolled handler).
             .route("/sw.js", get(forma_server::sw::serve_sw::<Assets>))

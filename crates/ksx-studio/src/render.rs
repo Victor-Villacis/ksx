@@ -408,18 +408,6 @@ pub(crate) const PAYLOAD_SCRIPT_ID: &str = "__ksx-payload";
 ///   new one is a review, not a surprise) and asserted non-empty, which is the
 ///   guard against ledger #10/#20(a) — an attribute whose value silently
 ///   vanishes.
-/// Slot ids of every slot named `name`, in slot-table (== document) order.
-#[cfg(test)]
-fn named_slot_ids(module: &IrModule, name: &str) -> Vec<u16> {
-    module
-        .slots
-        .entries()
-        .iter()
-        .filter(|e| module.strings.get(e.name_str_idx).is_ok_and(|n| n == name))
-        .map(|e| e.slot_id)
-        .collect()
-}
-
 #[cfg(test)]
 pub(crate) fn assert_island_slot_contract(
     module: &IrModule,
@@ -510,6 +498,23 @@ pub(crate) fn assert_island_slot_contract(
              value, or a child with no text, and no warning anywhere"
         );
     }
+}
+
+/// Slot ids of every slot named `name`, in slot-table (== document) order.
+///
+/// Lives BELOW the contract it serves on purpose: it used to sit above it, and
+/// a `///` block with no blank line between them silently reparented the whole
+/// contract doc onto this six-line helper. Clippy's `doc_lazy_continuation` is
+/// what noticed.
+#[cfg(test)]
+fn named_slot_ids(module: &IrModule, name: &str) -> Vec<u16> {
+    module
+        .slots
+        .entries()
+        .iter()
+        .filter(|e| module.strings.get(e.name_str_idx).is_ok_and(|n| n == name))
+        .map(|e| e.slot_id)
+        .collect()
 }
 
 /// The domain payload as a JSON data block body. `<` is JSON-escaped so a

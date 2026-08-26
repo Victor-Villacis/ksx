@@ -326,8 +326,6 @@ pub(crate) fn legend_label_for_persona(persona: &str, z: &Zone) -> String {
     format!("{}{}", legend_group(z), label)
 }
 
-/// Hardware selectors identify machines;
-
 // ── v11/v12: THE MACRO EDITOR — the piano roll, and it SAVES ───────────────
 // docs/INPUT-TRANSFORMS.md §6.2, adopted from TAStudio: "rows = steps,
 // columns = the slot's controls, cells = held or not". That beats a form with

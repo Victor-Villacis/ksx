@@ -9495,13 +9495,46 @@ export function NocturneIsland() {
           h("div", { class: "nm-kick" }, "Maintenance"),
           h(
             "a",
-            { class: "nm-item nm-link", href: "/setup/export.json" },
+            { class: "nm-item nm-link", href: "/nocturne/export.json" },
             "Export the configuration (download)",
           ),
+          // Import is a details/summary rather than a link because the consent
+          // shape matters more than the chrome: the "write it" box absent is a
+          // DRY RUN, so opening this and submitting reports what it WOULD do
+          // and changes nothing. That is the same contract `ksx config import`
+          // has always had, and it survives with scripting switched off.
           h(
-            "a",
-            { class: "nm-item nm-link", href: "/setup" },
-            "Import — opens the consent flow on Setup",
+            "details",
+            { class: "nm-sub" },
+            h("summary", { class: "nm-item" }, "Import a configuration…"),
+            h(
+              "div",
+              { class: "nm-subbody" },
+              h(
+                "form",
+                { class: "nm-importform", method: "post", action: "/nocturne/import" },
+                h(
+                  "p",
+                  { class: "nm-auto-note" },
+                  "Paste a configuration ksx exported. Leave the box below unticked and " +
+                    "nothing is written — you get a report of exactly what it would do.",
+                ),
+                h("textarea", {
+                  class: "nm-importbox",
+                  name: "document",
+                  rows: "6",
+                  "aria-label": "the configuration, as JSON",
+                  placeholder: "{ … }",
+                }),
+                h(
+                  "label",
+                  { class: "nm-importcheck" },
+                  h("input", { type: "checkbox", name: "apply", value: "1" }),
+                  h("span", {}, "write it"),
+                ),
+                h("button", { type: "submit", class: "nm-item nm-go" }, "Import"),
+              ),
+            ),
           ),
           h("div", { class: "nm-div" }),
           // The sign-in task, off the SAME derivation /start's card uses.

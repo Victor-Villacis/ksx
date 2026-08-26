@@ -556,6 +556,91 @@ pub(super) struct NocturneBlockingForm {
     blocking: String,
 }
 
+/// GET /nocturne/export.json — the whole configuration as one file.
+///
+/// Moved from `/setup` when `/nocturne` became the product. A download, not a
+/// page: the browser saves it and the user keeps it. On refusal the answer
+/// goes back to the page the link was on, because that is where someone can
+/// read it — a bare error body would dead-end them.
+pub(super) async fn nocturne_export(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ExportQuery>,
+) -> Response {
+    let what = what_words(query.what.as_deref());
+    let outcome = tokio::task::spawn_blocking(move || {
+        state
+            .machine
+            .config_export(&ksx_api::ExportRequest { what })
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(ksx_api::Refusal::new(
+            ksx_api::codes::REFUSED,
+            "the export panicked",
+        ))
+    });
+    let export = match outcome {
+        Ok(export) => export,
+        Err(refusal) => return nocturne_redirect(&refusal.message),
+    };
+    let disposition = format!("attachment; filename=\"{}\"", export.filename);
+    let mut response = export.document.into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&disposition)
+            .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+}
+
+/// POST /nocturne/import — bring a configuration back.
+///
+/// The consent shape is inherited whole and is worth restating: the "write it"
+/// box absent means DRY RUN, because HTML omits an unchecked box entirely. So
+/// the default action of this form reports what it WOULD do and writes
+/// nothing, which is the same contract `ksx config import` has always had.
+pub(super) async fn nocturne_form_import(
+    State(state): State<Arc<AppState>>,
+    form: Result<Form<ImportForm>, axum::extract::rejection::FormRejection>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return nocturne_redirect(
+            "that document could not be read — it may be larger than this page accepts (8 MB)",
+        );
+    };
+    let request = ksx_api::ImportRequest {
+        document: form.document.unwrap_or_default(),
+        what: what_words(form.what.as_deref()),
+        apply: form.apply.is_some(),
+        force: form.force.is_some(),
+    };
+    if request.document.trim().is_empty() {
+        return nocturne_redirect("nothing to import — paste a configuration into the box first");
+    }
+    let outcome = tokio::task::spawn_blocking(move || state.machine.config_import(&request))
+        .await
+        .unwrap_or_else(|_| {
+            Err(ksx_api::Refusal::new(
+                ksx_api::codes::REFUSED,
+                "the import panicked",
+            ))
+        });
+    nocturne_redirect(&match outcome {
+        Ok(report) => import_flash(&report),
+        Err(refusal) => refusal.message,
+    })
+}
+
 #[derive(Deserialize)]
 pub(super) struct NocturneThemeForm {
     theme: Option<String>,

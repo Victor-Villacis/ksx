@@ -131,7 +131,7 @@ pub(super) fn what_words(raw: Option<&str>) -> Vec<String> {
 #[derive(Deserialize)]
 pub(super) struct ExportQuery {
     /// `config,games,presets` — absent means the whole root.
-    what: Option<String>,
+    pub(super) what: Option<String>,
 }
 
 /// GET /setup/export.json — the configuration as a download.
@@ -192,16 +192,16 @@ pub(super) async fn setup_export(
 #[derive(Deserialize)]
 pub(super) struct ImportForm {
     #[serde(default)]
-    document: Option<String>,
+    pub(super) document: Option<String>,
     #[serde(default)]
-    what: Option<String>,
+    pub(super) what: Option<String>,
     /// The "write it" box. Present at all = ticked (HTML omits an unchecked box
     /// entirely), so an absent field is a DRY RUN — which is the consent shape
     /// `ksx config import` has always had, arriving here for free.
     #[serde(default)]
-    apply: Option<String>,
+    pub(super) apply: Option<String>,
     #[serde(default)]
-    force: Option<String>,
+    pub(super) force: Option<String>,
 }
 
 /// POST /setup/import — one `MachineSource::config_import`.

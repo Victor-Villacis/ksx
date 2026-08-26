@@ -358,6 +358,8 @@ pub fn serve(
             )
             .route("/nocturne/blocking", post(nocturne_form_blocking))
             .route("/nocturne/theme", post(nocturne_form_theme))
+            .route("/nocturne/export.json", get(nocturne_export))
+            .route("/nocturne/import", post(nocturne_form_import))
             .route("/nocturne/controller", post(nocturne_form_add))
             .route("/nocturne/controller/remove", post(nocturne_form_remove))
             .route("/nocturne/controller/undo", post(nocturne_form_undo))

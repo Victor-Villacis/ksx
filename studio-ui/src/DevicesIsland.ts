@@ -561,10 +561,10 @@ export function DevicesIsland() {
       h(
         "nav",
         { class: "topnav workflow-nav", "aria-label": "Set up and play" },
-        h("a", { class: "navlink workflow-link", href: "/start#keyboard" }, h("span", { class: "workflow-num" }, "1"), "Keyboard"),
-        h("a", { class: "navlink workflow-link", href: "/start#controller" }, h("span", { class: "workflow-num" }, "2"), "Controller"),
-        h("a", { class: "navlink workflow-link", href: "/map" }, h("span", { class: "workflow-num" }, "3"), "Mapping"),
-        h("a", { class: "navlink workflow-link", href: "/" }, h("span", { class: "workflow-num" }, "4"), "Play"),
+        // One page now owns the whole set-up-and-play workflow, so the four
+        // numbered steps that pointed at /start, /map and / collapse into the
+        // single link that actually goes somewhere.
+        h("a", { class: "navlink workflow-link", href: "/nocturne" }, "Set up & play"),
       ),
       h(
         "details",
@@ -572,10 +572,9 @@ export function DevicesIsland() {
         h("summary", { class: "navlink on", "aria-label": "Open Studio tools" }, "Tools"),
         h("nav", { class: "appmenu-panel", "aria-label": "Studio tools" },
           h("a", { href: "/check" }, h("span", null, "Test inputs"), h("small", null, "Live controller feedback")),
-          h("a", { href: "/profiles" }, h("span", null, "Game library"), h("small", null, "Saved launch profiles")),
           h("a", { href: "/devices", "aria-current": "page" }, h("span", null, "Hardware"), h("small", null, "Devices and recovery")),
           h("a", { href: "/pads" }, h("span", null, "Virtual controllers"), h("small", null, "Inspect and test pads")),
-          h("a", { href: "/setup" }, h("span", null, "Import & recovery"), h("small", null, "Advanced configuration")),
+          h("a", { href: "/nocturne" }, h("span", null, "Set up & play"), h("small", null, "Keyboard, controllers, games and configuration")),
         ),
       ),
       createShow(
@@ -602,7 +601,7 @@ export function DevicesIsland() {
           h("h1", { id: "devices-title" }, "Hardware and recovery"),
           h("p", { class: "workflow-lede" }, "See the physical boards KSX can reach, their preparation state, and the exact safe path back to ordinary typing."),
         ),
-        h("a", { class: "btn btn-primary", href: "/start#keyboard" }, "Choose a keyboard"),
+        h("a", { class: "btn btn-primary", href: "/nocturne" }, "Choose a keyboard"),
       ),
       // The scan itself refused. Not an empty list — an empty list on a
       // machine with four boards plugged in is the worst lie this page could

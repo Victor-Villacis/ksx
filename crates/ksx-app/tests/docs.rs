@@ -350,25 +350,6 @@ fn managed_real_qa_is_an_idle_identity_checked_process_pair() {
             && status.contains("$DaemonPipesValid"),
         "status must require both draft reachability and exact pipe ownership"
     );
-    assert!(
-        start.contains("Get-Process WinIPAC -ErrorAction SilentlyContinue")
-            && start.contains("This script will not close it."),
-        "real QA may warn that WinIPAC can contend for MI_02, but must never close the user's configurator"
-    );
-    let winipac_start = start
-        .find("$WinIpac = Get-Process WinIPAC -ErrorAction SilentlyContinue")
-        .expect("real QA must retain its advisory WinIPAC probe");
-    let winipac_end = start[winipac_start..]
-        .find("$TransitionMutex = $null")
-        .map(|offset| winipac_start + offset)
-        .expect("the advisory WinIPAC block must end before environment transition work");
-    let winipac_block = &start[winipac_start..winipac_end];
-    for forbidden in ["Stop-Process", "CloseMainWindow", ".Kill("] {
-        assert!(
-            !winipac_block.contains(forbidden),
-            "the advisory WinIPAC block must not use {forbidden}"
-        );
-    }
 }
 
 /// The fast development loop and the release pipeline protect different
@@ -446,19 +427,17 @@ fn development_and_release_promotion_are_identity_bound() {
     }
 
     assert!(
-        start.contains(r#"Global\KeyboardSplitterXboxPro.PanelProgramming.v1"#)
-            && start.contains("KSX_WATCH_DEFERRED:")
+        start.contains("KSX_WATCH_DEFERRED:")
             && start.contains("$ExactStopped")
             && start.contains("$ExactAbsent")
             && start.contains(r#"Payload.run -ceq "stopped""#)
             && start.contains(r#"Payload.code -ceq "daemon-not-running""#),
-        "real replacement must defer across Play and persistent panel transactions"
+        "real replacement must defer across a live Play session"
     );
     assert!(
-        teardown.contains(r#"Global\KeyboardSplitterXboxPro.PanelProgramming.v1"#)
-            && teardown.contains("Invoke-KsxDaemonStatusProbe")
+        teardown.contains("Invoke-KsxDaemonStatusProbe")
             && teardown.contains("$ExactIncompleteAbsent"),
-        "direct real teardown must share the hardware lease and require typed idle/absence"
+        "direct real teardown must require typed idle/absence"
     );
     assert!(
         watch.contains(r#"Global\KSXStudioEnvironment-$Environment-watch-v1"#)
@@ -490,7 +469,7 @@ fn development_and_release_promotion_are_identity_bound() {
             && ci.contains("tools/studio-env/build-assets.ps1")
             && ci.contains("Prove PowerShell 5.1 and 7 hash the same build graph")
             && ci.contains("watch.ps1")
-            && ci.contains("-Environment blank-encoder -Once")
+            && ci.contains("-Environment seeded -Once")
             && ci.contains("format('source-{0}-{1}', github.event_name, github.ref)")
             && ci.contains("cargo check -p ksx-output --features cab-tests --all-targets")
             && ci.contains("needs: [test, studio-browser, studio-environments,"),

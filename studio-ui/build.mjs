@@ -7,8 +7,7 @@
 // spawned via execFileSync without shell:true, ENOENT — was fixed in 0.1.9,
 // so a `tailwind: true` cssEntry would now work if ever wanted.)
 //
-// TEN routes — "/start" (the first run), "/workspace" (the Nocturne
-// workspace shell, growing toward v0.5's single main screen), "/" (status),
+// NINE routes — "/start" (the first run), "/" (status),
 // "/map" (the mapper), "/check", "/pads", "/devices", "/profiles" and
 // "/setup" (the configuration: import, export, first run) — plus the vendored
 // controller art copied (cleaned) from art/ into the embed.
@@ -267,7 +266,6 @@ try {
   await build({
     entryPoints: [
       { entry: "src/start.ts", outfile: "start.js" },
-      { entry: "src/workspace.ts", outfile: "workspace.js" },
       { entry: "src/nocturne.ts", outfile: "nocturne.js" },
       { entry: "src/status.ts", outfile: "status.js" },
       { entry: "src/map.ts", outfile: "map.js" },
@@ -280,7 +278,6 @@ try {
     cssEntries: [{ input: [tokensCssTmp, canvasCssTmp, normalizedCss], outfile: "studio.css" }],
     routes: {
       "/start": { js: ["start"], css: ["studio"] },
-      "/workspace": { js: ["workspace"], css: ["studio"] },
       "/nocturne": { js: ["nocturne"], css: ["studio"] },
       "/": { js: ["status"], css: ["studio"] },
       "/map": { js: ["map"], css: ["studio"] },
@@ -305,7 +302,6 @@ try {
     ssr: true,
     ssrEntryPoints: {
       start: "src/start.ts",
-      workspace: "src/workspace.ts",
       nocturne: "src/nocturne.ts",
       status: "src/status.ts",
       map: "src/map.ts",

@@ -73,7 +73,6 @@ const exe = path.join(
  *  exact-target values must survive adoption without a first-paint swap. */
 const ROUTES = [
   "/start",
-  "/workspace",
   "/nocturne",
   "/nocturne?slot=1&macro=hadouken",
   "/",

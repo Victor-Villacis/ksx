@@ -24,13 +24,7 @@ product-shaped process. The full promotion contract is
 | **4496** | fixture (test-owned) | Canvas suite's secondary live-stream process | test runner | Tests only |
 | **4500** | fixture (test-owned) | Visual-smoke suite | test runner | Tests only |
 | **4510–4512** | fixture (test-owned) | Theme-stamp suite: dark, light, and matrix | test runner | Tests only |
-| **4520** | `FIXTURE · FIRST RUN` | KSX has no saved configuration, while its simulated I-PAC has a realistic preconfigured keyboard chart | `macro_fixture --first-run` | Manual onboarding QA |
-| **4521** | `FIXTURE · BLANK ENCODER` | Explicit rare case: KSX has no config and the simulated encoder chart is all-Unassigned | `macro_fixture --blank-panel` | Blank-board/editor QA only |
-
-`First run` describes KSX state, not hardware EEPROM state. A factory-new
-I-PAC 4 normally ships with keyboard assignments; it must not be modeled as a
-blank device. The blank chart lives on 4521 so that exceptional flow remains
-testable without lying on 4520.
+| **4520** | `FIXTURE · FIRST RUN` | KSX has no saved configuration | `macro_fixture --first-run` | Manual onboarding QA |
 
 ## Start or reseed a fixture
 
@@ -47,7 +41,6 @@ Then, from the repository root:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/seed.ps1 -Environment seeded
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/seed.ps1 -Environment first-run
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/seed.ps1 -Environment blank-encoder
 ```
 
 For continuous fixture work, replace `seed.ps1` with
@@ -127,16 +120,7 @@ if its `status` response parses, it may be an installed or other-branch binary
 with the same display version. Start refuses that mixed runtime. Teardown
 validates every PID/executable first, stops Studio, asks the exact proven daemon
 to quit gracefully, and only then falls back to stopping that exact recorded
-PID. The script warns when WinIPAC is open but never closes it: WinIPAC may
-continue to own the I-PAC configuration collection, in which case keyboard
-presses can be observed while chart reads correctly report that the collection
-is busy. That launch-time process warning is advisory only: an open WinIPAC
-window does not prove that it currently owns MI_02. Studio reports
-`Configuration interface busy` only when Windows rejects KSX's exclusive open
-with `ERROR_SHARING_VIOLATION`. The typed refusal and its Close/Retry remedy are
-preserved through chart reads and both program/restore planning routes; KSX
-does not guess an owner from a process name, close another tool, or imply that
-ordinary keyboard input has stopped.
+PID.
 
 If start reports an unmanaged daemon, quit it from the tray belonging to the
 copy that launched it, or run that exact copy's `session quit`; verify
@@ -150,13 +134,8 @@ require status to report `manual live / running`. Product `open` can adopt
 already-answering global endpoints, so skipping that empty-state proof can
 silently create a mixed pair.
 
-Persistent I-PAC writes are allowed only when the assigned task explicitly
-calls for real hardware mutation and the in-app supervised confirmation is
-completed. A fixture result is never evidence for a real write.
-
-Before a replacement swap, the launcher holds the machine-wide panel
-programming lease and proves the answering daemon reports `run = stopped`. If
-Play is running or an I-PAC EEPROM transaction is active, a watched refresh
+Before a replacement swap, the launcher proves the answering daemon reports
+`run = stopped`. If Play is running, a watched refresh
 reports `deferred` and leaves the healthy pair untouched. Cargo and the Studio
 generator also share one machine-wide build-graph mutex, so Cargo cannot embed
 a partially rebuilt asset directory.
@@ -234,7 +213,7 @@ daemon pipes resolve to that same executable; teardown deliberately leaves that
 unrecorded process alone. Any other `unmanaged listener` or `provenance
 mismatch` must be resolved before using that page as QA evidence. Test port
 environment variables may move a suite for parallel work, but must never be
-pointed at 4460, 4476, 4520, or 4521.
+pointed at 4460, 4476, or 4520.
 
 ## Asset rebuild lock
 

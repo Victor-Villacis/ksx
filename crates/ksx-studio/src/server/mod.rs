@@ -47,7 +47,6 @@ mod session;
 mod setup;
 mod start;
 mod status;
-mod workspace;
 
 use check::*;
 use devices::*;
@@ -59,7 +58,6 @@ use session::*;
 use setup::*;
 use start::*;
 use status::*;
-use workspace::*;
 
 use std::net::SocketAddr;
 
@@ -93,16 +91,14 @@ use crate::render_setup::render_setup;
 
 use crate::render_start::render_start;
 
-use crate::render_workspace::render_workspace;
 
 use crate::snapshot::{
     CheckPayload, DevicesPayload, MapPayload, PadsPayload, ProfilesPayload, SetupPayload,
-    SetupSnapshot, StartPayload, StatusPayload, StatusSnapshot, StatusSource, WorkspacePayload,
+    SetupSnapshot, StartPayload, StatusPayload, StatusSnapshot, StatusSource,
 };
 
 struct AppState {
     page: EmbeddedPage,
-    workspace_page: EmbeddedPage,
     /// The static design-proof route (see `render_nocturne.rs`): loaded like
     /// every page, rendered from defaults, backed by nothing.
     nocturne_page: EmbeddedPage,
@@ -141,12 +137,6 @@ struct AppState {
     /// `Arc`, not `Box`, because every SSE connection hands a handle to its own
     /// blocking bridge thread.
     live: Arc<dyn ksx_api::LiveSource>,
-    /// Process-local ordering fence for browser-declared physical encoder
-    /// mutations. The browser's Web Locks cannot survive a tab crash, while a
-    /// queued `spawn_blocking` task can; this fence makes recovery reads and
-    /// those already-admitted tasks agree on one epoch order before either
-    /// reaches the machine provider.
-    panel_hardware_fence: Arc<nocturne::PanelHardwareFence>,
     /// The last REMOVED controller, held SERVER-side for the rack's short
     /// undo window — the browser is shown a chip and a verb, never the
     /// authoring table (`server/nocturne.rs`).
@@ -303,7 +293,6 @@ pub fn serve(
         return Err(StudioError::NonLoopbackBind { bind });
     }
     let page = EmbeddedPage::load("/")?;
-    let workspace = EmbeddedPage::load("/workspace")?;
     let nocturne = EmbeddedPage::load("/nocturne")?;
     let mapper = EmbeddedPage::load("/map")?;
     let check = EmbeddedPage::load("/check")?;
@@ -314,7 +303,6 @@ pub fn serve(
     let start = EmbeddedPage::load("/start")?;
     let state = Arc::new(AppState {
         page,
-        workspace_page: workspace,
         nocturne_page: nocturne,
         map_page: mapper,
         check_page: check,
@@ -327,7 +315,6 @@ pub fn serve(
         control,
         machine,
         live,
-        panel_hardware_fence: Arc::new(nocturne::PanelHardwareFence::new()),
         nocturne_undo: std::sync::Mutex::new(None),
         machine_cache: MachineCache::new(),
     });
@@ -351,7 +338,6 @@ pub fn serve(
             // The reads, plus the left pane's form twins — each ONE staging
             // verb, 303 → /workspace?flash=. The center and right panes'
             // verbs arrive with M3–M4.
-            .route("/workspace", get(workspace_page))
             // ── /nocturne — the Nocturne front end. The keyboard section
             // is MIGRATED product surface (reads + verbs in nocturne.rs);
             // the rest is still the design proof's placeholder.
@@ -360,16 +346,6 @@ pub fn serve(
             // On-demand hardware context for Control Surface Builder. Kept
             // out of `/api/nocturne`'s 2 s poll: passive HID enumeration is a
             // deliberate inspection, not background canvas state.
-            .route("/api/panel/status", get(api_panel_status))
-            .route("/api/panel/chart", post(api_panel_chart))
-            .route("/api/panel/backups", get(api_panel_backups))
-            .route("/api/panel/profiles", get(api_panel_profiles))
-            .route("/api/panel/profiles/save", post(api_panel_profile_save))
-            .route("/api/panel/profiles/delete", post(api_panel_profile_delete))
-            .route("/api/panel/program/plan", post(api_panel_program_plan))
-            .route("/api/panel/program/apply", post(api_panel_program_apply))
-            .route("/api/panel/restore/plan", post(api_panel_restore_plan))
-            .route("/api/panel/restore/apply", post(api_panel_restore_apply))
             .route("/nocturne/device", post(nocturne_form_device))
             .route("/nocturne/device/identify", post(nocturne_form_identify))
             .route(
@@ -381,6 +357,7 @@ pub fn serve(
                 post(nocturne_form_capture_release),
             )
             .route("/nocturne/blocking", post(nocturne_form_blocking))
+            .route("/nocturne/theme", post(nocturne_form_theme))
             .route("/nocturne/controller", post(nocturne_form_add))
             .route("/nocturne/controller/remove", post(nocturne_form_remove))
             .route("/nocturne/controller/undo", post(nocturne_form_undo))
@@ -408,21 +385,12 @@ pub fn serve(
             .route("/nocturne/adopt", post(nocturne_form_adopt))
             .route("/nocturne/discard", post(nocturne_form_discard))
             .route("/nocturne/autostart", post(nocturne_form_autostart))
-            .route("/api/workspace", get(api_workspace))
-            .route("/workspace/blocking", post(workspace_form_blocking))
-            .route("/workspace/controller/move", post(nocturne_form_move))
-            .route("/workspace/controller/remove", post(nocturne_form_remove))
-            .route("/workspace/controller/socd", post(nocturne_form_socd))
             .route(
                 "/workspace/controller/duplicate",
                 post(nocturne_form_duplicate),
             )
-            .route("/workspace/controller", post(nocturne_form_add))
-            .route("/workspace/device/identify", post(workspace_form_identify))
-            .route("/workspace/bind/clear", post(nocturne_form_bind_clear))
             // MIGRATED (2026-08-17): adopt lives in nocturne.rs now; this
             // page's button keeps working — the answer lands on /nocturne.
-            .route("/workspace/adopt", post(nocturne_form_adopt))
             .route("/session/start", post(session_start))
             .route("/session/stop", post(session_stop))
             .route("/config/reload", post(config_reload))

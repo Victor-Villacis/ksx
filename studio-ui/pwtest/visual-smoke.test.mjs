@@ -36,7 +36,6 @@ const screenshotDir = path.resolve(
 
 const ROUTES = [
   { path: "/start", name: "start" },
-  { path: "/workspace", name: "workspace" },
   { path: "/nocturne", name: "nocturne" },
   // The macro roll only exists when a macro is OPEN: with the dialog closed
   // the payload serves empty lists, so every cell, row body and pill in it sat

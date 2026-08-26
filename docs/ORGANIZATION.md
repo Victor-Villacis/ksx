@@ -31,17 +31,31 @@ better half of them.
 
 | crate | lines | files | share |
 |---|---:|---:|---:|
-| ksx-backend | 55,433 | 52 | 35% |
-| ksx-studio | 24,578 | 15 | 15% |
-| ksx-platform | 18,483 | 23 | 12% |
-| ksx-core | 11,666 | 18 | 7% |
-| ksx-api | 11,644 | 11 | 7% |
-| ksx-capture | 10,443 | 26 | 7% |
-| everything else | 27,599 | 44 | 17% |
+| ksx-backend | 68,272 | 60 | 35% |
+| ksx-studio | 34,507 | 32 | 18% |
+| ksx-platform | 22,625 | 26 | 12% |
+| ksx-api | 13,799 | 11 | 7% |
+| ksx-core | 12,236 | 19 | 6% |
+| ksx-capture | 9,716 | 26 | 5% |
+| everything else | 31,293 | 63 | 16% |
+
+**Measured 2026-08-25 by the command below**; 192,448 lines total. These are a snapshot, not a
+contract — nothing verifies them, and the previous figures had drifted by a
+third before anyone noticed. Re-measure rather than trust them:
+
+```powershell
+Get-ChildItem crates\*\src -Recurse -Filter *.rs |
+  Group-Object { $_.FullName -replace '.*\crates\([^\]+)\.*','$1' } |
+  ForEach-Object { [pscustomobject]@{
+    crate = $_.Name
+    files = $_.Count
+    lines = ($_.Group | Get-Content | Measure-Object -Line).Lines } } |
+  Sort-Object lines -Descending
+```
 
 `ksx-backend` being a third of the codebase is partly by design — it holds the
 logic so the surfaces can stay thin, and that trade is *why* the boundary
-above holds. But 52 files is where a convention has to carry the weight, which
+above holds. But 60 files is where a convention has to carry the weight, which
 is what the suffix rule in `CLAUDE.md` now exists to do.
 
 ## Done in this pass

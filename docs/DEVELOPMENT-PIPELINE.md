@@ -10,8 +10,8 @@ of a SaaS dev → stage → QA → production flow is:
 
 | Lane | What runs | State/hardware | Restart or promotion rule | Evidence |
 |---|---|---|---|---|
-| **DEV · SYNTHETIC** | Current source on 4476, 4520, or 4521 | Disposable fixtures only | Watched rebuild/reseed | Exact fixture id, process generation, healthy status |
-| **DEV BUILD · REAL HARDWARE** | Matched local daemon + Studio on 4460 | Real `%APPDATA%\ksx`, USB devices, and I-PAC | Watched rebuild; swap only while Play is stopped and no panel transaction owns the hardware lease | Executable hash, source/asset graph hashes, exact PIDs/pipes, real banner |
+| **DEV · SYNTHETIC** | Current source on 4476 or 4520 | Disposable fixtures only | Watched rebuild/reseed | Exact fixture id, process generation, healthy status |
+| **DEV BUILD · REAL HARDWARE** | Matched local daemon + Studio on 4460 | Real `%APPDATA%\ksx`, USB devices, and I-PAC | Watched rebuild; swap only while Play is stopped | Executable hash, source/asset graph hashes, exact PIDs/pipes, real banner |
 | **CI CANDIDATE** | Clean Windows runner | No physical cabinet | Every branch/PR runs the full matrix and produces immutable artifacts | Commit, run id, installer/ZIP hashes, candidate manifest |
 | **INSTALLED QA** | Exact tag-run installer | A real Windows machine and cabinet | Human installs and exercises the candidate while publication waits | Candidate manifest hash plus Gates 1–4 ledger bound to the installer SHA |
 | **PRODUCTION** | The approved tag-run files | Customer machines | A required reviewer releases the exact QA-tested files; there is no rebuild | Same run id, names, sizes, and SHA-256 values on the GitHub Release |
@@ -43,7 +43,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/watch.ps1 -
 # Synthetic alternatives.
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/watch.ps1 -Environment seeded
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/watch.ps1 -Environment first-run
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/studio-env/watch.ps1 -Environment blank-encoder
 ```
 
 The watcher debounces an editor save, fingerprints file contents as the source
@@ -54,9 +53,8 @@ Transient save/rename observation errors are retried without touching the
 running process. A permanent compile/generation failure is attempted once for
 that exact content graph and then waits for another edit; hardware/session and
 machine-lock deferrals keep retrying because the source itself is not broken.
-On 4460 the launcher acquires the I-PAC/Play transition lease and proves the
-daemon is stopped before replacing anything; a running game or hardware write
-becomes a visible deferred state. `Ctrl+C` stops only the watcher. Refresh the
+On 4460 the launcher proves the daemon is stopped before replacing anything;
+a running game becomes a visible deferred state. `Ctrl+C` stops only the watcher. Refresh the
 browser after a healthy replacement.
 
 `-NoInitialRefresh` may attach to an already running lane without replacing a

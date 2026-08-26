@@ -161,7 +161,6 @@ surface does a human perform this task on*, and that is answered by the matrix.
 | Rename / delete a controller layout | owns | — | **primary** (`/profiles`) |
 | Create / update / delete profiles | planned | view | **primary** |
 | Device pick / remove | owns | planned | **primary** |
-| Inspect and program panel encoder hardware / chart | owns (status, chart, backup, program, restore) | — | **primary** (Control Surface Builder) |
 | Measure simultaneous keyboard / encoder host signals | owns (`ksx input-test start`, `poll`, `cancel`) | — | **primary** (keyboard workbench / Control Surface Builder) |
 | WinUSB claim / release | owns (advanced) | planned | **primary** (installed `/start`; explicit UAC) |
 | "Press a button, see it light" | input only (`ksx monitor`) | **primary** | view (§8) |
@@ -231,16 +230,6 @@ and harder to notice, a face that SHIPPED while the cell still said `planned`:
   `/devices`, `/devices/pick` and `/devices/remove`. The egui half stays planned
   and drops the issue number, because #22 was never about the cabinet — its five
   screens are still ButtonCheck, Status, Session, Profiles, Presets.
-
-One row advanced on 2026-08-23 with E10's guarded encoder programmer:
-
-- **Inspect and program panel encoder hardware / chart — CLI and Studio.** The
-  prior row promised only passive status plus a Studio view. `panel chart`,
-  `backups`, plan-first `program`/`restore`, and the Control Surface Builder's
-  supervised read/backup/review/verify/recovery flow now share the typed
-  backend façade. Studio is therefore the primary human workflow; the CLI owns
-  the same advanced verbs. The cabinet surface remains deliberately absent
-  because persistent EEPROM recovery needs the close-range review UI.
 
 The simultaneous-signal diagnostic gets its own row rather than being folded
 into "Press a button, see it light." The latter compares a running pipeline's

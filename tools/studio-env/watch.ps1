@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("real", "seeded", "first-run", "blank-encoder")]
+    [ValidateSet("real", "seeded", "first-run")]
     [string]$Environment = "real",
 
     [ValidateRange(250, 10000)]

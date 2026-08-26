@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("seeded", "first-run", "blank-encoder")]
+    [ValidateSet("seeded", "first-run")]
     [string]$Environment,
 
     [switch]$SkipBuild
@@ -22,8 +22,7 @@ $CopiedExe = Join-Path $BinRoot "macro_fixture-$Environment-$Stamp.exe"
 
 $Definitions = @{
     "seeded" = @{ Port = 4476; Arguments = @(); Label = "seeded demo"; Id = "fixture-seeded-demo" }
-    "first-run" = @{ Port = 4520; Arguments = @("--first-run"); Label = "first-run with preconfigured encoder"; Id = "fixture-first-run" }
-    "blank-encoder" = @{ Port = 4521; Arguments = @("--blank-panel"); Label = "first-run with blank encoder chart"; Id = "fixture-blank-encoder" }
+    "first-run" = @{ Port = 4520; Arguments = @("--first-run"); Label = "first KSX visit, nothing configured"; Id = "fixture-first-run" }
 }
 $Definition = $Definitions[$Environment]
 $Port = [int]$Definition.Port

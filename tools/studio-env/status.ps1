@@ -13,8 +13,7 @@ param(
         "test-theme-dark",
         "test-theme-light",
         "test-theme-matrix",
-        "first-run",
-        "blank-encoder"
+        "first-run"
     )]
     [string]$Environment,
 
@@ -52,7 +51,6 @@ $Definitions = @(
     @{ Name = "test-theme-light"; Port = 4511; Id = "fixture-seeded-demo"; Fixture = $true; TestOwned = $true }
     @{ Name = "test-theme-matrix"; Port = 4512; Id = "fixture-seeded-demo"; Fixture = $true; TestOwned = $true }
     @{ Name = "first-run"; Port = 4520; Id = "fixture-first-run"; Fixture = $true; Record = "first-run" }
-    @{ Name = "blank-encoder"; Port = 4521; Id = "fixture-blank-encoder"; Fixture = $true; Record = "blank-encoder" }
 )
 if (($RequireHealthy -or $RequireCurrent) -and [string]::IsNullOrWhiteSpace($Environment)) {
     throw "-RequireHealthy and -RequireCurrent require one explicit -Environment so stopped, test-owned ports are never treated as an implicit deployment gate."

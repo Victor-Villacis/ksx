@@ -24,7 +24,6 @@ export const CONTROL_SURFACE_TEMPLATE_SLUGS = [
   "arcade-stick",
   "leverless",
   "four-player",
-  "encoder-current",
   "mapping-selected",
   "mapping-four",
 ] as const;
@@ -41,7 +40,6 @@ export type ControlSurfaceControlKind = "button30" | "button24" | "keycap" | "jo
 export type ControlSurfaceOrigin =
   | "template"
   | "manual"
-  | "encoder-generated"
   | "mapping-generated"
   | "workbench-migration";
 
@@ -52,23 +50,10 @@ export interface ControlSurfaceInput {
   device: string;
 }
 
-/** What the physical encoder is expected to emit after a reviewed hardware
- *  program. This is deliberately separate from `input`, which remains the
- *  signal Teach actually observed from Windows. */
-export interface ControlSurfaceEncoderAssignment {
-  driver: string;
-  boardFingerprint: string;
-  terminalId: string;
-  terminalLabel: string;
-  expectedKey: string;
-  verification: "unverified" | "matched" | "mismatch";
-}
-
 export interface ControlSurfaceChannel {
   id: string;
   label: string;
   input: ControlSurfaceInput;
-  encoder?: ControlSurfaceEncoderAssignment;
 }
 
 export interface ControlSurfaceControl {
@@ -121,20 +106,6 @@ export interface ControlSurfaceMappingRecord {
   functionName: string;
   controlLabel: string;
   playerLabel: string;
-}
-
-/** One readable hardware-chart row, reduced to the facts needed to draw a
- * physical panel. The chart remains backend-owned; this projection never
- * invents a Windows observation and therefore leaves `input` unassigned until
- * Teach sees the real wired control. */
-export interface ControlSurfaceEncoderRecord {
-  driver: string;
-  boardFingerprint: string;
-  terminalId: string;
-  terminalLabel: string;
-  playerSlot: number;
-  kind: string;
-  expectedKey: string;
 }
 
 const MAX_DEVICE_IDENTITIES = 64;
@@ -200,7 +171,7 @@ function validKind(value: unknown): value is ControlSurfaceControlKind {
 }
 
 function validOrigin(value: unknown): value is ControlSurfaceOrigin {
-  return value === "template" || value === "manual" || value === "encoder-generated" ||
+  return value === "template" || value === "manual" ||
     value === "mapping-generated" || value === "workbench-migration";
 }
 
@@ -228,27 +199,6 @@ function cleanInput(value: unknown): ControlSurfaceInput {
   return { kind: "keyboard", key, device: cleanString(value.device, 240) };
 }
 
-function cleanEncoderAssignment(value: unknown): ControlSurfaceEncoderAssignment | undefined {
-  if (!isRecord(value)) return undefined;
-  const driver = cleanString(value.driver, 64);
-  const boardFingerprint = cleanString(value.boardFingerprint, 160);
-  const terminalId = cleanString(value.terminalId, 32);
-  const terminalLabel = cleanString(value.terminalLabel, 64);
-  const expectedKey = cleanString(value.expectedKey, 64);
-  const verification = value.verification === "matched" || value.verification === "mismatch"
-    ? value.verification
-    : "unverified";
-  if (!driver || !boardFingerprint || !terminalId) return undefined;
-  return {
-    driver,
-    boardFingerprint,
-    terminalId,
-    terminalLabel: terminalLabel || terminalId,
-    expectedKey,
-    verification,
-  };
-}
-
 function cleanChannels(value: unknown, kind: ControlSurfaceControlKind): ControlSurfaceChannel[] {
   const fallback = channelsForKind(kind);
   if (!Array.isArray(value)) return fallback;
@@ -263,7 +213,6 @@ function cleanChannels(value: unknown, kind: ControlSurfaceControlKind): Control
       id,
       label: cleanString(raw.label, 40) || id,
       input: cleanInput(raw.input),
-      encoder: cleanEncoderAssignment(raw.encoder),
     });
     if (channels.length >= MAX_CHANNELS) break;
   }
@@ -323,39 +272,6 @@ function reconcileUnresolvedSignals(
   });
 }
 
-/** One encoder terminal is one physical signal, even when a panel drawing has
- * several views wired to it. Heal legacy drafts that could persist divergent
- * expected keys by keeping the first terminal assignment as the canonical
- * value. A changed expectation is deliberately left unverified; observation
- * is owned by Teach, not by document migration. */
-function reconcileEncoderTerminalAssignments(
-  controls: readonly ControlSurfaceControl[],
-): ControlSurfaceControl[] {
-  const canonical = new Map<string, ControlSurfaceEncoderAssignment>();
-  return controls.map((control) => ({
-    ...control,
-    channels: control.channels.map((channel) => {
-      const encoder = channel.encoder;
-      if (!encoder) return channel;
-      const identity = `${encoder.boardFingerprint}\u0000${encoder.terminalId}`;
-      const expected = canonical.get(identity);
-      if (!expected) {
-        canonical.set(identity, encoder);
-        return channel;
-      }
-      return {
-        ...channel,
-        encoder: {
-          ...expected,
-          verification: encoder.expectedKey === expected.expectedKey
-            ? encoder.verification
-            : "unverified" as const,
-        },
-      };
-    }),
-  }));
-}
-
 export function cloneControlSurfaceState(state: ControlSurfaceState): ControlSurfaceState {
   return {
     ...state,
@@ -364,8 +280,7 @@ export function cloneControlSurfaceState(state: ControlSurfaceState): ControlSur
       channels: control.channels.map((channel) => ({
         ...channel,
         input: { ...channel.input },
-        encoder: channel.encoder ? { ...channel.encoder } : undefined,
-      })),
+          })),
     })),
   };
 }
@@ -405,9 +320,7 @@ export function sanitizeControlSurfaceState(value: unknown): ControlSurfaceState
       control.physicalResolution = "unresolved-shared-signal";
     }
   }
-  const reconciledControls = reconcileEncoderTerminalAssignments(
-    reconcileUnresolvedSignals(controls),
-  );
+  const reconciledControls = reconcileUnresolvedSignals(controls);
   const selectedControlId = cleanString(value.selectedControlId, MAX_ID);
   const selected = controls.find((control) => control.id === selectedControlId);
   const selectedChannelId = selected?.channels.some(
@@ -610,7 +523,6 @@ function appendControl(
   const channels = options.channels?.map((channel) => ({
     ...channel,
     input: { ...channel.input },
-    encoder: channel.encoder ? { ...channel.encoder } : undefined,
   })) ?? channelsForKind(kind);
   if (options.inputKey && channels[0]) {
     channels[0].input = { kind: "keyboard", key: options.inputKey, device: options.device ?? "" };
@@ -632,120 +544,6 @@ function appendControl(
   if (!control) throw new Error("control surface template emitted an invalid component");
   context.controls.push(control);
   return control;
-}
-
-function encoderDirection(record: ControlSurfaceEncoderRecord): string {
-  const match = record.terminalLabel.match(/(?:^|\s|·)(up|right|down|left)(?:$|\s|·)/iu);
-  return match?.[1]?.toLocaleLowerCase() ?? "";
-}
-
-function encoderChannel(
-  id: string,
-  label: string,
-  record: ControlSurfaceEncoderRecord,
-): ControlSurfaceChannel {
-  return {
-    id,
-    label,
-    input: { ...EMPTY_INPUT },
-    encoder: {
-      driver: record.driver,
-      boardFingerprint: record.boardFingerprint,
-      terminalId: record.terminalId,
-      terminalLabel: record.terminalLabel,
-      expectedKey: record.expectedKey,
-      verification: "unverified",
-    },
-  };
-}
-
-function encoderControlLabel(record: ControlSurfaceEncoderRecord): string {
-  const withoutPlayer = record.terminalLabel
-    .replace(/^player\s+\d+\s*·\s*/iu, "")
-    .trim();
-  return withoutPlayer || record.terminalId.toLocaleUpperCase();
-}
-
-/** Build a physical cabinet view from the chart that is actually stored on an
- * encoder. Directions collapse into one four-channel stick; every other
- * assigned terminal remains an independent physical button. The expected key
- * is visible immediately, while Teach remains the sole authority that can
- * mark the physical wiring as observed. */
-function encoderTemplate(
-  context: BuildContext,
-  records: readonly ControlSurfaceEncoderRecord[],
-): void {
-  const usable = records
-    .filter((record) => record.expectedKey.trim() && record.playerSlot >= 1 && record.playerSlot <= 4)
-    .sort((left, right) =>
-      left.playerSlot - right.playerSlot || left.terminalId.localeCompare(right.terminalId)
-    );
-  const slots = [...new Set(usable.map((record) => record.playerSlot))];
-  const fourPlayerLayout = slots.length > 1 || slots.some((slot) => slot > 1);
-  for (const slot of slots) {
-    const playerRecords = usable.filter((record) => record.playerSlot === slot);
-    const directions = new Map(
-      playerRecords
-        .filter((record) => record.kind === "direction" && encoderDirection(record))
-        .map((record) => [encoderDirection(record), record]),
-    );
-    const panelColumn = fourPlayerLayout ? (slot - 1) % 2 : 0;
-    const panelRow = fourPlayerLayout ? Math.floor((slot - 1) / 2) : 0;
-    const region = fourPlayerLayout
-      ? { x: 28 + panelColumn * 590, y: 30 + panelRow * 342, width: 548, height: 314 }
-      : { x: 64, y: 92, width: 1072, height: 548 };
-    let actionX = region.x + 18;
-    if (directions.size > 0) {
-      const channelOrder = [
-        ["up", "Up"],
-        ["right", "Right"],
-        ["down", "Down"],
-        ["left", "Left"],
-      ] as const;
-      const channels = channelOrder.map(([id, label]) => {
-        const record = directions.get(id);
-        return record
-          ? encoderChannel(id, label, record)
-          : { id, label, input: { ...EMPTY_INPUT } };
-      });
-      appendControl(
-        context,
-        "joystick",
-        slots.length > 1 ? `P${slot} stick` : "Player stick",
-        region.x + 20,
-        region.y + Math.max(20, (region.height - 168) / 2),
-        {
-          playerSlot: fourPlayerLayout ? slot : null,
-          origin: "encoder-generated",
-          channels,
-        },
-      );
-      actionX = region.x + (fourPlayerLayout ? 214 : 238);
-    }
-    const actions = playerRecords.filter(
-      (record) => record.kind !== "direction" || !directions.has(encoderDirection(record)),
-    );
-    if (actions.length === 0) continue;
-    const columns = fourPlayerLayout ? Math.min(4, Math.max(1, Math.ceil(Math.sqrt(actions.length * 1.35)))) : 8;
-    const rows = Math.ceil(actions.length / columns);
-    const availableWidth = region.x + region.width - actionX;
-    const availableHeight = region.height;
-    const cellWidth = availableWidth / columns;
-    const cellHeight = availableHeight / rows;
-    actions.forEach((record, index) => {
-      const compact = record.kind === "start" || record.kind === "coin" ||
-        cellWidth < 82 || cellHeight < 82;
-      const kind = compact ? "button24" as const : "button30" as const;
-      const size = sizeForKind(kind);
-      const x = actionX + (index % columns) * cellWidth + Math.max(0, (cellWidth - size.width) / 2);
-      const y = region.y + Math.floor(index / columns) * cellHeight + Math.max(0, (cellHeight - size.height) / 2);
-      appendControl(context, kind, encoderControlLabel(record), x, y, {
-        playerSlot: fourPlayerLayout ? slot : null,
-        origin: "encoder-generated",
-        channels: [encoderChannel("press", "Press", record)],
-      });
-    });
-  }
 }
 
 function arcadeStickTemplate(context: BuildContext): void {
@@ -912,7 +710,6 @@ export function applyControlSurfaceTemplate(
   records: readonly ControlSurfaceMappingRecord[] = [],
   selectedSlot = 1,
   device = "",
-  encoderRecords: readonly ControlSurfaceEncoderRecord[] = [],
 ): ControlSurfaceState {
   if (template === "mapping-selected" || template === "mapping-four") {
     const generated = new Set(
@@ -928,7 +725,6 @@ export function applyControlSurfaceTemplate(
   if (template === "arcade-stick") arcadeStickTemplate(context);
   else if (template === "leverless") leverlessTemplate(context);
   else if (template === "four-player") fourPlayerTemplate(context);
-  else if (template === "encoder-current") encoderTemplate(context, encoderRecords);
   else if (template === "mapping-selected") {
     mappingTemplate(context, records, selectedSlot, false, device);
   } else if (template === "mapping-four") {
@@ -940,11 +736,10 @@ export function applyControlSurfaceTemplate(
     open: true,
     started: true,
     template,
-    panelLayout: template === "four-player" || template === "mapping-four" ||
-        (template === "encoder-current" && new Set(encoderRecords.map((record) => record.playerSlot)).size > 1)
+    panelLayout: template === "four-player" || template === "mapping-four"
       ? "four-player"
       : "single",
-    stage: template.startsWith("mapping-") ? "route" : template === "encoder-current" ? "teach" : "design",
+    stage: template.startsWith("mapping-") ? "route" : "design",
     controls: context.controls,
     selectedControlId: first?.id ?? "",
     selectedChannelId: first?.channels[0]?.id ?? "",
@@ -1126,9 +921,6 @@ export function copyControlSurfaceControl(
     channels: source.channels.map((channel) => ({
       ...channel,
       input: { ...channel.input },
-      // A duplicate is a different physical switch and therefore starts with
-      // no claimed terminal. A mirror is another view of the same switch.
-      encoder: mode === "mirror" && channel.encoder ? { ...channel.encoder } : undefined,
     })),
   };
   return sanitizeControlSurfaceState({
@@ -1215,12 +1007,6 @@ export function teachControlSurfaceChannel(
               ? {
                   ...channel,
                   input: { kind: "keyboard" as const, key, device },
-                  encoder: channel.encoder
-                    ? {
-                        ...channel.encoder,
-                        verification: channel.encoder.expectedKey === key ? "matched" as const : "mismatch" as const,
-                      }
-                    : undefined,
                 }
               : channel
           ),
@@ -1232,122 +1018,6 @@ export function teachControlSurfaceChannel(
     controls,
     selectedControlId: controlId,
     selectedChannelId: channelId,
-  });
-}
-
-/** Attach a backend-decoded encoder terminal to one physical channel.
- * Mirrors share the assignment through `physicalId`. Any other drawn control
- * already linked to the same board terminal shares its expected key as well:
- * the terminal is one physical signal, not independent state per drawing. The
- * observed input remains untouched until Teach proves what Windows receives. */
-export function assignControlSurfaceTerminal(
-  state: ControlSurfaceState,
-  controlId: string,
-  channelId: string,
-  assignment: Omit<ControlSurfaceEncoderAssignment, "verification"> | null,
-): ControlSurfaceState {
-  const safe = sanitizeControlSurfaceState(state);
-  const selected = safe.controls.find((control) => control.id === controlId);
-  if (!selected || !selected.channels.some((channel) => channel.id === channelId)) return safe;
-  const normalized = assignment
-    ? cleanEncoderAssignment({ ...assignment, verification: "unverified" })
-    : undefined;
-  if (assignment && !normalized) return safe;
-  const controls = safe.controls.map((control) =>
-    ({
-      ...control,
-      channels: control.channels.map((channel) => {
-        const selectedPhysicalChannel = control.physicalId === selected.physicalId &&
-          channel.id === channelId;
-        const sameTerminal = Boolean(normalized &&
-          channel.encoder?.boardFingerprint === normalized.boardFingerprint &&
-          channel.encoder.terminalId === normalized.terminalId);
-        if (!selectedPhysicalChannel && !sameTerminal) return channel;
-        const sameExpectation = Boolean(normalized && channel.encoder &&
-          channel.encoder.driver === normalized.driver &&
-          channel.encoder.boardFingerprint === normalized.boardFingerprint &&
-          channel.encoder.terminalId === normalized.terminalId &&
-          channel.encoder.expectedKey === normalized.expectedKey);
-        return {
-          ...channel,
-          encoder: normalized
-            ? {
-                ...normalized,
-                // Only Teach owns evidence about what this physical control
-                // emitted. Loading or editing a future hardware draft must
-                // never reinterpret an older observation as proof (or a
-                // wiring failure) for a key that has not been programmed yet.
-                verification: sameExpectation && channel.encoder
-                  ? channel.encoder.verification
-                  : "unverified" as const,
-              }
-            : undefined,
-        };
-      }),
-    })
-  );
-  return sanitizeControlSurfaceState({
-    ...safe,
-    controls,
-    selectedControlId: controlId,
-    selectedChannelId: channelId,
-  });
-}
-
-/** A successful hardware write changes the expectation, not the observation.
- * Mark every assignment for that board unverified until Teach walks it. */
-export function invalidateControlSurfaceEncoderVerification(
-  state: ControlSurfaceState,
-  boardFingerprint: string,
-): ControlSurfaceState {
-  const safe = sanitizeControlSurfaceState(state);
-  return sanitizeControlSurfaceState({
-    ...safe,
-    controls: safe.controls.map((control) => ({
-      ...control,
-      channels: control.channels.map((channel) =>
-        channel.encoder?.boardFingerprint === boardFingerprint
-          ? { ...channel, encoder: { ...channel.encoder, verification: "unverified" as const } }
-          : channel
-      ),
-    })),
-  });
-}
-
-/** Persist the pre-write loss of signal authority for one exact Windows
- * device. Linked encoder channels can retain their last observation as
- * labelled history because `verification` gates routing. An unlinked taught
- * channel has no such gate, so its observation must be cleared before the
- * hardware request: otherwise a browser crash after a successful EEPROM write
- * could make that pre-write key authoritative again on reload. */
-export function invalidateControlSurfaceHardwareObservations(
-  state: ControlSurfaceState,
-  boardFingerprint: string,
-  device: string,
-): ControlSurfaceState {
-  const safe = sanitizeControlSurfaceState(state);
-  const normalizedBoard = cleanString(boardFingerprint, 240).toLocaleUpperCase();
-  const normalizedDevice = cleanString(device, 240).toLocaleUpperCase();
-  return sanitizeControlSurfaceState({
-    ...safe,
-    controls: safe.controls.map((control) => ({
-      ...control,
-      channels: control.channels.map((channel) => {
-        const exactBoard = Boolean(normalizedBoard &&
-          channel.encoder?.boardFingerprint.trim().toLocaleUpperCase() === normalizedBoard);
-        if (exactBoard && channel.encoder) {
-          return {
-            ...channel,
-            encoder: { ...channel.encoder, verification: "unverified" as const },
-          };
-        }
-        const exactDevice = Boolean(normalizedDevice && channel.input.kind === "keyboard" &&
-          channel.input.device.trim().toLocaleUpperCase() === normalizedDevice);
-        return exactDevice
-          ? { ...channel, input: { kind: "unassigned" as const, key: "", device: "" } }
-          : channel;
-      }),
-    })),
   });
 }
 
@@ -1408,7 +1078,6 @@ export const CONTROL_SURFACE_TEMPLATES = [
   { slug: "arcade-stick", label: "Arcade stick", note: "Lever, eight actions, Start and Coin." },
   { slug: "leverless", label: "Leverless", note: "Four directions and an eight-button action bank." },
   { slug: "four-player", label: "Four-player cabinet", note: "Four independent sticks, action banks, Start and Coin." },
-  { slug: "encoder-current", label: "Connected encoder", note: "Build physical controls from the terminal-to-key chart stored on this board." },
   { slug: "mapping-selected", label: "Current player", note: "Generate physical controls from this player's existing routes." },
   { slug: "mapping-four", label: "All four players", note: "Generate four panels and flag repeated signals for physical confirmation." },
 ] as const satisfies readonly {

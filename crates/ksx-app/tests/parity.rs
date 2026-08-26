@@ -535,29 +535,6 @@ const ANCHORS: &[Anchors] = &[
         studio: &["/profiles/preset/rename", "/profiles/preset/delete"],
     },
     Anchors {
-        capability: "Inspect and program panel encoder hardware / chart",
-        cli: &[
-            "panel status",
-            "panel chart",
-            "panel backups",
-            "panel program",
-            "panel restore",
-        ],
-        // Deliberately absent from the 10-foot cabinet surface: hardware
-        // inventory belongs beside Studio's panel authoring context, and no
-        // cabinet screen or confirmation owns it today.
-        egui: &["Screen::PanelStatus", "Ask::InspectPanel"],
-        studio: &[
-            "/api/panel/status",
-            "/api/panel/chart",
-            "/api/panel/backups",
-            "/api/panel/program/plan",
-            "/api/panel/program/apply",
-            "/api/panel/restore/plan",
-            "/api/panel/restore/apply",
-        ],
-    },
-    Anchors {
         capability: "Measure simultaneous keyboard / encoder host signals",
         cli: &["input-test start", "input-test poll", "input-test cancel"],
         // Deliberately absent from the 10-foot surface: this is a timed,

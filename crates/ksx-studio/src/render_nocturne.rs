@@ -30,6 +30,7 @@ const LIST_SLOT_DEVICES: &str = "list:nDevRows:array";
 const LIST_SLOT_EXP: &str = "list:nDevExp:array";
 const LIST_SLOT_OTHER: &str = "list:nDevOther:array";
 const LIST_SLOT_MODES: &str = "list:nModeRows:array";
+const LIST_SLOT_THEMES: &str = "list:nThemeRows:array";
 const LIST_SLOT_RACK: &str = "list:nRackRows:array";
 const LIST_SLOT_RACK_EMPTY: &str = "list:nRackEmpty:array";
 const LIST_SLOT_PERSONAS: &str = "list:nPersonaRows:array";
@@ -476,7 +477,7 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 43] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 44] {
     let view = &payload.view;
     [
         (
@@ -650,6 +651,10 @@ fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 43] {
         (
             LIST_SLOT_MODES,
             SlotValue::array(view.mode_rows.iter().map(mode_row).collect()),
+        ),
+        (
+            LIST_SLOT_THEMES,
+            SlotValue::array(view.theme_rows.iter().map(mode_row).collect()),
         ),
     ]
 }
@@ -1090,6 +1095,7 @@ mod tests {
             LIST_SLOT_KB[0],
             LIST_SLOT_KB[6],
             LIST_SLOT_MODES,
+            LIST_SLOT_THEMES,
             LIST_SLOT_RACK,
             LIST_SLOT_RACK_EMPTY,
             LIST_SLOT_PERSONAS,

@@ -1,7 +1,7 @@
 [CmdletBinding(DefaultParameterSetName = "One")]
 param(
     [Parameter(Mandatory = $true, ParameterSetName = "One")]
-    [ValidateSet("seeded", "first-run", "blank-encoder", "real")]
+    [ValidateSet("seeded", "first-run", "real")]
     [string]$Environment,
 
     [Parameter(Mandatory = $true, ParameterSetName = "All")]
@@ -16,13 +16,11 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
 $RuntimeRoot = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot "tmp\studio-env"))
-$Targets = if ($All) { @("seeded", "first-run", "blank-encoder", "real") } else { @($Environment) }
+$Targets = if ($All) { @("seeded", "first-run", "real") } else { @($Environment) }
 
 foreach ($Target in $Targets) {
     $TransitionMutex = $null
     $TransitionLockHeld = $false
-    $HardwareLease = $null
-    $HardwareLeaseHeld = $false
     $OpenedProcessHandles = @()
     try {
         # Windows mutex ownership is recursive for the owning thread. A seed
@@ -44,25 +42,6 @@ foreach ($Target in $Targets) {
         }
         if (-not $TransitionLockHeld) {
             throw "Another process is building or swapping the '$Target' Studio environment. Teardown refused to race it."
-        }
-
-        if ($Target -eq "real") {
-            try {
-                $HardwareLease = [System.Threading.Mutex]::new(
-                    $false,
-                    "Global\KeyboardSplitterXboxPro.PanelProgramming.v1"
-                )
-            } catch [System.UnauthorizedAccessException] {
-                throw "The hardware transition lease belongs to another Windows identity. Real teardown refused."
-            }
-            try {
-                $HardwareLeaseHeld = $HardwareLease.WaitOne(0)
-            } catch [System.Threading.AbandonedMutexException] {
-                $HardwareLeaseHeld = $true
-            }
-            if (-not $HardwareLeaseHeld) {
-                throw "An I-PAC programming or Play transition is active. Real teardown left the runtime and hardware transaction untouched."
-            }
         }
 
         $RecordPath = Join-Path $RuntimeRoot "$Target.json"
@@ -350,12 +329,6 @@ foreach ($Target in $Targets) {
         }
         if ($TransitionMutex) {
             $TransitionMutex.Dispose()
-        }
-        if ($HardwareLeaseHeld) {
-            $HardwareLease.ReleaseMutex()
-        }
-        if ($HardwareLease) {
-            $HardwareLease.Dispose()
         }
     }
 }

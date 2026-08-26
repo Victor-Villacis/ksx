@@ -1337,68 +1337,77 @@ impl SetupRows {
                     }
                 })
                 .collect(),
-            themes: {
-                // Three states, three honest markings (review-caught: the
-                // first cut marked System "in use" even when the config could
-                // not be READ — a claim about a file nothing read, on the page
-                // whose signature rule is that a refusal renders as one):
-                //  - unreadable → NO row marked and every button stays an
-                //    action; theme_line carries the refusal sentence.
-                //  - unknown id → System IS what renders (the pill is true)
-                //    but not what is SET, so the button offers the useful act
-                //    — clearing the id — instead of claiming "this is how it
-                //    is set" about a config that says otherwise.
-                //  - known/empty → the blocking card's marking exactly.
-                let known = crate::theme_tokens::THEMES
-                    .iter()
-                    .any(|t| t.id == view.theme);
-                let readable = setup.available;
-                let system_set = readable && view.theme.is_empty();
-                let system_fallback = readable && !view.theme.is_empty() && !known;
-                let mark = |chosen: bool| {
-                    if chosen {
-                        "pill pill-ok".to_owned()
-                    } else {
-                        "pill pill-none".to_owned()
-                    }
-                };
-                let mut rows = vec![SetupThemeRowView {
-                    value: "system".to_owned(),
-                    title: "Match the operating system".to_owned(),
-                    detail: "Light or dark follows the system setting on the machine \
-                             viewing the page."
-                        .to_owned(),
-                    chosen_cls: mark(system_set || system_fallback),
-                    button: if system_set {
-                        "This is how it is set".to_owned()
-                    } else if system_fallback {
-                        "Follow the operating system instead".to_owned()
-                    } else {
-                        "Match the operating system".to_owned()
-                    },
-                }];
-                rows.extend(crate::theme_tokens::THEMES.iter().map(|meta| {
-                    let chosen = readable && view.theme == meta.id;
-                    SetupThemeRowView {
-                        value: meta.id.to_owned(),
-                        title: meta.label.to_owned(),
-                        detail: if meta.scheme == "light" {
-                            "Every page renders light, whatever the system prefers.".to_owned()
-                        } else {
-                            "Every page renders dark, whatever the system prefers.".to_owned()
-                        },
-                        chosen_cls: mark(chosen),
-                        button: if chosen {
-                            "This is how it is set".to_owned()
-                        } else {
-                            meta.label.to_owned()
-                        },
-                    }
-                }));
-                rows
-            },
+            themes: theme_rows(setup),
         }
     }
+}
+
+
+/// The Studio theme roster, composed once and served by every page that lets
+/// someone change it. Extracted from `SetupRows::of` when `/nocturne` grew its
+/// own picker: one implementation means the two pages cannot disagree about
+/// which theme is marked, which is the whole point of the three-state rule
+/// documented inside.
+pub fn theme_rows(setup: &SetupSnapshot) -> Vec<SetupThemeRowView> {
+    let view = &setup.view;
+            // Three states, three honest markings (review-caught: the
+            // first cut marked System "in use" even when the config could
+            // not be READ — a claim about a file nothing read, on the page
+            // whose signature rule is that a refusal renders as one):
+            //  - unreadable → NO row marked and every button stays an
+            //    action; theme_line carries the refusal sentence.
+            //  - unknown id → System IS what renders (the pill is true)
+            //    but not what is SET, so the button offers the useful act
+            //    — clearing the id — instead of claiming "this is how it
+            //    is set" about a config that says otherwise.
+            //  - known/empty → the blocking card's marking exactly.
+            let known = crate::theme_tokens::THEMES
+                .iter()
+                .any(|t| t.id == view.theme);
+            let readable = setup.available;
+            let system_set = readable && view.theme.is_empty();
+            let system_fallback = readable && !view.theme.is_empty() && !known;
+            let mark = |chosen: bool| {
+                if chosen {
+                    "pill pill-ok".to_owned()
+                } else {
+                    "pill pill-none".to_owned()
+                }
+            };
+            let mut rows = vec![SetupThemeRowView {
+                value: "system".to_owned(),
+                title: "Match the operating system".to_owned(),
+                detail: "Light or dark follows the system setting on the machine \
+                         viewing the page."
+                    .to_owned(),
+                chosen_cls: mark(system_set || system_fallback),
+                button: if system_set {
+                    "This is how it is set".to_owned()
+                } else if system_fallback {
+                    "Follow the operating system instead".to_owned()
+                } else {
+                    "Match the operating system".to_owned()
+                },
+            }];
+            rows.extend(crate::theme_tokens::THEMES.iter().map(|meta| {
+                let chosen = readable && view.theme == meta.id;
+                SetupThemeRowView {
+                    value: meta.id.to_owned(),
+                    title: meta.label.to_owned(),
+                    detail: if meta.scheme == "light" {
+                        "Every page renders light, whatever the system prefers.".to_owned()
+                    } else {
+                        "Every page renders dark, whatever the system prefers.".to_owned()
+                    },
+                    chosen_cls: mark(chosen),
+                    button: if chosen {
+                        "This is how it is set".to_owned()
+                    } else {
+                        meta.label.to_owned()
+                    },
+                }
+            }));
+            rows
 }
 
 /// What `GET /api/setup` serves AND what the setup island's props carry — the
@@ -3255,97 +3264,14 @@ fn hidden_when_empty(text: &str, class: &str) -> String {
     }
 }
 
-// ───────────────────────────────────────────────────────────────────────────
-// /workspace — the Nocturne workspace shell (M0 skeleton)
-// ───────────────────────────────────────────────────────────────────────────
-
-/// What `GET /api/workspace` serves AND what the workspace island's props
-/// carry — the same one-struct-one-serializer rule as [`StatusPayload`],
-/// parity pinned in `render_workspace.rs`.
-///
-/// M0 is the frame of the screen that will absorb `/start`, `/map` and `/`:
-/// the payload carries the daemon-held draft and the session, and every
-/// sentence the page shows lives in [`WorkspaceDerived`] — composed once, in
-/// Rust, exactly as [`ProfilesDerived`] and [`SetupLines`] are. The island
-/// copies fields and derives nothing, so the SSR paint and the 2 s poll can
-/// never disagree.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspacePayload {
-    /// The staged setup, from `ControlSource::staged` — the DAEMON's memory,
-    /// not a file. Its own `reachable`/`error` fields say when there is none.
-    pub staged: ksx_api::StagedSetupView,
-    pub session: crate::control::SessionView,
-    /// The slot the page is LOOKING AT (`?slot=N`), resolved by the server —
-    /// absent or unknown falls back to the first staged slot. The poller
-    /// echoes the page's own query string, so a poll cannot flip the view.
-    #[serde(default)]
-    pub selected: Option<u8>,
-    /// Every displayed string and every `show:` branch, computed once —
-    /// recomputed from the fields above by [`Self::derived`]; never assembled
-    /// by hand.
-    #[serde(default)]
-    pub view: WorkspaceDerived,
-}
-
-impl WorkspacePayload {
-    /// Fill [`Self::view`] from the raw provider data. Every producer of a
-    /// payload calls this — the page render and `GET /api/workspace` share one
-    /// collector — so the server paint and the poll are the same bytes by
-    /// construction rather than by two implementations agreeing.
-    #[must_use]
-    pub fn derived(mut self) -> Self {
-        self.view = WorkspaceDerived::of(&self);
-        self
-    }
-}
-
-/// One staged controller as the workspace rack renders it. Every string is
-/// composed HERE and every form value is precomposed — including the
-/// whole-order sequence each Move button submits, because the daemon's
-/// reorder verb takes the WHOLE order (`StageEdit::ReorderSlots`) and a page
-/// that recomputed it client-side would be a second derivation of slot order.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspaceSlotRow {
-    /// The slot number, as the string a form field submits.
-    pub number: String,
-    /// `"wsrow"`, `"wsrow on"` for the selected controller.
-    pub row_cls: String,
-    /// `/workspace?slot=N` — selection is a LINK, so switching controllers
-    /// works with no JavaScript at all.
-    pub href: String,
-    /// "P1 · Xbox 360".
-    pub title: String,
-    /// "\"Player 1\" · 12 controls".
-    pub detail: String,
-    /// "Opposites: Up wins", or empty for the off default — a policy nobody
-    /// set is not narrated.
-    pub socd_note: String,
-    /// The whole slot order after moving this row UP, space-separated
-    /// (`"2 1 3"`), or empty for the first row — the server answers an empty
-    /// submission with the honest already-there sentence.
-    pub up_order: String,
-    /// Same, moving DOWN; empty for the last row.
-    pub down_order: String,
-}
-
-/// One radio-row of a workspace choice group (keyboard capture). The chosen
-/// state is a composed CLASS and a composed button label, never client logic.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspaceChoiceRow {
-    pub name: String,
-    pub title: String,
-    pub detail: String,
-    /// `"wschoice on"` for the current answer, `"wschoice"` otherwise.
-    pub row_cls: String,
-    /// "This is how it is set" / "Choose".
-    pub button: String,
-}
-
-/// A `<select>` option, value + label, both served.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspaceOptionRow {
-    pub value: String,
-    pub label: String,
+/// The right pane's whole content for one selected controller, composed off
+/// the SAME machinery the mapper reads (`ksx_api::staged_mapper_slot` + the
+/// zone tables in render_map.rs), so the two surfaces cannot describe one
+/// binding differently.
+struct WorkspaceBinds {
+    title: String,
+    rows: Vec<WorkspaceBindRow>,
+    foot: String,
 }
 
 /// One binding-list row of the workspace's right pane: the selected slot's
@@ -3381,325 +3307,8 @@ pub struct WorkspaceBindRow {
     pub toggle: bool,
 }
 
-/// Everything the workspace SHOWS that is not verbatim provider data. The
-/// island reads these fields and renders them; it derives nothing.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspaceDerived {
-    /// The stage card's one customer sentence for the session state.
-    pub state_detail: String,
-    /// The Keyboard section's one line: the staged board's LABEL
-    /// (`FIRST-RUN.md` §5 — the label is the identifier on screen), or the
-    /// honest empty/unreadable sentence.
-    pub device_line: String,
-    /// The board's capture path in small print — "USB · Interception",
-    /// "USB · built-in (WinUSB)" — or empty with no board.
-    pub device_meta: String,
-    /// The Virtual-controllers section's one line.
-    pub rack_line: String,
-    /// The staged controllers, in slot order.
-    pub rack: Vec<WorkspaceSlotRow>,
-    /// The capacity sentence under the rack — served ceilings, never
-    /// hardcoded ones.
-    pub rack_caption: String,
-    /// P1..Pn for the shared opposite-directions form.
-    pub socd_slots: Vec<WorkspaceOptionRow>,
-    /// The served SOCD roster (`SocdOption`), as select options.
-    pub socd_policies: Vec<WorkspaceOptionRow>,
-    /// The capture question's current-answer sentence.
-    pub blocking_line: String,
-    /// The three capture answers as radio-rows.
-    pub blocking: Vec<WorkspaceChoiceRow>,
-    /// The personas "Add a controller" may offer — this build's pluggable,
-    /// this stage's still-addable, with the backend and per-session ceiling
-    /// in the label (the same filter and label `/start` offers).
-    pub add_personas: Vec<WorkspaceOptionRow>,
-    /// The in-box layouts, best-fit-first for the next slot.
-    pub add_layouts: Vec<WorkspaceOptionRow>,
-    /// The preset name the add would create — SERVED, because it becomes a
-    /// file name (`StagedSetupView::next_preset`'s own rule).
-    pub add_preset: String,
-    /// The ceiling sentence when every slot is staged, else empty.
-    pub add_full_line: String,
-    /// The schematic's accessible summary: the first controller's identity
-    /// and bound count, with the Sony-vocabulary honesty caption for
-    /// PlayStation-family pads ("shown on a generic gamepad outline").
-    pub pad_caption: String,
-    /// The right pane's heading line: the SELECTED controller's identity, or
-    /// the honest empty/unreachable sentence.
-    pub bind_title: String,
-    /// The selected controller's binding list, in zone order.
-    pub bind_rows: Vec<WorkspaceBindRow>,
-    /// "14 of 25 controls bound · 2 keys shared." — or empty with no slot.
-    pub bind_foot: String,
-    /// Where the full mapper lives for the selected slot
-    /// (`/map?target=stage&slot=N`), or `/map` with none.
-    pub map_href: String,
-    /// "Unsaved changes — …" when the draft is dirty, else empty.
-    pub dirty_line: String,
-    pub pill_running: bool,
-    pub pill_idle: bool,
-    pub pill_down: bool,
-    /// The pane-structure branches: a readable non-empty draft shows the
-    /// rack and its forms; a readable EMPTY draft shows the build/adopt
-    /// affordances; an unreachable one shows neither (the lines above carry
-    /// the failed-read sentences).
-    pub stage_ready: bool,
-    pub stage_empty: bool,
-    pub has_device: bool,
-    pub show_dirty: bool,
-    pub can_add: bool,
-    pub add_full: bool,
-    /// Which stage schematic renders: the first controller's FAMILY decides,
-    /// and an empty or unreadable draft shows the Xbox outline as the
-    /// generic default. Exactly one of the pair is ever true.
-    pub pad_xbox: bool,
-    pub pad_ps: bool,
-}
-
-/// The slot the page is looking at: the requested one when it still exists,
-/// else the first — a removed slot must not leave the pane staring at
-/// nothing when there is something honest to show.
-fn workspace_selected(p: &WorkspacePayload) -> Option<&ksx_api::StagedSlotView> {
-    if !p.staged.reachable {
-        return None;
-    }
-    p.selected
-        .and_then(|n| p.staged.slots.iter().find(|slot| slot.number == n))
-        .or_else(|| p.staged.slots.first())
-}
-
-impl WorkspaceDerived {
-    fn of(p: &WorkspacePayload) -> Self {
-        let staged = &p.staged;
-        let ready = staged.reachable && !staged.empty;
-        let selected = workspace_selected(p);
-        let binds = workspace_bind_rows(staged, selected);
-        Self {
-            state_detail: session_play_status(&p.session),
-            device_line: workspace_device_line(staged),
-            device_meta: workspace_device_meta(staged),
-            rack_line: workspace_rack_line(staged),
-            rack: workspace_rack_rows(staged, selected.map(|slot| slot.number)),
-            rack_caption: workspace_rack_caption(staged),
-            socd_slots: staged
-                .slots
-                .iter()
-                .map(|slot| WorkspaceOptionRow {
-                    value: slot.number.to_string(),
-                    label: format!("P{}", slot.number),
-                })
-                .collect(),
-            socd_policies: staged
-                .socd_options
-                .iter()
-                .map(|option| WorkspaceOptionRow {
-                    value: option.name.clone(),
-                    label: option.title.clone(),
-                })
-                .collect(),
-            blocking_line: workspace_blocking_line(staged),
-            blocking: workspace_blocking_rows(staged),
-            add_personas: staged
-                .personas
-                .iter()
-                .filter(|p| p.can_plug && p.available)
-                .map(|p| WorkspaceOptionRow {
-                    value: p.name.clone(),
-                    label: persona_picker_label(p),
-                })
-                .collect(),
-            add_layouts: layout_options(staged)
-                .into_iter()
-                .map(|option| WorkspaceOptionRow {
-                    value: option.value,
-                    label: option.label,
-                })
-                .collect(),
-            add_preset: staged.next_preset.clone().unwrap_or_default(),
-            add_full_line: if ready && staged.next_slot.is_none() {
-                format!(
-                    "All {} controller slots are staged — remove one to add a different one.",
-                    staged.max_slots
-                )
-            } else {
-                String::new()
-            },
-            pad_caption: workspace_pad_caption(selected),
-            bind_title: binds.title,
-            bind_rows: binds.rows,
-            bind_foot: binds.foot,
-            map_href: binds.map_href,
-            dirty_line: if ready && staged.dirty {
-                "Unsaved changes — Save writes them; Play runs them as they are.".to_owned()
-            } else {
-                String::new()
-            },
-            pill_running: p.session.reachable && p.session.running,
-            pill_idle: p.session.reachable && !p.session.running,
-            pill_down: !p.session.reachable,
-            stage_ready: ready,
-            stage_empty: staged.reachable && staged.empty,
-            has_device: staged.reachable && staged.device.is_some(),
-            show_dirty: ready && staged.dirty,
-            can_add: ready
-                && staged.next_slot.is_some()
-                && staged.personas.iter().any(|p| p.can_plug && p.available),
-            add_full: ready && staged.next_slot.is_none(),
-            pad_ps: selected.is_some_and(|slot| !slot.is_xinput),
-            pad_xbox: !selected.is_some_and(|slot| !slot.is_xinput),
-        }
-    }
-}
-
-/// A failed READ is not an absence (`docs/SURFACES.md` §1b): an unreachable
-/// draft says so, and never renders as "No keyboard chosen yet" — which is
-/// advice, and would be the wrong advice.
-fn workspace_device_line(staged: &ksx_api::StagedSetupView) -> String {
-    if !staged.reachable {
-        return "The draft could not be read. Reopen ksx and try again.".to_owned();
-    }
-    match &staged.device {
-        Some(device) => device.label.clone(),
-        None => "No keyboard chosen yet.".to_owned(),
-    }
-}
-
-fn workspace_rack_line(staged: &ksx_api::StagedSetupView) -> String {
-    if !staged.reachable {
-        return "Not readable right now.".to_owned();
-    }
-    match staged.slots.len() {
-        0 => "No controllers staged yet.".to_owned(),
-        1 => "1 controller staged.".to_owned(),
-        n => format!("{n} controllers staged."),
-    }
-}
-
-/// The capture path in the words `/start`'s device rows use, from the served
-/// backend name — matched, never parsed out of a selector.
-fn workspace_device_meta(staged: &ksx_api::StagedSetupView) -> String {
-    let Some(device) = staged.device.as_ref().filter(|_| staged.reachable) else {
-        return String::new();
-    };
-    match device.backend.as_str() {
-        "winusb" => "USB · built-in (WinUSB)".to_owned(),
-        "interception" => "USB · Interception".to_owned(),
-        // A backend this build has no words for still gets shown — the served
-        // name is at least true, and hiding it would claim there is none.
-        other => other.to_owned(),
-    }
-}
-
-fn workspace_rack_rows(
-    staged: &ksx_api::StagedSetupView,
-    selected: Option<u8>,
-) -> Vec<WorkspaceSlotRow> {
-    if !staged.reachable {
-        return Vec::new();
-    }
-    let order: Vec<u8> = staged.slots.iter().map(|slot| slot.number).collect();
-    let swapped = |a: usize, b: usize| -> String {
-        let mut next = order.clone();
-        next.swap(a, b);
-        next.iter().map(u8::to_string).collect::<Vec<_>>().join(" ")
-    };
-    staged
-        .slots
-        .iter()
-        .enumerate()
-        .map(|(at, slot)| WorkspaceSlotRow {
-            number: slot.number.to_string(),
-            row_cls: if selected == Some(slot.number) {
-                "wsrow on".to_owned()
-            } else {
-                "wsrow".to_owned()
-            },
-            href: format!("/workspace?slot={}", slot.number),
-            title: format!("P{} · {}", slot.number, slot.persona_label),
-            detail: format!(
-                "\"{}\" · {} control{}",
-                slot.preset,
-                slot.bindings,
-                if slot.bindings == 1 { "" } else { "s" }
-            ),
-            socd_note: match slot.socd.as_str() {
-                "" | "off" => String::new(),
-                _ => format!("Opposites: {}", slot.socd_label),
-            },
-            up_order: if at == 0 {
-                String::new()
-            } else {
-                swapped(at - 1, at)
-            },
-            down_order: if at + 1 == order.len() {
-                String::new()
-            } else {
-                swapped(at, at + 1)
-            },
-        })
-        .collect()
-}
-
-/// Served ceilings, never hardcoded ones — and only the Xbox half when it is
-/// the binding constraint, because "1 of 4" beside "1 of 16" reads as two
-/// unrelated quotas until one of them refuses.
-fn workspace_rack_caption(staged: &ksx_api::StagedSetupView) -> String {
-    if !staged.reachable || staged.slots.is_empty() {
-        return String::new();
-    }
-    format!(
-        "{} of {} controllers · {} of {} Xbox seats used.",
-        staged.slots.len(),
-        staged.max_slots,
-        staged.xinput_used,
-        staged.max_xinput_slots
-    )
-}
-
-fn workspace_blocking_line(staged: &ksx_api::StagedSetupView) -> String {
-    if !staged.reachable {
-        return String::new();
-    }
-    let current = staged.blocking.as_deref().unwrap_or("");
-    match staged
-        .blocking_options
-        .iter()
-        .find(|option| option.name == current)
-    {
-        Some(option) => format!("{} — {}", option.title, option.detail),
-        None => "Not answered yet. Play needs an answer; pick one below.".to_owned(),
-    }
-}
-
-/// The schematic's one accessible sentence: which pad it stands for and how
-/// bound it is. No vocabulary caveat any more — the stage shows each
-/// family's OWN outline (`WorkspaceDerived::pad_ps`), so the art and the
-/// words already agree.
-fn workspace_pad_caption(selected: Option<&ksx_api::StagedSlotView>) -> String {
-    let Some(slot) = selected else {
-        return String::new();
-    };
-    format!(
-        "P{} · {} — \"{}\", {} control{} bound.",
-        slot.number,
-        slot.persona_label,
-        slot.preset,
-        slot.bindings,
-        if slot.bindings == 1 { "" } else { "s" }
-    )
-}
-
-/// The right pane's whole content for one selected controller, composed off
-/// the SAME machinery the mapper reads (`ksx_api::staged_mapper_slot` + the
-/// zone tables in render_map.rs), so the two surfaces cannot describe one
-/// binding differently.
-struct WorkspaceBinds {
-    title: String,
-    rows: Vec<WorkspaceBindRow>,
-    foot: String,
-    map_href: String,
-}
-
+// The binding-row composer the Nocturne right pane uses. It was written for
+// the /workspace shell and outlived it: /nocturne re-dresses these rows.
 fn workspace_bind_rows(
     staged: &ksx_api::StagedSetupView,
     selected: Option<&ksx_api::StagedSlotView>,
@@ -3708,7 +3317,6 @@ fn workspace_bind_rows(
         title: title.to_owned(),
         rows: Vec::new(),
         foot: String::new(),
-        map_href: "/map".to_owned(),
     };
     if !staged.reachable {
         return empty("Not readable right now.");
@@ -3728,7 +3336,6 @@ fn workspace_bind_rows(
             title: format!("P{} · {}", slot.number, slot.persona_label),
             rows: Vec::new(),
             foot: String::new(),
-            map_href: format!("/map?target=stage&slot={}", slot.number),
         };
     };
     let shared = crate::render_map::shared_labels(&mapper);
@@ -3828,34 +3435,7 @@ fn workspace_bind_rows(
         ),
         rows,
         foot,
-        map_href: format!("/map?target=stage&slot={}", slot.number),
     }
-}
-
-fn workspace_blocking_rows(staged: &ksx_api::StagedSetupView) -> Vec<WorkspaceChoiceRow> {
-    if !staged.reachable {
-        return Vec::new();
-    }
-    let current = staged.blocking.as_deref().unwrap_or("");
-    staged
-        .blocking_options
-        .iter()
-        .map(|option| WorkspaceChoiceRow {
-            name: option.name.clone(),
-            title: option.title.clone(),
-            detail: option.detail.clone(),
-            row_cls: if option.name == current {
-                "wschoice on".to_owned()
-            } else {
-                "wschoice".to_owned()
-            },
-            button: if option.name == current {
-                "This is how it is set".to_owned()
-            } else {
-                "Choose".to_owned()
-            },
-        })
-        .collect()
 }
 
 // ═══ /nocturne — THE MIGRATED KEYBOARD SECTION ═════════════════════════════
@@ -4515,6 +4095,10 @@ pub struct NocturneDerived {
     /// runtime is explicitly read-only — an unknown or unavailable verb is
     /// not offered.
     pub auto_form_cls: String,
+    /// The Studio theme roster — same three-state marking `/setup` uses, from
+    /// the one shared composer so the two pages cannot disagree. Re-dressed as
+    /// choice rows because the blocking picker on this page is the same shape.
+    pub theme_rows: Vec<NocturneChoiceRow>,
 }
 
 /// Which of the right pane's six controller clusters a mapper function
@@ -6038,6 +5622,19 @@ impl NocturneDerived {
         };
 
         Self {
+            theme_rows: theme_rows(&SetupSnapshot {
+                available: p.setup.is_some(),
+                source: String::new(),
+                view: p.setup.clone().unwrap_or_default(),
+            })
+            .into_iter()
+            .map(|row| NocturneChoiceRow {
+                name: row.value,
+                title: row.title,
+                detail: row.detail,
+                cls: row.chosen_cls,
+            })
+            .collect(),
             version,
             environment_id,
             environment_label,

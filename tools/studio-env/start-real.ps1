@@ -218,26 +218,7 @@ function Invoke-RealHardwarePreBuildPreflight {
         [Parameter(Mandatory = $true)][string]$RecordPath
     )
 
-    $Lease = $null
-    $Held = $false
-    try {
-        try {
-            $Lease = [System.Threading.Mutex]::new(
-                $false,
-                "Global\KeyboardSplitterXboxPro.PanelProgramming.v1"
-            )
-        } catch [System.UnauthorizedAccessException] {
-            throw "KSX_WATCH_DEFERRED: the hardware transition lease belongs to another Windows identity."
-        }
-        try {
-            $Held = $Lease.WaitOne(0)
-        } catch [System.Threading.AbandonedMutexException] {
-            $Held = $true
-        }
-        if (-not $Held) {
-            throw "KSX_WATCH_DEFERRED: an I-PAC programming or Play transition is active; the current real-hardware runtime was left running."
-        }
-        if ($ProbeExecutable) {
+    if ($ProbeExecutable) {
             Assert-RealDaemonSafeForReplacement `
                 -Executable $ProbeExecutable `
                 -RecordPath $RecordPath `
@@ -257,21 +238,8 @@ function Invoke-RealHardwarePreBuildPreflight {
             if ([int]$ControlServerPid -ne 0 -or [int]$LiveServerPid -ne 0) {
                 throw "Refusing real-hardware replacement before build: a daemon pipe exists but no compatible executable is available for the required typed status probe (control=$ControlServerPid, live=$LiveServerPid)."
             }
-            Write-Verbose "No prior KSX client exists; the first build will provide the typed pre-swap probe."
-        }
-    } finally {
-        if ($Held) {
-            $Lease.ReleaseMutex()
-        }
-        if ($Lease) {
-            $Lease.Dispose()
-        }
+        Write-Verbose "No prior KSX client exists; the first build will provide the typed pre-swap probe."
     }
-}
-
-$WinIpac = Get-Process WinIPAC -ErrorAction SilentlyContinue
-if ($WinIpac) {
-    Write-Warning "WinIPAC is open. KSX can observe keyboard input, but I-PAC chart reads may be blocked until WinIPAC releases MI_02. This script will not close it."
 }
 
 $TransitionMutex = $null
@@ -287,8 +255,6 @@ try {
 }
 $TransitionLockHeld = $false
 $BuildGraphLock = $null
-$HardwareLease = $null
-$HardwareLeaseHeld = $false
 $LocationPushed = $false
 $RecordPath = Join-Path $RuntimeRoot "real.json"
 $RecordWritten = $false
@@ -388,26 +354,9 @@ try {
         throw "Refusing the managed real-QA copy because ksx.toml would change portable config-root discovery. Launch the portable ksx.exe in place on port 4460 instead."
     }
 
-    # Programming the I-PAC and transitioning Play use this same cross-process
-    # lease. Reacquire it after compilation and repeat the typed probe while
-    # holding it. This is the authoritative authorization for teardown; the
-    # cheap pre-build pass deliberately did not span a long Cargo build.
-    try {
-        $HardwareLease = [System.Threading.Mutex]::new(
-            $false,
-            "Global\KeyboardSplitterXboxPro.PanelProgramming.v1"
-        )
-    } catch [System.UnauthorizedAccessException] {
-        throw "KSX_WATCH_DEFERRED: the hardware transition lease belongs to another Windows identity."
-    }
-    try {
-        $HardwareLeaseHeld = $HardwareLease.WaitOne(0)
-    } catch [System.Threading.AbandonedMutexException] {
-        $HardwareLeaseHeld = $true
-    }
-    if (-not $HardwareLeaseHeld) {
-        throw "KSX_WATCH_DEFERRED: an I-PAC programming or Play transition is active; the current real-hardware runtime was left running."
-    }
+    # Repeat the typed probe after compilation: this is the authoritative
+    # authorization for teardown, and the cheap pre-build pass deliberately
+    # did not span a long Cargo build.
     Assert-RealDaemonSafeForReplacement `
         -Executable $BuiltExe `
         -RecordPath $RecordPath `
@@ -673,14 +622,6 @@ try {
     $Record.state = "ready"
     Write-ManagedRecord -Record $Record -Path $RecordPath
 
-    # Keep the cross-process hardware lease through the complete matched-pair
-    # launch. If Studio startup fails, no panel write can begin in the narrow
-    # window before cleanup has stopped the new processes.
-    $HardwareLease.ReleaseMutex()
-    $HardwareLeaseHeld = $false
-    $HardwareLease.Dispose()
-    $HardwareLease = $null
-
     Write-Host "Started a matched real-hardware QA artifact built by this invocation (source $SourceRevision)."
     Write-Host "Daemon PID $($DaemonProcess.Id) and Studio PID $($StudioProcess.Id) share artifact $($ArtifactHash.Substring(0, 12))."
     Write-Host "Config: $($Record.config_root)"
@@ -773,12 +714,6 @@ try {
     }
     if ($LocationPushed) {
         Pop-Location
-    }
-    if ($HardwareLeaseHeld) {
-        $HardwareLease.ReleaseMutex()
-    }
-    if ($HardwareLease) {
-        $HardwareLease.Dispose()
     }
     if ($BuildGraphLock) {
         Exit-KsxStudioBuildGraphLock -Lock $BuildGraphLock

@@ -955,6 +955,245 @@ pub struct PanelKeyOption {
     pub safe_for_qualification: bool,
 }
 
+/// **What a chart read said about one terminal, or why there is no such
+/// sentence.**
+///
+/// A chart is instantaneous truth about the bytes a board STORES, and it is
+/// only ever true for the request that produced it: nothing in ksx watches a
+/// board between requests, and WinIPAC can rewrite one at any moment. A
+/// persisted copy of [`Self::Read`] is a stale answer wearing a fresh one's
+/// clothes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum PanelChartEvidence {
+    /// No chart read has been attempted in this response.
+    ///
+    /// The default, for [`PanelShiftState::Opaque`]'s reason: a document or an
+    /// older client that omits the field must not deserialize into "the chart
+    /// says nothing about this terminal".
+    #[default]
+    NotAttempted,
+    /// A complete, stable read decoded this terminal's planes.
+    Read {
+        normal: PanelKeyValue,
+        shifted: PanelKeyValue,
+        /// The image this came from. An observation stamped with a different
+        /// hash was taken against a board that has since changed.
+        image_sha256: String,
+        read_at: String,
+    },
+    /// A read was attempted for this exact board and did not complete.
+    ///
+    /// **A failed read is not an absence.** This variant exists so that a
+    /// surface physically cannot render `panel-interface-busy` as an empty
+    /// chart. Retryable: the remedy names what to close.
+    Refused {
+        code: String,
+        message: String,
+        remedy: Option<String>,
+    },
+    /// A recognised encoder family with no measured protocol profile.
+    ///
+    /// **Not retryable, and that is the whole difference from [`Self::Refused`].**
+    /// A retry button here is an offer that can never succeed: ksx will not read
+    /// this model until someone measures its protocol on hardware they own.
+    Unprofiled {
+        family_id: String,
+        family_label: String,
+    },
+    /// No exact recognition evidence for this board at all.
+    Unrecognised,
+}
+
+/// How an observation came to be filed under one terminal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PanelObservationAttribution {
+    /// A surface prompted for this terminal and a key arrived. **Nothing proves
+    /// the user pressed the screw the prompt named**, so this is the default and
+    /// the weakest.
+    #[default]
+    Prompted,
+    /// A chart read in hand held this key on exactly one terminal, and it is
+    /// this one. The only attribution strong enough to reach `Matched`.
+    ChartUnique,
+    /// A chart read in hand held this key on MORE THAN ONE terminal. The
+    /// observation is real; the terminal it is filed under is a guess.
+    /// `input-test`'s own limit: "two terminals emitting the same key are
+    /// indistinguishable".
+    SharedSignal,
+}
+
+/// Whether anything still stands behind an observation.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum PanelObservationVouching {
+    /// A mechanism to vouch exists and has not run. Fails closed.
+    #[default]
+    Unproven,
+    /// A chart read in THIS response proves the board still holds the image
+    /// this observation was taken against.
+    Vouched,
+    /// No chart reader exists for this board, so nothing could ever vouch.
+    /// Stop offering "read the board again" — there is no such button.
+    NeverVouchable,
+    /// The board's image changed after this observation was taken.
+    ChartRewritten { was: String, now: String },
+}
+
+/// **What Windows actually received when somebody pressed a control.**
+///
+/// This proves what the wiring plus the firmware EMITTED at that moment. It does
+/// not prove what is stored, and it cannot name the terminal by itself.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelObservedEvidence {
+    /// Every canonical key the press produced, in arrival order.
+    ///
+    /// **A `Vec`, and that is load-bearing.** `docs/ENHANCEMENTS.md` E10 records
+    /// that "a perfect 56-key chart can still contain a terminal that fires two
+    /// other players' buttons". Recording only the first key would reproduce
+    /// inside ksx exactly the blindness E10 proves a chart read has — and a
+    /// multi-key burst is the only evidence of an onboard macro there will ever
+    /// be.
+    pub keys: Vec<String>,
+    pub observed_at: String,
+    /// The exact learner-reported device, not the selected identity.
+    pub device: String,
+    /// The chart image in hand when this was taken, if any. `None` means taken
+    /// with no chart — the only kind an unprofiled board can produce.
+    pub against_image_sha256: Option<String>,
+    pub attribution: PanelObservationAttribution,
+    pub vouching: PanelObservationVouching,
+}
+
+/// **What the user typed and locked in.**
+///
+/// The only source ksx did not obtain itself: a claim of authorship, not of
+/// measurement. It ranks below both, and is never deleted or silently corrected
+/// when they disagree — the user may know the wire from that button reaches a
+/// different screw than the silkscreen claims, which is a fact about the cabinet
+/// rather than the firmware.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelDeclaredEvidence {
+    /// A canonical key name, or empty for "I know this one is unassigned".
+    pub key: String,
+    pub declared_at: String,
+    /// What ksx knew when this was locked in, so a later contradiction can be
+    /// stated as what CHANGED rather than as who is right.
+    pub against_image_sha256: Option<String>,
+    /// Free text. "I wired this myself" is the only justification this row will
+    /// ever have, so it is kept.
+    pub note: String,
+}
+
+/// **The one sentence a surface leads with.** Backend-composed; never input.
+///
+/// Every variant is a different sentence to a human. Where two situations get
+/// the same words they get the same variant; where they get different remedies
+/// they get different variants — which is why [`Self::ChartRefused`] and
+/// [`Self::ChartImpossible`] are separate.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "answer", rename_all = "kebab-case")]
+pub enum PanelTerminalAnswer {
+    /// Nothing has ever been established here.
+    #[default]
+    Unknown,
+    /// A read was attempted and failed, and no observation stands in for it.
+    /// Retryable.
+    ChartRefused,
+    /// This board model has no measured protocol, and no observation stands in
+    /// for it. Offer teaching, never a retry.
+    ChartImpossible,
+    /// The firmware stores an observable key here.
+    Stored { key: String },
+    /// The terminal's own byte is zero.
+    ///
+    /// **NOT "this terminal does nothing."** E10: "onboard macros are
+    /// vendor-owned bytes that are preserved verbatim and never parsed, so a
+    /// macro'd terminal is indistinguishable from an unassigned one." This says
+    /// the byte is zero and nothing more, which is why teaching is offered here.
+    StoredUnassigned,
+    /// The firmware stores a byte ksx cannot classify — a vendor action, a macro
+    /// trigger, or a HID usage ksx cannot observe. Preserved exactly, never
+    /// selectable as a ksx key, marked unknown with an invitation to press it.
+    StoredUnclassified { code: u16, label: String },
+    /// The only source is what Windows saw arrive from this control.
+    Observed { key: String },
+    /// One press produced several keys. On a board with no macro reader this is
+    /// the only sighting of an onboard macro ksx will ever get.
+    ObservedMultiple { keys: Vec<String> },
+    /// An observation ksx can no longer vouch for. Kept, shown, and not route
+    /// authority.
+    ObservedUnvouched { key: String },
+    /// A chart read in THIS response holds `key`, and an observation taken
+    /// against THIS exact image, attributed [`PanelObservationAttribution::ChartUnique`],
+    /// saw it.
+    ///
+    /// The strongest state, and the narrowest. Two retained strings being equal
+    /// never produces it.
+    Matched { key: String },
+    /// The chart holds one observable key and the press produced another.
+    /// Something rewrote the board, or the wire does not go where the silkscreen
+    /// says.
+    Mismatch {
+        stored: PanelKeyValue,
+        observed: Vec<String>,
+    },
+    /// The chart holds a byte ksx cannot classify, and a press revealed what it
+    /// emits. **Not a conflict** — the observation COMPLETED the chart, and this
+    /// is the one combination where pressing adds what reading never could.
+    Resolved {
+        stored: PanelKeyValue,
+        observed: Vec<String>,
+    },
+    /// The chart says this terminal's byte is zero and it emitted keys anyway.
+    /// E10's blind spot made visible, and the strongest macro evidence this
+    /// product can produce.
+    Unaccounted { observed: Vec<String> },
+    /// The user locked this in and nothing ksx obtained disagrees, because
+    /// nothing ksx obtained exists.
+    Declared { key: String },
+    /// A later chart read contradicts what the user locked in. Both are shown;
+    /// neither is silently corrected and neither is deleted.
+    DeclaredContradicted {
+        declared: String,
+        stored: PanelKeyValue,
+    },
+}
+
+/// **Everything ksx knows about one screw terminal, and how it came to know it.**
+///
+/// Two independent sources answer two different questions and can disagree: a
+/// chart read is instantaneous truth about the bytes the board STORES, an
+/// observation is historical truth about the signal it EMITTED. A third — the
+/// user's own declaration — is neither, and says so.
+///
+/// This type never collapses them. [`Self::answer`] is the sentence a surface
+/// leads with; the three evidence fields are what stands behind it, and all
+/// three survive being outranked. Collapsing an unproven source into the winning
+/// one is how a stale string becomes a fresh claim.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelTerminalTruth {
+    pub terminal_id: String,
+    pub terminal_label: String,
+    pub player: u8,
+    pub chart: PanelChartEvidence,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed: Option<PanelObservedEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared: Option<PanelDeclaredEvidence>,
+    /// Backend-composed projection. Never accepted as input.
+    pub answer: PanelTerminalAnswer,
+    /// Backend-composed sentence; surfaces copy it verbatim rather than
+    /// translating variant combinations into prose themselves.
+    pub detail: String,
+    /// May a surface offer to learn this one by pressing it?
+    ///
+    /// False when the learner is unreachable — an offer that always refuses is
+    /// the bug `BoardRow.pickable` exists to prevent.
+    pub invite_press: bool,
+}
+
 /// Metadata for a durable raw-image backup. The bytes and filesystem path are
 /// intentionally absent from the surface contract.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

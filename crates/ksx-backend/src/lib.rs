@@ -67,6 +67,7 @@ pub mod panel;
 pub(crate) mod panel_catalog;
 pub mod panel_profiles;
 pub mod panel_programming;
+pub mod panel_truth;
 // The first-run state and the path-free config in/out, for the surfaces that
 // have a screen. Gated with `sources` because that is the only caller: the CLI
 // reaches this machinery through `config_io` directly.

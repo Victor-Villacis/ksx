@@ -107,10 +107,43 @@ async function readTheBoard() {
   );
   await page.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
 
+  // The device row is SERVER-RENDERED and visible long before the island
+  // hydrates, so a click can land on DOM nobody is listening to — the
+  // selection silently does not happen and every wait below times out 30 s
+  // later. This was the suite's one intermittent (seen locally and on CI run
+  // 33114699364, same test, same 30 s shape). visual-smoke.test.mjs already
+  // states the rule: interact only after the island reports active, and after
+  // the canvas engine has adopted its widgets — the workbench this journey
+  // opens is one of them.
+  await page.waitForFunction(
+    () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+    undefined,
+    { timeout: 30_000 },
+  );
+  await page.waitForFunction(
+    () => {
+      const kb = document.querySelector('.n-canvas [data-instance-id="keyboard"]');
+      return !document.querySelector(".n-canvas") || kb?.dataset.canvasX !== undefined;
+    },
+    undefined,
+    { timeout: 30_000 },
+  );
+
   // Pick the encoder the way a person does: press its row.
   const row = page.locator("button.n-dev", { hasText: "Ultimarc I-PAC 4" }).first();
   await row.waitFor({ state: "visible", timeout: 30_000 });
   await row.click();
+
+  // `#n-encoder-read`'s reveal gate (`syncControlSurfaceChrome`) needs the
+  // SELECTION to be island state, not just a click that happened: the row
+  // repaints with class `on` when the selection lands. Waiting on that fact
+  // (a server-marked class, not prose) is what separates "the click landed"
+  // from "the click happened" — the gap this journey's one intermittent
+  // lived in.
+  await page
+    .locator("button.n-dev.on", { hasText: "Ultimarc I-PAC 4" })
+    .first()
+    .waitFor({ state: "visible", timeout: 30_000 });
 
   // `#n-encoder-read` lives inside the control-surface workbench widget, which
   // is mounted on the canvas only once that surface is open. Selecting the

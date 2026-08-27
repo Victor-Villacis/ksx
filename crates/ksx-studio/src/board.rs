@@ -270,6 +270,213 @@ impl BoardCell {
     }
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// The encoder board
+// ───────────────────────────────────────────────────────────────────────────
+
+/// One control pitch: a cell plus the gap after it.
+const STEP: f32 = UNIT + GAP;
+
+/// Vertical distance between one player band and the next, in cell pitches.
+/// Three rows of controls plus a little air, so four players fit one plate.
+const BAND_PITCH: f32 = 3.4;
+
+/// What a terminal DOES on the panel, parsed from its id.
+///
+/// The ids are the backend's (`panel_programming::IPAC4_TERMINALS`), spelled
+/// `<player><role>`: `1up`, `2sw3`, `4coin`. Parsing them here rather than
+/// having the backend serve a shape is deliberate — a terminal role decides
+/// where it is DRAWN and what is PRINTED on it, and both are this crate's
+/// business. What the backend owns is what the terminal is wired to, which
+/// arrives as `normal_key` and is passed through untouched.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TerminalRole {
+    Up,
+    Down,
+    Left,
+    Right,
+    /// Action switch 1-8, as printed on a cabinet.
+    Switch(u8),
+    Start,
+    Coin,
+    /// An id this build does not recognise. **Still drawn.** A terminal that
+    /// vanishes from the picture is a control the user owns and cannot map,
+    /// with no way to find out why.
+    Unknown,
+}
+
+impl TerminalRole {
+    /// The printed text. `id` is the fallback so an unrecognised terminal says
+    /// what it is rather than showing a blank cap.
+    fn cap(self, id: &str) -> String {
+        match self {
+            Self::Up => "\u{25b2}".to_owned(),
+            Self::Down => "\u{25bc}".to_owned(),
+            Self::Left => "\u{25c0}".to_owned(),
+            Self::Right => "\u{25b6}".to_owned(),
+            Self::Switch(n) => n.to_string(),
+            Self::Start => "Start".to_owned(),
+            Self::Coin => "Coin".to_owned(),
+            Self::Unknown => id.to_owned(),
+        }
+    }
+
+    fn kind(self) -> BoardCellKind {
+        match self {
+            Self::Up | Self::Down | Self::Left | Self::Right => BoardCellKind::Joystick,
+            // Start and Coin are 24mm on essentially every cabinet; the action
+            // switches are 30mm. The distinction is real hardware, and it is
+            // what makes the drawn panel recognisable as your own.
+            Self::Start | Self::Coin => BoardCellKind::Button24,
+            Self::Switch(_) | Self::Unknown => BoardCellKind::Button30,
+        }
+    }
+
+    /// Where this control sits inside its player band, in cell pitches.
+    ///
+    /// A joystick diamond on the left, the eight action switches as the usual
+    /// two rows of four, then Start over Coin at the right. Anything unplaced
+    /// is parked past the right edge in arrival order, so it never lands on top
+    /// of a control that IS placed.
+    fn offset(self, unplaced: usize) -> (f32, f32) {
+        match self {
+            Self::Up => (1.0, 0.0),
+            Self::Left => (0.0, 1.0),
+            Self::Right => (2.0, 1.0),
+            Self::Down => (1.0, 2.0),
+            Self::Switch(n @ 1..=4) => (3.5 + f32::from(n - 1), 0.5),
+            Self::Switch(n) if (5..=8).contains(&n) => (3.5 + f32::from(n - 5), 1.5),
+            Self::Start => (8.0, 0.5),
+            Self::Coin => (8.0, 1.5),
+            Self::Switch(_) | Self::Unknown => (10.0 + unplaced as f32, 0.5),
+        }
+    }
+}
+
+/// Split a terminal id into the player it belongs to and what it does.
+///
+/// Deliberately total: anything unparseable comes back `(None, Unknown)` and is
+/// still drawn. See [`TerminalRole::Unknown`].
+fn parse_terminal(id: &str) -> (Option<u8>, TerminalRole) {
+    let lower = id.trim().to_ascii_lowercase();
+    let mut chars = lower.chars();
+    let Some(digit) = chars.next().and_then(|c| c.to_digit(10)) else {
+        return (None, TerminalRole::Unknown);
+    };
+    let player = u8::try_from(digit).ok().filter(|p| (1..=4).contains(p));
+    let rest = chars.as_str();
+    let role = match rest {
+        "up" => TerminalRole::Up,
+        "down" => TerminalRole::Down,
+        "left" => TerminalRole::Left,
+        "right" => TerminalRole::Right,
+        "start" => TerminalRole::Start,
+        "coin" => TerminalRole::Coin,
+        _ => rest
+            .strip_prefix("sw")
+            .and_then(|n| n.parse::<u8>().ok())
+            .filter(|n| (1..=8).contains(n))
+            .map_or(TerminalRole::Unknown, TerminalRole::Switch),
+    };
+    (player, role)
+}
+
+impl Board {
+    /// **An arcade panel, drawn from a layout the user saved.**
+    ///
+    /// The whole board is the profile. `panel_profiles` already stores one row
+    /// per terminal with the key that terminal emits, so there is nothing to
+    /// invent here and no second store to keep in step — this reads what the
+    /// backend already owns and decides only where to draw it.
+    ///
+    /// # Why a saved layout is required
+    ///
+    /// ksx cannot guess what a panel emits. An encoder is switches wired to a
+    /// board, and the host learns only that a key arrived. No factory chart is
+    /// compiled in anywhere in this repo, and writing one from memory would be
+    /// a confident claim about somebody else hardware. So a panel with no saved
+    /// layout gets no encoder board, and the picker says why rather than
+    /// offering an empty plate.
+    ///
+    /// A terminal with no key is Unassigned — drawn, labelled, and not
+    /// bindable, which is a real state on a panel rather than an error. The
+    /// key itself is passed through unvetted on purpose: this crate does not
+    /// link the key vocabulary at runtime, and the backend already refuses a
+    /// terminal it cannot store when the layout is saved.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn encoder_from_profile(profile: &ksx_api::PanelHardwareProfile) -> Self {
+        let mut cells = Vec::with_capacity(profile.terminals.len());
+        let mut unplaced = 0usize;
+        let mut width: f32 = 0.0;
+        let mut height: f32 = 0.0;
+
+        for terminal in &profile.terminals {
+            let (player, role) = parse_terminal(&terminal.terminal_id);
+            let (dx, dy) = role.offset(unplaced);
+            if matches!(role, TerminalRole::Unknown) {
+                unplaced += 1;
+            }
+            // An unrecognised player still gets a band of its own, after the
+            // four this build knows, for the same reason an unknown role is
+            // still drawn.
+            let band = player.map_or(4, |p| p - 1);
+            let x = dx * STEP;
+            let y = (f32::from(band) * BAND_PITCH + dy) * STEP;
+            // Passed through, never vetted here. This crate 'renders and
+            // routes and knows nothing about the key vocabulary at runtime'
+            // (its Cargo.toml, which keeps ksx-core a DEV dependency for
+            // exactly this reason). The vocabulary lives where the keys come
+            // from: the backend refuses a terminal it cannot store when the
+            // layout is saved. Re-deciding it here would put a second, older
+            // opinion about what a key is into the one crate that was built
+            // not to have one.
+            //
+            // Absent means Unassigned — a real state on a panel, and the
+            // reason this is an Option rather than an empty string upstream.
+            let key = terminal
+                .normal_key
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+
+            width = width.max(x + UNIT);
+            height = height.max(y + UNIT);
+            cells.push(BoardCell {
+                id: format!("terminal:{}", terminal.terminal_id),
+                cap: role.cap(&terminal.terminal_id),
+                key,
+                kind: role.kind(),
+                x,
+                y,
+                w: UNIT,
+                h: UNIT,
+                player,
+                ghost: false,
+                // One row per player while the page still renders rows. The
+                // diamond and the button cluster live in x/y above, ready for
+                // absolute rendering without a second pass over this.
+                row: band + 1,
+                unit: String::new(),
+                sp: false,
+            });
+        }
+
+        Board {
+            id: format!("panel:{}", profile.profile_id),
+            name: if profile.name.trim().is_empty() {
+                "Arcade panel".to_owned()
+            } else {
+                profile.name.clone()
+            },
+            origin: BoardOrigin::Recognized,
+            bounds: (width, height),
+            cells,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,5 +635,245 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // The encoder board
+    // ───────────────────────────────────────────────────────────────────
+
+    /// The 56 terminal ids an I-PAC 4 profile carries, in the backend order.
+    /// Spelled out rather than imported because `IPAC4_TERMINALS` is
+    /// `pub(crate)` in `ksx-backend` and this crate deliberately does not
+    /// depend on it — the Studio reaches the machine only through
+    /// `ksx-api` traits. `every_shipped_terminal_id_parses` is what keeps
+    /// this list honest against the real vocabulary.
+    fn ipac4_ids() -> Vec<String> {
+        let mut ids = Vec::new();
+        for player in 1..=4 {
+            for role in ["up", "down", "left", "right"] {
+                ids.push(format!("{player}{role}"));
+            }
+            for sw in 1..=8 {
+                ids.push(format!("{player}sw{sw}"));
+            }
+            ids.push(format!("{player}start"));
+            ids.push(format!("{player}coin"));
+        }
+        ids
+    }
+
+    fn profile_of(rows: Vec<(&str, Option<&str>)>) -> ksx_api::PanelHardwareProfile {
+        ksx_api::PanelHardwareProfile {
+            profile_id: "cab-01".to_owned(),
+            name: "Upright cab".to_owned(),
+            terminals: rows
+                .into_iter()
+                .map(|(id, key)| ksx_api::PanelHardwareTerminal {
+                    terminal_id: id.to_owned(),
+                    normal_key: key.map(str::to_owned),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    /// A full panel: four bands, fourteen controls each, and every key the
+    /// profile carries arriving intact.
+    #[test]
+    fn a_panel_is_drawn_from_the_saved_layout() {
+        let ids = ipac4_ids();
+        let profile = profile_of(ids.iter().map(|id| (id.as_str(), Some("A"))).collect());
+        let board = Board::encoder_from_profile(&profile);
+
+        assert_eq!(board.cells.len(), 56, "every terminal must get a cell");
+        assert_eq!(board.origin, BoardOrigin::Recognized);
+        assert_eq!(board.id, "panel:cab-01");
+        assert_eq!(board.name, "Upright cab");
+
+        let rows = board.rows();
+        assert_eq!(rows.len(), 4, "one band per player, got {}", rows.len());
+        for (index, row) in rows.iter().enumerate() {
+            assert_eq!(
+                row.len(),
+                14,
+                "player {} band has {} controls",
+                index + 1,
+                row.len()
+            );
+        }
+        assert!(
+            board.cells.iter().all(|c| c.key == "A"),
+            "a key the profile carries must reach the cell unchanged"
+        );
+        assert!(
+            board.cells.iter().all(|c| c.player.is_some()),
+            "every control on a known panel belongs to a player"
+        );
+    }
+
+    /// Each band is one joystick, eight action switches, Start and Coin —
+    /// named the way somebody standing at the cabinet would name them.
+    #[test]
+    fn a_band_is_a_stick_eight_buttons_start_and_coin() {
+        let profile = profile_of(ipac4_ids().iter().map(|id| (id.as_str(), None)).collect());
+        let board = Board::encoder_from_profile(&profile);
+        let band: Vec<&BoardCell> = board.cells.iter().filter(|c| c.player == Some(2)).collect();
+
+        let sticks = band
+            .iter()
+            .filter(|c| c.kind == BoardCellKind::Joystick)
+            .count();
+        let actions = band
+            .iter()
+            .filter(|c| c.kind == BoardCellKind::Button30)
+            .count();
+        let small = band
+            .iter()
+            .filter(|c| c.kind == BoardCellKind::Button24)
+            .count();
+        assert_eq!((sticks, actions, small), (4, 8, 2), "band was {band:?}");
+
+        let caps: Vec<&str> = band.iter().map(|c| c.cap.as_str()).collect();
+        for want in [
+            "\u{25b2}", "\u{25bc}", "\u{25c0}", "\u{25b6}", "Start", "Coin", "1", "8",
+        ] {
+            assert!(caps.contains(&want), "band is missing {want:?}: {caps:?}");
+        }
+    }
+
+    /// **An id this build does not know is still drawn.**
+    ///
+    /// A terminal that vanishes from the picture is a control the user owns
+    /// and cannot map, with nothing on screen to explain the absence. It gets
+    /// a cell, keeps its key, and is captioned with its own id.
+    #[test]
+    fn an_unrecognised_terminal_is_drawn_not_dropped() {
+        let profile = profile_of(vec![
+            ("1up", Some("Up")),
+            ("1sw9", Some("B")),
+            ("9zz", Some("C")),
+            ("", Some("D")),
+        ]);
+        let board = Board::encoder_from_profile(&profile);
+
+        assert_eq!(board.cells.len(), 4, "no terminal may be silently dropped");
+        let odd: Vec<&BoardCell> = board
+            .cells
+            .iter()
+            .filter(|c| c.kind == BoardCellKind::Button30)
+            .collect();
+        assert_eq!(odd.len(), 3, "unknown roles draw as buttons: {odd:?}");
+        assert!(
+            odd.iter().all(|c| !c.key.is_empty()),
+            "an unknown terminal still emits its key and stays bindable"
+        );
+        assert!(
+            odd.iter().any(|c| c.cap == "1sw9"),
+            "an unrecognised terminal is captioned with its own id: {odd:?}"
+        );
+        // The three unplaced controls are parked in arrival order, never
+        // stacked on each other.
+        let xs: Vec<i32> = odd.iter().map(|c| c.x as i32).collect();
+        let mut unique = xs.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), xs.len(), "unplaced controls overlap: {xs:?}");
+    }
+
+    /// **The picture reports the key; it does not decide it.**
+    ///
+    /// This crate does not link the key vocabulary at runtime — its Cargo.toml
+    /// keeps `ksx-core` a dev dependency and says why — so a key arrives from
+    /// the saved layout and leaves for `bind` unchanged. Re-deciding it here
+    /// would put a second opinion about what a key is into the one crate built
+    /// not to have one, and a stale Studio would then quietly drop keys a newer
+    /// backend can honour.
+    ///
+    /// Absence is the one thing it does read, because Unassigned is a real
+    /// state on a panel: that terminal is wired to nothing and cannot bind.
+    #[test]
+    fn a_key_is_carried_not_judged() {
+        let profile = profile_of(vec![
+            ("1sw1", Some("A")),
+            ("1sw2", None),
+            ("1sw3", Some("  B  ")),
+            ("1sw4", Some("SomethingOnlyANewerBackendKnows")),
+        ]);
+        let board = Board::encoder_from_profile(&profile);
+
+        assert_eq!(board.cells.len(), 4, "the control stays on the picture");
+        let keys: Vec<&str> = board.cells.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec!["A", "", "B", "SomethingOnlyANewerBackendKnows"],
+            "keys are trimmed and otherwise untouched"
+        );
+
+        // The test build CAN see the vocabulary, so it pins the real claim:
+        // what this build recognises survives the trip byte-for-byte.
+        for name in ["A", "B"] {
+            assert!(
+                ksx_core::Key::from_name(name).is_some(),
+                "{name:?} should be a key this build receives"
+            );
+        }
+    }
+
+    /// Two controls that share a cell are one control the user cannot press.
+    /// The shipped board has [`cells_in_a_row_never_overlap`]; a panel has to
+    /// hold across the whole plate, because its bands are laid out by hand.
+    #[test]
+    fn panel_controls_never_overlap() {
+        let profile = profile_of(ipac4_ids().iter().map(|id| (id.as_str(), None)).collect());
+        let board = Board::encoder_from_profile(&profile);
+
+        for (i, a) in board.cells.iter().enumerate() {
+            for b in board.cells.iter().skip(i + 1) {
+                let apart = a.x + a.w <= b.x + 0.01
+                    || b.x + b.w <= a.x + 0.01
+                    || a.y + a.h <= b.y + 0.01
+                    || b.y + b.h <= a.y + 0.01;
+                assert!(apart, "{} overlaps {}", a.id, b.id);
+            }
+        }
+        let (w, h) = board.bounds;
+        assert!(
+            w > 0.0 && h > 0.0 && h > w,
+            "a four-player plate is taller than it is wide: {w}x{h}"
+        );
+    }
+
+    /// The id scheme is the backend vocabulary, and this crate parses it.
+    /// If `panel_programming` ever renames a terminal, this is where it shows.
+    #[test]
+    fn every_shipped_terminal_id_parses() {
+        for id in ipac4_ids() {
+            let (player, role) = parse_terminal(&id);
+            assert!(player.is_some(), "{id} has no player");
+            assert_ne!(role, TerminalRole::Unknown, "{id} did not parse to a role");
+        }
+        assert_eq!(parse_terminal("1UP"), (Some(1), TerminalRole::Up));
+        assert_eq!(parse_terminal("3sw7"), (Some(3), TerminalRole::Switch(7)));
+        assert_eq!(parse_terminal("nonsense").1, TerminalRole::Unknown);
+    }
+
+    /// A board swap must not change what the backend sees. Same keys, two
+    /// pictures — this is the claim the whole plan rests on.
+    #[test]
+    fn two_boards_can_offer_the_same_keys() {
+        let qwerty = Board::shipped_qwerty();
+        let letter = |b: &Board| {
+            b.cells
+                .iter()
+                .find(|c| c.key == "A")
+                .map(|c| (c.key.clone(), c.cap.clone()))
+        };
+        let panel = Board::encoder_from_profile(&profile_of(vec![("1sw1", Some("A"))]));
+
+        let (qk, qc) = letter(&qwerty).expect("the shipped board has A");
+        let (pk, pc) = letter(&panel).expect("the panel emits A");
+        assert_eq!(qk, pk, "identity is the same on both pictures");
+        assert_ne!(qc, pc, "the caption is not: {qc:?} vs {pc:?}");
     }
 }

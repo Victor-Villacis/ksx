@@ -45,6 +45,7 @@ pub(super) const N_BLOCKING_OK: &str =
     "Capture behaviour updated. Nothing has been saved or started.";
 
 pub(super) const N_THEME_OK: &str = "Studio theme updated.";
+pub(super) const N_BOARD_OK: &str = "Board updated.";
 
 pub(super) const N_EDIT_OK: &str = "Draft updated. Nothing has been saved or started.";
 
@@ -88,6 +89,8 @@ pub(super) const N_LAYOUT_DELETE_ERROR: &str = "error: Controller layout could n
 
 pub(super) const N_THEME_UNKNOWN: &str = "error: That is not a theme this build ships. Pick one \
      from the list in this menu; nothing was changed.";
+pub(super) const N_BOARD_UNKNOWN: &str = "error: That is not a board this build can draw. Pick \
+     one from the list; nothing was changed.";
 
 /// Tick-box refusals for the two destructive configuration verbs. Server-side,
 /// because a browser dialog is an interaction nicety and not a boundary.
@@ -350,7 +353,7 @@ pub(super) const N_PLAY_OUTPUT_UNKNOWN: &str = "error: Play cannot start — ksx
      the controller outputs this setup needs, and it will not plug a pad it cannot vouch for. \
      The setup is still ready to save; reopen ksx and try again. Nothing was started.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 92] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 94] = [
     // Save and Play's own refusals. They are composed from a stable daemon
     // CODE rather than from the daemon's sentence, precisely so they can sit
     // on this list — a refusal that only exists at runtime cannot be
@@ -379,6 +382,7 @@ pub(super) const N_FLASH_ALLOWLIST: [&str; 92] = [
     N_LAYOUT_RENAME_OK,
     N_LAYOUT_DELETE_OK,
     N_THEME_OK,
+    N_BOARD_OK,
     N_GAME_ADD_ERROR,
     N_GAME_UPDATE_ERROR,
     N_GAME_DELETE_ERROR,
@@ -387,6 +391,7 @@ pub(super) const N_FLASH_ALLOWLIST: [&str; 92] = [
     N_GAME_DELETE_UNCONFIRMED,
     N_LAYOUT_DELETE_UNCONFIRMED,
     N_THEME_UNKNOWN,
+    N_BOARD_UNKNOWN,
     N_IMPORT_UNREADABLE,
     N_IMPORT_EMPTY,
     N_MOVE_AT_END,
@@ -509,6 +514,10 @@ pub(super) const N_READ_GAMES_ERROR: &str =
     "Saved games could not be read. Reopen ksx and try again.";
 pub(super) const N_READ_AUTOSTART_ERROR: &str =
     "What happens at sign-in could not be read. Reopen ksx and try again.";
+/// Rendered as customer copy under the board picker, so it says what could
+/// not be read rather than carrying a store diagnostic onto the page.
+pub(super) const N_READ_PANELS_ERROR: &str =
+    "Saved panel layouts could not be read, so only the keyboard is offered here.";
 
 /// The daemon-down banner, in the page's one status region.
 ///
@@ -572,6 +581,13 @@ pub(super) async fn collect_nocturne(
             Ok(view) => (Some(view), String::new()),
             Err(_) => (None, N_READ_AUTOSTART_ERROR.to_owned()),
         };
+        // The saved panel layouts. An arcade board is drawn from one of these
+        // and from nothing else, so a page that cannot read them must say so
+        // rather than render a picker with the arcade option quietly missing.
+        let (panels, panels_error) = match state.machine_cache.panel_profiles(&*state.machine) {
+            Ok(view) => (Some(view), String::new()),
+            Err(_) => (None, N_READ_PANELS_ERROR.to_owned()),
+        };
         // The undo chip: composed from the SERVER-held stash while its
         // window is open; an expired stash is dropped here so a late click
         // cannot find it either.
@@ -606,6 +622,8 @@ pub(super) async fn collect_nocturne(
             games_error,
             autostart_read,
             autostart_error,
+            panels,
+            panels_error,
             view: Default::default(),
         };
         offer_held_release(payload.derived())
@@ -630,6 +648,8 @@ pub(super) async fn collect_nocturne(
             games_error: N_READ_GAMES_ERROR.to_owned(),
             autostart_read: None,
             autostart_error: N_READ_AUTOSTART_ERROR.to_owned(),
+            panels: None,
+            panels_error: N_READ_PANELS_ERROR.to_owned(),
             selected: None,
             q: None,
             macro_selected: None,
@@ -1427,6 +1447,56 @@ pub(super) async fn nocturne_form_theme(
     .await
     .unwrap_or(false);
     nocturne_redirect(if ok { N_THEME_OK } else { N_EDIT_ERROR })
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturneBoardForm {
+    board: Option<String>,
+}
+
+/// POST /nocturne/board — which picture the keys are drawn on.
+///
+/// **This can never change what a controller does.** A board is the picture;
+/// a binding carries the canonical key name and nothing else, so the same key
+/// drives the same control whichever board is on screen. That is why there is
+/// no session guard here and no confirmation: the worst outcome of a misclick
+/// is a layout you did not want to look at.
+///
+/// The empty id is stored as absence, exactly as `system` is for the theme:
+/// "decide from the staged device" is a real answer, and keeping it as absence
+/// means there is no third state to hold in step with the device list.
+///
+/// An id this build cannot draw is REFUSED here rather than written, so the
+/// config cannot be wedged with a board nothing can render. A board that is
+/// merely unavailable right now — a panel layout deleted since it was chosen —
+/// is a different case and is handled at render time by falling back to the
+/// keyboard, because refusing to draw anything would be worse than drawing the
+/// one board that always works.
+pub(super) async fn nocturne_form_board(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneBoardForm>,
+) -> Response {
+    let Some(field) = form.board else {
+        return nocturne_redirect("the form did not say which board — pick one on the page");
+    };
+    let wanted = field.trim().to_owned();
+    let known = wanted.is_empty()
+        || wanted == crate::board::QWERTY_ID
+        || wanted
+            .strip_prefix("panel:")
+            .is_some_and(|id| !id.is_empty());
+    if !known {
+        return nocturne_redirect(N_BOARD_UNKNOWN);
+    }
+    let ok = tokio::task::spawn_blocking(move || {
+        state
+            .machine
+            .set_board(&ksx_api::BoardSpec { board: wanted })
+            .is_ok()
+    })
+    .await
+    .unwrap_or(false);
+    nocturne_redirect(if ok { N_BOARD_OK } else { N_EDIT_ERROR })
 }
 
 /// POST /nocturne/blocking (and /start/blocking) — the capture answer,

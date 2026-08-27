@@ -1407,6 +1407,7 @@ fn the_config_surface_ledger_names_every_field_that_exists() {
         mouse_move_deadzone: 7,
         starting_user_index: 2,
         theme: Some("light".to_owned()),
+        board: None,
     };
     let slot = ksx_config::SlotEntry {
         number: 3,

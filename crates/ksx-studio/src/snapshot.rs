@@ -1543,6 +1543,15 @@ pub struct NocturnePayload {
     pub setup: Option<ksx_api::SetupView>,
     #[serde(default)]
     pub setup_error: String,
+    /// The saved panel layouts, from `MachineSource::panel_hardware_profiles`.
+    /// An arcade board is drawn from one of these and from nothing else — ksx
+    /// cannot guess what a panel emits. `None` plus the sentence below when the
+    /// read refused, kept apart for SURFACES.md §1b's reason: "no layouts saved"
+    /// and "the store would not answer" are opposite advice.
+    #[serde(default)]
+    pub panels: Option<ksx_api::PanelHardwareProfilesView>,
+    #[serde(default)]
+    pub panels_error: String,
     #[serde(default)]
     pub games: Option<ksx_api::ProfilesView>,
     #[serde(default)]
@@ -2213,6 +2222,12 @@ pub struct NocturneDerived {
     /// the one shared composer so the two pages cannot disagree. Re-dressed as
     /// choice rows because the blocking picker on this page is the same shape.
     pub theme_rows: Vec<NocturneChoiceRow>,
+    /// The board roster — which picture the keys are drawn on. Same shape and
+    /// same no-JS form as the theme rows above, because it is the same kind of
+    /// question: a display choice that changes nothing about what is bound.
+    pub board_rows: Vec<NocturneChoiceRow>,
+    /// One sentence under the board picker.
+    pub board_line: String,
 }
 
 /// Which of the right pane's six controller clusters a mapper function
@@ -3676,7 +3691,26 @@ impl NocturneDerived {
         // cells, the tray's "off this board" test, and the available-key
         // rosters below — three readers that used to walk `ROWS`
         // separately and could disagree about what "on the board" meant.
-        let board = crate::board::Board::shipped_qwerty();
+        // The saved panel layouts. An empty slice covers both "none saved" and
+        // "the store refused" for DRAWING purposes — the difference between
+        // those two is advice, and it is carried by `panels_error` into the
+        // picker's own sentence rather than being guessed at here.
+        let panel_profiles: &[ksx_api::PanelHardwareProfile] = p
+            .panels
+            .as_ref()
+            .map(|v| v.profiles.as_slice())
+            .unwrap_or(&[]);
+        // WHICH board, resolved from the saved choice and what is staged.
+        // Empty means follow the hardware; an id this build cannot draw falls
+        // back to the keyboard rather than leaving the page with no picture.
+        let board = crate::board::Board::resolve(
+            p.setup
+                .as_ref()
+                .map(|s| s.board.as_str())
+                .unwrap_or_default(),
+            panel_profiles,
+            encoder_staged,
+        );
         let dress = |cell: &&crate::board::BoardCell| {
             let mut cls = String::from("n-key");
             if !cell.unit.is_empty() {
@@ -4313,6 +4347,44 @@ impl NocturneDerived {
         };
 
         Self {
+            // The board picker. Marked the way the theme picker is — the
+            // chosen row's button carries `n-radio on`, every other row plain
+            // `n-radio` — and deliberately NOT with a class that any stylesheet
+            // rule can hide, which is how three of four theme rows disappeared.
+            //
+            // The mark follows what is DRAWN, not what is stored, so a config
+            // naming a layout since deleted marks the keyboard it actually fell
+            // back to instead of marking nothing at all.
+            board_rows: crate::board::Board::roster(panel_profiles)
+                .into_iter()
+                .map(|choice| NocturneChoiceRow {
+                    cls: if choice.id == board.id {
+                        "n-radio on".to_owned()
+                    } else {
+                        "n-radio".to_owned()
+                    },
+                    name: choice.id,
+                    title: choice.name,
+                    detail: choice.detail,
+                })
+                .collect(),
+            // The sentence under the picker, and the only place the three
+            // states are told apart. They are genuinely different advice:
+            // a refused read means try again, no saved layout means go and
+            // make one, and neither is "you have no arcade board".
+            board_line: if !p.panels_error.is_empty() {
+                p.panels_error.clone()
+            } else if encoder_staged && panel_profiles.is_empty() {
+                "Your arcade panel can be a board here too — but ksx cannot \
+                 guess what it emits, because an encoder only ever tells the \
+                 host that a key arrived. Save a panel layout and it joins \
+                 this list."
+                    .to_owned()
+            } else {
+                "The picture only. Which key drives which control is the same \
+                 whichever board is on screen."
+                    .to_owned()
+            },
             theme_rows: theme_rows(&SetupSnapshot {
                 available: p.setup.is_some(),
                 source: String::new(),

@@ -1065,6 +1065,43 @@ impl ksx_api::MachineSource for LocalMachine {
         })
     }
 
+    fn set_board(&self, spec: &ksx_api::BoardSpec) -> Result<ksx_api::BoardView, Refusal> {
+        let wanted = spec.board.trim();
+        // Looser than the theme's css-ident rule on purpose: a board id may
+        // name a saved panel layout (`panel:<profile_id>`), and file ids are
+        // the backend's to spell. What is refused is anything that could not
+        // be an id at all — a path separator, whitespace, or a value long
+        // enough to be a payload rather than a name.
+        let ident_ok = wanted.len() <= 128
+            && wanted
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.'));
+        if !ident_ok {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::BAD_REQUEST,
+                format!("'{}' is not a board name ksx could store", spec.board),
+                "pick one of the boards on the page",
+            ));
+        }
+
+        let store = crate::device_edit::store().map_err(config_refusal)?;
+        let mut config = store.load_config().map_err(config_refusal)?.value;
+        config.settings.board = if wanted.is_empty() {
+            None
+        } else {
+            Some(wanted.to_owned())
+        };
+        let path = store.root().config_path();
+        let backup = store.backup(&path).map_err(config_refusal)?;
+        store.save_config(&config).map_err(config_refusal)?;
+
+        let on_disk = store.load_config().map_err(config_refusal)?.value;
+        Ok(ksx_api::BoardView {
+            board: on_disk.settings.board.unwrap_or_default(),
+            backup: backup.map(|path| path.display().to_string()),
+        })
+    }
+
     /// What ksx left behind, read and composed. See `WinusbResidueView`.
     #[cfg(windows)]
     fn winusb_residue(&self) -> Result<ksx_api::WinusbResidueView, Refusal> {

@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "build_hash": "8fa9944f8782ce3b41f8ade911759fc278e6e20b3ce33eefba56354ddb1a59a3",
+  "build_hash": "2484e9fd2bb66804cd5564dedf34fc04fbdba40db8dadb50a196629c8ce9484b",
   "assets": {
     "check.ir": "check.f5325a7a.ir",
     "check.js": "check.32ed38ef.js",
     "devices.ir": "devices.04fde940.ir",
     "devices.js": "devices.6a10a654.js",
-    "nocturne.ir": "nocturne.d6b05dd6.ir",
-    "nocturne.js": "nocturne.7988403d.js",
+    "nocturne.ir": "nocturne.42234aeb.ir",
+    "nocturne.js": "nocturne.b23e97f5.js",
     "pads.ir": "pads.cf21377b.ir",
     "pads.js": "pads.303eac94.js",
     "studio.css": "studio.d4d7a5ee.css"
@@ -15,15 +15,15 @@
   "routes": {
     "/nocturne": {
       "js": [
-        "nocturne.7988403d.js"
+        "nocturne.b23e97f5.js"
       ],
       "css": [
         "studio.d4d7a5ee.css"
       ],
       "fonts": [],
-      "total_size_br": 250186,
+      "total_size_br": 250083,
       "budget_warn_threshold": 282500,
-      "ir": "nocturne.d6b05dd6.ir"
+      "ir": "nocturne.42234aeb.ir"
     },
     "/check": {
       "js": [

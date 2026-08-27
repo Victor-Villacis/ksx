@@ -162,6 +162,16 @@ struct MachineCache {
             Result<ksx_api::AutostartView, ksx_api::Refusal>,
         )>,
     >,
+    /// The saved panel layouts, which are what an arcade board is DRAWN from
+    /// (`board::Board::encoder_from_profile`). Cached beside the others
+    /// because it is a disk read behind a cross-process lease, and the page
+    /// wants it on every render to know which boards it may offer.
+    panels: std::sync::Mutex<
+        Option<(
+            std::time::Instant,
+            Result<ksx_api::PanelHardwareProfilesView, ksx_api::Refusal>,
+        )>,
+    >,
 }
 
 /// Long enough to skip most polls, short enough that an EXTERNAL change
@@ -176,6 +186,7 @@ impl MachineCache {
             setup: std::sync::Mutex::new(None),
             games: std::sync::Mutex::new(None),
             auto: std::sync::Mutex::new(None),
+            panels: std::sync::Mutex::new(None),
         }
     }
 
@@ -184,6 +195,7 @@ impl MachineCache {
         *self.setup.lock().unwrap() = None;
         *self.games.lock().unwrap() = None;
         *self.auto.lock().unwrap() = None;
+        *self.panels.lock().unwrap() = None;
     }
 
     fn fetch<T: Clone>(
@@ -227,6 +239,13 @@ impl MachineCache {
         machine: &dyn ksx_api::MachineSource,
     ) -> Result<ksx_api::AutostartView, ksx_api::Refusal> {
         Self::fetch(&self.auto, || machine.autostart())
+    }
+
+    fn panel_profiles(
+        &self,
+        machine: &dyn ksx_api::MachineSource,
+    ) -> Result<ksx_api::PanelHardwareProfilesView, ksx_api::Refusal> {
+        Self::fetch(&self.panels, || machine.panel_hardware_profiles())
     }
 }
 
@@ -328,6 +347,7 @@ pub fn serve(
             )
             .route("/nocturne/blocking", post(nocturne_form_blocking))
             .route("/nocturne/theme", post(nocturne_form_theme))
+            .route("/nocturne/board", post(nocturne_form_board))
             .route("/nocturne/export.json", get(nocturne_export))
             // 8 MB, restored: this limit was a per-route layer on
             // `/setup/import` and did NOT travel with the verb when it moved

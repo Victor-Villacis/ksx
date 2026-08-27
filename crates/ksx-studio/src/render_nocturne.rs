@@ -32,6 +32,7 @@ const LIST_SLOT_OTHER: &str = "list:nDevOther:array";
 const LIST_SLOT_JOURNEY: &str = "list:nJourney:array";
 const LIST_SLOT_MODES: &str = "list:nModeRows:array";
 const LIST_SLOT_THEMES: &str = "list:nThemeRows:array";
+const LIST_SLOT_BOARDS: &str = "list:nBoardRows:array";
 /// The SECOND `createList` over the same binding. Forma names a reused list
 /// binding with an occurrence suffix (docs/FORMA-DOGFOOD.md #12), so the edit
 /// disclosures under the saved-games menu are a distinct slot that must be
@@ -108,6 +109,7 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nSaveText": payload.view.save_text,
         "nEscapeLine": payload.view.escape_line,
         "nJourneyLine": payload.view.journey_line,
+        "nBoardLine": payload.view.board_line,
         "nPlayCls": payload.view.play_cls,
         "nStopCls": payload.view.stop_cls,
         "nApplyCls": payload.view.apply_cls,
@@ -508,7 +510,7 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 46] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 47] {
     let view = &payload.view;
     [
         (
@@ -692,6 +694,10 @@ fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 46] {
             SlotValue::array(view.theme_rows.iter().map(mode_row).collect()),
         ),
         (
+            LIST_SLOT_BOARDS,
+            SlotValue::array(view.board_rows.iter().map(mode_row).collect()),
+        ),
+        (
             LIST_SLOT_GAMES_EDIT,
             SlotValue::array(view.game_rows.iter().map(game_row).collect()),
         ),
@@ -819,6 +825,11 @@ mod tests {
                 active: None,
             },
             unavailable: String::new(),
+            // No saved panel layouts. The fixture stages an I-PAC, so this is
+            // exactly the state that makes the picker say "save a layout and
+            // it joins this list" rather than offering an empty plate.
+            panels: None,
+            panels_error: String::new(),
             setup: Some(ksx_api::SetupView {
                 config_exists: true,
                 slots: vec![ksx_api::SetupSlotRow {
@@ -1002,8 +1013,9 @@ mod tests {
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 46] = [
+        const SERVED_LIST_PREFIXES: [&str; 47] = [
             "list:nKeyRows:",
+            "list:nBoardRows:",
             "list:nAvailMain:",
             "list:nAvailNav:",
             "list:nAvailNum:",
@@ -1552,6 +1564,73 @@ mod tests {
         );
     }
 
+    /// **The board picker paints every board, and marks exactly the one drawn.**
+    ///
+    /// The same gate as the theme picker above, written at the same time as the
+    /// picker rather than after a user reported that a control did nothing.
+    /// Two failures are pinned here because both have already happened on this
+    /// page:
+    ///
+    /// - A row whose class the stylesheet does not lay out is a verb that
+    ///   cannot be reached (`.pill-none { display: none }` hid three of four
+    ///   theme rows). So every row must carry `n-radio`, the one class
+    ///   `.n-modeform button` is laid out by.
+    /// - A picker that marks NOTHING reads as broken just as loudly. That takes
+    ///   only two spellings of one id: `roster()` said `qwerty` while
+    ///   `shipped_qwerty()` said `qwerty-104`, so the row you were on never lit
+    ///   up. `QWERTY_ID` is now the single spelling, and this is what would
+    ///   catch it drifting apart again.
+    #[test]
+    fn nocturne_paints_every_board_row_and_marks_the_one_it_drew() {
+        let out = render_nocturne(&page(), &keyboard_payload(), None);
+
+        let forms: Vec<&str> = out
+            .html
+            .match_indices(r#"action="/nocturne/board""#)
+            .map(|(at, _)| {
+                let rest = &out.html[at..];
+                let end = rest.find("</form>").expect("a board form to close");
+                &rest[..end]
+            })
+            .collect();
+
+        // The fixture saves no panel layouts, so the roster is the keyboard
+        // alone — and it must still be RENDERED as a row rather than collapsed
+        // into nothing because there is only one of it.
+        assert_eq!(
+            forms.len(),
+            1,
+            "the board picker served {} forms: {:?}",
+            forms.len(),
+            forms
+        );
+
+        for form in &forms {
+            assert!(
+                form.contains("n-radio"),
+                "a board row carries a class the sheet does not lay out: {form}"
+            );
+            assert!(
+                !form.contains("pill-none"),
+                "the class that hid three of four theme rows is back: {form}"
+            );
+        }
+
+        let marked = forms.iter().filter(|f| f.contains("n-radio on")).count();
+        assert_eq!(
+            marked, 1,
+            "exactly one board row must be marked as the one drawn, not {marked}: {forms:?}"
+        );
+
+        // And the marked row must be the board actually on screen — the two
+        // spellings bug was invisible until these were compared.
+        assert!(
+            forms
+                .iter()
+                .any(|f| f.contains("n-radio on") && f.contains(crate::board::QWERTY_ID)),
+            "the marked row is not the board that was drawn: {forms:?}"
+        );
+    }
     /// **The theme picker offers every theme, and every row is PAINTED.**
     ///
     /// The gate that was missing. `http.rs`'s

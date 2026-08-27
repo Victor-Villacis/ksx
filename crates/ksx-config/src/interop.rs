@@ -436,6 +436,7 @@ mod tests {
                 mouse_move_deadzone: 11,
                 starting_user_index: 3,
                 theme: Some("light".to_owned()),
+                board: None,
             },
             devices: vec![
                 DeviceEntry {

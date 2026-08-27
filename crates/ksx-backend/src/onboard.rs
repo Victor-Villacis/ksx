@@ -248,6 +248,7 @@ pub fn state() -> Result<SetupView, Refusal> {
         blocking: config.settings.block_keyboards.as_str().to_owned(),
         blocking_options: ksx_api::BlockingOption::roster(),
         theme: config.settings.theme.clone().unwrap_or_default(),
+        board: config.settings.board.clone().unwrap_or_default(),
         socd_options: ksx_api::SocdOption::roster(),
         persona_options: ksx_api::PersonaOption::roster(),
         config_root: root.dir().display().to_string(),

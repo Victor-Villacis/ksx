@@ -236,7 +236,7 @@ impl Board {
         }
 
         Self {
-            id: "qwerty-104".to_owned(),
+            id: QWERTY_ID.to_owned(),
             name: "Standard keyboard".to_owned(),
             origin: BoardOrigin::Shipped,
             bounds: (widest, ROWS.len() as f32 * row_step - GAP),
@@ -477,6 +477,110 @@ impl Board {
     }
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// The roster
+// ───────────────────────────────────────────────────────────────────────────
+
+/// The shipped board id, and the ONE spelling of it.
+///
+/// [`Board::shipped_qwerty`] and [`Board::roster`] must agree on this exactly:
+/// the picker marks a row by comparing its id against the drawn board, so two
+/// spellings would leave the keyboard row never lighting up as chosen — the
+/// same "the control does nothing" shape as the theme picker's hidden rows,
+/// and it is what `the_roster_offers_the_keyboard_and_every_saved_layout`
+/// caught. Stored in `[settings] board`; empty means "decide
+/// from the staged device", so this is written only when someone picks it.
+pub(crate) const QWERTY_ID: &str = "qwerty-104";
+
+/// One board the user may pick, as the picker says it.
+///
+/// Every row here is one you can actually pick. A board that CANNOT be drawn is
+/// not rendered as a dead row: a submit button that refuses to do anything is
+/// the greyed-out-step antipattern, and this one would post the empty id, which
+/// already means something else. What is missing is said in the sentence under
+/// the picker instead — `NocturneDerived::board_line`, which can tell "none
+/// saved yet" apart from "the store would not answer".
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct BoardChoice {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    /// The whole sentence: what this board is.
+    pub(crate) detail: String,
+}
+
+impl Board {
+    /// Every board this machine could draw right now, in picker order.
+    ///
+    /// The shipped keyboard is always first — it is the one picture that needs
+    /// nothing but the build. Saved panel layouts follow, in store order.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn roster(profiles: &[ksx_api::PanelHardwareProfile]) -> Vec<BoardChoice> {
+        let mut rows = vec![BoardChoice {
+            id: QWERTY_ID.to_owned(),
+            name: "Keyboard".to_owned(),
+            detail: "The usual key layout. Every key ksx can bind, where you \
+                     expect it."
+                .to_owned(),
+        }];
+
+        rows.extend(profiles.iter().map(|profile| BoardChoice {
+            id: format!("panel:{}", profile.profile_id),
+            name: if profile.name.trim().is_empty() {
+                "Arcade panel".to_owned()
+            } else {
+                profile.name.clone()
+            },
+            detail: format!(
+                "Your saved panel layout — {} controls, drawn as a cabinet.",
+                profile.terminals.len()
+            ),
+        }));
+
+        rows
+    }
+
+    /// The board to draw, given what was chosen and what is staged.
+    ///
+    /// An empty choice is not indecision — it is "follow the hardware", the
+    /// same absence-means-follow rule the theme uses for System. A recognised
+    /// encoder with a saved layout gets its panel; anything else gets the
+    /// keyboard.
+    ///
+    /// **An id this build cannot draw falls back to the keyboard rather than
+    /// rendering nothing.** A config written by a newer Studio, or naming a
+    /// panel layout since deleted, must not leave the page with no picture on
+    /// it — the picker still shows what the config says, so the choice is
+    /// visible even when it cannot be honoured.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn resolve(
+        chosen: &str,
+        profiles: &[ksx_api::PanelHardwareProfile],
+        encoder_staged: bool,
+    ) -> Self {
+        let panel_for = |id: &str| {
+            profiles
+                .iter()
+                .find(|p| p.profile_id == id)
+                .map(Self::encoder_from_profile)
+        };
+
+        match chosen.trim() {
+            "" => {
+                if encoder_staged {
+                    if let Some(first) = profiles.first() {
+                        return Self::encoder_from_profile(first);
+                    }
+                }
+                Self::shipped_qwerty()
+            }
+            QWERTY_ID => Self::shipped_qwerty(),
+            other => other
+                .strip_prefix("panel:")
+                .and_then(panel_for)
+                .unwrap_or_else(Self::shipped_qwerty),
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -875,5 +979,129 @@ mod tests {
         let (pk, pc) = letter(&panel).expect("the panel emits A");
         assert_eq!(qk, pk, "identity is the same on both pictures");
         assert_ne!(qc, pc, "the caption is not: {qc:?} vs {pc:?}");
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // The roster and what gets drawn
+    // ───────────────────────────────────────────────────────────────────
+
+    fn saved(id: &str, name: &str) -> ksx_api::PanelHardwareProfile {
+        let mut p = profile_of(
+            ipac4_ids()
+                .iter()
+                .map(|i| (i.as_str(), Some("A")))
+                .collect(),
+        );
+        p.profile_id = id.to_owned();
+        p.name = name.to_owned();
+        p
+    }
+
+    /// **A recognised encoder opens on its own panel.** That is the whole point
+    /// of recognising it — somebody who plugged in a cabinet should see a
+    /// cabinet, not have to go and find it.
+    #[test]
+    fn an_encoder_with_a_saved_layout_opens_on_it() {
+        let profiles = vec![saved("cab-01", "Upright")];
+        let board = Board::resolve("", &profiles, true);
+        assert_eq!(board.id, "panel:cab-01");
+        assert_eq!(board.origin, BoardOrigin::Recognized);
+    }
+
+    /// **And a keyboard never does.** A keyboard stays a keyboard: there is
+    /// nothing about plugging one in that should turn the picture into an
+    /// arcade panel, which was the backwards half of the original design.
+    #[test]
+    fn a_keyboard_never_opens_on_a_panel() {
+        let profiles = vec![saved("cab-01", "Upright")];
+        let board = Board::resolve("", &profiles, false);
+        assert_eq!(board.id, Board::shipped_qwerty().id);
+    }
+
+    /// An encoder with nothing saved gets the keyboard, because ksx cannot draw
+    /// a panel it has never been told about. The picker says why in its own
+    /// sentence rather than showing an empty plate.
+    #[test]
+    fn an_encoder_without_a_layout_gets_the_keyboard() {
+        let board = Board::resolve("", &[], true);
+        assert_eq!(board.id, Board::shipped_qwerty().id);
+        assert!(!board.cells.is_empty(), "the fallback must draw something");
+    }
+
+    /// **A choice this build cannot honour falls back rather than blanking.**
+    ///
+    /// A config written by a newer Studio, or naming a layout deleted since it
+    /// was chosen, must not leave the page with no picture on it. The keyboard
+    /// is the one board that always works.
+    #[test]
+    fn a_board_that_no_longer_exists_falls_back_to_the_keyboard() {
+        let profiles = vec![saved("cab-01", "Upright")];
+        for choice in ["panel:deleted", "panel:", "something-newer"] {
+            let board = Board::resolve(choice, &profiles, true);
+            assert_eq!(
+                board.id,
+                Board::shipped_qwerty().id,
+                "{choice:?} should have fallen back to the keyboard"
+            );
+        }
+
+        // Whitespace is not a broken id — it trims to empty, which means
+        // "follow the hardware" and is a real answer, not a fallback.
+        assert_eq!(Board::resolve("  ", &profiles, true).id, "panel:cab-01");
+    }
+
+    /// Either board can be asked for outright, whatever is plugged in. Nothing
+    /// is forced and nothing is hidden.
+    #[test]
+    fn every_board_can_be_picked_against_any_hardware() {
+        let profiles = vec![saved("cab-01", "Upright")];
+        for staged in [true, false] {
+            assert_eq!(
+                Board::resolve(QWERTY_ID, &profiles, staged).id,
+                Board::shipped_qwerty().id
+            );
+            assert_eq!(
+                Board::resolve("panel:cab-01", &profiles, staged).id,
+                "panel:cab-01"
+            );
+        }
+    }
+
+    /// The roster offers the keyboard plus every saved layout, in that order,
+    /// with ids the picker can post back.
+    #[test]
+    fn the_roster_offers_the_keyboard_and_every_saved_layout() {
+        let profiles = vec![saved("cab-01", "Upright"), saved("cab-02", "Cocktail")];
+        let rows = Board::roster(&profiles);
+
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec![QWERTY_ID, "panel:cab-01", "panel:cab-02"]);
+        assert_eq!(rows[1].name, "Upright");
+        assert!(
+            rows.iter()
+                .all(|r| !r.id.is_empty() && !r.detail.is_empty()),
+            "every row must be postable and must say what it is"
+        );
+        // Every id the roster offers must actually resolve to that board —
+        // a picker row that cannot be honoured is a control that does nothing.
+        for row in &rows {
+            assert_eq!(
+                Board::resolve(&row.id, &profiles, true).id,
+                row.id,
+                "the roster offered {:?} but resolve would not draw it",
+                row.id
+            );
+        }
+    }
+
+    /// With nothing saved there is exactly one board, and it is the keyboard.
+    /// The arcade case is a SENTENCE, never a dead row: a submit button that
+    /// refuses to do anything is the greyed-out-step antipattern, and this one
+    /// would post the empty id, which already means something else.
+    #[test]
+    fn an_unavailable_board_is_not_offered_as_a_dead_row() {
+        let rows = Board::roster(&[]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, QWERTY_ID);
     }
 }

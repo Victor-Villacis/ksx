@@ -76,6 +76,23 @@ pub struct Settings {
     /// never chose a theme stay byte-identical across load/save.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// **Which board the Studio draws its keys on**, by id. `None` decides
+    /// from whatever device is staged.
+    ///
+    /// A board is the PICTURE, never the mapping. `key -> control` is
+    /// identical whichever one is on screen, because the only field a binding
+    /// ever carries is the canonical key name — lay the keyboard out in
+    /// alphabetical order and nothing downstream can tell.
+    ///
+    /// Absence is the default for the same reason it is for [`Self::theme`]:
+    /// "follow what is staged" is a real answer, and writing it as a named id
+    /// would be a second state to keep in step with the device list. The
+    /// Studio owns the roster and sanitizes at render time, so a config
+    /// written by a NEWER Studio still loads here and an id this build cannot
+    /// draw falls back rather than failing to parse. Skipped when `None` so
+    /// configs that never chose one stay byte-identical across load/save.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub board: Option<String>,
 }
 
 impl Default for Settings {
@@ -86,6 +103,7 @@ impl Default for Settings {
             mouse_move_deadzone: 5,
             starting_user_index: 1,
             theme: None,
+            board: None,
         }
     }
 }

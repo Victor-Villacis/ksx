@@ -373,6 +373,8 @@ export interface NocturneView {
   other_fold_cls: string;
   mode_rows: NocturneChoiceRowView[];
   theme_rows: NocturneChoiceRowView[];
+  board_rows: NocturneChoiceRowView[];
+  board_line: string;
   cap_line: string;
   capd_cls: string;
   cap_sw_cls: string;
@@ -565,6 +567,8 @@ const [nOtherHead, setNOtherHead] = createSignal("");
 const [nOtherFoldCls, setNOtherFoldCls] = createSignal("n-devfold none");
 const [nModeRows, setNModeRows] = createSignal<NocturneChoiceRowView[]>([]);
 const [nThemeRows, setNThemeRows] = createSignal<NocturneChoiceRowView[]>([]);
+const [nBoardRows, setNBoardRows] = createSignal<NocturneChoiceRowView[]>([]);
+const [nBoardLine, setNBoardLine] = createSignal("");
 const [nKbTitle, setNKbTitle] = createSignal("");
 const [nCapLine, setNCapLine] = createSignal("");
 const [nCapdCls, setNCapdCls] = createSignal("n-capd none");
@@ -1045,6 +1049,8 @@ export function applyNocturne(p: NocturnePayload): void {
   setNModeNote(v.mode_note);
   setNModeRows(v.mode_rows);
   setNThemeRows(v.theme_rows ?? []);
+  setNBoardRows(v.board_rows ?? []);
+  setNBoardLine(v.board_line ?? "");
   setNCapLine(v.cap_line);
   setNCapdCls(v.capd_cls);
   setNCapSwCls(v.cap_sw_cls);
@@ -10463,6 +10469,46 @@ export function NocturneIsland() {
               "form",
               { class: "n-modeform", method: "post", action: "/nocturne/blocking" },
               h("input", { type: "hidden", name: "blocking", value: r.name }),
+              h(
+                "button",
+                { type: "submit", class: r.cls },
+                h("span", { class: "n-radio-dot" }),
+                h(
+                  "span",
+                  { class: "n-radio-txt" },
+                  h("span", { class: "n-radio-title" }, r.title),
+                  h("span", { class: "n-radio-detail" }, r.detail),
+                ),
+              ),
+            ),
+        ),
+        // ââ The board picker âââââââââââââââââââââââââââââââââââââââââââ
+        //
+        // WHICH PICTURE the keys are drawn on. It is a display choice and
+        // nothing more: a binding carries the canonical key name, so the same
+        // key drives the same control whichever board is on screen. That is
+        // why it sits beside the theme rather than anywhere near mapping.
+        //
+        // Server-marked, like the theme rows â `r.cls` is the whole class of
+        // the row's own submit button, and the chosen row arrives as
+        // `n-radio on`. Nothing is re-derived here, and no row is hidden: a
+        // board that cannot be drawn arrives as `n-radio off` carrying the
+        // sentence that says why. Hiding it is what made the theme picker look
+        // like a control that did nothing.
+        h(
+          "div",
+          { class: "n-kick-row" },
+          h("span", { class: "n-kick" }, "How the keys are drawn"),
+        ),
+        h("p", { class: "n-devnote" }, () => nBoardLine()),
+        createList(
+          () => nBoardRows(),
+          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls,
+          (r) =>
+            h(
+              "form",
+              { class: "n-modeform", method: "post", action: "/nocturne/board" },
+              h("input", { type: "hidden", name: "board", value: r.name }),
               h(
                 "button",
                 { type: "submit", class: r.cls },

@@ -394,6 +394,23 @@ pub trait MachineSource: Send + Sync {
         ))
     }
 
+    /// **Remember which board the Studio draws its keys on.**
+    ///
+    /// The same whole-config write discipline as [`Self::set_theme`], and the
+    /// same absence rule: empty stores as no value at all, meaning "decide from
+    /// the staged device".
+    ///
+    /// This can never change what a controller does. A board is the picture;
+    /// the binding carries the canonical key name and nothing else. That is
+    /// also why there is no session caveat here — a running session keeps
+    /// binding exactly the keys it already bound.
+    fn set_board(&self, _spec: &BoardSpec) -> Result<BoardView, Refusal> {
+        Err(Refusal::not_here(
+            "remembering a board choice",
+            "pick it on the Studio page",
+        ))
+    }
+
     /// **What ksx left behind**, compared against what Windows reports.
     ///
     /// Read-only: reads the receipt store, the device tree and the driver
@@ -2165,6 +2182,37 @@ pub struct ThemeView {
     pub backup: Option<String>,
 }
 
+/// Which board the Studio draws its keys on.
+///
+/// **A board is the picture, never the mapping.** `key -> control` is identical
+/// whichever board is on screen, because a binding carries only the canonical
+/// key name — so changing this can never change what any controller does. It is
+/// stored beside the theme, and for the same reasons: read per page render, and
+/// empty means "decide from the staged device" rather than a named default that
+/// would have to be kept in step with the device list.
+///
+/// The Studio owns the roster of valid ids. This crate carries the string.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardSpec {
+    /// A board id (`qwerty`, `panel:<profile>`, ...) or empty = follow the
+    /// staged device.
+    pub board: String,
+}
+
+/// What changing the board did.
+///
+/// No `session_running` here, for [`ThemeView`]'s reason: the board is read per
+/// page render and never by the daemon, so "saved" and "in effect" are the same
+/// claim. Nothing about a running session depends on it — the keys it binds are
+/// the keys it bound before.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardView {
+    /// The value now on disk (empty = follow the staged device).
+    pub board: String,
+    /// Where the previous config went.
+    pub backup: Option<String>,
+}
+
 /// **What ksx left behind on this machine, and whether it matters.**
 ///
 /// Every WinUSB preparation writes a receipt to `%ProgramData%\KSX\WinUSB`.
@@ -3406,6 +3454,14 @@ pub struct SetupView {
     /// silently pretending it was never made.
     #[serde(default)]
     pub theme: String,
+    /// **Which board id is currently on disk**, or empty to decide from the
+    /// staged device.
+    ///
+    /// Reported the way [`Self::theme`] is, and for the same reason: this view
+    /// says what the config SAYS, so a surface can show a choice this build
+    /// cannot draw instead of silently pretending it was never made.
+    #[serde(default)]
+    pub board: String,
     /// What opposite directions can be made to do, per slot. Served for the
     /// same reason the blocking answers are: the wording is the domain's.
     #[serde(default)]
@@ -3476,6 +3532,7 @@ impl Default for SetupView {
             blocking: String::new(),
             blocking_options: crate::stage::BlockingOption::roster(),
             theme: String::new(),
+            board: String::new(),
             socd_options: crate::stage::SocdOption::roster(),
             persona_options: default_persona_options(),
             config_root: String::new(),

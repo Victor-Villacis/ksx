@@ -720,6 +720,7 @@ mod tests {
                 mouse_move_deadzone: 7,
                 starting_user_index: 2,
                 theme: None,
+                board: None,
             },
             devices: vec![DeviceEntry {
                 id: r"HID\VID_D209&PID_0430&MI_00\8&A1B2C3D4&0&0000"

@@ -480,7 +480,19 @@ impl RawPanelImage {
     }
 
     fn with_replaced_bytes(&self, bytes: Vec<u8>) -> Self {
-        debug_assert_eq!(bytes.len(), self.bytes.len());
+        // A HARD assert, not `debug_assert_eq!`. Every read in
+        // `decode_ipac4_terminals` and `plan_between` is an unchecked index
+        // up to offset 195, safe only because `RawPanelImage::new` refuses
+        // any length but 256 or 260. This constructor bypasses `new`, and a
+        // `debug_assert` compiles out of the binary ksx ships — leaving the
+        // one path that can build a structurally invalid image, whose
+        // failure mode is an out-of-bounds panic inside a parser handling
+        // device bytes. It costs nothing on a path that already hashes 256.
+        assert_eq!(
+            bytes.len(),
+            self.bytes.len(),
+            "a replaced chart image must keep its admitted length"
+        );
         let sha256 = sha256_hex(&bytes);
         Self { bytes, sha256 }
     }

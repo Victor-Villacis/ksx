@@ -108,6 +108,138 @@ fn cli_verbs() -> &'static BTreeSet<String> {
     &VERBS
 }
 
+/// **A refusal may only name a verb that exists.**
+///
+/// `MachineSource`'s defaults are the sentence a surface says when it cannot do
+/// something, and every one of them ends with a way forward. For months several
+/// of those ways forward were `ksx panel status`, `ksx panel chart`,
+/// `ksx panel program` and `ksx panel restore` — commands deleted by `3901990`
+/// along with the encoder chart surface. A user who hit the refusal was told to
+/// run something that answers `error: unrecognized subcommand`.
+///
+/// `ksx-api`'s own test could not catch it. That crate cannot see the clap tree,
+/// so all it could check was that *a string* was present — and by asserting the
+/// exact dead strings it ENFORCED them. This is the same class the parity suite
+/// already exists for: the evidence lives in the built binary, so the guard has
+/// to live where the built binary is.
+///
+/// Only ``ksx …`` in backticks counts, and only outside a doc comment. A
+/// remedy is free to name a surface ("open the ksx Studio"), a concept
+/// ("saved layout management"), or a fact ("ksx does not write to encoder
+/// hardware") — what it may not do is spell a command that does not exist.
+///
+/// Prose is skipped deliberately. A doc comment names the verb a trait method
+/// CORRESPONDS to, which is a statement about the domain and stays true while
+/// a surface is missing; a remedy is an instruction to a user standing in
+/// front of a refusal, and that has to work today.
+#[test]
+fn every_machine_remedy_names_a_verb_that_exists() {
+    const SRC: &str = include_str!("../../ksx-api/src/machine.rs");
+
+    // Verbs this build genuinely lacks because a Cargo feature is off. The
+    // parity binary is built with default features, so `Studio` — which is
+    // `#[cfg(feature = "studio")]` — is absent from its `--help` while being
+    // perfectly real in a shipped build. Naming it here is cheaper and far
+    // more honest than teaching the walk to build every feature combination.
+    const FEATURE_GATED: &[&str] = &["studio"];
+
+    let verbs = cli_verbs();
+    let mut missing: Vec<String> = Vec::new();
+
+    // Every ``ksx …`` token in the file, taken from the source rather than by
+    // calling 200 trait defaults: the remedies are literals, and reading them
+    // where they are written means a new one is covered the day it is added.
+    for line in SRC.lines() {
+        // Prose describes; a remedy instructs. Only the instruction is checked.
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        for (at, _) in line.match_indices("`ksx ") {
+            let rest = &line[at + 1..];
+            let Some(end) = rest.find('`') else { continue };
+            let quoted = &rest[..end];
+            // Flags and placeholders are not part of the verb path: `ksx panel
+            // program --yes` and `ksx device pick <ID>` are the `panel program` and
+            // `device pick` verbs.
+            let verb = quoted
+                .split_whitespace()
+                // A verb path segment is always a plain identifier, so the path
+                // ends at the first word that is not one: a flag, a `<PLACEHOLDER>`,
+                // or a quoted argument. `ksx preset new "<NAME>" --from-template
+                // <ID>` is the `preset new` verb.
+                .take_while(|word| {
+                    !word.is_empty()
+                        && !word.starts_with('-')
+                        && word
+                            .chars()
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let Some(path) = verb.strip_prefix("ksx ") else {
+                continue;
+            };
+            if path.is_empty() || verbs.contains(path) || FEATURE_GATED.contains(&path) {
+                continue;
+            }
+            missing.push(format!("`{quoted}` (no `{path}` verb)"));
+        }
+    }
+    missing.sort();
+    missing.dedup();
+
+    assert!(
+        missing.is_empty(),
+        "crates/ksx-api/src/machine.rs tells a user to run commands this build \
+         does not have. A refusal that names a dead verb is worse than one that \
+         names nothing — the user follows it and gets `unrecognized \
+         subcommand`. Either ship the verb or reword the remedy to name a \
+         surface, a concept or a fact instead: {missing:#?}"
+    );
+}
+
+/// **`ksx.exe` has a second entry point, and it must be taken before clap.**
+///
+/// A chart write goes through `HidD_SetOutputReport`, which cannot be cancelled
+/// once it is in the kernel, so `ksx-platform` re-executes THIS binary with one
+/// private argument and can terminate that child on a deadline. The worker is
+/// `pub`, and its doc says it must run "before any logging or argument parsing".
+///
+/// Nothing called it. Every chart read therefore died on its first packet with
+/// "the HID output helper exited with code 2 without completing the report" —
+/// code 2 being what clap returns for an argument it does not recognise. The
+/// capability was written, made public, documented, and unreachable.
+///
+/// This asserts the shape that made it unreachable: the private argument must
+/// not reach clap. It deliberately does NOT assert success — with no request on
+/// stdin the worker fails, and that is fine. What must never happen is clap
+/// answering instead.
+#[test]
+fn the_hid_output_worker_argument_never_reaches_clap() {
+    const PRIVATE_ARG: &str = "__ksx-hid-output-worker-v1";
+
+    let output = Command::new(KSX)
+        .arg(PRIVATE_ARG)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap_or_else(|e| panic!("running {KSX} {PRIVATE_ARG}: {e}"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    for clap_says in [
+        "unrecognized subcommand",
+        "unexpected argument",
+        "Usage:",
+        "--help",
+    ] {
+        assert!(
+            !stderr.contains(clap_says),
+            "the private worker argument reached clap ({clap_says:?}), so the \
+             killable HID output helper cannot run and every chart read fails \
+             on its first packet:\n{stderr}"
+        );
+    }
+}
+
 fn walk_clap_tree() -> BTreeSet<String> {
     let dir = std::env::temp_dir().join(format!("ksx-parity-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("temp dir {}: {e}", dir.display()));
@@ -682,7 +814,7 @@ const ANCHORS: &[Anchors] = &[
         // THE ROW WITH NO CLI VERB, and it is here on purpose. Until now this
         // capability had no verb on ANY surface: `stage::apply` wrote
         // `settings.block_keyboards` during first run and nothing could ever
-        // write it again. `every_cli_verb_is_claimed_by_a_row_or_exempt` walks
+        // write it again. `every_cli_verb_is_claimed_by_a_row_or_exempt_with_a_reason` walks
         // the CLI tree and asks which surface performs each verb, so a config
         // concept nobody had given a verb to was invisible to this guard by
         // construction. An empty `cli` is the honest cell, not an oversight -
@@ -745,6 +877,57 @@ const ANCHORS: &[Anchors] = &[
         ],
         egui: &["Screen::Session", "Ask::Start", "Ask::Stop"],
         studio: &["/nocturne/play", "/nocturne/stop", "/nocturne/adopt"],
+    },
+    Anchors {
+        capability: "Identify an arcade encoder (family, release, whether its chart can be read)",
+        // Strictly passive: it walks the USB and HID device trees Windows has
+        // already enumerated and sends no report to any board. That is why it
+        // can own the capability outright while the chart READ — which does
+        // open the configuration collection — is a separate verb.
+        cli: &["panel status"],
+        egui: &[],
+        // Planned, and deliberately not claimed yet. The identity facts are
+        // already served on every `BoardRow` (`family_label`, `profile_state`,
+        // `terminal_count`, `chart_readable`); what is missing is the surface
+        // that renders them. Naming a route here before one exists would be
+        // the "unbacked published claim" this matrix exists to prevent.
+        studio: &[],
+    },
+    Anchors {
+        capability: "Read an encoder's stored chart (what every terminal emits)",
+        // The explicit hardware read: it opens the configuration collection and
+        // performs the vendor transaction, which is why it is a separate verb
+        // from `panel status` and never something a surface does unasked. It
+        // reads the board twice and refuses if the images differ.
+        cli: &["panel chart", "panel backups"],
+        egui: &[],
+        studio: &["/api/panel/chart"],
+    },
+    Anchors {
+        capability: "Say what ksx knows about each terminal, and how it knows it",
+        // Separate from the read because it answers a different question. The
+        // chart says what the board STORES; this composes that with what
+        // presses proved and what the user locked in, and where they disagree
+        // it reports the disagreement rather than picking a winner. It is the
+        // only verb that can name an onboard macro, which a chart read cannot
+        // detect even in principle.
+        cli: &["panel truth"],
+        egui: &[],
+        // Planned. The composition ships and is proven in CI; the surface for
+        // it does not exist yet, and naming a route before one exists is the
+        // claim this matrix is here to stop.
+        studio: &[],
+    },
+    Anchors {
+        capability: "Record what a person knows about a terminal ksx cannot read",
+        // The one source ksx did not obtain itself. It is stored beside what
+        // presses proved rather than in the layout store, because that store's
+        // contract is "programmable onto a board" and a declaration is not.
+        cli: &["panel declare", "panel forget"],
+        egui: &[],
+        // Planned. Typing a key is the half a browser is genuinely better at,
+        // and the surface for it is the next thing owed.
+        studio: &[],
     },
 ];
 
@@ -819,19 +1002,20 @@ const EXEMPT: &[Exempt] = &[
 /// **The guard's own blind spot, stated so it is not rediscovered.**
 ///
 /// `EXEMPT` gates and the two feature-gated verbs above are only visible when
-/// the test binary was built with that feature on, and CI's test step is
-/// `cargo test --workspace` with default features — where `studio` and
-/// `cabinet` are off (`CLAUDE.md`: "the default build compiles neither"). So
-/// `ksx open`, `ksx studio` and `ksx cabinet` are checked by this file only
-/// when somebody runs it with the feature enabled. `ksx open` sat unaccounted
-/// for exactly that reason until 2026-08-08 and CI stayed green throughout.
+/// the test binary was built with that feature on. A plain `cargo test
+/// --workspace` builds with default features — where `studio` and `cabinet` are
+/// off (`CLAUDE.md`: "the default build compiles neither") — so **a local green
+/// run has NOT checked `ksx open`, `ksx studio` or `ksx cabinet`.** `ksx open`
+/// sat unaccounted for exactly that reason until 2026-08-08.
 ///
-/// The fix is a feature-enabled test job, not a change here; it is written down
-/// rather than done because widening the CI matrix is its own change with its
-/// own runtime cost, and a note that names the hole is better than a guard that
-/// quietly checks less than it claims.
+/// That hole used to say "the fix is a feature-enabled test job… written down
+/// rather than done". **It is done**: `.github/workflows/ci.yml` runs
+/// `cargo test -p $p --features studio,cabinet` as its own step, so the three
+/// verbs above ARE checked on every CI run. What remains true is only the local
+/// half: if you are reading a green terminal rather than a green CI run, these
+/// three verbs were skipped, and the difference is four tests.
 #[cfg(test)]
-const _FEATURE_GATED_VERBS_ARE_ONLY_CHECKED_WITH_THE_FEATURE_ON: () = ();
+const _FEATURE_GATED_VERBS_ARE_CHECKED_IN_CI_NOT_IN_A_LOCAL_RUN: () = ();
 
 fn gate_is_on(feature: &str) -> bool {
     match feature {
@@ -1000,6 +1184,85 @@ fn every_cell_claiming_nothing_is_there_is_right() {
         "{} capability cell(s) say nothing is there when something is:\n\n{}",
         problems.len(),
         problems.join("\n\n")
+    );
+}
+
+/// Every backticked token in a matrix cell, parentheticals included.
+fn backticked(cell: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = cell;
+    while let Some(open) = rest.find('`') {
+        rest = &rest[open + 1..];
+        let Some(close) = rest.find('`') else { break };
+        out.push(&rest[..close]);
+        rest = &rest[close + 1..];
+    }
+    out
+}
+
+/// **The blind spot `classify` documents, closed.**
+///
+/// `classify` reads only a cell's FIRST word, so everything in a parenthetical
+/// is invisible to the two tests above. That is not theoretical: on 2026-08-25
+/// Studio deleted five pages, and six §3 cells went on naming `/start`,
+/// `/setup` or `/profiles` in their parentheticals for a fortnight while every
+/// test in this file stayed green — the anchor table had been migrated, the
+/// prose beside it had not. The cells are clean today, and until now nothing
+/// held them there.
+///
+/// So: pull every `` `/…` `` token out of a cell that classifies as `Shipped`
+/// and require [`studio_routes`] to contain it. A route named in prose is a
+/// promise a reader will follow, and a promise that 404s is worse than a blank
+/// cell.
+#[test]
+fn every_route_named_in_a_shipped_cell_still_resolves() {
+    let routes = studio_routes();
+    let mut named = 0;
+    let mut problems = Vec::new();
+
+    for row in matrix() {
+        for (surface, cell) in [
+            ("CLI", &row.cli),
+            ("egui", &row.egui),
+            ("Studio", &row.studio),
+        ] {
+            if classify(cell) != Claim::Shipped {
+                continue;
+            }
+            for token in backticked(cell) {
+                if !token.starts_with('/') {
+                    continue;
+                }
+                named += 1;
+                if !routes.contains(token) {
+                    problems.push(format!(
+                        "docs/SURFACES.md §3 — {capability}\n  \
+                         the {surface} cell names `{token}`, and no such route is in \
+                         crates/ksx-studio/src/server/mod.rs.\n  \
+                         Either the page moved and the prose did not, or the page was \
+                         deleted (five were, on 2026-08-25) and the cell still sends a \
+                         reader to a 404.",
+                        capability = row.capability,
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "{} cell(s) name a route that does not exist:\n\n{}",
+        problems.len(),
+        problems.join("\n\n")
+    );
+    // ...and the premise: §3's cells DO name routes in their parentheticals.
+    // If they ever stop, this guard passes by finding nothing — which is
+    // exactly the state the tests above were in for that fortnight.
+    assert!(
+        named >= 6,
+        "only {named} route(s) named across §3's shipped cells, so this guard is \
+         checking almost nothing. Either the table stopped naming routes, or \
+         `backticked` no longer reads the parentheticals."
     );
 }
 
@@ -1327,6 +1590,7 @@ fn the_config_surface_ledger_names_every_field_that_exists() {
         mouse_move_deadzone: 7,
         starting_user_index: 2,
         theme: Some("light".to_owned()),
+        board: None,
     };
     let slot = ksx_config::SlotEntry {
         number: 3,

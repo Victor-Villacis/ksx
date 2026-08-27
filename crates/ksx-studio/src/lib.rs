@@ -1,10 +1,22 @@
-//! ksx-studio — the optional Forma-powered local application for first run,
-//! status, mapping, checks, pads, devices, profiles and configuration (M10).
+//! ksx-studio — the optional Forma-powered local application: one product page
+//! that owns first run, mapping, saved games and configuration, plus three
+//! tools that diagnose the machine around it.
 //!
-//! Eight focused routes expose those tasks: `/start`, `/`, `/map`, `/check`,
-//! `/pads`, `/devices`, `/profiles` and `/setup`. Each route owns one screen;
-//! the navigation connects them without turning the product back into a
-//! multi-panel dashboard.
+//! **Four routes serve a page.** `/nocturne` **is** the product — setup,
+//! mapping, macros, saved games and the configuration menu are stages and panes
+//! *within* it, not a sequence of URLs. `/check`, `/pads` and `/devices` are
+//! the tools, each one deliberate action away.
+//!
+//! This header described eight routes until 2026-08-25, and five of those eight
+//! are now **404**: `/`, `/start`, `/map`, `/setup` and `/profiles` were deleted
+//! in the single-product-page cutover, as was `/workspace`. The router has no
+//! fallback and no redirect, which is a decision and not an omission — a
+//! silently redirecting `/start` would let a stale bookmark, a stale doc or a
+//! stale launcher keep *looking* correct. It also means a caller that still
+//! spells one of them is a live defect rather than a cosmetic one, which is
+//! exactly how `ksx open` shipped a chrome-less window on a 404 with no address
+//! bar (`ksx-backend/src/studio_launch.rs`, fixed in `ad520b4`; see
+//! `docs/SURFACES.md` §6). Grep before you cite a route from prose.
 //!
 //! Rendering model — SSR first paint + one live island per route:
 //! forma-server 0.2.0 renders the embedded FMIR per request (a complete page,
@@ -12,22 +24,30 @@
 //! server props BEFORE adoption (the islands protocol; dogfood ledger #5).
 //! Route clients then use the same-origin APIs and streams to update those
 //! signals in place. With JavaScript disabled the server-rendered screens
-//! remain usable; the status route also carries a `<noscript>` meta refresh.
-//! Client bundles load under Forma's strict nonce'd CSP (`connect-src 'self'`
-//! covers live data, `form-action 'self'` the forms).
+//! remain usable; every polling page also carries a `<noscript>` meta refresh
+//! (`render::body_prefix`, suppressed on `/pads` when a refresh would fight the
+//! page). Client bundles load under Forma's strict nonce'd CSP
+//! (`connect-src 'self'` covers live data, `form-action 'self'` the forms).
 //!
-//! `/setup` (M10) is the configuration screen: what this machine
-//! holds, and the two verbs a person performs on a configuration — **Export**
-//! (`GET /setup/export.json`, the whole root as one JSON document) and
-//! **Import** (`POST /setup/import`, dry run unless the write box is ticked).
-//! Neither takes a filesystem path: `ksx_api::MachineSource::{config_export,
+//! **Configuration is a menu on the product page, not a screen of its own.**
+//! The two verbs a person performs on a configuration are **Export**
+//! (`GET /nocturne/export.json`, the whole root as one JSON document, a
+//! download rather than a page) and **Import** (`POST /nocturne/import`, dry
+//! run unless the write box is ticked, under an 8 MB body limit that has to be
+//! re-stated on the route because it does not travel with the verb). Neither
+//! takes a filesystem path: `ksx_api::MachineSource::{config_export,
 //! config_import}` work in memory, so no screen has to put a directory in front
-//! of someone who asked for their configuration. Under them is the first run —
-//! a checklist the BACKEND decides (`ksx-app::onboard::plan_steps`) with one
-//! backend verb per step: the board step links to the devices screen, `POST
-//! /setup/slot` is one [`ControlSource::assign_slot`], and `POST /setup/prove`
-//! is the daemon's own learner, read back per render so it works with scripting
-//! switched off.
+//! of someone who asked for their configuration. Both moved here from `/setup`;
+//! the routes changed, the reasoning did not.
+//!
+//! First run is the same story. The checklist is still decided by the BACKEND
+//! (`ksx-backend::onboard::plan_steps`, pure and total over three counts) and
+//! still has one backend verb per step — but the steps are now stages of
+//! `/nocturne` rather than `POST /setup/slot` and `POST /setup/prove`, and the
+//! learner behind the proving step is read back per render so it works with
+//! scripting switched off. That last property is why the migration is worth
+//! watching: a verb that moves onto this page and loses its no-JS path has
+//! silently stopped being reachable for the audience the page was built for.
 //!
 //! Session state and the three POST routes go through [`ControlSource`] —
 //! ksx-backend implements it over the daemon's `\\.\pipe\ksx-daemon` control
@@ -91,6 +111,7 @@
 // is a named scalar — so it outgrew the default 128.
 #![recursion_limit = "512"]
 
+mod board;
 mod control;
 mod error;
 mod guard;

@@ -461,11 +461,34 @@ pub fn theme_rows(setup: &SetupSnapshot) -> Vec<SetupThemeRowView> {
     let readable = setup.available;
     let system_set = readable && view.theme.is_empty();
     let system_fallback = readable && !view.theme.is_empty() && !known;
+    // `chosen_cls` is not a status chip — it is the CLASS OF THE ROW'S OWN
+    // SUBMIT BUTTON (`render_nocturne.rs` pushes these rows through `mode_row`,
+    // the same serializer the blocking rows use, and the island renders
+    // `h("button", { type: "submit", class: r.cls }, …)`). So it must speak the
+    // surviving surface's idiom, `n-radio`, the way the doc comment above has
+    // always claimed it does.
+    //
+    // It said "pill pill-ok" / "pill pill-none" until 2026-08-26, inherited
+    // verbatim from the DELETED `/setup` page where the same string painted a
+    // SEPARATE chip beside the row and the row's button had a class of its own.
+    // Migrated onto /nocturne it became the whole control's class, and
+    // `.pill-none { display: none }` — a rule written for a device-health chip
+    // whose one deliberately-invisible level is "none" — hid every unchosen
+    // theme. The picker rendered exactly one row, the one you were already on,
+    // whose button re-posted the value you already had: "I click on it and
+    // nothing happens" and "where is it?" were the same defect. The nocturne
+    // cutover's signature failure mode — a verb that survives migration while
+    // the CSS that painted it does not.
+    //
+    // `.n-modeform button.n-radio { display: flex }` is what restores the
+    // layout, and it matches `.n-radio` only; the guard in
+    // `render_nocturne.rs` now asserts no theme button ever carries `pill-none`
+    // again.
     let mark = |chosen: bool| {
         if chosen {
-            "pill pill-ok".to_owned()
+            "n-radio on".to_owned()
         } else {
-            "pill pill-none".to_owned()
+            "n-radio".to_owned()
         }
     };
     let mut rows = vec![SetupThemeRowView {
@@ -488,11 +511,14 @@ pub fn theme_rows(setup: &SetupSnapshot) -> Vec<SetupThemeRowView> {
         SetupThemeRowView {
             value: meta.id.to_owned(),
             title: meta.label.to_owned(),
-            detail: if meta.scheme == "light" {
-                "Every page renders light, whatever the system prefers.".to_owned()
-            } else {
-                "Every page renders dark, whatever the system prefers.".to_owned()
-            },
+            // The theme's OWN sentence, authored beside its palette in
+            // `studio-ui/tokens/` and generated into the roster. Derived from
+            // `meta.scheme` until 2026-08-26, which read fine while three of
+            // the four rows were invisible and became a bug the moment they
+            // were not: Dark and Matrix are both `scheme: "dark"`, so they
+            // described themselves in identical words. `build-tokens.mjs`
+            // refuses to emit a theme without a blurb.
+            detail: meta.blurb.to_owned(),
             chosen_cls: mark(chosen),
             button: if chosen {
                 "This is how it is set".to_owned()
@@ -1397,6 +1423,63 @@ fn workspace_bind_rows(
             }
         })
         .collect();
+
+    // ── CONTROLS THIS PAD DOES NOT HAVE, THAT THIS PRESET STILL BINDS ──────
+    //
+    // `zones` is what the CONTROLLER has. A preset is what the FILE says, and
+    // the two are allowed to disagree — `ksx_core::persona`'s module doc makes
+    // it a rule: "Re-persona-ing a slot must never require editing its preset."
+    // Move an Xbox seat to SNES and its `lx.max` binding is still in the TOML,
+    // still loading, and driving nothing, because a SNES pad has no stick.
+    //
+    // A list built from `zones` alone simply omits those rows, and that omission
+    // is the SAME silent-fallback failure the retro zone tables were narrowed to
+    // remove, pointed the other way: the key stays bound, quietly stops working,
+    // and the one page that could explain it shows nothing at all — not even a
+    // Clear to undo it with. So they are appended, in their own control's group,
+    // each carrying the sentence that says what happened.
+    //
+    // Empty for every persona that expresses the whole vocabulary, which is
+    // every persona but the retro pair — so this costs nothing until it is the
+    // only thing standing between a player and a control that went missing.
+    let mut rows = rows;
+    let mut stranded: Vec<(&String, &Vec<String>)> = mapper
+        .bindings
+        .iter()
+        .filter(|(function, keys)| {
+            !keys.is_empty()
+                && !zones
+                    .iter()
+                    .any(|zone| zone.fn_name.eq_ignore_ascii_case(function))
+        })
+        .collect();
+    stranded.sort_by_key(|(function, _)| (*function).clone());
+    for (function, _) in stranded {
+        rows.push(WorkspaceBindRow {
+            function: function.clone(),
+            // No zone means no persona word for it; the canonical name is the
+            // only honest label, and it is also what the user's TOML says.
+            label: function.clone(),
+            keys: crate::render_map::key_tag(&mapper, function),
+            notes: String::new(),
+            cls: "wsbind".to_owned(),
+            share_note: format!(
+                "{} has no such control — this key is still bound and drives \
+                 nothing. Clear it, or give this player a controller that has \
+                 one.",
+                slot.persona_label
+            ),
+            clear: "Clear".to_owned(),
+            slot: slot.number.to_string(),
+            turbo_hz: mapper
+                .turbo
+                .get(function)
+                .map(|hz| hz.to_string())
+                .unwrap_or_default(),
+            toggle: mapper.toggle.contains(function),
+        });
+    }
+
     let bound = rows.iter().filter(|row| row.keys != "—").count();
     // A key is SHARED when it drives more than one control — counted once,
     // by inverting the binding table, so a key that merely sits beside a
@@ -1460,6 +1543,22 @@ pub struct NocturnePayload {
     pub setup: Option<ksx_api::SetupView>,
     #[serde(default)]
     pub setup_error: String,
+    /// The saved panel layouts, from `MachineSource::panel_hardware_profiles`.
+    /// An arcade board is drawn from one of these and from nothing else — ksx
+    /// cannot guess what a panel emits. `None` plus the sentence below when the
+    /// read refused, kept apart for SURFACES.md §1b's reason: "no layouts saved"
+    /// and "the store would not answer" are opposite advice.
+    #[serde(default)]
+    pub panels: Option<ksx_api::PanelHardwareProfilesView>,
+    #[serde(default)]
+    pub panels_error: String,
+    /// Boards somebody drew, from `MachineSource::boards`. Its own read and its
+    /// own sentence for SURFACES.md §1b's reason: "you have drawn none" and
+    /// "the store would not answer" are opposite advice.
+    #[serde(default)]
+    pub drawn: Option<ksx_api::BoardsView>,
+    #[serde(default)]
+    pub drawn_error: String,
     #[serde(default)]
     pub games: Option<ksx_api::ProfilesView>,
     #[serde(default)]
@@ -1520,6 +1619,37 @@ pub struct NocturneDeviceRow {
     pub selector: String,
     pub alias: String,
     pub label: String,
+    /// `"true"` on the staged board, `"false"` on every other row — the
+    /// ASSISTIVE half of what `cls: "n-dev on"` says visually.
+    ///
+    /// Served as a word rather than a flag because the attribute is written
+    /// from a list row: an empty string still SETS an attribute in the
+    /// runtime's generic-attribute path, so "absent" is not expressible here.
+    /// `aria-current="false"` is valid ARIA and means exactly what it says, so
+    /// the two-word vocabulary is the honest encoding rather than a
+    /// workaround.
+    #[serde(default)]
+    pub aria_current: String,
+    /// What pressing this row does, in the server's words — the `title` the
+    /// row carries. The chosen row explains why pressing it changes nothing;
+    /// the others say what choosing them costs (a replacement, and nothing
+    /// else).
+    ///
+    /// `docs/SURFACES.md` §1a: rendered copy is logic too. The browser has no
+    /// business composing "replaces the current one" out of a class name.
+    #[serde(default)]
+    pub title: String,
+    /// `"true"` when a chart read is possible for this EXACT board, from
+    /// `panel_catalog::capabilities_for`. A word, not a flag, for the reason
+    /// `aria_current` is: an empty string still sets an attribute from a list
+    /// row, so "absent" is not expressible.
+    ///
+    /// Served rather than inferred. The island needs a BOOLEAN here — it hides
+    /// a whole verb on it — and reading that out of a display sentence is the
+    /// pattern `role` exists to replace: "the island uses this value for
+    /// presentation; it never identifies an encoder by matching the display
+    /// name."
+    pub chart_readable: String,
 }
 
 /// One board that cannot be picked, and why — kept visible, never hidden:
@@ -1539,6 +1669,17 @@ pub struct NocturneChoiceRow {
     pub title: String,
     pub detail: String,
     pub cls: String,
+    /// **Whether this is the answer currently in effect**, as a FACT rather
+    /// than something to be read back out of [`Self::cls`].
+    ///
+    /// The class paints the marker; it cannot announce it. Without this the
+    /// only signal was a decorative `.n-radio.on` dot, so every row of a
+    /// picker read identically to a screen reader and the one you were on
+    /// was unknowable without sight. It is a separate field because the
+    /// alternative — parsing the class string in the browser — is the exact
+    /// coupling that let a stale `.pill-none` rule hide three of four theme
+    /// rows while every test still passed.
+    pub chosen: bool,
 }
 
 /// One staged controller in the rack.
@@ -1887,6 +2028,19 @@ pub struct NocturneKeyCell {
     /// The assistive name (`role="img"` + `aria-label`): the same sentence
     /// on a bound cap, the bare cap otherwise — never empty.
     pub aria: String,
+    /// **Where this control sits on the board**, as an inline `style`.
+    ///
+    /// Percentages of the board's own bounds — `left`, `top`, `width`,
+    /// `height` — so the plate scales to whatever width its card gives it
+    /// instead of being hand-fitted to one. `keyboardWorkbench` has positioned
+    /// its keys this way all along; this is the same arithmetic, served rather
+    /// than computed in the browser.
+    ///
+    /// Inline `style=""` is deliberate and already load-bearing on this page:
+    /// the CSP carries `style-src-attr 'unsafe-inline'` precisely so the
+    /// mapper's 25 hit zones can position themselves, and `style-src` stays
+    /// nonce-locked so `<style>` blocks gain nothing from it.
+    pub style: String,
 }
 
 /// Every sentence `/nocturne` states as a served fact.
@@ -1978,7 +2132,13 @@ pub struct NocturneDerived {
     /// The hidden masters' family classes (`"n-padwrap"` / `"n-padwrap
     /// none"`): with JS the masters are clone templates and the class is
     /// moot, but WITHOUT JS the canvas relaxes into a document and the
-    /// served class is what picks which body shows. Exactly one is visible.
+    /// served class is what picks which body shows.
+    ///
+    /// AT MOST one is visible, and the gap is deliberate: a persona this build
+    /// does not recognise resolves to the `"unknown"` family
+    /// ([`UNKNOWN_PRESENTATION`]), which names no master, so the no-JS page
+    /// draws NO body rather than confidently drawing the wrong one. Every
+    /// persona in `Persona::ALL` names exactly one.
     pub pad_xbox_cls: String,
     pub pad_ps_cls: String,
     pub pad_ps5_cls: String,
@@ -1990,6 +2150,11 @@ pub struct NocturneDerived {
     /// and the system row. Six served lists because a list body is one
     /// flat template — the group headers live in the island markup, each
     /// with its served "N of M bound" count beside it.
+    /// The setup spine, branched on the staged device's kind. See
+    /// [`NocturneJourneyStep`].
+    pub journey: Vec<NocturneJourneyStep>,
+    /// One sentence above the rail: where you are.
+    pub journey_line: String,
     pub bind_face: Vec<NocturneBindRow>,
     pub bind_dpad: Vec<NocturneBindRow>,
     pub bind_shoulders: Vec<NocturneBindRow>,
@@ -2099,6 +2264,22 @@ pub struct NocturneDerived {
     /// the one shared composer so the two pages cannot disagree. Re-dressed as
     /// choice rows because the blocking picker on this page is the same shape.
     pub theme_rows: Vec<NocturneChoiceRow>,
+    /// The board roster — which picture the keys are drawn on. Same shape and
+    /// same no-JS form as the theme rows above, because it is the same kind of
+    /// question: a display choice that changes nothing about what is bound.
+    pub board_rows: Vec<NocturneChoiceRow>,
+    /// One sentence under the board picker.
+    pub board_line: String,
+    /// The plate itself, as an inline `style`: an `aspect-ratio` taken from
+    /// the board bounds, so a case full of absolutely-positioned cells still
+    /// has a height. This is what replaces the hand-fitted 980px width — the
+    /// board now fits its card instead of the card being sized to the board.
+    pub board_case_style: String,
+    /// `shipped` | `recognized` | `authored`. Carried as `data-origin` on the
+    /// case so the stylesheet can sculpt a KEYCAP without also sculpting an
+    /// arcade button: the per-row cap profile is a fact about a keyboard, not
+    /// about every picture that happens to have rows.
+    pub board_origin: String,
 }
 
 /// Which of the right pane's six controller clusters a mapper function
@@ -2130,29 +2311,382 @@ const NOCTURNE_CONTROL_GROUPS: [&str; 6] = [
     "system",
 ];
 
-/// Which drawn body a seat wears — the ONE rule, read by both the per-slot
-/// pad views (what each canvas widget clones) and the no-JS master classes.
+/// **Everything a surface needs to draw ONE persona, in ONE record.**
 ///
-/// Keyed on the persona rather than on `is_xinput`, because a DualSense is
-/// not a DualShock: it has its own shell, its own Create/Options pair and its
-/// own touchpad, and drawing it as a PS4 pad is a picture that lies about the
-/// device Windows just gained.
+/// The table below ([`PAD_PRESENTATIONS`]) is the single persona →
+/// presentation decision in ksx Studio. Before it there were FIVE, none of
+/// which knew about the other four and none of which mentioned `snes` or
+/// `genesis`:
 ///
-fn pad_art_family(persona: Option<&str>, slot: Option<&ksx_api::StagedSlotView>) -> &'static str {
-    match persona {
-        Some("dualsense") => "ps5",
-        Some("switchpro") => "switchpro",
-        Some("xboxseries") => "xboxseries",
-        _ => {
-            if slot.is_some_and(|slot| slot.is_xinput) {
-                "xbox"
-            } else if slot.is_some() {
-                "ps"
-            } else {
-                // An empty roster keeps the neutral Xbox outline as ground.
-                "xbox"
+/// - `pad_art_family` matched three persona names and then fell through to
+///   `slot.is_xinput`, so a staged SNES seat (plain HID, `is_xinput == false`)
+///   became `"ps"` — a DualShock 4;
+/// - [`crate::render::art_for`] substring-matched seven PlayStation tokens and
+///   fell through to the Xbox art, so the SAME seat became an Xbox pad;
+/// - [`crate::render_map::zones_for`] delegated to `art_for` and so handed that
+///   seat `ZONE_XBOX` — two analog sticks, two analog triggers, an L3/R3 and a
+///   guide button, none of which exist on the device;
+/// - [`crate::render_map::legend_label_for_persona`] substring-matched Switch
+///   and PS5 and printed Xbox words for everything else;
+/// - `NocturneIsland.ts` re-decided the whole thing from a hardcoded
+///   five-name `Set` and fell back to `"xbox"`.
+///
+/// Every one of the five failed by SILENT FALLBACK, and two of them fell
+/// different ways, which is why one page could draw the same controller as a
+/// DualShock in the pad grid and an Xbox pad in the mapper.
+///
+/// **The rule this record replaces them with.** The mapping is TOTAL: a
+/// persona string either matches a row or it resolves to
+/// [`UNKNOWN_PRESENTATION`], which is a *named* outcome carrying the family
+/// `"unknown"` — not a fall-through to Xbox. The browser reads
+/// [`NocturnePadView::family`] and never re-decides; an unknown family there is
+/// a visible placeholder, not a silhouette we made up.
+///
+/// **Why the key is a STRING and not a `Persona`.** `render_map.rs` links
+/// ksx-core only as a dev-dependency and that boundary is deliberate
+/// (`docs/M9-DECISION.md` §6, argued at length above `zones_for`). So the match
+/// keys off the SERVED persona name — `StagedSlotView::persona` is documented
+/// as the canonical [`ksx_core::Persona::as_str`] spelling — and exhaustiveness
+/// cannot come from the compiler. It comes from
+/// `every_persona_resolves_to_a_presentation`, which walks `Persona::ALL`
+/// through the dev-dependency and fails if any persona has no row.
+pub(crate) struct PadPresentation {
+    /// The canonical persona name, exactly as `Persona::as_str` spells it.
+    pub persona: &'static str,
+    /// Spellings other than the canonical one that must resolve to this row.
+    ///
+    /// Kept because the functions this record replaced were *substring*
+    /// matchers: `art_for` answered DS4 for anything containing `ds4`, `ps4`,
+    /// `ps5`, `dualshock`… and callers outside the staged-slot path are not all
+    /// proven to pass a canonical name. Pinned against ksx-core's own
+    /// [`FromStr`](std::str::FromStr) by `presentation_aliases_match_ksx_core`,
+    /// so this list can never come to mean something the engine disagrees with.
+    pub aliases: &'static [&'static str],
+    /// Which drawn body a seat wears: the master the canvas clones, and the
+    /// no-JS page's visible `.n-padwrap`.
+    pub family: &'static str,
+    /// The vendored `<img>` art for the surfaces that serve a URL (`/pads`
+    /// tiles, and `/check`'s PlayStation-vocabulary test).
+    pub art: &'static str,
+    /// The controls this pad HAS — the authoring vocabulary for every surface
+    /// that asks "what can this seat bind": the binding pane's rows and free
+    /// chips, the canvas's control list, the macro grid's columns, and the
+    /// readable names on the keyboard.
+    pub zones: &'static [crate::render_map::Zone],
+    /// Function → the word THIS persona prints, for personas that share a
+    /// geometry table with another but not its vocabulary (Switch Pro over the
+    /// Xbox table, DualSense over the DS4 one). A persona whose whole
+    /// vocabulary differs gets its own table instead and leaves this empty.
+    pub legend: &'static [(&'static str, &'static str)],
+    /// Mappable functions this controller DOES NOT HAVE, named one by one.
+    ///
+    /// Derivable as `mappable_functions() - zones` and stated anyway, because
+    /// the two say different things. A missing zone is an absence; this list is
+    /// a DECISION, and `zone_tables_cover_every_mappable_function` proves the
+    /// two are exactly complementary — so a function added to ksx-core cannot
+    /// quietly become "absent everywhere", it fails until somebody says which
+    /// of these pads has it.
+    ///
+    /// Read only by that test, hence the allow — the same arrangement, and the
+    /// same reason, as `Zone`'s geometry fields: this exists to be CHECKED, and
+    /// deleting it to silence `dead_code` would delete the check with it. A
+    /// runtime reader arrives the day a surface says "this controller has no
+    /// right stick" out loud instead of simply not offering one.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub absent: &'static [&'static str],
+}
+
+/// No vocabulary delta — this persona's own zone table already prints the
+/// words it wants.
+const LEGEND_SAME_AS_TABLE: &[(&str, &str)] = &[];
+
+/// DualSense over the DS4 geometry: one button was renamed between the
+/// generations, and that is the whole delta.
+const LEGEND_DUALSENSE: &[(&str, &str)] = &[("back", "Create")];
+
+/// Switch Pro over the Xbox geometry: same physical layout, Nintendo words.
+const LEGEND_SWITCHPRO: &[(&str, &str)] = &[
+    ("lt", "ZL"),
+    ("lb", "L"),
+    ("rb", "R"),
+    ("rt", "ZR"),
+    ("back", "Capture"),
+    ("start", "Plus"),
+    ("guide", "Home"),
+];
+
+/// The ten analog functions neither retro pad can express, and the three
+/// buttons neither pad physically has.
+///
+/// **This is a shape claim, not a bit-order one**, and every part of it is
+/// already measured in the tree:
+///
+/// - `ibuffalo-snes` (0583:2060) is a **3-byte report: X/Y + 8 buttons**;
+///   `daemonbite-genesis` (2341:8036) is **9 buttons + signed X/Y**
+///   (`docs/HIDMAESTRO-STATE.md`, retro scope call 2026-08-20, and the doc
+///   comments on `ksx_core::Persona::{Snes, Genesis}`).
+/// - ksx needs SIX analog roles (`ksx_hidmaestro::axis::AxisRole::ALL`: two
+///   sticks and two triggers). Each retro descriptor carries exactly ONE axis
+///   pair, and on both physical pads that pair IS the D-pad. So the right
+///   stick and both analog triggers have nowhere on the wire to land, and the
+///   left stick would only be a second name for a direction the D-pad already
+///   drives.
+/// - `lthumb`/`rthumb` are stick CLICKS and neither pad has a stick to click.
+///   `guide` is a home button and neither pad has one — the SNES pad's eight
+///   are B/A/Y/X/L/R/Select/Start, and the DaemonBite adapter's nine are the
+///   Saturn/MD6 set.
+///
+/// L and R on both pads are DIGITAL, so they are already `lb`/`rb`; a player
+/// who binds a key to `lt` on one of these seats is binding a key to nothing.
+/// That is the whole reason this list exists rather than a truncated table
+/// with no explanation beside it.
+const ABSENT_ON_A_DIGITAL_RETRO_PAD: &[&str] = &[
+    "lt", "rt", "lthumb", "rthumb", "guide", "lx.min", "lx.max", "ly.min", "ly.max", "rx.min",
+    "rx.max", "ry.min", "ry.max",
+];
+
+/// Nothing is missing: this persona expresses ksx's whole control vocabulary.
+const ABSENT_NOTHING: &[&str] = &[];
+
+/// **The one persona → presentation table.** One row per
+/// [`ksx_core::Persona`], plus [`UNKNOWN_PRESENTATION`] for a name this build
+/// does not recognise.
+///
+/// ⚠️ ART: ksx ships exactly TWO vendored body drawings — `pad-xbox.svg` and
+/// `pad-ds4.svg` (`studio-ui/art/README.md`; the five inline `.n-padwrap`
+/// masters on /nocturne are xbox, ps, ps5, switchpro and xboxseries). **There is
+/// no SNES art and no Genesis art in this tree, and none is invented here.**
+/// Both retro rows therefore name the Xbox body as a DELIBERATE stand-in, which
+/// is a different thing from the fall-through they used to get: it is written
+/// down, it is the neutral outline the page already uses as empty-roster
+/// ground, and it is the closer of the two — a cross D-pad, a four-button face
+/// cluster and two shoulder chips, where the DS4 body has four separate D-pad
+/// arrows and a touchpad. The seat's own title still says "SNES", and the
+/// ZONES are the retro ones, so the picture is a stand-in while every control
+/// the page offers is real.
+pub(crate) const PAD_PRESENTATIONS: &[PadPresentation] = &[
+    PadPresentation {
+        persona: "xbox360",
+        aliases: &["x360", "xbox", "360", "xinput"],
+        family: "xbox",
+        art: crate::render::ART_XBOX,
+        zones: crate::render_map::ZONE_XBOX,
+        legend: LEGEND_SAME_AS_TABLE,
+        absent: ABSENT_NOTHING,
+    },
+    PadPresentation {
+        persona: "playstation",
+        aliases: &["ps", "ds4", "ps4", "dualshock", "dualshock4", "sony"],
+        family: "ps",
+        art: crate::render::ART_DS4,
+        zones: crate::render_map::ZONE_DS4,
+        legend: LEGEND_SAME_AS_TABLE,
+        absent: ABSENT_NOTHING,
+    },
+    PadPresentation {
+        // Its OWN family: a DualSense is not a DualShock — its own shell, its
+        // own Create/Options pair, its own touchpad. It borrows the DS4 hit
+        // geometry (same physical layout) and renames the one button Sony
+        // renamed.
+        persona: "dualsense",
+        aliases: &["ds5", "ps5", "dualsense5"],
+        family: "ps5",
+        art: crate::render::ART_DS4,
+        zones: crate::render_map::ZONE_DS4,
+        legend: LEGEND_DUALSENSE,
+        absent: ABSENT_NOTHING,
+    },
+    PadPresentation {
+        persona: "switchpro",
+        aliases: &["switch", "procontroller", "switchprocontroller", "nintendo"],
+        family: "switchpro",
+        art: crate::render::ART_XBOX,
+        zones: crate::render_map::ZONE_XBOX,
+        legend: LEGEND_SWITCHPRO,
+        absent: ABSENT_NOTHING,
+    },
+    PadPresentation {
+        persona: "xboxseries",
+        aliases: &[
+            "xboxseriesx",
+            "xboxseriess",
+            // `Persona::label()` for this one is "Xbox Series X|S", the string
+            // a surface holding a label rather than an id would pass in. Every
+            // other persona's label normalizes to its canonical name already.
+            "xboxseriesx|s",
+            "xboxseriesxs",
+            "xboxseriesxsbt",
+            "series",
+            "xsx",
+        ],
+        family: "xboxseries",
+        art: crate::render::ART_XBOX,
+        zones: crate::render_map::ZONE_XBOX,
+        legend: LEGEND_SAME_AS_TABLE,
+        absent: ABSENT_NOTHING,
+    },
+    PadPresentation {
+        // The SNES words are safe to print: `Persona::Snes`'s own doc states
+        // the anchor this build measured — "positional faces (ksx A = bottom =
+        // SNES B)" — and L/R/Select/Start are what is written on the shell.
+        // They live in `ZONE_SNES`'s own label column, so there is no override
+        // list here.
+        persona: "snes",
+        aliases: &["supernintendo", "superfamicom", "sfc"],
+        family: "xbox",
+        art: crate::render::ART_XBOX,
+        zones: crate::render_map::ZONE_SNES,
+        legend: LEGEND_SAME_AS_TABLE,
+        absent: ABSENT_ON_A_DIGITAL_RETRO_PAD,
+    },
+    PadPresentation {
+        // ⚠️ Its own table, printing ksx's function vocabulary rather than
+        // SEGA letters — a DECISION, argued in full on `ZONE_GENESIS`: the
+        // button-label table is recorded PROVISIONAL until the joy.cpl
+        // press-check, and this one wire identity serves three different face
+        // layouts (Genesis, Mega Drive, Saturn). The SHAPE is certain and is
+        // what the table states; the letters are not, so it prints none.
+        persona: "genesis",
+        aliases: &[
+            "megadrive",
+            "md",
+            "sega",
+            "saturn",
+            "segagenesis",
+            "segamegadrive",
+            "segasaturn",
+            "megadrive6b",
+        ],
+        family: "xbox",
+        art: crate::render::ART_XBOX,
+        zones: crate::render_map::ZONE_GENESIS,
+        legend: LEGEND_SAME_AS_TABLE,
+        absent: ABSENT_ON_A_DIGITAL_RETRO_PAD,
+    },
+];
+
+/// **The named outcome for a persona string this build does not recognise.**
+///
+/// Reachable exactly one way: a daemon newer than this Studio serving a
+/// persona added after this binary was built. The old behavior for that case
+/// was to draw a DualShock 4 (via `is_xinput == false`) and label it with Xbox
+/// words, which is a confident answer to a question we cannot answer.
+///
+/// What each field says, and why:
+///
+/// - `family: "unknown"` — the ONE field the browser reads. No `.n-padwrap`
+///   master carries that value, so the no-JS page deliberately draws NO body
+///   rather than a wrong one, and the canvas renders a visible placeholder
+///   naming the family instead of a silhouette.
+/// - `zones: ZONE_XBOX` — not a guess about the device. ksx's wire vocabulary
+///   is Xbox-flavored for EVERY persona (`ksx_core::persona` module doc: "the
+///   wire vocabulary stays Xbox-flavored everywhere… ✕○△□ are display aliases,
+///   not a second binding language"), so the Xbox table is the vocabulary
+///   itself with no relabeling applied — the only table that claims nothing
+///   about the hardware.
+/// - `absent: &[]` — we must not claim a control is MISSING on a device we do
+///   not recognise. "We do not know this pad" and "this pad has no right
+///   stick" are different statements.
+/// - `art: ART_XBOX` — `/pads` needs a URL for its tile and the Xbox line
+///   drawing is the neutral one; the tile prints the persona name beside it.
+pub(crate) const UNKNOWN_PRESENTATION: PadPresentation = PadPresentation {
+    persona: "",
+    aliases: &[],
+    family: "unknown",
+    art: crate::render::ART_XBOX,
+    zones: crate::render_map::ZONE_XBOX,
+    legend: LEGEND_SAME_AS_TABLE,
+    absent: ABSENT_NOTHING,
+};
+
+/// Resolve a served persona name to its presentation. **Total** — every input
+/// has an answer, and the answer for an unrecognised name is
+/// [`UNKNOWN_PRESENTATION`], which says so.
+///
+/// Normalized the way `ksx_core::Persona::from_str` normalizes (drop spaces,
+/// hyphens and underscores; lowercase) so a hand-edited `Xbox 360` and a
+/// catalog slug `xbox-series-xs-bt` both land where the engine would put them.
+///
+/// **Two passes, and both are EXACT.**
+///
+/// 1. The name as given. Every machine-name caller lands here —
+///    `StagedSlotView::persona` and `MapperSlot::persona` are documented as the
+///    canonical [`ksx_core::Persona::as_str`] spelling.
+///
+/// 2. The name with its DECORATION removed — a parenthesised aside and a
+///    trailing noun — matched exactly again. This exists for exactly one
+///    caller: `/pads` does not serve persona ids at all. It lists what is on
+///    the ViGEm bus, classified from hardware ids, and serves
+///    `ksx_platform::PersonaGuess::label()` — the human strings `"Xbox 360
+///    pad"` and `"PlayStation (DS4) pad"` — straight into `art_for`. Those drew
+///    the right art only because the substring matcher this table replaced
+///    happened to accept them, so dropping to one exact pass would have handed
+///    every live DualShock 4 on that page an Xbox body: the very bug this
+///    record exists to remove, reintroduced by its removal.
+///    `a_human_label_still_finds_its_pad` pins those strings.
+///
+/// ⚠️ It is `strip_suffix`, deliberately NOT `contains`. A `contains` pass over
+/// the canonical names resolves a future `"playstation6"` to the PlayStation
+/// row and draws a PS6 as a DualShock 4 — silently, and for exactly the reason
+/// this whole record was written. Extending a name must NOT inherit its
+/// presentation; only stripping a word that is not part of any name may.
+pub(crate) fn pad_presentation(persona: &str) -> &'static PadPresentation {
+    /// Nouns a display name puts after the controller's actual name. None of
+    /// them appears inside a canonical persona name or alias, which is what
+    /// makes removing one safe.
+    const DECORATIONS: [&str; 3] = ["pad", "gamepad", "controller"];
+
+    let normalized: String = persona
+        .chars()
+        .filter(|c| !matches!(c, ' ' | '-' | '_'))
+        .flat_map(char::to_lowercase)
+        .collect();
+    let row_for = |name: &str| -> Option<&'static PadPresentation> {
+        PAD_PRESENTATIONS
+            .iter()
+            .find(|row| row.persona == name || row.aliases.contains(&name))
+    };
+    if let Some(exact) = row_for(&normalized) {
+        return exact;
+    }
+    // Drop any parenthesised aside ("PlayStation (DS4) pad"), then one
+    // trailing noun, and ask again — still an exact question.
+    let mut bare = String::with_capacity(normalized.len());
+    let mut depth = 0usize;
+    for c in normalized.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => bare.push(c),
+            _ => {}
+        }
+    }
+    for noun in DECORATIONS {
+        if let Some(stem) = bare.strip_suffix(noun) {
+            if let Some(row) = row_for(stem) {
+                return row;
             }
         }
+    }
+    row_for(&bare).unwrap_or(&UNKNOWN_PRESENTATION)
+}
+
+/// Which drawn body a seat wears — read by both the per-slot pad views (what
+/// each canvas widget clones) and the no-JS master classes.
+///
+/// One line of decision, because the decision is [`pad_presentation`]'s. The
+/// `is_xinput` fall-through this used to end in is gone: it was a question
+/// about Windows' four XInput slots being asked to answer "what does this
+/// controller look like", and it answered "DualShock 4" for every plain-HID
+/// persona ksx has added since.
+///
+/// `None` is the EMPTY ROSTER — no seat to draw — and keeps the neutral Xbox
+/// outline as ground. That is a different case from an unrecognised persona,
+/// which resolves to the `"unknown"` family instead.
+fn pad_art_family(persona: Option<&str>) -> &'static str {
+    match persona {
+        Some(persona) => pad_presentation(persona).family,
+        None => "xbox",
     }
 }
 
@@ -2255,12 +2789,246 @@ fn nocturne_control_authoring(
         .collect()
 }
 
+/// One stop on the setup spine, as the page tells it.
+///
+/// **The spine is `pick a device -> make controllers -> bind -> play`, and an
+/// arcade panel needs one more stop than a keyboard does.** A keyboard
+/// describes itself: Windows hands over a layout, so the keys are known the
+/// moment it is picked. A panel does not. It is a board of switches wired to
+/// an encoder, and all the host ever learns is that *some keyboard sent G* —
+/// which button that was, and whether two buttons that both send G are one
+/// switch or two, exists nowhere except in the head of the person who can
+/// press them. So a panel gets a `describe` stop between picking and binding,
+/// and a keyboard never sees it.
+///
+/// `state` is the fact; `badge` and `cls` are how this page says it. A step
+/// the server cannot judge says so rather than guessing — see
+/// [`NocturneJourneyState::Needed`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NocturneJourneyStep {
+    /// Stable id for the client: `device`, `describe`, `controller`,
+    /// `mapping`, `play`. Never shown.
+    pub key: String,
+    pub title: String,
+    /// The whole sentence, and the accessible description.
+    pub detail: String,
+    /// The glanceable word: `Done`, `Now`, `Next`, `Needed`.
+    pub badge: String,
+    pub cls: String,
+}
+
+/// What the server can honestly say about one stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NocturneJourneyState {
+    /// Finished, and the read that proves it completed.
+    Done,
+    /// The next thing to do.
+    Now,
+    /// Real, but something earlier has to happen first.
+    Later,
+    /// **Worth doing, and not on the way to anything.**
+    ///
+    /// This replaces `Needed`, which was wrong twice over.
+    ///
+    /// It was wrong about the WORKFLOW: describing a panel was never a gate.
+    /// A binding carries a key name, so every key an encoder sends can be
+    /// bound on the shipped keyboard the moment it is picked. Drawing your
+    /// own cabinet makes that mapping legible; it does not make it possible.
+    /// Rendering it as a blocking step promoted a display choice into a
+    /// requirement, which is exactly the mistake this whole plan started from.
+    ///
+    /// And it was wrong about the READ. Its own doc said the daemon could not
+    /// know whether a panel had been described, because the document lived in
+    /// browser storage alone. That stopped being true when drawn boards became
+    /// a server-side store: `MachineSource::boards` is the read, and a step
+    /// that CAN be checked should never say it cannot.
+    Offered,
+}
+
+impl NocturneJourneyState {
+    fn badge(self) -> &'static str {
+        match self {
+            Self::Done => "Done",
+            Self::Now => "Now",
+            Self::Later => "Next",
+            Self::Offered => "Optional",
+        }
+    }
+
+    fn cls(self) -> &'static str {
+        match self {
+            Self::Done => "n-jstep done",
+            Self::Now => "n-jstep now",
+            Self::Later => "n-jstep later",
+            Self::Offered => "n-jstep offered",
+        }
+    }
+}
+
+fn journey_step(
+    key: &str,
+    title: &str,
+    detail: &str,
+    state: NocturneJourneyState,
+) -> NocturneJourneyStep {
+    NocturneJourneyStep {
+        key: key.to_owned(),
+        title: title.to_owned(),
+        detail: detail.to_owned(),
+        badge: state.badge().to_owned(),
+        cls: state.cls().to_owned(),
+    }
+}
+
+/// The spine: `pick an input -> add controllers -> bind -> play`.
+///
+/// Four stops, the same four for every device. Drawing a panel is offered
+/// beside them for an encoder and is NOT one of them — see
+/// [`NocturneJourneyState::Offered`]. It is absent entirely for a keyboard,
+/// because an offer nobody can take is not an offer, and a greyed one reads
+/// as a step somebody skipped.
+fn nocturne_journey(
+    staged: &ksx_api::StagedSetupView,
+    encoder_staged: bool,
+    has_drawn_board: bool,
+    running: bool,
+) -> (Vec<NocturneJourneyStep>, String) {
+    use NocturneJourneyState::{Done, Later, Now, Offered};
+
+    let picked = staged.device.is_some();
+    let made = !staged.slots.is_empty();
+    let bound = staged.slots.iter().any(|slot| {
+        slot.authoring
+            .as_ref()
+            .is_some_and(|preset| !preset.bindings.is_empty())
+    });
+
+    let mut steps = Vec::new();
+
+    steps.push(journey_step(
+        "device",
+        "Pick the input",
+        concat!(
+            "Choose the keyboard or arcade encoder whose keys this setup ",
+            "splits. Nothing is saved or started by choosing.",
+        ),
+        if picked { Done } else { Now },
+    ));
+
+    // The offer, for an encoder only, and never in the way. `Done` is a real
+    // read now — a published board is a file this process can see — so the
+    // rail can stop asking once you have drawn one.
+    if encoder_staged {
+        steps.push(journey_step(
+            "describe",
+            "Draw your panel",
+            concat!(
+                "Optional. Bind on a picture of your own cabinet instead of a ",
+                "keyboard: draw the controls where they really sit, publish it, ",
+                "and pick it under How the keys are drawn. Binding works either ",
+                "way — this only changes what you are looking at.",
+            ),
+            if has_drawn_board { Done } else { Offered },
+        ));
+    }
+
+    steps.push(journey_step(
+        "controller",
+        "Add controllers",
+        concat!(
+            "Make the virtual controllers this input drives. Up to sixteen, ",
+            "each with its own identity.",
+        ),
+        if made {
+            Done
+        } else if picked {
+            Now
+        } else {
+            Later
+        },
+    ));
+
+    steps.push(journey_step(
+        "mapping",
+        "Bind the keys",
+        concat!(
+            "Say which key drives which control. A ready-made layout does ",
+            "most of it; the rest is pressing a key and picking what it ",
+            "should do.",
+        ),
+        if bound {
+            Done
+        } else if made {
+            Now
+        } else {
+            Later
+        },
+    ));
+
+    steps.push(journey_step(
+        "play",
+        "Play",
+        concat!(
+            "Create the controllers and take the keys. Stop returns the ",
+            "keyboard to normal.",
+        ),
+        if running {
+            Done
+        } else if bound {
+            Now
+        } else {
+            Later
+        },
+    ));
+
+    // The one sentence above the rail: where you are, not what exists.
+    let line = if !staged.reachable {
+        "The draft could not be read, so this list cannot say where you are.".to_owned()
+    } else if running {
+        "Playing. Stop returns the keyboard to normal.".to_owned()
+    // Only a REQUIRED step can be "next". An offer that announced itself
+    // here would be a gate again in everything but name.
+    } else if let Some(next) = steps.iter().find(|step| step.badge == "Now") {
+        format!("Next: {}.", next.title.to_lowercase())
+    } else {
+        "Everything here is done.".to_owned()
+    };
+
+    (steps, line)
+}
+
+/// **What ksx knows about a board, in the words the device roster has room
+/// for.** Empty for a board in no catalog, which is most of them.
+///
+/// Composed here rather than served as six more fields because the row
+/// already carries two sentences the server owns — `meta` and `title` — and
+/// a fact nobody has room to render is a field that reaches nothing. The
+/// backend still owns every word: this only chooses which of them fit.
+fn identity_meta(board: &ksx_api::BoardRow) -> String {
+    let Some(family) = board.family_label.as_deref() else {
+        return String::new();
+    };
+    let mut out = format!(" · {family}");
+    if let Some(firmware) = board.firmware_label.as_deref() {
+        out.push_str(&format!(" · firmware {firmware}"));
+    }
+    // Only ever the capacity of a MEASURED profile. An unprofiled board
+    // says nothing here rather than a number ksx would be inventing.
+    if let Some(count) = board.terminal_count {
+        out.push_str(&format!(" · {count} terminals"));
+    }
+    out
+}
+
 impl NocturneDerived {
     fn of(p: &NocturnePayload) -> Self {
         let staged = &p.staged;
         let scan_read = p.scan_read();
         let chosen = staged.device.as_ref().map(|d| d.selector.as_str());
 
+        // Set inside the roster loop below, where a board's role and the
+        // staged selector are both available.
+        let mut encoder_staged = false;
         let mut dev_encoders = Vec::new();
         let mut dev_rows = Vec::new();
         let mut dev_exp = Vec::new();
@@ -2268,29 +3036,50 @@ impl NocturneDerived {
         if scan_read {
             for b in &p.scan.boards {
                 if !b.pickable {
+                    // A board with no keyboard interface never becomes a
+                    // device row at all — it lands here with a name and a
+                    // meta line and nothing else. That is exactly where a
+                    // recognised encoder with no keyboard collection ends
+                    // up, so the family name has to ride in the meta or it
+                    // is not said anywhere.
                     dev_other.push(NocturneOtherRow {
                         name: b.name.clone(),
-                        meta: format!("{} · {}", b.transport_label, b.backends),
+                        meta: format!("{} · {}{}", b.transport_label, b.backends, identity_meta(b)),
                     });
                     continue;
                 }
                 let Some(selector) = b.selector.clone() else {
                     dev_other.push(NocturneOtherRow {
                         name: b.name.clone(),
-                        meta: b.backends.clone(),
+                        meta: format!("{}{}", b.backends, identity_meta(b)),
                     });
                     continue;
                 };
                 let is_chosen = chosen == Some(selector.as_str());
+                // The staged device's KIND, captured at the one place the
+                // roster and the staged selector are both in hand. The journey
+                // branches on it: a panel needs describing, a keyboard does
+                // not.
+                if is_chosen && b.role == ksx_api::BoardRole::PanelEncoder {
+                    encoder_staged = true;
+                }
                 let verdict = if b.claimed {
                     "Held by ksx"
                 } else if b.role == ksx_api::BoardRole::PanelEncoder {
                     // An arcade encoder being reachable through its HID
                     // interface does not prove that any terminal has a usable
-                    // key assignment.  The chart read in I-PAC Setup owns that
-                    // answer; the device roster must not call an unchecked (or
-                    // deliberately cleared) EEPROM chart "ready".
-                    "Connected · outputs not checked"
+                    // key assignment. Only a chart read can say, and this row
+                    // must not call an unchecked — or deliberately cleared —
+                    // EEPROM chart "ready".
+                    //
+                    // It CAN now say whether such a read is possible at all,
+                    // which is a different sentence for a board ksx has a
+                    // measured profile for and one it never will.
+                    if b.chart_readable {
+                        "Connected · chart not read yet"
+                    } else {
+                        "Connected · outputs not checked"
+                    }
                 } else if b.cannot_type_line.trim().is_empty() {
                     "Ready to use"
                 } else {
@@ -2303,7 +3092,48 @@ impl NocturneDerived {
                         "n-dev".to_owned()
                     },
                     name: b.name.clone(),
-                    meta: format!("{} · {}", b.transport_label, verdict),
+                    // The chosen row says WHERE it is, not just what it is.
+                    //
+                    // This row IS the page's "add to canvas": `POST
+                    // /nocturne/device` is the verb that decides which board
+                    // `/nocturne` is about, and the centre widget's header is
+                    // this board's name. Until 2026-08-26 the only difference
+                    // between the chosen row and the rest was a class — no
+                    // word anywhere said the press had landed, and no word
+                    // said what pressing another one would cost. Both are
+                    // sentences, so both are the server's (`SURFACES.md`
+                    // §1a); the browser reads them.
+                    meta: if is_chosen {
+                        format!(
+                            "{} · {} · on the canvas{}",
+                            b.transport_label,
+                            verdict,
+                            identity_meta(b)
+                        )
+                    } else {
+                        format!("{} · {}{}", b.transport_label, verdict, identity_meta(b))
+                    },
+                    aria_current: if is_chosen { "true" } else { "false" }.to_owned(),
+                    // The verb sentence, and — for a board ksx recognises —
+                    // the whole of what recognition bought. `profile_detail`
+                    // is authored in the backend beside the status view, so
+                    // the two surfaces cannot word one fact two ways.
+                    title: {
+                        let verb = if is_chosen {
+                            "This board is the one on the canvas. Pressing it again changes \
+                             nothing — and deliberately does not re-stage it, so a keyboard \
+                             prepared for play keeps its preparation."
+                        } else {
+                            "Put this board on the canvas — it replaces the current one. \
+                             Nothing is saved or started."
+                        };
+                        if b.profile_detail.is_empty() || b.family_label.is_none() {
+                            verb.to_owned()
+                        } else {
+                            format!("{verb} {}", b.profile_detail)
+                        }
+                    },
+                    chart_readable: if b.chart_readable { "true" } else { "false" }.to_owned(),
                     role: b.role.code().to_owned(),
                     selector,
                     alias: b.alias_hint.clone(),
@@ -2408,6 +3238,7 @@ impl NocturneDerived {
                         (option.title.clone(), option.detail.clone())
                     };
                     NocturneChoiceRow {
+                    chosen: option.name == current_mode,
                     name: option.name.clone(),
                     title,
                     detail,
@@ -2495,6 +3326,11 @@ impl NocturneDerived {
         };
         let escape_line = ksx_api::stage::ESCAPE_HATCH_LINE.to_owned();
         let running = p.session.reachable && p.session.running;
+        // A published board is a file this process can see — the read the old
+        // `Needed` state said did not exist.
+        let has_drawn_board = p.drawn.as_ref().is_some_and(|view| !view.boards.is_empty());
+        let (journey, journey_line) =
+            nocturne_journey(staged, encoder_staged, has_drawn_board, running);
         let play_cls = if running { "n-play none" } else { "n-play" }.to_owned();
         let stop_cls = if running { "n-stop" } else { "n-stop none" }.to_owned();
         // Apply-in-place is offered exactly when it can mean something: a
@@ -2739,7 +3575,7 @@ impl NocturneDerived {
         // ⚠️Keyed on the PERSONA, not on `is_xinput`: a DualSense has its
         // own body, and drawing every non-XInput seat as a DualShock is how
         // modern controllers ended up wearing another generation's art.
-        let pad_family = pad_art_family(selected.map(|slot| slot.persona.as_str()), selected);
+        let pad_family = pad_art_family(selected.map(|slot| slot.persona.as_str()));
         let wrap_cls = |family: &str| {
             if pad_family == family {
                 "n-padwrap".to_owned()
@@ -2949,7 +3785,7 @@ impl NocturneDerived {
                 NocturnePadView {
                     slot: slot.number,
                     target_revision: slot.target_revision.clone(),
-                    family: pad_art_family(Some(slot.persona.as_str()), Some(slot)).to_owned(),
+                    family: pad_art_family(Some(slot.persona.as_str())).to_owned(),
                     preset: slot.preset.clone(),
                     title: format!("{} — \"{}\" preset", slot.persona_label, slot.preset),
                     fn_keys,
@@ -2992,11 +3828,61 @@ impl NocturneDerived {
         let drives_whom = selected
             .map(|slot| format!(" on P{}", slot.number))
             .unwrap_or_default();
-        let dress = |cell: &crate::keyboard_layout::KeyCell| {
+        // The BOARD, not the authored table. One source for the drawn
+        // cells, the tray's "off this board" test, and the available-key
+        // rosters below — three readers that used to walk `ROWS`
+        // separately and could disagree about what "on the board" meant.
+        // The saved panel layouts. An empty slice covers both "none saved" and
+        // "the store refused" for DRAWING purposes — the difference between
+        // those two is advice, and it is carried by `panels_error` into the
+        // picker's own sentence rather than being guessed at here.
+        let panel_profiles: &[ksx_api::PanelHardwareProfile] = p
+            .panels
+            .as_ref()
+            .map(|v| v.profiles.as_slice())
+            .unwrap_or(&[]);
+        // Boards somebody drew. Same empty-slice-covers-both rule as the panel
+        // layouts above: the difference between "none drawn" and "the store
+        // refused" is advice, and it is carried by `drawn_error`.
+        let drawn_boards: &[ksx_api::BoardDocument] =
+            p.drawn.as_ref().map(|v| v.boards.as_slice()).unwrap_or(&[]);
+        // WHICH board, resolved from the saved choice and what is staged.
+        // Empty means follow the hardware; an id this build cannot draw falls
+        // back to the keyboard rather than leaving the page with no picture.
+        // What the config SAYS, kept beside what was DRAWN: the picker's own
+        // sentence has to know the difference between "nothing chosen" and
+        // "chosen and honoured".
+        let chosen_board = p
+            .setup
+            .as_ref()
+            .map(|s| s.board.as_str())
+            .unwrap_or_default();
+        let board = crate::board::Board::resolve(
+            chosen_board,
+            panel_profiles,
+            drawn_boards,
+            encoder_staged,
+        );
+        // The plate's own coordinate system. Cells are placed as PERCENTAGES
+        // of it, which is what retires the hand-fitted board width: studio.css
+        // had to pick 35.5px so the plate filled one 980px card and warns
+        // against 36px because that lands it wider than its scroll container.
+        // A percentage board fits whatever card it is given, and a panel — a
+        // different shape entirely — needs no second hand-fitting.
+        let (board_w, board_h) = board.bounds;
+        let board_origin = board.origin.as_str().to_owned();
+        let pct = |value: f32, span: f32| {
+            if span > 0.0 {
+                value / span * 100.0
+            } else {
+                0.0
+            }
+        };
+        let dress = |cell: &&crate::board::BoardCell| {
             let mut cls = String::from("n-key");
             if !cell.unit.is_empty() {
                 cls.push(' ');
-                cls.push_str(cell.unit);
+                cls.push_str(&cell.unit);
             }
             if cell.sp {
                 cls.push_str(" sp");
@@ -3004,7 +3890,7 @@ impl NocturneDerived {
             if cell.ghost {
                 cls.push_str(" ghost");
             }
-            let fns = key_fns.get(cell.key).filter(|fns| !fns.is_empty());
+            let fns = key_fns.get(cell.key.as_str()).filter(|fns| !fns.is_empty());
             let (short, title) = match fns {
                 Some(fns) => {
                     cls.push_str(" bound");
@@ -3020,7 +3906,10 @@ impl NocturneDerived {
                 }
                 None => (String::new(), String::new()),
             };
-            let owners = key_slots.get(cell.key).map(|v| v.as_slice()).unwrap_or(&[]);
+            let owners = key_slots
+                .get(cell.key.as_str())
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
             let others: Vec<String> = owners
                 .iter()
                 .filter(|n| Some(**n) != selected_number)
@@ -3042,15 +3931,23 @@ impl NocturneDerived {
             };
             cls.push_str(&bands(owners));
             NocturneKeyCell {
-                cap: cell.cap.to_owned(),
-                key: cell.key.to_owned(),
+                cap: cell.cap.clone(),
+                key: cell.key.clone(),
                 cls,
                 short,
                 title,
                 aria,
+                style: format!(
+                    "left:{:.4}%;top:{:.4}%;width:{:.4}%;height:{:.4}%",
+                    pct(cell.x, board_w),
+                    pct(cell.y, board_h),
+                    pct(cell.w, board_w),
+                    pct(cell.h, board_h)
+                ),
             }
         };
-        let kb_rows: Vec<Vec<NocturneKeyCell>> = crate::keyboard_layout::ROWS
+        let kb_rows: Vec<Vec<NocturneKeyCell>> = board
+            .rows()
             .iter()
             .map(|row| row.iter().map(dress).collect())
             .collect();
@@ -3062,11 +3959,11 @@ impl NocturneDerived {
         let kb_row5 = kb_rows.next().unwrap_or_default();
         let kb_row6 = kb_rows.next().unwrap_or_default();
         // Off-board keys: bound in the table but not on the standard board.
-        let board_keys: std::collections::BTreeSet<&str> = crate::keyboard_layout::ROWS
+        let board_keys: std::collections::BTreeSet<&str> = board
+            .cells
             .iter()
-            .flat_map(|row| row.iter())
             .filter(|cell| !cell.key.is_empty())
-            .map(|cell| cell.key)
+            .map(|cell| cell.key.as_str())
             .collect();
         let kb_tray: Vec<NocturneKeyCell> = key_fns
             .iter()
@@ -3101,6 +3998,11 @@ impl NocturneDerived {
                     short: crate::keyboard_layout::short_for(persona, fns[0]),
                     aria: title.clone(),
                     title,
+                    // The TRAY is not on the plate. These are keys bound off
+                    // whatever board is drawn, so they have no place on it —
+                    // they stay a flowed strip, and an empty style is what
+                    // says so rather than a position that means nothing.
+                    style: String::new(),
                 }
             })
             .collect();
@@ -3152,15 +4054,27 @@ impl NocturneDerived {
         let mut avail_nav: Vec<NocturneKeyRow> = Vec::new();
         let mut avail_num: Vec<NocturneKeyRow> = Vec::new();
         if selected.is_some() {
-            for cell in crate::keyboard_layout::ROWS
-                .iter()
-                .flat_map(|row| row.iter())
-            {
-                if cell.ghost || cell.key.is_empty() || key_fns.contains_key(cell.key) {
+            // **One chip per KEY, not per cell.**
+            //
+            // The old source was `keyboard_layout::ROWS`, whose keys a test
+            // pinned unique, so nothing here had to dedupe. A Board makes
+            // duplicates ordinary and deliberate: a saved encoder layout may
+            // wire two terminals to one key (`allow_shared_key`), and two drawn
+            // controls may send the same key on purpose. Without this the tray
+            // showed "5" twice, the section headings counted cells rather than
+            // keys, and the list's `(r) => r.key` reconcile key had collisions —
+            // which is how a differ hands a recycled node to the wrong row.
+            let mut offered: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+            for cell in &board.cells {
+                if cell.ghost
+                    || cell.key.is_empty()
+                    || key_fns.contains_key(cell.key.as_str())
+                    || !offered.insert(cell.key.as_str())
+                {
                     continue;
                 }
                 let chip = NocturneKeyRow {
-                    key: cell.key.to_owned(),
+                    key: cell.key.clone(),
                     targets: String::new(),
                     fns: String::new(),
                     cls: "n-akey".to_owned(),
@@ -3168,7 +4082,7 @@ impl NocturneDerived {
                 };
                 if cell.key.starts_with("Numpad") || cell.key == "NumLock" {
                     avail_num.push(chip);
-                } else if NAV_KEYS.contains(&cell.key) {
+                } else if NAV_KEYS.contains(&cell.key.as_str()) {
                     avail_nav.push(chip);
                 } else {
                     avail_main.push(chip);
@@ -3627,6 +4541,85 @@ impl NocturneDerived {
         };
 
         Self {
+            // The board picker. Marked the way the theme picker is — the
+            // chosen row's button carries `n-radio on`, every other row plain
+            // `n-radio` — and deliberately NOT with a class that any stylesheet
+            // rule can hide, which is how three of four theme rows disappeared.
+            //
+            // The mark follows what is DRAWN, not what is stored, so a config
+            // naming a layout since deleted marks the keyboard it actually fell
+            // back to instead of marking nothing at all.
+            // The plate needs a height: every cell in it is absolutely
+            // positioned, so without this the case collapses to nothing.
+            //
+            // AND IT NEEDS A HEIGHT CEILING, because not every board is
+            // wide. A keyboard is 3.5:1 and fills its card happily; a
+            // four-player arcade panel is TALLER THAN IT IS WIDE, and a
+            // width-driven plate turned an I-PAC 4 into a 1400px column
+            // that swallowed everything below it on the canvas. The clamp
+            // is expressed as a width because that is the axis `width:
+            // auto` resolves on: cap the width at whatever would produce
+            // the tallest plate we allow, and `aspect-ratio` does the rest
+            // without distorting anything. `min()` keeps the card's own
+            // width the ceiling for a landscape board, where the budget is
+            // far wider than the card and must not win.
+            board_case_style: format!(
+                "aspect-ratio:{board_w:.2} / {board_h:.2};\
+                 max-width:min(100%, calc(var(--n-kbcase-max-h) * {board_w:.2} / {board_h:.2}))"
+            ),
+            board_origin,
+            board_rows: crate::board::Board::roster(panel_profiles, drawn_boards)
+                .into_iter()
+                .map(|choice| NocturneChoiceRow {
+                    chosen: choice.id == board.id,
+                    cls: if choice.id == board.id {
+                        "n-radio on".to_owned()
+                    } else {
+                        "n-radio".to_owned()
+                    },
+                    name: choice.id,
+                    title: choice.name,
+                    detail: choice.detail,
+                })
+                .collect(),
+            // The sentence under the picker, and the only place these states
+            // are told apart. They are genuinely different advice: a refused
+            // read means try again, nothing saved means go and make one, and
+            // neither is "you have no arcade board".
+            //
+            // TWO stores feed this picker and either can refuse on its own,
+            // so both errors are reported. `drawn_error` was composed and
+            // plumbed and then read by nothing at all — a refused board read
+            // silently redrew the page as a plain keyboard, dropped every
+            // `board:` row, and said "The picture only" as though all was
+            // well. A store that would not answer must never look like a
+            // store with nothing in it.
+            board_line: if !p.drawn_error.is_empty() && !p.panels_error.is_empty() {
+                format!("{} {}", p.drawn_error, p.panels_error)
+            } else if !p.drawn_error.is_empty() {
+                p.drawn_error.clone()
+            } else if !p.panels_error.is_empty() {
+                p.panels_error.clone()
+            } else if encoder_staged && panel_profiles.len() > 1 && chosen_board.is_empty() {
+                // More than one saved layout and no choice made. ksx cannot
+                // tell which belongs to the encoder that is plugged in — a
+                // saved layout carries no device identity at all — so it
+                // says so instead of drawing whichever sorted first.
+                "You have more than one saved panel layout, and a saved \
+                 layout does not record which board it came off. Pick the \
+                 one that matches the encoder you plugged in."
+                    .to_owned()
+            } else if encoder_staged && panel_profiles.is_empty() {
+                "Your arcade panel can be a board here too — but ksx cannot \
+                 guess what it emits, because an encoder only ever tells the \
+                 host that a key arrived. Save a panel layout and it joins \
+                 this list."
+                    .to_owned()
+            } else {
+                "The picture only. Which key drives which control is the same \
+                 whichever board is on screen."
+                    .to_owned()
+            },
             theme_rows: theme_rows(&SetupSnapshot {
                 available: p.setup.is_some(),
                 source: String::new(),
@@ -3634,6 +4627,9 @@ impl NocturneDerived {
             })
             .into_iter()
             .map(|row| NocturneChoiceRow {
+                // `theme_rows` already made this decision; it spelled it
+                // only in the class, which is why it could not be spoken.
+                chosen: row.chosen_cls.split_whitespace().any(|c| c == "on"),
                 name: row.value,
                 title: row.title,
                 detail: row.detail,
@@ -3679,6 +4675,8 @@ impl NocturneDerived {
             pad_switchpro_cls,
             pad_xboxseries_cls,
             bind_title: binds.title,
+            journey,
+            journey_line,
             bind_face,
             bind_dpad,
             bind_shoulders,
@@ -3780,6 +4778,427 @@ impl NocturneDerived {
 mod tests {
     use super::*;
 
+    /// **Every persona ksx ships has a presentation, and no two share a row.**
+    ///
+    /// ADDED 2026-08-26. This is the exhaustiveness the compiler cannot give
+    /// us. `PAD_PRESENTATIONS` is keyed by STRING on purpose — `render_map.rs`
+    /// links ksx-core only as a dev-dependency (`docs/M9-DECISION.md` §6) — so
+    /// a `match` on `Persona` is not available and a new variant cannot make
+    /// the build fail. It makes THIS fail instead.
+    ///
+    /// What it would have caught: `Persona::ALL` grew `snes` and `genesis` on
+    /// 2026-08-20 and `PadBackend::supports` returned true for both, so both
+    /// appeared in /nocturne's create-controller grid the same day. The string
+    /// "snes" appeared in zero of the five surfaces that decide how a
+    /// controller is drawn, and every one of the five answered anyway.
+    #[test]
+    fn every_persona_resolves_to_a_presentation() {
+        use std::collections::BTreeSet;
+
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        for persona in ksx_core::Persona::ALL.iter().copied() {
+            let name = persona.as_str();
+            let row = pad_presentation(name);
+            assert_eq!(
+                row.persona, name,
+                "persona '{name}' has no row in PAD_PRESENTATIONS — it \
+                 resolved to '{}' (family '{}'). Add the row: art, zone table, \
+                 legend, family and the controls the device does not have.",
+                row.persona, row.family
+            );
+            assert!(seen.insert(row.persona), "two rows claim '{name}'");
+        }
+        assert_eq!(
+            seen.len(),
+            PAD_PRESENTATIONS.len(),
+            "PAD_PRESENTATIONS holds a row for a persona ksx-core does not \
+             ship: {:?}",
+            PAD_PRESENTATIONS
+                .iter()
+                .map(|row| row.persona)
+                .filter(|name| !seen.contains(name))
+                .collect::<Vec<_>>()
+        );
+
+        // Every row also has to name a body the page can actually draw. The
+        // five `.n-padwrap` masters are the whole set of drawn bodies; a row
+        // naming a sixth would resolve to nothing on the no-JS page and to the
+        // unknown-family placeholder in the browser.
+        const DRAWN_BODIES: [&str; 5] = ["xbox", "ps", "ps5", "switchpro", "xboxseries"];
+        for row in PAD_PRESENTATIONS {
+            assert!(
+                DRAWN_BODIES.contains(&row.family),
+                "{}'s family '{}' is not one of the served masters {DRAWN_BODIES:?}",
+                row.persona,
+                row.family
+            );
+        }
+    }
+
+    /// **An unrecognised persona is a NAMED outcome, never a quiet Xbox pad.**
+    ///
+    /// The case is real: ksx Studio reads its roster over `ksx-api`, so a
+    /// daemon newer than this binary can serve a persona added after it was
+    /// built. The old code answered that with `slot.is_xinput` — false for any
+    /// plain-HID pad — and drew a DualShock 4.
+    #[test]
+    fn an_unknown_persona_is_named_rather_than_guessed() {
+        for made_up in ["gamecube", "n64", "", "xbox361", "playstation-6"] {
+            let row = pad_presentation(made_up);
+            assert_eq!(
+                row.family, "unknown",
+                "'{made_up}' resolved to the '{}' body — an unrecognised \
+                 controller must not be drawn as a controller we know",
+                row.family
+            );
+            assert!(
+                row.absent.is_empty(),
+                "'{made_up}' claims {:?} are missing from a device this build \
+                 does not recognise; not knowing a pad is not the same as \
+                 knowing what it lacks",
+                row.absent
+            );
+        }
+        // ...and the empty roster is a DIFFERENT case with its own answer: no
+        // seat to draw, so the neutral outline stays as ground.
+        assert_eq!(pad_art_family(None), "xbox");
+        // The one that matters most, because it is the exact shape of the bug:
+        // a plain-HID persona this build DOES know must keep its own body and
+        // must never be inferred from `is_xinput`.
+        assert_eq!(pad_art_family(Some("dualsense")), "ps5");
+        assert_eq!(pad_art_family(Some("snes")), "xbox");
+        assert_eq!(pad_art_family(Some("genesis")), "xbox");
+    }
+
+    /// **The alias column can never come to mean something ksx-core disagrees
+    /// with.**
+    ///
+    /// `pad_presentation` accepts spellings other than the canonical name
+    /// because the substring matchers it replaced did (`art_for` answered DS4
+    /// for anything containing `ds4`/`ps4`/`ps5`/`dualshock`). Tolerance is
+    /// fine; tolerance that DISAGREES with the parser is a page drawing one
+    /// controller for a config that loads as another. So every alias is fed to
+    /// the real `Persona::from_str`.
+    #[test]
+    fn presentation_aliases_match_ksx_core() {
+        for row in PAD_PRESENTATIONS {
+            let canonical: ksx_core::Persona = row
+                .persona
+                .parse()
+                .unwrap_or_else(|e| panic!("{}: {e}", row.persona));
+            for alias in row.aliases {
+                let parsed: ksx_core::Persona = alias
+                    .parse()
+                    .unwrap_or_else(|e| panic!("{}: alias '{alias}': {e}", row.persona));
+                assert_eq!(
+                    parsed, canonical,
+                    "'{alias}' is presented as {} but ksx-core parses it as \
+                     {parsed} — the page would draw one controller for a \
+                     config that loads as another",
+                    row.persona
+                );
+            }
+            // Separator and case tolerance is the parser's, so it must be
+            // this table's too: `Xbox 360` and `xbox-series-xs-bt` are both
+            // spellings a human or a catalog slug produces.
+            assert_eq!(
+                pad_presentation(&row.persona.to_uppercase()).persona,
+                row.persona
+            );
+        }
+        assert_eq!(pad_presentation("Xbox 360").persona, "xbox360");
+        assert_eq!(pad_presentation("xbox-series-xs-bt").persona, "xboxseries");
+        assert_eq!(pad_presentation("Sega Mega Drive").persona, "genesis");
+    }
+
+    /// **The surfaces that hold a LABEL rather than an id still find the right
+    /// pad.**
+    ///
+    /// Nearly every caller passes a canonical persona name, and it would be
+    /// easy to believe all of them do. `/pads` does not: it lists what is
+    /// actually on the ViGEm bus, classified from hardware ids, and serves
+    /// `ksx_platform::PersonaGuess::label()` — human strings with a noun on the
+    /// end. `render_pads.rs` hands one of those straight to `art_for`.
+    ///
+    /// The substring matcher this table replaced accepted them by accident.
+    /// Exact matching alone would have drawn every live DualShock 4 on that
+    /// page as an Xbox pad — a fresh instance of the bug being fixed,
+    /// introduced by the fix. Hence stage 2 of `pad_presentation`, and hence
+    /// these strings written out literally.
+    ///
+    /// They are copied rather than imported because ksx-studio does not link
+    /// ksx-platform, even in tests. If `PersonaGuess::label()` is reworded,
+    /// this test keeps passing and the page quietly loses its art — so the
+    /// wording is named here as the thing to re-check.
+    #[test]
+    fn a_human_label_still_finds_its_pad() {
+        // ksx_platform::PersonaGuess::label(), verbatim (2026-08-26).
+        assert_eq!(pad_presentation("Xbox 360 pad").persona, "xbox360");
+        assert_eq!(
+            pad_presentation("PlayStation (DS4) pad").persona,
+            "playstation"
+        );
+        assert_eq!(
+            crate::render::art_for("PlayStation (DS4) pad"),
+            crate::render::ART_DS4
+        );
+        // ...and the third guess is genuinely unknown, so it must stay that
+        // way rather than matching something by luck.
+        assert_eq!(pad_presentation("unknown pad").family, "unknown");
+
+        // ksx_core::Persona::label() for every persona, which is what any
+        // surface holding a display name would pass.
+        for persona in ksx_core::Persona::ALL.iter().copied() {
+            assert_eq!(
+                pad_presentation(persona.label()).persona,
+                persona.as_str(),
+                "the label {:?} must find {}'s own row",
+                persona.label(),
+                persona
+            );
+        }
+
+        // ⚠️ The reason the second pass strips rather than searches. A future
+        // persona whose name EXTENDS an existing one must not inherit its
+        // body: `contains` resolves every one of these to an older pad and
+        // draws it, silently, which is the entire bug this record removes.
+        for extension in [
+            "playstation6",
+            "playstation-6",
+            "xbox360x",
+            "snes2",
+            "dualsense2",
+            "genesis32x",
+        ] {
+            assert_eq!(
+                pad_presentation(extension).family,
+                "unknown",
+                "'{extension}' extends a name we know and must NOT inherit its \
+                 art — that is how a new console gets drawn as an old one"
+            );
+        }
+        // ...and a string naming two controllers is not an answer either.
+        assert_eq!(pad_presentation("xbox360 or playstation").family, "unknown");
+    }
+
+    /// **The five surfaces answer with ONE voice.**
+    ///
+    /// The bug this closes was not any single wrong answer — it was two
+    /// surfaces on the same page disagreeing about the same seat: a staged
+    /// SNES pad drawn as a DualShock 4 in the pad grid (`pad_art_family` fell
+    /// through `is_xinput` to `"ps"`) and as an Xbox pad in the mapper
+    /// (`art_for` fell through to `ART_XBOX`, and `zones_for` read `art_for`).
+    ///
+    /// So this checks agreement, not values: the family a seat is drawn with
+    /// must belong to the same row as the art it is served and the zone table
+    /// it is authored against.
+    #[test]
+    fn art_family_and_zones_come_from_one_row() {
+        for persona in ksx_core::Persona::ALL.iter().copied() {
+            let name = persona.as_str();
+            let row = pad_presentation(name);
+            assert_eq!(pad_art_family(Some(name)), row.family, "{name}");
+            assert_eq!(crate::render::art_for(name), row.art, "{name}");
+            assert!(
+                std::ptr::eq(crate::render_map::zones_for(name), row.zones),
+                "{name}: zones_for returned a different table than its row names"
+            );
+            // A PlayStation-family body is served the PlayStation art and a
+            // PlayStation vocabulary; anything else is the two disagreeing.
+            let sony_body = matches!(row.family, "ps" | "ps5");
+            assert_eq!(
+                row.art == crate::render::ART_DS4,
+                sony_body,
+                "{name} is drawn as '{}' but served {} — the art and the body \
+                 must be the same decision",
+                row.family,
+                row.art
+            );
+        }
+    }
+
+    /// **The retro pads offer no control their hardware does not have.**
+    ///
+    /// Stated as literals rather than derived from `absent`, because a test
+    /// that recomputed the production list would agree with any list. These
+    /// are the four things a player would notice: no analog trigger to pull,
+    /// no stick to push, no stick to click, no home button — and, positively,
+    /// a D-pad and four faces that DO exist and must stay bindable.
+    #[test]
+    fn a_snes_pad_offers_no_stick_and_no_trigger() {
+        for persona in ["snes", "genesis"] {
+            let drawn: Vec<&str> = crate::render_map::zones_for(persona)
+                .iter()
+                .map(|zone| zone.fn_name)
+                .collect();
+            for gone in [
+                "lt", "rt", "lthumb", "rthumb", "guide", "lx.min", "lx.max", "ly.min", "ly.max",
+                "rx.min", "rx.max", "ry.min", "ry.max",
+            ] {
+                assert!(
+                    !drawn.contains(&gone),
+                    "{persona} offers '{gone}', which the pinned descriptor \
+                     cannot express — a key bound there drives nothing"
+                );
+            }
+            for kept in [
+                "A",
+                "B",
+                "X",
+                "Y",
+                "lb",
+                "rb",
+                "start",
+                "dpad.up",
+                "dpad.down",
+                "dpad.left",
+                "dpad.right",
+            ] {
+                assert!(drawn.contains(&kept), "{persona} lost '{kept}'");
+            }
+        }
+        // The SNES pad prints its own words, anchored on the one mapping this
+        // build measured (`Persona::Snes`: "positional faces (ksx A = bottom =
+        // SNES B)"). Read through `legend_label_for_persona`, which is what
+        // every surface calls.
+        let label = |persona: &str, function: &str| -> String {
+            let zone = crate::render_map::zones_for(persona)
+                .iter()
+                .find(|zone| zone.fn_name == function)
+                .unwrap_or_else(|| panic!("{persona} has no {function}"));
+            crate::render_map::legend_label_for_persona(persona, zone)
+        };
+        assert_eq!(label("snes", "A"), "B");
+        assert_eq!(label("snes", "B"), "A");
+        assert_eq!(label("snes", "X"), "Y");
+        assert_eq!(label("snes", "Y"), "X");
+        assert_eq!(label("snes", "back"), "Select");
+        // Genesis deliberately prints NO Sega letters: one wire identity serves
+        // Genesis, Mega Drive and Saturn, and the button-label table is
+        // recorded as PROVISIONAL until the joy.cpl press-check
+        // (docs/HIDMAESTRO-STATE.md, 2026-08-20). It prints ksx's own function
+        // names, which claim nothing about anybody's shell. Change these four
+        // in the commit that lands the press-check, not before.
+        assert_eq!(label("genesis", "A"), "A");
+        assert_eq!(label("genesis", "B"), "B");
+        assert_eq!(label("genesis", "X"), "X");
+        assert_eq!(label("genesis", "Y"), "Y");
+        // …and the two retro personas must NOT have quietly become the same
+        // pad: identical geometry is intended, identical WORDS would mean one
+        // of the two vocabularies was never stated.
+        assert_ne!(label("snes", "A"), label("genesis", "A"));
+    }
+
+    /// **Narrowing a pad's controls must not silently swallow the bindings a
+    /// preset already holds for them.**
+    ///
+    /// The other half of the retro decision, and the half that is easy to get
+    /// wrong while feeling correct. `ksx_core::persona`'s module doc makes it a
+    /// rule that "re-persona-ing a slot must never require editing its preset",
+    /// so a seat moved from Xbox 360 to SNES keeps its `lx.max` binding in the
+    /// TOML — pointing at a stick that pad does not have.
+    ///
+    /// The binding pane is built from `zones_for`, so narrowing the SNES table
+    /// removes that row by construction: the key stays bound, quietly does
+    /// nothing, and the page cannot even offer a Clear. That is the same
+    /// silent-fallback class the narrowing exists to remove, so the row is
+    /// appended with the sentence that explains it.
+    #[test]
+    fn a_binding_the_new_pad_cannot_express_is_shown_not_swallowed() {
+        let staged_slot = |persona: &str, label: &str| ksx_api::StagedSlotView {
+            number: 1,
+            persona: persona.to_owned(),
+            persona_label: label.to_owned(),
+            preset: "Player 1".to_owned(),
+            authoring: Some(ksx_config::PresetFile {
+                name: "Player 1".to_owned(),
+                bindings: [
+                    (
+                        "A".to_owned(),
+                        ksx_config::BindingEntry::Key("G".to_owned()),
+                    ),
+                    // The control a SNES pad does not have.
+                    (
+                        "lx.max".to_owned(),
+                        ksx_config::BindingEntry::Key("K".to_owned()),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+                macros: Default::default(),
+            }),
+            ..Default::default()
+        };
+        let rows_for = |persona: &str, label: &str| -> Vec<WorkspaceBindRow> {
+            let slot = staged_slot(persona, label);
+            let staged = ksx_api::StagedSetupView {
+                reachable: true,
+                slots: vec![slot.clone()],
+                ..Default::default()
+            };
+            workspace_bind_rows(&staged, Some(&slot)).rows
+        };
+
+        // An Xbox seat HAS a left stick, so the row is an ordinary one and
+        // carries no apology.
+        let xbox = rows_for("xbox360", "Xbox 360");
+        let xbox_row = xbox
+            .iter()
+            .find(|row| row.function == "lx.max")
+            .expect("an Xbox pad has a left stick");
+        assert_eq!(xbox_row.keys, "K");
+        assert!(xbox_row.share_note.is_empty(), "{:?}", xbox_row.share_note);
+        assert_eq!(xbox_row.label, "LS →", "the persona names its own control");
+
+        // The same preset on a SNES seat: still listed, still clearable, and
+        // now saying why it does nothing.
+        let snes = rows_for("snes", "SNES");
+        let stranded = snes
+            .iter()
+            .find(|row| row.function == "lx.max")
+            .expect("the binding is still in the preset and must still be shown");
+        assert_eq!(stranded.keys, "K");
+        assert_eq!(stranded.clear, "Clear", "it must be undoable from here");
+        assert!(
+            stranded.share_note.contains("SNES") && stranded.share_note.contains("drives nothing"),
+            "the row must say what happened: {:?}",
+            stranded.share_note
+        );
+        // ...and the pad still offers no NEW stick control to bind.
+        assert!(
+            !snes.iter().any(|row| row.function == "lx.min"),
+            "an unbound stick direction must not be offered on a pad with no stick"
+        );
+        assert!(
+            snes.iter().any(|row| row.function == "A"),
+            "the controls the pad DOES have are untouched"
+        );
+    }
+
+    /// **One shape claim about retro hardware, not two copies of it.**
+    ///
+    /// `ZONE_SNES` and `ZONE_GENESIS` deliberately hold the same twelve
+    /// controls at the same coordinates — they draw the same stand-in body and
+    /// they make the same claim about what a digital retro pad has. Only the
+    /// printed words differ. Without this, editing one table's geometry leaves
+    /// the other's silently behind, and the shared claim quietly becomes two
+    /// different ones.
+    #[test]
+    fn retro_tables_share_one_geometry() {
+        let snes = crate::render_map::ZONE_SNES;
+        let genesis = crate::render_map::ZONE_GENESIS;
+        assert_eq!(snes.len(), genesis.len(), "retro tables differ in length");
+        for (a, b) in snes.iter().zip(genesis.iter()) {
+            assert_eq!(a.fn_name, b.fn_name, "retro tables list different controls");
+            assert_eq!(
+                (a.cx, a.cy, a.w, a.h, a.kind),
+                (b.cx, b.cy, b.w, b.h, b.kind),
+                "the {} zone has drifted between the two retro tables",
+                a.fn_name
+            );
+        }
+    }
+
     #[test]
     fn nocturne_environment_provenance_survives_derivation() {
         let payload = NocturnePayload {
@@ -3805,73 +5224,16 @@ mod tests {
             .contains("no physical device"));
     }
 
-    /// **The saved answer is marked, and an unconfigured machine claims
-    /// nothing.**
-    ///
-    /// The three answers come from `BlockingOption::roster()` - the same list
-    /// `/start` asks with - so this pins the part that is genuinely this page's
-    /// own: which one is chosen, and what the line says when there is nothing
-    /// to choose from yet. An unconfigured machine has a default in MEMORY,
-    /// and printing that as though somebody had picked it sends a person
-    /// hunting for a setting they never set.
-    #[test]
-    fn the_saved_split_or_freeze_answer_is_the_marked_one() {
-        let configured = ksx_api::SetupView {
-            config_exists: true,
-            blocking: "whole".to_owned(),
-            blocking_options: ksx_api::BlockingOption::roster(),
-            ..ksx_api::SetupView::default()
-        };
-        let rows = SetupRows::of(&SetupSnapshot::ready(configured.clone())).blocking;
-        assert_eq!(
-            rows.len(),
-            3,
-            "every answer is offered, not just the others"
-        );
-        let chosen: Vec<&str> = rows
-            .iter()
-            .filter(|r| r.chosen_cls.contains("pill-ok"))
-            .map(|r| r.name.as_str())
-            .collect();
-        assert_eq!(chosen, ["whole"], "exactly the saved answer is marked");
-        assert!(
-            rows.iter()
-                .find(|r| r.name == "whole")
-                .is_some_and(|r| r.button.contains("how it is set")),
-            "the current answer does not invite a no-op write"
-        );
-
-        // Nothing is configured: no answer is reported, and none is invented.
-        let fresh = ksx_api::SetupView {
-            config_exists: false,
-            blocking: String::new(),
-            blocking_options: ksx_api::BlockingOption::roster(),
-            ..ksx_api::SetupView::default()
-        };
-        assert!(
-            SetupRows::of(&SetupSnapshot::ready(fresh))
-                .blocking
-                .iter()
-                .all(|r| !r.chosen_cls.contains("pill-ok")),
-            "an unset machine has chosen none of the three"
-        );
-
-        // A value this build does not know (an older or hand-edited config) is
-        // NOT smoothed over into one of the three it does know.
-        let strange = ksx_api::SetupView {
-            config_exists: true,
-            blocking: "half-on".to_owned(),
-            blocking_options: ksx_api::BlockingOption::roster(),
-            ..ksx_api::SetupView::default()
-        };
-        assert!(
-            SetupRows::of(&SetupSnapshot::ready(strange))
-                .blocking
-                .iter()
-                .all(|r| !r.chosen_cls.contains("pill-ok")),
-            "an unknown value marks none of the three as in use"
-        );
-    }
+    // DELETED 2026-08-26: `the_saved_split_or_freeze_answer_is_the_marked_one`
+    // (STALE + DUPLICATE). It asserted `SetupRows::of(..).blocking` ->
+    // `SetupBlockingRowView` / `pill pill-ok`, the DELETED `/setup` page's
+    // composer. `/nocturne` derives its blocking rows from an INDEPENDENT
+    // implementation in this file (`NocturneChoiceRow`, `n-radio on`), so this
+    // test defended the dead twin and could not have caught a live break.
+    // Every claim it made is pinned on the live path in `tests/http.rs`:
+    // unanswered -> no row is `n-radio on`; answered -> exactly one is; and a
+    // value this build does not know is refused at the verb rather than being
+    // smoothed over into one of the three it does know.
 
     /// **A stale registration offers the REPAIR, not the removal.**
     ///
@@ -4006,32 +5368,80 @@ mod tests {
     /// The theme card's three states, pinned (TK2/TK3 review finding: the
     /// first cut marked System "in use" on a config nothing had READ, and
     /// claimed "this is how it is set" about a config that said otherwise).
+    ///
+    /// **And the vocabulary itself is pinned, because it was wrong for months
+    /// while this test stayed green.** `chosen_cls` is the class of the row's
+    /// own submit button, and it carried `pill pill-ok` / `pill pill-none`
+    /// inherited from the deleted `/setup` page, where the same string painted
+    /// a separate chip. `.pill-none { display: none }` therefore hid every
+    /// unchosen theme on `/nocturne`. This test asserted the marking was
+    /// CORRECT without asserting it was RENDERABLE — so it agreed, in detail,
+    /// with a picker that showed one row. Both halves are now claims.
     #[test]
     fn the_theme_rows_and_line_say_only_what_the_read_supports() {
         let marked = |rows: &[SetupThemeRowView]| {
             rows.iter()
-                .filter(|r| r.chosen_cls == "pill pill-ok")
+                .filter(|r| r.chosen_cls == "n-radio on")
                 .map(|r| r.value.clone())
                 .collect::<Vec<_>>()
+        };
+        // Every row must be a paintable control in EVERY state, marked or not.
+        // `.n-modeform button.n-radio { display: flex }` is what gives these
+        // buttons their layout, and it matches `.n-radio` only.
+        let renderable = |rows: &[SetupThemeRowView]| {
+            for r in rows {
+                assert!(
+                    r.chosen_cls == "n-radio" || r.chosen_cls == "n-radio on",
+                    "theme row '{}' has chosen_cls '{}' — it is the submit button's own \
+                     class, so anything but the n-radio idiom is either unstyled or (as \
+                     with pill-none) display:none",
+                    r.value,
+                    r.chosen_cls,
+                );
+            }
         };
 
         // Nothing stored: System is genuinely how it is set.
         let snap = SetupSnapshot::ready(ksx_api::SetupView::default());
-        let rows = SetupRows::of(&snap).themes;
+        let rows = theme_rows(&snap);
         assert_eq!(marked(&rows), ["system"]);
         assert_eq!(rows[0].button, "This is how it is set");
+        renderable(&rows);
+
+        // Every row describes itself in its own words. `scheme` cannot supply
+        // this sentence: Dark and Matrix are both `scheme: "dark"`, and while
+        // three rows were invisible nobody could see them say the same thing.
+        let details: std::collections::BTreeSet<&str> =
+            rows.iter().map(|r| r.detail.as_str()).collect();
+        assert_eq!(
+            details.len(),
+            rows.len(),
+            "two theme rows share a detail sentence — a picker cannot offer a choice it \
+             refuses to describe: {:?}",
+            rows.iter()
+                .map(|r| (r.value.as_str(), r.detail.as_str()))
+                .collect::<Vec<_>>(),
+        );
+        for r in &rows {
+            assert!(
+                !r.detail.trim().is_empty(),
+                "theme row '{}' has no detail sentence",
+                r.value,
+            );
+        }
 
         // A shipped id: that row is marked; System offers its action.
         let snap = SetupSnapshot::ready(ksx_api::SetupView {
             theme: "light".to_owned(),
             ..Default::default()
         });
-        let rows = SetupRows::of(&snap).themes;
+        let rows = theme_rows(&snap);
         assert_eq!(marked(&rows), ["light"]);
         assert_eq!(rows[0].button, "Match the operating system");
         assert!(rows
             .iter()
             .any(|r| r.value == "light" && r.button == "This is how it is set"));
+        renderable(&rows);
 
         // An id this build does not ship: System IS what renders (the pill is
         // true) but NOT what is set — the button offers the useful act.
@@ -4039,84 +5449,33 @@ mod tests {
             theme: "matrix2".to_owned(),
             ..Default::default()
         });
-        let rows = SetupRows::of(&snap).themes;
+        let rows = theme_rows(&snap);
         assert_eq!(marked(&rows), ["system"]);
         assert_eq!(rows[0].button, "Follow the operating system instead");
+        renderable(&rows);
 
         // A config nothing could read: no row claims anything about it.
         let snap = SetupSnapshot::unavailable("the store refused");
-        let rows = SetupRows::of(&snap).themes;
+        let rows = theme_rows(&snap);
         assert_eq!(marked(&rows), Vec::<String>::new());
         assert!(rows.iter().all(|r| r.button != "This is how it is set"));
+        // Even with nothing marked, all four stay clickable and painted —
+        // this is the state where the picker is the ONLY way out.
+        renderable(&rows);
     }
 
-    #[test]
-    fn the_setup_rows_are_composed_once_from_the_view() {
-        let view = ksx_api::SetupView {
-            devices: vec![ksx_api::SetupDeviceRow {
-                alias: "P1 board".to_owned(),
-                id: "usb:d209:0430:00".to_owned(),
-                backend: "interception".to_owned(),
-            }],
-            slots: vec![ksx_api::SetupSlotRow {
-                number: 3,
-                device: "P1 board".to_owned(),
-                preset: "Panel P1".to_owned(),
-                persona: "Xbox 360 pad".to_owned(),
-                socd: String::new(),
-                source: "config.toml".to_owned(),
-            }],
-            presets: vec!["Panel P1".to_owned()],
-            profiles: vec!["Example Game".to_owned()],
-            steps: vec![ksx_api::SetupStep {
-                id: ksx_api::setup_steps::SLOT.to_owned(),
-                title: "Wire a slot".to_owned(),
-                detail: "One slot is wired.".to_owned(),
-                state: ksx_api::setup_states::NOW.to_owned(),
-            }],
-            notes: vec!["a note".to_owned()],
-            ..ksx_api::SetupView::default()
-        };
-        let rows = SetupRows::of(&SetupSnapshot::ready(view));
-
-        assert_eq!(rows.steps[0].badge, "1");
-        assert_eq!(rows.steps[0].cls, "step now");
-        assert_eq!(rows.devices[0].title, "P1 board");
-        assert_eq!(rows.devices[0].detail, "interception · usb:d209:0430:00");
-        assert_eq!(rows.slots[0].title, "Slot 3 — Panel P1");
-        assert_eq!(
-            rows.slots[0].detail,
-            "P1 board · Xbox 360 pad · config.toml"
-        );
-        assert_eq!(rows.preset_options[0].text, "Panel P1");
-        assert_eq!(
-            rows.persona_options
-                .iter()
-                .map(|option| option.value.as_str())
-                .collect::<Vec<_>>(),
-            [
-                "xbox360",
-                "playstation",
-                "dualsense",
-                "switchpro",
-                "xboxseries",
-                "snes",
-                "genesis"
-            ],
-            "the maintenance menu offers every live persona and no gated one"
-        );
-        assert_eq!(rows.persona_options[0].label, "Xbox 360 · ViGEmBus");
-        assert_eq!(rows.persona_options[2].label, "DualSense · HIDMaestro");
-        assert_eq!(rows.profile_options[0].text, "Example Game");
-        assert_eq!(rows.notes[0].text, "a note");
-
-        // The menu is 1..=the ceiling the BACKEND serves — never a literal in
-        // a view layer (the shipped page held `SLOT_CHOICES = 8` in two
-        // languages while `ksx_core::MAX_SLOTS` was 16).
-        assert_eq!(rows.slot_options.len(), usize::from(ksx_core::MAX_SLOTS));
-        assert_eq!(rows.slot_options[0].value, "1");
-        assert_eq!(rows.slot_options[0].label, "Slot 1");
-        let last = rows.slot_options.last().unwrap();
-        assert_eq!(last.value, ksx_core::MAX_SLOTS.to_string());
-    }
+    // DELETED 2026-08-26: `the_setup_rows_are_composed_once_from_the_view`
+    // (STALE). It exercised `SetupRows::of`, the DELETED `/setup` page's row
+    // composer, which has no production call site — only `lib.rs`'s `pub use`
+    // keeps it from tripping `dead_code`. None of `steps`/`devices`/`slots`/
+    // `preset_options`/`profile_options`/`notes` render on any surface.
+    // What replaced each half, so nothing was silently dropped:
+    //  - the persona roster -> `/nocturne` serves `view.persona_rows`, pinned
+    //    live in `tests/http.rs` (the `nd-card sel` / `nd-card off` marking).
+    //  - the slot ceiling, and the defect it recorded (the shipped page held
+    //    `SLOT_CHOICES = 8` in two languages while `ksx_core::MAX_SLOTS` was
+    //    16) -> pinned at the source by `ksx-api`'s
+    //    `the_slot_ceiling_a_surface_renders_is_this_builds_max_slots`
+    //    (machine.rs) and `the_slot_assign_refusals_quote_max_slots_not_a_literal`
+    //    (wire.rs). Studio no longer renders a slot menu at all.
 }

@@ -37,6 +37,10 @@ fn connect() -> VigemBackend {
 }
 
 /// Polls XInput until the read-back state matches `want` or the deadline hits.
+///
+/// `want` is what the pad must REPORT, which is not always what was submitted:
+/// axes pass through [`ksx_core::safe_axis`] on the way out. See
+/// `extremes` / `extremes_on_the_wire` below.
 fn wait_for_state(xi: &XInputHandle, user_index: u32, want: &PadState) -> bool {
     let deadline = Instant::now() + SETTLE;
     loop {
@@ -128,6 +132,8 @@ fn four_pads_full_loopback() {
             );
         }
 
+        // SUBMITTED: `lx` is the raw `i16::MIN` a preset may name literally
+        // (`lx.-32768`).
         let extremes = PadState {
             buttons: XButtons::A | XButtons::DPAD_UP | XButtons::RIGHT_BUMPER,
             lt: 255,
@@ -137,10 +143,30 @@ fn four_pads_full_loopback() {
             rx: -12345,
             ry: 12345,
         };
+        // EXPECTED ON THE WIRE: -32767. `to_xgamepad` folds `i16::MIN` through
+        // `safe_axis`, so the pad can never report -32768 and this test asked
+        // for a value that does not exist — it would have polled the full 2 s
+        // SETTLE and failed with "combined extremes did not round-trip". It
+        // went unseen because this file is `feature = "cab-tests"` and only
+        // ever gets COMPILE-checked (docs/PLAYBOOK.md); found and corrected
+        // 2026-08-26 by reading, not by running.
+        //
+        // The correction is worth more than the fix: this is now the only
+        // end-to-end proof that the fold reaches real hardware. `vigem.rs`'s
+        // `no_axis_reaches_the_wire_as_i16_min` asserts it in-process, and
+        // nothing confirmed that XInput agrees.
+        let extremes_on_the_wire = PadState {
+            lx: ksx_core::AXIS_MIN,
+            ..extremes
+        };
+        assert_eq!(extremes_on_the_wire.lx, -32767);
         backend.update(h, &extremes).unwrap();
         assert!(
-            wait_for_state(&xi, idx, &extremes),
-            "pad {idx}: combined extremes did not round-trip"
+            wait_for_state(&xi, idx, &extremes_on_the_wire),
+            "pad {idx}: combined extremes did not round-trip (submitted \
+             lx={}, expected the safe_axis fold {} on the wire)",
+            extremes.lx,
+            extremes_on_the_wire.lx,
         );
 
         let neutral = PadState::default();

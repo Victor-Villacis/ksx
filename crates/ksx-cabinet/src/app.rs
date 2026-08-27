@@ -757,3 +757,326 @@ impl Drop for App {
 pub fn flash_alive(flash: &Flash, now: Instant) -> bool {
     now.saturating_duration_since(flash.at) < FLASH_FOR
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ksx_api::{KeyHit, Refusal, SlotLive, SlotOutcome};
+    use std::collections::VecDeque;
+
+    /// A feed whose script the test writes, so the decay below is driven by
+    /// stated frames rather than by whatever the machine happens to be doing.
+    #[derive(Default)]
+    struct ScriptedFeed(VecDeque<LiveFrame>);
+
+    impl LiveFeed for ScriptedFeed {
+        fn poll(&mut self) -> LiveFrame {
+            self.0.pop_front().unwrap_or_default()
+        }
+    }
+
+    /// A control source that says yes, so the SUCCESS arms of [`perform`] are
+    /// pinned as well as the refusals `demo` supplies.
+    struct YesControl;
+
+    impl ControlSource for YesControl {
+        fn session(&self) -> SessionView {
+            SessionView::default()
+        }
+        fn start(&self, _profile: Option<&str>) -> Result<String, Refusal> {
+            Ok("emulation started".to_owned())
+        }
+        fn stop(&self) -> Result<String, Refusal> {
+            Ok("emulation stopped".to_owned())
+        }
+        fn reload(&self) -> Result<String, Refusal> {
+            Ok("config reloaded".to_owned())
+        }
+        fn assign_slot(&self, request: &SlotAssignRequest) -> SlotOutcome {
+            SlotOutcome {
+                ok: true,
+                slot: Some(request.slot),
+                preset: request.preset.clone(),
+                message: Some("slot 1 now uses Panel P2 — the pads replugged".to_owned()),
+                ..SlotOutcome::default()
+            }
+        }
+    }
+
+    /// A window over the demo machine, with the live feed swapped for a script.
+    fn app(feed: ScriptedFeed) -> App {
+        let ctx = egui::Context::default();
+        App::new(
+            &ctx,
+            Cabinet {
+                feed: Box::new(feed),
+                ..crate::demo::cabinet()
+            },
+        )
+    }
+
+    fn one_frame(frame: LiveFrame) -> ScriptedFeed {
+        ScriptedFeed(VecDeque::from(vec![frame]))
+    }
+
+    fn hit(slot: u8, controls: &[&str]) -> SlotLive {
+        SlotLive {
+            slot,
+            hit: controls.iter().map(|c| (*c).to_owned()).collect(),
+            ..SlotLive::default()
+        }
+    }
+
+    /// **The ButtonCheck screen's whole reason to exist**, and until 2026-08-26
+    /// nothing in this file was tested at all.
+    ///
+    /// A press has to light the control it belongs to, on the slot it belongs
+    /// to, and then go out. Each half is a distinct failure a person at a
+    /// cabinet would see: a light that never comes on reads as a dead panel
+    /// wire; a light that never goes out reads as a stuck button; a light on
+    /// the wrong slot sends somebody re-wiring the wrong harness.
+    #[test]
+    fn a_hit_lights_only_its_own_control_and_the_light_expires() {
+        let mut app = app(one_frame(LiveFrame {
+            running: true,
+            slots: vec![hit(1, &["A"])],
+            ..LiveFrame::default()
+        }));
+        let t0 = Instant::now();
+        app.take_frame(t0);
+
+        assert!(matches!(app.lit(1, "A", t0), Some(Lit::Full)));
+        assert!(
+            app.lit(1, "B", t0).is_none(),
+            "a control nobody pressed must stay dark"
+        );
+        assert!(
+            app.lit(2, "A", t0).is_none(),
+            "P1's press must not light P2's A — that sends somebody to the wrong harness"
+        );
+
+        assert!(matches!(app.lit(1, "A", t0 + LIT_FULL), Some(Lit::Full)));
+        assert!(matches!(
+            app.lit(1, "A", t0 + LIT_FULL + Duration::from_millis(1)),
+            Some(Lit::Fading)
+        ));
+        assert!(matches!(app.lit(1, "A", t0 + LIT_FADE), Some(Lit::Fading)));
+        assert!(
+            app.lit(1, "A", t0 + LIT_FADE + Duration::from_millis(1))
+                .is_none(),
+            "the light has to go out, or a released button reads as held"
+        );
+    }
+
+    /// A tap SHORTER than a frame arrives only in `hit`, never in `down`, and
+    /// it is the case this screen was built for ("I pressed it and nothing lit"
+    /// must only ever mean the key did not arrive). A light fed from `down`
+    /// alone would drop it.
+    #[test]
+    fn a_tap_too_short_to_be_held_still_lights() {
+        let mut app = app(one_frame(LiveFrame {
+            running: true,
+            slots: vec![SlotLive {
+                slot: 3,
+                down: Vec::new(),
+                hit: vec!["dpad.up".to_owned()],
+                ..SlotLive::default()
+            }],
+            ..LiveFrame::default()
+        }));
+        let t0 = Instant::now();
+        app.take_frame(t0);
+        assert!(matches!(app.lit(3, "dpad.up", t0), Some(Lit::Full)));
+    }
+
+    /// The list the ButtonCheck screen draws per slot: every lit control, in a
+    /// stable order (a set that reshuffles every paint is unreadable at six
+    /// feet), and empty once the lights die rather than keeping a stale row.
+    #[test]
+    fn lit_controls_lists_one_slots_lights_in_a_stable_order() {
+        let mut app = app(one_frame(LiveFrame {
+            running: true,
+            slots: vec![
+                SlotLive {
+                    slot: 1,
+                    down: vec!["dpad.up".to_owned()],
+                    hit: vec!["B".to_owned(), "A".to_owned()],
+                    ..SlotLive::default()
+                },
+                hit(2, &["X"]),
+            ],
+            ..LiveFrame::default()
+        }));
+        let t0 = Instant::now();
+        app.take_frame(t0);
+
+        let names: Vec<String> = app
+            .lit_controls(1, t0)
+            .into_iter()
+            .map(|(control, _)| control)
+            .collect();
+        assert_eq!(names, ["A", "B", "dpad.up"]);
+        assert_eq!(app.lit_controls(2, t0).len(), 1);
+        assert!(
+            app.lit_controls(1, t0 + LIT_FADE + Duration::from_millis(1))
+                .is_empty(),
+            "a dead light must leave no row behind"
+        );
+    }
+
+    /// The panel column: presses only, newest first, capped at [`KEY_LOG`] —
+    /// and the two "what you are NOT seeing" counters accumulate across frames
+    /// instead of being overwritten by the newest one.
+    #[test]
+    fn the_key_log_keeps_presses_newest_first_and_counts_what_it_left_out() {
+        let key = |name: &str, down: bool| KeyHit {
+            key: name.to_owned(),
+            device: "HID_VID_F00D_PID_BEEF".to_owned(),
+            alias: String::new(),
+            down,
+        };
+        let mut app = app(ScriptedFeed(VecDeque::from(vec![
+            LiveFrame {
+                keys: (0..KEY_LOG + 2)
+                    .map(|n| key(&format!("K{n}"), true))
+                    .collect(),
+                dropped: 3,
+                off_panel: 2,
+                ..LiveFrame::default()
+            },
+            LiveFrame {
+                keys: vec![key("RELEASE", false)],
+                dropped: 1,
+                off_panel: 1,
+                ..LiveFrame::default()
+            },
+        ])));
+        let t0 = Instant::now();
+        app.take_frame(t0);
+
+        assert_eq!(app.keys.len(), KEY_LOG, "the log is capped");
+        assert_eq!(
+            app.keys[0].0.key,
+            format!("K{}", KEY_LOG + 1),
+            "newest key first"
+        );
+
+        app.take_frame(t0 + Duration::from_millis(16));
+        assert!(
+            !app.keys.iter().any(|(hit, _)| hit.key == "RELEASE"),
+            "a release is the same key a moment later; logging it halves the history"
+        );
+        assert_eq!(app.dropped, 4, "dropped frames accumulate");
+        assert_eq!(app.off_panel, 3, "off-panel keys accumulate");
+
+        app.clear_log();
+        assert!(app.keys.is_empty());
+        assert!(app.lit_controls(1, t0).is_empty());
+        assert_eq!((app.dropped, app.off_panel), (0, 0));
+    }
+
+    /// **A verb that fails must SAY so.** [`perform`] is where a refusal turns
+    /// into the one line this surface prints; a `None` here is a press that
+    /// does nothing and explains nothing, which on a panel with no other
+    /// feedback is indistinguishable from a broken button.
+    #[test]
+    fn a_refused_verb_becomes_a_bad_flash_not_a_silent_no_op() {
+        let control: Arc<dyn ControlSource> = Arc::new(crate::demo::DemoControl);
+        let machine: Arc<dyn MachineSource> = Arc::new(crate::demo::DemoMachine);
+
+        for ask in [Ask::Start(None), Ask::Stop, Ask::Reload] {
+            let flash = perform(&control, &machine, &ask)
+                .unwrap_or_else(|| panic!("{ask:?} answered with silence"));
+            assert_eq!(flash.tone, Tone::Bad, "{ask:?}: {}", flash.text);
+            assert!(!flash.text.is_empty(), "{ask:?} refused without saying why");
+            assert!(
+                flash.remedy.is_some(),
+                "{ask:?}: a refusal owes a way out, and the footer renders it"
+            );
+        }
+
+        let assign = Ask::Assign {
+            slot: 1,
+            preset: "Panel P2".to_owned(),
+            profile: None,
+        };
+        let flash = perform(&control, &machine, &assign).expect("a refused assign must speak");
+        assert_eq!(flash.tone, Tone::Bad);
+        assert!(
+            flash.text.contains("ksx slot assign"),
+            "the refusal must name the verb that does work: {}",
+            flash.text
+        );
+    }
+
+    /// `Refresh` is the one verb that must stay silent. It is sent on a timer
+    /// and after every other verb, so a flash for it would overwrite the
+    /// sentence the operator is still reading.
+    #[test]
+    fn refresh_is_the_only_verb_that_says_nothing() {
+        let machine: Arc<dyn MachineSource> = Arc::new(crate::demo::DemoMachine);
+        for control in [
+            Arc::new(crate::demo::DemoControl) as Arc<dyn ControlSource>,
+            Arc::new(YesControl) as Arc<dyn ControlSource>,
+        ] {
+            assert!(perform(&control, &machine, &Ask::Refresh).is_none());
+            for ask in [Ask::Start(None), Ask::Stop, Ask::Reload] {
+                assert!(
+                    perform(&control, &machine, &ask).is_some(),
+                    "{ask:?} is not allowed to be silent"
+                );
+            }
+        }
+    }
+
+    /// A slot assignment that SUCCEEDS is `Warn`, not `Ok`.
+    ///
+    /// It is the one verb on this surface that replugs the pads: four
+    /// controllers vanish and come back, and anything mid-game sees them go
+    /// (`SlotOutcome::reloaded`'s own doc). A green line there would read as
+    /// "nothing happened" at the exact moment something very visible did.
+    #[test]
+    fn a_successful_slot_assignment_warns_because_the_pads_replug() {
+        let control: Arc<dyn ControlSource> = Arc::new(YesControl);
+        let machine: Arc<dyn MachineSource> = Arc::new(crate::demo::DemoMachine);
+
+        let flash = perform(
+            &control,
+            &machine,
+            &Ask::Assign {
+                slot: 1,
+                preset: "Panel P2".to_owned(),
+                profile: None,
+            },
+        )
+        .expect("an assignment must speak");
+        assert_eq!(flash.tone, Tone::Warn, "{}", flash.text);
+
+        for ask in [Ask::Start(None), Ask::Stop, Ask::Reload] {
+            let flash = perform(&control, &machine, &ask).expect("a verb must speak");
+            assert_eq!(flash.tone, Tone::Ok, "{ask:?}: {}", flash.text);
+            assert!(flash.remedy.is_none(), "a success owes no remedy");
+        }
+    }
+
+    /// A flash expires, so a nine-second-old answer is never read as the answer
+    /// to the press just made.
+    #[test]
+    fn a_flash_expires_rather_than_standing_as_the_current_answer() {
+        let at = Instant::now();
+        let flash = Flash {
+            text: "emulation started".to_owned(),
+            tone: Tone::Ok,
+            at,
+            remedy: None,
+        };
+        assert!(flash_alive(&flash, at));
+        assert!(flash_alive(
+            &flash,
+            at + FLASH_FOR - Duration::from_millis(1)
+        ));
+        assert!(!flash_alive(&flash, at + FLASH_FOR));
+        // Never a panic on a clock that went backwards between two paints.
+        assert!(flash_alive(&flash, at - Duration::from_secs(30)));
+    }
+}

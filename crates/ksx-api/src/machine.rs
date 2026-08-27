@@ -107,6 +107,20 @@ pub trait MachineSource: Send + Sync {
         // classifies the selected board from its fresh machine inventory.
         Ok(None)
     }
+    /// `ksx panel truth` — the chart, what presses proved, and what the user
+    /// locked in, composed into one answer per terminal.
+    ///
+    /// Deliberately separate from [`Self::panel_chart`]. That verb returns what
+    /// the board STORES right now; this one returns what ksx KNOWS, which
+    /// includes evidence a read cannot produce — a press that revealed what a
+    /// preserved vendor byte actually emits, and a terminal whose byte is zero
+    /// that fires keys anyway.
+    fn panel_truth(&self, _spec: &PanelTruthSpec) -> Result<PanelTruthView, Refusal> {
+        Err(Refusal::not_here(
+            "composing what ksx knows about each terminal",
+            "run `ksx panel truth`",
+        ))
+    }
 
     /// `ksx panel backups` — immutable, lossless hardware restore points for
     /// the selected physical encoder. Raw images stay in the backend store;
@@ -126,7 +140,7 @@ pub trait MachineSource: Send + Sync {
     fn panel_hardware_profiles(&self) -> Result<PanelHardwareProfilesView, Refusal> {
         Err(Refusal::not_here(
             "listing saved encoder layouts",
-            "open Encoder setup in KSX Studio",
+            "open the ksx Studio; saved panel layouts appear under How the keys are drawn",
         ))
     }
 
@@ -139,7 +153,7 @@ pub trait MachineSource: Send + Sync {
     ) -> Result<PanelHardwareProfileMutationView, Refusal> {
         Err(Refusal::not_here(
             "saving an encoder layout",
-            "open Encoder setup in KSX Studio",
+            "saved layout management",
         ))
     }
 
@@ -152,7 +166,7 @@ pub trait MachineSource: Send + Sync {
     ) -> Result<PanelHardwareProfileMutationView, Refusal> {
         Err(Refusal::not_here(
             "deleting a saved encoder layout",
-            "open Encoder setup in KSX Studio",
+            "saved layout management",
         ))
     }
 
@@ -166,7 +180,7 @@ pub trait MachineSource: Send + Sync {
     ) -> Result<PanelProgramPlanView, Refusal> {
         Err(Refusal::not_here(
             "planning a panel encoder change",
-            "run `ksx panel program` without `--yes`",
+            "ksx does not write to encoder hardware",
         ))
     }
 
@@ -175,7 +189,7 @@ pub trait MachineSource: Send + Sync {
     fn panel_program(&self, _spec: &PanelProgramApplySpec) -> Result<PanelProgramOutcome, Refusal> {
         Err(Refusal::not_here(
             "programming the panel encoder",
-            "run `ksx panel program --yes`",
+            "ksx does not write to encoder hardware",
         ))
     }
 
@@ -187,7 +201,7 @@ pub trait MachineSource: Send + Sync {
     ) -> Result<PanelProgramPlanView, Refusal> {
         Err(Refusal::not_here(
             "planning a panel encoder restore",
-            "run `ksx panel restore` without `--yes`",
+            "ksx does not write to encoder hardware",
         ))
     }
 
@@ -196,7 +210,7 @@ pub trait MachineSource: Send + Sync {
     fn panel_restore(&self, _spec: &PanelRestoreApplySpec) -> Result<PanelProgramOutcome, Refusal> {
         Err(Refusal::not_here(
             "restoring the panel encoder",
-            "run `ksx panel restore --yes`",
+            "ksx does not write to encoder hardware",
         ))
     }
 
@@ -391,6 +405,52 @@ pub trait MachineSource: Send + Sync {
         Err(Refusal::not_here(
             "remembering a theme choice",
             "pick it on the Studio's configuration page",
+        ))
+    }
+
+    /// **Remember which board the Studio draws its keys on.**
+    ///
+    /// The same whole-config write discipline as [`Self::set_theme`], and the
+    /// same absence rule: empty stores as no value at all, meaning "decide from
+    /// the staged device".
+    ///
+    /// This can never change what a controller does. A board is the picture;
+    /// the binding carries the canonical key name and nothing else. That is
+    /// also why there is no session caveat here — a running session keeps
+    /// binding exactly the keys it already bound.
+    fn set_board(&self, _spec: &BoardSpec) -> Result<BoardView, Refusal> {
+        Err(Refusal::not_here(
+            "remembering a board choice",
+            "pick it on the Studio page",
+        ))
+    }
+
+    /// **Every board somebody drew on this machine.**
+    ///
+    /// A read of `<root>\boards`, kept apart from [`Self::panel_hardware_profiles`]
+    /// because the two stores hold opposite kinds of thing: a saved panel layout
+    /// says what a physical terminal emits and can be programmed onto a board; a
+    /// drawn board says where a control sits and can be programmed onto nothing.
+    fn boards(&self) -> Result<BoardsView, Refusal> {
+        Err(Refusal::not_here(
+            "listing drawn boards",
+            "open the Studio and draw one",
+        ))
+    }
+
+    /// Create or stale-safely update one drawn board.
+    fn board_save(&self, _spec: &BoardSaveSpec) -> Result<BoardMutationView, Refusal> {
+        Err(Refusal::not_here(
+            "saving a drawn board",
+            "open the Studio and draw one",
+        ))
+    }
+
+    /// Delete one drawn board. Touches no hardware — there is none behind it.
+    fn board_delete(&self, _spec: &BoardDeleteSpec) -> Result<BoardMutationView, Refusal> {
+        Err(Refusal::not_here(
+            "deleting a drawn board",
+            "open the Studio and remove it there",
         ))
     }
 
@@ -853,6 +913,48 @@ pub struct PanelChartSpec {
     pub backup: bool,
 }
 
+/// What to compose one board's answers from.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelTruthSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+}
+
+// There is deliberately no "compose without reading the board" mode. Stored
+// evidence is keyed to a board fingerprint and a terminal signature, and both
+// are established by a read — so skipping the read would leave nothing to look
+// the stored rows up BY, and no terminal vocabulary to hang them on either. A
+// read that refuses is not a failure of this verb: it composes to a refusal
+// state with zero terminal rows, which is the honest answer.
+
+/// **Everything ksx knows about one board's terminals, and how it came to know
+/// it.**
+///
+/// The verb that makes a chart read, a press and a typed-in declaration one
+/// answer instead of three surfaces. Composed by the backend; a caller renders
+/// [`PanelTerminalTruth::answer`] and [`PanelTerminalTruth::detail`] rather
+/// than deriving sentences from combinations of the evidence itself.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelTruthView {
+    pub board_name: String,
+    pub board_fingerprint: String,
+    /// Present only when this request actually read the board. Its absence is
+    /// what makes every `Matched` in `terminals` impossible, and is therefore
+    /// load-bearing rather than cosmetic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_at: Option<String>,
+    /// Said once for the whole board, never per row.
+    #[serde(default)]
+    pub shift: PanelShiftSummary,
+    /// **Empty is a legitimate answer.** A board with no measured protocol has
+    /// no terminal vocabulary, so it has zero terminal rows rather than 56
+    /// invented ones; its addressable unit is the control the user drew.
+    pub terminals: Vec<PanelTerminalTruth>,
+    pub notes: Vec<String>,
+}
+
 /// One key/action value decoded from the board image.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PanelKeyValue {
@@ -875,6 +977,50 @@ pub enum PanelShiftState {
     Opaque,
 }
 
+/// **The one sentence a chart surface leads with about shift, said once.**
+///
+/// Composed by the backend from a whole chart, never per row: the fact that
+/// matters — *is there a shift key at all?* — is a property of the board, and
+/// repeating it on 56 rows is how a page teaches somebody that shift is a
+/// per-terminal setting when it is not.
+///
+/// Every variant is a different sentence AND a different remedy, which is why
+/// [`Self::NoneEnabled`] and [`Self::Unreadable`] are separate: one says the
+/// shifted column is unreachable in practice, the other says ksx cannot see the
+/// column at all.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum PanelShiftSummary {
+    /// No chart was read, so there is no shift vocabulary for this board.
+    ///
+    /// The default, and the reason the shift column must be ABSENT rather than
+    /// empty on an unprofiled board: an empty column asserts "no shift", and an
+    /// absent one asserts nothing.
+    #[default]
+    Unreadable,
+    /// Exactly one terminal is the shift key. Only now do the other terminals'
+    /// `shifted` values mean anything reachable.
+    Enabled {
+        terminal_id: String,
+        terminal_label: String,
+        /// How many terminals carry a shifted value the shift key unlocks.
+        reachable: usize,
+    },
+    /// A chart was read and no terminal's shift byte says enabled.
+    ///
+    /// **Not "this board has no shift."** Any terminal whose byte is opaque
+    /// could be the shift control; ksx cannot classify the byte, so it cannot
+    /// rule the terminal out. `stranded` counts the shifted values that are
+    /// unreachable in practice while that stays true.
+    NoneEnabled { stranded: usize, opaque: usize },
+    /// More than one terminal's byte says enabled.
+    ///
+    /// Kept as its own variant rather than folded into `Enabled` because the
+    /// product cannot say which one wins on the hardware, and picking the first
+    /// would be exactly the guess this model exists to refuse.
+    Ambiguous { terminal_ids: Vec<String> },
+}
+
 /// One physical screw terminal in the supported encoder's chart.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PanelTerminalRow {
@@ -891,6 +1037,20 @@ pub struct PanelTerminalRow {
     /// also false for that compatibility/display convenience field.
     #[serde(default)]
     pub shift_state: PanelShiftState,
+    /// **Can pressing this control reveal something the read could not?**
+    ///
+    /// Served, not derived by the page. A byte ksx cannot name comes in two
+    /// kinds that need opposite offers: a vendor byte a press resolves, and a
+    /// HID usage Windows never delivers to ksx, where a press produces nothing
+    /// at all to hear. Both arrive as `supported: false`, so a surface that
+    /// wanted to tell them apart had to string-match the decoder's own display
+    /// label — and every surface that did would be a second copy of a rule that
+    /// lives in `panel_truth::press_would_help`.
+    ///
+    /// Defaults to `false`, which is the safe direction: an offer that can never
+    /// succeed is worse than a missing one.
+    #[serde(default)]
+    pub press_resolves: bool,
     /// Compatibility/display convenience. Mutation safety must use
     /// `shift_state` and require `disabled` explicitly.
     pub is_shift: bool,
@@ -907,6 +1067,300 @@ pub struct PanelKeyOption {
     /// Full-chart programming may use every served option after qualification.
     #[serde(default)]
     pub safe_for_qualification: bool,
+}
+
+/// **What a chart read said about one terminal, or why there is no such
+/// sentence.**
+///
+/// A chart is instantaneous truth about the bytes a board STORES, and it is
+/// only ever true for the request that produced it: nothing in ksx watches a
+/// board between requests, and WinIPAC can rewrite one at any moment. A
+/// persisted copy of [`Self::Read`] is a stale answer wearing a fresh one's
+/// clothes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum PanelChartEvidence {
+    /// No chart read has been attempted in this response.
+    ///
+    /// The default, for [`PanelShiftState::Opaque`]'s reason: a document or an
+    /// older client that omits the field must not deserialize into "the chart
+    /// says nothing about this terminal".
+    #[default]
+    NotAttempted,
+    /// A complete, stable read decoded this terminal's planes.
+    Read {
+        normal: PanelKeyValue,
+        shifted: PanelKeyValue,
+        /// The image this came from. An observation stamped with a different
+        /// hash was taken against a board that has since changed.
+        image_sha256: String,
+        read_at: String,
+    },
+    /// A read was attempted for this exact board and did not complete.
+    ///
+    /// **A failed read is not an absence.** This variant exists so that a
+    /// surface physically cannot render `panel-interface-busy` as an empty
+    /// chart. Retryable: the remedy names what to close.
+    Refused {
+        code: String,
+        message: String,
+        remedy: Option<String>,
+    },
+    /// A recognised encoder family with no measured protocol profile.
+    ///
+    /// **Not retryable, and that is the whole difference from [`Self::Refused`].**
+    /// A retry button here is an offer that can never succeed: ksx will not read
+    /// this model until someone measures its protocol on hardware they own.
+    Unprofiled {
+        family_id: String,
+        family_label: String,
+    },
+    /// No exact recognition evidence for this board at all.
+    Unrecognised,
+}
+
+/// How an observation came to be filed under one terminal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PanelObservationAttribution {
+    /// A surface prompted for this terminal and a key arrived. **Nothing proves
+    /// the user pressed the screw the prompt named**, so this is the default and
+    /// the weakest.
+    #[default]
+    Prompted,
+    /// A chart read in hand held this key on exactly one terminal, and it is
+    /// this one. The only attribution strong enough to reach `Matched`.
+    ChartUnique,
+    /// A chart read in hand held this key on MORE THAN ONE terminal. The
+    /// observation is real; the terminal it is filed under is a guess.
+    /// `input-test`'s own limit: "two terminals emitting the same key are
+    /// indistinguishable".
+    SharedSignal,
+}
+
+/// Whether anything still stands behind an observation.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum PanelObservationVouching {
+    /// A mechanism to vouch exists and has not run. Fails closed.
+    #[default]
+    Unproven,
+    /// A chart read in THIS response proves the board still holds the image
+    /// this observation was taken against.
+    Vouched,
+    /// No chart reader exists for this board, so nothing could ever vouch.
+    /// Stop offering "read the board again" — there is no such button.
+    NeverVouchable,
+    /// The board's image changed after this observation was taken.
+    ChartRewritten { was: String, now: String },
+}
+
+/// **What Windows actually received when somebody pressed a control.**
+///
+/// This proves what the wiring plus the firmware EMITTED at that moment. It does
+/// not prove what is stored, and it cannot name the terminal by itself.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelObservedEvidence {
+    /// Every canonical key the press produced, in arrival order.
+    ///
+    /// **A `Vec`, and that is load-bearing.** `docs/ENHANCEMENTS.md` E10 records
+    /// that "a perfect 56-key chart can still contain a terminal that fires two
+    /// other players' buttons". Recording only the first key would reproduce
+    /// inside ksx exactly the blindness E10 proves a chart read has — and a
+    /// multi-key burst is the only evidence of an onboard macro there will ever
+    /// be.
+    pub keys: Vec<String>,
+    pub observed_at: String,
+    /// The exact learner-reported device, not the selected identity.
+    pub device: String,
+    /// The chart image in hand when this was taken, if any. `None` means taken
+    /// with no chart — the only kind an unprofiled board can produce.
+    pub against_image_sha256: Option<String>,
+    pub attribution: PanelObservationAttribution,
+    pub vouching: PanelObservationVouching,
+}
+
+/// **What the user typed and locked in.**
+///
+/// The only source ksx did not obtain itself: a claim of authorship, not of
+/// measurement. It ranks below both, and is never deleted or silently corrected
+/// when they disagree — the user may know the wire from that button reaches a
+/// different screw than the silkscreen claims, which is a fact about the cabinet
+/// rather than the firmware.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelDeclaredEvidence {
+    /// A canonical key name, or empty for "I know this one is unassigned".
+    pub key: String,
+    pub declared_at: String,
+    /// What ksx knew when this was locked in, so a later contradiction can be
+    /// stated as what CHANGED rather than as who is right.
+    pub against_image_sha256: Option<String>,
+    /// Free text. "I wired this myself" is the only justification this row will
+    /// ever have, so it is kept.
+    pub note: String,
+}
+
+/// **The one sentence a surface leads with.** Backend-composed; never input.
+///
+/// Every variant is a different sentence to a human. Where two situations get
+/// the same words they get the same variant; where they get different remedies
+/// they get different variants — which is why [`Self::ChartRefused`] and
+/// [`Self::ChartImpossible`] are separate.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "answer", rename_all = "kebab-case")]
+pub enum PanelTerminalAnswer {
+    /// Nothing has ever been established here.
+    #[default]
+    Unknown,
+    /// A read was attempted and failed, and no observation stands in for it.
+    /// Retryable.
+    ChartRefused,
+    /// This board model has no measured protocol, and no observation stands in
+    /// for it. Offer teaching, never a retry.
+    ChartImpossible,
+    /// ksx has no model for this board AT ALL, and no observation stands in for
+    /// it.
+    ///
+    /// Separate from [`Self::ChartImpossible`] because the remedy is different
+    /// and the claim is weaker. `ChartImpossible` says a KNOWN model has no
+    /// measured protocol; this says ksx did not recognise the board, so it
+    /// cannot say anything about what its model can or cannot do. Folding the
+    /// two together made an unidentified board report that ksx can "never" read
+    /// what it stores — a claim about a model ksx has not identified.
+    ChartUnknownBoard,
+    /// The firmware stores an observable key here.
+    Stored { key: String },
+    /// The terminal's own byte is zero.
+    ///
+    /// **NOT "this terminal does nothing."** E10: "onboard macros are
+    /// vendor-owned bytes that are preserved verbatim and never parsed, so a
+    /// macro'd terminal is indistinguishable from an unassigned one." This says
+    /// the byte is zero and nothing more, which is why teaching is offered here.
+    StoredUnassigned,
+    /// The firmware stores a byte ksx cannot classify — a vendor action, a macro
+    /// trigger, or a HID usage ksx cannot observe. Preserved exactly, never
+    /// selectable as a ksx key, marked unknown with an invitation to press it.
+    StoredUnclassified { code: u16, label: String },
+    /// The only source is what Windows saw arrive from this control.
+    Observed { key: String },
+    /// One press produced several keys. On a board with no macro reader this is
+    /// the only sighting of an onboard macro ksx will ever get.
+    ObservedMultiple { keys: Vec<String> },
+    /// A press ksx has not confirmed against the board.
+    ///
+    /// **This says nothing about the board having changed** — that is
+    /// [`Self::ObservedStale`], and conflating them made ksx announce a rewrite
+    /// it never measured on every terminal of every board nobody had re-read.
+    /// This one means only: nothing in this response proves the board still
+    /// holds what it held when the control was pressed.
+    ObservedUnvouched { key: String },
+    /// A press taken against an image the board no longer holds.
+    ///
+    /// Measured, not inferred: `was` and `now` are the two hashes, and they are
+    /// carried so the sentence can say what changed rather than that something
+    /// did.
+    ObservedStale {
+        key: String,
+        was: String,
+        now: String,
+    },
+    /// A chart read in THIS response holds `key`, and an observation taken
+    /// against THIS exact image, attributed [`PanelObservationAttribution::ChartUnique`],
+    /// saw it.
+    ///
+    /// The strongest state, and the narrowest. Two retained strings being equal
+    /// never produces it.
+    Matched { key: String },
+    /// The chart holds one observable key and the press produced another.
+    /// Something rewrote the board, or the wire does not go where the silkscreen
+    /// says.
+    Mismatch {
+        stored: PanelKeyValue,
+        observed: Vec<String>,
+    },
+    /// The chart holds a byte ksx cannot classify, and a press revealed what it
+    /// emits. **Not a conflict** — the observation COMPLETED the chart, and this
+    /// is the one combination where pressing adds what reading never could.
+    Resolved {
+        stored: PanelKeyValue,
+        observed: Vec<String>,
+    },
+    /// The chart says this terminal's byte is zero and it emitted keys anyway.
+    /// E10's blind spot made visible, and the strongest macro evidence this
+    /// product can produce.
+    Unaccounted { observed: Vec<String> },
+    /// The user locked this in and nothing ksx obtained disagrees, because
+    /// nothing ksx obtained exists.
+    Declared { key: String },
+    /// The chart holds a byte ksx cannot name, and the user has said what the
+    /// control sends. **Not a conflict** — the declaration COMPLETED the chart,
+    /// exactly as [`Self::Resolved`] does when a press completes it.
+    ///
+    /// Without this the declaration was stored, kept, and then dropped from the
+    /// answer: a chart that cannot name a byte does not contradict anything, so
+    /// the contradiction arm never fired and the chart's own "I cannot say"
+    /// stood as the whole sentence. The person typed it in and saw no sign of it.
+    ///
+    /// It is deliberately weaker than `Resolved`: a press is measured, this is
+    /// claimed, and the sentence says which.
+    DeclaredCompletes {
+        stored: PanelKeyValue,
+        declared: String,
+    },
+    /// A later chart read contradicts what the user locked in. Both are shown;
+    /// neither is silently corrected and neither is deleted.
+    ///
+    /// `declared` may be EMPTY: "I know this one is unassigned" is a real
+    /// claim the store accepts on purpose, and a chart that stores a byte
+    /// contradicts it exactly as it contradicts a named key. Guarding these
+    /// arms with `!declared.is_empty()` was how a filed unassigned claim was
+    /// stored, acknowledged, and then never shown anywhere.
+    DeclaredContradicted {
+        declared: String,
+        stored: PanelKeyValue,
+    },
+    /// The user declared this terminal unassigned and the chart's byte is
+    /// zero — agreement, as far as a chart can see.
+    ///
+    /// The one answer that turns the macro invitation OFF: an onboard macro
+    /// would still look exactly like this, but the person has said no control
+    /// is wired here, so "press the control to find out" would be an offer to
+    /// press a control they just told ksx does not exist. The declaration is
+    /// kept, not proved, and the sentence says which.
+    DeclaredUnassigned { stored: PanelKeyValue },
+}
+
+/// **Everything ksx knows about one screw terminal, and how it came to know it.**
+///
+/// Two independent sources answer two different questions and can disagree: a
+/// chart read is instantaneous truth about the bytes the board STORES, an
+/// observation is historical truth about the signal it EMITTED. A third — the
+/// user's own declaration — is neither, and says so.
+///
+/// This type never collapses them. [`Self::answer`] is the sentence a surface
+/// leads with; the three evidence fields are what stands behind it, and all
+/// three survive being outranked. Collapsing an unproven source into the winning
+/// one is how a stale string becomes a fresh claim.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelTerminalTruth {
+    pub terminal_id: String,
+    pub terminal_label: String,
+    pub player: u8,
+    pub chart: PanelChartEvidence,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed: Option<PanelObservedEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared: Option<PanelDeclaredEvidence>,
+    /// Backend-composed projection. Never accepted as input.
+    pub answer: PanelTerminalAnswer,
+    /// Backend-composed sentence; surfaces copy it verbatim rather than
+    /// translating variant combinations into prose themselves.
+    pub detail: String,
+    /// May a surface offer to learn this one by pressing it?
+    ///
+    /// False when the learner is unreachable — an offer that always refuses is
+    /// the bug `BoardRow.pickable` exists to prevent.
+    pub invite_press: bool,
 }
 
 /// Metadata for a durable raw-image backup. The bytes and filesystem path are
@@ -953,6 +1407,11 @@ pub struct PanelChartView {
     /// Exact restore point that completes `validation-written`, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qualification_restore_backup_id: Option<String>,
+    /// Said once for the whole board, never per row. A page that renders each
+    /// terminal's raw `shift_state` teaches the reader that shift is a
+    /// per-terminal setting, which it is not.
+    #[serde(default)]
+    pub shift: PanelShiftSummary,
     pub terminals: Vec<PanelTerminalRow>,
     /// Backend-owned semantic preview of the deterministic four-player KSX
     /// layout against this exact chart baseline. This is display/draft data,
@@ -1060,6 +1519,99 @@ pub struct PanelHardwareProfileMutationView {
     pub profile_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<PanelHardwareProfile>,
+}
+
+/// One control on a board somebody drew.
+///
+/// **This is a picture, not a wiring diagram.** It says there is a 30mm button
+/// here, labelled `1`, that sends `LeftCtrl` — never how the switch behind it is
+/// wired, which is [`PanelHardwareTerminal`]'s business and belongs to a
+/// physical encoder ksx can program.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BoardControl {
+    /// Stable within its board. Two controls may legitimately send the same
+    /// key, so the key cannot be the identity.
+    pub id: String,
+    /// `keycap` | `button30` | `button24` | `joystick` — the Studio's drawing
+    /// vocabulary, carried as text so a newer Studio can add a shape without
+    /// this store refusing to load.
+    pub kind: String,
+    /// The printed text. Display only.
+    pub label: String,
+    /// The canonical key name this control sends, or empty for Unassigned.
+    /// **The only field a binding ever sees.**
+    pub key: String,
+    /// Which player's cluster this belongs to, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub player: Option<u8>,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// A board somebody drew, as it is stored.
+///
+/// Geometry lives in the document's own coordinate space — `bounds_w` by
+/// `bounds_h` — and the Studio renders it as percentages of that, so a board
+/// drawn on one screen fits any card on any other.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BoardDocument {
+    pub schema: String,
+    pub board_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Opaque content revision used by the update/delete stale-write guards,
+    /// the same discipline the saved panel layouts take.
+    pub revision: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub bounds_w: f32,
+    pub bounds_h: f32,
+    pub controls: Vec<BoardControl>,
+}
+
+/// Every drawn board on this machine.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BoardsView {
+    pub summary: String,
+    pub config_root: String,
+    pub boards: Vec<BoardDocument>,
+}
+
+/// Create when both identity fields are absent; update when both are present —
+/// the same shape as [`PanelHardwareProfileSaveSpec`], so the two stores cannot
+/// end up with two different opinions about what a safe write looks like.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BoardSaveSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub bounds_w: f32,
+    pub bounds_h: f32,
+    pub controls: Vec<BoardControl>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardDeleteSpec {
+    pub board_id: String,
+    pub expected_revision: String,
+}
+
+/// What a board write did.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BoardMutationView {
+    /// `created` | `updated` | `deleted`.
+    pub state: String,
+    pub board_id: String,
+    pub name: String,
+    pub revision: String,
+    pub summary: String,
 }
 
 /// One semantic terminal edit. An absent field is unchanged; an empty key
@@ -1317,6 +1869,27 @@ pub struct UsbRow {
     /// Why not, when not. Empty when it can.
     #[serde(default)]
     pub cannot_type_reason: String,
+    /// **The USB identity triple, as the enumerator reported it.**
+    ///
+    /// Carried on the row rather than recovered from [`Self::instance_id`],
+    /// because recovering it does not always work. `DeviceFacts::from_instance_path`
+    /// ends with `interface_number: hex_field(head, "MI_", 2)?` — the `?` is
+    /// load-bearing — so a board with no `MI_` segment yields `None` and the
+    /// panel catalog is never consulted for it at all. A composite I-PAC is
+    /// recognised; a single-interface one is silently a nameless keyboard.
+    ///
+    /// Zero means "no USB device descriptor was read" (a Bluetooth row), not
+    /// "vendor 0x0000". Nothing keys off it directly: `family_for` requires an
+    /// exact pair, and `0x0000:0x0000` is in no catalog entry.
+    #[serde(default)]
+    pub vendor_id: u16,
+    #[serde(default)]
+    pub product_id: u16,
+    /// Raw USB `bcdDevice`. A plain `u16` to match its sibling
+    /// [`PanelStatusRow::bcd_device`], and never presented as a parsed
+    /// firmware version — the vendor's release numbering is its own business.
+    #[serde(default)]
+    pub bcd_device: u16,
 }
 
 /// `ksx device scan`, presentation-shaped: one row per PHYSICAL board, plus
@@ -1899,6 +2472,50 @@ pub struct BoardRow {
     /// `[[slot]]` that refers to it.
     #[serde(default)]
     pub alias_hint: String,
+    /// **What ksx recognises this board as**, from the exact USB pair alone.
+    ///
+    /// `Some` for a catalogued family, `None` for everything else. Recognition
+    /// authorises nothing — see [`PanelDriverCapabilities`]. It only means the
+    /// board can be called by its real name instead of "USB Input Device".
+    #[serde(default)]
+    pub family_label: Option<String>,
+    /// The release this board reports, spelled the way its measured profile
+    /// spells it. `None` unless an exact profile matched: a family alone says
+    /// nothing about firmware, and guessing one from `bcd_device` would be
+    /// inventing a version the board never claimed.
+    #[serde(default)]
+    pub firmware_label: Option<String>,
+    /// `profiled` | `unprofiled-release` | `unrecognised`.
+    ///
+    /// The three tiers are genuinely different advice, which is why they are
+    /// three words and not a bool: a profiled board can be read; an
+    /// unprofiled-release board is a model ksx knows by name and can never
+    /// read until someone measures that firmware on hardware they own; an
+    /// unrecognised board may not be an encoder at all.
+    #[serde(default)]
+    pub profile_state: String,
+    /// The whole sentence for [`Self::profile_state`], authored in
+    /// `panel::status`'s own words so the two surfaces cannot word one fact two
+    /// ways.
+    #[serde(default)]
+    pub profile_detail: String,
+    /// **Terminal capacity of the exact registered programming profile** —
+    /// not a count of this board's screw terminals, and not a promise about
+    /// the family.
+    ///
+    /// `None` for every unprofiled board, and that is the honest answer rather
+    /// than a gap: `PanelFamily` carries four fields and no count, so ksx does
+    /// not know how many terminals an I-PAC 2 has. Filling it from the vendor's
+    /// published spec would be a confident claim about hardware ksx has never
+    /// measured.
+    #[serde(default)]
+    pub terminal_count: Option<usize>,
+    /// Whether a chart read is possible for this exact board, from
+    /// `panel_catalog::capabilities_for`. False for every board without a
+    /// measured protocol profile, and false is permanent for that model until
+    /// one is measured — which is why a surface must not offer a retry.
+    #[serde(default)]
+    pub chart_readable: bool,
 }
 
 /// What has to follow the reason a device cannot type.
@@ -2161,6 +2778,37 @@ pub struct ThemeSpec {
 pub struct ThemeView {
     /// The value now on disk (empty = System).
     pub theme: String,
+    /// Where the previous config went.
+    pub backup: Option<String>,
+}
+
+/// Which board the Studio draws its keys on.
+///
+/// **A board is the picture, never the mapping.** `key -> control` is identical
+/// whichever board is on screen, because a binding carries only the canonical
+/// key name — so changing this can never change what any controller does. It is
+/// stored beside the theme, and for the same reasons: read per page render, and
+/// empty means "decide from the staged device" rather than a named default that
+/// would have to be kept in step with the device list.
+///
+/// The Studio owns the roster of valid ids. This crate carries the string.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardSpec {
+    /// A board id (`qwerty`, `panel:<profile>`, ...) or empty = follow the
+    /// staged device.
+    pub board: String,
+}
+
+/// What changing the board did.
+///
+/// No `session_running` here, for [`ThemeView`]'s reason: the board is read per
+/// page render and never by the daemon, so "saved" and "in effect" are the same
+/// claim. Nothing about a running session depends on it — the keys it binds are
+/// the keys it bound before.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardView {
+    /// The value now on disk (empty = follow the staged device).
+    pub board: String,
     /// Where the previous config went.
     pub backup: Option<String>,
 }
@@ -3406,6 +4054,14 @@ pub struct SetupView {
     /// silently pretending it was never made.
     #[serde(default)]
     pub theme: String,
+    /// **Which board id is currently on disk**, or empty to decide from the
+    /// staged device.
+    ///
+    /// Reported the way [`Self::theme`] is, and for the same reason: this view
+    /// says what the config SAYS, so a surface can show a choice this build
+    /// cannot draw instead of silently pretending it was never made.
+    #[serde(default)]
+    pub board: String,
     /// What opposite directions can be made to do, per slot. Served for the
     /// same reason the blocking answers are: the wording is the domain's.
     #[serde(default)]
@@ -3476,6 +4132,7 @@ impl Default for SetupView {
             blocking: String::new(),
             blocking_options: crate::stage::BlockingOption::roster(),
             theme: String::new(),
+            board: String::new(),
             socd_options: crate::stage::SocdOption::roster(),
             persona_options: default_persona_options(),
             config_root: String::new(),
@@ -3680,6 +4337,19 @@ mod tests {
 
     /// A surface that implements nothing still SAYS something, per call, with
     /// the command that works — the CONTROL-SURFACE invariant, as a default.
+    ///
+    /// **This test can only check that a remedy SAYS something, never that what
+    /// it says exists.** `ksx-api` cannot see the clap tree, so for months it
+    /// asserted `ksx panel status`, `ksx panel chart`, `ksx panel program`,
+    /// `ksx panel restore` and "Encoder setup" — every one of which had been
+    /// deleted — and in asserting them it ENFORCED them. A guard that pins a
+    /// lie is worse than no guard.
+    ///
+    /// The half that needs real evidence now lives in `ksx-app`'s parity suite,
+    /// which walks the built binary's own `--help`: see
+    /// `every_machine_remedy_names_a_verb_that_exists`. What stays here is what
+    /// this crate can honestly know — that every default refuses, and refuses
+    /// with words.
     #[test]
     fn every_unimplemented_machine_verb_names_the_command_that_works() {
         struct Nothing;
@@ -3705,41 +4375,41 @@ mod tests {
                     .unwrap_err(),
             ),
             (
-                "Encoder setup",
+                "How the keys are drawn",
                 Nothing.panel_hardware_profiles().unwrap_err(),
             ),
             (
-                "Encoder setup",
+                "saved layout management",
                 Nothing
                     .panel_hardware_profile_save(&PanelHardwareProfileSaveSpec::default())
                     .unwrap_err(),
             ),
             (
-                "Encoder setup",
+                "saved layout management",
                 Nothing
                     .panel_hardware_profile_delete(&PanelHardwareProfileDeleteSpec::default())
                     .unwrap_err(),
             ),
             (
-                "ksx panel program",
+                "ksx does not write to encoder hardware",
                 Nothing
                     .panel_program_plan(&PanelProgramSpec::default())
                     .unwrap_err(),
             ),
             (
-                "ksx panel program",
+                "ksx does not write to encoder hardware",
                 Nothing
                     .panel_program(&PanelProgramApplySpec::default())
                     .unwrap_err(),
             ),
             (
-                "ksx panel restore",
+                "ksx does not write to encoder hardware",
                 Nothing
                     .panel_restore_plan(&PanelRestoreSpec::default())
                     .unwrap_err(),
             ),
             (
-                "ksx panel restore",
+                "ksx does not write to encoder hardware",
                 Nothing
                     .panel_restore(&PanelRestoreApplySpec::default())
                     .unwrap_err(),
@@ -3819,7 +4489,74 @@ mod tests {
                     .config_import(&ImportRequest::default())
                     .unwrap_err(),
             ),
+            // ---- added 2026-08-26 -------------------------------------
+            // The list below was missing from a hand-maintained vec while the
+            // trait had grown the methods. That is precisely the bug this
+            // test exists to catch — a `MachineSource` method whose default
+            // refuses, reached through a provider that never implemented it —
+            // and it was invisible because nothing tied the list to the
+            // trait. Ten verbs were unguarded. See EXPECTED_REFUSING_VERBS.
+            (
+                "ksx setup",
+                Nothing.device_identify("HID\\VID_0000").unwrap_err(),
+            ),
+            (
+                "ksx preset rename",
+                Nothing.preset_rename(&RenamePreset::default()).unwrap_err(),
+            ),
+            (
+                "ksx preset delete",
+                Nothing.preset_delete(&DeletePreset::default()).unwrap_err(),
+            ),
+            (
+                "ksx autostart",
+                Nothing
+                    .set_autostart(&AutostartSpec::default())
+                    .unwrap_err(),
+            ),
+            (
+                "the first-run screen",
+                Nothing
+                    .set_blocking(&BlockingSpec::default(), false)
+                    .unwrap_err(),
+            ),
+            (
+                "the Studio's configuration page",
+                Nothing.set_theme(&ThemeSpec::default()).unwrap_err(),
+            ),
+            ("ksx studio", Nothing.open_studio().unwrap_err()),
+            ("ksx doctor", {
+                Nothing
+                    .controller_outputs(&crate::StagedSetupView::default())
+                    .unwrap_err()
+            }),
+            ("ksx winusb repair", Nothing.winusb_residue().unwrap_err()),
+            (
+                "ksx winusb sweep-certificates",
+                Nothing
+                    .winusb_sweep_certificates(&WinusbCertificateSweepSpec::default())
+                    .unwrap_err(),
+            ),
         ];
+
+        /// Every `MachineSource` method whose default body refuses.
+        ///
+        /// The forcing function this test lacked. The list above is written
+        /// by hand, so a new method with a silent `Ok(default())` — or a new
+        /// refusing method nobody added here — used to sail straight past.
+        /// `panel_routing_guard` is the one method that deliberately defaults
+        /// to `Ok(None)` rather than refusing (a provider with no panel
+        /// support has no managed encoder class to guard), so the trait's
+        /// method count is this number plus one.
+        const EXPECTED_REFUSING_VERBS: usize = 42;
+        assert_eq!(
+            checks.len(),
+            EXPECTED_REFUSING_VERBS,
+            "a MachineSource verb was added or removed without updating this list. \
+             If the new method refuses by default, add it here. If it returns a \
+             silent Ok(default) instead, that is the bug this test is for."
+        );
+
         for (command, refusal) in checks {
             assert_eq!(refusal.code, crate::refusal::codes::NOT_HERE);
             let remedy = refusal.remedy.as_deref().unwrap_or_default();
@@ -4245,8 +4982,12 @@ mod tests {
         }]);
         let line = &bt.configured[0].health_line;
         assert!(line.contains("Bluetooth"), "{line}");
+        // Against the constant `device_health` already composes this line
+        // from, not against a fragment of it. The property is "the transport
+        // fact is IN the health line"; the words are ksx-core's to choose, and
+        // its own test is what fails if they change.
         assert!(
-            line.contains("no USB interface to bind"),
+            line.contains(ksx_core::transport::WINUSB_NEEDS_A_USB_INTERFACE),
             "the transport fact, not a vague 'unsupported': {line}"
         );
         assert!(
@@ -4758,5 +5499,41 @@ mod tests {
             None,
         );
         assert!(!unknown.line.contains("v1.22.0.0"), "{}", unknown.line);
+    }
+
+    /// The default must be the variant that asserts NOTHING about shift.
+    ///
+    /// `PanelShiftSummary` is `Default` and reached through `..Default::default()`
+    /// in the same places `PanelShiftState::Opaque` is, and for the same reason:
+    /// a board ksx cannot read must not deserialize into "this board has no
+    /// shift key". An older client omitting the field gets "unreadable", which
+    /// renders as an absent column rather than an empty one.
+    #[test]
+    fn an_unread_board_never_defaults_to_claiming_it_has_no_shift() {
+        assert_eq!(PanelShiftSummary::default(), PanelShiftSummary::Unreadable);
+
+        let omitted: PanelShiftSummary =
+            serde_json::from_str("{\"state\":\"unreadable\"}").expect("the default variant");
+        assert_eq!(omitted, PanelShiftSummary::Unreadable);
+
+        let enabled = serde_json::to_value(PanelShiftSummary::Enabled {
+            terminal_id: "1start".to_owned(),
+            terminal_label: "P1 Start".to_owned(),
+            reachable: 3,
+        })
+        .expect("serialize");
+        assert_eq!(enabled["state"], "enabled");
+        assert_eq!(enabled["terminal_id"], "1start");
+
+        // Separate variants because they are separate sentences with separate
+        // remedies: one says the column is unreachable, the other that ksx
+        // cannot see the column at all.
+        assert_ne!(
+            PanelShiftSummary::NoneEnabled {
+                stranded: 0,
+                opaque: 0,
+            },
+            PanelShiftSummary::Unreadable
+        );
     }
 }

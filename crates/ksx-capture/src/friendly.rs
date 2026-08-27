@@ -87,14 +87,35 @@ mod tests {
         assert_eq!(strip_revision("HID\\FOO&REV_0001"), "HID\\FOO&REV_0001");
     }
 
-    /// Live-registry test, read-only: the I-PAC4 is production hardware on this
-    /// machine, so its Enum entry must resolve. Skips silently if the board is
-    /// unplugged (friendly lookup is best-effort by contract).
+    /// Live-registry test, read-only. What it pins is the `;` split, which is
+    /// the whole point of this module: the registry stores
+    /// `@keyboard.inf,%hid.keyboarddevice%;HID Keyboard Device`, and the text
+    /// a picker shows is the part after the `;`. Return the raw value and the
+    /// device list reads as INF syntax.
+    ///
+    /// The previous version of this test asserted only `!name.is_empty()`,
+    /// which `search()` already guarantees before it returns `Some` — it could
+    /// not fail for any implementation of this module. These assertions can:
+    /// drop the split and the first one fires.
+    ///
+    /// Prints a SKIP when the board is not in this machine's Enum tree. A
+    /// check that silently passes when its subject is absent is not a check.
     #[test]
-    fn ipac_friendly_name_resolves_or_none() {
+    fn a_resolved_friendly_name_is_a_name_not_the_raw_inf_token() {
         let hwid = "HID\\VID_D209&PID_0430&REV_0001&MI_00";
-        if let Some(name) = friendly_name(hwid, DeviceKind::Keyboard) {
-            assert!(!name.is_empty());
-        }
+        let Some(name) = friendly_name(hwid, DeviceKind::Keyboard) else {
+            println!("SKIP: no {hwid} keyboard node in this machine's Enum tree");
+            return;
+        };
+        assert!(!name.is_empty());
+        assert!(
+            !name.starts_with('@'),
+            "the INF token survived the ';' split: {name}"
+        );
+        assert!(!name.contains(';'), "the ';' split did not happen: {name}");
+        assert!(
+            !name.to_ascii_lowercase().contains(".inf"),
+            "an INF file name is not a device name: {name}"
+        );
     }
 }

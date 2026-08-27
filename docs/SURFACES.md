@@ -42,6 +42,62 @@ result. `ksx-api` is the wire contract between them.
 Stated here because an unqualified rule that the code visibly does not follow
 teaches people to ignore the rule rather than to fix the code.
 
+- **The largest one: the Control Surface document has no backend at all.** Every
+  other entry in this list is a *duplicated* rule — a value the backend owns that
+  a surface re-states. This one is a whole document class the backend has never
+  heard of. `studio-ui/src/controlSurface.ts` (1,343 lines) defines
+  `ControlSurfaceState`, `/nocturne`'s drawn picture of a physical panel: control
+  geometry, `panelLayout`, the `design → teach → route` stage, per-control
+  `channels` tying a drawn control to the host signal the real hardware emits,
+  and — the part that makes this a state problem rather than a styling one —
+  `physicalId` ("stable physical-switch identity; mirrors share it, duplicates do
+  not") and `physicalResolution: "confirmed" | "unresolved-shared-signal"`. That
+  second field is a *measurement about the hardware*: whether two drawn controls
+  are one switch or two. `DEVICE-IDENTITY.md` is the document that owns claims of
+  that kind, and it never sees this one.
+
+  It lives in exactly one place — `window.localStorage`, under
+  `ksx-nocturne-control-surfaces1` (store version 3), with a companion
+  `ksx-nocturne-control-surface-hardware-epoch2:` ledger kept in a separate
+  record so a stale tab cannot overwrite both facts in one save.
+  `grep control_surface crates/ --include=*.rs` returns **zero hits**; there is no
+  route, no `ksx-api` type, no `DaemonCommand` and no file on disk. `fetch` never
+  appears in `controlSurface.ts`. So three things follow, and all three are live
+  defects rather than pending work:
+
+  - **Export/Import do not carry it.** `ConfigExport.parts`
+    (`ksx-api/src/machine.rs`) is `config`, `games`, `presets` — and that list is
+    the whole document. A user who exports their configuration, reinstalls, and
+    imports gets their slots, bindings, saved games and presets back, and loses
+    the panel they drew, silently, with the import reporting success.
+  - **The CLI and the cabinet cannot see it**, which by the second half of the
+    rule below is the tell: a capability with exactly one face has never been
+    tested against a second caller, so its shape is a guess.
+  - **Clearing browser data is a destructive product operation**, and nothing in
+    the product says so.
+
+  **The forcing function has now fired, and the debt was not paid.** Encoder
+  awareness returned to ksx one verb at a time (`ENHANCEMENTS.md` E10): `ksx
+  panel status`, then `ksx panel chart` and `POST /api/panel/chart`. Those verbs
+  answer *"which of my buttons collide?"*, and the answer is a statement about
+  physical switches — precisely what `physicalId` and `physicalResolution`
+  already assert from the browser.
+
+  What shipped is the second outcome this paragraph named, not the first: the
+  chart's own vocabulary was adopted into `ksx-api`, and the server-side
+  evidence store landed in `ksx-backend/src/panel_observations.rs` — though
+  only its typed-in half is wired (`declare`/`forget`); the press-recording
+  half has no production caller yet, so "what a press proved" is a capacity of
+  the store, not a thing any surface can file today — while the
+  browser-only document above still holds its own copy of the same class of
+  fact. **There are now two documents describing which physical switch produced
+  a signal, one of which the CLI and the cabinet still cannot see.** The
+  server-side one is the survivor; the payoff is migrating the browser-only
+  fields onto it, and it is now owed rather than anticipated. The same
+  seam is already visible from the other side: `DEVELOPMENT-PIPELINE.md` Step 7
+  records `hardwareEpochs` as a map "written by the sanitizer and read by
+  nothing", and it is a field of `ControlSurfaceStore`. Until then, do not build
+  a *second* browser-only document class; one is the debt, two is a pattern.
 - **The mapper's timing arithmetic exists three times.** `ksx_core` owns it;
   `ksx-studio/src/render_map.rs` mirrors `MIN_STEP_MS`, `TURBO_MAX_HZ`, the
   frame maths, `MacroStep::effective_ms`, the turbo on/off split, the turbo gap
@@ -181,6 +237,10 @@ surface does a human perform this task on*, and that is answered by the matrix.
 | Studio theme | — | never (the 10-foot surface is dark-only by design) | **primary** (`/nocturne`) |
 | What opposite directions do (SOCD) | owns (`slot assign --socd`) | — | **primary** (`/nocturne`) |
 | What ksx left behind (receipts and signing certificates) | owns (`winusb repair`, `winusb sweep-certificates`) | — | **primary** certificate cleanup (`/devices`); receipt view |
+| Identify an arcade encoder (family, release, whether its chart can be read) | owns (`panel status`) | — | planned |
+| Read an encoder's stored chart (what every terminal emits) | owns (`panel chart`, `panel backups`) | — | **primary** read (`/api/panel/chart` on `/nocturne`) |
+| Say what ksx knows about each terminal, and how it knows it | owns (`panel truth`) | — | planned |
+| Record what a person knows about a terminal ksx cannot read | owns (`panel declare`, `panel forget`) | — | planned |
 
 "owns" = the verb lives here. "primary" = where a human does it. "view" =
 renders backend state, takes no decisions. **"planned" = nothing is there** —
@@ -595,15 +655,31 @@ handoff used by the installer and customer shortcuts, not another surface.
 The empty-config daemon owns the control pipe/tray while doing no emulation
 work, which is what makes first-run staging reachable.
 
-> ⚠ **This sentence is the spec; the product does not obey it yet.**
-> `ksx-backend/src/studio_launch.rs` still builds `http://127.0.0.1:4460/start`,
-> and the router has no fallback and no redirect, so the installer shortcut, the
-> Start-menu entry, the desktop icon and the tray's "Open ksx" all open a
-> chrome-less window on a 404 with no address bar to correct it in. A test in the
-> same file pins the wrong value, which is why nothing went red. Fixing this is a
-> Studio/backend change, not a documentation one, and it has to land before
-> `RECOVERY.md`'s "there is now a way back that is not a command" is reachable
-> and before `FIRST-RUN.md` §7's Gate 4 can be run at all.
+> ✅ **The product obeys this sentence as of `ad520b4`, 2026-08-26.**
+> `ksx-backend/src/studio_launch.rs:73` returns `http://127.0.0.1:4460/nocturne`,
+> and the `--app=` argument the Chromium launcher builds carries the same
+> address; both are pinned by tests in that file. So the installer shortcut, the
+> Start-menu entry, the desktop icon and the tray's "Open ksx" land on the
+> product page.
+>
+> **What it was, and why the entry survives the fix.** For the fortnight after
+> the cutover that function returned `…:4460/start` — a page deleted with the
+> other five — and the router has no fallback and no redirect, so every one of
+> those four doors opened a chrome-less window on a 404 *with no address bar to
+> type a correction into*. It was also the address printed for a cabinet user
+> told to "type this on your phone", which is the 10-foot path's entire
+> fallback. Nothing went red because a test in the same file asserted the broken
+> value: `the_window_opens_the_address_the_module_publishes` pinned `/start`, so
+> the suite defended the bug and reported success.
+>
+> Two lessons are load-bearing enough to keep after the fix. **A test that pins
+> the wrong answer is worse than no test**, because a reviewer reading green
+> concludes the opposite of the truth. And this one could only ship because
+> `studio_launch.rs` lives behind `--features studio`, which the default build
+> does not compile, so no local run executed it at all — see `PLAYBOOK.md` §4
+> for the 71 tests that were in that position and the CI steps that now run
+> them. `/start` itself is still a 404 and stays one; the fix was to stop asking
+> for it, not to resurrect it.
 
 The cabinet app has an "Open Studio" action. That direction is correct: the
 process already running at the machine can open the workbench.

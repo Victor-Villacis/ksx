@@ -641,9 +641,56 @@ mod tests {
     /// telling the user a working address.
     #[test]
     fn the_window_opens_the_address_the_module_publishes() {
-        assert_eq!(url(), format!("http://127.0.0.1:{PORT}/nocturne"));
         let argv = app_argv(&url(), Path::new(r"C:\p"));
         assert_eq!(argv[0], format!("--app={}", url()));
         assert!(argv[0].contains(&PORT.to_string()));
+    }
+
+    /// **The published address has to be a page Studio actually serves.**
+    ///
+    /// THE BUG, 2026-08-25: this test used to open with
+    /// `assert_eq!(url(), format!("http://127.0.0.1:{PORT}/start"))` — the body
+    /// of [`url`], retyped. Two spellings of the same literal agree by
+    /// construction, so when `/start` was deleted in the cutover the test went
+    /// on passing and `ksx open` shipped a 404: to the browser it launches, and
+    /// to the cabinet user told to type the address on their phone.
+    ///
+    /// The fix is that the route may not come from this module. It is checked
+    /// against `manifest.json` — the file `ksx-studio` embeds and routes off,
+    /// the same one `EmbeddedPage::load` reads — so deleting the page fails the
+    /// launcher's test. (`ksx-studio`'s own `render_check`/`render_devices`
+    /// tests pin the links INSIDE the pages; nothing but this pins the address
+    /// ksx hands to a human.)
+    ///
+    /// The manifest is read as a file rather than through the crate because
+    /// nothing in `ksx-studio` publishes its routes: `AssetManifest` and
+    /// `EmbeddedPage` are both `pub(crate)`. A `pub const PRODUCT_ROUTE` over
+    /// there would let this assert against a symbol instead of a path.
+    #[test]
+    fn the_published_address_is_a_route_studio_serves() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../../ksx-studio/assets/manifest.json"))
+                .expect("the embedded studio manifest is JSON");
+        let published = url();
+        let route = published
+            .strip_prefix(&format!("http://127.0.0.1:{PORT}"))
+            .unwrap_or_else(|| panic!("{published} is not the local Studio origin"));
+        let routes = manifest["routes"]
+            .as_object()
+            .expect("manifest.json has a routes table");
+        assert!(
+            routes.contains_key(route),
+            "ksx opens '{route}', which studio does not serve — it serves {:?}",
+            routes.keys().collect::<Vec<_>>()
+        );
+        // Not just present: the route has to carry the page. A manifest entry
+        // with no module behind it renders nothing.
+        assert!(
+            routes[route]["js"]
+                .as_array()
+                .is_some_and(|js| !js.is_empty()),
+            "'{route}' is in the manifest with no module behind it: {}",
+            routes[route]
+        );
     }
 }

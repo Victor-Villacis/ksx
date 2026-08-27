@@ -1254,9 +1254,16 @@ mod tests {
 
     /// Every shipping persona is writable (retro leg flip 2026-08-20); the
     /// refusal machinery re-arms with the next gated persona.
+    ///
+    /// Each persona is checked ON DISK, not by `assign` returning `Ok`. A no-op
+    /// `Ok` is a real path through this writer — see
+    /// `asking_for_the_persona_a_slot_already_has_writes_nothing` — so a writer
+    /// that silently skipped four of the five personas and left the slot on its
+    /// original one would satisfy every `unwrap()` below. Only the reload
+    /// separates "written" from "accepted and dropped".
     #[test]
     fn every_shipping_persona_is_writable() {
-        let root = TempRoot::new("cannot-plug");
+        let root = TempRoot::new("every-persona");
         let store = root.store();
         assign(&store, &spec(1, "Panel P1")).unwrap();
 
@@ -1265,17 +1272,22 @@ mod tests {
             Persona::SwitchPro,
             Persona::Snes,
             Persona::Genesis,
+            // The production DualSense path, walked last so the file ends on a
+            // persona no earlier iteration could have left behind.
+            Persona::DualSense,
         ] {
-            assign(&store, &persona_spec(1, persona))
+            let applied = assign(&store, &persona_spec(1, persona))
                 .unwrap_or_else(|err| panic!("{persona} must be writable: {err}"));
+            assert!(
+                !applied.unchanged,
+                "{persona} was accepted without writing anything"
+            );
+            assert_eq!(
+                store.load_config().unwrap().value.slots[0].persona,
+                persona,
+                "{persona} was reported written but the file on disk says otherwise"
+            );
         }
-        assign(&store, &persona_spec(1, Persona::DualSense))
-            .expect("the production DualSense path is writable");
-        // Nothing was written by any of them.
-        assert_eq!(
-            store.load_config().unwrap().value.slots[0].persona,
-            Persona::DualSense
-        );
     }
 
     /// The elevated SDK host carries eight live pads; the writer refuses the
@@ -1286,7 +1298,13 @@ mod tests {
     fn a_ninth_hidmaestro_pad_is_refused_before_the_config_is_written() {
         let root = TempRoot::new("hidmaestro-pool");
         let store = root.store();
-        for slot in 1u8..=8 {
+        // The pool size is `ksx_core::MAX_HIDMAESTRO_PADS`, not the 8 this
+        // test used to spell three times over. Spelled, a raised ceiling makes
+        // this test fail on `unwrap_err()` returning `Ok(AppliedSlot { slot: 9,
+        // .. })` — a message that names a slot number and says nothing about
+        // the number that moved, in one of four crates failing the same way.
+        let pool = ksx_core::MAX_HIDMAESTRO_PADS;
+        for slot in 1u8..=pool {
             let persona = if slot % 2 == 0 {
                 Persona::DualSense
             } else {
@@ -1304,12 +1322,12 @@ mod tests {
                     socd: None,
                 },
             )
-            .unwrap_or_else(|err| panic!("pad {slot} of 8 must write: {err}"));
+            .unwrap_or_else(|err| panic!("pad {slot} of {pool} must write: {err}"));
         }
         let err = assign(
             &store,
             &SlotSpec {
-                slot: 9,
+                slot: pool + 1,
                 preset: Some("Panel P1".into()),
                 profile: None,
                 persona: Some(Persona::DualSense),
@@ -1319,9 +1337,17 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code(), "too-many-hidmaestro-pads");
         let message = err.to_string();
-        assert!(message.contains("at most 8"), "{message}");
+        // From the constant `SlotError::TooManyHidMaestroPads` renders, not the
+        // literal 8. The ceiling belongs to `ksx_core::MAX_HIDMAESTRO_PADS`,
+        // which `check_hidmaestro_pool` above already gates on — this line is
+        // here to prove the refusal QUOTES the ceiling, not to re-decide it.
+        assert!(message.contains(&format!("at most {pool}")), "{message}");
         let config = store.load_config().unwrap().value;
-        assert_eq!(config.slots.len(), 8, "a refusal writes nothing");
+        assert_eq!(
+            config.slots.len(),
+            usize::from(pool),
+            "a refusal writes nothing"
+        );
     }
 
     /// A fifth XInput slot is refused the way `ksx pads` refuses a fifth pad.

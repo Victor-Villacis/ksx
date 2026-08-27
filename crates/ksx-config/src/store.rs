@@ -720,6 +720,7 @@ mod tests {
                 mouse_move_deadzone: 7,
                 starting_user_index: 2,
                 theme: None,
+                board: None,
             },
             devices: vec![DeviceEntry {
                 id: r"HID\VID_D209&PID_0430&MI_00\8&A1B2C3D4&0&0000"
@@ -987,6 +988,60 @@ extra = true
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, vec!["config.toml"]);
+    }
+
+    /// The half the name of [`saves_are_atomic_and_leave_no_tmp_files`]
+    /// promised and did not deliver: a save that FAILS must not damage the
+    /// config the user already has.
+    ///
+    /// `write_atomic` writes `config.toml.tmp` and renames it over
+    /// `config.toml`, so a failure before the rename must leave the original
+    /// byte-identical. Nothing injected a failure between `File::create` /
+    /// `write_all` / `sync_all` and `fs::rename`, so the property that
+    /// actually matters — a crash or a full disk mid-save never truncates the
+    /// user's config — was untested (2026-08-26 audit).
+    ///
+    /// The failure is injected from outside production code: a DIRECTORY
+    /// standing where the tmp file wants to be makes `File::create` fail.
+    #[test]
+    fn a_save_that_fails_leaves_the_previous_config_byte_identical() {
+        let dir = TempDir::new("atomic-fail");
+        let store = store(&dir);
+        let good = sample_config();
+        store.save_config(&good).unwrap();
+        let path = store.root().config_path();
+        let before = std::fs::read(&path).unwrap();
+
+        // Block the tmp path: File::create cannot clobber a directory.
+        let tmp = path.with_file_name("config.toml.tmp");
+        std::fs::create_dir(&tmp).unwrap();
+
+        let mut doomed = sample_config();
+        doomed.settings.mouse_move_deadzone = 7;
+        let err = store
+            .save_config(&doomed)
+            .expect_err("the save must fail, not silently succeed");
+        assert!(matches!(err, ConfigError::Io { .. }), "{err:?}");
+
+        // The user's config is untouched — not truncated, not half-written.
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "a failed save damaged the existing config"
+        );
+        assert_eq!(store.load_config().unwrap().value, good);
+
+        // Known wart, pinned so a future cleanup is a visible test change:
+        // `write_atomic` has no cleanup path, so the failed attempt's tmp
+        // entry survives. It is inert (the next save renames over it) but it
+        // is residue, and the sibling test above asserts there is none on the
+        // success path.
+        assert!(tmp.exists(), "tmp residue after a failed save");
+        std::fs::remove_dir(&tmp).unwrap();
+
+        // ...and the store recovers: the next save works normally.
+        store.save_config(&doomed).unwrap();
+        assert_eq!(store.load_config().unwrap().value, doomed);
     }
 
     #[test]

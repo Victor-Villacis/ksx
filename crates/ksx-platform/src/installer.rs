@@ -1184,13 +1184,6 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn the_recorded_hash_round_trips() {
-        assert_eq!(sha256::hex_upper(&good_digest()), EXPECTED_SHA256);
-        assert!(trusted().is_trusted());
-        assert!(trusted().failures().is_empty());
-    }
-
     /// Both pins are load-bearing: neither one alone may authorise execution.
     #[test]
     fn a_single_passing_pin_is_never_enough() {

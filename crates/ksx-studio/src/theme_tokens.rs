@@ -20,12 +20,17 @@ pub(crate) const PERSONALITY_CSS: &str =
     "html{color-scheme:dark}body{background:#120c1c;color:#f0ebe0;margin:0}@media (prefers-color-scheme:light){html{color-scheme:light}body{background:#f6f3ee;color:#1c1428}}html[data-theme=dark]{color-scheme:dark}html[data-theme=dark] body{background:#120c1c;color:#f0ebe0}html[data-theme=light]{color-scheme:light}html[data-theme=light] body{background:#f6f3ee;color:#1c1428}html[data-theme=matrix]{color-scheme:dark}html[data-theme=matrix] body{background:#041008;color:#d8ffe0}";
 
 /// One selectable theme. `scheme` decides the first-paint color-scheme
-/// and which pad-art sheet the theme coexists with.
+/// and which pad-art sheet the theme coexists with; `blurb` is the one
+/// sentence the theme picker renders under the label. `blurb` is authored
+/// per theme rather than derived from `scheme` because Dark and Matrix
+/// share a scheme, and a derived sentence made those two picker rows
+/// word-for-word identical.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ThemeMeta {
     pub(crate) id: &'static str,
     pub(crate) label: &'static str,
     pub(crate) scheme: &'static str,
+    pub(crate) blurb: &'static str,
 }
 
 /// Every selectable theme, default first. "System" is not a theme — it
@@ -34,7 +39,7 @@ pub(crate) struct ThemeMeta {
 /// this roster; an unknown id renders as System rather than defeating the
 /// un-stamped light guard with a selector nothing styles.
 pub(crate) const THEMES: &[ThemeMeta] = &[
-    ThemeMeta { id: "dark", label: "Dark", scheme: "dark" },
-    ThemeMeta { id: "light", label: "Light", scheme: "light" },
-    ThemeMeta { id: "matrix", label: "Matrix", scheme: "dark" },
+    ThemeMeta { id: "dark", label: "Dark", scheme: "dark", blurb: "Every page renders dark, whatever the system prefers." },
+    ThemeMeta { id: "light", label: "Light", scheme: "light", blurb: "Every page renders light, whatever the system prefers." },
+    ThemeMeta { id: "matrix", label: "Matrix", scheme: "dark", blurb: "Phosphor green on near-black, in a monospace face — dark, whatever the system prefers." },
 ];

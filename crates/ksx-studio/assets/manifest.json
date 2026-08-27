@@ -1,39 +1,39 @@
 {
   "version": 1,
-  "build_hash": "b0fda20b5bf14d7270623f586262c9190894997b729d9361faf4f89c3b62eb01",
+  "build_hash": "b11f283abc4fb3b737c0c8aae3ef2b7163b795568db667825bf9adbe7fb1c115",
   "assets": {
     "check.ir": "check.f5325a7a.ir",
     "check.js": "check.32ed38ef.js",
     "devices.ir": "devices.04fde940.ir",
     "devices.js": "devices.6a10a654.js",
-    "nocturne.ir": "nocturne.288c1416.ir",
-    "nocturne.js": "nocturne.8734f6b3.js",
+    "nocturne.ir": "nocturne.aad79e87.ir",
+    "nocturne.js": "nocturne.1f6228bf.js",
     "pads.ir": "pads.cf21377b.ir",
     "pads.js": "pads.303eac94.js",
-    "studio.css": "studio.42b6d34f.css"
+    "studio.css": "studio.22d8f291.css"
   },
   "routes": {
     "/nocturne": {
       "js": [
-        "nocturne.8734f6b3.js"
+        "nocturne.1f6228bf.js"
       ],
       "css": [
-        "studio.42b6d34f.css"
+        "studio.22d8f291.css"
       ],
       "fonts": [],
-      "total_size_br": 249284,
+      "total_size_br": 251793,
       "budget_warn_threshold": 282500,
-      "ir": "nocturne.288c1416.ir"
+      "ir": "nocturne.aad79e87.ir"
     },
     "/check": {
       "js": [
         "check.32ed38ef.js"
       ],
       "css": [
-        "studio.42b6d34f.css"
+        "studio.22d8f291.css"
       ],
       "fonts": [],
-      "total_size_br": 85601,
+      "total_size_br": 89418,
       "budget_warn_threshold": 282500,
       "ir": "check.f5325a7a.ir"
     },
@@ -42,10 +42,10 @@
         "pads.303eac94.js"
       ],
       "css": [
-        "studio.42b6d34f.css"
+        "studio.22d8f291.css"
       ],
       "fonts": [],
-      "total_size_br": 85721,
+      "total_size_br": 89538,
       "budget_warn_threshold": 282500,
       "ir": "pads.cf21377b.ir"
     },
@@ -54,10 +54,10 @@
         "devices.6a10a654.js"
       ],
       "css": [
-        "studio.42b6d34f.css"
+        "studio.22d8f291.css"
       ],
       "fonts": [],
-      "total_size_br": 87237,
+      "total_size_br": 91054,
       "budget_warn_threshold": 282500,
       "ir": "devices.04fde940.ir"
     }

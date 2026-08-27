@@ -136,9 +136,12 @@ fn transport_label(board: &Board<'_>) -> &'static str {
 /// panel catalog is exact VID/PID evidence; the display table remains the
 /// fallback for every other USB device.
 fn name_of(row: &UsbRow, key: &str) -> String {
-    if let Some(family) = DeviceFacts::from_instance_path(&row.instance_id)
-        .and_then(|facts| crate::panel_catalog::family_for(facts.vendor_id, facts.product_id))
-    {
+    // The row's own pair, not one recovered from the instance path.
+    // `from_instance_path` requires an `MI_` segment, so a
+    // single-interface encoder used to fall through to the display
+    // table and show up as "USB Input Device" — while `recognised`
+    // below named the very same board. See `recognised`.
+    if let Some(family) = crate::panel_catalog::family_for(row.vendor_id, row.product_id) {
         return family.label.to_owned();
     }
     if let Some(vendor) = &row.vendor {
@@ -373,18 +376,70 @@ pub fn view(
     )
 }
 
+/// **What the panel catalog makes of one board, decided once.**
+///
+/// Read off the row's own `vendor_id`/`product_id`/`bcd_device` rather than
+/// recovered from the instance path. `DeviceFacts::from_instance_path` ends
+/// with `interface_number: hex_field(head, "MI_", 2)?`, so a board with no
+/// `MI_` segment — a single-interface, non-composite encoder — yields `None`
+/// and the catalog is never consulted for it at all. That silently made such a
+/// board a nameless keyboard: no family name, no `PanelEncoder` role, no
+/// arcade lane.
+///
+/// Returning family and profile together is what keeps the ROLE and the facts
+/// beside it from ever disagreeing: they are now the same lookup.
+fn recognised(
+    board: &Board<'_>,
+) -> Option<(
+    &'static crate::panel_catalog::PanelFamily,
+    Option<&'static crate::panel_catalog::PanelProtocolProfile>,
+)> {
+    board.interfaces.iter().find_map(|row| {
+        let family = crate::panel_catalog::family_for(row.vendor_id, row.product_id)?;
+        let profile =
+            crate::panel_catalog::profile_for(row.vendor_id, row.product_id, row.bcd_device);
+        Some((family, profile))
+    })
+}
+
 fn board_row(board: &Board<'_>) -> ksx_api::BoardRow {
     let keyboard = board.keyboard();
-    let role = if board.interfaces.iter().any(|row| {
-        DeviceFacts::from_instance_path(&row.instance_id).is_some_and(|facts| {
-            crate::panel_catalog::family_for(facts.vendor_id, facts.product_id).is_some()
-        })
-    }) {
+    // One lookup, three uses: the role, the name the picker shows, and the
+    // six identity facts below.
+    let known = recognised(board);
+    let role = if known.is_some() {
         ksx_api::BoardRole::PanelEncoder
     } else if board.looks_like_a_keyboard() {
         ksx_api::BoardRole::Keyboard
     } else {
         ksx_api::BoardRole::Other
+    };
+    // The three tiers, worded once. `panel.rs` already authors these sentences
+    // for its own status view; keeping them identical is what stops one board
+    // being described two ways by two surfaces.
+    let (profile_state, profile_detail) = match known {
+        Some((family, Some(profile))) => (
+            "profiled",
+            format!(
+                "ksx has a measured protocol profile for this {} at release {}, so it can read the \
+                 board's chart. {}",
+                family.label, profile.firmware_label, profile.firmware_detail
+            ),
+        ),
+        Some((family, None)) => (
+            "unprofiled-release",
+            format!(
+                "ksx recognises the {} but has no measured profile for this firmware release, so it cannot read \
+                 the board's chart. Teaching each control still works.",
+                family.label
+            ),
+        ),
+        None => (
+            "unrecognised",
+            "ksx has no exact recognition evidence for this board. It is treated as an ordinary keyboard, and \
+             teaching each control is how to learn what it sends."
+                .to_owned(),
+        ),
     };
     ksx_api::BoardRow {
         name: board.name.clone(),
@@ -423,6 +478,20 @@ fn board_row(board: &Board<'_>) -> ksx_api::BoardRow {
         cannot_type_line: String::new(),
         selector: None,
         alias_hint: String::new(),
+        family_label: known.map(|(family, _)| family.label.to_owned()),
+        firmware_label: known
+            .and_then(|(_, profile)| profile)
+            .map(|profile| profile.firmware_label.to_owned()),
+        profile_state: profile_state.to_owned(),
+        profile_detail,
+        terminal_count: known
+            .and_then(|(_, profile)| profile)
+            .map(|p| p.terminal_count),
+        chart_readable: crate::panel_catalog::capabilities_for(
+            known.map(|(family, _)| family),
+            known.and_then(|(_, profile)| profile),
+        )
+        .can_read_chart,
     }
 }
 
@@ -608,6 +677,25 @@ pub fn run(_all: bool, _json: bool) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    /// Read `VID_xxxx` / `PID_xxxx` out of a test instance path.
+    ///
+    /// The real enumerator reads these from the USB device descriptor and puts
+    /// them on the row; a fixture only has the path. Parsing it here means a
+    /// test that writes an I-PAC-shaped id gets I-PAC recognition, instead of
+    /// every fixture board silently being vendor 0x0000 — which would make the
+    /// catalog tests pass for the wrong reason.
+    fn usb_triple(id: &str) -> (u16, u16) {
+        let upper = id.to_ascii_uppercase();
+        let field = |key: &str| {
+            upper
+                .find(key)
+                .and_then(|at| upper.get(at + key.len()..at + key.len() + 4))
+                .and_then(|hex| u16::from_str_radix(hex, 16).ok())
+                .unwrap_or(0)
+        };
+        (field("VID_"), field("PID_"))
+    }
+
     fn row(id: &str, board: &str, state: &str, vendor: Option<&str>) -> UsbRow {
         // Built through `ksx_core::Reach` rather than by hand, deliberately: a
         // fixture that spelled its own eligibility could not disagree with the
@@ -621,6 +709,9 @@ mod tests {
         };
         let eligibility = reach.eligibility();
         UsbRow {
+            vendor_id: usb_triple(id).0,
+            product_id: usb_triple(id).1,
+            bcd_device: 0x0056,
             instance_id: id.to_owned(),
             description: "USB Input Device".to_owned(),
             transport: ksx_core::Transport::Usb.code().to_owned(),
@@ -683,6 +774,9 @@ mod tests {
         };
         let eligibility = reach.eligibility();
         UsbRow {
+            vendor_id: 0,
+            product_id: 0,
+            bcd_device: 0,
             instance_id: id.to_owned(),
             description: name.to_owned(),
             transport: ksx_core::Transport::Bluetooth.code().to_owned(),
@@ -907,8 +1001,13 @@ mod tests {
             .expect("the Bluetooth row has a backends line");
         assert!(bt.contains("interception: yes"), "{bt}");
         assert!(bt.contains("never"), "{bt}");
+        // The whole sentence from the constant `ksx_core::Reach::line`
+        // interpolates, not a fragment of it. The row is built through
+        // `ksx_core::Reach` on purpose (see `row` above), so the property this
+        // holds is that the composed backends line carries the reason intact —
+        // the wording is ksx-core's, and its test is what a reword breaks.
         assert!(
-            bt.contains("no USB interface to bind"),
+            bt.contains(ksx_core::transport::WINUSB_NEEDS_A_USB_INTERFACE),
             "the transport fact, not a vague refusal: {bt}"
         );
         assert!(
@@ -988,7 +1087,11 @@ mod tests {
         assert!(bt.pickable);
         assert!(bt.interception_eligible);
         assert!(!bt.winusb_eligible);
-        assert!(bt.backends.contains("no USB interface to bind"), "{bt:?}");
+        assert!(
+            bt.backends
+                .contains(ksx_core::transport::WINUSB_NEEDS_A_USB_INTERFACE),
+            "{bt:?}"
+        );
         // No elevated command: a claim on this device refuses every time, and
         // a page that printed one would be handing out a dead command.
         assert!(bt.claim_command.is_none());
@@ -1226,6 +1329,95 @@ mod tests {
             .find(|board| board.name == "Logitech Keyboard")
             .expect("the ordinary keyboard");
         assert_eq!(keyboard.role, ksx_api::BoardRole::Keyboard);
+    }
+
+    /// **A single-interface encoder is recognised too.**
+    ///
+    /// Recognition used to run through `DeviceFacts::from_instance_path`, which
+    /// ends `interface_number: hex_field(head, "MI_", 2)?` — so a board whose
+    /// devnode carries no `MI_` segment returned `None` and the catalog was
+    /// never consulted for it. A non-composite Ultimarc board was therefore an
+    /// unnamed keyboard: no family label, no `PanelEncoder` role, and no place
+    /// in the arcade lane, while a composite one right beside it worked.
+    ///
+    /// The row carries its own USB pair now, so the path shape cannot decide
+    /// whether a board is known.
+    #[test]
+    fn a_non_composite_encoder_is_recognised_and_named() {
+        let mut devices = ksx_api::DevicesView::default();
+        // No `MI_` anywhere: one interface, straight off the hub.
+        devices.usb.push(row(
+            r"USB\VID_D209&PID_0440\7&1A2B3C4D&0&0000",
+            r"USB\VID_D209&PID_0440\7&1A2B3C4D&0&0000",
+            "claimable",
+            None,
+        ));
+        let view = view(
+            &devices,
+            &connected(),
+            &ConfigFile::default(),
+            &GamesFile::default(),
+        );
+
+        let board = view.boards.first().expect("the board");
+        assert_eq!(
+            board.role,
+            ksx_api::BoardRole::PanelEncoder,
+            "a Mini-PAC with no MI_ segment was not recognised: {board:?}"
+        );
+        assert_eq!(
+            board.name, "Ultimarc Mini-PAC",
+            "the board fell through to the display table instead of the catalog"
+        );
+        assert_eq!(board.family_label.as_deref(), Some("Ultimarc Mini-PAC"));
+        // Recognised, and deliberately not readable: only one measured profile
+        // exists and it is not this model.
+        assert_eq!(board.profile_state, "unprofiled-release");
+        assert!(!board.chart_readable);
+        assert_eq!(
+            board.terminal_count, None,
+            "`PanelFamily` carries no terminal count; inventing one would be a \
+             claim about hardware ksx has never measured"
+        );
+        assert!(
+            board
+                .profile_detail
+                .contains("Teaching each control still works"),
+            "an unprofiled board must be told what it CAN do: {}",
+            board.profile_detail
+        );
+    }
+
+    /// The three tiers are three different sentences, and the profiled one
+    /// names the release it matched.
+    #[test]
+    fn every_recognition_tier_says_which_it_is() {
+        let view = view(
+            &cabinet(),
+            &connected(),
+            &ConfigFile::default(),
+            &GamesFile::default(),
+        );
+        let ipac = view
+            .boards
+            .iter()
+            .find(|b| b.role == ksx_api::BoardRole::PanelEncoder)
+            .expect("the I-PAC board");
+        assert_eq!(ipac.profile_state, "profiled");
+        assert_eq!(ipac.family_label.as_deref(), Some("Ultimarc I-PAC 4X"));
+        assert_eq!(ipac.firmware_label.as_deref(), Some("1.56"));
+        assert_eq!(ipac.terminal_count, Some(56));
+        assert!(ipac.chart_readable);
+
+        // Anything not in the catalog says so rather than being left blank.
+        let other = view
+            .boards
+            .iter()
+            .find(|b| b.role != ksx_api::BoardRole::PanelEncoder)
+            .expect("a non-encoder board");
+        assert_eq!(other.profile_state, "unrecognised");
+        assert_eq!(other.family_label, None);
+        assert!(!other.chart_readable);
     }
 
     #[test]

@@ -470,11 +470,13 @@ mod tests {
         )
     }
 
-    #[test]
-    fn embedded_page_loads_and_ir_is_fmir_v2() {
-        let page = EmbeddedPage::load("/check").expect("the /check route is embedded");
-        assert_eq!(page.module.header.version, 2);
-    }
+    // DELETED 2026-08-26: `embedded_page_loads_and_ir_is_fmir_v2` (TAUTOLOGICAL).
+    // `IrModule::parse` starts with `IrHeader::parse`, which already rejects a
+    // version mismatch, so `assert_eq!(header.version, 2)` after a successful
+    // load could only ever agree. Replaced by ONE cross-page test that pins
+    // something real: `render.rs::the_embed_ships_exactly_the_live_routes`,
+    // which checks the manifest carries the four live routes, none of the six
+    // deleted ones, and that each IR parses to a non-empty slot table.
 
     #[test]
     fn the_check_head_is_complete() {
@@ -738,38 +740,12 @@ mod tests {
         );
     }
 
-    /// The customer rail is the four-stage guided workflow (Keyboard →
-    /// Controller → Mapping → Play), and the Tools menu marks this page as
-    /// current.
-    #[test]
-    fn the_nav_reaches_every_sibling_page() {
-        let page = EmbeddedPage::load("/check").unwrap();
-        let html = render_check(&page, &cabinet()).html;
-        // One page owns the workflow now, so the four numbered steps that
-        // pointed at /start, /map and / are a single link.
-        assert!(
-            html.contains(r#"<a class="navlink workflow-link" href="/nocturne">"#),
-            "{html}"
-        );
-        // And nothing on this page may still point into a deleted one.
-        for dead in [
-            r#"href="/""#,
-            r#"href="/start"#,
-            r#"href="/map"#,
-            r#"href="/setup"#,
-            r#"href="/profiles"#,
-            r#"href="/workspace"#,
-        ] {
-            assert!(
-                !html.contains(dead),
-                "dead link {dead} still renders: {html}"
-            );
-        }
-        assert!(
-            html.contains(r#"<a href="/check" aria-current="page">"#),
-            "{html}"
-        );
-    }
+    // DELETED 2026-08-26: the per-page nav test (DUPLICATE — three byte-identical
+    // copies across render_check.rs, render_devices.rs and render_pads.rs).
+    // Replaced by `render.rs::no_page_links_into_a_deleted_surface`, which runs
+    // the same dead-link blocklist and rail assertions over ALL FOUR pages —
+    // including /nocturne, which had no blocklist at all despite absorbing every
+    // deleted surface.
 
     /// **The two-attribute contract, both sides.**
     ///

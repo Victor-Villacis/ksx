@@ -29,8 +29,10 @@ const LIST_SLOT_ENCODERS: &str = "list:nDevEncoders:array";
 const LIST_SLOT_DEVICES: &str = "list:nDevRows:array";
 const LIST_SLOT_EXP: &str = "list:nDevExp:array";
 const LIST_SLOT_OTHER: &str = "list:nDevOther:array";
+const LIST_SLOT_JOURNEY: &str = "list:nJourney:array";
 const LIST_SLOT_MODES: &str = "list:nModeRows:array";
 const LIST_SLOT_THEMES: &str = "list:nThemeRows:array";
+const LIST_SLOT_BOARDS: &str = "list:nBoardRows:array";
 /// The SECOND `createList` over the same binding. Forma names a reused list
 /// binding with an occurrence suffix (docs/FORMA-DOGFOOD.md #12), so the edit
 /// disclosures under the saved-games menu are a distinct slot that must be
@@ -106,6 +108,10 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nChipText": payload.view.chip_text,
         "nSaveText": payload.view.save_text,
         "nEscapeLine": payload.view.escape_line,
+        "nJourneyLine": payload.view.journey_line,
+        "nBoardLine": payload.view.board_line,
+        "nBoardCaseStyle": payload.view.board_case_style,
+        "nBoardOrigin": payload.view.board_origin,
         "nPlayCls": payload.view.play_cls,
         "nStopCls": payload.view.stop_cls,
         "nApplyCls": payload.view.apply_cls,
@@ -215,6 +221,15 @@ fn device_row(row: &NocturneDeviceRow) -> SlotValue {
         ("selector".to_owned(), SlotValue::Text(row.selector.clone())),
         ("alias".to_owned(), SlotValue::Text(row.alias.clone())),
         ("label".to_owned(), SlotValue::Text(row.label.clone())),
+        (
+            "aria_current".to_owned(),
+            SlotValue::Text(row.aria_current.clone()),
+        ),
+        ("title".to_owned(), SlotValue::Text(row.title.clone())),
+        (
+            "chartReadable".to_owned(),
+            SlotValue::Text(row.chart_readable.clone()),
+        ),
     ])
 }
 
@@ -225,12 +240,29 @@ fn other_row(row: &NocturneOtherRow) -> SlotValue {
     ])
 }
 
+fn journey_row(row: &crate::snapshot::NocturneJourneyStep) -> SlotValue {
+    SlotValue::object(vec![
+        ("key".to_owned(), SlotValue::Text(row.key.clone())),
+        ("title".to_owned(), SlotValue::Text(row.title.clone())),
+        ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
+        ("badge".to_owned(), SlotValue::Text(row.badge.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+    ])
+}
+
 fn mode_row(row: &NocturneChoiceRow) -> SlotValue {
     SlotValue::object(vec![
         ("name".to_owned(), SlotValue::Text(row.name.clone())),
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
         ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        // `"true"` / `"false"`, not a bool and not an empty string: this is
+        // bound STRAIGHT onto `aria-current`, and the two ARIA values are
+        // exactly these words. An empty string is not "absent" to ARIA.
+        (
+            "chosen".to_owned(),
+            SlotValue::Text(if row.chosen { "true" } else { "false" }.to_owned()),
+        ),
     ])
 }
 
@@ -305,6 +337,7 @@ fn key_cell(row: &NocturneKeyCell) -> SlotValue {
         ("short".to_owned(), SlotValue::Text(row.short.clone())),
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
         ("aria".to_owned(), SlotValue::Text(row.aria.clone())),
+        ("style".to_owned(), SlotValue::Text(row.style.clone())),
     ])
 }
 
@@ -491,7 +524,7 @@ fn bind_row(row: &NocturneBindRow) -> SlotValue {
     ])
 }
 
-fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 45] {
+fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 47] {
     let view = &payload.view;
     [
         (
@@ -663,12 +696,20 @@ fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 45] {
             SlotValue::array(view.dev_other.iter().map(other_row).collect()),
         ),
         (
+            LIST_SLOT_JOURNEY,
+            SlotValue::array(view.journey.iter().map(journey_row).collect()),
+        ),
+        (
             LIST_SLOT_MODES,
             SlotValue::array(view.mode_rows.iter().map(mode_row).collect()),
         ),
         (
             LIST_SLOT_THEMES,
             SlotValue::array(view.theme_rows.iter().map(mode_row).collect()),
+        ),
+        (
+            LIST_SLOT_BOARDS,
+            SlotValue::array(view.board_rows.iter().map(mode_row).collect()),
         ),
         (
             LIST_SLOT_GAMES_EDIT,
@@ -798,6 +839,15 @@ mod tests {
                 active: None,
             },
             unavailable: String::new(),
+            // No saved panel layouts. The fixture stages an I-PAC, so this is
+            // exactly the state that makes the picker say "save a layout and
+            // it joins this list" rather than offering an empty plate.
+            panels: None,
+            panels_error: String::new(),
+            // No boards drawn either — the fixture stages hardware, not
+            // somebody's drawing.
+            drawn: None,
+            drawn_error: String::new(),
             setup: Some(ksx_api::SetupView {
                 config_exists: true,
                 slots: vec![ksx_api::SetupSlotRow {
@@ -839,17 +889,263 @@ mod tests {
         .derived()
     }
 
-    /// Every named slot is either SERVED (injected from the payload here) or
-    /// a CLIENT-ONLY UI demo whose compile-time default is the idle screen.
-    /// The split is the contract: a slot showing up in neither list means the
-    /// island grew state nobody classified; a served name disappearing means
-    /// the seam is silently injecting into a dead slot.
+    /// Every named slot is either SERVED (injected from the payload by the
+    /// seam in this file) or a CLIENT-ONLY UI demo whose compile-time default
+    /// is the idle screen. The split is the contract: a slot in neither list
+    /// means the island grew state nobody classified; a served name that
+    /// vanished means the seam is injecting into a dead slot.
+    ///
+    /// The served side is derived from `scalar_slots`/`show_values`/
+    /// `list_values` so it cannot drift from what the seam does, and the whole
+    /// thing is handed to `assert_island_slot_contract` — the check that the
+    /// injected name resolves to the slot the island actually RENDERS.
+    /// **Every `applyFlash` argument is either a refusal or a named success.**
+    ///
+    /// `applyFlash` in NocturneIsland.ts picks the red side on
+    /// `startsWith("error")` and nothing else, so the prefix IS the severity —
+    /// there is no third state. That makes a refusal one forgotten prefix away
+    /// from rendering in the success colour, which is exactly what shipped:
+    /// a bind that succeeded, then could not confirm the new draft revision,
+    /// flashed its success sentence plus the failure clause and painted green
+    /// while silently stopping auto-map.
+    ///
+    /// The seam cannot see TypeScript, so this reads the island as text — the
+    /// same trick `render_check.rs` uses to keep its empty-state copy in
+    /// lockstep. A new SUCCESS flash has to be added to the list below, which
+    /// makes it a review rather than a surprise; a new refusal just needs its
+    /// prefix and needs nothing here.
+    #[test]
+    fn every_flash_is_a_refusal_or_a_named_success() {
+        const NOCTURNE_ISLAND_TS: &str = include_str!("../../../studio-ui/src/NocturneIsland.ts");
+
+        /// A flash passed through as a VARIABLE, already classified where it
+        /// was built. Named one by one, because a variable is exactly how the
+        /// shipped bug got in: `applyFlash(line)` is a clean success, but
+        /// `applyFlash(`${line} …failure clause…`)` is a refusal wearing the
+        /// success sentence, and only the second needs the prefix.
+        const NAMED_PASS_THROUGH: [&str; 2] = ["line)", "out.flash ?? null)"];
+
+        /// Literal flashes that really are a clean success and render green on
+        /// purpose.
+        const NAMED_SUCCESSES: [&str; 1] = ["Auto-map finished"];
+
+        let mut unclassified: Vec<String> = Vec::new();
+        for (index, _) in NOCTURNE_ISLAND_TS.match_indices("applyFlash(") {
+            let rest = &NOCTURNE_ISLAND_TS[index + "applyFlash(".len()..];
+            let head: String = rest.chars().take(160).collect();
+            let trimmed = head.trim_start_matches(['\n', '\r', ' ']);
+
+            // The definition site itself: `applyFlash(flash: string | null)`.
+            if trimmed.starts_with("flash:") {
+                continue;
+            }
+            let refusal = trimmed.starts_with("\"error:") || trimmed.starts_with("`error:");
+            let pass_through = NAMED_PASS_THROUGH.iter().any(|n| trimmed.starts_with(n));
+            let success = NAMED_SUCCESSES.iter().any(|n| trimmed.contains(n));
+            if !refusal && !pass_through && !success {
+                unclassified.push(trimmed.lines().next().unwrap_or("").to_owned());
+            }
+        }
+        assert!(
+            unclassified.is_empty(),
+            "these applyFlash arguments are neither an `error:` refusal nor a \
+             named success, so they will render GREEN whatever they say. Add the \
+             prefix, or add the sentence to NAMED_SUCCESSES if it really is one: \
+             {unclassified:#?}"
+        );
+    }
+
+    /// **Drawing a panel is an OFFER, and never the next thing to do.**
+    ///
+    /// The spine is `pick an input -> add controllers -> bind -> play`: four
+    /// stops, the same four for every device. This once rendered a fifth,
+    /// `Describe the panel`, wedged between picking and adding and badged
+    /// `Needed` — which said, in the one place that tells a user where they
+    /// are, that an arcade panel could not be set up until it had been drawn.
+    ///
+    /// That was false. A binding carries a key name, so every key an encoder
+    /// sends is bindable on the shipped keyboard the moment it is picked.
+    /// Drawing your own cabinet changes what you are LOOKING at. Promoting
+    /// that into a requirement is the mistake this whole plan started from.
+    ///
+    /// Three things are pinned, because each one has already gone wrong:
+    ///
+    ///  - the four required stops are all there, for both kinds of device;
+    ///  - a keyboard is never offered it at all — ABSENT, not greyed, because
+    ///    a greyed step reads as one somebody failed to do;
+    ///  - and it never appears as `Next:`, which is what would make it a gate
+    ///    again in everything but name.
+    #[test]
+    fn drawing_a_panel_is_offered_to_a_panel_and_never_required() {
+        // `keyboard_payload` is named for the page it exercises, not the
+        // hardware: it stages an Ultimarc I-PAC 4 whose role is PanelEncoder.
+        // That makes it the PANEL case, and the keyboard case has to be built
+        // by changing the one thing the branch reads.
+        let panel = render_nocturne(&page(), &keyboard_payload(), None).html;
+
+        for stop in ["Pick the input", "Add controllers", "Bind the keys", "Play"] {
+            assert!(panel.contains(stop), "the spine is missing {stop:?}");
+        }
+        assert!(
+            panel.contains("Draw your panel"),
+            "a staged panel was not offered its own picture to map on: {panel}"
+        );
+        assert!(
+            panel.contains("Optional"),
+            "the offer does not say it is optional, so it reads as a gate: {panel}"
+        );
+        assert!(
+            !panel.contains("Next: draw your panel"),
+            "an OFFER announced itself as the next thing to do, which is a gate \
+             in everything but name: {panel}"
+        );
+        assert!(
+            !panel.contains("n-jstep needed"),
+            "the retired `Needed` class is back; it painted an offer exactly as \
+             loudly as the one thing the user actually had to do: {panel}"
+        );
+        assert!(
+            panel.contains(r#"class="n-jstep offered" data-journey-step="describe""#),
+            "the offer is not marked as an offer, so the settled/unsettled pair \
+             below cannot tell them apart: {panel}"
+        );
+
+        // `derived()` is a consuming rebuild, so the roles have to change
+        // BEFORE the view is recomposed — mutating a derived payload leaves
+        // the old answer in place, which is its own small lesson.
+        let mut keyboard = keyboard_payload();
+        for board in &mut keyboard.scan.boards {
+            board.role = ksx_api::BoardRole::Keyboard;
+        }
+        let keyboard = render_nocturne(&page(), &keyboard.derived(), None).html;
+
+        for stop in ["Pick the input", "Add controllers", "Bind the keys", "Play"] {
+            assert!(keyboard.contains(stop), "the spine is missing {stop:?}");
+        }
+        assert!(
+            !keyboard.contains("Draw your panel"),
+            "a keyboard was offered a panel picture: {keyboard}"
+        );
+        assert!(
+            !keyboard.contains(r#"data-journey-step="describe""#),
+            "the offer must be ABSENT for a keyboard, not rendered and hidden — \
+             a hidden step reads as one somebody failed to do"
+        );
+
+        // Every stop carries its whole sentence, not just a title: the rail is
+        // read by someone who does not yet know what these words mean.
+        assert!(
+            keyboard.contains("Nothing is saved or started by choosing"),
+            "the first stop does not say what picking costs"
+        );
+    }
+
+    /// **Once you have drawn one, the rail stops asking.**
+    ///
+    /// The read that `NocturneJourneyState::Needed` was built around not
+    /// existing. Its doc said the daemon could not know whether a panel had
+    /// been described, because the document lived in browser storage alone —
+    /// so the step could only ever say "needed", forever, including to someone
+    /// who had finished an hour ago.
+    ///
+    /// A published board is a file under `<root>\boards`, and this process
+    /// reads it. A step that CAN be checked should never claim it cannot.
+    #[test]
+    fn a_published_board_settles_the_offer() {
+        let mut payload = keyboard_payload();
+        payload.drawn = Some(ksx_api::BoardsView {
+            summary: "1 board drawn.".to_owned(),
+            config_root: String::new(),
+            boards: vec![ksx_api::BoardDocument {
+                board_id: "my-cab".to_owned(),
+                name: "My cab".to_owned(),
+                ..Default::default()
+            }],
+        });
+        let html = render_nocturne(&page(), &payload.derived(), None).html;
+
+        assert!(html.contains("Draw your panel"), "the step is still shown");
+        // Still shown, now settled: the class carries the state, and `offered`
+        // is the one that means "not done".
+        assert!(
+            !html.contains(r#"class="n-jstep offered" data-journey-step="describe""#),
+            "the offer still reads as outstanding after a board was drawn: {html}"
+        );
+        assert!(
+            html.contains(r#"class="n-jstep done" data-journey-step="describe""#),
+            "a drawn board did not settle the offer: {html}"
+        );
+    }
+
+    /// **A store that would not answer must never look like a store with
+    /// nothing in it.**
+    ///
+    /// `drawn_error` was composed by the server and read by nothing at all, so
+    /// a refused board read silently degraded to an empty slice: every `board:`
+    /// row vanished from the picker, a chosen drawn board fell back to the
+    /// keyboard, the setup rail flipped back to Optional, and the sentence
+    /// under the picker said "The picture only" as though all were well. The
+    /// http.rs allowlist test even asserted this constant "renders into the
+    /// page body" — a claim that was false and that it could not check.
+    #[test]
+    fn a_refused_board_read_says_so_on_the_page() {
+        let mut payload = keyboard_payload();
+        payload.drawn = None;
+        payload.drawn_error =
+            "Boards you drew could not be read, so they are missing from this list.".to_owned();
+        let html = render_nocturne(&page(), &payload.derived(), None).html;
+
+        assert!(
+            html.contains("could not be read"),
+            "a refused board read is invisible on the page: {html}"
+        );
+        assert!(
+            !html.contains("The picture only. Which key drives which control"),
+            "the page reassured the user while a store was refusing: {html}"
+        );
+    }
+
+    /// Both stores feed one picker and either can refuse alone, so a refusal in
+    /// one must not hide a refusal in the other.
+    #[test]
+    fn two_refusing_stores_are_both_reported() {
+        let mut payload = keyboard_payload();
+        payload.drawn = None;
+        payload.drawn_error = "DRAWN-REFUSED.".to_owned();
+        payload.panels = None;
+        payload.panels_error = "PANELS-REFUSED.".to_owned();
+        let html = render_nocturne(&page(), &payload.derived(), None).html;
+
+        assert!(
+            html.contains("DRAWN-REFUSED."),
+            "the drawn-board refusal is missing"
+        );
+        assert!(
+            html.contains("PANELS-REFUSED."),
+            "the panel-layout refusal is missing"
+        );
+    }
+
+    /// The rail says where you ARE, not merely what exists.
+    #[test]
+    fn the_spine_names_the_next_thing_to_do() {
+        let html = render_nocturne(&page(), &keyboard_payload(), None).html;
+        // The fixture stages a keyboard and no controllers, so the next thing
+        // is adding one. Whatever the fixture's state, the line must name a
+        // stop rather than describe the tree.
+        assert!(
+            html.contains("Next:") || html.contains("Playing.") || html.contains("done."),
+            "the rail does not say where the user is: {html}"
+        );
+    }
+
     #[test]
     fn nocturne_slots_are_classified_exactly() {
         // Every slot under a served list's prefix (`:array`, `:item`, one
         // per member field) belongs to the seam wholesale.
-        const SERVED_LIST_PREFIXES: [&str; 45] = [
+        const SERVED_LIST_PREFIXES: [&str; 47] = [
             "list:nKeyRows:",
+            "list:nBoardRows:",
             "list:nAvailMain:",
             "list:nAvailNav:",
             "list:nAvailNum:",
@@ -891,6 +1187,9 @@ mod tests {
             "list:nKbRow6:",
             "list:nKbTray:",
             "list:nDevOther:",
+            // The setup spine. Served, because the order and which step is
+            // current are claims about the draft and the daemon owns it.
+            "list:nJourney:",
             "list:nModeRows:",
             "list:nRackRows:",
             "list:nRackEmpty:",
@@ -902,122 +1201,48 @@ mod tests {
             "list:nThemeRows:",
             "list:nSocdOpts:",
         ];
-        const SERVED_SLOTS: [&str; 111] = [
-            "nEnvironmentId",
-            "nEnvironmentLabel",
-            "nEnvironmentDetail",
-            "nEnvironmentCls",
-            "nKeysNote",
-            "nAvailMainHead",
-            "nAvailNavHead",
-            "nAvailNumHead",
-            "nAvailMainCls",
-            "nAvailNavCls",
-            "nAvailNumCls",
-            "nBindFaceCls",
-            "nBindDpadCls",
-            "nBindShlCls",
-            "nBindLsCls",
-            "nBindRsCls",
-            "nBindSysCls",
-            "nSlotVal",
-            "nUndoCls",
-            "nUndoLabel",
-            "nKbCls",
-            "nSoloLbl",
-            "nStageWord",
-            "nApplyCls",
-            "nPadBadgeCls",
-            "nBindFaceN",
-            "nBindDpadN",
-            "nBindShlN",
-            "nBindLsN",
-            "nBindRsN",
-            "nBindSysN",
-            "nBindGCls",
-            "nSocdCls",
-            "nSocdNum",
-            "nSocdLab",
-            "nDevCount",
-            "nEncoderCount",
-            "nEncoderHead",
-            "nModeNote",
-            "nMacrosHead",
-            "nMacrosNote",
-            "nPadXboxCls",
-            "nPadPsCls",
-            "nPadPs5Cls",
-            "nPadSwitchProCls",
-            "nPadXboxSeriesCls",
-            "nKbTrayHead",
-            "nKbTrayCls",
-            "nKbNote",
-            "nKbMoreCls",
-            "nMacBackCls",
-            "nMacName",
-            "nMacSlot",
-            "nMacPreset",
-            "nMacHead",
-            "nMacTrigger",
-            "nMacNote",
-            "nMacGridCls",
-            "nMacClose",
-            "nMacMapHref",
-            "nMacMotionLine",
-            "nMacPolicyLine",
-            "nMacRing",
-            "nMacRule",
-            "nMacToml",
-            "nMacRateCls",
-            "nMacRateVal",
-            "nMacRateLbl",
-            "nCfgLine",
-            "nCfgMeta",
-            "nCfgCls",
-            "nCfgCheck",
-            "nAdoptCls",
-            "nDiscardNote",
-            "nGamesHead",
-            "nGamesNote",
-            "nAutoLine",
-            "nAutoSwCls",
-            "nAutoDir",
-            "nAutoBtn",
-            "nAutoNote",
-            "nAutoFormCls",
-            "nExpHead",
-            "nExpFoldCls",
-            "nOtherHead",
-            "nOtherFoldCls",
-            "nVersion",
-            "nChipText",
-            "nSaveText",
-            "nEscapeLine",
-            "nPlayCls",
-            "nStopCls",
-            "nRackCaption",
-            "nAddLede",
-            "nAddPreset",
-            "nPadBadge",
-            "nPadName",
-            "nPadSub",
-            "nBindTitle",
-            "nBindFoot",
-            "nDevNote",
-            "nKbTitle",
-            "nCapLine",
-            "nCapdCls",
-            "nCapSwCls",
-            "nCapSelector",
-            "nCapInstance",
-            "nFlashLine",
-            "nFlashCls",
-            "show:nCapPrep",
-            "show:nCapRel",
+        // `attr:`/`text:` slots — bindings the compiler could not name after a
+        // signal. The seam can NEVER inject these: they render their
+        // compile-time default and nothing else. Pinned as an exact set so a
+        // new one is a review rather than a surprise, and checked non-empty by
+        // the contract (an anonymous slot with an empty default is ledger
+        // #10/#20(a) exactly: an attribute with no value and no warning).
+        const ANONYMOUS_SLOTS: [&str; 0] = [];
+        // FINDING 2026-08-26, caught by this contract's very first run:
+        // `nMacMapHref` is injected by `scalar_slots` (this file) and stored by
+        // the island (`NocturneIsland.ts` `setNMacMapHref`), but READ by
+        // nothing — no binding references `nMacMapHref()`, so the compiler left
+        // its slot outside the island's render set. The macro editor's
+        // "open this macro on the map" href is composed end to end
+        // (`macro_editor.rs`, `/nocturne?slot=N&macro=NAME`), serialized,
+        // injected, set into a signal, and painted nowhere.
+        //
+        // This is NOT the dangerous occurrence-suffix shape — there is no
+        // rendered twin sitting on a stale default — so it is excluded here
+        // rather than left failing, and the contract still guards every other
+        // served scalar. The fix is production-side and belongs to whoever owns
+        // the macro editor: bind it in the island, or delete the signal and the
+        // injection. Do not grow this list to silence a failure; a NEW name
+        // here is the ledger #9 twin bug, which is a defect, not an exemption.
+        const SEAM_ONLY_SLOTS: [&str; 3] = ["nMacMapHref", "nMacSlot", "nMacPreset"];
+        // Signals whose ONLY binding is a `show:` control-flow slot — there is
+        // no bare text/attribute binding anywhere, so the island never renders
+        // a bare slot under these names. The contract's converse check compares
+        // against BARE rendered slots, so these are accounted through their
+        // `show:` twin instead and must not be offered to it as bare
+        // client-only names. (`show:nCapPrep`/`show:nCapRel` are SERVED; the
+        // other four are client-only both ways.)
+        const CONTROL_ONLY_SLOTS: [&str; 6] = [
+            "nApplyOpen",
+            "nCapPrep",
+            "nCapRel",
+            "nConfOpen",
+            "nDlgOpen",
+            "nKeyboardWorkbenchOpen",
         ];
         // nMenuOpen left this list with the menu pass: the configuration
         // menu is a native details now, not signal state.
-        const CLIENT_ONLY_SLOTS: [&str; 42] = [
+        const CLIENT_ONLY_SLOTS: [&str; 40] = [
             "nMacSay",
             "nMacSayCls",
             // The auto-map toast's Skip button exists only while a walk runs
@@ -1064,8 +1289,6 @@ mod tests {
             "nIdLinkCls",
             "nIdBoxCls",
             "nIdText",
-            "nFlashLine",
-            "nFlashCls",
             // The learn flow's banner and the key-conflict consequence dialog
             // are capture-time browser state: the server never claims a learn
             // is armed, so these stay client-only.
@@ -1078,6 +1301,36 @@ mod tests {
             "nConfLines",
         ];
         let page = page();
+        let payload = keyboard_payload();
+
+        // The SERVED set is DERIVED from the seam, never hand-kept. The old
+        // hand list drifted twice over: `nFlashLine`/`nFlashCls` were pinned in
+        // BOTH lists at once, and because the classification check was
+        // `SERVED.contains(..) || CLIENT_ONLY.contains(..)` the contradiction
+        // could never fire; and nothing compared the list to what
+        // `scalar_slots` actually injects, so a scalar could be dropped from
+        // the seam and stay pinned as served.
+        let scalars = scalar_slots(&payload, None);
+        let served: Vec<&str> = scalars
+            .as_object()
+            .expect("scalar_slots is an object")
+            .keys()
+            .map(String::as_str)
+            .chain(show_values(&payload).iter().map(|(name, _)| *name))
+            .chain(list_values(&payload).iter().map(|(name, _)| *name))
+            .collect();
+
+        // A name cannot be both served and client-only. This is the assertion
+        // the doc above always claimed ("the split is the contract") and that
+        // the `||` shape silently exempted.
+        for name in &served {
+            assert!(
+                !CLIENT_ONLY_SLOTS.contains(name),
+                "slot {name:?} is in CLIENT_ONLY_SLOTS but the seam injects it \
+                 — the split is the contract, so one of the two is wrong",
+            );
+        }
+
         let named: Vec<String> = page
             .module
             .slots
@@ -1093,55 +1346,49 @@ mod tests {
                 .any(|prefix| name.starts_with(prefix));
             assert!(
                 served_list
-                    || SERVED_SLOTS.contains(&name.as_str())
-                    || CLIENT_ONLY_SLOTS.contains(&name.as_str()),
+                    || served.contains(&name.as_str())
+                    || CLIENT_ONLY_SLOTS.contains(&name.as_str())
+                    || name.starts_with("attr:")
+                    || name.starts_with("text:"),
                 "unclassified named slot {name:?} — decide whether the seam serves it or the \
                  island owns it, then pin it",
             );
         }
-        for name in SERVED_SLOTS.iter().chain(CLIENT_ONLY_SLOTS.iter()) {
+        for name in CLIENT_ONLY_SLOTS.iter() {
             assert!(
                 named.iter().any(|n| n == name),
                 "pinned slot {name:?} is gone from the IR",
             );
         }
-        for name in [
-            LIST_SLOT_ENCODERS,
-            LIST_SLOT_DEVICES,
-            LIST_SLOT_EXP,
-            LIST_SLOT_GAMES,
-            LIST_SLOT_MACROS,
-            LIST_SLOT_OTHER,
-            LIST_SLOT_LEGEND,
-            LIST_SLOT_MAC_COLS,
-            LIST_SLOT_MAC_GROUPS,
-            LIST_SLOT_MAC_ROWS,
-            LIST_SLOT_MAC_CELLS,
-            LIST_SLOT_MAC_POLS,
-            LIST_SLOT_MAC_MOTIONS,
-            LIST_SLOT_KB[0],
-            LIST_SLOT_KB[6],
-            LIST_SLOT_MODES,
-            LIST_SLOT_THEMES,
-            LIST_SLOT_GAMES_EDIT,
-            LIST_SLOT_RACK,
-            LIST_SLOT_RACK_EMPTY,
-            LIST_SLOT_PERSONAS,
-            LIST_SLOT_LAYOUTS,
-            LIST_SLOT_SOCDS,
-            LIST_SLOT_SOCD_EDIT,
-            LIST_SLOT_BIND_FACE,
-            LIST_SLOT_BIND_DPAD,
-            LIST_SLOT_BIND_SHL,
-            LIST_SLOT_BIND_LS,
-            LIST_SLOT_BIND_RS,
-            LIST_SLOT_BIND_SYS,
-        ] {
-            assert!(
-                named.iter().any(|n| n == name),
-                "served list slot {name:?} is gone from the IR",
-            );
-        }
+
+        // THE check, and the reason this test exists at all. Existence by name
+        // is not rendering: the compiler suffixes colliding slot names, so an
+        // injected scalar can resolve to a DEAD declaration while the rendered
+        // binding quietly keeps its authored default forever. `/nocturne` is
+        // the page most exposed to that — it is the only one in the build where
+        // the compiler mints an occurrence suffix (`list:nGameRows#2:*`).
+        //
+        // Measured 2026-08-26, before this call existed: deleting the whole
+        // `"nVersion": payload.view.version` injection from `scalar_slots` left
+        // ALL 233 ksx-studio tests green. The product page was the one surface
+        // with no island slot contract, which inverted the risk — `/check`,
+        // `/pads` and `/devices` all had one.
+        let rendered_served: Vec<&str> = served
+            .iter()
+            .copied()
+            .filter(|name| !SEAM_ONLY_SLOTS.contains(name))
+            .collect();
+        let client_only_rendered: Vec<&str> = CLIENT_ONLY_SLOTS
+            .iter()
+            .copied()
+            .filter(|name| !name.contains(':') && !CONTROL_ONLY_SLOTS.contains(name))
+            .collect();
+        crate::render::assert_island_slot_contract(
+            &page.module,
+            &rendered_served,
+            &client_only_rendered,
+            &ANONYMOUS_SLOTS,
+        );
     }
 
     /// The migrated keyboard section renders SERVED facts: the staged
@@ -1210,10 +1457,39 @@ mod tests {
     }
 
     /// The page embeds its payload for hydration seeding and the poller.
+    ///
+    /// HARDENED 2026-08-26: this used to be `html.contains("__ksx-payload")` —
+    /// a 13-character substring. Truncating the block, emptying it, or
+    /// serializing the wrong struct all left it green while the island seeded
+    /// from nothing. It now slices the block out and parses it back into a
+    /// `NocturnePayload`, which is the only assertion that can tell "the
+    /// wrapper is present" from "the payload arrived", and matches what
+    /// `render_check.rs` has always done for `/check`.
     #[test]
     fn nocturne_embeds_the_payload() {
-        let out = render_nocturne(&page(), &keyboard_payload(), None);
-        assert!(out.html.contains("__ksx-payload"));
+        let payload = keyboard_payload();
+        let out = render_nocturne(&page(), &payload, None);
+        let start = out
+            .html
+            .find("<script id=\"__ksx-payload\"")
+            .expect("the payload block");
+        let body = out.html[start..]
+            .split_once('>')
+            .expect("an open tag")
+            .1
+            .split("</script>")
+            .next()
+            .expect("a close tag");
+        assert!(
+            !body.trim().is_empty(),
+            "the payload block is present but EMPTY — the island seeds from nothing"
+        );
+        let parsed: NocturnePayload =
+            serde_json::from_str(body).expect("the embedded block IS a NocturnePayload");
+        assert_eq!(
+            parsed, payload,
+            "the embedded payload is not the payload the page rendered from"
+        );
     }
 
     /// The configuration menu is a native details, so its SERVED facts paint
@@ -1262,6 +1538,511 @@ mod tests {
         assert!(
             !out.html.contains("arrive with the configuration pass"),
             "the menu's placeholder sentence is back",
+        );
+    }
+
+    /// **The device row is this page's "add to canvas", and it says so.**
+    ///
+    /// `POST /nocturne/device` is the verb that decides which board
+    /// `/nocturne` is about — the widget on the canvas draws THAT keyboard's
+    /// title, its bindings and its ownership bands. There is no second "add"
+    /// gesture and there should not be one: a second device list would be two
+    /// sources of truth for one daemon field, and it would not work with
+    /// scripting off.
+    ///
+    /// What was missing was not the verb but its ANSWER. Until 2026-08-26 the
+    /// only difference between the chosen row and the rest was `n-dev on` — a
+    /// background colour. No word said the press had landed, no word said what
+    /// pressing another one costs, and assistive technology was told nothing
+    /// at all. Worse, the chosen row still looked exactly as pressable as its
+    /// neighbours, and pressing it re-ran `StageEdit::ChooseDevice`, which
+    /// rebuilds the staged device with `backend: interception` and so silently
+    /// threw away a WinUSB preparation bought with a UAC prompt.
+    ///
+    /// All three sentences here are SERVED (`SURFACES.md` §1a): a browser that
+    /// composed "replaces the current one" out of a class name would be
+    /// deriving policy from decoration.
+    #[test]
+    fn nocturne_device_rows_say_which_one_is_on_the_canvas() {
+        // A SECOND pickable board, so both halves of the claim are on the
+        // page: the base fixture holds only the staged I-PAC and one
+        // selector-less composite, and a list with a single row cannot show
+        // what an unchosen row says.
+        let mut payload = keyboard_payload();
+        payload.scan.boards.push(ksx_api::BoardRow {
+            name: "Logitech G915 TKL".to_owned(),
+            role: ksx_api::BoardRole::Keyboard,
+            transport_label: "Bluetooth".to_owned(),
+            selector: Some("usb:046d:c545:00".to_owned()),
+            alias_hint: "g915".to_owned(),
+            keyboard: Some("HID\\VID_046D&PID_C545\\1".to_owned()),
+            interception_eligible: true,
+            can_type: true,
+            pickable: true,
+            looks_like_a_keyboard: true,
+            ..Default::default()
+        });
+        // Re-derive: `keyboard_payload()` hands back an already-derived
+        // payload, and the rows the page renders come from `payload.view`.
+        let out = render_nocturne(&page(), &payload.derived(), None);
+
+        // The chosen row names its own state, in the meta line the user is
+        // already reading — not in a tooltip and not only in a colour. Matched
+        // with its tag delimiters so this reads the RENDERED row rather than
+        // the embedded payload JSON, which carries every sentence too.
+        assert!(
+            out.html
+                .contains(">USB · Connected · outputs not checked · on the canvas<"),
+            "the staged board's row does not say it is the one on the canvas",
+        );
+        // …and exactly one DEVICE row claims it. Two would mean the page is
+        // showing a second device the stage cannot hold
+        // (`StagedSetup.device` is a singular `Option`), which is the failure
+        // mode a "multiple keyboards" canvas would ship. `aria-current` is the
+        // countable form: the payload JSON spells the field `aria_current`, so
+        // the hyphen is the rendered attribute and nothing else.
+        //
+        // Scoped to the device forms rather than counted across the page. It
+        // used to be page-wide, which quietly assumed the device list was the
+        // ONLY thing on /nocturne that could say where you are — and the board,
+        // theme and blocking pickers all say it now, in this same attribute,
+        // because it is the only part of "you are on this one" a screen reader
+        // can reach.
+        let device_rows: usize = out
+            .html
+            .match_indices(r#"action="/nocturne/device""#)
+            .filter(|(at, _)| {
+                let rest = &out.html[*at..];
+                let end = rest.find("</form>").unwrap_or(rest.len());
+                rest[..end].contains(r#"aria-current="true""#)
+            })
+            .count();
+        assert_eq!(
+            device_rows, 1,
+            "the chosen device row is not the one and only aria-current device row",
+        );
+        assert!(
+            out.html.contains(r#"aria-current="false""#),
+            "unchosen device rows carry no aria-current at all — `false` is the honest \
+             encoding here, because an empty served string still SETS the attribute",
+        );
+
+        // Both titles are the server's words, and they are the two halves of
+        // the model: what this row is, and what pressing another one costs.
+        for sentence in [
+            "This board is the one on the canvas. Pressing it again changes nothing",
+            "Put this board on the canvas — it replaces the current one.",
+            "Nothing is saved or started.",
+        ] {
+            assert!(
+                out.html.contains(sentence),
+                "SSR of the device list is missing the served sentence {sentence:?}",
+            );
+        }
+
+        // And the whole thing survives with scripting off: these are plain
+        // POST forms with served attributes, not a JS affordance.
+        assert!(out
+            .html
+            .contains(r#"method="post" action="/nocturne/device""#));
+    }
+
+    /// **What ksx recognises about a board reaches the page.**
+    ///
+    /// The identity facts live on `BoardRow` and are composed into the two
+    /// sentences the device row already carries. That is deliberate — a served
+    /// field nothing renders reaches nothing, which this page has now shipped
+    /// twice — but it means the composition itself needs pinning: `meta` and
+    /// `title` are the whole surface, so a change that drops them is silent.
+    #[test]
+    fn a_recognised_encoder_says_what_it_is_on_the_page() {
+        let mut payload = keyboard_payload();
+        for board in &mut payload.scan.boards {
+            if board.role != ksx_api::BoardRole::PanelEncoder {
+                continue;
+            }
+            board.family_label = Some("Ultimarc I-PAC 4X".to_owned());
+            board.firmware_label = Some("1.56".to_owned());
+            board.terminal_count = Some(56);
+            board.chart_readable = true;
+            board.profile_state = "profiled".to_owned();
+            board.profile_detail =
+                "ksx has a measured protocol profile for this release.".to_owned();
+        }
+        let html = render_nocturne(&page(), &payload.derived(), None).html;
+
+        assert!(
+            html.contains("Ultimarc I-PAC 4X"),
+            "the family ksx recognised is not on the page: {html}"
+        );
+        assert!(
+            html.contains("firmware 1.56"),
+            "the release the profile matched is not on the page"
+        );
+        assert!(
+            html.contains("56 terminals"),
+            "the profile's terminal capacity is not on the page"
+        );
+        assert!(
+            html.contains("ksx has a measured protocol profile for this release."),
+            "the sentence explaining what recognition bought is not on the page"
+        );
+        // A board ksx can read says so, rather than the older blanket line that
+        // could not tell "not read yet" from "never readable".
+        assert!(
+            html.contains("chart not read yet"),
+            "a readable board does not say its chart is merely unread: {html}"
+        );
+    }
+
+    /// **A board ksx does not recognise claims nothing.**
+    ///
+    /// The failure this guards is the tempting one: leaving the identity
+    /// clauses in place with empty values, so every keyboard grows a trailing
+    /// ` ·  · ` and an unprofiled encoder appears to have a terminal count of
+    /// nothing rather than no terminal count at all.
+    #[test]
+    fn an_unrecognised_board_claims_nothing() {
+        let mut payload = keyboard_payload();
+        for board in &mut payload.scan.boards {
+            board.family_label = None;
+            board.firmware_label = None;
+            board.terminal_count = None;
+            board.chart_readable = false;
+            board.profile_state = "unrecognised".to_owned();
+            board.profile_detail = String::new();
+        }
+        let html = render_nocturne(&page(), &payload.derived(), None).html;
+
+        assert!(
+            !html.contains("terminals"),
+            "a board with no measured profile reported a terminal count: {html}"
+        );
+        assert!(
+            !html.contains("firmware "),
+            "a board with no profile reported a firmware release"
+        );
+        assert!(
+            !html.contains(" ·  · "),
+            "an empty identity clause left a dangling separator: {html}"
+        );
+    }
+
+    /// **Choosing the board that is already chosen must not un-prepare it.**
+    ///
+    /// `StageEdit::ChooseDevice` REPLACES the staged device wholesale, and the
+    /// device it builds always carries `StageCaptureBackend::Interception` —
+    /// the stage is a pure value and knows nothing about drivers. So the
+    /// obvious "make sure it is still selected" press, and the equally obvious
+    /// "identify it again to be sure", both cost a WinUSB preparation bought
+    /// through a UAC prompt: the staged backend drops to `interception` while
+    /// Windows still holds the board on the built-in path, `StartCaptureMode`
+    /// reads `Held`, and Save and Play both refuse.
+    ///
+    /// This pins the DEFECT, at the layer the guard has to defend against —
+    /// so that if `ChooseDevice` ever becomes backend-preserving on its own,
+    /// this fails and `choose_device_preserving_preparation` can be deleted
+    /// rather than left as a second, silent opinion.
+    #[test]
+    fn re_choosing_a_prepared_device_is_what_would_lose_the_preparation() {
+        let device = ksx_core::stage::StagedDevice {
+            selector: ksx_core::DeviceSelector::parse("usb:d209:0430:00")
+                .expect("a selector the scan would print"),
+            alias: "ipac".to_owned(),
+            label: "Ultimarc I-PAC 4".to_owned(),
+            backend: ksx_core::stage::StageCaptureBackend::Interception,
+        };
+        let staged = ksx_core::stage::StagedSetup::default()
+            .choose_device(device)
+            .expect("choosing a board with a usable alias");
+        let prepared = staged
+            .set_device_backend(
+                &ksx_core::DeviceSelector::parse("usb:d209:0430:00").unwrap(),
+                ksx_core::stage::StageCaptureBackend::Winusb,
+            )
+            .expect("preparing the board that is staged");
+        assert_eq!(
+            ksx_api::StagedSetupView::of(&prepared)
+                .device
+                .expect("a staged device")
+                .backend,
+            "winusb",
+        );
+
+        // The press. Same board, same alias, same label — and the preparation
+        // is gone, with nothing on screen saying so.
+        let re_chosen = ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".to_owned(),
+            alias: "ipac".to_owned(),
+            label: "Ultimarc I-PAC 4".to_owned(),
+        }
+        .apply(&prepared)
+        .expect("re-choosing the staged board is accepted, which is the whole problem");
+        assert_eq!(
+            ksx_api::StagedSetupView::of(&re_chosen)
+                .device
+                .expect("a staged device")
+                .backend,
+            "interception",
+            "ChooseDevice no longer resets the capture backend — if that is deliberate, \
+             `choose_device_preserving_preparation` in server/nocturne.rs is now a second \
+             opinion about the same rule and should be removed",
+        );
+    }
+
+    /// **Every cap carries its geometry, and the plate carries its height.**
+    ///
+    /// The gate that was missing, and it cost a full Playwright run to find.
+    /// `NocturneKeyCell` grew a `style` field and `snapshot.rs` filled it, but
+    /// `key_cell` — the serializer that turns the struct into the slot object
+    /// the page actually receives — was not updated. The field existed, was
+    /// computed correctly, and reached nothing. Every existing gate stayed
+    /// green: the slot manifest matched, no value was invented, the row count
+    /// was right. A field that never reaches the wire is invisible to all of
+    /// them.
+    ///
+    /// The symptom was not a missing style. It was that with no geometry every
+    /// absolutely-positioned cap collapsed to the same spot, so caps covered
+    /// each other and clicking a key hit a neighbour's label — which reads as
+    /// "binding is broken", nowhere near the cause.
+    #[test]
+    fn every_cap_carries_its_place_on_the_plate() {
+        let out = render_nocturne(&page(), &keyboard_payload(), None);
+        let html = &out.html;
+
+        // The plate: absolutely-positioned children give it no height of their
+        // own, so without this the whole board collapses to nothing.
+        assert!(
+            html.contains(r#"class="n-kbcase""#),
+            "the plate is missing entirely: {html}"
+        );
+        assert!(
+            html.contains("aspect-ratio:"),
+            "the plate has no aspect-ratio, so it has no height and every \
+             percentage inside it resolves against zero: {html}"
+        );
+        assert!(
+            html.contains(r#"data-origin="shipped""#),
+            "the plate does not say which kind of board it is, so the keycap \
+             sculpt cannot be kept off an arcade button: {html}"
+        );
+
+        // Every cap on the plate. The tray is deliberately excluded: it is not
+        // on the board, and it carries an empty style saying so.
+        let caps: Vec<&str> = html
+            .match_indices("<div")
+            .map(|(at, _)| {
+                let rest = &html[at..];
+                &rest[..rest.find('>').map_or(rest.len(), |e| e + 1)]
+            })
+            .filter(|tag| tag.contains("data-key=") && !tag.contains("tray"))
+            .collect();
+        assert!(
+            caps.len() > 60,
+            "expected a full board of caps, found {}: {caps:?}",
+            caps.len()
+        );
+
+        let mut places = std::collections::BTreeSet::new();
+        for cap in &caps {
+            let at = cap.find("style=\"").unwrap_or_else(|| {
+                panic!("a cap has no place on the plate, so it will stack on top of its neighbours: {cap}")
+            });
+            let style = &cap[at + 7..];
+            let style = &style[..style.find('"').expect("the style to close")];
+            for want in ["left:", "top:", "width:", "height:"] {
+                assert!(
+                    style.contains(want),
+                    "a cap's place is missing {want:?}: {style}"
+                );
+            }
+            places.insert(style.to_owned());
+        }
+
+        // Distinct places. One shared place is two controls the user cannot
+        // press separately, and it is exactly what a dropped field produces.
+        assert!(
+            places.len() > caps.len() / 2,
+            "{} caps share only {} places between them — the geometry \
+             collapsed rather than being served",
+            caps.len(),
+            places.len()
+        );
+    }
+    /// **The board picker paints every board, and marks exactly the one drawn.**
+    ///
+    /// The same gate as the theme picker above, written at the same time as the
+    /// picker rather than after a user reported that a control did nothing.
+    /// Two failures are pinned here because both have already happened on this
+    /// page:
+    ///
+    /// - A row whose class the stylesheet does not lay out is a verb that
+    ///   cannot be reached (`.pill-none { display: none }` hid three of four
+    ///   theme rows). So every row must carry `n-radio`, the one class
+    ///   `.n-modeform button` is laid out by.
+    /// - A picker that marks NOTHING reads as broken just as loudly. That takes
+    ///   only two spellings of one id: `roster()` said `qwerty` while
+    ///   `shipped_qwerty()` said `qwerty-104`, so the row you were on never lit
+    ///   up. `QWERTY_ID` is now the single spelling, and this is what would
+    ///   catch it drifting apart again.
+    #[test]
+    fn nocturne_paints_every_board_row_and_marks_the_one_it_drew() {
+        let out = render_nocturne(&page(), &keyboard_payload(), None);
+
+        let forms: Vec<&str> = out
+            .html
+            .match_indices(r#"action="/nocturne/board""#)
+            .map(|(at, _)| {
+                let rest = &out.html[at..];
+                let end = rest.find("</form>").expect("a board form to close");
+                &rest[..end]
+            })
+            .collect();
+
+        // The fixture saves no panel layouts and no drawn boards, so the
+        // roster is Automatic plus the keyboard — and both must be RENDERED
+        // as rows rather than collapsed because the list is short.
+        //
+        // Automatic earns its row: "follow whatever is staged" is STORED as
+        // absence, and a picker can only post ids, so without a row for it
+        // one click on any other board made it unreachable for good.
+        assert!(
+            forms.iter().any(|f| f.contains(r#"value="auto""#)),
+            "the roster does not offer Automatic, so it is a one-way door: {forms:?}"
+        );
+        assert_eq!(
+            forms.len(),
+            2,
+            "the board picker served {} forms: {:?}",
+            forms.len(),
+            forms
+        );
+
+        for form in &forms {
+            assert!(
+                form.contains("n-radio"),
+                "a board row carries a class the sheet does not lay out: {form}"
+            );
+            assert!(
+                !form.contains("pill-none"),
+                "the class that hid three of four theme rows is back: {form}"
+            );
+        }
+
+        let marked = forms.iter().filter(|f| f.contains("n-radio on")).count();
+        assert_eq!(
+            marked, 1,
+            "exactly one board row must be marked as the one drawn, not {marked}: {forms:?}"
+        );
+
+        // And the marked row must be the board actually on screen — the two
+        // spellings bug was invisible until these were compared.
+        assert!(
+            forms
+                .iter()
+                .any(|f| f.contains("n-radio on") && f.contains(crate::board::QWERTY_ID)),
+            "the marked row is not the board that was drawn: {forms:?}"
+        );
+    }
+    /// **The theme picker offers every theme, and every row is PAINTED.**
+    ///
+    /// The gate that was missing. `http.rs`'s
+    /// `the_theme_form_round_trips_and_refuses_what_the_build_lacks` walks the
+    /// whole server path — POST, 303, stamp, refusal — and never looks at the
+    /// markup; the sentinel above asserts only that the string
+    /// `"/nocturne/theme"` appears at all. Between them sat a picker that
+    /// rendered four rows of which `.pill-none { display: none }` hid three,
+    /// so whatever theme you were on was the only one you could see, and its
+    /// button re-posted the value you already had.
+    ///
+    /// The lesson is that `cls` on these rows is not decoration: it IS the
+    /// control. A row whose class the sheet does not lay out is a verb that
+    /// cannot be reached, and reachability has to be a claim, not a hope.
+    #[test]
+    fn nocturne_paints_every_theme_row_not_only_the_current_one() {
+        let out = render_nocturne(&page(), &keyboard_payload(), None);
+
+        // Isolate each theme form's own bytes so an assertion about "a theme
+        // button" cannot be satisfied (or broken) by some other card's markup.
+        let forms: Vec<&str> = out
+            .html
+            .match_indices(r#"action="/nocturne/theme""#)
+            .map(|(at, _)| {
+                let rest = &out.html[at..];
+                let end = rest.find("</form>").expect("a theme form to close");
+                &rest[..end]
+            })
+            .collect();
+
+        // System + every theme in the generated roster. Composed in
+        // `snapshot::theme_rows`, so shipping a theme adds a row here for free
+        // — and this count is what catches the reverse: a roster that grew
+        // while the picker did not.
+        let expected = 1 + crate::theme_tokens::THEMES.len();
+        assert_eq!(
+            forms.len(),
+            expected,
+            "the theme picker serves {} forms, not the {expected} the roster has",
+            forms.len(),
+        );
+
+        for want in
+            std::iter::once("system").chain(crate::theme_tokens::THEMES.iter().map(|t| t.id))
+        {
+            let hidden = format!(r#"name="theme" value="{want}""#);
+            assert!(
+                forms.iter().any(|f| f.contains(&hidden)),
+                "no theme form posts {want:?}",
+            );
+        }
+
+        // The defect itself, unrepresentable from here on. `pill-none` is
+        // `display: none` by design — it belongs to the device-health chip
+        // whose one deliberately-invisible level is "none" — and any theme
+        // button wearing it is an unreachable control.
+        for form in &forms {
+            assert!(
+                !form.contains("pill"),
+                "a theme row's submit button carries a `pill` class; that vocabulary \
+                 came from the deleted /setup page, where it painted a chip BESIDE the \
+                 row rather than the row's own button, and `.pill-none` is display:none: \
+                 {form}",
+            );
+            assert!(
+                form.contains(r#"class="n-radio"#),
+                "a theme row's submit button is not an `n-radio`; only \
+                 `.n-modeform button.n-radio` gets a layout: {form}",
+            );
+        }
+
+        // Exactly one row is marked current — the same claim the blocking card
+        // makes, from the same idiom.
+        let marked = forms
+            .iter()
+            .filter(|f| f.contains(r#"class="n-radio on""#))
+            .count();
+        assert_eq!(marked, 1, "{marked} theme rows claim to be the current one");
+
+        // Each row says something a person could choose BETWEEN. Dark and
+        // Matrix are both dark-scheme themes; when the sentence was derived
+        // from the scheme they read identically, which only looked harmless
+        // while two of them were invisible.
+        for meta in crate::theme_tokens::THEMES {
+            assert!(
+                out.html.contains(meta.blurb),
+                "SSR of the theme picker is missing {}'s own sentence {:?}",
+                meta.id,
+                meta.blurb,
+            );
+        }
+        let blurbs: std::collections::BTreeSet<&str> = crate::theme_tokens::THEMES
+            .iter()
+            .map(|t| t.blurb)
+            .collect();
+        assert_eq!(
+            blurbs.len(),
+            crate::theme_tokens::THEMES.len(),
+            "two themes describe themselves in the same words",
         );
     }
 

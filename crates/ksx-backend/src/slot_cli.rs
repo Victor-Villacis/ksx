@@ -235,3 +235,88 @@ fn refuse(err: &slots::SlotError, json: bool) -> ! {
     }
     std::process::exit(EXIT_REFUSED)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn applied() -> slots::AppliedSlot {
+        slots::AppliedSlot {
+            path: std::path::PathBuf::from(r"C:\cfg\ksx\config.toml"),
+            slot: 3,
+            preset: "IPAC P3".to_owned(),
+            previous: Some("Panel P1".to_owned()),
+            persona: ksx_core::Persona::Xbox360,
+            previous_persona: None,
+            profile: None,
+            created: false,
+            unchanged: false,
+            backup: None,
+        }
+    }
+
+    /// **The pad bounce is the half a user must not have to infer.**
+    ///
+    /// `ksx slot assign` prints exactly one sentence, and this function is the
+    /// only place the two things that happened — the FILE was written, and then
+    /// the PADS did something — are joined into it. Dropping the second half is
+    /// silent: the write still succeeded, the exit code is still 0, and the
+    /// player is left holding a controller that stopped working with no line on
+    /// screen about it.
+    ///
+    /// The writer's own sentence is `slots::AppliedSlot::message`, pinned in
+    /// `slots.rs`; what is asserted here is that the CLI carries it through
+    /// unedited and appends rather than replaces.
+    #[test]
+    fn the_sentence_names_the_write_and_then_what_happened_to_the_pads() {
+        let applied = applied();
+
+        // No reload asked for: the writer's sentence, which already names what
+        // the change NEEDS ("the pads replugged"), and no claim about what any
+        // daemon DID.
+        let alone = message(&applied, None);
+        assert!(alone.contains("slot 3"), "{alone}");
+        assert!(alone.contains("IPAC P3"), "{alone}");
+        assert!(
+            !alone.contains("the session restarted") && !alone.contains("no daemon is running"),
+            "with no reload asked for, nothing may be claimed about a daemon: {alone}"
+        );
+
+        // A daemon that took it: both halves, the write first.
+        let restarted = message(
+            &applied,
+            Some(&Reloaded {
+                restarted: true,
+                message: "the session restarted: 4 pad(s) (the pads replugged)".to_owned(),
+            }),
+        );
+        assert!(
+            restarted.starts_with(&alone),
+            "the write's own sentence must survive the join: {restarted}"
+        );
+        assert!(
+            restarted.contains("the session restarted:"),
+            "the daemon's answer must reach the user, not just the exit code: {restarted}"
+        );
+
+        // A daemon that was not there: still both halves, and the second one
+        // says why there was nothing to do.
+        let idle = message(
+            &applied,
+            Some(&Reloaded {
+                restarted: false,
+                message: "no daemon is running, so nothing had to restart".to_owned(),
+            }),
+        );
+        assert!(idle.starts_with(&alone), "{idle}");
+        assert!(idle.contains("nothing had to restart"), "{idle}");
+    }
+
+    /// 2 means the same thing in every ksx command: refused, nothing written.
+    /// `refuse()` exits with this and cannot be called from a test (it ends the
+    /// process), so the constant it uses is pinned instead.
+    #[test]
+    fn refusing_exits_the_way_every_other_refusal_does() {
+        assert_eq!(EXIT_REFUSED, crate::run::EXIT_CANNOT_START);
+    }
+}

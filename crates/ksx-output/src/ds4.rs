@@ -280,15 +280,45 @@ mod tests {
         assert_eq!(r.buttons & 0xF, hat::EAST);
     }
 
+    /// Exhaustive over every reachable button mask: the hat stays in bits
+    /// 0..=3, and the two halves of `buttons` are genuinely independent.
+    ///
+    /// Hardened 2026-08-26: the comment promised "never collide with a face
+    /// button" and only `r.buttons & 0xF <= 0x8` was asserted, which is the hat
+    /// half alone. The module doc's actual claim is that "nothing here uses
+    /// bits 0..=3" — so a face button that leaked into the low nibble would
+    /// read as a D-pad direction the player never pressed (`SQUARE` is
+    /// `1 << 4`; one bit's slip is `hat::NONE` becoming a live direction), and
+    /// a hat that leaked upward would press a face button. Both directions are
+    /// checked now, and the check is independence, not a spot value.
     #[test]
     fn dpad_never_escapes_its_nibble() {
-        // Exhaustive over every reachable button mask: the hat must stay in bits
-        // 0..=3 and never collide with a face button.
+        /// XInput's four D-pad bits — the only input that may reach the hat.
+        const DPAD: u16 = 0x000F;
+
         for raw in 0u16..=0xFFFF {
             let r = with_buttons(XButtons::from_bits_retain(raw));
             assert!(
                 r.buttons & 0xF <= 0x8,
                 "raw {raw:#06x} produced an invalid hat"
+            );
+
+            // The hat is a function of the D-pad bits ALONE: strip every other
+            // input bit and the low nibble must not move.
+            let dpad_only = with_buttons(XButtons::from_bits_retain(raw & DPAD));
+            assert_eq!(
+                r.buttons & 0xF,
+                dpad_only.buttons & 0xF,
+                "raw {raw:#06x}: a non-D-pad button changed the hat",
+            );
+
+            // ...and the face/shoulder/stick bits are a function of everything
+            // BUT the D-pad: pressing a direction must never press a button.
+            let buttons_only = with_buttons(XButtons::from_bits_retain(raw & !DPAD));
+            assert_eq!(
+                r.buttons & !0xF,
+                buttons_only.buttons & !0xF,
+                "raw {raw:#06x}: a D-pad direction leaked into a face button",
             );
         }
     }

@@ -4,6 +4,7 @@
       "id": "dark",
       "label": "Dark",
       "scheme": "dark",
+      "blurb": "Every page renders dark, whatever the system prefers.",
       "bg": "#120c1c",
       "text": "#f0ebe0"
     },
@@ -11,6 +12,7 @@
       "id": "light",
       "label": "Light",
       "scheme": "light",
+      "blurb": "Every page renders light, whatever the system prefers.",
       "bg": "#f6f3ee",
       "text": "#1c1428"
     },
@@ -18,6 +20,7 @@
       "id": "matrix",
       "label": "Matrix",
       "scheme": "dark",
+      "blurb": "Phosphor green on near-black, in a monospace face — dark, whatever the system prefers.",
       "bg": "#041008",
       "text": "#d8ffe0"
     }

@@ -25,6 +25,26 @@ gate should follow it top to bottom and never improvise past a failed step.
 - **GATE 4 — "fresh customer"**: the exact CI installer, a clean Windows user,
   and the complete launcher-to-Game-Bar journey with no terminal or TOML.
 
+### These are not the source gate, and neither substitutes for the other
+
+The commit-time gate — the `cargo` and `npm` lines a developer runs before
+pushing — lives in `PLAYBOOK.md` §4, with the same list annotated per-step in
+`DEVELOPMENT-PIPELINE.md` "the gates that must go green". Read it once before
+running anything here, because **`cargo test --workspace` is not the whole
+source gate and its omissions have shipped defects into these runbooks.** Four
+commands sit outside it: two feature-gated crates, the tests inside example
+targets (`cargo test` builds examples and never runs them), and
+`ksx-platform`'s elevation-boundary feature. Measured 2026-08-26: **71 tests**,
+all of which reported success by never executing.
+
+That is not a hypothetical here of all places. Gate 4's step 2 below records
+`ksx open` opening a chrome-less window on a deleted `/start` — a 404 with no
+address bar, on the first screen a new customer ever sees — with a green suite
+behind it, because `studio_launch.rs` sits behind `--features studio` and a test
+in the same file pinned the wrong value. A gate operator cannot tell "this was
+tested and passed" from "this was never compiled"; the source gate is what makes
+that difference visible before someone is standing at the cabinet.
+
 ## Shared rules (cabinet gates 1–3)
 
 - **conhost, not Windows Terminal.** Affected Windows Terminal builds fail-fast

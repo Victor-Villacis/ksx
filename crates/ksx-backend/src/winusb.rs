@@ -1744,11 +1744,16 @@ mod tests {
         ])
     }
 
+    /// Every code is asserted against the one `run` publishes, never against a
+    /// literal: a `winusb` that answered 3 while the rest of the CLI answered 3
+    /// for a *different* reason is exactly the drift these names exist to
+    /// prevent. The numbers themselves are pinned once, in
+    /// `run::tests::exit_codes_are_the_documented_values`.
     #[test]
     fn exit_codes_match_the_rest_of_the_cli() {
         assert_eq!(EXIT_REFUSED, crate::run::EXIT_CANNOT_START);
         assert_eq!(EXIT_REFUSED, crate::install::EXIT_REFUSED);
-        assert_eq!(EXIT_APPLY_FAILED, 3);
+        assert_eq!(EXIT_APPLY_FAILED, crate::run::EXIT_RUNTIME_FAILURE);
     }
 
     /// `status` is the command a user runs *before* they can hurt themselves,

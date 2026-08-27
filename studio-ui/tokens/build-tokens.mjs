@@ -46,8 +46,20 @@ const LIGHT_MARKER = "@media (prefers-color-scheme: light) {";
 
 /** The base theme — the bare `:root` values themselves. Not a themes/*.json
  *  file: every theme is an overlay on it. Its id/label sit here so the theme
- *  roster has exactly one authoring point. */
-const DEFAULT_THEME = { id: "dark", label: "Dark", scheme: "dark" };
+ *  roster has exactly one authoring point.
+ *
+ *  `blurb` is the sentence the theme PICKER shows under the label. It lives
+ *  here (and in each overlay's JSON) because `scheme` cannot stand in for it:
+ *  Dark and Matrix are both `scheme: "dark"`, so a sentence derived from the
+ *  scheme renders those two rows word-for-word identical and the picker
+ *  offers a choice it refuses to describe. Shipping a theme therefore means
+ *  writing its one sentence, exactly as it means writing its palette. */
+const DEFAULT_THEME = {
+  id: "dark",
+  label: "Dark",
+  scheme: "dark",
+  blurb: "Every page renders dark, whatever the system prefers.",
+};
 
 export function buildTokens({ authoredCss }) {
   const core = readJson("core.json");
@@ -134,6 +146,26 @@ export function buildTokens({ authoredCss }) {
   for (const t of themes) {
     if (!t.id || !t.label || !["dark", "light"].includes(t.scheme)) {
       throw new Error(`theme '${t.id ?? "?"}': id, label and scheme (dark|light) are required`);
+    }
+    // The picker sentence is required, not defaulted. A missing blurb used to
+    // fall back to a scheme-derived line, which is how Dark and Matrix ended
+    // up describing themselves identically in a visible picker; failing the
+    // build is the only way that cannot happen again silently.
+    if (typeof t.blurb !== "string" || t.blurb.trim().length < 10) {
+      throw new Error(
+        `theme '${t.id}': a 'blurb' of at least 10 characters is required — it is the ` +
+          "sentence the theme picker renders under the label, and no other field can " +
+          "stand in for it (Dark and Matrix share a scheme)",
+      );
+    }
+    // It is emitted into a Rust string literal verbatim; a quote or backslash
+    // would produce a module that does not compile, so refuse them here where
+    // the error can name the theme.
+    if (/["\\\n\r]/.test(t.blurb)) {
+      throw new Error(
+        `theme '${t.id}': blurb must not contain quotes, backslashes or newlines — it is ` +
+          "emitted verbatim into a Rust string literal",
+      );
     }
     if (t.id === DEFAULT_THEME.id) {
       throw new Error(`theme id '${t.id}' is the base theme — overlays must use their own id`);
@@ -322,7 +354,7 @@ export function buildTokens({ authoredCss }) {
   };
   const roster = [
     DEFAULT_THEME,
-    ...themes.map((t) => ({ id: t.id, label: t.label, scheme: t.scheme })),
+    ...themes.map((t) => ({ id: t.id, label: t.label, scheme: t.scheme, blurb: t.blurb })),
   ];
   // One unbroken string literal per rule: tests/contrast.rs pins this by
   // whitespace-stripped substring over THIS FILE's source, so a concat seam
@@ -346,7 +378,7 @@ export function buildTokens({ authoredCss }) {
   const themeMetaRows = roster
     .map(
       (t) =>
-        `    ThemeMeta { id: "${t.id}", label: "${t.label}", scheme: "${t.scheme}" },\n`,
+        `    ThemeMeta { id: "${t.id}", label: "${t.label}", scheme: "${t.scheme}", blurb: "${t.blurb}" },\n`,
     )
     .join("");
   const rustModule =
@@ -372,12 +404,17 @@ export function buildTokens({ authoredCss }) {
     `    "${personality}";\n` +
     "\n" +
     "/// One selectable theme. `scheme` decides the first-paint color-scheme\n" +
-    "/// and which pad-art sheet the theme coexists with.\n" +
+    "/// and which pad-art sheet the theme coexists with; `blurb` is the one\n" +
+    "/// sentence the theme picker renders under the label. `blurb` is authored\n" +
+    "/// per theme rather than derived from `scheme` because Dark and Matrix\n" +
+    "/// share a scheme, and a derived sentence made those two picker rows\n" +
+    "/// word-for-word identical.\n" +
     "#[derive(Clone, Copy, Debug, PartialEq, Eq)]\n" +
     "pub(crate) struct ThemeMeta {\n" +
     "    pub(crate) id: &'static str,\n" +
     "    pub(crate) label: &'static str,\n" +
     "    pub(crate) scheme: &'static str,\n" +
+    "    pub(crate) blurb: &'static str,\n" +
     "}\n" +
     "\n" +
     "/// Every selectable theme, default first. \"System\" is not a theme — it\n" +

@@ -1070,8 +1070,16 @@ mod tests {
     /// XInput ceiling first and this test is about the POOL.
     #[test]
     fn a_ninth_hidmaestro_pad_is_refused_before_it_can_reach_the_host() {
+        // Slot 1 is `staged()`'s Xbox360 pad — ViGEmBus, outside the pool — so
+        // the pool fills over slots 2..=MAX_HIDMAESTRO_PADS + 1 and the pad
+        // that overflows it is the one after that. Derived rather than spelled
+        // 9 and 10 because the panic below already counts "pad N of
+        // MAX_HIDMAESTRO_PADS": a loop bound that disagreed with it would stage
+        // the wrong number of pads while reporting the right one.
+        let last_in_pool = MAX_HIDMAESTRO_PADS + 1;
+        let overflow = last_in_pool + 1;
         let mut setup = staged();
-        for n in 2u8..=9 {
+        for n in 2u8..=last_in_pool {
             let persona = if n % 2 == 0 {
                 Persona::DualSense
             } else {
@@ -1082,21 +1090,30 @@ mod tests {
             });
         }
         let refused = setup
-            .add_slot(10, Persona::DualSense, preset("P10"))
+            .add_slot(overflow, Persona::DualSense, preset("P-overflow"))
             .unwrap_err();
         assert_eq!(refused.code(), "too-many-hidmaestro-pads");
         let message = refused.to_string();
-        assert!(message.contains("at most 8"), "{message}");
+        // The NUMBER comes from the constant that owns it; the words around it
+        // are this module's, and this line is the one place that locks them.
+        // Spelled "at most 8" it would be a fifth copy of a number ksx-config,
+        // ksx-backend and ksx-output also assert — raise the ceiling and each
+        // fails on its own, with nothing in any of the four messages saying
+        // they are the same fact.
+        assert!(
+            message.contains(&format!("at most {MAX_HIDMAESTRO_PADS} live pads")),
+            "{message}"
+        );
         assert!(message.contains("xbox360"), "{message}");
 
         // The same gate on the other door: repainting a ViGEm slot onto the
         // full pool is the ninth pad too.
         let with_other = setup
-            .add_slot(10, Persona::PlayStation, preset("P10"))
+            .add_slot(overflow, Persona::PlayStation, preset("P-overflow"))
             .unwrap();
         assert_eq!(
             with_other
-                .set_persona(10, Persona::DualSense)
+                .set_persona(overflow, Persona::DualSense)
                 .unwrap_err()
                 .code(),
             "too-many-hidmaestro-pads"
@@ -1449,51 +1466,198 @@ mod tests {
         assert_eq!(filled.slots().len(), 3);
     }
 
-    /// Every refusal has a stable, distinct code — a surface routes on these.
+    /// Every refusal has a stable, distinct code AND a message that names the
+    /// thing it is refusing.
+    ///
+    /// Surfaces route on [`StageRefusal::code`]; the person staring at the
+    /// screen reads `to_string()`. Both halves have to be checked, and the
+    /// second one has to check RENDERING, not length: `!to_string().is_empty()`
+    /// is satisfied by a message that forgot which slot it was about.
+    ///
+    /// **Why the ordinal machinery (2026-08-26 audit).** The array here used to
+    /// be hand-written with no exhaustiveness check, and three live variants had
+    /// silently fallen out of it — `TooManyHidMaestroPads`, `DeviceChanged` and
+    /// `BadReorder`, all three of which surfaces route on — while the test still
+    /// said "one code per refusal" and passed. `ordinal` below is exhaustive, so
+    /// adding a variant to `StageRefusal` now stops this file COMPILING until
+    /// somebody comes here. Note the residual gap, honestly: the compiler forces
+    /// the arm, and the `REFUSAL_VARIANTS` assertion forces the sample only if
+    /// the count below is bumped with it. Closing that last inch needs a derive
+    /// macro, and ksx-core is deliberately dependency-free (see the note above
+    /// `mod tests` in `persona.rs`). Bump the count when you add the arm.
     #[test]
-    fn refusal_codes_are_distinct_and_never_empty() {
-        let all = [
-            StageRefusal::BadSlot { given: 0 },
-            StageRefusal::SlotTaken { number: 1 },
-            StageRefusal::NoSuchSlot { number: 1 },
-            StageRefusal::NoFreeSlot,
-            StageRefusal::PersonaNotImplemented {
-                persona: Persona::DualSense,
-                backend: "HIDMaestro",
-                reason: "x",
-                instead: Persona::PlayStation,
-            },
-            StageRefusal::PersonaCapacity {
-                number: 2,
-                persona: Persona::DualSense,
-                after: 2,
-                limit: 1,
-            },
-            StageRefusal::TooManyXinputSlots {
-                number: 5,
-                after: 5,
-            },
-            StageRefusal::BadAlias {
-                alias: "a".into(),
-                problem: "x",
-            },
-            StageRefusal::PresetNameClash {
-                number: 1,
-                other: 2,
-                name: "P".into(),
-            },
-            StageRefusal::UnnamedPreset { number: 1 },
-            StageRefusal::NoBindings {
-                number: 1,
-                preset: "Player 1".into(),
-            },
-            StageRefusal::BlockingUnanswered,
-            StageRefusal::NoDevice { slots: 1 },
-            StageRefusal::NoSlots,
+    fn every_refusal_has_a_distinct_code_and_a_message_that_names_its_subject() {
+        // Sentinels that cannot show up by accident in boilerplate wording.
+        let all: Vec<(StageRefusal, Vec<&str>)> = vec![
+            (StageRefusal::BadSlot { given: 0 }, vec!["0"]),
+            (StageRefusal::SlotTaken { number: 7 }, vec!["7"]),
+            (StageRefusal::NoSuchSlot { number: 7 }, vec!["7"]),
+            // The ceiling is ksx's, not Windows'. Saying so is the whole point
+            // of the sentence: a user who reads "16 slots" as a driver limit
+            // goes looking for a driver setting that does not exist.
+            (
+                StageRefusal::NoFreeSlot,
+                vec!["16", "ksx's own ceiling", "not a Windows one"],
+            ),
+            (
+                StageRefusal::PersonaNotImplemented {
+                    persona: Persona::DualSense,
+                    backend: "HIDMaestro",
+                    reason: "zzz-the-stated-gap",
+                    instead: Persona::PlayStation,
+                },
+                // The refusal is useless without all four: which persona, which
+                // stack decided, why, and what to stage instead.
+                vec![
+                    "dualsense",
+                    "HIDMaestro",
+                    "zzz-the-stated-gap",
+                    "playstation",
+                ],
+            ),
+            (
+                StageRefusal::PersonaCapacity {
+                    number: 7,
+                    persona: Persona::DualSense,
+                    after: 2,
+                    limit: 1,
+                },
+                vec!["7", "dualsense"],
+            ),
+            (
+                StageRefusal::TooManyXinputSlots {
+                    number: 7,
+                    after: 5,
+                },
+                vec!["7", "5"],
+            ),
+            (
+                StageRefusal::TooManyHidMaestroPads {
+                    number: 7,
+                    after: 9,
+                },
+                vec!["7", "9"],
+            ),
+            (
+                StageRefusal::BadAlias {
+                    alias: "zzz-alias".into(),
+                    problem: "zzz-the-problem",
+                },
+                vec!["zzz-alias", "zzz-the-problem"],
+            ),
+            (
+                StageRefusal::PresetNameClash {
+                    number: 7,
+                    other: 2,
+                    name: "zzz-preset".into(),
+                },
+                vec!["7", "2", "zzz-preset"],
+            ),
+            // NOTE, deliberately not an assertion: `UnnamedPreset` carries
+            // `number` and its message never prints it, so the user is told "a
+            // preset needs a name" without being told which staged slot. It is
+            // the one refusal in this list that cannot name its own subject.
+            // Not pinned either way — asserting the number would fail today,
+            // and asserting its absence would defend the gap.
+            (
+                StageRefusal::UnnamedPreset { number: 7 },
+                vec!["needs a name", "[[slot]]"],
+            ),
+            (
+                StageRefusal::NoBindings {
+                    number: 7,
+                    preset: "zzz-preset".into(),
+                },
+                vec!["7", "zzz-preset"],
+            ),
+            // An unanswered question has to be ASKABLE from its own refusal, so
+            // all three answers are named. Literals, not `Blocking::as_str()`:
+            // the message is built from that function, so checking it against
+            // itself could only ever agree.
+            (
+                StageRefusal::BlockingUnanswered,
+                vec!["split-or-freeze", "whole", "bound-keys", "off"],
+            ),
+            (
+                StageRefusal::NoDevice { slots: 7 },
+                vec!["7", "pick a device"],
+            ),
+            (StageRefusal::NoSlots, vec!["no controller has been staged"]),
+            (
+                StageRefusal::DeviceChanged {
+                    expected: "zzz-expected".into(),
+                    current: "zzz-current".into(),
+                },
+                vec!["zzz-expected", "zzz-current"],
+            ),
+            (
+                StageRefusal::BadReorder {
+                    staged: "zzz-staged".into(),
+                    given: "zzz-given".into(),
+                },
+                vec!["zzz-staged", "zzz-given"],
+            ),
         ];
-        let codes: std::collections::HashSet<&str> = all.iter().map(|r| r.code()).collect();
+
+        /// Keep in lockstep with `ordinal`'s last arm.
+        const REFUSAL_VARIANTS: usize = 17;
+
+        // Exhaustive on purpose — no wildcard arm, ever. The ordinals mean
+        // nothing except "this variant has a sample above".
+        fn ordinal(refusal: &StageRefusal) -> usize {
+            match refusal {
+                StageRefusal::BadSlot { .. } => 0,
+                StageRefusal::SlotTaken { .. } => 1,
+                StageRefusal::NoSuchSlot { .. } => 2,
+                StageRefusal::NoFreeSlot => 3,
+                StageRefusal::PersonaNotImplemented { .. } => 4,
+                StageRefusal::PersonaCapacity { .. } => 5,
+                StageRefusal::TooManyXinputSlots { .. } => 6,
+                StageRefusal::TooManyHidMaestroPads { .. } => 7,
+                StageRefusal::BadAlias { .. } => 8,
+                StageRefusal::PresetNameClash { .. } => 9,
+                StageRefusal::UnnamedPreset { .. } => 10,
+                StageRefusal::NoBindings { .. } => 11,
+                StageRefusal::BlockingUnanswered => 12,
+                StageRefusal::NoDevice { .. } => 13,
+                StageRefusal::NoSlots => 14,
+                StageRefusal::DeviceChanged { .. } => 15,
+                StageRefusal::BadReorder { .. } => 16,
+            }
+        }
+
+        let covered: std::collections::BTreeSet<usize> =
+            all.iter().map(|(r, _)| ordinal(r)).collect();
+        assert_eq!(
+            covered,
+            (0..REFUSAL_VARIANTS).collect::<std::collections::BTreeSet<_>>(),
+            "every StageRefusal variant needs a sample in this test",
+        );
+
+        let codes: std::collections::HashSet<&str> = all.iter().map(|(r, _)| r.code()).collect();
         assert_eq!(codes.len(), all.len(), "one code per refusal");
-        assert!(all.iter().all(|r| !r.to_string().is_empty()));
+        assert!(
+            codes.iter().all(|c| !c.is_empty()),
+            "a surface cannot route on an empty code",
+        );
+
+        for (refusal, must_name) in &all {
+            let rendered = refusal.to_string();
+            assert!(
+                !must_name.is_empty(),
+                "{}: every refusal must state something checkable — a message \
+                 checked only for being non-empty is not checked at all",
+                refusal.code(),
+            );
+            for datum in must_name {
+                assert!(
+                    rendered.contains(datum),
+                    "{} must name {datum:?}, or the user cannot tell which slot, \
+                     board or preset it means: {rendered}",
+                    refusal.code(),
+                );
+            }
+        }
     }
 
     /// Staging the same slot twice is a refusal, not a silent overwrite — a

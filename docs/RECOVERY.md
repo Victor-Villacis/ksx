@@ -74,18 +74,35 @@ control existed only on the selected keyboard's card, so in every one of those
 states this runbook and an elevated shell were the only exit, which
 `docs/FIRST-RUN.md` §6 says must never be true.
 
-> 🔴 **As of 2026-08-25 that paragraph describes the design and not the build,
-> and if your keyboard is dead right now you should skip to §2b.** The
-> single-product-page cutover took two things with it. First, `ksx open` still
-> asks for `/start`, a page that was deleted, so the desktop icon, the Start-menu
-> entry and the tray's *Open ksx* all land on a 404 in a window with no address
-> bar — there is nowhere to type a correction. Second, the held-keyboards list
-> did not come across to the new page: the backend read is still there and
-> nothing draws it, and the only Release control on the page belongs to whichever
-> keyboard is currently selected, which on a fresh install is none of them. Both
-> are being fixed in Studio; neither is fixed by anything you can do from here.
-> Until they are, the subsections below are not the fallback — they are the
-> route.
+> 🟡 **As of `ad520b4` (2026-08-26) the app is worth trying again — but that
+> paragraph still describes more than the build draws.** Read this before you
+> decide whether to skip to §2b.
+>
+> **The door is open again.** From 2026-08-25 to 2026-08-26 `ksx open` asked for
+> `/start`, a page the cutover deleted, so the desktop icon, the Start-menu entry
+> and the tray's *Open ksx* all landed on a 404 in a window with no address bar
+> and nowhere to type a correction — the app was not a recovery route at all,
+> because you could not reach it. `studio_launch.rs` now returns `/nocturne` and
+> tests pin it in both places it is spelled. If your shortcut still opens a blank
+> or "not found" window, you are on a build older than that commit and §2b is
+> your route.
+>
+> **What is drawn is one board, not the list.** The full **Keyboards ksx is
+> holding** list did not come across to the new page and still has not.
+> `offer_held_release` in `server/nocturne.rs` is the replacement, and it is
+> narrower than the paragraph above in two ways worth knowing while your panel is
+> dead: it surfaces the **first** claimed board it finds, so a machine holding two
+> gives them back one page-load at a time; and it stands down entirely when the
+> selected keyboard is already offering its own prepare/release control, because
+> a machine fact must not silently replace an action you were reading. That
+> second rule is right, and it means the on-page way back is reachable in exactly
+> the state that matters — a fresh install with nothing selected — but is not
+> guaranteed in every state the paragraph above promises.
+>
+> So: **try the app first.** If the page offers a Release for the board you need,
+> take it. If it does not — because another keyboard's capture control has the
+> slot, or because the board you need is the second one held — §2b is the route,
+> and nothing you can do from the page will change that today.
 
 The subsections below stay in any case, because they are what you need when ksx
 itself will not start.

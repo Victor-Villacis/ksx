@@ -34,8 +34,10 @@ pub(super) async fn collect_check(state: &Arc<AppState>) -> CheckPayload {
 pub(super) async fn check_page(State(state): State<Arc<AppState>>) -> Response {
     let payload = collect_check(&state).await;
     let theme = page_theme(&state).await;
-    let out =
-        crate::render::with_theme(render_check(&state.check_page, &payload), theme.as_deref());
+    let out = crate::render::with_theme(
+        render_check(&state.check_page.get(), &payload),
+        theme.as_deref(),
+    );
     (
         [
             (

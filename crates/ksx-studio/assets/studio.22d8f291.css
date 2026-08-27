@@ -235,6 +235,27 @@
     --e-3: 0 2px 6px rgba(28, 20, 40, 0.08), 0 12px 28px -8px rgba(28, 20, 40, 0.16);
     --e-4: 0 4px 10px rgba(28, 20, 40, 0.1), 0 28px 64px -16px rgba(28, 20, 40, 0.28);
     --ground: radial-gradient(1200px 620px at 50% -10%, #ffffff 0%, transparent 70%), linear-gradient(180deg, #f6f3ee 0%, #f0ebe3 100%);
+  /* The Nocturne frame's roles re-pointed at this palette — the frame
+     follows the theme instead of painting its navy face over it. */
+    --n-bg: var(--bg);
+    --n-panel: var(--panel);
+    --n-panel-2: var(--panel-2);
+    --n-panel-3: var(--panel-3);
+    --n-line: var(--line);
+    --n-line-2: var(--line-strong);
+    --n-text: var(--text);
+    --n-text-2: var(--text-2);
+    --n-text-3: var(--text-3);
+    --n-accent: var(--accent);
+    --n-accent-2: var(--accent-strong);
+    --n-accent-ink: var(--accent-on);
+    --n-accent-tint: var(--accent-dim);
+    --n-accent-line: var(--accent-line);
+    --n-accent-dim: var(--accent-dim-2);
+    --n-warn: var(--warn);
+    --n-danger: var(--danger);
+    --n-danger-line: var(--danger-line);
+    --n-ok: var(--ok);
   }
 }
 
@@ -256,6 +277,39 @@
   --border-default: var(--line);
   --border-strong: var(--line-strong);
   --muted: var(--text-3); /* legacy alias, still referenced by markup */
+}
+
+/* ── §4 THE NOCTURNE FRAME ────────────────────────────────────────────────
+   `/nocturne`'s own roles. The values here are the Studio Nocturne
+   design's night face — they ARE the dark theme for the product page, so
+   the dark overlay needs nothing and light/matrix re-point every role at
+   the gated palette above (see themes/*.json). Emitted after the light
+   media block, which still wins: :root:not([data-theme]) out-ranks :root
+   by specificity. The input-test dialog mounts on <body>, which is WHY
+   these live on :root and not on .nocturne — a .nocturne-scoped pin can
+   never reach it, and a local re-pin shadows every theme with all gates
+   green (studio.css carried exactly that defect twice). ── */
+:root {
+  --n-bg: #161826;
+  --n-panel: #1a1c28;
+  --n-panel-2: #232532;
+  --n-panel-3: #2b2d3c; /* one step above --n-panel-2: the zebra stripe and every hover ground */
+  --n-line: #2b2d3a;
+  --n-line-2: #3f424d;
+  --n-text: #e9e9ed;
+  --n-text-2: #9397ab;
+  --n-text-3: #75798c;
+  --n-accent: #968ae0;
+  --n-accent-2: #a7a1db;
+  --n-accent-ink: #161826; /* text ON an --n-accent fill */
+  --n-accent-tint: rgba(150, 138, 224, 0.14);
+  --n-accent-line: rgba(150, 138, 224, 0.45);
+  --n-accent-dim: rgba(150, 138, 224, 0.26); /* a fill strong enough to read as HELD behind a mark */
+  --n-warn: #edbb46;
+  --n-danger: #e79aa6;
+  --n-danger-line: rgba(231, 154, 166, 0.5);
+  --n-ok: #4ed185;
+  --n-font: Inter, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; /* the frame's UI face; matrix re-points it at the mono stack */
 }
 
 /* ── Stamped themes: an explicit data-theme choice on <html>. Same
@@ -302,6 +356,25 @@
   --e-3: 0 2px 6px rgba(28, 20, 40, 0.08), 0 12px 28px -8px rgba(28, 20, 40, 0.16);
   --e-4: 0 4px 10px rgba(28, 20, 40, 0.1), 0 28px 64px -16px rgba(28, 20, 40, 0.28);
   --ground: radial-gradient(1200px 620px at 50% -10%, #ffffff 0%, transparent 70%), linear-gradient(180deg, #f6f3ee 0%, #f0ebe3 100%);
+  --n-bg: var(--bg);
+  --n-panel: var(--panel);
+  --n-panel-2: var(--panel-2);
+  --n-panel-3: var(--panel-3);
+  --n-line: var(--line);
+  --n-line-2: var(--line-strong);
+  --n-text: var(--text);
+  --n-text-2: var(--text-2);
+  --n-text-3: var(--text-3);
+  --n-accent: var(--accent);
+  --n-accent-2: var(--accent-strong);
+  --n-accent-ink: var(--accent-on);
+  --n-accent-tint: var(--accent-dim);
+  --n-accent-line: var(--accent-line);
+  --n-accent-dim: var(--accent-dim-2);
+  --n-warn: var(--warn);
+  --n-danger: var(--danger);
+  --n-danger-line: var(--danger-line);
+  --n-ok: var(--ok);
 }
 :root[data-theme="matrix"] {
   color-scheme: dark;
@@ -349,6 +422,26 @@
   --dur-1: 60ms;
   --dur-2: 110ms;
   --dur-3: 180ms;
+  --n-bg: var(--bg);
+  --n-panel: var(--panel);
+  --n-panel-2: var(--panel-2);
+  --n-panel-3: var(--panel-3);
+  --n-line: var(--line);
+  --n-line-2: var(--line-strong);
+  --n-text: var(--text);
+  --n-text-2: var(--text-2);
+  --n-text-3: var(--text-3);
+  --n-accent: var(--accent);
+  --n-accent-2: var(--accent-strong);
+  --n-accent-ink: var(--accent-on);
+  --n-accent-tint: var(--accent-dim);
+  --n-accent-line: var(--accent-line);
+  --n-accent-dim: var(--accent-dim-2);
+  --n-warn: var(--warn);
+  --n-danger: var(--danger);
+  --n-danger-line: var(--danger-line);
+  --n-ok: var(--ok);
+  --n-font: var(--mono);
 }
 
 [data-forma-canvas] {
@@ -6897,27 +6990,11 @@ a.wsrow-title:hover {
   --pcs14-key: var(--pal14-key);
   --pcs15-key: var(--pal15-key);
   --pcs16-key: var(--pal16-key);
-  --n-bg: #161826;
-  --n-panel: #1a1c28;
-  --n-panel-2: #232532;
-  --n-line: #2b2d3a;
-  --n-line-2: #3f424d;
-  --n-text: #e9e9ed;
-  --n-text-2: #9397ab;
-  --n-text-3: #75798c;
-  --n-accent: #968ae0;
-  --n-accent-2: #a7a1db;
-  --n-accent-tint: rgba(150, 138, 224, 0.14);
-  --n-accent-line: rgba(150, 138, 224, 0.45);
-  /* One step above --n-panel-2: the zebra stripe and every hover ground. */
-  --n-panel-3: #2b2d3c;
-  /* A fill strong enough to read as HELD behind a mark. */
-  --n-accent-dim: rgba(150, 138, 224, 0.26);
-  /* Amber and rose, matching the two pre-existing uses that carried these
-     exact values as fallbacks. */
-  --n-warn: #edbb46;
-  --n-danger: #e79aa6;
-  --n-danger-line: rgba(231, 154, 166, 0.5);
+  /* The frame's palette (--n-bg … --n-ok, --n-font) lives in the token
+     source: semantic.json block "nocturne-frame", re-pointed per theme in
+     themes/*.json. Nothing here may redefine an --n-* role — a local pin
+     shadows every theme with all gates green, which is the exact defect
+     that made the shipped theme picker change nothing a user could see. */
   /* A fixed-viewport app frame, like the prototype: the panes scroll
      INTERNALLY and the stage absorbs the leftover height. Without the hard
      height the right pane's content stretches the page and pushes the
@@ -6928,7 +7005,7 @@ a.wsrow-title:hover {
   flex-direction: column;
   background: var(--n-bg);
   color: var(--n-text);
-  font-family: Inter, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font-family: var(--n-font);
   font-size: 13px;
   line-height: 1.4;
 }
@@ -7092,7 +7169,7 @@ a.wsrow-title:hover {
 }
 
 .nm-cfg.on {
-  background: rgba(150, 138, 224, 0.12);
+  background: color-mix(in srgb, var(--n-accent) 12%, transparent);
 }
 
 .nm-cfg-txt {
@@ -7103,7 +7180,7 @@ a.wsrow-title:hover {
 .nm-cfg-t {
   font-size: 13px;
   font-weight: 500;
-  color: #cfd3e5;
+  color: color-mix(in srgb, var(--n-text) 72%, var(--n-text-2));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -7131,7 +7208,7 @@ a.wsrow-title:hover {
   padding: 8px 9px;
   border-radius: 7px;
   font-size: 12.5px;
-  color: #cfd3e5;
+  color: color-mix(in srgb, var(--n-text) 72%, var(--n-text-2));
   cursor: pointer;
 }
 
@@ -7142,7 +7219,7 @@ a.wsrow-title:hover {
 }
 
 .nm-cfg.on:hover {
-  background: rgba(150, 138, 224, 0.12);
+  background: color-mix(in srgb, var(--n-accent) 12%, transparent);
 }
 
 .nm-div {
@@ -7174,11 +7251,11 @@ a.wsrow-title:hover {
   border-radius: 5px;
   font-size: 10px;
   color: #b5abfc;
-  box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.5);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-accent) 50%, transparent);
 }
 
 .nm-gico.broken {
-  color: #e79aa6;
+  color: var(--n-danger);
   box-shadow: inset 0 0 0 1px #6b3a44;
 }
 
@@ -7200,7 +7277,7 @@ a.wsrow-title:hover {
 
 .nm-auto-t {
   font-size: 12.5px;
-  color: #cfd3e5;
+  color: color-mix(in srgb, var(--n-text) 72%, var(--n-text-2));
 }
 
 .nm-auto-note {
@@ -7235,7 +7312,7 @@ a.wsrow-title:hover {
   padding: 6px 14px;
   border: 1px solid var(--n-accent-line);
   border-radius: 9px;
-  background: rgba(150, 138, 224, 0.08);
+  background: color-mix(in srgb, var(--n-accent) 8%, transparent);
   color: var(--n-accent-2);
   font-size: 12.5px;
   cursor: pointer;
@@ -7351,7 +7428,7 @@ a.wsrow-title:hover {
 
 .n-dev.on {
   background: var(--n-panel-2);
-  border-color: rgba(150, 138, 224, 0.22);
+  border-color: color-mix(in srgb, var(--n-accent) 22%, transparent);
 }
 
 .n-dev.off {
@@ -7508,7 +7585,7 @@ a.wsrow-title:hover {
 /* The hole the dragged card left behind. */
 .n-slot.dragging {
   border: 1px dashed var(--n-accent-line);
-  background: rgba(150, 138, 224, 0.05);
+  background: color-mix(in srgb, var(--n-accent) 5%, transparent);
 }
 
 .n-slot.dragging > * {
@@ -7562,7 +7639,7 @@ a.wsrow-title:hover {
   height: 3px;
   border-radius: 2px;
   background: var(--n-accent);
-  box-shadow: 0 0 8px rgba(150, 138, 224, 0.7);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--n-accent) 70%, transparent);
 }
 
 .n-slot.dropbefore::before {
@@ -7583,7 +7660,7 @@ a.wsrow-title:hover {
 
 .n-slot.on {
   background: var(--n-panel-2);
-  border-color: rgba(150, 138, 224, 0.25);
+  border-color: color-mix(in srgb, var(--n-accent) 25%, transparent);
 }
 
 .n-slot.empty {
@@ -7598,7 +7675,7 @@ a.wsrow-title:hover {
   place-items: center;
   border-radius: 8px;
   background: var(--n-accent);
-  color: var(--badge-ink, #14151f);
+  color: var(--badge-ink, var(--n-accent-ink));
   font-size: 11px;
   font-weight: 700;
 }
@@ -7763,7 +7840,7 @@ a.wsrow-title:hover {
 
 .n-sact.danger:hover {
   background: rgba(231, 154, 166, 0.15);
-  color: #e79aa6;
+  color: var(--n-danger);
 }
 
 
@@ -7836,7 +7913,7 @@ a.wsrow-title:hover {
   padding: 4px 8px;
   border: 1px solid var(--n-line-2);
   border-radius: 7px;
-  background: #1d1f2b;
+  background: color-mix(in srgb, var(--n-panel) 60%, var(--n-panel-2));
   color: var(--n-text);
   font: inherit;
   font-size: 11.5px;
@@ -7919,7 +7996,7 @@ a.wsrow-title:hover {
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: rgba(150, 138, 224, 0.18);
+  color: color-mix(in srgb, var(--n-accent) 18%, transparent);
   pointer-events: none;
   user-select: none;
 }
@@ -7946,7 +8023,13 @@ a.wsrow-title:hover {
   --forma-canvas-accent: var(--n-accent);
   --forma-canvas-text: var(--n-text);
   --forma-canvas-muted: var(--n-text-2);
-  background: radial-gradient(ellipse at 50% 42%, #191b28 0%, #121320 74%);
+  /* A vignette a few units around --n-bg (was #191b28 → #121320 on the navy
+     face), mixed rather than restated so the well follows the theme. */
+  background: radial-gradient(
+    ellipse at 50% 42%,
+    color-mix(in srgb, var(--n-bg) 98%, #ffffff) 0%,
+    color-mix(in srgb, var(--n-bg) 89%, #000000) 74%
+  );
 }
 
 /* ── Key → controller signal paths ───────────────────────────────────────
@@ -8232,7 +8315,7 @@ a.wsrow-title:hover {
     0 12px 28px rgb(0 0 0 / 44%),
     inset 0 1px rgb(255 255 255 / 8%),
     0 0 0 1px rgb(0 0 0 / 45%);
-  color: var(--n-text-1);
+  color: var(--n-text);
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   line-height: 1.15;
   text-decoration: none;
@@ -8473,7 +8556,7 @@ a.wsrow-title:hover {
   display: grid;
   min-height: 44px;
   padding: 7px 9px;
-  color: var(--n-text-1);
+  color: var(--n-text);
   text-decoration: none;
 }
 
@@ -9422,7 +9505,7 @@ a.wsrow-title:hover {
   stroke: url(#nxg-lamp);
   stroke-width: 3;
   stroke-linecap: round;
-  filter: drop-shadow(0 0 3px rgba(150, 138, 224, 0.72));
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--n-accent) 72%, transparent));
 }
 
 .n-center .ds4free .ds4free-touch-sheen,
@@ -9724,7 +9807,7 @@ a.wsrow-title:hover {
 }
 
 .n-center :is(.ds4free-hook, .ds4premium-hook):is(:hover, .arm, .live, .n-flow-anchor-related) {
-  fill: rgba(150, 138, 224, 0.15);
+  fill: color-mix(in srgb, var(--n-accent) 15%, transparent);
   stroke: var(--n-accent-line);
   stroke-width: 3.4px;
 }
@@ -9780,7 +9863,7 @@ a.wsrow-title:hover {
 
 .n-center .ps5a .ps5a-upper {
   fill: url(#nxg-touch);
-  stroke: rgba(150, 138, 224, 0.48);
+  stroke: color-mix(in srgb, var(--n-accent) 48%, transparent);
   stroke-width: 2.6;
   stroke-linejoin: round;
 }
@@ -10215,7 +10298,7 @@ a.wsrow-title:hover {
   .switchpro-premium-hook,
   .xboxseriespremium-hook
 ):is(:hover, .arm, .live, .n-flow-anchor-related) {
-  fill: rgba(150, 138, 224, 0.16);
+  fill: color-mix(in srgb, var(--n-accent) 16%, transparent);
   stroke: var(--n-accent-line);
   stroke-width: 2.4px;
   vector-effect: non-scaling-stroke;
@@ -10301,19 +10384,19 @@ a.wsrow-title:hover {
   fill: url(#nxg-lamp);
   stroke: var(--n-accent-line);
   stroke-width: 0.3;
-  filter: drop-shadow(0 0 3px rgba(150, 138, 224, 0.55));
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--n-accent) 55%, transparent));
 }
 
 .n-center .wspad-glyph {
   fill: none;
-  stroke: #9397ab;
+  stroke: var(--n-text-2);
   stroke-width: 0.55;
   stroke-linejoin: round;
   stroke-linecap: round;
 }
 
 .n-center .wspad-face {
-  fill: #cfd3e5;
+  fill: color-mix(in srgb, var(--n-text) 72%, var(--n-text-2));
   font-size: 4.6px;
   font-weight: 600;
   font-family: inherit;
@@ -10321,7 +10404,7 @@ a.wsrow-title:hover {
 }
 
 .n-center .wspad-sys {
-  fill: #75798c;
+  fill: var(--n-text-3);
   font-size: 3.4px;
   font-family: inherit;
   letter-spacing: 0.02em;
@@ -10669,8 +10752,8 @@ a.wsrow-title:hover {
   height: 4px;
   border-color: var(--n-text);
   box-shadow:
-    0 0 0 1px rgba(150, 138, 224, 0.68),
-    0 0 8px rgba(150, 138, 224, 0.48);
+    0 0 0 1px color-mix(in srgb, var(--n-accent) 68%, transparent),
+    0 0 8px color-mix(in srgb, var(--n-accent) 48%, transparent);
 }
 
 .n-kbtheme:focus-visible {
@@ -10687,7 +10770,7 @@ a.wsrow-title:hover {
   padding: 3px 10px;
   border: 1px solid var(--n-line);
   border-radius: 8px;
-  background: rgba(22, 24, 38, 0.4);
+  background: color-mix(in srgb, var(--n-bg) 40%, transparent);
   color: var(--n-text-2);
   font-size: 11px;
   font-weight: 650;
@@ -10706,7 +10789,7 @@ a.wsrow-title:hover {
   border-color: var(--n-accent-line);
   background: var(--n-accent-tint);
   color: var(--n-accent-2);
-  box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.08);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-accent) 8%, transparent);
 }
 
 .n-kbbuild:focus-visible,
@@ -10742,7 +10825,36 @@ a.wsrow-title:hover {
    separate element so the plate travels with the rows when a narrow pane
    scrolls them. */
 .n-kbcase {
-  width: max-content;
+  /* THE PLATE IS THE COORDINATE SYSTEM. Every cell inside is absolutely
+     positioned in percentages of the board bounds, so the plate needs to
+     (a) be a containing block and (b) have a height, which arrives as an
+     inline `aspect-ratio` computed from those bounds.
+
+     `border-box` is load-bearing, and the reason is the opposite of what
+     this comment used to claim. `aspect-ratio` sizes the box named by
+     `box-sizing`; an absolutely positioned child resolves its percentages
+     against the PADDING box. This element has padding and no border, so
+     its border box and its padding box are the same box — which makes
+     `border-box` the one mode where the box the ratio shapes and the box
+     the percentages measure are identical. Under `content-box` they differ
+     by exactly the padding (26px across, 28px down), and every cap comes
+     out stretched: on a 980px card a cap drew 1.218 tall/wide against the
+     34/30 = 1.133 it is authored at, about 7.5% too tall.
+
+     `width: auto` replaces `max-content`, which is what retires the
+     hand-fitted 980px board: the plate now takes the width its card gives
+     it and the caps scale, instead of 35.5px having been chosen so one
+     particular board filled one particular card. */
+  /* The tallest plate any board may draw. A portrait arcade panel is
+     clamped to this by the inline `max-width` the server computes from its
+     own bounds; a landscape keyboard never reaches it. */
+  --n-kbcase-max-h: 520px;
+
+  position: relative;
+  box-sizing: border-box;
+  width: auto;
+  /* Centred, because a clamped portrait plate no longer fills its card. */
+  margin-inline: auto;
   padding: 13px 13px 15px;
   border-radius: 14px;
   background:
@@ -10770,28 +10882,28 @@ a.wsrow-title:hover {
    touch differently — top rows tilt away, the home row sits tallest and
    catches the most light. Inset-only, so the bound/live face treatments
    compose untouched. */
-.n-kbcase .n-kbrow:nth-child(1) .n-key::before {
+.n-kbcase[data-origin="shipped"] .n-kbrow:nth-child(1) .n-key::before {
   inset: 2.5px 2px 5px;
 }
 
-.n-kbcase .n-kbrow:nth-child(2) .n-key::before {
+.n-kbcase[data-origin="shipped"] .n-kbrow:nth-child(2) .n-key::before {
   inset: 2px 2px 5.5px;
 }
 
-.n-kbcase .n-kbrow:nth-child(3) .n-key::before {
+.n-kbcase[data-origin="shipped"] .n-kbrow:nth-child(3) .n-key::before {
   inset: 1.5px 2px 6px;
 }
 
-.n-kbcase .n-kbrow:nth-child(4) .n-key::before {
+.n-kbcase[data-origin="shipped"] .n-kbrow:nth-child(4) .n-key::before {
   inset: 1px 2px 6.5px;
   filter: brightness(1.05);
 }
 
-.n-kbcase .n-kbrow:nth-child(5) .n-key::before {
+.n-kbcase[data-origin="shipped"] .n-kbrow:nth-child(5) .n-key::before {
   inset: 1px 2px 6px;
 }
 
-.n-kbcase .n-kbrow:nth-child(6) .n-key::before {
+.n-kbcase[data-origin="shipped"] .n-kbrow:nth-child(6) .n-key::before {
   inset: 1.5px 2px 5.5px;
 }
 
@@ -10815,7 +10927,7 @@ a.wsrow-title:hover {
 .n-key.live[data-key="F"]::after,
 .n-key.live[data-key="J"]::after {
   transform: translateY(3px);
-  background: rgba(22, 24, 38, 0.35);
+  background: color-mix(in srgb, var(--n-bg) 35%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -10825,15 +10937,36 @@ a.wsrow-title:hover {
   }
 }
 
+/* A ROW IS NOW A GROUPING, NOT A LAYOUT. `display: contents` takes the row
+   box out of layout so its cells position against the plate, while the row
+   ELEMENT stays in the DOM — which is what keeps three things working that
+   would otherwise have had to be rewritten: the workbench's arrow-key roving
+   focus (`closest('.n-kbrow')` and its member queries), the per-row keycap
+   sculpt below (`nth-child`), and the seven served `list:nKbRow*` slots.
+
+   The old flex gap and bottom margin are gone because the gap is now IN the
+   coordinates: `board.rs` adds it to each cell's x and y. */
 .n-kbrow {
-  display: flex;
-  gap: var(--nkg);
-  margin-bottom: var(--nkg);
-  width: max-content;
+  display: contents;
 }
 
 .n-kbrow:last-child {
   margin-bottom: 0;
+}
+
+/* On the plate, a cell sits where the board says. The inline `style` carries
+   left/top/width/height as percentages, so these declarations lose to it —
+   `width: var(--nku)` and the `u*` classes below stay only for the tray, and
+   for `keyboardWorkbench`, which still reads the unit back out of the class
+   string when it repacks a board into its own view.
+
+   `margin: 0` is a backstop, not the mechanism. The cluster gap used to be a
+   left margin computed from row 1's exact contents and is now simply part of
+   x; the rules that applied it are DELETED rather than overridden, because
+   trying to override them here did not work — see the note above them. */
+.n-kbcase .n-key {
+  position: absolute;
+  margin: 0;
 }
 
 /* A keycap is TWO layers: this element is the side walls (dark, seated in
@@ -10999,15 +11132,24 @@ a.wsrow-title:hover {
   visibility: hidden;
 }
 
-.n-key.sp {
-  margin-left: calc((var(--nku) + var(--nkg)) * 21 / 34);
-}
+/* THE CLUSTER GAP LIVES IN `x` NOW, AND NOWHERE ELSE.
 
-/* The F-row cluster gaps absorb the width difference so Prt aligns over Ins:
-   (506px main-block width - 438px of F-row keys and gaps) / 3 gaps. */
-.n-kbrow:first-child .n-key.sp {
-  margin-left: calc((var(--nku) + var(--nkg)) * 22.66 / 34);
-}
+   `board.rs` bakes `sp_extra` into every cell's absolute x — that is what
+   retired these two `margin-left` rules. They were left behind with a
+   comment claiming they were "tray only", which was simply false: a tray
+   chip is built with a hardcoded `n-key tray bound` class (`snapshot.rs`)
+   and never carries `sp`, so both rules could only ever reach a PLATE cell.
+
+   `.n-kbcase .n-key { margin: 0 }` was supposed to hold them off and could
+   not: it is (0,2,0) and `.n-key.sp` is (0,2,0) declared 168 lines later,
+   while `.n-kbrow:first-child .n-key.sp` is higher still. Both won, so the
+   gap was applied twice — once in `left`, once again as a margin — and on
+   the shipped board that put 14 caps on top of their neighbour by more than
+   half a cap. Worse, a fixed-px margin against percentage caps means the
+   overlap GREW as the pane narrowed.
+
+   If a flowed surface ever needs the gap again, scope it to that surface
+   (`.n-kbtray-row .n-key.sp`) — never as a bare `.n-key.sp`. */
 
 .n-key.u1_25 {
   width: calc(1.25 * var(--nku) + 0.25 * var(--nkg));
@@ -11265,8 +11407,8 @@ a.wsrow-title:hover {
 }
 
 .n-bind.sel {
-  background: rgba(150, 138, 224, 0.14);
-  box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.45);
+  background: color-mix(in srgb, var(--n-accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-accent) 45%, transparent);
 }
 
 .n-bind-dot {
@@ -11274,7 +11416,7 @@ a.wsrow-title:hover {
   height: 5px;
   flex: none;
   border-radius: 50%;
-  background: #3f424d;
+  background: var(--n-line-2);
 }
 
 .n-bind.on .n-bind-dot {
@@ -11372,13 +11514,13 @@ a.wsrow-title:hover {
 }
 
 .n-keychip {
-  background: #292b31;
-  color: #e4e7f5;
+  background: var(--n-line);
+  color: var(--n-text);
 }
 
 .n-assign {
   background: transparent;
-  box-shadow: inset 0 0 0 1px #3f424d;
+  box-shadow: inset 0 0 0 1px var(--n-line-2);
   color: var(--n-text-2);
   cursor: pointer;
 }
@@ -11409,8 +11551,8 @@ a.wsrow-title:hover {
   margin: 2px 0 6px;
   padding: 12px 11px 13px;
   border-radius: 8px;
-  background: #1d1f2b;
-  box-shadow: inset 0 0 0 1px #292b31;
+  background: color-mix(in srgb, var(--n-panel) 60%, var(--n-panel-2));
+  box-shadow: inset 0 0 0 1px var(--n-line);
   animation: noct-rise 0.16s ease-out;
 }
 
@@ -11447,7 +11589,7 @@ a.wsrow-title:hover {
 .nx-keybtn.armed {
   background: var(--n-text);
   border-color: transparent;
-  color: #161826;
+  color: var(--n-bg);
   font-weight: 500;
 }
 
@@ -11472,7 +11614,7 @@ a.wsrow-title:hover {
   border-radius: 6px;
   background: var(--n-panel-2);
   box-shadow: inset 0 0 0 1px var(--n-line-2);
-  color: #cfd3e5;
+  color: color-mix(in srgb, var(--n-text) 72%, var(--n-text-2));
   font-size: 11.5px;
   cursor: pointer;
 }
@@ -11480,7 +11622,7 @@ a.wsrow-title:hover {
 .nx-pill.on {
   background: var(--n-accent);
   box-shadow: none;
-  color: #161826;
+  color: var(--n-accent-ink);
   font-weight: 500;
 }
 
@@ -11493,7 +11635,7 @@ a.wsrow-title:hover {
   justify-content: flex-start;
   padding: 2px;
   border-radius: 11px;
-  background: #292b31;
+  background: var(--n-line);
   box-shadow: inset 0 0 0 1px var(--n-line-2);
   cursor: pointer;
 }
@@ -11513,7 +11655,7 @@ a.wsrow-title:hover {
 }
 
 .nx-sw.on .nx-knob {
-  background: #161826;
+  background: var(--n-bg);
 }
 
 .nx-rates {
@@ -11537,7 +11679,7 @@ a.wsrow-title:hover {
 .nx-rate.on {
   background: var(--n-accent);
   box-shadow: none;
-  color: #161826;
+  color: var(--n-accent-ink);
 }
 
 /* Steady, not strobing: the prototype pulses this at the turbo rate (10 Hz);
@@ -11548,7 +11690,7 @@ a.wsrow-title:hover {
   flex: none;
   border-radius: 50%;
   background: var(--n-accent);
-  box-shadow: 0 0 8px rgba(150, 138, 224, 0.9);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--n-accent) 90%, transparent);
 }
 
 .nx-badge {
@@ -11727,7 +11869,7 @@ a.wsrow-title:hover {
 
 .n-krow-clear:hover {
   border-color: var(--n-danger-line, rgba(231, 154, 166, 0.5));
-  color: var(--n-danger, #e79aa6);
+  color: var(--n-danger);
 }
 
 .n-krow:hover {
@@ -11739,15 +11881,15 @@ a.wsrow-title:hover {
   min-width: 44px;
   padding: 3px 9px;
   border-radius: 6px;
-  background: #292b31;
-  color: #e4e7f5;
+  background: var(--n-line);
+  color: var(--n-text);
   font-family: ui-monospace, Menlo, monospace;
   font-size: 11.5px;
   text-align: center;
 }
 
 .n-krow.shared .n-krow-chip {
-  outline: 1.5px dashed rgba(150, 138, 224, 0.6);
+  outline: 1.5px dashed color-mix(in srgb, var(--n-accent) 60%, transparent);
   outline-offset: 1px;
 }
 
@@ -11821,7 +11963,7 @@ button.n-krow-tg {
   border-style: solid;
   border-color: var(--n-accent);
   color: var(--n-accent-2);
-  background: rgba(150, 138, 224, 0.12);
+  background: color-mix(in srgb, var(--n-accent) 12%, transparent);
   animation: n-assignwait 1.3s ease-in-out infinite;
 }
 
@@ -11913,7 +12055,7 @@ button.n-krow-tg {
   50% {
     box-shadow:
       0 0 0 2px var(--n-accent),
-      0 0 24px rgba(150, 138, 224, 0.5);
+      0 0 24px color-mix(in srgb, var(--n-accent) 50%, transparent);
   }
 }
 
@@ -11939,7 +12081,7 @@ button.n-krow-tg {
 .n-center [data-fn].arm {
   stroke: var(--n-accent);
   stroke-width: 3px;
-  fill: rgba(150, 138, 224, 0.15);
+  fill: color-mix(in srgb, var(--n-accent) 15%, transparent);
 }
 
 .n-center text.n-fnkey.arm {
@@ -11964,7 +12106,7 @@ button.n-krow-tg {
   padding: 6px 14px;
   border: 1px solid var(--n-accent-line);
   border-radius: 999px;
-  background: rgba(22, 24, 38, 0.92);
+  background: color-mix(in srgb, var(--n-bg) 92%, transparent);
   color: var(--n-accent-2);
   font-size: 12px;
   white-space: nowrap;
@@ -12027,7 +12169,7 @@ button.n-krow-tg {
    outline (not a border) so the chip's box never shifts; the global
    focus ring still wins while focused. */
 button.n-keychip.shared:not(:focus-visible) {
-  outline: 1.5px dashed rgba(150, 138, 224, 0.6);
+  outline: 1.5px dashed color-mix(in srgb, var(--n-accent) 60%, transparent);
   outline-offset: 1px;
 }
 
@@ -12090,7 +12232,7 @@ button.n-keychip:hover {
   margin-right: 4px;
   padding: 1px 6px;
   border-radius: 999px;
-  background: rgba(150, 138, 224, 0.12);
+  background: color-mix(in srgb, var(--n-accent) 12%, transparent);
   color: var(--n-accent-2);
   font-size: 9.5px;
   font-weight: 600;
@@ -12140,7 +12282,7 @@ button.n-keychip:hover {
 .n-clearall[open] .n-clearall-sum,
 .n-clearall-sum:hover {
   border-color: rgba(231, 154, 166, 0.45);
-  color: #e79aa6;
+  color: var(--n-danger);
 }
 
 .n-clearall-body {
@@ -12199,7 +12341,7 @@ button.n-keychip:hover {
 }
 
 .n-center circle[fill="transparent"][data-fn]:hover {
-  fill: rgba(150, 138, 224, 0.12);
+  fill: color-mix(in srgb, var(--n-accent) 12%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -12365,13 +12507,13 @@ button.n-keychip:hover {
   gap: 2px;
   padding: 10px 11px;
   border-radius: 8px;
-  background: #1d1f2b;
+  background: color-mix(in srgb, var(--n-panel) 60%, var(--n-panel-2));
   box-shadow: inset 0 0 0 1px var(--n-line-2);
   cursor: pointer;
 }
 
 .nd-card.on {
-  background: rgba(150, 138, 224, 0.12);
+  background: color-mix(in srgb, var(--n-accent) 12%, transparent);
   box-shadow: inset 0 0 0 1.5px var(--n-accent);
 }
 
@@ -12587,7 +12729,7 @@ button.n-keychip:hover {
   gap: 2px;
   padding: 10px 12px;
   border-radius: 8px;
-  background: #1d1f2b;
+  background: color-mix(in srgb, var(--n-panel) 60%, var(--n-panel-2));
   box-shadow: inset 0 0 0 1px var(--n-line-2);
   cursor: pointer;
 }
@@ -12648,7 +12790,7 @@ button.n-keychip:hover {
 .nmo-motion {
   padding: 4px 9px;
   border-radius: 6px;
-  box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.45);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-accent) 45%, transparent);
   color: #b5abfc;
   font-size: 11.5px;
   cursor: pointer;
@@ -12671,8 +12813,8 @@ button.n-keychip:hover {
 }
 
 .nms-wrap.open {
-  background: #1d1f2b;
-  box-shadow: inset 0 0 0 1px #292b31;
+  background: color-mix(in srgb, var(--n-panel) 60%, var(--n-panel-2));
+  box-shadow: inset 0 0 0 1px var(--n-line);
 }
 
 .nms-row {
@@ -12705,7 +12847,7 @@ button.n-keychip:hover {
   flex: 1;
   min-width: 0;
   font-size: 12px;
-  color: #e4e7f5;
+  color: var(--n-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -12717,7 +12859,7 @@ button.n-keychip:hover {
   border-radius: 5px;
   background: var(--n-panel-2);
   box-shadow: inset 0 0 0 1px var(--n-line-2);
-  color: #cfd3e5;
+  color: color-mix(in srgb, var(--n-text) 72%, var(--n-text-2));
   font-size: 11px;
   cursor: pointer;
 }
@@ -12725,7 +12867,7 @@ button.n-keychip:hover {
 .nms-edit.on {
   background: var(--n-accent);
   box-shadow: none;
-  color: #161826;
+  color: var(--n-accent-ink);
 }
 
 .nms-mini {
@@ -12766,7 +12908,7 @@ button.n-keychip:hover {
 .nmc.on {
   background: var(--n-accent);
   box-shadow: none;
-  color: #161826;
+  color: var(--n-accent-ink);
 }
 
 .nms-grids {
@@ -12810,7 +12952,7 @@ button.n-keychip:hover {
 .nmg-cell.on {
   background: var(--n-accent);
   box-shadow: none;
-  color: #161826;
+  color: var(--n-accent-ink);
 }
 
 .nms-add {
@@ -12889,7 +13031,7 @@ button.n-keychip:hover {
   border: 1px solid rgba(231, 154, 166, 0.5);
   border-radius: 9px;
   background: rgba(231, 154, 166, 0.1);
-  color: #e79aa6;
+  color: var(--n-danger);
   font-size: 12.5px;
   cursor: pointer;
 }
@@ -12906,7 +13048,7 @@ button.n-keychip:hover {
   padding: 6px 14px;
   border: 1px solid var(--n-accent-line);
   border-radius: 9px;
-  background: rgba(150, 138, 224, 0.08);
+  background: color-mix(in srgb, var(--n-accent) 8%, transparent);
   color: var(--n-accent-2);
   font-size: 12.5px;
   cursor: pointer;
@@ -12937,7 +13079,7 @@ button.n-keychip:hover {
 
 .n-tick.on {
   color: var(--n-text);
-  box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.45);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-accent) 45%, transparent);
 }
 
 .n-tick-dot {
@@ -12952,8 +13094,8 @@ button.n-keychip:hover {
 }
 
 .n-canvas.live {
-  border-color: rgba(150, 138, 224, 0.4);
-  box-shadow: inset 0 0 60px rgba(150, 138, 224, 0.07);
+  border-color: color-mix(in srgb, var(--n-accent) 40%, transparent);
+  box-shadow: inset 0 0 60px color-mix(in srgb, var(--n-accent) 7%, transparent);
 }
 
 
@@ -12975,7 +13117,7 @@ button.n-keychip:hover {
   padding: 3px 9px;
   border-radius: 6px;
   background: var(--n-accent);
-  color: #161826;
+  color: var(--n-accent-ink);
 }
 
 .n-idbox {
@@ -12994,12 +13136,45 @@ button.n-keychip:hover {
 .n-idbox.listen {
   padding: 10px 12px;
   border-radius: 9px;
-  box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.45);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-accent) 45%, transparent);
   color: var(--n-text);
 }
 
+/* The ANSWER state, wired 2026-08-26. It was designed with the listening
+   state and then never written by anything — `applyNocturneUi` only ever
+   emitted `n-idbox listen` / `n-idbox none`, so identify's outcome existed
+   only as one fixed sentence in the flash bar at the top of the page, and the
+   box under the button (where the user is actually looking) just vanished.
+   It carries the same padded shell as `.listen` so the box does not change
+   SHAPE at the moment it changes meaning — only its colour settles and its
+   pulsing dot goes away. */
 .n-idbox.done {
+  padding: 10px 12px;
+  border-radius: 9px;
+  box-shadow: inset 0 0 0 1px var(--n-accent-line);
   color: var(--n-accent-2);
+}
+
+/* "Identified" — a STATIC label authored in the island tree, so it is in the
+   SSR bytes and the hydrated tree alike, and shown only in the answer state.
+   Without it the box would read as a bare device name with no claim attached;
+   the name alone does not say what happened to it. */
+.n-idlabel {
+  display: none;
+}
+
+.n-idbox.done .n-idlabel {
+  display: inline;
+  flex: none;
+  color: var(--n-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 9.5px;
+  line-height: 1.6;
+}
+
+.n-idbox.done .n-idtxt {
+  font-weight: 600;
 }
 
 .n-idot {
@@ -13054,6 +13229,19 @@ button.n-keychip:hover {
   display: flex;
 }
 
+/* The chosen row is where the page already IS, not somewhere to go.
+   It keeps its submit — the no-JS contract needs every verb to survive a plain
+   POST, and a crafted or cached one has to land on the same server guard
+   anyway — but it stops advertising itself as a live target. Until 2026-08-26
+   the only thing separating it from the other rows was the background above:
+   it looked exactly as pressable as they did, and pressing it re-staged the
+   board and silently threw away a WinUSB preparation. The server now makes
+   that press a no-op that keeps the preparation; this is the half that stops
+   inviting it. */
+.n-devform button.n-dev.on {
+  cursor: default;
+}
+
 .n-encoder-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -13076,37 +13264,13 @@ button.n-keychip:hover {
   color: var(--n-accent-2);
 }
 
-.n-encoder-form .n-encoder-setup {
-  width: auto;
-  min-width: 62px;
-  padding: 0 10px;
-  border-color: color-mix(in srgb, var(--n-accent-line) 74%, var(--n-line));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--n-accent-dim) 52%, var(--n-panel));
-  color: var(--n-accent-2);
-  font-size: 10.5px;
-  font-weight: 760;
-  text-align: center;
-}
-
-.n-encoder-form .n-encoder-setup:hover,
-.n-encoder-form .n-encoder-setup:focus-visible {
-  border-color: var(--n-accent-line);
-  background: var(--n-accent-dim);
-  color: var(--n-text);
-}
-
-.n-encoder-accessible-name {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
-}
+/* `.n-encoder-form .n-encoder-setup` and its `.n-encoder-accessible-name`
+   screen-reader label were removed here 2026-08-26 with the "Open outputs"
+   button they painted — see NocturneIsland.ts, where that button's row used
+   to be. They were what made a dead control look alive: an accent border, an
+   accent-dim fill and a hover/focus lift, on a click the delegated dispatcher
+   had no branch for. They come back with the button, when a chart read verb
+   comes back from PacBench. */
 
 /* The row internals are spans (a button cannot contain divs); restore the
    block layout the div version had. */
@@ -13142,7 +13306,7 @@ button.n-keychip:hover {
 }
 
 .n-flash.err {
-  color: #e79aa6;
+  color: var(--n-danger);
 }
 
 .n-flash.none {
@@ -13214,7 +13378,7 @@ button.n-keychip:hover {
   justify-content: flex-start;
   padding: 2px;
   border-radius: 11px;
-  background: #292b31;
+  background: var(--n-line);
   box-shadow: inset 0 0 0 1px var(--n-line-2);
 }
 
@@ -13225,7 +13389,7 @@ button.n-keychip:hover {
 }
 
 .n-capsw.on .nx-knob {
-  background: #161826;
+  background: var(--n-bg);
 }
 
 .n-capline {
@@ -13270,7 +13434,7 @@ button.n-keychip:hover {
   align-items: flex-start;
   gap: 8px;
   font-size: 11.5px;
-  color: #cfd3e5;
+  color: color-mix(in srgb, var(--n-text) 72%, var(--n-text-2));
   text-wrap: pretty;
   cursor: pointer;
 }
@@ -13354,7 +13518,7 @@ button.n-keychip:hover {
 
 .n-keychip.ghost {
   background: transparent;
-  box-shadow: inset 0 0 0 1px #3f424d;
+  box-shadow: inset 0 0 0 1px var(--n-line-2);
   color: var(--n-text-3);
 }
 
@@ -13374,7 +13538,7 @@ button.n-keychip:hover {
   border: 1px solid var(--n-line);
   border-radius: 12px;
   padding: 8px 10px 4px;
-  background: rgba(22, 24, 38, 0.4);
+  background: color-mix(in srgb, var(--n-bg) 40%, transparent);
 }
 
 .n-mini-head {
@@ -13442,10 +13606,10 @@ button.n-keychip:hover {
 .n-controller-variant[aria-pressed="true"]::before {
   width: 18px;
   height: 4px;
-  border-color: var(--n-text-1);
+  border-color: var(--n-text);
   box-shadow:
-    0 0 0 1px rgba(150, 138, 224, 0.68),
-    0 0 7px rgba(150, 138, 224, 0.5);
+    0 0 0 1px color-mix(in srgb, var(--n-accent) 68%, transparent),
+    0 0 7px color-mix(in srgb, var(--n-accent) 50%, transparent);
 }
 
 .n-ds4-variant:focus-visible,
@@ -15382,7 +15546,7 @@ button.n-keychip:hover {
 
 .n-minus:hover {
   border-color: rgba(231, 154, 166, 0.5);
-  color: #e79aa6;
+  color: var(--n-danger);
 }
 
 /* A key driving ONE control has no pair to choose — its ✕ already says it. */
@@ -15439,7 +15603,7 @@ button.n-keychip:hover {
 
 .n-rowclear:hover {
   background: rgba(231, 154, 166, 0.15);
-  color: #e79aa6;
+  color: var(--n-danger);
 }
 
 .n-rowclear.none {
@@ -15469,7 +15633,7 @@ button.n-keychip:hover {
 }
 
 .nd-card:has(.nd-radio:checked) {
-  background: rgba(150, 138, 224, 0.12);
+  background: color-mix(in srgb, var(--n-accent) 12%, transparent);
   box-shadow: inset 0 0 0 1.5px var(--n-accent);
 }
 
@@ -15489,7 +15653,7 @@ button.n-keychip:hover {
   padding: 7px 10px;
   border: 1px solid var(--n-line-2);
   border-radius: 8px;
-  background: #1d1f2b;
+  background: color-mix(in srgb, var(--n-panel) 60%, var(--n-panel-2));
   color: var(--n-text);
   font: inherit;
   font-size: 12.5px;
@@ -15540,7 +15704,7 @@ button.n-keychip:hover {
 /* The dressed keyboard: shared = dashed (shape channel), and the tray row. */
 
 .n-key.shared::before {
-  border: 1px dashed rgba(150, 138, 224, 0.75);
+  border: 1px dashed color-mix(in srgb, var(--n-accent) 75%, transparent);
 }
 
 .n-key.tray {
@@ -15639,20 +15803,20 @@ details.n-bind {
 .n-bind[open] {
   margin: 6px 0;
   border-radius: 9px;
-  background: rgba(150, 138, 224, 0.05);
+  background: color-mix(in srgb, var(--n-accent) 5%, transparent);
   box-shadow: inset 0 0 0 1px var(--n-line);
 }
 
 .n-bind.arm .n-bind-sum {
-  background: rgba(150, 138, 224, 0.14);
-  box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.45);
+  background: color-mix(in srgb, var(--n-accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-accent) 45%, transparent);
 }
 
 /* Armed while OPEN: the whole card wears the wash and ring; the summary
    stops double-painting inside it. */
 details.n-bind.arm[open] {
-  background: rgba(150, 138, 224, 0.1);
-  box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.45);
+  background: color-mix(in srgb, var(--n-accent) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-accent) 45%, transparent);
 }
 
 details.n-bind.arm[open] .n-bind-sum {
@@ -15687,8 +15851,8 @@ details.n-bind.arm[open] .n-bind-sum {
   padding: 4px 10px;
   border: none;
   border-radius: 6px;
-  background: #292b31;
-  color: #e4e7f5;
+  background: var(--n-line);
+  color: var(--n-text);
   font-size: 11.5px;
   cursor: pointer;
 }
@@ -15707,15 +15871,15 @@ details.n-bind.arm[open] .n-bind-sum {
   border: none;
   border-radius: 999px;
   background: transparent;
-  box-shadow: inset 0 0 0 1px #3f424d;
+  box-shadow: inset 0 0 0 1px var(--n-line-2);
   color: var(--n-text-2);
   font-size: 11px;
   cursor: pointer;
 }
 
 .n-bpill.on {
-  background: rgba(150, 138, 224, 0.16);
-  box-shadow: inset 0 0 0 1px rgba(150, 138, 224, 0.5);
+  background: color-mix(in srgb, var(--n-accent) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-accent) 50%, transparent);
   color: var(--n-text);
 }
 
@@ -15729,7 +15893,7 @@ details.n-bind.arm[open] .n-bind-sum {
 .n-turbo-in {
   width: 44px;
   padding: 3px 6px;
-  border: 1px solid #3f424d;
+  border: 1px solid var(--n-line-2);
   border-radius: 6px;
   background: transparent;
   color: var(--n-text);
@@ -15742,19 +15906,19 @@ details.n-bind.arm[open] .n-bind-sum {
 a.n-bbtn-link {
   display: inline-block;
   text-decoration: none;
-  color: #e4e7f5;
+  color: var(--n-text);
 }
 
 .n-bbtn.ghost {
   background: transparent;
-  box-shadow: inset 0 0 0 1px #3f424d;
+  box-shadow: inset 0 0 0 1px var(--n-line-2);
   color: var(--n-text-2);
 }
 
 .n-bbtn.danger {
-  background: rgba(231, 154, 166, 0.14);
+  background: color-mix(in srgb, var(--n-danger) 14%, transparent);
   box-shadow: inset 0 0 0 1px #6b3a44;
-  color: #e79aa6;
+  color: var(--n-danger);
 }
 
 .n-bdel {
@@ -15796,7 +15960,7 @@ a.n-bbtn-link {
   border-radius: 9px;
   background: rgba(26, 24, 44, 0.96);
   box-shadow:
-    inset 0 0 0 1px rgba(150, 138, 224, 0.45),
+    inset 0 0 0 1px color-mix(in srgb, var(--n-accent) 45%, transparent),
     0 14px 30px rgba(0, 0, 0, 0.5);
 }
 
@@ -15879,7 +16043,7 @@ a.nm-link {
 }
 
 .nm-item.danger {
-  color: #e79aa6;
+  color: var(--n-danger);
 }
 
 .nm-cfg-txt > span {
@@ -15936,7 +16100,7 @@ a.nm-link {
   );
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.3),
-    0 0 14px rgba(150, 138, 224, 0.45);
+    0 0 14px color-mix(in srgb, var(--n-accent) 45%, transparent);
 }
 
 .n-key.live .n-key-cap,
@@ -16376,7 +16540,7 @@ a.nm-link {
 }
 
 .n-keylab-button.quiet {
-  background: rgba(22, 24, 38, 0.35);
+  background: color-mix(in srgb, var(--n-bg) 35%, transparent);
 }
 
 .n-keylab-button:disabled,
@@ -16670,7 +16834,7 @@ a.nm-link {
   );
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.3),
-    0 0 14px rgba(150, 138, 224, 0.45);
+    0 0 14px color-mix(in srgb, var(--n-accent) 45%, transparent);
 }
 
 .n-deck-key.live .n-key-cap,
@@ -16686,7 +16850,7 @@ a.nm-link {
 }
 
 .n-deck-key.shared::before {
-  border: 1px dashed rgba(150, 138, 224, 0.75);
+  border: 1px dashed color-mix(in srgb, var(--n-accent) 75%, transparent);
 }
 
 .n-deck-key[data-player-slot="1"] {
@@ -17133,7 +17297,7 @@ a.nm-link {
 .n-surface-stage[aria-pressed="true"] > span {
   border-color: var(--n-accent-line);
   background: var(--n-accent);
-  color: #11131d;
+  color: var(--n-accent-ink);
 }
 
 .n-surface-status,
@@ -17159,7 +17323,7 @@ a.nm-link {
   border: 1px solid color-mix(in srgb, var(--n-accent-line) 56%, var(--n-line));
   border-radius: 13px;
   background:
-    radial-gradient(circle at 16% 0, rgba(150, 138, 224, 0.11), transparent 38%),
+    radial-gradient(circle at 16% 0, color-mix(in srgb, var(--n-accent) 11%, transparent), transparent 38%),
     rgba(10, 12, 20, 0.5);
 }
 
@@ -17604,7 +17768,7 @@ a.nm-link {
   padding: 2px 4px;
   border: 1px solid var(--n-accent-line);
   border-radius: 4px;
-  background: #11131d;
+  background: var(--n-bg);
   color: var(--n-accent-2);
   font: 800 8px/1 ui-monospace, Menlo, Consolas, monospace;
   letter-spacing: 0.07em;
@@ -17909,18 +18073,9 @@ a.nm-link {
    host signals KSX can observe and deliberately avoids claiming an NKRO
    limit the selected transport cannot expose. */
 .n-input-test-dialog {
-  --n-panel-2: #232532;
-  --n-line: #2b2d3a;
-  --n-line-2: #3f424d;
-  --n-text: #e9e9ed;
-  --n-text-2: #9397ab;
-  --n-text-3: #75798c;
-  --n-accent: #968ae0;
-  --n-accent-2: #b6aff4;
-  --n-accent-dim: rgb(150 138 224 / 20%);
-  --n-accent-line: rgb(150 138 224 / 48%);
-  --n-warn: #e4bb79;
-
+  /* Palette: inherited from the :root tokens (semantic.json
+     "nocturne-frame" + theme overlays). This dialog mounts on <body> —
+     which is exactly why those tokens live on :root and never here. */
   width: min(720px, calc(100vw - 32px));
   max-width: none;
   max-height: calc(100vh - 32px);
@@ -17928,10 +18083,10 @@ a.nm-link {
   overflow: auto;
   border: 1px solid var(--n-accent-line);
   border-radius: 15px;
-  background: #161826;
+  background: var(--n-bg);
   color: var(--n-text);
   box-shadow: 0 28px 90px rgb(0 0 0 / 72%);
-  font-family: Inter, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font-family: var(--n-font);
 }
 
 .n-input-test-dialog::backdrop {
@@ -18150,31 +18305,12 @@ a.nm-link {
   border-color: var(--n-accent-line);
 }
 
-@media (prefers-reduced-motion: reduce) {}
-
 @media (width <= 900px) {
   .n-ipac-signal-roster {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .n-ipac-signal-player.shared > .n-kbrow {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .n-surface-hardware-status {
-    grid-template-columns: 1fr;
-  }
-
-  .n-surface-hardware-mode,
-  .n-surface-hardware-summary,
-  .n-surface-hardware-capabilities,
-  .n-surface-hardware-recommendation,
-  .n-surface-hardware-note {
-    grid-column: 1;
-    justify-self: stretch;
-  }
-
-  .n-surface-hardware-capabilities {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -18206,15 +18342,11 @@ a.nm-link {
   }
 }
 
-@media (width <= 620px) {}
-
 @media (pointer: coarse) {
   .n-widget-kb[data-input-kind="panel-encoder"] .n-ipac-signal.n-key {
     min-height: 42px;
   }
 
-  .n-surface-hardware-refresh,
-  .n-surface-hardware-actions .n-keylab-button,
   .n-surface-programming .n-keylab-button,
   .n-surface-stage,
   .n-surface-tools .n-keylab-button,
@@ -18225,4 +18357,245 @@ a.nm-link {
   .n-surface-starters > .n-keylab-button {
     min-height: 40px;
   }
+}
+
+/* ── The setup spine ───────────────────────────────────────────────────────
+   A rail of steps at the top of the left pane. `describe` is present only for
+   an arcade panel, so the list is 4 stops for a keyboard and 5 for a panel —
+   the rail never renders a step the device does not need. */
+.n-journey {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--n-line);
+}
+
+.n-journey-line {
+  margin: 0 0 6px;
+  color: var(--n-text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.n-jstep {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+}
+
+.n-jbadge {
+  min-width: 46px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--n-line);
+  color: var(--n-text-3);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.n-jtxt {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.n-jtitle {
+  color: var(--n-text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* The full sentence stays in the DOM for assistive technology and for the
+   title tooltip; only the CURRENT step spends vertical space on it. */
+.n-jdetail {
+  display: none;
+  color: var(--n-text-3);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.n-jstep.done .n-jbadge {
+  border-color: color-mix(in srgb, var(--n-ok) 55%, transparent);
+  color: var(--n-ok);
+}
+
+.n-jstep.done .n-jtitle {
+  color: var(--n-text-3);
+}
+
+.n-jstep.now {
+  border-color: color-mix(in srgb, var(--n-accent-line) 80%, transparent);
+  background: color-mix(in srgb, var(--n-accent) 8%, transparent);
+}
+
+/* AN OFFER IS NOT A NEXT STEP, and must not look like one.
+
+   `.needed` shared every one of `.now`'s rules — accent border, accent
+   wash, accent badge — so a step the user was free to ignore was painted
+   exactly as loudly as the one thing they actually had to do. That is the
+   same mistake in CSS that `NocturneJourneyState::Needed` was making in
+   Rust: a display choice reading as a requirement.
+
+   So: no wash, a dashed edge that says "aside", and the detail still shown
+   because an offer nobody can read the point of is not an offer. */
+.n-jstep.offered {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--n-line) 90%, transparent);
+  background: none;
+}
+
+.n-jstep.now .n-jbadge {
+  border-color: var(--n-accent-line);
+  color: var(--n-accent);
+}
+
+.n-jstep.offered .n-jbadge {
+  border-style: dashed;
+  color: var(--n-text-3);
+}
+
+.n-jstep.now .n-jtitle {
+  color: var(--n-text);
+}
+
+.n-jstep.offered .n-jtitle {
+  color: var(--n-text-2);
+}
+
+.n-jstep.now .n-jdetail,
+.n-jstep.offered .n-jdetail {
+  display: block;
+}
+
+.n-jstep.later .n-jtitle,
+.n-jstep.later .n-jbadge {
+  opacity: 0.55;
+}
+
+/* ── THE ENCODER READ ──────────────────────────────────────────────────────
+   The surface for `POST /api/panel/chart`. Written fresh with the verb, not
+   recovered: the removed furniture's base rules went with `3901990` and two
+   thirds of what they styled was write affordances this build cannot honour. */
+.n-encoder-read {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--n-line);
+  border-radius: 10px;
+  background: var(--n-panel-2);
+}
+
+.n-encoder-read-head {
+  display: grid;
+  gap: 4px;
+}
+
+/* The causal chain, lifted verbatim from the removed surface: a press travels
+   control -> terminal -> host signal -> ksx -> virtual control -> game, and a
+   chart read only ever answers the second hop. */
+.n-panel-signal-journey {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.n-panel-signal-journey li {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 6px;
+  align-items: baseline;
+  min-width: 120px;
+  padding: 6px 8px;
+  border: 1px solid var(--n-line);
+  border-radius: 8px;
+  background: var(--n-panel);
+}
+
+.n-panel-signal-journey li > span:first-child {
+  flex: none;
+  color: var(--n-text-3);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.n-panel-signal-journey strong {
+  display: block;
+  color: var(--n-text-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.n-panel-signal-journey small {
+  display: block;
+  color: var(--n-text-3);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.n-encoder-read-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin: 0;
+  color: var(--n-text-3);
+  font-size: 11px;
+}
+
+.n-encoder-read-facts dt {
+  color: var(--n-text-3);
+}
+
+.n-encoder-read-facts dd {
+  margin: 0;
+  color: var(--n-text-2);
+  font-family: var(--n-mono, ui-monospace, monospace);
+}
+
+.n-encoder-read-status {
+  margin: 0;
+  color: var(--n-text-2);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.n-encoder-read-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.n-encoder-read-table th,
+.n-encoder-read-table td {
+  padding: 3px 8px 3px 0;
+  text-align: left;
+  border-bottom: 1px solid var(--n-line);
+}
+
+.n-encoder-read-table th {
+  color: var(--n-text-3);
+  font-weight: 600;
+}
+
+.n-encoder-read-table td {
+  color: var(--n-text-2);
+  font-family: var(--n-mono, ui-monospace, monospace);
+}
+
+/* A byte ksx cannot name. NOT an error — the board is doing something, and an
+   onboard macro is byte-identical to an unassigned terminal, so this is the one
+   row a read genuinely cannot resolve and a press can. */
+.n-encoder-read-table tr[data-unknown-byte] td {
+  color: var(--n-warn, var(--n-text));
 }

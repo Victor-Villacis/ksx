@@ -328,30 +328,127 @@ impl EmbeddedPage {
     }
 }
 
+/// A page that notices when the asset build has moved underneath it.
+///
+/// **The bug this exists to remove.** `EmbeddedPage::load` resolves the
+/// manifest to a SPECIFIC hashed filename — `nocturne.8734f6b3.js` — and the
+/// four pages were loaded once into `AppState` and held for the life of the
+/// process. In a debug build `rust_embed` reads asset BYTES from disk per
+/// request, so the files stay live; the NAMES did not. Rebuilding assets under
+/// a running Studio therefore left the page emitting URLs that no longer
+/// existed, and `/nocturne` served a document whose script and stylesheet both
+/// 404'd — with nothing in any log to say why. It cost a real debugging
+/// session, and the documented workaround was "restart the lane", which is a
+/// note telling you to live with it rather than a fix.
+///
+/// So: in a debug build every render re-reads `manifest.json` (already a disk
+/// read there, already cheap) and reloads only when its bytes actually change.
+/// The expensive half — `IrModule::parse` over ~500 KB for `/nocturne` — is
+/// paid ONLY on a real rebuild, never per request.
+///
+/// In release this compiles to a clone of an `Arc`. `manifest.json` is baked
+/// into the binary and cannot change while the process runs, so there is
+/// nothing to check and nothing to pay for.
+pub(crate) struct LivePage {
+    route: &'static str,
+    /// `(fingerprint of manifest.json, the page built from it)`.
+    held: std::sync::RwLock<(u64, std::sync::Arc<EmbeddedPage>)>,
+}
+
+impl LivePage {
+    pub(crate) fn load(route: &'static str) -> Result<Self, StudioError> {
+        let page = EmbeddedPage::load(route)?;
+        Ok(Self {
+            route,
+            held: std::sync::RwLock::new((manifest_fingerprint(), std::sync::Arc::new(page))),
+        })
+    }
+
+    /// The page to render THIS request with.
+    #[cfg(not(debug_assertions))]
+    pub(crate) fn get(&self) -> std::sync::Arc<EmbeddedPage> {
+        std::sync::Arc::clone(&self.held.read().expect("live page lock").1)
+    }
+
+    /// The page to render THIS request with, reloading first if the asset
+    /// build has run since the last one.
+    ///
+    /// A reload FAILURE keeps serving the page we already have. A half-written
+    /// `manifest.json` — which the asset build produces for a moment every
+    /// time, since `build.mjs` clears the directory before it emits — must not
+    /// take the lane down; the next request picks up the finished build.
+    #[cfg(debug_assertions)]
+    pub(crate) fn get(&self) -> std::sync::Arc<EmbeddedPage> {
+        let now = manifest_fingerprint();
+        {
+            let held = self.held.read().expect("live page lock");
+            if held.0 == now {
+                return std::sync::Arc::clone(&held.1);
+            }
+        }
+        let mut held = self.held.write().expect("live page lock");
+        // Another request may have reloaded while this one waited.
+        if held.0 == now {
+            return std::sync::Arc::clone(&held.1);
+        }
+        match EmbeddedPage::load(self.route) {
+            Ok(page) => {
+                let page = std::sync::Arc::new(page);
+                *held = (now, std::sync::Arc::clone(&page));
+                tracing::info!(route = self.route, "assets changed on disk; page reloaded");
+                page
+            }
+            Err(error) => {
+                tracing::warn!(
+                    route = self.route,
+                    %error,
+                    "assets changed but the new build could not be read; \
+                     serving the page already loaded"
+                );
+                std::sync::Arc::clone(&held.1)
+            }
+        }
+    }
+}
+
+/// A cheap stand-in for "has the asset build run since we last looked".
+///
+/// The manifest names every hashed file, so any rebuild that changes an asset
+/// changes these bytes. In a debug build `Assets::get` reads it from disk; in
+/// release it is the embedded copy and never moves.
+fn manifest_fingerprint() -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    match Assets::get("manifest.json") {
+        Some(file) => file.data.hash(&mut hasher),
+        // Mid-rebuild: `build.mjs` clears the directory before emitting. Hash a
+        // constant so this transient state is not mistaken for a NEW build and
+        // does not trigger a reload that would only fail.
+        None => 0u64.hash(&mut hasher),
+    }
+    hasher.finish()
+}
+
 /// The vendored controller art, served from the embed (`/_assets/...`).
 /// Gamepad-Asset-Pack by AL2009man, MIT — see `studio-ui/art/README.md`; the
 /// page footers carry the visible credit (pinned by tests on both pages).
 pub(crate) const ART_XBOX: &str = "/_assets/pad-xbox.svg";
 pub(crate) const ART_DS4: &str = "/_assets/pad-ds4.svg";
 
-/// Pick the art for a PlayStation-family persona label or id. DualSense is a
-/// live HIDMaestro persona and therefore uses Sony vocabulary and the closest
-/// bundled PlayStation diagram rather than silently falling through to Xbox.
-/// Anything outside that family renders as the cabinet's default Xbox pad.
+/// The vendored body drawing a persona is served with.
+///
+/// One line, because the decision is not made here: it is one field of the
+/// persona's row in `PAD_PRESENTATIONS` ([`crate::snapshot::pad_presentation`]),
+/// beside the family, the zone table and the legend that must agree with it.
+///
+/// This used to substring-match seven PlayStation tokens and return
+/// [`ART_XBOX`] for everything else, which is a fall-through and not a
+/// decision — a persona nobody had thought about got the Xbox pad silently,
+/// while `pad_art_family`'s own fall-through gave the SAME persona a DualShock
+/// on the SAME page. Two silent fallbacks disagreeing is the bug class the
+/// single record exists to make unrepresentable.
 pub(crate) fn art_for(persona: &str) -> &'static str {
-    let lower = persona.to_ascii_lowercase();
-    if lower.contains("playstation")
-        || lower.contains("dualsense")
-        || lower.contains("dualshock")
-        || lower.contains("ds4")
-        || lower.contains("ds5")
-        || lower.contains("ps4")
-        || lower.contains("ps5")
-    {
-        ART_DS4
-    } else {
-        ART_XBOX
-    }
+    crate::snapshot::pad_presentation(persona).art
 }
 
 /// The id of the DOMAIN PAYLOAD data block — ksx's own channel, not Forma's.
@@ -563,4 +660,162 @@ fn payload_block<T: serde::Serialize>(payload: &T) -> String {
         "<script id=\"{PAYLOAD_SCRIPT_ID}\" type=\"application/json\">{}</script>",
         payload_json(payload)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The embed ships exactly the four live routes, and every one of them
+    /// parses.**
+    ///
+    /// REPLACES 2026-08-26 three copies of `embedded_page_loads_and_ir_is_fmir_v2`
+    /// (`render_check.rs`, `render_devices.rs`, `render_pads.rs`), each of
+    /// which was `EmbeddedPage::load(route)` followed by
+    /// `assert_eq!(page.module.header.version, 2)`. That assertion was
+    /// TAUTOLOGICAL: `IrModule::parse` begins with `IrHeader::parse`, which
+    /// rejects a version mismatch outright (`IrError::UnsupportedVersion` —
+    /// see the note in `EmbeddedPage::load` above). Any module that reached
+    /// the `assert_eq!` had already passed the identical comparison, so it
+    /// could only ever agree, and the per-page "does it load" half is
+    /// re-exercised by every other test in those files.
+    ///
+    /// What is NOT tautological, and is what this pins instead: WHICH routes
+    /// the embed carries. `/`, `/map`, `/start`, `/setup`, `/profiles` and
+    /// `/workspace` were deleted in the 2026-08-25 cutover. A stale manifest
+    /// that still shipped one of their IR modules would let a route come back
+    /// from the dead with no handler behind it, and `EmbeddedPage::load`'s own
+    /// doc warns that the old `"/"` and `"/map"` examples would now panic at
+    /// every call site.
+    /// **No page links into a deleted one, and every page can reach the
+    /// product page.**
+    ///
+    /// REPLACES 2026-08-26 three byte-identical copies — `render_check.rs` and
+    /// `render_devices.rs` both had `the_nav_reaches_every_sibling_page`, and
+    /// `render_pads.rs` had `the_nav_reaches_the_other_screens`. They differed
+    /// only in which page they rendered. Both names also overclaimed: there
+    /// are no sibling pages any more, only one workflow link plus this
+    /// blocklist.
+    ///
+    /// Folding them closes a real gap rather than just saving runtime.
+    /// `/nocturne` had NO dead-link blocklist at all — the one page that
+    /// absorbed all five deleted surfaces, and therefore has by far the most
+    /// links and by far the most chances to keep pointing at one of them, was
+    /// the only page nothing checked. It is clean today; it was simply
+    /// unguarded.
+    ///
+    /// The dead set is the 2026-08-25 cutover: `/`, `/map`, `/start`,
+    /// `/setup`, `/profiles` and `/workspace` all 404 now.
+    #[test]
+    fn no_page_links_into_a_deleted_surface() {
+        const DEAD: [&str; 6] = [
+            r#"href="/""#,
+            r#"href="/start"#,
+            r#"href="/map"#,
+            r#"href="/setup"#,
+            r#"href="/profiles"#,
+            r#"href="/workspace"#,
+        ];
+
+        let pages: [(&str, String); 4] = [
+            (
+                "/nocturne",
+                crate::render_nocturne::render_nocturne(
+                    &EmbeddedPage::load("/nocturne").unwrap(),
+                    &crate::snapshot::NocturnePayload::default(),
+                    None,
+                )
+                .html,
+            ),
+            (
+                "/check",
+                crate::render_check::render_check(
+                    &EmbeddedPage::load("/check").unwrap(),
+                    &crate::snapshot::CheckPayload::default(),
+                )
+                .html,
+            ),
+            (
+                "/pads",
+                crate::render_pads::render_pads(
+                    &EmbeddedPage::load("/pads").unwrap(),
+                    &crate::snapshot::PadsPayload::default(),
+                )
+                .html,
+            ),
+            (
+                "/devices",
+                crate::render_devices::render_devices(
+                    &EmbeddedPage::load("/devices").unwrap(),
+                    &crate::snapshot::DevicesPayload::default(),
+                    None,
+                )
+                .html,
+            ),
+        ];
+
+        for (route, html) in &pages {
+            for dead in DEAD {
+                assert!(
+                    !html.contains(dead),
+                    "{route} still renders the dead link {dead} — that surface 404s"
+                );
+            }
+        }
+
+        // The three tool pages carry the rail: one link to the page that owns
+        // the workflow, and their own entry marked as current. `/nocturne` IS
+        // the workflow, so it links to itself from nothing.
+        for (route, html) in pages.iter().filter(|(r, _)| *r != "/nocturne") {
+            assert!(
+                html.contains(r#"<a class="navlink workflow-link" href="/nocturne">"#),
+                "{route} cannot reach the product page"
+            );
+            assert!(
+                html.contains(&format!(r#"<a href="{route}" aria-current="page">"#)),
+                "{route} does not mark itself as the current page"
+            );
+        }
+    }
+
+    #[test]
+    fn the_embed_ships_exactly_the_live_routes() {
+        const LIVE: [&str; 4] = ["/nocturne", "/check", "/pads", "/devices"];
+        const DELETED: [&str; 6] = ["/", "/map", "/start", "/setup", "/profiles", "/workspace"];
+
+        let raw = Assets::get("manifest.json").expect("manifest.json is embedded");
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&raw.data).expect("manifest.json parses");
+        let routes = manifest["routes"]
+            .as_object()
+            .expect("the manifest carries a route table");
+
+        let mut names: Vec<&str> = routes.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        let mut expected = LIVE.to_vec();
+        expected.sort_unstable();
+        assert_eq!(
+            names, expected,
+            "the embed's route table is not the set of live pages"
+        );
+
+        for route in DELETED {
+            assert!(
+                !routes.contains_key(route),
+                "deleted route {route:?} is back in the manifest — it 404s in the \
+                 router, so shipping IR for it is a page nobody can reach"
+            );
+        }
+
+        // Every live route's IR actually loads and parses. This is the real
+        // content of the three deleted tests, stated once.
+        for route in LIVE {
+            let page = EmbeddedPage::load(route)
+                .unwrap_or_else(|e| panic!("the embedded {route} page must load: {e:?}"));
+            assert!(
+                !page.module.slots.entries().is_empty(),
+                "{route} parsed to an IR module with no slots at all"
+            );
+        }
+    }
 }

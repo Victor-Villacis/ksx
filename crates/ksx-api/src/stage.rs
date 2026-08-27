@@ -2360,6 +2360,22 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
              still type"
         );
         assert_eq!(view.blocking, None, "§3 has not been asked yet");
+        // KEPT, after the 2026-08-26 duplication audit flagged it against
+        // `ready_is_false_for_a_dead_pad_and_for_an_unanswered_question` below
+        // and against the daemon's JSON assertion in `ksx-backend`. Both of
+        // those are stronger tests of the same STRING. This one is not about
+        // the string: it is the only place that says WHICH gate is the last one
+        // standing at this point in the walkthrough — after a device and a
+        // mapped controller, and before §3 is answered. `!view.ready` two lines
+        // up is true of half a dozen incomplete setups; this pins it to the one
+        // the next edit is about to close, so a reordering of the moments fails
+        // here rather than at the `view.ready` assertion further down, where the
+        // message would name the wrong step.
+        //
+        // Deliberately NOT rewritten to share a constant with ksx-core's
+        // refusal wording: this asserts a position in a sequence, and tying it
+        // to the sentence's wording would make it re-state a fact ksx-core
+        // already owns (stage.rs, where the literals are there on purpose).
         assert!(
             view.not_ready
                 .as_deref()

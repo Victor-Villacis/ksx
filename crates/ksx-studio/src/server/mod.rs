@@ -76,7 +76,7 @@ use crate::control::{BindOutcome, ControlSource, SessionView};
 
 use crate::error::StudioError;
 
-use crate::render::{Assets, BrandAssets, EmbeddedPage};
+use crate::render::{Assets, BrandAssets, LivePage};
 
 use crate::render_check::render_check;
 
@@ -87,10 +87,10 @@ use crate::snapshot::{CheckPayload, DevicesPayload, PadsPayload, StatusSource};
 struct AppState {
     /// The static design-proof route (see `render_nocturne.rs`): loaded like
     /// every page, rendered from defaults, backed by nothing.
-    nocturne_page: EmbeddedPage,
-    check_page: EmbeddedPage,
-    pads_page: EmbeddedPage,
-    devices_page: EmbeddedPage,
+    nocturne_page: LivePage,
+    check_page: LivePage,
+    pads_page: LivePage,
+    devices_page: LivePage,
     source: Box<dyn StatusSource>,
     control: Box<dyn ControlSource>,
     /// The MACHINE reads and writes that are not a `DaemonCommand`: the
@@ -162,6 +162,26 @@ struct MachineCache {
             Result<ksx_api::AutostartView, ksx_api::Refusal>,
         )>,
     >,
+    /// The saved panel layouts, which are what an arcade board is DRAWN from
+    /// (`board::Board::encoder_from_profile`). Cached beside the others
+    /// because it is a disk read behind a cross-process lease, and the page
+    /// wants it on every render to know which boards it may offer.
+    panels: std::sync::Mutex<
+        Option<(
+            std::time::Instant,
+            Result<ksx_api::PanelHardwareProfilesView, ksx_api::Refusal>,
+        )>,
+    >,
+    /// Boards somebody drew, from `<root>\boards`. A separate read from
+    /// `panels` because it is a separate store holding a different KIND of
+    /// thing — a picture, not a hardware layout — and the two refuse for
+    /// different reasons.
+    drawn: std::sync::Mutex<
+        Option<(
+            std::time::Instant,
+            Result<ksx_api::BoardsView, ksx_api::Refusal>,
+        )>,
+    >,
 }
 
 /// Long enough to skip most polls, short enough that an EXTERNAL change
@@ -176,6 +196,8 @@ impl MachineCache {
             setup: std::sync::Mutex::new(None),
             games: std::sync::Mutex::new(None),
             auto: std::sync::Mutex::new(None),
+            panels: std::sync::Mutex::new(None),
+            drawn: std::sync::Mutex::new(None),
         }
     }
 
@@ -184,6 +206,8 @@ impl MachineCache {
         *self.setup.lock().unwrap() = None;
         *self.games.lock().unwrap() = None;
         *self.auto.lock().unwrap() = None;
+        *self.panels.lock().unwrap() = None;
+        *self.drawn.lock().unwrap() = None;
     }
 
     fn fetch<T: Clone>(
@@ -227,6 +251,20 @@ impl MachineCache {
         machine: &dyn ksx_api::MachineSource,
     ) -> Result<ksx_api::AutostartView, ksx_api::Refusal> {
         Self::fetch(&self.auto, || machine.autostart())
+    }
+
+    fn panel_profiles(
+        &self,
+        machine: &dyn ksx_api::MachineSource,
+    ) -> Result<ksx_api::PanelHardwareProfilesView, ksx_api::Refusal> {
+        Self::fetch(&self.panels, || machine.panel_hardware_profiles())
+    }
+
+    fn drawn_boards(
+        &self,
+        machine: &dyn ksx_api::MachineSource,
+    ) -> Result<ksx_api::BoardsView, ksx_api::Refusal> {
+        Self::fetch(&self.drawn, || machine.boards())
     }
 }
 
@@ -274,10 +312,10 @@ pub fn serve(
     if !bind.ip().is_loopback() {
         return Err(StudioError::NonLoopbackBind { bind });
     }
-    let nocturne = EmbeddedPage::load("/nocturne")?;
-    let check = EmbeddedPage::load("/check")?;
-    let pads = EmbeddedPage::load("/pads")?;
-    let devices = EmbeddedPage::load("/devices")?;
+    let nocturne = LivePage::load("/nocturne")?;
+    let check = LivePage::load("/check")?;
+    let pads = LivePage::load("/pads")?;
+    let devices = LivePage::load("/devices")?;
     let state = Arc::new(AppState {
         nocturne_page: nocturne,
         check_page: check,
@@ -328,6 +366,7 @@ pub fn serve(
             )
             .route("/nocturne/blocking", post(nocturne_form_blocking))
             .route("/nocturne/theme", post(nocturne_form_theme))
+            .route("/nocturne/board", post(nocturne_form_board))
             .route("/nocturne/export.json", get(nocturne_export))
             // 8 MB, restored: this limit was a per-route layer on
             // `/setup/import` and did NOT travel with the verb when it moved
@@ -359,6 +398,7 @@ pub fn serve(
             .route("/nocturne/bind/clear-all", post(nocturne_form_clear_all))
             .route("/nocturne/key/clear", post(nocturne_form_key_clear))
             .route("/nocturne/api/bind", post(nocturne_api_bind))
+            .route("/nocturne/api/board/save", post(nocturne_api_board_save))
             .route("/nocturne/api/macro/edit", post(nocturne_api_macro_edit))
             .route("/nocturne/bind/turbo", post(nocturne_form_bind_turbo))
             .route("/nocturne/bind/toggle", post(nocturne_form_bind_toggle))
@@ -378,6 +418,14 @@ pub fn serve(
             // verb — no GUI-only code paths).
             .route("/api/learn", get(api_learn_poll))
             .route("/api/learn/start", post(api_learn_start))
+            // **The one read that DOES wear POST, deliberately.** The rule
+            // above holds for reads that only read memory. A chart read takes
+            // the machine-wide programming lease and opens the board's
+            // configuration collection exclusively — it is a hardware
+            // transaction with a real exclusion and a real cost, and it must
+            // not be reachable by a link, a prefetch, or a page load. The guard
+            // policing by method is the point here, not the problem.
+            .route("/api/panel/chart", post(nocturne_api_panel_chart))
             .route("/api/learn/cancel", post(api_learn_cancel))
             .route("/api/input-test", get(api_input_test_poll))
             .route("/api/input-test/start", post(api_input_test_start))

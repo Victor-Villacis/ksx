@@ -228,3 +228,55 @@ fn the_smoke_names_are_ones_the_provider_accepts() {
     // Unique per call, or the certificate cache is what gets exercised.
     assert_ne!(transaction_id(), id);
 }
+
+/// **And the same rules against PRODUCTION's id**, because everything above
+/// checks a fixture.
+///
+/// The whole point of this file is that a replica cannot fail the way the
+/// original does — and the test above validates the string `transaction_id()`
+/// (this file, a few lines up) produces, not the one
+/// `winusb_transaction.rs` mints. Both are private to that module, so a source
+/// read is the honest second best; a `pub(crate) fn inf_name(id)` /
+/// `cert_subject(id)` pair would let this call the real thing.
+///
+/// Breaks against `{byte:02X}`: `ksx_is_safe_inf_name` in
+/// `third_party/libwdi/src/libwdi.c` accepts a lowercase-only stem, so every
+/// real WinUSB claim on every machine would be refused at preparation while
+/// this file — and the whole workspace — stayed green.
+#[test]
+fn productions_transaction_id_obeys_the_same_rules_as_this_fixture() {
+    // Normalized like `process.rs::no_kill_primitive_exists`: a fresh Windows
+    // clone (and GitHub CI) checks this out CRLF.
+    let source = include_str!("../src/winusb_transaction.rs").replace("\r\n", "\n");
+
+    let minted = source
+        .split("fn transaction_id()")
+        .nth(1)
+        .expect("winusb_transaction.rs still mints a transaction id")
+        .split("\n#[cfg(")
+        .next()
+        .expect("the minting function ends");
+    assert!(
+        minted.contains("[0u8; 16]"),
+        "16 random bytes is what makes the 32 hex digits the provider requires: {minted}"
+    );
+    assert!(
+        minted.contains("{byte:02x}"),
+        "the id must be LOWERCASE hex or the provider refuses the INF name: {minted}"
+    );
+    assert!(
+        !minted.contains("{byte:02X}"),
+        "uppercase hex is refused by ksx_is_safe_inf_name: {minted}"
+    );
+
+    // ...and both names the provider validates are spelled from that one value,
+    // which is the other half of what refused this test twice.
+    assert!(
+        source.contains(r#"format!("ksx-winusb-{transaction_id}.inf")"#),
+        "the INF name must be minted from the transaction id"
+    );
+    assert!(
+        source.contains(r#"format!("CN=KSX WinUSB {transaction_id}")"#),
+        "the certificate subject must be minted from the same transaction id"
+    );
+}

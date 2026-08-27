@@ -220,37 +220,65 @@ mod tests {
         assert_eq!(r.pads[1].hardware_id, "HID\\NOPE");
     }
 
-    /// The live collector walks `CM_Get_Child`/`CM_Get_Sibling` from the
-    /// *ViGEmBus devnode*, so the only ids that can reach the classifier are
-    /// ids whose PnP parent is the bus. Model that contract with a synthetic
-    /// (parent, child) tree: a REAL DualShock — same VID/PID as the ghost
-    /// persona — hangs off a USB root hub and must never appear in the report.
+    /// **The containment this module's header claims.** A REAL DualShock or
+    /// Xbox pad plugged into the cabinet carries the very same VID/PID as the
+    /// ghost persona, so the only thing keeping it out of `ksx doctor`'s
+    /// ghost-pad count is that classification is reachable *solely* from the
+    /// bus devnode's own children.
+    ///
+    /// That containment lives in the collector, not here, so read the
+    /// collector. The previous version of this test built a synthetic (parent,
+    /// child) tree and then filtered it **in the test** before handing the
+    /// result to `from_bus_children`: it asserted a property of its own input,
+    /// and passed for any collector at all — including one that enumerated the
+    /// pad class system-wide and reported a player's real controller as a
+    /// ghost to be removed.
     #[test]
-    fn a_real_pad_under_a_usb_hub_never_reaches_the_classifier() {
-        const BUS: &str = "ROOT\\SYSTEM\\0002";
-        let tree = [
-            // A real DS4 on a physical port: parent is a hub, not the bus.
-            (
-                "USB\\ROOT_HUB30\\5&AAAA&0&0",
-                "USB\\VID_054C&PID_05C4\\9&REAL&0&1",
-            ),
-            // A real Xbox pad, likewise.
-            (
-                "USB\\ROOT_HUB30\\5&AAAA&0&0",
-                "USB\\VID_045E&PID_028E\\9&REAL&0&2",
-            ),
-            // The ghost: a child of the ViGEmBus devnode.
-            (BUS, GHOST_X360),
-        ];
-        let children: Vec<&str> = tree
-            .iter()
-            .filter(|(parent, _)| *parent == BUS)
-            .map(|(_, child)| *child)
-            .collect();
-        let r = VirtualPadReport::from_bus_children(Some(BUS.into()), children, Vec::new());
-        assert_eq!(r.count, 1);
-        assert!(r.pads.iter().all(|p| !p.instance_id.contains("REAL")));
-        assert_eq!(r.pads[0].persona_guess, PersonaGuess::Xbox360);
+    fn the_collector_can_only_classify_children_of_the_bus_devnode() {
+        // Normalized like `process.rs::no_kill_primitive_exists`: a fresh
+        // Windows clone (and GitHub CI) checks this out CRLF.
+        let source = include_str!("win/mod.rs").replace("\r\n", "\n");
+        let collector = source
+            .split("fn virtual_pads()")
+            .nth(1)
+            .expect("win/mod.rs still collects the bus's child pads")
+            .split("\nfn ")
+            .next()
+            .unwrap();
+
+        // The bus is found by SERVICE name — the identity `bus_driver` reports
+        // on — and the children are that devnode's own child list. Both halves
+        // are load-bearing: a class-wide or VID/PID-wide enumeration would
+        // reach the classifier with ids that are not ViGEm's.
+        assert!(
+            collector.contains("vigem_pads::bus_instance_ids(VIGEMBUS_SERVICE)"),
+            "the bus must be located by service name: {collector}"
+        );
+        // The argument is deliberately not pinned — renaming the local binding
+        // is not a defect. Where the ids come FROM is.
+        assert!(
+            collector.contains("vigem_pads::child_instance_ids("),
+            "children must come from the bus devnode's child list: {collector}"
+        );
+        // Nothing here may look a pad up by what it pretends to be.
+        for forbidden in [
+            ["VID", "_045E"].concat(),
+            ["VID", "_054C"].concat(),
+            ["Setup", "DiGetClassDevs"].concat(),
+            ["classify", "("].concat(),
+        ] {
+            assert!(
+                !collector.contains(&forbidden),
+                "the collector may not select pads by identity ({forbidden}): {collector}"
+            );
+        }
+        // And there is still exactly one way in, so the fence above is the
+        // only fence there is to keep.
+        assert_eq!(
+            source.matches("from_bus_children(").count(),
+            1,
+            "a second construction site would bypass the containment above"
+        );
     }
 
     #[test]

@@ -644,9 +644,14 @@ fn separators_stay_perceptible() {
 /// `--hw-xbox-b` and `--hw-xbox-x` are a **recorded exemption**, not an
 /// oversight: white on those two reds/blues is what the physical pad prints,
 /// the art is a picture of a device rather than a label, and every hit zone
-/// carries an `aria-label` naming the control and its bound keys
-/// (`render_map.rs`). Pinning them here means changing them is a decision
-/// somebody has to make on purpose.
+/// carries an `aria-label` naming the control and its bound keys. Pinning
+/// them here means changing them is a decision somebody has to make on
+/// purpose.
+///
+/// (That citation used to read `render_map.rs`. Those `aria-label`s moved to
+/// the nocturne canvas with the 2026-08-21 pivot, and `render_map.rs` now
+/// contains none at all — the accessibility claim this exemption rests on is
+/// carried by `NocturneIsland.ts`.)
 #[test]
 fn hardware_markings_are_either_legible_or_a_recorded_exemption() {
     let (dark_block, _) = split_themes(&strip_comments(CSS));
@@ -685,15 +690,29 @@ fn hardware_markings_are_either_legible_or_a_recorded_exemption() {
 
     // The exemption, pinned. If someone repaints these, this fires and they
     // have to come back to the comment above and decide again.
+    // FIXED 2026-08-26: this was `(got - expected).abs() < 0.02`, which
+    // contradicted its own message — the text said an increase "is fine", and
+    // the assertion failed on one. Repainting `--hw-xbox-b` from 4.00:1 to
+    // 5.50:1, a strict accessibility improvement, broke the build. A floor is
+    // the honest shape for an exemption: the pin is the WORST this may be.
     for (name, expected) in [("hw-xbox-b", 4.00_f64), ("hw-xbox-x", 3.94_f64)] {
         let got = ratio(t.get("hw-xbox-on"), t.get(name));
         assert!(
-            (got - expected).abs() < 0.02,
-            "--{name} is a recorded contrast exemption measured at {expected:.2}:1, \
-             but now measures {got:.2}:1. That is fine if it went UP, and a \
-             decision either way — update the exemption in \
-             ksx-studio/tests/contrast.rs and the hardware-markings note in \
-             studio-ui/tokens/semantic.json (emitted into tokens.gen.css §1)."
+            got >= expected - 0.02,
+            "--{name} is a recorded contrast exemption whose floor is \
+             {expected:.2}:1, but it now measures {got:.2}:1 — it got WORSE. \
+             Raising it is always allowed; lowering it is a decision — update \
+             the exemption in ksx-studio/tests/contrast.rs and the \
+             hardware-markings note in studio-ui/tokens/semantic.json (emitted \
+             into tokens.gen.css §1)."
+        );
+        // ...and if it improved a lot, say so, so the floor is raised on
+        // purpose rather than drifting upward unrecorded.
+        assert!(
+            got <= expected + 0.75,
+            "--{name} now measures {got:.2}:1 against a recorded floor of \
+             {expected:.2}:1. That is an improvement — raise the pin in \
+             ksx-studio/tests/contrast.rs so the new value is what is defended."
         );
     }
 }
@@ -731,44 +750,19 @@ fn placeholder_text_clears_the_text_floor() {
 /// controls" is precisely what communicates the state. They are pinned rather
 /// than skipped because §13.7 says an exemption ships with its number.
 ///
-/// There are TWO live compositions, not one. This test originally claimed
-/// there was only the first, and that claim was wrong in the way that
-/// matters — it named the harmless one and missed the whole-screen one.
+/// The live composition: `PadsIsland.ts` renders `<div class="controls off">`
+/// holding a `<select disabled>` and a `<button class="btn" disabled>` inside
+/// a `.card`. Two rules set opacity on that button — `.controls.off .btn`
+/// (0.40) and `.btn:disabled` (0.42) — and the three-class selector wins, so
+/// **0.40 is the number that renders**, not 0.42.
 ///
-/// 1. The status page's daemon-down block (`StatusIsland.ts`) renders
-///    `<div class="controls off">` holding a `<select disabled>` and a
-///    `<button class="btn" disabled>Start</button>` inside a `.card`. Two
-///    rules set opacity on that button — `.controls.off .btn` (0.40) and
-///    `.btn:disabled` (0.42) — and the three-class selector wins, so
-///    **0.40 is the number that renders**, not 0.42.
-///
-/// 2. **The whole mapper, whenever a session is running.** `render_map.rs`
-///    stamps `z-dead` on every one of the 25 pad zones and `l-dead` on
-///    every one of the 25 legend rows, and `.zone.z-dead, .lrow.l-dead`
-///    sets `opacity: 0.4`. So the controller art AND the bindings legend —
-///    the entire content of the screen — render at 0.40 in the read-only
-///    state. Measured in a real browser (Playwright, 1600px, dark): a bound
-///    key `.lkc.lk1` composites to **2.55:1**, a key chip on the art
-///    `.ztag` to **2.39:1**, a control label `.lid.id-txt` to **1.79:1**.
-///
-/// Case 2 is pinned here so the number is on record, but it deserves a
-/// decision rather than a pin. The 1.4.3 exemption is written for an
-/// *inactive component* — a Start button you cannot press. The bindings
-/// legend is not a component the user operates, it is REFERENCE TEXT they
-/// read, and "which key is B?" is a question worth asking precisely while a
-/// session is running. Two loud banners already say the screen is read-only
-/// (`.alarm` + `.warnbox`, both at full strength), so the dimming is the
-/// third telling — and it is the one that costs the screen its content.
-/// Dimming only the interactive affordance (`.zone`) and leaving the legend
-/// at full strength would keep the affordance and the information both.
+/// (This doc used to cite `StatusIsland.ts`, deleted with `/` in the
+/// 2026-08-25 cutover. The composition itself survived the move onto `/pads`,
+/// so the pin still measures something a user can see.)
 ///
 /// CSS `opacity` composites the element's whole buffer over its parent, so
 /// the text AND the field fade together; that is why this cannot be measured
 /// as a plain token pair.
-///
-/// What must NOT be dimmed is the reason: the `<p class="warn">` in the same
-/// block is deliberately outside both selectors, and is checked at full
-/// strength by `colored_roles_clear_the_floor_as_text`.
 #[test]
 fn disabled_controls_are_a_pinned_exemption() {
     /// `.controls.off .btn` / `.controls.off select`.
@@ -816,45 +810,22 @@ fn disabled_controls_are_a_pinned_exemption() {
         );
     }
 
-    // Case 2: the read-only mapper. `.zone.z-dead, .lrow.l-dead { opacity: .4 }`
-    // over the legend's own ground. `--bg-2` is the ground the legend card
-    // actually draws on (`.legendcard`), which is why it is the one measured.
-    // Same per-theme pin discipline as above.
-    const DEAD_OPACITY: f64 = 0.40;
-    const DEAD_PINS: &[(&str, &str, f64)] = &[
-        ("dark", "accent", 2.55), // a bound key in the legend
-        ("dark", "text-3", 1.81), // a control's own label
-        ("light", "accent", 1.85),
-        ("light", "text-3", 1.70),
-        ("matrix", "accent", 2.72), // measured 2026-08-20, TK3
-        ("matrix", "text-3", 2.07),
-    ];
-    for t in themes() {
-        for role in ["accent", "text-3"] {
-            let expected = DEAD_PINS
-                .iter()
-                .find(|(n, r, _)| *n == t.name && *r == role)
-                .map(|(_, _, v)| *v)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "theme '{}' has no recorded read-only-mapper pin for --{role} — \
-                         measure it, decide it, and add the row to DEAD_PINS",
-                        t.name
-                    )
-                });
-            let ground = t.get("bg-2");
-            let got = ratio(faded(t.get(role), DEAD_OPACITY, ground), ground);
-            assert!(
-                (got - expected).abs() < 0.05,
-                "{}: --{role} in the READ-ONLY MAPPER measures {got:.2}:1 against \
-                 its own ground, pinned at {expected:.2}:1. This is the whole mapper — every \
-                 pad zone and every legend row carries z-dead/l-dead while a session runs. \
-                 It is pinned, not blessed: see this test's docs before changing the opacity \
-                 or the token, and update DESIGN-SYSTEM §3.5 with whatever is decided.",
-                t.name
-            );
-        }
-    }
+    // DELETED 2026-08-26: Case 2, "the read-only mapper" (STALE), and the
+    // DEAD_PINS table with it. It pinned six contrast ratios for
+    // `.zone.z-dead` / `.lrow.l-dead` over `.legendcard`. Those three classes
+    // exist ONLY in studio.css — no `.ts`, `.rs`, compiled `.js` or compiled
+    // `.ir` in this tree emits any of them. They were `/map`'s read-only
+    // mapper, and `/map` was deleted in the 2026-08-25 cutover.
+    // `tests/http.rs::a_dead_daemon_is_loud_on_the_product_page` records the
+    // same finding from the other side: "`z-dead`, `l-dead` ... are that
+    // page's DOM vocabulary — `/nocturne` has panes, `n-flash` and `n-dev`".
+    //
+    // The DESIGN QUESTION it raised outlives the pin, so it is kept here:
+    // dimming REFERENCE TEXT (a bindings legend the user reads) is not the
+    // same exemption as dimming an INACTIVE COMPONENT (a Start button they
+    // cannot press), and WCAG 1.4.3 grants only the latter. If a read-only
+    // state returns to /nocturne as PacBench's verbs come back, dim the
+    // affordance and leave the information at full strength.
 }
 
 /// The anti-flash `<style>` used to be a hand copy of `--bg`/`--text` in two

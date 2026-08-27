@@ -29,10 +29,29 @@ use crate::snapshot::NocturnePayload;
 
 pub(super) const N_DEVICE_OK: &str = "Keyboard selected. Nothing has been saved or started.";
 
+/// The answer to choosing the board that is already chosen. **Not a refusal**
+/// — nothing went wrong and nothing needs a remedy; the page is in the state
+/// the press asked for. It says "still" rather than "already" because the
+/// second half is the part that matters: `choose_device_preserving_
+/// preparation` skipped the write precisely so a WinUSB preparation would
+/// survive the press, and a sentence that only said "already selected" would
+/// leave the user unable to tell that from a write that happened to be
+/// idempotent.
+pub(super) const N_DEVICE_ALREADY_OK: &str =
+    "That keyboard is still the selected one. Nothing changed — any preparation it \
+     already has was kept.";
+
 pub(super) const N_BLOCKING_OK: &str =
     "Capture behaviour updated. Nothing has been saved or started.";
 
 pub(super) const N_THEME_OK: &str = "Studio theme updated.";
+pub(super) const N_BOARD_OK: &str = "Board updated.";
+/// Shown when the board store itself refuses — the folder is unreadable, a
+/// saved board is corrupt, or another writer holds it. Authored here because
+/// the store's own text for those carries an absolute path and raw io/serde
+/// detail, and this string is announced through an aria-live region.
+pub(super) const N_BOARD_STORE_ERROR: &str =
+    "The board could not be published — ksx could not use its boards folder.";
 
 pub(super) const N_EDIT_OK: &str = "Draft updated. Nothing has been saved or started.";
 
@@ -76,6 +95,8 @@ pub(super) const N_LAYOUT_DELETE_ERROR: &str = "error: Controller layout could n
 
 pub(super) const N_THEME_UNKNOWN: &str = "error: That is not a theme this build ships. Pick one \
      from the list in this menu; nothing was changed.";
+pub(super) const N_BOARD_UNKNOWN: &str = "error: That is not a board this build can draw. Pick \
+     one from the list; nothing was changed.";
 
 /// Tick-box refusals for the two destructive configuration verbs. Server-side,
 /// because a browser dialog is an interaction nicety and not a boundary.
@@ -338,7 +359,7 @@ pub(super) const N_PLAY_OUTPUT_UNKNOWN: &str = "error: Play cannot start — ksx
      the controller outputs this setup needs, and it will not plug a pad it cannot vouch for. \
      The setup is still ready to save; reopen ksx and try again. Nothing was started.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 91] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 94] = [
     // Save and Play's own refusals. They are composed from a stable daemon
     // CODE rather than from the daemon's sentence, precisely so they can sit
     // on this list — a refusal that only exists at runtime cannot be
@@ -367,6 +388,7 @@ pub(super) const N_FLASH_ALLOWLIST: [&str; 91] = [
     N_LAYOUT_RENAME_OK,
     N_LAYOUT_DELETE_OK,
     N_THEME_OK,
+    N_BOARD_OK,
     N_GAME_ADD_ERROR,
     N_GAME_UPDATE_ERROR,
     N_GAME_DELETE_ERROR,
@@ -375,6 +397,7 @@ pub(super) const N_FLASH_ALLOWLIST: [&str; 91] = [
     N_GAME_DELETE_UNCONFIRMED,
     N_LAYOUT_DELETE_UNCONFIRMED,
     N_THEME_UNKNOWN,
+    N_BOARD_UNKNOWN,
     N_IMPORT_UNREADABLE,
     N_IMPORT_EMPTY,
     N_MOVE_AT_END,
@@ -409,6 +432,7 @@ pub(super) const N_FLASH_ALLOWLIST: [&str; 91] = [
     N_TOGGLE_OK,
     N_TOGGLE_UNBOUND_ERROR,
     N_DEVICE_OK,
+    N_DEVICE_ALREADY_OK,
     N_BLOCKING_OK,
     N_EDIT_OK,
     N_ADD_LAYOUT_ERROR,
@@ -496,6 +520,15 @@ pub(super) const N_READ_GAMES_ERROR: &str =
     "Saved games could not be read. Reopen ksx and try again.";
 pub(super) const N_READ_AUTOSTART_ERROR: &str =
     "What happens at sign-in could not be read. Reopen ksx and try again.";
+/// Rendered as customer copy under the board picker, so it says what could
+/// not be read rather than carrying a store diagnostic onto the page.
+pub(super) const N_READ_PANELS_ERROR: &str =
+    "Saved panel layouts could not be read, so only the keyboard is offered here.";
+/// Rendered under the board picker when the drawn-board store refuses. Its own
+/// sentence, because it is its own store: the saved panel layouts can be
+/// perfectly readable while this one is not.
+pub(super) const N_READ_BOARDS_ERROR: &str =
+    "Boards you drew could not be read, so they are missing from this list.";
 
 /// The daemon-down banner, in the page's one status region.
 ///
@@ -559,6 +592,20 @@ pub(super) async fn collect_nocturne(
             Ok(view) => (Some(view), String::new()),
             Err(_) => (None, N_READ_AUTOSTART_ERROR.to_owned()),
         };
+        // The saved panel layouts. An arcade board is drawn from one of these
+        // and from nothing else, so a page that cannot read them must say so
+        // rather than render a picker with the arcade option quietly missing.
+        let (panels, panels_error) = match state.machine_cache.panel_profiles(&*state.machine) {
+            Ok(view) => (Some(view), String::new()),
+            Err(_) => (None, N_READ_PANELS_ERROR.to_owned()),
+        };
+        // Boards somebody drew. A separate store from the saved panel layouts
+        // above, and a separate refusal: one holds pictures, the other holds
+        // what a physical terminal emits.
+        let (drawn, drawn_error) = match state.machine_cache.drawn_boards(&*state.machine) {
+            Ok(view) => (Some(view), String::new()),
+            Err(_) => (None, N_READ_BOARDS_ERROR.to_owned()),
+        };
         // The undo chip: composed from the SERVER-held stash while its
         // window is open; an expired stash is dropped here so a late click
         // cannot find it either.
@@ -593,6 +640,10 @@ pub(super) async fn collect_nocturne(
             games_error,
             autostart_read,
             autostart_error,
+            panels,
+            panels_error,
+            drawn,
+            drawn_error,
             view: Default::default(),
         };
         offer_held_release(payload.derived())
@@ -617,6 +668,10 @@ pub(super) async fn collect_nocturne(
             games_error: N_READ_GAMES_ERROR.to_owned(),
             autostart_read: None,
             autostart_error: N_READ_AUTOSTART_ERROR.to_owned(),
+            panels: None,
+            panels_error: N_READ_PANELS_ERROR.to_owned(),
+            drawn: None,
+            drawn_error: N_READ_BOARDS_ERROR.to_owned(),
             selected: None,
             q: None,
             macro_selected: None,
@@ -723,7 +778,7 @@ pub(super) async fn nocturne_page_handler(
         .or_else(|| (!payload.staged.reachable).then(|| N_DAEMON_DOWN.to_owned()));
     let theme = page_theme(&state).await;
     let out = crate::render::with_theme(
-        render_nocturne(&state.nocturne_page, &payload, flash.as_deref()),
+        render_nocturne(&state.nocturne_page.get(), &payload, flash.as_deref()),
         theme.as_deref(),
     );
     (
@@ -812,6 +867,74 @@ pub(super) struct NocturneDeviceForm {
 
 /// POST /nocturne/device (and /start/device) — replaces any earlier choice,
 /// freely. One staged value in the daemon and nothing else.
+/// What [`choose_device_preserving_preparation`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DeviceChoice {
+    /// This board is already the staged one; nothing was written.
+    Unchanged,
+    /// The stage now holds this board.
+    Chosen,
+    /// The daemon refused the edit.
+    Refused,
+}
+
+/// Choose the input device — but never RE-choose the one already staged.
+///
+/// **The reason is a silent data loss, not tidiness.**
+/// `StageEdit::ChooseDevice` builds a whole `StagedDevice` and hands it to
+/// `StagedSetup::choose_device`, which REPLACES the previous one wholesale
+/// (`ksx-core/src/stage.rs`: "Replaces any earlier choice — freely, because
+/// nothing was written"). The stage is a pure value and knows nothing about
+/// drivers, so the device it builds always carries
+/// `StageCaptureBackend::Interception` (`ksx-api/src/stage.rs`). That is the
+/// right default for a board nobody has prepared, and it is destructive for
+/// one somebody has: prepare a keyboard for WinUSB through a UAC prompt, then
+/// choose that same board again, and the staged backend silently drops back to
+/// `interception` while Windows still holds it on the built-in path. The two
+/// then disagree, `StartCaptureMode` reads `Held`, and both Save and Play
+/// refuse — with the way out being the held-keyboard list rather than the row
+/// that was pressed.
+///
+/// Re-choosing arrives by two ordinary doors, neither of them a mistake the
+/// user could see coming:
+///  - the device row itself. It is not disabled and carries no selected state
+///    beyond a class, so after a Rescan or a poll it is the obvious "make sure
+///    it is still selected" gesture.
+///  - Identify by key, pressed on the board that is already staged — which is
+///    exactly what someone does to confirm they picked the right one.
+///
+/// So the guard lives here, at the one place both doors pass through, rather
+/// than in either caller. It is a READ then a compare: if the selector the
+/// caller is asking for is already the staged device's, nothing is written and
+/// the preparation survives. The comparison is on the SELECTOR alone —
+/// `[[device]] id` is the identity a saved config refers to; alias and label
+/// are naming, and re-choosing to rename is not a thing any surface offers.
+fn choose_device_preserving_preparation(
+    state: &AppState,
+    selector: String,
+    alias: String,
+    label: String,
+) -> DeviceChoice {
+    if state.control.staged().device.is_some_and(|staged| {
+        !staged.selector.trim().is_empty() && staged.selector.trim() == selector.trim()
+    }) {
+        return DeviceChoice::Unchanged;
+    }
+    if state
+        .control
+        .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+            selector,
+            alias,
+            label,
+        })
+        .ok
+    {
+        DeviceChoice::Chosen
+    } else {
+        DeviceChoice::Refused
+    }
+}
+
 pub(super) async fn nocturne_form_device(
     State(state): State<Arc<AppState>>,
     form: NocturneForm<NocturneDeviceForm>,
@@ -819,19 +942,20 @@ pub(super) async fn nocturne_form_device(
     let Ok(Form(form)) = form else {
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
-    let ok = tokio::task::spawn_blocking(move || {
-        state
-            .control
-            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
-                selector: form.selector,
-                alias: form.alias,
-                label: form.label,
-            })
-            .ok
+    let outcome = tokio::task::spawn_blocking(move || {
+        choose_device_preserving_preparation(&state, form.selector, form.alias, form.label)
     })
     .await
-    .unwrap_or(false);
-    nocturne_redirect(if ok { N_DEVICE_OK } else { N_EDIT_ERROR })
+    .unwrap_or(DeviceChoice::Refused);
+    nocturne_redirect(match outcome {
+        // Not a refusal: the user asked for a state the page is already in,
+        // and it is in it. Saying so is the honest answer, and it is the one
+        // the no-JS reader needs — with scripting off this sentence is the
+        // ONLY evidence that the press did anything at all.
+        DeviceChoice::Unchanged => N_DEVICE_ALREADY_OK,
+        DeviceChoice::Chosen => N_DEVICE_OK,
+        DeviceChoice::Refused => N_EDIT_ERROR,
+    })
 }
 
 /// POST /nocturne/device/identify (and /start/device/identify) — one
@@ -1345,6 +1469,62 @@ pub(super) async fn nocturne_form_theme(
     .await
     .unwrap_or(false);
     nocturne_redirect(if ok { N_THEME_OK } else { N_EDIT_ERROR })
+}
+
+#[derive(Deserialize)]
+pub(super) struct NocturneBoardForm {
+    board: Option<String>,
+}
+
+/// POST /nocturne/board — which picture the keys are drawn on.
+///
+/// **This can never change what a controller does.** A board is the picture;
+/// a binding carries the canonical key name and nothing else, so the same key
+/// drives the same control whichever board is on screen. That is why there is
+/// no session guard here and no confirmation: the worst outcome of a misclick
+/// is a layout you did not want to look at.
+///
+/// The empty id is stored as absence, exactly as `system` is for the theme:
+/// "decide from the staged device" is a real answer, and keeping it as absence
+/// means there is no third state to hold in step with the device list.
+///
+/// An id this build cannot draw is REFUSED here rather than written, so the
+/// config cannot be wedged with a board nothing can render. A board that is
+/// merely unavailable right now — a panel layout deleted since it was chosen —
+/// is a different case and is handled at render time by falling back to the
+/// keyboard, because refusing to draw anything would be worse than drawing the
+/// one board that always works.
+pub(super) async fn nocturne_form_board(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NocturneBoardForm>,
+) -> Response {
+    let Some(field) = form.board else {
+        return nocturne_redirect("the form did not say which board — pick one on the page");
+    };
+    let wanted = field.trim().to_owned();
+    // `panel:` is a saved encoder layout, `board:` is one somebody drew. Both
+    // are refused here if the id half is empty, so the config can never be
+    // wedged with a prefix that names nothing. A board that merely does not
+    // exist RIGHT NOW is a different case and is handled at render time by
+    // falling back to the keyboard.
+    let known = wanted.is_empty()
+        || wanted == crate::board::AUTO_ID
+        || wanted == crate::board::QWERTY_ID
+        || ["panel:", "board:"]
+            .iter()
+            .any(|prefix| wanted.strip_prefix(prefix).is_some_and(|id| !id.is_empty()));
+    if !known {
+        return nocturne_redirect(N_BOARD_UNKNOWN);
+    }
+    let ok = tokio::task::spawn_blocking(move || {
+        state
+            .machine
+            .set_board(&ksx_api::BoardSpec { board: wanted })
+            .is_ok()
+    })
+    .await
+    .unwrap_or(false);
+    nocturne_redirect(if ok { N_BOARD_OK } else { N_EDIT_ERROR })
 }
 
 /// POST /nocturne/blocking (and /start/blocking) — the capture answer,
@@ -2367,6 +2547,277 @@ pub(super) struct NocturneBindBody {
     force: bool,
 }
 
+/// What the Builder posts to publish the panel it has drawn.
+///
+/// Deliberately the store's own spec shape rather than the browser document:
+/// the Builder keeps a rich editing document in `localStorage` (stage, theme,
+/// selection, per-channel teach state) and none of that is a board. What
+/// crosses is the picture — where each control sits, what it is, and what it
+/// sends.
+#[derive(Deserialize)]
+pub(super) struct NocturneBoardSaveBody {
+    #[serde(default)]
+    board_id: Option<String>,
+    #[serde(default)]
+    expected_revision: Option<String>,
+    name: String,
+    #[serde(default)]
+    description: String,
+    bounds_w: f32,
+    bounds_h: f32,
+    controls: Vec<ksx_api::BoardControl>,
+}
+
+#[derive(Default, serde::Serialize)]
+pub(super) struct NocturneBoardSaveOutcome {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    board_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remedy: Option<String>,
+}
+
+/// POST /nocturne/api/board/save — publish the drawn panel as a board.
+///
+/// **Publishing, not saving.** The Builder goes on keeping its editing document
+/// in browser storage, because that is what an editor needs: every drag is
+/// local and instant. This is the separate, deliberate act of saying "this
+/// picture is finished enough to map on", and only then does it become durable,
+/// server-side, and visible to the board picker.
+///
+/// Every refusal is the STORE's, passed through with its own remedy. This
+/// handler decides nothing: it does not vet keys, shapes or geometry, because
+/// `boards::save` is the one door every client goes through and a second
+/// opinion here could only ever disagree with it.
+pub(super) async fn nocturne_api_board_save(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<NocturneBoardSaveBody>,
+) -> Response {
+    let cache = Arc::clone(&state);
+    let outcome = tokio::task::spawn_blocking(move || {
+        let spec = ksx_api::BoardSaveSpec {
+            board_id: body.board_id,
+            expected_revision: body.expected_revision,
+            name: body.name,
+            description: body.description,
+            bounds_w: body.bounds_w,
+            bounds_h: body.bounds_h,
+            controls: body.controls,
+        };
+        match state.machine.board_save(&spec) {
+            Ok(view) => NocturneBoardSaveOutcome {
+                ok: true,
+                board_id: Some(view.board_id),
+                revision: Some(view.revision),
+                summary: Some(view.summary),
+                ..Default::default()
+            },
+            // **Only an authored refusal reaches the page.**
+            //
+            // `boards::save` refuses two very different ways. A BAD_REQUEST
+            // is a sentence about what the user drew — "control 'x' sends
+            // 'NotAKey'" — and is exactly what they need to read. Anything
+            // else is a store diagnostic that embeds an absolute config path
+            // and raw serde/io text, and one unreadable *.ksxboard.json was
+            // enough to announce the user's whole config path through an
+            // aria-live region. The code is the discriminator, so the page
+            // never has to guess from the prose.
+            Err(refusal) if refusal.code == ksx_api::codes::BAD_REQUEST => {
+                NocturneBoardSaveOutcome {
+                    ok: false,
+                    error: Some(refusal.message),
+                    remedy: refusal.remedy,
+                    ..Default::default()
+                }
+            }
+            Err(_) => NocturneBoardSaveOutcome {
+                ok: false,
+                error: Some(N_BOARD_STORE_ERROR.to_owned()),
+                remedy: Some(
+                    "make sure ksx can read and write its boards folder, then publish again"
+                        .to_owned(),
+                ),
+                ..Default::default()
+            },
+        }
+    })
+    .await
+    .unwrap_or_else(|_| NocturneBoardSaveOutcome {
+        ok: false,
+        error: Some("The board could not be published. Nothing was changed.".to_owned()),
+        ..Default::default()
+    });
+    // The read cache holds the board list for ten seconds; a publish the user
+    // cannot see in the picker reads as a publish that did not happen.
+    cache.machine_cache.invalidate();
+    axum::Json(outcome).into_response()
+}
+
+/// Shown when a chart read refuses for any reason that is not about the user's
+/// own request. Authored here because the store and the transport refuse with
+/// text that embeds an absolute config path and raw io detail — see
+/// `nocturne_api_panel_chart`.
+pub(super) const N_PANEL_CHART_ERROR: &str =
+    "That board's chart could not be read. Nothing on the board was changed.";
+
+/// The chart route's answer when the selector matched no board, or more than
+/// one.
+///
+/// Authored here rather than forwarded: the backend's own sentence for both
+/// cases names every connected board by raw device instance path. JSON-only, so
+/// it is deliberately NOT on `N_FLASH_ALLOWLIST` — that list is consumed only
+/// when resolving `?flash=` on a 303, where an entry would be both unreachable
+/// and reflectable from a query string.
+const N_PANEL_CHART_SELECTOR: &str =
+    "ksx could not match that board. It may have been unplugged, or more than one board now \
+     matches.";
+
+const N_PANEL_CHART_SELECTOR_REMEDY: &str = "Refresh the device list and pick the board again.";
+
+/// What the page may ask for. **Deliberately not `ksx_api::PanelChartSpec`.**
+///
+/// That type carries `backup: bool`, and `facade::chart` answers `backup: true`
+/// by writing a file, verifying it, and reconciling this board's
+/// write-qualification journal. Deserializing it straight off the wire — which
+/// the neighbouring `api_input_test_start` does with its own spec — would let a
+/// field nobody typed turn a read into a durable write. `deny_unknown_fields`
+/// so a client cannot send one and be quietly ignored either.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NocturnePanelChartBody {
+    selector: String,
+}
+
+#[derive(Default, serde::Serialize)]
+pub(super) struct NocturnePanelChartOutcome {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    board_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    terminals: Option<Vec<ksx_api::PanelTerminalRow>>,
+    /// The board-level shift sentence. Composed by the backend and forwarded
+    /// whole: a page that derives it from 56 `shift_state` values is deriving
+    /// a board fact from per-row data, which is how a column comes to be
+    /// rendered as though every terminal had its own shift setting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shift: Option<ksx_api::PanelShiftSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notes: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remedy: Option<String>,
+}
+
+/// POST /api/panel/chart — read what every terminal on one board is programmed
+/// to emit.
+///
+/// **A POST that reads, and the reason is in the router's own rule.**
+/// `server/mod.rs` says reads do not wear POST because the guard polices by
+/// method. This one does anyway: it takes the machine-wide programming lease
+/// and opens the board's configuration collection exclusively, so it is a
+/// hardware transaction with a real cost and a real exclusion, and it must not
+/// be reachable by a link, a prefetch or a page load. It is not idempotent in
+/// the way a GET promises.
+///
+/// **The refusal filter is an ALLOWLIST, and that is not a stylistic choice.**
+/// `facade::chart` reaches the recovery store on every call, and several of its
+/// refusals format `path.display()` into the message — `RECOVERY_REQUIRED` in
+/// three places, and `BackupError`'s own `Display` is `"{path}: {source}"` under
+/// `REFUSED`. A denylist that suppressed only the lease refusal would announce
+/// the user's absolute config path through an aria-live region.
+///
+/// **`BAD_REQUEST` does not pass through either, and the reason is worth
+/// stating.** It reads like "a sentence about what the user asked for", and it
+/// is not: `panel::view`'s unknown-selector and multi-match refusals format
+/// `BoardGroup::board_id` — a raw `USB\VID_…\7&…` device instance path — for
+/// EVERY connected board into the message, and echo the caller's own selector
+/// beside them. A stale selector is the ordinary race this route lives in (the
+/// roster renders, the user presses, the board is gone), so that is not an
+/// exotic path: it is the common one. Both of its cases get one authored
+/// sentence, and the backend remedy is dropped rather than filtered, because a
+/// `contains('\\')` test is a denylist and would pass `(os error 5)` or a POSIX
+/// path unchanged.
+///
+/// So: `PANEL_INTERFACE_BUSY` is authored copy naming the tool to close and
+/// passes through; everything else becomes one authored sentence.
+///
+/// The response carries no `programming_state`, no `programming_detail`, no
+/// `qualification_*`, no `recommended_terminals` and no `key_options`. Those are
+/// the WRITE vocabulary — a page handed "Lossless backup, exact write, full
+/// readback, verification, and restore are available" will eventually render it,
+/// and this build cannot do any of that.
+pub(super) async fn nocturne_api_panel_chart(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<NocturnePanelChartBody>,
+) -> Response {
+    let outcome = tokio::task::spawn_blocking(move || {
+        // The browser's selector reaches `device` verbatim. I-PAC instance
+        // paths are serial-anchored, so canonicalising the string here would
+        // pick a different board than the row the user pressed.
+        let spec = ksx_api::PanelChartSpec {
+            device: Some(body.selector),
+            backup: false,
+        };
+        match state.machine.panel_chart(&spec) {
+            Ok(view) => NocturnePanelChartOutcome {
+                ok: true,
+                board_name: Some(view.board_name),
+                image_sha256: Some(view.image_sha256),
+                shift: Some(view.shift),
+                terminals: Some(view.terminals),
+                notes: Some(view.notes),
+                ..Default::default()
+            },
+            Err(refusal) if refusal.code == ksx_api::codes::PANEL_INTERFACE_BUSY => {
+                NocturnePanelChartOutcome {
+                    ok: false,
+                    error: Some(refusal.message),
+                    remedy: refusal.remedy,
+                    ..Default::default()
+                }
+            }
+            Err(refusal) if refusal.code == ksx_api::codes::BAD_REQUEST => {
+                NocturnePanelChartOutcome {
+                    ok: false,
+                    error: Some(N_PANEL_CHART_SELECTOR.to_owned()),
+                    remedy: Some(N_PANEL_CHART_SELECTOR_REMEDY.to_owned()),
+                    ..Default::default()
+                }
+            }
+            Err(_) => NocturnePanelChartOutcome {
+                ok: false,
+                error: Some(N_PANEL_CHART_ERROR.to_owned()),
+                remedy: None,
+                ..Default::default()
+            },
+        }
+    })
+    .await
+    .unwrap_or_else(|_| NocturnePanelChartOutcome {
+        ok: false,
+        error: Some(N_PANEL_CHART_ERROR.to_owned()),
+        ..Default::default()
+    });
+
+    // **Never cached.** A chart is true for the request that produced it and
+    // nothing watches the board between requests — WinIPAC can rewrite it at
+    // any moment. A re-served copy is a stale answer wearing a fresh one's
+    // clothes.
+    (
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        axum::Json(outcome),
+    )
+        .into_response()
+}
 pub(super) async fn nocturne_api_bind(
     State(state): State<Arc<AppState>>,
     axum::Json(body): axum::Json<NocturneBindBody>,
@@ -3196,15 +3647,25 @@ pub(super) async fn identify_and_stage(state: Arc<AppState>) -> StartIdentifyRes
                         Ok(identified) => identified,
                         Err(_) => return StartIdentifyResult::Failed,
                     };
-                    let outcome = state.control.stage_edit(&ksx_api::StageEdit::ChooseDevice {
-                        selector: identified.selector,
-                        alias: identified.alias,
-                        label: identified.label,
-                    });
-                    return if outcome.ok {
-                        StartIdentifyResult::Selected
-                    } else {
-                        StartIdentifyResult::Failed
+                    // Identifying the board that is ALREADY staged is not a
+                    // no-op the user is doing by accident — it is the natural
+                    // way to confirm the right keyboard is selected. Going
+                    // through the shared guard means that confirmation cannot
+                    // cost them a WinUSB preparation; see
+                    // `choose_device_preserving_preparation` for what a
+                    // re-choose destroys. Either way the ANSWER is the same:
+                    // a keyboard answered and it is the staged one, which is
+                    // precisely what `N_IDENTIFY_OK` says.
+                    return match choose_device_preserving_preparation(
+                        &state,
+                        identified.selector,
+                        identified.alias,
+                        identified.label,
+                    ) {
+                        DeviceChoice::Chosen | DeviceChoice::Unchanged => {
+                            StartIdentifyResult::Selected
+                        }
+                        DeviceChoice::Refused => StartIdentifyResult::Failed,
                     };
                 }
                 "listening" => {
@@ -3232,4 +3693,76 @@ pub(super) enum StartIdentifyResult {
     Selected,
     TimedOut,
     Failed,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The island reads the flash to tell identify's success from its two
+    /// refusals, so the sentence is a contract between the two languages.**
+    ///
+    /// The flash string is this page's outcome channel — it is what survives
+    /// the no-JS 303, and with scripting on it is the only thing `applyFlash`
+    /// is handed. Identify's answer box (`.n-idbox.done`, wired 2026-08-26)
+    /// opens on `N_IDENTIFY_OK` and on nothing else; the two `error:`
+    /// sentences collapse it, because a reddened flash IS their answer.
+    ///
+    /// Matching a served sentence by literal is the cheap way to do that and
+    /// the easy way to break it: reword `N_IDENTIFY_OK` and the box silently
+    /// stops opening, with nothing failing and no error anywhere — identify
+    /// would go back to answering only in a 32 px bar at the top of the page,
+    /// which is the complaint the box exists to answer. So the two literals
+    /// are pinned to each other here. If this fails, change BOTH.
+    #[test]
+    fn the_identify_success_sentence_is_the_one_the_island_matches() {
+        const NOCTURNE_ISLAND_TS: &str =
+            include_str!("../../../../studio-ui/src/NocturneIsland.ts");
+
+        assert!(
+            NOCTURNE_ISLAND_TS.contains(N_IDENTIFY_OK),
+            "NocturneIsland.ts no longer carries N_IDENTIFY_OK verbatim ({N_IDENTIFY_OK:?}). \
+             Its `IDENTIFY_OK_FLASH` compares against this exact string to decide whether \
+             identify answered; a reworded sentence makes that comparison quietly false and \
+             the answer box stops opening.",
+        );
+        // …and it is the one the COMPARISON uses, not merely a string that
+        // happens to appear somewhere in a 12,000-line file.
+        let at = NOCTURNE_ISLAND_TS
+            .find("const IDENTIFY_OK_FLASH")
+            .expect("NocturneIsland.ts to declare IDENTIFY_OK_FLASH");
+        let decl = &NOCTURNE_ISLAND_TS[at..(at + 400).min(NOCTURNE_ISLAND_TS.len())];
+        assert!(
+            decl.contains(N_IDENTIFY_OK),
+            "IDENTIFY_OK_FLASH is declared, but not from N_IDENTIFY_OK's words: {decl}",
+        );
+
+        // The refusals must stay refusals. `applyFlash` reddens on the
+        // `error:` prefix alone, and identify's box reads the same prefix to
+        // know it must NOT open — one dropped prefix would both paint a
+        // failure green and pop an answer box naming whatever was staged
+        // before.
+        for refusal in [N_IDENTIFY_TIMEOUT, N_IDENTIFY_ERROR] {
+            assert!(
+                refusal.starts_with("error:"),
+                "identify refusal {refusal:?} lost its prefix — it would render green and be \
+                 indistinguishable from the success the answer box opens on",
+            );
+            assert_ne!(
+                refusal, N_IDENTIFY_OK,
+                "a refusal and the success sentence cannot be the same string",
+            );
+        }
+
+        // All three still ride the no-JS path: the outcome of a verb has to
+        // render with scripting off, and only allowlisted sentences survive
+        // the 303 → `?flash=` round trip.
+        for sentence in [N_IDENTIFY_OK, N_IDENTIFY_TIMEOUT, N_IDENTIFY_ERROR] {
+            assert!(
+                N_FLASH_ALLOWLIST.contains(&sentence),
+                "{sentence:?} is not on N_FLASH_ALLOWLIST — with scripting off it would \
+                 render as the generic error instead of identify's own answer",
+            );
+        }
+    }
 }

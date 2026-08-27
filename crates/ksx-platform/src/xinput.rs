@@ -58,11 +58,17 @@ pub fn slots_in_use() -> Option<u8> {
 mod tests {
     use super::*;
 
-    /// Whatever this machine answers, it cannot answer more slots than
-    /// Windows has — and off Windows it must refuse to answer at all rather
-    /// than report an empty machine it never looked at.
+    /// A smoke, and only a smoke: the call runs, does not panic, and answers
+    /// `Some` on Windows / `None` off it.
+    ///
+    /// Read the two assertions before trusting them. `Some(used)` is a literal
+    /// in the Windows arm, and `used` increments at most once per iteration of
+    /// a loop bounded by the very constant it is compared against — so
+    /// **neither can fail for any implementation of the loop**. The `None` arm
+    /// is the only one carrying weight, and it is the arm this build never
+    /// compiles. What the count actually *means* is pinned below.
     #[test]
-    fn the_count_never_exceeds_the_ceiling_and_never_guesses() {
+    fn asking_xinput_never_panics_and_never_guesses_off_windows() {
         let answer = slots_in_use();
         if cfg!(windows) {
             let used = answer.expect("Windows can always ask XInput");
@@ -76,5 +82,51 @@ mod tests {
                 "off Windows this must be unanswerable, never 0 — 0 is a claim"
             );
         }
+    }
+
+    /// **What the number means**, which no live call on one machine can check:
+    /// a slot is counted when XInput SUCCEEDS, and the ceiling is the shared
+    /// constant.
+    ///
+    /// Invert the comparison to `!=` and a cabinet with nothing plugged in
+    /// reports all four slots occupied — the surface then says "no more pads
+    /// will be readable" about a machine it did look at and misread, which is
+    /// the mirror image of the failure this module's header exists to prevent.
+    /// The live smoke above stays green through that change on every machine,
+    /// and so does the whole workspace.
+    ///
+    /// A source fence rather than a table-driven test because the counting is
+    /// welded to the `XInputGetState` call. Extracting
+    /// `fn count_connected(results: &[u32]) -> u8` would let this be fixtures
+    /// (`[SUCCESS, NOT_CONNECTED, SUCCESS, NOT_CONNECTED] -> 2`) and would be
+    /// the better shape; until then, read the counter.
+    #[test]
+    fn a_slot_is_counted_only_where_xinput_succeeded() {
+        let source = include_str!("xinput.rs").replace("\r\n", "\n");
+        let counter = source
+            .split("pub fn slots_in_use()")
+            .nth(1)
+            .expect("xinput.rs still counts occupied slots")
+            .split("#[cfg(not(windows))]")
+            .next()
+            .unwrap();
+
+        assert!(
+            counter.contains("0..u32::from(ksx_core::MAX_XINPUT_SLOTS)"),
+            "the poll must be bounded by the shared constant, not a literal 4: {counter}"
+        );
+        assert!(
+            counter.contains("if result == ERROR_SUCCESS {"),
+            "a slot counts only where XInput answered SUCCESS: {counter}"
+        );
+        assert!(
+            !counter.contains("!= ERROR_SUCCESS"),
+            "counting the failures reports an empty machine as full: {counter}"
+        );
+        assert_eq!(
+            counter.matches("used += 1").count(),
+            1,
+            "one increment, inside the success branch: {counter}"
+        );
     }
 }

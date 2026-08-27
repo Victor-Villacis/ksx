@@ -257,6 +257,59 @@ mod tests {
     use super::*;
     use crate::host::{ControllerId, FeedbackSource, HostFeedback, Message};
 
+    /// Every `fn` declared in a span of Rust source, in declaration order.
+    ///
+    /// Line-based on purpose: it must see a function that a name blacklist
+    /// would miss, so it strips visibility rather than matching known names.
+    fn declared_fns(span: &str) -> Vec<&str> {
+        span.lines()
+            .filter_map(|line| {
+                let mut rest = line.trim_start();
+                // Strip visibility and every modifier that may precede `fn`, so
+                // a `const`/`unsafe`/`async`/`extern` function cannot slip past
+                // this guard the way a renamed one slips past a blacklist.
+                while let Some(next) = [
+                    "pub(crate) ",
+                    "pub(super) ",
+                    "pub ",
+                    "default ",
+                    "const ",
+                    "async ",
+                    "unsafe ",
+                    "extern \"C\" ",
+                    "extern ",
+                ]
+                .into_iter()
+                .find_map(|prefix| rest.strip_prefix(prefix))
+                {
+                    rest = next;
+                }
+                let rest = rest.strip_prefix("fn ")?;
+                let end = rest
+                    .find(|c: char| !c.is_alphanumeric() && c != '_')
+                    .unwrap_or(rest.len());
+                (end > 0).then(|| &rest[..end])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_fn_extractor_sees_what_a_name_blacklist_would_miss() {
+        // Companion to `source_keeps_production_and_fake_admission_separate`:
+        // if this helper silently returned an empty list, that guard's
+        // allowlist would be worthless. So prove it reads every shape.
+        let sample = "\
+pub fn a() {}
+    pub(crate) unsafe fn b() {}
+const fn c() -> u8 { 0 }
+        fn d(&self) {}
+pub async fn e() {}
+pub const MAX: usize = 4;
+// fn commented_out() {}
+";
+        assert_eq!(declared_fns(sample), ["a", "b", "c", "d", "e"]);
+    }
+
     fn feedback(sequence: u64) -> Frame {
         Frame::new(
             0,
@@ -385,6 +438,47 @@ mod tests {
                 "production transport gained an unfixed launcher/admission path: {forbidden}"
             );
         }
+
+        // The list above is a NAME BLACKLIST, and a name blacklist over a
+        // privilege boundary fails OPEN: rename the fake admission entry point
+        // and the guard passes while the property it protects is gone. So the
+        // real gate is this allowlist — the production span must declare
+        // EXACTLY these functions, so a new admission path is a failure by
+        // construction rather than a name somebody forgot to ban.
+        assert_eq!(
+            declared_fns(production),
+            [
+                "new",
+                "lock",
+                "fail",
+                "fmt",
+                // Private, and deliberately so: the one constructor both the
+                // production and the fake path funnel through AFTER their own
+                // authentication. It must never become `pub`/`pub(crate)`.
+                "from_authenticated_halves",
+                "close_with",
+                "close_and_join",
+                "connect_production",
+                "connect_production_sdk",
+                "setup_error",
+                "round_trip",
+                "try_receive",
+                "drop",
+                "reader_loop",
+                "read_frame",
+                "terminal_from_pipe",
+            ],
+            "the production span of windows.rs changed shape; if the new function \
+             admits a host, it needs the elevation checks connect_production does"
+        );
+        assert_eq!(
+            production
+                .lines()
+                .filter(|l| l.trim_start().starts_with("pub fn "))
+                .count(),
+            2,
+            "only connect_production and connect_production_sdk may be public doors"
+        );
         let create = production.find("OneUsePipeServer::create").unwrap();
         let seal = production.find("protected_hidmaestro_host()").unwrap();
         let launch = production

@@ -885,6 +885,18 @@ impl ksx_api::MachineSource for LocalMachine {
         crate::panel_programming::chart(spec)
     }
 
+    fn panel_truth(
+        &self,
+        spec: &ksx_api::PanelTruthSpec,
+    ) -> Result<ksx_api::PanelTruthView, Refusal> {
+        // `learner_reachable: true` because this build reaches the learner
+        // through the same process that answers this call. It is a parameter
+        // rather than a constant so that a caller which CANNOT reach it — a
+        // headless run, or one where the capture backend refused — can say so
+        // and stop the surface offering a press nothing would hear.
+        crate::panel_answers::truth(spec, true)
+    }
+
     #[cfg(windows)]
     fn panel_routing_guard(
         &self,
@@ -911,6 +923,24 @@ impl ksx_api::MachineSource for LocalMachine {
 
     fn panel_hardware_profiles(&self) -> Result<ksx_api::PanelHardwareProfilesView, Refusal> {
         crate::panel_profiles::profiles()
+    }
+
+    fn boards(&self) -> Result<ksx_api::BoardsView, Refusal> {
+        crate::boards::boards()
+    }
+
+    fn board_save(
+        &self,
+        spec: &ksx_api::BoardSaveSpec,
+    ) -> Result<ksx_api::BoardMutationView, Refusal> {
+        crate::boards::save(spec)
+    }
+
+    fn board_delete(
+        &self,
+        spec: &ksx_api::BoardDeleteSpec,
+    ) -> Result<ksx_api::BoardMutationView, Refusal> {
+        crate::boards::delete(spec)
     }
 
     fn panel_hardware_profile_save(
@@ -1061,6 +1091,43 @@ impl ksx_api::MachineSource for LocalMachine {
         let on_disk = store.load_config().map_err(config_refusal)?.value;
         Ok(ksx_api::ThemeView {
             theme: on_disk.settings.theme.unwrap_or_default(),
+            backup: backup.map(|path| path.display().to_string()),
+        })
+    }
+
+    fn set_board(&self, spec: &ksx_api::BoardSpec) -> Result<ksx_api::BoardView, Refusal> {
+        let wanted = spec.board.trim();
+        // Looser than the theme's css-ident rule on purpose: a board id may
+        // name a saved panel layout (`panel:<profile_id>`), and file ids are
+        // the backend's to spell. What is refused is anything that could not
+        // be an id at all — a path separator, whitespace, or a value long
+        // enough to be a payload rather than a name.
+        let ident_ok = wanted.len() <= 128
+            && wanted
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.'));
+        if !ident_ok {
+            return Err(Refusal::with_remedy(
+                ksx_api::codes::BAD_REQUEST,
+                format!("'{}' is not a board name ksx could store", spec.board),
+                "pick one of the boards on the page",
+            ));
+        }
+
+        let store = crate::device_edit::store().map_err(config_refusal)?;
+        let mut config = store.load_config().map_err(config_refusal)?.value;
+        config.settings.board = if wanted.is_empty() {
+            None
+        } else {
+            Some(wanted.to_owned())
+        };
+        let path = store.root().config_path();
+        let backup = store.backup(&path).map_err(config_refusal)?;
+        store.save_config(&config).map_err(config_refusal)?;
+
+        let on_disk = store.load_config().map_err(config_refusal)?.value;
+        Ok(ksx_api::BoardView {
+            board: on_disk.settings.board.unwrap_or_default(),
             backup: backup.map(|path| path.display().to_string()),
         })
     }
@@ -3039,12 +3106,51 @@ steps = [{ hold = ["A"], ms = 50 }]
         );
     }
 
+    /// **This test reads the machine's live process list, and only one of the
+    /// two branches exists on any given run.** `daemon_check` calls
+    /// `ksx_platform::process::snapshot()` itself, so whether a ksx daemon (or
+    /// a `ksx run` session, or another developer's `cargo run`) happens to be
+    /// alive decides which sentence is under test here. Both branches contain
+    /// the words "Session panel", which is why the assertion that used to be
+    /// the whole of this test — `detail.contains("Session panel")` — passed on
+    /// either road and told you nothing about which one you were on.
+    ///
+    /// So the wording is now bound to the ANSWER. A branch that reports
+    /// liveness with the no-daemon sentence (or the reverse) is the failure
+    /// this catches: the row would tell a user their daemon is dead while the
+    /// flag beside it says otherwise.
+    ///
+    /// The untaken branch is still unasserted, and no test in this file can fix
+    /// that: it needs `daemon_check` to take the process list as a PARAMETER
+    /// instead of reading it. That is a change to the function, not to its
+    /// test, and it would let both sentences be checked against injected lists
+    /// with no machine dependency at all.
     #[test]
     fn daemon_check_is_honest_about_its_mechanism() {
-        // Cannot assert liveness (depends on the machine), but the wording
-        // must always disclose the mechanism's limit and point at the pipe.
-        let (_, detail) = daemon_check();
+        let (alive, detail) = daemon_check();
+        // Whichever branch this machine takes, the row must disclose the limit
+        // of a process-list check and point at the authoritative view.
         assert!(detail.contains("Session panel"), "{detail}");
+        if alive {
+            assert!(
+                detail.contains("ksx.exe alive (pid"),
+                "a live answer must name the pids it is claiming: {detail}"
+            );
+            assert!(
+                detail.contains("daemon or session"),
+                "a process list cannot tell a tray daemon from a foreground run, and the \
+                 row must not pretend otherwise: {detail}"
+            );
+        } else {
+            assert!(
+                detail.contains("no other ksx.exe process"),
+                "a not-alive answer must say what was looked for: {detail}"
+            );
+            assert!(
+                detail.contains("process-list check"),
+                "the mechanism is named so a user knows what the absence proves: {detail}"
+            );
+        }
     }
 
     /// One pickable board shaped like the measured machine: USB interface

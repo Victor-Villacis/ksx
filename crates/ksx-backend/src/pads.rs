@@ -1374,7 +1374,13 @@ pub mod surface {
         /// own refusal would arrive after eight pads were live.
         #[test]
         fn the_plan_enforces_the_hidmaestro_pool_capacity() {
-            for count in [1u8, 2, 4, 8] {
+            // A full pool and the pad past it, both derived. Spelled 8 and 9,
+            // a raised ceiling fails this at `assert_eq!(refused.code(), ...)`
+            // with `left: None, right: Some("persona-capacity")` — a message
+            // about an absent refusal code that never mentions the number that
+            // changed, in one of four crates failing the same way at once.
+            let pool = ksx_core::MAX_HIDMAESTRO_PADS;
+            for count in [1u8, 2, 4, pool] {
                 assert!(
                     matches!(
                         plan_spawn(count, Persona::DualSense, 30, false, IDLE.0, IDLE.1),
@@ -1383,10 +1389,14 @@ pub mod surface {
                     "{count} DualSense pads must plan"
                 );
             }
-            let refused = plan_spawn(9, Persona::DualSense, 30, false, IDLE.0, IDLE.1);
+            let refused = plan_spawn(pool + 1, Persona::DualSense, 30, false, IDLE.0, IDLE.1);
             assert_eq!(refused.code(), Some("persona-capacity"));
+            // From the constant `plan_spawn` puts in `PersonaCapacity.limit`,
+            // not the literal 8. Four crates assert this ceiling; sourcing it
+            // here means a raised ceiling reprices this line instead of failing
+            // it with a number that says nothing about where 8 came from.
             assert!(
-                refused.message().contains("at most 8"),
+                refused.message().contains(&format!("at most {pool}")),
                 "{}",
                 refused.message()
             );
@@ -1887,10 +1897,12 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn exit_code_for_missing_driver_is_2() {
-        assert_eq!(EXIT_DRIVER_MISSING, 2);
-    }
+    // The value of `EXIT_DRIVER_MISSING` is pinned where it is a CONTRACT
+    // between modules rather than a literal:
+    // `run::tests::exit_codes_are_the_documented_values` asserts
+    // `run::EXIT_CANNOT_START == 2` and `== pads::EXIT_DRIVER_MISSING`, so "2
+    // means the same thing across every ksx command" is checked in one place
+    // instead of once per module.
 
     #[test]
     fn pattern_is_deterministic() {

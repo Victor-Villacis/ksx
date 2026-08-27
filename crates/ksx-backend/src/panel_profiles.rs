@@ -37,7 +37,12 @@ static TEMP_SERIAL: AtomicU64 = AtomicU64::new(0);
 /// One compare-and-replace lease shared by Studio, CLI and any future
 /// process. Atomic rename prevents a torn document; this lease prevents two
 /// processes from both accepting the same revision before either rename.
-struct PanelLayoutsLease {
+/// Shared by every compare-and-replace store under the config root: the
+/// saved encoder layouts, and the boards somebody drew. It is keyed by
+/// DIRECTORY, so two stores never block each other, and it carries the
+/// noun for its own refusal so a board write never claims to be an
+/// encoder layout.
+pub(crate) struct StoreLease {
     #[cfg(windows)]
     handle: windows_sys::Win32::Foundation::HANDLE,
     lease_name: String,
@@ -52,14 +57,17 @@ fn process_layout_leases() -> &'static Mutex<BTreeSet<String>> {
     LEASES.get_or_init(|| Mutex::new(BTreeSet::new()))
 }
 
-fn claim_process_layout_lease(name: &str) -> std::io::Result<()> {
+fn claim_process_layout_lease(name: &str, what: &str) -> std::io::Result<()> {
     let mut leases = process_layout_leases()
         .lock()
-        .map_err(|_| std::io::Error::other("the panel-layout lease registry is poisoned"))?;
+        .map_err(|_| std::io::Error::other("the store lease registry is poisoned"))?;
     if !leases.insert(name.to_owned()) {
+        // Named for the caller: this lease is shared between the saved
+        // encoder layouts and the boards somebody drew, so a hardcoded noun
+        // here told a board writer that PANEL LAYOUTS were busy.
         return Err(std::io::Error::new(
             std::io::ErrorKind::WouldBlock,
-            "the panel-layouts store is already being changed",
+            format!("{what} are already being changed"),
         ));
     }
     Ok(())
@@ -70,6 +78,9 @@ fn release_process_layout_lease(name: &str) {
         leases.remove(name);
     }
 }
+
+/// What this store is called when a lease refusal has to name it.
+pub(crate) const SAVED_LAYOUTS: &str = "saved encoder layouts";
 
 fn layout_lease_name(dir: &Path) -> String {
     let absolute = if dir.is_absolute() {
@@ -93,14 +104,14 @@ fn layout_lease_name(dir: &Path) -> String {
     )
 }
 
-impl PanelLayoutsLease {
+impl StoreLease {
     #[cfg(windows)]
-    fn acquire(dir: &Path) -> Result<Self, Refusal> {
+    pub(crate) fn acquire(dir: &Path, what: &str) -> Result<Self, Refusal> {
         use windows_sys::Win32::Foundation::{WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT};
         use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
 
         let lease_name = layout_lease_name(dir);
-        claim_process_layout_lease(&lease_name).map_err(layout_lease_refusal)?;
+        claim_process_layout_lease(&lease_name, what).map_err(|e| layout_lease_refusal(what, e))?;
         let wide = lease_name
             .encode_utf16()
             .chain(std::iter::once(0))
@@ -109,7 +120,7 @@ impl PanelLayoutsLease {
         let handle = unsafe { CreateMutexW(std::ptr::null(), 0, wide.as_ptr()) };
         if handle.is_null() {
             release_process_layout_lease(&lease_name);
-            return Err(layout_lease_refusal(std::io::Error::last_os_error()));
+            return Err(layout_lease_refusal(what, std::io::Error::last_os_error()));
         }
         // Saved-layout actions are explicit UI/CLI operations. Refuse a
         // competing editor immediately rather than queueing a stale form.
@@ -122,26 +133,28 @@ impl PanelLayoutsLease {
             let error = if wait == WAIT_TIMEOUT {
                 std::io::Error::new(
                     std::io::ErrorKind::WouldBlock,
-                    "the panel-layouts store is already being changed",
+                    format!("{what} are already being changed"),
                 )
             } else {
                 std::io::Error::other(format!("WaitForSingleObject returned {wait:#x}"))
             };
-            Err(layout_lease_refusal(error))
+            Err(layout_lease_refusal(what, error))
         }
     }
 
     #[cfg(not(windows))]
-    fn acquire(dir: &Path) -> Result<Self, Refusal> {
+    pub(crate) fn acquire(dir: &Path, what: &str) -> Result<Self, Refusal> {
         fs::create_dir_all(dir).map_err(|error| {
             store_refusal(format!(
-                "the panel-layouts folder {} could not be created: {error}",
+                "the folder for {what} ({}) could not be created: {error}",
                 dir.display()
             ))
         })?;
         let lease_name = layout_lease_name(dir);
-        claim_process_layout_lease(&lease_name).map_err(layout_lease_refusal)?;
-        let path = dir.join(".panel-layouts.lock");
+        claim_process_layout_lease(&lease_name).map_err(|e| layout_lease_refusal(what, e))?;
+        // One lock file name for every store under the config root; the
+        // DIRECTORY is what keeps two stores from blocking each other.
+        let path = dir.join(".ksx-store.lock");
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(file) => Ok(Self {
                 lease_name,
@@ -150,13 +163,13 @@ impl PanelLayoutsLease {
             }),
             Err(error) => {
                 release_process_layout_lease(&lease_name);
-                Err(layout_lease_refusal(error))
+                Err(layout_lease_refusal(what, error))
             }
         }
     }
 }
 
-impl Drop for PanelLayoutsLease {
+impl Drop for StoreLease {
     fn drop(&mut self) {
         #[cfg(windows)]
         unsafe {
@@ -172,13 +185,11 @@ impl Drop for PanelLayoutsLease {
     }
 }
 
-fn layout_lease_refusal(error: std::io::Error) -> Refusal {
+fn layout_lease_refusal(what: &str, error: std::io::Error) -> Refusal {
     Refusal::with_remedy(
         ksx_api::codes::REFUSED,
-        format!(
-            "another KSX process is reading or changing saved encoder layouts ({error}); nothing was changed"
-        ),
-        "finish the other Encoder setup save/delete, refresh the saved layouts, and retry",
+        format!("another KSX process is reading or changing {what} ({error}); nothing was changed"),
+        "finish the other save or delete, refresh the list, and retry",
     )
 }
 
@@ -190,7 +201,7 @@ fn store_refusal(message: impl Into<String>) -> Refusal {
     Refusal::with_remedy(
         ksx_api::codes::REFUSED,
         message,
-        "refresh Encoder setup and retry; if it still fails, make sure KSX can access its panel-layouts folder",
+        "refresh the saved layout list and retry; if it still fails, make sure KSX can access its panel-layouts folder",
     )
 }
 
@@ -388,7 +399,7 @@ fn profile_path(dir: &Path, profile_id: &str) -> Result<PathBuf, Refusal> {
     if !safe_profile_id(profile_id) {
         return Err(bad_request(
             format!("'{profile_id}' is not a saved encoder layout id"),
-            "refresh Encoder setup and choose the saved layout again",
+            "refresh the saved layout list and choose the layout again",
         ));
     }
     Ok(dir.join(format!("{profile_id}{PROFILE_EXTENSION}")))
@@ -637,7 +648,13 @@ fn list_dir(dir: &Path) -> Result<Vec<PanelHardwareProfile>, Refusal> {
             continue;
         };
         if name.ends_with(PROFILE_EXTENSION) {
-            profiles.push(read_profile(&path)?);
+            // See `boards::list_dir`: a layout deleted between the listing
+            // and the read is a layout that is gone, not a failed read.
+            match read_profile(&path) {
+                Ok(profile) => profiles.push(profile),
+                Err(_) if !path.exists() => continue,
+                Err(refusal) => return Err(refusal),
+            }
         }
     }
     profiles.sort_by(|left, right| {
@@ -649,8 +666,21 @@ fn list_dir(dir: &Path) -> Result<Vec<PanelHardwareProfile>, Refusal> {
     Ok(profiles)
 }
 
+/// **No lease on a read.**
+///
+/// This lease is exclusive and zero-timeout: it refuses a competitor rather
+/// than queueing, which is right for a WRITE and wrong for a read that the
+/// Studio now performs on every two-second poll. Taken here it made a poll
+/// and a save contend, and whichever lost was told "another KSX process is
+/// reading or changing …" when there was no other process — the user's own
+/// page had it. Retrying always worked, which is the signature of a lock
+/// that should not have been held.
+///
+/// Dropping it is safe because durability never depended on it. Every write
+/// lands through `write_atomic`, so a concurrent reader sees the whole old
+/// file or the whole new one, never a torn one. What the lease DID mask is
+/// the directory race below, which is now handled where it happens.
 fn profiles_at(root: &ConfigRoot) -> Result<PanelHardwareProfilesView, Refusal> {
-    let _lease = PanelLayoutsLease::acquire(&root.panel_layouts_dir())?;
     let profiles = list_dir(&root.panel_layouts_dir())?;
     Ok(PanelHardwareProfilesView {
         summary: format!(
@@ -664,20 +694,27 @@ fn profiles_at(root: &ConfigRoot) -> Result<PanelHardwareProfilesView, Refusal> 
     })
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Refusal> {
+/// Replace one file with new bytes, atomically, or change nothing.
+///
+/// `what` names the KIND of document for every refusal this can raise. It is
+/// a parameter for the reason `StoreLease::acquire`'s noun is: this writer is
+/// shared by three stores now, and a hardcoded noun told a board writer — and
+/// then an observation writer — that the PANEL-LAYOUTS folder had failed,
+/// naming a directory the user was never in.
+pub(crate) fn write_atomic(what: &str, path: &Path, bytes: &[u8]) -> Result<(), Refusal> {
     let Some(parent) = path.parent() else {
-        return Err(store_refusal(
-            "the saved encoder layout has no parent folder",
-        ));
+        return Err(store_refusal(format!(
+            "the {what} document has no parent folder"
+        )));
     };
     fs::create_dir_all(parent).map_err(|error| {
         store_refusal(format!(
-            "the panel-layouts folder {} could not be created: {error}",
+            "the folder for {what} ({}) could not be created: {error}",
             parent.display()
         ))
     })?;
     let serial = TEMP_SERIAL.fetch_add(1, Ordering::Relaxed);
-    let temp = parent.join(format!(".panel-layout.tmp-{}-{serial}", std::process::id()));
+    let temp = parent.join(format!(".ksx-store.tmp-{}-{serial}", std::process::id()));
     let result = (|| {
         let mut file = OpenOptions::new()
             .write(true)
@@ -685,24 +722,24 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Refusal> {
             .open(&temp)
             .map_err(|error| {
                 store_refusal(format!(
-                    "a temporary encoder layout could not be created in {}: {error}",
+                    "a temporary {what} document could not be created in {}: {error}",
                     parent.display()
                 ))
             })?;
         file.write_all(bytes).map_err(|error| {
             store_refusal(format!(
-                "the temporary encoder layout could not be written: {error}"
+                "the temporary {what} document could not be written: {error}"
             ))
         })?;
         file.sync_all().map_err(|error| {
             store_refusal(format!(
-                "the temporary encoder layout could not be made durable: {error}"
+                "the temporary {what} document could not be made durable: {error}"
             ))
         })?;
         drop(file);
         fs::rename(&temp, path).map_err(|error| {
             store_refusal(format!(
-                "the saved encoder layout could not be replaced atomically: {error}"
+                "the {what} document could not be replaced atomically: {error}"
             ))
         })
     })();
@@ -724,7 +761,7 @@ fn save_at(
     timestamp: Timestamp,
 ) -> Result<PanelHardwareProfileMutationView, Refusal> {
     let dir = root.panel_layouts_dir();
-    let _lease = PanelLayoutsLease::acquire(&dir)?;
+    let _lease = StoreLease::acquire(&dir, SAVED_LAYOUTS)?;
     let existing = list_dir(&dir)?;
     let name = normalize_name(&spec.name)?;
     let description = normalize_description(&spec.description)?;
@@ -763,7 +800,7 @@ fn save_at(
                         "saved encoder layout '{}' changed while this edit was open; nothing was written",
                         current.name
                     ),
-                    "refresh Encoder setup, review the newer layout, and apply the edit again",
+                    "refresh the saved layout list, review the newer layout, and apply the edit again",
                 ));
             }
             if duplicate_name(&existing, &name, Some(profile_id)) {
@@ -782,7 +819,7 @@ fn save_at(
         _ => {
             return Err(bad_request(
                 "a saved encoder layout update needs both its id and exact revision",
-                "refresh Encoder setup and save the layout again",
+                "refresh the saved layout list and save it again",
             ));
         }
     };
@@ -824,7 +861,11 @@ fn save_at(
             "the saved encoder layout could not be encoded: {error}"
         ))
     })?;
-    write_atomic(&profile_path(&dir, &profile.profile_id)?, &bytes)?;
+    write_atomic(
+        SAVED_LAYOUTS,
+        &profile_path(&dir, &profile.profile_id)?,
+        &bytes,
+    )?;
     Ok(PanelHardwareProfileMutationView {
         state: state.to_owned(),
         summary: format!("{state} saved encoder layout '{}'", profile.name),
@@ -838,7 +879,7 @@ fn delete_at(
     spec: &PanelHardwareProfileDeleteSpec,
 ) -> Result<PanelHardwareProfileMutationView, Refusal> {
     let dir = root.panel_layouts_dir();
-    let _lease = PanelLayoutsLease::acquire(&dir)?;
+    let _lease = StoreLease::acquire(&dir, SAVED_LAYOUTS)?;
     let path = profile_path(&dir, spec.profile_id.trim())?;
     let current = read_profile(&path)?;
     if current.revision != spec.expected_revision {
@@ -848,7 +889,7 @@ fn delete_at(
                 "saved encoder layout '{}' changed while deletion was being confirmed; nothing was deleted",
                 current.name
             ),
-            "refresh Encoder setup, review the newer layout, and confirm deletion again",
+            "refresh the saved layout list, review the newer layout, and confirm deletion again",
         ));
     }
     fs::remove_file(&path).map_err(|error| {
@@ -1027,8 +1068,19 @@ mod tests {
     /// Catches the broken process-local-only CAS: Studio and CLI could both
     /// accept revision A and the last atomic rename silently won. Holding the
     /// path-scoped lease stands in for that other process deterministically.
+    ///
+    /// **The lease spans every WRITE and no read.** It used to span reads too,
+    /// and this test asserted that a read "must not race a replace" — a claim
+    /// that was never what the CAS needed and became actively harmful once the
+    /// Studio began listing this store on a two-second poll: a poll and a save
+    /// contended, and whichever lost was told another process held the store
+    /// when it was the user's own page. Nothing was protecting data. Every
+    /// write lands through `write_atomic`, so a concurrent reader sees the
+    /// whole old file or the whole new one and never a torn one, and a reader
+    /// that picks up a stale revision is caught by the revision gate below —
+    /// which is the check that actually prevents the lost update.
     #[test]
-    fn cross_process_lease_spans_list_revision_check_replace_and_delete() {
+    fn cross_process_lease_spans_every_write_and_no_read() {
         let dir = TestDir::new("lease");
         let root = ConfigRoot::at(&dir.0);
         let created = save_at(&root, &create_spec("Cabinet"), stamp(1))
@@ -1043,10 +1095,10 @@ mod tests {
             expected_revision: created.revision.clone(),
         };
 
-        let lease = PanelLayoutsLease::acquire(&root.panel_layouts_dir()).unwrap();
+        let lease = StoreLease::acquire(&root.panel_layouts_dir(), SAVED_LAYOUTS).unwrap();
         assert!(
-            profiles_at(&root).is_err(),
-            "a read must not race a replace"
+            profiles_at(&root).is_ok(),
+            "a read must never be blocked by a write; the Studio lists this \n             store on every poll and a refused list reads as a lost store"
         );
         assert!(
             save_at(&root, &update, stamp(2)).is_err(),

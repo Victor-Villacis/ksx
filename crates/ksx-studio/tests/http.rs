@@ -1085,6 +1085,7 @@ impl ScriptedMachine {
             },
             shift_state: ksx_api::PanelShiftState::Disabled,
             is_shift: false,
+            press_resolves: false,
         };
         let recommended_terminal = ksx_api::PanelTerminalRow {
             normal: ksx_api::PanelKeyValue {
@@ -1097,6 +1098,7 @@ impl ScriptedMachine {
         };
         ksx_api::PanelChartView {
             generated_at: "2026-08-23 12:00:00 UTC".to_owned(),
+            shift: ksx_api::PanelShiftSummary::default(),
             summary: "Complete 256-byte I-PAC chart read and backed up.".to_owned(),
             board_id: r"USB\VID_D209&PID_0430\4".to_owned(),
             board_name: "Ultimarc I-PAC 4X".to_owned(),
@@ -2921,6 +2923,43 @@ fn post_form(addr: SocketAddr, path: &str, body: &str) -> String {
     )
 }
 
+/// **Prove the path in a guard loop actually ROUTES.**
+///
+/// `guard::same_origin` is installed with `Router::layer`, not
+/// `route_layer`, so it runs BEFORE axum matches a path. Every
+/// "…_behind_the_guard" loop therefore has a silent failure mode: a path with
+/// NO handler answers the hostile request 403 exactly like a real one, so the
+/// 403 assertion passes while testing nothing at all.
+///
+/// That is not hypothetical — it has bitten this file twice. The cutover left
+/// `/start/controller/persona` in `the_start_routes_are_behind_the_guard`, a
+/// path with no handler anywhere, and the loop stayed green against a route
+/// that did not exist. Removing the two bad entries fixed the symptom; this
+/// helper is what stops the third.
+///
+/// The discriminator: a GET carries no `Origin`, so it passes the guard and
+/// reaches the router, where a routed POST-only path answers **405** and an
+/// unrouted one answers **404**. A GET also executes no verb, so this is safe
+/// to call against `/nocturne/play` or `/nocturne/game/delete`.
+///
+/// Measured 2026-08-26 on a live fixture:
+/// ```text
+/// GET /nocturne/play              -> 405 Method Not Allowed
+/// GET /nocturne/controller        -> 405 Method Not Allowed
+/// GET /start/controller/persona   -> 404 Not Found
+/// GET /this/route/never/existed   -> 404 Not Found
+/// ```
+#[track_caller]
+fn assert_route_is_real(addr: SocketAddr, path: &str) {
+    let response = get(addr, path);
+    assert!(
+        !response.starts_with("HTTP/1.1 404"),
+        "{path} has NO handler — the guard answers 403 before routing, so the \
+         cross-origin assertion above passed against a route that does not \
+         exist. Fix the path or drop the entry: {response}"
+    );
+}
+
 /// Percent-encode one form VALUE. Only used to post a selector the SERVER
 /// served: a test that hand-spelled the encoding of a Bluetooth instance path
 /// would be asserting its own arithmetic rather than the page's behaviour.
@@ -3616,9 +3655,16 @@ fn a_refusal_serves_a_scan_that_asserts_nothing() {
     }
 }
 
-/// The page and the poller serve one shape.
+/// The devices poller serves the facts the page needs, field by field.
+///
+/// RENAMED 2026-08-26 from `api_devices_serves_the_same_payload_the_page_embeds`.
+/// The old name claimed a page/poller comparison this body never made: it
+/// never requests `/devices` and never touches `__ksx-payload`, so replacing
+/// the page's embedded block with `{}` left it green. The claim it advertised
+/// is now actually tested, for all four pages, by
+/// `every_page_embeds_the_payload_its_api_serves`.
 #[test]
-fn api_devices_serves_the_same_payload_the_page_embeds() {
+fn the_devices_api_serves_the_scan_fields_the_page_reads() {
     let addr = start_server(Arc::new(ScriptedControl::new(true)));
     let json: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/devices"))).unwrap();
@@ -3656,6 +3702,105 @@ fn api_devices_serves_the_same_payload_the_page_embeds() {
     );
     // A poll is not an action.
     assert_eq!(json.pointer("/flash"), Some(&serde_json::json!(null)));
+}
+
+/// **Every page embeds exactly the payload its `/api/*` route serves.**
+///
+/// One struct, one serializer — so the first paint and the 2 s poll can never
+/// describe different worlds. This is the assertion three tests were NAMED
+/// after and none of them made: `api_devices_serves_the_same_payload_the_page_embeds`
+/// (renamed above), `the_payload_block_matches_the_api_payload_shape` on
+/// `/devices` (which compared the serializer to itself), and
+/// `nocturne_embeds_the_payload` (which asserted a 13-character substring).
+///
+/// The coverage existed once and was deleted WITH the pages it named:
+/// `the_profiles_api_serves_the_pages_own_payload` and
+/// `the_setup_api_serves_the_payload_the_page_embeds` went out in the cutover
+/// and were never replaced on the surviving four.
+///
+/// The browser parity suite cannot see this: `ssr-hydration-parity.test.mjs`
+/// captures ~300 ms after adoption, BEFORE the first poll lands. A page that
+/// paints one thing and repaints another two seconds later is exactly the
+/// failure that suite's own header describes, and this is the seam it happens
+/// at.
+///
+/// Two divergences are normalized, and BOTH are deliberate production
+/// behaviour rather than slack in the test:
+///
+///  - `flash` — a page renders the flash it was redirected with; a poll is not
+///    an action, so `/api/*` always serves `flash: null`.
+///  - `/devices`'s `residue` — the page collects with `Reconcile::Now` and the
+///    poller with `Reconcile::Skip`, because `reconcile_report` shells out to
+///    `pnputil` (157 ms measured) and receipts only move through this very
+///    page. The poll therefore serves a NEUTRAL residue and `DevicesIsland.ts`
+///    keeps the page's values behind its `looked` guard. That exemption is not
+///    a hole here: the neutral shape is asserted below, because it is exactly
+///    what makes the island's guard safe. If a poll ever served
+///    `readable: false` or a real receipt count, the island WOULD overwrite the
+///    page's card and the user would watch it change two seconds after load.
+#[test]
+fn every_page_embeds_the_payload_its_api_serves() {
+    let addr = start_server(Arc::new(ScriptedControl::new(true)));
+
+    for (page, api) in [
+        ("/nocturne", "/api/nocturne"),
+        ("/check", "/api/check"),
+        ("/pads", "/api/pads"),
+        ("/devices", "/api/devices"),
+    ] {
+        let body = body_of(&get(addr, page)).to_owned();
+        let block = body
+            .split_once(r#"<script id="__ksx-payload" type="application/json">"#)
+            .and_then(|(_, rest)| rest.split_once("</script>"))
+            .map(|(json, _)| json)
+            .unwrap_or_else(|| panic!("{page} serves no hydration payload block"));
+        assert!(
+            !block.trim().is_empty(),
+            "{page} serves an EMPTY payload block — the island seeds from nothing"
+        );
+
+        let mut embedded: serde_json::Value =
+            serde_json::from_str(block).unwrap_or_else(|e| panic!("{page} payload json: {e}"));
+        let mut served: serde_json::Value = serde_json::from_str(body_of(&get(addr, api)))
+            .unwrap_or_else(|e| panic!("{api} json: {e}"));
+
+        if page == "/devices" {
+            // The poll must be the neutral "this poll did not look" shape —
+            // `readable: true` and no facts — or the island's `looked` guard
+            // stops protecting the page's card.
+            let residue = &served["residue"];
+            assert_eq!(
+                residue["readable"],
+                serde_json::json!(true),
+                "{api} claims the receipt store is UNREADABLE on a poll that \
+                 never looked; the island would repaint the page's card: {residue}"
+            );
+            for empty in ["receipts", "leftover_certificates", "certificates_in_use"] {
+                assert_eq!(
+                    residue[empty],
+                    serde_json::json!(0),
+                    "{api} serves a {empty} count from a poll that skipped the \
+                     reconcile: {residue}"
+                );
+            }
+            for value in [&mut embedded, &mut served] {
+                if let Some(object) = value.as_object_mut() {
+                    object.remove("residue");
+                }
+            }
+        }
+
+        for value in [&mut embedded, &mut served] {
+            if let Some(object) = value.as_object_mut() {
+                object.insert("flash".to_owned(), serde_json::Value::Null);
+            }
+        }
+        assert_eq!(
+            embedded, served,
+            "{page} embeds a payload {api} does not serve — the paint and the \
+             poll disagree, so the page will repaint on the first poll"
+        );
+    }
 }
 
 /// The pick write: 303 back to the page with the outcome as the flash, and the
@@ -3909,6 +4054,7 @@ fn a_cross_site_post_never_reaches_the_device_writer() {
             response.starts_with("HTTP/1.1 403"),
             "{path} must refuse a cross-site write, got: {response}"
         );
+        assert_route_is_real(addr, path);
     }
     assert!(
         machine.picked.lock().unwrap().is_empty(),
@@ -3931,24 +4077,45 @@ fn a_rebound_host_cannot_read_the_device_list() {
     );
 }
 
-/// Device selection now lives directly in the customer Setup flow. Existing
-/// and specialist screens must reach that flow, and the destination must still
-/// contain the real picker form rather than merely borrowing its label.
+/// Device selection lives in the customer flow, and the destination contains
+/// the real picker FORM rather than merely borrowing its label.
+///
+/// RENAMED 2026-08-26 from `every_page_links_to_the_device_picker`, which
+/// overclaimed: it checked two of the four pages, and neither by following a
+/// link. The picker lives in exactly two places now and neither is `/start` —
+/// `/nocturne` carries the form itself and `/devices` IS the picker — so the
+/// honest claim is about those two pages. Whether the OTHER pages can reach
+/// the flow is a nav question, and it is pinned where nav belongs:
+/// `render.rs::no_page_links_into_a_deleted_surface` asserts every tool page
+/// carries the workflow link to `/nocturne`.
 #[test]
-fn every_page_links_to_the_device_picker() {
+fn the_picker_form_is_served_on_nocturne_and_devices() {
     let addr = start_server(Arc::new(ScriptedControl::new(true)));
-    let picker = body_of(&get(addr, "/nocturne")).to_owned();
-    assert!(
-        picker.contains(r#"action="/nocturne/device""#),
-        "the Setup destination has no device picker: {picker}"
-    );
-    // The picker lives in two places now and neither is /start: /nocturne
-    // carries the form itself (asserted above) and /devices IS the picker.
-    let devices = body_of(&get(addr, "/devices")).to_owned();
-    assert!(
-        devices.contains(r#"action="/devices/pick""#),
-        "the device page has no picker: {devices}"
-    );
+
+    for (page, action) in [
+        ("/nocturne", r#"action="/nocturne/device""#),
+        ("/devices", r#"action="/devices/pick""#),
+    ] {
+        let body = body_of(&get(addr, page)).to_owned();
+        assert!(
+            body.contains(action),
+            "{page} has no device picker form ({action}): {body}"
+        );
+        // A form is only a picker if it can POST. `method="post"` is what
+        // separates the real control from a label that looks like one — and
+        // the no-JS path depends on it entirely.
+        let at = body.find(action).expect("just asserted");
+        let tag_start = body[..at].rfind("<form").expect("the form tag");
+        let tag_end = body[tag_start..]
+            .find('>')
+            .map_or(body.len(), |end| tag_start + end);
+        let tag = &body[tag_start..tag_end];
+        assert!(
+            tag.contains(r#"method="post""#),
+            "{page}'s picker form is not a POST — the no-JS picker cannot \
+             submit: {tag}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4220,6 +4387,75 @@ fn deleting_a_profile_without_confirmation_changes_nothing() {
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(response.contains("flash=error%3A"), "{response}");
     assert!(machine.deleted_profile.lock().unwrap().is_none());
+}
+
+/// **...and so does deleting a controller LAYOUT.**
+///
+/// Commit `6b6e996` was "both delete verbs lost their confirmation", but the
+/// regression pin created then covered only the saved-GAME delete above.
+/// `/nocturne/layout/delete` appeared exactly once in this file — inside
+/// `the_profiles_write_routes_refuse_a_cross_site_post`, where the request is
+/// refused at 403 and never reaches the handler — so its confirmation gate,
+/// its success sentence and its refusal sentence were all untested. A user
+/// loses a controller layout to one unconfirmed click.
+///
+/// The discriminator does not need a recorder on the fixture: the gate is
+/// checked BEFORE `preset_delete` is called, and the scripted machine's
+/// default `preset_delete` refuses, so "gate fired" and "machine was asked"
+/// produce two DIFFERENT sentences. Getting `N_LAYOUT_DELETE_UNCONFIRMED`
+/// proves the handler returned without asking the machine at all.
+#[test]
+fn deleting_a_layout_without_confirmation_changes_nothing() {
+    let control = Arc::new(ScriptedControl::new(true));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(control, machine);
+
+    // No `confirm_delete` at all.
+    let bare = post_form(addr, "/nocturne/layout/delete", "name=Arcade");
+    assert!(bare.starts_with("HTTP/1.1 303"), "{bare}");
+    assert!(
+        bare.contains("Tick%20the%20confirmation%20box"),
+        "an unconfirmed layout delete must be refused by the HANDLER, not by \
+         the browser dialog: {bare}"
+    );
+
+    // A box that is present but not "yes" is not a confirmation either.
+    let unticked = post_form(
+        addr,
+        "/nocturne/layout/delete",
+        "name=Arcade&confirm_delete=no",
+    );
+    assert!(
+        unticked.contains("Tick%20the%20confirmation%20box"),
+        "{unticked}"
+    );
+
+    // ...and with the confirmation the handler DOES reach the machine, which
+    // is what proves the two cases above stopped short of it. The scripted
+    // machine refuses, so this is the refusal sentence, not the success one.
+    let confirmed = post_form(
+        addr,
+        "/nocturne/layout/delete",
+        "name=Arcade&confirm_delete=yes",
+    );
+    assert!(
+        confirmed.contains("Controller%20layout%20could%20not%20be%20deleted"),
+        "a confirmed delete must reach the machine: {confirmed}"
+    );
+    assert!(
+        !confirmed.contains("Tick%20the%20confirmation%20box"),
+        "the gate fired on a request that DID confirm: {confirmed}"
+    );
+
+    // Provider text never reaches the page: the refusal is this module's own
+    // sentence, not the machine's (paths, `--force` and "daemon" are for a
+    // log, not for a line under a form).
+    for raw in ["--force", "daemon", "games.toml"] {
+        assert!(
+            !confirmed.contains(raw),
+            "raw provider text {raw:?}: {confirmed}"
+        );
+    }
 }
 
 #[test]
@@ -4606,6 +4842,7 @@ fn the_profiles_write_routes_refuse_a_cross_site_post() {
             response.starts_with("HTTP/1.1 403"),
             "{path} must refuse a cross-site POST: {response}"
         );
+        assert_route_is_real(addr, path);
     }
     // Not "it returned 403" — that no write happened.
     assert!(machine.created_profile.lock().unwrap().is_none());
@@ -4917,6 +5154,7 @@ fn the_setup_routes_are_guarded_like_every_other_one() {
             response.starts_with("HTTP/1.1 403"),
             "{path} must refuse a cross-site write, got: {response}"
         );
+        assert_route_is_real(addr, path);
     }
 
     // Reads too: a rebound name never reaches a handler, on any route.
@@ -4929,6 +5167,7 @@ fn the_setup_routes_are_guarded_like_every_other_one() {
             response.starts_with("HTTP/1.1 421"),
             "{path} must refuse a rebound read, got: {response}"
         );
+        assert_route_is_real(addr, path);
     }
 }
 
@@ -5352,6 +5591,7 @@ fn the_pads_routes_are_behind_the_guard() {
             response.starts_with("HTTP/1.1 403"),
             "{path} must refuse a foreign origin: {response}"
         );
+        assert_route_is_real(addr, path);
     }
     // …and the rebinding defence covers the read as well.
     let rebound = http(
@@ -5638,6 +5878,7 @@ fn the_check_routes_are_behind_the_guard() {
             response.starts_with("HTTP/1.1 421"),
             "{path} answered a rebound host: {response}"
         );
+        assert_route_is_real(addr, path);
     }
 }
 
@@ -6615,32 +6856,44 @@ fn a_controller_with_no_bindings_is_refused_by_name_and_fixed_in_place() {
     assert!(control.played.load(Ordering::SeqCst), "{response}");
 }
 
-/// Every mutating staging route is behind the guard: a rebound host must not
-/// be able to stage, save or start anything on this machine.
+/// **EVERY mutating route in the router is behind the guard — derived from the
+/// router source, so the list cannot drift.**
 ///
-/// The list carried two entries that proved nothing after the cutover: a
-/// `/start/controller/persona` with no handler anywhere, and a duplicate of
-/// `/nocturne/controller` left when two `/start` paths collapsed onto it. The
-/// guard answers 403 BEFORE routing, so a path with no handler passes this
-/// assertion while testing nothing.
+/// REPLACES 2026-08-26 `the_start_routes_are_behind_the_guard` (13 paths) and
+/// `the_workspace_routes_are_behind_the_guard` (9 paths, 6 of them the same 13
+/// again). Both were pure "assert 403" loops with no domain assertion, and
+/// both were HAND-KEPT, so between them they missed 14 of the router's
+/// mutating routes — `/nocturne/api/bind`, `/nocturne/api/apply`,
+/// `/nocturne/api/macro/edit`, `/nocturne/apply`, `/nocturne/autostart`,
+/// `/nocturne/key/clear`, `/nocturne/macro/{new,delete,toggle}`,
+/// `/nocturne/bind/{turbo,toggle}`, `/api/macro/save` and
+/// `/api/input-test/{start,cancel}` were all unguarded by any test.
+///
+/// A hand-kept list of routes drifts from the router the moment somebody adds
+/// a verb. This one reads `server/mod.rs` itself, so a new `post(...)` route
+/// is covered the day it is written — the same source-scanning pattern
+/// `contrast.rs` and `devices_source.rs` already use in this crate.
+///
+/// Each route is checked BOTH ways, which is the lesson of the two phantom
+/// entries the cutover left behind: the hostile POST is refused, AND the path
+/// actually routes (see [`assert_route_is_real`] — the guard is a
+/// `Router::layer`, so it answers 403 before matching and a path with no
+/// handler passes the refusal assertion while testing nothing).
 #[test]
-fn the_start_routes_are_behind_the_guard() {
+fn every_mutating_route_is_behind_the_guard() {
     let addr = start_server(Arc::new(ScriptedControl::new(false)));
-    for path in [
-        "/nocturne/device",
-        "/nocturne/device/identify",
-        "/nocturne/capture/prepare",
-        "/nocturne/capture/release",
-        "/nocturne/controller",
-        "/nocturne/controller/remove",
-        "/nocturne/controller/move",
-        "/nocturne/controller/socd",
-        "/nocturne/controller/undo",
-        "/nocturne/blocking",
-        "/nocturne/discard",
-        "/nocturne/save",
-        "/nocturne/play",
-    ] {
+    let paths = mutating_routes();
+
+    // A floor, so a parser that silently stopped matching cannot pass as "all
+    // routes are guarded". The router had 46 mutating routes on 2026-08-26.
+    assert!(
+        paths.len() >= 40,
+        "only {} mutating routes were parsed out of server/mod.rs — the \
+         scanner has stopped seeing the router: {paths:?}",
+        paths.len()
+    );
+
+    for path in &paths {
         let response = http(
             addr,
             &format!(
@@ -6653,7 +6906,40 @@ fn the_start_routes_are_behind_the_guard() {
             response.starts_with("HTTP/1.1 403") || response.starts_with("HTTP/1.1 421"),
             "{path} accepted a cross-origin POST: {response}"
         );
+        assert_route_is_real(addr, path);
     }
+}
+
+/// Every path the router serves a `post(...)` handler on, read out of
+/// `server/mod.rs`.
+///
+/// Splitting on `.route(` and looking for `post(` before the next `.route(`
+/// handles the multi-line declarations (`/nocturne/capture/prepare`,
+/// `/nocturne/import` and friends) without needing to parse Rust.
+fn mutating_routes() -> Vec<String> {
+    const ROUTER_SRC: &str = include_str!("../src/server/mod.rs");
+    let mut out = Vec::new();
+    for chunk in ROUTER_SRC.split(".route(").skip(1) {
+        let stop = chunk.find(".route(").unwrap_or(chunk.len());
+        let chunk = &chunk[..stop];
+        let Some(open) = chunk.find('"') else {
+            continue;
+        };
+        let rest = &chunk[open + 1..];
+        let Some(close) = rest.find('"') else {
+            continue;
+        };
+        let path = &rest[..close];
+        if !path.starts_with('/') || path.contains('{') {
+            continue;
+        }
+        if chunk.contains("post(") {
+            out.push(path.to_owned());
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// The browser's Identify action starts the daemon-owned learner, passes that
@@ -6683,6 +6969,10 @@ fn start_identify_selects_the_machine_providers_exact_board() {
     let response = post_form(addr, "/nocturne/device/identify", "");
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(response.contains("Keyboard%20identified"), "{response}");
+    // Folded in from `workspace_identify_selects_the_board_and_returns_here`
+    // (deleted below): the flash lands back on THIS page, not on one of the
+    // surfaces the cutover deleted.
+    assert!(response.contains("/nocturne?flash="), "{response}");
 
     let staged = control.staged();
     let selected = staged.device.expect("the identified keyboard is staged");
@@ -6700,35 +6990,16 @@ fn start_identify_selects_the_machine_providers_exact_board() {
     );
 }
 
-// ── /workspace — the left pane's form twins (M2) ────────────────────────────
+// ── the left pane's form twins (M2) ────────────────────────────────────────
 
-/// The workspace's Identify goes through the same daemon-owned transaction
-/// as /start's, and lands its flash on THIS page.
-#[test]
-fn workspace_identify_selects_the_board_and_returns_here() {
-    let control = Arc::new(ScriptedControl::new(false).with_identify_hit(IPAC_KB));
-    let machine = Arc::new(ScriptedMachine::default());
-    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
-
-    let page = get(addr, "/nocturne");
-    assert!(
-        page.contains(r#"action="/nocturne/device/identify""#),
-        "{page}"
-    );
-
-    let response = post_form(addr, "/nocturne/device/identify", "");
-    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-    assert!(response.contains("/nocturne?flash="), "{response}");
-    assert!(response.contains("Keyboard%20identified"), "{response}");
-    let staged = control.staged();
-    assert_eq!(
-        staged
-            .device
-            .expect("the identified keyboard is staged")
-            .label,
-        "Ultimarc I-PAC 4X"
-    );
-}
+// DELETED 2026-08-26: `workspace_identify_selects_the_board_and_returns_here`
+// (DUPLICATE). `start_identify_selects_the_machine_providers_exact_board`
+// above is a strict superset — same control fixture, same POST to
+// /nocturne/device/identify, same 303, same `Keyboard%20identified`, same
+// staged label — and adds the alias, the selector, `slots.is_empty()` and the
+// machine resolver's exact identity. Its one unique assertion (the redirect
+// lands on `/nocturne?flash=`) was folded into that test rather than dropped.
+// Both names were fossils: neither /start nor /workspace exists.
 
 /// Duplicate is a COMPOSITION of existing staging verbs, and the copy is
 /// honest: same bindings, same opposite-directions rule, the served fresh
@@ -6803,36 +7074,118 @@ fn an_unknown_workspace_flash_is_never_reflected() {
     );
 }
 
-/// Every mutating `/workspace` route is behind the guard: a rebound host must
-/// not be able to edit this machine's draft.
+/// **Every flash sentence this module can redirect with is ON the allowlist.**
+///
+/// `nocturne_flash_from_query` reflects only members of `N_FLASH_ALLOWLIST`;
+/// anything else becomes `N_UNKNOWN_FLASH_ERROR`. So a verb that redirects
+/// with a NEW `N_*` sentence nobody added to the array does not fail loudly —
+/// the no-JS user is simply told "That request could not be finished" instead
+/// of what actually happened to their cabinet.
+///
+/// That is not a hypothetical: it is verbatim the bug fixed in `cf6f68b`, and
+/// `an_unknown_workspace_flash_is_never_reflected` above only proves the
+/// FALLBACK works, never that a real outcome avoids it. Nothing checked the
+/// list for completeness, so the next one would ship the same way.
+///
+/// The list is read out of `server/nocturne.rs` itself rather than restated
+/// here — a hand-copied roster of 96 constants would drift by lunchtime.
+/// Nine constants are deliberately OFF the allowlist because they are
+/// READ-side sentences that render into the page body and are never a
+/// redirect target. They are named individually: if a tenth appears, that is a
+/// decision to make, not a default to inherit.
 #[test]
-fn the_workspace_routes_are_behind_the_guard() {
-    let addr = start_server(Arc::new(ScriptedControl::new(false)));
-    for path in [
-        "/nocturne/blocking",
-        "/nocturne/controller",
-        "/nocturne/controller/move",
-        "/nocturne/controller/duplicate",
-        "/nocturne/controller/remove",
-        "/nocturne/controller/socd",
-        "/nocturne/device/identify",
-        "/nocturne/bind/clear",
-        "/nocturne/adopt",
-    ] {
-        let response = http(
-            addr,
-            &format!(
-                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\n\
-                 Content-Type: application/x-www-form-urlencoded\r\n\
-                 Content-Length: 0\r\nConnection: close\r\n\r\n"
-            ),
-        );
+fn every_redirect_flash_is_on_the_allowlist() {
+    const SRC: &str = include_str!("../src/server/nocturne.rs");
+
+    // Sentences that render INTO the page (a refused read), never a redirect.
+    const READ_SIDE: [&str; 9] = [
+        "N_DAEMON_DOWN",
+        // Answered in the JSON body of POST /nocturne/api/board/save and read
+        // out by the island, never redirected with. It exists because the
+        // store's own refusal for these carries an absolute config path and
+        // raw io/serde text, and this string is announced aloud.
+        "N_BOARD_STORE_ERROR",
+        // Answered in the JSON body of POST /api/panel/chart. Putting it on
+        // N_FLASH_ALLOWLIST would be strictly WORSE than leaving it off: that
+        // list is consumed only by `?flash=` on a 303, so a JSON route cannot
+        // reach it — while adding it would make the sentence reflectable from
+        // an attacker-supplied query string on /nocturne.
+        "N_PANEL_CHART_ERROR",
+        "N_READ_AUTOSTART_ERROR",
+        "N_READ_GAMES_ERROR",
+        // Rendered under the board picker when the panel-layout store refuses.
+        // A refused read is advice ("try again"), not an outcome, and the
+        // picker still works — it just offers the keyboard alone.
+        "N_READ_PANELS_ERROR",
+        // Its sibling, and a SEPARATE store: the saved panel layouts can be
+        // perfectly readable while the drawn boards are not. Same rule —
+        // rendered under the picker, never redirected with.
+        "N_READ_BOARDS_ERROR",
+        "N_READ_SCAN_ERROR",
+        "N_READ_SETUP_ERROR",
+    ];
+
+    let declared: Vec<&str> = SRC
+        .match_indices("pub(super) const N_")
+        .filter_map(|(at, _)| {
+            let rest = &SRC[at + "pub(super) const ".len()..];
+            let name = rest.split(':').next()?.trim();
+            // Only the `&str` sentences — not the allowlist array itself.
+            rest.split_once(':')
+                .map(|(_, tail)| tail.trim_start().starts_with("&str"))
+                .unwrap_or(false)
+                .then_some(name)
+        })
+        .collect();
+    assert!(
+        declared.len() > 80,
+        "the constant scanner stopped seeing server/nocturne.rs: {declared:?}"
+    );
+
+    let start = SRC
+        .find("pub(super) const N_FLASH_ALLOWLIST")
+        .expect("the allowlist");
+    let end = SRC[start..].find("];").expect("the allowlist ends") + start;
+    let body = &SRC[start..end];
+
+    // Word-boundary match: `N_SAVE_NO_DEVICE` must not be satisfied by a
+    // longer name like `N_SAVE_NO_DEVICES` that happens to contain it.
+    let listed = |name: &str| {
+        body.match_indices(name).any(|(at, _)| {
+            let after = body[at + name.len()..].chars().next().unwrap_or(',');
+            !after.is_alphanumeric() && after != '_'
+        })
+    };
+    let missing: Vec<&str> = declared
+        .iter()
+        .copied()
+        .filter(|name| !READ_SIDE.contains(name) && !listed(name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "these flash sentences can be redirected with but are NOT on \
+         N_FLASH_ALLOWLIST, so a no-JS user reading them gets \
+         \"That request could not be finished\" instead of the outcome: \
+         {missing:?}"
+    );
+
+    // ...and the exemption does not quietly grow: every READ_SIDE name still
+    // exists, so a rename cannot turn one into a silent hole.
+    for name in READ_SIDE {
         assert!(
-            response.starts_with("HTTP/1.1 403") || response.starts_with("HTTP/1.1 421"),
-            "{path} accepted a cross-origin POST: {response}"
+            declared.contains(&name),
+            "{name} is exempted from the allowlist but no longer exists — the \
+             exemption list is stale"
         );
     }
 }
+
+// DELETED 2026-08-26: `the_workspace_routes_are_behind_the_guard` (DUPLICATE).
+// A pure 403 loop over 9 paths, 6 of which `the_start_routes_are_behind_the_guard`
+// already carried, with no domain assertion of its own. Both are replaced by
+// `every_mutating_route_is_behind_the_guard` above, which derives the list from
+// the router source and therefore covers all 46 mutating routes instead of 16.
+// (Its name was also a fossil: `/workspace` 404s.)
 
 /// **The MIGRATED keyboard section, over HTTP.** `/nocturne` serves the
 /// scan-backed device rows and the roster beside the placeholder half,
@@ -9686,4 +10039,227 @@ fn managed_development_runtime_words_the_autostart_fence_in_the_ui() {
         "{response}"
     );
     assert!(response.contains("Nothing%20was%20changed"), "{response}");
+}
+
+/// **The service worker is served in a shape a browser will actually
+/// register, and everything it precaches exists.**
+///
+/// ADDED 2026-08-26. `/sw.js` was the one route in the router named NOWHERE in
+/// this file, and the browser suites cannot cover it either —
+/// `visual-smoke.test.mjs` launches with `serviceWorkers: "block"`. A wrong
+/// content type, a missing `Service-Worker-Allowed`, or a cached `sw.js` would
+/// all have shipped silently.
+///
+/// The load-bearing assertion is the last one. `install` runs
+/// `cache.addAll(PRECACHE_URLS)`, and `addAll` REJECTS THE WHOLE INSTALL if a
+/// single URL 404s — so one stale content-addressed filename in that list
+/// means the service worker never activates on any machine, with nothing in
+/// the UI to say so. The list is generated from the same manifest the router
+/// serves `/_assets/` from, and this is what proves the two agree.
+#[test]
+fn the_service_worker_is_registrable_and_its_precache_resolves() {
+    let addr = start_server(Arc::new(ScriptedControl::new(false)));
+    let response = get(addr, "/sw.js");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+
+    // A browser refuses to register a worker served as anything but a
+    // JavaScript MIME type.
+    assert!(
+        response.contains("content-type: text/javascript"),
+        "a service worker served as the wrong type will not register: {response}"
+    );
+    // Registration is scoped to the script's own directory unless this widens
+    // it; the worker is served from the root, so `/` is what it must claim.
+    assert!(response.contains("service-worker-allowed: /"), "{response}");
+    // A CACHED service worker is how a cabinet gets stuck on an old build
+    // forever — the one file that must never be held.
+    assert!(response.contains("no-store"), "{response}");
+    assert!(
+        response.contains("x-content-type-options: nosniff"),
+        "{response}"
+    );
+
+    // Everything it precaches must be served, or `addAll` rejects and the
+    // worker never activates.
+    let body = body_of(&response).to_owned();
+    let list = body
+        .split_once("const PRECACHE_URLS = [")
+        .and_then(|(_, rest)| rest.split_once("];"))
+        .map(|(inner, _)| inner)
+        .expect("the generated precache list");
+    let urls: Vec<&str> = list
+        .split('"')
+        .filter(|piece| piece.starts_with('/'))
+        .collect();
+    assert!(
+        !urls.is_empty(),
+        "the service worker precaches nothing — the generator changed shape \
+         and this test is no longer reading it: {list}"
+    );
+    for url in urls {
+        let asset = get(addr, url);
+        assert!(
+            asset.starts_with("HTTP/1.1 200"),
+            "sw.js precaches {url}, which the server does not serve. \
+             `cache.addAll` rejects the whole install on ONE bad URL, so the \
+             service worker would never activate: {asset}"
+        );
+    }
+}
+
+/// **The page may ask which board, and nothing else.**
+///
+/// `ksx_api::PanelChartSpec` carries `backup: bool`, and `facade::chart` answers
+/// `backup: true` by writing a file, verifying it, and reconciling this board's
+/// write-qualification journal. The neighbouring `api_input_test_start`
+/// deserializes its api spec straight off the wire; doing the same here would
+/// let a field nobody typed turn a read into a durable write.
+///
+/// The selector must also arrive VERBATIM: I-PAC instance paths are
+/// serial-anchored, so a canonicalised string picks a different board than the
+/// row the user pressed.
+#[test]
+fn panel_chart_carries_the_browsers_selector_and_never_asks_for_a_backup() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+
+    let body = post_json(
+        addr,
+        "/api/panel/chart",
+        r#"{"selector":"USB\\VID_D209&PID_0430\\4"}"#,
+    );
+    assert!(
+        body.contains("\"ok\":true"),
+        "the read did not happen: {body}"
+    );
+
+    let specs = machine.panel_chart_specs.lock().unwrap();
+    assert_eq!(specs.len(), 1, "exactly one chart read per request");
+    assert_eq!(
+        specs[0].device.as_deref(),
+        Some(r"USB\VID_D209&PID_0430\4"),
+        "the browser's selector did not reach the backend unchanged"
+    );
+    assert!(
+        !specs[0].backup,
+        "a page asked for a BACKUP, which writes a file and advances this \
+         board's write-qualification state"
+    );
+}
+
+/// A body carrying anything else is refused outright rather than ignored, so a
+/// client cannot send `backup` and be quietly told nothing happened.
+#[test]
+fn panel_chart_refuses_a_body_that_asks_for_more_than_a_selector() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+
+    let response = post_json(
+        addr,
+        "/api/panel/chart",
+        r#"{"selector":"USB\\VID_D209&PID_0430\\4","backup":true}"#,
+    );
+    assert!(
+        response.starts_with("HTTP/1.1 4"),
+        "an unknown field was accepted: {response}"
+    );
+    assert!(
+        machine.panel_chart_specs.lock().unwrap().is_empty(),
+        "the board was read despite an unreadable request"
+    );
+}
+
+/// **The refusal CODE decides what a page may read, never the prose.**
+///
+/// `facade::chart` reaches the recovery store on every call, and several of its
+/// refusals format `path.display()` into the message — `RECOVERY_REQUIRED` in
+/// three places, and `BackupError`'s own Display is `"{path}: {source}"` under
+/// `REFUSED`. A denylist that suppressed only the lease refusal would announce
+/// the user's absolute config path through an aria-live region.
+#[test]
+fn the_code_decides_which_chart_refusal_a_page_may_read() {
+    // A refusal ABOUT THE REQUEST is authored copy and passes through.
+    let machine = Arc::new(ScriptedMachine {
+        panel_chart_refusal: Some(Refusal::with_remedy(
+            ksx_api::codes::PANEL_INTERFACE_BUSY,
+            "Another app is using this I-PAC's configuration interface.",
+            "close WinIPAC and read the board again",
+        )),
+        ..ScriptedMachine::default()
+    });
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+    let body = post_json(addr, "/api/panel/chart", r#"{"selector":"x"}"#);
+    assert!(
+        body.contains("Another app is using this I-PAC"),
+        "an authored refusal was swallowed: {body}"
+    );
+
+    // Anything else becomes one authored sentence, and its path never ships.
+    let machine = Arc::new(ScriptedMachine {
+        panel_chart_refusal: Some(Refusal::with_remedy(
+            ksx_api::codes::REFUSED,
+            r"C:\Users\Someone\AppData\Roaming\ksx\panel-backups: access is denied",
+            r"restore access to C:\Users\Someone\AppData\Roaming\ksx\panel-backups",
+        )),
+        ..ScriptedMachine::default()
+    });
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+    let body = post_json(addr, "/api/panel/chart", r#"{"selector":"x"}"#);
+    assert!(
+        !body.contains("AppData"),
+        "a store diagnostic put the user's config path on the page: {body}"
+    );
+    assert!(
+        body.contains("could not be read"),
+        "the page was told nothing at all: {body}"
+    );
+}
+
+/// **A chart is true for the request that produced it and no longer.**
+///
+/// Nothing watches the board between requests — WinIPAC can rewrite it at any
+/// moment — so a re-served copy is a stale answer wearing a fresh one's clothes.
+#[test]
+fn a_chart_read_is_never_cached() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+    let response = http(
+        addr,
+        "POST /api/panel/chart HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+         Content-Type: application/json\r\nContent-Length: 16\r\n\r\n{\"selector\":\"x\"}",
+    );
+    assert!(
+        response
+            .to_ascii_lowercase()
+            .contains("cache-control: no-store"),
+        "a chart response may be cached: {response}"
+    );
+}
+
+/// The write vocabulary never reaches the page. A surface handed
+/// "Lossless backup, exact write, full readback, verification, and restore are
+/// available" will eventually render it, and this build can do none of that.
+#[test]
+fn a_chart_response_carries_no_write_vocabulary() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+    let body = post_json(addr, "/api/panel/chart", r#"{"selector":"x"}"#);
+
+    for write_word in [
+        "programming_state",
+        "programming_detail",
+        "qualification_state",
+        "qualification_detail",
+        "recommended_terminals",
+        "key_options",
+        "image_bytes",
+    ] {
+        assert!(
+            !body.contains(write_word),
+            "{write_word:?} reached the page: {body}"
+        );
+    }
+    // What it DOES carry: the board, the proof, and the terminals.
+    assert!(body.contains("terminals"), "no terminals: {body}");
+    assert!(body.contains("image_sha256"), "no read proof: {body}");
 }

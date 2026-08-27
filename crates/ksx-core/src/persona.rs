@@ -555,6 +555,23 @@ mod tests {
         assert!(Persona::XboxSeries.is_xinput());
         assert!(Persona::XboxSeries.dpad_is_hat());
         assert!(Persona::XboxSeries.has_feedback());
+
+        // The retro pair, added 2026-08-26: before this, NO literal pinned
+        // either one — `dpad_is_hat` and `has_feedback` were free to flip on
+        // both without a single test noticing, and the only thing touching
+        // them was the XInput *count* in
+        // `xbox_series_counts_against_the_four_xinput_slots`.
+        //
+        // Plain HID pads: no XInput slot, and no rumble to decode — an SNES pad
+        // has no motors and the Genesis profile carries none, so a `true` here
+        // would make `poll_feedback` a promise of silence exactly as it would
+        // for Switch Pro. Both report their d-pad as a 4-bit hat, per the
+        // descriptor-ordered tables the 2026-08-20 retro leg spawned.
+        for retro in [Persona::Snes, Persona::Genesis] {
+            assert!(!retro.is_xinput(), "{retro} is plain HID");
+            assert!(retro.dpad_is_hat(), "{retro} reports a hat");
+            assert!(!retro.has_feedback(), "{retro} has no motors to decode");
+        }
     }
 
     #[test]
@@ -600,12 +617,9 @@ mod tests {
     #[test]
     fn the_first_hidmaestro_runtime_has_one_explicit_device_slot() {
         assert_eq!(Persona::DualSense.instance_limit(), None);
-        for persona in [
-            Persona::Xbox360,
-            Persona::PlayStation,
-            Persona::SwitchPro,
-            Persona::XboxSeries,
-        ] {
+        // Every persona, not a hand-picked list: a new variant with a stray
+        // per-persona ceiling would otherwise slip past this.
+        for &persona in Persona::ALL {
             assert_eq!(persona.instance_limit(), None, "{persona}");
         }
     }
@@ -614,9 +628,13 @@ mod tests {
     fn a_refused_persona_still_parses_and_still_has_a_name() {
         // Deleting the variant, or making it stop parsing, would turn every
         // existing `persona = "snes"` into "unknown persona" — which is
-        // false, and points the reader at a typo they did not make. The
-        // subjects are the ACTUALLY gated pair, restoring this test's premise
-        // (it drifted onto a pluggable persona when nothing was gated).
+        // false, and points the reader at a typo they did not make.
+        //
+        // The retro pair is the subject because it was the LAST pair to be
+        // gated (arms flipped on the 2026-08-20 hardware leg). Nothing here is
+        // gated today — `every_shipping_persona_can_plug` proves it — so what
+        // this pins now is the vocabulary half: every spelling a config may
+        // already contain still resolves, whatever the gate says.
         for (spelling, persona) in [
             ("snes", Persona::Snes),
             ("superfamicom", Persona::Snes),
@@ -653,33 +671,75 @@ mod tests {
         assert_eq!(Persona::DualSense.nearest_pluggable(), Persona::DualSense);
         assert_eq!(Persona::SwitchPro.nearest_pluggable(), Persona::SwitchPro);
         assert_eq!(Persona::XboxSeries.nearest_pluggable(), Persona::XboxSeries);
+
+        // HONEST NOTE ON WHAT THIS TEST CANNOT SEE (2026-08-26 audit): the loop
+        // above is unfalsifiable while every persona plugs — `nearest_pluggable`
+        // returns `self` on its first line, so the fallback `match` never runs
+        // and no production edit outside that first line can make the loop fail.
+        // Reaching it needs a gated persona, which only production code can
+        // create.
+        //
+        // What CAN be checked without one is the landing pad the dormant arm
+        // names: it hands every gated persona `Persona::Xbox360`. That is safe
+        // only because Xbox 360 sits on the ViGEm lane, which is the stack that
+        // is never build-gated (`PadBackend::Vigem.is_implemented()` is a
+        // literal `true`). Gate Xbox 360, or move it to HIDMaestro, and the
+        // fallback becomes a refusal suggesting a refusal — the loop this test
+        // exists to forbid — the moment anything re-arms.
+        assert!(
+            Persona::Xbox360.can_plug(),
+            "the fallback every refusal points at must itself plug"
+        );
+        assert_eq!(
+            Persona::Xbox360.backend(),
+            PadBackend::Vigem,
+            "the fallback must stay on the never-gated stack, or the suggestion \
+             can go stale with a rollout"
+        );
     }
 
     #[test]
     fn a_backend_that_cannot_build_a_device_says_what_is_missing() {
-        // `gap()` is `Some` exactly when the stack is unimplemented, so no
-        // caller can print an empty explanation or swallow a real one.
-        for &b in PadBackend::ALL {
-            assert_eq!(b.gap().is_none(), b.is_implemented(), "{b}");
-        }
+        // Both stacks ship today, so neither has a backend-wide gap. Frozen as
+        // literals: `gap()` deriving itself from `is_implemented()` is the
+        // function body copied into the test and cannot fail.
+        assert_eq!(PadBackend::Vigem.gap(), None);
         assert_eq!(PadBackend::HidMaestro.gap(), None);
-        // Every persona plugs, so no per-persona gap remains — the machinery
-        // stays for the next gated persona.
+        // Every persona plugs on its OWN backend, so no per-persona gap remains
+        // — the machinery stays for the next gated persona.
         for p in Persona::ALL.iter().copied() {
             assert_eq!(p.backend().gap_for(p), None, "{p}");
         }
-    }
 
-    #[test]
-    fn plugability_is_derived_from_the_exact_backend_capability() {
-        // The persona-specific gate is what allows one rich profile to ship
-        // without silently enabling every profile on the same backend.
-        for &p in Persona::ALL {
-            assert_eq!(p.can_plug(), p.backend().supports(p), "{p}");
-            assert_eq!(p.gap().is_none(), p.can_plug(), "{p}");
-        }
-        // And the sanity floor: something must be pluggable, or ksx is a no-op.
-        assert!(Persona::ALL.iter().any(|p| p.can_plug()));
+        // What the test's name actually promises, and the only live rendering
+        // path left: ask a backend about a persona it does not own. Both arms
+        // must name the stack that is missing something and must NOT read like
+        // an install instruction — "install ViGEmBus" is the wrong fix for a
+        // persona ViGEmBus can never express, and the wrong fix for a profile
+        // this build has not finished.
+        let vigem_gap = PadBackend::Vigem
+            .gap_for(Persona::DualSense)
+            .expect("ViGEmBus cannot express a DualSense; that must be explainable");
+        assert!(
+            vigem_gap.contains("ViGEmBus") && vigem_gap.contains("cannot emulate"),
+            "{vigem_gap}"
+        );
+        assert!(
+            !vigem_gap.contains("install"),
+            "a persona the driver can never express must not read as an install hint: {vigem_gap}"
+        );
+
+        let build_gap = PadBackend::HidMaestro
+            .gap_for(Persona::Xbox360)
+            .expect("the HIDMaestro stack does not own Xbox 360; that must be explainable");
+        assert!(
+            build_gap.contains("HIDMaestro") && build_gap.contains("production runtime"),
+            "the build gap must name the component and the missing milestone: {build_gap}"
+        );
+        assert!(
+            !build_gap.contains("install"),
+            "an unfinished runtime must not tell the user to install anything: {build_gap}"
+        );
     }
 
     #[test]

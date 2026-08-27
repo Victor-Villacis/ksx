@@ -312,8 +312,20 @@ mod tests {
     #[test]
     fn the_demo_payload_is_explicitly_synthetic() {
         let status = DemoStatus.snapshot();
-        assert_eq!(status.config_root, DEMO_CONFIG_ROOT);
-        assert_eq!(status.profiles[0].title, DEMO_PROFILE);
+        // NOT `assert_eq!(status.config_root, DEMO_CONFIG_ROOT)` — comparing
+        // the demo's output to the demo's own constant can only ever agree.
+        // The property is that a screenshot of `--demo` can never be mistaken
+        // for a real machine, so these assert what a READER would check.
+        assert!(
+            status.config_root.starts_with(r"C:\cfg"),
+            "the demo config root must be obviously not anybody's: {}",
+            status.config_root
+        );
+        assert!(
+            status.profiles[0].title.starts_with("Example"),
+            "every demo profile is named Example-something: {}",
+            status.profiles[0].title
+        );
         assert_eq!(status.profiles[1].title, "Example Game");
         assert_eq!(
             status.profiles[0].detail,

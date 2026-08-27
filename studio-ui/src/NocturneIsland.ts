@@ -124,6 +124,18 @@ export interface NocturneDeviceRowView {
   selector: string;
   alias: string;
   label: string;
+  /** `"true"` on the staged board, `"false"` on every other row. A WORD, not
+   *  a flag: an empty string still sets an attribute in the runtime's generic
+   *  path, so "absent" is not expressible from a list row — and
+   *  `aria-current="false"` is valid ARIA that says exactly this. */
+  aria_current: string;
+  /** The server's sentence about what pressing this row does. Rendered as the
+   *  button's `title`; never composed here. */
+  title: string;
+  /** `"true"` when a chart read is possible for this exact board. A SERVED
+   *  fact, because the read verb is hidden on it — and reading that out of a
+   *  display sentence is the pattern `role` exists to replace. */
+  chartReadable: string;
 }
 
 export interface NocturneOtherRowView {
@@ -131,11 +143,26 @@ export interface NocturneOtherRowView {
   meta: string;
 }
 
+/** One stop on the setup spine. Served, never derived here — the server
+ *  decides what the steps ARE and which one is current, because a step is a
+ *  claim about the draft and the daemon owns the draft. */
+export interface NocturneJourneyStepView {
+  key: string;
+  title: string;
+  detail: string;
+  badge: string;
+  cls: string;
+}
+
 export interface NocturneChoiceRowView {
   name: string;
   title: string;
   detail: string;
   cls: string;
+  /** `"true"` or `"false"` — bound straight onto `aria-current`, which is
+   *  why it is those exact words and not a bool. Served as a fact so it can
+   *  be ANNOUNCED rather than merely painted; see `NocturneChoiceRow::chosen`. */
+  chosen: string;
 }
 
 export interface NocturneRackRowView {
@@ -354,6 +381,10 @@ export interface NocturneView {
   other_fold_cls: string;
   mode_rows: NocturneChoiceRowView[];
   theme_rows: NocturneChoiceRowView[];
+  board_rows: NocturneChoiceRowView[];
+  board_line: string;
+  board_case_style: string;
+  board_origin: string;
   cap_line: string;
   capd_cls: string;
   cap_sw_cls: string;
@@ -371,6 +402,8 @@ export interface NocturneView {
   chip_text: string;
   save_text: string;
   escape_line: string;
+  journey: NocturneJourneyStepView[];
+  journey_line: string;
   play_cls: string;
   stop_cls: string;
   apply_cls: string;
@@ -544,6 +577,10 @@ const [nOtherHead, setNOtherHead] = createSignal("");
 const [nOtherFoldCls, setNOtherFoldCls] = createSignal("n-devfold none");
 const [nModeRows, setNModeRows] = createSignal<NocturneChoiceRowView[]>([]);
 const [nThemeRows, setNThemeRows] = createSignal<NocturneChoiceRowView[]>([]);
+const [nBoardRows, setNBoardRows] = createSignal<NocturneChoiceRowView[]>([]);
+const [nBoardLine, setNBoardLine] = createSignal("");
+const [nBoardCaseStyle, setNBoardCaseStyle] = createSignal("");
+const [nBoardOrigin, setNBoardOrigin] = createSignal("");
 const [nKbTitle, setNKbTitle] = createSignal("");
 const [nCapLine, setNCapLine] = createSignal("");
 const [nCapdCls, setNCapdCls] = createSignal("n-capd none");
@@ -599,6 +636,8 @@ function reconcileFixtureGeneration(v: NocturneView): boolean {
 const [nChipText, setNChipText] = createSignal("");
 const [nSaveText, setNSaveText] = createSignal("");
 const [nEscapeLine, setNEscapeLine] = createSignal("");
+const [nJourney, setNJourney] = createSignal<NocturneJourneyStepView[]>([]);
+const [nJourneyLine, setNJourneyLine] = createSignal("");
 const [nPlayCls, setNPlayCls] = createSignal("n-play");
 const [nStopCls, setNStopCls] = createSignal("n-stop none");
 const [nApplyCls, setNApplyCls] = createSignal("n-apply none");
@@ -1022,6 +1061,10 @@ export function applyNocturne(p: NocturnePayload): void {
   setNModeNote(v.mode_note);
   setNModeRows(v.mode_rows);
   setNThemeRows(v.theme_rows ?? []);
+  setNBoardRows(v.board_rows ?? []);
+  setNBoardLine(v.board_line ?? "");
+  setNBoardCaseStyle(v.board_case_style ?? "");
+  setNBoardOrigin(v.board_origin ?? "");
   setNCapLine(v.cap_line);
   setNCapdCls(v.capd_cls);
   setNCapSwCls(v.cap_sw_cls);
@@ -1037,6 +1080,8 @@ export function applyNocturne(p: NocturnePayload): void {
   setNChipText(v.chip_text);
   setNSaveText(v.save_text);
   setNEscapeLine(v.escape_line);
+  setNJourney(v.journey ?? []);
+  setNJourneyLine(v.journey_line ?? "");
   setNPlayCls(v.play_cls);
   setNStopCls(v.stop_cls);
   setNApplyCls(v.apply_cls);
@@ -1209,6 +1254,15 @@ export function applyNocturne(p: NocturnePayload): void {
       `Macro “${previouslyOpenMacro.macro}” is no longer available.`,
     );
     restoreDialogFocus();
+  }
+  // Identify's answer lands HERE, on the first poll after the success flash,
+  // and at the END of the apply so the device lists this reads have already
+  // taken the values above. The flash proved a keyboard answered; only this
+  // read carries WHICH one. Consumed once — a later background poll must not
+  // resurrect an answer the user has already read.
+  if (identifyAwaitingAnswer) {
+    identifyAwaitingAnswer = false;
+    identifyDone(v.kb_title);
   }
 }
 
@@ -2468,6 +2522,321 @@ function clearControlSurfaceUndo(): void {
   controlSurfaceUndoIdentity = "";
   controlSurfaceUndoAfterFingerprint = "";
 }
+
+/** What `POST /nocturne/api/board/save` answers. */
+interface NocturneBoardSaveOutcome {
+  ok: boolean;
+  board_id?: string;
+  revision?: string;
+  summary?: string;
+  error?: string;
+  remedy?: string;
+}
+
+interface NocturneBoardControlBody {
+  id: string;
+  kind: string;
+  label: string;
+  key: string;
+  player: number | null;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * **Flatten the drawn panel into a board's controls.**
+ *
+ * The Builder's document and a board are not the same shape, and the difference
+ * that matters is the JOYSTICK. In the Builder a stick is ONE physical part
+ * carrying four channels (`up`/`right`/`down`/`left`); on a board every cell is
+ * one thing you can press and bind. Publishing a stick as a single cell would
+ * silently drop three of its four directions.
+ *
+ * So a control becomes one cell PER CHANNEL. A button has a single `press`
+ * channel and comes out unchanged in place; a stick comes out as four cells
+ * arranged in a diamond inside the box it occupied, which is both what it looks
+ * like on a cabinet and what keeps the four independently bindable.
+ *
+ * Identity is the VISUAL instance (`control.id`), not `physicalId`: mirrors
+ * deliberately share a physical id, and a board is a picture where two mirrored
+ * views are two places you can press.
+ */
+function controlSurfaceBoardControls(): NocturneBoardControlBody[] {
+  const out: NocturneBoardControlBody[] = [];
+  for (const control of controlSurfaceState.controls) {
+    const assigned = control.channels;
+    const stick = assigned.length > 1;
+    for (const channel of assigned) {
+      // A stick's four cells sit in a diamond inside the part's own box: a
+      // third of the box each, never overlapping, never outside it.
+      const third = { w: control.width / 3, h: control.height / 3 };
+      const place = !stick
+        ? { x: control.x, y: control.y, w: control.width, h: control.height }
+        : channel.id === "up"
+          ? { x: control.x + third.w, y: control.y, ...third }
+          : channel.id === "down"
+            ? { x: control.x + third.w, y: control.y + third.h * 2, ...third }
+            : channel.id === "left"
+              ? { x: control.x, y: control.y + third.h, ...third }
+              : { x: control.x + third.w * 2, y: control.y + third.h, ...third };
+      out.push({
+        id: stick ? `${control.id}:${channel.id}` : control.id,
+        kind: control.kind,
+        label: stick ? channel.label : control.label,
+        // Unassigned stays empty. The server refuses a key it cannot receive,
+        // which is the check this side cannot make.
+        key: channel.input.kind === "keyboard" ? channel.input.key : "",
+        player: control.playerSlot,
+        x: place.x,
+        y: place.y,
+        w: place.w,
+        h: place.h,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * **Publish the drawn panel as a board you can map on.**
+ *
+ * Publishing, not saving. The Builder goes on keeping its editing document in
+ * browser storage — that is what an editor needs, every drag local and instant —
+ * and this is the separate act of saying the picture is finished enough to map
+ * on. Only then does it become durable, server-side, and offered by the board
+ * picker.
+ *
+ * Every refusal shown here is the STORE's own sentence and remedy. Nothing is
+ * pre-vetted in the browser: `boards::save` is the one door every client goes
+ * through, and a second opinion here could only disagree with it.
+ */
+
+/** One terminal, as `POST /api/panel/chart` answers. */
+interface NocturnePanelTerminalView {
+  terminal_id: string;
+  terminal_label: string;
+  player: number;
+  kind: string;
+  // `key` is OMITTED when the byte names no key, not sent as null: the wire
+  // type skips a `None`. A `=== null` test therefore never fired.
+  normal: { code: number; key?: string | null; label: string; supported: boolean };
+  shifted: { code: number; key?: string | null; label: string; supported: boolean };
+  shift_state: string;
+  is_shift: boolean;
+  /** Served, never derived here: a vendor byte a press resolves and a HID usage
+   *  Windows never delivers both arrive as `supported: false`, and telling them
+   *  apart by reading `label` would be a second copy of a backend rule. */
+  press_resolves: boolean;
+}
+
+/** The board-level shift sentence, composed by the backend and said ONCE. */
+type NocturnePanelShift =
+  | { state: "unreadable" }
+  | { state: "enabled"; terminal_id: string; terminal_label: string; reachable: number }
+  | { state: "none-enabled"; stranded: number; opaque: number }
+  | { state: "ambiguous"; terminal_ids: string[] };
+
+interface NocturnePanelChartOutcome {
+  ok: boolean;
+  board_name?: string;
+  image_sha256?: string;
+  terminals?: NocturnePanelTerminalView[];
+  shift?: NocturnePanelShift;
+  notes?: string[];
+  error?: string;
+  remedy?: string;
+}
+
+/** What the board-level shift state means for the column beside it. */
+function panelShiftSentence(shift: NocturnePanelShift | undefined): string {
+  switch (shift?.state) {
+    case "enabled":
+      return `${shift.terminal_label || shift.terminal_id} is the Shift key, so the shifted column below is reachable${shift.reachable ? ` on ${shift.reachable} terminal${shift.reachable === 1 ? "" : "s"}` : ""}.`;
+    case "none-enabled":
+      // NOT "this board has no shift". An opaque byte could be the shift
+      // control; ksx cannot classify it, so it cannot rule the terminal out.
+      return (
+        `No terminal's byte says it is the Shift key, so every shifted value below is unreachable in practice.` +
+        (shift.opaque
+          ? ` ${shift.opaque} shift byte${shift.opaque === 1 ? "" : "s"} could not be classified, so one of those could still be it.`
+          : "")
+      );
+    case "ambiguous":
+      return `More than one terminal claims to be the Shift key (${shift.terminal_ids.join(", ")}). ksx cannot say which one the board honours.`;
+    default:
+      return "";
+  }
+}
+
+/**
+ * **Ask the board what every terminal is programmed to emit.**
+ *
+ * The only thing on this page that talks to encoder hardware. It opens the
+ * board's configuration interface exclusively, so it refuses while WinIPAC has
+ * it — and that refusal is the store's own authored sentence, shown verbatim.
+ *
+ * Nothing here interprets a refusal: the server already decided which ones a
+ * page may read, because several of them carry an absolute config path.
+ */
+async function readEncoderChart(root: HTMLElement): Promise<void> {
+  const status = root.querySelector<HTMLElement>("[data-encoder-status]");
+  const facts = root.querySelector<HTMLElement>("[data-encoder-facts]");
+  const table = root.querySelector<HTMLElement>("[data-encoder-table]");
+  const rows = root.querySelector<HTMLElement>("[data-encoder-rows]");
+  // The row the user actually chose, not a guess: `selectedEncoderRow` reads
+  // the served `cls` the backend marks. A read must never go to a board other
+  // than the one on screen.
+  const selector = selectedEncoderRow()?.selector;
+  if (!status || !rows || !selector) return;
+
+  status.textContent = "Reading the board…";
+  if (table) table.hidden = true;
+
+  let outcome: NocturnePanelChartOutcome;
+  try {
+    outcome = await fetchJSON<NocturnePanelChartOutcome>("/api/panel/chart", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ selector }),
+    });
+  } catch {
+    status.textContent = "ksx did not answer. Nothing on the board was changed.";
+    return;
+  }
+
+  if (!outcome.ok) {
+    status.textContent = [outcome.error, outcome.remedy].filter(Boolean).join(" ");
+    return;
+  }
+
+  const terminals = outcome.terminals ?? [];
+  // The count of bytes ksx could not name is the honest headline: an onboard
+  // macro and an unassigned terminal are byte-identical, so an unclassified
+  // byte is the one thing a read genuinely cannot resolve.
+  // Split by whether a press could actually answer. A vendor byte is resolved
+  // by pressing the control; a HID usage Windows never delivers to ksx is not,
+  // and offering a press there is an offer that can never succeed. The backend
+  // already decides which is which and serves it as `press_resolves`.
+  const askable = terminals.filter((t) => !t.normal.supported && t.press_resolves).length;
+  const unhearable = terminals.filter((t) => !t.normal.supported && !t.press_resolves).length;
+  const shiftLine = panelShiftSentence(outcome.shift);
+  status.textContent = [
+    `Read ${terminals.length} terminals.`,
+    askable
+      ? `${askable} hold${askable === 1 ? "s" : ""} a byte ksx cannot name — press that control to find out what it really sends.`
+      : "",
+    unhearable
+      ? `${unhearable} hold${unhearable === 1 ? "s" : ""} a key Windows never passes to ksx, so pressing will not reveal ${unhearable === 1 ? "it" : "them"} either.`
+      : "",
+    shiftLine,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  if (facts) {
+    facts.replaceChildren();
+    for (const [label, value] of [
+      ["Board", outcome.board_name ?? ""],
+      ["Read proof", (outcome.image_sha256 ?? "").slice(0, 16)],
+    ] as const) {
+      if (!value) continue;
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.textContent = value;
+      facts.append(dt, dd);
+    }
+    // The backend composes counts that only exist in `notes` — the route serves
+    // no `summary` — so dropping them lost the byte-preservation sentence and
+    // every number the read produced.
+    for (const note of outcome.notes ?? []) {
+      if (!note) continue;
+      const dt = document.createElement("dt");
+      dt.textContent = "Note";
+      const dd = document.createElement("dd");
+      dd.textContent = note;
+      facts.append(dt, dd);
+    }
+  }
+
+  rows.replaceChildren();
+  for (const terminal of terminals) {
+    const tr = document.createElement("tr");
+    tr.dataset.terminalId = terminal.terminal_id;
+    if (!terminal.normal.supported) tr.dataset.unknownByte = "";
+    // A byte of zero is NOT "this terminal does nothing" — an onboard macro is
+    // byte-identical to an unassigned terminal, which is the measured limit in
+    // `ENHANCEMENTS.md` E10. Rendering a bare "Unassigned" asserted the one
+    // thing a chart read cannot establish.
+    // Per PLANE, not per terminal: the ambiguity is a property of the zero
+    // byte, and the shifted plane stores bytes through the same decoder. A
+    // shifted WinIPAC macro is exactly as invisible as a normal one, so the
+    // Shifted column must refuse the same claim the normal column refuses.
+    const silent = terminal.normal.supported && !terminal.normal.key;
+    const shiftedSilent = terminal.shifted.supported && !terminal.shifted.key;
+    if (silent) tr.dataset.silentByte = "";
+    for (const cell of [
+      terminal.terminal_label || terminal.terminal_id,
+      silent
+        ? "Nothing stored — or a macro, which looks the same"
+        : (terminal.normal.key ?? terminal.normal.label),
+      shiftedSilent
+        ? "Nothing stored — or a macro, which looks the same"
+        : (terminal.shifted.key ?? terminal.shifted.label),
+      // The shift COLUMN says only whether this terminal is the shift key. What
+      // that means for the board is one sentence in the status line above, not
+      // a raw wire enum repeated on 56 rows.
+      terminal.is_shift ? "Shift key" : "",
+    ]) {
+      const td = document.createElement("td");
+      td.textContent = cell;
+      tr.append(td);
+    }
+    rows.append(tr);
+  }
+  if (table) table.hidden = false;
+}
+async function publishControlSurfaceAsBoard(): Promise<void> {
+  const controls = controlSurfaceBoardControls();
+  if (!controls.length) {
+    keyboardWorkbenchAnnounce("There is nothing on this panel to publish yet.");
+    return;
+  }
+  const name = (controlSurfaceState.name || "").trim() || "My panel";
+  keyboardWorkbenchAnnounce(`Publishing “${name}” as a board…`);
+  let outcome: NocturneBoardSaveOutcome;
+  try {
+    outcome = await fetchJSON<NocturneBoardSaveOutcome>("/nocturne/api/board/save", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name,
+        description: "Drawn in the Studio's panel builder.",
+        bounds_w: CONTROL_SURFACE_BOUNDS.width,
+        bounds_h: CONTROL_SURFACE_BOUNDS.height,
+        controls,
+      }),
+    });
+  } catch {
+    keyboardWorkbenchAnnounce(
+      "The board could not be published — ksx did not answer. Nothing was changed.",
+    );
+    return;
+  }
+  if (!outcome.ok) {
+    keyboardWorkbenchAnnounce(
+      [outcome.error ?? "The board could not be published.", outcome.remedy]
+        .filter(Boolean)
+        .join(" "),
+    );
+    return;
+  }
+  keyboardWorkbenchAnnounce(
+    `${outcome.summary ?? "Board published."} Pick it under “How the keys are drawn”.`,
+  );
+}
 function saveControlSurfacePrefs(): void {
   if (
     controlSurfaceUndoAfterFingerprint &&
@@ -3047,6 +3416,15 @@ function selectedEncoderRow(): NocturneDeviceRowView | undefined {
 
 let lastProvenEncoderRow: NocturneDeviceRowView | undefined;
 
+
+/** Whether the served row says a chart read is possible for this exact board.
+ *
+ * Read from the backend, never inferred from a name: only an exact measured
+ * protocol profile admits a chart transaction, and `chart_readable` is where
+ * `panel_catalog::capabilities_for` says so. */
+function choosingReadable(row: NocturneDeviceRowView): boolean {
+  return row.chartReadable === "true";
+}
 function selectedInputIsPanelEncoder(): boolean {
   return Boolean(selectedEncoderRow());
 }
@@ -4857,6 +5235,16 @@ function renderControlSurfaceControls(): void {
 function syncControlSurfaceChrome(): void {
   const item = controlSurfaceItem;
   if (!item) return;
+  // **The read surface exists only for a board that can be read.**
+  //
+  // Absent, not disabled: a greyed "Read this board" beside a keyboard is a
+  // capability claim ksx cannot honour, and an unprofiled encoder can NEVER
+  // be read, so offering it a retry would be an offer that always refuses.
+  const encoderRead = item.querySelector<HTMLElement>("#n-encoder-read");
+  if (encoderRead) {
+    const row = selectedEncoderRow();
+    encoderRead.hidden = !row || !choosingReadable(row);
+  }
   const choosing = !controlSurfaceState.started || controlSurfaceChoosingTemplate;
   const starters = item.querySelector<HTMLElement>(".n-surface-starters");
   const workarea = item.querySelector<HTMLElement>(".n-surface-workarea");
@@ -4976,456 +5364,152 @@ function createControlSurfaceItem(): HTMLElement {
   close.classList.add("quiet");
   head.append(heading, close);
 
-  const hardware = document.createElement("section");
-  hardware.className = "n-surface-hardware";
-  hardware.setAttribute("aria-labelledby", "n-surface-hardware-title");
-  hardware.dataset.state = "idle";
-  const hardwareHead = document.createElement("div");
-  hardwareHead.className = "n-surface-hardware-head";
-  const hardwareHeading = document.createElement("div");
-  const hardwareKicker = document.createElement("span");
-  hardwareKicker.className = "n-surface-hardware-kick";
-  hardwareKicker.textContent = "Selected encoder";
-  const hardwareName = document.createElement("strong");
-  hardwareName.id = "n-surface-hardware-title";
-  hardwareName.dataset.surfaceHardwareName = "";
-  hardwareName.textContent = "Status not inspected";
-  hardwareHeading.append(hardwareKicker, hardwareName);
-  const hardwareRefresh = makeKeyboardWorkbenchButton(
-    "Refresh status",
-    "surface-hardware-refresh",
-    "Read the selected encoder's identity, mode, and read-back capabilities without changing it",
-  );
-  hardwareRefresh.classList.add("quiet", "n-surface-hardware-refresh");
-  const hardwareActions = document.createElement("div");
-  hardwareActions.className = "n-surface-hardware-actions";
-  const encoderSetup = makeKeyboardWorkbenchButton(
-    "Inspect to continue",
-    "surface-encoder-open",
-    "Inspect this exact encoder before opening hardware configuration",
-  );
-  encoderSetup.classList.add("n-surface-encoder-open");
-  encoderSetup.setAttribute("aria-controls", "n-surface-programming");
-  encoderSetup.setAttribute("aria-expanded", "false");
-  hardwareActions.append(hardwareRefresh, encoderSetup);
-  hardwareHead.append(hardwareHeading, hardwareActions);
+  // ── THE ENCODER STATUS SURFACE STOOD HERE, REMOVED 2026-08-26 ───────────
+  //
+  // Between the builder's head and its programming form sat a
+  // `<section class="n-surface-hardware" data-state="idle">`: a "Selected
+  // encoder" kicker over a "Status not inspected" name, a quiet "Refresh
+  // status" button (`data-nx="surface-hardware-refresh"`), an "Inspect to
+  // continue" button (`data-nx="surface-encoder-open"`, `aria-controls` the
+  // programming section below), and a live-region status block with the
+  // board's identity, its mode, a summary line, a note, and an "Inspection
+  // details" disclosure listing inspection access, panel driver,
+  // configuration collection and chart read-back.
+  //
+  // Every one of those values could only be filled by READING A CHART, and
+  // `3901990` ("cut ksx over to /nocturne — remove the encoder chart
+  // surface") moved chart access out of this product into PacBench together
+  // with the ten `/api/panel/*` routes and the code that filled them. What
+  // was left was the FURNITURE: `data-state` was written "idle" once, on
+  // this line, and never again; neither `data-nx` token had a branch in the
+  // delegated dispatcher (which has no default arm, so both clicks were
+  // silently inert); and the shipped bundle issued zero `api/panel` requests,
+  // which is why the ten deleted chart tests in pwtest read as hangs rather
+  // than failures — they were waiting on a surface no code could ever move.
+  //
+  // That is worse than an absent feature. An enabled, styled, promising
+  // control panel next to the user's real I-PAC asserts that KSX can inspect
+  // it; a page must not advertise a capability it does not have.
+  //
+  // ✅ IT RETURNED WITH THE CHART VERB, 2026-08-27. `ksx panel status` named
+  // every board and `POST /api/panel/chart` reads one, so the surface below
+  // is true again — and is a REBUILD, not the old furniture unhidden. Its
+  // base CSS had already gone, and two thirds of what it built was write
+  // furniture (a `danger`-classed "Disable all hardware outputs", a
+  // program-review modal, a qualification stepper, a restore group) which
+  // this build still cannot do. Reviving and re-hiding those would recreate
+  // the exact failure this note describes.
+  //
+  // The six-step journey is the one piece lifted verbatim: pure explanation,
+  // no verb, and the mental model the feature needs.
 
-  const hardwareStatus = document.createElement("div");
-  hardwareStatus.className = "n-surface-hardware-status";
-  hardwareStatus.setAttribute("role", "status");
-  hardwareStatus.setAttribute("aria-live", "polite");
-  hardwareStatus.setAttribute("aria-atomic", "true");
-  const hardwareIdentity = document.createElement("span");
-  hardwareIdentity.className = "n-surface-hardware-identity";
-  hardwareIdentity.dataset.surfaceHardwareIdentity = "";
-  const hardwareMode = document.createElement("span");
-  hardwareMode.className = "n-surface-hardware-mode";
-  hardwareMode.dataset.surfaceHardwareMode = "";
-  hardwareMode.dataset.tone = "neutral";
-  const hardwareSummary = document.createElement("p");
-  hardwareSummary.className = "n-surface-hardware-summary";
-  hardwareSummary.dataset.surfaceHardwareSummary = "";
-  const hardwareDetails = document.createElement("details");
-  hardwareDetails.className = "n-surface-hardware-details";
-  hardwareDetails.dataset.surfaceHardwareDetails = "";
-  hardwareDetails.hidden = true;
-  const hardwareDetailsSummary = document.createElement("summary");
-  hardwareDetailsSummary.textContent = "Inspection details";
-  const hardwareCapabilities = document.createElement("dl");
-  hardwareCapabilities.className = "n-surface-hardware-capabilities";
-  hardwareCapabilities.dataset.surfaceHardwareCapabilities = "";
-  hardwareCapabilities.hidden = true;
-  const hardwareAccessRow = document.createElement("div");
-  const hardwareAccessTerm = document.createElement("dt");
-  hardwareAccessTerm.textContent = "Inspection access";
-  const hardwareAccessValue = document.createElement("dd");
-  hardwareAccessValue.dataset.surfaceHardwareAccess = "";
-  hardwareAccessRow.append(hardwareAccessTerm, hardwareAccessValue);
-  const hardwareDriverRow = document.createElement("div");
-  const hardwareDriverTerm = document.createElement("dt");
-  hardwareDriverTerm.textContent = "Panel driver";
-  const hardwareDriverValue = document.createElement("dd");
-  hardwareDriverValue.dataset.surfaceHardwareDriver = "";
-  hardwareDriverRow.append(hardwareDriverTerm, hardwareDriverValue);
-  const hardwareConfigurationRow = document.createElement("div");
-  const hardwareConfigurationTerm = document.createElement("dt");
-  hardwareConfigurationTerm.textContent = "Configuration collection";
-  const hardwareConfigurationValue = document.createElement("dd");
-  hardwareConfigurationValue.dataset.surfaceHardwareConfiguration = "";
-  hardwareConfigurationRow.append(hardwareConfigurationTerm, hardwareConfigurationValue);
-  const hardwareChartRow = document.createElement("div");
-  const hardwareChartTerm = document.createElement("dt");
-  hardwareChartTerm.textContent = "Chart read-back";
-  const hardwareChartValue = document.createElement("dd");
-  const hardwareChartLabel = document.createElement("strong");
-  hardwareChartLabel.dataset.surfaceHardwareChart = "";
-  const hardwareChartDetail = document.createElement("small");
-  hardwareChartDetail.dataset.surfaceHardwareChartDetail = "";
-  hardwareChartValue.append(hardwareChartLabel, hardwareChartDetail);
-  hardwareChartRow.append(hardwareChartTerm, hardwareChartValue);
-  hardwareCapabilities.append(
-    hardwareAccessRow,
-    hardwareDriverRow,
-    hardwareConfigurationRow,
-    hardwareChartRow,
-  );
-  const hardwareRecommendation = document.createElement("p");
-  hardwareRecommendation.className = "n-surface-hardware-recommendation";
-  hardwareRecommendation.dataset.surfaceHardwareRecommendation = "";
-  const hardwareNote = document.createElement("p");
-  hardwareNote.className = "n-surface-hardware-note";
-  hardwareNote.dataset.surfaceHardwareNote = "";
-  hardwareDetails.append(
-    hardwareDetailsSummary,
-    hardwareCapabilities,
-    hardwareRecommendation,
-  );
-  hardwareStatus.append(
-    hardwareIdentity,
-    hardwareMode,
-    hardwareSummary,
-    hardwareDetails,
-    hardwareNote,
-  );
-  hardware.append(hardwareHead, hardwareStatus);
+  // ── THE ENCODER READ ────────────────────────────────────────────────────
+  //
+  // Built fresh, replacing ~340 lines of furniture that sat here `hidden = true`
+  // and was never revealed. Its own removal note said "IT RETURNS WITH THE CHART
+  // VERBS … Rebuild it then — wired to that verb", and rebuilding rather than
+  // unhiding is the only honest reading of that: its base CSS is gone, and two
+  // thirds of what it built was WRITE furniture — a `danger`-classed "Disable
+  // all hardware outputs", a program-review modal, a qualification stepper, a
+  // restore group. Reviving those and hiding them would recreate exactly the
+  // failure the note describes: a styled, enabled control panel beside the
+  // user's real hardware, asserting a capability ksx does not have.
+  //
+  // What is lifted verbatim is the six-step journey below. It is pure
+  // explanation with no verb attached, and it is the mental model this feature
+  // needs: a press travels physical control -> terminal -> host signal -> ksx
+  // -> virtual control -> game, and only the middle hop is what a chart read
+  // can tell you about.
+  const encoderRead = document.createElement("section");
+  encoderRead.id = "n-encoder-read";
+  encoderRead.className = "n-encoder-read";
+  encoderRead.hidden = true;
 
-  const programming = document.createElement("section");
-  programming.id = "n-surface-programming";
-  programming.className = "n-surface-programming";
-  programming.hidden = true;
   const signalJourney = document.createElement("ol");
   signalJourney.className = "n-panel-signal-journey";
   signalJourney.setAttribute("aria-label", "Physical control to game signal journey");
   ([
     ["physical", "1", "Panel control", "Button, stick, or key"],
-    ["encoder", "2", "I-PAC", "Wired terminal"],
-    ["keys", "3", "Host signal", "Keyboard key emitted to Windows"],
-    ["mapping", "4", "KSX transform", "Route, macro, or behavior"],
+    ["encoder", "2", "Encoder terminal", "The screw it is wired to"],
+    ["keys", "3", "Host signal", "The key the board emits to Windows"],
+    ["mapping", "4", "ksx transform", "Route, macro, or behaviour"],
     ["controller", "5", "Virtual controller", "Game-facing target"],
     ["game", "6", "Game", "Receives when running"],
   ] as const).forEach(([step, number, label, detail]) => {
     const item = document.createElement("li");
     item.dataset.panelJourneyStep = step;
-    item.dataset.state = "upcoming";
     const badge = document.createElement("span");
     badge.textContent = number;
     const copy = document.createElement("span");
     const strong = document.createElement("strong");
     strong.textContent = label;
-    if (step === "encoder") strong.dataset.panelJourneyEncoderLabel = "";
     const small = document.createElement("small");
     small.textContent = detail;
     copy.append(strong, small);
     item.append(badge, copy);
     signalJourney.append(item);
   });
-  const programmingHead = document.createElement("div");
-  programmingHead.className = "n-surface-programming-head";
-  const programmingHeading = document.createElement("div");
-  const programmingKicker = document.createElement("span");
-  programmingKicker.dataset.surfaceProgrammingKicker = "";
-  programmingKicker.textContent = "Encoder hardware";
-  const programmingTitle = document.createElement("strong");
-  programmingTitle.dataset.surfaceProgrammingTitle = "";
-  programmingTitle.textContent = "Edit, save, clear, or program the complete 56-terminal chart";
-  programmingHeading.append(programmingKicker, programmingTitle);
-  const programmingClose = makeKeyboardWorkbenchButton(
-    "Close setup",
-    "surface-encoder-close",
-    "Close encoder setup without changing the hardware",
+
+  const encoderHead = document.createElement("div");
+  encoderHead.className = "n-encoder-read-head";
+  const encoderKicker = document.createElement("span");
+  encoderKicker.className = "n-kick";
+  encoderKicker.textContent = "What this board is programmed to emit";
+  const encoderLede = document.createElement("p");
+  encoderLede.className = "n-devnote";
+  encoderLede.textContent =
+    "Reading opens the board's configuration interface and asks it what every terminal stores. It changes nothing on the board, and it needs the interface to itself — close WinIPAC first.";
+  encoderHead.append(encoderKicker, encoderLede);
+
+  const encoderFacts = document.createElement("dl");
+  encoderFacts.className = "n-encoder-read-facts";
+  encoderFacts.dataset.encoderFacts = "";
+  encoderFacts.setAttribute("aria-label", "What ksx read from this board");
+
+  const encoderActions = document.createElement("div");
+  encoderActions.className = "n-encoder-read-actions";
+  encoderActions.append(
+    makeKeyboardWorkbenchButton(
+      "Read this board",
+      "encoder-read",
+      "Ask the board what each terminal is programmed to emit. Nothing is written.",
+    ),
   );
-  programmingClose.classList.add("quiet");
-  programmingHead.append(programmingHeading, programmingClose);
-  const programmingSummary = document.createElement("p");
-  programmingSummary.className = "n-surface-programming-summary";
-  programmingSummary.dataset.surfaceProgrammingSummary = "";
-  programmingSummary.setAttribute("role", "status");
-  programmingSummary.setAttribute("aria-live", "polite");
-  programmingSummary.textContent = "Read and back up the complete encoder chart before changing terminal assignments.";
-  const programmingDevice = document.createElement("dl");
-  programmingDevice.className = "n-surface-programming-device n-surface-board-facts";
-  programmingDevice.dataset.surfaceProgrammingDevice = "";
-  programmingDevice.dataset.surfaceBoardFacts = "";
-  programmingDevice.setAttribute("aria-label", "Selected I-PAC facts");
-  const programmingQualification = document.createElement("aside");
-  programmingQualification.className = "n-surface-programming-qualification";
-  programmingQualification.dataset.surfaceProgrammingQualification = "";
-  programmingQualification.setAttribute("aria-live", "polite");
-  programmingQualification.hidden = true;
-  const qualificationStep = document.createElement("span");
-  qualificationStep.dataset.surfaceQualificationStep = "";
-  qualificationStep.textContent = "Writer check · step 1 of 2";
-  const qualificationTitle = document.createElement("strong");
-  qualificationTitle.dataset.surfaceQualificationTitle = "";
-  qualificationTitle.textContent = "Verify this encoder before writing a full layout";
-  const qualificationDetail = document.createElement("p");
-  qualificationDetail.dataset.surfaceQualificationDetail = "";
-  qualificationDetail.textContent =
-    "Choose one noncritical SW action button—not a direction, Start, or Coin—with a readable normal assignment and Shift state explicitly disabled. Change it to one safe letter or top-row number so exactly one desired byte differs. Programming still retransmits the complete 256-byte chart as all 64 HID reports; review that full-write consent, then restore its exact safety backup.";
-  const qualificationPicker = document.createElement("div");
-  qualificationPicker.className = "n-surface-qualification-picker";
-  qualificationPicker.dataset.surfaceQualificationPicker = "";
-  const qualificationTerminalLabel = document.createElement("label");
-  const qualificationTerminalText = document.createElement("span");
-  qualificationTerminalText.textContent = "Wired test terminal";
-  const qualificationTerminalSelect = document.createElement("select");
-  qualificationTerminalSelect.dataset.nx = "surface-qualification-terminal";
-  qualificationTerminalSelect.setAttribute("aria-label", "I-PAC safety-test terminal");
-  qualificationTerminalLabel.append(qualificationTerminalText, qualificationTerminalSelect);
-  const qualificationKeyLabel = document.createElement("label");
-  const qualificationKeyText = document.createElement("span");
-  qualificationKeyText.textContent = "Temporary test key";
-  const qualificationKeySelect = document.createElement("select");
-  qualificationKeySelect.dataset.nx = "surface-qualification-key";
-  qualificationKeySelect.setAttribute("aria-label", "I-PAC safety-test key");
-  qualificationKeyLabel.append(qualificationKeyText, qualificationKeySelect);
-  const qualificationSelection = document.createElement("p");
-  qualificationSelection.dataset.surfaceQualificationSelection = "";
-  qualificationSelection.setAttribute("role", "status");
-  qualificationPicker.append(
-    qualificationTerminalLabel,
-    qualificationKeyLabel,
-    qualificationSelection,
-  );
-  programmingQualification.append(
-    qualificationStep,
-    qualificationTitle,
-    qualificationDetail,
-    qualificationPicker,
-  );
-  const programmingConflicts = document.createElement("ul");
-  programmingConflicts.className = "n-surface-programming-conflicts";
-  programmingConflicts.dataset.surfaceProgrammingConflicts = "";
-  programmingConflicts.setAttribute("role", "alert");
-  programmingConflicts.hidden = true;
-  const programmingModes = document.createElement("div");
-  programmingModes.className = "n-surface-programming-modes";
-  programmingModes.setAttribute("role", "group");
-  programmingModes.setAttribute("aria-label", "Start hardware layout from");
-  ([
-    ["keep-current", "Use current outputs", "Keep the terminal-to-key chart already on this I-PAC, test it, or edit only what you want."],
-    ["recommended", "KSX four-player", "Preview 56 unique Windows key signals arranged for four players, then program only after review."],
-    ["custom", "Use panel design", "Start from terminal and key links in the optional physical panel design."],
-  ] as const).forEach(([mode, label, description]) => {
-    const button = makeKeyboardWorkbenchButton(label, "surface-encoder-mode", description, mode);
-    button.dataset.surfaceProgrammingMode = mode;
-    button.dataset.surfaceProgrammingDescription = description;
-    const copy = document.createElement("small");
-    copy.textContent = description;
-    button.append(copy);
-    programmingModes.append(button);
-  });
-  const profiles = document.createElement("section");
-  profiles.className = "n-surface-hardware-profiles";
-  const profilesHead = document.createElement("div");
-  const profilesTitle = document.createElement("strong");
-  profilesTitle.textContent = "Saved hardware layouts";
-  const profilesSummary = document.createElement("span");
-  profilesSummary.dataset.surfaceProfilesSummary = "";
-  profilesSummary.textContent = "Loading KSX profiles…";
-  profilesHead.append(profilesTitle, profilesSummary);
-  const profilesPicker = document.createElement("div");
-  profilesPicker.className = "n-surface-profile-picker";
-  const profileSelect = document.createElement("select");
-  profileSelect.dataset.surfaceProfile = "";
-  profileSelect.setAttribute("aria-label", "Saved I-PAC hardware layout");
-  const profilePlaceholder = document.createElement("option");
-  profilePlaceholder.value = "";
-  profilePlaceholder.textContent = "Choose a saved layout";
-  profileSelect.append(profilePlaceholder);
-  const profileUse = makeKeyboardWorkbenchButton(
-    "Use saved",
-    "surface-profile-use",
-    "Load this saved semantic layout into the editor without programming the board",
-  );
-  profilesPicker.append(profileSelect, profileUse);
-  const profileFields = document.createElement("div");
-  profileFields.className = "n-surface-profile-fields";
-  const profileNameLabel = document.createElement("label");
-  const profileNameText = document.createElement("span");
-  profileNameText.textContent = "Layout name";
-  const profileName = document.createElement("input");
-  profileName.type = "text";
-  profileName.maxLength = 80;
-  profileName.placeholder = "My four-player cabinet";
-  profileName.dataset.surfaceProfileName = "";
-  profileNameLabel.append(profileNameText, profileName);
-  const profileDescriptionLabel = document.createElement("label");
-  const profileDescriptionText = document.createElement("span");
-  profileDescriptionText.textContent = "Description (optional)";
-  const profileDescription = document.createElement("input");
-  profileDescription.type = "text";
-  profileDescription.maxLength = 240;
-  profileDescription.placeholder = "What this panel layout is for";
-  profileDescription.dataset.surfaceProfileDescription = "";
-  profileDescriptionLabel.append(profileDescriptionText, profileDescription);
-  profileFields.append(profileNameLabel, profileDescriptionLabel);
-  const profileActions = document.createElement("div");
-  profileActions.className = "n-surface-profile-actions";
-  profileActions.append(
-    makeKeyboardWorkbenchButton("Save as new", "surface-profile-save", "Save this complete editor draft as a reusable KSX hardware layout"),
-    makeKeyboardWorkbenchButton("Update saved", "surface-profile-update", "Replace the selected saved layout with this complete editor draft"),
-    makeKeyboardWorkbenchButton("Delete saved", "surface-profile-delete", "Delete only the selected KSX layout; this never changes the I-PAC"),
-  );
-  const profileMessage = document.createElement("p");
-  profileMessage.dataset.surfaceProfilesMessage = "";
-  profileMessage.setAttribute("role", "status");
-  profiles.append(profilesHead, profilesPicker, profileFields, profileActions, profileMessage);
-  const terminalEditor = document.createElement("section");
-  terminalEditor.className = "n-surface-terminal-editor";
-  const terminalEditorHead = document.createElement("div");
-  const terminalEditorTitle = document.createElement("div");
-  const terminalEditorStrong = document.createElement("strong");
-  terminalEditorStrong.textContent = "Terminal chart";
-  const terminalEditorStatus = document.createElement("span");
-  terminalEditorStatus.dataset.surfaceTerminalStatus = "";
-  terminalEditorStatus.textContent = "No chart loaded";
-  terminalEditorTitle.append(terminalEditorStrong, terminalEditorStatus);
-  const advancedLabel = document.createElement("label");
-  advancedLabel.className = "n-surface-terminal-advanced-toggle";
-  const advancedInput = document.createElement("input");
-  advancedInput.type = "checkbox";
-  advancedInput.dataset.nx = "surface-terminal-advanced";
-  const advancedText = document.createElement("span");
-  advancedText.textContent = "Advanced shift layer";
-  advancedLabel.append(advancedInput, advancedText);
-  terminalEditorHead.append(terminalEditorTitle, advancedLabel);
-  const terminalEditorNote = document.createElement("p");
-  terminalEditorNote.dataset.surfaceTerminalNote = "";
-  terminalEditorNote.textContent =
-    "Windows key outputs are what KSX receives. Open Advanced only for the I-PAC shifted layer and terminal Shift roles.";
-  const terminalGrid = document.createElement("div");
-  terminalGrid.className = "n-surface-terminal-grid";
-  terminalGrid.dataset.surfaceTerminalGrid = "";
-  terminalEditor.append(terminalEditorHead, terminalEditorNote, terminalGrid);
-  const outputTest = document.createElement("section");
-  outputTest.className = "n-panel-output-test";
-  const outputTestHead = document.createElement("div");
-  const outputTestHeading = document.createElement("div");
-  const outputTestTitle = document.createElement("strong");
-  outputTestTitle.textContent = "Test wiring";
-  const outputTestStatus = document.createElement("span");
-  outputTestStatus.dataset.panelOutputTestStatus = "";
-  outputTestStatus.textContent = "Program or load at least one output first";
-  outputTestHeading.append(outputTestTitle, outputTestStatus);
-  const outputTestButton = makeKeyboardWorkbenchButton(
-    "Test one control",
-    "surface-encoder-test",
-    "Listen once and identify the Windows key and every matching I-PAC terminal without changing a KSX mapping",
-  );
-  const simultaneousTestButton = makeKeyboardWorkbenchButton(
-    "Test simultaneous inputs…",
-    "input-test-open",
-    "Measure the peak distinct keyboard-mode signals KSX observes during one bounded test of this exact encoder",
-  );
-  outputTestHead.append(outputTestHeading, outputTestButton, simultaneousTestButton);
-  const outputTestCopy = document.createElement("p");
-  outputTestCopy.dataset.panelOutputTestCopy = "";
-  outputTestCopy.textContent =
-    "Press any wired cabinet control. KSX identifies the Windows key emitted by this I-PAC; no controller mapping changes.";
-  const outputSignalGrid = document.createElement("div");
-  outputSignalGrid.className = "n-panel-signal-grid";
-  outputSignalGrid.dataset.panelSignalGrid = "";
-  const routeActions = document.createElement("div");
-  routeActions.className = "n-panel-route-actions";
-  const routeCopy = document.createElement("p");
-  routeCopy.dataset.panelRouteCopy = "";
-  routeCopy.textContent = "After the hardware signals work, route those keys through KSX to virtual controllers.";
-  const buildPanelButton = makeKeyboardWorkbenchButton(
-    "Build physical panel",
-    "surface-encoder-build-panel",
-    "Draw physical joysticks and buttons from the terminal-to-key chart stored on this encoder",
-  );
-  buildPanelButton.classList.add("primary");
-  const designPanelButton = makeKeyboardWorkbenchButton(
-    "Design physical panel first",
-    "surface-encoder-design-panel",
-    "Choose the cabinet shape and physical controls before assigning I-PAC terminal outputs",
-  );
-  designPanelButton.classList.add("primary");
-  designPanelButton.hidden = true;
-  const routeButton = makeKeyboardWorkbenchButton(
-    "Continue to KSX routing",
-    "surface-encoder-route",
-    "Leave hardware setup and open the KSX mapping inspector",
-  );
-  routeActions.append(routeCopy, designPanelButton, buildPanelButton, routeButton);
-  outputTest.append(outputTestHead, outputTestCopy, outputSignalGrid, routeActions);
-  const programmingActions = document.createElement("div");
-  programmingActions.className = "n-surface-programming-actions";
-  const reread = makeKeyboardWorkbenchButton(
-    "Read board again",
-    "surface-encoder-read",
-    "Read every chart byte again and create another verified backend-owned backup",
-  );
-  reread.classList.add("quiet");
-  const review = makeKeyboardWorkbenchButton(
-    "Review & program board",
-    "surface-encoder-review",
-    "Compute an exact terminal and byte diff without writing anything",
-  );
-  review.classList.add("primary");
-  programmingActions.append(reread, review);
-  const advancedHardware = document.createElement("details");
-  advancedHardware.className = "n-surface-programming-advanced";
-  const advancedHardwareSummary = document.createElement("summary");
-  advancedHardwareSummary.textContent = "Advanced hardware actions";
-  const advancedHardwareCopy = document.createElement("p");
-  advancedHardwareCopy.textContent =
-    "Clearing the board disables every readable output. Use it only when you intentionally want a silent I-PAC; deleting a saved KSX layout does not change hardware.";
-  const clearOutputs = makeKeyboardWorkbenchButton(
-    "Disable all hardware outputs",
-    "surface-encoder-mode",
-    "Prepare a clear-all hardware draft while preserving opaque vendor bytes",
-    "blank",
-  );
-  clearOutputs.dataset.surfaceProgrammingMode = "blank";
-  clearOutputs.dataset.surfaceProgrammingDescription =
-    "Clear readable actions and known Shift roles while preserving opaque vendor bytes.";
-  clearOutputs.classList.add("danger");
-  advancedHardware.append(advancedHardwareSummary, advancedHardwareCopy, clearOutputs);
-  const recovery = document.createElement("details");
-  recovery.className = "n-surface-programming-recovery";
-  const recoverySummary = document.createElement("summary");
-  recoverySummary.textContent = "Recovery and raw board history";
-  const recoveryCopy = document.createElement("p");
-  recoveryCopy.textContent =
-    "Raw, board-bound recovery images are transaction safeguards. Saved hardware layouts above are the reusable profiles you normally work with.";
-  const restoreGroup = document.createElement("div");
-  restoreGroup.className = "n-surface-programming-restore";
-  const restoreLabel = document.createElement("label");
-  const restoreLabelText = document.createElement("span");
-  restoreLabelText.dataset.surfaceBackupLabel = "";
-  restoreLabelText.textContent = "Restore a verified backup";
-  const backupSelect = document.createElement("select");
-  backupSelect.dataset.surfaceBackup = "";
-  backupSelect.setAttribute("aria-label", "Verified encoder backup");
-  const backupPlaceholder = document.createElement("option");
-  backupPlaceholder.value = "";
-  backupPlaceholder.textContent = "No verified backups yet";
-  backupSelect.append(backupPlaceholder);
-  restoreLabel.append(restoreLabelText, backupSelect);
-  const restore = makeKeyboardWorkbenchButton(
-    "Review restore…",
-    "surface-encoder-restore",
-    "Compare this backend-owned backup with the complete current chart before restoring",
-  );
-  restoreGroup.append(restoreLabel, restore);
-  recovery.append(recoverySummary, recoveryCopy, restoreGroup);
-  programming.append(
+
+  // One line, and it says what happened — a refusal in the store's own authored
+  // words, or the summary of a read. `aria-live` because pressing the button is
+  // the only thing on this surface that talks to hardware.
+  const encoderStatus = document.createElement("p");
+  encoderStatus.className = "n-encoder-read-status";
+  encoderStatus.dataset.encoderStatus = "";
+  encoderStatus.setAttribute("role", "status");
+  encoderStatus.setAttribute("aria-live", "polite");
+
+  const encoderTable = document.createElement("table");
+  encoderTable.className = "n-encoder-read-table";
+  encoderTable.dataset.encoderTable = "";
+  encoderTable.hidden = true;
+  const encoderHeadRow = document.createElement("thead");
+  encoderHeadRow.innerHTML = "";
+  const headRow = document.createElement("tr");
+  for (const label of ["Terminal", "Emits", "Shifted", "Shift role"]) {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.textContent = label;
+    headRow.append(th);
+  }
+  encoderHeadRow.append(headRow);
+  const encoderBody = document.createElement("tbody");
+  encoderBody.dataset.encoderRows = "";
+  encoderTable.append(encoderHeadRow, encoderBody);
+
+  encoderRead.append(
     signalJourney,
-    programmingHead,
-    programmingDevice,
-    programmingSummary,
-    programmingQualification,
-    programmingConflicts,
-    programmingModes,
-    profiles,
-    terminalEditor,
-    outputTest,
-    programmingActions,
-    advancedHardware,
-    recovery,
+    encoderHead,
+    encoderFacts,
+    encoderActions,
+    encoderStatus,
+    encoderTable,
   );
 
   const stages = document.createElement("nav");
@@ -5494,6 +5578,7 @@ function createControlSurfaceItem(): HTMLElement {
     makeKeyboardWorkbenchGroup("Panel", "n-surface-panel-actions", [
       makeKeyboardWorkbenchButton("Choose template…", "surface-new", "Replace this panel only after choosing and confirming a new starting layout"),
       makeKeyboardWorkbenchButton("Undo removal / replacement", "surface-undo", "Restore the panel from immediately before the last destructive edit"),
+      makeKeyboardWorkbenchButton("Publish as board", "surface-publish", "Save this panel as a board you can map on — it joins the list under How the keys are drawn"),
     ]),
   );
   for (const button of Array.from(tools.querySelectorAll<HTMLButtonElement>('[data-nx="surface-add"]'))) {
@@ -5533,8 +5618,16 @@ function createControlSurfaceItem(): HTMLElement {
   note.className = "n-surface-note";
   note.dataset.surfaceNote = "";
   note.textContent =
-    "Encoder setup is supervised: KSX reads and backs up the complete chart, previews an exact diff, then writes only after confirmation and byte-for-byte verification. Teach still proves what the physical wiring sends; Route writes the dynamic KSX mapping.";
-  content.append(head, hardware, programming, stages, status, starters, tools, workarea, note);
+    // This sentence opened with a promise `3901990` had already taken away —
+    // "KSX reads and backs up the complete chart, previews an exact diff,
+    // then writes only after confirmation and byte-for-byte verification" —
+    // describing the supervised chart write in the present tense on a build
+    // that cannot read a chart at all. It was the footer of the removed
+    // status surface above, and it went the same way and for the same reason.
+    // What remains is the part that is still true on every build: the two
+    // steps this builder does own, and the fact that they are separate.
+    "Teach proves what the physical wiring sends; Route writes the dynamic KSX mapping.";
+  content.append(head, encoderRead, stages, status, starters, tools, workarea, note);
 
   const item = createCanvasItem({
     instanceId: "control-surface",
@@ -6131,6 +6224,28 @@ function controlSurfacePointerEnd(event: PointerEvent): void {
   }
 }
 
+/** The body a seat gets when the server named a family this bundle has no
+ *  master for — a visible, self-explaining failure instead of a guess.
+ *
+ *  Reachable exactly one way: a daemon newer than this bundle serving a
+ *  persona added after it was built, which the server resolves to the named
+ *  `"unknown"` family rather than inventing a silhouette for
+ *  (`UNKNOWN_PRESENTATION`, `crates/ksx-studio/src/snapshot.rs`). The seat
+ *  itself is real — it is staged, it binds keys, its controls are the wire
+ *  vocabulary — so it keeps its widget, its badge and its title, and only the
+ *  picture is missing. Saying so is the point: the previous behaviours were to
+ *  draw an Xbox pad, or to drop the widget and leave a controller the user
+ *  created with no representation anywhere and nothing logged. */
+function unrecognisedPadBody(family: string): HTMLElement {
+  const body = document.createElement("p");
+  body.className = "n-mini-unknown";
+  body.setAttribute("role", "status");
+  body.textContent = "No controller art for this device" +
+    (family && family !== "unknown" ? ` ("${family}")` : "") +
+    ". Its buttons still bind — update ksx Studio to see it drawn.";
+  return body;
+}
+
 /** Every staged controller as a canvas widget, rebuilt when the roster
  *  changes: the engine's own item factory around the same badge-and-clone
  *  card the pad grid used to build. Client-created on purpose (the padgrid
@@ -6162,16 +6277,29 @@ export function syncPadWidgets(): void {
     // The hidden masters, keyed by the family they draw — NOT by template
     // order: a third art (the DualSense) is exactly the change that makes an
     // index silently hand every PlayStation seat the wrong body.
+    //
+    // ⚠️ `pv.family` is READ, never re-decided. There used to be a hardcoded
+    // `Set(["xbox","ps","ps5","switchpro","xboxseries"])` here with an `: "xbox"`
+    // fallback, which is the same bug the comment above warns about wearing a
+    // different hat: it fixed the index by name and then re-introduced a
+    // five-name allowlist that answers "xbox" for anything outside it. The
+    // server had already made this decision ONCE, for every persona, in
+    // `PAD_PRESENTATIONS` (`crates/ksx-studio/src/snapshot.rs`) — a second
+    // opinion here can only ever disagree with it.
+    //
+    // A family with no master is now a VISIBLE failure. It reaches us exactly
+    // one way — a daemon newer than this bundle, whose persona the server
+    // resolved to the named `"unknown"` family — and the two wrong answers are
+    // to draw a controller we made up, or to `return` and let the seat vanish
+    // from the canvas with no error anywhere. Both were live: the fallback drew
+    // an Xbox pad, and the `if (!art) return` below dropped the widget.
     pads.forEach((pv, index) => {
-      const family = new Set(["xbox", "ps", "ps5", "switchpro", "xboxseries"]).has(pv.family)
-        ? pv.family
-        : "xbox";
+      const family = pv.family;
       const master = root.querySelector<HTMLElement>(
-        `.n-padwrap[data-pad-family="${family}"]`,
+        `.n-padwrap[data-pad-family="${CSS.escape(family)}"]`,
       );
       const art = master?.querySelector(".ps5a") ?? master?.querySelector("svg");
-      if (!art) return;
-      const artClone = art.cloneNode(true) as SVGSVGElement;
+      const artClone = art ? (art.cloneNode(true) as SVGSVGElement) : null;
       const storeKey = storeKeys.get(pv.slot) ?? "p:" + pv.preset;
       const content = document.createElement("div");
       content.className = "n-mini np" + pv.slot;
@@ -6189,7 +6317,7 @@ export function syncPadWidgets(): void {
       title.textContent = pv.title;
       head.append(badge, title);
       let variantControls: HTMLElement | null = null;
-      if (pv.family === "ps" && artClone.matches("svg.ds4premium")) {
+      if (artClone && pv.family === "ps" && artClone.matches("svg.ds4premium")) {
         const controls = document.createElement("div");
         controls.className = "n-ds4-variants";
         controls.setAttribute("role", "group");
@@ -6223,7 +6351,7 @@ export function syncPadWidgets(): void {
         variantControls = controls;
       } else {
         const config = premiumControllerConfig(family);
-        if (config && artClone.matches(config.selector)) {
+        if (artClone && config && artClone.matches(config.selector)) {
           const premiumFamily = family as PremiumControllerFamily;
           const controls = document.createElement("div");
           controls.className = "n-controller-variants";
@@ -6266,7 +6394,7 @@ export function syncPadWidgets(): void {
           variantControls = controls;
         }
       }
-      content.append(head, artClone);
+      content.append(head, artClone ?? unrecognisedPadBody(family));
       const item = createCanvasItem({
         instanceId: "pad-" + pv.slot,
         displayName: "P" + pv.slot + " \u00b7 " + pv.title,
@@ -6472,9 +6600,36 @@ export function applyNocturneUnreachable(): void {
   setNDevNote("ksx could not be reached — this list may be stale. Reopen ksx.");
 }
 
+/** The one sentence `nocturne_form_identify` redirects with when a keyboard
+ *  actually answered (`server/nocturne.rs` `N_IDENTIFY_OK`). Matched, not
+ *  parsed: the flash string IS this page's outcome channel, and it is already
+ *  the thing that tells success from the two `error:` refusals. Kept as a
+ *  literal here rather than derived, because the served copy and this
+ *  comparison are pinned together by `nocturne_identify_success_sentence_is_
+ *  the_one_the_island_matches` in `render_nocturne.rs`. */
+const IDENTIFY_OK_FLASH =
+  "Keyboard identified and selected. Nothing has been captured, saved, or started.";
+
+/** Set by `applyFlash` when identify succeeded, read and cleared by the very
+ *  next `applyNocturne`. The answer is deliberately staged through the POLL
+ *  rather than shown straight from the flash: the flash proves the daemon
+ *  staged SOMETHING, but only the poll carries WHAT — `kb_title` — and naming
+ *  a device from anywhere but the served value is how a page ends up claiming
+ *  a selection the daemon does not have. `submitForm` fires that poll
+ *  immediately after `applyFlash`, so the wait is one round trip. */
+let identifyAwaitingAnswer = false;
+
 /** Report one action outcome (the redirect's allowlisted ?flash= copy), and
  *  settle any in-flight identify banner. */
 export function applyFlash(flash: string | null): void {
+  // Whatever the answer is, the keyboard belongs to the user again: the
+  // round trip is over, so the guard that was swallowing their keypresses
+  // comes off here, at the one place every identify outcome passes through.
+  if (ui.identify === "listening") disarmFocusGuard();
+  const identified = ui.identify === "listening" && flash === IDENTIFY_OK_FLASH;
+  identifyAwaitingAnswer = identified;
+  // A refusal collapses the box exactly as before — the reddened flash IS the
+  // answer, and holding a "done" box open beside it would be two answers.
   ui.identify = false;
   // A dialog or menu whose form just answered is done — the flash line and
   // the refreshed panes are the answer now.
@@ -6485,6 +6640,78 @@ export function applyFlash(flash: string | null): void {
   const err = flash.startsWith("error");
   setNFlashLine(flash.replace(/^error:\s*/, ""));
   setNFlashCls(err ? "n-flash err" : "n-flash ok");
+}
+
+/** How long the answer stays on screen. Long enough to read a device name
+ *  after looking up from the keyboard you just pressed; short enough that the
+ *  box is a report and not a second, permanent piece of chrome. */
+const IDENTIFY_DONE_MS = 6000;
+let identifyDoneTimer: number | undefined;
+
+/** The answer, settled: the box directly under the Identify button stops
+ *  pulsing, turns to the accent, and says which keyboard answered — using the
+ *  SERVED `kb_title` the source widget's header is already showing.
+ *
+ *  This is the second half of the 2026-08-26 fix. The first half stopped the
+ *  page lurching; this one gives the verb a visible outcome. `.n-idbox.done`
+ *  and `.n-idbox.done .n-idot { display: none }` were designed for exactly
+ *  this and had never been written by anything — `grep -c "n-idbox done"` on
+ *  the built bundle was 0.
+ *
+ *  Called from `applyNocturne`, i.e. from the poll, so `title` is a value the
+ *  daemon just served rather than a sentence this file composed. */
+function identifyDone(title: string): void {
+  const name = title.trim();
+  // A staged device the poll cannot name is not an answer worth holding open.
+  // `kb_title` reads "No keyboard selected — pick one on the left" when
+  // nothing is staged, and echoing that under a success flash would be the
+  // page contradicting itself.
+  if (!name || name.startsWith("No keyboard selected")) return;
+  ui.identify = "done";
+  applyNocturneUi();
+  // AFTER applyNocturneUi, which writes the prompt for every other state.
+  setNIdText(name);
+  if (identifyDoneTimer !== undefined) window.clearTimeout(identifyDoneTimer);
+  identifyDoneTimer = window.setTimeout(() => {
+    identifyDoneTimer = undefined;
+    if (ui.identify !== "done") return;
+    ui.identify = false;
+    applyNocturneUi();
+  }, IDENTIFY_DONE_MS);
+  announceIdentified(name);
+  // One frame later: the caller has just written the device-list signals, and
+  // the row this wants to pulse does not exist until the engine reconciles
+  // them. Querying now would find the PREVIOUS chosen row, or none.
+  window.requestAnimationFrame(() => pulseChosenDeviceRow());
+}
+
+/** Say it once to a screen reader too — the box is a colour change and a
+ *  pulse stopping, neither of which announces itself. Reuses the island's one
+ *  live region (`liveAnnounce`), so the page still has exactly one. */
+function announceIdentified(name: string): void {
+  liveAnnounce(`Identified ${name}.`);
+}
+
+/** The other half of "show me what I identified": the row in the left pane
+ *  that is now the chosen one pulses, using the same `.locate` animation
+ *  `locateBindRow` and `locateKeyRow` already use.
+ *
+ *  Found BY SELECTOR, deliberately. The device lists are `createList`s whose
+ *  key includes `cls`, so the row that just became `n-dev on` was destroyed
+ *  and rebuilt by the poll that named it — a node reference taken before the
+ *  poll points at a corpse. `block: "nearest"` is a no-op when the row is
+ *  already visible, which after the key guard landed it usually is. */
+function pulseChosenDeviceRow(): void {
+  const row = learnRoot?.querySelector<HTMLElement>(".n-left .n-devform button.n-dev.on");
+  if (!row) return;
+  row.scrollIntoView({
+    block: "nearest",
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+  });
+  row.classList.remove("locate");
+  void row.offsetWidth;
+  row.classList.add("locate");
+  window.setTimeout(() => row.classList.remove("locate"), 3600);
 }
 
 // ── CLIENT-ONLY UI state: dialogs, rails, the identify banner ──────────────
@@ -6506,7 +6733,18 @@ const ui: {
   dlg: boolean;
   leftRail: boolean;
   rightRail: boolean;
-  identify: boolean;
+  /** Identify's three states, not two. `"listening"` is the in-flight round
+   *  trip (the box pulses, the key guard is armed); `"done"` is the ANSWER,
+   *  held on screen for a few seconds so the verb has a visible outcome where
+   *  the user's eyes already are; `false` is the collapsed box.
+   *
+   *  It was a boolean until 2026-08-26, and the missing state was the whole
+   *  complaint: the answer only ever appeared as one fixed sentence in the
+   *  32 px flash bar at the top of the page — "Keyboard identified and
+   *  selected." — which never names the device that answered, while the box
+   *  under the button (whose `.n-idbox.done` styling has existed all along,
+   *  unwritten by anything) simply vanished. */
+  identify: false | "listening" | "done";
   rightView: "controls" | "keys";
   kbSolo: boolean;
 } = {
@@ -6545,9 +6783,20 @@ function applyNocturneUi(): void {
         .map((pv) => ` mute${pv.slot}`)
         .join(""),
   );
-  setNIdLinkCls(ui.identify ? "n-link on" : "n-link");
-  setNIdBoxCls(ui.identify ? "n-idbox listen" : "n-idbox none");
-  setNIdText("Press a key on the keyboard you want to use");
+  // Only the LISTENING state lights the button — "done" is an answer, not an
+  // armed verb, and a lit button beside a settled answer reads as still-armed.
+  setNIdLinkCls(ui.identify === "listening" ? "n-link on" : "n-link");
+  setNIdBoxCls(
+    ui.identify === "listening"
+      ? "n-idbox listen"
+      : ui.identify === "done"
+        ? "n-idbox done"
+        : "n-idbox none",
+  );
+  // The prompt is this function's to write; the ANSWER is not. `identifyDone`
+  // sets `nIdText` from the SERVED `kb_title` and is the only writer of the
+  // done wording, so the box can never name a device the daemon did not stage.
+  if (ui.identify !== "done") setNIdText("Press a key on the keyboard you want to use");
 }
 
 // ── Chrome preferences that survive a refresh ──────────────────────────────
@@ -7123,9 +7372,41 @@ function stopLearnTimer(): void {
 /** While armed the panel's keys reach Windows and therefore this page; a
  *  letter would type into anything focusable and Space would "click" the
  *  button that armed the learn. Swallow everything at the capture phase —
- *  except Escape, which cancels. */
+ *  except Escape, which cancels.
+ *
+ *  **Identify arms this too, and it always should have.** Identify asks the
+ *  user to press a real key while the server listens for up to 11 s; that key
+ *  reaches this page exactly the way a learn's does. It went unguarded until
+ *  2026-08-26, and the measured result was ugly: `submitForm` disables the
+ *  button it just submitted, Chrome blurs it to `<body>`, and the next
+ *  keypress runs its default scroll action against `.n-left` — the page's only
+ *  scroller, because `.nocturne { height: 100vh; overflow: hidden }` means the
+ *  document itself cannot scroll. One Space moved the pane 327 px and carried
+ *  the Identify button, and the answer box directly under it, off the top.
+ *
+ *  The two arming verbs want DIFFERENT strengths, so this reads the arm rather
+ *  than assuming learn's:
+ *   - learn swallows the event whole (`stopPropagation`), because a learn owns
+ *     the keyboard until it binds, refuses or is cancelled;
+ *   - identify only `preventDefault`s. That is enough to kill the scroll — the
+ *     canvas's document-level Space-pan handler already checks
+ *     `!event.defaultPrevented` — while leaving the page's own Escape handling
+ *     and every other listener intact, so an 11 s round trip can never trap
+ *     someone inside a modal-feeling page with no way out.
+ *
+ *  Identify's Escape releases the guard and nothing else. It deliberately does
+ *  NOT route into `cancelLearn`/`autoMapAdvance` (those are learn's, and would
+ *  cancel a learn identify never started), and it cannot cancel the POST: the
+ *  learner generation lives inside `identify_and_stage` on the server, so the
+ *  transaction runs to its own deadline regardless. Releasing the guard is the
+ *  honest thing Escape CAN do — it hands the keyboard back. */
 function guardLearnKeys(ev: KeyboardEvent): void {
-  if (!learnRow) return;
+  if (!learnRow) {
+    if (ui.identify !== "listening") return;
+    ev.preventDefault();
+    if (ev.key === "Escape") disarmFocusGuard();
+    return;
+  }
   ev.preventDefault();
   ev.stopPropagation();
   if (ev.key === "Escape") {
@@ -7825,8 +8106,13 @@ async function writeLearnedKey(row: LearnTarget, key: string, force: boolean): P
     )?.target_revision?.trim() ?? "";
     if (!refreshedRevision || refreshedRevision === row.expectedTargetRevision?.trim()) {
       autoMap = null;
+      // **The bind landed; the follow-on did not.** `line` is success copy, and
+      // `applyFlash` reddens only on a leading "error" — so without this prefix
+      // the page painted GREEN while telling the user KSX could not confirm the
+      // write AND silently stopping auto-map. A flash the user must act on is
+      // not a success, whatever the first half of the sentence says.
       applyFlash(
-        `${line} Refresh the canvas before mapping another control; KSX could not confirm the new draft revision.`,
+        `error: ${line} KSX could not confirm the new draft revision, so mapping stopped — refresh the canvas before mapping another control.`,
       );
       return false;
     }
@@ -8959,8 +9245,17 @@ export function nocturneWire(root: HTMLElement): void {
       return;
     }
     if (form && form.classList.contains("n-idform")) {
-      ui.identify = true;
+      ui.identify = "listening";
       applyNocturneUi();
+      // Take the keyboard BEFORE `wireForms`'s own submit listener disables
+      // this button (which blurs it to `<body>`) and before the user's real
+      // keypress arrives. Without this the keypress runs its default scroll
+      // action against `.n-left`, the page's only scroller, and carries the
+      // button and its answer box off the top of the pane — measured at
+      // 327 px for a single Space. `armFocusGuard`'s pre-emptive blur is
+      // harmless here; `submitForm` blurs the same button a tick later
+      // anyway. `applyFlash` disarms it on every outcome.
+      armFocusGuard();
     }
     if (
       form instanceof HTMLFormElement &&
@@ -9395,6 +9690,14 @@ export function nocturneWire(root: HTMLElement): void {
           ?.focus({ preventScroll: true });
     } else if (hit === "surface-undo") {
       undoControlSurfaceDestructiveEdit();
+    } else if (hit === "surface-publish") {
+      void publishControlSurfaceAsBoard();
+    } else if (hit === "encoder-read") {
+      // The dispatcher has NO default arm, so a token with no branch is
+      // silently inert — which is how the old furniture's two buttons sat
+      // enabled and dead beside real hardware. The branch ships with the
+      // button, in the same edit.
+      void readEncoderChart(root);
     } else if (hit === "surface-stage") {
       const stage = target?.closest<HTMLElement>("[data-surface-stage]")
         ?.dataset.surfaceStage as ControlSurfaceStage | undefined;
@@ -10043,6 +10346,40 @@ export function NocturneIsland() {
           h("button", { class: "n-collapse", type: "button", "data-nx": "pane-left" }, "›"),
           h("button", { class: "n-pbadge plus", type: "button", "data-nx": "slot-new" }, "+"),
         ),
+        // ── The setup spine ────────────────────────────────────────────
+        //
+        // `pick an input -> make controllers -> bind -> play`, with ONE extra
+        // stop for an arcade panel: describe it. A keyboard describes itself
+        // — Windows hands over a layout — so its keys are known the moment it
+        // is picked. A panel is switches wired to an encoder, and the host
+        // only ever learns that a key arrived, never which button sent it.
+        //
+        // Every step here is SERVED. The order, the wording and which one is
+        // current are claims about the draft, and the daemon owns the draft;
+        // re-deriving any of it here is how two surfaces start disagreeing.
+        // The `describe` step is simply ABSENT for a keyboard rather than
+        // greyed out — a stop that never applies is not one somebody skipped.
+        h(
+          "nav",
+          { class: "n-journey", "aria-label": "Setup steps" },
+          h("p", { class: "n-journey-line" }, () => nJourneyLine()),
+          createList(
+            () => nJourney(),
+            (r) => r.key + "|" + r.badge + "|" + r.cls,
+            (r) =>
+              h(
+                "div",
+                { class: r.cls, "data-journey-step": r.key, title: r.detail },
+                h("span", { class: "n-jbadge" }, r.badge),
+                h(
+                  "span",
+                  { class: "n-jtxt" },
+                  h("span", { class: "n-jtitle" }, r.title),
+                  h("span", { class: "n-jdetail" }, r.detail),
+                ),
+              ),
+          ),
+        ),
         h(
           "div",
           { class: "n-kick-row" },
@@ -10057,7 +10394,7 @@ export function NocturneIsland() {
         ),
         createList(
           () => nDevEncoders(),
-          (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta + "|" + r.role,
+          (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta + "|" + r.role + "|" + r.aria_current + "|" + r.title + "|" + r.chartReadable,
           (r) =>
             h(
               "form",
@@ -10067,7 +10404,17 @@ export function NocturneIsland() {
               h("input", { type: "hidden", name: "label", value: r.label }),
               h(
                 "button",
-                { type: "submit", class: r.cls },
+                {
+                  type: "submit",
+                  class: r.cls,
+                  // Both SERVED. `aria-current` is the assistive half of
+                  // `n-dev on`; `title` is the server's sentence about what
+                  // this press does. Neither is composed here — the row is
+                  // this page's "add to canvas" verb, and what a verb costs
+                  // is derivation, not decoration (SURFACES.md §1a).
+                  "aria-current": r.aria_current,
+                  title: r.title,
+                },
                 h("span", { class: "n-dev-ico" }, "▦"),
                 h(
                   "span",
@@ -10077,18 +10424,23 @@ export function NocturneIsland() {
                 ),
                 h("span", { class: "n-dev-dot" }),
               ),
-              h(
-                "button",
-                {
-                  type: "button",
-                  class: "n-encoder-setup",
-                  "data-nx": "encoder-select-setup",
-                  title: "Open this exact encoder's hardware outputs; KSX inspects proven capabilities before offering reads or writes",
-                  "data-encoder-selector": r.selector,
-                },
-                "Open outputs",
-                h("span", { class: "n-encoder-accessible-name" }, " ", r.name),
-              ),
+              // ── "Open outputs" STOOD HERE, REMOVED 2026-08-26 ────────────
+              //
+              // Every encoder row carried a second button —
+              // `data-nx="encoder-select-setup"`, carrying that board's
+              // `data-encoder-selector` — which opened this exact I-PAC's
+              // hardware-output surface. `3901990` deleted the handler along
+              // with the rest of the chart work and LEFT THE BUTTON: the
+              // delegated dispatcher below matches `[data-nx]` through a
+              // chain of `else if`s with no default arm, so an unknown token
+              // falls off the end and the click does nothing observable at
+              // all — no flash, no error, no focus move. Styled, enabled and
+              // titled "KSX inspects proven capabilities before offering
+              // reads or writes", sitting beside the user's real hardware.
+              //
+              // It returns with the status surface it opened, when a chart
+              // READ verb comes back from PacBench — see the note in
+              // `createControlSurfaceItem` for what that surface was.
             ),
         ),
         h(
@@ -10100,7 +10452,7 @@ export function NocturneIsland() {
         // Device rows — the row IS the /nocturne/device form's button.
         createList(
           () => nDevRows(),
-          (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta,
+          (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta + "|" + r.aria_current + "|" + r.title + "|" + r.chartReadable,
           (r) =>
             h(
               "form",
@@ -10110,7 +10462,12 @@ export function NocturneIsland() {
               h("input", { type: "hidden", name: "label", value: r.label }),
               h(
                 "button",
-                { type: "submit", class: r.cls },
+                {
+                  type: "submit",
+                  class: r.cls,
+                  "aria-current": r.aria_current,
+                  title: r.title,
+                },
                 h("span", { class: "n-dev-ico" }, "⌨"),
                 h(
                   "span",
@@ -10136,7 +10493,7 @@ export function NocturneIsland() {
           ),
           createList(
             () => nDevExp(),
-            (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta,
+            (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta + "|" + r.aria_current + "|" + r.title + "|" + r.chartReadable,
             (r) =>
               h(
                 "form",
@@ -10146,7 +10503,12 @@ export function NocturneIsland() {
                 h("input", { type: "hidden", name: "label", value: r.label }),
                 h(
                   "button",
-                  { type: "submit", class: r.cls },
+                  {
+                    type: "submit",
+                    class: r.cls,
+                    "aria-current": r.aria_current,
+                    title: r.title,
+                  },
                   h("span", { class: "n-dev-ico" }, "⚙"),
                   h(
                     "span",
@@ -10208,6 +10570,13 @@ export function NocturneIsland() {
           "div",
           { class: () => nIdBoxCls() },
           h("span", { class: "n-idot" }),
+          // A static claim beside the served value. `n-idtxt` holds either the
+          // prompt or — in the answer state — the SERVED `kb_title`, verbatim;
+          // this word is what turns that bare device name into a sentence. It
+          // is static markup on purpose: it is in the SSR pass too, so nothing
+          // about the box's shape is JS-only, and the CSS shows it in the
+          // `.done` state alone.
+          h("span", { class: "n-idlabel" }, "Identified"),
           h("span", { class: "n-idtxt" }, () => nIdText()),
         ),
         h(
@@ -10226,7 +10595,7 @@ export function NocturneIsland() {
         ),
         createList(
           () => nModeRows(),
-          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls,
+          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
           (r) =>
             h(
               "form",
@@ -10234,7 +10603,65 @@ export function NocturneIsland() {
               h("input", { type: "hidden", name: "blocking", value: r.name }),
               h(
                 "button",
-                { type: "submit", class: r.cls },
+                // `aria-current` is the only part of "this is the one you are
+                // on" a screen reader can reach: `.n-radio.on` paints a dot
+                // and announces nothing at all.
+                //
+                // Bound as a PLAIN property, never `r.chosen || undefined`. The
+                // compiler cannot evaluate a bare `||`, so that form is dropped
+                // from the server-rendered HTML and hydration does not re-apply
+                // a non-function prop — the attribute would simply never exist,
+                // which is the same silent nothing this fix was written to end.
+                { type: "submit", class: r.cls, "aria-current": r.chosen },
+                h("span", { class: "n-radio-dot" }),
+                h(
+                  "span",
+                  { class: "n-radio-txt" },
+                  h("span", { class: "n-radio-title" }, r.title),
+                  h("span", { class: "n-radio-detail" }, r.detail),
+                ),
+              ),
+            ),
+        ),
+        // ââ The board picker âââââââââââââââââââââââââââââââââââââââââââ
+        //
+        // WHICH PICTURE the keys are drawn on. It is a display choice and
+        // nothing more: a binding carries the canonical key name, so the same
+        // key drives the same control whichever board is on screen. That is
+        // why it sits beside the theme rather than anywhere near mapping.
+        //
+        // Server-marked, like the theme rows â `r.cls` is the whole class of
+        // the row's own submit button, and the chosen row arrives as
+        // `n-radio on`. Nothing is re-derived here, and no row is hidden: a
+        // board that cannot be drawn arrives as `n-radio off` carrying the
+        // sentence that says why. Hiding it is what made the theme picker look
+        // like a control that did nothing.
+        h(
+          "div",
+          { class: "n-kick-row" },
+          h("span", { class: "n-kick" }, "How the keys are drawn"),
+        ),
+        h("p", { class: "n-devnote" }, () => nBoardLine()),
+        createList(
+          () => nBoardRows(),
+          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
+          (r) =>
+            h(
+              "form",
+              { class: "n-modeform", method: "post", action: "/nocturne/board" },
+              h("input", { type: "hidden", name: "board", value: r.name }),
+              h(
+                "button",
+                // `aria-current` is the only part of "this is the one you are
+                // on" a screen reader can reach: `.n-radio.on` paints a dot
+                // and announces nothing at all.
+                //
+                // Bound as a PLAIN property, never `r.chosen || undefined`. The
+                // compiler cannot evaluate a bare `||`, so that form is dropped
+                // from the server-rendered HTML and hydration does not re-apply
+                // a non-function prop — the attribute would simply never exist,
+                // which is the same silent nothing this fix was written to end.
+                { type: "submit", class: r.cls, "aria-current": r.chosen },
                 h("span", { class: "n-radio-dot" }),
                 h(
                   "span",
@@ -10257,7 +10684,7 @@ export function NocturneIsland() {
         ),
         createList(
           () => nThemeRows(),
-          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls,
+          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
           (r) =>
             h(
               "form",
@@ -10265,7 +10692,16 @@ export function NocturneIsland() {
               h("input", { type: "hidden", name: "theme", value: r.name }),
               h(
                 "button",
-                { type: "submit", class: r.cls },
+                // `aria-current` is the only part of "this is the one you are
+                // on" a screen reader can reach: `.n-radio.on` paints a dot
+                // and announces nothing at all.
+                //
+                // Bound as a PLAIN property, never `r.chosen || undefined`. The
+                // compiler cannot evaluate a bare `||`, so that form is dropped
+                // from the server-rendered HTML and hydration does not re-apply
+                // a non-function prop — the attribute would simply never exist,
+                // which is the same silent nothing this fix was written to end.
+                { type: "submit", class: r.cls, "aria-current": r.chosen },
                 h("span", { class: "n-radio-dot" }),
                 h(
                   "span",
@@ -10474,7 +10910,21 @@ export function NocturneIsland() {
             // It pointed at the Start page until 2026-08-25, and that page is
             // a 404 now: with scripting off this was the only sentence about
             // adding a controller, and it sent people to nowhere.
-            "Adding a controller here needs JavaScript, because the create dialog is where the persona, the layout and the opposite-directions rule are chosen together. Everything else on this page — picking a keyboard, loading a saved game, Save and Play — works without it.",
+            //
+            // And until 2026-08-26 it closed with "Everything else on this
+            // page … works without it", which was false for the one verb the
+            // page exists for. BINDING has no form twin: `/nocturne/api/bind`
+            // takes `axum::Json` only, and the Learn that precedes it needs a
+            // live listener watching the keyboard. Everything AROUND a
+            // binding does have a twin — `/nocturne/bind/clear`,
+            // `/nocturne/bind/clear-all`, `/nocturne/bind/turbo`,
+            // `/nocturne/bind/toggle` — so a reader with scripting off can
+            // clear, shape and reshape bindings all day and never once make
+            // one, and the old sentence told them the opposite. It is the
+            // one sentence on the page addressed EXACTLY to the people it
+            // misled, so it now names both exceptions and then enumerates
+            // what actually works rather than implying the remainder.
+            "Adding a controller here needs JavaScript, because the create dialog is where the persona, the layout and the opposite-directions rule are chosen together. Assigning a key needs it too: Learn has to watch your keyboard while you press, and the bind that follows is a JSON call with no form behind it. What does work without scripting, because each one is a plain form: picking a keyboard, loading a saved game, clearing one binding or every binding in a slot, Turbo, Hold/Toggle, Save, Play and Stop.",
           ),
         ),
         // The short undo window after a removal: the SERVER holds the
@@ -11771,17 +12221,29 @@ export function NocturneIsland() {
           { class: () => nKbCls() },
           h(
             "div",
-            { class: "n-kbcase" },
+            {
+              class: "n-kbcase",
+              // The plate's own aspect, from the board bounds. Every cell
+              // inside is absolutely positioned, so without a height the
+              // case collapses. `data-origin` is what lets the stylesheet
+              // sculpt a KEYCAP without also sculpting an arcade button.
+              style: () => nBoardCaseStyle(),
+              "data-origin": () => nBoardOrigin(),
+            },
           h(
             "div",
             { class: "n-kbrow" },
             createList(
               () => nKbRow1(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              // `r.key` MUST be in the reconcile key. Without it two cells
+              // differing only by which key they send are interchangeable to
+              // the differ, and it can hand a recycled node the wrong
+              // `data-key` — a cap that binds a key you did not press.
+              (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -11792,11 +12254,15 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow2(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              // `r.key` MUST be in the reconcile key. Without it two cells
+              // differing only by which key they send are interchangeable to
+              // the differ, and it can hand a recycled node the wrong
+              // `data-key` — a cap that binds a key you did not press.
+              (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -11807,11 +12273,15 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow3(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              // `r.key` MUST be in the reconcile key. Without it two cells
+              // differing only by which key they send are interchangeable to
+              // the differ, and it can hand a recycled node the wrong
+              // `data-key` — a cap that binds a key you did not press.
+              (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -11822,11 +12292,15 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow4(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              // `r.key` MUST be in the reconcile key. Without it two cells
+              // differing only by which key they send are interchangeable to
+              // the differ, and it can hand a recycled node the wrong
+              // `data-key` — a cap that binds a key you did not press.
+              (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -11837,11 +12311,15 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow5(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              // `r.key` MUST be in the reconcile key. Without it two cells
+              // differing only by which key they send are interchangeable to
+              // the differ, and it can hand a recycled node the wrong
+              // `data-key` — a cap that binds a key you did not press.
+              (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -11852,11 +12330,15 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow6(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              // `r.key` MUST be in the reconcile key. Without it two cells
+              // differing only by which key they send are interchangeable to
+              // the differ, and it can hand a recycled node the wrong
+              // `data-key` — a cap that binds a key you did not press.
+              (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -11875,11 +12357,15 @@ export function NocturneIsland() {
             { class: "n-kbtray-row" },
             createList(
               () => nKbTray(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              // `r.key` MUST be in the reconcile key. Without it two cells
+              // differing only by which key they send are interchangeable to
+              // the differ, and it can hand a recycled node the wrong
+              // `data-key` — a cap that binds a key you did not press.
+              (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),

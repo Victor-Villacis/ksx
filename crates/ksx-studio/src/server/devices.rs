@@ -129,7 +129,7 @@ pub(super) async fn devices_page(
     payload.flash = flash.clone();
     let theme = page_theme(&state).await;
     let out = crate::render::with_theme(
-        render_devices(&state.devices_page, &payload, flash.as_deref()),
+        render_devices(&state.devices_page.get(), &payload, flash.as_deref()),
         theme.as_deref(),
     );
     (

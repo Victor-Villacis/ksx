@@ -138,7 +138,7 @@ pub mod retrigger {
 
 #[cfg(test)]
 mod tests {
-    use ksx_core::{OnRelease, Retrigger};
+    use ksx_core::{Interrupt, MacroSwitch, OnRelease, Retrigger};
 
     #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
     struct Holder {
@@ -182,5 +182,70 @@ mod tests {
         assert!(err.to_string().contains("abort"), "{err}");
         let err = toml::from_str::<Holder>("retrigger = \"maybe\"").unwrap_err();
         assert!(err.to_string().contains("restart"), "{err}");
+    }
+
+    /// The other two hand-edited fields this module adapts.
+    ///
+    /// `an_unknown_policy_names_the_options` covered `on_release` and
+    /// `retrigger` only, so `interrupt = "sometimes"` and `macros = "sometime"`
+    /// produced messages nothing pinned (2026-08-26 audit) — and these are
+    /// exactly the two settings whose whole job is deciding what happens
+    /// mid-macro and whether macros run at all. A typo here must say what the
+    /// legal words are, not just "invalid value".
+    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct Switches {
+        #[serde(
+            default,
+            with = "super::interrupt",
+            skip_serializing_if = "super::interrupt::is_default"
+        )]
+        interrupt: Interrupt,
+        #[serde(
+            default,
+            with = "super::switch",
+            skip_serializing_if = "super::switch::is_default"
+        )]
+        macros: MacroSwitch,
+    }
+
+    #[test]
+    fn an_unknown_interrupt_or_macro_switch_names_the_options() {
+        let err = toml::from_str::<Switches>("interrupt = \"sometimes\"").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("sometimes"),
+            "must quote what was typed: {msg}"
+        );
+        assert!(
+            Interrupt::ALL.iter().all(|i| msg.contains(i.as_str())),
+            "must name every interrupt policy: {msg}"
+        );
+
+        let err = toml::from_str::<Switches>("macros = \"sometime\"").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("sometime"), "must quote what was typed: {msg}");
+        assert!(
+            MacroSwitch::ALL.iter().all(|s| msg.contains(s.as_str())),
+            "must name on and off: {msg}"
+        );
+    }
+
+    #[test]
+    fn interrupt_and_the_macro_switch_normalize_and_cost_no_bytes_when_default() {
+        // Defaults write nothing: a config that predates either field
+        // round-trips byte for byte.
+        let plain: Switches = toml::from_str("").unwrap();
+        assert_eq!(plain.interrupt, Interrupt::None);
+        assert_eq!(plain.macros, MacroSwitch::On);
+        assert_eq!(toml::to_string(&plain).unwrap().trim(), "");
+
+        // Aliases and casing land on the canonical spelling on the way out.
+        let s: Switches = toml::from_str("interrupt = \"Any-Key\"\nmacros = \"Disabled\"").unwrap();
+        assert_eq!(s.interrupt, Interrupt::AnyInput);
+        assert_eq!(s.macros, MacroSwitch::Off);
+        let text = toml::to_string(&s).unwrap();
+        assert!(text.contains("interrupt = \"any-input\""), "{text}");
+        assert!(text.contains("macros = \"off\""), "{text}");
+        assert_eq!(toml::from_str::<Switches>(&text).unwrap(), s);
     }
 }

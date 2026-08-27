@@ -242,73 +242,110 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    /// Representative canonical names from every key family used by presets.
-    const CANONICAL_NAMES: &[&str] = &[
-        "G",
-        "F",
-        "J",
-        "I",
-        "D",
-        "C",
-        "A",
-        "B",
-        "Q",
-        "H",
-        "E",
-        "M",
-        "N",
-        "K",
-        "L",
-        "Eight",
-        "Seven",
-        "Enter",
-        "Zero",
-        "Five",
-        "Four",
-        "Two",
-        "Three",
-        "Nine",
-        "Six",
-        "Tab",
-        "Space",
-        "Escape",
-        "Backspace",
-        "T",
-        "S",
-        "W",
-        "V",
-        "O",
-        "P",
-        "U",
-        "R",
-        "Z",
-        "X",
-        "Y",
-        "One",
-        "BackslashPipe",
-        "CloseBracketBrace",
-        "Tilde",
-        "SingleDoubleQuote",
-        "DashUnderscore",
-        "PlusEquals",
-        "SemicolonColon",
-        "OpenBracketBrace",
-        "ForwardSlashQuestionMark",
-        "CapsLock",
-        "CommaLeftArrow",
-        "PeriodRightArrow",
-        "None",
+    /// The COMPLETE key vocabulary, frozen as literals: every canonical
+    /// spelling paired with its wire value.
+    ///
+    /// Why the whole table and not a sample (2026-08-26 audit): `Key::name()`
+    /// is `stringify!($variant)`, so the enum variant IS the word written into
+    /// native preset TOML. Renaming a variant is a refactor any IDE will offer
+    /// and it compiles clean — but every preset already on disk then fails
+    /// [`Key::from_name`] and reads as "unknown key". This table was 54 of the
+    /// 137 spellings before it was completed; the 13 `Mouse*` and 9 `Oem*`
+    /// names had no literal witness anywhere in the workspace
+    /// (`ksx-studio/src/keyboard_layout.rs` covers only the physical-keyboard
+    /// subset).
+    ///
+    /// This is the append-only compatibility surface the module docs describe.
+    /// Adding a key means adding a row. Changing a row means breaking saved
+    /// presets, and that has to be loud.
+    #[rustfmt::skip]
+    const WIRE_VOCABULARY: &[(&str, u16)] = &[
+        ("None", 0), ("Escape", 1), ("One", 2), ("Two", 3),
+        ("Three", 4), ("Four", 5), ("Five", 6), ("Six", 7),
+        ("Seven", 8), ("Eight", 9), ("Nine", 10), ("Zero", 11),
+        ("DashUnderscore", 12), ("PlusEquals", 13), ("Backspace", 14), ("Tab", 15),
+        ("Q", 16), ("W", 17), ("E", 18), ("R", 19),
+        ("T", 20), ("Y", 21), ("U", 22), ("I", 23),
+        ("O", 24), ("P", 25), ("OpenBracketBrace", 26), ("CloseBracketBrace", 27),
+        ("Enter", 28), ("LeftControl", 29), ("A", 30), ("S", 31),
+        ("D", 32), ("F", 33), ("G", 34), ("H", 35),
+        ("J", 36), ("K", 37), ("L", 38), ("SemicolonColon", 39),
+        ("SingleDoubleQuote", 40), ("Tilde", 41), ("LeftShift", 42), ("BackslashPipe", 43),
+        ("Z", 44), ("X", 45), ("C", 46), ("V", 47),
+        ("B", 48), ("N", 49), ("M", 50), ("CommaLeftArrow", 51),
+        ("PeriodRightArrow", 52), ("ForwardSlashQuestionMark", 53), ("RightShift", 54), ("NumpadAsterisk", 55),
+        ("LeftAlt", 56), ("Space", 57), ("CapsLock", 58), ("F1", 59),
+        ("F2", 60), ("F3", 61), ("F4", 62), ("F5", 63),
+        ("F6", 64), ("F7", 65), ("F8", 66), ("F9", 67),
+        ("F10", 68), ("NumLock", 69), ("ScrollLock", 70), ("Numpad7", 71),
+        ("Numpad8", 72), ("Numpad9", 73), ("NumpadMinus", 74), ("Numpad4", 75),
+        ("Numpad5", 76), ("Numpad6", 77), ("NumpadPlus", 78), ("Numpad1", 79),
+        ("Numpad2", 80), ("Numpad3", 81), ("Numpad0", 82), ("NumpadDelete", 83),
+        ("Oem16", 84), ("LeftBackslashPipe", 86), ("F11", 87), ("F12", 88),
+        ("LeftWindows", 91), ("RightWindows", 92), ("Menu", 93), ("Up", 5001),
+        ("Down", 5002), ("Left", 5003), ("Right", 5004), ("Home", 10071),
+        ("PageUp", 10073), ("End", 10079), ("PageDown", 10081), ("Insert", 10082),
+        ("Delete", 10083), ("MediaPreviousTrack", 10001), ("MediaPlayPause", 10002), ("MediaNextTrack", 10003),
+        ("VolumeUp", 10004), ("VolumeDown", 10005), ("VolumeMute", 10006), ("RightControl", 10008),
+        ("RightAlt", 10009), ("Oem0", 10020), ("Oem2", 10010), ("Oem3", 10011),
+        ("Oem4", 10015), ("Oem5", 10012), ("Oem6", 10013), ("Oem7", 10014),
+        ("Oem13", 10007), ("NumpadDivide", 10040), ("ShiftModifier", 10016), ("PrintScreen", 10017),
+        ("Break", 10018), ("Pause", 10019), ("NumpadEnter", 10021), ("MouseLeftButton", 20001),
+        ("MouseRightButton", 20002), ("MouseMiddleButton", 20003), ("MouseExtraLeft", 20004), ("MouseExtraRight", 20005),
+        ("MouseWheelUp", 20006), ("MouseWheelDown", 20007), ("MouseWheelLeft", 20008), ("MouseWheelRight", 20009),
+        ("MouseMoveLeft", 20010), ("MouseMoveRight", 20011), ("MouseMoveUp", 20012), ("MouseMoveDown", 20013),
+        ("Unknown", 30000),
     ];
 
+    /// Every spelling a preset may already contain still parses, still renders
+    /// the same way, and still carries the same number.
+    ///
+    /// Replaces `every_canonical_name_round_trips` (a 54-name sample) and the
+    /// set-size half of `full_enum_is_distinct_and_complete`. Those two size
+    /// assertions could not fail: `Key` is macro-generated, so a duplicate
+    /// discriminant is `E0081` and a duplicate variant is `E0428` — both
+    /// compile errors, checked with `rustc` before removing them.
     #[test]
-    fn every_canonical_name_round_trips() {
-        for name in CANONICAL_NAMES {
+    fn the_wire_vocabulary_is_frozen() {
+        // The key vocabulary is an append-only compatibility surface.
+        assert_eq!(Key::ALL.len(), 137);
+        assert_eq!(
+            WIRE_VOCABULARY.len(),
+            Key::ALL.len(),
+            "a new key needs a frozen (spelling, value) row before it ships",
+        );
+
+        for &(name, value) in WIRE_VOCABULARY {
             let key = Key::from_name(name)
-                .unwrap_or_else(|| panic!("canonical key name '{name}' not in Key enum"));
-            assert_eq!(key.name(), *name);
+                .unwrap_or_else(|| panic!("preset spelling '{name}' no longer parses"));
+            assert_eq!(key.name(), name, "'{name}' now renders under another name");
+            assert_eq!(key.value(), value, "'{name}' changed its wire value");
+            assert_eq!(
+                Key::from_value(value),
+                Some(key),
+                "value {value} must resolve back to '{name}'",
+            );
+        }
+
+        // ...and no key escaped the table. Length alone would not catch a
+        // duplicated row masking a missing one.
+        let frozen: HashSet<&str> = WIRE_VOCABULARY.iter().map(|&(n, _)| n).collect();
+        assert_eq!(frozen.len(), WIRE_VOCABULARY.len(), "duplicate frozen row");
+        for key in Key::ALL {
+            assert!(
+                frozen.contains(key.name()),
+                "{} ships with no frozen spelling",
+                key.name(),
+            );
         }
     }
 
+    /// Kept alongside `the_wire_vocabulary_is_frozen` even though every line
+    /// below is a subset of that table, because the provenance differs: these
+    /// numbers were written by hand against the set-1 scancode spec and the
+    /// E0/E1 correction table, while the full table was transcribed from the
+    /// enum. If the big table is ever regenerated from a broken enum, this is
+    /// the independent witness that still disagrees.
     #[test]
     fn stable_value_spot_checks() {
         assert_eq!(Key::None.value(), 0);
@@ -332,16 +369,6 @@ mod tests {
         assert_eq!(Key::MouseLeftButton.value(), 20001);
         assert_eq!(Key::MouseMoveDown.value(), 20013);
         assert_eq!(Key::Unknown.value(), 30000);
-    }
-
-    #[test]
-    fn full_enum_is_distinct_and_complete() {
-        let values: HashSet<u16> = Key::ALL.iter().map(|k| k.value()).collect();
-        assert_eq!(values.len(), Key::ALL.len());
-        let names: HashSet<&str> = Key::ALL.iter().map(|k| k.name()).collect();
-        assert_eq!(names.len(), Key::ALL.len());
-        // The key vocabulary is an append-only compatibility surface.
-        assert_eq!(Key::ALL.len(), 137);
     }
 
     #[test]

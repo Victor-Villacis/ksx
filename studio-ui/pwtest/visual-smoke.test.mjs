@@ -161,7 +161,29 @@ after(async () => {
       `${JSON.stringify(manifest, null, 2)}\n`,
       "utf8",
     );
-    assert.equal(records.length, expectedCount, "the screenshot artifact is incomplete");
+    // The completeness pin is what makes the artifact trustworthy in CI: a
+    // suite that captured 12 of 15 screenshots and said nothing is how a
+    // regression hides, so it stays ON by default and CI never sets the escape
+    // hatch below.
+    //
+    // The hatch exists because this hook is file-level: running ONE test by
+    // name (`--test-name-pattern`) still runs it, so teardown failed on every
+    // filtered run long after the test itself had passed. Detecting the filter
+    // from inside the test process is NOT possible — node's runner spawns each
+    // file as a child WITHOUT the runner's own flags, so `process.argv` here is
+    // just `[node, <file>]` (measured 2026-08-26; an earlier attempt to sniff
+    // argv was silently inert, which is worse than no fix). An explicit opt-in
+    // is the honest mechanism:
+    //
+    //     KSX_PARTIAL_SHOTS=1 node --test --test-name-pattern="…" visual-smoke.test.mjs
+    if (process.env.KSX_PARTIAL_SHOTS === "1") {
+      console.log(
+        `visual smoke: captured ${records.length} of ${expectedCount} screenshots ` +
+          "(KSX_PARTIAL_SHOTS=1, so the completeness pin is skipped)",
+      );
+    } else {
+      assert.equal(records.length, expectedCount, "the screenshot artifact is incomplete");
+    }
   } catch (error) {
     failures.push(error);
   }
@@ -289,6 +311,10 @@ for (const config of CONTEXTS) {
               documentWidth,
               coarse: matchMedia("(pointer: coarse)").matches,
               light: matchMedia("(prefers-color-scheme: light)").matches,
+              nocturneStage: (() => {
+                const stage = document.querySelector(".nocturne");
+                return stage ? getComputedStyle(stage).backgroundColor : null;
+              })(),
               containers,
               canvasAdoption,
               escaped: containers.filter(
@@ -331,6 +357,20 @@ for (const config of CONTEXTS) {
             config.options.colorScheme === "light",
             `${config.name} did not expose the intended color scheme`,
           );
+          // Under System (the fixture stamps no data-theme) the product frame
+          // itself must follow the OS, not just the body behind it: an
+          // emulated light OS repaints `.nocturne` with the light tokens.
+          // Dark keeps the Nocturne design's own navy — that face IS dark.
+          if (layout.nocturneStage !== null) {
+            assert.equal(
+              layout.nocturneStage,
+              config.options.colorScheme === "light"
+                ? hexToRgb(THEMES.find((t) => t.id === "light").bg)
+                : "rgb(22, 24, 38)",
+              `${route.path} did not paint the System-${config.options.colorScheme} ` +
+                `ground on ${config.name}`,
+            );
+          }
           assert.deepEqual(diagnostics, [], `${route.path} emitted browser errors on ${config.name}`);
         } catch (error) {
           failure = error;
@@ -488,33 +528,21 @@ ${themedStderr.trim() || "(it said nothing)"}`,
           `${route.path} painted the wrong ground for stamped ${theme.id}`,
         );
         if (painted.nocturneStage !== null) {
-          // ⚠️ WHAT THIS PINS IS NO LONGER WHAT IT SAYS IT PINS.
-          //
-          // The rationale here used to be "the design-proof route deliberately
-          // ignores themes… and dies wholesale at M5 (its own banner's
-          // contract)". That route is now THE PRODUCT — `/nocturne` is the
-          // only page ksx Studio ships — and the frame still hard-codes its
-          // palette: `studio.css` sets `--n-bg: #161826` on `.nocturne` and
-          // paints `background: var(--n-bg)` on a `height: 100vh;
-          // overflow: hidden` frame. The theme stamp reaches `body` and
-          // nothing else, so the frame covers every pixel of the ground the
-          // assertion above just proved was themed.
-          //
-          // The consequence is a shipped theme picker (`/nocturne/theme`,
-          // `themes.json` = dark/light/matrix) that changes NOTHING A USER CAN
-          // SEE on the product page — and this assertion is what would fail
-          // first if somebody fixed it. It is left standing on purpose: the
-          // fact it states is true today, and deleting it would let the frame
-          // drift silently while the question is decided. But it is a
-          // REGRESSION GUARD OVER A DEFECT, not a contract, and whoever owns
-          // the token system should either theme `--n-bg` (and re-point this
-          // at `theme.bg`) or remove the picker.
+          // The frame learned the themes (2026-08-27). `.nocturne` was the
+          // one surface a stamp could not reach — it hard-coded its palette
+          // over a 100vh frame, so the shipped picker changed nothing a user
+          // could see. Its `--n-*` roles now alias the token values under a
+          // stamped light or matrix theme, so the ground here IS `theme.bg`.
+          // Stamped dark is the one exception, on purpose: the Nocturne
+          // design's own navy (#161826) is the product's dark face, and the
+          // picker's Dark row promises "renders dark", not "renders the
+          // token ramp's dark".
+          const expectedStage =
+            theme.id === "dark" ? "rgb(22, 24, 38)" : hexToRgb(theme.bg);
           assert.equal(
             painted.nocturneStage,
-            "rgb(22, 24, 38)",
-            `${route.path}'s .nocturne frame still hard-codes --n-bg under stamped ${theme.id} ` +
-              `— if this failed because the frame learned the theme, that is the fix landing: ` +
-              `re-point this at hexToRgb(theme.bg)`,
+            expectedStage,
+            `${route.path}'s .nocturne frame did not paint the stamped ${theme.id} ground`,
           );
         }
         assert.deepEqual(
@@ -527,3 +555,134 @@ ${themedStderr.trim() || "(it said nothing)"}`,
     }
   });
 }
+
+// ── The plate lays out, measured in a real browser ─────────────────────────
+//
+// These assert on GEOMETRY the page actually computed, which is the only place
+// the two defects below were visible. Both shipped, both passed every Rust
+// test, and neither could have been caught by one: the Rust side owns the
+// numbers, and the stylesheet was quietly disagreeing with them.
+//
+//  - `.n-key.sp` still carried the cluster gap as a `margin-left` after
+//    `board.rs` began baking it into `left`. `.n-kbcase .n-key { margin: 0 }`
+//    was meant to hold it off and could not — equal specificity, declared
+//    later — so the gap applied twice and 14 caps on the DEFAULT board sat on
+//    top of their neighbour by more than half a cap.
+//  - `.n-kbcase` was `box-sizing: content-box`, so `aspect-ratio` shaped the
+//    content box while the absolutely positioned caps measured percentages
+//    against the padding box. They differ by exactly the padding, and every
+//    cap came out about 7.5% too tall.
+describe("the plate lays out", () => {
+  let context;
+
+  before(async () => {
+    context = await browser.newContext({
+      viewport: { width: 1440, height: 900 },
+      locale: "en-US",
+      timezoneId: "UTC",
+      serviceWorkers: "block",
+    });
+  });
+
+  after(async () => {
+    await context?.close();
+  });
+
+  test("no two caps on the board overlap", async () => {
+    const page = await context.newPage();
+    try {
+      const response = await page.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
+      assert.ok(response?.ok(), `/nocturne returned HTTP ${response?.status() ?? "none"}`);
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+
+      const boxes = await page.evaluate(() =>
+        Array.from(document.querySelectorAll(".n-kbcase .n-key")).map((el) => {
+          const r = el.getBoundingClientRect();
+          return {
+            key: el.getAttribute("data-key") ?? "",
+            sp: el.classList.contains("sp"),
+            x: r.x,
+            y: r.y,
+            w: r.width,
+            h: r.height,
+          };
+        }),
+      );
+
+      assert.ok(boxes.length > 60, `expected a full board of caps, saw ${boxes.length}`);
+
+      // A cap that overlaps its neighbour hands clicks to the wrong key, which
+      // is indistinguishable from a binding that stopped working. 0.5px of
+      // slack absorbs sub-pixel rounding and nothing else.
+      const overlaps = [];
+      for (let i = 0; i < boxes.length; i += 1) {
+        for (let j = i + 1; j < boxes.length; j += 1) {
+          const a = boxes[i];
+          const b = boxes[j];
+          const apart =
+            a.x + a.w <= b.x + 0.5 ||
+            b.x + b.w <= a.x + 0.5 ||
+            a.y + a.h <= b.y + 0.5 ||
+            b.y + b.h <= a.y + 0.5;
+          if (!apart) overlaps.push(`${a.key || "chrome"} over ${b.key || "chrome"}`);
+        }
+      }
+      assert.deepEqual(
+        overlaps.slice(0, 8),
+        [],
+        `${overlaps.length} caps overlap a neighbour; the cluster gap is most likely being applied twice`,
+      );
+
+      // Every cap is authored 34/30 taller than it is wide. A plate whose
+      // percentage basis disagrees with its own aspect-ratio stretches all of
+      // them uniformly, so this catches the box-sizing class of bug without
+      // depending on any single cap's size.
+      const square = boxes.filter((b) => !b.sp && b.w > 0 && Math.abs(b.w - boxes[0].w) < 0.5);
+      assert.ok(square.length > 20, "expected many 1u caps to compare");
+      const ratio = square[0].h / square[0].w;
+      assert.ok(
+        Math.abs(ratio - 34 / 30) < 0.03,
+        `a 1u cap drew ${ratio.toFixed(3)} tall/wide, not the authored ${(34 / 30).toFixed(3)} — the plate's aspect-ratio and its percentage basis disagree`,
+      );
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("the board fits inside its card", async () => {
+    const page = await context.newPage();
+    try {
+      await page.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      const fit = await page.evaluate(() => {
+        const plate = document.querySelector(".n-kbcase");
+        if (!plate) return null;
+        const p = plate.getBoundingClientRect();
+        const card = plate.closest(".n-widget-kb") ?? plate.parentElement;
+        const c = card.getBoundingClientRect();
+        return { plateW: p.width, plateH: p.height, cardW: c.width };
+      });
+      assert.ok(fit, "the plate is missing");
+      assert.ok(
+        fit.plateW <= fit.cardW + 1,
+        `the plate is ${fit.plateW.toFixed(0)}px wide inside a ${fit.cardW.toFixed(0)}px card`,
+      );
+      // A portrait board (an arcade panel) is clamped by a height budget so it
+      // cannot grow into a column that swallows the canvas beneath it.
+      assert.ok(
+        fit.plateH <= 620,
+        `the plate is ${fit.plateH.toFixed(0)}px tall; the height budget is meant to cap it`,
+      );
+    } finally {
+      await page.close();
+    }
+  });
+});

@@ -4,7 +4,7 @@
 //! same enumeration as `ksx devices`; HID top-level collection metadata comes
 //! from handles opened with desired access zero. No input, output, or feature
 //! report is requested or sent, and the persistent chart remains an explicit
-//! unattempted state until the user opens Encoder setup.
+//! unattempted state until something explicitly asks for the chart.
 
 use std::fmt::Write as _;
 
@@ -426,14 +426,14 @@ fn panel_row(group: &BoardGroup<'_>, hid: &HidSurvey) -> PanelStatusRow {
         (Some(_), "keyboard-compatible") => (
             "not-read",
             "Chart not read — explicit action required",
-            "Passive status never sends the chart query; choose Read & back up to admit the exact configuration collection and preserve a lossless restore point",
-            "Keep keyboard mode, then open Encoder setup to inspect, review and program this board under KSX",
+            "Passive status never sends the chart query; reading the stored chart is a separate, explicit action that opens the board's configuration collection",
+            "Keep keyboard mode — it is what lets ksx both split this board and, for a profiled release, read its stored chart",
         ),
         (Some(_), _) => (
             "not-read",
             "Chart not read — exact mode remains unknown",
             "Passive status never sends the chart query; an absent keyboard-compatible interface is kept explicit rather than guessed",
-            "Use the documented hardware recovery gesture to restore keyboard mode, then open Encoder setup",
+            "Use the documented hardware recovery gesture to restore keyboard mode",
         ),
         (None, _) if family.is_some() => (
             "unsupported-release",
@@ -837,7 +837,7 @@ mod tests {
         );
         assert_eq!(
             panel.recommendation,
-            "Keep keyboard mode, then open Encoder setup to inspect, review and program this board under KSX"
+            "Keep keyboard mode — it is what lets ksx both split this board and, for a profiled release, read its stored chart"
         );
     }
 

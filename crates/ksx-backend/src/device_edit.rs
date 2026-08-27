@@ -1579,8 +1579,13 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("winusb"), "{message}");
         assert!(message.contains("Bluetooth"), "{message}");
+        // The constant `PickError::BackendTransport` carries as its `reason`,
+        // not a fragment of its wording: what has to hold here is that the
+        // reason reached the `Display` output at all — the refusal that hides
+        // it behind "backend-transport" is the failure this test exists for.
+        // ksx-core owns the sentence and locks its words in its own test.
         assert!(
-            message.contains("no USB interface to bind"),
+            message.contains(ksx_core::transport::WINUSB_NEEDS_A_USB_INTERFACE),
             "the transport fact must be IN the refusal, not only in a doc: {message}"
         );
 

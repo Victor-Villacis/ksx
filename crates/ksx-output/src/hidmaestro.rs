@@ -285,6 +285,161 @@ impl Drop for HidMaestroBackend {
     }
 }
 
+/// The two capacity refusals, and the constants they duplicate.
+///
+/// **Why these exist (2026-08-26 audit).** Both refusals sit behind
+/// `connect()`, which opens the real elevated host, so neither had ever been
+/// exercised — and `stage.rs`'s
+/// `a_ninth_hidmaestro_pad_is_refused_before_it_can_reach_the_host` pins the
+/// STAGING half, which makes the runtime half look covered when it is not.
+/// Staging and runtime disagreeing is not a cosmetic bug: staging waves a pad
+/// through and the backend refuses it mid-session, after seven other players
+/// are already live.
+///
+/// The pads are built directly rather than plugged, because plugging is exactly
+/// what would reach the host. Both refusals are pure functions of `self.pads`
+/// and run before `self.client()?`, which is the property the tests confirm.
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    fn live(persona: Persona, id: u32) -> LivePad {
+        LivePad {
+            controller: ksx_hidmaestro::host::ControllerId::new(id).expect("nonzero"),
+            persona,
+            state: PadState::default(),
+            last_submit: Instant::now(),
+            feedback: VecDeque::new(),
+        }
+    }
+
+    /// A backend holding `personas` as live pads and NO host connection.
+    fn backend_with(personas: &[Persona]) -> HidMaestroBackend {
+        let pads = personas
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| (i as u32, live(p, i as u32 + 1)))
+            .collect();
+        HidMaestroBackend {
+            sdk: None,
+            pads,
+            next_handle: personas.len() as u32 + 1,
+        }
+    }
+
+    #[test]
+    fn a_ninth_pad_is_refused_without_the_host_being_asked() {
+        let mut backend = backend_with(&[Persona::DualSense; HOST_CONTROLLER_LIMIT]);
+        let err = backend
+            .plug_persona(Persona::DualSense)
+            .expect_err("a 9th pad must be refused");
+        let msg = err.to_string();
+        // From `HOST_CONTROLLER_LIMIT` — the constant this crate's refusal is
+        // actually built from — rather than the literal 8. The tie back to
+        // `ksx_core::MAX_HIDMAESTRO_PADS` is its own assertion below
+        // (`the_runtime_limits_match_the_ones_staging_validates_against`), so
+        // the number lives in exactly one place per layer and the layers are
+        // pinned together once, on purpose, where that is the point.
+        assert!(
+            msg.contains(&format!("at most {HOST_CONTROLLER_LIMIT}")),
+            "{msg}"
+        );
+        assert!(msg.contains("live controllers"), "{msg}");
+        // THE POINT OF REFUSING LOCALLY: a host Fault poisons the whole one-use
+        // session, so a 9th create reaching the host would tear down the eight
+        // pads already in people's hands. `sdk` still being `None` is the proof
+        // that the refusal never got that far.
+        assert!(
+            backend.sdk.is_none(),
+            "the refusal must not open the elevated host",
+        );
+        assert_eq!(backend.pads.len(), HOST_CONTROLLER_LIMIT, "nothing changed");
+    }
+
+    #[test]
+    fn a_fifth_xinput_persona_is_refused_by_the_seat_rule_and_names_itself() {
+        // Four Xbox pads seat all four XInput slots; three Sony pads take none,
+        // so the eight-pad pool rule is NOT what fires here.
+        let mut backend = backend_with(&[
+            Persona::XboxSeries,
+            Persona::XboxSeries,
+            Persona::XboxSeries,
+            Persona::XboxSeries,
+            Persona::DualSense,
+            Persona::DualSense,
+            Persona::DualSense,
+        ]);
+        let err = backend
+            .plug_persona(Persona::XboxSeries)
+            .expect_err("a 5th XInput persona must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("XInput seats 4"), "{msg}");
+        assert!(
+            msg.contains("slotless"),
+            "say what would actually go wrong — the pad plugs and no game reads \
+             it: {msg}"
+        );
+        assert!(
+            msg.contains(Persona::XboxSeries.as_str()),
+            "name the persona being refused: {msg}"
+        );
+        assert!(
+            !msg.contains("at most"),
+            "the seat rule must not be reported as the pool rule — different \
+             fix, different ceiling: {msg}"
+        );
+        assert!(backend.sdk.is_none());
+
+        // ...and the same eight-pad session still has room for a plain HID pad:
+        // it is the XInput SEAT that is full, not the host. That plug reaches
+        // the host (there is nothing to refuse), so it is not attempted here —
+        // what is asserted is that it gets past both capacity gates.
+        assert!(!Persona::DualSense.is_xinput());
+        assert!(backend.pads.len() < HOST_CONTROLLER_LIMIT);
+    }
+
+    #[test]
+    fn a_ninth_non_xinput_pad_is_refused_by_the_pool_rule_not_the_seat_rule() {
+        // Eight Sony pads: zero XInput seats used, so only the pool rule can
+        // fire. The two refusals have different ceilings and different fixes
+        // ("use ViGEm for this one" vs "use a HID persona"), and reporting one
+        // as the other sends the user to the wrong change.
+        let mut backend = backend_with(&[Persona::DualSense; HOST_CONTROLLER_LIMIT]);
+        let msg = backend
+            .plug_persona(Persona::SwitchPro)
+            .expect_err("the 9th pad must be refused")
+            .to_string();
+        // Same constant, same reason as the pool refusal above.
+        assert!(
+            msg.contains(&format!("at most {HOST_CONTROLLER_LIMIT}")),
+            "{msg}"
+        );
+        assert!(!msg.contains("slotless"), "{msg}");
+    }
+
+    /// The staging gate and the runtime gate must agree on both numbers.
+    ///
+    /// Added 2026-08-26: each limit is written twice, once here and once in
+    /// `ksx-core`, with nothing tying them together. Raise one and staging
+    /// admits a pad the backend then refuses mid-session — or lower one and
+    /// staging refuses a pad that would have worked. Both are silent.
+    #[test]
+    fn the_runtime_limits_match_the_ones_staging_validates_against() {
+        assert_eq!(
+            HOST_CONTROLLER_LIMIT,
+            usize::from(ksx_core::MAX_HIDMAESTRO_PADS),
+            "the host's pool ceiling and `StageRefusal::TooManyHidMaestroPads` \
+             must be the same number",
+        );
+        assert_eq!(
+            XINPUT_SEAT_LIMIT,
+            usize::from(ksx_core::MAX_XINPUT_SLOTS),
+            "the XInput seat ceiling and `StageRefusal::TooManyXinputSlots` \
+             must be the same number",
+        );
+    }
+}
+
 #[cfg(not(windows))]
 impl VirtualPadBackend for HidMaestroBackend {
     fn plug(&mut self) -> Result<PadHandle, OutputError> {

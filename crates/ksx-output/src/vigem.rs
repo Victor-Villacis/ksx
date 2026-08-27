@@ -491,33 +491,75 @@ mod tests {
         }
     }
 
+    /// Hardened 2026-08-26: the expected side used to be `safe_axis(lx)` — the
+    /// production function this test exists to check. A change to `safe_axis`
+    /// moved the test and the code together, so the fold could be widened or
+    /// removed and this would still agree. Expected values are literals now.
     #[test]
     fn axes_and_triggers_copy_verbatim() {
+        // (lt, rt, lx, ly, rx, ry) submitted → the four axes as they must reach
+        // the wire. Verbatim EXCEPT i16::MIN, which folds to -32767 on the way
+        // out (see `to_xgamepad`): the one value a consumer cannot negate, abs,
+        // or normalize by 32767 without producing nonsense.
+        struct Case {
+            lt: u8,
+            rt: u8,
+            /// `[lx, ly, rx, ry]` as submitted.
+            submitted: [i16; 4],
+            /// `[lx, ly, rx, ry]` as they must reach the wire.
+            on_the_wire: [i16; 4],
+        }
+
         let cases = [
-            (0u8, 0u8, 0i16, 0i16, 0i16, 0i16),
-            (255, 128, i16::MIN, i16::MAX, -1, 1),
-            (1, 254, 12345, -12345, i16::MAX, i16::MIN),
+            Case {
+                lt: 0,
+                rt: 0,
+                submitted: [0, 0, 0, 0],
+                on_the_wire: [0, 0, 0, 0],
+            },
+            Case {
+                lt: 255,
+                rt: 128,
+                submitted: [i16::MIN, i16::MAX, -1, 1],
+                on_the_wire: [-32767, 32767, -1, 1],
+            },
+            Case {
+                lt: 1,
+                rt: 254,
+                submitted: [12345, -12345, i16::MAX, i16::MIN],
+                on_the_wire: [12345, -12345, 32767, -32767],
+            },
+            // -32767 is already the folded value and must pass through
+            // untouched: a fold implemented as a clamp at, say, -32766 would
+            // move it, and only a literal catches that.
+            Case {
+                lt: 0,
+                rt: 0,
+                submitted: [-32767, -32766, -32768, 32766],
+                on_the_wire: [-32767, -32766, -32767, 32766],
+            },
         ];
-        for (lt, rt, lx, ly, rx, ry) in cases {
+
+        for case in cases {
+            let [lx, ly, rx, ry] = case.submitted;
             let state = PadState {
                 buttons: XButtons::empty(),
-                lt,
-                rt,
+                lt: case.lt,
+                rt: case.rt,
                 lx,
                 ly,
                 rx,
                 ry,
             };
             let g = to_xgamepad(&state);
-            assert_eq!(g.left_trigger, lt);
-            assert_eq!(g.right_trigger, rt);
-            // Verbatim EXCEPT i16::MIN, which is folded to -32767 on the way
-            // out (see `to_xgamepad`): the one value a consumer cannot negate,
-            // abs, or normalize by 32767 without producing nonsense.
-            assert_eq!(g.thumb_lx, safe_axis(lx));
-            assert_eq!(g.thumb_ly, safe_axis(ly));
-            assert_eq!(g.thumb_rx, safe_axis(rx));
-            assert_eq!(g.thumb_ry, safe_axis(ry));
+            assert_eq!(g.left_trigger, case.lt);
+            assert_eq!(g.right_trigger, case.rt);
+            assert_eq!(
+                [g.thumb_lx, g.thumb_ly, g.thumb_rx, g.thumb_ry],
+                case.on_the_wire,
+                "submitted {:?}",
+                case.submitted,
+            );
         }
     }
 

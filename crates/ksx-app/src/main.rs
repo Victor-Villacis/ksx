@@ -16,8 +16,8 @@
 // If you are adding logic rather than a flag, it does not go in this file.
 use ksx_backend::{
     autostart, config_io, daemon, device_edit, device_scan, devices, doctor, input_test_cli,
-    install, logging, macro_cli, macro_trace, map, mapping, monitor, pads, play, preset_cli, run,
-    session, setup, slot_cli, stage_cli, winusb,
+    install, logging, macro_cli, macro_trace, map, mapping, monitor, pads, panel, panel_answers,
+    panel_programming, play, preset_cli, run, session, setup, slot_cli, stage_cli, winusb,
 };
 // `console` is here rather than above because `ksx cabinet` is its only caller
 // in this file: the daemon detaches its own console from inside the backend.
@@ -987,6 +987,26 @@ enum Command {
         #[command(subcommand)]
         command: WinusbCommand,
     },
+    /// Inspect a recognised arcade-panel encoder
+    ///
+    /// `status` is strictly PASSIVE. It reads the USB and HID device trees and
+    /// reports what ksx recognises: the board's family, the release it claims,
+    /// whether ksx holds a measured protocol profile for that exact release,
+    /// and therefore whether the board's stored chart could ever be read. It
+    /// sends no report to the board and opens no configuration handle.
+    ///
+    /// Recognition is not capability. ksx names seven Ultimarc families from
+    /// their exact USB pair, and holds a measured protocol profile for one
+    /// release of one of them. A recognised board without that profile is
+    /// named, split and mapped exactly as before — what it cannot do is have
+    /// its chart read, and this verb says so per board rather than leaving you
+    /// to guess.
+    ///
+    /// Exit codes: 0 = reported, 1 = error.
+    Panel {
+        #[command(subcommand)]
+        command: PanelCommand,
+    },
     /// Choose which physical device ksx reads — scan for boards, then pick one
     ///
     /// `ksx devices` lists devnodes, which is right for diagnosing a backend
@@ -1028,22 +1048,37 @@ enum Command {
     /// answered, or no browser could be started).
     #[cfg(feature = "studio")]
     Open,
-    /// Serve the ksx Studio page on 127.0.0.1: cabinet status + session control
+    /// Serve ksx Studio on 127.0.0.1: the product page, plus three tool pages
     ///
-    /// One auto-refreshing page. The SESSION panel talks to a running `ksx
-    /// daemon` over its control pipe (the same surface as `ksx session` and
-    /// the tray menu): current state, a games.toml profile dropdown, and
-    /// Start / Stop / Reload buttons as plain HTML forms — every button is
-    /// one backend verb, no GUI-only code paths. With no daemon on the pipe
-    /// the controls render disabled and say so; this command never starts a
-    /// daemon or captures anything itself.
+    /// This is the SERVER. `ksx open` is the friendly way in — it starts what
+    /// is missing and opens a window; this command only binds the port and
+    /// serves, so it is what you run when you want the browser you already
+    /// have, on the port you chose.
     ///
-    /// Below it, the status sections re-run the same read-only collectors
-    /// `ksx doctor` uses per request: driver health, the virtual pads the
-    /// bus is exposing, autostart registration, the games.toml profiles.
-    /// Status rows are point-in-time snapshots; session state is live from
-    /// the pipe. Localhost only — there is no LAN option; that arrives with
-    /// the pairing token.
+    /// `/nocturne` is the product: one page that owns the keyboard choice,
+    /// the controllers, the mapper, macros, saved games and the configuration
+    /// menu (Export, Import) as stages within it rather than as a sequence of
+    /// URLs. `/check`, `/pads` and `/devices` are the tools — the wiring echo,
+    /// the virtual pads the bus is exposing, and the machine's input devices —
+    /// each one deliberate action away. This help described a single
+    /// auto-refreshing status dashboard until 2026-08-25; `/`, `/start`,
+    /// `/map`, `/setup` and `/profiles` were deleted in that cutover and now
+    /// 404 with no redirect, deliberately (docs/SURFACES.md §6).
+    ///
+    /// Session control talks to a running `ksx daemon` over its control pipe —
+    /// the same surface as `ksx session` and the tray menu. Play, Stop and
+    /// Apply are plain HTML forms — every button is one backend verb, no
+    /// GUI-only code paths — and Apply is the one worth knowing: it hands the
+    /// draft's binding changes to the LIVE session without unplugging a pad,
+    /// and refuses with `needs-restart` when the change is structural. With no
+    /// daemon on the pipe the controls render disabled and say why; this
+    /// command never starts a daemon or captures anything itself.
+    ///
+    /// The tool pages re-run the same read-only collectors `ksx doctor` uses,
+    /// per request: driver health, virtual pads, autostart registration, the
+    /// games.toml profiles. Those rows are point-in-time snapshots; session
+    /// state is live from the pipe. Localhost only — there is no LAN option;
+    /// that arrives with the pairing token.
     ///
     /// Exit codes: 0 = clean stop, 1 = error (bind failed, embedded UI
     /// rejected).
@@ -1589,6 +1624,158 @@ enum WinusbCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum PanelCommand {
+    /// Report what ksx recognises about each connected encoder
+    ///
+    /// Read-only, and passive in the strong sense: it walks the USB and HID
+    /// device trees and reads descriptors Windows already has. No report is
+    /// sent to any board and no configuration collection is opened, so it is
+    /// safe to run while a board is in use — including while another tool has
+    /// the configuration interface.
+    Status {
+        /// One encoder, by instance path or any unique substring of one
+        ///
+        /// Omit to report every recognised board. An ambiguous substring is
+        /// refused rather than guessed.
+        #[arg(long)]
+        device: Option<String>,
+        /// One JSON object on stdout instead of the readable report
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read one encoder's stored chart — what every terminal is programmed to emit
+    ///
+    /// This is the explicit hardware read. Unlike `status`, it opens the board's
+    /// configuration collection and performs the vendor report transaction, so
+    /// it is an on-demand action and never something a page does on your behalf.
+    ///
+    /// It reads the board TWICE, independently, and refuses if the two images
+    /// differ — one lucky packet sequence is not authority. It writes nothing to
+    /// the board under any circumstances.
+    ///
+    /// Only a board with an exact measured protocol profile can be read; run
+    /// `ksx panel status` first to see whether yours is one. A terminal whose
+    /// byte ksx cannot classify is reported as a preserved vendor action rather
+    /// than guessed at — an onboard macro is indistinguishable from an
+    /// unassigned terminal, and this verb says so rather than pretending.
+    ///
+    /// Exit codes: 0 = read, 1 = error, 2 = refused (no measured profile, the
+    /// configuration interface is busy, the board is not in a keyboard-compatible
+    /// mode, or more than one board matched).
+    Chart {
+        /// One encoder, by instance path or any unique substring of one
+        #[arg(long)]
+        device: Option<String>,
+        /// Also save a lossless local restore point of the raw image
+        ///
+        /// OFF by default, and that is deliberate: a backup read is not a plain
+        /// read. It reconciles the pending-transaction journal and can advance
+        /// this board's write-qualification state, and in a build that never
+        /// writes to hardware, reading must not move write-safety state. The
+        /// file lands in the config root's `panel-backups` folder; nothing is
+        /// ever sent to the board.
+        #[arg(long)]
+        backup: bool,
+        /// One JSON object on stdout instead of the readable report
+        #[arg(long)]
+        json: bool,
+    },
+    /// Everything ksx knows about each terminal, and how it came to know it
+    ///
+    /// Reads the board, then composes that read together with what presses have
+    /// proved and what you have locked in by hand. Where those disagree it says
+    /// so rather than picking: a chart is instantaneous truth about the bytes the
+    /// board STORES, a press is historical truth about what it EMITTED, and
+    /// neither contains the other.
+    ///
+    /// This is the verb that can say things `chart` cannot. A terminal whose byte
+    /// is zero and that fires keys anyway is an onboard macro — the one thing a
+    /// chart read can never detect, because a macro'd terminal is byte-identical
+    /// to an unassigned one.
+    ///
+    /// It writes nothing to the board. Every answer starts with a read because
+    /// stored evidence is filed under a board fingerprint and a terminal
+    /// signature, and the read is what establishes both.
+    ///
+    /// Exit codes: 0 = composed, 1 = error, 2 = refused.
+    Truth {
+        /// One encoder, by instance path or any unique substring of one
+        #[arg(long)]
+        device: Option<String>,
+        /// One JSON object on stdout instead of the readable report
+        #[arg(long)]
+        json: bool,
+    },
+    /// Type in what a terminal sends, and lock it in
+    ///
+    /// For the terminals ksx cannot work out on its own: a byte it preserves but
+    /// cannot classify, or one you know is unwired. It writes nothing to the
+    /// board — this records what YOU say the control does. The board must be one
+    /// ksx can read: a declaration is filed against the chart's own terminal
+    /// roster and board identity, and only a read establishes those, so a board
+    /// with no measured protocol refuses here exactly as `chart` does.
+    ///
+    /// A declaration never outranks the board. It loses to a chart read and to a
+    /// press, it is never promoted by agreeing with one, and a later read that
+    /// disagrees shows both values rather than quietly correcting you. You may
+    /// know the wire from that button reaches a different screw than the
+    /// silkscreen claims, and that is a fact about the cabinet, not the firmware.
+    ///
+    /// Exit codes: 0 = locked in, 1 = error, 2 = refused.
+    Declare {
+        /// One encoder, by instance path or any unique substring of one
+        #[arg(long)]
+        device: Option<String>,
+        /// The screw terminal, exactly as `ksx panel chart` spells it
+        #[arg(long)]
+        terminal: String,
+        /// The canonical key name this control sends, or empty for unassigned
+        #[arg(long)]
+        key: String,
+        /// Why you know this — kept verbatim, and never shown as ksx's own claim
+        #[arg(long, default_value = "")]
+        note: String,
+        /// One JSON object on stdout instead of the readable report
+        #[arg(long)]
+        json: bool,
+    },
+    /// Drop what ksx stored for one terminal
+    ///
+    /// The undo for `declare`, and the only way a recorded press is removed.
+    /// Nothing in ksx prunes these on its own. With neither flag it forgets both.
+    ///
+    /// Exit codes: 0 = forgotten, 1 = error, 2 = refused.
+    Forget {
+        /// One encoder, by instance path or any unique substring of one
+        #[arg(long)]
+        device: Option<String>,
+        /// The screw terminal, exactly as `ksx panel chart` spells it
+        #[arg(long)]
+        terminal: String,
+        /// Forget only the recorded press
+        #[arg(long)]
+        observed: bool,
+        /// Forget only what you typed in
+        #[arg(long)]
+        declared: bool,
+        /// One JSON object on stdout instead of the readable report
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the local restore points `chart --backup` has saved
+    ///
+    /// Reads the backup store on disk. Opens no device and sends nothing.
+    Backups {
+        /// One encoder, by instance path or any unique substring of one
+        #[arg(long)]
+        device: Option<String>,
+        /// One JSON object on stdout instead of the readable report
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Clap adapter for [`ksx_core::Persona`]'s lenient `FromStr` (ksx-core carries
 /// no clap dependency). The error already names the valid values.
 fn parse_persona(s: &str) -> Result<ksx_core::Persona, ksx_core::UnknownPersona> {
@@ -1813,6 +2000,25 @@ impl From<AutostartMode> for ksx_platform::autostart::TaskMode {
 }
 
 fn main() -> anyhow::Result<()> {
+    // **The killable HID output worker, before anything else.**
+    //
+    // A chart write to an I-PAC goes through `HidD_SetOutputReport`, which
+    // cannot be cancelled once it is in the kernel. `ksx-platform` therefore
+    // re-executes THIS binary with one private argument, duplicates the exact
+    // HID handle into it, and can terminate that child on a deadline instead of
+    // hanging forever on an unresponsive board.
+    //
+    // That means `ksx.exe` has a second entry point, and it has to be taken
+    // before logging and before clap — logging would write a second process's
+    // lines into the same file, and clap would reject the private argument and
+    // exit 2. Which is exactly what happened: this call was missing, so every
+    // chart read failed on its first packet with "the HID output helper exited
+    // with code 2 without completing the report". The worker was written, made
+    // `pub`, documented as needing to run "before any logging or argument
+    // parsing" — and never called by anything.
+    if let Some(code) = ksx_platform::hid_report::maybe_run_output_report_worker() {
+        std::process::exit(code);
+    }
     // Logging first, and for **every** command — not just the daemon. A
     // `ksx run` started by the cabinet's logon task has no console either, and
     // the whole point of the file sink is that something is left behind when a
@@ -2232,6 +2438,30 @@ fn main() -> anyhow::Result<()> {
                 device_edit::remove(device_edit::RemoveSpec { alias, force }, json)
             }
         },
+        Command::Panel { command } => match command {
+            PanelCommand::Status { device, json } => panel::run(device, json),
+            PanelCommand::Chart {
+                device,
+                backup,
+                json,
+            } => panel_programming::run_chart(device, backup, json),
+            PanelCommand::Truth { device, json } => panel_answers::run_truth(device, json),
+            PanelCommand::Declare {
+                device,
+                terminal,
+                key,
+                note,
+                json,
+            } => panel_answers::run_declare(device, terminal, key, note, json),
+            PanelCommand::Forget {
+                device,
+                terminal,
+                observed,
+                declared,
+                json,
+            } => panel_answers::run_forget(device, terminal, observed, declared, json),
+            PanelCommand::Backups { device, json } => panel_programming::run_backups(device, json),
+        },
         Command::Winusb { command } => match command {
             WinusbCommand::Status { json } => winusb::run(winusb::Options {
                 action: winusb::Action::Status,
@@ -2453,6 +2683,36 @@ mod tests {
             Cli::try_parse_from(["ksx", "pads", "--yes"]).is_err(),
             "--yes without --prune must not parse: it would look like consent with no subject"
         );
+    }
+
+    /// **The other half of the prune consent shape**, which the parse test
+    /// above cannot see: `--prune` alone is a REPORT.
+    ///
+    /// `config_import_is_a_report_until_yes` and
+    /// `winusb_claim_and_release_take_a_device_and_default_to_not_acting` each
+    /// pin their verb's version of this. `pads --prune` is the one that
+    /// actually yanks controllers out from under a running game — it restarts
+    /// the ViGEmBus devnode, which drops every child pad with it — so the two
+    /// sentences that make it safe have to be in the text a person reads
+    /// before running it, not only in the code.
+    ///
+    /// Pinned as help text and not as behaviour on purpose: the only honest
+    /// end-to-end check would run `pads --prune` on the machine running the
+    /// tests, and that machine may have a live session on it.
+    #[test]
+    fn prune_help_says_it_is_a_dry_run_and_that_a_live_session_refuses_it() {
+        let mut cmd = Cli::command();
+        let pads = cmd.find_subcommand_mut("pads").unwrap();
+        let help = pads.render_long_help().to_string();
+        let flat = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        for needle in [
+            "A dry run unless `--yes` is given",
+            "refused outright while a session is running",
+            "those pads belong to whoever is playing",
+            "Without it, `--prune` only says what it would do",
+        ] {
+            assert!(flat.contains(needle), "missing '{needle}' in:\n{help}");
+        }
     }
 
     #[test]
@@ -3200,6 +3460,54 @@ mod tests {
             "point-in-time",
             "Localhost only",
             "no LAN option",
+        ] {
+            assert!(flat.contains(needle), "missing '{needle}' in:\n{help}");
+        }
+    }
+
+    /// **`ksx open` had no test of any kind** until 2026-08-26 — not a parse
+    /// test, not a help pin — while being the verb the installer's desktop
+    /// shortcut and the Start-menu entry both run
+    /// (`tests/installer.rs::the_post_install_offer_uses_the_console_free_launcher`).
+    /// `tests/parity.rs`'s `EXEMPT` entry for it only evaluates with
+    /// `--features studio` on, which is why it sat unaccounted for until
+    /// 2026-08-08 with CI green throughout.
+    ///
+    /// It takes no arguments, and that is the point: the front door has no
+    /// knobs. Anything trailing it is a mistake worth refusing rather than
+    /// silently ignoring.
+    #[cfg(feature = "studio")]
+    #[test]
+    fn open_is_the_front_door_and_takes_no_arguments() {
+        let cli = Cli::try_parse_from(["ksx", "open"]).unwrap();
+        assert!(matches!(cli.command, Command::Open));
+        assert!(
+            Cli::try_parse_from(["ksx", "open", "--port", "4460"]).is_err(),
+            "`open` has no port: it opens whatever Studio is already serving"
+        );
+        assert!(
+            Cli::try_parse_from(["ksx", "open", "somewhere"]).is_err(),
+            "a stray argument to the front door must be refused, not ignored"
+        );
+    }
+
+    /// The promises `open`'s help makes, which are the ones a person double
+    /// clicking a shortcut cannot read anywhere else: a daemon that will not
+    /// start is a WARNING (Studio's read side needs none), and the window is a
+    /// chrome-less app window rather than a tab.
+    #[cfg(feature = "studio")]
+    #[test]
+    fn open_help_states_the_read_only_fallback_and_exit_codes() {
+        let mut cmd = Cli::command();
+        let open = cmd.find_subcommand_mut("open").unwrap();
+        let help = open.render_long_help().to_string();
+        let flat = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        for needle in [
+            "A daemon that will not start is a warning, not a failure",
+            "read-only",
+            "No daemon",
+            "0 = a window was opened",
+            "1 = it could not be",
         ] {
             assert!(flat.contains(needle), "missing '{needle}' in:\n{help}");
         }

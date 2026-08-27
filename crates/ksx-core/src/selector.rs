@@ -167,10 +167,20 @@ impl DeviceFacts {
     }
 }
 
-/// `VID_D209` -> `0xD209`. `width` digits, exactly, or nothing.
+/// `VID_D209` -> `0xD209`. `width` HEX DIGITS, exactly, or nothing.
+///
+/// The digit check is not redundant with the width check. `from_str_radix`
+/// accepts a leading `+`, and the sign then eats one of the `width` bytes the
+/// slice counted — so `VID_+209` parsed cleanly to vendor `0x0209`, a vendor
+/// id invented out of a path that carries none. Windows does not emit such a
+/// path, but this is the module that exists to refuse claims it cannot
+/// support, and it was making one.
 fn hex_field(upper: &str, key: &str, width: usize) -> Option<u32> {
     let at = upper.find(key)? + key.len();
     let digits = upper.get(at..at + width)?;
+    if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
     u32::from_str_radix(digits, 16).ok()
 }
 
@@ -673,6 +683,64 @@ fn parse_hex8(text: &str) -> Option<u8> {
 mod tests {
     use super::*;
 
+    /// **A field that is not hex digits is not a number.**
+    ///
+    /// `u32::from_str_radix` accepts a leading `+`, and the sign then eats one
+    /// of the `width` bytes the slice counted — so `VID_+209` parsed cleanly to
+    /// vendor `0x0209`, a vendor id invented out of a path that carries none.
+    /// Windows does not emit such a path, which is exactly why this could sit
+    /// here: the doc said "`width` digits, exactly, or nothing" and the code
+    /// did something else, in the module written to refuse claims it cannot
+    /// support.
+    #[test]
+    fn a_field_that_is_not_hex_digits_is_not_a_number() {
+        for path in [
+            r"USB\VID_+209&PID_0430&MI_00\7&X",
+            r"USB\VID_D209&PID_+430&MI_00\7&X",
+            r"USB\VID_D209&PID_0430&MI_+0\7&X",
+            r"USB\VID_ 209&PID_0430&MI_00\7&X",
+            r"USB\VID_-209&PID_0430&MI_00\7&X",
+        ] {
+            assert_eq!(
+                DeviceFacts::from_instance_path(path),
+                None,
+                "{path} yielded facts out of a field that is not hex"
+            );
+        }
+        // The real shape still parses, or the guard would be useless.
+        let facts = DeviceFacts::from_instance_path(r"USB\VID_D209&PID_0430&MI_00\7&X")
+            .expect("a real path still parses");
+        assert_eq!(facts.vendor_id, 0xD209);
+        assert_eq!(facts.product_id, 0x0430);
+        assert_eq!(facts.interface_number, 0);
+    }
+
+    /// `from_instance_path` is TOTAL: no input panics, and anything it cannot
+    /// read comes back `None` rather than a fabricated triple.
+    #[test]
+    fn from_instance_path_is_total() {
+        let long = format!(r"USB\VID_D209&PID_0430&MI_00\{}", "A".repeat(4096));
+        for path in [
+            "",
+            " ",
+            "\\",
+            "USB\\",
+            r"USB\VID_",
+            r"USB\VID_D2",
+            r"USB\VID_D209",
+            r"USB\VID_D209&PID_04",
+            r"USB\VID_D209&PID_0430",
+            r"USB\VID_D209&PID_0430\NO_MI",
+            r"HID\VID_D209&PID_0430&MI_00\8&X",
+            "USB\\VID_D209&PID_0430&MI_00\\7&\u{0}",
+            "üñïçø∂é",
+            &long,
+        ] {
+            // The assertion is that this returns at all.
+            let _ = DeviceFacts::from_instance_path(path);
+        }
+    }
+
     /// The cabinet's board, in the socket it is in tonight.
     fn ipac(instance: &str, serial: Option<&str>) -> DeviceFacts {
         DeviceFacts {
@@ -928,18 +996,75 @@ mod tests {
         assert_eq!(DeviceFacts::instance_of(r"A\"), "");
     }
 
+    /// Each rung names itself correctly and its sentence carries the datum that
+    /// tells it apart from the other four.
+    ///
+    /// Hardened 2026-08-26: this asserted `!explain().is_empty()` and
+    /// `!rung().is_empty()`, which an `explain()` returning `"x"` satisfies.
+    /// The surfaces route on `rung()` and the user reads `explain()`, so both
+    /// have to be checked for what they render, not for existence — the same
+    /// mistake `render.rs` records as "the slot exists" letting a dead slot
+    /// through the gate. `no_explanation_asserts_a_move_it_cannot_know_happened`
+    /// already does this properly for the port rung; this is its shape applied
+    /// to the other four.
     #[test]
     fn every_rung_explains_itself_in_a_sentence() {
-        for text in [
-            "usb:d209:0430:00",
-            "usb:d209:0430:00:sn=4",
-            "usb:d209:0430:00:port=7&X&0&0",
-            r"USB\VID_D209&PID_0430&MI_00\7&X&0&0",
-            r"HID\VID_D209&PID_0430&REV_0001&MI_00",
-        ] {
+        // (selector, expected rung, the datum that must survive into the
+        // sentence — the thing that makes it about THIS board and not a
+        // paraphrase that fits any of them).
+        let cases: [(&str, &str, &str); 5] = [
+            ("usb:d209:0430:00", "model", "any board of this model"),
+            // The serial itself, not "a serial": a message that drops the value
+            // cannot be acted on, because the user has to find that board.
+            ("usb:d209:0430:00:sn=4", "serial", "\"4\""),
+            // Likewise the instance path — the user matches it against
+            // `ksx device scan` output.
+            ("usb:d209:0430:00:port=7&X&0&0", "port", "7&X&0&0"),
+            (
+                r"USB\VID_D209&PID_0430&MI_00\7&X&0&0",
+                "port",
+                "legacy full path",
+            ),
+            (
+                r"HID\VID_D209&PID_0430&REV_0001&MI_00",
+                "hardware-id",
+                "names a model, not a board",
+            ),
+        ];
+
+        let mut sentences = Vec::new();
+        for (text, rung, datum) in cases {
             let s = sel(text);
-            assert!(!s.explain().is_empty(), "{text}");
-            assert!(!s.rung().is_empty(), "{text}");
+            assert_eq!(s.rung(), rung, "{text}");
+            let explained = s.explain();
+            assert!(
+                explained.contains(datum),
+                "the {rung} rung must carry {datum:?}: {explained}"
+            );
+            sentences.push(explained);
+        }
+
+        // The two rungs that survive a replug must never borrow the
+        // socket-specific warning: a copy-pasted arm would tell a user their
+        // model-wide selector breaks when they move the board, and the fix they
+        // would reach for is to pin it to a port — strictly worse.
+        for (rung, explained) in ["model", "serial"].iter().zip(&sentences) {
+            assert!(
+                !explained.contains("SOCKET-SPECIFIC"),
+                "the {rung} rung survives a port move: {explained}"
+            );
+            assert!(
+                explained.contains("survives being moved"),
+                "say so, or the user pins a port they did not need: {explained}"
+            );
+        }
+
+        // ...and no two rungs may render the same sentence. Five distinct
+        // trade-offs; a duplicate means an arm was copied and not edited.
+        for (i, a) in sentences.iter().enumerate() {
+            for b in &sentences[i + 1..] {
+                assert_ne!(a, b, "two rungs explain themselves identically");
+            }
         }
     }
 

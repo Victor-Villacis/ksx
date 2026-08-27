@@ -76,6 +76,23 @@ pub struct Settings {
     /// never chose a theme stay byte-identical across load/save.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// **Which board the Studio draws its keys on**, by id. `None` decides
+    /// from whatever device is staged.
+    ///
+    /// A board is the PICTURE, never the mapping. `key -> control` is
+    /// identical whichever one is on screen, because the only field a binding
+    /// ever carries is the canonical key name — lay the keyboard out in
+    /// alphabetical order and nothing downstream can tell.
+    ///
+    /// Absence is the default for the same reason it is for [`Self::theme`]:
+    /// "follow what is staged" is a real answer, and writing it as a named id
+    /// would be a second state to keep in step with the device list. The
+    /// Studio owns the roster and sanitizes at render time, so a config
+    /// written by a NEWER Studio still loads here and an id this build cannot
+    /// draw falls back rather than failing to parse. Skipped when `None` so
+    /// configs that never chose one stay byte-identical across load/save.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub board: Option<String>,
 }
 
 impl Default for Settings {
@@ -86,6 +103,7 @@ impl Default for Settings {
             mouse_move_deadzone: 5,
             starting_user_index: 1,
             theme: None,
+            board: None,
         }
     }
 }
@@ -312,6 +330,15 @@ preset = "street-fighter-p1"
         assert_eq!(cfg.slots[0].preset, "street-fighter-p1");
     }
 
+    /// Serializing and parsing must be inverses, not merely stable.
+    ///
+    /// Not covered by `tests/emission.rs::populated_config_shape`, which
+    /// snapshots the emitted TEXT: a field that emits one way and parses back
+    /// as a DIFFERENT value leaves the text unchanged, so the snapshot stays
+    /// green and pins the lossy bytes. `Blocking` is the live example — it
+    /// emits as a bool and parses from a bool or a string, so the two
+    /// directions can drift apart without a byte moving. This is the only
+    /// test that would notice.
     #[test]
     fn round_trips_through_toml() {
         let cfg: ConfigFile = toml::from_str(DOC_EXAMPLE).unwrap();

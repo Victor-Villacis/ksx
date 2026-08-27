@@ -186,29 +186,35 @@ mod tests {
         assert!(!err.is_hidmaestro_missing());
     }
 
+    /// With every persona pluggable the gap-rendering arm is dormant: the
+    /// refusal keeps its honest fallback for ANY persona — no invented reason —
+    /// and re-arms with the next gated one (the gapped rendering's shape lives
+    /// in git history).
+    ///
+    /// Merged 2026-08-26: `a_gated_persona_refusal_names_the_gap_and_a_way_out`
+    /// asserted exactly these three things over SNES and Genesis and nothing
+    /// else — its own doc admitted the gap arm was dormant, so its name had
+    /// become false (it asserted neither a gap nor a way out). Its two personas
+    /// moved here rather than being dropped, so the coverage survives the
+    /// deletion.
     #[test]
     fn the_dormant_persona_refusal_keeps_its_shape() {
-        // A PLUGGABLE persona reaching this refusal is a bug elsewhere; its
-        // rendering stays honest — no invented reason.
-        let err = OutputError::PersonaNotImplemented(ksx_core::Persona::XboxSeries);
-        let msg = err.to_string();
-        assert!(msg.contains("xboxseries"), "{msg}");
-        assert!(!err.is_hidmaestro_missing(), "{msg}");
-        assert!(err.is_not_implemented());
-        assert!(msg.contains("no reason recorded"), "{msg}");
-    }
-
-    /// With every persona pluggable the gap-rendering arm is dormant: the
-    /// refusal keeps its honest fallback for any persona (re-arms with the
-    /// next gated one; the gapped rendering's shape lives in git history).
-    #[test]
-    fn a_gated_persona_refusal_names_the_gap_and_a_way_out() {
-        for persona in [ksx_core::Persona::Snes, ksx_core::Persona::Genesis] {
+        for persona in [
+            ksx_core::Persona::XboxSeries,
+            ksx_core::Persona::Snes,
+            ksx_core::Persona::Genesis,
+        ] {
+            // A PLUGGABLE persona reaching this refusal is a bug elsewhere; its
+            // rendering stays honest.
             let err = OutputError::PersonaNotImplemented(persona);
             let msg = err.to_string();
             assert!(msg.contains(persona.as_str()), "{msg}");
+            assert!(!err.is_hidmaestro_missing(), "{msg}");
+            assert!(err.is_not_implemented(), "{msg}");
             assert!(msg.contains("no reason recorded"), "{msg}");
-            assert!(err.is_not_implemented());
+            // The honest fallback must not grow an install hint: there is
+            // nothing to install for a persona this build has not finished.
+            assert!(!msg.contains("install"), "{msg}");
         }
     }
 

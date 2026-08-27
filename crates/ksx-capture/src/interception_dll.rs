@@ -216,28 +216,77 @@ mod tests {
         assert!(text.contains("win32 error 126"), "{text}");
     }
 
-    /// The table is exactly the set of entry points the backend calls. If a
-    /// symbol is added to `Api` without being added here the loader would leave
-    /// a field unresolved, so the two lists are pinned together.
+    /// **The table is positional, so pin it positionally.** `load` indexes
+    /// `SYMBOLS[0..=9]` straight into `Api`'s named fields, and four of those
+    /// fields share one signature (`Predicate`). Swap
+    /// `"interception_is_keyboard"` and `"interception_is_mouse"` in the array
+    /// and there is no type error, no length change, no duplicate and no
+    /// missing prefix — `is_keyboard()` simply answers "is this a mouse", every
+    /// keyboard is skipped, and the Interception backend captures nothing at
+    /// all while the process starts cleanly and reports no fault.
+    ///
+    /// The earlier version of this test asserted only the length, the
+    /// `interception_` prefix and uniqueness, all three of which that swap
+    /// preserves. So assert the array itself, in field order, and keep the two
+    /// lists side by side where a reviewer can read them together.
     #[test]
-    fn every_symbol_is_an_interception_export_name() {
-        assert_eq!(SYMBOLS.len(), 10);
-        for name in SYMBOLS {
-            assert!(name.starts_with("interception_"), "{name}");
+    fn every_symbol_is_an_interception_export_name_in_api_field_order() {
+        assert_eq!(
+            SYMBOLS,
+            [
+                // Api::create_context
+                "interception_create_context",
+                // Api::destroy_context
+                "interception_destroy_context",
+                // Api::set_filter
+                "interception_set_filter",
+                // Api::wait_with_timeout
+                "interception_wait_with_timeout",
+                // Api::send
+                "interception_send",
+                // Api::receive
+                "interception_receive",
+                // Api::get_hardware_id
+                "interception_get_hardware_id",
+                // Api::is_invalid
+                "interception_is_invalid",
+                // Api::is_keyboard
+                "interception_is_keyboard",
+                // Api::is_mouse
+                "interception_is_mouse",
+            ]
+            .as_slice(),
+            "SYMBOLS is indexed positionally by `load`; a reorder is a silent \
+             mis-binding, not a compile error"
+        );
+        // ...and `load` still resolves them by index rather than by name, which
+        // is what makes the order above load-bearing rather than cosmetic.
+        let source = include_str!("interception_dll.rs");
+        for index in 0..SYMBOLS.len() {
+            assert!(
+                source.contains(&format!("sym(SYMBOLS[{index}])")),
+                "SYMBOLS[{index}] is no longer resolved by index — if `load` now \
+                 names each symbol at its field, this test can go"
+            );
         }
-        let mut sorted = SYMBOLS.to_vec();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), SYMBOLS.len(), "duplicate symbol in the table");
     }
 
-    /// Loading is idempotent and never panics, on a machine with the DLL or
-    /// without it — `ksx devices` calls this on both.
+    /// Loading never panics and answers the same way twice, on a machine with
+    /// the DLL and on one without — `ksx devices` runs on both, and the whole
+    /// point of this module is that neither crashes at load time.
+    ///
+    /// Note for anyone adding a test here: [`API`] is a process-global
+    /// `OnceLock`, so whichever test touches [`api`] first fixes the answer for
+    /// every test in this binary. Nothing may assert a *particular* answer —
+    /// only that asking is safe and self-consistent.
     #[test]
-    fn asking_twice_is_stable() {
+    fn loading_never_panics_and_answers_the_same_way_twice() {
         let first = api().is_ok();
         let second = api().is_ok();
         assert_eq!(first, second);
+        // `is_loaded` is the diagnostic spelling of the same fact and must not
+        // drift into "the cache is populated" — that is `Some(_)`, and it
+        // reports a machine WITHOUT the DLL as having loaded it.
         assert_eq!(is_loaded(), first);
     }
 }

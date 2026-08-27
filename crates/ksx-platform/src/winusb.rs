@@ -2752,8 +2752,15 @@ mod tests {
         assert!(message.contains("never"), "{message}");
 
         let advice = err.advice();
+        // The whole sentence from the constant that owns it, not the fragment
+        // "no USB interface to bind". What this test is here to hold is that
+        // the transport fact REACHED the advice string; how that fact is
+        // worded is ksx-core's business, and `transport.rs` locks the wording
+        // there. Spelling the fragment here too would mean a reword breaks
+        // five crates at once, each with a message that says nothing about
+        // which one of them decided the words.
         assert!(
-            advice.contains("no USB interface to bind"),
+            advice.contains(ksx_core::transport::WINUSB_NEEDS_A_USB_INTERFACE),
             "the transport fact, not a vague refusal: {advice}"
         );
         assert!(
@@ -2884,12 +2891,19 @@ mod tests {
             .all(|c| c.transport == Transport::Usb));
     }
 
-    /// Both supported spellings of a Bluetooth address, and the all-zero
+    /// Every supported spelling of a Bluetooth address, and the all-zero
     /// address that is NOT one, using synthetic identities.
     ///
     /// FAILS against `len() == 12 && all hex`: the local radio's own service
     /// nodes all spell `…&0&000000000000_0000000n`, and accepting that files
     /// three unrelated pseudo-devices under one identity.
+    ///
+    /// Also FAILS against a parser written from one example. The `DEV_` form,
+    /// the `_C00000000`-suffixed service form and the bare `2&…&0&<addr>` form
+    /// are three different spellings of one fact, and a device wears several of
+    /// them at once — miss one and the same controller becomes two rows.
+    /// (`ksx_capture::bluetooth` pins the consequence at the grouping layer,
+    /// including the suffix that is itself twelve hex digits.)
     #[test]
     fn a_bluetooth_address_is_read_from_either_spelling_and_never_zero() {
         let of = |id: &str| bd_addr(&DeviceNode::new(id, None, None, None, None));

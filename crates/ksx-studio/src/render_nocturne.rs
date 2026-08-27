@@ -944,22 +944,28 @@ mod tests {
         );
     }
 
-    /// **A panel gets one more stop than a keyboard, and the extra stop is
-    /// ABSENT rather than greyed out.**
+    /// **Drawing a panel is an OFFER, and never the next thing to do.**
     ///
-    /// The spine is `pick an input -> make controllers -> bind -> play`. A
-    /// keyboard describes itself: Windows hands over a layout, so its keys are
-    /// known the moment it is picked. An arcade panel does not — it is
-    /// switches wired to an encoder, and the host only ever learns that a key
-    /// arrived, never which button sent it. That asymmetry is the whole reason
-    /// `describe` exists, and it is the one thing about this rail worth
-    /// pinning: a keyboard user must never be shown a step they cannot do, and
-    /// a panel user must never be left to guess that describing comes first.
+    /// The spine is `pick an input -> add controllers -> bind -> play`: four
+    /// stops, the same four for every device. This once rendered a fifth,
+    /// `Describe the panel`, wedged between picking and adding and badged
+    /// `Needed` — which said, in the one place that tells a user where they
+    /// are, that an arcade panel could not be set up until it had been drawn.
     ///
-    /// Rendering a disabled `describe` for a keyboard would read as a step
-    /// somebody skipped. It is not skipped; it does not apply.
+    /// That was false. A binding carries a key name, so every key an encoder
+    /// sends is bindable on the shipped keyboard the moment it is picked.
+    /// Drawing your own cabinet changes what you are LOOKING at. Promoting
+    /// that into a requirement is the mistake this whole plan started from.
+    ///
+    /// Three things are pinned, because each one has already gone wrong:
+    ///
+    ///  - the four required stops are all there, for both kinds of device;
+    ///  - a keyboard is never offered it at all — ABSENT, not greyed, because
+    ///    a greyed step reads as one somebody failed to do;
+    ///  - and it never appears as `Next:`, which is what would make it a gate
+    ///    again in everything but name.
     #[test]
-    fn the_spine_gains_a_stop_for_a_panel_and_never_for_a_keyboard() {
+    fn drawing_a_panel_is_offered_to_a_panel_and_never_required() {
         // `keyboard_payload` is named for the page it exercises, not the
         // hardware: it stages an Ultimarc I-PAC 4 whose role is PanelEncoder.
         // That makes it the PANEL case, and the keyboard case has to be built
@@ -970,8 +976,27 @@ mod tests {
             assert!(panel.contains(stop), "the spine is missing {stop:?}");
         }
         assert!(
-            panel.contains("Describe the panel"),
-            "a staged PANEL was not told to describe it — the host only ever              learns that a key arrived, never which button sent it: {panel}"
+            panel.contains("Draw your panel"),
+            "a staged panel was not offered its own picture to map on: {panel}"
+        );
+        assert!(
+            panel.contains("Optional"),
+            "the offer does not say it is optional, so it reads as a gate: {panel}"
+        );
+        assert!(
+            !panel.contains("Next: draw your panel"),
+            "an OFFER announced itself as the next thing to do, which is a gate \
+             in everything but name: {panel}"
+        );
+        assert!(
+            !panel.contains("n-jstep needed"),
+            "the retired `Needed` class is back; it painted an offer exactly as \
+             loudly as the one thing the user actually had to do: {panel}"
+        );
+        assert!(
+            panel.contains(r#"class="n-jstep offered" data-journey-step="describe""#),
+            "the offer is not marked as an offer, so the settled/unsettled pair \
+             below cannot tell them apart: {panel}"
         );
 
         // `derived()` is a consuming rebuild, so the roles have to change
@@ -987,12 +1012,13 @@ mod tests {
             assert!(keyboard.contains(stop), "the spine is missing {stop:?}");
         }
         assert!(
-            !keyboard.contains("Describe the panel"),
-            "a keyboard was offered a step only a panel needs: {keyboard}"
+            !keyboard.contains("Draw your panel"),
+            "a keyboard was offered a panel picture: {keyboard}"
         );
         assert!(
             !keyboard.contains(r#"data-journey-step="describe""#),
-            "the describe stop must be ABSENT for a keyboard, not rendered and              hidden — a hidden step reads as one somebody failed to do"
+            "the offer must be ABSENT for a keyboard, not rendered and hidden — \
+             a hidden step reads as one somebody failed to do"
         );
 
         // Every stop carries its whole sentence, not just a title: the rail is
@@ -1000,6 +1026,43 @@ mod tests {
         assert!(
             keyboard.contains("Nothing is saved or started by choosing"),
             "the first stop does not say what picking costs"
+        );
+    }
+
+    /// **Once you have drawn one, the rail stops asking.**
+    ///
+    /// The read that `NocturneJourneyState::Needed` was built around not
+    /// existing. Its doc said the daemon could not know whether a panel had
+    /// been described, because the document lived in browser storage alone —
+    /// so the step could only ever say "needed", forever, including to someone
+    /// who had finished an hour ago.
+    ///
+    /// A published board is a file under `<root>\boards`, and this process
+    /// reads it. A step that CAN be checked should never claim it cannot.
+    #[test]
+    fn a_published_board_settles_the_offer() {
+        let mut payload = keyboard_payload();
+        payload.drawn = Some(ksx_api::BoardsView {
+            summary: "1 board drawn.".to_owned(),
+            config_root: String::new(),
+            boards: vec![ksx_api::BoardDocument {
+                board_id: "my-cab".to_owned(),
+                name: "My cab".to_owned(),
+                ..Default::default()
+            }],
+        });
+        let html = render_nocturne(&page(), &payload.derived(), None).html;
+
+        assert!(html.contains("Draw your panel"), "the step is still shown");
+        // Still shown, now settled: the class carries the state, and `offered`
+        // is the one that means "not done".
+        assert!(
+            !html.contains(r#"class="n-jstep offered" data-journey-step="describe""#),
+            "the offer still reads as outstanding after a board was drawn: {html}"
+        );
+        assert!(
+            html.contains(r#"class="n-jstep done" data-journey-step="describe""#),
+            "a drawn board did not settle the offer: {html}"
         );
     }
 

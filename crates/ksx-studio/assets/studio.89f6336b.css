@@ -18336,25 +18336,47 @@ a.nm-link {
   color: var(--n-text-3);
 }
 
-.n-jstep.now,
-.n-jstep.needed {
+.n-jstep.now {
   border-color: color-mix(in srgb, var(--n-accent-line) 80%, transparent);
   background: color-mix(in srgb, var(--n-accent) 8%, transparent);
 }
 
-.n-jstep.now .n-jbadge,
-.n-jstep.needed .n-jbadge {
+/* AN OFFER IS NOT A NEXT STEP, and must not look like one.
+
+   `.needed` shared every one of `.now`'s rules — accent border, accent
+   wash, accent badge — so a step the user was free to ignore was painted
+   exactly as loudly as the one thing they actually had to do. That is the
+   same mistake in CSS that `NocturneJourneyState::Needed` was making in
+   Rust: a display choice reading as a requirement.
+
+   So: no wash, a dashed edge that says "aside", and the detail still shown
+   because an offer nobody can read the point of is not an offer. */
+.n-jstep.offered {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--n-line) 90%, transparent);
+  background: none;
+}
+
+.n-jstep.now .n-jbadge {
   border-color: var(--n-accent-line);
   color: var(--n-accent);
 }
 
-.n-jstep.now .n-jtitle,
-.n-jstep.needed .n-jtitle {
+.n-jstep.offered .n-jbadge {
+  border-style: dashed;
+  color: var(--n-text-3);
+}
+
+.n-jstep.now .n-jtitle {
   color: var(--n-text-1);
 }
 
+.n-jstep.offered .n-jtitle {
+  color: var(--n-text-2);
+}
+
 .n-jstep.now .n-jdetail,
-.n-jstep.needed .n-jdetail {
+.n-jstep.offered .n-jdetail {
   display: block;
 }
 

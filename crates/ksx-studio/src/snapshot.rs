@@ -2804,14 +2804,23 @@ enum NocturneJourneyState {
     Now,
     /// Real, but something earlier has to happen first.
     Later,
-    /// **Required, and the server cannot see whether it is finished.** The
-    /// Control Surface document lives in browser storage alone (SURFACES.md
-    /// §1 admits this), so the daemon cannot know whether a panel has been
-    /// described. Claiming `Done` would assert a read that never happened —
-    /// this project's signature bug — and claiming `Now` forever would nag
-    /// someone who finished an hour ago. The page says it is needed, and the
-    /// island, which CAN read that document, is free to say more.
-    Needed,
+    /// **Worth doing, and not on the way to anything.**
+    ///
+    /// This replaces `Needed`, which was wrong twice over.
+    ///
+    /// It was wrong about the WORKFLOW: describing a panel was never a gate.
+    /// A binding carries a key name, so every key an encoder sends can be
+    /// bound on the shipped keyboard the moment it is picked. Drawing your
+    /// own cabinet makes that mapping legible; it does not make it possible.
+    /// Rendering it as a blocking step promoted a display choice into a
+    /// requirement, which is exactly the mistake this whole plan started from.
+    ///
+    /// And it was wrong about the READ. Its own doc said the daemon could not
+    /// know whether a panel had been described, because the document lived in
+    /// browser storage alone. That stopped being true when drawn boards became
+    /// a server-side store: `MachineSource::boards` is the read, and a step
+    /// that CAN be checked should never say it cannot.
+    Offered,
 }
 
 impl NocturneJourneyState {
@@ -2820,7 +2829,7 @@ impl NocturneJourneyState {
             Self::Done => "Done",
             Self::Now => "Now",
             Self::Later => "Next",
-            Self::Needed => "Needed",
+            Self::Offered => "Optional",
         }
     }
 
@@ -2829,7 +2838,7 @@ impl NocturneJourneyState {
             Self::Done => "n-jstep done",
             Self::Now => "n-jstep now",
             Self::Later => "n-jstep later",
-            Self::Needed => "n-jstep needed",
+            Self::Offered => "n-jstep offered",
         }
     }
 }
@@ -2849,17 +2858,20 @@ fn journey_step(
     }
 }
 
-/// The spine, branched on what kind of device is staged.
+/// The spine: `pick an input -> add controllers -> bind -> play`.
 ///
-/// `describe` is present ONLY for a panel encoder. It is not disabled or
-/// greyed for a keyboard — it is absent, because a step that never applies is
-/// not a step somebody failed to do.
+/// Four stops, the same four for every device. Drawing a panel is offered
+/// beside them for an encoder and is NOT one of them — see
+/// [`NocturneJourneyState::Offered`]. It is absent entirely for a keyboard,
+/// because an offer nobody can take is not an offer, and a greyed one reads
+/// as a step somebody skipped.
 fn nocturne_journey(
     staged: &ksx_api::StagedSetupView,
     encoder_staged: bool,
+    has_drawn_board: bool,
     running: bool,
 ) -> (Vec<NocturneJourneyStep>, String) {
-    use NocturneJourneyState::{Done, Later, Needed, Now};
+    use NocturneJourneyState::{Done, Later, Now, Offered};
 
     let picked = staged.device.is_some();
     let made = !staged.slots.is_empty();
@@ -2878,12 +2890,20 @@ fn nocturne_journey(
         if picked { Done } else { Now },
     ));
 
+    // The offer, for an encoder only, and never in the way. `Done` is a real
+    // read now — a published board is a file this process can see — so the
+    // rail can stop asking once you have drawn one.
     if encoder_staged {
         steps.push(journey_step(
             "describe",
-            "Describe the panel",
-            "An encoder does not describe itself: the host only ever learns              that a key arrived, never which button sent it. Lay the panel out              and press each control once, so ksx knows what is where — and so              two buttons that send the same key are known to be two.",
-            if picked { Needed } else { Later },
+            "Draw your panel",
+            concat!(
+                "Optional. Bind on a picture of your own cabinet instead of a ",
+                "keyboard: draw the controls where they really sit, publish it, ",
+                "and pick it under How the keys are drawn. Binding works either ",
+                "way — this only changes what you are looking at.",
+            ),
+            if has_drawn_board { Done } else { Offered },
         ));
     }
 
@@ -2931,10 +2951,9 @@ fn nocturne_journey(
         "The draft could not be read, so this list cannot say where you are.".to_owned()
     } else if running {
         "Playing. Stop returns the keyboard to normal.".to_owned()
-    } else if let Some(next) = steps
-        .iter()
-        .find(|step| step.badge == "Now" || step.badge == "Needed")
-    {
+    // Only a REQUIRED step can be "next". An offer that announced itself
+    // here would be a gate again in everything but name.
+    } else if let Some(next) = steps.iter().find(|step| step.badge == "Now") {
         format!("Next: {}.", next.title.to_lowercase())
     } else {
         "Everything here is done.".to_owned()
@@ -3219,7 +3238,11 @@ impl NocturneDerived {
         };
         let escape_line = ksx_api::stage::ESCAPE_HATCH_LINE.to_owned();
         let running = p.session.reachable && p.session.running;
-        let (journey, journey_line) = nocturne_journey(staged, encoder_staged, running);
+        // A published board is a file this process can see — the read the old
+        // `Needed` state said did not exist.
+        let has_drawn_board = p.drawn.as_ref().is_some_and(|view| !view.boards.is_empty());
+        let (journey, journey_line) =
+            nocturne_journey(staged, encoder_staged, has_drawn_board, running);
         let play_cls = if running { "n-play none" } else { "n-play" }.to_owned();
         let stop_cls = if running { "n-stop" } else { "n-stop none" }.to_owned();
         // Apply-in-place is offered exactly when it can mean something: a

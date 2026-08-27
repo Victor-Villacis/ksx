@@ -579,6 +579,7 @@ fn normalize_image_sha256(value: &Option<String>) -> Result<Option<String>, Refu
 fn check_attribution(
     attribution: PanelObservationAttribution,
     against_image_sha256: Option<&str>,
+    keys: &[String],
 ) -> Result<(), Refusal> {
     let needs_chart = matches!(
         attribution,
@@ -588,6 +589,18 @@ fn check_attribution(
         return Err(bad_request(
             "this observation claims a chart read backed it, and names no chart image",
             "read the board's chart first, then file the press against that image",
+        ));
+    }
+    // A stored byte is ONE key. `panel_truth::attribute_press` already refuses
+    // to call a burst chart-backed; this door has to refuse it too, because a
+    // door that trusts one caller to have been careful is not a door. A durable
+    // row carrying `ChartUnique` for an event no single stored byte can produce
+    // is a lie that outlives the request that told it.
+    if attribution == PanelObservationAttribution::ChartUnique && keys.len() != 1 {
+        return Err(bad_request(
+            "several keys arrived from one press, and no single stored byte can account for that, \
+             so a chart read cannot have attributed it to one terminal",
+            "file this press as prompted, or read the chart and attribute it from what the read holds",
         ));
     }
     Ok(())
@@ -628,8 +641,29 @@ fn scrub_live_judgements(document: &mut PanelObservationsDocument) {
     for row in &mut document.terminals {
         if let Some(observed) = row.observed.as_mut() {
             observed.vouching = PanelObservationVouching::Unproven;
+            observed.against_image_sha256 = scrub_image_hash(&observed.against_image_sha256);
+        }
+        if let Some(declared) = row.declared.as_mut() {
+            declared.against_image_sha256 = scrub_image_hash(&declared.against_image_sha256);
         }
     }
+}
+
+/// **The write door's image check, applied on the way back IN.**
+///
+/// The two doors were asymmetric: a write refused anything that was not a full
+/// SHA-256, and a load accepted whatever was on disk. So a hand-edited file — or
+/// one written by an older build — carrying the 12-character DISPLAY hash sailed
+/// through, and `panel_truth::corroborates` then compared it to a real 64-char
+/// read hash, never matched, and reported that observation as taken against a
+/// changed board FOREVER. That is the exact outcome the write-side check exists
+/// to prevent, arriving by the other door.
+///
+/// Dropped to `None` rather than refusing the document: the press really did
+/// happen, and losing the whole board's history to one bad field would be a
+/// worse answer than an observation that cannot be vouched for.
+fn scrub_image_hash(value: &Option<String>) -> Option<String> {
+    normalize_image_sha256(value).unwrap_or(None)
 }
 
 fn validate_loaded(
@@ -764,11 +798,17 @@ fn fresh_document(scope: &PanelBoardScope, now: &str) -> PanelObservationsDocume
 /// **The compare-and-replace, and the one place it is relaxed.**
 ///
 /// Every mutation here touches exactly ONE terminal row and leaves every other
-/// row byte-identical, so two writers on two different terminals do not race at
-/// all — the lease serialises them and neither loses anything. `expected_revision`
-/// therefore exists for the case that actually needs it: a caller that read a
-/// row, showed it to a person, and is now replacing what that person saw. When
-/// it is supplied it is enforced exactly, and a stale one refuses.
+/// row byte-identical. **The lease does not serialise those writers — it refuses
+/// the second one.** `StoreLease::acquire` waits zero milliseconds by design, so
+/// two presses arriving at once do not queue: the loser is told another process
+/// is changing terminal observations, and the caller decides whether to press
+/// again. That is a deliberately visible failure rather than a silent one, but
+/// it is NOT the "neither loses anything" this comment used to claim, and the
+/// difference matters to anyone reasoning about why the revision is optional.
+///
+/// `expected_revision` exists for the case that actually needs it: a caller that
+/// read a row, showed it to a person, and is now replacing what that person saw.
+/// When it is supplied it is enforced exactly, and a stale one refuses.
 ///
 /// When it is absent the write is a row-scoped append. For an OBSERVATION that
 /// is the correct semantics rather than a hole: pressing the control again
@@ -899,7 +939,7 @@ fn record_observation_at(
     let keys = normalize_observed_keys(&spec.keys, &terminal_id)?;
     let device = normalize_device(&spec.device, &terminal_id)?;
     let against_image_sha256 = normalize_image_sha256(&spec.against_image_sha256)?;
-    check_attribution(spec.attribution, against_image_sha256.as_deref())?;
+    check_attribution(spec.attribution, against_image_sha256.as_deref(), &keys)?;
     let now = timestamp_rfc3339(timestamp);
 
     // This store's own directory, so this lease is not the layouts lease, not
@@ -1027,6 +1067,26 @@ fn forget_at(
     let mut document =
         current.expect("check_revision refuses a missing document with an expectation");
     document.updated_at = now;
+
+    // Refuse BEFORE touching the document. Pushing an empty row, clearing
+    // nothing and retaining it away reported "the declaration was forgotten" for
+    // a terminal id the user mistyped — while their note sat safely under the
+    // right one — and still bumped the revision, invalidating every other
+    // caller's held copy with a write that changed nothing.
+    let present = document
+        .terminals
+        .iter()
+        .find(|row| row.terminal_id == terminal_id);
+    let would_clear = present.is_some_and(|row| {
+        (spec.forget_observed && row.observed.is_some())
+            || (spec.forget_declared && row.declared.is_some())
+    });
+    if !would_clear {
+        return Err(bad_request(
+            format!("KSX has nothing stored to forget for terminal '{terminal_id}'"),
+            "check the terminal, or list what this board has stored first",
+        ));
+    }
 
     let row = row_mut(&mut document, &terminal_id)?;
     if spec.forget_observed {
@@ -1677,6 +1737,91 @@ mod tests {
         assert_eq!(
             spec.against_image_sha256, None,
             "a body named the chart image its own claim is checked against",
+        );
+    }
+
+    // ── REGRESSIONS FOUND BY ADVERSARIAL REVIEW ────────────────────────────
+
+    /// **A burst cannot wear a chart read's provenance.**
+    ///
+    /// `attribute_press` already refuses to call several keys chart-backed. The
+    /// store's own door has to refuse it too: a door that trusts one caller to
+    /// have been careful is not a door, and a durable row claiming `ChartUnique`
+    /// for an event no single stored byte can produce outlives the request that
+    /// wrote it.
+    #[test]
+    fn a_multi_key_press_cannot_be_filed_as_chart_unique() {
+        let (_dir, root) = temp_root("burst-attribution");
+        let mut spec = observe("1sw1", &["A", "B"]);
+        spec.attribution = PanelObservationAttribution::ChartUnique;
+        spec.against_image_sha256 = Some(IMAGE.to_owned());
+
+        let refusal = record_observation_at(&root, &spec, at(1))
+            .expect_err("a burst is not chart-unique");
+        assert_eq!(refusal.code, ksx_api::codes::BAD_REQUEST);
+
+        // The same burst is perfectly fileable as what it actually is.
+        spec.attribution = PanelObservationAttribution::Prompted;
+        let stored = record_observation_at(&root, &spec, at(2)).expect("a prompted burst is fine");
+        assert_eq!(stored.terminal_id, "1sw1");
+    }
+
+    /// Forgetting what was never stored must not report success, and must not
+    /// burn a revision every other caller is holding.
+    #[test]
+    fn forgetting_nothing_refuses_instead_of_reporting_success() {
+        let (_dir, root) = temp_root("forget-nothing");
+        let stored =
+            record_observation_at(&root, &observe("1sw1", &["A"]), at(1)).expect("one observation");
+
+        let refusal = forget_at(
+            &root,
+            &PanelForgetSpec {
+                scope: scope(),
+                terminal_id: "4coin".to_owned(),
+                expected_revision: stored.revision.clone(),
+                forget_observed: true,
+                forget_declared: true,
+            },
+            at(2),
+        )
+        .expect_err("nothing is stored for that terminal");
+        assert_eq!(refusal.code, ksx_api::codes::BAD_REQUEST);
+
+        // The revision the caller was holding is still valid, because nothing
+        // was written.
+        let after = observations_at(&root, &scope()).expect("still readable");
+        assert_eq!(after.revision, stored.revision);
+    }
+
+    /// **The write door's image check, applied on the way back in.**
+    ///
+    /// A 12-character display hash on disk used to load unchanged, and then
+    /// never equal a real 64-character read hash — so that observation reported
+    /// as taken against a changed board forever, which is exactly what the
+    /// write-side check exists to prevent.
+    #[test]
+    fn a_truncated_image_hash_on_disk_is_dropped_rather_than_believed() {
+        let (_dir, root) = temp_root("truncated-hash");
+        let mut spec = observe("1sw1", &["A"]);
+        spec.against_image_sha256 = Some(IMAGE.to_owned());
+        record_observation_at(&root, &spec, at(1)).expect("one observation");
+
+        // Simulate a hand-edited file, or one an older build wrote.
+        let dir = root.panel_observations_dir();
+        let id = observations_at(&root, &scope()).expect("read").document_id;
+        let path = document_path(&dir, &id).expect("a path");
+        let raw = std::fs::read_to_string(&path).expect("read the document");
+        std::fs::write(&path, raw.replace(IMAGE, "0123456789AB")).expect("write it back");
+
+        let loaded = observations_at(&root, &scope()).expect("it still loads");
+        let observed = loaded.terminals[0]
+            .observed
+            .as_ref()
+            .expect("the press survived");
+        assert_eq!(
+            observed.against_image_sha256, None,
+            "a display hash was believed as a full image hash",
         );
     }
 }

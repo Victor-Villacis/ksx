@@ -107,6 +107,21 @@ pub trait MachineSource: Send + Sync {
         // classifies the selected board from its fresh machine inventory.
         Ok(None)
     }
+    /// `ksx panel truth` — the chart, what presses proved, and what the user
+    /// locked in, composed into one answer per terminal.
+    ///
+    /// Deliberately separate from [`Self::panel_chart`]. That verb returns what
+    /// the board STORES right now; this one returns what ksx KNOWS, which
+    /// includes evidence a read cannot produce — a press that revealed what a
+    /// preserved vendor byte actually emits, and a terminal whose byte is zero
+    /// that fires keys anyway.
+    fn panel_truth(&self, _spec: &PanelTruthSpec) -> Result<PanelTruthView, Refusal> {
+        Err(Refusal::not_here(
+            "composing what ksx knows about each terminal",
+            "run `ksx panel truth`",
+        ))
+    }
+
 
     /// `ksx panel backups` — immutable, lossless hardware restore points for
     /// the selected physical encoder. Raw images stay in the backend store;
@@ -899,6 +914,48 @@ pub struct PanelChartSpec {
     pub backup: bool,
 }
 
+/// What to compose one board's answers from.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelTruthSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+}
+
+// There is deliberately no "compose without reading the board" mode. Stored
+// evidence is keyed to a board fingerprint and a terminal signature, and both
+// are established by a read — so skipping the read would leave nothing to look
+// the stored rows up BY, and no terminal vocabulary to hang them on either. A
+// read that refuses is not a failure of this verb: it composes to a refusal
+// state with zero terminal rows, which is the honest answer.
+
+/// **Everything ksx knows about one board's terminals, and how it came to know
+/// it.**
+///
+/// The verb that makes a chart read, a press and a typed-in declaration one
+/// answer instead of three surfaces. Composed by the backend; a caller renders
+/// [`PanelTerminalTruth::answer`] and [`PanelTerminalTruth::detail`] rather
+/// than deriving sentences from combinations of the evidence itself.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelTruthView {
+    pub board_name: String,
+    pub board_fingerprint: String,
+    /// Present only when this request actually read the board. Its absence is
+    /// what makes every `Matched` in `terminals` impossible, and is therefore
+    /// load-bearing rather than cosmetic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_at: Option<String>,
+    /// Said once for the whole board, never per row.
+    #[serde(default)]
+    pub shift: PanelShiftSummary,
+    /// **Empty is a legitimate answer.** A board with no measured protocol has
+    /// no terminal vocabulary, so it has zero terminal rows rather than 56
+    /// invented ones; its addressable unit is the control the user drew.
+    pub terminals: Vec<PanelTerminalTruth>,
+    pub notes: Vec<String>,
+}
+
 /// One key/action value decoded from the board image.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PanelKeyValue {
@@ -919,6 +976,50 @@ pub enum PanelShiftState {
     /// The raw byte is preserved but is not a known enabled/disabled value.
     #[default]
     Opaque,
+}
+
+/// **The one sentence a chart surface leads with about shift, said once.**
+///
+/// Composed by the backend from a whole chart, never per row: the fact that
+/// matters — *is there a shift key at all?* — is a property of the board, and
+/// repeating it on 56 rows is how a page teaches somebody that shift is a
+/// per-terminal setting when it is not.
+///
+/// Every variant is a different sentence AND a different remedy, which is why
+/// [`Self::NoneEnabled`] and [`Self::Unreadable`] are separate: one says the
+/// shifted column is unreachable in practice, the other says ksx cannot see the
+/// column at all.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum PanelShiftSummary {
+    /// No chart was read, so there is no shift vocabulary for this board.
+    ///
+    /// The default, and the reason the shift column must be ABSENT rather than
+    /// empty on an unprofiled board: an empty column asserts "no shift", and an
+    /// absent one asserts nothing.
+    #[default]
+    Unreadable,
+    /// Exactly one terminal is the shift key. Only now do the other terminals'
+    /// `shifted` values mean anything reachable.
+    Enabled {
+        terminal_id: String,
+        terminal_label: String,
+        /// How many terminals carry a shifted value the shift key unlocks.
+        reachable: usize,
+    },
+    /// A chart was read and no terminal's shift byte says enabled.
+    ///
+    /// **Not "this board has no shift."** Any terminal whose byte is opaque
+    /// could be the shift control; ksx cannot classify the byte, so it cannot
+    /// rule the terminal out. `stranded` counts the shifted values that are
+    /// unreachable in practice while that stays true.
+    NoneEnabled { stranded: usize, opaque: usize },
+    /// More than one terminal's byte says enabled.
+    ///
+    /// Kept as its own variant rather than folded into `Enabled` because the
+    /// product cannot say which one wins on the hardware, and picking the first
+    /// would be exactly the guess this model exists to refuse.
+    Ambiguous { terminal_ids: Vec<String> },
 }
 
 /// One physical screw terminal in the supported encoder's chart.
@@ -1104,6 +1205,16 @@ pub enum PanelTerminalAnswer {
     /// This board model has no measured protocol, and no observation stands in
     /// for it. Offer teaching, never a retry.
     ChartImpossible,
+    /// ksx has no model for this board AT ALL, and no observation stands in for
+    /// it.
+    ///
+    /// Separate from [`Self::ChartImpossible`] because the remedy is different
+    /// and the claim is weaker. `ChartImpossible` says a KNOWN model has no
+    /// measured protocol; this says ksx did not recognise the board, so it
+    /// cannot say anything about what its model can or cannot do. Folding the
+    /// two together made an unidentified board report that ksx can "never" read
+    /// what it stores — a claim about a model ksx has not identified.
+    ChartUnknownBoard,
     /// The firmware stores an observable key here.
     Stored { key: String },
     /// The terminal's own byte is zero.
@@ -1122,9 +1233,24 @@ pub enum PanelTerminalAnswer {
     /// One press produced several keys. On a board with no macro reader this is
     /// the only sighting of an onboard macro ksx will ever get.
     ObservedMultiple { keys: Vec<String> },
-    /// An observation ksx can no longer vouch for. Kept, shown, and not route
-    /// authority.
+    /// A press ksx has not confirmed against the board.
+    ///
+    /// **This says nothing about the board having changed** — that is
+    /// [`Self::ObservedStale`], and conflating them made ksx announce a rewrite
+    /// it never measured on every terminal of every board nobody had re-read.
+    /// This one means only: nothing in this response proves the board still
+    /// holds what it held when the control was pressed.
     ObservedUnvouched { key: String },
+    /// A press taken against an image the board no longer holds.
+    ///
+    /// Measured, not inferred: `was` and `now` are the two hashes, and they are
+    /// carried so the sentence can say what changed rather than that something
+    /// did.
+    ObservedStale {
+        key: String,
+        was: String,
+        now: String,
+    },
     /// A chart read in THIS response holds `key`, and an observation taken
     /// against THIS exact image, attributed [`PanelObservationAttribution::ChartUnique`],
     /// saw it.
@@ -5325,5 +5451,41 @@ mod tests {
             None,
         );
         assert!(!unknown.line.contains("v1.22.0.0"), "{}", unknown.line);
+    }
+
+    /// The default must be the variant that asserts NOTHING about shift.
+    ///
+    /// `PanelShiftSummary` is `Default` and reached through `..Default::default()`
+    /// in the same places `PanelShiftState::Opaque` is, and for the same reason:
+    /// a board ksx cannot read must not deserialize into "this board has no
+    /// shift key". An older client omitting the field gets "unreadable", which
+    /// renders as an absent column rather than an empty one.
+    #[test]
+    fn an_unread_board_never_defaults_to_claiming_it_has_no_shift() {
+        assert_eq!(PanelShiftSummary::default(), PanelShiftSummary::Unreadable);
+
+        let omitted: PanelShiftSummary =
+            serde_json::from_str("{\"state\":\"unreadable\"}").expect("the default variant");
+        assert_eq!(omitted, PanelShiftSummary::Unreadable);
+
+        let enabled = serde_json::to_value(PanelShiftSummary::Enabled {
+            terminal_id: "1start".to_owned(),
+            terminal_label: "P1 Start".to_owned(),
+            reachable: 3,
+        })
+        .expect("serialize");
+        assert_eq!(enabled["state"], "enabled");
+        assert_eq!(enabled["terminal_id"], "1start");
+
+        // Separate variants because they are separate sentences with separate
+        // remedies: one says the column is unreachable, the other that ksx
+        // cannot see the column at all.
+        assert_ne!(
+            PanelShiftSummary::NoneEnabled {
+                stranded: 0,
+                opaque: 0,
+            },
+            PanelShiftSummary::Unreadable
+        );
     }
 }

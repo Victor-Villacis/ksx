@@ -1755,6 +1755,26 @@ impl ksx_api::MachineSource for NoMachine {
                     can_type: true,
                     pickable: true,
                     looks_like_a_keyboard: true,
+                    // WITHOUT THESE THE READ SURFACE DOES NOT EXIST.
+                    //
+                    // `chart_readable` defaults to false, `choosingReadable()`
+                    // reads it, and `syncControlSurfaceChrome` leaves
+                    // `#n-encoder-read` hidden when it is false. So every state
+                    // `--messy-panel` was built to render — the vendor byte, the
+                    // unobservable usage, the opaque shift byte, the shift
+                    // terminal, the shared key, the zero byte — was unreachable
+                    // in a browser while the Rust test that decodes them passed,
+                    // because that test calls the chart builder directly and
+                    // never goes through the roster.
+                    chart_readable: true,
+                    family_label: Some("Ultimarc I-PAC 4".into()),
+                    firmware_label: Some("firmware 1.56".into()),
+                    profile_state: "profiled".into(),
+                    profile_detail:
+                        "ksx has a measured protocol profile for this firmware and can read the \
+                         chart."
+                            .into(),
+                    terminal_count: Some(56),
                     ..Default::default()
                 },
                 ksx_api::BoardRow {

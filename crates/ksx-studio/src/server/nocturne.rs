@@ -2666,6 +2666,20 @@ pub(super) async fn nocturne_api_board_save(
 pub(super) const N_PANEL_CHART_ERROR: &str =
     "That board's chart could not be read. Nothing on the board was changed.";
 
+/// The chart route's answer when the selector matched no board, or more than
+/// one.
+///
+/// Authored here rather than forwarded: the backend's own sentence for both
+/// cases names every connected board by raw device instance path. JSON-only, so
+/// it is deliberately NOT on `N_FLASH_ALLOWLIST` — that list is consumed only
+/// when resolving `?flash=` on a 303, where an entry would be both unreachable
+/// and reflectable from a query string.
+const N_PANEL_CHART_SELECTOR: &str =
+    "ksx could not match that board. It may have been unplugged, or more than one board now \
+     matches.";
+
+const N_PANEL_CHART_SELECTOR_REMEDY: &str = "Refresh the device list and pick the board again.";
+
 /// What the page may ask for. **Deliberately not `ksx_api::PanelChartSpec`.**
 ///
 /// That type carries `backup: bool`, and `facade::chart` answers `backup: true`
@@ -2713,10 +2727,22 @@ pub(super) struct NocturnePanelChartOutcome {
 /// refusals format `path.display()` into the message — `RECOVERY_REQUIRED` in
 /// three places, and `BackupError`'s own `Display` is `"{path}: {source}"` under
 /// `REFUSED`. A denylist that suppressed only the lease refusal would announce
-/// the user's absolute config path through an aria-live region. So: a
-/// `BAD_REQUEST` is a sentence about what the user asked for and passes through;
-/// `PANEL_INTERFACE_BUSY` is authored copy naming the tool to close and passes
-/// through; anything else becomes one authored sentence.
+/// the user's absolute config path through an aria-live region.
+///
+/// **`BAD_REQUEST` does not pass through either, and the reason is worth
+/// stating.** It reads like "a sentence about what the user asked for", and it
+/// is not: `panel::view`'s unknown-selector and multi-match refusals format
+/// `BoardGroup::board_id` — a raw `USB\VID_…\7&…` device instance path — for
+/// EVERY connected board into the message, and echo the caller's own selector
+/// beside them. A stale selector is the ordinary race this route lives in (the
+/// roster renders, the user presses, the board is gone), so that is not an
+/// exotic path: it is the common one. Both of its cases get one authored
+/// sentence, and the backend remedy is dropped rather than filtered, because a
+/// `contains('\\')` test is a denylist and would pass `(os error 5)` or a POSIX
+/// path unchanged.
+///
+/// So: `PANEL_INTERFACE_BUSY` is authored copy naming the tool to close and
+/// passes through; everything else becomes one authored sentence.
 ///
 /// The response carries no `programming_state`, no `programming_detail`, no
 /// `qualification_*`, no `recommended_terminals` and no `key_options`. Those are
@@ -2744,10 +2770,7 @@ pub(super) async fn nocturne_api_panel_chart(
                 notes: Some(view.notes),
                 ..Default::default()
             },
-            Err(refusal)
-                if refusal.code == ksx_api::codes::BAD_REQUEST
-                    || refusal.code == ksx_api::codes::PANEL_INTERFACE_BUSY =>
-            {
+            Err(refusal) if refusal.code == ksx_api::codes::PANEL_INTERFACE_BUSY => {
                 NocturnePanelChartOutcome {
                     ok: false,
                     error: Some(refusal.message),
@@ -2755,10 +2778,18 @@ pub(super) async fn nocturne_api_panel_chart(
                     ..Default::default()
                 }
             }
-            Err(refusal) => NocturnePanelChartOutcome {
+            Err(refusal) if refusal.code == ksx_api::codes::BAD_REQUEST => {
+                NocturnePanelChartOutcome {
+                    ok: false,
+                    error: Some(N_PANEL_CHART_SELECTOR.to_owned()),
+                    remedy: Some(N_PANEL_CHART_SELECTOR_REMEDY.to_owned()),
+                    ..Default::default()
+                }
+            }
+            Err(_) => NocturnePanelChartOutcome {
                 ok: false,
                 error: Some(N_PANEL_CHART_ERROR.to_owned()),
-                remedy: refusal.remedy.filter(|remedy| !remedy.contains('\\')),
+                remedy: None,
                 ..Default::default()
             },
         }

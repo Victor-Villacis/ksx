@@ -100,7 +100,14 @@ fn with_chart(
                 // A press taken against THIS image that produced something else
                 // is a real contradiction. One taken against an older image is
                 // not: the board changed, which the vouching field already says.
-                if fresh && !o.keys.is_empty() && !o.keys.iter().any(|k| k == stored) {
+                // `!= [stored]` rather than "does not contain stored": a press
+                // that produced this key AND OTHERS is the shape an onboard
+                // macro takes on an ASSIGNED terminal, and testing for
+                // containment let the chart win and dropped the extra keys from
+                // the answer entirely. That is exactly what E10 proves a chart
+                // cannot see, so it is the last thing that may be discarded.
+                let exactly_stored = o.keys.len() == 1 && o.keys[0] == stored;
+                if fresh && !o.keys.is_empty() && !exactly_stored {
                     return PanelTerminalAnswer::Mismatch {
                         stored: normal.clone(),
                         observed: keys,
@@ -145,6 +152,12 @@ fn without_chart(
     declared: Option<&PanelDeclaredEvidence>,
     never_vouchable: bool,
 ) -> PanelTerminalAnswer {
+    // `Vouched` means "a chart read in THIS response proves the board still
+    // holds the image this observation was taken against". Every caller reaches
+    // this function precisely BECAUSE no such read exists, so a stored
+    // `Vouched` here is a claim about a response that did not happen. Honouring
+    // it let an observation ride a REFUSED read to the front of the answer as
+    // current truth.
     if let Some(o) = observed.filter(|o| !o.keys.is_empty()) {
         if o.keys.len() > 1 {
             return PanelTerminalAnswer::ObservedMultiple {
@@ -154,15 +167,24 @@ fn without_chart(
         let key = o.keys[0].clone();
         // On a board with no reader, "unvouched" is permanent and saying so
         // every time would be nagging about a button that does not exist.
-        let vouched = never_vouchable
-            || matches!(
-                o.vouching,
-                PanelObservationVouching::Vouched | PanelObservationVouching::NeverVouchable
-            );
-        return if vouched {
-            PanelTerminalAnswer::Observed { key }
-        } else {
-            PanelTerminalAnswer::ObservedUnvouched { key }
+        if never_vouchable || matches!(o.vouching, PanelObservationVouching::NeverVouchable) {
+            // On a board with no reader, "unvouched" is permanent, and saying so
+            // every time is nagging about a button that does not exist.
+            return PanelTerminalAnswer::Observed { key };
+        }
+        // A MEASURED change says what changed. Everything else says only that
+        // nothing has confirmed this — never that the board moved. Collapsing
+        // the two made ksx announce a rewrite it never observed on every
+        // terminal of every board nobody had re-read, which is every board.
+        return match &o.vouching {
+            PanelObservationVouching::ChartRewritten { was, now } => {
+                PanelTerminalAnswer::ObservedStale {
+                    key,
+                    was: was.clone(),
+                    now: now.clone(),
+                }
+            }
+            _ => PanelTerminalAnswer::ObservedUnvouched { key },
         };
     }
     if let Some(d) = declared.filter(|d| !d.key.is_empty()) {
@@ -195,10 +217,12 @@ pub fn compose(facts: &TerminalFacts<'_>) -> PanelTerminalTruth {
             // user did deliberately, and they may be right about the CABINET
             // even when the firmware disagrees: the wire from that button may
             // not reach the screw the silkscreen names.
-            match (facts.declared, &chart_answer) {
-                (Some(d), PanelTerminalAnswer::Stored { key })
-                    if !d.key.is_empty() && &d.key != key =>
-                {
+            // Keyed off what the CHART holds, not off which answer the chart
+            // produced. Matching `Stored` alone meant a press that AGREED with
+            // the firmware made ksx stop reporting that the user's own
+            // declaration contradicted it — corroboration hid the conflict.
+            match (facts.declared, observable(normal)) {
+                (Some(d), Some(key)) if !d.key.is_empty() && d.key != key => {
                     PanelTerminalAnswer::DeclaredContradicted {
                         declared: d.key.clone(),
                         stored: normal.clone(),
@@ -215,9 +239,19 @@ pub fn compose(facts: &TerminalFacts<'_>) -> PanelTerminalTruth {
         }
         // No reader exists for this model, so nothing can ever vouch and a retry
         // is an offer that always refuses.
-        PanelChartEvidence::Unprofiled { .. } | PanelChartEvidence::Unrecognised => {
+        PanelChartEvidence::Unprofiled { .. } => {
             match without_chart(facts.observed, facts.declared, true) {
                 PanelTerminalAnswer::Unknown => PanelTerminalAnswer::ChartImpossible,
+                answer => answer,
+            }
+        }
+        // Separate arm, because the two differ in what may be SAID. One names a
+        // known model with no measured protocol; the other has no model to name,
+        // and folding them together made an unidentified board report that ksx
+        // can "never" read what its model stores.
+        PanelChartEvidence::Unrecognised => {
+            match without_chart(facts.observed, facts.declared, true) {
+                PanelTerminalAnswer::Unknown => PanelTerminalAnswer::ChartUnknownBoard,
                 answer => answer,
             }
         }
@@ -262,6 +296,7 @@ fn press_would_help(answer: &PanelTerminalAnswer) -> bool {
         PanelTerminalAnswer::StoredUnclassified { label, .. } => !label.contains(UNOBSERVABLE_ACTION),
         PanelTerminalAnswer::StoredUnassigned
         | PanelTerminalAnswer::ChartImpossible
+        | PanelTerminalAnswer::ChartUnknownBoard
         | PanelTerminalAnswer::ChartRefused
         | PanelTerminalAnswer::Unknown
         | PanelTerminalAnswer::Declared { .. } => true,
@@ -285,6 +320,12 @@ fn detail_for(answer: &PanelTerminalAnswer) -> String {
              the board was changed."
                 .to_owned()
         }
+        PanelTerminalAnswer::ChartUnknownBoard => {
+            "ksx does not recognise this board, so it cannot say what this terminal stores or \
+             whether it could ever be read. Press the control and ksx will record what Windows \
+             hears."
+                .to_owned()
+        }
         PanelTerminalAnswer::ChartImpossible => {
             "ksx has no measured profile for this board model, so it can never read what this \
              terminal stores. Press the control and ksx will record what Windows hears."
@@ -298,11 +339,20 @@ fn detail_for(answer: &PanelTerminalAnswer) -> String {
              Press the control to find out which."
                 .to_owned()
         }
-        PanelTerminalAnswer::StoredUnclassified { code, label } => {
-            format!(
-                "{label} (0x{code:02X}). ksx keeps this byte exactly as it found it and cannot say \
-                 what it does; pressing the control is the only way to find out."
-            )
+        PanelTerminalAnswer::StoredUnclassified { label, .. } => {
+            // `label` already ends in the raw byte, so the code is NOT repeated
+            // here. And the closing clause is conditional: `press_would_help`
+            // excludes an unobservable usage from `invite_press` because nothing
+            // arrives for a learner to hear, and this sentence is copied
+            // verbatim by surfaces — so an unconditional "press it" re-issued,
+            // two lines away in this same file, the offer that flag suppressed.
+            let remedy = if label.contains(UNOBSERVABLE_ACTION) {
+                "and no press can reveal it either: this is a usage Windows does not deliver to \
+                 ksx. Tell ksx what it is if you know."
+            } else {
+                "and pressing the control is the only way to find out."
+            };
+            format!("{label}. ksx keeps this byte exactly as it found it, {remedy}")
         }
         PanelTerminalAnswer::Observed { key } => {
             format!("Pressing this control sent {key}.")
@@ -316,8 +366,18 @@ fn detail_for(answer: &PanelTerminalAnswer) -> String {
         }
         PanelTerminalAnswer::ObservedUnvouched { key } => {
             format!(
-                "Pressing this control sent {key}, but the board has changed since — so that may \
-                 no longer be true."
+                "Pressing this control sent {key}. ksx has not read the board since, so it cannot \
+                 confirm that is still what the firmware holds."
+            )
+        }
+        PanelTerminalAnswer::ObservedStale { key, was, now } => {
+            // Says WHAT changed. The hashes are carried precisely so this
+            // sentence does not have to assert a rewrite in the abstract.
+            format!(
+                "Pressing this control sent {key}, but the board has been rewritten since: it held \
+                 {} when that was recorded and holds {} now.",
+                &was[..was.len().min(12)],
+                &now[..now.len().min(12)]
             )
         }
         PanelTerminalAnswer::Matched { key } => {
@@ -441,11 +501,20 @@ pub fn attribute_press(
     // in this chart can be the whole story even when one of them matches part
     // of it — the rest came from somewhere the chart cannot see.
     if keys.len() > 1 {
+        // `unaccounted` is per-KEY, not all-or-nothing. A burst where one key is
+        // held and another is held by nothing is the commonest shape of an
+        // onboard macro; reporting it as fully accounted for silenced the one
+        // field whose whole purpose is flagging exactly that.
+        let stray = keys.iter().any(|seen| {
+            !rows
+                .iter()
+                .any(|row| observable(&row.normal) == Some(seen.as_str()))
+        });
         return PressAttribution {
             terminal_id: prompted_id,
             attribution: PanelObservationAttribution::Prompted,
             candidates,
-            unaccounted: false,
+            unaccounted: stray,
             prompted_mismatch: false,
         };
     }
@@ -979,5 +1048,221 @@ mod tests {
             !attributed.unaccounted,
             "a board with no chart cannot contradict one",
         );
+    }
+
+    // ── REGRESSIONS FOUND BY ADVERSARIAL REVIEW ────────────────────────────
+
+    /// **A press that sends the stored key AND MORE is not agreement.**
+    ///
+    /// This is what an onboard macro looks like on an ASSIGNED terminal, and it
+    /// is the one shape `docs/ENHANCEMENTS.md` E10 proves a chart can never see.
+    /// The containment test let the chart win and dropped the extra key from the
+    /// answer, the sentence and the press offer alike — destroying the only
+    /// evidence of the macro ksx will ever hold.
+    #[test]
+    fn a_burst_containing_the_stored_key_is_still_a_disagreement() {
+        let observed = press(&["A", "B"], Some("SHA-A"));
+        let truth = compose(&TerminalFacts {
+            terminal_id: "1sw1",
+            terminal_label: "P1 SW1",
+            player: 1,
+            chart: &read(key_value("A")),
+            observed: Some(&observed),
+            declared: None,
+            learner_reachable: true,
+        });
+
+        match &truth.answer {
+            PanelTerminalAnswer::Mismatch { observed, .. } => {
+                assert_eq!(observed, &["A".to_owned(), "B".to_owned()]);
+            }
+            other => panic!("the extra key vanished into {other:?}"),
+        }
+        assert!(truth.detail.contains('B'), "{}", truth.detail);
+    }
+
+    /// **"Nothing has confirmed this" is not "the board changed."**
+    ///
+    /// `Unproven` is the state every stored observation is in until a read
+    /// vouches for it, so announcing a rewrite here announced one on every
+    /// terminal of every board nobody had re-read — which is every board.
+    #[test]
+    fn an_unconfirmed_press_does_not_announce_a_rewrite_that_never_happened() {
+        let mut observed = press(&["A"], Some("SHA-A"));
+        observed.vouching = PanelObservationVouching::Unproven;
+        let truth = compose(&TerminalFacts {
+            terminal_id: "1sw1",
+            terminal_label: "P1 SW1",
+            player: 1,
+            chart: &PanelChartEvidence::NotAttempted,
+            observed: Some(&observed),
+            declared: None,
+            learner_reachable: true,
+        });
+
+        assert_eq!(
+            truth.answer,
+            PanelTerminalAnswer::ObservedUnvouched {
+                key: "A".to_owned()
+            }
+        );
+        assert!(
+            !truth.detail.contains("has changed"),
+            "it claimed a change it never measured: {}",
+            truth.detail
+        );
+    }
+
+    /// A measured rewrite says WHAT changed, using both hashes it carries.
+    #[test]
+    fn a_measured_rewrite_names_both_images() {
+        let mut observed = press(&["A"], Some("SHA-A"));
+        observed.vouching = PanelObservationVouching::ChartRewritten {
+            was: "AAAAAAAAAAAAAAAA".to_owned(),
+            now: "BBBBBBBBBBBBBBBB".to_owned(),
+        };
+        let truth = compose(&TerminalFacts {
+            terminal_id: "1sw1",
+            terminal_label: "P1 SW1",
+            player: 1,
+            chart: &PanelChartEvidence::NotAttempted,
+            observed: Some(&observed),
+            declared: None,
+            learner_reachable: true,
+        });
+
+        assert!(matches!(
+            truth.answer,
+            PanelTerminalAnswer::ObservedStale { .. }
+        ));
+        assert!(truth.detail.contains("AAAAAAAAAAAA"), "{}", truth.detail);
+        assert!(truth.detail.contains("BBBBBBBBBBBB"), "{}", truth.detail);
+    }
+
+    /// **A read that FAILED cannot vouch for anything.**
+    ///
+    /// `Vouched` means a read in THIS response proved the board still holds the
+    /// image. A refused read is the opposite of that, so a stored `Vouched` must
+    /// not ride it to the front of the answer as current truth.
+    #[test]
+    fn a_refused_read_cannot_vouch_for_a_stored_observation() {
+        let observed = press(&["A"], Some("SHA-A"));
+        assert_eq!(observed.vouching, PanelObservationVouching::Vouched);
+        let truth = compose(&TerminalFacts {
+            terminal_id: "1sw1",
+            terminal_label: "P1 SW1",
+            player: 1,
+            chart: &PanelChartEvidence::Refused {
+                code: "panel-interface-busy".to_owned(),
+                message: "another program has the board".to_owned(),
+                remedy: None,
+            },
+            observed: Some(&observed),
+            declared: None,
+            learner_reachable: true,
+        });
+
+        assert_eq!(
+            truth.answer,
+            PanelTerminalAnswer::ObservedUnvouched {
+                key: "A".to_owned()
+            },
+            "a failed read vouched for an observation",
+        );
+    }
+
+    /// **Corroboration must not hide a contradiction.**
+    ///
+    /// Adding a press that AGREES with the firmware made ksx stop reporting that
+    /// the user's own declaration disagreed with it.
+    #[test]
+    fn a_press_that_agrees_with_the_chart_does_not_bury_the_declaration() {
+        let observed = press(&["A"], Some("SHA-A"));
+        let declared = PanelDeclaredEvidence {
+            key: "Z".to_owned(),
+            declared_at: "2026-08-27T00:00:00Z".to_owned(),
+            against_image_sha256: None,
+            note: "I wired this myself".to_owned(),
+        };
+        let truth = compose(&TerminalFacts {
+            terminal_id: "1sw1",
+            terminal_label: "P1 SW1",
+            player: 1,
+            chart: &read(key_value("A")),
+            observed: Some(&observed),
+            declared: Some(&declared),
+            learner_reachable: true,
+        });
+
+        assert!(
+            matches!(
+                truth.answer,
+                PanelTerminalAnswer::DeclaredContradicted { .. }
+            ),
+            "the contradiction vanished into {:?}",
+            truth.answer
+        );
+        // And the press that caused it to vanish is still on the record.
+        assert!(truth.observed.is_some());
+    }
+
+    /// ksx must not say what an unidentified board's model can "never" do.
+    #[test]
+    fn an_unrecognised_board_is_not_told_what_its_model_can_never_do() {
+        let truth = compose(&TerminalFacts {
+            terminal_id: "1sw1",
+            terminal_label: "P1 SW1",
+            player: 1,
+            chart: &PanelChartEvidence::Unrecognised,
+            observed: None,
+            declared: None,
+            learner_reachable: true,
+        });
+
+        assert_eq!(truth.answer, PanelTerminalAnswer::ChartUnknownBoard);
+        assert!(
+            !truth.detail.contains("never"),
+            "it made a claim about a model it has not identified: {}",
+            truth.detail
+        );
+        assert!(truth.invite_press, "the only way to learn this one");
+    }
+
+    /// A byte no learner can hear must not be answered with "press it".
+    #[test]
+    fn an_unobservable_byte_is_never_answered_with_press_it() {
+        let truth = compose(&TerminalFacts {
+            terminal_id: "1sw6",
+            terminal_label: "P1 SW6",
+            player: 1,
+            chart: &read(unobservable(0x66)),
+            observed: None,
+            declared: None,
+            learner_reachable: true,
+        });
+
+        assert!(!truth.invite_press);
+        assert!(
+            !truth.detail.contains("only way to find out"),
+            "the sentence re-issued the offer the flag suppressed: {}",
+            truth.detail
+        );
+        // `label` already ends in the byte; printing it again read as "0x66 (0x66)".
+        assert_eq!(truth.detail.matches("0x66").count(), 1, "{}", truth.detail);
+    }
+
+    /// A burst where ONE key is held and another is held by nothing is the
+    /// commonest shape of a macro, and the field that exists to flag it said
+    /// nothing.
+    #[test]
+    fn a_partly_unaccounted_burst_is_flagged() {
+        let chart = [row("1sw1", key_value("A"))];
+        let attributed = attribute_press(&keys(&["A", "Z"]), Some(&chart), None);
+
+        assert!(
+            attributed.unaccounted,
+            "the board emitted Z and nothing in the chart holds it",
+        );
+        assert_eq!(attributed.candidates, ["1sw1"]);
     }
 }

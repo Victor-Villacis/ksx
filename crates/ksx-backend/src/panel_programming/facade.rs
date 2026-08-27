@@ -2213,6 +2213,9 @@ fn terminal_rows(image: &RawPanelImage) -> (Vec<PanelTerminalRow>, usize) {
                 + usize::from(!shifted.supported)
                 + usize::from(shift_state == PanelShiftState::Opaque);
             let (terminal_label, kind) = terminal_label(state.terminal.id, state.terminal.player);
+            // Computed before `normal` is moved into the row below.
+            let press_resolves = !normal.supported
+                && !normal.label.contains(crate::panel_truth::UNOBSERVABLE_ACTION);
             PanelTerminalRow {
                 terminal_id: state.terminal.id.to_owned(),
                 terminal_label,
@@ -2222,6 +2225,13 @@ fn terminal_rows(image: &RawPanelImage) -> (Vec<PanelTerminalRow>, usize) {
                 shifted,
                 shift_state,
                 is_shift: shift_state == PanelShiftState::Enabled,
+                // Served rather than left for a surface to work out, because
+                // the only clue on the wire is the display label and every
+                // consumer that read it would be a second copy of the rule in
+                // `panel_truth::press_would_help`. A vendor byte a press can
+                // resolve and a HID usage Windows never delivers to ksx both
+                // arrive as `supported: false`, and they need opposite offers.
+                press_resolves,
             }
         })
         .collect();
@@ -2318,6 +2328,7 @@ fn chart_view(
         qualification_state: qualification.api_state().to_owned(),
         qualification_detail: qualification.detail(),
         qualification_restore_backup_id: qualification.restore_backup_id(),
+        shift: crate::panel_truth::compose_shift(&terminals),
         terminals,
         recommended_terminals,
         key_options: key_roster()

@@ -2703,6 +2703,12 @@ pub(super) struct NocturnePanelChartOutcome {
     image_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     terminals: Option<Vec<ksx_api::PanelTerminalRow>>,
+    /// The board-level shift sentence. Composed by the backend and forwarded
+    /// whole: a page that derives it from 56 `shift_state` values is deriving
+    /// a board fact from per-row data, which is how a column comes to be
+    /// rendered as though every terminal had its own shift setting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shift: Option<ksx_api::PanelShiftSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     notes: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2766,6 +2772,7 @@ pub(super) async fn nocturne_api_panel_chart(
                 ok: true,
                 board_name: Some(view.board_name),
                 image_sha256: Some(view.image_sha256),
+                shift: Some(view.shift),
                 terminals: Some(view.terminals),
                 notes: Some(view.notes),
                 ..Default::default()

@@ -1085,6 +1085,7 @@ impl ScriptedMachine {
             },
             shift_state: ksx_api::PanelShiftState::Disabled,
             is_shift: false,
+            press_resolves: false,
         };
         let recommended_terminal = ksx_api::PanelTerminalRow {
             normal: ksx_api::PanelKeyValue {
@@ -1097,6 +1098,7 @@ impl ScriptedMachine {
         };
         ksx_api::PanelChartView {
             generated_at: "2026-08-23 12:00:00 UTC".to_owned(),
+            shift: ksx_api::PanelShiftSummary::default(),
             summary: "Complete 256-byte I-PAC chart read and backed up.".to_owned(),
             board_id: r"USB\VID_D209&PID_0430\4".to_owned(),
             board_name: "Ultimarc I-PAC 4X".to_owned(),

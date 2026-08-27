@@ -17,7 +17,7 @@
 use ksx_backend::{
     autostart, config_io, daemon, device_edit, device_scan, devices, doctor, input_test_cli,
     install, logging, macro_cli, macro_trace, map, mapping, monitor, pads, panel,
-    panel_programming, play, preset_cli, run, session, setup, slot_cli, stage_cli, winusb,
+    panel_answers, panel_programming, play, preset_cli, run, session, setup, slot_cli, stage_cli, winusb,
 };
 // `console` is here rather than above because `ksx cabinet` is its only caller
 // in this file: the daemon detaches its own console from inside the backend.
@@ -1681,6 +1681,32 @@ enum PanelCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Everything ksx knows about each terminal, and how it came to know it
+    ///
+    /// Reads the board, then composes that read together with what presses have
+    /// proved and what you have locked in by hand. Where those disagree it says
+    /// so rather than picking: a chart is instantaneous truth about the bytes the
+    /// board STORES, a press is historical truth about what it EMITTED, and
+    /// neither contains the other.
+    ///
+    /// This is the verb that can say things `chart` cannot. A terminal whose byte
+    /// is zero and that fires keys anyway is an onboard macro — the one thing a
+    /// chart read can never detect, because a macro'd terminal is byte-identical
+    /// to an unassigned one.
+    ///
+    /// It writes nothing to the board. Every answer starts with a read because
+    /// stored evidence is filed under a board fingerprint and a terminal
+    /// signature, and the read is what establishes both.
+    ///
+    /// Exit codes: 0 = composed, 1 = error, 2 = refused.
+    Truth {
+        /// One encoder, by instance path or any unique substring of one
+        #[arg(long)]
+        device: Option<String>,
+        /// One JSON object on stdout instead of the readable report
+        #[arg(long)]
+        json: bool,
+    },
     /// List the local restore points `chart --backup` has saved
     ///
     /// Reads the backup store on disk. Opens no device and sends nothing.
@@ -2363,6 +2389,7 @@ fn main() -> anyhow::Result<()> {
                 backup,
                 json,
             } => panel_programming::run_chart(device, backup, json),
+            PanelCommand::Truth { device, json } => panel_answers::run_truth(device, json),
             PanelCommand::Backups { device, json } => panel_programming::run_backups(device, json),
         },
         Command::Winusb { command } => match command {

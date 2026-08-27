@@ -1038,6 +1038,20 @@ pub struct PanelTerminalRow {
     /// also false for that compatibility/display convenience field.
     #[serde(default)]
     pub shift_state: PanelShiftState,
+    /// **Can pressing this control reveal something the read could not?**
+    ///
+    /// Served, not derived by the page. A byte ksx cannot name comes in two
+    /// kinds that need opposite offers: a vendor byte a press resolves, and a
+    /// HID usage Windows never delivers to ksx, where a press produces nothing
+    /// at all to hear. Both arrive as `supported: false`, so a surface that
+    /// wanted to tell them apart had to string-match the decoder's own display
+    /// label — and every surface that did would be a second copy of a rule that
+    /// lives in `panel_truth::press_would_help`.
+    ///
+    /// Defaults to `false`, which is the safe direction: an offer that can never
+    /// succeed is worse than a missing one.
+    #[serde(default)]
+    pub press_resolves: bool,
     /// Compatibility/display convenience. Mutation safety must use
     /// `shift_state` and require `disabled` explicitly.
     pub is_shift: bool,
@@ -1364,6 +1378,11 @@ pub struct PanelChartView {
     /// Exact restore point that completes `validation-written`, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qualification_restore_backup_id: Option<String>,
+    /// Said once for the whole board, never per row. A page that renders each
+    /// terminal's raw `shift_state` teaches the reader that shift is a
+    /// per-terminal setting, which it is not.
+    #[serde(default)]
+    pub shift: PanelShiftSummary,
     pub terminals: Vec<PanelTerminalRow>,
     /// Backend-owned semantic preview of the deterministic four-player KSX
     /// layout against this exact chart baseline. This is display/draft data,

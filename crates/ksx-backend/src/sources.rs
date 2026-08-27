@@ -885,6 +885,18 @@ impl ksx_api::MachineSource for LocalMachine {
         crate::panel_programming::chart(spec)
     }
 
+    fn panel_truth(
+        &self,
+        spec: &ksx_api::PanelTruthSpec,
+    ) -> Result<ksx_api::PanelTruthView, Refusal> {
+        // `learner_reachable: true` because this build reaches the learner
+        // through the same process that answers this call. It is a parameter
+        // rather than a constant so that a caller which CANNOT reach it — a
+        // headless run, or one where the capture backend refused — can say so
+        // and stop the surface offering a press nothing would hear.
+        crate::panel_answers::truth(spec, true)
+    }
+
     #[cfg(windows)]
     fn panel_routing_guard(
         &self,

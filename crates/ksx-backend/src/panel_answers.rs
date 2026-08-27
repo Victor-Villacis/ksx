@@ -20,10 +20,7 @@
 //! answer: ksx does not know this board's terminals, and says so instead of
 //! rendering 56 rows it invented.
 
-use ksx_api::{
-    PanelChartEvidence, PanelChartSpec, PanelShiftSummary, PanelTerminalTruth, PanelTruthSpec,
-    PanelTruthView, Refusal,
-};
+use ksx_api::{PanelChartEvidence, PanelChartSpec, PanelTruthSpec, PanelTruthView, Refusal};
 
 use crate::panel_observations::{self, PanelBoardScope};
 use crate::panel_truth::{self, TerminalFacts};
@@ -119,5 +116,82 @@ pub fn unknown_count(view: &PanelTruthView) -> usize {
         .count()
 }
 
-#[allow(dead_code)]
-fn assert_object_safe(_: &PanelTerminalTruth, _: &PanelShiftSummary) {}
+/// `ksx panel truth` — read the board, then say what ksx knows and how.
+///
+/// Exit codes match the rest of the panel group: 0 composed, 2 refused. A
+/// refusal here is the same shape a refusal from `chart` is, because it IS one:
+/// this verb cannot begin without a read.
+pub fn run_truth(device: Option<String>, json: bool) -> anyhow::Result<()> {
+    let spec = PanelTruthSpec { device };
+    let view = match truth(&spec, true) {
+        Ok(view) => view,
+        Err(refusal) => {
+            eprintln!("{}", refusal.message);
+            if let Some(remedy) = &refusal.remedy {
+                eprintln!("{remedy}");
+            }
+            std::process::exit(2);
+        }
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&view)?);
+        return Ok(());
+    }
+
+    if view.terminals.is_empty() {
+        // Zero rows is an answer, not an empty report: ksx does not know this
+        // board's terminals, and inventing 56 named rows for a board with no
+        // measured protocol would be fabricated hardware.
+        println!("ksx has no terminal-by-terminal answer for this board.");
+        for note in &view.notes {
+            println!("  {note}");
+        }
+        return Ok(());
+    }
+
+    println!("{}", view.board_name);
+    if let Some(image) = &view.image_sha256 {
+        println!("  read proof  {}", &image[..image.len().min(16)]);
+    }
+    println!("  shift       {}", shift_line(&view.shift));
+    println!(
+        "  unresolved  {} of {} terminals",
+        unknown_count(&view),
+        view.terminals.len()
+    );
+    println!();
+    for terminal in &view.terminals {
+        println!(
+            "  {:<8} {:<12} {}",
+            terminal.terminal_id, terminal.terminal_label, terminal.detail
+        );
+    }
+    for note in &view.notes {
+        println!("\n{note}");
+    }
+    Ok(())
+}
+
+/// The board-level shift sentence, said once — never per terminal.
+fn shift_line(shift: &ksx_api::PanelShiftSummary) -> String {
+    match shift {
+        ksx_api::PanelShiftSummary::Unreadable => {
+            "not readable on this board".to_owned()
+        }
+        ksx_api::PanelShiftSummary::Enabled {
+            terminal_label,
+            reachable,
+            ..
+        } => format!("{terminal_label} is the Shift key ({reachable} shifted values reachable)"),
+        ksx_api::PanelShiftSummary::NoneEnabled { stranded, opaque } => format!(
+            "no terminal says it is the Shift key, so {stranded} shifted value(s) are unreachable \
+             ({opaque} shift byte(s) could not be classified, so one of those could still be it)"
+        ),
+        ksx_api::PanelShiftSummary::Ambiguous { terminal_ids } => format!(
+            "more than one terminal claims to be the Shift key ({}); ksx cannot say which the \
+             board honours",
+            terminal_ids.join(", ")
+        ),
+    }
+}

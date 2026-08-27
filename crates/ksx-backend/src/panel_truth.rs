@@ -41,6 +41,7 @@
 //! retained strings happen to be equal."*
 
 use ksx_api::{
+    PanelShiftSummary,
     PanelChartEvidence, PanelDeclaredEvidence, PanelKeyValue, PanelObservationAttribution,
     PanelObservationVouching, PanelObservedEvidence, PanelTerminalAnswer, PanelTerminalTruth,
 };
@@ -547,6 +548,53 @@ pub fn attribute_press(
     }
 }
 
+
+// ── STAGE 7: SHIFT, SAID ONCE ──────────────────────────────────────────────
+
+/// **Is there a shift key on this board, and does the shifted column mean
+/// anything?**
+///
+/// A property of the BOARD, composed once. Rendering each terminal's raw
+/// `shift_state` on 56 rows teaches a reader that shift is a per-terminal
+/// setting, and it is not: until exactly one terminal's byte says enabled, every
+/// shifted value on the board is unreachable in practice.
+///
+/// `Opaque` is never counted as "not shift". `PanelTerminalRow`'s own doc says
+/// `is_shift == false` alone does not mean disabled, so an opaque byte leaves
+/// open that THIS is the shift terminal — which is why the count travels in
+/// [`PanelShiftSummary::NoneEnabled`] instead of being silently discarded.
+pub fn compose_shift(rows: &[ksx_api::PanelTerminalRow]) -> PanelShiftSummary {
+    let enabled: Vec<&ksx_api::PanelTerminalRow> = rows
+        .iter()
+        .filter(|row| row.shift_state == ksx_api::PanelShiftState::Enabled)
+        .collect();
+
+    // Terminals carrying a shifted value the shift key would unlock.
+    let shifted = rows
+        .iter()
+        .filter(|row| observable(&row.shifted).is_some())
+        .count();
+
+    match enabled.as_slice() {
+        [] if rows.is_empty() => PanelShiftSummary::Unreadable,
+        [] => PanelShiftSummary::NoneEnabled {
+            stranded: shifted,
+            opaque: rows
+                .iter()
+                .filter(|row| row.shift_state == ksx_api::PanelShiftState::Opaque)
+                .count(),
+        },
+        [only] => PanelShiftSummary::Enabled {
+            terminal_id: only.terminal_id.clone(),
+            terminal_label: only.terminal_label.clone(),
+            reachable: shifted,
+        },
+        many => PanelShiftSummary::Ambiguous {
+            terminal_ids: many.iter().map(|row| row.terminal_id.clone()).collect(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -888,6 +936,7 @@ mod tests {
             shifted: unassigned(),
             shift_state: ksx_api::PanelShiftState::Disabled,
             is_shift: false,
+            press_resolves: false,
         }
     }
 

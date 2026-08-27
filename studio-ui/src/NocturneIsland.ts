@@ -2619,20 +2619,55 @@ interface NocturnePanelTerminalView {
   terminal_label: string;
   player: number;
   kind: string;
-  normal: { code: number; key: string | null; label: string; supported: boolean };
-  shifted: { code: number; key: string | null; label: string; supported: boolean };
+  // `key` is OMITTED when the byte names no key, not sent as null: the wire
+  // type skips a `None`. A `=== null` test therefore never fired.
+  normal: { code: number; key?: string | null; label: string; supported: boolean };
+  shifted: { code: number; key?: string | null; label: string; supported: boolean };
   shift_state: string;
   is_shift: boolean;
+  /** Served, never derived here: a vendor byte a press resolves and a HID usage
+   *  Windows never delivers both arrive as `supported: false`, and telling them
+   *  apart by reading `label` would be a second copy of a backend rule. */
+  press_resolves: boolean;
 }
+
+/** The board-level shift sentence, composed by the backend and said ONCE. */
+type NocturnePanelShift =
+  | { state: "unreadable" }
+  | { state: "enabled"; terminal_id: string; terminal_label: string; reachable: number }
+  | { state: "none-enabled"; stranded: number; opaque: number }
+  | { state: "ambiguous"; terminal_ids: string[] };
 
 interface NocturnePanelChartOutcome {
   ok: boolean;
   board_name?: string;
   image_sha256?: string;
   terminals?: NocturnePanelTerminalView[];
+  shift?: NocturnePanelShift;
   notes?: string[];
   error?: string;
   remedy?: string;
+}
+
+/** What the board-level shift state means for the column beside it. */
+function panelShiftSentence(shift: NocturnePanelShift | undefined): string {
+  switch (shift?.state) {
+    case "enabled":
+      return `${shift.terminal_label || shift.terminal_id} is the Shift key, so the shifted column below is reachable${shift.reachable ? ` on ${shift.reachable} terminal${shift.reachable === 1 ? "" : "s"}` : ""}.`;
+    case "none-enabled":
+      // NOT "this board has no shift". An opaque byte could be the shift
+      // control; ksx cannot classify it, so it cannot rule the terminal out.
+      return (
+        `No terminal's byte says it is the Shift key, so every shifted value below is unreachable in practice.` +
+        (shift.opaque
+          ? ` ${shift.opaque} shift byte${shift.opaque === 1 ? "" : "s"} could not be classified, so one of those could still be it.`
+          : "")
+      );
+    case "ambiguous":
+      return `More than one terminal claims to be the Shift key (${shift.terminal_ids.join(", ")}). ksx cannot say which one the board honours.`;
+    default:
+      return "";
+  }
 }
 
 /**
@@ -2680,12 +2715,25 @@ async function readEncoderChart(root: HTMLElement): Promise<void> {
   // The count of bytes ksx could not name is the honest headline: an onboard
   // macro and an unassigned terminal are byte-identical, so an unclassified
   // byte is the one thing a read genuinely cannot resolve.
-  const unknown = terminals.filter((t) => !t.normal.supported).length;
-  status.textContent =
-    `Read ${terminals.length} terminals.` +
-    (unknown
-      ? ` ${unknown} hold${unknown === 1 ? "s" : ""} a byte ksx cannot name — press that control to find out what it really sends.`
-      : "");
+  // Split by whether a press could actually answer. A vendor byte is resolved
+  // by pressing the control; a HID usage Windows never delivers to ksx is not,
+  // and offering a press there is an offer that can never succeed. The backend
+  // already decides which is which and serves it as `press_resolves`.
+  const askable = terminals.filter((t) => !t.normal.supported && t.press_resolves).length;
+  const unhearable = terminals.filter((t) => !t.normal.supported && !t.press_resolves).length;
+  const shiftLine = panelShiftSentence(outcome.shift);
+  status.textContent = [
+    `Read ${terminals.length} terminals.`,
+    askable
+      ? `${askable} hold${askable === 1 ? "s" : ""} a byte ksx cannot name — press that control to find out what it really sends.`
+      : "",
+    unhearable
+      ? `${unhearable} hold${unhearable === 1 ? "s" : ""} a key Windows never passes to ksx, so pressing will not reveal ${unhearable === 1 ? "it" : "them"} either.`
+      : "",
+    shiftLine,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   if (facts) {
     facts.replaceChildren();
@@ -2700,6 +2748,17 @@ async function readEncoderChart(root: HTMLElement): Promise<void> {
       dd.textContent = value;
       facts.append(dt, dd);
     }
+    // The backend composes counts that only exist in `notes` — the route serves
+    // no `summary` — so dropping them lost the byte-preservation sentence and
+    // every number the read produced.
+    for (const note of outcome.notes ?? []) {
+      if (!note) continue;
+      const dt = document.createElement("dt");
+      dt.textContent = "Note";
+      const dd = document.createElement("dd");
+      dd.textContent = note;
+      facts.append(dt, dd);
+    }
   }
 
   rows.replaceChildren();
@@ -2707,11 +2766,22 @@ async function readEncoderChart(root: HTMLElement): Promise<void> {
     const tr = document.createElement("tr");
     tr.dataset.terminalId = terminal.terminal_id;
     if (!terminal.normal.supported) tr.dataset.unknownByte = "";
+    // A byte of zero is NOT "this terminal does nothing" — an onboard macro is
+    // byte-identical to an unassigned terminal, which is the measured limit in
+    // `ENHANCEMENTS.md` E10. Rendering a bare "Unassigned" asserted the one
+    // thing a chart read cannot establish.
+    const silent = terminal.normal.supported && !terminal.normal.key;
+    if (silent) tr.dataset.silentByte = "";
     for (const cell of [
       terminal.terminal_label || terminal.terminal_id,
-      terminal.normal.key ?? terminal.normal.label,
+      silent
+        ? "Nothing stored — or a macro, which looks the same"
+        : (terminal.normal.key ?? terminal.normal.label),
       terminal.shifted.key ?? terminal.shifted.label,
-      terminal.is_shift ? "Shift key" : terminal.shift_state,
+      // The shift COLUMN says only whether this terminal is the shift key. What
+      // that means for the board is one sentence in the status line above, not
+      // a raw wire enum repeated on 56 rows.
+      terminal.is_shift ? "Shift key" : "",
     ]) {
       const td = document.createElement("td");
       td.textContent = cell;

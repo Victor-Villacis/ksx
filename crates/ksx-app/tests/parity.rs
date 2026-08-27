@@ -901,9 +901,21 @@ const ANCHORS: &[Anchors] = &[
         // reads the board twice and refuses if the images differ.
         cli: &["panel chart", "panel backups"],
         egui: &[],
-        // Planned. The read exists and is proven on hardware; what is missing
-        // is the surface, and naming a route before one exists is the claim
-        // this matrix is here to stop.
+        studio: &["/api/panel/chart"],
+    },
+    Anchors {
+        capability: "Say what ksx knows about each terminal, and how it knows it",
+        // Separate from the read because it answers a different question. The
+        // chart says what the board STORES; this composes that with what
+        // presses proved and what the user locked in, and where they disagree
+        // it reports the disagreement rather than picking a winner. It is the
+        // only verb that can name an onboard macro, which a chart read cannot
+        // detect even in principle.
+        cli: &["panel truth"],
+        egui: &[],
+        // Planned. The composition ships and is proven in CI; the surface for
+        // it does not exist yet, and naming a route before one exists is the
+        // claim this matrix is here to stop.
         studio: &[],
     },
 ];

@@ -1430,6 +1430,40 @@ fn fixture_panel_backup(scenario: FixtureScenario) -> ksx_api::PanelBackupRow {
     }
 }
 
+/// The board-level shift sentence, composed the way `panel_truth::compose_shift`
+/// composes it.
+///
+/// A second implementation rather than a call, because `ksx-studio` does not
+/// link `ksx-backend` — the same boundary that makes this file build its own
+/// chart at all. It is deliberately the same SHAPE: an `Opaque` byte is never
+/// counted as "not shift", because an opaque byte leaves open that THIS is the
+/// shift terminal.
+fn fixture_shift_summary(rows: &[ksx_api::PanelTerminalRow]) -> ksx_api::PanelShiftSummary {
+    let enabled: Vec<&ksx_api::PanelTerminalRow> = rows.iter().filter(|row| row.is_shift).collect();
+    let reachable = rows
+        .iter()
+        .filter(|row| row.shifted.key.is_some() && row.shifted.supported)
+        .count();
+    match enabled.as_slice() {
+        [] if rows.is_empty() => ksx_api::PanelShiftSummary::Unreadable,
+        [] => ksx_api::PanelShiftSummary::NoneEnabled {
+            stranded: reachable,
+            opaque: rows
+                .iter()
+                .filter(|row| row.shift_state == ksx_api::PanelShiftState::Opaque)
+                .count(),
+        },
+        [only] => ksx_api::PanelShiftSummary::Enabled {
+            terminal_id: only.terminal_id.clone(),
+            terminal_label: only.terminal_label.clone(),
+            reachable,
+        },
+        many => ksx_api::PanelShiftSummary::Ambiguous {
+            terminal_ids: many.iter().map(|row| row.terminal_id.clone()).collect(),
+        },
+    }
+}
+
 /// A safe browser-only model of three distinct customer histories. An
 /// ordinary first KSX visit discovers a board whose terminals already
 /// emit keys; --blank-panel models the exceptional cleared/new EEPROM;
@@ -1450,15 +1484,23 @@ fn fixture_panel_chart(scenario: FixtureScenario, backup: bool) -> ksx_api::Pane
         let (terminal_label, kind) = fixture_terminal_label(id, player);
         let offset = 4 + usize::from(base);
         let shift_state = fixture_shift_state(image[offset + 128]);
+        let normal = fixture_key_value(image[offset]);
+        // The same rule the production decoder applies, for the same reason: a
+        // vendor byte a press can resolve and a HID usage Windows never delivers
+        // to KSX both arrive as `supported: false` and need OPPOSITE offers, and
+        // a page must not tell them apart by reading this label.
+        let press_resolves =
+            !normal.supported && !normal.label.starts_with("Unobservable HID action");
         terminals.push(ksx_api::PanelTerminalRow {
             terminal_id: id.into(),
             terminal_label,
             player,
             kind: kind.into(),
-            normal: fixture_key_value(image[offset]),
+            normal,
             shifted: fixture_key_value(image[offset + 64]),
             shift_state,
             is_shift: shift_state == ksx_api::PanelShiftState::Enabled,
+            press_resolves,
         });
     }
     let recommended_terminals = terminals
@@ -1572,6 +1614,7 @@ fn fixture_panel_chart(scenario: FixtureScenario, backup: bool) -> ksx_api::Pane
                 .into()
         },
         qualification_restore_backup_id: None,
+        shift: fixture_shift_summary(&terminals),
         terminals,
         recommended_terminals,
         key_options,

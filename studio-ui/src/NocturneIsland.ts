@@ -159,10 +159,14 @@ export interface NocturneChoiceRowView {
   title: string;
   detail: string;
   cls: string;
-  /** `"true"` or `"false"` — bound straight onto `aria-current`, which is
-   *  why it is those exact words and not a bool. Served as a fact so it can
-   *  be ANNOUNCED rather than merely painted; see `NocturneChoiceRow::chosen`. */
-  chosen: string;
+  /** A BOOLEAN on the wire (`NocturneChoiceRow::chosen` is `bool`; serde
+   *  writes `true`/`false`). Bound straight onto `aria-current`, where the
+   *  DOM coerces it to the words the attribute needs — which is how this
+   *  field was long DOCUMENTED as the strings `"true"`/`"false"`: every
+   *  binding site was coercion-tolerant, so the wrong contract sat here
+   *  unfalsified until the first `=== "true"` comparison silently never
+   *  matched (the live theme re-stamp, which stripped the stamp instead). */
+  chosen: boolean;
 }
 
 export interface NocturneRackRowView {
@@ -1061,6 +1065,26 @@ export function applyNocturne(p: NocturnePayload): void {
   setNModeNote(v.mode_note);
   setNModeRows(v.mode_rows);
   setNThemeRows(v.theme_rows ?? []);
+  // The ONE verb whose effect lives outside this island's tree. Every other
+  // form's outcome is repainted from this payload, but the theme is an
+  // attribute on <html> that only a full server render used to stamp — so
+  // with scripting on (wireForms fetch-submits every POST and discards the
+  // redirect's page) choosing a theme changed nothing on screen until a
+  // manual refresh. The rows already carry the server's choice as DATA
+  // (`chosen`/`name`, never prose), so the stamp converges here exactly the
+  // way every pane does — including a change made from another tab or the
+  // CLI, which arrives on the ordinary poll. `system` is the ABSENCE of a
+  // stamp: the tokens' `:root:not([data-theme])` media guard needs the
+  // attribute gone, not set to a word nothing styles.
+  {
+    const chosen = (v.theme_rows ?? []).find((r) => r.chosen)?.name ?? "";
+    const html = document.documentElement;
+    if (!chosen || chosen === "system") {
+      if (html.dataset.theme !== undefined) delete html.dataset.theme;
+    } else if (html.dataset.theme !== chosen) {
+      html.dataset.theme = chosen;
+    }
+  }
   setNBoardRows(v.board_rows ?? []);
   setNBoardLine(v.board_line ?? "");
   setNBoardCaseStyle(v.board_case_style ?? "");

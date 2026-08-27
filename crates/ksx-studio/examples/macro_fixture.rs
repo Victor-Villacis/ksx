@@ -292,6 +292,25 @@ impl Store {
     }
 }
 
+/// The fixture's stored theme: seeded once from `KSX_FIXTURE_THEME` (the
+/// `KSX_FIXTURE_SESSION` precedent), then WRITABLE through the machine
+/// trait so the theme picker round-trips. Held in memory because this
+/// fixture fabricates state and writes no config.toml. Before this the
+/// trait default refused every write, which made the picker an
+/// always-erroring control in every fixture-backed QA pass — and hid the
+/// island's missing live re-stamp from every browser gate.
+static FIXTURE_THEME: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
+
+fn fixture_theme_cell() -> &'static std::sync::Mutex<String> {
+    FIXTURE_THEME.get_or_init(|| {
+        std::sync::Mutex::new(std::env::var("KSX_FIXTURE_THEME").unwrap_or_default())
+    })
+}
+
+fn fixture_theme() -> String {
+    fixture_theme_cell().lock().unwrap().clone()
+}
+
 /// The configuration menu for the explicit first-run scenario. It begins as
 /// a real absence (`config_exists == false`), then reflects a successful Save
 /// from the shared in-memory restore point so the same browser session can
@@ -341,7 +360,7 @@ fn first_run_setup_state(saved: Option<&ksx_core::stage::StagedSetup>) -> ksx_ap
             .as_ref()
             .and_then(|view| view.blocking.clone())
             .unwrap_or_default(),
-        theme: std::env::var("KSX_FIXTURE_THEME").unwrap_or_default(),
+        theme: fixture_theme(),
         config_root: "C:\\fixture".into(),
         config_exists: saved.is_some(),
         devices,
@@ -1643,6 +1662,18 @@ fn require_fixture_panel(device: Option<&str>) -> Result<(), ksx_api::Refusal> {
 }
 
 impl ksx_api::MachineSource for NoMachine {
+    /// Accept the theme write the real store performs, in memory. The route
+    /// has already validated the id against the Studio's own roster and
+    /// mapped `system` to the empty id, so storing the spec verbatim is the
+    /// whole job; `backup: None` because this fixture writes no config.toml.
+    fn set_theme(&self, spec: &ksx_api::ThemeSpec) -> Result<ksx_api::ThemeView, ksx_api::Refusal> {
+        *fixture_theme_cell().lock().unwrap() = spec.theme.clone();
+        Ok(ksx_api::ThemeView {
+            theme: spec.theme.clone(),
+            backup: None,
+        })
+    }
+
     /// The configuration menu's identity row: a config.toml with the two
     /// seeded controllers. `KSX_FIXTURE_THEME` seeds the stored theme id
     /// (the `KSX_FIXTURE_SESSION` precedent) so the browser suites can
@@ -1655,7 +1686,7 @@ impl ksx_api::MachineSource for NoMachine {
         }
         Ok(ksx_api::SetupView {
             config_exists: true,
-            theme: std::env::var("KSX_FIXTURE_THEME").unwrap_or_default(),
+            theme: fixture_theme(),
             slots: vec![
                 ksx_api::SetupSlotRow {
                     number: 1,

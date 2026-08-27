@@ -686,3 +686,85 @@ describe("the plate lays out", () => {
     }
   });
 });
+
+// ── The picker changes the page it lives on, WITHOUT a reload ───────────────
+//
+// The regression this pins: with scripting on, every POST form is
+// fetch-enhanced (nocturne.ts wireForms) and the redirect's page is
+// discarded — but the theme's whole effect is an attribute on <html>,
+// OUTSIDE the island's render tree, so choosing a theme changed nothing a
+// user could see until a manual refresh. applyNocturne now converges the
+// stamp from the payload's own theme rows; this test walks the journey in
+// one living document. It also needed the fixture to ACCEPT the write:
+// set_theme's trait default refuses, which made the picker an
+// always-erroring control in every fixture-backed pass and hid all of this
+// from every browser gate.
+describe("live theme switch", () => {
+  let context;
+
+  before(async () => {
+    context = await browser.newContext({
+      viewport: { width: 1600, height: 1000 },
+      colorScheme: "dark",
+      reducedMotion: "reduce",
+    });
+  });
+
+  after(async () => {
+    await context?.close();
+  });
+
+  test("choosing Light restamps <html> in place, and System removes the stamp", async () => {
+    const page = await context.newPage();
+    try {
+      await page.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      // A property that survives only while this DOCUMENT survives: if the
+      // form fell back to a full navigation, the stamp would appear anyway
+      // and this test would pass a reload off as a live switch.
+      await page.evaluate(() => {
+        window.__sameDocument = true;
+      });
+
+      await page.click('form[action="/nocturne/theme"]:has(input[value="light"]) button');
+      await page.waitForFunction(
+        () => document.documentElement.dataset.theme === "light",
+        null,
+        { timeout: 15_000 },
+      );
+      assert.equal(
+        await page.evaluate(() => window.__sameDocument === true),
+        true,
+        "the stamp arrived via a full reload, not a live re-stamp",
+      );
+      // And the frame actually repaints: the themed --n-* roles resolve to
+      // the light ground the stamped-theme suite pins.
+      const light = THEMES.find((theme) => theme.id === "light");
+      await page.waitForFunction(
+        (bg) => getComputedStyle(document.querySelector(".nocturne")).backgroundColor === bg,
+        hexToRgb(light.bg),
+        { timeout: 15_000 },
+      );
+
+      // System is the ABSENCE of a stamp — the media guard needs the
+      // attribute GONE, not set to a word nothing styles.
+      await page.click('form[action="/nocturne/theme"]:has(input[value="system"]) button');
+      await page.waitForFunction(
+        () => document.documentElement.dataset.theme === undefined,
+        null,
+        { timeout: 15_000 },
+      );
+      assert.equal(
+        await page.evaluate(() => window.__sameDocument === true),
+        true,
+        "clearing the stamp navigated instead of re-stamping",
+      );
+    } finally {
+      await page.close();
+    }
+  });
+});

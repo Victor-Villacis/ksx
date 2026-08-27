@@ -2658,6 +2658,128 @@ pub(super) async fn nocturne_api_board_save(
     cache.machine_cache.invalidate();
     axum::Json(outcome).into_response()
 }
+
+/// Shown when a chart read refuses for any reason that is not about the user's
+/// own request. Authored here because the store and the transport refuse with
+/// text that embeds an absolute config path and raw io detail — see
+/// `nocturne_api_panel_chart`.
+pub(super) const N_PANEL_CHART_ERROR: &str =
+    "That board's chart could not be read. Nothing on the board was changed.";
+
+/// What the page may ask for. **Deliberately not `ksx_api::PanelChartSpec`.**
+///
+/// That type carries `backup: bool`, and `facade::chart` answers `backup: true`
+/// by writing a file, verifying it, and reconciling this board's
+/// write-qualification journal. Deserializing it straight off the wire — which
+/// the neighbouring `api_input_test_start` does with its own spec — would let a
+/// field nobody typed turn a read into a durable write. `deny_unknown_fields`
+/// so a client cannot send one and be quietly ignored either.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NocturnePanelChartBody {
+    selector: String,
+}
+
+#[derive(Default, serde::Serialize)]
+pub(super) struct NocturnePanelChartOutcome {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    board_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    terminals: Option<Vec<ksx_api::PanelTerminalRow>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notes: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remedy: Option<String>,
+}
+
+/// POST /api/panel/chart — read what every terminal on one board is programmed
+/// to emit.
+///
+/// **A POST that reads, and the reason is in the router's own rule.**
+/// `server/mod.rs` says reads do not wear POST because the guard polices by
+/// method. This one does anyway: it takes the machine-wide programming lease
+/// and opens the board's configuration collection exclusively, so it is a
+/// hardware transaction with a real cost and a real exclusion, and it must not
+/// be reachable by a link, a prefetch or a page load. It is not idempotent in
+/// the way a GET promises.
+///
+/// **The refusal filter is an ALLOWLIST, and that is not a stylistic choice.**
+/// `facade::chart` reaches the recovery store on every call, and several of its
+/// refusals format `path.display()` into the message — `RECOVERY_REQUIRED` in
+/// three places, and `BackupError`'s own `Display` is `"{path}: {source}"` under
+/// `REFUSED`. A denylist that suppressed only the lease refusal would announce
+/// the user's absolute config path through an aria-live region. So: a
+/// `BAD_REQUEST` is a sentence about what the user asked for and passes through;
+/// `PANEL_INTERFACE_BUSY` is authored copy naming the tool to close and passes
+/// through; anything else becomes one authored sentence.
+///
+/// The response carries no `programming_state`, no `programming_detail`, no
+/// `qualification_*`, no `recommended_terminals` and no `key_options`. Those are
+/// the WRITE vocabulary — a page handed "Lossless backup, exact write, full
+/// readback, verification, and restore are available" will eventually render it,
+/// and this build cannot do any of that.
+pub(super) async fn nocturne_api_panel_chart(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<NocturnePanelChartBody>,
+) -> Response {
+    let outcome = tokio::task::spawn_blocking(move || {
+        // The browser's selector reaches `device` verbatim. I-PAC instance
+        // paths are serial-anchored, so canonicalising the string here would
+        // pick a different board than the row the user pressed.
+        let spec = ksx_api::PanelChartSpec {
+            device: Some(body.selector),
+            backup: false,
+        };
+        match state.machine.panel_chart(&spec) {
+            Ok(view) => NocturnePanelChartOutcome {
+                ok: true,
+                board_name: Some(view.board_name),
+                image_sha256: Some(view.image_sha256),
+                terminals: Some(view.terminals),
+                notes: Some(view.notes),
+                ..Default::default()
+            },
+            Err(refusal)
+                if refusal.code == ksx_api::codes::BAD_REQUEST
+                    || refusal.code == ksx_api::codes::PANEL_INTERFACE_BUSY =>
+            {
+                NocturnePanelChartOutcome {
+                    ok: false,
+                    error: Some(refusal.message),
+                    remedy: refusal.remedy,
+                    ..Default::default()
+                }
+            }
+            Err(refusal) => NocturnePanelChartOutcome {
+                ok: false,
+                error: Some(N_PANEL_CHART_ERROR.to_owned()),
+                remedy: refusal.remedy.filter(|remedy| !remedy.contains('\\')),
+                ..Default::default()
+            },
+        }
+    })
+    .await
+    .unwrap_or_else(|_| NocturnePanelChartOutcome {
+        ok: false,
+        error: Some(N_PANEL_CHART_ERROR.to_owned()),
+        ..Default::default()
+    });
+
+    // **Never cached.** A chart is true for the request that produced it and
+    // nothing watches the board between requests — WinIPAC can rewrite it at
+    // any moment. A re-served copy is a stale answer wearing a fresh one's
+    // clothes.
+    (
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        axum::Json(outcome),
+    )
+        .into_response()
+}
 pub(super) async fn nocturne_api_bind(
     State(state): State<Arc<AppState>>,
     axum::Json(body): axum::Json<NocturneBindBody>,

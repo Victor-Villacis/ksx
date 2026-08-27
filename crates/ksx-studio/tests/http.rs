@@ -7087,22 +7087,28 @@ fn an_unknown_workspace_flash_is_never_reflected() {
 ///
 /// The list is read out of `server/nocturne.rs` itself rather than restated
 /// here — a hand-copied roster of 96 constants would drift by lunchtime.
-/// Eight constants are deliberately OFF the allowlist because they are
+/// Nine constants are deliberately OFF the allowlist because they are
 /// READ-side sentences that render into the page body and are never a
-/// redirect target. They are named individually: if a ninth appears, that is a
+/// redirect target. They are named individually: if a tenth appears, that is a
 /// decision to make, not a default to inherit.
 #[test]
 fn every_redirect_flash_is_on_the_allowlist() {
     const SRC: &str = include_str!("../src/server/nocturne.rs");
 
     // Sentences that render INTO the page (a refused read), never a redirect.
-    const READ_SIDE: [&str; 8] = [
+    const READ_SIDE: [&str; 9] = [
         "N_DAEMON_DOWN",
         // Answered in the JSON body of POST /nocturne/api/board/save and read
         // out by the island, never redirected with. It exists because the
         // store's own refusal for these carries an absolute config path and
         // raw io/serde text, and this string is announced aloud.
         "N_BOARD_STORE_ERROR",
+        // Answered in the JSON body of POST /api/panel/chart. Putting it on
+        // N_FLASH_ALLOWLIST would be strictly WORSE than leaving it off: that
+        // list is consumed only by `?flash=` on a 303, so a JSON route cannot
+        // reach it — while adding it would make the sentence reflectable from
+        // an attacker-supplied query string on /nocturne.
+        "N_PANEL_CHART_ERROR",
         "N_READ_AUTOSTART_ERROR",
         "N_READ_GAMES_ERROR",
         // Rendered under the board picker when the panel-layout store refuses.
@@ -10097,4 +10103,161 @@ fn the_service_worker_is_registrable_and_its_precache_resolves() {
              service worker would never activate: {asset}"
         );
     }
+}
+
+/// **The page may ask which board, and nothing else.**
+///
+/// `ksx_api::PanelChartSpec` carries `backup: bool`, and `facade::chart` answers
+/// `backup: true` by writing a file, verifying it, and reconciling this board's
+/// write-qualification journal. The neighbouring `api_input_test_start`
+/// deserializes its api spec straight off the wire; doing the same here would
+/// let a field nobody typed turn a read into a durable write.
+///
+/// The selector must also arrive VERBATIM: I-PAC instance paths are
+/// serial-anchored, so a canonicalised string picks a different board than the
+/// row the user pressed.
+#[test]
+fn panel_chart_carries_the_browsers_selector_and_never_asks_for_a_backup() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+
+    let body = post_json(
+        addr,
+        "/api/panel/chart",
+        r#"{"selector":"USB\\VID_D209&PID_0430\\4"}"#,
+    );
+    assert!(
+        body.contains("\"ok\":true"),
+        "the read did not happen: {body}"
+    );
+
+    let specs = machine.panel_chart_specs.lock().unwrap();
+    assert_eq!(specs.len(), 1, "exactly one chart read per request");
+    assert_eq!(
+        specs[0].device.as_deref(),
+        Some(r"USB\VID_D209&PID_0430\4"),
+        "the browser's selector did not reach the backend unchanged"
+    );
+    assert!(
+        !specs[0].backup,
+        "a page asked for a BACKUP, which writes a file and advances this \
+         board's write-qualification state"
+    );
+}
+
+/// A body carrying anything else is refused outright rather than ignored, so a
+/// client cannot send `backup` and be quietly told nothing happened.
+#[test]
+fn panel_chart_refuses_a_body_that_asks_for_more_than_a_selector() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+
+    let response = post_json(
+        addr,
+        "/api/panel/chart",
+        r#"{"selector":"USB\\VID_D209&PID_0430\\4","backup":true}"#,
+    );
+    assert!(
+        response.starts_with("HTTP/1.1 4"),
+        "an unknown field was accepted: {response}"
+    );
+    assert!(
+        machine.panel_chart_specs.lock().unwrap().is_empty(),
+        "the board was read despite an unreadable request"
+    );
+}
+
+/// **The refusal CODE decides what a page may read, never the prose.**
+///
+/// `facade::chart` reaches the recovery store on every call, and several of its
+/// refusals format `path.display()` into the message — `RECOVERY_REQUIRED` in
+/// three places, and `BackupError`'s own Display is `"{path}: {source}"` under
+/// `REFUSED`. A denylist that suppressed only the lease refusal would announce
+/// the user's absolute config path through an aria-live region.
+#[test]
+fn the_code_decides_which_chart_refusal_a_page_may_read() {
+    // A refusal ABOUT THE REQUEST is authored copy and passes through.
+    let machine = Arc::new(ScriptedMachine {
+        panel_chart_refusal: Some(Refusal::with_remedy(
+            ksx_api::codes::PANEL_INTERFACE_BUSY,
+            "Another app is using this I-PAC's configuration interface.",
+            "close WinIPAC and read the board again",
+        )),
+        ..ScriptedMachine::default()
+    });
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+    let body = post_json(addr, "/api/panel/chart", r#"{"selector":"x"}"#);
+    assert!(
+        body.contains("Another app is using this I-PAC"),
+        "an authored refusal was swallowed: {body}"
+    );
+
+    // Anything else becomes one authored sentence, and its path never ships.
+    let machine = Arc::new(ScriptedMachine {
+        panel_chart_refusal: Some(Refusal::with_remedy(
+            ksx_api::codes::REFUSED,
+            r"C:\Users\Someone\AppData\Roaming\ksx\panel-backups: access is denied",
+            r"restore access to C:\Users\Someone\AppData\Roaming\ksx\panel-backups",
+        )),
+        ..ScriptedMachine::default()
+    });
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+    let body = post_json(addr, "/api/panel/chart", r#"{"selector":"x"}"#);
+    assert!(
+        !body.contains("AppData"),
+        "a store diagnostic put the user's config path on the page: {body}"
+    );
+    assert!(
+        body.contains("could not be read"),
+        "the page was told nothing at all: {body}"
+    );
+}
+
+/// **A chart is true for the request that produced it and no longer.**
+///
+/// Nothing watches the board between requests — WinIPAC can rewrite it at any
+/// moment — so a re-served copy is a stale answer wearing a fresh one's clothes.
+#[test]
+fn a_chart_read_is_never_cached() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+    let response = http(
+        addr,
+        "POST /api/panel/chart HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+         Content-Type: application/json\r\nContent-Length: 16\r\n\r\n{\"selector\":\"x\"}",
+    );
+    assert!(
+        response
+            .to_ascii_lowercase()
+            .contains("cache-control: no-store"),
+        "a chart response may be cached: {response}"
+    );
+}
+
+/// The write vocabulary never reaches the page. A surface handed
+/// "Lossless backup, exact write, full readback, verification, and restore are
+/// available" will eventually render it, and this build can do none of that.
+#[test]
+fn a_chart_response_carries_no_write_vocabulary() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::new(ScriptedControl::new(true)), machine.clone());
+    let body = post_json(addr, "/api/panel/chart", r#"{"selector":"x"}"#);
+
+    for write_word in [
+        "programming_state",
+        "programming_detail",
+        "qualification_state",
+        "qualification_detail",
+        "recommended_terminals",
+        "key_options",
+        "image_bytes",
+    ] {
+        assert!(
+            !body.contains(write_word),
+            "{write_word:?} reached the page: {body}"
+        );
+    }
+    // What it DOES carry: the board, the proof, and the terminals.
+    assert!(body.contains("terminals"), "no terminals: {body}");
+    assert!(body.contains("image_sha256"), "no read proof: {body}");
 }

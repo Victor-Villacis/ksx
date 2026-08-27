@@ -418,6 +418,14 @@ pub fn serve(
             // verb — no GUI-only code paths).
             .route("/api/learn", get(api_learn_poll))
             .route("/api/learn/start", post(api_learn_start))
+            // **The one read that DOES wear POST, deliberately.** The rule
+            // above holds for reads that only read memory. A chart read takes
+            // the machine-wide programming lease and opens the board's
+            // configuration collection exclusively — it is a hardware
+            // transaction with a real exclusion and a real cost, and it must
+            // not be reachable by a link, a prefetch, or a page load. The guard
+            // policing by method is the point here, not the problem.
+            .route("/api/panel/chart", post(nocturne_api_panel_chart))
             .route("/api/learn/cancel", post(api_learn_cancel))
             .route("/api/input-test", get(api_input_test_poll))
             .route("/api/input-test/start", post(api_input_test_start))

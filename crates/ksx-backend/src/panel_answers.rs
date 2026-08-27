@@ -195,3 +195,136 @@ fn shift_line(shift: &ksx_api::PanelShiftSummary) -> String {
         ),
     }
 }
+
+/// **Read the board, and return the scope its stored facts are filed under.**
+///
+/// Every mutation starts here for the reason every answer does: a document is
+/// keyed by board fingerprint AND terminal signature, and only a read
+/// establishes either. It also proves the terminal exists before anything is
+/// written under its name — a typo would otherwise create a durable row for a
+/// screw that is not on this board.
+fn scope_for(device: Option<String>, terminal_id: &str) -> Result<ScopeRead, Refusal> {
+    let chart = crate::panel_programming::chart(&PanelChartSpec {
+        device,
+        backup: false,
+    })?;
+    if !chart
+        .terminals
+        .iter()
+        .any(|row| row.terminal_id == terminal_id)
+    {
+        return Err(Refusal::with_remedy(
+            ksx_api::codes::BAD_REQUEST,
+            format!("this board has no terminal called '{terminal_id}'"),
+            "run `ksx panel chart` to see this board's terminals",
+        ));
+    }
+    Ok(ScopeRead {
+        scope: PanelBoardScope {
+            board_fingerprint: chart.board_fingerprint.clone(),
+            terminal_signature: crate::panel_programming::ipac4_terminal_signature(),
+        },
+        image_sha256: chart.image_sha256,
+    })
+}
+
+struct ScopeRead {
+    scope: PanelBoardScope,
+    image_sha256: String,
+}
+
+/// `ksx panel declare` — type in what a terminal sends, and lock it in.
+///
+/// **The claim ksx did not obtain itself**, and it is kept as exactly that: it
+/// never outranks a chart read or a press, it is never promoted to `Matched` by
+/// agreeing with one, and a later read that disagrees produces a contradiction
+/// with BOTH values shown rather than a silent correction. The user may know the
+/// wire from that button reaches a different screw than the silkscreen claims,
+/// which is a fact about the cabinet rather than the firmware.
+pub fn run_declare(
+    device: Option<String>,
+    terminal: String,
+    key: String,
+    note: String,
+    json: bool,
+) -> anyhow::Result<()> {
+    let read = match scope_for(device, &terminal) {
+        Ok(read) => read,
+        Err(refusal) => return refuse(refusal),
+    };
+
+    // The store requires the exact revision the caller last saw, so a
+    // declaration can never silently replace one written since. A board with
+    // nothing stored yet has no revision, and that is not a stale write.
+    let held = panel_observations::observations(&read.scope)
+        .map(|view| view.revision)
+        .unwrap_or_default();
+
+    let outcome = panel_observations::declare(&panel_observations::PanelDeclareSpec {
+        scope: read.scope,
+        terminal_id: terminal,
+        expected_revision: (!held.is_empty()).then_some(held),
+        key,
+        against_image_sha256: Some(read.image_sha256),
+        note,
+    });
+    report(outcome, json)
+}
+
+/// `ksx panel forget` — drop what the caller names, and nothing else.
+///
+/// The undo for `declare`, and the only way a press is ever removed. Deleting
+/// evidence is always the user's explicit instruction: nothing in ksx prunes
+/// these rows on its own.
+pub fn run_forget(
+    device: Option<String>,
+    terminal: String,
+    observed: bool,
+    declared: bool,
+    json: bool,
+) -> anyhow::Result<()> {
+    let read = match scope_for(device, &terminal) {
+        Ok(read) => read,
+        Err(refusal) => return refuse(refusal),
+    };
+    let held = match panel_observations::observations(&read.scope) {
+        Ok(view) => view.revision,
+        Err(refusal) => return refuse(refusal),
+    };
+
+    let outcome = panel_observations::forget(&panel_observations::PanelForgetSpec {
+        scope: read.scope,
+        terminal_id: terminal,
+        expected_revision: held,
+        // Neither flag means both: "forget this terminal" is the whole row.
+        forget_observed: observed || !declared,
+        forget_declared: declared || !observed,
+    });
+    report(outcome, json)
+}
+
+fn report(
+    outcome: Result<panel_observations::PanelObservationMutationView, Refusal>,
+    json: bool,
+) -> anyhow::Result<()> {
+    match outcome {
+        Ok(view) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&view)?);
+            } else {
+                println!("{}", view.summary);
+                println!("  revision {}", view.revision);
+            }
+            Ok(())
+        }
+        Err(refusal) => refuse(refusal),
+    }
+}
+
+fn refuse(refusal: Refusal) -> anyhow::Result<()> {
+    eprintln!("{}", refusal.message);
+    if let Some(remedy) = &refusal.remedy {
+        eprintln!("{remedy}");
+    }
+    std::process::exit(2);
+}

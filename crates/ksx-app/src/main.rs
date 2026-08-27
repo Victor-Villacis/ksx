@@ -1707,6 +1707,59 @@ enum PanelCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Type in what a terminal sends, and lock it in
+    ///
+    /// For the terminals ksx cannot work out on its own: a byte it preserves but
+    /// cannot classify, or a control on a board with no measured protocol. It
+    /// writes nothing to the board — this records what YOU say the control does.
+    ///
+    /// A declaration never outranks the board. It loses to a chart read and to a
+    /// press, it is never promoted by agreeing with one, and a later read that
+    /// disagrees shows both values rather than quietly correcting you. You may
+    /// know the wire from that button reaches a different screw than the
+    /// silkscreen claims, and that is a fact about the cabinet, not the firmware.
+    ///
+    /// Exit codes: 0 = locked in, 1 = error, 2 = refused.
+    Declare {
+        /// One encoder, by instance path or any unique substring of one
+        #[arg(long)]
+        device: Option<String>,
+        /// The screw terminal, exactly as `ksx panel chart` spells it
+        #[arg(long)]
+        terminal: String,
+        /// The canonical key name this control sends, or empty for unassigned
+        #[arg(long)]
+        key: String,
+        /// Why you know this — kept verbatim, and never shown as ksx's own claim
+        #[arg(long, default_value = "")]
+        note: String,
+        /// One JSON object on stdout instead of the readable report
+        #[arg(long)]
+        json: bool,
+    },
+    /// Drop what ksx stored for one terminal
+    ///
+    /// The undo for `declare`, and the only way a recorded press is removed.
+    /// Nothing in ksx prunes these on its own. With neither flag it forgets both.
+    ///
+    /// Exit codes: 0 = forgotten, 1 = error, 2 = refused.
+    Forget {
+        /// One encoder, by instance path or any unique substring of one
+        #[arg(long)]
+        device: Option<String>,
+        /// The screw terminal, exactly as `ksx panel chart` spells it
+        #[arg(long)]
+        terminal: String,
+        /// Forget only the recorded press
+        #[arg(long)]
+        observed: bool,
+        /// Forget only what you typed in
+        #[arg(long)]
+        declared: bool,
+        /// One JSON object on stdout instead of the readable report
+        #[arg(long)]
+        json: bool,
+    },
     /// List the local restore points `chart --backup` has saved
     ///
     /// Reads the backup store on disk. Opens no device and sends nothing.
@@ -2390,6 +2443,20 @@ fn main() -> anyhow::Result<()> {
                 json,
             } => panel_programming::run_chart(device, backup, json),
             PanelCommand::Truth { device, json } => panel_answers::run_truth(device, json),
+            PanelCommand::Declare {
+                device,
+                terminal,
+                key,
+                note,
+                json,
+            } => panel_answers::run_declare(device, terminal, key, note, json),
+            PanelCommand::Forget {
+                device,
+                terminal,
+                observed,
+                declared,
+                json,
+            } => panel_answers::run_forget(device, terminal, observed, declared, json),
             PanelCommand::Backups { device, json } => panel_programming::run_backups(device, json),
         },
         Command::Winusb { command } => match command {

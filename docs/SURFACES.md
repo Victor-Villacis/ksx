@@ -237,6 +237,7 @@ surface does a human perform this task on*, and that is answered by the matrix.
 | Identify an arcade encoder (family, release, whether its chart can be read) | owns (`panel status`) | — | planned |
 | Read an encoder's stored chart (what every terminal emits) | owns (`panel chart`, `panel backups`) | — | **primary** read (`/api/panel/chart` on `/nocturne`) |
 | Say what ksx knows about each terminal, and how it knows it | owns (`panel truth`) | — | planned |
+| Record what a person knows about a terminal ksx cannot read | owns (`panel declare`, `panel forget`) | — | planned |
 
 "owns" = the verb lives here. "primary" = where a human does it. "view" =
 renders backend state, takes no decisions. **"planned" = nothing is there** —

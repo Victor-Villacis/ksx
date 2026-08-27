@@ -918,6 +918,17 @@ const ANCHORS: &[Anchors] = &[
         // claim this matrix is here to stop.
         studio: &[],
     },
+    Anchors {
+        capability: "Record what a person knows about a terminal ksx cannot read",
+        // The one source ksx did not obtain itself. It is stored beside what
+        // presses proved rather than in the layout store, because that store's
+        // contract is "programmable onto a board" and a declaration is not.
+        cli: &["panel declare", "panel forget"],
+        egui: &[],
+        // Planned. Typing a key is the half a browser is genuinely better at,
+        // and the surface for it is the next thing owed.
+        studio: &[],
+    },
 ];
 
 /// A verb that is right to leave CLI-only, and why.

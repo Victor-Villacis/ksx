@@ -534,8 +534,17 @@ merged and never deleted.
 **What ksx has.** `ksx panel status` on any board (all 7 Ultimarc families, and
 boards in no table at all, which say plainly that ksx has no model for them);
 `ksx panel chart` and `POST /api/panel/chart` on a board with a measured
-protocol profile — today exactly one, the I-PAC 4X at `bcdDevice 0x0056`.
-Everything else is taught by pressing it.
+protocol profile — today exactly one, the I-PAC 4X at `bcdDevice 0x0056`; and
+`ksx panel declare` / `forget`, the typed-in half of the evidence store.
+
+**What is built but not yet wired: the press half.** The observation store
+(`panel_observations::record_observation`) and the attribution judgement
+(`panel_truth::attribute_press`) exist, are tested, and have **zero production
+callers** — no verb, route or daemon path files a press yet, so today the
+observed side of every composed answer is always empty and `Matched`,
+`Mismatch`, `Resolved` and `Unaccounted` cannot be reached outside tests.
+Wiring a listener to them is the remaining step, and until it lands "taught by
+pressing it" describes the design, not the product.
 
 **What ksx does not have, deliberately.** Any path that writes to encoder
 hardware. The write verbs' refusals name no command to run, because there is no
@@ -550,5 +559,6 @@ nothing*, precisely because the first measurement says those are
 indistinguishable. When such a terminal emits keys anyway, that composes to
 `Unaccounted` — the strongest evidence of an onboard macro this product can
 produce, and the reason an observation records EVERY key a press produced rather
-than just the first.
+than just the first. (`Unaccounted` is composed, tested, and unreachable today
+for the reason above: nothing files the press that would trigger it.)
 

@@ -1710,8 +1710,11 @@ enum PanelCommand {
     /// Type in what a terminal sends, and lock it in
     ///
     /// For the terminals ksx cannot work out on its own: a byte it preserves but
-    /// cannot classify, or a control on a board with no measured protocol. It
-    /// writes nothing to the board — this records what YOU say the control does.
+    /// cannot classify, or one you know is unwired. It writes nothing to the
+    /// board — this records what YOU say the control does. The board must be one
+    /// ksx can read: a declaration is filed against the chart's own terminal
+    /// roster and board identity, and only a read establishes those, so a board
+    /// with no measured protocol refuses here exactly as `chart` does.
     ///
     /// A declaration never outranks the board. It loses to a chart read and to a
     /// press, it is never promoted by agreeing with one, and a later read that

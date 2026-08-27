@@ -2770,14 +2770,21 @@ async function readEncoderChart(root: HTMLElement): Promise<void> {
     // byte-identical to an unassigned terminal, which is the measured limit in
     // `ENHANCEMENTS.md` E10. Rendering a bare "Unassigned" asserted the one
     // thing a chart read cannot establish.
+    // Per PLANE, not per terminal: the ambiguity is a property of the zero
+    // byte, and the shifted plane stores bytes through the same decoder. A
+    // shifted WinIPAC macro is exactly as invisible as a normal one, so the
+    // Shifted column must refuse the same claim the normal column refuses.
     const silent = terminal.normal.supported && !terminal.normal.key;
+    const shiftedSilent = terminal.shifted.supported && !terminal.shifted.key;
     if (silent) tr.dataset.silentByte = "";
     for (const cell of [
       terminal.terminal_label || terminal.terminal_id,
       silent
         ? "Nothing stored — or a macro, which looks the same"
         : (terminal.normal.key ?? terminal.normal.label),
-      terminal.shifted.key ?? terminal.shifted.label,
+      shiftedSilent
+        ? "Nothing stored — or a macro, which looks the same"
+        : (terminal.shifted.key ?? terminal.shifted.label),
       // The shift COLUMN says only whether this terminal is the shift key. What
       // that means for the board is one sentence in the status line above, not
       // a raw wire enum repeated on 56 rows.

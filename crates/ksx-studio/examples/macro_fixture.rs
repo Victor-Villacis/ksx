@@ -1330,18 +1330,26 @@ fn fixture_sha256(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// The same prose `facade.rs::terminal_label` serves — "Player 1 · Start",
+/// "Player 1 · Button 5" — NOT a fixture-invented shorthand. The label
+/// reaches the browser verbatim (terminal rows and the shift summary's
+/// "… is the Shift key" sentence), so a fixture spelling of its own would
+/// green-light a browser suite against prose production never emits.
 fn fixture_terminal_label(id: &str, player: u8) -> (String, &'static str) {
     let suffix = &id[1..];
-    let (label, kind) = match suffix {
+    let (part, kind) = match suffix {
         "up" => ("Up".into(), "direction"),
         "down" => ("Down".into(), "direction"),
         "left" => ("Left".into(), "direction"),
         "right" => ("Right".into(), "direction"),
         "start" => ("Start".into(), "start"),
         "coin" => ("Coin".into(), "coin"),
-        other => (other.to_ascii_uppercase(), "button"),
+        other if other.starts_with("sw") => {
+            (format!("Button {}", other.trim_start_matches("sw")), "button")
+        }
+        other => (other.to_owned(), "button"),
     };
-    (format!("P{player} {label}"), kind)
+    (format!("Player {player} · {part}"), kind)
 }
 
 /// Decode one raw action byte into the same `PanelKeyValue` the production
@@ -1811,7 +1819,10 @@ impl ksx_api::MachineSource for NoMachine {
                     // never goes through the roster.
                     chart_readable: true,
                     family_label: Some("Ultimarc I-PAC 4".into()),
-                    firmware_label: Some("firmware 1.56".into()),
+                    // The BARE version, as device_scan serves it: the studio
+                    // renderer prepends the word "firmware" itself, so prose
+                    // here rendered "firmware firmware 1.56" on /nocturne.
+                    firmware_label: Some("1.56".into()),
                     profile_state: "profiled".into(),
                     profile_detail:
                         "ksx has a measured protocol profile for this firmware and can read the \

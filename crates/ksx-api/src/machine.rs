@@ -1310,10 +1310,25 @@ pub enum PanelTerminalAnswer {
     },
     /// A later chart read contradicts what the user locked in. Both are shown;
     /// neither is silently corrected and neither is deleted.
+    ///
+    /// `declared` may be EMPTY: "I know this one is unassigned" is a real
+    /// claim the store accepts on purpose, and a chart that stores a byte
+    /// contradicts it exactly as it contradicts a named key. Guarding these
+    /// arms with `!declared.is_empty()` was how a filed unassigned claim was
+    /// stored, acknowledged, and then never shown anywhere.
     DeclaredContradicted {
         declared: String,
         stored: PanelKeyValue,
     },
+    /// The user declared this terminal unassigned and the chart's byte is
+    /// zero — agreement, as far as a chart can see.
+    ///
+    /// The one answer that turns the macro invitation OFF: an onboard macro
+    /// would still look exactly like this, but the person has said no control
+    /// is wired here, so "press the control to find out" would be an offer to
+    /// press a control they just told ksx does not exist. The declaration is
+    /// kept, not proved, and the sentence says which.
+    DeclaredUnassigned { stored: PanelKeyValue },
 }
 
 /// **Everything ksx knows about one screw terminal, and how it came to know it.**

@@ -84,8 +84,11 @@ teaches people to ignore the rule rather than to fix the code.
   already assert from the browser.
 
   What shipped is the second outcome this paragraph named, not the first: the
-  chart's own vocabulary was adopted into `ksx-api`, and what a press proved is
-  now stored SERVER-SIDE in `ksx-backend/src/panel_observations.rs` — while the
+  chart's own vocabulary was adopted into `ksx-api`, and the server-side
+  evidence store landed in `ksx-backend/src/panel_observations.rs` — though
+  only its typed-in half is wired (`declare`/`forget`); the press-recording
+  half has no production caller yet, so "what a press proved" is a capacity of
+  the store, not a thing any surface can file today — while the
   browser-only document above still holds its own copy of the same class of
   fact. **There are now two documents describing which physical switch produced
   a signal, one of which the CLI and the cabinet still cannot see.** The

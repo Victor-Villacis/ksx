@@ -27,30 +27,24 @@ use crate::panel_truth::{self, TerminalFacts};
 
 /// Compose everything ksx knows about one board's terminals.
 ///
-/// The refusal path returns `Ok`, not `Err`: "the configuration interface is
-/// busy" is a state of the answer, not an absence of one, and a caller that got
-/// `Err` here would have nothing to render but a dead end.
+/// A refused read is a refusal, `Err` — the same shape `declare` and `forget`
+/// give the identical selector or busy interface, and the shape both this
+/// module's own doc and the CLI help promise ("2 = refused"). This first
+/// shipped returning `Ok` with the refusal folded into `notes` on the theory
+/// that a refusal is "a state of the answer" — but the view it composed had
+/// empty board identity and zero terminals, so a typo'd `--device` exited 0
+/// as a successful compose while `declare` exited 2 for the same typo, and
+/// the documented exit 2 was dead code. The "compose stored evidence without
+/// a read" idea it gestured at cannot work today anyway: the observation
+/// store is keyed by the fingerprint only a read can produce.
 pub fn truth(spec: &PanelTruthSpec, learner_reachable: bool) -> Result<PanelTruthView, Refusal> {
-    let read = crate::panel_programming::chart(&PanelChartSpec {
+    let chart = crate::panel_programming::chart(&PanelChartSpec {
         device: spec.device.clone(),
         // Never true here. A backup read reconciles the transaction journal and
         // can advance this board's write-qualification state, and composing an
         // answer must not move write-safety state.
         backup: false,
-    });
-
-    let chart = match read {
-        Ok(chart) => chart,
-        Err(refusal) => {
-            return Ok(PanelTruthView {
-                notes: vec![refusal.message.clone(), refusal.remedy.clone().unwrap_or_default()]
-                    .into_iter()
-                    .filter(|line| !line.is_empty())
-                    .collect(),
-                ..PanelTruthView::default()
-            });
-        }
-    };
+    })?;
 
     let scope = PanelBoardScope {
         board_fingerprint: chart.board_fingerprint.clone(),

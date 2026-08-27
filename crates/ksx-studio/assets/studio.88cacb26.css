@@ -8023,7 +8023,13 @@ a.wsrow-title:hover {
   --forma-canvas-accent: var(--n-accent);
   --forma-canvas-text: var(--n-text);
   --forma-canvas-muted: var(--n-text-2);
-  background: radial-gradient(ellipse at 50% 42%, #191b28 0%, #121320 74%);
+  /* A vignette a few units around --n-bg (was #191b28 → #121320 on the navy
+     face), mixed rather than restated so the well follows the theme. */
+  background: radial-gradient(
+    ellipse at 50% 42%,
+    color-mix(in srgb, var(--n-bg) 98%, #ffffff) 0%,
+    color-mix(in srgb, var(--n-bg) 89%, #000000) 74%
+  );
 }
 
 /* ── Key → controller signal paths ───────────────────────────────────────
@@ -10764,7 +10770,7 @@ a.wsrow-title:hover {
   padding: 3px 10px;
   border: 1px solid var(--n-line);
   border-radius: 8px;
-  background: rgba(22, 24, 38, 0.4);
+  background: color-mix(in srgb, var(--n-bg) 40%, transparent);
   color: var(--n-text-2);
   font-size: 11px;
   font-weight: 650;
@@ -10921,7 +10927,7 @@ a.wsrow-title:hover {
 .n-key.live[data-key="F"]::after,
 .n-key.live[data-key="J"]::after {
   transform: translateY(3px);
-  background: rgba(22, 24, 38, 0.35);
+  background: color-mix(in srgb, var(--n-bg) 35%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -12100,7 +12106,7 @@ button.n-krow-tg {
   padding: 6px 14px;
   border: 1px solid var(--n-accent-line);
   border-radius: 999px;
-  background: rgba(22, 24, 38, 0.92);
+  background: color-mix(in srgb, var(--n-bg) 92%, transparent);
   color: var(--n-accent-2);
   font-size: 12px;
   white-space: nowrap;
@@ -13532,7 +13538,7 @@ button.n-keychip:hover {
   border: 1px solid var(--n-line);
   border-radius: 12px;
   padding: 8px 10px 4px;
-  background: rgba(22, 24, 38, 0.4);
+  background: color-mix(in srgb, var(--n-bg) 40%, transparent);
 }
 
 .n-mini-head {
@@ -16534,7 +16540,7 @@ a.nm-link {
 }
 
 .n-keylab-button.quiet {
-  background: rgba(22, 24, 38, 0.35);
+  background: color-mix(in srgb, var(--n-bg) 35%, transparent);
 }
 
 .n-keylab-button:disabled,
@@ -17291,7 +17297,7 @@ a.nm-link {
 .n-surface-stage[aria-pressed="true"] > span {
   border-color: var(--n-accent-line);
   background: var(--n-accent);
-  color: #11131d;
+  color: var(--n-accent-ink);
 }
 
 .n-surface-status,
@@ -17762,7 +17768,7 @@ a.nm-link {
   padding: 2px 4px;
   border: 1px solid var(--n-accent-line);
   border-radius: 4px;
-  background: #11131d;
+  background: var(--n-bg);
   color: var(--n-accent-2);
   font: 800 8px/1 ui-monospace, Menlo, Consolas, monospace;
   letter-spacing: 0.07em;

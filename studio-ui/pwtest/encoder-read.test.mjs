@@ -181,6 +181,21 @@ describe("the encoder read surface", () => {
         "",
         "the row is not marked as the one a read cannot resolve",
       );
+      // The shifted plane stores bytes through the same decoder, so a zero
+      // there is exactly as ambiguous — yet the Shifted column shipped
+      // printing bare "Unassigned" directly under a normal column that
+      // refuses that claim for the identical byte. No shifted cell may ever
+      // make it.
+      const shifted = await page
+        .locator("[data-encoder-rows] tr td:nth-child(3)")
+        .allTextContents();
+      assert.ok(shifted.length > 0, "no shifted cells rendered at all");
+      const bare = shifted.filter((cell) => cell.trim() === "Unassigned");
+      assert.equal(
+        bare.length,
+        0,
+        `${bare.length} shifted cell(s) assert an emptiness a chart read cannot establish`,
+      );
     } finally {
       await page.close();
     }
@@ -190,7 +205,10 @@ describe("the encoder read surface", () => {
     const { page } = await readTheBoard();
     try {
       const status = (await page.locator("[data-encoder-status]").textContent()) ?? "";
-      assert.match(status, /P1 Start is the Shift key/, status);
+      // The production label spelling ("Player 1 · Start"), which the fixture
+      // now mirrors — this line failed while the fixture spoke "P1 Start", a
+      // prose shape the real backend never serves.
+      assert.match(status, /Player 1 · Start is the Shift key/, status);
 
       // Exactly one row says anything about shift, and no row prints the raw
       // kebab-case wire value.

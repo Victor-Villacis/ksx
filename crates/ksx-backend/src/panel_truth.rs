@@ -188,7 +188,10 @@ fn without_chart(
             _ => PanelTerminalAnswer::ObservedUnvouched { key },
         };
     }
-    if let Some(d) = declared.filter(|d| !d.key.is_empty()) {
+    // An empty key is included on purpose: "I know this one is unassigned" is
+    // a real claim the store accepts, and filtering it here dropped the one
+    // thing the user locked in from the very surface built to show it.
+    if let Some(d) = declared {
         return PanelTerminalAnswer::Declared { key: d.key.clone() };
     }
     PanelTerminalAnswer::Unknown
@@ -233,7 +236,29 @@ pub fn compose(facts: &TerminalFacts<'_>) -> PanelTerminalTruth {
                     stored: normal.clone(),
                     declared: d.key.clone(),
                 },
-                (Some(d), Some(key)) if !d.key.is_empty() && d.key != key => {
+                // An EMPTY declaration — "I know this one is unassigned" — is a
+                // real claim the store accepts on purpose, and it composes like
+                // any other: the zero byte agrees with it, anything else
+                // disagrees loudly. Guarding every declared arm with
+                // `!d.key.is_empty()` was how the claim got stored, confirmed
+                // ("Declaration filed … unassigned.") and then never shown.
+                (Some(d), None) if normal.supported && normal.key.is_none() => {
+                    debug_assert!(d.key.is_empty());
+                    PanelTerminalAnswer::DeclaredUnassigned {
+                        stored: normal.clone(),
+                    }
+                }
+                // …and a byte the chart cannot name is still a byte: the board
+                // stores SOMETHING where the person said nothing is wired.
+                (Some(d), None) if d.key.is_empty() => {
+                    PanelTerminalAnswer::DeclaredContradicted {
+                        declared: d.key.clone(),
+                        stored: normal.clone(),
+                    }
+                }
+                // Covers the empty declaration against a named key for free:
+                // "" never equals an observable key.
+                (Some(d), Some(key)) if d.key != key => {
                     PanelTerminalAnswer::DeclaredContradicted {
                         declared: d.key.clone(),
                         stored: normal.clone(),
@@ -310,8 +335,12 @@ fn press_would_help(answer: &PanelTerminalAnswer) -> bool {
         | PanelTerminalAnswer::ChartImpossible
         | PanelTerminalAnswer::ChartUnknownBoard
         | PanelTerminalAnswer::ChartRefused
-        | PanelTerminalAnswer::Unknown
-        | PanelTerminalAnswer::Declared { .. } => true,
+        | PanelTerminalAnswer::Unknown => true,
+        // A declared UNASSIGNED terminal (empty key, or the agreeing
+        // `DeclaredUnassigned` answer) turns the invitation off: the person
+        // said no control is wired here, so "press the control" would be an
+        // offer to press a control they just told ksx does not exist.
+        PanelTerminalAnswer::Declared { key } => !key.is_empty(),
         // Already answered by a press, or already contradicted — pressing again
         // changes nothing about what is on screen.
         _ => false,
@@ -411,6 +440,9 @@ fn detail_for(answer: &PanelTerminalAnswer) -> String {
              accounts for that, which is what an onboard macro looks like.",
             observed.join(" then ")
         ),
+        PanelTerminalAnswer::Declared { key } if key.is_empty() => {
+            "You told ksx nothing is wired to this terminal.".to_owned()
+        }
         PanelTerminalAnswer::Declared { key } => {
             format!("You told ksx this control sends {key}.")
         }
@@ -419,11 +451,24 @@ fn detail_for(answer: &PanelTerminalAnswer) -> String {
              it would turn that into something ksx measured itself.",
             stored.label
         ),
+        PanelTerminalAnswer::DeclaredContradicted { declared, stored } if declared.is_empty() => {
+            format!(
+                "You told ksx nothing is wired here; the board says it stores {}. Both are kept — \
+                 you may be right about the wiring even when the firmware disagrees.",
+                stored.key.clone().unwrap_or_else(|| stored.label.clone())
+            )
+        }
         PanelTerminalAnswer::DeclaredContradicted { declared, stored } => format!(
             "You told ksx this control sends {declared}; the board says it stores {}. Both are \
              kept — you may be right about the wiring even when the firmware disagrees.",
             stored.key.clone().unwrap_or_else(|| stored.label.clone())
         ),
+        PanelTerminalAnswer::DeclaredUnassigned { .. } => {
+            "You declared this terminal unassigned, and the board stores nothing here either. An \
+             onboard macro would still look the same — ksx keeps your declaration and stops \
+             asking."
+                .to_owned()
+        }
     }
 }
 
@@ -906,6 +951,96 @@ mod tests {
             "the losing source must survive being outranked"
         );
         assert!(truth.detail.contains("Both are kept"), "{}", truth.detail);
+    }
+
+    fn declared_unassigned() -> PanelDeclaredEvidence {
+        PanelDeclaredEvidence {
+            key: String::new(),
+            declared_at: "2026-08-20T00:00:00Z".to_owned(),
+            against_image_sha256: None,
+            note: "screw not wired".to_owned(),
+        }
+    }
+
+    /// **"I know this one is unassigned" is a claim, not a blank.**
+    ///
+    /// The store accepts an empty declared key on purpose and confirms it
+    /// ("Declaration filed … unassigned.") — and then every composition arm
+    /// guarded declarations with `!d.key.is_empty()`, so the claim influenced
+    /// no answer, no sentence, and no count. These four pin each honest
+    /// outcome: agreement with a zero byte, contradiction by a named key,
+    /// contradiction by a byte the chart cannot name, and survival on a board
+    /// with no chart at all.
+    #[test]
+    fn an_unassigned_declaration_agreeing_with_a_zero_byte_is_shown_and_stops_the_asking() {
+        let chart = read(unassigned());
+        let declared = declared_unassigned();
+        let mut f = facts(&chart, None);
+        f.declared = Some(&declared);
+        let truth = compose(&f);
+
+        assert!(
+            matches!(truth.answer, PanelTerminalAnswer::DeclaredUnassigned { .. }),
+            "got {:?}",
+            truth.answer
+        );
+        assert!(truth.detail.contains("declared this terminal unassigned"), "{}", truth.detail);
+        // The person said no control is wired here: inviting a press would be
+        // an offer to press a control they just said does not exist.
+        assert!(!truth.invite_press, "{}", truth.detail);
+    }
+
+    #[test]
+    fn an_unassigned_declaration_is_contradicted_by_a_stored_key() {
+        let chart = read(key_value("A"));
+        let declared = declared_unassigned();
+        let mut f = facts(&chart, None);
+        f.declared = Some(&declared);
+        let truth = compose(&f);
+
+        assert!(
+            matches!(truth.answer, PanelTerminalAnswer::DeclaredContradicted { .. }),
+            "got {:?}",
+            truth.answer
+        );
+        assert!(truth.detail.contains("nothing is wired"), "{}", truth.detail);
+        assert!(truth.detail.contains("Both are kept"), "{}", truth.detail);
+    }
+
+    #[test]
+    fn an_unassigned_declaration_is_contradicted_by_a_byte_the_chart_cannot_name() {
+        let chart = read(vendor(0xE0));
+        let declared = declared_unassigned();
+        let mut f = facts(&chart, None);
+        f.declared = Some(&declared);
+        let truth = compose(&f);
+
+        // A byte the chart cannot NAME is still a byte: the board stores
+        // something where the person said nothing is wired. Completion is for
+        // declarations that say what the byte MEANS, not that it is absent.
+        assert!(
+            matches!(truth.answer, PanelTerminalAnswer::DeclaredContradicted { .. }),
+            "got {:?}",
+            truth.answer
+        );
+        assert!(truth.detail.contains("nothing is wired"), "{}", truth.detail);
+    }
+
+    #[test]
+    fn an_unassigned_declaration_survives_having_no_chart() {
+        let chart = PanelChartEvidence::NotAttempted;
+        let declared = declared_unassigned();
+        let mut f = facts(&chart, None);
+        f.declared = Some(&declared);
+        let truth = compose(&f);
+
+        assert!(
+            matches!(truth.answer, PanelTerminalAnswer::Declared { ref key } if key.is_empty()),
+            "got {:?}",
+            truth.answer
+        );
+        assert!(truth.detail.contains("nothing is wired"), "{}", truth.detail);
+        assert!(!truth.invite_press, "{}", truth.detail);
     }
 
     /// **No press is offered when nothing can hear it.**

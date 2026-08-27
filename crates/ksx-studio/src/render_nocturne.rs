@@ -110,6 +110,8 @@ fn scalar_slots(payload: &NocturnePayload, flash: Option<&str>) -> serde_json::V
         "nEscapeLine": payload.view.escape_line,
         "nJourneyLine": payload.view.journey_line,
         "nBoardLine": payload.view.board_line,
+        "nBoardCaseStyle": payload.view.board_case_style,
+        "nBoardOrigin": payload.view.board_origin,
         "nPlayCls": payload.view.play_cls,
         "nStopCls": payload.view.stop_cls,
         "nApplyCls": payload.view.apply_cls,
@@ -324,6 +326,7 @@ fn key_cell(row: &NocturneKeyCell) -> SlotValue {
         ("short".to_owned(), SlotValue::Text(row.short.clone())),
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
         ("aria".to_owned(), SlotValue::Text(row.aria.clone())),
+        ("style".to_owned(), SlotValue::Text(row.style.clone())),
     ])
 }
 
@@ -1564,6 +1567,85 @@ mod tests {
         );
     }
 
+    /// **Every cap carries its geometry, and the plate carries its height.**
+    ///
+    /// The gate that was missing, and it cost a full Playwright run to find.
+    /// `NocturneKeyCell` grew a `style` field and `snapshot.rs` filled it, but
+    /// `key_cell` — the serializer that turns the struct into the slot object
+    /// the page actually receives — was not updated. The field existed, was
+    /// computed correctly, and reached nothing. Every existing gate stayed
+    /// green: the slot manifest matched, no value was invented, the row count
+    /// was right. A field that never reaches the wire is invisible to all of
+    /// them.
+    ///
+    /// The symptom was not a missing style. It was that with no geometry every
+    /// absolutely-positioned cap collapsed to the same spot, so caps covered
+    /// each other and clicking a key hit a neighbour's label — which reads as
+    /// "binding is broken", nowhere near the cause.
+    #[test]
+    fn every_cap_carries_its_place_on_the_plate() {
+        let out = render_nocturne(&page(), &keyboard_payload(), None);
+        let html = &out.html;
+
+        // The plate: absolutely-positioned children give it no height of their
+        // own, so without this the whole board collapses to nothing.
+        assert!(
+            html.contains(r#"class="n-kbcase""#),
+            "the plate is missing entirely: {html}"
+        );
+        assert!(
+            html.contains("aspect-ratio:"),
+            "the plate has no aspect-ratio, so it has no height and every \
+             percentage inside it resolves against zero: {html}"
+        );
+        assert!(
+            html.contains(r#"data-origin="shipped""#),
+            "the plate does not say which kind of board it is, so the keycap \
+             sculpt cannot be kept off an arcade button: {html}"
+        );
+
+        // Every cap on the plate. The tray is deliberately excluded: it is not
+        // on the board, and it carries an empty style saying so.
+        let caps: Vec<&str> = html
+            .match_indices("<div")
+            .map(|(at, _)| {
+                let rest = &html[at..];
+                &rest[..rest.find('>').map_or(rest.len(), |e| e + 1)]
+            })
+            .filter(|tag| tag.contains("data-key=") && !tag.contains("tray"))
+            .collect();
+        assert!(
+            caps.len() > 60,
+            "expected a full board of caps, found {}: {caps:?}",
+            caps.len()
+        );
+
+        let mut places = std::collections::BTreeSet::new();
+        for cap in &caps {
+            let at = cap.find("style=\"").unwrap_or_else(|| {
+                panic!("a cap has no place on the plate, so it will stack on top of its neighbours: {cap}")
+            });
+            let style = &cap[at + 7..];
+            let style = &style[..style.find('"').expect("the style to close")];
+            for want in ["left:", "top:", "width:", "height:"] {
+                assert!(
+                    style.contains(want),
+                    "a cap's place is missing {want:?}: {style}"
+                );
+            }
+            places.insert(style.to_owned());
+        }
+
+        // Distinct places. One shared place is two controls the user cannot
+        // press separately, and it is exactly what a dropped field produces.
+        assert!(
+            places.len() > caps.len() / 2,
+            "{} caps share only {} places between them — the geometry \
+             collapsed rather than being served",
+            caps.len(),
+            places.len()
+        );
+    }
     /// **The board picker paints every board, and marks exactly the one drawn.**
     ///
     /// The same gate as the theme picker above, written at the same time as the

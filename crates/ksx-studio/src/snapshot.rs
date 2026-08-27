@@ -1999,6 +1999,19 @@ pub struct NocturneKeyCell {
     /// The assistive name (`role="img"` + `aria-label`): the same sentence
     /// on a bound cap, the bare cap otherwise — never empty.
     pub aria: String,
+    /// **Where this control sits on the board**, as an inline `style`.
+    ///
+    /// Percentages of the board's own bounds — `left`, `top`, `width`,
+    /// `height` — so the plate scales to whatever width its card gives it
+    /// instead of being hand-fitted to one. `keyboardWorkbench` has positioned
+    /// its keys this way all along; this is the same arithmetic, served rather
+    /// than computed in the browser.
+    ///
+    /// Inline `style=""` is deliberate and already load-bearing on this page:
+    /// the CSP carries `style-src-attr 'unsafe-inline'` precisely so the
+    /// mapper's 25 hit zones can position themselves, and `style-src` stays
+    /// nonce-locked so `<style>` blocks gain nothing from it.
+    pub style: String,
 }
 
 /// Every sentence `/nocturne` states as a served fact.
@@ -2228,6 +2241,16 @@ pub struct NocturneDerived {
     pub board_rows: Vec<NocturneChoiceRow>,
     /// One sentence under the board picker.
     pub board_line: String,
+    /// The plate itself, as an inline `style`: an `aspect-ratio` taken from
+    /// the board bounds, so a case full of absolutely-positioned cells still
+    /// has a height. This is what replaces the hand-fitted 980px width — the
+    /// board now fits its card instead of the card being sized to the board.
+    pub board_case_style: String,
+    /// `shipped` | `recognized` | `authored`. Carried as `data-origin` on the
+    /// case so the stylesheet can sculpt a KEYCAP without also sculpting an
+    /// arcade button: the per-row cap profile is a fact about a keyboard, not
+    /// about every picture that happens to have rows.
+    pub board_origin: String,
 }
 
 /// Which of the right pane's six controller clusters a mapper function
@@ -3711,6 +3734,21 @@ impl NocturneDerived {
             panel_profiles,
             encoder_staged,
         );
+        // The plate's own coordinate system. Cells are placed as PERCENTAGES
+        // of it, which is what retires the hand-fitted board width: studio.css
+        // had to pick 35.5px so the plate filled one 980px card and warns
+        // against 36px because that lands it wider than its scroll container.
+        // A percentage board fits whatever card it is given, and a panel — a
+        // different shape entirely — needs no second hand-fitting.
+        let (board_w, board_h) = board.bounds;
+        let board_origin = board.origin.as_str().to_owned();
+        let pct = |value: f32, span: f32| {
+            if span > 0.0 {
+                value / span * 100.0
+            } else {
+                0.0
+            }
+        };
         let dress = |cell: &&crate::board::BoardCell| {
             let mut cls = String::from("n-key");
             if !cell.unit.is_empty() {
@@ -3770,6 +3808,13 @@ impl NocturneDerived {
                 short,
                 title,
                 aria,
+                style: format!(
+                    "left:{:.4}%;top:{:.4}%;width:{:.4}%;height:{:.4}%",
+                    pct(cell.x, board_w),
+                    pct(cell.y, board_h),
+                    pct(cell.w, board_w),
+                    pct(cell.h, board_h)
+                ),
             }
         };
         let kb_rows: Vec<Vec<NocturneKeyCell>> = board
@@ -3824,6 +3869,11 @@ impl NocturneDerived {
                     short: crate::keyboard_layout::short_for(persona, fns[0]),
                     aria: title.clone(),
                     title,
+                    // The TRAY is not on the plate. These are keys bound off
+                    // whatever board is drawn, so they have no place on it —
+                    // they stay a flowed strip, and an empty style is what
+                    // says so rather than a position that means nothing.
+                    style: String::new(),
                 }
             })
             .collect();
@@ -4355,6 +4405,10 @@ impl NocturneDerived {
             // The mark follows what is DRAWN, not what is stored, so a config
             // naming a layout since deleted marks the keyboard it actually fell
             // back to instead of marking nothing at all.
+            // The plate needs a height: every cell in it is absolutely
+            // positioned, so without this the case collapses to nothing.
+            board_case_style: format!("aspect-ratio:{board_w:.2} / {board_h:.2}"),
+            board_origin,
             board_rows: crate::board::Board::roster(panel_profiles)
                 .into_iter()
                 .map(|choice| NocturneChoiceRow {

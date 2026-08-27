@@ -375,6 +375,8 @@ export interface NocturneView {
   theme_rows: NocturneChoiceRowView[];
   board_rows: NocturneChoiceRowView[];
   board_line: string;
+  board_case_style: string;
+  board_origin: string;
   cap_line: string;
   capd_cls: string;
   cap_sw_cls: string;
@@ -569,6 +571,8 @@ const [nModeRows, setNModeRows] = createSignal<NocturneChoiceRowView[]>([]);
 const [nThemeRows, setNThemeRows] = createSignal<NocturneChoiceRowView[]>([]);
 const [nBoardRows, setNBoardRows] = createSignal<NocturneChoiceRowView[]>([]);
 const [nBoardLine, setNBoardLine] = createSignal("");
+const [nBoardCaseStyle, setNBoardCaseStyle] = createSignal("");
+const [nBoardOrigin, setNBoardOrigin] = createSignal("");
 const [nKbTitle, setNKbTitle] = createSignal("");
 const [nCapLine, setNCapLine] = createSignal("");
 const [nCapdCls, setNCapdCls] = createSignal("n-capd none");
@@ -1051,6 +1055,8 @@ export function applyNocturne(p: NocturnePayload): void {
   setNThemeRows(v.theme_rows ?? []);
   setNBoardRows(v.board_rows ?? []);
   setNBoardLine(v.board_line ?? "");
+  setNBoardCaseStyle(v.board_case_style ?? "");
+  setNBoardOrigin(v.board_origin ?? "");
   setNCapLine(v.cap_line);
   setNCapdCls(v.capd_cls);
   setNCapSwCls(v.cap_sw_cls);
@@ -12062,17 +12068,29 @@ export function NocturneIsland() {
           { class: () => nKbCls() },
           h(
             "div",
-            { class: "n-kbcase" },
+            {
+              class: "n-kbcase",
+              // The plate's own aspect, from the board bounds. Every cell
+              // inside is absolutely positioned, so without a height the
+              // case collapses. `data-origin` is what lets the stylesheet
+              // sculpt a KEYCAP without also sculpting an arcade button.
+              style: () => nBoardCaseStyle(),
+              "data-origin": () => nBoardOrigin(),
+            },
           h(
             "div",
             { class: "n-kbrow" },
             createList(
               () => nKbRow1(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              // `r.key` MUST be in the reconcile key. Without it two cells
+              // differing only by which key they send are interchangeable to
+              // the differ, and it can hand a recycled node the wrong
+              // `data-key` — a cap that binds a key you did not press.
+              (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -12083,11 +12101,15 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow2(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              // `r.key` MUST be in the reconcile key. Without it two cells
+              // differing only by which key they send are interchangeable to
+              // the differ, and it can hand a recycled node the wrong
+              // `data-key` — a cap that binds a key you did not press.
+              (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -12098,11 +12120,15 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow3(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              // `r.key` MUST be in the reconcile key. Without it two cells
+              // differing only by which key they send are interchangeable to
+              // the differ, and it can hand a recycled node the wrong
+              // `data-key` — a cap that binds a key you did not press.
+              (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -12113,11 +12139,15 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow4(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              // `r.key` MUST be in the reconcile key. Without it two cells
+              // differing only by which key they send are interchangeable to
+              // the differ, and it can hand a recycled node the wrong
+              // `data-key` — a cap that binds a key you did not press.
+              (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -12128,11 +12158,15 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow5(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              // `r.key` MUST be in the reconcile key. Without it two cells
+              // differing only by which key they send are interchangeable to
+              // the differ, and it can hand a recycled node the wrong
+              // `data-key` — a cap that binds a key you did not press.
+              (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -12143,11 +12177,15 @@ export function NocturneIsland() {
             { class: "n-kbrow" },
             createList(
               () => nKbRow6(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              // `r.key` MUST be in the reconcile key. Without it two cells
+              // differing only by which key they send are interchangeable to
+              // the differ, and it can hand a recycled node the wrong
+              // `data-key` — a cap that binds a key you did not press.
+              (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),
@@ -12166,11 +12204,15 @@ export function NocturneIsland() {
             { class: "n-kbtray-row" },
             createList(
               () => nKbTray(),
-              (r) => r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria,
+              // `r.key` MUST be in the reconcile key. Without it two cells
+              // differing only by which key they send are interchangeable to
+              // the differ, and it can hand a recycled node the wrong
+              // `data-key` — a cap that binds a key you did not press.
+              (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
               (r) =>
                 h(
                   "div",
-                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls },
+                  { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
                   h("span", { class: "n-key-cap" }, r.cap),
                   h("span", { class: "n-key-short" }, r.short),
                 ),

@@ -9925,7 +9925,23 @@ a.wsrow-title:hover {
    separate element so the plate travels with the rows when a narrow pane
    scrolls them. */
 .n-kbcase {
-  width: max-content;
+  /* THE PLATE IS THE COORDINATE SYSTEM. Every cell inside is absolutely
+     positioned in percentages of the board bounds, so the plate needs to
+     (a) be a containing block and (b) have a height, which arrives as an
+     inline `aspect-ratio` computed from those bounds.
+
+     `content-box` is load-bearing: `aspect-ratio` sizes the box named by
+     `box-sizing`, and a percentage child positions against the PADDING box.
+     Under the usual `border-box` those two disagree by exactly the padding
+     — 26px across, 28px down — and every cap comes out subtly stretched.
+
+     `width: auto` replaces `max-content`, which is what retires the
+     hand-fitted 980px board: the plate now takes the width its card gives
+     it and the caps scale, instead of 35.5px having been chosen so one
+     particular board filled one particular card. */
+  position: relative;
+  box-sizing: content-box;
+  width: auto;
   padding: 13px 13px 15px;
   border-radius: 14px;
   background:
@@ -9953,28 +9969,28 @@ a.wsrow-title:hover {
    touch differently — top rows tilt away, the home row sits tallest and
    catches the most light. Inset-only, so the bound/live face treatments
    compose untouched. */
-.n-kbcase .n-kbrow:nth-child(1) .n-key::before {
+.n-kbcase[data-origin="shipped"] .n-kbrow:nth-child(1) .n-key::before {
   inset: 2.5px 2px 5px;
 }
 
-.n-kbcase .n-kbrow:nth-child(2) .n-key::before {
+.n-kbcase[data-origin="shipped"] .n-kbrow:nth-child(2) .n-key::before {
   inset: 2px 2px 5.5px;
 }
 
-.n-kbcase .n-kbrow:nth-child(3) .n-key::before {
+.n-kbcase[data-origin="shipped"] .n-kbrow:nth-child(3) .n-key::before {
   inset: 1.5px 2px 6px;
 }
 
-.n-kbcase .n-kbrow:nth-child(4) .n-key::before {
+.n-kbcase[data-origin="shipped"] .n-kbrow:nth-child(4) .n-key::before {
   inset: 1px 2px 6.5px;
   filter: brightness(1.05);
 }
 
-.n-kbcase .n-kbrow:nth-child(5) .n-key::before {
+.n-kbcase[data-origin="shipped"] .n-kbrow:nth-child(5) .n-key::before {
   inset: 1px 2px 6px;
 }
 
-.n-kbcase .n-kbrow:nth-child(6) .n-key::before {
+.n-kbcase[data-origin="shipped"] .n-kbrow:nth-child(6) .n-key::before {
   inset: 1.5px 2px 5.5px;
 }
 
@@ -10008,15 +10024,35 @@ a.wsrow-title:hover {
   }
 }
 
+/* A ROW IS NOW A GROUPING, NOT A LAYOUT. `display: contents` takes the row
+   box out of layout so its cells position against the plate, while the row
+   ELEMENT stays in the DOM — which is what keeps three things working that
+   would otherwise have had to be rewritten: the workbench's arrow-key roving
+   focus (`closest('.n-kbrow')` and its member queries), the per-row keycap
+   sculpt below (`nth-child`), and the seven served `list:nKbRow*` slots.
+
+   The old flex gap and bottom margin are gone because the gap is now IN the
+   coordinates: `board.rs` adds it to each cell's x and y. */
 .n-kbrow {
-  display: flex;
-  gap: var(--nkg);
-  margin-bottom: var(--nkg);
-  width: max-content;
+  display: contents;
 }
 
 .n-kbrow:last-child {
   margin-bottom: 0;
+}
+
+/* On the plate, a cell sits where the board says. The inline `style` carries
+   left/top/width/height as percentages, so these declarations lose to it —
+   `width: var(--nku)` and the `u*` classes below stay only for the tray, and
+   for `keyboardWorkbench`, which still reads the unit back out of the class
+   string when it repacks a board into its own view.
+
+   `margin: 0` is what retires `.n-key.sp`: a cluster gap used to be a left
+   margin computed from row 1's exact contents, and it is now simply part of
+   x. Leaving the margin in would add it a second time. */
+.n-kbcase .n-key {
+  position: absolute;
+  margin: 0;
 }
 
 /* A keycap is TWO layers: this element is the side walls (dark, seated in
@@ -10188,6 +10224,7 @@ a.wsrow-title:hover {
 
 /* The F-row cluster gaps absorb the width difference so Prt aligns over Ins:
    (506px main-block width - 438px of F-row keys and gaps) / 3 gaps. */
+/* Tray only: on the plate the cluster gap lives in x (see `.n-kbcase .n-key`). */
 .n-kbrow:first-child .n-key.sp {
   margin-left: calc((var(--nku) + var(--nkg)) * 22.66 / 34);
 }

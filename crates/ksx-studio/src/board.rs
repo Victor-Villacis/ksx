@@ -481,6 +481,63 @@ impl Board {
 // The roster
 // ───────────────────────────────────────────────────────────────────────────
 
+impl Board {
+    /// **A board somebody drew.**
+    ///
+    /// The document already speaks this crate's vocabulary — its controls carry
+    /// a kind, a label, a key and a place — so this is a rename rather than a
+    /// translation. Geometry arrives in the document's own coordinate space and
+    /// is used as-is: `bounds` says what that space was, and the page renders
+    /// every cell as a percentage of it, so a board drawn on one screen fits
+    /// any card on any other.
+    ///
+    /// An unrecognised kind draws as a 30mm button rather than being dropped,
+    /// the same rule an unrecognised encoder terminal gets: a control that
+    /// vanishes from the picture is one the user placed and cannot find.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn authored_from(document: &ksx_api::BoardDocument) -> Self {
+        // Row hints are still served, and a drawn board has no rows — so it
+        // gets ONE, and the page draws it from x/y like everything else. The
+        // hints exist for the shipped keyboard's sculpt and for arrow-key
+        // focus, neither of which a drawn board asks for.
+        let cells = document
+            .controls
+            .iter()
+            .map(|control| BoardCell {
+                id: format!("control:{}", control.id),
+                cap: control.label.clone(),
+                key: control.key.clone(),
+                kind: match control.kind.as_str() {
+                    "keycap" => BoardCellKind::Keycap,
+                    "button24" => BoardCellKind::Button24,
+                    "joystick" => BoardCellKind::Joystick,
+                    _ => BoardCellKind::Button30,
+                },
+                x: control.x,
+                y: control.y,
+                w: control.w,
+                h: control.h,
+                player: control.player,
+                ghost: false,
+                row: 1,
+                unit: String::new(),
+                sp: false,
+            })
+            .collect();
+
+        Board {
+            id: format!("board:{}", document.board_id),
+            name: if document.name.trim().is_empty() {
+                "Drawn board".to_owned()
+            } else {
+                document.name.clone()
+            },
+            origin: BoardOrigin::Authored,
+            bounds: (document.bounds_w, document.bounds_h),
+            cells,
+        }
+    }
+}
 /// The shipped board id, and the ONE spelling of it.
 ///
 /// [`Board::shipped_qwerty`] and [`Board::roster`] must agree on this exactly:
@@ -512,9 +569,13 @@ impl Board {
     /// Every board this machine could draw right now, in picker order.
     ///
     /// The shipped keyboard is always first — it is the one picture that needs
-    /// nothing but the build. Saved panel layouts follow, in store order.
+    /// nothing but the build. Boards you drew come next, then saved panel
+    /// layouts, both in store order.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn roster(profiles: &[ksx_api::PanelHardwareProfile]) -> Vec<BoardChoice> {
+    pub(crate) fn roster(
+        profiles: &[ksx_api::PanelHardwareProfile],
+        drawn: &[ksx_api::BoardDocument],
+    ) -> Vec<BoardChoice> {
         let mut rows = vec![BoardChoice {
             id: QWERTY_ID.to_owned(),
             name: "Keyboard".to_owned(),
@@ -522,6 +583,16 @@ impl Board {
                      expect it."
                 .to_owned(),
         }];
+
+        rows.extend(drawn.iter().map(|document| BoardChoice {
+            id: format!("board:{}", document.board_id),
+            name: if document.name.trim().is_empty() {
+                "Drawn board".to_owned()
+            } else {
+                document.name.clone()
+            },
+            detail: format!("A board you drew — {} controls.", document.controls.len()),
+        }));
 
         rows.extend(profiles.iter().map(|profile| BoardChoice {
             id: format!("panel:{}", profile.profile_id),
@@ -555,6 +626,7 @@ impl Board {
     pub(crate) fn resolve(
         chosen: &str,
         profiles: &[ksx_api::PanelHardwareProfile],
+        drawn: &[ksx_api::BoardDocument],
         encoder_staged: bool,
     ) -> Self {
         let panel_for = |id: &str| {
@@ -574,10 +646,19 @@ impl Board {
                 Self::shipped_qwerty()
             }
             QWERTY_ID => Self::shipped_qwerty(),
-            other => other
-                .strip_prefix("panel:")
-                .and_then(panel_for)
-                .unwrap_or_else(Self::shipped_qwerty),
+            other => {
+                if let Some(id) = other.strip_prefix("panel:") {
+                    return panel_for(id).unwrap_or_else(Self::shipped_qwerty);
+                }
+                if let Some(id) = other.strip_prefix("board:") {
+                    return drawn
+                        .iter()
+                        .find(|d| d.board_id == id)
+                        .map(Self::authored_from)
+                        .unwrap_or_else(Self::shipped_qwerty);
+                }
+                Self::shipped_qwerty()
+            }
         }
     }
 }
@@ -1003,7 +1084,7 @@ mod tests {
     #[test]
     fn an_encoder_with_a_saved_layout_opens_on_it() {
         let profiles = vec![saved("cab-01", "Upright")];
-        let board = Board::resolve("", &profiles, true);
+        let board = Board::resolve("", &profiles, &[], true);
         assert_eq!(board.id, "panel:cab-01");
         assert_eq!(board.origin, BoardOrigin::Recognized);
     }
@@ -1014,7 +1095,7 @@ mod tests {
     #[test]
     fn a_keyboard_never_opens_on_a_panel() {
         let profiles = vec![saved("cab-01", "Upright")];
-        let board = Board::resolve("", &profiles, false);
+        let board = Board::resolve("", &profiles, &[], false);
         assert_eq!(board.id, Board::shipped_qwerty().id);
     }
 
@@ -1023,7 +1104,7 @@ mod tests {
     /// sentence rather than showing an empty plate.
     #[test]
     fn an_encoder_without_a_layout_gets_the_keyboard() {
-        let board = Board::resolve("", &[], true);
+        let board = Board::resolve("", &[], &[], true);
         assert_eq!(board.id, Board::shipped_qwerty().id);
         assert!(!board.cells.is_empty(), "the fallback must draw something");
     }
@@ -1037,7 +1118,7 @@ mod tests {
     fn a_board_that_no_longer_exists_falls_back_to_the_keyboard() {
         let profiles = vec![saved("cab-01", "Upright")];
         for choice in ["panel:deleted", "panel:", "something-newer"] {
-            let board = Board::resolve(choice, &profiles, true);
+            let board = Board::resolve(choice, &profiles, &[], true);
             assert_eq!(
                 board.id,
                 Board::shipped_qwerty().id,
@@ -1047,7 +1128,10 @@ mod tests {
 
         // Whitespace is not a broken id — it trims to empty, which means
         // "follow the hardware" and is a real answer, not a fallback.
-        assert_eq!(Board::resolve("  ", &profiles, true).id, "panel:cab-01");
+        assert_eq!(
+            Board::resolve("  ", &profiles, &[], true).id,
+            "panel:cab-01"
+        );
     }
 
     /// Either board can be asked for outright, whatever is plugged in. Nothing
@@ -1057,11 +1141,11 @@ mod tests {
         let profiles = vec![saved("cab-01", "Upright")];
         for staged in [true, false] {
             assert_eq!(
-                Board::resolve(QWERTY_ID, &profiles, staged).id,
+                Board::resolve(QWERTY_ID, &profiles, &[], staged).id,
                 Board::shipped_qwerty().id
             );
             assert_eq!(
-                Board::resolve("panel:cab-01", &profiles, staged).id,
+                Board::resolve("panel:cab-01", &profiles, &[], staged).id,
                 "panel:cab-01"
             );
         }
@@ -1072,7 +1156,7 @@ mod tests {
     #[test]
     fn the_roster_offers_the_keyboard_and_every_saved_layout() {
         let profiles = vec![saved("cab-01", "Upright"), saved("cab-02", "Cocktail")];
-        let rows = Board::roster(&profiles);
+        let rows = Board::roster(&profiles, &[]);
 
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, vec![QWERTY_ID, "panel:cab-01", "panel:cab-02"]);
@@ -1086,7 +1170,7 @@ mod tests {
         // a picker row that cannot be honoured is a control that does nothing.
         for row in &rows {
             assert_eq!(
-                Board::resolve(&row.id, &profiles, true).id,
+                Board::resolve(&row.id, &profiles, &[], true).id,
                 row.id,
                 "the roster offered {:?} but resolve would not draw it",
                 row.id
@@ -1100,8 +1184,159 @@ mod tests {
     /// would post the empty id, which already means something else.
     #[test]
     fn an_unavailable_board_is_not_offered_as_a_dead_row() {
-        let rows = Board::roster(&[]);
+        let rows = Board::roster(&[], &[]);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, QWERTY_ID);
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Boards somebody drew
+    // ───────────────────────────────────────────────────────────────────
+
+    fn drawn(id: &str, name: &str) -> ksx_api::BoardDocument {
+        ksx_api::BoardDocument {
+            board_id: id.to_owned(),
+            name: name.to_owned(),
+            bounds_w: 400.0,
+            bounds_h: 200.0,
+            controls: vec![
+                ksx_api::BoardControl {
+                    id: "stick".to_owned(),
+                    kind: "joystick".to_owned(),
+                    label: "\u{25b2}".to_owned(),
+                    key: "Up".to_owned(),
+                    player: Some(1),
+                    x: 0.0,
+                    y: 0.0,
+                    w: 40.0,
+                    h: 40.0,
+                },
+                ksx_api::BoardControl {
+                    id: "fire".to_owned(),
+                    kind: "button30".to_owned(),
+                    label: "1".to_owned(),
+                    key: "A".to_owned(),
+                    player: Some(1),
+                    x: 60.0,
+                    y: 0.0,
+                    w: 40.0,
+                    h: 40.0,
+                },
+                ksx_api::BoardControl {
+                    id: "odd".to_owned(),
+                    kind: "something-a-newer-studio-draws".to_owned(),
+                    label: "?".to_owned(),
+                    key: "B".to_owned(),
+                    player: None,
+                    x: 120.0,
+                    y: 0.0,
+                    w: 40.0,
+                    h: 40.0,
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// A drawn board arrives whole: its place, its shapes, and above all its
+    /// keys, which are the only thing a binding ever sees.
+    #[test]
+    fn a_drawn_board_becomes_a_board() {
+        let board = Board::authored_from(&drawn("cab-01", "My cabinet"));
+
+        assert_eq!(board.id, "board:cab-01");
+        assert_eq!(board.name, "My cabinet");
+        assert_eq!(board.origin, BoardOrigin::Authored);
+        assert_eq!(board.bounds, (400.0, 200.0));
+        assert_eq!(board.cells.len(), 3);
+
+        let keys: Vec<&str> = board.cells.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(keys, vec!["Up", "A", "B"], "keys arrive unchanged");
+        assert_eq!(board.cells[0].kind, BoardCellKind::Joystick);
+        assert_eq!(board.cells[1].kind, BoardCellKind::Button30);
+        assert_eq!(board.cells[0].cap, "\u{25b2}", "the label is the caption");
+        assert_eq!(board.cells[1].x, 60.0, "geometry is used as drawn");
+    }
+
+    /// **A shape this build does not know still draws.** A newer Studio may add
+    /// one, and a control that vanishes from the picture is one the user placed
+    /// and cannot find — the same rule an unrecognised encoder terminal gets.
+    #[test]
+    fn a_shape_this_build_does_not_know_still_draws() {
+        let board = Board::authored_from(&drawn("cab-01", "My cabinet"));
+        let odd = board
+            .cells
+            .iter()
+            .find(|c| c.id == "control:odd")
+            .expect("the unknown shape is still on the board");
+        assert_eq!(odd.kind, BoardCellKind::Button30, "it draws as a button");
+        assert_eq!(odd.key, "B", "and it is still bindable");
+    }
+
+    /// Drawn boards join the one roster, ahead of the saved panel layouts, and
+    /// every id the roster offers resolves to the board it named.
+    #[test]
+    fn drawn_boards_join_the_roster() {
+        let profiles = vec![saved("cab-01", "Upright")];
+        let mine = vec![drawn("mine", "My cabinet")];
+        let rows = Board::roster(&profiles, &mine);
+
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec![QWERTY_ID, "board:mine", "panel:cab-01"]);
+        for row in &rows {
+            assert_eq!(
+                Board::resolve(&row.id, &profiles, &mine, true).id,
+                row.id,
+                "the roster offered {:?} but resolve would not draw it",
+                row.id
+            );
+        }
+    }
+
+    /// A drawn board deleted since it was chosen falls back to the keyboard,
+    /// rather than leaving the page with no picture on it.
+    #[test]
+    fn a_drawn_board_that_is_gone_falls_back() {
+        let mine = vec![drawn("mine", "My cabinet")];
+        assert_eq!(
+            Board::resolve("board:mine", &[], &mine, false).id,
+            "board:mine"
+        );
+        assert_eq!(
+            Board::resolve("board:deleted", &[], &mine, false).id,
+            Board::shipped_qwerty().id
+        );
+        assert_eq!(
+            Board::resolve("board:", &[], &mine, false).id,
+            Board::shipped_qwerty().id
+        );
+    }
+
+    /// **Drawing a board never changes what a controller does.** The plan's
+    /// whole thesis, now across all three origins: the same `A` reaches bind
+    /// from a keycap, a cabinet button, and a control somebody drew.
+    #[test]
+    fn all_three_origins_can_offer_the_same_key() {
+        let qwerty = Board::shipped_qwerty();
+        let panel = Board::encoder_from_profile(&profile_of(vec![("1sw1", Some("A"))]));
+        let mine = Board::authored_from(&drawn("mine", "My cabinet"));
+
+        let caption = |b: &Board| {
+            b.cells
+                .iter()
+                .find(|c| c.key == "A")
+                .map(|c| c.cap.clone())
+                .expect("every one of these boards emits A")
+        };
+        let captions = [caption(&qwerty), caption(&panel), caption(&mine)];
+        assert_eq!(captions, ["A", "1", "1"], "captions differ by picture");
+
+        for board in [&qwerty, &panel, &mine] {
+            assert!(
+                board.cells.iter().any(|c| c.key == "A"),
+                "{} does not emit A",
+                board.id
+            );
+        }
     }
 }

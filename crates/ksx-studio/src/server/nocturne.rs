@@ -518,6 +518,11 @@ pub(super) const N_READ_AUTOSTART_ERROR: &str =
 /// not be read rather than carrying a store diagnostic onto the page.
 pub(super) const N_READ_PANELS_ERROR: &str =
     "Saved panel layouts could not be read, so only the keyboard is offered here.";
+/// Rendered under the board picker when the drawn-board store refuses. Its own
+/// sentence, because it is its own store: the saved panel layouts can be
+/// perfectly readable while this one is not.
+pub(super) const N_READ_BOARDS_ERROR: &str =
+    "Boards you drew could not be read, so they are missing from this list.";
 
 /// The daemon-down banner, in the page's one status region.
 ///
@@ -588,6 +593,13 @@ pub(super) async fn collect_nocturne(
             Ok(view) => (Some(view), String::new()),
             Err(_) => (None, N_READ_PANELS_ERROR.to_owned()),
         };
+        // Boards somebody drew. A separate store from the saved panel layouts
+        // above, and a separate refusal: one holds pictures, the other holds
+        // what a physical terminal emits.
+        let (drawn, drawn_error) = match state.machine_cache.drawn_boards(&*state.machine) {
+            Ok(view) => (Some(view), String::new()),
+            Err(_) => (None, N_READ_BOARDS_ERROR.to_owned()),
+        };
         // The undo chip: composed from the SERVER-held stash while its
         // window is open; an expired stash is dropped here so a late click
         // cannot find it either.
@@ -624,6 +636,8 @@ pub(super) async fn collect_nocturne(
             autostart_error,
             panels,
             panels_error,
+            drawn,
+            drawn_error,
             view: Default::default(),
         };
         offer_held_release(payload.derived())
@@ -650,6 +664,8 @@ pub(super) async fn collect_nocturne(
             autostart_error: N_READ_AUTOSTART_ERROR.to_owned(),
             panels: None,
             panels_error: N_READ_PANELS_ERROR.to_owned(),
+            drawn: None,
+            drawn_error: N_READ_BOARDS_ERROR.to_owned(),
             selected: None,
             q: None,
             macro_selected: None,
@@ -1480,11 +1496,16 @@ pub(super) async fn nocturne_form_board(
         return nocturne_redirect("the form did not say which board — pick one on the page");
     };
     let wanted = field.trim().to_owned();
+    // `panel:` is a saved encoder layout, `board:` is one somebody drew. Both
+    // are refused here if the id half is empty, so the config can never be
+    // wedged with a prefix that names nothing. A board that merely does not
+    // exist RIGHT NOW is a different case and is handled at render time by
+    // falling back to the keyboard.
     let known = wanted.is_empty()
         || wanted == crate::board::QWERTY_ID
-        || wanted
-            .strip_prefix("panel:")
-            .is_some_and(|id| !id.is_empty());
+        || ["panel:", "board:"]
+            .iter()
+            .any(|prefix| wanted.strip_prefix(prefix).is_some_and(|id| !id.is_empty()));
     if !known {
         return nocturne_redirect(N_BOARD_UNKNOWN);
     }

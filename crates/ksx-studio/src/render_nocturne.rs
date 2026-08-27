@@ -833,6 +833,10 @@ mod tests {
             // it joins this list" rather than offering an empty plate.
             panels: None,
             panels_error: String::new(),
+            // No boards drawn either — the fixture stages hardware, not
+            // somebody's drawing.
+            drawn: None,
+            drawn_error: String::new(),
             setup: Some(ksx_api::SetupView {
                 config_exists: true,
                 slots: vec![ksx_api::SetupSlotRow {

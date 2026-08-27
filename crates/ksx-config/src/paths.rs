@@ -114,6 +114,18 @@ impl ConfigRoot {
         self.dir.join("panel-layouts")
     }
 
+    /// Boards somebody DREW: pictures to map on, not hardware layouts.
+    ///
+    /// Deliberately not `panel-layouts`. That store holds what each physical
+    /// I-PAC terminal emits, and its whole contract is that a layout can be
+    /// PROGRAMMED ONTO a board — which is why it refuses anything that is not
+    /// exactly the 56 real terminal ids, and why nothing in it carries
+    /// geometry. A drawn board is the opposite kind of thing: arbitrary
+    /// controls at arbitrary places, which no encoder can be programmed with.
+    pub fn boards_dir(&self) -> PathBuf {
+        self.dir.join("boards")
+    }
+
     pub fn games_path(&self) -> PathBuf {
         self.dir.join("games.toml")
     }

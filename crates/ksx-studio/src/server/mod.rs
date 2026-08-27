@@ -172,6 +172,16 @@ struct MachineCache {
             Result<ksx_api::PanelHardwareProfilesView, ksx_api::Refusal>,
         )>,
     >,
+    /// Boards somebody drew, from `<root>\boards`. A separate read from
+    /// `panels` because it is a separate store holding a different KIND of
+    /// thing — a picture, not a hardware layout — and the two refuse for
+    /// different reasons.
+    drawn: std::sync::Mutex<
+        Option<(
+            std::time::Instant,
+            Result<ksx_api::BoardsView, ksx_api::Refusal>,
+        )>,
+    >,
 }
 
 /// Long enough to skip most polls, short enough that an EXTERNAL change
@@ -187,6 +197,7 @@ impl MachineCache {
             games: std::sync::Mutex::new(None),
             auto: std::sync::Mutex::new(None),
             panels: std::sync::Mutex::new(None),
+            drawn: std::sync::Mutex::new(None),
         }
     }
 
@@ -196,6 +207,7 @@ impl MachineCache {
         *self.games.lock().unwrap() = None;
         *self.auto.lock().unwrap() = None;
         *self.panels.lock().unwrap() = None;
+        *self.drawn.lock().unwrap() = None;
     }
 
     fn fetch<T: Clone>(
@@ -246,6 +258,13 @@ impl MachineCache {
         machine: &dyn ksx_api::MachineSource,
     ) -> Result<ksx_api::PanelHardwareProfilesView, ksx_api::Refusal> {
         Self::fetch(&self.panels, || machine.panel_hardware_profiles())
+    }
+
+    fn drawn_boards(
+        &self,
+        machine: &dyn ksx_api::MachineSource,
+    ) -> Result<ksx_api::BoardsView, ksx_api::Refusal> {
+        Self::fetch(&self.drawn, || machine.boards())
     }
 }
 

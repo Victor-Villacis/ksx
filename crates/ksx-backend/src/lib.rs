@@ -38,6 +38,7 @@
 //! is where surfaces get their data.
 
 pub mod autostart;
+pub mod boards;
 #[cfg(feature = "cabinet")]
 pub mod cabinet;
 #[cfg(windows)]

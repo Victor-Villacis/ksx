@@ -7087,16 +7087,16 @@ fn an_unknown_workspace_flash_is_never_reflected() {
 ///
 /// The list is read out of `server/nocturne.rs` itself rather than restated
 /// here — a hand-copied roster of 96 constants would drift by lunchtime.
-/// Six constants are deliberately OFF the allowlist because they are
+/// Seven constants are deliberately OFF the allowlist because they are
 /// READ-side sentences that render into the page body and are never a
-/// redirect target. They are named individually: if a seventh appears, that is a
+/// redirect target. They are named individually: if an eighth appears, that is a
 /// decision to make, not a default to inherit.
 #[test]
 fn every_redirect_flash_is_on_the_allowlist() {
     const SRC: &str = include_str!("../src/server/nocturne.rs");
 
     // Sentences that render INTO the page (a refused read), never a redirect.
-    const READ_SIDE: [&str; 6] = [
+    const READ_SIDE: [&str; 7] = [
         "N_DAEMON_DOWN",
         "N_READ_AUTOSTART_ERROR",
         "N_READ_GAMES_ERROR",
@@ -7104,6 +7104,10 @@ fn every_redirect_flash_is_on_the_allowlist() {
         // A refused read is advice ("try again"), not an outcome, and the
         // picker still works — it just offers the keyboard alone.
         "N_READ_PANELS_ERROR",
+        // Its sibling, and a SEPARATE store: the saved panel layouts can be
+        // perfectly readable while the drawn boards are not. Same rule —
+        // rendered under the picker, never redirected with.
+        "N_READ_BOARDS_ERROR",
         "N_READ_SCAN_ERROR",
         "N_READ_SETUP_ERROR",
     ];

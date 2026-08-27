@@ -93,8 +93,9 @@ pub use live::{
 pub use live_pipe::PipeLiveSource;
 pub use machine::{
     controller_output_states, setup_states, setup_steps, vigem_output_codes, AdviceRow,
-    AutostartSpec, AutostartView, BlockingSpec, BlockingView, BoardRole, BoardRow, BoardSpec,
-    BoardView, ConfigExport, ConfiguredDevice, ControllerOutputRequirement, ControllerOutputView,
+    AutostartSpec, AutostartView, BlockingSpec, BlockingView, BoardControl, BoardDeleteSpec,
+    BoardDocument, BoardMutationView, BoardRole, BoardRow, BoardSaveSpec, BoardSpec, BoardView,
+    BoardsView, ConfigExport, ConfiguredDevice, ControllerOutputRequirement, ControllerOutputView,
     ControllerOutputsView, DeletePreset, DeleteProfile, DeviceIdentifyView, DevicePickSpec,
     DevicePickView, DeviceRemoveSpec, DeviceRemoveView, DeviceScanView, DevicesView, DoctorRow,
     DoctorView, ExportRequest, ImportReport, ImportRequest, ImportWrite, KeyboardRow,

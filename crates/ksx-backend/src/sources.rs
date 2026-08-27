@@ -913,6 +913,24 @@ impl ksx_api::MachineSource for LocalMachine {
         crate::panel_profiles::profiles()
     }
 
+    fn boards(&self) -> Result<ksx_api::BoardsView, Refusal> {
+        crate::boards::boards()
+    }
+
+    fn board_save(
+        &self,
+        spec: &ksx_api::BoardSaveSpec,
+    ) -> Result<ksx_api::BoardMutationView, Refusal> {
+        crate::boards::save(spec)
+    }
+
+    fn board_delete(
+        &self,
+        spec: &ksx_api::BoardDeleteSpec,
+    ) -> Result<ksx_api::BoardMutationView, Refusal> {
+        crate::boards::delete(spec)
+    }
+
     fn panel_hardware_profile_save(
         &self,
         spec: &ksx_api::PanelHardwareProfileSaveSpec,

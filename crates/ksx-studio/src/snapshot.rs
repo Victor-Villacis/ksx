@@ -1552,6 +1552,13 @@ pub struct NocturnePayload {
     pub panels: Option<ksx_api::PanelHardwareProfilesView>,
     #[serde(default)]
     pub panels_error: String,
+    /// Boards somebody drew, from `MachineSource::boards`. Its own read and its
+    /// own sentence for SURFACES.md §1b's reason: "you have drawn none" and
+    /// "the store would not answer" are opposite advice.
+    #[serde(default)]
+    pub drawn: Option<ksx_api::BoardsView>,
+    #[serde(default)]
+    pub drawn_error: String,
     #[serde(default)]
     pub games: Option<ksx_api::ProfilesView>,
     #[serde(default)]
@@ -3723,6 +3730,11 @@ impl NocturneDerived {
             .as_ref()
             .map(|v| v.profiles.as_slice())
             .unwrap_or(&[]);
+        // Boards somebody drew. Same empty-slice-covers-both rule as the panel
+        // layouts above: the difference between "none drawn" and "the store
+        // refused" is advice, and it is carried by `drawn_error`.
+        let drawn_boards: &[ksx_api::BoardDocument] =
+            p.drawn.as_ref().map(|v| v.boards.as_slice()).unwrap_or(&[]);
         // WHICH board, resolved from the saved choice and what is staged.
         // Empty means follow the hardware; an id this build cannot draw falls
         // back to the keyboard rather than leaving the page with no picture.
@@ -3732,6 +3744,7 @@ impl NocturneDerived {
                 .map(|s| s.board.as_str())
                 .unwrap_or_default(),
             panel_profiles,
+            drawn_boards,
             encoder_staged,
         );
         // The plate's own coordinate system. Cells are placed as PERCENTAGES
@@ -4409,7 +4422,7 @@ impl NocturneDerived {
             // positioned, so without this the case collapses to nothing.
             board_case_style: format!("aspect-ratio:{board_w:.2} / {board_h:.2}"),
             board_origin,
-            board_rows: crate::board::Board::roster(panel_profiles)
+            board_rows: crate::board::Board::roster(panel_profiles, drawn_boards)
                 .into_iter()
                 .map(|choice| NocturneChoiceRow {
                     cls: if choice.id == board.id {

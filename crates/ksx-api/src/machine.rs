@@ -411,6 +411,35 @@ pub trait MachineSource: Send + Sync {
         ))
     }
 
+    /// **Every board somebody drew on this machine.**
+    ///
+    /// A read of `<root>\boards`, kept apart from [`Self::panel_hardware_profiles`]
+    /// because the two stores hold opposite kinds of thing: a saved panel layout
+    /// says what a physical terminal emits and can be programmed onto a board; a
+    /// drawn board says where a control sits and can be programmed onto nothing.
+    fn boards(&self) -> Result<BoardsView, Refusal> {
+        Err(Refusal::not_here(
+            "listing drawn boards",
+            "open the Studio and draw one",
+        ))
+    }
+
+    /// Create or stale-safely update one drawn board.
+    fn board_save(&self, _spec: &BoardSaveSpec) -> Result<BoardMutationView, Refusal> {
+        Err(Refusal::not_here(
+            "saving a drawn board",
+            "open the Studio and draw one",
+        ))
+    }
+
+    /// Delete one drawn board. Touches no hardware — there is none behind it.
+    fn board_delete(&self, _spec: &BoardDeleteSpec) -> Result<BoardMutationView, Refusal> {
+        Err(Refusal::not_here(
+            "deleting a drawn board",
+            "open the Studio and remove it there",
+        ))
+    }
+
     /// **What ksx left behind**, compared against what Windows reports.
     ///
     /// Read-only: reads the receipt store, the device tree and the driver
@@ -1077,6 +1106,99 @@ pub struct PanelHardwareProfileMutationView {
     pub profile_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<PanelHardwareProfile>,
+}
+
+/// One control on a board somebody drew.
+///
+/// **This is a picture, not a wiring diagram.** It says there is a 30mm button
+/// here, labelled `1`, that sends `LeftCtrl` — never how the switch behind it is
+/// wired, which is [`PanelHardwareTerminal`]'s business and belongs to a
+/// physical encoder ksx can program.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BoardControl {
+    /// Stable within its board. Two controls may legitimately send the same
+    /// key, so the key cannot be the identity.
+    pub id: String,
+    /// `keycap` | `button30` | `button24` | `joystick` — the Studio's drawing
+    /// vocabulary, carried as text so a newer Studio can add a shape without
+    /// this store refusing to load.
+    pub kind: String,
+    /// The printed text. Display only.
+    pub label: String,
+    /// The canonical key name this control sends, or empty for Unassigned.
+    /// **The only field a binding ever sees.**
+    pub key: String,
+    /// Which player's cluster this belongs to, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub player: Option<u8>,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// A board somebody drew, as it is stored.
+///
+/// Geometry lives in the document's own coordinate space — `bounds_w` by
+/// `bounds_h` — and the Studio renders it as percentages of that, so a board
+/// drawn on one screen fits any card on any other.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BoardDocument {
+    pub schema: String,
+    pub board_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Opaque content revision used by the update/delete stale-write guards,
+    /// the same discipline the saved panel layouts take.
+    pub revision: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub bounds_w: f32,
+    pub bounds_h: f32,
+    pub controls: Vec<BoardControl>,
+}
+
+/// Every drawn board on this machine.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BoardsView {
+    pub summary: String,
+    pub config_root: String,
+    pub boards: Vec<BoardDocument>,
+}
+
+/// Create when both identity fields are absent; update when both are present —
+/// the same shape as [`PanelHardwareProfileSaveSpec`], so the two stores cannot
+/// end up with two different opinions about what a safe write looks like.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BoardSaveSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub bounds_w: f32,
+    pub bounds_h: f32,
+    pub controls: Vec<BoardControl>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardDeleteSpec {
+    pub board_id: String,
+    pub expected_revision: String,
+}
+
+/// What a board write did.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BoardMutationView {
+    /// `created` | `updated` | `deleted`.
+    pub state: String,
+    pub board_id: String,
+    pub name: String,
+    pub revision: String,
+    pub summary: String,
 }
 
 /// One semantic terminal edit. An absent field is unchanged; an empty key

@@ -7180,7 +7180,7 @@ a.wsrow-title:hover {
 .nm-cfg-t {
   font-size: 13px;
   font-weight: 500;
-  color: #cfd3e5;
+  color: color-mix(in srgb, var(--n-text) 72%, var(--n-text-2));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -7208,7 +7208,7 @@ a.wsrow-title:hover {
   padding: 8px 9px;
   border-radius: 7px;
   font-size: 12.5px;
-  color: #cfd3e5;
+  color: color-mix(in srgb, var(--n-text) 72%, var(--n-text-2));
   cursor: pointer;
 }
 
@@ -7277,7 +7277,7 @@ a.wsrow-title:hover {
 
 .nm-auto-t {
   font-size: 12.5px;
-  color: #cfd3e5;
+  color: color-mix(in srgb, var(--n-text) 72%, var(--n-text-2));
 }
 
 .nm-auto-note {
@@ -7913,7 +7913,7 @@ a.wsrow-title:hover {
   padding: 4px 8px;
   border: 1px solid var(--n-line-2);
   border-radius: 7px;
-  background: #1d1f2b;
+  background: color-mix(in srgb, var(--n-panel) 60%, var(--n-panel-2));
   color: var(--n-text);
   font: inherit;
   font-size: 11.5px;
@@ -10396,7 +10396,7 @@ a.wsrow-title:hover {
 }
 
 .n-center .wspad-face {
-  fill: #cfd3e5;
+  fill: color-mix(in srgb, var(--n-text) 72%, var(--n-text-2));
   font-size: 4.6px;
   font-weight: 600;
   font-family: inherit;
@@ -11514,7 +11514,7 @@ a.wsrow-title:hover {
 }
 
 .n-keychip {
-  background: #292b31;
+  background: var(--n-line);
   color: var(--n-text);
 }
 
@@ -11551,8 +11551,8 @@ a.wsrow-title:hover {
   margin: 2px 0 6px;
   padding: 12px 11px 13px;
   border-radius: 8px;
-  background: #1d1f2b;
-  box-shadow: inset 0 0 0 1px #292b31;
+  background: color-mix(in srgb, var(--n-panel) 60%, var(--n-panel-2));
+  box-shadow: inset 0 0 0 1px var(--n-line);
   animation: noct-rise 0.16s ease-out;
 }
 
@@ -11614,7 +11614,7 @@ a.wsrow-title:hover {
   border-radius: 6px;
   background: var(--n-panel-2);
   box-shadow: inset 0 0 0 1px var(--n-line-2);
-  color: #cfd3e5;
+  color: color-mix(in srgb, var(--n-text) 72%, var(--n-text-2));
   font-size: 11.5px;
   cursor: pointer;
 }
@@ -11635,7 +11635,7 @@ a.wsrow-title:hover {
   justify-content: flex-start;
   padding: 2px;
   border-radius: 11px;
-  background: #292b31;
+  background: var(--n-line);
   box-shadow: inset 0 0 0 1px var(--n-line-2);
   cursor: pointer;
 }
@@ -11881,7 +11881,7 @@ a.wsrow-title:hover {
   min-width: 44px;
   padding: 3px 9px;
   border-radius: 6px;
-  background: #292b31;
+  background: var(--n-line);
   color: var(--n-text);
   font-family: ui-monospace, Menlo, monospace;
   font-size: 11.5px;
@@ -12507,7 +12507,7 @@ button.n-keychip:hover {
   gap: 2px;
   padding: 10px 11px;
   border-radius: 8px;
-  background: #1d1f2b;
+  background: color-mix(in srgb, var(--n-panel) 60%, var(--n-panel-2));
   box-shadow: inset 0 0 0 1px var(--n-line-2);
   cursor: pointer;
 }
@@ -12729,7 +12729,7 @@ button.n-keychip:hover {
   gap: 2px;
   padding: 10px 12px;
   border-radius: 8px;
-  background: #1d1f2b;
+  background: color-mix(in srgb, var(--n-panel) 60%, var(--n-panel-2));
   box-shadow: inset 0 0 0 1px var(--n-line-2);
   cursor: pointer;
 }
@@ -12813,8 +12813,8 @@ button.n-keychip:hover {
 }
 
 .nms-wrap.open {
-  background: #1d1f2b;
-  box-shadow: inset 0 0 0 1px #292b31;
+  background: color-mix(in srgb, var(--n-panel) 60%, var(--n-panel-2));
+  box-shadow: inset 0 0 0 1px var(--n-line);
 }
 
 .nms-row {
@@ -12859,7 +12859,7 @@ button.n-keychip:hover {
   border-radius: 5px;
   background: var(--n-panel-2);
   box-shadow: inset 0 0 0 1px var(--n-line-2);
-  color: #cfd3e5;
+  color: color-mix(in srgb, var(--n-text) 72%, var(--n-text-2));
   font-size: 11px;
   cursor: pointer;
 }
@@ -13378,7 +13378,7 @@ button.n-keychip:hover {
   justify-content: flex-start;
   padding: 2px;
   border-radius: 11px;
-  background: #292b31;
+  background: var(--n-line);
   box-shadow: inset 0 0 0 1px var(--n-line-2);
 }
 
@@ -13434,7 +13434,7 @@ button.n-keychip:hover {
   align-items: flex-start;
   gap: 8px;
   font-size: 11.5px;
-  color: #cfd3e5;
+  color: color-mix(in srgb, var(--n-text) 72%, var(--n-text-2));
   text-wrap: pretty;
   cursor: pointer;
 }
@@ -15653,7 +15653,7 @@ button.n-keychip:hover {
   padding: 7px 10px;
   border: 1px solid var(--n-line-2);
   border-radius: 8px;
-  background: #1d1f2b;
+  background: color-mix(in srgb, var(--n-panel) 60%, var(--n-panel-2));
   color: var(--n-text);
   font: inherit;
   font-size: 12.5px;
@@ -15851,7 +15851,7 @@ details.n-bind.arm[open] .n-bind-sum {
   padding: 4px 10px;
   border: none;
   border-radius: 6px;
-  background: #292b31;
+  background: var(--n-line);
   color: var(--n-text);
   font-size: 11.5px;
   cursor: pointer;

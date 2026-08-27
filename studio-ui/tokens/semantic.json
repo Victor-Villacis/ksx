@@ -756,6 +756,136 @@
           "$type": "alias"
         }
       ]
+    },
+    {
+      "name": "nocturne-frame",
+      "note": "/* ── §4 THE NOCTURNE FRAME ────────────────────────────────────────────────\n   `/nocturne`'s own roles. The values here are the Studio Nocturne\n   design's night face — they ARE the dark theme for the product page, so\n   the dark overlay needs nothing and light/matrix re-point every role at\n   the gated palette above (see themes/*.json). Emitted after the light\n   media block, which still wins: :root:not([data-theme]) out-ranks :root\n   by specificity. The input-test dialog mounts on <body>, which is WHY\n   these live on :root and not on .nocturne — a .nocturne-scoped pin can\n   never reach it, and a local re-pin shadows every theme with all gates\n   green (studio.css carried exactly that defect twice). ── */",
+      "tokens": [
+        {
+          "cssName": "--n-bg",
+          "$value": "#161826",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-panel",
+          "$value": "#1a1c28",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-panel-2",
+          "$value": "#232532",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-panel-3",
+          "$value": "#2b2d3c",
+          "$description": "one step above --n-panel-2: the zebra stripe and every hover ground",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-line",
+          "$value": "#2b2d3a",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-line-2",
+          "$value": "#3f424d",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-text",
+          "$value": "#e9e9ed",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-text-2",
+          "$value": "#9397ab",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-text-3",
+          "$value": "#75798c",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-accent",
+          "$value": "#968ae0",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-accent-2",
+          "$value": "#a7a1db",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-accent-ink",
+          "$value": "#161826",
+          "$description": "text ON an --n-accent fill",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-accent-tint",
+          "$value": "rgba(150, 138, 224, 0.14)",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-accent-line",
+          "$value": "rgba(150, 138, 224, 0.45)",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-accent-dim",
+          "$value": "rgba(150, 138, 224, 0.26)",
+          "$description": "a fill strong enough to read as HELD behind a mark",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-warn",
+          "$value": "#edbb46",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-danger",
+          "$value": "#e79aa6",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-danger-line",
+          "$value": "rgba(231, 154, 166, 0.5)",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-ok",
+          "$value": "#4ed185",
+          "$type": "color",
+          "themeable": true
+        },
+        {
+          "cssName": "--n-font",
+          "$value": "Inter, \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif",
+          "$description": "the frame's UI face; matrix re-points it at the mono stack",
+          "$type": "other",
+          "themeable": "optional"
+        }
+      ]
     }
   ]
 }

@@ -311,6 +311,10 @@ for (const config of CONTEXTS) {
               documentWidth,
               coarse: matchMedia("(pointer: coarse)").matches,
               light: matchMedia("(prefers-color-scheme: light)").matches,
+              nocturneStage: (() => {
+                const stage = document.querySelector(".nocturne");
+                return stage ? getComputedStyle(stage).backgroundColor : null;
+              })(),
               containers,
               canvasAdoption,
               escaped: containers.filter(
@@ -353,6 +357,20 @@ for (const config of CONTEXTS) {
             config.options.colorScheme === "light",
             `${config.name} did not expose the intended color scheme`,
           );
+          // Under System (the fixture stamps no data-theme) the product frame
+          // itself must follow the OS, not just the body behind it: an
+          // emulated light OS repaints `.nocturne` with the light tokens.
+          // Dark keeps the Nocturne design's own navy — that face IS dark.
+          if (layout.nocturneStage !== null) {
+            assert.equal(
+              layout.nocturneStage,
+              config.options.colorScheme === "light"
+                ? hexToRgb(THEMES.find((t) => t.id === "light").bg)
+                : "rgb(22, 24, 38)",
+              `${route.path} did not paint the System-${config.options.colorScheme} ` +
+                `ground on ${config.name}`,
+            );
+          }
           assert.deepEqual(diagnostics, [], `${route.path} emitted browser errors on ${config.name}`);
         } catch (error) {
           failure = error;
@@ -510,33 +528,21 @@ ${themedStderr.trim() || "(it said nothing)"}`,
           `${route.path} painted the wrong ground for stamped ${theme.id}`,
         );
         if (painted.nocturneStage !== null) {
-          // ⚠️ WHAT THIS PINS IS NO LONGER WHAT IT SAYS IT PINS.
-          //
-          // The rationale here used to be "the design-proof route deliberately
-          // ignores themes… and dies wholesale at M5 (its own banner's
-          // contract)". That route is now THE PRODUCT — `/nocturne` is the
-          // only page ksx Studio ships — and the frame still hard-codes its
-          // palette: `studio.css` sets `--n-bg: #161826` on `.nocturne` and
-          // paints `background: var(--n-bg)` on a `height: 100vh;
-          // overflow: hidden` frame. The theme stamp reaches `body` and
-          // nothing else, so the frame covers every pixel of the ground the
-          // assertion above just proved was themed.
-          //
-          // The consequence is a shipped theme picker (`/nocturne/theme`,
-          // `themes.json` = dark/light/matrix) that changes NOTHING A USER CAN
-          // SEE on the product page — and this assertion is what would fail
-          // first if somebody fixed it. It is left standing on purpose: the
-          // fact it states is true today, and deleting it would let the frame
-          // drift silently while the question is decided. But it is a
-          // REGRESSION GUARD OVER A DEFECT, not a contract, and whoever owns
-          // the token system should either theme `--n-bg` (and re-point this
-          // at `theme.bg`) or remove the picker.
+          // The frame learned the themes (2026-08-27). `.nocturne` was the
+          // one surface a stamp could not reach — it hard-coded its palette
+          // over a 100vh frame, so the shipped picker changed nothing a user
+          // could see. Its `--n-*` roles now alias the token values under a
+          // stamped light or matrix theme, so the ground here IS `theme.bg`.
+          // Stamped dark is the one exception, on purpose: the Nocturne
+          // design's own navy (#161826) is the product's dark face, and the
+          // picker's Dark row promises "renders dark", not "renders the
+          // token ramp's dark".
+          const expectedStage =
+            theme.id === "dark" ? "rgb(22, 24, 38)" : hexToRgb(theme.bg);
           assert.equal(
             painted.nocturneStage,
-            "rgb(22, 24, 38)",
-            `${route.path}'s .nocturne frame still hard-codes --n-bg under stamped ${theme.id} ` +
-              `— if this failed because the frame learned the theme, that is the fix landing: ` +
-              `re-point this at hexToRgb(theme.bg)`,
+            expectedStage,
+            `${route.path}'s .nocturne frame did not paint the stamped ${theme.id} ground`,
           );
         }
         assert.deepEqual(

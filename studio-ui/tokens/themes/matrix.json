@@ -50,6 +50,27 @@
     { "cssName": "--font-sans", "$value": "ui-monospace, \"Cascadia Mono\", \"Cascadia Code\", Consolas, monospace", "$type": "other" },
     { "cssName": "--dur-1", "$value": "60ms", "$type": "other" },
     { "cssName": "--dur-2", "$value": "110ms", "$type": "other" },
-    { "cssName": "--dur-3", "$value": "180ms", "$type": "other" }
+    { "cssName": "--dur-3", "$value": "180ms", "$type": "other" },
+    { "comment": "  /* The Nocturne frame's roles re-pointed at this palette, and the\n     frame's UI face joins the terminal's mono stack. */" },
+    { "cssName": "--n-bg", "$value": "var(--bg)", "$type": "alias" },
+    { "cssName": "--n-panel", "$value": "var(--panel)", "$type": "alias" },
+    { "cssName": "--n-panel-2", "$value": "var(--panel-2)", "$type": "alias" },
+    { "cssName": "--n-panel-3", "$value": "var(--panel-3)", "$type": "alias" },
+    { "cssName": "--n-line", "$value": "var(--line)", "$type": "alias" },
+    { "cssName": "--n-line-2", "$value": "var(--line-strong)", "$type": "alias" },
+    { "cssName": "--n-text", "$value": "var(--text)", "$type": "alias" },
+    { "cssName": "--n-text-2", "$value": "var(--text-2)", "$type": "alias" },
+    { "cssName": "--n-text-3", "$value": "var(--text-3)", "$type": "alias" },
+    { "cssName": "--n-accent", "$value": "var(--accent)", "$type": "alias" },
+    { "cssName": "--n-accent-2", "$value": "var(--accent-strong)", "$type": "alias" },
+    { "cssName": "--n-accent-ink", "$value": "var(--accent-on)", "$type": "alias" },
+    { "cssName": "--n-accent-tint", "$value": "var(--accent-dim)", "$type": "alias" },
+    { "cssName": "--n-accent-line", "$value": "var(--accent-line)", "$type": "alias" },
+    { "cssName": "--n-accent-dim", "$value": "var(--accent-dim-2)", "$type": "alias" },
+    { "cssName": "--n-warn", "$value": "var(--warn)", "$type": "alias" },
+    { "cssName": "--n-danger", "$value": "var(--danger)", "$type": "alias" },
+    { "cssName": "--n-danger-line", "$value": "var(--danger-line)", "$type": "alias" },
+    { "cssName": "--n-ok", "$value": "var(--ok)", "$type": "alias" },
+    { "cssName": "--n-font", "$value": "var(--mono)", "$type": "alias" }
   ]
 }

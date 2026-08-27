@@ -215,6 +215,104 @@
       "cssName": "--ground",
       "$value": "radial-gradient(1200px 620px at 50% -10%, #ffffff 0%, transparent 70%), linear-gradient(180deg, #f6f3ee 0%, #f0ebe3 100%)",
       "$type": "other"
+    },
+    {
+      "comment": "  /* The Nocturne frame's roles re-pointed at this palette — the frame\n     follows the theme instead of painting its navy face over it. */"
+    },
+    {
+      "cssName": "--n-bg",
+      "$value": "var(--bg)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-panel",
+      "$value": "var(--panel)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-panel-2",
+      "$value": "var(--panel-2)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-panel-3",
+      "$value": "var(--panel-3)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-line",
+      "$value": "var(--line)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-line-2",
+      "$value": "var(--line-strong)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-text",
+      "$value": "var(--text)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-text-2",
+      "$value": "var(--text-2)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-text-3",
+      "$value": "var(--text-3)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-accent",
+      "$value": "var(--accent)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-accent-2",
+      "$value": "var(--accent-strong)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-accent-ink",
+      "$value": "var(--accent-on)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-accent-tint",
+      "$value": "var(--accent-dim)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-accent-line",
+      "$value": "var(--accent-line)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-accent-dim",
+      "$value": "var(--accent-dim-2)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-warn",
+      "$value": "var(--warn)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-danger",
+      "$value": "var(--danger)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-danger-line",
+      "$value": "var(--danger-line)",
+      "$type": "alias"
+    },
+    {
+      "cssName": "--n-ok",
+      "$value": "var(--ok)",
+      "$type": "alias"
     }
   ]
 }

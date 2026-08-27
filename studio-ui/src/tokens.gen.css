@@ -235,6 +235,27 @@
     --e-3: 0 2px 6px rgba(28, 20, 40, 0.08), 0 12px 28px -8px rgba(28, 20, 40, 0.16);
     --e-4: 0 4px 10px rgba(28, 20, 40, 0.1), 0 28px 64px -16px rgba(28, 20, 40, 0.28);
     --ground: radial-gradient(1200px 620px at 50% -10%, #ffffff 0%, transparent 70%), linear-gradient(180deg, #f6f3ee 0%, #f0ebe3 100%);
+  /* The Nocturne frame's roles re-pointed at this palette — the frame
+     follows the theme instead of painting its navy face over it. */
+    --n-bg: var(--bg);
+    --n-panel: var(--panel);
+    --n-panel-2: var(--panel-2);
+    --n-panel-3: var(--panel-3);
+    --n-line: var(--line);
+    --n-line-2: var(--line-strong);
+    --n-text: var(--text);
+    --n-text-2: var(--text-2);
+    --n-text-3: var(--text-3);
+    --n-accent: var(--accent);
+    --n-accent-2: var(--accent-strong);
+    --n-accent-ink: var(--accent-on);
+    --n-accent-tint: var(--accent-dim);
+    --n-accent-line: var(--accent-line);
+    --n-accent-dim: var(--accent-dim-2);
+    --n-warn: var(--warn);
+    --n-danger: var(--danger);
+    --n-danger-line: var(--danger-line);
+    --n-ok: var(--ok);
   }
 }
 
@@ -256,6 +277,39 @@
   --border-default: var(--line);
   --border-strong: var(--line-strong);
   --muted: var(--text-3); /* legacy alias, still referenced by markup */
+}
+
+/* ── §4 THE NOCTURNE FRAME ────────────────────────────────────────────────
+   `/nocturne`'s own roles. The values here are the Studio Nocturne
+   design's night face — they ARE the dark theme for the product page, so
+   the dark overlay needs nothing and light/matrix re-point every role at
+   the gated palette above (see themes/*.json). Emitted after the light
+   media block, which still wins: :root:not([data-theme]) out-ranks :root
+   by specificity. The input-test dialog mounts on <body>, which is WHY
+   these live on :root and not on .nocturne — a .nocturne-scoped pin can
+   never reach it, and a local re-pin shadows every theme with all gates
+   green (studio.css carried exactly that defect twice). ── */
+:root {
+  --n-bg: #161826;
+  --n-panel: #1a1c28;
+  --n-panel-2: #232532;
+  --n-panel-3: #2b2d3c; /* one step above --n-panel-2: the zebra stripe and every hover ground */
+  --n-line: #2b2d3a;
+  --n-line-2: #3f424d;
+  --n-text: #e9e9ed;
+  --n-text-2: #9397ab;
+  --n-text-3: #75798c;
+  --n-accent: #968ae0;
+  --n-accent-2: #a7a1db;
+  --n-accent-ink: #161826; /* text ON an --n-accent fill */
+  --n-accent-tint: rgba(150, 138, 224, 0.14);
+  --n-accent-line: rgba(150, 138, 224, 0.45);
+  --n-accent-dim: rgba(150, 138, 224, 0.26); /* a fill strong enough to read as HELD behind a mark */
+  --n-warn: #edbb46;
+  --n-danger: #e79aa6;
+  --n-danger-line: rgba(231, 154, 166, 0.5);
+  --n-ok: #4ed185;
+  --n-font: Inter, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; /* the frame's UI face; matrix re-points it at the mono stack */
 }
 
 /* ── Stamped themes: an explicit data-theme choice on <html>. Same
@@ -302,6 +356,25 @@
   --e-3: 0 2px 6px rgba(28, 20, 40, 0.08), 0 12px 28px -8px rgba(28, 20, 40, 0.16);
   --e-4: 0 4px 10px rgba(28, 20, 40, 0.1), 0 28px 64px -16px rgba(28, 20, 40, 0.28);
   --ground: radial-gradient(1200px 620px at 50% -10%, #ffffff 0%, transparent 70%), linear-gradient(180deg, #f6f3ee 0%, #f0ebe3 100%);
+  --n-bg: var(--bg);
+  --n-panel: var(--panel);
+  --n-panel-2: var(--panel-2);
+  --n-panel-3: var(--panel-3);
+  --n-line: var(--line);
+  --n-line-2: var(--line-strong);
+  --n-text: var(--text);
+  --n-text-2: var(--text-2);
+  --n-text-3: var(--text-3);
+  --n-accent: var(--accent);
+  --n-accent-2: var(--accent-strong);
+  --n-accent-ink: var(--accent-on);
+  --n-accent-tint: var(--accent-dim);
+  --n-accent-line: var(--accent-line);
+  --n-accent-dim: var(--accent-dim-2);
+  --n-warn: var(--warn);
+  --n-danger: var(--danger);
+  --n-danger-line: var(--danger-line);
+  --n-ok: var(--ok);
 }
 :root[data-theme="matrix"] {
   color-scheme: dark;
@@ -349,4 +422,24 @@
   --dur-1: 60ms;
   --dur-2: 110ms;
   --dur-3: 180ms;
+  --n-bg: var(--bg);
+  --n-panel: var(--panel);
+  --n-panel-2: var(--panel-2);
+  --n-panel-3: var(--panel-3);
+  --n-line: var(--line);
+  --n-line-2: var(--line-strong);
+  --n-text: var(--text);
+  --n-text-2: var(--text-2);
+  --n-text-3: var(--text-3);
+  --n-accent: var(--accent);
+  --n-accent-2: var(--accent-strong);
+  --n-accent-ink: var(--accent-on);
+  --n-accent-tint: var(--accent-dim);
+  --n-accent-line: var(--accent-line);
+  --n-accent-dim: var(--accent-dim-2);
+  --n-warn: var(--warn);
+  --n-danger: var(--danger);
+  --n-danger-line: var(--danger-line);
+  --n-ok: var(--ok);
+  --n-font: var(--mono);
 }

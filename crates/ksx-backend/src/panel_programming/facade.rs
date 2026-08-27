@@ -152,7 +152,7 @@ impl PanelRecoveryRootAuthority {
             Refusal::with_remedy(
                 ksx_api::codes::RECOVERY_REQUIRED,
                 "KSX cannot resolve the machine-scoped panel recovery root; persistent encoder recovery cannot proceed safely",
-                "keep Play stopped; restore this account's installed config directory, then use Encoder setup Read & back up (or `ksx panel chart --backup`) before Play",
+                "keep Play stopped; restore this account's installed config directory, then run `ksx panel chart --backup` before Play",
             )
         })?;
         let candidate = installed.join(BACKUP_DIR);
@@ -233,7 +233,7 @@ fn pending_panel_transaction_paths_at(backup_root: &Path) -> Result<Vec<PathBuf>
                     return Err(Refusal::with_remedy(
                         ksx_api::codes::RECOVERY_REQUIRED,
                         "Play/start is blocked because a panel transaction recovery marker is not an ordinary non-reparse file, so KSX cannot prove the encoder is settled",
-                        "keep Play stopped; preserve the panel-backups folder, restore its filesystem integrity, then run `ksx panel chart --backup` (add `--device QUERY` when needed) or use Encoder setup to restore the exact safety backup",
+                        "keep Play stopped; preserve the panel-backups folder, restore its filesystem integrity, then run `ksx panel chart --backup` (add `--device QUERY` when needed), then restore the exact safety backup",
                     ));
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -284,7 +284,7 @@ fn panel_recovery_store_refusal(path: &Path, error: &std::io::Error) -> Refusal 
             "Play/start is blocked because KSX could not prove the panel recovery store is settled ({}: {error})",
             path.display()
         ),
-        "keep Play stopped; restore access to the panel-backups folder, then run `ksx panel chart --backup` (add `--device QUERY` when needed) or use Encoder setup to restore the exact safety backup",
+        "keep Play stopped; restore access to the panel-backups folder, then run `ksx panel chart --backup` (add `--device QUERY` when needed), then restore the exact safety backup",
     )
 }
 
@@ -326,7 +326,7 @@ fn pending_play_start_refusal(path: &Path, pending_count: usize) -> Refusal {
                     pending.current.transaction_id, pending.current.operation
                 ),
                 format!(
-                    "keep Play stopped; use Encoder setup Read & back up (or `ksx panel chart --backup`, adding `--device QUERY` when needed) to reconcile a stable full-chart read, or restore exact safety backup {}",
+                    "keep Play stopped; run `ksx panel chart --backup` (adding `--device QUERY` when needed) to reconcile a stable full-chart read, or restore exact safety backup {}",
                     pending.current.safety_backup_id
                 ),
             )
@@ -341,7 +341,7 @@ fn unreadable_pending_refusal(detail: impl std::fmt::Display) -> Refusal {
         format!(
             "Play/start is blocked because a durable panel transaction journal is present but cannot be interpreted ({detail})"
         ),
-        "keep Play stopped and preserve the panel-backups folder; inspect Encoder setup, then run `ksx panel chart --backup` (add `--device QUERY` when needed) or restore the exact safety backup after the journal is repaired",
+        "keep Play stopped and preserve the panel-backups folder; run `ksx panel chart --backup` (add `--device QUERY` when needed) or restore the exact safety backup after the journal is repaired",
     )
 }
 
@@ -3269,6 +3269,20 @@ pub fn run_backups_cli(spec: PanelBackupsSpec, json: bool) -> anyhow::Result<()>
         print!("{}", render_backups(&view));
         Ok(())
     }
+}
+
+/// Read one board's chart and print it.
+///
+/// Takes plain arguments rather than a spec because `ksx-app` does not depend on
+/// `ksx-api` — `panel::run` sets the same precedent, and widening the binary's
+/// dependency graph to name one struct would be the wrong trade.
+pub fn run_chart(device: Option<String>, backup: bool, json: bool) -> anyhow::Result<()> {
+    run_chart_cli(PanelChartSpec { device, backup }, json)
+}
+
+/// List the local restore points. Reads the backup store; opens no device.
+pub fn run_backups(device: Option<String>, json: bool) -> anyhow::Result<()> {
+    run_backups_cli(PanelBackupsSpec { device }, json)
 }
 
 pub fn run_program_cli(

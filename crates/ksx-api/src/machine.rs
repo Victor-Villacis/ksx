@@ -85,7 +85,7 @@ pub trait MachineSource: Send + Sync {
     fn panel_chart(&self, _spec: &PanelChartSpec) -> Result<PanelChartView, Refusal> {
         Err(Refusal::not_here(
             "reading the panel encoder chart",
-            "reading an encoder chart",
+            "run `ksx panel chart`",
         ))
     }
 
@@ -114,7 +114,7 @@ pub trait MachineSource: Send + Sync {
     fn panel_backups(&self, _spec: &PanelBackupsSpec) -> Result<PanelBackupsView, Refusal> {
         Err(Refusal::not_here(
             "listing panel encoder backups",
-            "encoder backup listing",
+            "run `ksx panel backups`",
         ))
     }
 
@@ -3952,11 +3952,11 @@ mod tests {
                     .unwrap_err(),
             ),
             (
-                "reading an encoder chart",
+                "ksx panel chart",
                 Nothing.panel_chart(&PanelChartSpec::default()).unwrap_err(),
             ),
             (
-                "encoder backup listing",
+                "ksx panel backups",
                 Nothing
                     .panel_backups(&PanelBackupsSpec::default())
                     .unwrap_err(),

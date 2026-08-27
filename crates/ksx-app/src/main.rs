@@ -16,8 +16,8 @@
 // If you are adding logic rather than a flag, it does not go in this file.
 use ksx_backend::{
     autostart, config_io, daemon, device_edit, device_scan, devices, doctor, input_test_cli,
-    install, logging, macro_cli, macro_trace, map, mapping, monitor, pads, panel, play, preset_cli,
-    run, session, setup, slot_cli, stage_cli, winusb,
+    install, logging, macro_cli, macro_trace, map, mapping, monitor, pads, panel,
+    panel_programming, play, preset_cli, run, session, setup, slot_cli, stage_cli, winusb,
 };
 // `console` is here rather than above because `ksx cabinet` is its only caller
 // in this file: the daemon detaches its own console from inside the backend.
@@ -1644,6 +1644,54 @@ enum PanelCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Read one encoder's stored chart — what every terminal is programmed to emit
+    ///
+    /// This is the explicit hardware read. Unlike `status`, it opens the board's
+    /// configuration collection and performs the vendor report transaction, so
+    /// it is an on-demand action and never something a page does on your behalf.
+    ///
+    /// It reads the board TWICE, independently, and refuses if the two images
+    /// differ — one lucky packet sequence is not authority. It writes nothing to
+    /// the board under any circumstances.
+    ///
+    /// Only a board with an exact measured protocol profile can be read; run
+    /// `ksx panel status` first to see whether yours is one. A terminal whose
+    /// byte ksx cannot classify is reported as a preserved vendor action rather
+    /// than guessed at — an onboard macro is indistinguishable from an
+    /// unassigned terminal, and this verb says so rather than pretending.
+    ///
+    /// Exit codes: 0 = read, 1 = error, 2 = refused (no measured profile, the
+    /// configuration interface is busy, the board is not in a keyboard-compatible
+    /// mode, or more than one board matched).
+    Chart {
+        /// One encoder, by instance path or any unique substring of one
+        #[arg(long)]
+        device: Option<String>,
+        /// Also save a lossless local restore point of the raw image
+        ///
+        /// OFF by default, and that is deliberate: a backup read is not a plain
+        /// read. It reconciles the pending-transaction journal and can advance
+        /// this board's write-qualification state, and in a build that never
+        /// writes to hardware, reading must not move write-safety state. The
+        /// file lands in the config root's `panel-backups` folder; nothing is
+        /// ever sent to the board.
+        #[arg(long)]
+        backup: bool,
+        /// One JSON object on stdout instead of the readable report
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the local restore points `chart --backup` has saved
+    ///
+    /// Reads the backup store on disk. Opens no device and sends nothing.
+    Backups {
+        /// One encoder, by instance path or any unique substring of one
+        #[arg(long)]
+        device: Option<String>,
+        /// One JSON object on stdout instead of the readable report
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Clap adapter for [`ksx_core::Persona`]'s lenient `FromStr` (ksx-core carries
@@ -1870,6 +1918,25 @@ impl From<AutostartMode> for ksx_platform::autostart::TaskMode {
 }
 
 fn main() -> anyhow::Result<()> {
+    // **The killable HID output worker, before anything else.**
+    //
+    // A chart write to an I-PAC goes through `HidD_SetOutputReport`, which
+    // cannot be cancelled once it is in the kernel. `ksx-platform` therefore
+    // re-executes THIS binary with one private argument, duplicates the exact
+    // HID handle into it, and can terminate that child on a deadline instead of
+    // hanging forever on an unresponsive board.
+    //
+    // That means `ksx.exe` has a second entry point, and it has to be taken
+    // before logging and before clap — logging would write a second process's
+    // lines into the same file, and clap would reject the private argument and
+    // exit 2. Which is exactly what happened: this call was missing, so every
+    // chart read failed on its first packet with "the HID output helper exited
+    // with code 2 without completing the report". The worker was written, made
+    // `pub`, documented as needing to run "before any logging or argument
+    // parsing" — and never called by anything.
+    if let Some(code) = ksx_platform::hid_report::maybe_run_output_report_worker() {
+        std::process::exit(code);
+    }
     // Logging first, and for **every** command — not just the daemon. A
     // `ksx run` started by the cabinet's logon task has no console either, and
     // the whole point of the file sink is that something is left behind when a
@@ -2291,6 +2358,12 @@ fn main() -> anyhow::Result<()> {
         },
         Command::Panel { command } => match command {
             PanelCommand::Status { device, json } => panel::run(device, json),
+            PanelCommand::Chart {
+                device,
+                backup,
+                json,
+            } => panel_programming::run_chart(device, backup, json),
+            PanelCommand::Backups { device, json } => panel_programming::run_backups(device, json),
         },
         Command::Winusb { command } => match command {
             WinusbCommand::Status { json } => winusb::run(winusb::Options {

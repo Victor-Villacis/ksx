@@ -198,6 +198,48 @@ fn every_machine_remedy_names_a_verb_that_exists() {
     );
 }
 
+/// **`ksx.exe` has a second entry point, and it must be taken before clap.**
+///
+/// A chart write goes through `HidD_SetOutputReport`, which cannot be cancelled
+/// once it is in the kernel, so `ksx-platform` re-executes THIS binary with one
+/// private argument and can terminate that child on a deadline. The worker is
+/// `pub`, and its doc says it must run "before any logging or argument parsing".
+///
+/// Nothing called it. Every chart read therefore died on its first packet with
+/// "the HID output helper exited with code 2 without completing the report" —
+/// code 2 being what clap returns for an argument it does not recognise. The
+/// capability was written, made public, documented, and unreachable.
+///
+/// This asserts the shape that made it unreachable: the private argument must
+/// not reach clap. It deliberately does NOT assert success — with no request on
+/// stdin the worker fails, and that is fine. What must never happen is clap
+/// answering instead.
+#[test]
+fn the_hid_output_worker_argument_never_reaches_clap() {
+    const PRIVATE_ARG: &str = "__ksx-hid-output-worker-v1";
+
+    let output = Command::new(KSX)
+        .arg(PRIVATE_ARG)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap_or_else(|e| panic!("running {KSX} {PRIVATE_ARG}: {e}"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    for clap_says in [
+        "unrecognized subcommand",
+        "unexpected argument",
+        "Usage:",
+        "--help",
+    ] {
+        assert!(
+            !stderr.contains(clap_says),
+            "the private worker argument reached clap ({clap_says:?}), so the \
+             killable HID output helper cannot run and every chart read fails \
+             on its first packet:\n{stderr}"
+        );
+    }
+}
+
 fn walk_clap_tree() -> BTreeSet<String> {
     let dir = std::env::temp_dir().join(format!("ksx-parity-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("temp dir {}: {e}", dir.display()));
@@ -849,6 +891,19 @@ const ANCHORS: &[Anchors] = &[
         // `terminal_count`, `chart_readable`); what is missing is the surface
         // that renders them. Naming a route here before one exists would be
         // the "unbacked published claim" this matrix exists to prevent.
+        studio: &[],
+    },
+    Anchors {
+        capability: "Read an encoder's stored chart (what every terminal emits)",
+        // The explicit hardware read: it opens the configuration collection and
+        // performs the vendor transaction, which is why it is a separate verb
+        // from `panel status` and never something a surface does unasked. It
+        // reads the board twice and refuses if the images differ.
+        cli: &["panel chart", "panel backups"],
+        egui: &[],
+        // Planned. The read exists and is proven on hardware; what is missing
+        // is the surface, and naming a route before one exists is the claim
+        // this matrix is here to stop.
         studio: &[],
     },
 ];

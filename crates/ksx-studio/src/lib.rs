@@ -111,6 +111,7 @@
 // is a named scalar — so it outgrew the default 128.
 #![recursion_limit = "512"]
 
+mod board;
 mod control;
 mod error;
 mod guard;

@@ -3672,11 +3672,16 @@ impl NocturneDerived {
         let drives_whom = selected
             .map(|slot| format!(" on P{}", slot.number))
             .unwrap_or_default();
-        let dress = |cell: &crate::keyboard_layout::KeyCell| {
+        // The BOARD, not the authored table. One source for the drawn
+        // cells, the tray's "off this board" test, and the available-key
+        // rosters below — three readers that used to walk `ROWS`
+        // separately and could disagree about what "on the board" meant.
+        let board = crate::board::Board::shipped_qwerty();
+        let dress = |cell: &&crate::board::BoardCell| {
             let mut cls = String::from("n-key");
             if !cell.unit.is_empty() {
                 cls.push(' ');
-                cls.push_str(cell.unit);
+                cls.push_str(&cell.unit);
             }
             if cell.sp {
                 cls.push_str(" sp");
@@ -3684,7 +3689,7 @@ impl NocturneDerived {
             if cell.ghost {
                 cls.push_str(" ghost");
             }
-            let fns = key_fns.get(cell.key).filter(|fns| !fns.is_empty());
+            let fns = key_fns.get(cell.key.as_str()).filter(|fns| !fns.is_empty());
             let (short, title) = match fns {
                 Some(fns) => {
                     cls.push_str(" bound");
@@ -3700,7 +3705,10 @@ impl NocturneDerived {
                 }
                 None => (String::new(), String::new()),
             };
-            let owners = key_slots.get(cell.key).map(|v| v.as_slice()).unwrap_or(&[]);
+            let owners = key_slots
+                .get(cell.key.as_str())
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
             let others: Vec<String> = owners
                 .iter()
                 .filter(|n| Some(**n) != selected_number)
@@ -3722,15 +3730,16 @@ impl NocturneDerived {
             };
             cls.push_str(&bands(owners));
             NocturneKeyCell {
-                cap: cell.cap.to_owned(),
-                key: cell.key.to_owned(),
+                cap: cell.cap.clone(),
+                key: cell.key.clone(),
                 cls,
                 short,
                 title,
                 aria,
             }
         };
-        let kb_rows: Vec<Vec<NocturneKeyCell>> = crate::keyboard_layout::ROWS
+        let kb_rows: Vec<Vec<NocturneKeyCell>> = board
+            .rows()
             .iter()
             .map(|row| row.iter().map(dress).collect())
             .collect();
@@ -3742,11 +3751,11 @@ impl NocturneDerived {
         let kb_row5 = kb_rows.next().unwrap_or_default();
         let kb_row6 = kb_rows.next().unwrap_or_default();
         // Off-board keys: bound in the table but not on the standard board.
-        let board_keys: std::collections::BTreeSet<&str> = crate::keyboard_layout::ROWS
+        let board_keys: std::collections::BTreeSet<&str> = board
+            .cells
             .iter()
-            .flat_map(|row| row.iter())
             .filter(|cell| !cell.key.is_empty())
-            .map(|cell| cell.key)
+            .map(|cell| cell.key.as_str())
             .collect();
         let kb_tray: Vec<NocturneKeyCell> = key_fns
             .iter()
@@ -3832,15 +3841,12 @@ impl NocturneDerived {
         let mut avail_nav: Vec<NocturneKeyRow> = Vec::new();
         let mut avail_num: Vec<NocturneKeyRow> = Vec::new();
         if selected.is_some() {
-            for cell in crate::keyboard_layout::ROWS
-                .iter()
-                .flat_map(|row| row.iter())
-            {
-                if cell.ghost || cell.key.is_empty() || key_fns.contains_key(cell.key) {
+            for cell in &board.cells {
+                if cell.ghost || cell.key.is_empty() || key_fns.contains_key(cell.key.as_str()) {
                     continue;
                 }
                 let chip = NocturneKeyRow {
-                    key: cell.key.to_owned(),
+                    key: cell.key.clone(),
                     targets: String::new(),
                     fns: String::new(),
                     cls: "n-akey".to_owned(),
@@ -3848,7 +3854,7 @@ impl NocturneDerived {
                 };
                 if cell.key.starts_with("Numpad") || cell.key == "NumLock" {
                     avail_num.push(chip);
-                } else if NAV_KEYS.contains(&cell.key) {
+                } else if NAV_KEYS.contains(&cell.key.as_str()) {
                     avail_nav.push(chip);
                 } else {
                     avail_main.push(chip);

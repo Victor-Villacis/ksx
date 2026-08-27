@@ -76,15 +76,21 @@ teaches people to ignore the rule rather than to fix the code.
   - **Clearing browser data is a destructive product operation**, and nothing in
     the product says so.
 
-  **This is admitted, not scheduled, and the forcing function is PacBench.** The
-  encoder chart surface left ksx (`ENHANCEMENTS.md` E10) and encoder awareness
-  returns one observation-built verb at a time — the simultaneous-input
-  diagnostic and the auto-map walk. Those verbs answer *"which of my buttons
-  collide?"*, and the answer is a statement about physical switches: precisely
-  what `physicalId` and `physicalResolution` already assert from the browser. The
-  first returning verb therefore either adopts this document into `ksx-api` or
-  ships a second, disagreeing copy of the same fact — which is the moment to pay
-  it off, and the reason for writing it down now rather than filing it. The same
+  **The forcing function has now fired, and the debt was not paid.** Encoder
+  awareness returned to ksx one verb at a time (`ENHANCEMENTS.md` E10): `ksx
+  panel status`, then `ksx panel chart` and `POST /api/panel/chart`. Those verbs
+  answer *"which of my buttons collide?"*, and the answer is a statement about
+  physical switches — precisely what `physicalId` and `physicalResolution`
+  already assert from the browser.
+
+  What shipped is the second outcome this paragraph named, not the first: the
+  chart's own vocabulary was adopted into `ksx-api`, and what a press proved is
+  now stored SERVER-SIDE in `ksx-backend/src/panel_observations.rs` — while the
+  browser-only document above still holds its own copy of the same class of
+  fact. **There are now two documents describing which physical switch produced
+  a signal, one of which the CLI and the cabinet still cannot see.** The
+  server-side one is the survivor; the payoff is migrating the browser-only
+  fields onto it, and it is now owed rather than anticipated. The same
   seam is already visible from the other side: `DEVELOPMENT-PIPELINE.md` Step 7
   records `hardwareEpochs` as a map "written by the sanitizer and read by
   nothing", and it is a field of `ControlSurfaceStore`. Until then, do not build

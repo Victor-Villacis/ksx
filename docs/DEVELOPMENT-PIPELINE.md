@@ -332,10 +332,13 @@ it is about to look up.
 For the same reason: `PanelDriverCapabilities` (`can_identify`,
 `can_report_mode`, `can_read_chart`, `can_write_chart`, `write_is_persistent`)
 is still serialized on the wire and still set to `true` for the one measured
-I-PAC 4 profile, but a grep across `crates/` and `studio-ui/src` finds no
-production code that branches on the last three — only test assertions. Treat
-them as an unbacked published claim until PacBench brings a reader back, and do
-not add a sixth capability field expecting something to honour it.
+I-PAC 4 profile. **`can_read_chart` is now honoured** — `device_scan.rs` reads
+it to serve `BoardRow.chart_readable`, which is what decides whether a surface
+offers a read at all — but `can_write_chart` and `write_is_persistent` are still
+branched on by nothing outside test assertions, and now never will be: ksx reads
+encoder hardware and does not write to it (`ENHANCEMENTS.md` E10). Treat those
+two as an unbacked published claim, and do not add a sixth capability field
+expecting something to honour it.
 
 ### Step 4 — a capture backend, and when you genuinely need one
 

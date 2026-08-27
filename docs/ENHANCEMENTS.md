@@ -488,21 +488,23 @@ binding, configuration, or receipt is changed by this verb.
 
 ---
 
-## E10 — ksx reads and programs the panel encoder (EXTRACTED — no longer ksx)
+## E10 — ksx reads the panel encoder; it does not write to one
 
-**Recorded 2026-08-22. Shipped in PR #30. Extracted 2026-08-25.**
+**Recorded 2026-08-22. Shipped in PR #30. Writing extracted 2026-08-25. Reading
+returned incrementally from 2026-08-26.**
 
-This capability now lives in its own product, **PacBench**, and is no longer
-part of ksx. The entry is kept so the ledger's numbering and the decision
-history survive the move.
+The two halves of this entry had different fates, and collapsing them into one
+verdict is what made the ledger wrong for a day: **reading a board is back in
+ksx and read-only; programming a board is not, and is not coming back here.**
 
-**Why it left.** Chart access is vendor- and firmware-specific: it needs an
+**Why writing left.** Chart access is vendor- and firmware-specific: it needs an
 exact measured protocol profile per board model, which costs a supervised
 hardware session on hardware you own. ksx's own capability needs no vendor
 knowledge and works on devices neither product has ever seen. Those are
 different cost curves, so they are different programs.
 
-Two measurements settled it:
+Two measurements settled it, and **both still stand** — the returning read does
+not weaken either one:
 
 - **A chart read cannot detect a macro collision, even in principle.** Onboard
   macros are vendor-owned bytes that are preserved verbatim and never parsed,
@@ -512,16 +514,41 @@ Two measurements settled it:
   terminal that fires two other players' buttons.
 
 So the question people actually have — *"which of my buttons collide?"* — is
-answered by observing what arrives, not by reading the board. That answer
-belongs in ksx and works on every encoder; changing what a board emits is a
-separate, hardware-bound job.
+answered by observing what arrives, not by reading the board.
 
-**What ksx keeps.** An I-PAC remains an ordinary keyboard-emitting input
-device: it is recognised (`BoardRole::PanelEncoder`), named, claimed and split
-exactly as before. What ksx no longer has is any way to read or write the
-board's stored configuration.
+**Why reading came back anyway.** Because the two answers are not the same
+answer, and neither contains the other. A chart is instantaneous truth about the
+bytes a board STORES; an observation is historical truth about what it EMITTED.
+Only a chart can name which screw terminal emits a given key, and only when
+exactly one does. Only a press can reveal a byte the chart preserves and cannot
+parse. Shipping one and calling it the whole picture is what the first
+measurement above warns against.
 
-**What replaces it.** Encoder awareness returns incrementally, built on the
-observation flow ksx already owns — the simultaneous-input diagnostic and the
-auto-map walk — so it works on any encoder with no vendor profile. See the
-extraction plan for the staged design.
+They are therefore composed rather than ranked
+(`crates/ksx-backend/src/panel_truth.rs`): a fresh chart read is the answer, an
+observation is the answer when there is no such read, a user's declaration is
+the answer when there is neither — and **when a fresh chart and a live press
+disagree, the disagreement is the answer.** The loser is always shown, never
+merged and never deleted.
+
+**What ksx has.** `ksx panel status` on any board (all 7 Ultimarc families, and
+boards in no table at all, which say plainly that ksx has no model for them);
+`ksx panel chart` and `POST /api/panel/chart` on a board with a measured
+protocol profile — today exactly one, the I-PAC 4X at `bcdDevice 0x0056`.
+Everything else is taught by pressing it.
+
+**What ksx does not have, deliberately.** Any path that writes to encoder
+hardware. The write verbs' refusals name no command to run, because there is no
+such command in this product: `panel_program`, `panel_program_plan`,
+`panel_restore` and `panel_restore_plan` all refuse and say so. `--backup`
+defaults OFF on the read for the same reason — reconciling a transaction journal
+can advance a board's write-qualification state, which is not a read.
+
+**The blind spot, made visible rather than papered over.** A terminal whose byte
+is zero is reported as *the byte is zero* and never as *this terminal does
+nothing*, precisely because the first measurement says those are
+indistinguishable. When such a terminal emits keys anyway, that composes to
+`Unaccounted` — the strongest evidence of an onboard macro this product can
+produce, and the reason an observation records EVERY key a press produced rather
+than just the first.
+

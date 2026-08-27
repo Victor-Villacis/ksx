@@ -350,6 +350,134 @@ fn detail_for(answer: &PanelTerminalAnswer) -> String {
     }
 }
 
+
+// ── STAGE 5: WHICH SCREW DID THAT PRESS COME FROM? ─────────────────────────
+
+/// **What a press can honestly be filed under, and how strong that is.**
+///
+/// The learner reports `(device, keys)` and nothing else, because that is all
+/// Windows told it. Naming a terminal is a separate judgement made HERE, from
+/// a chart, as a pure function — deliberately not a `terminal` field on the
+/// learn wire protocol, which would be a field the learner fills with a guess.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PressAttribution {
+    /// The terminal this press may be filed under, if exactly one can be named.
+    pub terminal_id: Option<String>,
+    pub attribution: PanelObservationAttribution,
+    /// Every terminal the chart says could have produced these keys. Kept even
+    /// when one of them wins, so a surface can show the user what was ruled out
+    /// rather than presenting a lone answer it cannot justify.
+    pub candidates: Vec<String>,
+    /// The chart lists none of these keys on any terminal.
+    ///
+    /// The board emitted something its own stored bytes do not account for: an
+    /// onboard macro, or a chart that went stale between the read and the press.
+    /// `docs/ENHANCEMENTS.md` E10's blind spot, arriving as evidence.
+    pub unaccounted: bool,
+    /// A surface asked for one terminal and the chart names a different one as
+    /// the only source of what arrived.
+    ///
+    /// Not an error and not resolved here: either the wrong control was pressed,
+    /// or the wire from that button reaches a screw the silkscreen does not
+    /// claim. Both are worth showing and neither is worth guessing between.
+    pub prompted_mismatch: bool,
+}
+
+/// **Attribute one press, using the chart as the only thing that can name a
+/// terminal.**
+///
+/// `keys` is every canonical key the press produced, in arrival order —
+/// `input-test`'s multi-key `seen` set rather than `LearnView`'s single
+/// `Option<String>`. Truncating a burst to its first key would file a
+/// clean-looking answer and destroy the only evidence of an onboard macro this
+/// product can ever obtain.
+///
+/// `prompted` is the terminal a surface asked the user to press. It is the
+/// weakest thing in the room: nothing proves the person pressed the screw the
+/// prompt named, which is why it can never produce more than
+/// [`PanelObservationAttribution::Prompted`] on its own.
+///
+/// Only the NORMAL plane is matched. A shifted value is only reachable while
+/// the shift terminal is held, and no observation records whether it was — so
+/// matching the shifted plane would attribute a press to a terminal on the
+/// strength of a condition ksx never measured.
+pub fn attribute_press(
+    keys: &[String],
+    chart: Option<&[ksx_api::PanelTerminalRow]>,
+    prompted: Option<&str>,
+) -> PressAttribution {
+    let prompted_id = prompted.filter(|id| !id.is_empty()).map(str::to_owned);
+
+    // No chart means no terminal vocabulary at all. On an unprofiled board ksx
+    // does not know the terminals EXIST, so the caller binds this observation
+    // to a control the user drew instead, and the surface says "control".
+    let Some(rows) = chart else {
+        return PressAttribution {
+            terminal_id: prompted_id,
+            attribution: PanelObservationAttribution::Prompted,
+            ..PressAttribution::default()
+        };
+    };
+
+    let candidates: Vec<String> = rows
+        .iter()
+        .filter(|row| {
+            observable(&row.normal).is_some_and(|key| keys.iter().any(|seen| seen == key))
+        })
+        .map(|row| row.terminal_id.clone())
+        .collect();
+
+    if candidates.is_empty() {
+        return PressAttribution {
+            terminal_id: prompted_id,
+            attribution: PanelObservationAttribution::Prompted,
+            candidates,
+            unaccounted: true,
+            prompted_mismatch: false,
+        };
+    }
+
+    // A burst. No single stored byte accounts for several keys, so no terminal
+    // in this chart can be the whole story even when one of them matches part
+    // of it — the rest came from somewhere the chart cannot see.
+    if keys.len() > 1 {
+        return PressAttribution {
+            terminal_id: prompted_id,
+            attribution: PanelObservationAttribution::Prompted,
+            candidates,
+            unaccounted: false,
+            prompted_mismatch: false,
+        };
+    }
+
+    if candidates.len() > 1 {
+        // `input-test`'s own stated limit: two terminals emitting the same key
+        // are indistinguishable. The observation is real; the terminal it gets
+        // filed under is a guess, and `SharedSignal` is that guess admitting it.
+        let terminal_id = prompted_id
+            .as_ref()
+            .filter(|id| candidates.contains(id))
+            .cloned();
+        return PressAttribution {
+            terminal_id,
+            attribution: PanelObservationAttribution::SharedSignal,
+            candidates,
+            unaccounted: false,
+            prompted_mismatch: false,
+        };
+    }
+
+    let only = candidates[0].clone();
+    let prompted_mismatch = prompted_id.is_some_and(|id| id != only);
+    PressAttribution {
+        terminal_id: Some(only),
+        attribution: PanelObservationAttribution::ChartUnique,
+        candidates,
+        unaccounted: false,
+        prompted_mismatch,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,5 +805,179 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── STAGE 5: ATTRIBUTION ───────────────────────────────────────────────
+
+    fn row(id: &str, normal: PanelKeyValue) -> ksx_api::PanelTerminalRow {
+        ksx_api::PanelTerminalRow {
+            terminal_id: id.to_owned(),
+            terminal_label: id.to_uppercase(),
+            player: 1,
+            kind: "button".to_owned(),
+            normal,
+            shifted: unassigned(),
+            shift_state: ksx_api::PanelShiftState::Disabled,
+            is_shift: false,
+        }
+    }
+
+    fn keys(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    /// A chart holding a key on exactly ONE terminal is the only thing in this
+    /// product that can name a screw, and the only route to `Matched`.
+    #[test]
+    fn one_terminal_holding_the_key_is_the_only_way_to_name_a_screw() {
+        let chart = [row("1sw1", key_value("A")), row("1sw2", key_value("B"))];
+        let attributed = attribute_press(&keys(&["B"]), Some(&chart), None);
+
+        assert_eq!(attributed.terminal_id.as_deref(), Some("1sw2"));
+        assert_eq!(
+            attributed.attribution,
+            PanelObservationAttribution::ChartUnique
+        );
+        assert!(!attributed.unaccounted);
+        assert!(!attributed.prompted_mismatch);
+    }
+
+    /// `input-test`'s own stated limit, enforced rather than described: two
+    /// terminals emitting one key are indistinguishable, so nothing may pick.
+    #[test]
+    fn two_terminals_sharing_a_key_attribute_to_neither() {
+        let chart = [
+            row("2sw1", key_value("S")),
+            row("2sw2", key_value("S")),
+            row("2sw3", key_value("D")),
+        ];
+        let attributed = attribute_press(&keys(&["S"]), Some(&chart), None);
+
+        assert_eq!(attributed.terminal_id, None, "it picked one anyway");
+        assert_eq!(
+            attributed.attribution,
+            PanelObservationAttribution::SharedSignal
+        );
+        assert_eq!(attributed.candidates, ["2sw1", "2sw2"]);
+        assert!(!attributed.unaccounted);
+    }
+
+    /// A prompt narrows a shared signal to the terminal it named, and the
+    /// attribution STAYS `SharedSignal` — a prompt is not evidence about which
+    /// screw was pressed, so this must never become the one attribution that
+    /// can reach `Matched`.
+    #[test]
+    fn a_prompt_narrows_a_shared_signal_without_strengthening_it() {
+        let chart = [row("2sw1", key_value("S")), row("2sw2", key_value("S"))];
+        let attributed = attribute_press(&keys(&["S"]), Some(&chart), Some("2sw2"));
+
+        assert_eq!(attributed.terminal_id.as_deref(), Some("2sw2"));
+        assert_eq!(
+            attributed.attribution,
+            PanelObservationAttribution::SharedSignal
+        );
+    }
+
+    /// A prompt that names a terminal the chart does not list among the sources
+    /// of that key files nothing under it.
+    #[test]
+    fn a_prompt_outside_the_candidates_does_not_win() {
+        let chart = [row("2sw1", key_value("S")), row("2sw2", key_value("S"))];
+        let attributed = attribute_press(&keys(&["S"]), Some(&chart), Some("4coin"));
+
+        assert_eq!(attributed.terminal_id, None);
+    }
+
+    /// The board emitted a key its own stored bytes do not account for. E10's
+    /// blind spot arriving as evidence — a macro, or a chart gone stale.
+    #[test]
+    fn a_key_no_terminal_holds_is_unaccounted_for() {
+        let chart = [row("1sw1", key_value("A"))];
+        let attributed = attribute_press(&keys(&["Z"]), Some(&chart), Some("1sw1"));
+
+        assert!(attributed.unaccounted);
+        assert!(attributed.candidates.is_empty());
+        assert_eq!(
+            attributed.attribution,
+            PanelObservationAttribution::Prompted,
+            "an unaccounted key was filed as chart-backed evidence",
+        );
+    }
+
+    /// One press, several keys. A stored byte is one key, so no terminal in
+    /// this chart is the whole story even when one of them matches part of it.
+    #[test]
+    fn a_burst_is_never_attributed_to_one_terminal_by_the_chart() {
+        let chart = [row("1sw1", key_value("A")), row("1sw2", key_value("B"))];
+        let attributed = attribute_press(&keys(&["A", "B"]), Some(&chart), Some("1sw1"));
+
+        assert_eq!(
+            attributed.attribution,
+            PanelObservationAttribution::Prompted,
+            "a macro burst wore the provenance of a single stored byte",
+        );
+        assert_eq!(attributed.candidates, ["1sw1", "1sw2"]);
+        assert!(!attributed.unaccounted, "the chart does hold these keys");
+    }
+
+    /// Both plausible readings are shown; neither is guessed between.
+    #[test]
+    fn a_prompt_the_chart_contradicts_is_reported_not_resolved() {
+        let chart = [row("1sw1", key_value("A")), row("1sw2", key_value("B"))];
+        let attributed = attribute_press(&keys(&["A"]), Some(&chart), Some("1sw2"));
+
+        assert_eq!(attributed.terminal_id.as_deref(), Some("1sw1"));
+        assert_eq!(
+            attributed.attribution,
+            PanelObservationAttribution::ChartUnique
+        );
+        assert!(attributed.prompted_mismatch);
+    }
+
+    /// Bytes ksx cannot name are never candidates. They hold no key to match,
+    /// and treating them as a match would attribute a press to a terminal on
+    /// the strength of a value ksx explicitly cannot interpret.
+    #[test]
+    fn unnameable_bytes_are_never_candidates() {
+        let chart = [
+            row("1sw5", vendor(0xE9)),
+            row("1sw6", unobservable(0x66)),
+            row("3sw8", unassigned()),
+            row("1sw1", key_value("A")),
+        ];
+        let attributed = attribute_press(&keys(&["A"]), Some(&chart), None);
+
+        assert_eq!(attributed.candidates, ["1sw1"]);
+    }
+
+    /// The shifted plane is not matched, and the reason is that no observation
+    /// records whether the shift terminal was held when the key arrived.
+    #[test]
+    fn the_shifted_plane_cannot_attribute_a_press() {
+        let mut shifted_only = row("1sw8", unassigned());
+        shifted_only.shifted = key_value("Q");
+        let chart = [shifted_only];
+        let attributed = attribute_press(&keys(&["Q"]), Some(&chart), None);
+
+        assert!(attributed.unaccounted);
+        assert!(attributed.candidates.is_empty());
+    }
+
+    /// On an unprofiled board ksx does not know the terminals EXIST, so there
+    /// is nothing to attribute to and it says so instead of inventing a roster.
+    #[test]
+    fn with_no_chart_there_is_no_terminal_vocabulary_to_attribute_to() {
+        let attributed = attribute_press(&keys(&["A"]), None, Some("control-7"));
+
+        assert_eq!(attributed.terminal_id.as_deref(), Some("control-7"));
+        assert_eq!(
+            attributed.attribution,
+            PanelObservationAttribution::Prompted
+        );
+        assert!(attributed.candidates.is_empty());
+        assert!(
+            !attributed.unaccounted,
+            "a board with no chart cannot contradict one",
+        );
     }
 }

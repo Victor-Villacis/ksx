@@ -132,6 +132,10 @@ export interface NocturneDeviceRowView {
   /** The server's sentence about what pressing this row does. Rendered as the
    *  button's `title`; never composed here. */
   title: string;
+  /** `"true"` when a chart read is possible for this exact board. A SERVED
+   *  fact, because the read verb is hidden on it — and reading that out of a
+   *  display sentence is the pattern `role` exists to replace. */
+  chartReadable: string;
 }
 
 export interface NocturneOtherRowView {
@@ -2608,6 +2612,115 @@ function controlSurfaceBoardControls(): NocturneBoardControlBody[] {
  * pre-vetted in the browser: `boards::save` is the one door every client goes
  * through, and a second opinion here could only disagree with it.
  */
+
+/** One terminal, as `POST /api/panel/chart` answers. */
+interface NocturnePanelTerminalView {
+  terminal_id: string;
+  terminal_label: string;
+  player: number;
+  kind: string;
+  normal: { code: number; key: string | null; label: string; supported: boolean };
+  shifted: { code: number; key: string | null; label: string; supported: boolean };
+  shift_state: string;
+  is_shift: boolean;
+}
+
+interface NocturnePanelChartOutcome {
+  ok: boolean;
+  board_name?: string;
+  image_sha256?: string;
+  terminals?: NocturnePanelTerminalView[];
+  notes?: string[];
+  error?: string;
+  remedy?: string;
+}
+
+/**
+ * **Ask the board what every terminal is programmed to emit.**
+ *
+ * The only thing on this page that talks to encoder hardware. It opens the
+ * board's configuration interface exclusively, so it refuses while WinIPAC has
+ * it — and that refusal is the store's own authored sentence, shown verbatim.
+ *
+ * Nothing here interprets a refusal: the server already decided which ones a
+ * page may read, because several of them carry an absolute config path.
+ */
+async function readEncoderChart(root: HTMLElement): Promise<void> {
+  const status = root.querySelector<HTMLElement>("[data-encoder-status]");
+  const facts = root.querySelector<HTMLElement>("[data-encoder-facts]");
+  const table = root.querySelector<HTMLElement>("[data-encoder-table]");
+  const rows = root.querySelector<HTMLElement>("[data-encoder-rows]");
+  // The row the user actually chose, not a guess: `selectedEncoderRow` reads
+  // the served `cls` the backend marks. A read must never go to a board other
+  // than the one on screen.
+  const selector = selectedEncoderRow()?.selector;
+  if (!status || !rows || !selector) return;
+
+  status.textContent = "Reading the board…";
+  if (table) table.hidden = true;
+
+  let outcome: NocturnePanelChartOutcome;
+  try {
+    outcome = await fetchJSON<NocturnePanelChartOutcome>("/api/panel/chart", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ selector }),
+    });
+  } catch {
+    status.textContent = "ksx did not answer. Nothing on the board was changed.";
+    return;
+  }
+
+  if (!outcome.ok) {
+    status.textContent = [outcome.error, outcome.remedy].filter(Boolean).join(" ");
+    return;
+  }
+
+  const terminals = outcome.terminals ?? [];
+  // The count of bytes ksx could not name is the honest headline: an onboard
+  // macro and an unassigned terminal are byte-identical, so an unclassified
+  // byte is the one thing a read genuinely cannot resolve.
+  const unknown = terminals.filter((t) => !t.normal.supported).length;
+  status.textContent =
+    `Read ${terminals.length} terminals.` +
+    (unknown
+      ? ` ${unknown} hold${unknown === 1 ? "s" : ""} a byte ksx cannot name — press that control to find out what it really sends.`
+      : "");
+
+  if (facts) {
+    facts.replaceChildren();
+    for (const [label, value] of [
+      ["Board", outcome.board_name ?? ""],
+      ["Read proof", (outcome.image_sha256 ?? "").slice(0, 16)],
+    ] as const) {
+      if (!value) continue;
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.textContent = value;
+      facts.append(dt, dd);
+    }
+  }
+
+  rows.replaceChildren();
+  for (const terminal of terminals) {
+    const tr = document.createElement("tr");
+    tr.dataset.terminalId = terminal.terminal_id;
+    if (!terminal.normal.supported) tr.dataset.unknownByte = "";
+    for (const cell of [
+      terminal.terminal_label || terminal.terminal_id,
+      terminal.normal.key ?? terminal.normal.label,
+      terminal.shifted.key ?? terminal.shifted.label,
+      terminal.is_shift ? "Shift key" : terminal.shift_state,
+    ]) {
+      const td = document.createElement("td");
+      td.textContent = cell;
+      tr.append(td);
+    }
+    rows.append(tr);
+  }
+  if (table) table.hidden = false;
+}
 async function publishControlSurfaceAsBoard(): Promise<void> {
   const controls = controlSurfaceBoardControls();
   if (!controls.length) {
@@ -3226,6 +3339,15 @@ function selectedEncoderRow(): NocturneDeviceRowView | undefined {
 
 let lastProvenEncoderRow: NocturneDeviceRowView | undefined;
 
+
+/** Whether the served row says a chart read is possible for this exact board.
+ *
+ * Read from the backend, never inferred from a name: only an exact measured
+ * protocol profile admits a chart transaction, and `chart_readable` is where
+ * `panel_catalog::capabilities_for` says so. */
+function choosingReadable(row: NocturneDeviceRowView): boolean {
+  return row.chartReadable === "true";
+}
 function selectedInputIsPanelEncoder(): boolean {
   return Boolean(selectedEncoderRow());
 }
@@ -5036,6 +5158,16 @@ function renderControlSurfaceControls(): void {
 function syncControlSurfaceChrome(): void {
   const item = controlSurfaceItem;
   if (!item) return;
+  // **The read surface exists only for a board that can be read.**
+  //
+  // Absent, not disabled: a greyed "Read this board" beside a keyboard is a
+  // capability claim ksx cannot honour, and an unprofiled encoder can NEVER
+  // be read, so offering it a retry would be an offer that always refuses.
+  const encoderRead = item.querySelector<HTMLElement>("#n-encoder-read");
+  if (encoderRead) {
+    const row = selectedEncoderRow();
+    encoderRead.hidden = !row || !choosingReadable(row);
+  }
   const choosing = !controlSurfaceState.started || controlSurfaceChoosingTemplate;
   const starters = item.querySelector<HTMLElement>(".n-surface-starters");
   const workarea = item.querySelector<HTMLElement>(".n-surface-workarea");
@@ -5182,350 +5314,125 @@ function createControlSurfaceItem(): HTMLElement {
   // control panel next to the user's real I-PAC asserts that KSX can inspect
   // it; a page must not advertise a capability it does not have.
   //
-  // ⚠️ IT RETURNS WITH THE CHART VERBS. PacBench comes back to ksx one verb
-  // at a time, and the first verb that can READ a board is the one that makes
-  // this surface true again. Rebuild it then — wired to that verb, with the
-  // dispatcher branches and the CSS (base rules and the `width <= 900px` /
-  // `pointer: coarse` overrides) that went with it — not before. It was not
-  // lost by accident.
+  // ✅ IT RETURNED WITH THE CHART VERB, 2026-08-27. `ksx panel status` named
+  // every board and `POST /api/panel/chart` reads one, so the surface below
+  // is true again — and is a REBUILD, not the old furniture unhidden. Its
+  // base CSS had already gone, and two thirds of what it built was write
+  // furniture (a `danger`-classed "Disable all hardware outputs", a
+  // program-review modal, a qualification stepper, a restore group) which
+  // this build still cannot do. Reviving and re-hiding those would recreate
+  // the exact failure this note describes.
+  //
+  // The six-step journey is the one piece lifted verbatim: pure explanation,
+  // no verb, and the mental model the feature needs.
 
-  const programming = document.createElement("section");
-  programming.id = "n-surface-programming";
-  programming.className = "n-surface-programming";
-  programming.hidden = true;
+  // ── THE ENCODER READ ────────────────────────────────────────────────────
+  //
+  // Built fresh, replacing ~340 lines of furniture that sat here `hidden = true`
+  // and was never revealed. Its own removal note said "IT RETURNS WITH THE CHART
+  // VERBS … Rebuild it then — wired to that verb", and rebuilding rather than
+  // unhiding is the only honest reading of that: its base CSS is gone, and two
+  // thirds of what it built was WRITE furniture — a `danger`-classed "Disable
+  // all hardware outputs", a program-review modal, a qualification stepper, a
+  // restore group. Reviving those and hiding them would recreate exactly the
+  // failure the note describes: a styled, enabled control panel beside the
+  // user's real hardware, asserting a capability ksx does not have.
+  //
+  // What is lifted verbatim is the six-step journey below. It is pure
+  // explanation with no verb attached, and it is the mental model this feature
+  // needs: a press travels physical control -> terminal -> host signal -> ksx
+  // -> virtual control -> game, and only the middle hop is what a chart read
+  // can tell you about.
+  const encoderRead = document.createElement("section");
+  encoderRead.id = "n-encoder-read";
+  encoderRead.className = "n-encoder-read";
+  encoderRead.hidden = true;
+
   const signalJourney = document.createElement("ol");
   signalJourney.className = "n-panel-signal-journey";
   signalJourney.setAttribute("aria-label", "Physical control to game signal journey");
   ([
     ["physical", "1", "Panel control", "Button, stick, or key"],
-    ["encoder", "2", "I-PAC", "Wired terminal"],
-    ["keys", "3", "Host signal", "Keyboard key emitted to Windows"],
-    ["mapping", "4", "KSX transform", "Route, macro, or behavior"],
+    ["encoder", "2", "Encoder terminal", "The screw it is wired to"],
+    ["keys", "3", "Host signal", "The key the board emits to Windows"],
+    ["mapping", "4", "ksx transform", "Route, macro, or behaviour"],
     ["controller", "5", "Virtual controller", "Game-facing target"],
     ["game", "6", "Game", "Receives when running"],
   ] as const).forEach(([step, number, label, detail]) => {
     const item = document.createElement("li");
     item.dataset.panelJourneyStep = step;
-    item.dataset.state = "upcoming";
     const badge = document.createElement("span");
     badge.textContent = number;
     const copy = document.createElement("span");
     const strong = document.createElement("strong");
     strong.textContent = label;
-    if (step === "encoder") strong.dataset.panelJourneyEncoderLabel = "";
     const small = document.createElement("small");
     small.textContent = detail;
     copy.append(strong, small);
     item.append(badge, copy);
     signalJourney.append(item);
   });
-  const programmingHead = document.createElement("div");
-  programmingHead.className = "n-surface-programming-head";
-  const programmingHeading = document.createElement("div");
-  const programmingKicker = document.createElement("span");
-  programmingKicker.dataset.surfaceProgrammingKicker = "";
-  programmingKicker.textContent = "Encoder hardware";
-  const programmingTitle = document.createElement("strong");
-  programmingTitle.dataset.surfaceProgrammingTitle = "";
-  programmingTitle.textContent = "Edit, save, clear, or program the complete 56-terminal chart";
-  programmingHeading.append(programmingKicker, programmingTitle);
-  const programmingClose = makeKeyboardWorkbenchButton(
-    "Close setup",
-    "surface-encoder-close",
-    "Close encoder setup without changing the hardware",
+
+  const encoderHead = document.createElement("div");
+  encoderHead.className = "n-encoder-read-head";
+  const encoderKicker = document.createElement("span");
+  encoderKicker.className = "n-kick";
+  encoderKicker.textContent = "What this board is programmed to emit";
+  const encoderLede = document.createElement("p");
+  encoderLede.className = "n-devnote";
+  encoderLede.textContent =
+    "Reading opens the board's configuration interface and asks it what every terminal stores. It changes nothing on the board, and it needs the interface to itself — close WinIPAC first.";
+  encoderHead.append(encoderKicker, encoderLede);
+
+  const encoderFacts = document.createElement("dl");
+  encoderFacts.className = "n-encoder-read-facts";
+  encoderFacts.dataset.encoderFacts = "";
+  encoderFacts.setAttribute("aria-label", "What ksx read from this board");
+
+  const encoderActions = document.createElement("div");
+  encoderActions.className = "n-encoder-read-actions";
+  encoderActions.append(
+    makeKeyboardWorkbenchButton(
+      "Read this board",
+      "encoder-read",
+      "Ask the board what each terminal is programmed to emit. Nothing is written.",
+    ),
   );
-  programmingClose.classList.add("quiet");
-  programmingHead.append(programmingHeading, programmingClose);
-  const programmingSummary = document.createElement("p");
-  programmingSummary.className = "n-surface-programming-summary";
-  programmingSummary.dataset.surfaceProgrammingSummary = "";
-  programmingSummary.setAttribute("role", "status");
-  programmingSummary.setAttribute("aria-live", "polite");
-  programmingSummary.textContent = "Read and back up the complete encoder chart before changing terminal assignments.";
-  const programmingDevice = document.createElement("dl");
-  programmingDevice.className = "n-surface-programming-device n-surface-board-facts";
-  programmingDevice.dataset.surfaceProgrammingDevice = "";
-  programmingDevice.dataset.surfaceBoardFacts = "";
-  programmingDevice.setAttribute("aria-label", "Selected I-PAC facts");
-  const programmingQualification = document.createElement("aside");
-  programmingQualification.className = "n-surface-programming-qualification";
-  programmingQualification.dataset.surfaceProgrammingQualification = "";
-  programmingQualification.setAttribute("aria-live", "polite");
-  programmingQualification.hidden = true;
-  const qualificationStep = document.createElement("span");
-  qualificationStep.dataset.surfaceQualificationStep = "";
-  qualificationStep.textContent = "Writer check · step 1 of 2";
-  const qualificationTitle = document.createElement("strong");
-  qualificationTitle.dataset.surfaceQualificationTitle = "";
-  qualificationTitle.textContent = "Verify this encoder before writing a full layout";
-  const qualificationDetail = document.createElement("p");
-  qualificationDetail.dataset.surfaceQualificationDetail = "";
-  qualificationDetail.textContent =
-    "Choose one noncritical SW action button—not a direction, Start, or Coin—with a readable normal assignment and Shift state explicitly disabled. Change it to one safe letter or top-row number so exactly one desired byte differs. Programming still retransmits the complete 256-byte chart as all 64 HID reports; review that full-write consent, then restore its exact safety backup.";
-  const qualificationPicker = document.createElement("div");
-  qualificationPicker.className = "n-surface-qualification-picker";
-  qualificationPicker.dataset.surfaceQualificationPicker = "";
-  const qualificationTerminalLabel = document.createElement("label");
-  const qualificationTerminalText = document.createElement("span");
-  qualificationTerminalText.textContent = "Wired test terminal";
-  const qualificationTerminalSelect = document.createElement("select");
-  qualificationTerminalSelect.dataset.nx = "surface-qualification-terminal";
-  qualificationTerminalSelect.setAttribute("aria-label", "I-PAC safety-test terminal");
-  qualificationTerminalLabel.append(qualificationTerminalText, qualificationTerminalSelect);
-  const qualificationKeyLabel = document.createElement("label");
-  const qualificationKeyText = document.createElement("span");
-  qualificationKeyText.textContent = "Temporary test key";
-  const qualificationKeySelect = document.createElement("select");
-  qualificationKeySelect.dataset.nx = "surface-qualification-key";
-  qualificationKeySelect.setAttribute("aria-label", "I-PAC safety-test key");
-  qualificationKeyLabel.append(qualificationKeyText, qualificationKeySelect);
-  const qualificationSelection = document.createElement("p");
-  qualificationSelection.dataset.surfaceQualificationSelection = "";
-  qualificationSelection.setAttribute("role", "status");
-  qualificationPicker.append(
-    qualificationTerminalLabel,
-    qualificationKeyLabel,
-    qualificationSelection,
-  );
-  programmingQualification.append(
-    qualificationStep,
-    qualificationTitle,
-    qualificationDetail,
-    qualificationPicker,
-  );
-  const programmingConflicts = document.createElement("ul");
-  programmingConflicts.className = "n-surface-programming-conflicts";
-  programmingConflicts.dataset.surfaceProgrammingConflicts = "";
-  programmingConflicts.setAttribute("role", "alert");
-  programmingConflicts.hidden = true;
-  const programmingModes = document.createElement("div");
-  programmingModes.className = "n-surface-programming-modes";
-  programmingModes.setAttribute("role", "group");
-  programmingModes.setAttribute("aria-label", "Start hardware layout from");
-  ([
-    ["keep-current", "Use current outputs", "Keep the terminal-to-key chart already on this I-PAC, test it, or edit only what you want."],
-    ["recommended", "KSX four-player", "Preview 56 unique Windows key signals arranged for four players, then program only after review."],
-    ["custom", "Use panel design", "Start from terminal and key links in the optional physical panel design."],
-  ] as const).forEach(([mode, label, description]) => {
-    const button = makeKeyboardWorkbenchButton(label, "surface-encoder-mode", description, mode);
-    button.dataset.surfaceProgrammingMode = mode;
-    button.dataset.surfaceProgrammingDescription = description;
-    const copy = document.createElement("small");
-    copy.textContent = description;
-    button.append(copy);
-    programmingModes.append(button);
-  });
-  const profiles = document.createElement("section");
-  profiles.className = "n-surface-hardware-profiles";
-  const profilesHead = document.createElement("div");
-  const profilesTitle = document.createElement("strong");
-  profilesTitle.textContent = "Saved hardware layouts";
-  const profilesSummary = document.createElement("span");
-  profilesSummary.dataset.surfaceProfilesSummary = "";
-  profilesSummary.textContent = "Loading KSX profiles…";
-  profilesHead.append(profilesTitle, profilesSummary);
-  const profilesPicker = document.createElement("div");
-  profilesPicker.className = "n-surface-profile-picker";
-  const profileSelect = document.createElement("select");
-  profileSelect.dataset.surfaceProfile = "";
-  profileSelect.setAttribute("aria-label", "Saved I-PAC hardware layout");
-  const profilePlaceholder = document.createElement("option");
-  profilePlaceholder.value = "";
-  profilePlaceholder.textContent = "Choose a saved layout";
-  profileSelect.append(profilePlaceholder);
-  const profileUse = makeKeyboardWorkbenchButton(
-    "Use saved",
-    "surface-profile-use",
-    "Load this saved semantic layout into the editor without programming the board",
-  );
-  profilesPicker.append(profileSelect, profileUse);
-  const profileFields = document.createElement("div");
-  profileFields.className = "n-surface-profile-fields";
-  const profileNameLabel = document.createElement("label");
-  const profileNameText = document.createElement("span");
-  profileNameText.textContent = "Layout name";
-  const profileName = document.createElement("input");
-  profileName.type = "text";
-  profileName.maxLength = 80;
-  profileName.placeholder = "My four-player cabinet";
-  profileName.dataset.surfaceProfileName = "";
-  profileNameLabel.append(profileNameText, profileName);
-  const profileDescriptionLabel = document.createElement("label");
-  const profileDescriptionText = document.createElement("span");
-  profileDescriptionText.textContent = "Description (optional)";
-  const profileDescription = document.createElement("input");
-  profileDescription.type = "text";
-  profileDescription.maxLength = 240;
-  profileDescription.placeholder = "What this panel layout is for";
-  profileDescription.dataset.surfaceProfileDescription = "";
-  profileDescriptionLabel.append(profileDescriptionText, profileDescription);
-  profileFields.append(profileNameLabel, profileDescriptionLabel);
-  const profileActions = document.createElement("div");
-  profileActions.className = "n-surface-profile-actions";
-  profileActions.append(
-    makeKeyboardWorkbenchButton("Save as new", "surface-profile-save", "Save this complete editor draft as a reusable KSX hardware layout"),
-    makeKeyboardWorkbenchButton("Update saved", "surface-profile-update", "Replace the selected saved layout with this complete editor draft"),
-    makeKeyboardWorkbenchButton("Delete saved", "surface-profile-delete", "Delete only the selected KSX layout; this never changes the I-PAC"),
-  );
-  const profileMessage = document.createElement("p");
-  profileMessage.dataset.surfaceProfilesMessage = "";
-  profileMessage.setAttribute("role", "status");
-  profiles.append(profilesHead, profilesPicker, profileFields, profileActions, profileMessage);
-  const terminalEditor = document.createElement("section");
-  terminalEditor.className = "n-surface-terminal-editor";
-  const terminalEditorHead = document.createElement("div");
-  const terminalEditorTitle = document.createElement("div");
-  const terminalEditorStrong = document.createElement("strong");
-  terminalEditorStrong.textContent = "Terminal chart";
-  const terminalEditorStatus = document.createElement("span");
-  terminalEditorStatus.dataset.surfaceTerminalStatus = "";
-  terminalEditorStatus.textContent = "No chart loaded";
-  terminalEditorTitle.append(terminalEditorStrong, terminalEditorStatus);
-  const advancedLabel = document.createElement("label");
-  advancedLabel.className = "n-surface-terminal-advanced-toggle";
-  const advancedInput = document.createElement("input");
-  advancedInput.type = "checkbox";
-  advancedInput.dataset.nx = "surface-terminal-advanced";
-  const advancedText = document.createElement("span");
-  advancedText.textContent = "Advanced shift layer";
-  advancedLabel.append(advancedInput, advancedText);
-  terminalEditorHead.append(terminalEditorTitle, advancedLabel);
-  const terminalEditorNote = document.createElement("p");
-  terminalEditorNote.dataset.surfaceTerminalNote = "";
-  terminalEditorNote.textContent =
-    "Windows key outputs are what KSX receives. Open Advanced only for the I-PAC shifted layer and terminal Shift roles.";
-  const terminalGrid = document.createElement("div");
-  terminalGrid.className = "n-surface-terminal-grid";
-  terminalGrid.dataset.surfaceTerminalGrid = "";
-  terminalEditor.append(terminalEditorHead, terminalEditorNote, terminalGrid);
-  const outputTest = document.createElement("section");
-  outputTest.className = "n-panel-output-test";
-  const outputTestHead = document.createElement("div");
-  const outputTestHeading = document.createElement("div");
-  const outputTestTitle = document.createElement("strong");
-  outputTestTitle.textContent = "Test wiring";
-  const outputTestStatus = document.createElement("span");
-  outputTestStatus.dataset.panelOutputTestStatus = "";
-  outputTestStatus.textContent = "Program or load at least one output first";
-  outputTestHeading.append(outputTestTitle, outputTestStatus);
-  const outputTestButton = makeKeyboardWorkbenchButton(
-    "Test one control",
-    "surface-encoder-test",
-    "Listen once and identify the Windows key and every matching I-PAC terminal without changing a KSX mapping",
-  );
-  const simultaneousTestButton = makeKeyboardWorkbenchButton(
-    "Test simultaneous inputs…",
-    "input-test-open",
-    "Measure the peak distinct keyboard-mode signals KSX observes during one bounded test of this exact encoder",
-  );
-  outputTestHead.append(outputTestHeading, outputTestButton, simultaneousTestButton);
-  const outputTestCopy = document.createElement("p");
-  outputTestCopy.dataset.panelOutputTestCopy = "";
-  outputTestCopy.textContent =
-    "Press any wired cabinet control. KSX identifies the Windows key emitted by this I-PAC; no controller mapping changes.";
-  const outputSignalGrid = document.createElement("div");
-  outputSignalGrid.className = "n-panel-signal-grid";
-  outputSignalGrid.dataset.panelSignalGrid = "";
-  const routeActions = document.createElement("div");
-  routeActions.className = "n-panel-route-actions";
-  const routeCopy = document.createElement("p");
-  routeCopy.dataset.panelRouteCopy = "";
-  routeCopy.textContent = "After the hardware signals work, route those keys through KSX to virtual controllers.";
-  const buildPanelButton = makeKeyboardWorkbenchButton(
-    "Build physical panel",
-    "surface-encoder-build-panel",
-    "Draw physical joysticks and buttons from the terminal-to-key chart stored on this encoder",
-  );
-  buildPanelButton.classList.add("primary");
-  const designPanelButton = makeKeyboardWorkbenchButton(
-    "Design physical panel first",
-    "surface-encoder-design-panel",
-    "Choose the cabinet shape and physical controls before assigning I-PAC terminal outputs",
-  );
-  designPanelButton.classList.add("primary");
-  designPanelButton.hidden = true;
-  const routeButton = makeKeyboardWorkbenchButton(
-    "Continue to KSX routing",
-    "surface-encoder-route",
-    "Leave hardware setup and open the KSX mapping inspector",
-  );
-  routeActions.append(routeCopy, designPanelButton, buildPanelButton, routeButton);
-  outputTest.append(outputTestHead, outputTestCopy, outputSignalGrid, routeActions);
-  const programmingActions = document.createElement("div");
-  programmingActions.className = "n-surface-programming-actions";
-  const reread = makeKeyboardWorkbenchButton(
-    "Read board again",
-    "surface-encoder-read",
-    "Read every chart byte again and create another verified backend-owned backup",
-  );
-  reread.classList.add("quiet");
-  const review = makeKeyboardWorkbenchButton(
-    "Review & program board",
-    "surface-encoder-review",
-    "Compute an exact terminal and byte diff without writing anything",
-  );
-  review.classList.add("primary");
-  programmingActions.append(reread, review);
-  const advancedHardware = document.createElement("details");
-  advancedHardware.className = "n-surface-programming-advanced";
-  const advancedHardwareSummary = document.createElement("summary");
-  advancedHardwareSummary.textContent = "Advanced hardware actions";
-  const advancedHardwareCopy = document.createElement("p");
-  advancedHardwareCopy.textContent =
-    "Clearing the board disables every readable output. Use it only when you intentionally want a silent I-PAC; deleting a saved KSX layout does not change hardware.";
-  const clearOutputs = makeKeyboardWorkbenchButton(
-    "Disable all hardware outputs",
-    "surface-encoder-mode",
-    "Prepare a clear-all hardware draft while preserving opaque vendor bytes",
-    "blank",
-  );
-  clearOutputs.dataset.surfaceProgrammingMode = "blank";
-  clearOutputs.dataset.surfaceProgrammingDescription =
-    "Clear readable actions and known Shift roles while preserving opaque vendor bytes.";
-  clearOutputs.classList.add("danger");
-  advancedHardware.append(advancedHardwareSummary, advancedHardwareCopy, clearOutputs);
-  const recovery = document.createElement("details");
-  recovery.className = "n-surface-programming-recovery";
-  const recoverySummary = document.createElement("summary");
-  recoverySummary.textContent = "Recovery and raw board history";
-  const recoveryCopy = document.createElement("p");
-  recoveryCopy.textContent =
-    "Raw, board-bound recovery images are transaction safeguards. Saved hardware layouts above are the reusable profiles you normally work with.";
-  const restoreGroup = document.createElement("div");
-  restoreGroup.className = "n-surface-programming-restore";
-  const restoreLabel = document.createElement("label");
-  const restoreLabelText = document.createElement("span");
-  restoreLabelText.dataset.surfaceBackupLabel = "";
-  restoreLabelText.textContent = "Restore a verified backup";
-  const backupSelect = document.createElement("select");
-  backupSelect.dataset.surfaceBackup = "";
-  backupSelect.setAttribute("aria-label", "Verified encoder backup");
-  const backupPlaceholder = document.createElement("option");
-  backupPlaceholder.value = "";
-  backupPlaceholder.textContent = "No verified backups yet";
-  backupSelect.append(backupPlaceholder);
-  restoreLabel.append(restoreLabelText, backupSelect);
-  const restore = makeKeyboardWorkbenchButton(
-    "Review restore…",
-    "surface-encoder-restore",
-    "Compare this backend-owned backup with the complete current chart before restoring",
-  );
-  restoreGroup.append(restoreLabel, restore);
-  recovery.append(recoverySummary, recoveryCopy, restoreGroup);
-  programming.append(
+
+  // One line, and it says what happened — a refusal in the store's own authored
+  // words, or the summary of a read. `aria-live` because pressing the button is
+  // the only thing on this surface that talks to hardware.
+  const encoderStatus = document.createElement("p");
+  encoderStatus.className = "n-encoder-read-status";
+  encoderStatus.dataset.encoderStatus = "";
+  encoderStatus.setAttribute("role", "status");
+  encoderStatus.setAttribute("aria-live", "polite");
+
+  const encoderTable = document.createElement("table");
+  encoderTable.className = "n-encoder-read-table";
+  encoderTable.dataset.encoderTable = "";
+  encoderTable.hidden = true;
+  const encoderHeadRow = document.createElement("thead");
+  encoderHeadRow.innerHTML = "";
+  const headRow = document.createElement("tr");
+  for (const label of ["Terminal", "Emits", "Shifted", "Shift role"]) {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.textContent = label;
+    headRow.append(th);
+  }
+  encoderHeadRow.append(headRow);
+  const encoderBody = document.createElement("tbody");
+  encoderBody.dataset.encoderRows = "";
+  encoderTable.append(encoderHeadRow, encoderBody);
+
+  encoderRead.append(
     signalJourney,
-    programmingHead,
-    programmingDevice,
-    programmingSummary,
-    programmingQualification,
-    programmingConflicts,
-    programmingModes,
-    profiles,
-    terminalEditor,
-    outputTest,
-    programmingActions,
-    advancedHardware,
-    recovery,
+    encoderHead,
+    encoderFacts,
+    encoderActions,
+    encoderStatus,
+    encoderTable,
   );
 
   const stages = document.createElement("nav");
@@ -5643,7 +5550,7 @@ function createControlSurfaceItem(): HTMLElement {
     // What remains is the part that is still true on every build: the two
     // steps this builder does own, and the fact that they are separate.
     "Teach proves what the physical wiring sends; Route writes the dynamic KSX mapping.";
-  content.append(head, programming, stages, status, starters, tools, workarea, note);
+  content.append(head, encoderRead, stages, status, starters, tools, workarea, note);
 
   const item = createCanvasItem({
     instanceId: "control-surface",
@@ -9708,6 +9615,12 @@ export function nocturneWire(root: HTMLElement): void {
       undoControlSurfaceDestructiveEdit();
     } else if (hit === "surface-publish") {
       void publishControlSurfaceAsBoard();
+    } else if (hit === "encoder-read") {
+      // The dispatcher has NO default arm, so a token with no branch is
+      // silently inert — which is how the old furniture's two buttons sat
+      // enabled and dead beside real hardware. The branch ships with the
+      // button, in the same edit.
+      void readEncoderChart(root);
     } else if (hit === "surface-stage") {
       const stage = target?.closest<HTMLElement>("[data-surface-stage]")
         ?.dataset.surfaceStage as ControlSurfaceStage | undefined;
@@ -10404,7 +10317,7 @@ export function NocturneIsland() {
         ),
         createList(
           () => nDevEncoders(),
-          (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta + "|" + r.role + "|" + r.aria_current + "|" + r.title,
+          (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta + "|" + r.role + "|" + r.aria_current + "|" + r.title + "|" + r.chartReadable,
           (r) =>
             h(
               "form",
@@ -10462,7 +10375,7 @@ export function NocturneIsland() {
         // Device rows — the row IS the /nocturne/device form's button.
         createList(
           () => nDevRows(),
-          (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta + "|" + r.aria_current + "|" + r.title,
+          (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta + "|" + r.aria_current + "|" + r.title + "|" + r.chartReadable,
           (r) =>
             h(
               "form",
@@ -10503,7 +10416,7 @@ export function NocturneIsland() {
           ),
           createList(
             () => nDevExp(),
-            (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta + "|" + r.aria_current + "|" + r.title,
+            (r) => r.selector + "|" + r.alias + "|" + r.label + "|" + r.cls + "|" + r.name + "|" + r.meta + "|" + r.aria_current + "|" + r.title + "|" + r.chartReadable,
             (r) =>
               h(
                 "form",

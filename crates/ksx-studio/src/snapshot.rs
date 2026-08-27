@@ -1639,6 +1639,17 @@ pub struct NocturneDeviceRow {
     /// business composing "replaces the current one" out of a class name.
     #[serde(default)]
     pub title: String,
+    /// `"true"` when a chart read is possible for this EXACT board, from
+    /// `panel_catalog::capabilities_for`. A word, not a flag, for the reason
+    /// `aria_current` is: an empty string still sets an attribute from a list
+    /// row, so "absent" is not expressible.
+    ///
+    /// Served rather than inferred. The island needs a BOOLEAN here — it hides
+    /// a whole verb on it — and reading that out of a display sentence is the
+    /// pattern `role` exists to replace: "the island uses this value for
+    /// presentation; it never identifies an encoder by matching the display
+    /// name."
+    pub chart_readable: String,
 }
 
 /// One board that cannot be picked, and why — kept visible, never hidden:
@@ -3122,6 +3133,7 @@ impl NocturneDerived {
                             format!("{verb} {}", b.profile_detail)
                         }
                     },
+                    chart_readable: if b.chart_readable { "true" } else { "false" }.to_owned(),
                     role: b.role.code().to_owned(),
                     selector,
                     alias: b.alias_hint.clone(),

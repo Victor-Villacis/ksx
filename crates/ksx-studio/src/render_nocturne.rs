@@ -226,6 +226,10 @@ fn device_row(row: &NocturneDeviceRow) -> SlotValue {
             SlotValue::Text(row.aria_current.clone()),
         ),
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
+        (
+            "chartReadable".to_owned(),
+            SlotValue::Text(row.chart_readable.clone()),
+        ),
     ])
 }
 

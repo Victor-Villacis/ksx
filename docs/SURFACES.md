@@ -228,6 +228,7 @@ surface does a human perform this task on*, and that is answered by the matrix.
 | Studio theme | — | never (the 10-foot surface is dark-only by design) | **primary** (`/nocturne`) |
 | What opposite directions do (SOCD) | owns (`slot assign --socd`) | — | **primary** (`/nocturne`) |
 | What ksx left behind (receipts and signing certificates) | owns (`winusb repair`, `winusb sweep-certificates`) | — | **primary** certificate cleanup (`/devices`); receipt view |
+| Identify an arcade encoder (family, release, whether its chart can be read) | owns (`panel status`) | — | planned |
 
 "owns" = the verb lives here. "primary" = where a human does it. "view" =
 renders backend state, takes no decisions. **"planned" = nothing is there** —

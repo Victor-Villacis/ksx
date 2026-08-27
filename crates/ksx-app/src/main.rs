@@ -16,8 +16,8 @@
 // If you are adding logic rather than a flag, it does not go in this file.
 use ksx_backend::{
     autostart, config_io, daemon, device_edit, device_scan, devices, doctor, input_test_cli,
-    install, logging, macro_cli, macro_trace, map, mapping, monitor, pads, play, preset_cli, run,
-    session, setup, slot_cli, stage_cli, winusb,
+    install, logging, macro_cli, macro_trace, map, mapping, monitor, pads, panel, play, preset_cli,
+    run, session, setup, slot_cli, stage_cli, winusb,
 };
 // `console` is here rather than above because `ksx cabinet` is its only caller
 // in this file: the daemon detaches its own console from inside the backend.
@@ -987,6 +987,26 @@ enum Command {
         #[command(subcommand)]
         command: WinusbCommand,
     },
+    /// Inspect a recognised arcade-panel encoder
+    ///
+    /// `status` is strictly PASSIVE. It reads the USB and HID device trees and
+    /// reports what ksx recognises: the board's family, the release it claims,
+    /// whether ksx holds a measured protocol profile for that exact release,
+    /// and therefore whether the board's stored chart could ever be read. It
+    /// sends no report to the board and opens no configuration handle.
+    ///
+    /// Recognition is not capability. ksx names seven Ultimarc families from
+    /// their exact USB pair, and holds a measured protocol profile for one
+    /// release of one of them. A recognised board without that profile is
+    /// named, split and mapped exactly as before — what it cannot do is have
+    /// its chart read, and this verb says so per board rather than leaving you
+    /// to guess.
+    ///
+    /// Exit codes: 0 = reported, 1 = error.
+    Panel {
+        #[command(subcommand)]
+        command: PanelCommand,
+    },
     /// Choose which physical device ksx reads — scan for boards, then pick one
     ///
     /// `ksx devices` lists devnodes, which is right for diagnosing a backend
@@ -1599,6 +1619,28 @@ enum WinusbCommand {
         #[arg(long)]
         force: bool,
         /// JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum PanelCommand {
+    /// Report what ksx recognises about each connected encoder
+    ///
+    /// Read-only, and passive in the strong sense: it walks the USB and HID
+    /// device trees and reads descriptors Windows already has. No report is
+    /// sent to any board and no configuration collection is opened, so it is
+    /// safe to run while a board is in use — including while another tool has
+    /// the configuration interface.
+    Status {
+        /// One encoder, by instance path or any unique substring of one
+        ///
+        /// Omit to report every recognised board. An ambiguous substring is
+        /// refused rather than guessed.
+        #[arg(long)]
+        device: Option<String>,
+        /// One JSON object on stdout instead of the readable report
         #[arg(long)]
         json: bool,
     },
@@ -2246,6 +2288,9 @@ fn main() -> anyhow::Result<()> {
             DeviceCommand::Remove { alias, force, json } => {
                 device_edit::remove(device_edit::RemoveSpec { alias, force }, json)
             }
+        },
+        Command::Panel { command } => match command {
+            PanelCommand::Status { device, json } => panel::run(device, json),
         },
         Command::Winusb { command } => match command {
             WinusbCommand::Status { json } => winusb::run(winusb::Options {

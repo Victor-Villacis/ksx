@@ -513,6 +513,9 @@ pub fn to_view(report: &DevicesReport) -> ksx_api::DevicesView {
             };
             let eligibility = reach.eligibility();
             ksx_api::UsbRow {
+                vendor_id: c.vendor_id,
+                product_id: c.product_id,
+                bcd_device: c.bcd_device,
                 instance_id: c.id.as_str().to_owned(),
                 description: c.friendly().unwrap_or_default().to_owned(),
                 transport: ksx_core::Transport::Usb.code().to_owned(),
@@ -581,6 +584,12 @@ pub fn to_view(report: &DevicesReport) -> ksx_api::DevicesView {
             )
         };
         usb.push(ksx_api::UsbRow {
+            // A Bluetooth candidate has no USB device descriptor to report.
+            // Zero means exactly that, and is safe because `family_for` needs
+            // an exact pair and nothing in the catalog is 0x0000:0x0000.
+            vendor_id: 0,
+            product_id: 0,
+            bcd_device: 0,
             instance_id: c.id.as_str().to_owned(),
             description: c.name.clone(),
             transport: ksx_core::Transport::Bluetooth.code().to_owned(),

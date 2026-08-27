@@ -836,6 +836,21 @@ const ANCHORS: &[Anchors] = &[
         egui: &["Screen::Session", "Ask::Start", "Ask::Stop"],
         studio: &["/nocturne/play", "/nocturne/stop", "/nocturne/adopt"],
     },
+    Anchors {
+        capability: "Identify an arcade encoder (family, release, whether its chart can be read)",
+        // Strictly passive: it walks the USB and HID device trees Windows has
+        // already enumerated and sends no report to any board. That is why it
+        // can own the capability outright while the chart READ — which does
+        // open the configuration collection — is a separate verb.
+        cli: &["panel status"],
+        egui: &[],
+        // Planned, and deliberately not claimed yet. The identity facts are
+        // already served on every `BoardRow` (`family_label`, `profile_state`,
+        // `terminal_count`, `chart_readable`); what is missing is the surface
+        // that renders them. Naming a route here before one exists would be
+        // the "unbacked published claim" this matrix exists to prevent.
+        studio: &[],
+    },
 ];
 
 /// A verb that is right to leave CLI-only, and why.

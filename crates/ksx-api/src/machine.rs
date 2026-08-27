@@ -71,7 +71,7 @@ pub trait MachineSource: Send + Sync {
     fn panel_status(&self, _spec: &PanelStatusSpec) -> Result<PanelStatusView, Refusal> {
         Err(Refusal::not_here(
             "inspecting panel encoder capabilities",
-            "encoder identity",
+            "run `ksx panel status`",
         ))
     }
 
@@ -1456,6 +1456,27 @@ pub struct UsbRow {
     /// Why not, when not. Empty when it can.
     #[serde(default)]
     pub cannot_type_reason: String,
+    /// **The USB identity triple, as the enumerator reported it.**
+    ///
+    /// Carried on the row rather than recovered from [`Self::instance_id`],
+    /// because recovering it does not always work. `DeviceFacts::from_instance_path`
+    /// ends with `interface_number: hex_field(head, "MI_", 2)?` — the `?` is
+    /// load-bearing — so a board with no `MI_` segment yields `None` and the
+    /// panel catalog is never consulted for it at all. A composite I-PAC is
+    /// recognised; a single-interface one is silently a nameless keyboard.
+    ///
+    /// Zero means "no USB device descriptor was read" (a Bluetooth row), not
+    /// "vendor 0x0000". Nothing keys off it directly: `family_for` requires an
+    /// exact pair, and `0x0000:0x0000` is in no catalog entry.
+    #[serde(default)]
+    pub vendor_id: u16,
+    #[serde(default)]
+    pub product_id: u16,
+    /// Raw USB `bcdDevice`. A plain `u16` to match its sibling
+    /// [`PanelStatusRow::bcd_device`], and never presented as a parsed
+    /// firmware version — the vendor's release numbering is its own business.
+    #[serde(default)]
+    pub bcd_device: u16,
 }
 
 /// `ksx device scan`, presentation-shaped: one row per PHYSICAL board, plus
@@ -2038,6 +2059,50 @@ pub struct BoardRow {
     /// `[[slot]]` that refers to it.
     #[serde(default)]
     pub alias_hint: String,
+    /// **What ksx recognises this board as**, from the exact USB pair alone.
+    ///
+    /// `Some` for a catalogued family, `None` for everything else. Recognition
+    /// authorises nothing — see [`PanelDriverCapabilities`]. It only means the
+    /// board can be called by its real name instead of "USB Input Device".
+    #[serde(default)]
+    pub family_label: Option<String>,
+    /// The release this board reports, spelled the way its measured profile
+    /// spells it. `None` unless an exact profile matched: a family alone says
+    /// nothing about firmware, and guessing one from `bcd_device` would be
+    /// inventing a version the board never claimed.
+    #[serde(default)]
+    pub firmware_label: Option<String>,
+    /// `profiled` | `unprofiled-release` | `unrecognised`.
+    ///
+    /// The three tiers are genuinely different advice, which is why they are
+    /// three words and not a bool: a profiled board can be read; an
+    /// unprofiled-release board is a model ksx knows by name and can never
+    /// read until someone measures that firmware on hardware they own; an
+    /// unrecognised board may not be an encoder at all.
+    #[serde(default)]
+    pub profile_state: String,
+    /// The whole sentence for [`Self::profile_state`], authored in
+    /// `panel::status`'s own words so the two surfaces cannot word one fact two
+    /// ways.
+    #[serde(default)]
+    pub profile_detail: String,
+    /// **Terminal capacity of the exact registered programming profile** —
+    /// not a count of this board's screw terminals, and not a promise about
+    /// the family.
+    ///
+    /// `None` for every unprofiled board, and that is the honest answer rather
+    /// than a gap: `PanelFamily` carries four fields and no count, so ksx does
+    /// not know how many terminals an I-PAC 2 has. Filling it from the vendor's
+    /// published spec would be a confident claim about hardware ksx has never
+    /// measured.
+    #[serde(default)]
+    pub terminal_count: Option<usize>,
+    /// Whether a chart read is possible for this exact board, from
+    /// `panel_catalog::capabilities_for`. False for every board without a
+    /// measured protocol profile, and false is permanent for that model until
+    /// one is measured — which is why a surface must not offer a retry.
+    #[serde(default)]
+    pub chart_readable: bool,
 }
 
 /// What has to follow the reason a device cannot type.
@@ -3881,7 +3946,7 @@ mod tests {
             ("ksx devices", Nothing.devices().unwrap_err()),
             ("ksx device scan", Nothing.device_scan().unwrap_err()),
             (
-                "encoder identity",
+                "ksx panel status",
                 Nothing
                     .panel_status(&PanelStatusSpec::default())
                     .unwrap_err(),

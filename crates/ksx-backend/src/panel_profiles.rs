@@ -201,7 +201,7 @@ fn store_refusal(message: impl Into<String>) -> Refusal {
     Refusal::with_remedy(
         ksx_api::codes::REFUSED,
         message,
-        "refresh Encoder setup and retry; if it still fails, make sure KSX can access its panel-layouts folder",
+        "refresh the saved layout list and retry; if it still fails, make sure KSX can access its panel-layouts folder",
     )
 }
 
@@ -399,7 +399,7 @@ fn profile_path(dir: &Path, profile_id: &str) -> Result<PathBuf, Refusal> {
     if !safe_profile_id(profile_id) {
         return Err(bad_request(
             format!("'{profile_id}' is not a saved encoder layout id"),
-            "refresh Encoder setup and choose the saved layout again",
+            "refresh the saved layout list and choose the layout again",
         ));
     }
     Ok(dir.join(format!("{profile_id}{PROFILE_EXTENSION}")))
@@ -793,7 +793,7 @@ fn save_at(
                         "saved encoder layout '{}' changed while this edit was open; nothing was written",
                         current.name
                     ),
-                    "refresh Encoder setup, review the newer layout, and apply the edit again",
+                    "refresh the saved layout list, review the newer layout, and apply the edit again",
                 ));
             }
             if duplicate_name(&existing, &name, Some(profile_id)) {
@@ -812,7 +812,7 @@ fn save_at(
         _ => {
             return Err(bad_request(
                 "a saved encoder layout update needs both its id and exact revision",
-                "refresh Encoder setup and save the layout again",
+                "refresh the saved layout list and save it again",
             ));
         }
     };
@@ -878,7 +878,7 @@ fn delete_at(
                 "saved encoder layout '{}' changed while deletion was being confirmed; nothing was deleted",
                 current.name
             ),
-            "refresh Encoder setup, review the newer layout, and confirm deletion again",
+            "refresh the saved layout list, review the newer layout, and confirm deletion again",
         ));
     }
     fs::remove_file(&path).map_err(|error| {

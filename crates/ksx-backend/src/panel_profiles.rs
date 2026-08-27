@@ -57,14 +57,17 @@ fn process_layout_leases() -> &'static Mutex<BTreeSet<String>> {
     LEASES.get_or_init(|| Mutex::new(BTreeSet::new()))
 }
 
-fn claim_process_layout_lease(name: &str) -> std::io::Result<()> {
+fn claim_process_layout_lease(name: &str, what: &str) -> std::io::Result<()> {
     let mut leases = process_layout_leases()
         .lock()
-        .map_err(|_| std::io::Error::other("the panel-layout lease registry is poisoned"))?;
+        .map_err(|_| std::io::Error::other("the store lease registry is poisoned"))?;
     if !leases.insert(name.to_owned()) {
+        // Named for the caller: this lease is shared between the saved
+        // encoder layouts and the boards somebody drew, so a hardcoded noun
+        // here told a board writer that PANEL LAYOUTS were busy.
         return Err(std::io::Error::new(
             std::io::ErrorKind::WouldBlock,
-            "the panel-layouts store is already being changed",
+            format!("{what} are already being changed"),
         ));
     }
     Ok(())
@@ -108,7 +111,7 @@ impl StoreLease {
         use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
 
         let lease_name = layout_lease_name(dir);
-        claim_process_layout_lease(&lease_name).map_err(|e| layout_lease_refusal(what, e))?;
+        claim_process_layout_lease(&lease_name, what).map_err(|e| layout_lease_refusal(what, e))?;
         let wide = lease_name
             .encode_utf16()
             .chain(std::iter::once(0))
@@ -130,7 +133,7 @@ impl StoreLease {
             let error = if wait == WAIT_TIMEOUT {
                 std::io::Error::new(
                     std::io::ErrorKind::WouldBlock,
-                    "the panel-layouts store is already being changed",
+                    format!("{what} are already being changed"),
                 )
             } else {
                 std::io::Error::other(format!("WaitForSingleObject returned {wait:#x}"))
@@ -143,13 +146,15 @@ impl StoreLease {
     pub(crate) fn acquire(dir: &Path, what: &str) -> Result<Self, Refusal> {
         fs::create_dir_all(dir).map_err(|error| {
             store_refusal(format!(
-                "the panel-layouts folder {} could not be created: {error}",
+                "the folder for {what} ({}) could not be created: {error}",
                 dir.display()
             ))
         })?;
         let lease_name = layout_lease_name(dir);
         claim_process_layout_lease(&lease_name).map_err(|e| layout_lease_refusal(what, e))?;
-        let path = dir.join(".panel-layouts.lock");
+        // One lock file name for every store under the config root; the
+        // DIRECTORY is what keeps two stores from blocking each other.
+        let path = dir.join(".ksx-store.lock");
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(file) => Ok(Self {
                 lease_name,
@@ -643,7 +648,13 @@ fn list_dir(dir: &Path) -> Result<Vec<PanelHardwareProfile>, Refusal> {
             continue;
         };
         if name.ends_with(PROFILE_EXTENSION) {
-            profiles.push(read_profile(&path)?);
+            // See `boards::list_dir`: a layout deleted between the listing
+            // and the read is a layout that is gone, not a failed read.
+            match read_profile(&path) {
+                Ok(profile) => profiles.push(profile),
+                Err(_) if !path.exists() => continue,
+                Err(refusal) => return Err(refusal),
+            }
         }
     }
     profiles.sort_by(|left, right| {
@@ -655,8 +666,21 @@ fn list_dir(dir: &Path) -> Result<Vec<PanelHardwareProfile>, Refusal> {
     Ok(profiles)
 }
 
+/// **No lease on a read.**
+///
+/// This lease is exclusive and zero-timeout: it refuses a competitor rather
+/// than queueing, which is right for a WRITE and wrong for a read that the
+/// Studio now performs on every two-second poll. Taken here it made a poll
+/// and a save contend, and whichever lost was told "another KSX process is
+/// reading or changing …" when there was no other process — the user's own
+/// page had it. Retrying always worked, which is the signature of a lock
+/// that should not have been held.
+///
+/// Dropping it is safe because durability never depended on it. Every write
+/// lands through `write_atomic`, so a concurrent reader sees the whole old
+/// file or the whole new one, never a torn one. What the lease DID mask is
+/// the directory race below, which is now handled where it happens.
 fn profiles_at(root: &ConfigRoot) -> Result<PanelHardwareProfilesView, Refusal> {
-    let _lease = StoreLease::acquire(&root.panel_layouts_dir(), SAVED_LAYOUTS)?;
     let profiles = list_dir(&root.panel_layouts_dir())?;
     Ok(PanelHardwareProfilesView {
         summary: format!(
@@ -1033,8 +1057,19 @@ mod tests {
     /// Catches the broken process-local-only CAS: Studio and CLI could both
     /// accept revision A and the last atomic rename silently won. Holding the
     /// path-scoped lease stands in for that other process deterministically.
+    ///
+    /// **The lease spans every WRITE and no read.** It used to span reads too,
+    /// and this test asserted that a read "must not race a replace" — a claim
+    /// that was never what the CAS needed and became actively harmful once the
+    /// Studio began listing this store on a two-second poll: a poll and a save
+    /// contended, and whichever lost was told another process held the store
+    /// when it was the user's own page. Nothing was protecting data. Every
+    /// write lands through `write_atomic`, so a concurrent reader sees the
+    /// whole old file or the whole new one and never a torn one, and a reader
+    /// that picks up a stale revision is caught by the revision gate below —
+    /// which is the check that actually prevents the lost update.
     #[test]
-    fn cross_process_lease_spans_list_revision_check_replace_and_delete() {
+    fn cross_process_lease_spans_every_write_and_no_read() {
         let dir = TestDir::new("lease");
         let root = ConfigRoot::at(&dir.0);
         let created = save_at(&root, &create_spec("Cabinet"), stamp(1))
@@ -1051,8 +1086,8 @@ mod tests {
 
         let lease = StoreLease::acquire(&root.panel_layouts_dir(), SAVED_LAYOUTS).unwrap();
         assert!(
-            profiles_at(&root).is_err(),
-            "a read must not race a replace"
+            profiles_at(&root).is_ok(),
+            "a read must never be blocked by a write; the Studio lists this \n             store on every poll and a refused list reads as a lost store"
         );
         assert!(
             save_at(&root, &update, stamp(2)).is_err(),

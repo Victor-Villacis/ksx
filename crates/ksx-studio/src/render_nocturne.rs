@@ -252,6 +252,13 @@ fn mode_row(row: &NocturneChoiceRow) -> SlotValue {
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
         ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        // `"true"` / `"false"`, not a bool and not an empty string: this is
+        // bound STRAIGHT onto `aria-current`, and the two ARIA values are
+        // exactly these words. An empty string is not "absent" to ARIA.
+        (
+            "chosen".to_owned(),
+            SlotValue::Text(if row.chosen { "true" } else { "false" }.to_owned()),
+        ),
     ])
 }
 
@@ -1066,6 +1073,55 @@ mod tests {
         );
     }
 
+    /// **A store that would not answer must never look like a store with
+    /// nothing in it.**
+    ///
+    /// `drawn_error` was composed by the server and read by nothing at all, so
+    /// a refused board read silently degraded to an empty slice: every `board:`
+    /// row vanished from the picker, a chosen drawn board fell back to the
+    /// keyboard, the setup rail flipped back to Optional, and the sentence
+    /// under the picker said "The picture only" as though all were well. The
+    /// http.rs allowlist test even asserted this constant "renders into the
+    /// page body" — a claim that was false and that it could not check.
+    #[test]
+    fn a_refused_board_read_says_so_on_the_page() {
+        let mut payload = keyboard_payload();
+        payload.drawn = None;
+        payload.drawn_error =
+            "Boards you drew could not be read, so they are missing from this list.".to_owned();
+        let html = render_nocturne(&page(), &payload.derived(), None).html;
+
+        assert!(
+            html.contains("could not be read"),
+            "a refused board read is invisible on the page: {html}"
+        );
+        assert!(
+            !html.contains("The picture only. Which key drives which control"),
+            "the page reassured the user while a store was refusing: {html}"
+        );
+    }
+
+    /// Both stores feed one picker and either can refuse alone, so a refusal in
+    /// one must not hide a refusal in the other.
+    #[test]
+    fn two_refusing_stores_are_both_reported() {
+        let mut payload = keyboard_payload();
+        payload.drawn = None;
+        payload.drawn_error = "DRAWN-REFUSED.".to_owned();
+        payload.panels = None;
+        payload.panels_error = "PANELS-REFUSED.".to_owned();
+        let html = render_nocturne(&page(), &payload.derived(), None).html;
+
+        assert!(
+            html.contains("DRAWN-REFUSED."),
+            "the drawn-board refusal is missing"
+        );
+        assert!(
+            html.contains("PANELS-REFUSED."),
+            "the panel-layout refusal is missing"
+        );
+    }
+
     /// The rail says where you ARE, not merely what exists.
     #[test]
     fn the_spine_names_the_next_thing_to_do() {
@@ -1535,16 +1591,31 @@ mod tests {
                 .contains(">USB · Connected · outputs not checked · on the canvas<"),
             "the staged board's row does not say it is the one on the canvas",
         );
-        // …and exactly one row claims it. Two would mean the page is showing a
-        // second device the stage cannot hold (`StagedSetup.device` is a
-        // singular `Option`), which is the failure mode a "multiple keyboards"
-        // canvas would ship. `aria-current` is the countable form: the payload
-        // JSON spells the field `aria_current`, so the hyphen is the rendered
-        // attribute and nothing else.
+        // …and exactly one DEVICE row claims it. Two would mean the page is
+        // showing a second device the stage cannot hold
+        // (`StagedSetup.device` is a singular `Option`), which is the failure
+        // mode a "multiple keyboards" canvas would ship. `aria-current` is the
+        // countable form: the payload JSON spells the field `aria_current`, so
+        // the hyphen is the rendered attribute and nothing else.
+        //
+        // Scoped to the device forms rather than counted across the page. It
+        // used to be page-wide, which quietly assumed the device list was the
+        // ONLY thing on /nocturne that could say where you are — and the board,
+        // theme and blocking pickers all say it now, in this same attribute,
+        // because it is the only part of "you are on this one" a screen reader
+        // can reach.
+        let device_rows: usize = out
+            .html
+            .match_indices(r#"action="/nocturne/device""#)
+            .filter(|(at, _)| {
+                let rest = &out.html[*at..];
+                let end = rest.find("</form>").unwrap_or(rest.len());
+                rest[..end].contains(r#"aria-current="true""#)
+            })
+            .count();
         assert_eq!(
-            out.html.matches(r#"aria-current="true""#).count(),
-            1,
-            "the chosen device row is not the one and only aria-current row",
+            device_rows, 1,
+            "the chosen device row is not the one and only aria-current device row",
         );
         assert!(
             out.html.contains(r#"aria-current="false""#),
@@ -1743,12 +1814,20 @@ mod tests {
             })
             .collect();
 
-        // The fixture saves no panel layouts, so the roster is the keyboard
-        // alone — and it must still be RENDERED as a row rather than collapsed
-        // into nothing because there is only one of it.
+        // The fixture saves no panel layouts and no drawn boards, so the
+        // roster is Automatic plus the keyboard — and both must be RENDERED
+        // as rows rather than collapsed because the list is short.
+        //
+        // Automatic earns its row: "follow whatever is staged" is STORED as
+        // absence, and a picker can only post ids, so without a row for it
+        // one click on any other board made it unreachable for good.
+        assert!(
+            forms.iter().any(|f| f.contains(r#"value="auto""#)),
+            "the roster does not offer Automatic, so it is a one-way door: {forms:?}"
+        );
         assert_eq!(
             forms.len(),
-            1,
+            2,
             "the board picker served {} forms: {:?}",
             forms.len(),
             forms

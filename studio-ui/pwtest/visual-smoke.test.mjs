@@ -549,3 +549,134 @@ ${themedStderr.trim() || "(it said nothing)"}`,
     }
   });
 }
+
+// ── The plate lays out, measured in a real browser ─────────────────────────
+//
+// These assert on GEOMETRY the page actually computed, which is the only place
+// the two defects below were visible. Both shipped, both passed every Rust
+// test, and neither could have been caught by one: the Rust side owns the
+// numbers, and the stylesheet was quietly disagreeing with them.
+//
+//  - `.n-key.sp` still carried the cluster gap as a `margin-left` after
+//    `board.rs` began baking it into `left`. `.n-kbcase .n-key { margin: 0 }`
+//    was meant to hold it off and could not — equal specificity, declared
+//    later — so the gap applied twice and 14 caps on the DEFAULT board sat on
+//    top of their neighbour by more than half a cap.
+//  - `.n-kbcase` was `box-sizing: content-box`, so `aspect-ratio` shaped the
+//    content box while the absolutely positioned caps measured percentages
+//    against the padding box. They differ by exactly the padding, and every
+//    cap came out about 7.5% too tall.
+describe("the plate lays out", () => {
+  let context;
+
+  before(async () => {
+    context = await browser.newContext({
+      viewport: { width: 1440, height: 900 },
+      locale: "en-US",
+      timezoneId: "UTC",
+      serviceWorkers: "block",
+    });
+  });
+
+  after(async () => {
+    await context?.close();
+  });
+
+  test("no two caps on the board overlap", async () => {
+    const page = await context.newPage();
+    try {
+      const response = await page.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
+      assert.ok(response?.ok(), `/nocturne returned HTTP ${response?.status() ?? "none"}`);
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+
+      const boxes = await page.evaluate(() =>
+        Array.from(document.querySelectorAll(".n-kbcase .n-key")).map((el) => {
+          const r = el.getBoundingClientRect();
+          return {
+            key: el.getAttribute("data-key") ?? "",
+            sp: el.classList.contains("sp"),
+            x: r.x,
+            y: r.y,
+            w: r.width,
+            h: r.height,
+          };
+        }),
+      );
+
+      assert.ok(boxes.length > 60, `expected a full board of caps, saw ${boxes.length}`);
+
+      // A cap that overlaps its neighbour hands clicks to the wrong key, which
+      // is indistinguishable from a binding that stopped working. 0.5px of
+      // slack absorbs sub-pixel rounding and nothing else.
+      const overlaps = [];
+      for (let i = 0; i < boxes.length; i += 1) {
+        for (let j = i + 1; j < boxes.length; j += 1) {
+          const a = boxes[i];
+          const b = boxes[j];
+          const apart =
+            a.x + a.w <= b.x + 0.5 ||
+            b.x + b.w <= a.x + 0.5 ||
+            a.y + a.h <= b.y + 0.5 ||
+            b.y + b.h <= a.y + 0.5;
+          if (!apart) overlaps.push(`${a.key || "chrome"} over ${b.key || "chrome"}`);
+        }
+      }
+      assert.deepEqual(
+        overlaps.slice(0, 8),
+        [],
+        `${overlaps.length} caps overlap a neighbour; the cluster gap is most likely being applied twice`,
+      );
+
+      // Every cap is authored 34/30 taller than it is wide. A plate whose
+      // percentage basis disagrees with its own aspect-ratio stretches all of
+      // them uniformly, so this catches the box-sizing class of bug without
+      // depending on any single cap's size.
+      const square = boxes.filter((b) => !b.sp && b.w > 0 && Math.abs(b.w - boxes[0].w) < 0.5);
+      assert.ok(square.length > 20, "expected many 1u caps to compare");
+      const ratio = square[0].h / square[0].w;
+      assert.ok(
+        Math.abs(ratio - 34 / 30) < 0.03,
+        `a 1u cap drew ${ratio.toFixed(3)} tall/wide, not the authored ${(34 / 30).toFixed(3)} — the plate's aspect-ratio and its percentage basis disagree`,
+      );
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("the board fits inside its card", async () => {
+    const page = await context.newPage();
+    try {
+      await page.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      const fit = await page.evaluate(() => {
+        const plate = document.querySelector(".n-kbcase");
+        if (!plate) return null;
+        const p = plate.getBoundingClientRect();
+        const card = plate.closest(".n-widget-kb") ?? plate.parentElement;
+        const c = card.getBoundingClientRect();
+        return { plateW: p.width, plateH: p.height, cardW: c.width };
+      });
+      assert.ok(fit, "the plate is missing");
+      assert.ok(
+        fit.plateW <= fit.cardW + 1,
+        `the plate is ${fit.plateW.toFixed(0)}px wide inside a ${fit.cardW.toFixed(0)}px card`,
+      );
+      // A portrait board (an arcade panel) is clamped by a height budget so it
+      // cannot grow into a column that swallows the canvas beneath it.
+      assert.ok(
+        fit.plateH <= 620,
+        `the plate is ${fit.plateH.toFixed(0)}px tall; the height budget is meant to cap it`,
+      );
+    } finally {
+      await page.close();
+    }
+  });
+});

@@ -7087,17 +7087,22 @@ fn an_unknown_workspace_flash_is_never_reflected() {
 ///
 /// The list is read out of `server/nocturne.rs` itself rather than restated
 /// here — a hand-copied roster of 96 constants would drift by lunchtime.
-/// Seven constants are deliberately OFF the allowlist because they are
+/// Eight constants are deliberately OFF the allowlist because they are
 /// READ-side sentences that render into the page body and are never a
-/// redirect target. They are named individually: if an eighth appears, that is a
+/// redirect target. They are named individually: if a ninth appears, that is a
 /// decision to make, not a default to inherit.
 #[test]
 fn every_redirect_flash_is_on_the_allowlist() {
     const SRC: &str = include_str!("../src/server/nocturne.rs");
 
     // Sentences that render INTO the page (a refused read), never a redirect.
-    const READ_SIDE: [&str; 7] = [
+    const READ_SIDE: [&str; 8] = [
         "N_DAEMON_DOWN",
+        // Answered in the JSON body of POST /nocturne/api/board/save and read
+        // out by the island, never redirected with. It exists because the
+        // store's own refusal for these carries an absolute config path and
+        // raw io/serde text, and this string is announced aloud.
+        "N_BOARD_STORE_ERROR",
         "N_READ_AUTOSTART_ERROR",
         "N_READ_GAMES_ERROR",
         // Rendered under the board picker when the panel-layout store refuses.

@@ -1658,6 +1658,17 @@ pub struct NocturneChoiceRow {
     pub title: String,
     pub detail: String,
     pub cls: String,
+    /// **Whether this is the answer currently in effect**, as a FACT rather
+    /// than something to be read back out of [`Self::cls`].
+    ///
+    /// The class paints the marker; it cannot announce it. Without this the
+    /// only signal was a decorative `.n-radio.on` dot, so every row of a
+    /// picker read identically to a screen reader and the one you were on
+    /// was unknowable without sight. It is a separate field because the
+    /// alternative — parsing the class string in the browser — is the exact
+    /// coupling that let a stale `.pill-none` rule hide three of four theme
+    /// rows while every test still passed.
+    pub chosen: bool,
 }
 
 /// One staged controller in the rack.
@@ -3164,6 +3175,7 @@ impl NocturneDerived {
                         (option.title.clone(), option.detail.clone())
                     };
                     NocturneChoiceRow {
+                    chosen: option.name == current_mode,
                     name: option.name.clone(),
                     title,
                     detail,
@@ -3774,11 +3786,16 @@ impl NocturneDerived {
         // WHICH board, resolved from the saved choice and what is staged.
         // Empty means follow the hardware; an id this build cannot draw falls
         // back to the keyboard rather than leaving the page with no picture.
+        // What the config SAYS, kept beside what was DRAWN: the picker's own
+        // sentence has to know the difference between "nothing chosen" and
+        // "chosen and honoured".
+        let chosen_board = p
+            .setup
+            .as_ref()
+            .map(|s| s.board.as_str())
+            .unwrap_or_default();
         let board = crate::board::Board::resolve(
-            p.setup
-                .as_ref()
-                .map(|s| s.board.as_str())
-                .unwrap_or_default(),
+            chosen_board,
             panel_profiles,
             drawn_boards,
             encoder_staged,
@@ -3974,8 +3991,23 @@ impl NocturneDerived {
         let mut avail_nav: Vec<NocturneKeyRow> = Vec::new();
         let mut avail_num: Vec<NocturneKeyRow> = Vec::new();
         if selected.is_some() {
+            // **One chip per KEY, not per cell.**
+            //
+            // The old source was `keyboard_layout::ROWS`, whose keys a test
+            // pinned unique, so nothing here had to dedupe. A Board makes
+            // duplicates ordinary and deliberate: a saved encoder layout may
+            // wire two terminals to one key (`allow_shared_key`), and two drawn
+            // controls may send the same key on purpose. Without this the tray
+            // showed "5" twice, the section headings counted cells rather than
+            // keys, and the list's `(r) => r.key` reconcile key had collisions —
+            // which is how a differ hands a recycled node to the wrong row.
+            let mut offered: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
             for cell in &board.cells {
-                if cell.ghost || cell.key.is_empty() || key_fns.contains_key(cell.key.as_str()) {
+                if cell.ghost
+                    || cell.key.is_empty()
+                    || key_fns.contains_key(cell.key.as_str())
+                    || !offered.insert(cell.key.as_str())
+                {
                     continue;
                 }
                 let chip = NocturneKeyRow {
@@ -4456,11 +4488,27 @@ impl NocturneDerived {
             // back to instead of marking nothing at all.
             // The plate needs a height: every cell in it is absolutely
             // positioned, so without this the case collapses to nothing.
-            board_case_style: format!("aspect-ratio:{board_w:.2} / {board_h:.2}"),
+            //
+            // AND IT NEEDS A HEIGHT CEILING, because not every board is
+            // wide. A keyboard is 3.5:1 and fills its card happily; a
+            // four-player arcade panel is TALLER THAN IT IS WIDE, and a
+            // width-driven plate turned an I-PAC 4 into a 1400px column
+            // that swallowed everything below it on the canvas. The clamp
+            // is expressed as a width because that is the axis `width:
+            // auto` resolves on: cap the width at whatever would produce
+            // the tallest plate we allow, and `aspect-ratio` does the rest
+            // without distorting anything. `min()` keeps the card's own
+            // width the ceiling for a landscape board, where the budget is
+            // far wider than the card and must not win.
+            board_case_style: format!(
+                "aspect-ratio:{board_w:.2} / {board_h:.2};\
+                 max-width:min(100%, calc(var(--n-kbcase-max-h) * {board_w:.2} / {board_h:.2}))"
+            ),
             board_origin,
             board_rows: crate::board::Board::roster(panel_profiles, drawn_boards)
                 .into_iter()
                 .map(|choice| NocturneChoiceRow {
+                    chosen: choice.id == board.id,
                     cls: if choice.id == board.id {
                         "n-radio on".to_owned()
                     } else {
@@ -4471,12 +4519,33 @@ impl NocturneDerived {
                     detail: choice.detail,
                 })
                 .collect(),
-            // The sentence under the picker, and the only place the three
-            // states are told apart. They are genuinely different advice:
-            // a refused read means try again, no saved layout means go and
-            // make one, and neither is "you have no arcade board".
-            board_line: if !p.panels_error.is_empty() {
+            // The sentence under the picker, and the only place these states
+            // are told apart. They are genuinely different advice: a refused
+            // read means try again, nothing saved means go and make one, and
+            // neither is "you have no arcade board".
+            //
+            // TWO stores feed this picker and either can refuse on its own,
+            // so both errors are reported. `drawn_error` was composed and
+            // plumbed and then read by nothing at all — a refused board read
+            // silently redrew the page as a plain keyboard, dropped every
+            // `board:` row, and said "The picture only" as though all was
+            // well. A store that would not answer must never look like a
+            // store with nothing in it.
+            board_line: if !p.drawn_error.is_empty() && !p.panels_error.is_empty() {
+                format!("{} {}", p.drawn_error, p.panels_error)
+            } else if !p.drawn_error.is_empty() {
+                p.drawn_error.clone()
+            } else if !p.panels_error.is_empty() {
                 p.panels_error.clone()
+            } else if encoder_staged && panel_profiles.len() > 1 && chosen_board.is_empty() {
+                // More than one saved layout and no choice made. ksx cannot
+                // tell which belongs to the encoder that is plugged in — a
+                // saved layout carries no device identity at all — so it
+                // says so instead of drawing whichever sorted first.
+                "You have more than one saved panel layout, and a saved \
+                 layout does not record which board it came off. Pick the \
+                 one that matches the encoder you plugged in."
+                    .to_owned()
             } else if encoder_staged && panel_profiles.is_empty() {
                 "Your arcade panel can be a board here too — but ksx cannot \
                  guess what it emits, because an encoder only ever tells the \
@@ -4495,6 +4564,9 @@ impl NocturneDerived {
             })
             .into_iter()
             .map(|row| NocturneChoiceRow {
+                // `theme_rows` already made this decision; it spelled it
+                // only in the class, which is why it could not be spoken.
+                chosen: row.chosen_cls.split_whitespace().any(|c| c == "on"),
                 name: row.value,
                 title: row.title,
                 detail: row.detail,

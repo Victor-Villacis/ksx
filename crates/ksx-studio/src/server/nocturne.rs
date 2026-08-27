@@ -46,6 +46,12 @@ pub(super) const N_BLOCKING_OK: &str =
 
 pub(super) const N_THEME_OK: &str = "Studio theme updated.";
 pub(super) const N_BOARD_OK: &str = "Board updated.";
+/// Shown when the board store itself refuses — the folder is unreadable, a
+/// saved board is corrupt, or another writer holds it. Authored here because
+/// the store's own text for those carries an absolute path and raw io/serde
+/// detail, and this string is announced through an aria-live region.
+pub(super) const N_BOARD_STORE_ERROR: &str =
+    "The board could not be published — ksx could not use its boards folder.";
 
 pub(super) const N_EDIT_OK: &str = "Draft updated. Nothing has been saved or started.";
 
@@ -1502,6 +1508,7 @@ pub(super) async fn nocturne_form_board(
     // exist RIGHT NOW is a different case and is handled at render time by
     // falling back to the keyboard.
     let known = wanted.is_empty()
+        || wanted == crate::board::AUTO_ID
         || wanted == crate::board::QWERTY_ID
         || ["panel:", "board:"]
             .iter()
@@ -2611,10 +2618,31 @@ pub(super) async fn nocturne_api_board_save(
                 summary: Some(view.summary),
                 ..Default::default()
             },
-            Err(refusal) => NocturneBoardSaveOutcome {
+            // **Only an authored refusal reaches the page.**
+            //
+            // `boards::save` refuses two very different ways. A BAD_REQUEST
+            // is a sentence about what the user drew — "control 'x' sends
+            // 'NotAKey'" — and is exactly what they need to read. Anything
+            // else is a store diagnostic that embeds an absolute config path
+            // and raw serde/io text, and one unreadable *.ksxboard.json was
+            // enough to announce the user's whole config path through an
+            // aria-live region. The code is the discriminator, so the page
+            // never has to guess from the prose.
+            Err(refusal) if refusal.code == ksx_api::codes::BAD_REQUEST => {
+                NocturneBoardSaveOutcome {
+                    ok: false,
+                    error: Some(refusal.message),
+                    remedy: refusal.remedy,
+                    ..Default::default()
+                }
+            }
+            Err(_) => NocturneBoardSaveOutcome {
                 ok: false,
-                error: Some(refusal.message),
-                remedy: refusal.remedy,
+                error: Some(N_BOARD_STORE_ERROR.to_owned()),
+                remedy: Some(
+                    "make sure ksx can read and write its boards folder, then publish again"
+                        .to_owned(),
+                ),
                 ..Default::default()
             },
         }

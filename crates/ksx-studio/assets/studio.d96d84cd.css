@@ -10747,18 +10747,31 @@ a.wsrow-title:hover {
      (a) be a containing block and (b) have a height, which arrives as an
      inline `aspect-ratio` computed from those bounds.
 
-     `content-box` is load-bearing: `aspect-ratio` sizes the box named by
-     `box-sizing`, and a percentage child positions against the PADDING box.
-     Under the usual `border-box` those two disagree by exactly the padding
-     — 26px across, 28px down — and every cap comes out subtly stretched.
+     `border-box` is load-bearing, and the reason is the opposite of what
+     this comment used to claim. `aspect-ratio` sizes the box named by
+     `box-sizing`; an absolutely positioned child resolves its percentages
+     against the PADDING box. This element has padding and no border, so
+     its border box and its padding box are the same box — which makes
+     `border-box` the one mode where the box the ratio shapes and the box
+     the percentages measure are identical. Under `content-box` they differ
+     by exactly the padding (26px across, 28px down), and every cap comes
+     out stretched: on a 980px card a cap drew 1.218 tall/wide against the
+     34/30 = 1.133 it is authored at, about 7.5% too tall.
 
      `width: auto` replaces `max-content`, which is what retires the
      hand-fitted 980px board: the plate now takes the width its card gives
      it and the caps scale, instead of 35.5px having been chosen so one
      particular board filled one particular card. */
+  /* The tallest plate any board may draw. A portrait arcade panel is
+     clamped to this by the inline `max-width` the server computes from its
+     own bounds; a landscape keyboard never reaches it. */
+  --n-kbcase-max-h: 520px;
+
   position: relative;
-  box-sizing: content-box;
+  box-sizing: border-box;
   width: auto;
+  /* Centred, because a clamped portrait plate no longer fills its card. */
+  margin-inline: auto;
   padding: 13px 13px 15px;
   border-radius: 14px;
   background:
@@ -10864,9 +10877,10 @@ a.wsrow-title:hover {
    for `keyboardWorkbench`, which still reads the unit back out of the class
    string when it repacks a board into its own view.
 
-   `margin: 0` is what retires `.n-key.sp`: a cluster gap used to be a left
-   margin computed from row 1's exact contents, and it is now simply part of
-   x. Leaving the margin in would add it a second time. */
+   `margin: 0` is a backstop, not the mechanism. The cluster gap used to be a
+   left margin computed from row 1's exact contents and is now simply part of
+   x; the rules that applied it are DELETED rather than overridden, because
+   trying to override them here did not work — see the note above them. */
 .n-kbcase .n-key {
   position: absolute;
   margin: 0;
@@ -11035,16 +11049,24 @@ a.wsrow-title:hover {
   visibility: hidden;
 }
 
-.n-key.sp {
-  margin-left: calc((var(--nku) + var(--nkg)) * 21 / 34);
-}
+/* THE CLUSTER GAP LIVES IN `x` NOW, AND NOWHERE ELSE.
 
-/* The F-row cluster gaps absorb the width difference so Prt aligns over Ins:
-   (506px main-block width - 438px of F-row keys and gaps) / 3 gaps. */
-/* Tray only: on the plate the cluster gap lives in x (see `.n-kbcase .n-key`). */
-.n-kbrow:first-child .n-key.sp {
-  margin-left: calc((var(--nku) + var(--nkg)) * 22.66 / 34);
-}
+   `board.rs` bakes `sp_extra` into every cell's absolute x — that is what
+   retired these two `margin-left` rules. They were left behind with a
+   comment claiming they were "tray only", which was simply false: a tray
+   chip is built with a hardcoded `n-key tray bound` class (`snapshot.rs`)
+   and never carries `sp`, so both rules could only ever reach a PLATE cell.
+
+   `.n-kbcase .n-key { margin: 0 }` was supposed to hold them off and could
+   not: it is (0,2,0) and `.n-key.sp` is (0,2,0) declared 168 lines later,
+   while `.n-kbrow:first-child .n-key.sp` is higher still. Both won, so the
+   gap was applied twice — once in `left`, once again as a margin — and on
+   the shipped board that put 14 caps on top of their neighbour by more than
+   half a cap. Worse, a fixed-px margin against percentage caps means the
+   overlap GREW as the pane narrowed.
+
+   If a flowed surface ever needs the gap again, scope it to that surface
+   (`.n-kbtray-row .n-key.sp`) — never as a bare `.n-key.sp`. */
 
 .n-key.u1_25 {
   width: calc(1.25 * var(--nku) + 0.25 * var(--nkg));

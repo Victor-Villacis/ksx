@@ -155,6 +155,10 @@ export interface NocturneChoiceRowView {
   title: string;
   detail: string;
   cls: string;
+  /** `"true"` or `"false"` — bound straight onto `aria-current`, which is
+   *  why it is those exact words and not a bool. Served as a fact so it can
+   *  be ANNOUNCED rather than merely painted; see `NocturneChoiceRow::chosen`. */
+  chosen: string;
 }
 
 export interface NocturneRackRowView {
@@ -10601,7 +10605,7 @@ export function NocturneIsland() {
         ),
         createList(
           () => nModeRows(),
-          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls,
+          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
           (r) =>
             h(
               "form",
@@ -10609,7 +10613,16 @@ export function NocturneIsland() {
               h("input", { type: "hidden", name: "blocking", value: r.name }),
               h(
                 "button",
-                { type: "submit", class: r.cls },
+                // `aria-current` is the only part of "this is the one you are
+                // on" a screen reader can reach: `.n-radio.on` paints a dot
+                // and announces nothing at all.
+                //
+                // Bound as a PLAIN property, never `r.chosen || undefined`. The
+                // compiler cannot evaluate a bare `||`, so that form is dropped
+                // from the server-rendered HTML and hydration does not re-apply
+                // a non-function prop — the attribute would simply never exist,
+                // which is the same silent nothing this fix was written to end.
+                { type: "submit", class: r.cls, "aria-current": r.chosen },
                 h("span", { class: "n-radio-dot" }),
                 h(
                   "span",
@@ -10641,7 +10654,7 @@ export function NocturneIsland() {
         h("p", { class: "n-devnote" }, () => nBoardLine()),
         createList(
           () => nBoardRows(),
-          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls,
+          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
           (r) =>
             h(
               "form",
@@ -10649,7 +10662,16 @@ export function NocturneIsland() {
               h("input", { type: "hidden", name: "board", value: r.name }),
               h(
                 "button",
-                { type: "submit", class: r.cls },
+                // `aria-current` is the only part of "this is the one you are
+                // on" a screen reader can reach: `.n-radio.on` paints a dot
+                // and announces nothing at all.
+                //
+                // Bound as a PLAIN property, never `r.chosen || undefined`. The
+                // compiler cannot evaluate a bare `||`, so that form is dropped
+                // from the server-rendered HTML and hydration does not re-apply
+                // a non-function prop — the attribute would simply never exist,
+                // which is the same silent nothing this fix was written to end.
+                { type: "submit", class: r.cls, "aria-current": r.chosen },
                 h("span", { class: "n-radio-dot" }),
                 h(
                   "span",
@@ -10672,7 +10694,7 @@ export function NocturneIsland() {
         ),
         createList(
           () => nThemeRows(),
-          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls,
+          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
           (r) =>
             h(
               "form",
@@ -10680,7 +10702,16 @@ export function NocturneIsland() {
               h("input", { type: "hidden", name: "theme", value: r.name }),
               h(
                 "button",
-                { type: "submit", class: r.cls },
+                // `aria-current` is the only part of "this is the one you are
+                // on" a screen reader can reach: `.n-radio.on` paints a dot
+                // and announces nothing at all.
+                //
+                // Bound as a PLAIN property, never `r.chosen || undefined`. The
+                // compiler cannot evaluate a bare `||`, so that form is dropped
+                // from the server-rendered HTML and hydration does not re-apply
+                // a non-function prop — the attribute would simply never exist,
+                // which is the same silent nothing this fix was written to end.
+                { type: "submit", class: r.cls, "aria-current": r.chosen },
                 h("span", { class: "n-radio-dot" }),
                 h(
                   "span",

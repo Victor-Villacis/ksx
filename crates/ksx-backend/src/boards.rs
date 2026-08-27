@@ -360,7 +360,16 @@ fn list_dir(dir: &Path) -> Result<Vec<BoardDocument>, Refusal> {
         if !name.ends_with(BOARD_EXTENSION) {
             continue;
         }
-        out.push(read_board(&path)?);
+        // A board deleted between listing this directory and reading this
+        // file is not an error — it is a board that no longer exists, which
+        // is exactly what the caller is about to be told. Failing the whole
+        // read would hide every OTHER board because one was removed while
+        // the page happened to be looking.
+        match read_board(&path) {
+            Ok(board) => out.push(board),
+            Err(_) if !path.exists() => continue,
+            Err(refusal) => return Err(refusal),
+        }
     }
     // Alphabetical, case-insensitively: the picker shows these in order and
     // a store that reordered itself between reads would move rows under the
@@ -379,9 +388,22 @@ fn duplicate_name(boards: &[BoardDocument], name: &str, except_id: Option<&str>)
 // The verbs
 // ───────────────────────────────────────────────────────────────────────────
 
+/// **No lease on a read.**
+///
+/// This lease is exclusive and zero-timeout: it refuses a competitor rather
+/// than queueing, which is right for a WRITE and wrong for a read that the
+/// Studio now performs on every two-second poll. Taken here it made a poll
+/// and a save contend, and whichever lost was told "another KSX process is
+/// reading or changing …" when there was no other process — the user's own
+/// page had it. Retrying always worked, which is the signature of a lock
+/// that should not have been held.
+///
+/// Dropping it is safe because durability never depended on it. Every write
+/// lands through `write_atomic`, so a concurrent reader sees the whole old
+/// file or the whole new one, never a torn one. What the lease DID mask is
+/// the directory race below, which is now handled where it happens.
 fn boards_at(root: &ConfigRoot) -> Result<BoardsView, Refusal> {
     let dir = root.boards_dir();
-    let _lease = StoreLease::acquire(&dir, DRAWN_BOARDS)?;
     let boards = list_dir(&dir)?;
     Ok(BoardsView {
         summary: match boards.len() {

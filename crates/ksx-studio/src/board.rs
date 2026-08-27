@@ -549,6 +549,22 @@ impl Board {
 /// from the staged device", so this is written only when someone picks it.
 pub(crate) const QWERTY_ID: &str = "qwerty-104";
 
+/// **"Follow whatever is staged"**, as something the user can pick again.
+///
+/// The stored form of this is ABSENCE — `[settings] board` unset — which is
+/// the same absence-means-follow rule the theme uses for System. Absence is
+/// a fine way to STORE it and a useless way to OFFER it: the picker can only
+/// post ids, so once somebody clicked any row there was no way back to
+/// automatic short of hand-editing config.toml, and plugging in a different
+/// encoder silently stopped changing anything. The theme picker ships its
+/// equivalent row (`system`) for exactly this reason.
+///
+/// It is a sentinel rather than an empty id because an empty id would post as
+/// a missing form field, and because every other roster id resolves to the
+/// board it names — this one deliberately does not, which is a property worth
+/// stating rather than smuggling through a blank.
+pub(crate) const AUTO_ID: &str = "auto";
+
 /// One board the user may pick, as the picker says it.
 ///
 /// Every row here is one you can actually pick. A board that CANNOT be drawn is
@@ -576,13 +592,23 @@ impl Board {
         profiles: &[ksx_api::PanelHardwareProfile],
         drawn: &[ksx_api::BoardDocument],
     ) -> Vec<BoardChoice> {
-        let mut rows = vec![BoardChoice {
-            id: QWERTY_ID.to_owned(),
-            name: "Keyboard".to_owned(),
-            detail: "The usual key layout. Every key ksx can bind, where you \
+        let mut rows = vec![
+            BoardChoice {
+                id: AUTO_ID.to_owned(),
+                name: "Automatic".to_owned(),
+                detail: "Follow whatever is plugged in: an arcade panel when \
+                         ksx recognises one and has a single saved layout for \
+                         it, the keyboard otherwise."
+                    .to_owned(),
+            },
+            BoardChoice {
+                id: QWERTY_ID.to_owned(),
+                name: "Keyboard".to_owned(),
+                detail: "The usual key layout. Every key ksx can bind, where you \
                      expect it."
-                .to_owned(),
-        }];
+                    .to_owned(),
+            },
+        ];
 
         rows.extend(drawn.iter().map(|document| BoardChoice {
             id: format!("board:{}", document.board_id),
@@ -637,13 +663,25 @@ impl Board {
         };
 
         match chosen.trim() {
-            "" => {
-                if encoder_staged {
-                    if let Some(first) = profiles.first() {
-                        return Self::encoder_from_profile(first);
-                    }
+            "" | AUTO_ID => {
+                // **One saved layout is a safe default. Two is a guess.**
+                //
+                // A `PanelHardwareProfile` carries driver, protocol and
+                // terminal signature — and no device identity whatsoever: no
+                // serial, no hardware id. So with two saved layouts nothing
+                // here can tell which one belongs to the encoder that is
+                // actually plugged in, and picking `first()` picked whichever
+                // sorted first by NAME. Somebody with a Cocktail and an
+                // Upright cabinet would plug in the Upright and be handed the
+                // Cocktail, with every caption confidently wrong.
+                //
+                // So: draw a panel automatically only when there is exactly
+                // one it could mean. Otherwise the keyboard, and the picker's
+                // own sentence asks which.
+                match profiles {
+                    [only] if encoder_staged => Self::encoder_from_profile(only),
+                    _ => Self::shipped_qwerty(),
                 }
-                Self::shipped_qwerty()
             }
             QWERTY_ID => Self::shipped_qwerty(),
             other => {
@@ -1159,8 +1197,11 @@ mod tests {
         let rows = Board::roster(&profiles, &[]);
 
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids, vec![QWERTY_ID, "panel:cab-01", "panel:cab-02"]);
-        assert_eq!(rows[1].name, "Upright");
+        assert_eq!(
+            ids,
+            vec![AUTO_ID, QWERTY_ID, "panel:cab-01", "panel:cab-02"]
+        );
+        assert_eq!(rows[2].name, "Upright");
         assert!(
             rows.iter()
                 .all(|r| !r.id.is_empty() && !r.detail.is_empty()),
@@ -1168,7 +1209,12 @@ mod tests {
         );
         // Every id the roster offers must actually resolve to that board —
         // a picker row that cannot be honoured is a control that does nothing.
-        for row in &rows {
+        //
+        // AUTO_ID is the one exemption and is exempt BY DEFINITION: it means
+        // "whatever is staged", so it resolves to some other board on
+        // purpose. That is why it is a named sentinel rather than a blank —
+        // the exemption has to be visible here rather than inferred.
+        for row in rows.iter().filter(|r| r.id != AUTO_ID) {
             assert_eq!(
                 Board::resolve(&row.id, &profiles, &[], true).id,
                 row.id,
@@ -1185,8 +1231,9 @@ mod tests {
     #[test]
     fn an_unavailable_board_is_not_offered_as_a_dead_row() {
         let rows = Board::roster(&[], &[]);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, QWERTY_ID);
+        assert_eq!(rows.len(), 2, "automatic and the keyboard, nothing else");
+        assert_eq!(rows[0].id, AUTO_ID);
+        assert_eq!(rows[1].id, QWERTY_ID);
     }
 
     // ───────────────────────────────────────────────────────────────────
@@ -1282,8 +1329,8 @@ mod tests {
         let rows = Board::roster(&profiles, &mine);
 
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids, vec![QWERTY_ID, "board:mine", "panel:cab-01"]);
-        for row in &rows {
+        assert_eq!(ids, vec![AUTO_ID, QWERTY_ID, "board:mine", "panel:cab-01"]);
+        for row in rows.iter().filter(|r| r.id != AUTO_ID) {
             assert_eq!(
                 Board::resolve(&row.id, &profiles, &mine, true).id,
                 row.id,
@@ -1338,5 +1385,72 @@ mod tests {
                 board.id
             );
         }
+    }
+
+    /// **Two saved layouts is not a guess to make.**
+    ///
+    /// A `PanelHardwareProfile` carries driver, protocol and terminal signature
+    /// and NO device identity — no serial, no hardware id. So with more than one
+    /// saved layout nothing can tell which belongs to the encoder that is
+    /// plugged in, and the old code drew `profiles.first()`, which is whichever
+    /// sorted first BY NAME. Plug in the Upright cabinet, get handed the
+    /// Cocktail, with every caption confidently wrong.
+    #[test]
+    fn two_saved_layouts_are_never_guessed_between() {
+        let one = vec![saved("upright", "Upright")];
+        let two = vec![saved("cocktail", "Cocktail"), saved("upright", "Upright")];
+
+        // Exactly one candidate is a safe default, and still is.
+        assert_eq!(
+            Board::resolve("", &one, &[], true).id,
+            "panel:upright",
+            "a single saved layout should still open automatically"
+        );
+        // More than one is an ambiguity, and the keyboard is the honest answer.
+        assert_eq!(
+            Board::resolve("", &two, &[], true).id,
+            Board::shipped_qwerty().id,
+            "ksx cannot know which of two saved layouts is plugged in"
+        );
+        // Naming one explicitly still works — the ambiguity is only about
+        // guessing, never about honouring a choice.
+        assert_eq!(
+            Board::resolve("panel:upright", &two, &[], true).id,
+            "panel:upright"
+        );
+    }
+
+    /// **Automatic is a row you can get back to.**
+    ///
+    /// Absence is how "follow whatever is staged" is STORED, and absence cannot
+    /// be posted by a picker — so without this row, one click on any other board
+    /// made automatic unreachable short of hand-editing config.toml, and
+    /// plugging in a different encoder silently stopped changing anything.
+    #[test]
+    fn automatic_is_offered_and_means_follow_the_hardware() {
+        let profiles = vec![saved("upright", "Upright")];
+        let rows = Board::roster(&profiles, &[]);
+        assert_eq!(rows[0].id, AUTO_ID, "automatic leads the roster");
+
+        // It resolves exactly as the empty stored form does — that equivalence
+        // is the whole point, and is what lets one be stored as the other.
+        assert_eq!(
+            Board::resolve(AUTO_ID, &profiles, &[], true).id,
+            Board::resolve("", &profiles, &[], true).id,
+        );
+        assert_eq!(
+            Board::resolve(AUTO_ID, &profiles, &[], false).id,
+            Board::resolve("", &profiles, &[], false).id,
+        );
+        assert_eq!(
+            Board::resolve(AUTO_ID, &profiles, &[], true).id,
+            "panel:upright",
+            "automatic follows a recognised encoder"
+        );
+        assert_eq!(
+            Board::resolve(AUTO_ID, &profiles, &[], false).id,
+            Board::shipped_qwerty().id,
+            "and follows a keyboard back to the keyboard"
+        );
     }
 }

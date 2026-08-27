@@ -2514,6 +2514,135 @@ function clearControlSurfaceUndo(): void {
   controlSurfaceUndoIdentity = "";
   controlSurfaceUndoAfterFingerprint = "";
 }
+
+/** What `POST /nocturne/api/board/save` answers. */
+interface NocturneBoardSaveOutcome {
+  ok: boolean;
+  board_id?: string;
+  revision?: string;
+  summary?: string;
+  error?: string;
+  remedy?: string;
+}
+
+interface NocturneBoardControlBody {
+  id: string;
+  kind: string;
+  label: string;
+  key: string;
+  player: number | null;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * **Flatten the drawn panel into a board's controls.**
+ *
+ * The Builder's document and a board are not the same shape, and the difference
+ * that matters is the JOYSTICK. In the Builder a stick is ONE physical part
+ * carrying four channels (`up`/`right`/`down`/`left`); on a board every cell is
+ * one thing you can press and bind. Publishing a stick as a single cell would
+ * silently drop three of its four directions.
+ *
+ * So a control becomes one cell PER CHANNEL. A button has a single `press`
+ * channel and comes out unchanged in place; a stick comes out as four cells
+ * arranged in a diamond inside the box it occupied, which is both what it looks
+ * like on a cabinet and what keeps the four independently bindable.
+ *
+ * Identity is the VISUAL instance (`control.id`), not `physicalId`: mirrors
+ * deliberately share a physical id, and a board is a picture where two mirrored
+ * views are two places you can press.
+ */
+function controlSurfaceBoardControls(): NocturneBoardControlBody[] {
+  const out: NocturneBoardControlBody[] = [];
+  for (const control of controlSurfaceState.controls) {
+    const assigned = control.channels;
+    const stick = assigned.length > 1;
+    for (const channel of assigned) {
+      // A stick's four cells sit in a diamond inside the part's own box: a
+      // third of the box each, never overlapping, never outside it.
+      const third = { w: control.width / 3, h: control.height / 3 };
+      const place = !stick
+        ? { x: control.x, y: control.y, w: control.width, h: control.height }
+        : channel.id === "up"
+          ? { x: control.x + third.w, y: control.y, ...third }
+          : channel.id === "down"
+            ? { x: control.x + third.w, y: control.y + third.h * 2, ...third }
+            : channel.id === "left"
+              ? { x: control.x, y: control.y + third.h, ...third }
+              : { x: control.x + third.w * 2, y: control.y + third.h, ...third };
+      out.push({
+        id: stick ? `${control.id}:${channel.id}` : control.id,
+        kind: control.kind,
+        label: stick ? channel.label : control.label,
+        // Unassigned stays empty. The server refuses a key it cannot receive,
+        // which is the check this side cannot make.
+        key: channel.input.kind === "keyboard" ? channel.input.key : "",
+        player: control.playerSlot,
+        x: place.x,
+        y: place.y,
+        w: place.w,
+        h: place.h,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * **Publish the drawn panel as a board you can map on.**
+ *
+ * Publishing, not saving. The Builder goes on keeping its editing document in
+ * browser storage — that is what an editor needs, every drag local and instant —
+ * and this is the separate act of saying the picture is finished enough to map
+ * on. Only then does it become durable, server-side, and offered by the board
+ * picker.
+ *
+ * Every refusal shown here is the STORE's own sentence and remedy. Nothing is
+ * pre-vetted in the browser: `boards::save` is the one door every client goes
+ * through, and a second opinion here could only disagree with it.
+ */
+async function publishControlSurfaceAsBoard(): Promise<void> {
+  const controls = controlSurfaceBoardControls();
+  if (!controls.length) {
+    keyboardWorkbenchAnnounce("There is nothing on this panel to publish yet.");
+    return;
+  }
+  const name = (controlSurfaceState.name || "").trim() || "My panel";
+  keyboardWorkbenchAnnounce(`Publishing “${name}” as a board…`);
+  let outcome: NocturneBoardSaveOutcome;
+  try {
+    outcome = await fetchJSON<NocturneBoardSaveOutcome>("/nocturne/api/board/save", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name,
+        description: "Drawn in the Studio's panel builder.",
+        bounds_w: CONTROL_SURFACE_BOUNDS.width,
+        bounds_h: CONTROL_SURFACE_BOUNDS.height,
+        controls,
+      }),
+    });
+  } catch {
+    keyboardWorkbenchAnnounce(
+      "The board could not be published — ksx did not answer. Nothing was changed.",
+    );
+    return;
+  }
+  if (!outcome.ok) {
+    keyboardWorkbenchAnnounce(
+      [outcome.error ?? "The board could not be published.", outcome.remedy]
+        .filter(Boolean)
+        .join(" "),
+    );
+    return;
+  }
+  keyboardWorkbenchAnnounce(
+    `${outcome.summary ?? "Board published."} Pick it under “How the keys are drawn”.`,
+  );
+}
 function saveControlSurfacePrefs(): void {
   if (
     controlSurfaceUndoAfterFingerprint &&
@@ -5461,6 +5590,7 @@ function createControlSurfaceItem(): HTMLElement {
     makeKeyboardWorkbenchGroup("Panel", "n-surface-panel-actions", [
       makeKeyboardWorkbenchButton("Choose template…", "surface-new", "Replace this panel only after choosing and confirming a new starting layout"),
       makeKeyboardWorkbenchButton("Undo removal / replacement", "surface-undo", "Restore the panel from immediately before the last destructive edit"),
+      makeKeyboardWorkbenchButton("Publish as board", "surface-publish", "Save this panel as a board you can map on — it joins the list under How the keys are drawn"),
     ]),
   );
   for (const button of Array.from(tools.querySelectorAll<HTMLButtonElement>('[data-nx="surface-add"]'))) {
@@ -9572,6 +9702,8 @@ export function nocturneWire(root: HTMLElement): void {
           ?.focus({ preventScroll: true });
     } else if (hit === "surface-undo") {
       undoControlSurfaceDestructiveEdit();
+    } else if (hit === "surface-publish") {
+      void publishControlSurfaceAsBoard();
     } else if (hit === "surface-stage") {
       const stage = target?.closest<HTMLElement>("[data-surface-stage]")
         ?.dataset.surfaceStage as ControlSurfaceStage | undefined;

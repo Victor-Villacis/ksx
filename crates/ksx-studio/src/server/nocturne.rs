@@ -2540,6 +2540,96 @@ pub(super) struct NocturneBindBody {
     force: bool,
 }
 
+/// What the Builder posts to publish the panel it has drawn.
+///
+/// Deliberately the store's own spec shape rather than the browser document:
+/// the Builder keeps a rich editing document in `localStorage` (stage, theme,
+/// selection, per-channel teach state) and none of that is a board. What
+/// crosses is the picture — where each control sits, what it is, and what it
+/// sends.
+#[derive(Deserialize)]
+pub(super) struct NocturneBoardSaveBody {
+    #[serde(default)]
+    board_id: Option<String>,
+    #[serde(default)]
+    expected_revision: Option<String>,
+    name: String,
+    #[serde(default)]
+    description: String,
+    bounds_w: f32,
+    bounds_h: f32,
+    controls: Vec<ksx_api::BoardControl>,
+}
+
+#[derive(Default, serde::Serialize)]
+pub(super) struct NocturneBoardSaveOutcome {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    board_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remedy: Option<String>,
+}
+
+/// POST /nocturne/api/board/save — publish the drawn panel as a board.
+///
+/// **Publishing, not saving.** The Builder goes on keeping its editing document
+/// in browser storage, because that is what an editor needs: every drag is
+/// local and instant. This is the separate, deliberate act of saying "this
+/// picture is finished enough to map on", and only then does it become durable,
+/// server-side, and visible to the board picker.
+///
+/// Every refusal is the STORE's, passed through with its own remedy. This
+/// handler decides nothing: it does not vet keys, shapes or geometry, because
+/// `boards::save` is the one door every client goes through and a second
+/// opinion here could only ever disagree with it.
+pub(super) async fn nocturne_api_board_save(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<NocturneBoardSaveBody>,
+) -> Response {
+    let cache = Arc::clone(&state);
+    let outcome = tokio::task::spawn_blocking(move || {
+        let spec = ksx_api::BoardSaveSpec {
+            board_id: body.board_id,
+            expected_revision: body.expected_revision,
+            name: body.name,
+            description: body.description,
+            bounds_w: body.bounds_w,
+            bounds_h: body.bounds_h,
+            controls: body.controls,
+        };
+        match state.machine.board_save(&spec) {
+            Ok(view) => NocturneBoardSaveOutcome {
+                ok: true,
+                board_id: Some(view.board_id),
+                revision: Some(view.revision),
+                summary: Some(view.summary),
+                ..Default::default()
+            },
+            Err(refusal) => NocturneBoardSaveOutcome {
+                ok: false,
+                error: Some(refusal.message),
+                remedy: refusal.remedy,
+                ..Default::default()
+            },
+        }
+    })
+    .await
+    .unwrap_or_else(|_| NocturneBoardSaveOutcome {
+        ok: false,
+        error: Some("The board could not be published. Nothing was changed.".to_owned()),
+        ..Default::default()
+    });
+    // The read cache holds the board list for ten seconds; a publish the user
+    // cannot see in the picker reads as a publish that did not happen.
+    cache.machine_cache.invalidate();
+    axum::Json(outcome).into_response()
+}
 pub(super) async fn nocturne_api_bind(
     State(state): State<Arc<AppState>>,
     axum::Json(body): axum::Json<NocturneBindBody>,

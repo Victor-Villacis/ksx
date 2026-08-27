@@ -23,12 +23,19 @@
 //!
 //! # What a board is worth checking for
 //!
-//! Not much, and deliberately. The Studio owns the drawing vocabulary and the
-//! key vocabulary; this store owns durability. It refuses only what would make
-//! a document unreadable or unrenderable later: a name it cannot file, bounds
-//! that would make every percentage divide by zero, a control outside the
-//! bounds it claims, and duplicate control ids — which would make two controls
-//! indistinguishable to every later edit.
+//! Little, and deliberately — but the KEY is checked here, and that is not a
+//! detail. The Studio owns the drawing vocabulary (which shapes exist) and
+//! cannot own the key one: it does not link `ksx-core` at runtime, by design.
+//! So a key that resolves to nothing has to be refused at this door, or it is
+//! stored, drawn, looks bound, and matches nothing forever. That is the exact
+//! hole `controlSurface.ts`'s `cleanInput` leaves open today, and closing it
+//! here closes it for every client at once.
+//!
+//! The rest is only what would make a document unreadable or unrenderable
+//! LATER: a name it cannot file, bounds that would make every percentage
+//! divide by zero, a control outside the bounds it claims, and duplicate
+//! control ids — which would make two controls indistinguishable to every
+//! later edit.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -185,9 +192,11 @@ fn finite(value: f32) -> bool {
 
 /// What this store refuses, and nothing more.
 ///
-/// The Studio owns which shapes exist and which key names are real; re-deciding
-/// either here would put a second, older opinion in the way of a newer Studio.
-/// What is checked is only what makes a document unreadable LATER.
+/// The Studio owns which SHAPES exist, so an unrecognised kind is stored as
+/// written and drawn as a button — a newer Studio may invent one. The KEY is
+/// different: the Studio cannot check it (no runtime `ksx-core`), and a key
+/// that resolves to nothing would look bound forever. Everything else here is
+/// what makes a document unreadable LATER.
 fn normalize_controls(
     controls: &[BoardControl],
     bounds_w: f32,
@@ -251,11 +260,31 @@ fn normalize_controls(
                 "move the control back onto the board and save it again",
             ));
         }
+        // **The key gate.** Empty is Unassigned, a real state on a panel.
+        // Anything else must be a key this build can actually receive, and
+        // is stored in the canonical spelling so two boards never disagree
+        // about how to write the same key.
+        let key = control.key.trim();
+        let key = if key.is_empty() {
+            String::new()
+        } else {
+            match ksx_core::Key::from_name(key) {
+                Some(resolved) => resolved.name().to_owned(),
+                None => {
+                    return Err(bad_request(
+                        format!(
+                            "control '{id}' sends '{key}', which is not a key ksx can receive"
+                        ),
+                        "press the control again to learn what it really sends, then save the board",
+                    ));
+                }
+            }
+        };
         out.push(BoardControl {
             id: id.to_owned(),
             kind: control.kind.trim().to_ascii_lowercase(),
             label: control.label.trim().to_owned(),
-            key: control.key.trim().to_owned(),
+            key,
             player: control.player,
             x: control.x,
             y: control.y,
@@ -780,5 +809,52 @@ mod tests {
             .unwrap_err()
             .message
             .contains("id and exact revision"));
+    }
+
+    /// **A key that resolves to nothing is refused at this door.**
+    ///
+    /// It is the only vocabulary check this store makes, and it earns its place:
+    /// the Studio cannot make it — ksx-studio deliberately does not link
+    /// `ksx-core` at runtime — and `controlSurface.ts`'s `cleanInput` accepts any
+    /// string at all. Without this a typo is stored, drawn, looks bound, and
+    /// matches nothing for as long as the board exists.
+    ///
+    /// Empty is NOT a typo: Unassigned is a real state on a panel.
+    #[test]
+    fn a_key_nothing_can_receive_is_refused() {
+        let dir = TestDir::new("keygate");
+        let root = ConfigRoot::at(&dir.0);
+
+        let mut typo = spec("Typo");
+        typo.controls = vec![control("c1", "Ay", 0.0, 0.0)];
+        let refusal = save_at(&root, &typo, at()).unwrap_err();
+        assert!(
+            refusal.message.contains("not a key ksx can receive"),
+            "the refusal must name the problem: {}",
+            refusal.message
+        );
+        assert!(
+            boards_at(&root).unwrap().boards.is_empty(),
+            "nothing stored"
+        );
+
+        // Unassigned is fine, and stays empty rather than becoming a guess.
+        let mut unassigned = spec("Unassigned");
+        unassigned.controls = vec![control("c1", "", 0.0, 0.0)];
+        save_at(&root, &unassigned, at()).expect("Unassigned is a real state");
+        let stored = &boards_at(&root).unwrap().boards[0];
+        assert_eq!(stored.controls[0].key, "");
+    }
+
+    /// The stored key is the CANONICAL spelling, so two boards never disagree
+    /// about how to write the same key.
+    #[test]
+    fn a_key_is_stored_the_one_way_ksx_spells_it() {
+        let dir = TestDir::new("canonical");
+        let root = ConfigRoot::at(&dir.0);
+        let mut padded = spec("Padded");
+        padded.controls = vec![control("c1", "  A  ", 0.0, 0.0)];
+        save_at(&root, &padded, at()).unwrap();
+        assert_eq!(boards_at(&root).unwrap().boards[0].controls[0].key, "A");
     }
 }

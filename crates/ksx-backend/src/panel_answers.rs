@@ -170,9 +170,7 @@ pub fn run_truth(device: Option<String>, json: bool) -> anyhow::Result<()> {
 /// The board-level shift sentence, said once — never per terminal.
 fn shift_line(shift: &ksx_api::PanelShiftSummary) -> String {
     match shift {
-        ksx_api::PanelShiftSummary::Unreadable => {
-            "not readable on this board".to_owned()
-        }
+        ksx_api::PanelShiftSummary::Unreadable => "not readable on this board".to_owned(),
         ksx_api::PanelShiftSummary::Enabled {
             terminal_label,
             reachable,

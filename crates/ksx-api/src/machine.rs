@@ -122,7 +122,6 @@ pub trait MachineSource: Send + Sync {
         ))
     }
 
-
     /// `ksx panel backups` — immutable, lossless hardware restore points for
     /// the selected physical encoder. Raw images stay in the backend store;
     /// this view exposes identity and hashes, never EEPROM bytes.

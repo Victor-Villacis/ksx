@@ -2215,7 +2215,9 @@ fn terminal_rows(image: &RawPanelImage) -> (Vec<PanelTerminalRow>, usize) {
             let (terminal_label, kind) = terminal_label(state.terminal.id, state.terminal.player);
             // Computed before `normal` is moved into the row below.
             let press_resolves = !normal.supported
-                && !normal.label.contains(crate::panel_truth::UNOBSERVABLE_ACTION);
+                && !normal
+                    .label
+                    .contains(crate::panel_truth::UNOBSERVABLE_ACTION);
             PanelTerminalRow {
                 terminal_id: state.terminal.id.to_owned(),
                 terminal_label,

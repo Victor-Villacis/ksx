@@ -1309,9 +1309,7 @@ fn fixture_panel_image(scenario: FixtureScenario) -> [u8; 256] {
         for (id, normal, alternate, shift) in FIXTURE_MESSY_TERMINALS {
             let base = FIXTURE_IPAC_TERMINALS
                 .iter()
-                .find_map(|(candidate, _, base)| {
-                    (*candidate == id).then_some(usize::from(*base))
-                })
+                .find_map(|(candidate, _, base)| (*candidate == id).then_some(usize::from(*base)))
                 .expect("every messy override names an exact fixture terminal");
             bytes[4 + base] = normal;
             bytes[4 + base + 64] = alternate;
@@ -1344,9 +1342,10 @@ fn fixture_terminal_label(id: &str, player: u8) -> (String, &'static str) {
         "right" => ("Right".into(), "direction"),
         "start" => ("Start".into(), "start"),
         "coin" => ("Coin".into(), "coin"),
-        other if other.starts_with("sw") => {
-            (format!("Button {}", other.trim_start_matches("sw")), "button")
-        }
+        other if other.starts_with("sw") => (
+            format!("Button {}", other.trim_start_matches("sw")),
+            "button",
+        ),
         other => (other.to_owned(), "button"),
     };
     (format!("Player {player} · {part}"), kind)
@@ -2406,7 +2405,10 @@ mod tests {
         let unobservable = row("1sw6");
         assert!(!unobservable.normal.supported);
         assert!(
-            unobservable.normal.label.starts_with("Unobservable HID action"),
+            unobservable
+                .normal
+                .label
+                .starts_with("Unobservable HID action"),
             "{}",
             unobservable.normal.label
         );

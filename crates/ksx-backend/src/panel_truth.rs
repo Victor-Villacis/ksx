@@ -41,9 +41,9 @@
 //! retained strings happen to be equal."*
 
 use ksx_api::{
-    PanelShiftSummary,
     PanelChartEvidence, PanelDeclaredEvidence, PanelKeyValue, PanelObservationAttribution,
-    PanelObservationVouching, PanelObservedEvidence, PanelTerminalAnswer, PanelTerminalTruth,
+    PanelObservationVouching, PanelObservedEvidence, PanelShiftSummary, PanelTerminalAnswer,
+    PanelTerminalTruth,
 };
 
 /// Everything one terminal's answer is composed from.
@@ -250,20 +250,16 @@ pub fn compose(facts: &TerminalFacts<'_>) -> PanelTerminalTruth {
                 }
                 // …and a byte the chart cannot name is still a byte: the board
                 // stores SOMETHING where the person said nothing is wired.
-                (Some(d), None) if d.key.is_empty() => {
-                    PanelTerminalAnswer::DeclaredContradicted {
-                        declared: d.key.clone(),
-                        stored: normal.clone(),
-                    }
-                }
+                (Some(d), None) if d.key.is_empty() => PanelTerminalAnswer::DeclaredContradicted {
+                    declared: d.key.clone(),
+                    stored: normal.clone(),
+                },
                 // Covers the empty declaration against a named key for free:
                 // "" never equals an observable key.
-                (Some(d), Some(key)) if d.key != key => {
-                    PanelTerminalAnswer::DeclaredContradicted {
-                        declared: d.key.clone(),
-                        stored: normal.clone(),
-                    }
-                }
+                (Some(d), Some(key)) if d.key != key => PanelTerminalAnswer::DeclaredContradicted {
+                    declared: d.key.clone(),
+                    stored: normal.clone(),
+                },
                 _ => chart_answer,
             }
         }
@@ -329,7 +325,9 @@ fn press_would_help(answer: &PanelTerminalAnswer) -> bool {
     match answer {
         // A byte ksx cannot name, and an unassigned one, are byte-identical to a
         // macro. Only a press separates them.
-        PanelTerminalAnswer::StoredUnclassified { label, .. } => !label.contains(UNOBSERVABLE_ACTION),
+        PanelTerminalAnswer::StoredUnclassified { label, .. } => {
+            !label.contains(UNOBSERVABLE_ACTION)
+        }
         PanelTerminalAnswer::DeclaredCompletes { .. }
         | PanelTerminalAnswer::StoredUnassigned
         | PanelTerminalAnswer::ChartImpossible
@@ -472,7 +470,6 @@ fn detail_for(answer: &PanelTerminalAnswer) -> String {
     }
 }
 
-
 // ── STAGE 5: WHICH SCREW DID THAT PRESS COME FROM? ─────────────────────────
 
 /// **What a press can honestly be filed under, and how strong that is.**
@@ -608,7 +605,6 @@ pub fn attribute_press(
         prompted_mismatch,
     }
 }
-
 
 // ── STAGE 7: SHIFT, SAID ONCE ──────────────────────────────────────────────
 
@@ -984,7 +980,11 @@ mod tests {
             "got {:?}",
             truth.answer
         );
-        assert!(truth.detail.contains("declared this terminal unassigned"), "{}", truth.detail);
+        assert!(
+            truth.detail.contains("declared this terminal unassigned"),
+            "{}",
+            truth.detail
+        );
         // The person said no control is wired here: inviting a press would be
         // an offer to press a control they just said does not exist.
         assert!(!truth.invite_press, "{}", truth.detail);
@@ -999,11 +999,18 @@ mod tests {
         let truth = compose(&f);
 
         assert!(
-            matches!(truth.answer, PanelTerminalAnswer::DeclaredContradicted { .. }),
+            matches!(
+                truth.answer,
+                PanelTerminalAnswer::DeclaredContradicted { .. }
+            ),
             "got {:?}",
             truth.answer
         );
-        assert!(truth.detail.contains("nothing is wired"), "{}", truth.detail);
+        assert!(
+            truth.detail.contains("nothing is wired"),
+            "{}",
+            truth.detail
+        );
         assert!(truth.detail.contains("Both are kept"), "{}", truth.detail);
     }
 
@@ -1019,11 +1026,18 @@ mod tests {
         // something where the person said nothing is wired. Completion is for
         // declarations that say what the byte MEANS, not that it is absent.
         assert!(
-            matches!(truth.answer, PanelTerminalAnswer::DeclaredContradicted { .. }),
+            matches!(
+                truth.answer,
+                PanelTerminalAnswer::DeclaredContradicted { .. }
+            ),
             "got {:?}",
             truth.answer
         );
-        assert!(truth.detail.contains("nothing is wired"), "{}", truth.detail);
+        assert!(
+            truth.detail.contains("nothing is wired"),
+            "{}",
+            truth.detail
+        );
     }
 
     #[test]
@@ -1039,7 +1053,11 @@ mod tests {
             "got {:?}",
             truth.answer
         );
-        assert!(truth.detail.contains("nothing is wired"), "{}", truth.detail);
+        assert!(
+            truth.detail.contains("nothing is wired"),
+            "{}",
+            truth.detail
+        );
         assert!(!truth.invite_press, "{}", truth.detail);
     }
 

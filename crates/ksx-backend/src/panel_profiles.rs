@@ -703,9 +703,9 @@ fn profiles_at(root: &ConfigRoot) -> Result<PanelHardwareProfilesView, Refusal> 
 /// naming a directory the user was never in.
 pub(crate) fn write_atomic(what: &str, path: &Path, bytes: &[u8]) -> Result<(), Refusal> {
     let Some(parent) = path.parent() else {
-        return Err(store_refusal(
-            format!("the {what} document has no parent folder"),
-        ));
+        return Err(store_refusal(format!(
+            "the {what} document has no parent folder"
+        )));
     };
     fs::create_dir_all(parent).map_err(|error| {
         store_refusal(format!(
@@ -861,7 +861,11 @@ fn save_at(
             "the saved encoder layout could not be encoded: {error}"
         ))
     })?;
-    write_atomic(SAVED_LAYOUTS, &profile_path(&dir, &profile.profile_id)?, &bytes)?;
+    write_atomic(
+        SAVED_LAYOUTS,
+        &profile_path(&dir, &profile.profile_id)?,
+        &bytes,
+    )?;
     Ok(PanelHardwareProfileMutationView {
         state: state.to_owned(),
         summary: format!("{state} saved encoder layout '{}'", profile.name),

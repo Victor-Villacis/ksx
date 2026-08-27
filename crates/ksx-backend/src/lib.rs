@@ -64,11 +64,11 @@ pub mod map;
 pub mod mapping;
 pub mod monitor;
 pub mod panel;
+pub mod panel_answers;
 pub(crate) mod panel_catalog;
+pub mod panel_observations;
 pub mod panel_profiles;
 pub mod panel_programming;
-pub mod panel_answers;
-pub mod panel_observations;
 pub mod panel_truth;
 // The first-run state and the path-free config in/out, for the surfaces that
 // have a screen. Gated with `sources` because that is the only caller: the CLI

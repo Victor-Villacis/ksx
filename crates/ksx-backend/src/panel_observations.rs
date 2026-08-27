@@ -779,7 +779,11 @@ fn write_document(dir: &Path, document: &mut PanelObservationsDocument) -> Resul
             format!("this board's observations could not be written: {error}"),
         )
     })?;
-    write_atomic(TERMINAL_OBSERVATIONS, &document_path(dir, &document.document_id)?, &bytes)
+    write_atomic(
+        TERMINAL_OBSERVATIONS,
+        &document_path(dir, &document.document_id)?,
+        &bytes,
+    )
 }
 
 fn fresh_document(scope: &PanelBoardScope, now: &str) -> PanelObservationsDocument {
@@ -1756,8 +1760,8 @@ mod tests {
         spec.attribution = PanelObservationAttribution::ChartUnique;
         spec.against_image_sha256 = Some(IMAGE.to_owned());
 
-        let refusal = record_observation_at(&root, &spec, at(1))
-            .expect_err("a burst is not chart-unique");
+        let refusal =
+            record_observation_at(&root, &spec, at(1)).expect_err("a burst is not chart-unique");
         assert_eq!(refusal.code, ksx_api::codes::BAD_REQUEST);
 
         // The same burst is perfectly fileable as what it actually is.

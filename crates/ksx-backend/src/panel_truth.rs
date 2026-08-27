@@ -237,6 +237,17 @@ pub fn compose(facts: &TerminalFacts<'_>) -> PanelTerminalTruth {
     }
 }
 
+/// **The one spelling of "the firmware stores a usage no learner can hear."**
+///
+/// `panel_programming::facade::key_value` writes this into a label and
+/// [`press_would_help`] reads it back out to decide whether pressing the
+/// control could ever resolve the byte. That is a contract between two modules
+/// carried in a display string, so it is ONE constant rather than two literals
+/// and a test asserting they still match: renaming the label without moving the
+/// press offer would otherwise invite a person to press a control that produces
+/// nothing at all to hear.
+pub(crate) const UNOBSERVABLE_ACTION: &str = "Unobservable HID action";
+
 /// **Would pressing this control tell the user something a re-read cannot?**
 ///
 /// The distinction that matters is `StoredUnclassified` versus an unobservable
@@ -248,7 +259,7 @@ fn press_would_help(answer: &PanelTerminalAnswer) -> bool {
     match answer {
         // A byte ksx cannot name, and an unassigned one, are byte-identical to a
         // macro. Only a press separates them.
-        PanelTerminalAnswer::StoredUnclassified { label, .. } => !label.contains("Unobservable"),
+        PanelTerminalAnswer::StoredUnclassified { label, .. } => !label.contains(UNOBSERVABLE_ACTION),
         PanelTerminalAnswer::StoredUnassigned
         | PanelTerminalAnswer::ChartImpossible
         | PanelTerminalAnswer::ChartRefused

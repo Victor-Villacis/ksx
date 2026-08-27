@@ -2129,7 +2129,7 @@ fn key_value(raw: u8, action: TerminalAction) -> PanelKeyValue {
             None => PanelKeyValue {
                 code: raw as u16,
                 key: None,
-                label: format!("Unobservable HID action 0x{raw:02X}"),
+                label: format!("{} 0x{raw:02X}", crate::panel_truth::UNOBSERVABLE_ACTION),
                 supported: false,
             },
         },

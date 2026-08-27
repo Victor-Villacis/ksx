@@ -2199,7 +2199,15 @@ fn terminal_rows(image: &RawPanelImage) -> (Vec<PanelTerminalRow>, usize) {
                 SemanticValue::ShiftDisabled => PanelShiftState::Disabled,
                 SemanticValue::ShiftEnabled => PanelShiftState::Enabled,
                 SemanticValue::ShiftOpaque(_) => PanelShiftState::Opaque,
-                SemanticValue::Action(_) => unreachable!("the shift plane decodes as shift state"),
+                // An action byte here is unreachable BY CONVENTION, not by type:
+                // `Ipac4TerminalState.shift` is a plain field of a four-variant
+                // enum, and only `decode_ipac4_terminals` currently fills it from
+                // the shift plane. Nothing at the compiler level stops a future
+                // caller from putting a Normal byte there, and the first vendor
+                // byte through that path would abort a verb whose entire contract
+                // is that it only reads. `Opaque` is what this module already means
+                // by "a byte ksx cannot name" — so say that instead of aborting.
+                SemanticValue::Action(_) => PanelShiftState::Opaque,
             };
             unknown_actions += usize::from(!normal.supported)
                 + usize::from(!shifted.supported)

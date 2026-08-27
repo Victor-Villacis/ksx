@@ -375,7 +375,12 @@ fn parse_terminal(id: &str) -> (Option<u8>, TerminalRole) {
         "coin" => TerminalRole::Coin,
         _ => rest
             .strip_prefix("sw")
-            .and_then(|n| n.parse::<u8>().ok())
+            .and_then(|n| n.parse::<u8>().ok().map(|parsed| (n, parsed)))
+            // The text must be exactly the number's own spelling. `parse`
+            // accepts a leading `+` and leading zeros, so `1sw01` and `1sw+1`
+            // both became `Switch(1)` and drew ON TOP of `1sw1`.
+            .filter(|(n, parsed)| *n == parsed.to_string())
+            .map(|(_, parsed)| parsed)
             .filter(|n| (1..=8).contains(n))
             .map_or(TerminalRole::Unknown, TerminalRole::Switch),
     };
@@ -413,13 +418,24 @@ impl Board {
 
         for terminal in &profile.terminals {
             let (player, role) = parse_terminal(&terminal.terminal_id);
-            let (dx, dy) = role.offset(unplaced);
-            if matches!(role, TerminalRole::Unknown) {
+            // **Anything ksx cannot seat goes in the parking lane, which
+            // advances per cell.**
+            //
+            // An unknown ROLE already did. An unknown PLAYER did not: every one
+            // of them took `band 4` and its role's ordinary offset, so `5up` and
+            // `9up` drew at exactly the same point — and the comment here
+            // claimed each got "a band of its own", which `map_or(4, ..)` never
+            // gave them. Two controls in one place is one control the user can
+            // see and one they cannot press.
+            let seated = player.is_some();
+            let (dx, dy) = if seated {
+                role.offset(unplaced)
+            } else {
+                (10.0 + unplaced as f32, 0.5)
+            };
+            if !seated || matches!(role, TerminalRole::Unknown) {
                 unplaced += 1;
             }
-            // An unrecognised player still gets a band of its own, after the
-            // four this build knows, for the same reason an unknown role is
-            // still drawn.
             let band = player.map_or(4, |p| p - 1);
             let x = dx * STEP;
             let y = (f32::from(band) * BAND_PITCH + dy) * STEP;
@@ -1079,6 +1095,86 @@ mod tests {
         assert_eq!(parse_terminal("1UP"), (Some(1), TerminalRole::Up));
         assert_eq!(parse_terminal("3sw7"), (Some(3), TerminalRole::Switch(7)));
         assert_eq!(parse_terminal("nonsense").1, TerminalRole::Unknown);
+    }
+
+    /// **No two controls may be drawn in the same place.**
+    ///
+    /// Two cells at one point is one control the user can see and one they
+    /// cannot press, and there were two independent ways to get there:
+    ///
+    ///  - `str::parse` accepts a leading `+` and leading zeros, so `1sw01` and
+    ///    `1sw+1` both became `Switch(1)` and drew on top of `1sw1`.
+    ///  - every player the build cannot seat took band 4 AND its role's
+    ///    ordinary offset, so `5up` and `9up` drew at exactly the same point —
+    ///    while the comment beside it claimed each got "a band of its own".
+    ///
+    /// Both are reachable only through a hand-written or newer-build document,
+    /// because `panel_profiles::normalize_terminals` refuses any id that is not
+    /// an exact I-PAC 4 terminal. That is a reason to keep the drawing honest,
+    /// not a reason to assume the input is.
+    #[test]
+    fn no_two_controls_are_ever_drawn_in_the_same_place() {
+        let hostile = profile_of(vec![
+            ("1sw1", Some("A")),
+            ("1sw01", Some("B")),
+            ("1sw+1", Some("C")),
+            ("1up", Some("Up")),
+            ("5up", Some("D")),
+            ("9up", Some("E")),
+            ("0up", Some("F")),
+            ("nonsense", Some("G")),
+            ("", Some("H")),
+        ]);
+        let board = Board::encoder_from_profile(&hostile);
+        assert_eq!(board.cells.len(), 9, "no control may be dropped");
+
+        for (i, a) in board.cells.iter().enumerate() {
+            for b in board.cells.iter().skip(i + 1) {
+                assert!(
+                    (a.x - b.x).abs() > 0.01 || (a.y - b.y).abs() > 0.01,
+                    "{} and {} are drawn at the same point ({}, {})",
+                    a.id,
+                    b.id,
+                    a.x,
+                    a.y
+                );
+            }
+        }
+    }
+
+    /// A switch number is exactly its digits — `1sw01` is not switch 1.
+    #[test]
+    fn a_switch_number_is_exactly_its_digits() {
+        assert_eq!(parse_terminal("1sw1"), (Some(1), TerminalRole::Switch(1)));
+        // NOTE: `"1sw1 "` is NOT here. `parse_terminal` trims the whole id
+        // before splitting it, so trailing space is legitimately ignored —
+        // the rule is about the DIGITS, not about whitespace around the id.
+        for odd in ["1sw01", "1sw+1", "1sw 1", "1sw٤"] {
+            assert_eq!(
+                parse_terminal(odd).1,
+                TerminalRole::Unknown,
+                "{odd:?} was accepted as a switch number"
+            );
+        }
+    }
+
+    /// `parse_terminal` is total, and every value it reports stays in range.
+    #[test]
+    fn parse_terminal_is_total_and_stays_in_range() {
+        let huge = format!("1sw{}", "9".repeat(4096));
+        let long = "1".repeat(65_536);
+        for id in [
+            "", " ", "\t", "1", "9", "0up", "1up", "1UP", "nonsense", "sw1", "1sw0", "1sw9",
+            "1sw99", "\u{0}", "🕹", "١up", &huge, &long,
+        ] {
+            let (player, role) = parse_terminal(id);
+            if let Some(p) = player {
+                assert!((1..=4).contains(&p), "{id:?} seated player {p}");
+            }
+            if let TerminalRole::Switch(n) = role {
+                assert!((1..=8).contains(&n), "{id:?} produced switch {n}");
+            }
+        }
     }
 
     /// A board swap must not change what the backend sees. Same keys, two

@@ -167,10 +167,20 @@ impl DeviceFacts {
     }
 }
 
-/// `VID_D209` -> `0xD209`. `width` digits, exactly, or nothing.
+/// `VID_D209` -> `0xD209`. `width` HEX DIGITS, exactly, or nothing.
+///
+/// The digit check is not redundant with the width check. `from_str_radix`
+/// accepts a leading `+`, and the sign then eats one of the `width` bytes the
+/// slice counted — so `VID_+209` parsed cleanly to vendor `0x0209`, a vendor
+/// id invented out of a path that carries none. Windows does not emit such a
+/// path, but this is the module that exists to refuse claims it cannot
+/// support, and it was making one.
 fn hex_field(upper: &str, key: &str, width: usize) -> Option<u32> {
     let at = upper.find(key)? + key.len();
     let digits = upper.get(at..at + width)?;
+    if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
     u32::from_str_radix(digits, 16).ok()
 }
 
@@ -672,6 +682,64 @@ fn parse_hex8(text: &str) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A field that is not hex digits is not a number.**
+    ///
+    /// `u32::from_str_radix` accepts a leading `+`, and the sign then eats one
+    /// of the `width` bytes the slice counted — so `VID_+209` parsed cleanly to
+    /// vendor `0x0209`, a vendor id invented out of a path that carries none.
+    /// Windows does not emit such a path, which is exactly why this could sit
+    /// here: the doc said "`width` digits, exactly, or nothing" and the code
+    /// did something else, in the module written to refuse claims it cannot
+    /// support.
+    #[test]
+    fn a_field_that_is_not_hex_digits_is_not_a_number() {
+        for path in [
+            r"USB\VID_+209&PID_0430&MI_00\7&X",
+            r"USB\VID_D209&PID_+430&MI_00\7&X",
+            r"USB\VID_D209&PID_0430&MI_+0\7&X",
+            r"USB\VID_ 209&PID_0430&MI_00\7&X",
+            r"USB\VID_-209&PID_0430&MI_00\7&X",
+        ] {
+            assert_eq!(
+                DeviceFacts::from_instance_path(path),
+                None,
+                "{path} yielded facts out of a field that is not hex"
+            );
+        }
+        // The real shape still parses, or the guard would be useless.
+        let facts = DeviceFacts::from_instance_path(r"USB\VID_D209&PID_0430&MI_00\7&X")
+            .expect("a real path still parses");
+        assert_eq!(facts.vendor_id, 0xD209);
+        assert_eq!(facts.product_id, 0x0430);
+        assert_eq!(facts.interface_number, 0);
+    }
+
+    /// `from_instance_path` is TOTAL: no input panics, and anything it cannot
+    /// read comes back `None` rather than a fabricated triple.
+    #[test]
+    fn from_instance_path_is_total() {
+        let long = format!(r"USB\VID_D209&PID_0430&MI_00\{}", "A".repeat(4096));
+        for path in [
+            "",
+            " ",
+            "\\",
+            "USB\\",
+            r"USB\VID_",
+            r"USB\VID_D2",
+            r"USB\VID_D209",
+            r"USB\VID_D209&PID_04",
+            r"USB\VID_D209&PID_0430",
+            r"USB\VID_D209&PID_0430\NO_MI",
+            r"HID\VID_D209&PID_0430&MI_00\8&X",
+            "USB\\VID_D209&PID_0430&MI_00\\7&\u{0}",
+            "üñïçø∂é",
+            &long,
+        ] {
+            // The assertion is that this returns at all.
+            let _ = DeviceFacts::from_instance_path(path);
+        }
+    }
 
     /// The cabinet's board, in the socket it is in tonight.
     fn ipac(instance: &str, serial: Option<&str>) -> DeviceFacts {

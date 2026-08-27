@@ -1643,6 +1643,87 @@ mod tests {
             .contains(r#"method="post" action="/nocturne/device""#));
     }
 
+    /// **What ksx recognises about a board reaches the page.**
+    ///
+    /// The identity facts live on `BoardRow` and are composed into the two
+    /// sentences the device row already carries. That is deliberate — a served
+    /// field nothing renders reaches nothing, which this page has now shipped
+    /// twice — but it means the composition itself needs pinning: `meta` and
+    /// `title` are the whole surface, so a change that drops them is silent.
+    #[test]
+    fn a_recognised_encoder_says_what_it_is_on_the_page() {
+        let mut payload = keyboard_payload();
+        for board in &mut payload.scan.boards {
+            if board.role != ksx_api::BoardRole::PanelEncoder {
+                continue;
+            }
+            board.family_label = Some("Ultimarc I-PAC 4X".to_owned());
+            board.firmware_label = Some("1.56".to_owned());
+            board.terminal_count = Some(56);
+            board.chart_readable = true;
+            board.profile_state = "profiled".to_owned();
+            board.profile_detail =
+                "ksx has a measured protocol profile for this release.".to_owned();
+        }
+        let html = render_nocturne(&page(), &payload.derived(), None).html;
+
+        assert!(
+            html.contains("Ultimarc I-PAC 4X"),
+            "the family ksx recognised is not on the page: {html}"
+        );
+        assert!(
+            html.contains("firmware 1.56"),
+            "the release the profile matched is not on the page"
+        );
+        assert!(
+            html.contains("56 terminals"),
+            "the profile's terminal capacity is not on the page"
+        );
+        assert!(
+            html.contains("ksx has a measured protocol profile for this release."),
+            "the sentence explaining what recognition bought is not on the page"
+        );
+        // A board ksx can read says so, rather than the older blanket line that
+        // could not tell "not read yet" from "never readable".
+        assert!(
+            html.contains("chart not read yet"),
+            "a readable board does not say its chart is merely unread: {html}"
+        );
+    }
+
+    /// **A board ksx does not recognise claims nothing.**
+    ///
+    /// The failure this guards is the tempting one: leaving the identity
+    /// clauses in place with empty values, so every keyboard grows a trailing
+    /// ` ·  · ` and an unprofiled encoder appears to have a terminal count of
+    /// nothing rather than no terminal count at all.
+    #[test]
+    fn an_unrecognised_board_claims_nothing() {
+        let mut payload = keyboard_payload();
+        for board in &mut payload.scan.boards {
+            board.family_label = None;
+            board.firmware_label = None;
+            board.terminal_count = None;
+            board.chart_readable = false;
+            board.profile_state = "unrecognised".to_owned();
+            board.profile_detail = String::new();
+        }
+        let html = render_nocturne(&page(), &payload.derived(), None).html;
+
+        assert!(
+            !html.contains("terminals"),
+            "a board with no measured profile reported a terminal count: {html}"
+        );
+        assert!(
+            !html.contains("firmware "),
+            "a board with no profile reported a firmware release"
+        );
+        assert!(
+            !html.contains(" ·  · "),
+            "an empty identity clause left a dangling separator: {html}"
+        );
+    }
+
     /// **Choosing the board that is already chosen must not un-prepare it.**
     ///
     /// `StageEdit::ChooseDevice` REPLACES the staged device wholesale, and the

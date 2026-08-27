@@ -2986,6 +2986,29 @@ fn nocturne_journey(
     (steps, line)
 }
 
+/// **What ksx knows about a board, in the words the device roster has room
+/// for.** Empty for a board in no catalog, which is most of them.
+///
+/// Composed here rather than served as six more fields because the row
+/// already carries two sentences the server owns — `meta` and `title` — and
+/// a fact nobody has room to render is a field that reaches nothing. The
+/// backend still owns every word: this only chooses which of them fit.
+fn identity_meta(board: &ksx_api::BoardRow) -> String {
+    let Some(family) = board.family_label.as_deref() else {
+        return String::new();
+    };
+    let mut out = format!(" · {family}");
+    if let Some(firmware) = board.firmware_label.as_deref() {
+        out.push_str(&format!(" · firmware {firmware}"));
+    }
+    // Only ever the capacity of a MEASURED profile. An unprofiled board
+    // says nothing here rather than a number ksx would be inventing.
+    if let Some(count) = board.terminal_count {
+        out.push_str(&format!(" · {count} terminals"));
+    }
+    out
+}
+
 impl NocturneDerived {
     fn of(p: &NocturnePayload) -> Self {
         let staged = &p.staged;
@@ -3002,16 +3025,22 @@ impl NocturneDerived {
         if scan_read {
             for b in &p.scan.boards {
                 if !b.pickable {
+                    // A board with no keyboard interface never becomes a
+                    // device row at all — it lands here with a name and a
+                    // meta line and nothing else. That is exactly where a
+                    // recognised encoder with no keyboard collection ends
+                    // up, so the family name has to ride in the meta or it
+                    // is not said anywhere.
                     dev_other.push(NocturneOtherRow {
                         name: b.name.clone(),
-                        meta: format!("{} · {}", b.transport_label, b.backends),
+                        meta: format!("{} · {}{}", b.transport_label, b.backends, identity_meta(b)),
                     });
                     continue;
                 }
                 let Some(selector) = b.selector.clone() else {
                     dev_other.push(NocturneOtherRow {
                         name: b.name.clone(),
-                        meta: b.backends.clone(),
+                        meta: format!("{}{}", b.backends, identity_meta(b)),
                     });
                     continue;
                 };
@@ -3028,10 +3057,18 @@ impl NocturneDerived {
                 } else if b.role == ksx_api::BoardRole::PanelEncoder {
                     // An arcade encoder being reachable through its HID
                     // interface does not prove that any terminal has a usable
-                    // key assignment.  The chart read in I-PAC Setup owns that
-                    // answer; the device roster must not call an unchecked (or
-                    // deliberately cleared) EEPROM chart "ready".
-                    "Connected · outputs not checked"
+                    // key assignment. Only a chart read can say, and this row
+                    // must not call an unchecked — or deliberately cleared —
+                    // EEPROM chart "ready".
+                    //
+                    // It CAN now say whether such a read is possible at all,
+                    // which is a different sentence for a board ksx has a
+                    // measured profile for and one it never will.
+                    if b.chart_readable {
+                        "Connected · chart not read yet"
+                    } else {
+                        "Connected · outputs not checked"
+                    }
                 } else if b.cannot_type_line.trim().is_empty() {
                     "Ready to use"
                 } else {
@@ -3056,20 +3093,34 @@ impl NocturneDerived {
                     // sentences, so both are the server's (`SURFACES.md`
                     // §1a); the browser reads them.
                     meta: if is_chosen {
-                        format!("{} · {} · on the canvas", b.transport_label, verdict)
+                        format!(
+                            "{} · {} · on the canvas{}",
+                            b.transport_label,
+                            verdict,
+                            identity_meta(b)
+                        )
                     } else {
-                        format!("{} · {}", b.transport_label, verdict)
+                        format!("{} · {}{}", b.transport_label, verdict, identity_meta(b))
                     },
                     aria_current: if is_chosen { "true" } else { "false" }.to_owned(),
-                    title: if is_chosen {
-                        "This board is the one on the canvas. Pressing it again changes \
-                         nothing — and deliberately does not re-stage it, so a keyboard \
-                         prepared for play keeps its preparation."
-                            .to_owned()
-                    } else {
-                        "Put this board on the canvas — it replaces the current one. \
-                         Nothing is saved or started."
-                            .to_owned()
+                    // The verb sentence, and — for a board ksx recognises —
+                    // the whole of what recognition bought. `profile_detail`
+                    // is authored in the backend beside the status view, so
+                    // the two surfaces cannot word one fact two ways.
+                    title: {
+                        let verb = if is_chosen {
+                            "This board is the one on the canvas. Pressing it again changes \
+                             nothing — and deliberately does not re-stage it, so a keyboard \
+                             prepared for play keeps its preparation."
+                        } else {
+                            "Put this board on the canvas — it replaces the current one. \
+                             Nothing is saved or started."
+                        };
+                        if b.profile_detail.is_empty() || b.family_label.is_none() {
+                            verb.to_owned()
+                        } else {
+                            format!("{verb} {}", b.profile_detail)
+                        }
                     },
                     role: b.role.code().to_owned(),
                     selector,

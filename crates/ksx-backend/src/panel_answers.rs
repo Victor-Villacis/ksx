@@ -163,7 +163,7 @@ pub fn run_truth(device: Option<String>, json: bool) -> anyhow::Result<()> {
     println!();
     for terminal in &view.terminals {
         println!(
-            "  {:<8} {:<12} {}",
+            "  {:<8}  {:<22}  {}",
             terminal.terminal_id, terminal.terminal_label, terminal.detail
         );
     }

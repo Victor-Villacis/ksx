@@ -508,7 +508,7 @@ fn save_at(
     })?;
     let bytes = serde_json::to_vec_pretty(&board)
         .map_err(|error| store_refusal(format!("the board could not be written: {error}")))?;
-    write_atomic(&board_path(&dir, &board.board_id)?, &bytes)?;
+    write_atomic(DRAWN_BOARDS, &board_path(&dir, &board.board_id)?, &bytes)?;
 
     Ok(BoardMutationView {
         state: state.to_owned(),

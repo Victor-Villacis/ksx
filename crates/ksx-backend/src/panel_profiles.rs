@@ -694,20 +694,27 @@ fn profiles_at(root: &ConfigRoot) -> Result<PanelHardwareProfilesView, Refusal> 
     })
 }
 
-pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Refusal> {
+/// Replace one file with new bytes, atomically, or change nothing.
+///
+/// `what` names the KIND of document for every refusal this can raise. It is
+/// a parameter for the reason `StoreLease::acquire`'s noun is: this writer is
+/// shared by three stores now, and a hardcoded noun told a board writer — and
+/// then an observation writer — that the PANEL-LAYOUTS folder had failed,
+/// naming a directory the user was never in.
+pub(crate) fn write_atomic(what: &str, path: &Path, bytes: &[u8]) -> Result<(), Refusal> {
     let Some(parent) = path.parent() else {
         return Err(store_refusal(
-            "the saved encoder layout has no parent folder",
+            format!("the {what} document has no parent folder"),
         ));
     };
     fs::create_dir_all(parent).map_err(|error| {
         store_refusal(format!(
-            "the panel-layouts folder {} could not be created: {error}",
+            "the folder for {what} ({}) could not be created: {error}",
             parent.display()
         ))
     })?;
     let serial = TEMP_SERIAL.fetch_add(1, Ordering::Relaxed);
-    let temp = parent.join(format!(".panel-layout.tmp-{}-{serial}", std::process::id()));
+    let temp = parent.join(format!(".ksx-store.tmp-{}-{serial}", std::process::id()));
     let result = (|| {
         let mut file = OpenOptions::new()
             .write(true)
@@ -715,24 +722,24 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Refusal> {
             .open(&temp)
             .map_err(|error| {
                 store_refusal(format!(
-                    "a temporary encoder layout could not be created in {}: {error}",
+                    "a temporary {what} document could not be created in {}: {error}",
                     parent.display()
                 ))
             })?;
         file.write_all(bytes).map_err(|error| {
             store_refusal(format!(
-                "the temporary encoder layout could not be written: {error}"
+                "the temporary {what} document could not be written: {error}"
             ))
         })?;
         file.sync_all().map_err(|error| {
             store_refusal(format!(
-                "the temporary encoder layout could not be made durable: {error}"
+                "the temporary {what} document could not be made durable: {error}"
             ))
         })?;
         drop(file);
         fs::rename(&temp, path).map_err(|error| {
             store_refusal(format!(
-                "the saved encoder layout could not be replaced atomically: {error}"
+                "the {what} document could not be replaced atomically: {error}"
             ))
         })
     })();
@@ -854,7 +861,7 @@ fn save_at(
             "the saved encoder layout could not be encoded: {error}"
         ))
     })?;
-    write_atomic(&profile_path(&dir, &profile.profile_id)?, &bytes)?;
+    write_atomic(SAVED_LAYOUTS, &profile_path(&dir, &profile.profile_id)?, &bytes)?;
     Ok(PanelHardwareProfileMutationView {
         state: state.to_owned(),
         summary: format!("{state} saved encoder layout '{}'", profile.name),

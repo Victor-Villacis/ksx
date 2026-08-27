@@ -126,6 +126,17 @@ impl ConfigRoot {
         self.dir.join("boards")
     }
 
+    /// What a person pressed, and what they typed. **Its own directory, and
+    /// that is load-bearing.**
+    ///
+    /// `StoreLease` is keyed by DIRECTORY, so filing these under an existing
+    /// store's folder would silently make an observation write contend with a
+    /// layout save — the exact contention the store was designed to avoid by
+    /// never taking the programming lease.
+    pub fn panel_observations_dir(&self) -> PathBuf {
+        self.dir.join("panel-observations")
+    }
+
     pub fn games_path(&self) -> PathBuf {
         self.dir.join("games.toml")
     }

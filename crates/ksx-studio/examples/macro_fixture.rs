@@ -12,13 +12,15 @@
 //!
 //! Loopback only, and the port is an argument so it can never collide with the
 //! user's own `ksx studio` (4460):
-//! `4478` belongs to the automated macro-editor suite, while `4520` and `4521`
-//! are the documented manual first-run and blank-encoder workspaces.
+//! `4478` belongs to the automated macro-editor suite, while `4520`, `4521` and
+//! `4522` are the documented manual first-run, blank-encoder and messy-encoder
+//! workspaces.
 //!
 //! ```text
 //! cargo run -p ksx-studio --example macro_fixture -- 4476
 //! cargo run -p ksx-studio --example macro_fixture -- 4520 --first-run
 //! cargo run -p ksx-studio --example macro_fixture -- 4521 --blank-panel
+//! cargo run -p ksx-studio --example macro_fixture -- 4522 --messy-panel
 //! ```
 
 use std::collections::BTreeMap;
@@ -42,17 +44,27 @@ const PRESET: &str = "Panel P1";
 /// session exists yet. BlankPanel keeps that empty KSX history while making
 /// the encoder EEPROM deliberately all-Unassigned for the rarer hardware-
 /// initialization path.
+///
+/// MessyPanel keeps that same empty KSX history and gives the encoder the
+/// chart a used cabinet actually walks in with. Its whole reason to exist is
+/// that FirstRun and BlankPanel can only ever produce `supported: true` and a
+/// disabled shift byte, so every terminal state a surface has to tell apart —
+/// a preserved vendor action, a keyboard usage KSX cannot observe, an opaque
+/// shift byte, the shift terminal itself, one key emitted by two terminals,
+/// and a byte that is genuinely zero — was unreachable in a browser, and
+/// anything built on those states therefore shipped unexercised.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum FixtureScenario {
     #[default]
     Seeded,
     FirstRun,
     BlankPanel,
+    MessyPanel,
 }
 
 impl FixtureScenario {
     const fn starts_without_ksx_config(self) -> bool {
-        matches!(self, Self::FirstRun | Self::BlankPanel)
+        matches!(self, Self::FirstRun | Self::BlankPanel | Self::MessyPanel)
     }
 
     /// The default seeded browser fixture historically presents a blank chart
@@ -62,11 +74,19 @@ impl FixtureScenario {
         matches!(self, Self::Seeded | Self::BlankPanel)
     }
 
+    /// A separate fact from `panel_is_blank`, not its opposite: a messy chart
+    /// is the preconfigured baseline with a used board's history overlaid on
+    /// it, so it is neither blank nor the clean 56-key stand-in.
+    const fn panel_is_messy(self) -> bool {
+        matches!(self, Self::MessyPanel)
+    }
+
     const fn label(self) -> &'static str {
         match self {
             Self::Seeded => "seeded-demo",
             Self::FirstRun => "first-run",
             Self::BlankPanel => "blank-encoder",
+            Self::MessyPanel => "messy-encoder",
         }
     }
 }
@@ -82,16 +102,17 @@ where
     let mut generation = None;
     for arg in args {
         let arg = arg.as_ref();
-        if arg == "--first-run" || arg == "--blank-panel" {
+        if arg == "--first-run" || arg == "--blank-panel" || arg == "--messy-panel" {
             if scenario_selected {
                 return Err(
-                    "choose exactly one fixture scenario: --first-run or --blank-panel".into(),
+                    "choose exactly one fixture scenario: --first-run, --blank-panel or --messy-panel"
+                        .into(),
                 );
             }
-            scenario = if arg == "--first-run" {
-                FixtureScenario::FirstRun
-            } else {
-                FixtureScenario::BlankPanel
+            scenario = match arg {
+                "--first-run" => FixtureScenario::FirstRun,
+                "--blank-panel" => FixtureScenario::BlankPanel,
+                _ => FixtureScenario::MessyPanel,
             };
             scenario_selected = true;
         } else if let Some(value) = arg.strip_prefix("--generation=") {
@@ -115,7 +136,7 @@ where
             }
         } else {
             return Err(format!(
-                "unknown fixture argument '{arg}' (usage: macro_fixture [PORT] [--first-run|--blank-panel] [--generation=NONCE])"
+                "unknown fixture argument '{arg}' (usage: macro_fixture [PORT] [--first-run|--blank-panel|--messy-panel] [--generation=NONCE])"
             ));
         }
     }
@@ -254,7 +275,9 @@ impl Store {
             active_slots: Arc::new(AtomicUsize::new(if first_run { 0 } else { 2 })),
             macros: Arc::new(Mutex::new(match scenario {
                 FixtureScenario::Seeded => seed_macros(),
-                FixtureScenario::FirstRun | FixtureScenario::BlankPanel => Vec::new(),
+                FixtureScenario::FirstRun
+                | FixtureScenario::BlankPanel
+                | FixtureScenario::MessyPanel => Vec::new(),
             })),
             stage: Arc::new(Mutex::new(seeded.clone().unwrap_or_default())),
             saved_stage: Arc::new(Mutex::new(seeded)),
@@ -490,6 +513,11 @@ impl StatusSource for Store {
                 "fixture-blank-encoder",
                 "FIXTURE · BLANK ENCODER",
                 "Synthetic first KSX visit with an all-Unassigned encoder chart; no physical devices are read or written.",
+            ),
+            FixtureScenario::MessyPanel => (
+                "fixture-messy-encoder",
+                "FIXTURE · MESSY ENCODER",
+                "Synthetic first KSX visit with a used encoder chart carrying preserved vendor bytes, an opaque shift byte, a shared key and an unassigned terminal; no physical devices are read or written.",
             ),
         };
         ksx_api::RuntimeEnvironmentView::fixture(id, label, detail)
@@ -1176,6 +1204,49 @@ fn main() {
         ("F10", 0x43),
     ];
 
+    /// What `--messy-panel` overlays on the preconfigured baseline, as
+    /// `(terminal_id, normal, alternate, shift)` raw bytes in the board's own
+    /// wire spelling.
+    ///
+    /// This table is written into the IMAGE and nowhere else; the chart is
+    /// decoded back out of that image the way the production driver decodes a
+    /// real read. There is therefore exactly one place these bytes exist, and
+    /// no way for the raw preview and the semantic rows to drift apart.
+    ///
+    /// The vocabulary these bytes are chosen from: `0x00` is Unassigned,
+    /// `0x04..=0x67` and the compacted modifier range `0x70..=0x77` are
+    /// keyboard usages, every other value is a vendor byte KSX preserves and
+    /// cannot name; on the shift plane `0x01` is disabled, `0x41` enabled, and
+    /// anything else is preserved and opaque.
+    const FIXTURE_MESSY_TERMINALS: [(&str, u8, u8, u8); 8] = [
+        // A vendor byte KSX cannot name. Preserved exactly, never selectable
+        // as a KSX key — and the one case a press CAN complete: the firmware
+        // stores something, and only the learner can say what it emits.
+        ("1sw5", 0xE9, 0x00, 0x01),
+        // A Keyboard-page usage the chart can encode and KSX's capture
+        // vocabulary cannot observe (HID 0x66, Keyboard Power). Teaching can
+        // NEVER resolve this one — pressing it produces nothing for a learner
+        // to hear — which is exactly why it carries a different label from
+        // 1sw5 rather than being folded into one "unknown".
+        ("1sw6", 0x66, 0x00, 0x01),
+        // An opaque shift byte: preserved as-is, and specifically not read as
+        // "shift disabled" just because it is not the enabled value.
+        ("1sw7", 0x0E, 0x00, 0x7F),
+        // A real shifted assignment, so the shift terminal below unlocks
+        // something and the alternate plane is not uniformly empty.
+        ("1sw8", 0x0F, 0x3A, 0x01),
+        // The terminal that IS the shift key.
+        ("1start", 0x10, 0x00, 0x41),
+        // Two terminals deliberately emitting one key: the case where an
+        // observation of "S" cannot be attributed to a terminal at all.
+        ("2sw1", 0x16, 0x00, 0x01),
+        ("2sw2", 0x16, 0x00, 0x01),
+        // A byte that is genuinely zero — which a chart read cannot tell apart
+        // from an onboard vendor macro, so nothing may report it as a terminal
+        // that does nothing.
+        ("3sw8", 0x00, 0x00, 0x01),
+    ];
+
     fn fixture_panel_image(scenario: FixtureScenario) -> [u8; 256] {
         let mut bytes = [0; 256];
         bytes[..4].copy_from_slice(&[0x50, 0xDD, 0x56, 0x00]);
@@ -1198,6 +1269,22 @@ fn main() {
             {
                 bytes[4 + usize::from(base)] =
                     u8::try_from(code).expect("fixture key usage fits one byte");
+            }
+        }
+        // A used cabinet's history, laid over that clean baseline. Applied
+        // last so it wins, and applied to the image alone: every semantic row
+        // the chart serves is decoded back out of these same bytes.
+        if scenario.panel_is_messy() {
+            for (id, normal, alternate, shift) in FIXTURE_MESSY_TERMINALS {
+                let base = FIXTURE_IPAC_TERMINALS
+                    .iter()
+                    .find_map(|(candidate, _, base)| {
+                        (*candidate == id).then_some(usize::from(*base))
+                    })
+                    .expect("every messy override names an exact fixture terminal");
+                bytes[4 + base] = normal;
+                bytes[4 + base + 64] = alternate;
+                bytes[4 + base + 128] = shift;
             }
         }
         bytes
@@ -1226,20 +1313,84 @@ fn main() {
         (format!("P{player} {label}"), kind)
     }
 
+    /// Decode one raw action byte into the same `PanelKeyValue` the production
+    /// driver's `key_value` builds, with its exact two unsupported spellings.
+    ///
+    /// The two are a real distinction, not two words for "unknown": a keyboard
+    /// usage KSX cannot observe can never be resolved by pressing the control,
+    /// because nothing arrives for a learner to hear, while an opaque vendor
+    /// byte is precisely the case a press completes. A surface that collapsed
+    /// them would offer teaching that can only ever fail.
+    ///
+    /// The fixture's roster is 56 keys, not the backend's whole observable
+    /// vocabulary, so a real key outside that roster would be mislabelled
+    /// here. None ever reaches this function: every byte it sees comes from
+    /// `FIXTURE_CANONICAL_KEYS` or `FIXTURE_MESSY_TERMINALS`.
+    fn fixture_key_value(raw: u8) -> ksx_api::PanelKeyValue {
+        let code = u16::from(raw);
+        if raw == 0 {
+            return ksx_api::PanelKeyValue {
+                code,
+                key: None,
+                label: "Unassigned".into(),
+                supported: true,
+            };
+        }
+        if let Some((key, _)) = FIXTURE_CANONICAL_KEYS
+            .into_iter()
+            .find(|(_, candidate)| *candidate == code)
+        {
+            return ksx_api::PanelKeyValue {
+                code,
+                key: Some(key.into()),
+                label: key.into(),
+                supported: true,
+            };
+        }
+        let label = if matches!(raw, 0x04..=0x67 | 0x70..=0x77) {
+            format!("Unobservable HID action 0x{raw:02X}")
+        } else {
+            format!("Preserved vendor action 0x{raw:02X}")
+        };
+        ksx_api::PanelKeyValue {
+            code,
+            key: None,
+            label,
+            supported: false,
+        }
+    }
+
+    /// The shift plane's three states, decoded exactly as production decodes
+    /// them. Anything that is not the enabled or disabled value stays opaque
+    /// rather than being rounded down to "disabled" — the difference decides
+    /// whether a mutation is allowed to touch this terminal at all.
+    fn fixture_shift_state(raw: u8) -> ksx_api::PanelShiftState {
+        match raw {
+            0x01 => ksx_api::PanelShiftState::Disabled,
+            0x41 => ksx_api::PanelShiftState::Enabled,
+            _ => ksx_api::PanelShiftState::Opaque,
+        }
+    }
+
     fn fixture_panel_backup(scenario: FixtureScenario) -> ksx_api::PanelBackupRow {
-        let blank = scenario.panel_is_blank();
         let image = fixture_panel_image(scenario);
+        let (backup_id, label) = match scenario {
+            FixtureScenario::Seeded | FixtureScenario::BlankPanel => (
+                "fixture-blank-ipac-original",
+                "Fixture preview · original all-Unassigned chart",
+            ),
+            FixtureScenario::FirstRun => (
+                "fixture-preconfigured-ipac-original",
+                "Fixture preview · original preconfigured 56-key chart",
+            ),
+            FixtureScenario::MessyPanel => (
+                "fixture-messy-ipac-original",
+                "Fixture preview · original used chart, vendor bytes included",
+            ),
+        };
         ksx_api::PanelBackupRow {
-            backup_id: if blank {
-                "fixture-blank-ipac-original".into()
-            } else {
-                "fixture-preconfigured-ipac-original".into()
-            },
-            label: if blank {
-                "Fixture preview · original all-Unassigned chart".into()
-            } else {
-                "Fixture preview · original preconfigured 56-key chart".into()
-            },
+            backup_id: backup_id.into(),
+            label: label.into(),
             created_at: "fixture session".into(),
             board_fingerprint: "fixture-ipac-d209-0430-0056".into(),
             image_sha256: fixture_sha256(&image),
@@ -1248,47 +1399,35 @@ fn main() {
         }
     }
 
-    /// A safe browser-only model of two distinct customer histories. An
+    /// A safe browser-only model of three distinct customer histories. An
     /// ordinary first KSX visit discovers a board whose terminals already
-    /// emit keys; --blank-panel models the exceptional cleared/new EEPROM.
+    /// emit keys; --blank-panel models the exceptional cleared/new EEPROM;
+    /// --messy-panel models the board that actually walks in, carrying every
+    /// terminal state the other two cannot reach.
     /// This fixture never sends an HID report; every plan carries a blocker so
     /// even its confirmation dialog cannot issue a physical write.
     fn fixture_panel_chart(scenario: FixtureScenario, backup: bool) -> ksx_api::PanelChartView {
         let blank = scenario.panel_is_blank();
+        let image = fixture_panel_image(scenario);
+        // Decode the SAME bytes the raw preview carries, instead of writing a
+        // second copy of them by hand. `panel_program_plan` takes its baseline
+        // hash from the image and its `before` value from a row built here: if
+        // the two were authored independently this fixture could serve a
+        // review whose one-byte diff does not describe its own board.
         let mut terminals = Vec::with_capacity(56);
-        for ((id, player, _), (key, code)) in FIXTURE_IPAC_TERMINALS
-            .into_iter()
-            .zip(FIXTURE_CANONICAL_KEYS)
-        {
+        for (id, player, base) in FIXTURE_IPAC_TERMINALS {
             let (terminal_label, kind) = fixture_terminal_label(id, player);
+            let offset = 4 + usize::from(base);
+            let shift_state = fixture_shift_state(image[offset + 128]);
             terminals.push(ksx_api::PanelTerminalRow {
                 terminal_id: id.into(),
                 terminal_label,
                 player,
                 kind: kind.into(),
-                normal: if blank {
-                    ksx_api::PanelKeyValue {
-                        code: 0,
-                        key: None,
-                        label: "Unassigned".into(),
-                        supported: true,
-                    }
-                } else {
-                    ksx_api::PanelKeyValue {
-                        code,
-                        key: Some(key.into()),
-                        label: key.into(),
-                        supported: true,
-                    }
-                },
-                shifted: ksx_api::PanelKeyValue {
-                    code: 0,
-                    key: None,
-                    label: "Unassigned".into(),
-                    supported: true,
-                },
-                shift_state: ksx_api::PanelShiftState::Disabled,
-                is_shift: false,
+                normal: fixture_key_value(image[offset]),
+                shifted: fixture_key_value(image[offset + 64]),
+                shift_state,
+                is_shift: shift_state == ksx_api::PanelShiftState::Enabled,
             });
         }
         let recommended_terminals = terminals
@@ -1316,14 +1455,73 @@ fn main() {
                 safe_for_qualification: index < 36,
             })
             .collect();
-        let image = fixture_panel_image(scenario);
+        // Counted off the decoded rows rather than written into a sentence, so
+        // nothing here can outlive the overlay table it claims to describe.
+        //
+        // These go into `notes` as well as `summary` on purpose: the Studio
+        // route (`nocturne_api_panel_chart`) serves only `board_name`,
+        // `image_sha256`, `terminals` and `notes`, so a count that lived in
+        // `summary` alone would reach the browser not at all. `summary` is
+        // still filled honestly — the CLI read renders it — but the numbers a
+        // page can actually show have to travel in a note.
+        let assigned = terminals
+            .iter()
+            .filter(|terminal| terminal.normal.code != 0)
+            .count();
+        let unknown_actions: usize = terminals
+            .iter()
+            .map(|terminal| {
+                usize::from(!terminal.normal.supported)
+                    + usize::from(!terminal.shifted.supported)
+                    + usize::from(terminal.shift_state == ksx_api::PanelShiftState::Opaque)
+            })
+            .sum();
+        // Scoped: a BTreeMap of borrowed keys has a Drop impl, so its borrow of
+        // `terminals` would otherwise still be live where the vector is moved.
+        let shared_signals = {
+            let mut normal_keys: BTreeMap<&str, usize> = BTreeMap::new();
+            for terminal in &terminals {
+                if let Some(key) = terminal.normal.key.as_deref() {
+                    *normal_keys.entry(key).or_default() += 1;
+                }
+            }
+            normal_keys.values().filter(|count| **count > 1).count()
+        };
+        let mut notes = vec![match scenario {
+            FixtureScenario::Seeded => {
+                "Fixture-only preview; no physical I-PAC was read or changed.".to_owned()
+            }
+            FixtureScenario::BlankPanel => {
+                "Fixture-only blank-encoder preview; no physical I-PAC was read or changed."
+                    .to_owned()
+            }
+            FixtureScenario::FirstRun => {
+                "Fixture-only preconfigured-encoder preview; these deterministic assignments model an existing chart, not a claim about one exact factory image. No physical I-PAC was read or changed."
+                    .to_owned()
+            }
+            FixtureScenario::MessyPanel => {
+                "Fixture-only used-encoder preview; the deterministic overlay models one preserved vendor action, one keyboard usage KSX cannot observe, one opaque shift byte, one shift terminal, one key emitted by two terminals, and one terminal whose byte is zero — which a chart read cannot tell apart from an onboard vendor macro. These are believable bytes, not a claim about one exact vendor encoding. No physical I-PAC was read or changed."
+                    .to_owned()
+            }
+        }];
+        if scenario.panel_is_messy() {
+            notes.push(format!(
+                "{assigned} of 56 normal outputs carry a byte. {unknown_actions} value(s) across the three planes are preserved exactly and cannot be selected as KSX keys. {shared_signals} key(s) are emitted by more than one terminal, so an observation of one of those keys cannot be attributed to a terminal."
+            ));
+        }
         ksx_api::PanelChartView {
             generated_at: "fixture session".into(),
-            summary: if blank {
-                "Fixture preview: complete all-Unassigned I-PAC chart read safely.".into()
-            } else {
-                "Fixture preview: complete preconfigured I-PAC chart read; 56 of 56 normal outputs are assigned."
-                    .into()
+            summary: match scenario {
+                FixtureScenario::Seeded | FixtureScenario::BlankPanel => {
+                    "Fixture preview: complete all-Unassigned I-PAC chart read safely.".into()
+                }
+                FixtureScenario::FirstRun => {
+                    "Fixture preview: complete preconfigured I-PAC chart read; 56 of 56 normal outputs are assigned."
+                        .into()
+                }
+                FixtureScenario::MessyPanel => format!(
+                    "Fixture preview: complete used I-PAC chart read; {assigned} of 56 normal outputs carry a byte, {unknown_actions} value(s) across the three planes are preserved exactly and cannot be selected as KSX keys, and {shared_signals} key(s) are emitted by more than one terminal."
+                ),
             },
             board_id: "USB\\VID_D209&PID_0430\\FIXTURE".into(),
             board_name: "Ultimarc I-PAC 4".into(),
@@ -1347,19 +1545,7 @@ fn main() {
             recommended_terminals,
             key_options,
             backup: backup.then(|| fixture_panel_backup(scenario)),
-            notes: vec![match scenario {
-                FixtureScenario::Seeded => {
-                    "Fixture-only preview; no physical I-PAC was read or changed.".into()
-                }
-                FixtureScenario::BlankPanel => {
-                    "Fixture-only blank-encoder preview; no physical I-PAC was read or changed."
-                        .into()
-                }
-                FixtureScenario::FirstRun => {
-                    "Fixture-only preconfigured-encoder preview; these deterministic assignments model an existing chart, not a claim about one exact factory image. No physical I-PAC was read or changed."
-                        .into()
-                }
-            }],
+            notes,
         }
     }
 
@@ -1614,6 +1800,11 @@ fn main() {
                     "Preconfigured encoder preview available",
                     "Choose Set up to inspect and back up the existing terminal-to-key assignments before routing them through KSX",
                 ),
+                FixtureScenario::MessyPanel => (
+                    "Open I-PAC Setup to load the fixture's used chart, vendor bytes included; no physical report is sent",
+                    "Used encoder preview available",
+                    "Choose Set up to inspect a chart carrying preserved vendor bytes, an opaque shift byte, a shift terminal, a shared key and an unassigned terminal before routing any of it through KSX",
+                ),
             };
             Ok(ksx_api::PanelStatusView {
                 generated_at: "fixture".into(),
@@ -1722,6 +1913,9 @@ fn main() {
                     FixtureScenario::BlankPanel => {
                         "Fixture-only restore points for the blank encoder chart.".into()
                     }
+                    FixtureScenario::MessyPanel => {
+                        "Fixture-only restore points for the used encoder chart.".into()
+                    }
                 },
                 board_fingerprint: "fixture-ipac-d209-0430-0056".into(),
                 backups,
@@ -1811,6 +2005,8 @@ fn main() {
                         .into(),
                     FixtureScenario::FirstRun => "Preview one reversible change to the existing chart while preserving the other 255 bytes."
                         .into(),
+                    FixtureScenario::MessyPanel => "Preview one reversible change to the used chart while preserving the other 255 bytes, vendor bytes included."
+                        .into(),
                 },
                 board_id: "USB\\VID_D209&PID_0430\\FIXTURE".into(),
                 board_name: "Ultimarc I-PAC 4".into(),
@@ -1892,8 +2088,14 @@ mod tests {
                 Some("launch-0123456789abcdef".into()),
             )
         );
+        assert_eq!(
+            parse_fixture_args(["4522", "--messy-panel"]).unwrap(),
+            (4522, FixtureScenario::MessyPanel, None)
+        );
         assert!(parse_fixture_args(["--first-run", "--blank-panel"]).is_err());
         assert!(parse_fixture_args(["--blank-panel", "--blank-panel"]).is_err());
+        assert!(parse_fixture_args(["--messy-panel", "--first-run"]).is_err());
+        assert!(parse_fixture_args(["--messy-panel", "--messy-panel"]).is_err());
         assert!(parse_fixture_args(["4476", "4478"]).is_err());
         assert!(parse_fixture_args(["--generation=one", "--generation=two"]).is_err());
         assert!(parse_fixture_args(["--generation=bad value"]).is_err());
@@ -1905,14 +2107,24 @@ mod tests {
         assert!(!FixtureScenario::Seeded.starts_without_ksx_config());
         assert!(FixtureScenario::FirstRun.starts_without_ksx_config());
         assert!(FixtureScenario::BlankPanel.starts_without_ksx_config());
+        assert!(FixtureScenario::MessyPanel.starts_without_ksx_config());
 
         assert!(FixtureScenario::Seeded.panel_is_blank());
         assert!(!FixtureScenario::FirstRun.panel_is_blank());
         assert!(FixtureScenario::BlankPanel.panel_is_blank());
+        assert!(!FixtureScenario::MessyPanel.panel_is_blank());
+
+        // Not-blank is two different boards: the clean 56-key stand-in and the
+        // used one. Nothing may treat "not blank" as "ordinary".
+        assert!(!FixtureScenario::Seeded.panel_is_messy());
+        assert!(!FixtureScenario::FirstRun.panel_is_messy());
+        assert!(!FixtureScenario::BlankPanel.panel_is_messy());
+        assert!(FixtureScenario::MessyPanel.panel_is_messy());
 
         assert_eq!(FixtureScenario::Seeded.label(), "seeded-demo");
         assert_eq!(FixtureScenario::FirstRun.label(), "first-run");
         assert_eq!(FixtureScenario::BlankPanel.label(), "blank-encoder");
+        assert_eq!(FixtureScenario::MessyPanel.label(), "messy-encoder");
     }
 
     #[test]
@@ -1932,6 +2144,11 @@ mod tests {
                 FixtureScenario::BlankPanel,
                 "fixture-blank-encoder",
                 "FIXTURE · BLANK ENCODER",
+            ),
+            (
+                FixtureScenario::MessyPanel,
+                "fixture-messy-encoder",
+                "FIXTURE · MESSY ENCODER",
             ),
         ];
 
@@ -1985,6 +2202,25 @@ mod tests {
         assert!(staged.slots.is_empty());
         assert!(StatusSource::mapper(&store).slots.is_empty());
         assert!(ControlSource::start(&store, None).is_err());
+    }
+
+    /// The messy chart is a fact about the ENCODER. KSX's own history is still
+    /// empty, exactly like the other two hardware scenarios — otherwise a
+    /// manual pass would be reading a used board through a pre-seeded KSX and
+    /// could not tell which of the two supplied a claim.
+    #[test]
+    fn messy_panel_is_also_a_clean_ksx_visit() {
+        let store = Store::new(FixtureScenario::MessyPanel);
+        let staged = ControlSource::staged(&store);
+        assert!(staged.reachable);
+        assert!(staged.empty);
+        assert!(!staged.dirty);
+        assert!(staged.device.is_none());
+        assert!(staged.slots.is_empty());
+        assert!(StatusSource::mapper(&store).slots.is_empty());
+        assert!(StatusSource::snapshot(&store).pads.is_empty());
+        assert!(ControlSource::start(&store, None).is_err());
+        assert!(StatusSource::macros(&store, PRESET).macros.is_empty());
     }
 
     #[test]

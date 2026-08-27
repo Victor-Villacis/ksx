@@ -71,7 +71,7 @@ pub trait MachineSource: Send + Sync {
     fn panel_status(&self, _spec: &PanelStatusSpec) -> Result<PanelStatusView, Refusal> {
         Err(Refusal::not_here(
             "inspecting panel encoder capabilities",
-            "run `ksx panel status`",
+            "encoder identity",
         ))
     }
 
@@ -85,7 +85,7 @@ pub trait MachineSource: Send + Sync {
     fn panel_chart(&self, _spec: &PanelChartSpec) -> Result<PanelChartView, Refusal> {
         Err(Refusal::not_here(
             "reading the panel encoder chart",
-            "run `ksx panel chart`",
+            "reading an encoder chart",
         ))
     }
 
@@ -114,7 +114,7 @@ pub trait MachineSource: Send + Sync {
     fn panel_backups(&self, _spec: &PanelBackupsSpec) -> Result<PanelBackupsView, Refusal> {
         Err(Refusal::not_here(
             "listing panel encoder backups",
-            "run `ksx panel backups`",
+            "encoder backup listing",
         ))
     }
 
@@ -126,7 +126,7 @@ pub trait MachineSource: Send + Sync {
     fn panel_hardware_profiles(&self) -> Result<PanelHardwareProfilesView, Refusal> {
         Err(Refusal::not_here(
             "listing saved encoder layouts",
-            "open Encoder setup in KSX Studio",
+            "open the ksx Studio; saved panel layouts appear under How the keys are drawn",
         ))
     }
 
@@ -139,7 +139,7 @@ pub trait MachineSource: Send + Sync {
     ) -> Result<PanelHardwareProfileMutationView, Refusal> {
         Err(Refusal::not_here(
             "saving an encoder layout",
-            "open Encoder setup in KSX Studio",
+            "saved layout management",
         ))
     }
 
@@ -152,7 +152,7 @@ pub trait MachineSource: Send + Sync {
     ) -> Result<PanelHardwareProfileMutationView, Refusal> {
         Err(Refusal::not_here(
             "deleting a saved encoder layout",
-            "open Encoder setup in KSX Studio",
+            "saved layout management",
         ))
     }
 
@@ -166,7 +166,7 @@ pub trait MachineSource: Send + Sync {
     ) -> Result<PanelProgramPlanView, Refusal> {
         Err(Refusal::not_here(
             "planning a panel encoder change",
-            "run `ksx panel program` without `--yes`",
+            "ksx does not write to encoder hardware",
         ))
     }
 
@@ -175,7 +175,7 @@ pub trait MachineSource: Send + Sync {
     fn panel_program(&self, _spec: &PanelProgramApplySpec) -> Result<PanelProgramOutcome, Refusal> {
         Err(Refusal::not_here(
             "programming the panel encoder",
-            "run `ksx panel program --yes`",
+            "ksx does not write to encoder hardware",
         ))
     }
 
@@ -187,7 +187,7 @@ pub trait MachineSource: Send + Sync {
     ) -> Result<PanelProgramPlanView, Refusal> {
         Err(Refusal::not_here(
             "planning a panel encoder restore",
-            "run `ksx panel restore` without `--yes`",
+            "ksx does not write to encoder hardware",
         ))
     }
 
@@ -196,7 +196,7 @@ pub trait MachineSource: Send + Sync {
     fn panel_restore(&self, _spec: &PanelRestoreApplySpec) -> Result<PanelProgramOutcome, Refusal> {
         Err(Refusal::not_here(
             "restoring the panel encoder",
-            "run `ksx panel restore --yes`",
+            "ksx does not write to encoder hardware",
         ))
     }
 
@@ -3859,6 +3859,19 @@ mod tests {
 
     /// A surface that implements nothing still SAYS something, per call, with
     /// the command that works — the CONTROL-SURFACE invariant, as a default.
+    ///
+    /// **This test can only check that a remedy SAYS something, never that what
+    /// it says exists.** `ksx-api` cannot see the clap tree, so for months it
+    /// asserted `ksx panel status`, `ksx panel chart`, `ksx panel program`,
+    /// `ksx panel restore` and "Encoder setup" — every one of which had been
+    /// deleted — and in asserting them it ENFORCED them. A guard that pins a
+    /// lie is worse than no guard.
+    ///
+    /// The half that needs real evidence now lives in `ksx-app`'s parity suite,
+    /// which walks the built binary's own `--help`: see
+    /// `every_machine_remedy_names_a_verb_that_exists`. What stays here is what
+    /// this crate can honestly know — that every default refuses, and refuses
+    /// with words.
     #[test]
     fn every_unimplemented_machine_verb_names_the_command_that_works() {
         struct Nothing;
@@ -3868,57 +3881,57 @@ mod tests {
             ("ksx devices", Nothing.devices().unwrap_err()),
             ("ksx device scan", Nothing.device_scan().unwrap_err()),
             (
-                "ksx panel status",
+                "encoder identity",
                 Nothing
                     .panel_status(&PanelStatusSpec::default())
                     .unwrap_err(),
             ),
             (
-                "ksx panel chart",
+                "reading an encoder chart",
                 Nothing.panel_chart(&PanelChartSpec::default()).unwrap_err(),
             ),
             (
-                "ksx panel backups",
+                "encoder backup listing",
                 Nothing
                     .panel_backups(&PanelBackupsSpec::default())
                     .unwrap_err(),
             ),
             (
-                "Encoder setup",
+                "How the keys are drawn",
                 Nothing.panel_hardware_profiles().unwrap_err(),
             ),
             (
-                "Encoder setup",
+                "saved layout management",
                 Nothing
                     .panel_hardware_profile_save(&PanelHardwareProfileSaveSpec::default())
                     .unwrap_err(),
             ),
             (
-                "Encoder setup",
+                "saved layout management",
                 Nothing
                     .panel_hardware_profile_delete(&PanelHardwareProfileDeleteSpec::default())
                     .unwrap_err(),
             ),
             (
-                "ksx panel program",
+                "ksx does not write to encoder hardware",
                 Nothing
                     .panel_program_plan(&PanelProgramSpec::default())
                     .unwrap_err(),
             ),
             (
-                "ksx panel program",
+                "ksx does not write to encoder hardware",
                 Nothing
                     .panel_program(&PanelProgramApplySpec::default())
                     .unwrap_err(),
             ),
             (
-                "ksx panel restore",
+                "ksx does not write to encoder hardware",
                 Nothing
                     .panel_restore_plan(&PanelRestoreSpec::default())
                     .unwrap_err(),
             ),
             (
-                "ksx panel restore",
+                "ksx does not write to encoder hardware",
                 Nothing
                     .panel_restore(&PanelRestoreApplySpec::default())
                     .unwrap_err(),

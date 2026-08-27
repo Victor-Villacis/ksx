@@ -108,6 +108,96 @@ fn cli_verbs() -> &'static BTreeSet<String> {
     &VERBS
 }
 
+/// **A refusal may only name a verb that exists.**
+///
+/// `MachineSource`'s defaults are the sentence a surface says when it cannot do
+/// something, and every one of them ends with a way forward. For months several
+/// of those ways forward were `ksx panel status`, `ksx panel chart`,
+/// `ksx panel program` and `ksx panel restore` — commands deleted by `3901990`
+/// along with the encoder chart surface. A user who hit the refusal was told to
+/// run something that answers `error: unrecognized subcommand`.
+///
+/// `ksx-api`'s own test could not catch it. That crate cannot see the clap tree,
+/// so all it could check was that *a string* was present — and by asserting the
+/// exact dead strings it ENFORCED them. This is the same class the parity suite
+/// already exists for: the evidence lives in the built binary, so the guard has
+/// to live where the built binary is.
+///
+/// Only ``ksx …`` in backticks counts, and only outside a doc comment. A
+/// remedy is free to name a surface ("open the ksx Studio"), a concept
+/// ("saved layout management"), or a fact ("ksx does not write to encoder
+/// hardware") — what it may not do is spell a command that does not exist.
+///
+/// Prose is skipped deliberately. A doc comment names the verb a trait method
+/// CORRESPONDS to, which is a statement about the domain and stays true while
+/// a surface is missing; a remedy is an instruction to a user standing in
+/// front of a refusal, and that has to work today.
+#[test]
+fn every_machine_remedy_names_a_verb_that_exists() {
+    const SRC: &str = include_str!("../../ksx-api/src/machine.rs");
+
+    // Verbs this build genuinely lacks because a Cargo feature is off. The
+    // parity binary is built with default features, so `Studio` — which is
+    // `#[cfg(feature = "studio")]` — is absent from its `--help` while being
+    // perfectly real in a shipped build. Naming it here is cheaper and far
+    // more honest than teaching the walk to build every feature combination.
+    const FEATURE_GATED: &[&str] = &["studio"];
+
+    let verbs = cli_verbs();
+    let mut missing: Vec<String> = Vec::new();
+
+    // Every ``ksx …`` token in the file, taken from the source rather than by
+    // calling 200 trait defaults: the remedies are literals, and reading them
+    // where they are written means a new one is covered the day it is added.
+    for line in SRC.lines() {
+        // Prose describes; a remedy instructs. Only the instruction is checked.
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        for (at, _) in line.match_indices("`ksx ") {
+            let rest = &line[at + 1..];
+            let Some(end) = rest.find('`') else { continue };
+            let quoted = &rest[..end];
+            // Flags and placeholders are not part of the verb path: `ksx panel
+            // program --yes` and `ksx device pick <ID>` are the `panel program` and
+            // `device pick` verbs.
+            let verb = quoted
+                .split_whitespace()
+                // A verb path segment is always a plain identifier, so the path
+                // ends at the first word that is not one: a flag, a `<PLACEHOLDER>`,
+                // or a quoted argument. `ksx preset new "<NAME>" --from-template
+                // <ID>` is the `preset new` verb.
+                .take_while(|word| {
+                    !word.is_empty()
+                        && !word.starts_with('-')
+                        && word
+                            .chars()
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let Some(path) = verb.strip_prefix("ksx ") else {
+                continue;
+            };
+            if path.is_empty() || verbs.contains(path) || FEATURE_GATED.contains(&path) {
+                continue;
+            }
+            missing.push(format!("`{quoted}` (no `{path}` verb)"));
+        }
+    }
+    missing.sort();
+    missing.dedup();
+
+    assert!(
+        missing.is_empty(),
+        "crates/ksx-api/src/machine.rs tells a user to run commands this build \
+         does not have. A refusal that names a dead verb is worse than one that \
+         names nothing — the user follows it and gets `unrecognized \
+         subcommand`. Either ship the verb or reword the remedy to name a \
+         surface, a concept or a fact instead: {missing:#?}"
+    );
+}
+
 fn walk_clap_tree() -> BTreeSet<String> {
     let dir = std::env::temp_dir().join(format!("ksx-parity-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("temp dir {}: {e}", dir.display()));

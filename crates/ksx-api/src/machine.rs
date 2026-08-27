@@ -1293,6 +1293,21 @@ pub enum PanelTerminalAnswer {
     /// The user locked this in and nothing ksx obtained disagrees, because
     /// nothing ksx obtained exists.
     Declared { key: String },
+    /// The chart holds a byte ksx cannot name, and the user has said what the
+    /// control sends. **Not a conflict** — the declaration COMPLETED the chart,
+    /// exactly as [`Self::Resolved`] does when a press completes it.
+    ///
+    /// Without this the declaration was stored, kept, and then dropped from the
+    /// answer: a chart that cannot name a byte does not contradict anything, so
+    /// the contradiction arm never fired and the chart's own "I cannot say"
+    /// stood as the whole sentence. The person typed it in and saw no sign of it.
+    ///
+    /// It is deliberately weaker than `Resolved`: a press is measured, this is
+    /// claimed, and the sentence says which.
+    DeclaredCompletes {
+        stored: PanelKeyValue,
+        declared: String,
+    },
     /// A later chart read contradicts what the user locked in. Both are shown;
     /// neither is silently corrected and neither is deleted.
     DeclaredContradicted {

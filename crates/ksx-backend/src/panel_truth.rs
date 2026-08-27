@@ -223,6 +223,16 @@ pub fn compose(facts: &TerminalFacts<'_>) -> PanelTerminalTruth {
             // the firmware made ksx stop reporting that the user's own
             // declaration contradicted it — corroboration hid the conflict.
             match (facts.declared, observable(normal)) {
+                // A chart that cannot NAME the byte does not contradict a
+                // declaration — it is completed by one, the way a press
+                // completes it into `Resolved`. Measured on a real I-PAC 4X:
+                // 2coin holds vendor byte 0xE0, a declaration was filed, and the
+                // answer showed no sign of it because the contradiction arm
+                // below needs a key to disagree WITH.
+                (Some(d), None) if !d.key.is_empty() => PanelTerminalAnswer::DeclaredCompletes {
+                    stored: normal.clone(),
+                    declared: d.key.clone(),
+                },
                 (Some(d), Some(key)) if !d.key.is_empty() && d.key != key => {
                     PanelTerminalAnswer::DeclaredContradicted {
                         declared: d.key.clone(),
@@ -295,7 +305,8 @@ fn press_would_help(answer: &PanelTerminalAnswer) -> bool {
         // A byte ksx cannot name, and an unassigned one, are byte-identical to a
         // macro. Only a press separates them.
         PanelTerminalAnswer::StoredUnclassified { label, .. } => !label.contains(UNOBSERVABLE_ACTION),
-        PanelTerminalAnswer::StoredUnassigned
+        PanelTerminalAnswer::DeclaredCompletes { .. }
+        | PanelTerminalAnswer::StoredUnassigned
         | PanelTerminalAnswer::ChartImpossible
         | PanelTerminalAnswer::ChartUnknownBoard
         | PanelTerminalAnswer::ChartRefused
@@ -403,6 +414,11 @@ fn detail_for(answer: &PanelTerminalAnswer) -> String {
         PanelTerminalAnswer::Declared { key } => {
             format!("You told ksx this control sends {key}.")
         }
+        PanelTerminalAnswer::DeclaredCompletes { stored, declared } => format!(
+            "{}. ksx cannot name that byte; you told ksx this control sends {declared}. Pressing \
+             it would turn that into something ksx measured itself.",
+            stored.label
+        ),
         PanelTerminalAnswer::DeclaredContradicted { declared, stored } => format!(
             "You told ksx this control sends {declared}; the board says it stores {}. Both are \
              kept — you may be right about the wiring even when the firmware disagrees.",
@@ -1313,5 +1329,65 @@ mod tests {
             "the board emitted Z and nothing in the chart holds it",
         );
         assert_eq!(attributed.candidates, ["1sw1"]);
+    }
+
+    /// **A chart that cannot name a byte does not contradict a declaration.**
+    ///
+    /// Found by running the verb on a real I-PAC 4X: `2coin` holds vendor byte
+    /// 0xE0, a declaration was filed and stored, and the composed answer showed
+    /// no sign of it — the contradiction arm needs a key to disagree WITH, so a
+    /// declaration against an unnameable byte fell through to the chart's own
+    /// "I cannot say". The person typed it in and saw nothing.
+    #[test]
+    fn a_declaration_completes_a_byte_the_chart_cannot_name() {
+        let declared = PanelDeclaredEvidence {
+            key: "F11".to_owned(),
+            declared_at: "2026-08-27T00:00:00Z".to_owned(),
+            against_image_sha256: None,
+            note: String::new(),
+        };
+        let truth = compose(&TerminalFacts {
+            terminal_id: "2coin",
+            terminal_label: "Player 2 · Coin",
+            player: 2,
+            chart: &read(vendor(0xE0)),
+            observed: None,
+            declared: Some(&declared),
+            learner_reachable: true,
+        });
+
+        match &truth.answer {
+            PanelTerminalAnswer::DeclaredCompletes { declared, stored } => {
+                assert_eq!(declared, "F11");
+                // The byte is still there. A declaration never replaces what the
+                // firmware holds; it says what the person knows about it.
+                assert_eq!(stored.code, 0xE0);
+            }
+            other => panic!("the declaration was dropped from the answer: {other:?}"),
+        }
+        assert!(truth.detail.contains("F11"), "{}", truth.detail);
+        assert!(
+            truth.invite_press,
+            "a press would turn a claim into a measurement",
+        );
+
+        // An unassigned byte is the same case: zero is indistinguishable from a
+        // macro, so a declaration there is additive too, not contradicted.
+        let silent = compose(&TerminalFacts {
+            chart: &read(unassigned()),
+            ..TerminalFacts {
+                terminal_id: "3sw8",
+                terminal_label: "Player 3 · Button 8",
+                player: 3,
+                chart: &read(unassigned()),
+                observed: None,
+                declared: Some(&declared),
+                learner_reachable: true,
+            }
+        });
+        assert!(matches!(
+            silent.answer,
+            PanelTerminalAnswer::DeclaredCompletes { .. }
+        ));
     }
 }

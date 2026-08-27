@@ -2886,7 +2886,10 @@ fn nocturne_journey(
     steps.push(journey_step(
         "device",
         "Pick the input",
-        "Choose the keyboard or arcade encoder whose keys this setup splits.          Nothing is saved or started by choosing.",
+        concat!(
+            "Choose the keyboard or arcade encoder whose keys this setup ",
+            "splits. Nothing is saved or started by choosing.",
+        ),
         if picked { Done } else { Now },
     ));
 
@@ -2910,7 +2913,10 @@ fn nocturne_journey(
     steps.push(journey_step(
         "controller",
         "Add controllers",
-        "Make the virtual controllers this input drives. Up to sixteen, each          with its own identity.",
+        concat!(
+            "Make the virtual controllers this input drives. Up to sixteen, ",
+            "each with its own identity.",
+        ),
         if made {
             Done
         } else if picked {
@@ -2923,7 +2929,11 @@ fn nocturne_journey(
     steps.push(journey_step(
         "mapping",
         "Bind the keys",
-        "Say which key drives which control. A ready-made layout does most of          it; the rest is pressing a key and picking what it should do.",
+        concat!(
+            "Say which key drives which control. A ready-made layout does ",
+            "most of it; the rest is pressing a key and picking what it ",
+            "should do.",
+        ),
         if bound {
             Done
         } else if made {
@@ -2936,7 +2946,10 @@ fn nocturne_journey(
     steps.push(journey_step(
         "play",
         "Play",
-        "Create the controllers and take the keys. Stop returns the keyboard          to normal.",
+        concat!(
+            "Create the controllers and take the keys. Stop returns the ",
+            "keyboard to normal.",
+        ),
         if running {
             Done
         } else if bound {

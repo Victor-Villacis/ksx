@@ -18,8 +18,12 @@ pub(super) struct RedesignQuery {
 /// verb's sentences ARE nocturne's constants: one wording, two pages, so the
 /// copy cannot drift between the surfaces (the cutover's "provider text"
 /// lesson, applied in advance).
-const RD_FLASH_ALLOWLIST: [&str; 4] =
-    [N_THEME_OK, N_THEME_UNKNOWN, N_EDIT_ERROR, N_UNKNOWN_FLASH_ERROR];
+const RD_FLASH_ALLOWLIST: [&str; 4] = [
+    N_THEME_OK,
+    N_THEME_UNKNOWN,
+    N_EDIT_ERROR,
+    N_UNKNOWN_FLASH_ERROR,
+];
 
 pub(super) fn redesign_flash_from_query(flash: Option<&str>) -> Option<String> {
     let flash = flash?.trim();
@@ -40,10 +44,9 @@ fn redesign_redirect(flash: &str) -> Response {
 }
 
 /// One fresh [`RedesignPayload`]: the machine provenance and the theme
-/// roster, on a blocking worker like every other collector read. The setup
-/// read is the SAME `machine_cache` read `page_theme` stamps the page from,
-/// so the menu's marked row and the `<html data-theme>` stamp cannot
-/// disagree within a render.
+/// roster, on a blocking worker like every other collector read. The page
+/// derives its `<html data-theme>` stamp from the chosen row in this payload,
+/// so the stamp and the menu cannot disagree within a render.
 pub(super) async fn collect_redesign(state: &Arc<AppState>) -> RedesignPayload {
     let redesign_state = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
@@ -71,6 +74,22 @@ pub(super) async fn collect_redesign(state: &Arc<AppState>) -> RedesignPayload {
     .unwrap_or_default()
 }
 
+/// The root stamp for one already-collected payload. System is represented by
+/// the absence of `data-theme`, just as it is everywhere else; an unreadable
+/// setup has no chosen row and therefore also renders without a claim.
+///
+/// Deliberately do not read setup again here. The chosen row was composed from
+/// the collector's one cached `SetupView`, making it the page's single theme
+/// truth for both SSR chrome and the document root.
+fn theme_from_payload(payload: &RedesignPayload) -> Option<&str> {
+    payload
+        .theme_rows
+        .iter()
+        .find(|row| row.chosen)
+        .map(|row| row.name.as_str())
+        .filter(|theme| *theme != "system")
+}
+
 /// `GET /redesign` — the redesign lane's canvas workbench.
 pub(super) async fn redesign_page(
     State(state): State<Arc<AppState>>,
@@ -78,10 +97,9 @@ pub(super) async fn redesign_page(
 ) -> Response {
     let payload = collect_redesign(&state).await;
     let flash = redesign_flash_from_query(query.flash.as_deref());
-    let theme = page_theme(&state).await;
     let out = crate::render::with_theme(
         render_redesign(&state.redesign_page.get(), &payload, flash.as_deref()),
-        theme.as_deref(),
+        theme_from_payload(&payload),
     );
     (
         [
@@ -132,7 +150,10 @@ pub(super) async fn redesign_form_theme(
     Form(form): Form<RedesignThemeForm>,
 ) -> Response {
     let Some(field) = form.theme else {
-        return redesign_redirect("the form did not say which theme — pick one on the page");
+        // Keep the scripted and no-JavaScript paths on the same allowlisted
+        // feedback channel. A literal here would be read directly from the
+        // redirect URL by fetch enhancement but replaced on a full render.
+        return redesign_redirect(N_THEME_UNKNOWN);
     };
     let wanted = field.trim().to_owned();
     let stored = if wanted == "system" {
@@ -151,4 +172,43 @@ pub(super) async fn redesign_form_theme(
     .await
     .unwrap_or(false);
     redesign_redirect(if ok { N_THEME_OK } else { N_EDIT_ERROR })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn theme_row(name: &str, chosen: bool) -> crate::snapshot::NocturneChoiceRow {
+        crate::snapshot::NocturneChoiceRow {
+            name: name.to_owned(),
+            chosen,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn root_theme_comes_from_the_payloads_chosen_row() {
+        let mut payload = RedesignPayload {
+            theme_rows: vec![theme_row("system", true), theme_row("matrix", false)],
+            ..Default::default()
+        };
+        assert_eq!(
+            theme_from_payload(&payload),
+            None,
+            "System has no root stamp"
+        );
+
+        payload.theme_rows[0].chosen = false;
+        payload.theme_rows[1].chosen = true;
+        assert_eq!(theme_from_payload(&payload), Some("matrix"));
+
+        for row in &mut payload.theme_rows {
+            row.chosen = false;
+        }
+        assert_eq!(
+            theme_from_payload(&payload),
+            None,
+            "an unreadable setup makes no root-theme claim"
+        );
+    }
 }

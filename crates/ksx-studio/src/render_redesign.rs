@@ -127,7 +127,10 @@ fn build_slots(module: &IrModule, payload: &RedesignPayload, flash: Option<&str>
     let scalars = scalar_slots(payload, flash).to_string();
     let mut slots = SlotData::from_json(&scalars, module)
         .unwrap_or_else(|_| SlotData::new_from_defaults(&module.slots));
-    if let Some(id) = named_slot_ids(module, LIST_SLOT_THEME_ROWS).into_iter().next() {
+    if let Some(id) = named_slot_ids(module, LIST_SLOT_THEME_ROWS)
+        .into_iter()
+        .next()
+    {
         slots.set(
             id,
             SlotValue::array(payload.theme_rows.iter().map(mode_row).collect()),
@@ -266,7 +269,11 @@ mod tests {
     #[test]
     fn the_workbench_tiers_sort_like_the_nocturne_roster() {
         let devices = RedesignDeviceRows::of(Some(&fixture_scan()), "");
-        assert_eq!(devices.encoders.len(), 1, "role wins over looks_like_a_keyboard");
+        assert_eq!(
+            devices.encoders.len(),
+            1,
+            "role wins over looks_like_a_keyboard"
+        );
         assert_eq!(devices.encoders[0].name, "Ultimarc I-PAC 4");
         assert_eq!(devices.encoders[0].role, "panel-encoder");
         assert!(
@@ -527,7 +534,13 @@ mod tests {
                 "RedesignIsland.ts no longer declares the '{signal}' signal the seam injects"
             );
         }
-        for signal in ["rdThemeRows", "rdDevKb", "rdDevEnc", "rdDevExp", "rdDevOther"] {
+        for signal in [
+            "rdThemeRows",
+            "rdDevKb",
+            "rdDevEnc",
+            "rdDevExp",
+            "rdDevOther",
+        ] {
             assert!(
                 REDESIGN_ISLAND_TS.contains(&format!("const [{signal}, ")),
                 "RedesignIsland.ts no longer declares the '{signal}' list signal the seam fills"

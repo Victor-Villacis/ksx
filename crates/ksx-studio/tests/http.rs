@@ -5358,6 +5358,17 @@ fn the_redesign_theme_form_round_trips_like_nocturnes() {
         2,
         "a refused id must never reach the machine provider"
     );
+
+    let response = post_form(addr, "/redesign/theme", "");
+    assert!(
+        response.contains("flash=error"),
+        "a missing field uses the same allowlisted error in every client: {response}"
+    );
+    assert_eq!(
+        machine.set_theme_specs.lock().unwrap().len(),
+        2,
+        "a missing field must never reach the machine provider"
+    );
 }
 
 /// With no daemon, the config half of the page keeps working and the two verbs

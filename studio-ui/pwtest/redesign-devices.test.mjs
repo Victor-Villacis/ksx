@@ -18,6 +18,11 @@ import path from "node:path";
 
 import { chromium } from "playwright";
 import { stopFixtureProcess } from "./fixture-process.mjs";
+import {
+  claimSavedDeviceGeometryKey,
+  deviceInstanceId,
+  legacyDeviceInstanceId,
+} from "../src/device-instance-id.ts";
 
 /** OUR port: never 4460 (a real `ksx studio`), and never another suite's. */
 const PORT = Number(process.env.KSX_PWTEST_REDESIGN_DEVICES_PORT ?? 4531);
@@ -30,8 +35,8 @@ const targetDir = process.env.CARGO_TARGET_DIR
 // The fixture's roster, by RAW selector (macro_fixture.rs device_scan).
 const IPAC = "usb:d209:0430:00";
 const G915 = "usb:046d:c545:00";
-const IPAC_SLUG = "dev-usb-d209-0430-00";
-const G915_SLUG = "dev-usb-046d-c545-00";
+const IPAC_SLUG = deviceInstanceId(IPAC);
+const G915_SLUG = deviceInstanceId(G915);
 
 let server;
 let browser;
@@ -120,14 +125,111 @@ async function openBench() {
 }
 
 describe("the device workbench", () => {
+  test("the complete raw selector owns a collision-resistant canvas identity", () => {
+    const punctuationTwinA = "opaque:panel/a";
+    const punctuationTwinB = "opaque:panel:a";
+    const longSharedPrefix = `usb:${"a".repeat(120)}`;
+    const longTwinA = `${longSharedPrefix}:port=1`;
+    const longTwinB = `${longSharedPrefix}:port=2`;
+
+    for (const [left, right] of [
+      [punctuationTwinA, punctuationTwinB],
+      [longTwinA, longTwinB],
+    ]) {
+      assert.equal(
+        legacyDeviceInstanceId(left),
+        legacyDeviceInstanceId(right),
+        "the fixture pair must reproduce the old lossy-key collision",
+      );
+      assert.notEqual(
+        deviceInstanceId(left),
+        deviceInstanceId(right),
+        "the complete selector must distinguish twin boards",
+      );
+      for (const id of [deviceInstanceId(left), deviceInstanceId(right)]) {
+        assert.match(id, /^[A-Za-z0-9_-]+$/, "the engine-safe charset is preserved");
+        assert.ok(id.length <= 96, `canvas identity is ${id.length} characters`);
+      }
+    }
+    assert.equal(
+      deviceInstanceId(IPAC),
+      "dev-usb-d209-0430-00-01xwu04m1az45",
+      "the persisted identity for a known selector stays stable",
+    );
+
+    const legacyKey = legacyDeviceInstanceId(punctuationTwinA);
+    const savedKeys = new Set([legacyKey]);
+    const owners = new Map();
+    assert.equal(
+      claimSavedDeviceGeometryKey(punctuationTwinA, savedKeys, owners),
+      legacyKey,
+      "the first raw selector claims its migrated coordinates",
+    );
+    assert.equal(
+      claimSavedDeviceGeometryKey(punctuationTwinB, savedKeys, owners),
+      undefined,
+      "a colliding twin falls back to its staggered home instead of stacking",
+    );
+    assert.equal(
+      claimSavedDeviceGeometryKey(punctuationTwinA, savedKeys, owners),
+      legacyKey,
+      "the same board can reclaim its position after a remove/add cycle",
+    );
+  });
+
   test("the picker serves every tier; picking two boards benches two widgets", async () => {
     const page = await openBench();
-    await page.click('[data-nx="rd-devs-open"]');
+    const opener = page.locator('[data-nx="rd-devs-open"]');
+    await opener.click();
     assert.equal(
       await page.locator(".rd-devmodal[hidden]").count(),
       0,
       "the modal opens",
     );
+    assert.equal(
+      await page.evaluate(() =>
+        document.activeElement?.matches('.rd-devmodal button[data-nx="rd-devs-close"]')
+      ),
+      true,
+      "the picker lands on its first reliable control",
+    );
+    // The modal owns keyboard focus in both directions.
+    const modalControls = page.locator(".rd-devmodal-panel button:not([disabled])");
+    await modalControls.last().focus();
+    await page.keyboard.press("Tab");
+    assert.equal(
+      await page.evaluate(() =>
+        document.activeElement?.matches('.rd-devmodal button[data-nx="rd-devs-close"]')
+      ),
+      true,
+      "Tab wraps from the last control to the first",
+    );
+    await page.keyboard.press("Shift+Tab");
+    assert.equal(
+      await page.evaluate(() => document.activeElement === document.querySelectorAll(
+        ".rd-devmodal-panel button:not([disabled])",
+      ).item(document.querySelectorAll(".rd-devmodal-panel button:not([disabled])").length - 1)),
+      true,
+      "Shift+Tab wraps from the first control to the last",
+    );
+    // Ctrl+K transfers ownership instead of stacking two modal surfaces. Its
+    // Escape return lands on the original Devices opener.
+    await page.keyboard.press("Control+k");
+    assert.equal(await page.locator(".rd-devmodal[hidden]").count(), 1, "palette closes Devices");
+    assert.equal(await page.locator(".rd-palette[hidden]").count(), 0, "palette opens alone");
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.matches(".rd-palette-input")),
+      true,
+      "the palette owns focus",
+    );
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator(".rd-palette[hidden]").count(), 1, "Escape closes the palette");
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.matches('[data-nx="rd-devs-open"]')),
+      true,
+      "closing the replacement overlay returns to the Devices opener",
+    );
+    await opener.click();
     // All four folds, with the fixture's counts — and the scan's own line.
     for (const head of [
       "Keyboards · 1",
@@ -201,6 +303,11 @@ describe("the device workbench", () => {
       await page.locator(".rd-devmodal[hidden]").count(),
       1,
       "Escape closes the picker first",
+    );
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.matches('[data-nx="rd-devs-open"]')),
+      true,
+      "closing the picker restores its opener",
     );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();

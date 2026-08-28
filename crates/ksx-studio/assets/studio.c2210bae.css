@@ -18864,6 +18864,12 @@ a.nm-link {
   position: relative;
 }
 
+/* The Inspector is fixed at layer 30. Lift only the open disclosure above it
+   so the resting topbar does not become an unnecessary stacking context. */
+.rd-themed[open] {
+  z-index: 31;
+}
+
 .rd-theme-sum {
   display: inline-block;
   padding: 5px 11px;
@@ -19419,6 +19425,10 @@ a.nm-link {
 }
 
 @media (pointer: coarse) {
+  .rd-theme-sum {
+    min-height: 40px;
+  }
+
   .rd .n-mapclose,
   .rd-insp-head .n-mapclose {
     width: 40px;

@@ -33,49 +33,61 @@ function embeddedPayload<T>(): T | null {
  *  No interval poller on this page yet: the canvas is client state, and the
  *  seam's fields change on human actions, so a refresh after each verb is
  *  enough until a transplant brings live data. */
-async function refresh(): Promise<void> {
+async function refresh(): Promise<boolean> {
   try {
     const res = await fetch("/api/redesign", { headers: { accept: "application/json" } });
-    if (!res.ok) return;
+    if (!res.ok) return false;
     applyRedesign((await res.json()) as RedesignPayload);
+    return true;
   } catch {
     // The flash already said what failed; the page keeps its last truth.
+    return false;
   }
 }
 
-/** Fetch-enhance the plain-HTML forms (the nocturne.ts pattern). With
- *  JavaScript off they POST + 303 + full reload, which is the baseline this
- *  page is built on; with it on, the submit goes through fetch, the outcome
- *  is read out of the redirect's ?flash= query, and the payload refreshes in
- *  place. Delegated on the island root, because the theme rows are
- *  reconciled and a per-form listener would die with its row. */
+/** Fetch-enhance the theme forms only. Other redesign widgets own their own
+ *  verbs and must never silently inherit this menu's close/flash/refresh
+ *  lifecycle as the workbench grows. With JavaScript off these still POST +
+ *  303 + full reload; with it on the outcome and payload repaint in place. */
 function wireForms(root: HTMLElement): void {
   root.addEventListener("submit", (ev) => {
-    const form = ev.target as HTMLFormElement | null;
-    if (!form || form.method.toLowerCase() !== "post") return;
+    const form = ev.target;
+    if (!(form instanceof HTMLFormElement) || !form.matches('[data-rd-form="theme"]')) return;
+    const menu = form.closest<HTMLElement>(".rd-themed");
+    if (!menu) return;
     ev.preventDefault();
-    void submitForm(form);
+    const submitter = ev instanceof SubmitEvent && ev.submitter instanceof HTMLElement
+      ? ev.submitter
+      : null;
+    void submitThemeForm(form, menu, submitter);
   });
 }
 
-/** A double click must not launch the same verb twice while the first
- *  round-trip is in flight (the nocturne guard, kept with the copy). */
-const pendingForms = new WeakSet<HTMLFormElement>();
+/** The picker is one mutation surface even though progressive enhancement
+ *  gives every row its own form. Lock the whole fold so two different theme
+ *  choices cannot race their writes and repaint responses. */
+const pendingThemeMenus = new WeakSet<HTMLElement>();
 
-async function submitForm(form: HTMLFormElement): Promise<void> {
-  if (pendingForms.has(form)) return;
-  pendingForms.add(form);
+async function submitThemeForm(
+  form: HTMLFormElement,
+  menu: HTMLElement,
+  submitter: HTMLElement | null,
+): Promise<void> {
+  if (pendingThemeMenus.has(menu)) return;
+  pendingThemeMenus.add(menu);
   const submits = Array.from(
-    form.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
+    menu.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
       'button[type="submit"], input[type="submit"]',
     ),
   );
+  const summary = menu.querySelector<HTMLElement>(".rd-theme-sum");
+  let completed = false;
   submits.forEach((control) => {
     control.disabled = true;
   });
   try {
     const body = new URLSearchParams();
-    new FormData(form).forEach((value, key) => {
+    new FormData(form, submitter).forEach((value, key) => {
       if (typeof value === "string") body.append(key, value);
     });
     const res = await fetch(form.action, {
@@ -83,19 +95,46 @@ async function submitForm(form: HTMLFormElement): Promise<void> {
       body,
       redirect: "follow", // 303 → GET /redesign?flash=…; the outcome rides res.url
     });
+    if (!res.ok) throw new Error(`theme request failed with ${res.status}`);
     applyRedesignFlash(new URL(res.url).searchParams.get("flash"));
-    // A fold that just acted closes itself: the outcome line and the moved
-    // marking are the answer now (the nocturne consent-fold convention).
-    form.closest("details")?.removeAttribute("open");
+    if (!(await refresh())) {
+      applyRedesignFlash(
+        "error: theme was sent, but the workbench could not refresh — reload to confirm.",
+      );
+      return;
+    }
+    completed = true;
   } catch {
     applyRedesignFlash("error: request failed — is ksx studio still running?");
   } finally {
-    pendingForms.delete(form);
     submits.forEach((control) => {
       control.disabled = false;
     });
+    pendingThemeMenus.delete(menu);
+    if (completed) {
+      // A fold that acted closes itself, but focus must remain at the verb
+      // that opened it rather than falling through to the document/canvas.
+      menu.removeAttribute("open");
+      summary?.focus();
+    } else if (submitter) {
+      // A failed request leaves the choices visible for retry.
+      submitter.focus();
+    }
   }
-  void refresh();
+}
+
+/** Hydration must start the action signals from the already-sanitized SSR
+ *  flash. It intentionally is not part of /api/redesign: polling is not an
+ *  action and must not replay old feedback. */
+function seedRenderedFlash(root: HTMLElement): void {
+  const rendered = root.querySelector<HTMLElement>(".rd-flash");
+  // Forma's SSR markers can contribute non-visible text during adoption.
+  // The server-owned visibility class is the authoritative indication that
+  // this request actually carried an allowlisted action result.
+  if (!rendered || rendered.classList.contains("none")) return;
+  const line = rendered?.textContent?.trim();
+  if (!line) return;
+  applyRedesignFlash(rendered.classList.contains("err") ? `error: ${line}` : line);
 }
 
 // Ledger #5 order: the served signals hold the server's values BEFORE the
@@ -105,6 +144,7 @@ activateIslands({
   RedesignIsland: (el) => {
     const seed = embeddedPayload<RedesignPayload>();
     if (seed) applyRedesign(seed);
+    seedRenderedFlash(el);
     redesignWire(el);
     wireForms(el);
     window.requestAnimationFrame(() => {
@@ -114,7 +154,7 @@ activateIslands({
     // line; strip the query so a manual reload does not replay feedback for
     // an action nobody just took.
     const query = new URLSearchParams(window.location.search);
-    if (query.get("flash")) {
+    if (query.has("flash")) {
       query.delete("flash");
       const clean = query.toString();
       window.history.replaceState(null, "", clean === "" ? "/redesign" : `/redesign?${clean}`);

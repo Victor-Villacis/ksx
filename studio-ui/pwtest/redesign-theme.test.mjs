@@ -79,7 +79,7 @@ after(async () => {
 });
 
 /** A hydrated /redesign page, with every page error and console error kept. */
-async function openRedesign(options = {}) {
+async function openRedesign(options = {}, route = "/redesign") {
   const page = await browser.newPage({
     viewport: { width: 1600, height: 1000 },
     colorScheme: "dark",
@@ -91,7 +91,7 @@ async function openRedesign(options = {}) {
     if (message.type() === "error") noise.push(`console: ${message.text()}`);
   });
   page.ksxNoise = noise;
-  await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${BASE}${route}`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(
     () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
     null,
@@ -126,12 +126,36 @@ describe("the redesign theme menu", () => {
     await page.evaluate(() => {
       window.__ksxStay = 42;
     });
-    await page.click('.rd-thememenu form:has(input[value="matrix"]) button');
+    // Hold the request long enough to prove the whole picker — not only the
+    // chosen row's separate form — becomes one locked mutation surface.
+    let releaseRequest;
+    const requestGate = new Promise((resolve) => {
+      releaseRequest = resolve;
+    });
+    await page.route(`${BASE}/redesign/theme`, async (route) => {
+      await requestGate;
+      await route.continue();
+    });
+    const matrix = page.locator('.rd-thememenu form:has(input[value="matrix"]) button');
+    try {
+      const requestStarted = page.waitForRequest(`${BASE}/redesign/theme`);
+      await matrix.focus();
+      await page.keyboard.press("Enter");
+      await requestStarted;
+      assert.equal(
+        await rows.evaluateAll((buttons) => buttons.every((button) => button.disabled)),
+        true,
+        "one in-flight pick disables every theme choice",
+      );
+    } finally {
+      releaseRequest();
+    }
     await page.waitForFunction(
       () => document.documentElement.dataset.theme === "matrix",
       null,
       { timeout: 10_000 },
     );
+    await page.unroute(`${BASE}/redesign/theme`);
     assert.equal(
       await page.evaluate(() => window.__ksxStay),
       42,
@@ -148,31 +172,18 @@ describe("the redesign theme menu", () => {
       /\bok\b/,
       "a success flash wears the success colour",
     );
-    // The marking followed the refresh: matrix's row is the current one now.
-    // The DOM coerces the boolean binding differently per paint — SSR writes
-    // the WORDS ("true"/"false", mode_row's rule), a client repaint sets the
-    // property (attribute present-but-empty for true, "false"/absent for
-    // false) — so "current" here is: present and not "false". The
-    // wire-contract note on RdChoiceRowView is about exactly this coercion
-    // tolerance; a strict `=== "true"` never matches a repainted row.
+    // The marking followed the refresh and remains a valid ARIA token after
+    // the client repaint — not a boolean attribute serialized as empty.
     await page.waitForFunction(
-      () => {
-        const attr = document
+      () =>
+        document
           .querySelector('.rd-thememenu form:has(input[value="matrix"]) button')
-          ?.getAttribute("aria-current");
-        return attr !== null && attr !== undefined && attr !== "false";
-      },
+          ?.getAttribute("aria-current") === "true",
       null,
       { timeout: 10_000 },
     );
     assert.equal(
-      await page.evaluate(
-        () =>
-          Array.from(document.querySelectorAll(".rd-thememenu form button")).filter((btn) => {
-            const attr = btn.getAttribute("aria-current");
-            return attr !== null && attr !== "false";
-          }).length,
-      ),
+      await page.locator('.rd-thememenu form button[aria-current="true"]').count(),
       1,
       "exactly one row claims to be current",
     );
@@ -181,6 +192,122 @@ describe("the redesign theme menu", () => {
       await page.locator(".rd-themed[open]").count(),
       0,
       "the menu closes after an action",
+    );
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.matches(".rd-theme-sum")),
+      true,
+      "a keyboard pick returns focus to the Theme summary",
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("Theme owns Escape and layers above an open Inspector", async () => {
+    const page = await openRedesign();
+    await page.waitForFunction(
+      () =>
+        document.querySelector('.forma-canvas-stage > [data-instance-id="mock-a"]')?.dataset
+          .canvasX !== undefined,
+      null,
+      { timeout: 20_000 },
+    );
+    await page.locator('.forma-canvas-stage > [data-instance-id="mock-a"]').click();
+    await page.waitForFunction(() => !document.querySelector(".rd-inspector")?.hidden);
+    const summary = page.locator(".rd-themed > summary");
+    await summary.click();
+    const layers = await page.evaluate(() => ({
+      theme: Number.parseInt(getComputedStyle(document.querySelector(".rd-themed")).zIndex, 10),
+      inspector: Number.parseInt(getComputedStyle(document.querySelector(".rd-inspector")).zIndex, 10),
+    }));
+    assert.ok(
+      layers.theme > layers.inspector,
+      `the open theme layer (${layers.theme}) must clear the Inspector (${layers.inspector})`,
+    );
+    await page
+      .locator('.rd-thememenu form:has(input[value="matrix"]) button')
+      .click({ trial: true });
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator(".rd-themed[open]").count(), 0, "Escape closes Theme first");
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.matches(".rd-theme-sum")),
+      true,
+      "Escape restores focus to the Theme summary",
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("a served flash survives hydration, then its query is consumed", async () => {
+    const message = "Studio theme updated.";
+    const page = await openRedesign(
+      {},
+      `/redesign?flash=${encodeURIComponent(message)}`,
+    );
+    assert.equal(await page.locator(".rd-flash").textContent(), message);
+    assert.match(await page.locator(".rd-flash").getAttribute("class"), /\bok\b/);
+    assert.equal(new URL(page.url()).searchParams.has("flash"), false, "history is cleaned once");
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("the theme enhancer leaves unrelated redesign POST forms alone", async () => {
+    const page = await openRedesign();
+    const result = await page.evaluate(() => {
+      const root = document.querySelector("[data-forma-island]");
+      const form = document.createElement("form");
+      form.method = "post";
+      form.action = "/redesign/future-widget-probe";
+      root.append(form);
+      const event = new Event("submit", { bubbles: true, cancelable: true });
+      const allowed = form.dispatchEvent(event);
+      const prevented = event.defaultPrevented;
+      form.remove();
+      return { allowed, prevented };
+    });
+    assert.deepEqual(result, { allowed: true, prevented: false });
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("Theme meets the coarse-pointer target floor", async () => {
+    const page = await openRedesign({
+      viewport: { width: 390, height: 844 },
+      hasTouch: true,
+    });
+    const box = await page.locator(".rd-theme-sum").boundingBox();
+    assert.ok(box && box.height >= 40, `Theme target is ${box?.height ?? 0}px tall`);
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("a failed repaint keeps the picker open and reports the uncertain state", async () => {
+    const page = await openRedesign();
+    await page.route(`${BASE}/api/redesign`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: "not-json",
+      });
+    });
+    await page.click(".rd-themed > summary");
+    const matrix = page.locator('.rd-thememenu form:has(input[value="matrix"]) button');
+    await matrix.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(
+      () => document.querySelector(".rd-flash")?.textContent?.includes("could not refresh"),
+      null,
+      { timeout: 10_000 },
+    );
+    assert.equal(await page.locator(".rd-themed[open]").count(), 1, "choices stay available");
+    assert.equal(
+      await page.locator(".rd-thememenu button:disabled").count(),
+      0,
+      "the menu-wide lock releases",
+    );
+    assert.equal(
+      await matrix.evaluate((button) => button === document.activeElement),
+      true,
+      "focus returns to the attempted choice for retry",
     );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();

@@ -1,5 +1,9 @@
 import { createList, createSignal, h } from "@getforma/core";
 import { createCanvasItem, WidgetCanvas } from "./genui/canvas/index";
+import {
+  claimSavedDeviceGeometryKey,
+  deviceInstanceId,
+} from "./device-instance-id";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /redesign — the transplant rebuild's blank workbench.
@@ -20,15 +24,19 @@ import { createCanvasItem, WidgetCanvas } from "./genui/canvas/index";
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** One theme-menu row — `NocturneChoiceRow` on the wire (snapshot.rs), the
- *  same shape /nocturne's pickers consume. `chosen` is a BOOLEAN on the
- *  wire; bound straight onto `aria-current`, where the DOM coerces it to
- *  the words the attribute needs. */
+ *  same shape /nocturne's pickers consume. */
 export interface RdChoiceRowView {
   name: string;
   title: string;
   detail: string;
   cls: string;
   chosen: boolean;
+}
+
+/** The rendered twin keeps ARIA token semantics instead of handing a boolean
+ * to an attribute setter (where `true` becomes the meaningless empty value). */
+interface RdRenderedChoiceRow extends Omit<RdChoiceRowView, "chosen"> {
+  chosen: "true" | "false";
 }
 
 /** One picker device row — `NocturneDeviceRow` on the wire (snapshot.rs),
@@ -85,7 +93,7 @@ export interface RedesignPayload {
 
 const [rdEnvLabel, setRdEnvLabel] = createSignal("");
 const [rdEnvCls, setRdEnvCls] = createSignal("n-environment unknown");
-const [rdThemeRows, setRdThemeRows] = createSignal<RdChoiceRowView[]>([]);
+const [rdThemeRows, setRdThemeRows] = createSignal<RdRenderedChoiceRow[]>([]);
 const [rdDevKb, setRdDevKb] = createSignal<RdDeviceRowView[]>([]);
 const [rdDevEnc, setRdDevEnc] = createSignal<RdDeviceRowView[]>([]);
 const [rdDevExp, setRdDevExp] = createSignal<RdDeviceRowView[]>([]);
@@ -109,7 +117,11 @@ const [rdFlashCls, setRdFlashCls] = createSignal("n-flash rd-flash none");
 export function applyRedesign(v: RedesignPayload): void {
   setRdEnvLabel(v.environment_label);
   setRdEnvCls(v.environment_cls);
-  setRdThemeRows(v.theme_rows ?? []);
+  const themeRows = v.theme_rows ?? [];
+  setRdThemeRows(themeRows.map((row) => ({
+    ...row,
+    chosen: row.chosen ? "true" : "false",
+  })));
   // The ONE verb whose effect lives outside this island's tree (the
   // nocturne lesson, carried over with the rows). Every other form's outcome
   // is repainted from this payload, but the theme is an attribute on <html>
@@ -121,7 +133,7 @@ export function applyRedesign(v: RedesignPayload): void {
   // /nocturne, another tab, or the CLI, which arrives on the next refresh.
   // `system` is the ABSENCE of a stamp: the tokens' `:root:not([data-theme])`
   // media guard needs the attribute GONE, not set to "".
-  const chosen = (v.theme_rows ?? []).find((r) => r.chosen)?.name ?? "";
+  const chosen = themeRows.find((r) => r.chosen)?.name ?? "";
   const html = document.documentElement;
   if (chosen === "" || chosen === "system") {
     if (html.dataset.theme !== undefined) delete html.dataset.theme;
@@ -401,11 +413,28 @@ function restoreOverlayFocus(target: HTMLElement | null): void {
   }
 }
 
+/** Close the native theme disclosure before a modal surface takes focus.
+ *  When the disclosure itself owned focus, its summary is the durable return
+ *  point — controls inside a closed details are no longer focusable. */
+function closeThemeMenu(restoreFocus = false): boolean {
+  const menu = rdRoot?.querySelector<HTMLDetailsElement>(".rd-themed[open]");
+  if (!menu) return false;
+  menu.open = false;
+  if (restoreFocus) {
+    menu.querySelector<HTMLElement>(".rd-theme-sum")?.focus({ preventScroll: true });
+  }
+  return true;
+}
+
 function setSheet(open: boolean): void {
   const sheet = rdRoot?.querySelector<HTMLElement>(".rd-sheet");
   if (!sheet || sheet.hidden === !open) return;
   if (open) {
+    // Close peers only through their close paths; none of those paths opens a
+    // replacement, so modal coordination cannot recurse.
+    if (devModalIsOpen()) setDevModal(false);
     if (paletteOpen()) setPalette(false);
+    closeThemeMenu(true);
     setZoomMenu(false);
     sheetReturnFocus = activeControl();
     sheet.hidden = false;
@@ -465,8 +494,11 @@ function setPalette(open: boolean): void {
   if (overlay.hidden === !open) return;
   if (open) {
     // Only one modal surface owns focus at a time. In particular, Ctrl/Cmd+K
-    // must not focus a palette hidden behind the later shortcut sheet.
+    // replaces an open device picker or shortcut sheet instead of focusing a
+    // palette hidden behind it.
+    if (devModalIsOpen()) setDevModal(false);
     if (sheetOpen()) setSheet(false);
+    closeThemeMenu(true);
     setZoomMenu(false);
     paletteReturnFocus = activeControl();
   }
@@ -984,16 +1016,13 @@ function mountMockNodes(): void {
 // (data-client-widget — parity rule 3e), like the mock nodes they will
 // eventually replace.
 
-/** instanceId-safe slug for a selector (`usb:d209:0430:00` → the engine's id
- *  charset). The RAW selector rides data-selector on the widget and in the
- *  bench store — the slug is only the engine's key. */
-function deviceSlug(selector: string): string {
-  return `dev-${selector.replace(/[^A-Za-z0-9_-]/g, "-")}`.slice(0, 96);
-}
-
 function benchSelectors(): string[] {
   return canvasPrefs.bench ?? [];
 }
+
+/** Ownership for the old lossy storage keys during this canvas lifetime.
+ * Twin selectors may share a legacy key, but never its coordinates. */
+const legacyGeometryOwners = new Map<string, string>();
 
 function deviceRowFor(selector: string): RdDeviceRowView | undefined {
   return [...rdDevKb(), ...rdDevEnc(), ...rdDevExp()].find((r) => r.selector === selector);
@@ -1026,7 +1055,12 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
 function mountDeviceWidget(row: RdDeviceRowView, index: number): void {
   const canvas = nCanvas;
   if (!canvas) return;
-  const slug = deviceSlug(row.selector);
+  const slug = deviceInstanceId(row.selector);
+  const savedGeometryKey = claimSavedDeviceGeometryKey(
+    row.selector,
+    new Set(Object.keys(canvasPrefs.widgets)),
+    legacyGeometryOwners,
+  );
   const item = createCanvasItem({
     instanceId: slug,
     displayName: row.name,
@@ -1046,13 +1080,17 @@ function mountDeviceWidget(row: RdDeviceRowView, index: number): void {
     z: 3 + index,
     manualScale: 1,
   };
-  canvas.mountItem(item, canvasPrefs.widgets[slug] ?? home, { focus: false });
+  canvas.mountItem(
+    item,
+    (savedGeometryKey ? canvasPrefs.widgets[savedGeometryKey] : undefined) ?? home,
+    { focus: false },
+  );
 }
 
 function benchItemEl(selector: string): HTMLElement | null {
   return (
     rdRoot?.querySelector<HTMLElement>(
-      `.forma-canvas-stage > [data-instance-id="${deviceSlug(selector)}"]`,
+      `.forma-canvas-stage > [data-instance-id="${deviceInstanceId(selector)}"]`,
     ) ?? null
   );
 }
@@ -1117,13 +1155,28 @@ function devModalIsOpen(): boolean {
   return Boolean(el && !el.hidden);
 }
 
+let devModalReturnFocus: HTMLElement | null = null;
 function setDevModal(open: boolean): void {
   const el = devModalEl();
-  if (!el) return;
-  el.hidden = !open;
+  if (!el || el.hidden === !open) return;
   if (open) {
+    // Opening paths close peers; closing paths only restore focus. Keeping
+    // that direction one-way prevents modal hand-offs from recursing.
+    if (sheetOpen()) setSheet(false);
+    if (paletteOpen()) setPalette(false);
+    closeThemeMenu(true);
+    setZoomMenu(false);
+    devModalReturnFocus = activeControl();
     syncDeviceRows();
-    el.querySelector<HTMLElement>(".rd-devmodal-panel")?.focus();
+    el.hidden = false;
+    el.querySelector<HTMLButtonElement>(
+      '.rd-devmodal-head button[data-nx="rd-devs-close"]',
+    )?.focus({ preventScroll: true });
+  } else {
+    el.hidden = true;
+    const target = devModalReturnFocus;
+    devModalReturnFocus = null;
+    restoreOverlayFocus(target);
   }
 }
 
@@ -1277,7 +1330,7 @@ export function redesignWire(root: HTMLElement): void {
     // action belongs to the fetch-submit layer, not here.
     const themeMenu = rdRoot?.querySelector<HTMLElement>(".rd-themed[open]");
     if (themeMenu && !target?.closest(".rd-themed")) {
-      themeMenu.removeAttribute("open");
+      closeThemeMenu();
     }
     if (!hit) return;
     const closeMenuAfter = Boolean(target?.closest(".rd-menu"));
@@ -1363,6 +1416,8 @@ export function redesignWire(root: HTMLElement): void {
     ?.addEventListener("keydown", trapDialogTab);
   root.querySelector<HTMLElement>(".rd-sheet-card")
     ?.addEventListener("keydown", trapDialogTab);
+  root.querySelector<HTMLElement>(".rd-devmodal-panel")
+    ?.addEventListener("keydown", trapDialogTab);
   window.addEventListener("resize", () => {
     nCanvas?.setSafeInsetRight(inspectorInset());
     scheduleChips();
@@ -1389,9 +1444,14 @@ export function redesignWire(root: HTMLElement): void {
       return;
     }
     if (ev.key === "Escape") {
-      // The escape ladder (design handoff §2), one rung per press: device
-      // picker → sheet → palette → menu → focus mode → back view → clear
-      // selection.
+      // The escape ladder (design handoff §2), one rung per press: theme
+      // menu → device picker → sheet → palette → camera menu → focus mode →
+      // back view → clear selection. A closed disclosure returns focus to
+      // its trigger instead of letting the same key reach the canvas below.
+      if (closeThemeMenu(true)) {
+        ev.preventDefault();
+        return;
+      }
       if (devModalIsOpen()) setDevModal(false);
       else if (sheetOpen()) setSheet(false);
       else if (paletteOpen()) setPalette(false);
@@ -1570,21 +1630,25 @@ export function RedesignIsland() {
                 (r) =>
                   h(
                     "form",
-                    { class: "n-modeform", method: "post", action: "/redesign/theme" },
+                    {
+                      class: "n-modeform",
+                      method: "post",
+                      action: "/redesign/theme",
+                      "data-rd-form": "theme",
+                    },
                     h("input", { type: "hidden", name: "theme", value: r.name }),
                     h(
                       "button",
                       // `aria-current` is the only part of "this is the one
                       // you are on" a screen reader can reach: `.n-radio.on`
-                      // paints a dot and announces nothing at all.
-                      //
-                      // Bound as a PLAIN property, never `r.chosen || undefined`.
-                      // The compiler cannot evaluate a bare `||`, so that form
-                      // is dropped from the server-rendered HTML and hydration
-                      // does not re-apply a non-function prop — the attribute
-                      // would simply never exist, which is the same silent
-                      // nothing this fix was written to end.
-                      { type: "submit", class: r.cls, "aria-current": r.chosen },
+                      // paints a dot and announces nothing at all. Explicit
+                      // string tokens avoid boolean-attribute serialization's
+                      // empty `aria-current` value for the selected row.
+                      {
+                        type: "submit",
+                        class: r.cls,
+                        "aria-current": r.chosen,
+                      },
                       h("span", { class: "n-radio-dot" }),
                       h(
                         "span",

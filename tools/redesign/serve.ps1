@@ -1,14 +1,14 @@
 <#
 .SYNOPSIS
-    Build and serve the redesign THEME lane on 127.0.0.1:4470 from THIS checkout.
+    Build and serve the redesign lane from THIS checkout.
 
 .DESCRIPTION
     The transplant rebuild's own lane: a fixture-backed studio server (the
     macro_fixture example, which runs the real Router with synthetic
-    providers) on port 4470 — the theme worktree's own port; 4469 belongs to
-    the canvas worktree, and neither is reserved by studio-env or pwtest —
-    so it can run beside the real 4460 lane forever without touching the
-    daemon or the hardware.
+    providers) on the requested loopback port. The canonical redesign port is
+    4469, and a parallel worktree can select another one (for example 4470),
+    so lanes can run beside the real 4460 server without touching the daemon
+    or the hardware.
 
     Three measured facts shape this script:
     - A DEBUG exe serves assets from the checkout that COMPILED it (rust-embed
@@ -24,19 +24,26 @@
 .PARAMETER SkipBuild
     Serve the last built exe without rebuilding.
 
+.PARAMETER Port
+    Loopback port for this lane. Defaults to the canonical redesign port 4469.
+
 .EXAMPLE
     pwsh -NoProfile -ExecutionPolicy Bypass -File tools/redesign/serve.ps1
+
+.EXAMPLE
+    pwsh -NoProfile -ExecutionPolicy Bypass -File tools/redesign/serve.ps1 -Port 4470
 #>
 [CmdletBinding()]
 param(
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [ValidateRange(1, 65535)]
+    [int]$Port = 4469
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
-$Port = 4470
 $BuildRoot = Join-Path $RepoRoot "target\studio-env-redesign"
 $BinDir = Join-Path $RepoRoot "tmp\studio-env\bin"
 $LogDir = Join-Path $RepoRoot "tmp\studio-env\logs"
@@ -72,7 +79,7 @@ Copy-Item $Built $CopiedExe
 $Out = Join-Path $LogDir "redesign-$Port-$Stamp.out.log"
 $Err = Join-Path $LogDir "redesign-$Port-$Stamp.err.log"
 $Process = Start-Process -FilePath $CopiedExe -ArgumentList @("$Port") `
-    -WorkingDirectory $RepoRoot -PassThru `
+    -WorkingDirectory $RepoRoot -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput $Out -RedirectStandardError $Err
 
 $Deadline = [DateTime]::UtcNow.AddSeconds(30)

@@ -123,12 +123,7 @@ impl RedesignDeviceRows {
                 if !b.pickable {
                     other.push(NocturneOtherRow {
                         name: b.name.clone(),
-                        meta: format!(
-                            "{} · {}{}",
-                            b.transport_label,
-                            b.backends,
-                            identity_meta(b)
-                        ),
+                        meta: format!("{} · {}{}", b.transport_label, b.backends, identity_meta(b)),
                     });
                     continue;
                 }

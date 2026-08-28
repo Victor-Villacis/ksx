@@ -13,7 +13,7 @@
     Three measured facts shape this script:
     - A DEBUG exe serves assets from the checkout that COMPILED it (rust-embed
       bakes CARGO_MANIFEST_DIR at expansion time), so building here is what
-      binds the lane to this worktree's assets — and a running server picks
+      binds the lane to this worktree's assets -- and a running server picks
       up every build-assets.ps1 rebuild per request, no restart needed.
     - Windows locks a running exe, so cargo can never relink it (LNK1104).
       The served process runs a timestamped COPY out of tmp\, like every
@@ -60,10 +60,10 @@ if (-not $SkipBuild) {
     }
 }
 $Built = Join-Path $BuildRoot "debug\examples\macro_fixture.exe"
-if (-not (Test-Path $Built)) { throw "no built fixture at $Built — run without -SkipBuild" }
+if (-not (Test-Path $Built)) { throw "no built fixture at $Built -- run without -SkipBuild" }
 
 # Stop the previous lane process (ours are the only redesign-$Port-*.exe
-# under THIS worktree's tmp\ — the path match keeps other lanes out of reach).
+# under THIS worktree's tmp\ -- the path match keeps other lanes out of reach).
 Get-Process -ErrorAction SilentlyContinue | Where-Object {
     $_.Path -and $_.Path -like (Join-Path $BinDir "redesign-$Port-*.exe")
 } | ForEach-Object {

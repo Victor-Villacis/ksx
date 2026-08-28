@@ -1,11 +1,12 @@
 <#
 .SYNOPSIS
-    Build and serve the redesign lane on 127.0.0.1:4469 from THIS checkout.
+    Build and serve the redesign THEME lane on 127.0.0.1:4470 from THIS checkout.
 
 .DESCRIPTION
     The transplant rebuild's own lane: a fixture-backed studio server (the
     macro_fixture example, which runs the real Router with synthetic
-    providers) on port 4469 — reserved by nothing in studio-env or pwtest —
+    providers) on port 4470 — the theme worktree's own port; 4469 belongs to
+    the canvas worktree, and neither is reserved by studio-env or pwtest —
     so it can run beside the real 4460 lane forever without touching the
     daemon or the hardware.
 
@@ -35,7 +36,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
-$Port = 4469
+$Port = 4470
 $BuildRoot = Join-Path $RepoRoot "target\studio-env-redesign"
 $BinDir = Join-Path $RepoRoot "tmp\studio-env\bin"
 $LogDir = Join-Path $RepoRoot "tmp\studio-env\logs"
@@ -54,9 +55,10 @@ if (-not $SkipBuild) {
 $Built = Join-Path $BuildRoot "debug\examples\macro_fixture.exe"
 if (-not (Test-Path $Built)) { throw "no built fixture at $Built — run without -SkipBuild" }
 
-# Stop the previous lane process (ours are the only redesign-4469-*.exe).
+# Stop the previous lane process (ours are the only redesign-$Port-*.exe
+# under THIS worktree's tmp\ — the path match keeps other lanes out of reach).
 Get-Process -ErrorAction SilentlyContinue | Where-Object {
-    $_.Path -and $_.Path -like (Join-Path $BinDir "redesign-4469-*.exe")
+    $_.Path -and $_.Path -like (Join-Path $BinDir "redesign-$Port-*.exe")
 } | ForEach-Object {
     Write-Host "Stopping previous redesign lane (PID $($_.Id))."
     Stop-Process -Id $_.Id -Force
@@ -64,11 +66,11 @@ Get-Process -ErrorAction SilentlyContinue | Where-Object {
 Start-Sleep -Milliseconds 300
 
 $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$CopiedExe = Join-Path $BinDir "redesign-4469-$Stamp.exe"
+$CopiedExe = Join-Path $BinDir "redesign-$Port-$Stamp.exe"
 Copy-Item $Built $CopiedExe
 
-$Out = Join-Path $LogDir "redesign-4469-$Stamp.out.log"
-$Err = Join-Path $LogDir "redesign-4469-$Stamp.err.log"
+$Out = Join-Path $LogDir "redesign-$Port-$Stamp.out.log"
+$Err = Join-Path $LogDir "redesign-$Port-$Stamp.err.log"
 $Process = Start-Process -FilePath $CopiedExe -ArgumentList @("$Port") `
     -WorkingDirectory $RepoRoot -PassThru `
     -RedirectStandardOutput $Out -RedirectStandardError $Err

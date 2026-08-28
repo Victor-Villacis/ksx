@@ -56,6 +56,12 @@ pub struct RedesignPayload {
     /// `n-environment` + the fixture/live/unknown variant — presentation
     /// class, composed in Rust so the island words nothing.
     pub environment_cls: String,
+    /// The Studio theme roster for the topbar menu — the first transplanted
+    /// content. Composed by the ONE shared [`theme_rows`] composer and
+    /// re-dressed through the same [`NocturneChoiceRow`] shape `/nocturne`
+    /// serves, so the two pages cannot mark different rows.
+    #[serde(default)]
+    pub theme_rows: Vec<NocturneChoiceRow>,
 }
 
 /// What `GET /api/pads` serves AND what the pads island's props carry — the

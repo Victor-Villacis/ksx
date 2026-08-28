@@ -486,9 +486,14 @@ pub fn serve(
             // which is what stops a rebound origin watching the panel.
             .route("/check", get(check_page))
             .route("/api/check", get(api_check))
-            // ── The redesign lane's workbench: read-only, like /check ────
+            // ── The redesign lane's workbench ────────────────────────────
             .route("/redesign", get(redesign_page))
             .route("/api/redesign", get(api_redesign))
+            // Its first verb: the nocturne theme verb re-homed (303 → back
+            // to /redesign). In this chain, so the origin guard and the
+            // machine-cache invalidation layer cover it by construction —
+            // and tests/http.rs proves both, once, like every new verb.
+            .route("/redesign/theme", post(redesign_form_theme))
             // ── THE LIVE FEED ─────────────────────────────────────────────
             // One route, and it is the keystone the button check stands on:
             // the daemon's input fan-out as Server-Sent Events. Read-only and

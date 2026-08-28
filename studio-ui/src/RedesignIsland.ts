@@ -1,4 +1,4 @@
-import { createSignal, h } from "@getforma/core";
+import { createList, createSignal, h } from "@getforma/core";
 import { createCanvasItem, WidgetCanvas } from "./genui/canvas/index";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -19,21 +19,73 @@ import { createCanvasItem, WidgetCanvas } from "./genui/canvas/index";
 // orphan every scoped rule including the `:not(.js)` no-JS relaxation.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** One theme-menu row — `NocturneChoiceRow` on the wire (snapshot.rs), the
+ *  same shape /nocturne's pickers consume. `chosen` is a BOOLEAN on the
+ *  wire; bound straight onto `aria-current`, where the DOM coerces it to
+ *  the words the attribute needs. */
+export interface RdChoiceRowView {
+  name: string;
+  title: string;
+  detail: string;
+  cls: string;
+  chosen: boolean;
+}
+
 /** The payload the server embeds and /api/redesign serves — seeded into the
  *  signals by the entry BEFORE the island returns (ledger #5). */
 export interface RedesignPayload {
   environment_label: string;
   environment_cls: string;
+  theme_rows: RdChoiceRowView[];
 }
 
 // ── SERVED signals — copiers, never derivers ────────────────────────────────
 
 const [rdEnvLabel, setRdEnvLabel] = createSignal("");
 const [rdEnvCls, setRdEnvCls] = createSignal("n-environment unknown");
+const [rdThemeRows, setRdThemeRows] = createSignal<RdChoiceRowView[]>([]);
+
+// The action flash. The server fills these from the allowlisted query
+// parameter on a full-page load; the fetch-submit layer applies the same
+// copy here. A refresh is not an action and never touches them.
+const [rdFlashLine, setRdFlashLine] = createSignal("");
+const [rdFlashCls, setRdFlashCls] = createSignal("n-flash rd-flash none");
 
 export function applyRedesign(v: RedesignPayload): void {
   setRdEnvLabel(v.environment_label);
   setRdEnvCls(v.environment_cls);
+  setRdThemeRows(v.theme_rows ?? []);
+  // The ONE verb whose effect lives outside this island's tree (the
+  // nocturne lesson, carried over with the rows). Every other form's outcome
+  // is repainted from this payload, but the theme is an attribute on <html>
+  // that only a full server render used to stamp — so with scripting on
+  // (the entry fetch-submits every POST and discards the redirect's page)
+  // choosing a theme changed nothing on screen until a manual refresh. The
+  // rows already carry the server's choice as DATA (`chosen`/`name`, never
+  // prose), so the stamp converges here — including a change made from
+  // /nocturne, another tab, or the CLI, which arrives on the next refresh.
+  // `system` is the ABSENCE of a stamp: the tokens' `:root:not([data-theme])`
+  // media guard needs the attribute GONE, not set to "".
+  const chosen = (v.theme_rows ?? []).find((r) => r.chosen)?.name ?? "";
+  const html = document.documentElement;
+  if (chosen === "" || chosen === "system") {
+    if (html.dataset.theme !== undefined) delete html.dataset.theme;
+  } else if (html.dataset.theme !== chosen) {
+    html.dataset.theme = chosen;
+  }
+}
+
+/** Report one action outcome (the redirect's allowlisted ?flash= copy) —
+ *  the server derivation in render_redesign.rs `scalar_slots`, mirrored:
+ *  strip the marker for display, key the colour class off it. */
+export function applyRedesignFlash(flash: string | null): void {
+  if (!flash) {
+    setRdFlashLine("");
+    setRdFlashCls("n-flash rd-flash none");
+    return;
+  }
+  setRdFlashLine(flash.replace(/^error: /, ""));
+  setRdFlashCls(flash.startsWith("error") ? "n-flash rd-flash err" : "n-flash rd-flash ok");
 }
 
 // ── The canvas (lifted from NocturneIsland's canvas section) ────────────────
@@ -988,6 +1040,13 @@ export function redesignWire(root: HTMLElement): void {
     ) {
       setZoomMenu(false);
     }
+    // The theme menu (a native details): an outside click puts it away —
+    // the nocturne configuration menu's own convention. Closing after an
+    // action belongs to the fetch-submit layer, not here.
+    const themeMenu = rdRoot?.querySelector<HTMLElement>(".rd-themed[open]");
+    if (themeMenu && !target?.closest(".rd-themed")) {
+      themeMenu.removeAttribute("open");
+    }
     if (!hit) return;
     const closeMenuAfter = Boolean(target?.closest(".rd-menu"));
     if (hit === "canvas-fit") {
@@ -1181,6 +1240,10 @@ export function RedesignIsland() {
           // redesign workbench can never be mistaken for the cabinet.
           h("span", { class: () => rdEnvCls() }, () => rdEnvLabel()),
           h("span", { class: "rd-spring" }),
+          // The action flash — the one place a verb's outcome lands. Served
+          // from the allowlisted ?flash= on a full load; the entry's
+          // fetch-submit layer applies the same copy without one.
+          h("span", { role: "status", class: () => rdFlashCls() }, () => rdFlashLine()),
           // Back view: appears the moment the camera history is non-empty;
           // its title carries the top entry's label.
           h(
@@ -1215,6 +1278,67 @@ export function RedesignIsland() {
               title: "Canvas control (?)",
             },
             "⌨",
+          ),
+          // The Studio theme menu: the nocturne picker's rows, re-homed into
+          // the topbar as a NATIVE details — every row is a plain form POST,
+          // so the choice works with scripting off and the served facts
+          // paint on the SSR pass (which is why the summary is NOT an
+          // `.n-autobtn`: that class is scripting-only chrome). JS adds only
+          // outside-click dismissal and the fetch-submit upgrade; the fold
+          // closes itself after acting.
+          h(
+            "details",
+            { class: "rd-themed" },
+            h(
+              "summary",
+              { class: "rd-theme-sum", title: "How the Studio looks" },
+              "◐ Theme",
+            ),
+            h(
+              "div",
+              { class: "rd-thememenu" },
+              h(
+                "div",
+                { class: "n-kick-row" },
+                h("span", { class: "n-kick" }, "How the Studio looks"),
+              ),
+              h(
+                "p",
+                { class: "n-devnote" },
+                "Pages follow the operating system's light or dark choice unless you pick one here.",
+              ),
+              createList(
+                () => rdThemeRows(),
+                (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
+                (r) =>
+                  h(
+                    "form",
+                    { class: "n-modeform", method: "post", action: "/redesign/theme" },
+                    h("input", { type: "hidden", name: "theme", value: r.name }),
+                    h(
+                      "button",
+                      // `aria-current` is the only part of "this is the one
+                      // you are on" a screen reader can reach: `.n-radio.on`
+                      // paints a dot and announces nothing at all.
+                      //
+                      // Bound as a PLAIN property, never `r.chosen || undefined`.
+                      // The compiler cannot evaluate a bare `||`, so that form
+                      // is dropped from the server-rendered HTML and hydration
+                      // does not re-apply a non-function prop — the attribute
+                      // would simply never exist, which is the same silent
+                      // nothing this fix was written to end.
+                      { type: "submit", class: r.cls, "aria-current": r.chosen },
+                      h("span", { class: "n-radio-dot" }),
+                      h(
+                        "span",
+                        { class: "n-radio-txt" },
+                        h("span", { class: "n-radio-title" }, r.title),
+                        h("span", { class: "n-radio-detail" }, r.detail),
+                      ),
+                    ),
+                  ),
+              ),
+            ),
           ),
           h("span", { role: "status", class: "n-live-sr" }),
         ),

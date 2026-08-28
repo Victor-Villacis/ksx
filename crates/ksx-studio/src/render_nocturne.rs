@@ -250,7 +250,10 @@ fn journey_row(row: &crate::snapshot::NocturneJourneyStep) -> SlotValue {
     ])
 }
 
-fn mode_row(row: &NocturneChoiceRow) -> SlotValue {
+/// Shared with `render_redesign.rs`: the redesign topbar's theme menu serves
+/// the same choice rows, through the same serializer, for the same reason the
+/// composer is shared — one spelling of "chosen", two pages.
+pub(crate) fn mode_row(row: &NocturneChoiceRow) -> SlotValue {
     SlotValue::object(vec![
         ("name".to_owned(), SlotValue::Text(row.name.clone())),
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
@@ -719,7 +722,8 @@ fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 47] {
 }
 
 /// Slot ids of every slot named `name`, in slot-table (== document) order.
-fn named_slot_ids(module: &IrModule, name: &str) -> Vec<u16> {
+/// Shared with `render_redesign.rs` (its theme-rows list slot).
+pub(crate) fn named_slot_ids(module: &IrModule, name: &str) -> Vec<u16> {
     module
         .slots
         .entries()

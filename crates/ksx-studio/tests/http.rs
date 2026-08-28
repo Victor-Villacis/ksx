@@ -4827,6 +4827,9 @@ fn the_profiles_write_routes_refuse_a_cross_site_post() {
         ("/nocturne/import", "document=%7B%7D&apply=1"),
         ("/nocturne/adopt", "profile=Missing+Example+Game"),
         ("/nocturne/stop", ""),
+        // The redesign lane's first verb, added to this sweep the day it was
+        // routed — "by construction" is the claim worth testing per route.
+        ("/redesign/theme", "theme=matrix"),
     ] {
         let response = http(
             addr,
@@ -5287,6 +5290,65 @@ fn the_theme_form_round_trips_and_refuses_what_the_build_lacks() {
     );
 
     let response = post_form(addr, "/nocturne/theme", "theme=matrix2");
+    assert!(
+        response.contains("flash=error"),
+        "an unshipped id flashes an error, got: {response}"
+    );
+    assert_eq!(
+        machine.set_theme_specs.lock().unwrap().len(),
+        2,
+        "a refused id must never reach the machine provider"
+    );
+}
+
+/// The same round trip for the verb's re-homed twin on `/redesign` — the
+/// nocturne cutover's lesson applied in advance: a verb that migrates
+/// without its redirect target, its flash allowlist entry, or its guards
+/// LOOKS migrated and silently is not. This pins all three: the 303 lands
+/// back on `/redesign` carrying the allowlisted sentence, the very next
+/// `/redesign` render stamps the choice (the invalidation layer covers the
+/// new route), and an unshipped id is refused at the door.
+#[test]
+fn the_redesign_theme_form_round_trips_like_nocturnes() {
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(
+        Arc::new(ScriptedControl::new(false)),
+        Arc::clone(&machine) as Arc<dyn ksx_api::MachineSource>,
+    );
+
+    let response = post_form(addr, "/redesign/theme", "theme=matrix");
+    assert!(response.starts_with("HTTP/1.1 303"), "got: {response}");
+    assert!(
+        response.contains("/redesign?flash=Studio%20theme%20updated."),
+        "the outcome must ride back to THIS page, got: {response}"
+    );
+    assert_eq!(
+        machine.set_theme_specs.lock().unwrap().as_slice(),
+        ["matrix"],
+        "the form's id must reach the verb"
+    );
+    let after = get(addr, "/redesign");
+    assert!(
+        body_of(&after).contains("data-theme=\"matrix\""),
+        "the redirect's render must already stamp the new choice \
+         (the POST busts the machine cache)"
+    );
+    // And the menu's marking follows the same read: the stamped id's row is
+    // the one marked, on this page's own forms.
+    assert!(
+        body_of(&after).contains(r#"action="/redesign/theme""#),
+        "the theme menu must serve its forms"
+    );
+
+    let response = post_form(addr, "/redesign/theme", "theme=system");
+    assert!(response.starts_with("HTTP/1.1 303"), "got: {response}");
+    assert_eq!(
+        machine.set_theme_specs.lock().unwrap().as_slice(),
+        ["matrix", ""],
+        "`system` clears: the stored value is the empty string"
+    );
+
+    let response = post_form(addr, "/redesign/theme", "theme=matrix2");
     assert!(
         response.contains("flash=error"),
         "an unshipped id flashes an error, got: {response}"

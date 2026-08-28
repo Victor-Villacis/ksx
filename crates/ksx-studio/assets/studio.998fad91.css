@@ -18856,6 +18856,64 @@ a.nm-link {
   background: var(--n-accent-tint);
 }
 
+/* ── The topbar theme menu: the nocturne picker's rows, re-homed ──────────
+   A native details, so the roster works with scripting off — which is why
+   its summary is NOT an `.n-autobtn` (that class is scripting-only chrome,
+   hidden until the wire stamps `.js`). */
+.rd-themed {
+  position: relative;
+}
+
+.rd-theme-sum {
+  display: inline-block;
+  padding: 5px 11px;
+  border: 1px solid var(--n-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--n-text-2);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.rd-theme-sum::-webkit-details-marker {
+  display: none;
+}
+
+.rd-theme-sum:hover,
+.rd-themed[open] .rd-theme-sum {
+  border-color: var(--n-accent-line);
+  color: var(--n-accent-2);
+}
+
+.rd-thememenu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 12;
+  width: 300px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--n-line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--n-panel) 97%, transparent);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.4);
+}
+
+/* The action flash, worn as a topbar pill: the shared `.n-flash` state
+   machine (ok/err/none) with the page-line chrome swapped out. */
+.rd-flash {
+  margin-left: 4px;
+  padding: 2px 10px;
+  border: 0;
+  border-radius: 999px;
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .rd-menu-sep {
   height: 1px;
   margin: 5px 4px;

@@ -4827,9 +4827,13 @@ fn the_profiles_write_routes_refuse_a_cross_site_post() {
         ("/nocturne/import", "document=%7B%7D&apply=1"),
         ("/nocturne/adopt", "profile=Missing+Example+Game"),
         ("/nocturne/stop", ""),
-        // The redesign lane's first verb, added to this sweep the day it was
+        // The redesign lane's verbs, added to this sweep the day each was
         // routed — "by construction" is the claim worth testing per route.
         ("/redesign/theme", "theme=matrix"),
+        (
+            "/redesign/device",
+            "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
+        ),
     ] {
         let response = http(
             addr,
@@ -5368,6 +5372,44 @@ fn the_redesign_theme_form_round_trips_like_nocturnes() {
         machine.set_theme_specs.lock().unwrap().len(),
         2,
         "a missing field must never reach the machine provider"
+    );
+}
+
+/// The workbench's Stage-this-board verb: the nocturne device verb re-homed,
+/// through the SAME preparation-preserving guard — staging writes, the 303
+/// lands back on `/redesign` with the shared sentence, the redirect's render
+/// marks the staged row, and pressing the staged board again writes nothing
+/// and says "still" (the guard's whole point).
+#[test]
+fn the_redesign_device_verb_stages_through_the_preserving_guard() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+
+    let body = "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC";
+    let response = post_form(addr, "/redesign/device", body);
+    assert!(response.starts_with("HTTP/1.1 303"), "got: {response}");
+    assert!(
+        response.contains("/redesign?flash=Keyboard%20selected."),
+        "the outcome must ride back to THIS page, got: {response}"
+    );
+    assert_eq!(
+        control
+            .staged()
+            .device
+            .map(|device| device.selector)
+            .as_deref(),
+        Some("usb:d209:0430:00"),
+        "the stage must hold the posted board"
+    );
+    // (The staged row's aria_current marking is composed and pinned in
+    // render_redesign.rs's tier test; the scripted machine serves no boards,
+    // so this transport-level test asserts the write and the sentences.)
+
+    let again = post_form(addr, "/redesign/device", body);
+    assert!(
+        again.contains("flash=That%20keyboard%20is%20still"),
+        "re-staging the staged board must answer with the preserved-preparation \
+         sentence, got: {again}"
     );
 }
 

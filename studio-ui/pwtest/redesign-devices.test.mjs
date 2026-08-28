@@ -98,8 +98,10 @@ after(async () => {
   }
 });
 
-/** A hydrated /redesign whose canvas has adopted (the mocks are the proof
- *  the engine is alive — restoreBench runs in the same init). */
+/** A hydrated /redesign whose canvas has adopted. The workbench starts
+ *  empty, so the engine's first camera transform is the adoption mark —
+ *  restoreBench runs in the same init, so any remembered boards are mounted
+ *  by the time the transform lands. */
 async function openBench() {
   const page = await context.newPage();
   const noise = [];
@@ -115,9 +117,7 @@ async function openBench() {
     { timeout: 20_000 },
   );
   await page.waitForFunction(
-    () =>
-      document.querySelector('.forma-canvas-stage [data-instance-id="mock-a"]')?.dataset
-        .canvasX !== undefined,
+    () => Boolean(document.querySelector(".forma-canvas-stage")?.style.transform),
     null,
     { timeout: 20_000 },
   );
@@ -370,5 +370,323 @@ describe("the device workbench", () => {
     );
     assert.deepEqual(again.ksxNoise, [], "the page must stay error-free");
     await again.close();
+  });
+
+  test("staging from the bench card runs the daemon verb; the marking follows the truth", async () => {
+    const page = await openBench();
+    await page.evaluate(() => {
+      window.__ksxStay = 42;
+    });
+    // The seeded fixture stages its I-PAC from the START — the served
+    // daemon fact must arrive on the benched card without any press, chip
+    // on, verb withdrawn. (The stage-scoped selector matters: the minimap
+    // marker wears the same data-instance-id.)
+    await page.waitForFunction(
+      (id) =>
+        document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)?.dataset
+          .staged === "true",
+      IPAC_SLUG,
+      { timeout: 10_000 },
+    );
+    assert.equal(
+      await page
+        .locator(`.forma-canvas-stage [data-instance-id="${IPAC_SLUG}"] .rd-stageform`)
+        .evaluate((form) => getComputedStyle(form).display),
+      "none",
+      "a staged card offers the chip, not the verb",
+    );
+    // Bench the keyboard again and promote IT: the verb runs through the
+    // preparation-preserving guard, the flash speaks, and the marking MOVES
+    // — off the encoder, onto the keyboard, on cards and rows alike.
+    await page.click('[data-nx="rd-devs-open"]');
+    await page.click(`.rd-devmodal button[data-selector="${G915}"]`);
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(
+      (id) =>
+        document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)?.dataset
+          .canvasX !== undefined,
+      G915_SLUG,
+      { timeout: 10_000 },
+    );
+    assert.equal(
+      await page
+        .locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`)
+        .getAttribute("data-staged"),
+      "false",
+      "an unstaged board's card offers the verb",
+    );
+    await page.click(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"] .rd-stagebtn`);
+    await page.waitForFunction(
+      (id) =>
+        document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)?.dataset
+          .staged === "true",
+      G915_SLUG,
+      { timeout: 10_000 },
+    );
+    assert.equal(await page.evaluate(() => window.__ksxStay), 42, "staging does not reload");
+    await page.waitForFunction(
+      (id) =>
+        document.activeElement ===
+          document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`),
+      G915_SLUG,
+      { timeout: 10_000 },
+    );
+    assert.equal(
+      await page
+        .locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`)
+        .evaluate((item) => item === document.activeElement),
+      true,
+      "focus moves from the hidden verb to its durable canvas card",
+    );
+    await page.waitForFunction(
+      () =>
+        document.querySelector(".rd-flash")?.textContent ===
+          "Keyboard selected. Nothing has been saved or started.",
+      null,
+      { timeout: 10_000 },
+    );
+    await page.waitForFunction(
+      (id) =>
+        document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)?.dataset
+          .staged === "false",
+      IPAC_SLUG,
+      { timeout: 10_000 },
+    );
+    await page.click('[data-nx="rd-devs-open"]');
+    assert.equal(
+      await page
+        .locator(`.rd-devmodal button[data-selector="${G915}"][aria-current="true"]`)
+        .count(),
+      1,
+      "the picker row carries the staged fact",
+    );
+    assert.equal(
+      await page.locator('.rd-devmodal button[aria-current="true"]').count(),
+      1,
+      "exactly one row is the staged one",
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("Theme and Stage share one lock, including cards added while a request is pending", async () => {
+    const page = await openBench();
+    await page.click('[data-nx="rd-devs-open"]');
+    const g915PickerRow = page.locator(`.rd-devmodal button[data-selector="${G915}"]`);
+    if ((await g915PickerRow.getAttribute("aria-pressed")) === "true") {
+      await g915PickerRow.click();
+    }
+    await page.keyboard.press("Escape");
+    assert.equal(
+      await page.locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`).count(),
+      0,
+      "the regression starts with one card available to add during the request",
+    );
+    let releaseRequest;
+    const requestGate = new Promise((resolve) => {
+      releaseRequest = resolve;
+    });
+    await page.route(`${BASE}/redesign/device`, async (route) => {
+      await requestGate;
+      await route.continue();
+    });
+    try {
+      const requestStarted = page.waitForRequest(`${BASE}/redesign/device`);
+      await page.click(`.forma-canvas-stage [data-instance-id="${IPAC_SLUG}"] .rd-stagebtn`);
+      await requestStarted;
+      assert.equal(
+        await page.locator('.rd-stageform button[type="submit"]:not(:disabled)').count(),
+        0,
+        "one Stage request locks every bench-card mutation",
+      );
+      assert.equal(
+        await page.locator('.rd-thememenu button[type="submit"]:not(:disabled)').count(),
+        0,
+        "Theme cannot race a Stage request's full-payload repaint",
+      );
+
+      await page.click('[data-nx="rd-devs-open"]');
+      await g915PickerRow.click();
+      const newStageButton = page.locator(
+        `.forma-canvas-stage [data-instance-id="${G915_SLUG}"] .rd-stagebtn`,
+      );
+      assert.equal(
+        await newStageButton.isDisabled(),
+        true,
+        "a card mounted during the request immediately inherits the shared lock",
+      );
+      releaseRequest();
+      await page.waitForFunction(
+        (id) =>
+          document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)?.dataset
+            .staged === "true",
+        IPAC_SLUG,
+        { timeout: 10_000 },
+      );
+      assert.equal(await page.locator(".rd-devmodal[hidden]").count(), 0, "the modal stays open");
+      assert.equal(
+        await g915PickerRow.evaluate((button) => button === document.activeElement),
+        true,
+        "the delayed response leaves focus with the active picker control",
+      );
+      assert.equal(
+        await page.locator('.rd-thememenu button[type="submit"]:disabled').count(),
+        0,
+        "the shared lock releases after repaint",
+      );
+      assert.equal(
+        await newStageButton.isDisabled(),
+        false,
+        "the shared lock also releases a card mounted after the request began",
+      );
+    } finally {
+      releaseRequest();
+      await page.unroute(`${BASE}/redesign/device`);
+    }
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("a Stage refresh that loses its board returns focus to the workbench picker", async () => {
+    const page = await openBench();
+    const card = page.locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`);
+    assert.equal(await card.getAttribute("data-staged"), "false");
+    await page.route(`${BASE}/api/redesign`, async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      for (const tier of ["keyboards", "encoders", "experimental"]) {
+        payload.devices[tier] = payload.devices[tier].filter((row) => row.selector !== G915);
+      }
+      await route.fulfill({ response, json: payload });
+    });
+    try {
+      await card.locator(".rd-stagebtn").click();
+      await page.waitForFunction(
+        (id) => !document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`),
+        G915_SLUG,
+        { timeout: 10_000 },
+      );
+      const picker = page.locator('[data-nx="rd-devs-open"]');
+      assert.equal(
+        await picker.evaluate((button) => button === document.activeElement),
+        true,
+        "focus lands on a durable control when the initiating card disappears",
+      );
+    } finally {
+      await page.unroute(`${BASE}/api/redesign`);
+    }
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("provider unknown is preserved, authoritative absence unmounts, and return restores geometry", async () => {
+    const page = await openBench();
+    const item = page.locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`);
+    const before = await item.evaluate((node) => ({
+      x: Number(node.dataset.canvasX),
+      y: Number(node.dataset.canvasY),
+      width: Number(node.dataset.canvasWidth),
+      height: Number(node.dataset.canvasHeight),
+    }));
+    let rosterMode = "staging-unreachable";
+    await page.route(`${BASE}/api/redesign`, async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      if (rosterMode === "staging-unreachable") {
+        payload.devices.staging_reachable = false;
+        payload.devices.staging_line = "Staging unavailable — test helper did not answer.";
+      } else if (rosterMode === "unknown-scan") {
+        payload.devices.scan_authoritative = false;
+        payload.devices.scan_line = "Device scan unavailable — try again.";
+        for (const tier of ["keyboards", "encoders", "experimental", "other"]) {
+          payload.devices[tier] = [];
+        }
+      } else if (rosterMode === "absent") {
+        for (const tier of ["keyboards", "encoders", "experimental"]) {
+          payload.devices[tier] = payload.devices[tier].filter((row) => row.selector !== G915);
+        }
+      }
+      await route.fulfill({ response, json: payload });
+    });
+    try {
+      await page.click(".rd-themed > summary");
+      await page.click('.rd-thememenu form:has(input[value="matrix"]) button');
+      await page.waitForFunction(
+        (id) =>
+          document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)?.dataset
+            .stagingReachable === "false",
+        G915_SLUG,
+        { timeout: 10_000 },
+      );
+      assert.equal(
+        await item.locator(".rd-stagebtn").isDisabled(),
+        true,
+        "an unreachable staging provider keeps Stage visible but safely disabled",
+      );
+      assert.equal(
+        await item.locator(".rd-stagebtn").isVisible(),
+        true,
+        "the disabled action remains discoverable beside its reason",
+      );
+      assert.match(
+        await item.locator(".rd-devcard-staged").textContent(),
+        /Staging unavailable/,
+      );
+
+      rosterMode = "unknown-scan";
+      await page.click(".rd-themed > summary");
+      await page.click('.rd-thememenu form:has(input[value="dark"]) button');
+      await page.waitForFunction(
+        (id) =>
+          document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)?.dataset
+            .scanAuthoritative === "false",
+        G915_SLUG,
+        { timeout: 10_000 },
+      );
+      assert.equal(await item.count(), 1, "a refused scan is unknown, not an empty machine");
+      assert.match(await item.locator(".rd-devcard-meta").textContent(), /Status unavailable/);
+
+      rosterMode = "absent";
+      await page.click(".rd-themed > summary");
+      await page.click('.rd-thememenu form:has(input[value="light"]) button');
+      await page.waitForFunction(
+        (id) => !document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`),
+        G915_SLUG,
+        { timeout: 10_000 },
+      );
+      assert.equal(
+        await page.evaluate((selector) => {
+          const saved = JSON.parse(localStorage.getItem("ksx-redesign-canvas") ?? "{}");
+          return saved.bench?.includes(selector) === true;
+        }, G915),
+        true,
+        "temporary absence keeps browser-owned membership",
+      );
+
+      rosterMode = "full";
+      await page.click(".rd-themed > summary");
+      await page.click('.rd-thememenu form:has(input[value="system"]) button');
+      await page.waitForFunction(
+        (id) =>
+          document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)?.dataset
+            .canvasX !== undefined,
+        G915_SLUG,
+        { timeout: 10_000 },
+      );
+      assert.deepEqual(
+        await item.evaluate((node) => ({
+          x: Number(node.dataset.canvasX),
+          y: Number(node.dataset.canvasY),
+          width: Number(node.dataset.canvasWidth),
+          height: Number(node.dataset.canvasHeight),
+        })),
+        before,
+        "the returning board reclaims the exact saved geometry",
+      );
+    } finally {
+      await page.unroute(`${BASE}/api/redesign`);
+    }
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
   });
 });

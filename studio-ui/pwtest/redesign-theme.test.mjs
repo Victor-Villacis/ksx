@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { chromium } from "playwright";
+import { deviceInstanceId } from "../src/device-instance-id.ts";
 import { stopFixtureProcess } from "./fixture-process.mjs";
 
 /** OUR port: never 4460 (a real `ksx studio`), and never another suite's. */
@@ -204,14 +205,19 @@ describe("the redesign theme menu", () => {
 
   test("Theme owns Escape and layers above an open Inspector", async () => {
     const page = await openRedesign();
+    const selector = "usb:046d:c545:00";
+    const instanceId = deviceInstanceId(selector);
+    await page.click('[data-nx="rd-devs-open"]');
+    await page.click(`.rd-devmodal button[data-selector="${selector}"]`);
+    await page.keyboard.press("Escape");
     await page.waitForFunction(
-      () =>
-        document.querySelector('.forma-canvas-stage > [data-instance-id="mock-a"]')?.dataset
+      (id) =>
+        document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)?.dataset
           .canvasX !== undefined,
-      null,
+      instanceId,
       { timeout: 20_000 },
     );
-    await page.locator('.forma-canvas-stage > [data-instance-id="mock-a"]').click();
+    await page.locator(`.forma-canvas-stage > [data-instance-id="${instanceId}"]`).click();
     await page.waitForFunction(() => !document.querySelector(".rd-inspector")?.hidden);
     const summary = page.locator(".rd-themed > summary");
     await summary.click();

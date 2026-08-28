@@ -78,6 +78,9 @@ export interface RdDeviceRows {
   other_head: string;
   other_fold_cls: string;
   scan_line: string;
+  scan_authoritative: boolean;
+  staging_reachable: boolean;
+  staging_line: string;
 }
 
 /** The payload the server embeds and /api/redesign serves — seeded into the
@@ -107,6 +110,9 @@ const [rdDevExpHead, setRdDevExpHead] = createSignal("");
 const [rdDevExpFoldCls, setRdDevExpFoldCls] = createSignal("n-devfold none");
 const [rdDevOtherHead, setRdDevOtherHead] = createSignal("");
 const [rdDevOtherFoldCls, setRdDevOtherFoldCls] = createSignal("n-devfold none");
+let rdDeviceScanAuthoritative = false;
+let rdStagingReachable = false;
+let rdStagingLine = "";
 
 // The action flash. The server fills these from the allowlisted query
 // parameter on a full-page load; the fetch-submit layer applies the same
@@ -115,6 +121,7 @@ const [rdFlashLine, setRdFlashLine] = createSignal("");
 const [rdFlashCls, setRdFlashCls] = createSignal("n-flash rd-flash none");
 
 export function applyRedesign(v: RedesignPayload): void {
+  const deviceFocus = captureDeviceRowFocus();
   setRdEnvLabel(v.environment_label);
   setRdEnvCls(v.environment_cls);
   const themeRows = v.theme_rows ?? [];
@@ -141,6 +148,9 @@ export function applyRedesign(v: RedesignPayload): void {
     html.dataset.theme = chosen;
   }
   const d = v.devices;
+  rdDeviceScanAuthoritative = d?.scan_authoritative === true;
+  rdStagingReachable = d?.staging_reachable === true;
+  rdStagingLine = d?.staging_line ?? "";
   setRdDevKb(d?.keyboards ?? []);
   setRdDevEnc(d?.encoders ?? []);
   setRdDevExp(d?.experimental ?? []);
@@ -154,8 +164,11 @@ export function applyRedesign(v: RedesignPayload): void {
   setRdDevExpFoldCls(d?.exp_fold_cls ?? "n-devfold none");
   setRdDevOtherHead(d?.other_head ?? "");
   setRdDevOtherFoldCls(d?.other_fold_cls ?? "n-devfold none");
-  // The rows may have re-rendered: re-mark the workbench state onto them.
-  syncDeviceRows();
+  // Reconcile browser-owned membership with the freshly served roster: a
+  // disconnected board leaves the canvas without losing its remembered
+  // place, and a remembered board mounts as soon as the scan sees it again.
+  reconcileBenchWithRoster();
+  restoreDeviceRowFocus(deviceFocus);
 }
 
 /** Report one action outcome (the redirect's allowlisted ?flash= copy) —
@@ -217,6 +230,36 @@ interface CanvasPrefs {
 let canvasPrefs: CanvasPrefs = { widgets: {} };
 let nCanvas: WidgetCanvas | null = null;
 let rdRoot: HTMLElement | null = null;
+
+interface DeviceRowFocus {
+  element: HTMLElement;
+  selector: string;
+}
+
+/** Served list rows can be replaced when their staged marking changes. Keep
+ * keyboard focus on the equivalent picker control across that repaint; if
+ * the row authoritatively disappears, the modal close button is the stable
+ * fallback. */
+function captureDeviceRowFocus(): DeviceRowFocus | null {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !rdRoot?.contains(active)) return null;
+  const row = active.closest<HTMLElement>('[data-nx="rd-dev-toggle"][data-selector]');
+  const selector = row?.dataset.selector;
+  return row && selector ? { element: row, selector } : null;
+}
+
+function restoreDeviceRowFocus(snapshot: DeviceRowFocus | null): void {
+  if (
+    !snapshot || snapshot.element.isConnected || document.activeElement !== document.body ||
+    !devModalIsOpen()
+  ) return;
+  const replacement = Array.from(
+    rdRoot?.querySelectorAll<HTMLElement>('[data-nx="rd-dev-toggle"][data-selector]') ?? [],
+  ).find((row) => row.dataset.selector === snapshot.selector);
+  (replacement ?? rdRoot?.querySelector<HTMLElement>('[data-nx="rd-devs-close"]'))?.focus({
+    preventScroll: true,
+  });
+}
 
 function isGeometry(g: unknown): g is CanvasItemGeometry {
   const v = g as CanvasItemGeometry;
@@ -947,74 +990,19 @@ function wireSpotlight(stage: HTMLElement, viewport: HTMLElement): void {
   });
 }
 
-// ── The mock nodes: two disposable widgets to exercise the canvas ───────────
-// Client-created (data-client-widget — parity rule 3e), so nothing about
-// them is served. They exist so selection, marquee, drag, focus, fit and the
-// semantic tiers have something real to act on while the first product
-// pieces are still on the way; delete this block when a transplant lands.
-
-function mockNodeContent(summary: string, detail: string[]): HTMLElement {
-  const body = document.createElement("div");
-  body.className = "rd-mock";
-  const sum = document.createElement("p");
-  sum.className = "rd-mock-sum";
-  sum.textContent = summary;
-  body.append(sum);
-  const block = document.createElement("dl");
-  block.className = "rd-mock-detail";
-  for (const line of detail) {
-    const [term, value] = line.split(": ");
-    const dt = document.createElement("dt");
-    dt.textContent = term;
-    const dd = document.createElement("dd");
-    dd.textContent = value ?? "";
-    block.append(dt, dd);
-  }
-  body.append(block);
-  return body;
-}
-
-function mountMockNodes(): void {
-  const canvas = nCanvas;
-  if (!canvas) return;
-  const mocks: [string, string, string, string[], CanvasItemGeometry][] = [
-    [
-      "mock-a",
-      "Mock node A",
-      "trigger · always fires",
-      ["kind: trigger", "wired to: nothing yet", "state: healthy"],
-      { x: 120, y: 140, width: 260, height: 150, z: 1, manualScale: 1 },
-    ],
-    [
-      "mock-b",
-      "Mock node B",
-      "transform · echoes its input",
-      ["kind: transform", "wired to: nothing yet", "state: healthy"],
-      { x: 470, y: 300, width: 260, height: 150, z: 2, manualScale: 1 },
-    ],
-  ];
-  for (const [id, name, summary, detail, home] of mocks) {
-    const item = createCanvasItem({
-      instanceId: id,
-      displayName: name,
-      preferredWidth: 260,
-      minHeight: 150,
-      content: mockNodeContent(summary, detail),
-      document,
-    });
-    item.dataset.clientWidget = "";
-    item.classList.add("rd-mock-node");
-    canvas.mountItem(item, canvasPrefs.widgets[id] ?? home, { focus: false });
-  }
-}
+// The mock nodes lived here until 2026-08-28 — two disposable widgets that
+// gave selection, marquee, drag, focus, fit and the semantic tiers something
+// to act on. The first product transplant (the device workbench) landed, so
+// they are gone, exactly as their own comment promised. The workbench starts
+// EMPTY on purpose: boards arrive through the picker.
 
 // ── The device workbench (the lane's thesis made real) ──────────────────────
 // The canvas is a WORKBENCH: the picker adds boards to it — several at once —
 // and each lands as a widget. Membership is the browser's arrangement state
 // (canvasPrefs, beside the camera and the widget geometry), never a daemon
 // claim; every fact ON a widget is served. Widgets are client-created
-// (data-client-widget — parity rule 3e), like the mock nodes they will
-// eventually replace.
+// (`data-client-widget` — parity rule 3e); they are the real product surface
+// that replaced the disposable mock nodes.
 
 function benchSelectors(): string[] {
   return canvasPrefs.bench ?? [];
@@ -1032,6 +1020,9 @@ const DEVICE_ROLE_BADGE: Record<string, string> = {
   "panel-encoder": "Panel encoder",
   keyboard: "Keyboard",
 };
+const STAGED_DEVICE_TITLE =
+  "This board is the background helper's staged choice. Staging it again changes nothing — " +
+  "a keyboard prepared for play keeps its preparation.";
 
 function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   const body = document.createElement("div");
@@ -1046,12 +1037,45 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   const meta = document.createElement("p");
   meta.className = "rd-devcard-meta";
   meta.textContent = row.meta;
-  body.append(badge, name, meta);
+  // The daemon chip and the daemon verb. `data-staged` on the ITEM decides
+  // which shows (syncBenchCards keeps it true to the served rows): a staged
+  // board wears the chip; every other pickable board offers the act. The
+  // form is a REAL POST — the entry's fetch-submit layer carries it, the
+  // flash speaks, and the refresh moves the marking wherever it now belongs.
+  const staged = document.createElement("p");
+  staged.className = "rd-devcard-staged";
+  staged.textContent = "Staged — the board ksx splits";
+  staged.title = STAGED_DEVICE_TITLE;
+  const form = document.createElement("form");
+  form.className = "rd-stageform";
+  form.method = "post";
+  form.action = "/redesign/device";
+  form.dataset.rdForm = "device";
+  for (const [fieldName, value] of [
+    ["selector", row.selector],
+    ["alias", row.alias],
+    ["label", row.label],
+  ]) {
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = fieldName;
+    input.value = value;
+    form.append(input);
+  }
+  const submit = document.createElement("button");
+  submit.type = "submit";
+  submit.className = "rd-stagebtn";
+  submit.textContent = "Stage this board";
+  submit.title =
+    "Make this the board ksx splits — replaces the daemon's current choice. " +
+    "Nothing is saved or started, and a board already prepared keeps its preparation.";
+  form.append(submit);
+  body.append(badge, name, meta, staged, form);
   return body;
 }
 
 /** Mount one board onto the workbench: the saved spot if this board has been
- *  here before (removal keeps geometry), else a stagger clear of the mocks. */
+ *  here before (removal keeps geometry), otherwise a staggered open spot. */
 function mountDeviceWidget(row: RdDeviceRowView, index: number): void {
   const canvas = nCanvas;
   if (!canvas) return;
@@ -1065,18 +1089,19 @@ function mountDeviceWidget(row: RdDeviceRowView, index: number): void {
     instanceId: slug,
     displayName: row.name,
     preferredWidth: 300,
-    minHeight: 118,
+    minHeight: 150,
     content: deviceCardContent(row),
     document,
   });
   item.dataset.clientWidget = "";
   item.dataset.selector = row.selector;
+  item.dataset.staged = row.aria_current === "true" ? "true" : "false";
   item.classList.add("rd-dev-node");
   const home: CanvasItemGeometry = {
     x: 140 + (index % 3) * 340,
-    y: 520 + Math.floor(index / 3) * 170,
+    y: 160 + Math.floor(index / 3) * 200,
     width: 300,
-    height: 118,
+    height: 150,
     z: 3 + index,
     manualScale: 1,
   };
@@ -1095,13 +1120,26 @@ function benchItemEl(selector: string): HTMLElement | null {
   );
 }
 
+function rememberDeviceGeometry(item: HTMLElement): void {
+  const canvas = nCanvas;
+  const id = item.dataset.instanceId;
+  if (!canvas || !id || item.dataset.canvasX === undefined) return;
+  canvasPrefs.widgets = {
+    ...canvasPrefs.widgets,
+    [id]: canvas.getItemState(item),
+  };
+}
+
 /** Add or remove one board. Removal keeps the saved geometry, so a board
  *  that returns lands where it lived. */
 function toggleBenchDevice(selector: string): void {
   const bench = benchSelectors();
   if (bench.includes(selector)) {
     const item = benchItemEl(selector);
-    if (item) nCanvas?.removeItem(item, { selectFallback: false });
+    if (item) {
+      rememberDeviceGeometry(item);
+      nCanvas?.removeItem(item, { selectFallback: false });
+    }
     canvasPrefs.bench = bench.filter((s) => s !== selector);
   } else {
     const row = deviceRowFor(selector);
@@ -1112,17 +1150,134 @@ function toggleBenchDevice(selector: string): void {
   saveCanvasPrefs();
   syncMapCount();
   syncDeviceRows();
+  // A card added while a mutation is pending or either provider is
+  // unavailable must inherit that state immediately; the mount defaults are
+  // only a structural fallback until served truth is applied.
+  syncBenchCards();
 }
 
 /** Re-mount every remembered board whose device is still in the served
  *  roster. One that vanished stays remembered but not mounted — honestly
  *  absent, back the moment the scan offers it again. */
 function restoreBench(): void {
-  benchSelectors().forEach((selector, i) => {
+  reconcileBenchWithRoster();
+}
+
+/** Reconcile browser-owned bench membership against current served truth.
+ * Missing devices unmount but stay in `canvasPrefs.bench`; their exact
+ * geometry is retained. Reappearing devices remount at that same geometry. */
+function reconcileBenchWithRoster(): void {
+  const canvas = nCanvas;
+  if (!canvas) {
+    syncDeviceRows();
+    return;
+  }
+
+  const bench = new Set(benchSelectors());
+  let changed = false;
+  for (const item of Array.from(
+    rdRoot?.querySelectorAll<HTMLElement>(".rd-dev-node[data-selector]") ?? [],
+  )) {
+    const selector = item.dataset.selector ?? "";
+    // A refused scan is UNKNOWN, not an authoritative empty roster. Keep the
+    // remembered card mounted and let syncBenchCards mark its status unknown.
+    if (
+      bench.has(selector) &&
+      (deviceRowFor(selector) || !rdDeviceScanAuthoritative)
+    ) continue;
+    rememberDeviceGeometry(item);
+    canvas.removeItem(item, { selectFallback: false });
+    changed = true;
+  }
+
+  benchSelectors().forEach((selector, index) => {
     const row = deviceRowFor(selector);
-    if (row && !benchItemEl(selector)) mountDeviceWidget(row, i);
+    if (row && !benchItemEl(selector)) {
+      mountDeviceWidget(row, index);
+      changed = true;
+    }
   });
+
   syncDeviceRows();
+  syncBenchCards();
+  // Names and roles can change without membership changing. Keep the
+  // selection surface and proximity labels on the same served repaint.
+  renderInspector();
+  scheduleChips();
+  if (changed) {
+    saveCanvasPrefs();
+    syncMapCount();
+  }
+}
+
+/** Repaint every served fact on mounted cards, including the daemon's staged
+ * choice. Membership and geometry remain browser-owned and untouched. */
+function syncBenchCards(): void {
+  for (const item of Array.from(
+    rdRoot?.querySelectorAll<HTMLElement>(".rd-dev-node[data-selector]") ?? [],
+  )) {
+    const row = deviceRowFor(item.dataset.selector ?? "");
+    const status = item.querySelector<HTMLElement>(".rd-devcard-staged");
+    const meta = item.querySelector<HTMLElement>(".rd-devcard-meta");
+    const stageButton = item.querySelector<HTMLButtonElement>(".rd-stagebtn");
+    const actionAvailable = rdDeviceScanAuthoritative && rdStagingReachable && Boolean(row);
+    item.dataset.scanAuthoritative = rdDeviceScanAuthoritative ? "true" : "false";
+    item.dataset.stagingReachable = rdStagingReachable ? "true" : "false";
+    item.dataset.staged = actionAvailable
+      ? (row!.aria_current === "true" ? "true" : "false")
+      : "unknown";
+    if (stageButton) {
+      stageButton.dataset.rdProductDisabled = actionAvailable ? "false" : "true";
+      stageButton.disabled = !actionAvailable || rdRoot?.dataset.rdMutationPending === "true";
+    }
+
+    if (!rdDeviceScanAuthoritative) {
+      if (meta) meta.textContent = `Status unavailable — ${rdDevScanLine()}`;
+      if (status) {
+        status.textContent = "Device status unavailable — latest scan did not answer";
+        status.title = rdDevScanLine();
+      }
+      continue;
+    }
+    if (!row) continue;
+
+    if (!rdStagingReachable) {
+      if (status) {
+        status.textContent = rdStagingLine || "Staging unavailable";
+        status.title = rdStagingLine || "Staging unavailable";
+      }
+    } else if (status) {
+      status.textContent = "Staged — the board ksx splits";
+      status.title = STAGED_DEVICE_TITLE;
+    }
+    item.dataset.widgetName = row.name;
+    item.setAttribute("aria-label", row.name);
+    item.querySelector<HTMLElement>(".rd-devcard-badge")!.dataset.role = row.role;
+    item.querySelector<HTMLElement>(".rd-devcard-badge")!.textContent =
+      DEVICE_ROLE_BADGE[row.role] ?? "Experimental";
+    item.querySelector<HTMLElement>(".rd-devcard-name")!.textContent = row.name;
+    if (meta) meta.textContent = row.meta;
+    item.querySelector<HTMLElement>(".widget-drag-handle")?.setAttribute(
+      "aria-label",
+      `Move ${row.name}`,
+    );
+    for (const [fieldName, value] of [
+      ["selector", row.selector],
+      ["alias", row.alias],
+      ["label", row.label],
+    ]) {
+      const input = item.querySelector<HTMLInputElement>(
+        `.rd-stageform input[name="${fieldName}"]`,
+      );
+      if (input) input.value = value;
+    }
+    const id = item.dataset.instanceId;
+    const marker = id
+      ? rdRoot?.querySelector<HTMLElement>(`.navigator-item[data-instance-id="${id}"]`)
+      : null;
+    marker?.setAttribute("aria-label", `Focus ${row.name}`);
+    if (marker) marker.title = row.name;
+  }
 }
 
 /** Decorate the picker rows with CLIENT truth — membership — after any
@@ -1274,7 +1429,6 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
     },
   );
   setCanvasMap(canvasPrefs.mapHidden === true);
-  mountMockNodes();
   restoreBench();
   syncMapCount();
   syncToolRail(nCanvas.toolMode());
@@ -1706,7 +1860,9 @@ export function RedesignIsland() {
               h("h3", { class: "rd-devhead" }, () => rdDevKbHead()),
               createList(
                 () => rdDevKb(),
-                (r) => r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title,
+                (r) =>
+                  r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title +
+                  "|" + r.aria_current,
                 (r) =>
                   h(
                     "button",
@@ -1718,11 +1874,20 @@ export function RedesignIsland() {
                       "data-role": r.role,
                       title: r.title,
                       "aria-pressed": "false",
+                      // The DAEMON fact, served: this board is the staged
+                      // one. A different channel from aria-pressed (client
+                      // bench membership) on purpose — different answers.
+                      "aria-current": r.aria_current,
                     },
                     h(
                       "span",
                       { class: "n-dev-txt" },
                       h("span", { class: "n-dev-name" }, r.name),
+                      // Its OWN node, never a sibling beside the bound text
+                      // above — the compiler drops an element that shares a
+                      // parent with a dynamic text, and the parity gate is
+                      // what caught the chip existing only after hydration.
+                      h("span", { class: "rd-dev-stagedchip" }, "staged"),
                       h("span", { class: "n-dev-meta" }, r.meta),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Add to workbench"),
                     ),
@@ -1736,7 +1901,9 @@ export function RedesignIsland() {
               h("h3", { class: "rd-devhead" }, () => rdDevEncHead()),
               createList(
                 () => rdDevEnc(),
-                (r) => r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title,
+                (r) =>
+                  r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title +
+                  "|" + r.aria_current,
                 (r) =>
                   h(
                     "button",
@@ -1748,11 +1915,20 @@ export function RedesignIsland() {
                       "data-role": r.role,
                       title: r.title,
                       "aria-pressed": "false",
+                      // The DAEMON fact, served: this board is the staged
+                      // one. A different channel from aria-pressed (client
+                      // bench membership) on purpose — different answers.
+                      "aria-current": r.aria_current,
                     },
                     h(
                       "span",
                       { class: "n-dev-txt" },
                       h("span", { class: "n-dev-name" }, r.name),
+                      // Its OWN node, never a sibling beside the bound text
+                      // above — the compiler drops an element that shares a
+                      // parent with a dynamic text, and the parity gate is
+                      // what caught the chip existing only after hydration.
+                      h("span", { class: "rd-dev-stagedchip" }, "staged"),
                       h("span", { class: "n-dev-meta" }, r.meta),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Add to workbench"),
                     ),
@@ -1766,7 +1942,9 @@ export function RedesignIsland() {
               h("h3", { class: "rd-devhead" }, () => rdDevExpHead()),
               createList(
                 () => rdDevExp(),
-                (r) => r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title,
+                (r) =>
+                  r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title +
+                  "|" + r.aria_current,
                 (r) =>
                   h(
                     "button",
@@ -1778,11 +1956,20 @@ export function RedesignIsland() {
                       "data-role": r.role,
                       title: r.title,
                       "aria-pressed": "false",
+                      // The DAEMON fact, served: this board is the staged
+                      // one. A different channel from aria-pressed (client
+                      // bench membership) on purpose — different answers.
+                      "aria-current": r.aria_current,
                     },
                     h(
                       "span",
                       { class: "n-dev-txt" },
                       h("span", { class: "n-dev-name" }, r.name),
+                      // Its OWN node, never a sibling beside the bound text
+                      // above — the compiler drops an element that shares a
+                      // parent with a dynamic text, and the parity gate is
+                      // what caught the chip existing only after hydration.
+                      h("span", { class: "rd-dev-stagedchip" }, "staged"),
                       h("span", { class: "n-dev-meta" }, r.meta),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Add to workbench"),
                     ),

@@ -45,46 +45,89 @@ async function refresh(): Promise<boolean> {
   }
 }
 
-/** Fetch-enhance the theme forms only. Other redesign widgets own their own
- *  verbs and must never silently inherit this menu's close/flash/refresh
- *  lifecycle as the workbench grows. With JavaScript off these still POST +
- *  303 + full reload; with it on the outcome and payload repaint in place. */
+/** Fetch-enhance only explicitly typed redesign forms. Future widgets must
+ *  opt into a lifecycle instead of silently inheriting Theme's close/focus
+ *  behavior. With JavaScript off these remain ordinary POST + 303 forms;
+ *  with it on, the outcome and served payload repaint in place. */
 function wireForms(root: HTMLElement): void {
   root.addEventListener("submit", (ev) => {
     const form = ev.target;
-    if (!(form instanceof HTMLFormElement) || !form.matches('[data-rd-form="theme"]')) return;
-    const menu = form.closest<HTMLElement>(".rd-themed");
-    if (!menu) return;
-    ev.preventDefault();
+    if (!(form instanceof HTMLFormElement)) return;
     const submitter = ev instanceof SubmitEvent && ev.submitter instanceof HTMLElement
       ? ev.submitter
       : null;
-    void submitThemeForm(form, menu, submitter);
+    if (form.matches('[data-rd-form="theme"]')) {
+      const menu = form.closest<HTMLElement>(".rd-themed");
+      if (!menu) return;
+      ev.preventDefault();
+      void submitThemeForm(form, menu, root, submitter);
+    } else if (form.matches('[data-rd-form="device"]')) {
+      ev.preventDefault();
+      void submitDeviceForm(form, root, submitter);
+    }
   });
 }
 
-/** The picker is one mutation surface even though progressive enhancement
- *  gives every row its own form. Lock the whole fold so two different theme
- *  choices cannot race their writes and repaint responses. */
-const pendingThemeMenus = new WeakSet<HTMLElement>();
+/** Theme and Stage both repaint the complete served payload. Treat the whole
+ * island as one mutation surface so an older refresh can never arrive last
+ * and temporarily roll back the other verb's visible truth. */
+const pendingMutationRoots = new WeakSet<HTMLElement>();
+type SubmitControl = HTMLButtonElement | HTMLInputElement;
+
+function beginMutation(root: HTMLElement): SubmitControl[] | null {
+  if (pendingMutationRoots.has(root)) return null;
+  pendingMutationRoots.add(root);
+  root.dataset.rdMutationPending = "true";
+  const controls = Array.from(
+    root.querySelectorAll<SubmitControl>(
+      '[data-rd-form="theme"] button[type="submit"], ' +
+        '[data-rd-form="theme"] input[type="submit"], ' +
+        '[data-rd-form="device"] button[type="submit"], ' +
+        '[data-rd-form="device"] input[type="submit"]',
+    ),
+  );
+  controls.forEach((control) => {
+    control.disabled = true;
+  });
+  return controls;
+}
+
+function endMutation(root: HTMLElement, controls: SubmitControl[]): void {
+  delete root.dataset.rdMutationPending;
+  // A device card can be added from the still-usable picker while the
+  // request is in flight. Include those newly mounted controls as well as
+  // the original snapshot so none remain stuck disabled after the lock.
+  const currentControls = root.querySelectorAll<SubmitControl>(
+    '[data-rd-form="theme"] button[type="submit"], ' +
+      '[data-rd-form="theme"] input[type="submit"], ' +
+      '[data-rd-form="device"] button[type="submit"], ' +
+      '[data-rd-form="device"] input[type="submit"]',
+  );
+  new Set<SubmitControl>([...controls, ...currentControls]).forEach((control) => {
+    control.disabled = control.dataset.rdProductDisabled === "true";
+  });
+  pendingMutationRoots.delete(root);
+}
+
+/** A delayed response must not steal focus from a modal or another canvas
+ * control the user moved to while the request was in flight. Browsers may
+ * move focus to body when the submitter becomes disabled, which still counts
+ * as the original action owning the focus lifecycle. */
+function actionStillOwnsFocus(owner: HTMLElement, submitter: HTMLElement | null): boolean {
+  const active = document.activeElement;
+  return active === null || active === document.body || active === submitter || owner.contains(active);
+}
 
 async function submitThemeForm(
   form: HTMLFormElement,
   menu: HTMLElement,
+  root: HTMLElement,
   submitter: HTMLElement | null,
 ): Promise<void> {
-  if (pendingThemeMenus.has(menu)) return;
-  pendingThemeMenus.add(menu);
-  const submits = Array.from(
-    menu.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
-      'button[type="submit"], input[type="submit"]',
-    ),
-  );
+  const submits = beginMutation(root);
+  if (!submits) return;
   const summary = menu.querySelector<HTMLElement>(".rd-theme-sum");
   let completed = false;
-  submits.forEach((control) => {
-    control.disabled = true;
-  });
   try {
     const body = new URLSearchParams();
     new FormData(form, submitter).forEach((value, key) => {
@@ -107,18 +150,73 @@ async function submitThemeForm(
   } catch {
     applyRedesignFlash("error: request failed — is ksx studio still running?");
   } finally {
-    submits.forEach((control) => {
-      control.disabled = false;
-    });
-    pendingThemeMenus.delete(menu);
+    const restoreFocus = actionStillOwnsFocus(menu, submitter);
+    endMutation(root, submits);
     if (completed) {
       // A fold that acted closes itself, but focus must remain at the verb
       // that opened it rather than falling through to the document/canvas.
       menu.removeAttribute("open");
-      summary?.focus();
-    } else if (submitter) {
+      if (restoreFocus) summary?.focus();
+    } else if (restoreFocus && submitter) {
       // A failed request leaves the choices visible for retry.
       submitter.focus();
+    }
+  }
+}
+
+async function submitDeviceForm(
+  form: HTMLFormElement,
+  root: HTMLElement,
+  submitter: HTMLElement | null,
+): Promise<void> {
+  const submits = beginMutation(root);
+  if (!submits) return;
+  const card = form.closest<HTMLElement>(".rd-dev-node");
+  let refreshed = false;
+  try {
+    const body = new URLSearchParams();
+    new FormData(form, submitter).forEach((value, key) => {
+      if (typeof value === "string") body.append(key, value);
+    });
+    const res = await fetch(form.action, {
+      method: "POST",
+      body,
+      redirect: "follow",
+    });
+    if (!res.ok) throw new Error(`device request failed with ${res.status}`);
+    applyRedesignFlash(new URL(res.url).searchParams.get("flash"));
+    if (!(await refresh())) {
+      applyRedesignFlash(
+        "error: the device request completed, but the workbench could not refresh — reload to confirm.",
+      );
+      return;
+    }
+    refreshed = true;
+  } catch {
+    applyRedesignFlash("error: request failed — is ksx studio still running?");
+  } finally {
+    const focusOwner = card ?? form;
+    const restoreFocus = actionStillOwnsFocus(focusOwner, submitter);
+    endMutation(root, submits);
+    if (!restoreFocus) return;
+    if (!card?.isConnected) {
+      // The authoritative scan may lose the initiating board while Stage is
+      // in flight. Its detached button cannot receive focus, so return to the
+      // durable workbench entry point instead of dropping the keyboard user
+      // on <body>.
+      root.querySelector<HTMLElement>('[data-nx="rd-devs-open"]')?.focus({
+        preventScroll: true,
+      });
+      return;
+    }
+    if (refreshed && card?.dataset.staged !== "false") {
+      // A successful stage hides the verb; an unknown provider disables it.
+      // In either state, keep keyboard focus on the durable card/status,
+      // never its hidden or product-disabled submitter.
+      card?.focus({ preventScroll: true });
+    } else {
+      // A refusal or failed repaint leaves the Stage verb available to retry.
+      submitter?.focus({ preventScroll: true });
     }
   }
 }

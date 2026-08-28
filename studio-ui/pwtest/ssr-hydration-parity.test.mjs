@@ -240,12 +240,10 @@ async function hydratedDom(url) {
         if (!canvas) return true;
         const kb = canvas.querySelector('[data-instance-id="keyboard"]');
         if (kb) return kb.dataset.canvasX !== undefined;
-        // The redesign's mock widgets are client-created. A stage transform
-        // alone proves only that the engine is alive, not that its current
-        // canvas content mounted.
-        if (canvas.closest(".rd")) {
-          return canvas.querySelector('[data-instance-id="mock-a"]')?.dataset.canvasX !== undefined;
-        }
+        // The redesign workbench starts EMPTY — boards arrive through the
+        // picker — so, like every widget-less canvas, its adoption mark is
+        // the engine's first camera transform below. The mock-era special
+        // case retired with the mock nodes.
         // Any other widget-less canvas uses the stage transform as its
         // adoption mark.
         const stage = canvas.querySelector(".forma-canvas-stage");

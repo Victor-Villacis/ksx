@@ -2,9 +2,9 @@
 //!
 //! The same shape as every page module here: one collector on a blocking
 //! worker, one GET that renders it themed, one JSON twin the island polls —
-//! and, since the theme menu transplanted in, the page's first verb:
-//! `POST /redesign/theme`, `/nocturne`'s theme verb re-homed with its own
-//! 303 target and the same allowlisted `?flash=` outcome channel.
+//! plus the theme and device-staging verbs transplanted from `/nocturne`,
+//! each re-homed with its own 303 target and the same allowlisted `?flash=`
+//! outcome channel.
 
 use super::*;
 
@@ -14,13 +14,16 @@ pub(super) struct RedesignQuery {
 }
 
 /// The sentences this page may be asked to repeat after a redirect, resolved
-/// against an allowlist exactly like `/nocturne` — never reflected. The theme
+/// against an allowlist exactly like `/nocturne` — never reflected. Every
 /// verb's sentences ARE nocturne's constants: one wording, two pages, so the
 /// copy cannot drift between the surfaces (the cutover's "provider text"
 /// lesson, applied in advance).
-const RD_FLASH_ALLOWLIST: [&str; 4] = [
+const RD_FLASH_ALLOWLIST: [&str; 7] = [
     N_THEME_OK,
     N_THEME_UNKNOWN,
+    N_DEVICE_OK,
+    N_DEVICE_ALREADY_OK,
+    N_FORM_UNREADABLE,
     N_EDIT_ERROR,
     N_UNKNOWN_FLASH_ERROR,
 ];
@@ -68,7 +71,10 @@ pub(super) async fn collect_redesign(state: &Arc<AppState>) -> RedesignPayload {
                 Some(remedy) => format!("{} — {remedy}", refusal.message),
                 None => refusal.message.clone(),
             });
-        crate::render_redesign::payload(&redesign_state.source.environment(), setup, scan)
+        // The staged device — the daemon's answer to "which board does ksx
+        // split", marked onto the picker rows and the bench cards.
+        let staged = redesign_state.control.staged();
+        crate::render_redesign::payload(&redesign_state.source.environment(), setup, scan, &staged)
     })
     .await
     .unwrap_or_default()
@@ -172,6 +178,47 @@ pub(super) async fn redesign_form_theme(
     .await
     .unwrap_or(false);
     redesign_redirect(if ok { N_THEME_OK } else { N_EDIT_ERROR })
+}
+
+/// A form this page might not be able to read — the nocturne rule: axum's
+/// own rejection is a 422 with no Location, which a fetch-submitting page
+/// renders as nothing at all. Answer in a sentence instead.
+type RedesignForm<T> = Result<Form<T>, axum::extract::rejection::FormRejection>;
+
+#[derive(Deserialize)]
+pub(super) struct RedesignDeviceForm {
+    /// The `ksx_core::DeviceSelector` the bench card carried (served).
+    /// **Never a path anybody typed** — the card has no text input.
+    selector: String,
+    alias: String,
+    label: String,
+}
+
+/// POST /redesign/device — `nocturne_form_device`, re-homed for the bench
+/// card's "Stage this board" action. The body is that verb's, through the
+/// SAME [`choose_device_preserving_preparation`] guard — both doors to
+/// staging keep the one preparation-preserving compare, so a WinUSB-prepared
+/// board pressed again never silently drops back to interception.
+pub(super) async fn redesign_form_device(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignDeviceForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let outcome = tokio::task::spawn_blocking(move || {
+        choose_device_preserving_preparation(&state, form.selector, form.alias, form.label)
+    })
+    .await
+    .unwrap_or(DeviceChoice::Refused);
+    redesign_redirect(match outcome {
+        // Not a refusal: the user asked for a state the page is already in,
+        // and it is in it (and the preparation survived — the sentence's
+        // second half is the part that matters).
+        DeviceChoice::Unchanged => N_DEVICE_ALREADY_OK,
+        DeviceChoice::Chosen => N_DEVICE_OK,
+        DeviceChoice::Refused => N_EDIT_ERROR,
+    })
 }
 
 #[cfg(test)]

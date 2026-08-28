@@ -35,6 +35,9 @@ const CLIENT_ONLY_SLOTS: [&str; 0] = [];
 #[cfg(test)]
 const ANONYMOUS_SLOTS: [&str; 0] = [];
 
+const STAGING_UNAVAILABLE: &str = "Staging unavailable — the ksx background helper is not \
+    answering. Staging status can't be confirmed; close and reopen ksx to check.";
+
 /// Compose the payload from the environment the source reports — the same
 /// wording rule the nocturne derived block uses, copied so the two chips can
 /// never disagree about what a fixture looks like. `setup` is the same
@@ -44,7 +47,34 @@ pub(crate) fn payload(
     environment: &ksx_api::RuntimeEnvironmentView,
     setup: Option<ksx_api::SetupView>,
     scan: Result<ksx_api::DeviceScanView, String>,
+    staged: &ksx_api::StagedSetupView,
 ) -> RedesignPayload {
+    let staged_selector = staged
+        .reachable
+        .then(|| {
+            staged
+                .device
+                .as_ref()
+                .map(|device| device.selector.as_str())
+        })
+        .flatten();
+    let mut devices = match &scan {
+        Ok(scan) => RedesignDeviceRows::of(Some(scan), "", staged_selector),
+        Err(unavailable) => RedesignDeviceRows::of(None, unavailable, staged_selector),
+    };
+    devices.staging_reachable = staged.reachable;
+    devices.staging_line = if staged.reachable {
+        String::new()
+    } else {
+        STAGING_UNAVAILABLE.to_owned()
+    };
+    if !staged.reachable {
+        devices.scan_line = if devices.scan_line.trim().is_empty() {
+            STAGING_UNAVAILABLE.to_owned()
+        } else {
+            format!("{} · {STAGING_UNAVAILABLE}", devices.scan_line)
+        };
+    }
     RedesignPayload {
         environment_label: environment.label.clone(),
         environment_cls: if environment.fixture {
@@ -58,10 +88,7 @@ pub(crate) fn payload(
         // The picker's truth. `Err` carries the refusal's sentence (with its
         // remedy — the `/devices` composition), so a refused read renders as
         // one line over an empty picker, never as an empty machine.
-        devices: match &scan {
-            Ok(scan) => RedesignDeviceRows::of(Some(scan), ""),
-            Err(unavailable) => RedesignDeviceRows::of(None, unavailable),
-        },
+        devices,
         // The composition `/nocturne` performs (snapshot.rs), copied verbatim:
         // the ONE shared `theme_rows` composer, re-dressed as choice rows, so
         // the redesign menu and the nocturne picker can never mark different
@@ -258,6 +285,13 @@ mod tests {
             // A readable config with no stamp: System is the one marked row.
             Some(ksx_api::SetupView::default()),
             Ok(fixture_scan()),
+            // Nothing staged, authoritatively: every row serves
+            // aria_current "false".
+            &ksx_api::StagedSetupView {
+                reachable: true,
+                empty: true,
+                ..Default::default()
+            },
         )
     }
 
@@ -268,7 +302,7 @@ mod tests {
     /// in the meta because nothing else will say them.
     #[test]
     fn the_workbench_tiers_sort_like_the_nocturne_roster() {
-        let devices = RedesignDeviceRows::of(Some(&fixture_scan()), "");
+        let devices = RedesignDeviceRows::of(Some(&fixture_scan()), "", None);
         assert_eq!(
             devices.encoders.len(),
             1,
@@ -289,8 +323,9 @@ mod tests {
         assert_eq!(devices.experimental[0].name, "AURA LED Controller");
         assert_eq!(devices.other.len(), 1);
         assert_eq!(devices.other[0].name, "Composite pointing device");
-        // The workbench never claims a daemon selection, and never wears the
-        // nocturne canvas verb ("replaces the current one" is false here).
+        assert!(devices.scan_authoritative);
+        // With authoritatively nothing staged, no row claims a daemon
+        // selection or wears nocturne's canvas-replacement wording.
         for row in devices
             .encoders
             .iter()
@@ -304,10 +339,53 @@ mod tests {
         }
         // A refused read is one sentence over an empty picker, never an
         // empty machine.
-        let refused = RedesignDeviceRows::of(None, "the scan refused — run `ksx devices`");
+        let refused = RedesignDeviceRows::of(None, "the scan refused — run `ksx devices`", None);
         assert!(refused.keyboards.is_empty() && refused.other.is_empty());
         assert_eq!(refused.scan_line, "the scan refused — run `ksx devices`");
+        assert!(!refused.scan_authoritative);
         assert!(refused.other_fold_cls.contains("none"));
+        // The staged daemon fact rides aria_current — the selector compare
+        // alone, trimmed, never empty-equals-empty (the guard's own rule).
+        let staged = RedesignDeviceRows::of(Some(&fixture_scan()), "", Some("usb:046d:c545:00"));
+        assert_eq!(staged.keyboards[0].aria_current, "true");
+        assert_eq!(staged.encoders[0].aria_current, "false");
+        let nobody = RedesignDeviceRows::of(Some(&fixture_scan()), "", Some("  "));
+        assert!(
+            nobody.keyboards.iter().all(|r| r.aria_current == "false"),
+            "an empty staged selector marks nothing"
+        );
+    }
+
+    #[test]
+    fn unreachable_staging_is_disabled_with_authored_copy_not_a_raw_diagnostic() {
+        let raw = "named pipe \\.\\pipe\\ksx-control refused with os error 231";
+        let staged = ksx_api::StagedSetupView::unreachable(raw);
+        let payload = payload(
+            &ksx_api::RuntimeEnvironmentView {
+                fixture: true,
+                id: "seeded-demo".into(),
+                label: "Fixture · Seeded demo".into(),
+                detail: "Synthetic data for the redesign lane.".into(),
+                generation: "test".into(),
+            },
+            Some(ksx_api::SetupView::default()),
+            Ok(fixture_scan()),
+            &staged,
+        );
+        assert!(!payload.devices.staging_reachable);
+        assert!(payload.devices.staging_line.contains("background helper"));
+        assert!(payload.devices.scan_line.contains("Staging unavailable"));
+        assert!(!payload.devices.staging_line.contains(raw));
+        assert!(!payload.devices.scan_line.contains(raw));
+        assert!(
+            payload
+                .devices
+                .keyboards
+                .iter()
+                .chain(&payload.devices.encoders)
+                .all(|row| row.aria_current == "false"),
+            "an unreachable staging provider never invents a current row"
+        );
     }
 
     /// The picker is SERVED: the button, the modal (hidden until opened),

@@ -909,7 +909,9 @@ pub(super) enum DeviceChoice {
 /// the preparation survives. The comparison is on the SELECTOR alone —
 /// `[[device]] id` is the identity a saved config refers to; alias and label
 /// are naming, and re-choosing to rename is not a thing any surface offers.
-fn choose_device_preserving_preparation(
+/// Shared with `server/redesign.rs` (the workbench's Stage-this-board verb):
+/// both doors to staging pass through the ONE preparation-preserving guard.
+pub(super) fn choose_device_preserving_preparation(
     state: &AppState,
     selector: String,
     alias: String,

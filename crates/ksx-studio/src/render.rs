@@ -780,7 +780,7 @@ mod tests {
 
     #[test]
     fn the_embed_ships_exactly_the_live_routes() {
-        const LIVE: [&str; 4] = ["/nocturne", "/check", "/pads", "/devices"];
+        const LIVE: [&str; 5] = ["/nocturne", "/check", "/pads", "/devices", "/redesign"];
         const DELETED: [&str; 6] = ["/", "/map", "/start", "/setup", "/profiles", "/workspace"];
 
         let raw = Assets::get("manifest.json").expect("manifest.json is embedded");

@@ -268,6 +268,7 @@ try {
       { entry: "src/check.ts", outfile: "check.js" },
       { entry: "src/pads.ts", outfile: "pads.js" },
       { entry: "src/devices.ts", outfile: "devices.js" },
+      { entry: "src/redesign.ts", outfile: "redesign.js" },
     ],
     cssEntries: [{ input: [tokensCssTmp, canvasCssTmp, normalizedCss], outfile: "studio.css" }],
     routes: {
@@ -275,6 +276,7 @@ try {
       "/check": { js: ["check"], css: ["studio"] },
       "/pads": { js: ["pads"], css: ["studio"] },
       "/devices": { js: ["devices"], css: ["studio"] },
+      "/redesign": { js: ["redesign"], css: ["studio"] },
     },
     outputDir,
     // The mapping-flow lens, contextual Inspector, Keyboard Arranger, physical
@@ -294,6 +296,7 @@ try {
       check: "src/check.ts",
       pads: "src/pads.ts",
       devices: "src/devices.ts",
+      redesign: "src/redesign.ts",
     },
   });
 } finally {

@@ -44,6 +44,7 @@ const ROUTES = [
   { path: "/check", name: "check" },
   { path: "/pads", name: "pads" },
   { path: "/devices", name: "devices" },
+  { path: "/redesign", name: "redesign" },
 ];
 
 const CONTEXTS = [

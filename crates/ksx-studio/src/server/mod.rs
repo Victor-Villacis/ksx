@@ -49,12 +49,14 @@ mod check;
 mod devices;
 mod nocturne;
 mod pads;
+mod redesign;
 mod session;
 
 use check::*;
 use devices::*;
 use nocturne::*;
 use pads::*;
+use redesign::*;
 
 use std::net::SocketAddr;
 
@@ -82,7 +84,9 @@ use crate::render_check::render_check;
 
 use crate::render_devices::render_devices;
 
-use crate::snapshot::{CheckPayload, DevicesPayload, PadsPayload, StatusSource};
+use crate::render_redesign::render_redesign;
+
+use crate::snapshot::{CheckPayload, DevicesPayload, PadsPayload, RedesignPayload, StatusSource};
 
 struct AppState {
     /// The static design-proof route (see `render_nocturne.rs`): loaded like
@@ -91,6 +95,8 @@ struct AppState {
     check_page: LivePage,
     pads_page: LivePage,
     devices_page: LivePage,
+    /// The transplant lane's blank workbench (see render_redesign.rs).
+    redesign_page: LivePage,
     source: Box<dyn StatusSource>,
     control: Box<dyn ControlSource>,
     /// The MACHINE reads and writes that are not a `DaemonCommand`: the
@@ -316,11 +322,13 @@ pub fn serve(
     let check = LivePage::load("/check")?;
     let pads = LivePage::load("/pads")?;
     let devices = LivePage::load("/devices")?;
+    let redesign = LivePage::load("/redesign")?;
     let state = Arc::new(AppState {
         nocturne_page: nocturne,
         check_page: check,
         pads_page: pads,
         devices_page: devices,
+        redesign_page: redesign,
         source,
         control,
         machine,
@@ -478,6 +486,9 @@ pub fn serve(
             // which is what stops a rebound origin watching the panel.
             .route("/check", get(check_page))
             .route("/api/check", get(api_check))
+            // ── The redesign lane's workbench: read-only, like /check ────
+            .route("/redesign", get(redesign_page))
+            .route("/api/redesign", get(api_redesign))
             // ── THE LIVE FEED ─────────────────────────────────────────────
             // One route, and it is the keystone the button check stands on:
             // the daemon's input fan-out as Server-Sent Events. Read-only and

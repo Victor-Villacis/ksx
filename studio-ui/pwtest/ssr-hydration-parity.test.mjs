@@ -78,6 +78,7 @@ const ROUTES = [
   "/check",
   "/pads",
   "/devices",
+  "/redesign",
 ];
 
 /** The session states the show pairs actually move between. `modal open` is

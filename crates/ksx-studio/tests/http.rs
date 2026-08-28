@@ -3747,6 +3747,7 @@ fn every_page_embeds_the_payload_its_api_serves() {
         ("/check", "/api/check"),
         ("/pads", "/api/pads"),
         ("/devices", "/api/devices"),
+        ("/redesign", "/api/redesign"),
     ] {
         let body = body_of(&get(addr, page)).to_owned();
         let block = body
@@ -5182,7 +5183,7 @@ fn the_setup_routes_are_guarded_like_every_other_one() {
 /// `/workspace` were deleted and `/nocturne` became the product.
 #[test]
 fn every_page_stamps_the_stored_theme_and_only_a_shipped_one() {
-    const PAGES: [&str; 4] = ["/nocturne", "/check", "/pads", "/devices"];
+    const PAGES: [&str; 5] = ["/nocturne", "/check", "/pads", "/devices", "/redesign"];
 
     // No stored choice → no stamp: System is the ABSENCE of the attribute,
     // which is what hands the choice to the stylesheet's

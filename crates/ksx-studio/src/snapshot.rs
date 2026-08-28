@@ -44,6 +44,20 @@ pub struct CheckPayload {
     pub feed_hint: String,
 }
 
+/// What `GET /api/redesign` serves AND what the redesign island's props
+/// carry — the transplant lane's blank workbench. Deliberately minimal: the
+/// machine-provenance chip and nothing else, so the lane can never be
+/// mistaken for the cabinet. Every field a transplanted piece needs joins
+/// here, server-worded, as the piece arrives.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignPayload {
+    /// The environment's compact label, verbatim from the source.
+    pub environment_label: String,
+    /// `n-environment` + the fixture/live/unknown variant — presentation
+    /// class, composed in Rust so the island words nothing.
+    pub environment_cls: String,
+}
+
 /// What `GET /api/pads` serves AND what the pads island's props carry — the
 /// same one-struct-one-serializer rule as [`StatusPayload`], parity pinned in
 /// `render_pads.rs`.

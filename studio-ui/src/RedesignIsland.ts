@@ -142,8 +142,10 @@ export function applyRedesign(v: RedesignPayload): void {
   setRdDevExpFoldCls(d?.exp_fold_cls ?? "n-devfold none");
   setRdDevOtherHead(d?.other_head ?? "");
   setRdDevOtherFoldCls(d?.other_fold_cls ?? "n-devfold none");
-  // The rows may have re-rendered: re-mark the workbench state onto them.
+  // The rows may have re-rendered: re-mark the workbench state onto them,
+  // and carry the daemon's staged fact onto the bench cards.
   syncDeviceRows();
+  syncBenchCards();
 }
 
 /** Report one action outcome (the redirect's allowlisted ?flash= copy) —
@@ -915,66 +917,11 @@ function wireSpotlight(stage: HTMLElement, viewport: HTMLElement): void {
   });
 }
 
-// ── The mock nodes: two disposable widgets to exercise the canvas ───────────
-// Client-created (data-client-widget — parity rule 3e), so nothing about
-// them is served. They exist so selection, marquee, drag, focus, fit and the
-// semantic tiers have something real to act on while the first product
-// pieces are still on the way; delete this block when a transplant lands.
-
-function mockNodeContent(summary: string, detail: string[]): HTMLElement {
-  const body = document.createElement("div");
-  body.className = "rd-mock";
-  const sum = document.createElement("p");
-  sum.className = "rd-mock-sum";
-  sum.textContent = summary;
-  body.append(sum);
-  const block = document.createElement("dl");
-  block.className = "rd-mock-detail";
-  for (const line of detail) {
-    const [term, value] = line.split(": ");
-    const dt = document.createElement("dt");
-    dt.textContent = term;
-    const dd = document.createElement("dd");
-    dd.textContent = value ?? "";
-    block.append(dt, dd);
-  }
-  body.append(block);
-  return body;
-}
-
-function mountMockNodes(): void {
-  const canvas = nCanvas;
-  if (!canvas) return;
-  const mocks: [string, string, string, string[], CanvasItemGeometry][] = [
-    [
-      "mock-a",
-      "Mock node A",
-      "trigger · always fires",
-      ["kind: trigger", "wired to: nothing yet", "state: healthy"],
-      { x: 120, y: 140, width: 260, height: 150, z: 1, manualScale: 1 },
-    ],
-    [
-      "mock-b",
-      "Mock node B",
-      "transform · echoes its input",
-      ["kind: transform", "wired to: nothing yet", "state: healthy"],
-      { x: 470, y: 300, width: 260, height: 150, z: 2, manualScale: 1 },
-    ],
-  ];
-  for (const [id, name, summary, detail, home] of mocks) {
-    const item = createCanvasItem({
-      instanceId: id,
-      displayName: name,
-      preferredWidth: 260,
-      minHeight: 150,
-      content: mockNodeContent(summary, detail),
-      document,
-    });
-    item.dataset.clientWidget = "";
-    item.classList.add("rd-mock-node");
-    canvas.mountItem(item, canvasPrefs.widgets[id] ?? home, { focus: false });
-  }
-}
+// The mock nodes lived here until 2026-08-28 — two disposable widgets that
+// gave selection, marquee, drag, focus, fit and the semantic tiers something
+// to act on. The first product transplant (the device workbench) landed, so
+// they are gone, exactly as their own comment promised. The workbench starts
+// EMPTY on purpose: boards arrive through the picker.
 
 // ── The device workbench (the lane's thesis made real) ──────────────────────
 // The canvas is a WORKBENCH: the picker adds boards to it — several at once —
@@ -1017,7 +964,41 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   const meta = document.createElement("p");
   meta.className = "rd-devcard-meta";
   meta.textContent = row.meta;
-  body.append(badge, name, meta);
+  // The daemon chip and the daemon verb. `data-staged` on the ITEM decides
+  // which shows (syncBenchCards keeps it true to the served rows): a staged
+  // board wears the chip; every other pickable board offers the act. The
+  // form is a REAL POST — the entry's fetch-submit layer carries it, the
+  // flash speaks, and the refresh moves the marking wherever it now belongs.
+  const staged = document.createElement("p");
+  staged.className = "rd-devcard-staged";
+  staged.textContent = "Staged — the board ksx splits";
+  staged.title =
+    "This board is the daemon's staged choice. Staging it again changes nothing — " +
+    "a keyboard prepared for play keeps its preparation.";
+  const form = document.createElement("form");
+  form.className = "rd-stageform";
+  form.method = "post";
+  form.action = "/redesign/device";
+  for (const [fieldName, value] of [
+    ["selector", row.selector],
+    ["alias", row.alias],
+    ["label", row.label],
+  ]) {
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = fieldName;
+    input.value = value;
+    form.append(input);
+  }
+  const submit = document.createElement("button");
+  submit.type = "submit";
+  submit.className = "rd-stagebtn";
+  submit.textContent = "Stage this board";
+  submit.title =
+    "Make this the board ksx splits — replaces the daemon's current choice. " +
+    "Nothing is saved or started, and a board already prepared keeps its preparation.";
+  form.append(submit);
+  body.append(badge, name, meta, staged, form);
   return body;
 }
 
@@ -1031,18 +1012,19 @@ function mountDeviceWidget(row: RdDeviceRowView, index: number): void {
     instanceId: slug,
     displayName: row.name,
     preferredWidth: 300,
-    minHeight: 118,
+    minHeight: 150,
     content: deviceCardContent(row),
     document,
   });
   item.dataset.clientWidget = "";
   item.dataset.selector = row.selector;
+  item.dataset.staged = row.aria_current === "true" ? "true" : "false";
   item.classList.add("rd-dev-node");
   const home: CanvasItemGeometry = {
     x: 140 + (index % 3) * 340,
-    y: 520 + Math.floor(index / 3) * 170,
+    y: 160 + Math.floor(index / 3) * 200,
     width: 300,
-    height: 118,
+    height: 150,
     z: 3 + index,
     manualScale: 1,
   };
@@ -1085,6 +1067,18 @@ function restoreBench(): void {
     if (row && !benchItemEl(selector)) mountDeviceWidget(row, i);
   });
   syncDeviceRows();
+}
+
+/** Decorate the bench cards with the DAEMON truth — which board is staged —
+ *  read off the served rows. A card whose device left the scan keeps its
+ *  last stamp; the picker row is the surface that says a device vanished. */
+function syncBenchCards(): void {
+  for (const item of Array.from(
+    rdRoot?.querySelectorAll<HTMLElement>(".rd-dev-node[data-selector]") ?? [],
+  )) {
+    const row = deviceRowFor(item.dataset.selector ?? "");
+    if (row) item.dataset.staged = row.aria_current === "true" ? "true" : "false";
+  }
 }
 
 /** Decorate the picker rows with CLIENT truth — membership — after any
@@ -1221,7 +1215,6 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
     },
   );
   setCanvasMap(canvasPrefs.mapHidden === true);
-  mountMockNodes();
   restoreBench();
   syncMapCount();
   syncToolRail(nCanvas.toolMode());
@@ -1642,7 +1635,9 @@ export function RedesignIsland() {
               h("h3", { class: "rd-devhead" }, () => rdDevKbHead()),
               createList(
                 () => rdDevKb(),
-                (r) => r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title,
+                (r) =>
+                  r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title +
+                  "|" + r.aria_current,
                 (r) =>
                   h(
                     "button",
@@ -1654,11 +1649,20 @@ export function RedesignIsland() {
                       "data-role": r.role,
                       title: r.title,
                       "aria-pressed": "false",
+                      // The DAEMON fact, served: this board is the staged
+                      // one. A different channel from aria-pressed (client
+                      // bench membership) on purpose — different answers.
+                      "aria-current": r.aria_current,
                     },
                     h(
                       "span",
                       { class: "n-dev-txt" },
                       h("span", { class: "n-dev-name" }, r.name),
+                      // Its OWN node, never a sibling beside the bound text
+                      // above — the compiler drops an element that shares a
+                      // parent with a dynamic text, and the parity gate is
+                      // what caught the chip existing only after hydration.
+                      h("span", { class: "rd-dev-stagedchip" }, "staged"),
                       h("span", { class: "n-dev-meta" }, r.meta),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Add to workbench"),
                     ),
@@ -1672,7 +1676,9 @@ export function RedesignIsland() {
               h("h3", { class: "rd-devhead" }, () => rdDevEncHead()),
               createList(
                 () => rdDevEnc(),
-                (r) => r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title,
+                (r) =>
+                  r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title +
+                  "|" + r.aria_current,
                 (r) =>
                   h(
                     "button",
@@ -1684,11 +1690,20 @@ export function RedesignIsland() {
                       "data-role": r.role,
                       title: r.title,
                       "aria-pressed": "false",
+                      // The DAEMON fact, served: this board is the staged
+                      // one. A different channel from aria-pressed (client
+                      // bench membership) on purpose — different answers.
+                      "aria-current": r.aria_current,
                     },
                     h(
                       "span",
                       { class: "n-dev-txt" },
                       h("span", { class: "n-dev-name" }, r.name),
+                      // Its OWN node, never a sibling beside the bound text
+                      // above — the compiler drops an element that shares a
+                      // parent with a dynamic text, and the parity gate is
+                      // what caught the chip existing only after hydration.
+                      h("span", { class: "rd-dev-stagedchip" }, "staged"),
                       h("span", { class: "n-dev-meta" }, r.meta),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Add to workbench"),
                     ),
@@ -1702,7 +1717,9 @@ export function RedesignIsland() {
               h("h3", { class: "rd-devhead" }, () => rdDevExpHead()),
               createList(
                 () => rdDevExp(),
-                (r) => r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title,
+                (r) =>
+                  r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title +
+                  "|" + r.aria_current,
                 (r) =>
                   h(
                     "button",
@@ -1714,11 +1731,20 @@ export function RedesignIsland() {
                       "data-role": r.role,
                       title: r.title,
                       "aria-pressed": "false",
+                      // The DAEMON fact, served: this board is the staged
+                      // one. A different channel from aria-pressed (client
+                      // bench membership) on purpose — different answers.
+                      "aria-current": r.aria_current,
                     },
                     h(
                       "span",
                       { class: "n-dev-txt" },
                       h("span", { class: "n-dev-name" }, r.name),
+                      // Its OWN node, never a sibling beside the bound text
+                      // above — the compiler drops an element that shares a
+                      // parent with a dynamic text, and the parity gate is
+                      // what caught the chip existing only after hydration.
+                      h("span", { class: "rd-dev-stagedchip" }, "staged"),
                       h("span", { class: "n-dev-meta" }, r.meta),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Add to workbench"),
                     ),

@@ -93,8 +93,10 @@ after(async () => {
   }
 });
 
-/** A hydrated /redesign whose canvas has adopted (the mocks are the proof
- *  the engine is alive — restoreBench runs in the same init). */
+/** A hydrated /redesign whose canvas has adopted. The workbench starts
+ *  empty, so the engine's first camera transform is the adoption mark —
+ *  restoreBench runs in the same init, so any remembered boards are mounted
+ *  by the time the transform lands. */
 async function openBench() {
   const page = await context.newPage();
   const noise = [];
@@ -110,9 +112,7 @@ async function openBench() {
     { timeout: 20_000 },
   );
   await page.waitForFunction(
-    () =>
-      document.querySelector('.forma-canvas-stage [data-instance-id="mock-a"]')?.dataset
-        .canvasX !== undefined,
+    () => Boolean(document.querySelector(".forma-canvas-stage")?.style.transform),
     null,
     { timeout: 20_000 },
   );
@@ -263,5 +263,84 @@ describe("the device workbench", () => {
     );
     assert.deepEqual(again.ksxNoise, [], "the page must stay error-free");
     await again.close();
+  });
+
+  test("staging from the bench card runs the daemon verb; the marking follows the truth", async () => {
+    const page = await openBench();
+    // The seeded fixture stages its I-PAC from the START — the served
+    // daemon fact must arrive on the benched card without any press, chip
+    // on, verb withdrawn. (The stage-scoped selector matters: the minimap
+    // marker wears the same data-instance-id.)
+    await page.waitForFunction(
+      (id) =>
+        document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)?.dataset
+          .staged === "true",
+      IPAC_SLUG,
+      { timeout: 10_000 },
+    );
+    assert.equal(
+      await page
+        .locator(`.forma-canvas-stage [data-instance-id="${IPAC_SLUG}"] .rd-stageform`)
+        .evaluate((form) => getComputedStyle(form).display),
+      "none",
+      "a staged card offers the chip, not the verb",
+    );
+    // Bench the keyboard again and promote IT: the verb runs through the
+    // preparation-preserving guard, the flash speaks, and the marking MOVES
+    // — off the encoder, onto the keyboard, on cards and rows alike.
+    await page.click('[data-nx="rd-devs-open"]');
+    await page.click(`.rd-devmodal button[data-selector="${G915}"]`);
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(
+      (id) =>
+        document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)?.dataset
+          .canvasX !== undefined,
+      G915_SLUG,
+      { timeout: 10_000 },
+    );
+    assert.equal(
+      await page
+        .locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`)
+        .getAttribute("data-staged"),
+      "false",
+      "an unstaged board's card offers the verb",
+    );
+    await page.click(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"] .rd-stagebtn`);
+    await page.waitForFunction(
+      (id) =>
+        document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)?.dataset
+          .staged === "true",
+      G915_SLUG,
+      { timeout: 10_000 },
+    );
+    await page.waitForFunction(
+      () =>
+        document.querySelector(".rd-flash")?.textContent ===
+          "Keyboard selected. Nothing has been saved or started.",
+      null,
+      { timeout: 10_000 },
+    );
+    await page.waitForFunction(
+      (id) =>
+        document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)?.dataset
+          .staged === "false",
+      IPAC_SLUG,
+      { timeout: 10_000 },
+    );
+    await page.click('[data-nx="rd-devs-open"]');
+    assert.equal(
+      await page
+        .locator(`.rd-devmodal button[data-selector="${G915}"][aria-current="true"]`)
+        .count(),
+      1,
+      "the picker row carries the staged fact",
+    );
+    assert.equal(
+      await page.locator('.rd-devmodal button[aria-current="true"]').count(),
+      1,
+      "exactly one row is the staged one",
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
   });
 });

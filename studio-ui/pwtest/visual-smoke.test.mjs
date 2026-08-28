@@ -253,13 +253,10 @@ for (const config of CONTEXTS) {
               if (!canvas) return true;
               const kb = canvas.querySelector('[data-instance-id="keyboard"]');
               if (kb) return kb.dataset.canvasX !== undefined;
-              // The redesign's mock widgets are client-created. Waiting only
-              // for the stage transform lets a live engine with a missing
-              // product surface pass, so require the first mock's geometry.
-              if (canvas.closest(".rd")) {
-                return canvas.querySelector('[data-instance-id="mock-a"]')?.dataset.canvasX !==
-                  undefined;
-              }
+              // The redesign workbench starts EMPTY — boards arrive through
+              // the picker — so, like every widget-less canvas, its adoption
+              // mark is the engine's first camera transform below. The
+              // mock-era special case retired with the mock nodes.
               // Any other widget-less canvas uses the engine's first camera
               // transform as its alive mark.
               const stage = canvas.querySelector(".forma-canvas-stage");
@@ -456,6 +453,22 @@ describe("redesign canvas interaction chrome", () => {
       if (message.type() === "error") diagnostics.push(`console: ${message.text()}`);
     });
 
+    // The workbench starts empty; seed two benched boards (the fixture's
+    // keyboard and its encoder) through the arrangement store the page
+    // itself reads, so the interaction chrome has real widgets to act on —
+    // the role the retired mock nodes used to play.
+    const BENCH_A = "dev-usb-046d-c545-00"; // Logitech G915 TKL
+    const BENCH_B = "dev-usb-d209-0430-00"; // Ultimarc I-PAC 4
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "ksx-redesign-canvas",
+        JSON.stringify({
+          widgets: {},
+          bench: ["usb:046d:c545:00", "usb:d209:0430:00"],
+        }),
+      );
+    });
+
     try {
       const response = await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
       assert.ok(response?.ok(), `/redesign returned HTTP ${response?.status() ?? "none"}`);
@@ -470,7 +483,12 @@ describe("redesign canvas interaction chrome", () => {
         { timeout: 20_000 },
       );
       await page.waitForFunction(
-        () => document.querySelector('[data-instance-id="mock-a"]')?.dataset.canvasX !== undefined,
+        () =>
+          ["dev-usb-046d-c545-00", "dev-usb-d209-0430-00"].every(
+            (id) =>
+              document.querySelector(`[data-instance-id="${id}"]`)?.dataset.canvasX !==
+                undefined,
+          ),
         null,
         { timeout: 20_000 },
       );
@@ -514,7 +532,7 @@ describe("redesign canvas interaction chrome", () => {
         });
         return { width: bounds.width, height: bounds.height, outside };
       });
-      await stageItem("mock-a").click();
+      await stageItem(BENCH_A).click();
       await page.waitForFunction(() => document.querySelector(".rd-inspector")?.hidden === false);
       await page.locator('[data-nx="rd-insp-close"]').click();
       assert.deepEqual(
@@ -523,11 +541,11 @@ describe("redesign canvas interaction chrome", () => {
         "Inspector X must remove the panel from layout, not only set an attribute",
       );
 
-      await stageItem("mock-b").click();
+      await stageItem(BENCH_B).click();
       await page.waitForFunction(
         () =>
           document.querySelector(".rd-inspector")?.hidden === false &&
-          document.querySelector(".rd-insp-name")?.textContent === "Mock node B",
+          document.querySelector(".rd-insp-name")?.textContent === "Ultimarc I-PAC 4",
       );
       await page.locator('.rd-inspector [data-nx="rd-focus-sel"]').click();
       await page.waitForFunction(
@@ -540,8 +558,8 @@ describe("redesign canvas interaction chrome", () => {
         "closing the Inspector must also leave Focus mode",
       );
 
-      await stageItem("mock-a").click();
-      const beforePosition = await stageItem("mock-a").evaluate((item) => ({
+      await stageItem(BENCH_A).click();
+      const beforePosition = await stageItem(BENCH_A).evaluate((item) => ({
         x: Number(item.dataset.canvasX),
         y: Number(item.dataset.canvasY),
       }));
@@ -550,7 +568,7 @@ describe("redesign canvas interaction chrome", () => {
       await page.getByLabel("Y", { exact: true }).fill(String(beforePosition.y + 23));
       await page.locator(".rd-insp-head .rd-map-title").click();
       assert.deepEqual(
-        await stageItem("mock-a").evaluate((item) => ({
+        await stageItem(BENCH_A).evaluate((item) => ({
           x: Number(item.dataset.canvasX),
           y: Number(item.dataset.canvasY),
         })),
@@ -616,15 +634,15 @@ describe("redesign canvas interaction chrome", () => {
         "an unmodified canvas shortcut fired while title-bar focus was outside the canvas",
       );
 
-      await stageItem("mock-a").click();
-      const beforeKeys = await stageItem("mock-a").evaluate((item) => ({
+      await stageItem(BENCH_A).click();
+      const beforeKeys = await stageItem(BENCH_A).evaluate((item) => ({
         x: Number(item.dataset.canvasX),
         y: Number(item.dataset.canvasY),
       }));
       await page.keyboard.press("ArrowRight");
       await page.keyboard.press("Shift+ArrowDown");
       assert.deepEqual(
-        await stageItem("mock-a").evaluate((item) => ({
+        await stageItem(BENCH_A).evaluate((item) => ({
           x: Number(item.dataset.canvasX),
           y: Number(item.dataset.canvasY),
         })),
@@ -652,7 +670,7 @@ describe("redesign canvas interaction chrome", () => {
         "Escape cleared the widget underneath instead of closing the shortcut sheet",
       );
       assert.equal(
-        await stageItem("mock-a").getAttribute("aria-current"),
+        await stageItem(BENCH_A).getAttribute("aria-current"),
         "true",
         "closing the shortcut sheet unexpectedly cleared the active widget",
       );
@@ -668,16 +686,16 @@ describe("redesign canvas interaction chrome", () => {
         "item-focused Escape skipped the redesign's Focus-mode rung",
       );
 
-      const moveHandle = stageItem("mock-a").locator(".widget-drag-handle");
+      const moveHandle = stageItem(BENCH_A).locator(".widget-drag-handle");
       await moveHandle.focus();
-      const beforeHandleKeys = await stageItem("mock-a").evaluate((item) => ({
+      const beforeHandleKeys = await stageItem(BENCH_A).evaluate((item) => ({
         x: Number(item.dataset.canvasX),
         y: Number(item.dataset.canvasY),
       }));
       await page.keyboard.press("ArrowLeft");
       await page.keyboard.press("Shift+ArrowUp");
       assert.deepEqual(
-        await stageItem("mock-a").evaluate((item) => ({
+        await stageItem(BENCH_A).evaluate((item) => ({
           x: Number(item.dataset.canvasX),
           y: Number(item.dataset.canvasY),
         })),
@@ -702,7 +720,7 @@ describe("redesign canvas interaction chrome", () => {
       );
 
       const beforeMobileInspector = await stage.evaluate((node) => node.style.transform);
-      await stageItem("mock-b").click();
+      await stageItem(BENCH_B).click();
       await page.waitForFunction(() => document.querySelector(".rd-inspector")?.hidden === false);
       assert.equal(
         await stage.evaluate((node) => node.style.transform),
@@ -717,7 +735,7 @@ describe("redesign canvas interaction chrome", () => {
 
       await page.getByLabel("X", { exact: true }).focus();
       await page.keyboard.press("Escape");
-      assert.equal(await stageItem("mock-b").getAttribute("aria-current"), "true");
+      assert.equal(await stageItem(BENCH_B).getAttribute("aria-current"), "true");
       assert.equal(await page.locator(".rd-inspector").getAttribute("hidden"), null);
       await page.locator('[data-nx="rd-insp-close"]').click();
 

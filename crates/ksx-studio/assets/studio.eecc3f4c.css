@@ -19210,42 +19210,78 @@ a.nm-link {
   display: block;
 }
 
-/* Mock nodes: disposable content whose DETAIL follows the semantic tier the
-   engine stamps on the viewport (data-canvas-zoom-tier). */
-.rd-mock {
-  padding: 6px 10px 10px;
-}
-
-.rd-mock-sum {
-  margin: 0 0 6px;
-  color: var(--n-text-2);
-  font-size: 11.5px;
-}
-
-.rd-mock-detail {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 3px 10px;
-  margin: 0;
-  padding-top: 6px;
-  border-top: 1px solid var(--n-line);
-}
-
-.rd-mock-detail dt {
-  color: var(--n-text-2);
-  font-size: 10.5px;
-}
-
-.rd-mock-detail dd {
-  margin: 0;
-  color: var(--n-text);
-  font-size: 11px;
-}
-
-.rd [data-canvas-zoom-tier="overview"] .rd-mock-sum,
-.rd [data-canvas-zoom-tier="overview"] .rd-mock-detail,
-.rd [data-canvas-zoom-tier="structure"] .rd-mock-detail {
+/* Device cards follow the semantic tier the engine stamps on the viewport
+   (data-canvas-zoom-tier) — the pattern the retired mock nodes proved, now
+   on the real widgets: badge and name always; the meta from structure in;
+   the daemon chrome (chip or verb) only at editing distance. */
+.rd [data-canvas-zoom-tier="overview"] .rd-devcard-meta,
+.rd [data-canvas-zoom-tier="overview"] .rd-devcard-staged,
+.rd [data-canvas-zoom-tier="overview"] .rd-stageform,
+.rd [data-canvas-zoom-tier="structure"] .rd-devcard-staged,
+.rd [data-canvas-zoom-tier="structure"] .rd-stageform {
   display: none;
+}
+
+/* The daemon chip and the daemon verb: `data-staged` on the ITEM decides
+   which shows. Default (unstaged): the verb. */
+.rd-devcard-staged {
+  display: none;
+  margin: 8px 0 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--n-accent) 22%, transparent);
+  color: var(--n-accent-2);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  width: fit-content;
+}
+
+.rd-dev-node[data-staged="true"] .rd-devcard-staged {
+  display: inline-block;
+}
+
+.rd-dev-node[data-staged="true"] .rd-stageform {
+  display: none;
+}
+
+.rd-stageform {
+  margin: 8px 0 0;
+}
+
+.rd-stagebtn {
+  padding: 4px 11px;
+  border: 1px solid var(--n-accent-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--n-accent-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rd-stagebtn:hover,
+.rd-stagebtn:focus-visible {
+  background: var(--n-accent-tint);
+}
+
+/* The picker row's own staged word, off the SERVED attribute alone. */
+.rd-dev-stagedchip {
+  display: none;
+  margin: 3px 0 0;
+  width: fit-content;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--n-accent) 22%, transparent);
+  color: var(--n-accent-2);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+.rd-devmodal button[aria-current="true"] .rd-dev-stagedchip {
+  display: inline-block;
 }
 
 /* The palette landing pulse — the eye needs to find what the camera flew to. */

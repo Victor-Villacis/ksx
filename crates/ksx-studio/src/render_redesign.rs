@@ -44,6 +44,7 @@ pub(crate) fn payload(
     environment: &ksx_api::RuntimeEnvironmentView,
     setup: Option<ksx_api::SetupView>,
     scan: Result<ksx_api::DeviceScanView, String>,
+    staged: Option<&str>,
 ) -> RedesignPayload {
     RedesignPayload {
         environment_label: environment.label.clone(),
@@ -59,8 +60,8 @@ pub(crate) fn payload(
         // remedy — the `/devices` composition), so a refused read renders as
         // one line over an empty picker, never as an empty machine.
         devices: match &scan {
-            Ok(scan) => RedesignDeviceRows::of(Some(scan), ""),
-            Err(unavailable) => RedesignDeviceRows::of(None, unavailable),
+            Ok(scan) => RedesignDeviceRows::of(Some(scan), "", staged),
+            Err(unavailable) => RedesignDeviceRows::of(None, unavailable, staged),
         },
         // The composition `/nocturne` performs (snapshot.rs), copied verbatim:
         // the ONE shared `theme_rows` composer, re-dressed as choice rows, so
@@ -255,6 +256,8 @@ mod tests {
             // A readable config with no stamp: System is the one marked row.
             Some(ksx_api::SetupView::default()),
             Ok(fixture_scan()),
+            // Nothing staged: every row serves aria_current "false".
+            None,
         )
     }
 
@@ -265,7 +268,7 @@ mod tests {
     /// in the meta because nothing else will say them.
     #[test]
     fn the_workbench_tiers_sort_like_the_nocturne_roster() {
-        let devices = RedesignDeviceRows::of(Some(&fixture_scan()), "");
+        let devices = RedesignDeviceRows::of(Some(&fixture_scan()), "", None);
         assert_eq!(devices.encoders.len(), 1, "role wins over looks_like_a_keyboard");
         assert_eq!(devices.encoders[0].name, "Ultimarc I-PAC 4");
         assert_eq!(devices.encoders[0].role, "panel-encoder");
@@ -297,10 +300,21 @@ mod tests {
         }
         // A refused read is one sentence over an empty picker, never an
         // empty machine.
-        let refused = RedesignDeviceRows::of(None, "the scan refused — run `ksx devices`");
+        let refused = RedesignDeviceRows::of(None, "the scan refused — run `ksx devices`", None);
         assert!(refused.keyboards.is_empty() && refused.other.is_empty());
         assert_eq!(refused.scan_line, "the scan refused — run `ksx devices`");
         assert!(refused.other_fold_cls.contains("none"));
+        // The staged daemon fact rides aria_current — the selector compare
+        // alone, trimmed, never empty-equals-empty (the guard's own rule).
+        let staged =
+            RedesignDeviceRows::of(Some(&fixture_scan()), "", Some("usb:046d:c545:00"));
+        assert_eq!(staged.keyboards[0].aria_current, "true");
+        assert_eq!(staged.encoders[0].aria_current, "false");
+        let nobody = RedesignDeviceRows::of(Some(&fixture_scan()), "", Some("  "));
+        assert!(
+            nobody.keyboards.iter().all(|r| r.aria_current == "false"),
+            "an empty staged selector marks nothing"
+        );
     }
 
     /// The picker is SERVED: the button, the modal (hidden until opened),

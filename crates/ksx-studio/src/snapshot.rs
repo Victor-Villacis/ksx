@@ -105,8 +105,15 @@ pub struct RedesignDeviceRows {
 impl RedesignDeviceRows {
     /// `scan: None` means the read REFUSED (`unavailable` carries its
     /// sentence); an empty board list inside `Some` is a real answer on a
-    /// machine with nothing plugged in.
-    pub fn of(scan: Option<&ksx_api::DeviceScanView>, unavailable: &str) -> Self {
+    /// machine with nothing plugged in. `staged` is the daemon's staged
+    /// device selector — the ONE board ksx splits — marked onto its row as
+    /// `aria_current: "true"` (a served daemon fact, distinct from the
+    /// browser's own workbench membership, which the client decorates).
+    pub fn of(
+        scan: Option<&ksx_api::DeviceScanView>,
+        unavailable: &str,
+        staged: Option<&str>,
+    ) -> Self {
         let fold = |n: usize| {
             if n == 0 {
                 "n-devfold none".to_owned()
@@ -156,15 +163,21 @@ impl RedesignDeviceRows {
                 } else {
                     "Cannot type right now"
                 };
+                // The staged compare, exactly the preparation-preserving
+                // guard's (`choose_device_preserving_preparation`): selector
+                // alone, trimmed, never empty-equals-empty.
+                let is_staged = staged
+                    .is_some_and(|s| !s.trim().is_empty() && s.trim() == selector.trim());
                 let row = NocturneDeviceRow {
                     cls: "n-dev".to_owned(),
                     name: b.name.clone(),
                     meta: format!("{} · {}{}", b.transport_label, verdict, identity_meta(b)),
-                    // No row is "current" here: workbench membership is the
-                    // browser's arrangement state (several boards at once),
-                    // not a daemon fact this read could claim. The picker
-                    // decorates membership client-side, off its own state.
-                    aria_current: "false".to_owned(),
+                    // `aria_current` carries the DAEMON fact — this board is
+                    // the staged one, the board ksx splits. Workbench
+                    // membership is the browser's own arrangement state and
+                    // rides a different channel (aria-pressed, client-set):
+                    // the two facts are different answers and stay apart.
+                    aria_current: if is_staged { "true" } else { "false" }.to_owned(),
                     title: {
                         let verb = "Add this board to the workbench — several can share it. \
                                     Nothing is saved or started.";

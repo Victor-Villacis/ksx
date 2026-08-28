@@ -236,8 +236,16 @@ async function hydratedDom(url) {
     // waits pass instantly on the routes that have no canvas.
     await page.waitForFunction(
       () => {
-        const kb = document.querySelector('.n-canvas [data-instance-id="keyboard"]');
-        return !document.querySelector(".n-canvas") || kb?.dataset.canvasX !== undefined;
+        const canvas = document.querySelector(".n-canvas");
+        if (!canvas) return true;
+        const kb = canvas.querySelector('[data-instance-id="keyboard"]');
+        if (kb) return kb.dataset.canvasX !== undefined;
+        // A WIDGET-LESS canvas (the redesign lane): the engine's first
+        // camera render writes the stage's inline transform — the served
+        // stage carries no style attribute, so that write is the
+        // engine's own alive mark.
+        const stage = canvas.querySelector(".forma-canvas-stage");
+        return Boolean(stage && stage.style.transform);
       },
       null,
       { timeout: 20_000 },

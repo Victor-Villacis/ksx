@@ -249,8 +249,16 @@ for (const config of CONTEXTS) {
           // Both waits pass instantly on the routes that have no canvas.
           await page.waitForFunction(
             () => {
-              const kb = document.querySelector('.n-canvas [data-instance-id="keyboard"]');
-              return !document.querySelector(".n-canvas") || kb?.dataset.canvasX !== undefined;
+              const canvas = document.querySelector(".n-canvas");
+              if (!canvas) return true;
+              const kb = canvas.querySelector('[data-instance-id="keyboard"]');
+              if (kb) return kb.dataset.canvasX !== undefined;
+              // A WIDGET-LESS canvas (the redesign lane): the engine's first
+              // camera render writes the stage's inline transform — the served
+              // stage carries no style attribute, so that write is the
+              // engine's own alive mark.
+              const stage = canvas.querySelector(".forma-canvas-stage");
+              return Boolean(stage && stage.style.transform);
             },
             null,
             { timeout: 20_000 },
@@ -291,7 +299,7 @@ for (const config of CONTEXTS) {
             );
             const canvas = document.querySelector(".n-canvas");
             let canvasAdoption = null;
-            if (canvas) {
+            if (canvas && kbWidget) {
               const kbRect = kbWidget?.getBoundingClientRect();
               const canvasRect = canvas.getBoundingClientRect();
               canvasAdoption = {
@@ -306,6 +314,11 @@ for (const config of CONTEXTS) {
                 ),
               };
             }
+            // The engine-alive mark for ANY canvas, keyboard or not: its
+            // first camera render writes the stage transform inline.
+            const canvasEngineAlive = canvas
+              ? Boolean(canvas.querySelector(".forma-canvas-stage")?.style.transform)
+              : null;
             return {
               status: document.querySelector("[data-forma-island]")?.dataset.formaStatus ?? null,
               viewportWidth,
@@ -318,6 +331,7 @@ for (const config of CONTEXTS) {
               })(),
               containers,
               canvasAdoption,
+              canvasEngineAlive,
               escaped: containers.filter(
                 (box) => box.width > 0 && (box.left < -1 || box.right > viewportWidth + 1),
               ),
@@ -343,6 +357,13 @@ for (const config of CONTEXTS) {
                 "visible canvas — the camera or the stored geometry lost it",
             );
           }
+          assert.notEqual(
+            layout.canvasEngineAlive,
+            false,
+            route.path +
+              ": the canvas engine never wrote its camera — a dead canvas " +
+              "passes every other check",
+          );
           assert.deepEqual(
             layout.escaped,
             [],

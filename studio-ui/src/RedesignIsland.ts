@@ -1,9 +1,18 @@
 import { createList, createSignal, h } from "@getforma/core";
-import { createCanvasItem, WidgetCanvas } from "./genui/canvas/index";
+import {
+  createCanvasItem,
+  type WidgetCanvasMountReservation,
+  WidgetCanvas,
+  WidgetCanvasCapacityError,
+} from "./genui/canvas/index";
 import {
   claimSavedDeviceGeometryKey,
   deviceInstanceId,
 } from "./device-instance-id";
+import {
+  createEncoderConceptCanvasItems,
+  ENCODER_CONCEPT_INSTANCE_IDS,
+} from "./encoderConceptArt";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /redesign — the transplant rebuild's blank workbench.
@@ -189,6 +198,11 @@ export function applyRedesignFlash(flash: string | null): void {
 /** The lane's OWN store key — sharing /nocturne's would inherit and corrupt
  *  its camera and widget geometry. */
 const CANVAS_STORE = "ksx-redesign-canvas";
+const ENCODER_CONCEPT_ID_SET = new Set<string>(ENCODER_CONCEPT_INSTANCE_IDS);
+
+function isEncoderConceptInstanceId(instanceId: string): boolean {
+  return ENCODER_CONCEPT_ID_SET.has(instanceId);
+}
 
 /** One press of canvas zoom. The engine's own wheel step is finer; a button
  *  press should be a visible move, not a nudge. */
@@ -230,6 +244,7 @@ interface CanvasPrefs {
 let canvasPrefs: CanvasPrefs = { widgets: {} };
 let nCanvas: WidgetCanvas | null = null;
 let rdRoot: HTMLElement | null = null;
+let encoderLabReturnCamera: { panX: number; panY: number; zoom: number } | null = null;
 
 interface DeviceRowFocus {
   element: HTMLElement;
@@ -278,7 +293,9 @@ function loadCanvasPrefs(): void {
     const saved = JSON.parse(raw) as CanvasPrefs;
     const widgets: Record<string, CanvasItemGeometry> = {};
     for (const [key, g] of Object.entries(saved.widgets ?? {})) {
-      if (isGeometry(g)) widgets[key] = g;
+      // Older prototype builds could strand review-only geometry in the
+      // durable arrangement. Drop it on read as well as refusing it on write.
+      if (!isEncoderConceptInstanceId(key) && isGeometry(g)) widgets[key] = g;
     }
     const cam = saved.camera;
     canvasPrefs = {
@@ -327,12 +344,14 @@ function persistCanvas(): void {
     root.querySelectorAll<HTMLElement>(".n-canvas [data-instance-id]"),
   )) {
     const id = item.dataset.instanceId;
-    if (id && item.dataset.canvasX !== undefined) {
+    if (id && !isEncoderConceptInstanceId(id) && item.dataset.canvasX !== undefined) {
       widgets[id] = canvas.getItemState(item);
     }
   }
   canvasPrefs = {
-    camera: canvas.getCamera(),
+    // The lab's automatic comparison fit is temporary chrome, not the user's
+    // workbench view. While it is open, retain the exact camera it displaced.
+    camera: encoderLabReturnCamera ?? canvas.getCamera(),
     widgets,
     mapHidden: canvasPrefs.mapHidden,
     bench: canvasPrefs.bench,
@@ -542,6 +561,12 @@ function paletteCommands(): PaletteCommand[] {
       hint: "the map in the corner",
       key: "M",
       run: () => setCanvasMap(!(canvasPrefs.mapHidden === true)),
+    },
+    {
+      name: "Toggle encoder concepts",
+      hint: "three sample-data approaches for review",
+      key: "",
+      run: toggleEncoderConceptLab,
     },
   ];
 }
@@ -1186,6 +1211,116 @@ function restoreBench(): void {
   reconcileBenchWithRoster();
 }
 
+// ── Encoder visual lab (temporary review surface) ──────────────────────────
+// This is intentionally NOT a fourth browser-owned document type. One button
+// mounts three source-labelled sample widgets for a product decision; another
+// press removes them. No daemon verb runs, no chart is read, and visibility is
+// not persisted. Once a direction is chosen, its renderer can consume the
+// existing PanelTruthView / Board models in a proper product transplant.
+
+function encoderConceptNodes(): HTMLElement[] {
+  return Array.from(
+    rdRoot?.querySelectorAll<HTMLElement>(
+      ".forma-canvas-stage > .rd-encoder-concept-node[data-instance-id]",
+    ) ?? [],
+  );
+}
+
+function syncEncoderConceptButton(): void {
+  const button = rdRoot?.querySelector<HTMLButtonElement>(
+    '[data-nx="rd-encoder-concepts"]',
+  );
+  if (!button) return;
+  const shown = encoderConceptNodes().length > 0;
+  button.setAttribute("aria-pressed", String(shown));
+  // A toggle keeps one accessible name. aria-pressed and the selected styling
+  // carry its state without turning it into a different command.
+  button.textContent = "◇ Encoder concepts";
+  button.title = shown
+    ? "Remove the three encoder review prototypes"
+    : "Show three sample-data encoder approaches on the canvas";
+}
+
+function announceEncoderConcepts(message: string): void {
+  const status = rdRoot?.querySelector<HTMLElement>(".n-live-sr");
+  if (status) status.textContent = message;
+}
+
+function removeEncoderConceptLab(): void {
+  const canvas = nCanvas;
+  if (!canvas) return;
+  const returnCamera = encoderLabReturnCamera;
+  for (const item of encoderConceptNodes()) {
+    canvas.removeItem(item, { selectFallback: false });
+  }
+  if (returnCamera) canvas.restoreCamera(returnCamera);
+  encoderLabReturnCamera = null;
+  // Camera commits can briefly capture prototype geometry. Delete those keys
+  // when the lab closes so a disposable comparison never becomes arrangement
+  // data or influences a later real encoder transplant.
+  const widgets = { ...canvasPrefs.widgets };
+  for (const instanceId of ENCODER_CONCEPT_INSTANCE_IDS) delete widgets[instanceId];
+  canvasPrefs.widgets = widgets;
+  if (returnCamera) canvasPrefs.camera = returnCamera;
+  saveCanvasPrefs();
+  syncEncoderConceptButton();
+  syncMapCount();
+  scheduleChips();
+  announceEncoderConcepts("Encoder review prototypes removed. No hardware state changed.");
+}
+
+function mountEncoderConceptLab(): void {
+  const canvas = nCanvas;
+  if (!canvas) return;
+  const concepts = createEncoderConceptCanvasItems(document);
+  let reservation: WidgetCanvasMountReservation;
+  try {
+    // All three concepts are one comparison. Reserve the whole batch first so
+    // a nearly-full canvas gets either the complete lab or nothing at all.
+    reservation = canvas.reserveItems(concepts.length);
+  } catch (error) {
+    if (error instanceof WidgetCanvasCapacityError) {
+      const free = Math.max(0, error.limit - error.current);
+      announceEncoderConcepts(
+        `Encoder concepts need ${error.requested} open widget spaces; this canvas has ${free}. ` +
+          "Remove widgets and try again.",
+      );
+      return;
+    }
+    throw error;
+  }
+  const returnCamera = canvas.getCamera();
+  encoderLabReturnCamera = returnCamera;
+  const mounted: HTMLElement[] = [];
+  try {
+    for (const { item, home } of concepts) {
+      reservation.mountItem(item, home, { focus: false });
+      mounted.push(item);
+    }
+  } catch (error) {
+    // Capacity is reserved, so this is an unexpected construction failure.
+    // Roll back before surfacing it; a three-way comparison must never strand
+    // one or two plausible-looking options on the workbench.
+    for (const item of mounted.reverse()) canvas.removeItem(item, { selectFallback: false });
+    encoderLabReturnCamera = null;
+    throw error;
+  } finally {
+    reservation.release();
+  }
+  syncEncoderConceptButton();
+  syncMapCount();
+  scheduleChips();
+  announceEncoderConcepts(
+    "Three encoder review prototypes added. They use sample data and perform no hardware action.",
+  );
+  window.requestAnimationFrame(() => nCanvas?.fitAll());
+}
+
+function toggleEncoderConceptLab(): void {
+  if (encoderConceptNodes().length > 0) removeEncoderConceptLab();
+  else mountEncoderConceptLab();
+}
+
 /** Reconcile browser-owned bench membership against current served truth.
  * Missing devices unmount but stay in `canvasPrefs.bench`; their exact
  * geometry is retained. Reappearing devices remount at that same geometry. */
@@ -1453,6 +1588,7 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
   );
   setCanvasMap(canvasPrefs.mapHidden === true);
   restoreBench();
+  syncEncoderConceptButton();
   syncMapCount();
   syncToolRail(nCanvas.toolMode());
   wireSpotlight(stage, viewport);
@@ -1520,6 +1656,9 @@ export function redesignWire(root: HTMLElement): void {
     } else if (hit === "rd-focus-sel") {
       const item = nCanvas?.activeItem();
       if (item) nCanvas?.toggleFocusMode(item);
+    } else if (hit === "rd-encoder-concepts") {
+      toggleEncoderConceptLab();
+      return;
     } else if (hit === "rd-devs-open") {
       setDevModal(true);
       return;
@@ -1775,6 +1914,18 @@ export function RedesignIsland() {
               title: "Add devices to the workbench",
             },
             "＋ Devices",
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              class: "n-autobtn rd-encoder-lab-toggle",
+              "data-nx": "rd-encoder-concepts",
+              "aria-pressed": "false",
+              "aria-label": "Encoder concepts",
+              title: "Show three sample-data encoder approaches on the canvas",
+            },
+            "◇ Encoder concepts",
           ),
           h("span", { class: "rd-spring" }),
           // The action flash — the one place a verb's outcome lands. Served

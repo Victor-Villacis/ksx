@@ -731,6 +731,187 @@ describe("the device workbench", () => {
     await page.close();
   });
 
+  test("the encoder lab compares three truthful native-SVG approaches without touching hardware", async () => {
+    const page = await openBench();
+    const toggle = page.locator('[data-nx="rd-encoder-concepts"]');
+    const beforeCount = await page.locator(
+      ".forma-canvas-stage > [data-instance-id]",
+    ).count();
+    const beforeTransform = await page.locator(".forma-canvas-stage").evaluate(
+      (stage) => stage.style.transform,
+    );
+
+    assert.equal(await toggle.getAttribute("aria-pressed"), "false");
+    assert.equal(await toggle.getAttribute("aria-label"), "Encoder concepts");
+    await toggle.click();
+    await page.waitForFunction(
+      () => document.querySelectorAll(".rd-encoder-concept-node").length === 3,
+    );
+    assert.equal(await toggle.getAttribute("aria-pressed"), "true");
+    assert.equal(
+      await toggle.getAttribute("aria-label"),
+      "Encoder concepts",
+      "the toggle keeps one accessible name while aria-pressed carries state",
+    );
+    assert.equal(
+      await page.locator(".rd-encoder-concept-node[data-sample-data='true']").count(),
+      3,
+      "every option is explicitly sample data",
+    );
+    assert.equal(
+      await page.locator(".rd-encoder-concept-node svg").evaluateAll((svgs) =>
+        svgs.filter((svg) => svg.namespaceURI === "http://www.w3.org/2000/svg").length
+      ),
+      3,
+      "all three visuals are native SVG rather than raster assets",
+    );
+    assert.equal(
+      await page.locator('.rd-encoder-concept-node[data-canvas-resizable="false"]').count(),
+      3,
+      "fixed comparison layouts cannot be width-resized into clipped mini-cards",
+    );
+
+    const readBacked = page.locator(
+      '.rd-encoder-concept-node[data-concept-id="read-backed"]',
+    );
+    assert.equal(
+      await readBacked.locator("[data-terminal-id]").count(),
+      56,
+      "the measured I-PAC profile renders its complete 56-terminal roster",
+    );
+    assert.equal(
+      await readBacked.locator("svg").getAttribute("data-capacity-source"),
+      "measured-profile",
+    );
+    assert.deepEqual(
+      await readBacked.locator("[data-terminal-id]").evaluateAll((terminals) =>
+        [terminals[0]?.getAttribute("data-terminal-id"), terminals.at(-1)?.getAttribute("data-terminal-id")]
+      ),
+      ["1up", "4coin"],
+      "SVG hooks use the backend's canonical terminal identity",
+    );
+    assert.match(await readBacked.textContent(), /physical wiring/i);
+
+    const guided = page.locator(
+      '.rd-encoder-concept-node[data-concept-id="guided-teach"]',
+    );
+    assert.equal(await guided.locator("[data-control-id]").count(), 12);
+    assert.equal(await guided.locator("svg").getAttribute("data-capacity"), "unknown");
+    assert.match(await guided.textContent(), /terminal capacity/i);
+
+    const hybrid = page.locator(
+      '.rd-encoder-concept-node[data-concept-id="hybrid-truth"]',
+    );
+    assert.equal(await hybrid.locator("[data-channel-id]").count(), 32);
+    assert.equal(await hybrid.locator('[data-observed="true"]').count(), 10);
+    assert.equal(await hybrid.locator('[data-declared="true"]').count(), 12);
+    assert.equal(
+      await hybrid.locator('[data-observed="false"][data-declared="false"]').count(),
+      20,
+    );
+    assert.equal(
+      await hybrid.locator("svg").getAttribute("data-capacity-source"),
+      "sample-catalog",
+      "the hypothetical model count never masquerades as a generic HID read",
+    );
+    assert.match(await hybrid.textContent(), /declared mappings/i);
+    assert.match(await hybrid.textContent(), /generic HID does not read model capacity/i);
+    assert.match(await hybrid.textContent(), /Recommended/);
+
+    assert.equal(
+      await page.locator(".rd-map-count").textContent(),
+      `${beforeCount + 3} widgets`,
+      "the minimap count includes the review widgets",
+    );
+    assert.match(
+      await page.locator(".n-live-sr").textContent(),
+      /sample data.*no hardware action/i,
+      "the action is announced as a harmless prototype",
+    );
+
+    await page.setViewportSize({ width: 420, height: 900 });
+    const narrowToggle = await toggle.boundingBox();
+    assert.ok(narrowToggle, "the concept toggle stays rendered on a narrow canvas");
+    assert.ok(
+      narrowToggle.x >= 0 && narrowToggle.x + narrowToggle.width <= 420,
+      "the concept toggle stays inside the narrow viewport",
+    );
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      true,
+      "the added topbar verb does not create page-level horizontal overflow",
+    );
+    assert.deepEqual(
+      await page.locator(".rd-encoder-concept").evaluateAll((cards) =>
+        cards.map((card) => ({
+          horizontal: card.scrollWidth <= card.clientWidth,
+          vertical: card.scrollHeight <= card.clientHeight,
+        }))
+      ),
+      Array.from({ length: 3 }, () => ({ horizontal: true, vertical: true })),
+      "all three cards keep their source labels and notes inside the widget hull",
+    );
+    await page.setViewportSize({ width: 1600, height: 1000 });
+
+    await toggle.click();
+    await page.waitForFunction(
+      () => document.querySelectorAll(".rd-encoder-concept-node").length === 0,
+    );
+    await page.waitForFunction(
+      (transform) =>
+        document.querySelector(".forma-canvas-stage")?.style.transform === transform,
+      beforeTransform,
+    );
+    assert.equal(await toggle.getAttribute("aria-pressed"), "false");
+    assert.equal(
+      await page.locator(".rd-map-count").textContent(),
+      beforeCount === 1 ? "1 widget" : `${beforeCount} widgets`,
+    );
+    assert.deepEqual(
+      await page.evaluate(() => {
+        const saved = JSON.parse(localStorage.getItem("ksx-redesign-canvas") ?? "{}");
+        return Object.keys(saved.widgets ?? {}).filter((key) =>
+          key.startsWith("encoder-concept-")
+        );
+      }),
+      [],
+      "explicit Hide leaves no prototype geometry in the durable arrangement",
+    );
+
+    // Closing the tab or reloading while the lab is open is just as clean:
+    // its temporary fit must not replace the user's real workbench camera.
+    await toggle.click();
+    await page.waitForFunction(
+      () => document.querySelectorAll(".rd-encoder-concept-node").length === 3,
+    );
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+      null,
+      { timeout: 20_000 },
+    );
+    await page.waitForFunction(
+      (transform) =>
+        document.querySelector(".forma-canvas-stage")?.style.transform === transform,
+      beforeTransform,
+      { timeout: 20_000 },
+    );
+    assert.equal(await page.locator(".rd-encoder-concept-node").count(), 0);
+    assert.equal(await toggle.getAttribute("aria-pressed"), "false");
+    assert.deepEqual(
+      await page.evaluate(() => {
+        const saved = JSON.parse(localStorage.getItem("ksx-redesign-canvas") ?? "{}");
+        return Object.keys(saved.widgets ?? {}).filter((key) =>
+          key.startsWith("encoder-concept-")
+        );
+      }),
+      [],
+      "reload while open leaves neither prototype geometry nor its comparison camera",
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
   test("removing a non-primary board repaints the surviving multi-selection", async () => {
     const page = await openBench();
     const g915 = page.locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`);

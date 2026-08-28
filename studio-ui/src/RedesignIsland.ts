@@ -257,6 +257,14 @@ function parkController(entry: ParkedController): void {
   syncCtrlBench();
 }
 
+/** Whether the server still holds parked material for this ghost — the
+ *  entry's post-assign check: a re-slot SUCCEEDED exactly when the id left
+ *  the served `parked_held` (the stash entry is dropped only on the success
+ *  path), which is a structural signal, never a sentence comparison. */
+export function redesignGhostHeld(id: string): boolean {
+  return rdCtrlParkedHeld.includes(id);
+}
+
 /** Discard one parked ghost (browser-only), or retire it after a
  *  successful re-slot. Exported for the entry's assign chain. */
 export function unparkController(id: string): void {

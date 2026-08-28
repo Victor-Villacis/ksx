@@ -10,6 +10,7 @@ import {
   applyRedesignFlash,
   initRedesignCanvas,
   RedesignIsland,
+  redesignGhostHeld,
   redesignWire,
   unparkController,
   type RedesignPayload,
@@ -85,10 +86,13 @@ function wireForms(root: HTMLElement): void {
  * island as one mutation surface so an older refresh can never arrive last
  * and temporarily roll back the other verb's visible truth. */
 const pendingMutationRoots = new WeakSet<HTMLElement>();
-type SubmitControl = HTMLButtonElement | HTMLInputElement;
+type SubmitControl = HTMLButtonElement | HTMLInputElement | HTMLSelectElement;
 
 /** Every fetch-enhanced submit on the page — one selector, so the mutation
- *  lock can never miss a form type that joined later. */
+ *  lock can never miss a form type that joined later. The Player selects
+ *  belong in it too: a change during a pending mutation would mint a ghost
+ *  whose park verb the lock silently swallowed — the select must be as
+ *  disabled as the submit it drives. */
 const MUTATION_SUBMIT_SELECTOR = [
   "theme",
   "device",
@@ -102,6 +106,7 @@ const MUTATION_SUBMIT_SELECTOR = [
     `[data-rd-form="${kind}"] button[type="submit"]`,
     `[data-rd-form="${kind}"] input[type="submit"]`,
   ])
+  .concat(["select.rd-ctrlplayer"])
   .join(", ");
 
 function beginMutation(root: HTMLElement): SubmitControl[] | null {
@@ -279,10 +284,11 @@ async function submitControllerForm(
         "error: the controller request completed, but the workbench could not refresh — reload to confirm.",
       );
     }
-    // The success sentence is the allowlisted N_EDIT_OK constant — the one
-    // signal the redirect carries. A refusal keeps the ghost parked for
-    // another try.
-    if (ghost && outcome === "Draft updated. Nothing has been saved or started.") {
+    // A re-slot SUCCEEDED exactly when the server dropped the ghost's stash
+    // entry — the id leaving the refreshed `parked_held` is the structural
+    // signal, never a sentence comparison. The error-prefix guard keeps a
+    // REFUSED fresh-fallback (which was never held) parked for another try.
+    if (ghost && outcome && !outcome.startsWith("error") && !redesignGhostHeld(ghost)) {
       unparkController(ghost);
     }
   } catch {

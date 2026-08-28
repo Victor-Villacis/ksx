@@ -399,6 +399,11 @@ pub(super) async fn redesign_form_ctrl_park(
     let Ok(Form(form)) = form else {
         return redesign_redirect(N_FORM_UNREADABLE);
     };
+    // The ghost id is browser-minted and becomes a server-held key: bound
+    // it, so a buggy client cannot grow the store's keys without limit.
+    if form.ghost.trim().is_empty() || form.ghost.len() > 64 {
+        return redesign_redirect(N_EDIT_ERROR);
+    }
     let ok = tokio::task::spawn_blocking(move || {
         let Some(slot) = state
             .control

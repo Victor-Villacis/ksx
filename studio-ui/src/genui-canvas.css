@@ -90,7 +90,9 @@
 }
 
 [data-forma-canvas] .forma-canvas-viewport.is-camera-animating .forma-canvas-stage {
-  transition: transform 200ms cubic-bezier(0.2, 0.75, 0.25, 1), opacity 120ms ease;
+  transition:
+    transform var(--canvas-camera-duration, 260ms) cubic-bezier(0.33, 1, 0.68, 1),
+    opacity 120ms ease;
 }
 
 [data-forma-canvas] .forma-canvas-zoom-status {

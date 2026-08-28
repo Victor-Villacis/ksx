@@ -334,8 +334,10 @@ describe("the device workbench", () => {
     await page.close();
   });
 
-  test("removal is the same toggle, and the removal also survives a reload", async () => {
+  test("selected picker removal clears the Inspector and survives a reload", async () => {
     const page = await openBench();
+    await page.locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`).click();
+    await page.waitForFunction(() => document.querySelector(".rd-inspector")?.hidden === false);
     await page.click('[data-nx="rd-devs-open"]');
     await page.click(`.rd-devmodal button[data-selector="${G915}"]`);
     await page.waitForFunction(
@@ -349,6 +351,16 @@ describe("the device workbench", () => {
         .count(),
       1,
       "the row un-pressed",
+    );
+    assert.equal(
+      await page.locator(".rd-inspector[hidden]").count(),
+      1,
+      "removing the selected board closes its Inspector behind the picker",
+    );
+    assert.equal(
+      await page.locator(".rd.is-inspector-open").count(),
+      0,
+      "the removed selection releases the Inspector's canvas inset",
     );
     await page.close();
 
@@ -560,6 +572,8 @@ describe("the device workbench", () => {
       await route.fulfill({ response, json: payload });
     });
     try {
+      await card.locator(".rd-devcard-name").click();
+      await page.waitForFunction(() => document.querySelector(".rd-inspector")?.hidden === false);
       await card.locator(".rd-stagebtn").click();
       await page.waitForFunction(
         (id) => !document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`),
@@ -571,6 +585,33 @@ describe("the device workbench", () => {
         await picker.evaluate((button) => button === document.activeElement),
         true,
         "focus lands on a durable control when the initiating card disappears",
+      );
+      assert.equal(
+        await page.locator(".rd-inspector[hidden]").count(),
+        1,
+        "authoritative disappearance closes the removed board's Inspector",
+      );
+      assert.equal(
+        await page.locator(".rd.is-inspector-open").count(),
+        0,
+        "authoritative disappearance releases the Inspector's safe inset",
+      );
+
+      await page.getByRole("button", { name: "Fit", exact: true }).click();
+      await page.waitForFunction(() => !document.querySelector(".is-camera-animating"));
+      const centerError = await page.evaluate((id) => {
+        const viewport = document.querySelector(".forma-canvas-viewport")?.getBoundingClientRect();
+        const item = document
+          .querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)
+          ?.getBoundingClientRect();
+        if (!viewport || !item) return Number.POSITIVE_INFINITY;
+        return Math.abs(
+          item.left + item.width / 2 - (viewport.left + viewport.width / 2),
+        );
+      }, IPAC_SLUG);
+      assert.ok(
+        centerError <= 2,
+        `Fit still used a stale Inspector inset (${centerError}px from the full canvas centre)`,
       );
     } finally {
       await page.unroute(`${BASE}/api/redesign`);
@@ -686,6 +727,47 @@ describe("the device workbench", () => {
     } finally {
       await page.unroute(`${BASE}/api/redesign`);
     }
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("removing a non-primary board repaints the surviving multi-selection", async () => {
+    const page = await openBench();
+    const g915 = page.locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`);
+    const ipac = page.locator(`.forma-canvas-stage [data-instance-id="${IPAC_SLUG}"]`);
+    const ipacName = await ipac.getAttribute("data-widget-name");
+    await g915.click();
+    await ipac.click({ modifiers: ["Shift"] });
+    await page.waitForFunction(
+      () => document.querySelector(".rd-insp-name")?.textContent === "2 widgets selected",
+    );
+
+    await page.click('[data-nx="rd-devs-open"]');
+    await page.click(`.rd-devmodal button[data-selector="${G915}"]`);
+    await page.waitForFunction(
+      (id) => !document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`),
+      G915_SLUG,
+      { timeout: 10_000 },
+    );
+    assert.equal(
+      await ipac.getAttribute("aria-current"),
+      "true",
+      "the surviving primary remains the selection anchor",
+    );
+    assert.equal(
+      await page.locator(".forma-canvas-stage > .is-active").count(),
+      1,
+      "the removed non-primary no longer occupies the selection set",
+    );
+    assert.equal(
+      await page.locator(".rd-insp-name").textContent(),
+      ipacName,
+      "the Inspector repaints from multi-select to the surviving board",
+    );
+
+    // Keep the suite's shared arrangement intact for any later regression.
+    await page.click(`.rd-devmodal button[data-selector="${G915}"]`);
+    await page.keyboard.press("Escape");
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();
   });

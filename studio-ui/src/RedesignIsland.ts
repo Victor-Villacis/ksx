@@ -393,6 +393,278 @@ function paletteKeydown(event: KeyboardEvent): void {
   }
 }
 
+// ── The inspector (design handoff §7): overlay, never reflow ────────────────
+// Served hidden; everything dynamic lives in one data-client-subtree box.
+// Opening declares its width to the engine as the safe-viewport inset and
+// pans by exactly the overlap needed to keep the active widget clear.
+
+const INSPECTOR_WIDTH = 328;
+let inspectorDismissed = false;
+
+function inspectorEl(): HTMLElement | null {
+  return rdRoot?.querySelector<HTMLElement>(".rd-inspector") ?? null;
+}
+
+function numberField(
+  label: string,
+  value: number,
+  onCommit: (next: number) => void,
+): HTMLElement {
+  const wrap = document.createElement("label");
+  wrap.className = "rd-insp-field";
+  const caption = document.createElement("span");
+  caption.textContent = label;
+  const input = document.createElement("input");
+  input.type = "number";
+  input.value = String(value);
+  input.addEventListener("change", () => {
+    const next = Number(input.value);
+    if (Number.isFinite(next)) onCommit(next);
+  });
+  wrap.append(caption, input);
+  return wrap;
+}
+
+function inspectorButton(label: string, nx: string, title: string): HTMLElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "n-autobtn";
+  button.dataset.nx = nx;
+  button.title = title;
+  button.textContent = label;
+  return button;
+}
+
+/** Repaint the inspector's body from the live selection. Called on every
+ *  selection or item-state change while open. */
+function renderInspector(): void {
+  const canvas = nCanvas;
+  const body = inspectorEl()?.querySelector<HTMLElement>(".rd-insp-body");
+  if (!canvas || !body) return;
+  const selected = canvas.selectedItems();
+  const rows: (HTMLElement | null)[] = [];
+  if (selected.length === 1) {
+    const item = selected[0];
+    const state = canvas.getItemState(item);
+    const title = document.createElement("h2");
+    title.className = "rd-insp-name";
+    title.textContent = item.dataset.widgetName ?? item.dataset.instanceId ?? "Widget";
+    const kind = document.createElement("p");
+    kind.className = "rd-insp-kind";
+    kind.textContent = `widget · ${Math.round(state.width)} × ${Math.round(state.height)}`;
+    const scale = document.createElement("div");
+    scale.className = "rd-insp-row";
+    const scaleLabel = document.createElement("span");
+    scaleLabel.className = "rd-insp-cap";
+    scaleLabel.textContent = "Size";
+    const smaller = inspectorButton("−", "rd-w-smaller", "Smaller");
+    const pct = document.createElement("span");
+    pct.className = "rd-insp-pct";
+    pct.textContent = `${Math.round(state.manualScale * 100)}%`;
+    const bigger = inspectorButton("+", "rd-w-bigger", "Bigger");
+    const reset = inspectorButton("100%", "rd-w-reset", "Reset size");
+    scale.append(scaleLabel, smaller, pct, bigger, reset);
+    const position = document.createElement("div");
+    position.className = "rd-insp-row";
+    position.append(
+      numberField("X", Math.round(state.x), (x) => canvas.moveItemTo(item, x, state.y)),
+      numberField("Y", Math.round(state.y), (y) => canvas.moveItemTo(item, state.x, y)),
+    );
+    const verbs = document.createElement("div");
+    verbs.className = "rd-insp-row";
+    verbs.append(
+      inspectorButton("Focus", "rd-focus-sel", "Spotlight it alone — Esc restores (F)"),
+      inspectorButton("Fit", "rd-fit-sel", "Frame it (2)"),
+      inspectorButton("Center", "rd-center-sel", "Pan it to the middle (C)"),
+    );
+    rows.push(title, kind, scale, position, verbs);
+  } else if (selected.length > 1) {
+    // The multi-selection rules (design handoff §7): no empty sections —
+    // only what applies to many. Selection origin moves the whole group by
+    // the delta as ONE step.
+    const bounds = selected.map((item) => canvas.getItemState(item));
+    const minX = Math.min(...bounds.map((s) => s.x));
+    const minY = Math.min(...bounds.map((s) => s.y));
+    const maxX = Math.max(...bounds.map((s) => s.x + s.width));
+    const maxY = Math.max(...bounds.map((s) => s.y + s.height));
+    const title = document.createElement("h2");
+    title.className = "rd-insp-name";
+    title.textContent = `${selected.length} widgets selected`;
+    const kind = document.createElement("p");
+    kind.className = "rd-insp-kind";
+    kind.textContent = `${Math.round(maxX - minX)} × ${Math.round(maxY - minY)} box`;
+    const origin = document.createElement("div");
+    origin.className = "rd-insp-row";
+    origin.append(
+      numberField("Origin X", Math.round(minX), (x) => {
+        nCanvas?.moveSelectionBy(Math.round(x - minX), 0);
+        renderInspector();
+      }),
+      numberField("Origin Y", Math.round(minY), (y) => {
+        nCanvas?.moveSelectionBy(0, Math.round(y - minY));
+        renderInspector();
+      }),
+    );
+    const verbs = document.createElement("div");
+    verbs.className = "rd-insp-row";
+    verbs.append(
+      inspectorButton("Fit", "rd-fit-sel", "Frame the selection (2)"),
+      inspectorButton("Center", "rd-center-sel", "Pan the selection to the middle (C)"),
+    );
+    rows.push(title, kind, origin, verbs);
+  }
+  body.replaceChildren(...rows.filter((row): row is HTMLElement => Boolean(row)));
+}
+
+function setInspector(open: boolean): void {
+  const panel = inspectorEl();
+  const canvas = nCanvas;
+  if (!panel || !canvas) return;
+  const wasOpen = !panel.hidden;
+  panel.hidden = !open;
+  canvas.setSafeInsetRight(open ? INSPECTOR_WIDTH : 0);
+  if (open) {
+    renderInspector();
+    // The design's panel rule: zoom preserved, pan by exactly the overlap —
+    // often zero — and only when the panel is NEWLY open.
+    if (!wasOpen) canvas.keepActiveClear();
+  }
+  syncChips();
+}
+
+function syncInspectorToSelection(items: HTMLElement[]): void {
+  if (items.length === 0) {
+    inspectorDismissed = false;
+    setInspector(false);
+    return;
+  }
+  if (!inspectorDismissed) setInspector(true);
+  else renderInspector();
+}
+
+// ── Off-screen proximity chips (design handoff §6.5) ────────────────────────
+// Recomputed on camera SETTLE (150ms debounce), never per frame — arrows
+// that jitter during a pan are worse than arrows that appear when you stop.
+
+let chipsTimer = 0;
+function scheduleChips(): void {
+  window.clearTimeout(chipsTimer);
+  chipsTimer = window.setTimeout(syncChips, 150);
+}
+
+function syncChips(): void {
+  const root = rdRoot;
+  const canvas = nCanvas;
+  const rail = root?.querySelector<HTMLElement>(".rd-chips");
+  if (!root || !canvas || !rail) return;
+  // Focus mode masks getCamera() to the entry camera; screen-space chrome
+  // cannot be computed there, and focus dims the world anyway.
+  if (canvas.isFocusModeActive()) {
+    rail.replaceChildren();
+    return;
+  }
+  const viewport = root.querySelector<HTMLElement>(".forma-canvas-viewport");
+  const rect = viewport?.getBoundingClientRect();
+  if (!rect) return;
+  const camera = canvas.getCamera();
+  const inset = inspectorEl()?.hidden === false ? INSPECTOR_WIDTH : 0;
+  const safeWidth = rect.width - inset;
+  const centerWorldX = (safeWidth / 2 - camera.panX) / camera.zoom;
+  const centerWorldY = (rect.height / 2 - camera.panY) / camera.zoom;
+  const offscreen: { item: HTMLElement; name: string; sx: number; sy: number; dist: number }[] = [];
+  for (const item of Array.from(
+    root.querySelectorAll<HTMLElement>(".forma-canvas-stage > [data-instance-id]"),
+  )) {
+    if (item.dataset.canvasX === undefined) continue;
+    const state = canvas.getItemState(item);
+    const cx = state.x + state.width / 2;
+    const cy = state.y + state.height / 2;
+    const sx = cx * camera.zoom + camera.panX;
+    const sy = cy * camera.zoom + camera.panY;
+    const right = (state.x + state.width) * camera.zoom + camera.panX;
+    const left = state.x * camera.zoom + camera.panX;
+    const top = state.y * camera.zoom + camera.panY;
+    const bottom = (state.y + state.height) * camera.zoom + camera.panY;
+    // The inspector counts as off-screen: a widget behind the panel
+    // announces itself.
+    const visible = right > 0 && left < safeWidth && bottom > 0 && top < rect.height;
+    if (visible) continue;
+    offscreen.push({
+      item,
+      name: item.dataset.widgetName ?? item.dataset.instanceId ?? "widget",
+      sx,
+      sy,
+      dist: Math.round(Math.hypot(cx - centerWorldX, cy - centerWorldY)),
+    });
+  }
+  offscreen.sort((a, b) => a.dist - b.dist);
+  const placed: { x: number; y: number }[] = [];
+  rail.replaceChildren(
+    ...offscreen.slice(0, 4).map(({ item, name, sx, sy, dist }) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "rd-chip";
+      // Clamped clear of the lane's own corners (the tool rail, the map
+      // panel, the zoom pill) — a chip under other chrome is a control that
+      // cannot be pressed — and SPREAD when several widgets sit off in the
+      // same direction, or the nearer chip buries the rest.
+      let x = Math.min(Math.max(sx, 96), safeWidth - 20);
+      let y = Math.min(Math.max(sy, 56), rect.height - 72);
+      while (placed.some((p) => Math.abs(p.x - x) < 90 && Math.abs(p.y - y) < 30)) {
+        y = Math.min(y + 34, rect.height - 72);
+        if (y >= rect.height - 72) x += 120;
+      }
+      placed.push({ x, y });
+      chip.style.left = `${x}px`;
+      chip.style.top = `${y}px`;
+      const angle = Math.atan2(
+        sy - rect.height / 2,
+        sx - safeWidth / 2,
+      );
+      const caret = document.createElement("span");
+      caret.className = "rd-chip-caret";
+      caret.style.transform = `rotate(${Math.round((angle * 180) / Math.PI)}deg)`;
+      caret.textContent = "➤";
+      const label = document.createElement("span");
+      label.textContent = `${name} · ${dist}px`;
+      chip.append(caret, label);
+      chip.addEventListener("click", () => {
+        nCanvas?.pushCameraHistory(`before jump to ${name}`);
+        nCanvas?.centerItem(item);
+      });
+      return chip;
+    }),
+  );
+}
+
+// ── Hover spotlight v0 (design handoff §6.5) ────────────────────────────────
+// Hover a widget, dim the rest. Suppressed while a gesture or focus mode is
+// active. Becomes the SIGNAL TRACE when binding edges transplant in.
+
+function wireSpotlight(stage: HTMLElement, viewport: HTMLElement): void {
+  stage.addEventListener("pointerover", (event) => {
+    const item = (event.target as HTMLElement | null)?.closest<HTMLElement>(
+      ".forma-canvas-stage > [data-instance-id]",
+    );
+    if (!item) return;
+    if (
+      viewport.classList.contains("is-panning") ||
+      viewport.classList.contains("is-dragging-widget") ||
+      nCanvas?.isFocusModeActive()
+    ) return;
+    stage.classList.add("rd-spotlighting");
+    item.classList.add("rd-spot");
+  });
+  stage.addEventListener("pointerout", (event) => {
+    const item = (event.target as HTMLElement | null)?.closest<HTMLElement>(
+      ".forma-canvas-stage > [data-instance-id]",
+    );
+    if (!item) return;
+    stage.classList.remove("rd-spotlighting");
+    item.classList.remove("rd-spot");
+  });
+}
+
 // ── The mock nodes: two disposable widgets to exercise the canvas ───────────
 // Client-created (data-client-widget — parity rule 3e), so nothing about
 // them is served. They exist so selection, marquee, drag, focus, fit and the
@@ -511,11 +783,15 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
   nCanvas = new WidgetCanvas(
     { viewport, stage, zoomStatus, navigator, navigatorItems, navigatorViewport },
     {
-      onCommit: persistCanvas,
+      onCommit: () => {
+        persistCanvas();
+        scheduleChips();
+      },
       // The trail behind onCommit: pans and in-flight drags reach the store
       // within a second even if the tab dies before a durable boundary.
       onChange: () => {
         scheduleCanvasPersist();
+        scheduleChips();
       },
       // The engine has no live region of its own; the meta bar's sr status
       // line is this page's.
@@ -532,12 +808,24 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
       onToolModeChange: syncToolRail,
       onZoomChange: (_zoom, tier) => applyZoomTier(tier),
       onCameraHistoryChange: syncBackView,
+      onSelectionChange: syncInspectorToSelection,
+      onActiveItemStateChange: () => renderInspector(),
+      // Focus opens the inspector (design handoff §3) and hides the chips.
+      onFocusModeChange: (_item, focused) => {
+        if (focused) {
+          inspectorDismissed = false;
+          setInspector(true);
+        }
+        syncChips();
+      },
     },
   );
   setCanvasMap(canvasPrefs.mapHidden === true);
   mountMockNodes();
   syncMapCount();
   syncToolRail(nCanvas.toolMode());
+  wireSpotlight(stage, viewport);
+  scheduleChips();
   // The automatic first-open fit never pushes history — only USER camera
   // verbs mint Back-view entries.
   if (canvasPrefs.camera) nCanvas.restoreCamera(canvasPrefs.camera);
@@ -613,6 +901,17 @@ export function redesignWire(root: HTMLElement): void {
       nCanvas?.setToolMode("hand");
     } else if (hit === "rd-back") {
       nCanvas?.backView();
+    } else if (hit === "rd-insp-close") {
+      inspectorDismissed = true;
+      setInspector(false);
+    } else if (hit === "rd-w-smaller" || hit === "rd-w-bigger" || hit === "rd-w-reset") {
+      const widget = nCanvas?.activeItem();
+      if (widget && nCanvas) {
+        if (hit === "rd-w-smaller") nCanvas.adjustItemScale(widget, -1);
+        else if (hit === "rd-w-bigger") nCanvas.adjustItemScale(widget, 1);
+        else nCanvas.resetItemScale(widget);
+        renderInspector();
+      }
     } else if (hit === "rd-search") {
       setPalette(true);
     } else if (hit === "rd-keys") {
@@ -774,6 +1073,8 @@ export function RedesignIsland() {
           "section",
           { class: "forma-canvas n-canvas", "data-forma-canvas": "", "data-client-canvas": "" },
           // ── The tool cluster (design handoff §7): select and hand ───────
+          // Off-screen proximity chips: client-populated, camera-settle paced.
+          h("div", { class: "rd-chips", "data-client-subtree": "", "aria-hidden": "true" }),
           h(
             "div",
             { class: "rd-tools", role: "group", "aria-label": "Canvas tools" },
@@ -1010,6 +1311,30 @@ export function RedesignIsland() {
           ),
         ),
       ),
+    ),
+    // ── The inspector (design handoff §7): 328px, right, OVERLAY ──────────
+    // It overlays the canvas — it does not reflow it, which would move
+    // widget positions. Served hidden; the body is client-populated.
+    h(
+      "aside",
+      { class: "rd-inspector", "aria-label": "Inspector", hidden: "" },
+      h(
+        "div",
+        { class: "rd-insp-head" },
+        h("span", { class: "rd-map-title" }, "Inspector"),
+        h(
+          "button",
+          {
+            type: "button",
+            class: "n-mapclose",
+            "data-nx": "rd-insp-close",
+            "aria-label": "Close the inspector",
+            title: "Close",
+          },
+          "×",
+        ),
+      ),
+      h("div", { class: "rd-insp-body", "data-client-subtree": "" }),
     ),
     // ── The command palette (⌘K / ⌘F) ─────────────────────────────────────
     // Served hidden; the result list is the one client-populated box.

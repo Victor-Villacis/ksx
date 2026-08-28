@@ -491,6 +491,10 @@ export class WidgetCanvas {
   readonly #onCameraHistoryChange: (depth: number, topLabel: string | null) => void;
   #toolMode: "select" | "hand" = "select";
   #selectedIds = new Set<string>();
+  /** ksx: chrome overlaying the canvas's right edge (the inspector). Every
+   *  camera command computes against the SAFE viewport — the canvas minus
+   *  this — so fit/centre land in the visible area, not under the panel. */
+  #safeInsetRight = 0;
   readonly #cameraHistory: (WidgetCanvasCamera & { label: string })[] = [];
   #zoomTier: "overview" | "structure" | "editing" | null = null;
   #changeFrame = 0;
@@ -1374,14 +1378,16 @@ export class WidgetCanvas {
     if (!bounds) return;
     const viewport = this.#viewport.getBoundingClientRect();
     const zoom = this.#camera.zoom;
-    this.#camera.panX = viewport.width / 2 - (bounds.x + bounds.width / 2) * zoom;
+    const safeWidth = Math.max(80, viewport.width - this.#safeInsetRight);
+    this.#camera.panX = safeWidth / 2 - (bounds.x + bounds.width / 2) * zoom;
     this.#camera.panY = viewport.height / 2 - (bounds.y + bounds.height / 2) * zoom;
     this.#animateCamera();
   }
 
   #fitWorldRect(bounds: WorldRect, screenPadding: number, zoomCap: number): void {
     const viewport = this.#viewport.getBoundingClientRect();
-    const availableWidth = Math.max(80, viewport.width - screenPadding * 2);
+    const safeWidth = Math.max(80, viewport.width - this.#safeInsetRight);
+    const availableWidth = Math.max(80, safeWidth - screenPadding * 2);
     const availableHeight = Math.max(80, viewport.height - screenPadding * 2);
     const targetZoom = clamp(
       Math.min(availableWidth / bounds.width, availableHeight / bounds.height, zoomCap),
@@ -1389,16 +1395,52 @@ export class WidgetCanvas {
       this.#zoomMax,
     );
     this.#camera.zoom = targetZoom;
-    this.#camera.panX = viewport.width / 2 - (bounds.x + bounds.width / 2) * targetZoom;
+    this.#camera.panX = safeWidth / 2 - (bounds.x + bounds.width / 2) * targetZoom;
     this.#camera.panY = viewport.height / 2 - (bounds.y + bounds.height / 2) * targetZoom;
     this.#animateCamera();
+  }
+
+  /** ksx: declare how much of the canvas's right edge is covered by chrome.
+   *  Fit, centre and the safe-centre zoom anchors compute against what is
+   *  left. The inspector calls this as it opens and closes. */
+  setSafeInsetRight(px: number): void {
+    this.#safeInsetRight = Math.max(0, px);
+  }
+
+  /** ksx: the design's panel rule — opening chrome preserves zoom and pans
+   *  by EXACTLY the overlap needed to keep the active item clear of it,
+   *  often zero. */
+  keepActiveClear(margin = 20): void {
+    const item = this.activeItem();
+    if (!item) return;
+    const state = this.getItemState(item);
+    const visual = scaledRect(state, state.manualScale);
+    const viewport = this.#viewport.getBoundingClientRect();
+    const safeRight = viewport.width - this.#safeInsetRight - margin;
+    const screenLeft = visual.x * this.#camera.zoom + this.#camera.panX;
+    const screenRight = (visual.x + visual.width) * this.#camera.zoom + this.#camera.panX;
+    let deltaX = 0;
+    if (screenRight > safeRight) deltaX = safeRight - screenRight;
+    if (screenLeft + deltaX < margin) deltaX = margin - screenLeft;
+    if (deltaX === 0) return;
+    this.#camera.panX += deltaX;
+    this.#animateCamera();
+  }
+
+  /** ksx: place one widget at exact world coordinates — the inspector's
+   *  numeric X/Y fields (the no-drag a11y contract). One committed change. */
+  moveItemTo(item: HTMLElement, x: number, y: number): void {
+    if (!this.#items.has(this.#itemId(item))) return;
+    this.#moveItem(item, Math.round(x), Math.round(y));
+    this.#requestNavigatorRender();
+    this.#commitChange();
   }
 
   zoomBy(factor: number): void {
     const rect = this.#viewport.getBoundingClientRect();
     this.#zoomAtPoint(
       this.#camera.zoom * factor,
-      rect.left + rect.width / 2,
+      rect.left + (rect.width - this.#safeInsetRight) / 2,
       rect.top + rect.height / 2,
     );
   }
@@ -1410,13 +1452,21 @@ export class WidgetCanvas {
     if (clamped === this.#camera.zoom) return;
     this.pushCameraHistory(label);
     const rect = this.#viewport.getBoundingClientRect();
-    this.#zoomAtPoint(clamped, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    this.#zoomAtPoint(
+      clamped,
+      rect.left + (rect.width - this.#safeInsetRight) / 2,
+      rect.top + rect.height / 2,
+    );
   }
 
   resetZoom(): void {
     if (this.#camera.zoom !== 1) this.pushCameraHistory("before Zoom 100%");
     const rect = this.#viewport.getBoundingClientRect();
-    this.#zoomAtPoint(1, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    this.#zoomAtPoint(
+      1,
+      rect.left + (rect.width - this.#safeInsetRight) / 2,
+      rect.top + rect.height / 2,
+    );
   }
 
   /** ksx: the camera history (design handoff §3) — a labelled ring, capped,

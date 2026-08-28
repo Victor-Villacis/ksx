@@ -89,6 +89,27 @@ export interface WidgetCanvasOptions {
   interactionBlocked?: () => boolean;
   /** ksx: the world's fixed extent. Widgets and the camera stay inside it. */
   worldBounds?: WorldSize;
+  /** ksx: the navigation model. "map" (the shipped default) pans on
+   * empty-space drag; "design-tool" marquee-selects there instead, moves
+   * panning to space/middle/right-drag and two-finger scroll, pans on plain
+   * wheel, and zooms on ctrl/cmd+wheel (which is also how a trackpad pinch
+   * arrives). Opt-in so the two canvases can differ without forking the
+   * engine — /nocturne stays "map" and its whole suite stays byte-true. */
+  navigationModel?: "map" | "design-tool";
+  /** ksx: camera zoom limits; the design-tool lane runs 0.08–3. */
+  zoomRange?: { min: number; max: number };
+  /** ksx: select/hand tool changed (design-tool model only). */
+  onToolModeChange?: (mode: "select" | "hand") => void;
+  /** ksx: the multi-selection changed. Fires alongside onActiveChange —
+   * the active item is always the selection's primary. */
+  onSelectionChange?: (items: HTMLElement[]) => void;
+  /** ksx: the zoom (and its semantic reading tier) changed. Fired once per
+   * distinct zoom value from the camera render, so hosts stop deriving the
+   * tier through getCamera() — which is masked during focus mode. */
+  onZoomChange?: (zoom: number, tier: "overview" | "structure" | "editing") => void;
+  /** ksx: the camera history stack changed; depth and the top label drive
+   * a "Back view" control. */
+  onCameraHistoryChange?: (depth: number, topLabel: string | null) => void;
 }
 
 export interface WidgetCanvasCapacitySnapshot {
@@ -238,6 +259,13 @@ const WIDGET_CHROME_EDGE_HYSTERESIS_PX = 12;
 const WIDGET_COMMAND_EDGE_HANDOFF_PX = 48;
 const WIDGET_COMMAND_EDGE_HANDOFF_RATIO = 0.15;
 const FOCUS_MAX_ZOOM = 1.35;
+// ksx: semantic-zoom reading tiers (design handoff §4). The hysteresis is
+// ±0.03 so a camera resting exactly on a boundary cannot flicker the tier.
+const ZOOM_TIER_LOW = 0.5;
+const ZOOM_TIER_HIGH = 0.9;
+const ZOOM_TIER_HYSTERESIS = 0.03;
+// ksx: the camera history ring (design handoff §3) — labelled views, capped.
+const CAMERA_HISTORY_MAX = 24;
 const MIN_EFFECTIVE_SCALE = MIN_WIDGET_MANUAL_SCALE * DISTANCE_SCALE_MIN;
 const CAMERA_MOTION_SETTLE_MS = 120;
 const DEFAULT_VIRTUALIZATION_DWELL_MS = 2_000;
@@ -450,6 +478,21 @@ export class WidgetCanvas {
   #cancelCameraGesture: (() => void) | null = null;
   #topZ = 0;
   #spacePressed = false;
+  // ksx: design-tool model state. The selection SET rides beside #activeId —
+  // the active item is always the selection's primary member, so everything
+  // keyed on a single active answer (selbar, inert, runtime admission, the
+  // minimap marker) keeps a defined answer under multi-select.
+  readonly #navigationModel: "map" | "design-tool";
+  readonly #zoomMin: number;
+  readonly #zoomMax: number;
+  readonly #onToolModeChange: (mode: "select" | "hand") => void;
+  readonly #onSelectionChange: (items: HTMLElement[]) => void;
+  readonly #onZoomChange: (zoom: number, tier: "overview" | "structure" | "editing") => void;
+  readonly #onCameraHistoryChange: (depth: number, topLabel: string | null) => void;
+  #toolMode: "select" | "hand" = "select";
+  #selectedIds = new Set<string>();
+  readonly #cameraHistory: (WidgetCanvasCamera & { label: string })[] = [];
+  #zoomTier: "overview" | "structure" | "editing" | null = null;
   #changeFrame = 0;
   #cameraFrame = 0;
   #navigatorFrame = 0;
@@ -485,6 +528,13 @@ export class WidgetCanvas {
     this.#onChange = options.onChange ?? (() => undefined);
     this.#onCommit = options.onCommit ?? (() => undefined);
     this.#worldBounds = options.worldBounds ?? DEFAULT_WORLD_BOUNDS;
+    this.#navigationModel = options.navigationModel ?? "map";
+    this.#zoomMin = options.zoomRange?.min ?? MIN_ZOOM;
+    this.#zoomMax = options.zoomRange?.max ?? MAX_ZOOM;
+    this.#onToolModeChange = options.onToolModeChange ?? (() => undefined);
+    this.#onSelectionChange = options.onSelectionChange ?? (() => undefined);
+    this.#onZoomChange = options.onZoomChange ?? (() => undefined);
+    this.#onCameraHistoryChange = options.onCameraHistoryChange ?? (() => undefined);
     this.#onActiveChange = options.onActiveChange ?? (() => undefined);
     this.#onActiveItemStateChange = options.onActiveItemStateChange ?? (() => undefined);
     this.#onActiveDragStateChange = options.onActiveDragStateChange ?? (() => undefined);
@@ -725,6 +775,17 @@ export class WidgetCanvas {
         this.#cameraGesturePointerId !== null ||
         (event.pointerType !== "" && !event.isPrimary)
       ) return;
+      // ksx: shift/cmd-click TOGGLES membership in the design-tool model —
+      // and deliberately does not start a drag or steal focus, so building
+      // a selection cannot scatter the widgets being gathered.
+      if (
+        this.#navigationModel === "design-tool" &&
+        (event.shiftKey || event.metaKey || event.ctrlKey)
+      ) {
+        event.preventDefault();
+        this.toggleInSelection(item);
+        return;
+      }
       this.setActive(item);
       if (!eventOriginatesInInteractiveControl(event)) {
         item.focus({ preventScroll: true });
@@ -873,20 +934,75 @@ export class WidgetCanvas {
   #selectItem(item: HTMLElement, raise = true): void {
     const id = this.#itemId(item);
     this.#activeId = id;
+    // ksx: a single select collapses the multi-selection to that item —
+    // the set and the active item can never disagree.
+    this.#selectedIds = new Set([id]);
     if (raise) {
       this.#topZ += 1;
       const state = this.getItemState(item);
       state.z = this.#topZ;
       this.#positionItem(item, state);
     }
-    for (const candidate of this.#items.values()) {
-      const selected = candidate === item;
-      candidate.classList.toggle("is-active", selected);
-      if (selected) candidate.setAttribute("aria-current", "true");
-      else candidate.removeAttribute("aria-current");
-    }
+    this.#applySelectionClasses();
     this.#syncNavigationFocusTargets();
     this.#onActiveChange(item);
+    this.#onSelectionChange(this.selectedItems());
+  }
+
+  /** ksx: paint membership. `is-active` marks every selected member;
+   *  `aria-current` names only the PRIMARY (the active item), so assistive
+   *  tech keeps one answer to "which one am I on". */
+  #applySelectionClasses(): void {
+    for (const [id, candidate] of this.#items) {
+      const selected = this.#selectedIds.has(id);
+      candidate.classList.toggle("is-active", selected);
+      if (selected && id === this.#activeId) candidate.setAttribute("aria-current", "true");
+      else candidate.removeAttribute("aria-current");
+    }
+  }
+
+  /** ksx: replace the whole selection (the marquee's verb). The LAST member
+   *  becomes the primary; an empty list clears. No z-raise — a marquee that
+   *  reshuffled the stack would make selection destructive. */
+  setSelection(items: HTMLElement[]): void {
+    const ids = items
+      .map((item) => this.#itemId(item))
+      .filter((id) => this.#items.has(id));
+    if (ids.length === 0) {
+      this.clearActive();
+      return;
+    }
+    this.#selectedIds = new Set(ids);
+    this.#activeId = ids[ids.length - 1];
+    this.#applySelectionClasses();
+    this.#syncNavigationFocusTargets();
+    this.#onActiveChange(this.activeItem());
+    this.#onSelectionChange(this.selectedItems());
+    this.#updateItemVisibility();
+    this.#requestNavigatorRender();
+    this.#scheduleChange();
+  }
+
+  /** ksx: shift/cmd-click — toggle one item's membership. Removing the
+   *  primary promotes the most recently added remaining member. */
+  toggleInSelection(item: HTMLElement): void {
+    const id = this.#itemId(item);
+    if (!this.#items.has(id)) return;
+    const ids = new Set(this.#selectedIds);
+    if (ids.has(id)) ids.delete(id);
+    else ids.add(id);
+    const ordered = Array.from(ids, (memberId) => this.#items.get(memberId))
+      .filter((member): member is HTMLElement => Boolean(member));
+    this.setSelection(ordered);
+  }
+
+  selectedItems(): HTMLElement[] {
+    const items: HTMLElement[] = [];
+    for (const id of this.#selectedIds) {
+      const item = this.#items.get(id);
+      if (item) items.push(item);
+    }
+    return items;
   }
 
   activeItem(): HTMLElement | null {
@@ -894,18 +1010,20 @@ export class WidgetCanvas {
   }
 
   clearActive(): void {
-    if (!this.#activeId) {
+    if (!this.#activeId && this.#selectedIds.size === 0) {
       this.focusViewport();
       return;
     }
     this.#endFocusMode(true, true);
     this.#activeId = null;
+    this.#selectedIds = new Set();
     for (const item of this.#items.values()) {
       item.classList.remove("is-active");
       item.removeAttribute("aria-current");
     }
     this.#syncNavigationFocusTargets();
     this.#onActiveChange(null);
+    this.#onSelectionChange([]);
     this.#updateItemVisibility();
     this.#requestNavigatorRender();
     this.#scheduleChange();
@@ -970,6 +1088,9 @@ export class WidgetCanvas {
     this.setActive(item);
     this.#stopCameraAnimation();
     this.#renderCameraNow();
+    // ksx: the history entry rides beside the focus session's own restore —
+    // Escape uses the session (bit-identical), Back view uses this.
+    this.pushCameraHistory(`before Focus ${item.dataset.widgetName ?? "widget"}`);
     this.#focusSession = {
       itemId: id,
       entryCamera: { ...this.#camera },
@@ -1033,8 +1154,8 @@ export class WidgetCanvas {
     const availableHeight = Math.max(viewportInsets ? 1 : 220, frame.height - focusGutter * 2);
     const targetZoom = clamp(
       Math.min(availableWidth / visual.width, availableHeight / visual.height, 1.1),
-      MIN_ZOOM,
-      MAX_ZOOM,
+      this.#zoomMin,
+      this.#zoomMax,
     );
     this.#camera.zoom = targetZoom;
     this.#camera.panX = frame.x + frame.width / 2 -
@@ -1064,10 +1185,10 @@ export class WidgetCanvas {
       Math.max(
         session.entryCamera.zoom,
         desiredZoom,
-        finiteNumber(session.focusOptions.minimumZoom, MIN_ZOOM),
+        finiteNumber(session.focusOptions.minimumZoom, this.#zoomMin),
       ),
-      MIN_ZOOM,
-      MAX_ZOOM,
+      this.#zoomMin,
+      this.#zoomMax,
     );
     this.#camera.zoom = targetZoom;
     const startOversized = session.focusOptions.oversizedAlignment === "start";
@@ -1177,7 +1298,12 @@ export class WidgetCanvas {
     else this.fitAll();
   }
 
-  fitAll(): void {
+  /** `pushHistory: false` is for the AUTOMATIC first-open fit — the design's
+   *  rule is that fit runs on first open and never again on its own, and an
+   *  automatic move must not mint a history entry (it also un-hid the
+   *  Back-view button in the served-vs-hydrated parity capture). */
+  fitAll(pushHistory = true): void {
+    if (pushHistory) this.pushCameraHistory("before Fit workflow");
     this.#endFocusMode(false, false);
     const bounds = unionRects(Array.from(this.#items.values(), (item) => {
       const state = this.getItemState(item);
@@ -1188,6 +1314,16 @@ export class WidgetCanvas {
       this.#animateCamera();
       return;
     }
+    if (this.#navigationModel === "design-tool") {
+      // ksx: SCREEN-pixel padding (design handoff §3 — 68px per side)
+      // rather than a world-unit pad whose on-screen size varies with the
+      // resulting zoom; and the cap is 1.1 — a two-widget canvas must not
+      // fill the screen.
+      this.#fitWorldRect(bounds, 68, 1.1);
+      return;
+    }
+    // The map model keeps the shipped math exactly — /nocturne's suite pins
+    // these numbers.
     const viewport = this.#viewport.getBoundingClientRect();
     const padded = {
       x: bounds.x - 60,
@@ -1197,12 +1333,64 @@ export class WidgetCanvas {
     };
     const targetZoom = clamp(
       Math.min(viewport.width / padded.width, viewport.height / padded.height, 1),
-      MIN_ZOOM,
-      MAX_ZOOM,
+      this.#zoomMin,
+      this.#zoomMax,
     );
     this.#camera.zoom = targetZoom;
     this.#camera.panX = viewport.width / 2 - (padded.x + padded.width / 2) * targetZoom;
     this.#camera.panY = viewport.height / 2 - (padded.y + padded.height / 2) * targetZoom;
+    this.#animateCamera();
+  }
+
+  /** ksx: fit the SELECTED widgets only (design handoff §3 — pad 90px,
+   *  cap 1.3). How you read one section of a large canvas. Falls back to
+   *  fitAll when nothing is selected. */
+  fitSelection(): void {
+    const selected = this.selectedItems();
+    if (selected.length === 0) {
+      this.fitAll();
+      return;
+    }
+    this.pushCameraHistory("before Fit selection");
+    this.#endFocusMode(false, false);
+    const bounds = unionRects(selected.map((item) => {
+      const state = this.getItemState(item);
+      return scaledRect(state, state.manualScale);
+    }));
+    if (!bounds) return;
+    this.#fitWorldRect(bounds, 90, 1.3);
+  }
+
+  /** ksx: pan so the selection's bounding-box centre sits at the viewport
+   *  centre. Zoom untouched — that is the whole verb (design handoff §3). */
+  centerSelection(): void {
+    const selected = this.selectedItems();
+    if (selected.length === 0) return;
+    this.pushCameraHistory("before Centre selection");
+    const bounds = unionRects(selected.map((item) => {
+      const state = this.getItemState(item);
+      return scaledRect(state, state.manualScale);
+    }));
+    if (!bounds) return;
+    const viewport = this.#viewport.getBoundingClientRect();
+    const zoom = this.#camera.zoom;
+    this.#camera.panX = viewport.width / 2 - (bounds.x + bounds.width / 2) * zoom;
+    this.#camera.panY = viewport.height / 2 - (bounds.y + bounds.height / 2) * zoom;
+    this.#animateCamera();
+  }
+
+  #fitWorldRect(bounds: WorldRect, screenPadding: number, zoomCap: number): void {
+    const viewport = this.#viewport.getBoundingClientRect();
+    const availableWidth = Math.max(80, viewport.width - screenPadding * 2);
+    const availableHeight = Math.max(80, viewport.height - screenPadding * 2);
+    const targetZoom = clamp(
+      Math.min(availableWidth / bounds.width, availableHeight / bounds.height, zoomCap),
+      this.#zoomMin,
+      this.#zoomMax,
+    );
+    this.#camera.zoom = targetZoom;
+    this.#camera.panX = viewport.width / 2 - (bounds.x + bounds.width / 2) * targetZoom;
+    this.#camera.panY = viewport.height / 2 - (bounds.y + bounds.height / 2) * targetZoom;
     this.#animateCamera();
   }
 
@@ -1215,9 +1403,47 @@ export class WidgetCanvas {
     );
   }
 
+  /** ksx: jump to an absolute zoom, centre-anchored — the zoom menu's
+   *  percentage rows. History is pushed only when something will move. */
+  setZoomTo(zoom: number, label = "before zoom change"): void {
+    const clamped = clamp(zoom, this.#zoomMin, this.#zoomMax);
+    if (clamped === this.#camera.zoom) return;
+    this.pushCameraHistory(label);
+    const rect = this.#viewport.getBoundingClientRect();
+    this.#zoomAtPoint(clamped, rect.left + rect.width / 2, rect.top + rect.height / 2);
+  }
+
   resetZoom(): void {
+    if (this.#camera.zoom !== 1) this.pushCameraHistory("before Zoom 100%");
     const rect = this.#viewport.getBoundingClientRect();
     this.#zoomAtPoint(1, rect.left + rect.width / 2, rect.top + rect.height / 2);
+  }
+
+  /** ksx: the camera history (design handoff §3) — a labelled ring, capped,
+   *  pushed BEFORE every camera verb, its own stack, never content undo.
+   *  Captures the LIVE camera on purpose: during focus mode getCamera()
+   *  is masked to the entry camera, which is the wrong thing to remember. */
+  pushCameraHistory(label: string): void {
+    this.#cameraHistory.push({ ...this.#camera, label });
+    if (this.#cameraHistory.length > CAMERA_HISTORY_MAX) this.#cameraHistory.shift();
+    const top = this.#cameraHistory[this.#cameraHistory.length - 1];
+    this.#onCameraHistoryChange(this.#cameraHistory.length, top?.label ?? null);
+  }
+
+  /** ksx: pop back to the previous view. Returns whether anything moved. */
+  backView(): boolean {
+    const entry = this.#cameraHistory.pop();
+    const top = this.#cameraHistory[this.#cameraHistory.length - 1];
+    this.#onCameraHistoryChange(this.#cameraHistory.length, top?.label ?? null);
+    if (!entry) return false;
+    this.#endFocusMode(false, false);
+    this.#camera = { panX: entry.panX, panY: entry.panY, zoom: entry.zoom };
+    this.#animateCamera();
+    return true;
+  }
+
+  cameraHistoryDepth(): number {
+    return this.#cameraHistory.length;
   }
 
   getCamera(): WidgetCanvasCamera {
@@ -1234,7 +1460,7 @@ export class WidgetCanvas {
       this.#camera = {
         panX: finiteNumber(camera.panX, DEFAULT_CAMERA.panX),
         panY: finiteNumber(camera.panY, DEFAULT_CAMERA.panY),
-        zoom: clamp(finiteNumber(camera.zoom, DEFAULT_CAMERA.zoom), MIN_ZOOM, MAX_ZOOM),
+        zoom: clamp(finiteNumber(camera.zoom, DEFAULT_CAMERA.zoom), this.#zoomMin, this.#zoomMax),
       };
     }
     const active = activeId ? this.#items.get(activeId) : undefined;
@@ -2072,6 +2298,17 @@ export class WidgetCanvas {
       const direction = KEYBOARD_NAVIGATION_DIRECTIONS[event.key];
       if (!direction) return;
       event.preventDefault();
+      // ksx: in the design-tool model arrows move the SELECTION when one
+      // exists (12px, shift 1px — the design's numbers); the camera pan is
+      // what arrows mean only on an empty selection.
+      if (this.#navigationModel === "design-tool" && this.#selectedIds.size > 0) {
+        const nudge = event.shiftKey ? 1 : 12;
+        this.moveSelectionBy(
+          direction === "left" ? -nudge : direction === "right" ? nudge : 0,
+          direction === "up" ? -nudge : direction === "down" ? nudge : 0,
+        );
+        return;
+      }
       this.#stopCameraAnimation();
       const step = event.shiftKey
         ? KEYBOARD_CANVAS_PAN_LARGE_STEP_PX
@@ -2118,9 +2355,22 @@ export class WidgetCanvas {
     this.#viewport.addEventListener("pointerdown", (event) => {
       const target = event.target as HTMLElement;
       const onBackground = target === this.#viewport || target === this.#stage;
-      const shouldPan = event.button === 1 || this.#spacePressed || (event.button === 0 && onBackground);
+      // ksx: two navigation models share this press. In "map" a plain
+      // left-drag on empty space pans (the shipped default). In
+      // "design-tool" that same drag marquee-selects, and panning belongs
+      // to space, middle, right and the hand tool — the map model is easier
+      // in the first five minutes and worse from the second hour, once
+      // people select groups and organise sections.
+      const designTool = this.#navigationModel === "design-tool";
+      const shouldPan = event.button === 1 ||
+        (designTool && event.button === 2) ||
+        this.#spacePressed ||
+        (event.button === 0 && onBackground &&
+          (!designTool || this.#toolMode === "hand"));
+      const shouldMarquee = !shouldPan && designTool &&
+        event.button === 0 && onBackground && this.#toolMode === "select";
       if (
-        !shouldPan ||
+        (!shouldPan && !shouldMarquee) ||
         (event.pointerType !== "" && !event.isPrimary) ||
         this.#cameraGesturePointerId !== null ||
         this.#widgetDragPointerId !== null
@@ -2130,8 +2380,82 @@ export class WidgetCanvas {
       this.#cameraGesturePointerId = pointerId;
       const startX = event.clientX;
       const startY = event.clientY;
+
+      if (shouldMarquee) {
+        // ksx: the marquee is TRANSIENT interaction state — the rectangle
+        // element exists only between the 5px threshold and pointerup, so a
+        // settled page can never carry it (SSR parity rule 3e). It shares
+        // the camera gesture slot so every mutual-exclusion guard and
+        // teardown path covers it unchanged — but it is deliberately NOT
+        // camera motion: no pan class, no admission freeze.
+        const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+        const viewportRect = this.#viewport.getBoundingClientRect();
+        let marquee: HTMLElement | null = null;
+        let marqueeMoved = false;
+        const onMarqueeMove = (moveEvent: PointerEvent): void => {
+          if (moveEvent.pointerId !== pointerId) return;
+          const deltaX = moveEvent.clientX - startX;
+          const deltaY = moveEvent.clientY - startY;
+          if (!marqueeMoved && Math.hypot(deltaX, deltaY) <= 5) return;
+          if (!marqueeMoved) {
+            marqueeMoved = true;
+            marquee = this.#document.createElement("div");
+            marquee.className = "canvas-marquee";
+            marquee.setAttribute("aria-hidden", "true");
+            this.#viewport.append(marquee);
+          }
+          const box = marquee as HTMLElement;
+          box.style.left = `${Math.min(startX, moveEvent.clientX) - viewportRect.left}px`;
+          box.style.top = `${Math.min(startY, moveEvent.clientY) - viewportRect.top}px`;
+          box.style.width = `${Math.abs(moveEvent.clientX - startX)}px`;
+          box.style.height = `${Math.abs(moveEvent.clientY - startY)}px`;
+        };
+        const finishMarquee = (endEvent: PointerEvent | null): void => {
+          if (endEvent && endEvent.pointerId !== pointerId) return;
+          this.#cancelCameraGesture = null;
+          this.#window.removeEventListener("pointermove", onMarqueeMove);
+          this.#window.removeEventListener("pointerup", onMarqueeEnd);
+          this.#window.removeEventListener("pointercancel", onMarqueeEnd);
+          marquee?.remove();
+          if (this.#cameraGesturePointerId === pointerId) this.#cameraGesturePointerId = null;
+          if (endEvent?.type !== "pointerup") return;
+          if (!marqueeMoved) {
+            // A tap on empty space clears — unless the press was additive.
+            if (!additive) this.clearActive();
+            return;
+          }
+          const { panX, panY, zoom } = this.#camera;
+          const minX = (Math.min(startX, endEvent.clientX) - viewportRect.left - panX) / zoom;
+          const maxX = (Math.max(startX, endEvent.clientX) - viewportRect.left - panX) / zoom;
+          const minY = (Math.min(startY, endEvent.clientY) - viewportRect.top - panY) / zoom;
+          const maxY = (Math.max(startY, endEvent.clientY) - viewportRect.top - panY) / zoom;
+          // Intersects, not contains — the design's own rule; candidates
+          // carry world-space visual rects, virtualized widgets included.
+          const hits = this.#navigationCandidates()
+            .filter(({ rect }) =>
+              rect.x < maxX && rect.x + rect.width > minX &&
+              rect.y < maxY && rect.y + rect.height > minY
+            )
+            .map(({ item }) => item);
+          if (additive) {
+            const merged = this.selectedItems();
+            for (const item of hits) if (!merged.includes(item)) merged.push(item);
+            this.setSelection(merged);
+          } else {
+            this.setSelection(hits);
+          }
+        };
+        const onMarqueeEnd = (endEvent: PointerEvent): void => finishMarquee(endEvent);
+        this.#cancelCameraGesture = () => finishMarquee(null);
+        this.#window.addEventListener("pointermove", onMarqueeMove);
+        this.#window.addEventListener("pointerup", onMarqueeEnd);
+        this.#window.addEventListener("pointercancel", onMarqueeEnd);
+        return;
+      }
+
       const origin = { ...this.#camera };
-      const clearsSelection = event.button === 0 && onBackground && !this.#spacePressed;
+      const clearsSelection = event.button === 0 && onBackground && !this.#spacePressed &&
+        !(designTool && this.#toolMode === "hand");
       let moved = false;
 
       const onMove = (moveEvent: PointerEvent): void => {
@@ -2174,14 +2498,102 @@ export class WidgetCanvas {
       const overWidget = Boolean(target.closest(".widget-instance"));
       if (overWidget && !event.ctrlKey && !event.metaKey) return;
       event.preventDefault();
+      if (this.#navigationModel === "design-tool") {
+        if (event.ctrlKey || event.metaKey) {
+          // A trackpad pinch arrives as a wheel event with ctrlKey — the
+          // same branch serves pinch and ctrl/cmd+wheel, continuously,
+          // anchored on the pointer. The factor is the design's own number.
+          const factor = Math.pow(0.9985, event.deltaY * 1.6);
+          this.#zoomAtPoint(this.#camera.zoom * factor, event.clientX, event.clientY);
+          return;
+        }
+        // Plain wheel pans (two-finger trackpad drag IS a wheel event);
+        // shift turns a mouse's vertical wheel sideways.
+        this.#stopCameraAnimation();
+        this.#cameraFramingTarget = null;
+        const sideways = event.shiftKey && event.deltaX === 0;
+        this.#camera.panX -= sideways ? event.deltaY : event.deltaX;
+        this.#camera.panY -= sideways ? 0 : event.deltaY;
+        this.#requestCameraRender();
+        this.#scheduleChange();
+        return;
+      }
       const factor = event.deltaY < 0 ? 1.08 : 1 / 1.08;
       this.#zoomAtPoint(this.#camera.zoom * factor, event.clientX, event.clientY);
     }, { passive: false, signal: this.#abort.signal });
+
+    // ksx: in the design-tool model right-drag pans, so the canvas
+    // suppresses its context menu (the design's own rule).
+    this.#viewport.addEventListener("contextmenu", (event) => {
+      if (this.#navigationModel !== "design-tool") return;
+      event.preventDefault();
+    }, { signal: this.#abort.signal });
+
+    // ksx: design-tool double-click — a widget enters focus; empty space
+    // fits the workflow.
+    this.#viewport.addEventListener("dblclick", (event) => {
+      if (this.#navigationModel !== "design-tool") return;
+      const target = event.target as HTMLElement;
+      const widget = target.closest<HTMLElement>(".widget-instance");
+      if (widget && this.#items.get(this.#itemId(widget)) === widget) {
+        event.preventDefault();
+        this.toggleFocusMode(widget);
+        return;
+      }
+      if (target === this.#viewport || target === this.#stage) {
+        event.preventDefault();
+        this.fitAll();
+      }
+    }, { signal: this.#abort.signal });
   }
 
   #clearSpacePanState(): void {
     this.#spacePressed = false;
     this.#viewport.classList.remove("is-pan-ready", "is-panning");
+    // The hand tool's persistent cursor comes back after a Space override.
+    this.#viewport.classList.toggle("is-hand-tool", this.#toolMode === "hand");
+  }
+
+  /** ksx: which reading tier a zoom is in, with ±3% hysteresis keyed on the
+   *  CURRENT tier so a camera resting on a boundary cannot flicker. */
+  #tierFor(zoom: number): "overview" | "structure" | "editing" {
+    const current = this.#zoomTier;
+    const low = current === "overview"
+      ? ZOOM_TIER_LOW + ZOOM_TIER_HYSTERESIS
+      : ZOOM_TIER_LOW - ZOOM_TIER_HYSTERESIS;
+    const high = current === "editing"
+      ? ZOOM_TIER_HIGH - ZOOM_TIER_HYSTERESIS
+      : ZOOM_TIER_HIGH + ZOOM_TIER_HYSTERESIS;
+    if (zoom < low) return "overview";
+    if (zoom < high) return "structure";
+    return "editing";
+  }
+
+  /** ksx: the select/hand tool (design-tool model). A mode, not a held key
+   *  — it survives blur, unlike Space. */
+  setToolMode(mode: "select" | "hand"): void {
+    if (this.#toolMode === mode) return;
+    this.#toolMode = mode;
+    this.#viewport.classList.toggle("is-hand-tool", mode === "hand");
+    this.#onToolModeChange(mode);
+  }
+
+  toolMode(): "select" | "hand" {
+    return this.#toolMode;
+  }
+
+  /** ksx: nudge every selected widget (design handoff — arrows move the
+   *  selection 12px, shift-arrows 1px). One committed change per call. */
+  moveSelectionBy(deltaX: number, deltaY: number): boolean {
+    const selected = this.selectedItems();
+    if (selected.length === 0) return false;
+    for (const item of selected) {
+      const state = this.getItemState(item);
+      this.#moveItem(item, state.x + deltaX, state.y + deltaY);
+    }
+    this.#requestNavigatorRender();
+    this.#commitChange();
+    return true;
   }
 
   #cancelLostInputState(): void {
@@ -2268,7 +2680,7 @@ export class WidgetCanvas {
     this.#cameraFramingTarget = null;
     const rect = this.#viewport.getBoundingClientRect();
     const oldZoom = this.#camera.zoom;
-    const zoom = clamp(nextZoom, MIN_ZOOM, MAX_ZOOM);
+    const zoom = clamp(nextZoom, this.#zoomMin, this.#zoomMax);
     if (zoom === oldZoom) return;
     const worldX = (clientX - rect.left - this.#camera.panX) / oldZoom;
     const worldY = (clientY - rect.top - this.#camera.panY) / oldZoom;
@@ -2343,6 +2755,17 @@ export class WidgetCanvas {
           `Canvas zoom ${zoomPercentage}%; reset to 100%`,
         );
       }
+      // ksx: the semantic-zoom channel (design handoff §4). Inline style
+      // and a data-canvas-* attribute on the client-canvas viewport, so
+      // both ride the SSR-parity exemption; the hysteresis lives HERE so
+      // the attribute and any host label can never disagree at a boundary.
+      this.#viewport.style.setProperty("--canvas-zoom", String(this.#camera.zoom));
+      const tier = this.#tierFor(this.#camera.zoom);
+      if (tier !== this.#zoomTier) {
+        this.#zoomTier = tier;
+        this.#viewport.dataset.canvasZoomTier = tier;
+      }
+      this.#onZoomChange(this.#camera.zoom, tier);
     }
     this.#viewport.style.setProperty("--canvas-grid-x", `${this.#camera.panX}px`);
     this.#viewport.style.setProperty("--canvas-grid-y", `${this.#camera.panY}px`);

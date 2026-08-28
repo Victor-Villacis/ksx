@@ -18734,3 +18734,337 @@ a.nm-link {
 .nocturne:not(.js) .rd-tier {
   display: none;
 }
+
+/* ── Redesign lane, slice 2: the interaction chrome ──────────────────────── */
+
+/* The tool cluster, top-left over the canvas (design handoff §7). */
+.rd-tools {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--n-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--n-panel) 94%, transparent);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.rd-tool {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--n-text-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.rd-tool[data-nx="rd-tool-select"] {
+  transform: none;
+}
+
+.rd-tool[aria-pressed="true"] {
+  background: var(--n-accent-dim);
+  color: var(--n-text);
+  box-shadow: inset 0 0 0 1px var(--n-accent-line);
+}
+
+/* The hand tool's resting cursor on the surface it changes. */
+.rd .forma-canvas-viewport.is-hand-tool {
+  cursor: grab;
+}
+
+/* The marquee: transient, engine-created, gone by pointerup. */
+.rd .canvas-marquee {
+  position: absolute;
+  z-index: 8;
+  border: 1px solid var(--n-accent);
+  background: color-mix(in srgb, var(--n-accent) 12%, transparent);
+  pointer-events: none;
+}
+
+/* Top-bar additions. */
+.rd-kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--n-line);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--n-bg) 60%, transparent);
+  color: var(--n-text-3);
+  font: 600 10px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+.rd-search .rd-kbd {
+  margin-left: 7px;
+}
+
+/* The camera menu, opening upward from the zoom pill. */
+.rd-zoom {
+  overflow: visible;
+}
+
+.rd-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 9;
+  min-width: 232px;
+  padding: 5px;
+  border: 1px solid var(--n-line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--n-panel) 97%, transparent);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.4);
+}
+
+.rd-menu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--n-text);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rd-menu-row:hover,
+.rd-menu-row:focus-visible {
+  background: var(--n-accent-tint);
+}
+
+.rd-menu-sep {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--n-line);
+}
+
+.rd-caret {
+  margin-left: 3px;
+  color: var(--n-text-3);
+  font-size: 9px;
+}
+
+/* The minimap header's live count. */
+.rd-map-count {
+  margin-left: auto;
+  margin-right: 4px;
+  color: var(--n-text-3);
+  font-size: 10px;
+}
+
+/* Overlays: the palette and the shortcut sheet. */
+.rd-palette,
+.rd-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.rd-scrim {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--n-bg) 55%, transparent);
+}
+
+.rd-palette-card {
+  position: relative;
+  width: min(520px, calc(100vw - 40px));
+  margin: 88px auto 0;
+  overflow: hidden;
+  border: 1px solid var(--n-line-2);
+  border-radius: 14px;
+  background: var(--n-panel);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+}
+
+.rd-palette-input {
+  width: 100%;
+  padding: 14px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--n-line);
+  background: transparent;
+  color: var(--n-text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.rd-palette-input:focus {
+  outline: none;
+}
+
+.rd-palette-list {
+  max-height: 340px;
+  margin: 0;
+  padding: 6px;
+  overflow: auto;
+  list-style: none;
+}
+
+.rd-palette-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--n-text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rd-palette-row:hover,
+.rd-palette-row[aria-current="true"] {
+  background: var(--n-accent-tint);
+}
+
+.rd-palette-name {
+  font-weight: 500;
+}
+
+.rd-palette-hint {
+  flex: 1;
+  overflow: hidden;
+  color: var(--n-text-3);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-sheet-card {
+  position: relative;
+  width: min(880px, calc(100vw - 48px));
+  margin: 72px auto 0;
+  padding: 22px 26px;
+  border: 1px solid var(--n-line-2);
+  border-radius: 14px;
+  background: var(--n-panel);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+}
+
+.rd-sheet-lede {
+  margin: 0 0 16px;
+  color: var(--n-text-2);
+  font-size: 12.5px;
+}
+
+.rd-sheet-lede strong {
+  margin-right: 10px;
+  color: var(--n-text);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.rd-sheet-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px 26px;
+}
+
+.rd-sheet-col {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  align-content: start;
+  margin: 0;
+}
+
+.rd-sheet-kick {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  color: var(--n-text-2);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rd-sheet-col dt:not(.rd-sheet-kick) {
+  color: var(--n-accent-2);
+  font: 500 11px/1.6 ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+.rd-sheet-col dd {
+  margin: 0;
+  color: var(--n-text-2);
+  font-size: 11.5px;
+}
+
+.rd-sheet-dismiss {
+  margin-top: 18px;
+  margin-left: auto;
+  display: block;
+}
+
+/* Mock nodes: disposable content whose DETAIL follows the semantic tier the
+   engine stamps on the viewport (data-canvas-zoom-tier). */
+.rd-mock {
+  padding: 6px 10px 10px;
+}
+
+.rd-mock-sum {
+  margin: 0 0 6px;
+  color: var(--n-text-2);
+  font-size: 11.5px;
+}
+
+.rd-mock-detail {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 10px;
+  margin: 0;
+  padding-top: 6px;
+  border-top: 1px solid var(--n-line);
+}
+
+.rd-mock-detail dt {
+  color: var(--n-text-3);
+  font-size: 10.5px;
+}
+
+.rd-mock-detail dd {
+  margin: 0;
+  color: var(--n-text);
+  font-size: 11px;
+}
+
+.rd [data-canvas-zoom-tier="overview"] .rd-mock-sum,
+.rd [data-canvas-zoom-tier="overview"] .rd-mock-detail,
+.rd [data-canvas-zoom-tier="structure"] .rd-mock-detail {
+  display: none;
+}
+
+/* The palette landing pulse — the eye needs to find what the camera flew to. */
+@keyframes rd-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--n-accent) 70%, transparent); }
+  100% { box-shadow: 0 0 0 14px color-mix(in srgb, var(--n-accent) 0%, transparent); }
+}
+
+.rd .widget-instance.rd-pulse {
+  animation: rd-pulse 700ms ease-out 2;
+}
+
+/* No JavaScript: every piece of camera chrome is scripting-only. */
+.nocturne:not(.js) .rd-tools,
+.nocturne:not(.js) .rd-menu,
+.nocturne:not(.js) .rd-palette,
+.nocturne:not(.js) .rd-sheet,
+.nocturne:not(.js) .rd-back,
+.nocturne:not(.js) .rd-search,
+.nocturne:not(.js) [data-nx="rd-keys"] {
+  display: none;
+}

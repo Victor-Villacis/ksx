@@ -1,5 +1,5 @@
 import { createSignal, h } from "@getforma/core";
-import { WidgetCanvas } from "./genui/canvas/index";
+import { createCanvasItem, WidgetCanvas } from "./genui/canvas/index";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /redesign — the transplant rebuild's blank workbench.
@@ -106,7 +106,7 @@ function loadCanvasPrefs(): void {
         [cam.panX, cam.panY, cam.zoom].every(
           (n) => typeof n === "number" && Number.isFinite(n),
         )
-          ? { panX: cam.panX, panY: cam.panY, zoom: Math.min(2, Math.max(0.2, cam.zoom)) }
+          ? { panX: cam.panX, panY: cam.panY, zoom: Math.min(3, Math.max(0.08, cam.zoom)) }
           : undefined,
     };
   } catch {
@@ -128,17 +128,26 @@ function saveCanvasPrefs(): boolean {
   return writeCanvasPrefs(canvasPrefs);
 }
 
-/** Read the camera (and, once widgets arrive, their geometry) back into the
- *  store — called from the engine's onCommit (its own durable boundary),
- *  from the debounced onChange trail (so a kill mid-arrangement loses at
- *  most the last second), and synchronously on pagehide. The per-widget
- *  bookkeeping joins this loop as widgets are transplanted in. */
+/** Read the camera and every mounted widget's geometry back into the store
+ *  — called from the engine's onCommit (its own durable boundary), from the
+ *  debounced onChange trail (so a kill mid-arrangement loses at most the
+ *  last second), and synchronously on pagehide. */
 function persistCanvas(): void {
   const canvas = nCanvas;
-  if (!canvas) return;
+  const root = rdRoot;
+  if (!canvas || !root) return;
+  const widgets: Record<string, CanvasItemGeometry> = { ...canvasPrefs.widgets };
+  for (const item of Array.from(
+    root.querySelectorAll<HTMLElement>(".n-canvas [data-instance-id]"),
+  )) {
+    const id = item.dataset.instanceId;
+    if (id && item.dataset.canvasX !== undefined) {
+      widgets[id] = canvas.getItemState(item);
+    }
+  }
   canvasPrefs = {
     camera: canvas.getCamera(),
-    widgets: { ...canvasPrefs.widgets },
+    widgets,
     mapHidden: canvasPrefs.mapHidden,
   };
   saveCanvasPrefs();
@@ -172,89 +181,279 @@ function scheduleCanvasPersist(): void {
   canvasPersistTimer = window.setTimeout(persistCanvas, 1000);
 }
 
-// ── Semantic-zoom tier readout (design notes §04) ───────────────────────────
+// ── Semantic-zoom tier readout (design handoff §4) ──────────────────────────
 
 /** The three reading tiers, worded once. Zooming out is not shrinking: each
  *  tier says what a widget should show at this distance, and the readout in
- *  the corner names the tier the camera is in. The thresholds carry ±3%
- *  hysteresis so a camera resting on a boundary cannot flicker the line. */
+ *  the corner names the tier the camera is in. The thresholds and their
+ *  ±3% hysteresis live in the ENGINE now (it also stamps the tier onto the
+ *  viewport as `data-canvas-zoom-tier`, which is what the mock nodes' CSS
+ *  keys on) — this label can therefore never disagree with the attribute. */
 const TIER_COPY: Record<string, string> = {
   overview: "Overview — colour, name, status",
   structure: "Structure — type, ports, one-line summary",
   editing: "Editing — full detail and controls",
 };
-let zoomTier = "";
-function syncZoomTier(): void {
-  const canvas = nCanvas;
-  const root = rdRoot;
-  if (!canvas || !root) return;
-  const el = root.querySelector<HTMLElement>(".rd-tier");
-  if (!el) return;
-  const pct = canvas.getCamera().zoom * 100;
-  let next = zoomTier;
-  if (!zoomTier) {
-    next = pct < 50 ? "overview" : pct <= 90 ? "structure" : "editing";
-  } else if (zoomTier === "overview") {
-    if (pct >= 53) next = pct > 93 ? "editing" : "structure";
-  } else if (zoomTier === "structure") {
-    if (pct < 47) next = "overview";
-    else if (pct > 93) next = "editing";
-  } else if (pct <= 87) {
-    next = pct < 47 ? "overview" : "structure";
-  }
-  zoomTier = next;
-  el.textContent = TIER_COPY[next];
+function applyZoomTier(tier: string): void {
+  const el = rdRoot?.querySelector<HTMLElement>(".rd-tier");
+  if (el) el.textContent = TIER_COPY[tier] ?? tier;
 }
 
-/** The selected widget's controls, retargeted instead of cloned — the
- *  upstream app's own shape (one contextual group, not four buttons on
- *  every card), and the reason the page can carry a live size readout and
- *  honest disabled states at the scale limits.
- *
- *  ⚠️PARITY: every write here is imperative, so what it writes for "nothing
- *  selected" must be EXACTLY what the server serves — see the markup's
- *  `data-nsel` group. Nothing is selected at first paint (mounting passes
- *  `focus: false`), so the two agree byte-for-byte with no exemption. */
-function syncWidgetSelection(): void {
+// ── Chrome state the engine reports back ────────────────────────────────────
+
+function syncToolRail(mode: "select" | "hand"): void {
   const root = rdRoot;
-  const canvas = nCanvas;
   if (!root) return;
-  const group = root.querySelector<HTMLElement>(".n-selbar");
-  if (!group) return;
-  const item = canvas?.activeItem() ?? null;
-  const name = item?.dataset.widgetName ?? "";
-  const state = item && canvas ? canvas.getItemState(item) : null;
-  const percent = state ? Math.round(state.manualScale * 100) : 100;
-  const focused = Boolean(item && canvas?.isFocusModeActive(item));
-  group.dataset.nselState = item ? "selected" : "none";
-  const label = group.querySelector<HTMLElement>(".n-sel-name");
-  if (label) label.textContent = item ? name : "Nothing selected";
-  const size = group.querySelector<HTMLElement>('[data-nx="w-scale-reset"]');
-  if (size) {
-    size.textContent = percent + "%";
-    size.title = item ? name + " is at " + percent + "% — click for 100%" : "Widget size";
-    size.setAttribute(
-      "aria-label",
-      item ? name + " size " + percent + "%; reset to 100%" : "Widget size",
-    );
+  root.querySelector<HTMLElement>('[data-nx="rd-tool-select"]')
+    ?.setAttribute("aria-pressed", String(mode === "select"));
+  root.querySelector<HTMLElement>('[data-nx="rd-tool-hand"]')
+    ?.setAttribute("aria-pressed", String(mode === "hand"));
+}
+
+function syncBackView(depth: number, topLabel: string | null): void {
+  const button = rdRoot?.querySelector<HTMLButtonElement>('[data-nx="rd-back"]');
+  if (!button) return;
+  button.hidden = depth === 0;
+  button.title = topLabel ? `Back view — ${topLabel}` : "Back view";
+}
+
+function syncMapCount(): void {
+  const root = rdRoot;
+  if (!root) return;
+  const el = root.querySelector<HTMLElement>(".rd-map-count");
+  if (!el) return;
+  // Stage-scoped on purpose: the minimap's own markers carry
+  // data-instance-id too and would double the count.
+  const count = root.querySelectorAll(".forma-canvas-stage > [data-instance-id]").length;
+  el.textContent = count === 1 ? "1 widget" : `${count} widgets`;
+}
+
+// ── The zoom menu, the command palette, and the shortcut sheet ──────────────
+// All three are SERVED hidden as static markup (the mapshow precedent) and
+// toggled client-side, so SSR parity holds with no exemption; the palette's
+// result list is the one client-populated box, marked data-client-subtree.
+
+function zoomMenuOpen(): boolean {
+  return rdRoot?.querySelector<HTMLElement>(".rd-menu")?.hidden === false;
+}
+function setZoomMenu(open: boolean): void {
+  const menu = rdRoot?.querySelector<HTMLElement>(".rd-menu");
+  if (!menu) return;
+  menu.hidden = !open;
+  rdRoot
+    ?.querySelector<HTMLElement>('[data-nx="rd-zoom-menu"]')
+    ?.setAttribute("aria-expanded", String(open));
+}
+
+function sheetOpen(): boolean {
+  return rdRoot?.querySelector<HTMLElement>(".rd-sheet")?.hidden === false;
+}
+function setSheet(open: boolean): void {
+  const sheet = rdRoot?.querySelector<HTMLElement>(".rd-sheet");
+  if (sheet) sheet.hidden = !open;
+}
+
+interface PaletteCommand {
+  name: string;
+  hint: string;
+  key: string;
+  run: () => void;
+}
+function paletteCommands(): PaletteCommand[] {
+  return [
+    { name: "Fit workflow", hint: "frame every widget on the canvas", key: "1", run: () => nCanvas?.fitAll() },
+    { name: "Fit selection", hint: "frame the selected widgets", key: "2", run: () => nCanvas?.fitSelection() },
+    { name: "Zoom 100%", hint: "true size, keeps the centre point", key: "0", run: () => nCanvas?.resetZoom() },
+    { name: "Center selection", hint: "pan without changing zoom", key: "C", run: () => nCanvas?.centerSelection() },
+    {
+      name: "Focus selected widget",
+      hint: "spotlight it alone — Esc restores the view",
+      key: "F",
+      run: () => {
+        const item = nCanvas?.activeItem();
+        if (item) nCanvas?.toggleFocusMode(item);
+      },
+    },
+    { name: "Select tool", hint: "left-drag marquee-selects", key: "V", run: () => nCanvas?.setToolMode("select") },
+    { name: "Hand tool", hint: "left-drag pans", key: "H", run: () => nCanvas?.setToolMode("hand") },
+    {
+      name: "Toggle minimap",
+      hint: "the map in the corner",
+      key: "M",
+      run: () => setCanvasMap(!(canvasPrefs.mapHidden === true)),
+    },
+  ];
+}
+
+let paletteIndex = 0;
+function paletteOpen(): boolean {
+  return rdRoot?.querySelector<HTMLElement>(".rd-palette")?.hidden === false;
+}
+function setPalette(open: boolean): void {
+  const root = rdRoot;
+  const overlay = root?.querySelector<HTMLElement>(".rd-palette");
+  if (!root || !overlay) return;
+  overlay.hidden = !open;
+  if (!open) return;
+  const input = overlay.querySelector<HTMLInputElement>(".rd-palette-input");
+  if (input) {
+    input.value = "";
+    input.focus();
   }
-  for (const button of Array.from(group.querySelectorAll<HTMLButtonElement>("button[data-nx]"))) {
-    const nx = button.dataset.nx ?? "";
-    // The scale buttons also die at the engine's own clamp, so a press that
-    // could not move anything never looks available.
-    const atFloor = nx === "w-zoom-out" && state !== null && state.manualScale <= 0.6;
-    const atCeiling = nx === "w-zoom-in" && state !== null && state.manualScale >= 1.6;
-    button.disabled = item === null || atFloor || atCeiling;
-    if (nx === "w-focus") {
-      button.setAttribute("aria-pressed", String(focused));
-      button.textContent = focused ? "Unfocus" : "Focus";
-      button.setAttribute(
-        "aria-label",
-        focused ? "Leave focus and restore the previous view" : "Focus " + (name || "widget"),
-      );
-    }
+  paletteIndex = 0;
+  renderPalette("");
+}
+
+/** Fly the camera to one widget — the palette's landing. The design's rule:
+ *  at least 90% zoom, centre it, pulse its outline so the eye finds it. */
+function flyToWidget(item: HTMLElement): void {
+  const canvas = nCanvas;
+  if (!canvas) return;
+  if (canvas.getCamera().zoom < 0.9) {
+    canvas.setZoomTo(0.9, "before search jump");
+  } else {
+    canvas.pushCameraHistory("before search jump");
+  }
+  canvas.centerItem(item);
+  item.classList.add("rd-pulse");
+  window.setTimeout(() => item.classList.remove("rd-pulse"), 1500);
+}
+
+function renderPalette(query: string): void {
+  const root = rdRoot;
+  const list = root?.querySelector<HTMLElement>(".rd-palette-list");
+  if (!root || !list) return;
+  const needle = query.trim().toLowerCase();
+  const widgets = Array.from(
+    root.querySelectorAll<HTMLElement>(".n-canvas [data-instance-id][data-widget-name]"),
+  );
+  const rows: { name: string; hint: string; key: string; run: () => void }[] = [
+    ...widgets
+      .map((item) => ({
+        name: item.dataset.widgetName ?? "",
+        hint: "widget on this canvas",
+        key: "",
+        run: () => flyToWidget(item),
+      }))
+      .filter((row) => row.name),
+    ...paletteCommands(),
+  ].filter((row) =>
+    !needle ||
+    row.name.toLowerCase().includes(needle) ||
+    row.hint.toLowerCase().includes(needle)
+  );
+  if (paletteIndex >= rows.length) paletteIndex = Math.max(0, rows.length - 1);
+  list.replaceChildren(
+    ...rows.map((row, index) => {
+      const li = document.createElement("li");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "rd-palette-row";
+      if (index === paletteIndex) button.setAttribute("aria-current", "true");
+      const name = document.createElement("span");
+      name.className = "rd-palette-name";
+      name.textContent = row.name;
+      const hint = document.createElement("span");
+      hint.className = "rd-palette-hint";
+      hint.textContent = row.hint;
+      button.append(name, hint);
+      if (row.key) {
+        const key = document.createElement("kbd");
+        key.className = "rd-palette-key";
+        key.textContent = row.key;
+        button.append(key);
+      }
+      button.addEventListener("click", () => {
+        setPalette(false);
+        row.run();
+      });
+      li.append(button);
+      return li;
+    }),
+  );
+  list.dataset.rowCount = String(rows.length);
+}
+
+function paletteKeydown(event: KeyboardEvent): void {
+  const list = rdRoot?.querySelector<HTMLElement>(".rd-palette-list");
+  const count = Number(list?.dataset.rowCount ?? "0");
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    if (count === 0) return;
+    paletteIndex = event.key === "ArrowDown"
+      ? (paletteIndex + 1) % count
+      : (paletteIndex - 1 + count) % count;
+    const input = rdRoot?.querySelector<HTMLInputElement>(".rd-palette-input");
+    renderPalette(input?.value ?? "");
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    list
+      ?.querySelectorAll<HTMLButtonElement>(".rd-palette-row")
+      [paletteIndex]?.click();
   }
 }
+
+// ── The mock nodes: two disposable widgets to exercise the canvas ───────────
+// Client-created (data-client-widget — parity rule 3e), so nothing about
+// them is served. They exist so selection, marquee, drag, focus, fit and the
+// semantic tiers have something real to act on while the first product
+// pieces are still on the way; delete this block when a transplant lands.
+
+function mockNodeContent(summary: string, detail: string[]): HTMLElement {
+  const body = document.createElement("div");
+  body.className = "rd-mock";
+  const sum = document.createElement("p");
+  sum.className = "rd-mock-sum";
+  sum.textContent = summary;
+  body.append(sum);
+  const block = document.createElement("dl");
+  block.className = "rd-mock-detail";
+  for (const line of detail) {
+    const [term, value] = line.split(": ");
+    const dt = document.createElement("dt");
+    dt.textContent = term;
+    const dd = document.createElement("dd");
+    dd.textContent = value ?? "";
+    block.append(dt, dd);
+  }
+  body.append(block);
+  return body;
+}
+
+function mountMockNodes(): void {
+  const canvas = nCanvas;
+  if (!canvas) return;
+  const mocks: [string, string, string, string[], CanvasItemGeometry][] = [
+    [
+      "mock-a",
+      "Mock node A",
+      "trigger · always fires",
+      ["kind: trigger", "wired to: nothing yet", "state: healthy"],
+      { x: 120, y: 140, width: 260, height: 150, z: 1, manualScale: 1 },
+    ],
+    [
+      "mock-b",
+      "Mock node B",
+      "transform · echoes its input",
+      ["kind: transform", "wired to: nothing yet", "state: healthy"],
+      { x: 470, y: 300, width: 260, height: 150, z: 2, manualScale: 1 },
+    ],
+  ];
+  for (const [id, name, summary, detail, home] of mocks) {
+    const item = createCanvasItem({
+      instanceId: id,
+      displayName: name,
+      preferredWidth: 260,
+      minHeight: 150,
+      content: mockNodeContent(summary, detail),
+      document,
+    });
+    item.dataset.clientWidget = "";
+    item.classList.add("rd-mock-node");
+    canvas.mountItem(item, canvasPrefs.widgets[id] ?? home, { focus: false });
+  }
+}
+
 
 /** Adopt the served canvas skeleton. Runs once, strictly AFTER adoption (the
  *  entry's post-mount frame): the engine annotates the served nodes, and
@@ -317,13 +516,7 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
       // within a second even if the tab dies before a durable boundary.
       onChange: () => {
         scheduleCanvasPersist();
-        syncZoomTier();
       },
-      // The selection group follows the canvas, never the other way round:
-      // selecting, scaling and focusing all report here.
-      onActiveChange: syncWidgetSelection,
-      onActiveItemStateChange: syncWidgetSelection,
-      onFocusModeChange: syncWidgetSelection,
       // The engine has no live region of its own; the meta bar's sr status
       // line is this page's.
       onKeyboardNavigation: (message) => {
@@ -331,12 +524,24 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
         if (sr) sr.textContent = message;
       },
       worldBounds: CANVAS_WORLD,
+      // The design-tool model (design handoff §2): empty-drag marquees,
+      // panning belongs to space/middle/right/two-finger/hand, plain wheel
+      // pans and ctrl/cmd+wheel (= pinch) zooms at the pointer.
+      navigationModel: "design-tool",
+      zoomRange: { min: 0.08, max: 3 },
+      onToolModeChange: syncToolRail,
+      onZoomChange: (_zoom, tier) => applyZoomTier(tier),
+      onCameraHistoryChange: syncBackView,
     },
   );
   setCanvasMap(canvasPrefs.mapHidden === true);
+  mountMockNodes();
+  syncMapCount();
+  syncToolRail(nCanvas.toolMode());
+  // The automatic first-open fit never pushes history — only USER camera
+  // verbs mint Back-view entries.
   if (canvasPrefs.camera) nCanvas.restoreCamera(canvasPrefs.camera);
-  else window.requestAnimationFrame(() => nCanvas?.fitAll());
-  syncZoomTier();
+  else window.requestAnimationFrame(() => nCanvas?.fitAll(false));
   window.addEventListener("pagehide", () => {
     // flushPendingChange only fires the onChange callback — whose debounce
     // timer will never tick in a dying page. The synchronous persist IS the
@@ -348,6 +553,14 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
 
 // ── Wire: root marker, camera verbs, focus-mode escape ──────────────────────
 
+/** Single keys must never fire while someone is typing (design handoff §2);
+ *  cmd-combinations are checked BEFORE this guard so ⌘K works from a field. */
+function typingIntoSomething(event: KeyboardEvent): boolean {
+  const target = event.target;
+  return target instanceof HTMLElement &&
+    Boolean(target.closest("input, textarea, select, [contenteditable]"));
+}
+
 export function redesignWire(root: HTMLElement): void {
   rdRoot = root;
   // The wire's own "JavaScript is live" marker: scripting-only chrome (the
@@ -356,42 +569,144 @@ export function redesignWire(root: HTMLElement): void {
   root.addEventListener("click", (ev) => {
     const target = ev.target as HTMLElement | null;
     const hit = target?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
+    // Any un-annotated click puts the zoom menu away (the nocturne
+    // configuration menu's own convention).
+    if (
+      zoomMenuOpen() && hit !== "rd-zoom-menu" &&
+      !target?.closest(".rd-menu")
+    ) {
+      setZoomMenu(false);
+    }
     if (!hit) return;
+    const closeMenuAfter = Boolean(target?.closest(".rd-menu"));
     if (hit === "canvas-fit") {
       nCanvas?.fitAll();
-    } else if (hit === "canvas-zoom-reset") {
+    } else if (hit === "rd-fit-sel") {
+      nCanvas?.fitSelection();
+    } else if (hit === "rd-center-sel") {
+      nCanvas?.centerSelection();
+    } else if (hit === "rd-focus-sel") {
+      const item = nCanvas?.activeItem();
+      if (item) nCanvas?.toggleFocusMode(item);
+    } else if (hit === "rd-zoom-menu") {
+      setZoomMenu(!zoomMenuOpen());
+      return;
+    } else if (hit === "rd-z-25") {
+      nCanvas?.setZoomTo(0.25, "before zoom menu pick");
+    } else if (hit === "rd-z-50") {
+      nCanvas?.setZoomTo(0.5, "before zoom menu pick");
+    } else if (hit === "rd-z-75") {
+      nCanvas?.setZoomTo(0.75, "before zoom menu pick");
+    } else if (hit === "rd-z-100") {
       nCanvas?.resetZoom();
+    } else if (hit === "rd-z-150") {
+      nCanvas?.setZoomTo(1.5, "before zoom menu pick");
     } else if (hit === "canvas-zoom-in") {
       nCanvas?.zoomBy(CANVAS_ZOOM_STEP);
     } else if (hit === "canvas-zoom-out") {
       nCanvas?.zoomBy(1 / CANVAS_ZOOM_STEP);
     } else if (hit === "canvas-map") {
       setCanvasMap(!(canvasPrefs.mapHidden === true));
-    } else if (
-      hit === "w-zoom-in" || hit === "w-zoom-out" || hit === "w-scale-reset" ||
-      hit === "w-center" || hit === "w-focus"
-    ) {
-      // The selection group: the button says WHAT, the canvas says WHICH.
-      const widget = nCanvas?.activeItem();
-      if (widget && nCanvas) {
-        if (hit === "w-zoom-in") nCanvas.adjustItemScale(widget, 1);
-        else if (hit === "w-zoom-out") nCanvas.adjustItemScale(widget, -1);
-        else if (hit === "w-scale-reset") nCanvas.resetItemScale(widget);
-        else if (hit === "w-center") nCanvas.centerItem(widget);
-        else nCanvas.toggleFocusMode(widget);
-        syncWidgetSelection();
-      }
+    } else if (hit === "rd-tool-select") {
+      nCanvas?.setToolMode("select");
+    } else if (hit === "rd-tool-hand") {
+      nCanvas?.setToolMode("hand");
+    } else if (hit === "rd-back") {
+      nCanvas?.backView();
+    } else if (hit === "rd-search") {
+      setPalette(true);
+    } else if (hit === "rd-keys") {
+      setSheet(true);
+    } else if (hit === "rd-sheet-close") {
+      setSheet(false);
+    } else if (hit === "rd-palette-close") {
+      setPalette(false);
     }
+    if (closeMenuAfter) setZoomMenu(false);
   });
+
+  const paletteInput = root.querySelector<HTMLInputElement>(".rd-palette-input");
+  paletteInput?.addEventListener("input", () => {
+    paletteIndex = 0;
+    renderPalette(paletteInput.value);
+  });
+  paletteInput?.addEventListener("keydown", paletteKeydown);
+
   window.addEventListener("keydown", (ev) => {
-    // Focus mode is a whole-canvas state, so leaving it must not depend on
-    // which control the user last touched. (The engine binds Escape on the
-    // widget shell alone — reachable only when the widget itself holds
-    // focus, which it does not after a button press.)
-    if (ev.key === "Escape" && nCanvas?.isFocusModeActive()) {
+    // ⌘K / ⌘F open the palette from ANYWHERE, a text field included —
+    // the one binding checked before the typing guard.
+    if ((ev.metaKey || ev.ctrlKey) && (ev.key === "k" || ev.key === "f")) {
       ev.preventDefault();
-      nCanvas.exitFocusMode();
-      syncWidgetSelection();
+      setPalette(!paletteOpen());
+      return;
+    }
+    if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    // The engine's own targeted handlers (viewport arrows, the widget
+    // shell's Escape/Enter) run before this window listener and
+    // preventDefault when they act — never double-handle their keys.
+    if (ev.defaultPrevented) return;
+    if (ev.key === "Escape") {
+      // The escape ladder (design handoff §2), one rung per press:
+      // sheet → palette → menu → focus mode → back view → clear selection.
+      if (sheetOpen()) setSheet(false);
+      else if (paletteOpen()) setPalette(false);
+      else if (zoomMenuOpen()) setZoomMenu(false);
+      else if (nCanvas?.isFocusModeActive()) {
+        nCanvas.exitFocusMode();
+      } else if (!nCanvas?.backView()) {
+        nCanvas?.clearActive();
+      }
+      ev.preventDefault();
+      return;
+    }
+    if (typingIntoSomething(ev)) return;
+    const key = ev.key;
+    if (key === "+" || key === "=") {
+      ev.preventDefault();
+      nCanvas?.zoomBy(CANVAS_ZOOM_STEP);
+    } else if (key === "-") {
+      ev.preventDefault();
+      nCanvas?.zoomBy(1 / CANVAS_ZOOM_STEP);
+    } else if (key === "0") {
+      ev.preventDefault();
+      nCanvas?.resetZoom();
+    } else if (key === "1") {
+      ev.preventDefault();
+      nCanvas?.fitAll();
+    } else if (key === "2") {
+      ev.preventDefault();
+      nCanvas?.fitSelection();
+    } else if (key === "c" || key === "C") {
+      ev.preventDefault();
+      nCanvas?.centerSelection();
+    } else if (key === "f" || key === "F") {
+      const item = nCanvas?.activeItem();
+      if (item) {
+        ev.preventDefault();
+        nCanvas?.toggleFocusMode(item);
+      }
+    } else if (key === "m" || key === "M") {
+      ev.preventDefault();
+      setCanvasMap(!(canvasPrefs.mapHidden === true));
+    } else if (key === "v" || key === "V") {
+      ev.preventDefault();
+      nCanvas?.setToolMode("select");
+    } else if (key === "h" || key === "H") {
+      ev.preventDefault();
+      nCanvas?.setToolMode("hand");
+    } else if (key === "?") {
+      ev.preventDefault();
+      setSheet(!sheetOpen());
+    } else if (
+      key === "ArrowLeft" || key === "ArrowRight" ||
+      key === "ArrowUp" || key === "ArrowDown"
+    ) {
+      // Arrows move the SELECTION (12px, shift 1px) when one exists; with
+      // nothing selected the engine's own viewport arrows pan the camera.
+      const step = ev.shiftKey ? 1 : 12;
+      const dx = key === "ArrowLeft" ? -step : key === "ArrowRight" ? step : 0;
+      const dy = key === "ArrowUp" ? -step : key === "ArrowDown" ? step : 0;
+      if (nCanvas?.moveSelectionBy(dx, dy)) ev.preventDefault();
     }
   });
 }
@@ -418,87 +733,75 @@ export function RedesignIsland() {
           // redesign workbench can never be mistaken for the cabinet.
           h("span", { class: () => rdEnvCls() }, () => rdEnvLabel()),
           h("span", { class: "rd-spring" }),
-          // ── The selected widget's own controls ──────────────────────────
-          // One group that retargets (the upstream app's shape), not four
-          // buttons on every card. Served in its RESTING state — nothing is
-          // selected at first paint — and `syncWidgetSelection` writes
-          // exactly these strings back when the selection clears, so the
-          // parity gate sees no drift with no exemption to hide behind.
+          // Back view: appears the moment the camera history is non-empty;
+          // its title carries the top entry's label.
           h(
-            "div",
+            "button",
             {
-              class: "n-selbar",
-              role: "group",
-              "aria-label": "Selected widget",
-              "data-nsel-state": "none",
+              type: "button",
+              class: "n-autobtn rd-back",
+              "data-nx": "rd-back",
+              title: "Back view",
+              hidden: "",
             },
-            h("span", { class: "n-sel-name" }, "Nothing selected"),
-            h(
-              "button",
-              {
-                type: "button",
-                class: "n-autobtn n-zbtn",
-                "data-nx": "w-zoom-out",
-                "aria-label": "Make the selected widget smaller",
-                title: "Smaller",
-                disabled: "",
-              },
-              "−",
-            ),
-            h(
-              "button",
-              {
-                type: "button",
-                class: "n-autobtn n-selsize",
-                "data-nx": "w-scale-reset",
-                "aria-label": "Widget size",
-                title: "Widget size",
-                disabled: "",
-              },
-              "100%",
-            ),
-            h(
-              "button",
-              {
-                type: "button",
-                class: "n-autobtn n-zbtn",
-                "data-nx": "w-zoom-in",
-                "aria-label": "Make the selected widget bigger",
-                title: "Bigger",
-                disabled: "",
-              },
-              "+",
-            ),
-            h(
-              "button",
-              {
-                type: "button",
-                class: "n-autobtn",
-                "data-nx": "w-center",
-                title: "Bring the selected widget to the middle of the view",
-                disabled: "",
-              },
-              "Center",
-            ),
-            h(
-              "button",
-              {
-                type: "button",
-                class: "n-autobtn",
-                "data-nx": "w-focus",
-                "aria-pressed": "false",
-                "aria-label": "Focus widget",
-                title: "Spotlight it alone — Esc restores the view",
-                disabled: "",
-              },
-              "Focus",
-            ),
+            "↩ Back view",
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              class: "n-autobtn rd-search",
+              "data-nx": "rd-search",
+              title: "Search widgets and commands",
+            },
+            "Search",
+            h("kbd", { class: "rd-kbd" }, "⌘K"),
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              class: "n-autobtn n-zbtn",
+              "data-nx": "rd-keys",
+              "aria-label": "Canvas control — the shortcut sheet",
+              title: "Canvas control (?)",
+            },
+            "⌨",
           ),
           h("span", { role: "status", class: "n-live-sr" }),
         ),
         h(
           "section",
           { class: "forma-canvas n-canvas", "data-forma-canvas": "", "data-client-canvas": "" },
+          // ── The tool cluster (design handoff §7): select and hand ───────
+          h(
+            "div",
+            { class: "rd-tools", role: "group", "aria-label": "Canvas tools" },
+            h(
+              "button",
+              {
+                type: "button",
+                class: "rd-tool",
+                "data-nx": "rd-tool-select",
+                "aria-pressed": "true",
+                "aria-label": "Select tool — left-drag marquee-selects",
+                title: "Select tool (V)",
+              },
+              "➤",
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                class: "rd-tool",
+                "data-nx": "rd-tool-hand",
+                "aria-pressed": "false",
+                "aria-label": "Hand tool — left-drag pans",
+                title: "Hand tool (H)",
+              },
+              "✋",
+            ),
+          ),
           h(
             "div",
             {
@@ -539,6 +842,7 @@ export function RedesignIsland() {
                 "div",
                 { class: "rd-map-head" },
                 h("span", { class: "rd-map-title" }, "Canvas"),
+                h("span", { class: "rd-map-count", "data-live-chatter": "" }, "0 widgets"),
                 h(
                   "button",
                   {
@@ -561,24 +865,12 @@ export function RedesignIsland() {
                 "data-client-canvas": "",
               }),
             ),
-            // What brings the map back, in the corner the map lives in.
-            // Served hidden: the map starts shown, and this is its stand-in.
-            h(
-              "button",
-              {
-                type: "button",
-                class: "n-mapshow",
-                "data-nx": "canvas-map",
-                "aria-label": "Show the canvas map",
-                title: "Show the canvas map",
-                hidden: "",
-              },
-              "▦",
-            ),
-            // ── The zoom cluster (design: bottom-left, under the map) ─────
+            // ── The zoom cluster (design handoff §7): [−][%⌃][+] | [Fit][▦]
             // The camera's verbs, scripting-only — wheel, Space-drag and the
             // arrow keys carry the same moves for anyone who would rather
-            // not aim at a button.
+            // not aim at a button. The percentage opens the camera menu; the
+            // map icon is the collapsed minimap's stand-in, living in the
+            // cluster the design says it belongs to.
             h(
               "div",
               { class: "rd-zoom", role: "group", "aria-label": "Canvas zoom" },
@@ -594,24 +886,25 @@ export function RedesignIsland() {
                 "−",
               ),
               // The engine writes the LIVE zoom into the SPAN, not the
-              // button, and clicking the button resets to 100%.
+              // button.
               // ⚠️The span on purpose: handed a BUTTON the engine also
               // rewrites its aria-label with the live number, and
               // `data-live-chatter` exempts an element's TEXT, never its
               // attributes — which the parity gate caught the moment this
-              // was wired the obvious way. With no aria-label at all, the
-              // button's accessible name is its own content ("Canvas zoom
-              // 84%") and follows the number for free.
+              // was wired the obvious way.
               h(
                 "button",
                 {
                   type: "button",
-                  "data-nx": "canvas-zoom-reset",
-                  title: "Canvas zoom — click for 100%",
+                  "data-nx": "rd-zoom-menu",
+                  title: "Zoom and camera commands",
                   class: "n-autobtn n-zoomread",
+                  "aria-haspopup": "menu",
+                  "aria-expanded": "false",
                 },
                 h("span", { class: "sr-head" }, "Canvas zoom "),
                 h("span", { class: "n-zoomval", "data-live-chatter": "" }, "100%"),
+                h("span", { class: "rd-caret", "aria-hidden": "true" }, "⌃"),
               ),
               h(
                 "button",
@@ -629,13 +922,83 @@ export function RedesignIsland() {
                 {
                   type: "button",
                   "data-nx": "canvas-fit",
-                  title: "Fit every widget on screen",
+                  title: "Fit every widget on screen (1)",
                   class: "n-autobtn",
                 },
                 "Fit",
               ),
+              // The collapsed map's stand-in. Served hidden — the map
+              // starts shown; setCanvasMap swaps the two.
+              h(
+                "button",
+                {
+                  type: "button",
+                  class: "n-autobtn n-zbtn n-mapshow",
+                  "data-nx": "canvas-map",
+                  "aria-label": "Show the canvas map",
+                  title: "Show the canvas map (M)",
+                  hidden: "",
+                },
+                "▦",
+              ),
+              // ── The camera menu, opening upward ───────────────────────
+              h(
+                "div",
+                { class: "rd-menu", role: "menu", hidden: "" },
+                h(
+                  "button",
+                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "rd-z-25" },
+                  h("span", {}, "25%"),
+                ),
+                h(
+                  "button",
+                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "rd-z-50" },
+                  h("span", {}, "50%"),
+                ),
+                h(
+                  "button",
+                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "rd-z-75" },
+                  h("span", {}, "75%"),
+                ),
+                h(
+                  "button",
+                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "rd-z-100" },
+                  h("span", {}, "100%"),
+                  h("kbd", { class: "rd-kbd" }, "0"),
+                ),
+                h(
+                  "button",
+                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "rd-z-150" },
+                  h("span", {}, "150%"),
+                ),
+                h("div", { class: "rd-menu-sep", "aria-hidden": "true" }),
+                h(
+                  "button",
+                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "canvas-fit" },
+                  h("span", {}, "Fit workflow"),
+                  h("kbd", { class: "rd-kbd" }, "1"),
+                ),
+                h(
+                  "button",
+                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "rd-fit-sel" },
+                  h("span", {}, "Fit selection"),
+                  h("kbd", { class: "rd-kbd" }, "2"),
+                ),
+                h(
+                  "button",
+                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "rd-center-sel" },
+                  h("span", {}, "Center selection"),
+                  h("kbd", { class: "rd-kbd" }, "C"),
+                ),
+                h(
+                  "button",
+                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "rd-focus-sel" },
+                  h("span", {}, "Focus selected widget"),
+                  h("kbd", { class: "rd-kbd" }, "F"),
+                ),
+              ),
             ),
-            // ── The reading-tier line (design notes §04) ──────────────────
+            // ── The reading-tier line (design handoff §4) ─────────────────
             // Which semantic tier the camera is in. Client-written at zoom
             // speed, so its text is chatter; served at the 100% tier the
             // camera starts on.
@@ -645,6 +1008,89 @@ export function RedesignIsland() {
               "Editing — full detail and controls",
             ),
           ),
+        ),
+      ),
+    ),
+    // ── The command palette (⌘K / ⌘F) ─────────────────────────────────────
+    // Served hidden; the result list is the one client-populated box.
+    h(
+      "div",
+      { class: "rd-palette", hidden: "" },
+      h("div", { class: "rd-scrim", "data-nx": "rd-palette-close" }),
+      h(
+        "div",
+        { class: "rd-palette-card", role: "dialog", "aria-label": "Search" },
+        h("input", {
+          class: "rd-palette-input",
+          type: "text",
+          placeholder: "Find a widget — or run a command",
+          "aria-label": "Find a widget or run a command",
+        }),
+        h("ol", { class: "rd-palette-list", "data-client-subtree": "" }),
+      ),
+    ),
+    // ── The shortcut sheet (?) — Canvas control ───────────────────────────
+    h(
+      "div",
+      { class: "rd-sheet", hidden: "" },
+      h("div", { class: "rd-scrim", "data-nx": "rd-sheet-close" }),
+      h(
+        "div",
+        { class: "rd-sheet-card", role: "dialog", "aria-label": "Canvas control" },
+        h(
+          "p",
+          { class: "rd-sheet-lede" },
+          h("strong", {}, "Canvas control"),
+          " Single-key shortcuts fire only when the canvas has focus — never while you are typing in a field.",
+        ),
+        h(
+          "div",
+          { class: "rd-sheet-cols" },
+          h(
+            "dl",
+            { class: "rd-sheet-col" },
+            h("dt", { class: "rd-sheet-kick" }, "Camera"),
+            h("dt", {}, "+ / −"), h("dd", {}, "zoom in / out"),
+            h("dt", {}, "0"), h("dd", {}, "100%, centre kept"),
+            h("dt", {}, "1"), h("dd", {}, "fit workflow"),
+            h("dt", {}, "2"), h("dd", {}, "fit selection"),
+            h("dt", {}, "C"), h("dd", {}, "centre selection"),
+            h("dt", {}, "Esc"), h("dd", {}, "back to previous view"),
+          ),
+          h(
+            "dl",
+            { class: "rd-sheet-col" },
+            h("dt", { class: "rd-sheet-kick" }, "Pointer"),
+            h("dt", {}, "two-finger drag"), h("dd", {}, "pan"),
+            h("dt", {}, "pinch · ⌘ wheel"), h("dd", {}, "zoom at the pointer"),
+            h("dt", {}, "wheel / ⇧ wheel"), h("dd", {}, "pan vertically / sideways"),
+            h("dt", {}, "space · middle · right drag"), h("dd", {}, "pan"),
+            h("dt", {}, "left drag on empty"), h("dd", {}, "marquee select"),
+          ),
+          h(
+            "dl",
+            { class: "rd-sheet-col" },
+            h("dt", { class: "rd-sheet-kick" }, "Items"),
+            h("dt", {}, "click / ⇧ click"), h("dd", {}, "select / add to selection"),
+            h("dt", {}, "double-click"), h("dd", {}, "focus the widget"),
+            h("dt", {}, "F"), h("dd", {}, "focus selected widget"),
+            h("dt", {}, "arrows / ⇧ arrows"), h("dd", {}, "move by 12 / 1 px"),
+            h("dt", {}, "drag the header"), h("dd", {}, "move the widget"),
+          ),
+          h(
+            "dl",
+            { class: "rd-sheet-col" },
+            h("dt", { class: "rd-sheet-kick" }, "Chrome"),
+            h("dt", {}, "⌘K / ⌘F"), h("dd", {}, "search and fly to a widget"),
+            h("dt", {}, "M"), h("dd", {}, "minimap"),
+            h("dt", {}, "V / H"), h("dd", {}, "select / hand tool"),
+            h("dt", {}, "?"), h("dd", {}, "this sheet"),
+          ),
+        ),
+        h(
+          "button",
+          { type: "button", class: "n-autobtn rd-sheet-dismiss", "data-nx": "rd-sheet-close" },
+          "Close",
         ),
       ),
     ),

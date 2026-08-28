@@ -44,7 +44,7 @@ const CANVAS_STORE = "ksx-redesign-canvas";
 
 /** One press of canvas zoom. The engine's own wheel step is finer; a button
  *  press should be a visible move, not a nudge. */
-const CANVAS_ZOOM_STEP = 1.2;
+const CANVAS_ZOOM_STEP = 1.25;
 
 /** The runaway rail for widgets — NOT a workspace edge, and not a camera
  *  limit (the view pans freely, the way every canvas tool in this shape
@@ -236,13 +236,30 @@ function syncMapCount(): void {
 function zoomMenuOpen(): boolean {
   return rdRoot?.querySelector<HTMLElement>(".rd-menu")?.hidden === false;
 }
-function setZoomMenu(open: boolean): void {
+function zoomMenuTrigger(): HTMLButtonElement | null {
+  return rdRoot?.querySelector<HTMLButtonElement>('[data-nx="rd-zoom-menu"]') ?? null;
+}
+function zoomMenuItems(): HTMLButtonElement[] {
+  return Array.from(
+    rdRoot?.querySelectorAll<HTMLButtonElement>('.rd-menu [role="menuitem"]') ?? [],
+  );
+}
+function setZoomMenu(
+  open: boolean,
+  focusItem: "first" | "last" = "first",
+  restoreFocus = true,
+): void {
   const menu = rdRoot?.querySelector<HTMLElement>(".rd-menu");
   if (!menu) return;
   menu.hidden = !open;
-  rdRoot
-    ?.querySelector<HTMLElement>('[data-nx="rd-zoom-menu"]')
-    ?.setAttribute("aria-expanded", String(open));
+  const trigger = zoomMenuTrigger();
+  trigger?.setAttribute("aria-expanded", String(open));
+  if (open) {
+    const items = zoomMenuItems();
+    items[focusItem === "last" ? items.length - 1 : 0]?.focus({ preventScroll: true });
+  } else if (restoreFocus && menu.contains(document.activeElement)) {
+    trigger?.focus({ preventScroll: true });
+  }
 }
 
 function sheetOpen(): boolean {
@@ -295,6 +312,10 @@ interface PaletteCommand {
   key: string;
   run: () => void;
 }
+const PALETTE_DEFAULT_WIDGET_LIMIT = 6;
+const PALETTE_DEFAULT_COMMAND_LIMIT = 4;
+const PALETTE_RESULT_LIMIT = 10;
+
 function paletteCommands(): PaletteCommand[] {
   return [
     { name: "Fit workflow", hint: "frame every widget on the canvas", key: "1", run: () => nCanvas?.fitAll() },
@@ -384,12 +405,10 @@ function flyToWidget(item: HTMLElement): void {
   const canvas = nCanvas;
   if (!canvas) return;
   if (canvas.isFocusModeActive()) canvas.exitFocusMode();
-  if (canvas.getCamera().zoom < 0.9) {
-    canvas.setZoomTo(0.9, "before search jump");
-  } else {
-    canvas.pushCameraHistory("before search jump");
-  }
-  canvas.centerItem(item);
+  canvas.pushCameraHistory("before search jump");
+  // Zoom and pan share one camera transaction; splitting them would snap to
+  // 90% before the centre tween begins under normal-motion preferences.
+  canvas.centerItem(item, { minimumZoom: 0.9 });
   const panel = inspectorEl();
   if (panel && !panel.hidden && inspectorInset() === 0) {
     panel.querySelector<HTMLButtonElement>('[data-nx="rd-insp-close"]')
@@ -409,50 +428,61 @@ function renderPalette(query: string): void {
   const widgets = Array.from(
     root.querySelectorAll<HTMLElement>(".n-canvas [data-instance-id][data-widget-name]"),
   );
-  const rows: { name: string; hint: string; key: string; run: () => void }[] = [
-    ...widgets
-      .map((item) => ({
-        name: item.dataset.widgetName ?? "",
-        hint: "widget on this canvas",
-        key: "",
-        run: () => flyToWidget(item),
-      }))
-      .filter((row) => row.name),
-    ...paletteCommands(),
-  ].filter((row) =>
-    !needle ||
-    row.name.toLowerCase().includes(needle) ||
-    row.hint.toLowerCase().includes(needle)
-  );
+  const widgetRows = widgets
+    .map((item) => ({
+      name: item.dataset.widgetName ?? "",
+      hint: "widget on this canvas",
+      key: "",
+      run: () => flyToWidget(item),
+    }))
+    .filter((row) => row.name);
+  const commandRows = paletteCommands();
+  const rows = needle
+    ? [...widgetRows, ...commandRows]
+      .filter((row) =>
+        row.name.toLowerCase().includes(needle) ||
+        row.hint.toLowerCase().includes(needle)
+      )
+      .slice(0, PALETTE_RESULT_LIMIT)
+    : [
+      ...widgetRows.slice(0, PALETTE_DEFAULT_WIDGET_LIMIT),
+      ...commandRows.slice(0, PALETTE_DEFAULT_COMMAND_LIMIT),
+    ];
   if (paletteIndex >= rows.length) paletteIndex = Math.max(0, rows.length - 1);
-  list.replaceChildren(
-    ...rows.map((row, index) => {
-      const li = document.createElement("li");
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "rd-palette-row";
-      if (index === paletteIndex) button.setAttribute("aria-current", "true");
-      const name = document.createElement("span");
-      name.className = "rd-palette-name";
-      name.textContent = row.name;
-      const hint = document.createElement("span");
-      hint.className = "rd-palette-hint";
-      hint.textContent = row.hint;
-      button.append(name, hint);
-      if (row.key) {
-        const key = document.createElement("kbd");
-        key.className = "rd-palette-key";
-        key.textContent = row.key;
-        button.append(key);
-      }
-      button.addEventListener("click", () => {
-        setPalette(false);
-        row.run();
-      });
-      li.append(button);
-      return li;
-    }),
-  );
+  const renderedRows = rows.map((row, index) => {
+    const li = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "rd-palette-row";
+    if (index === paletteIndex) button.setAttribute("aria-current", "true");
+    const name = document.createElement("span");
+    name.className = "rd-palette-name";
+    name.textContent = row.name;
+    const hint = document.createElement("span");
+    hint.className = "rd-palette-hint";
+    hint.textContent = row.hint;
+    button.append(name, hint);
+    if (row.key) {
+      const key = document.createElement("kbd");
+      key.className = "rd-palette-key";
+      key.textContent = row.key;
+      button.append(key);
+    }
+    button.addEventListener("click", () => {
+      setPalette(false);
+      row.run();
+    });
+    li.append(button);
+    return li;
+  });
+  if (renderedRows.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "rd-palette-empty";
+    empty.setAttribute("role", "status");
+    empty.textContent = `Nothing matches “${query.trim()}”`;
+    renderedRows.push(empty);
+  }
+  list.replaceChildren(...renderedRows);
   list.dataset.rowCount = String(rows.length);
 }
 
@@ -494,11 +524,7 @@ function inspectorInset(): number {
   // At the mobile breakpoint the Inspector is a full-screen drawer, not a
   // right-side obstruction. Feeding its 100vw width into the safe-inset
   // camera math leaves no usable canvas and produces a large hidden pan.
-  if (
-    viewportRect &&
-    panelRect.left <= viewportRect.left + 1 &&
-    panelRect.width >= viewportRect.width - 1
-  ) return 0;
+  if (viewportRect && panelRect.width >= viewportRect.width - 1) return 0;
   return Math.min(panelRect.width, viewportRect?.width ?? panelRect.width);
 }
 
@@ -742,10 +768,7 @@ function syncChips(): void {
       const label = document.createElement("span");
       label.textContent = `${name} · ${dist}px`;
       chip.append(caret, label);
-      chip.addEventListener("click", () => {
-        nCanvas?.pushCameraHistory(`before jump to ${name}`);
-        nCanvas?.centerItem(item);
-      });
+      chip.addEventListener("click", () => flyToWidget(item));
       return chip;
     }),
   );
@@ -1061,8 +1084,51 @@ export function redesignWire(root: HTMLElement): void {
     ?.addEventListener("keydown", trapDialogTab);
   root.querySelector<HTMLElement>(".rd-sheet-card")
     ?.addEventListener("keydown", trapDialogTab);
+
+  const zoomTrigger = zoomMenuTrigger();
+  const zoomMenu = root.querySelector<HTMLElement>(".rd-menu");
+  zoomTrigger?.addEventListener("keydown", (event) => {
+    if (
+      event.key !== "Enter" && event.key !== " " &&
+      event.key !== "ArrowDown" && event.key !== "ArrowUp"
+    ) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setZoomMenu(true, event.key === "ArrowUp" ? "last" : "first");
+  });
+  zoomMenu?.addEventListener("keydown", (event) => {
+    const items = zoomMenuItems();
+    if (items.length === 0) return;
+    const activeIndex = Math.max(0, items.indexOf(document.activeElement as HTMLButtonElement));
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowDown") nextIndex = (activeIndex + 1) % items.length;
+    else if (event.key === "ArrowUp") nextIndex = (activeIndex - 1 + items.length) % items.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = items.length - 1;
+    if (nextIndex !== null) {
+      event.preventDefault();
+      event.stopPropagation();
+      items[nextIndex]?.focus({ preventScroll: true });
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      setZoomMenu(false);
+    } else if (event.key === "Tab") {
+      // A menu is not a focus trap. Move to the adjacent zoom-cluster
+      // control explicitly so hiding the focused popup cannot strand focus.
+      event.preventDefault();
+      event.stopPropagation();
+      const destination = event.shiftKey
+        ? zoomTrigger
+        : root.querySelector<HTMLButtonElement>('[data-nx="canvas-zoom-in"]');
+      setZoomMenu(false, "first", false);
+      destination?.focus({ preventScroll: true });
+    }
+  });
   window.addEventListener("resize", () => {
-    nCanvas?.setSafeInsetRight(inspectorInset());
+    nCanvas?.setSafeInsetRight(inspectorInset(), true);
     scheduleChips();
   });
 
@@ -1346,11 +1412,13 @@ export function RedesignIsland() {
                 "button",
                 {
                   type: "button",
+                  id: "rd-zoom-menu-button",
                   "data-nx": "rd-zoom-menu",
                   title: "Zoom and camera commands",
                   class: "n-autobtn n-zoomread",
                   "aria-haspopup": "menu",
                   "aria-expanded": "false",
+                  "aria-controls": "rd-zoom-menu-popup",
                 },
                 h("span", { class: "sr-head" }, "Canvas zoom "),
                 h("span", { class: "n-zoomval", "data-live-chatter": "" }, "100%"),
@@ -1394,55 +1462,61 @@ export function RedesignIsland() {
               // ── The camera menu, opening upward ───────────────────────
               h(
                 "div",
-                { class: "rd-menu", role: "menu", hidden: "" },
+                {
+                  id: "rd-zoom-menu-popup",
+                  class: "rd-menu",
+                  role: "menu",
+                  "aria-labelledby": "rd-zoom-menu-button",
+                  hidden: "",
+                },
                 h(
                   "button",
-                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "rd-z-25" },
+                  { type: "button", class: "rd-menu-row", role: "menuitem", tabindex: "-1", "data-nx": "rd-z-25" },
                   h("span", {}, "25%"),
                 ),
                 h(
                   "button",
-                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "rd-z-50" },
+                  { type: "button", class: "rd-menu-row", role: "menuitem", tabindex: "-1", "data-nx": "rd-z-50" },
                   h("span", {}, "50%"),
                 ),
                 h(
                   "button",
-                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "rd-z-75" },
+                  { type: "button", class: "rd-menu-row", role: "menuitem", tabindex: "-1", "data-nx": "rd-z-75" },
                   h("span", {}, "75%"),
                 ),
                 h(
                   "button",
-                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "rd-z-100" },
+                  { type: "button", class: "rd-menu-row", role: "menuitem", tabindex: "-1", "data-nx": "rd-z-100" },
                   h("span", {}, "100%"),
                   h("kbd", { class: "rd-kbd" }, "0"),
                 ),
                 h(
                   "button",
-                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "rd-z-150" },
+                  { type: "button", class: "rd-menu-row", role: "menuitem", tabindex: "-1", "data-nx": "rd-z-150" },
                   h("span", {}, "150%"),
                 ),
                 h("div", { class: "rd-menu-sep", "aria-hidden": "true" }),
                 h(
                   "button",
-                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "canvas-fit" },
+                  { type: "button", class: "rd-menu-row", role: "menuitem", tabindex: "-1", "data-nx": "canvas-fit" },
                   h("span", {}, "Fit workflow"),
                   h("kbd", { class: "rd-kbd" }, "1"),
                 ),
                 h(
                   "button",
-                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "rd-fit-sel" },
+                  { type: "button", class: "rd-menu-row", role: "menuitem", tabindex: "-1", "data-nx": "rd-fit-sel" },
                   h("span", {}, "Fit selection"),
                   h("kbd", { class: "rd-kbd" }, "2"),
                 ),
                 h(
                   "button",
-                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "rd-center-sel" },
+                  { type: "button", class: "rd-menu-row", role: "menuitem", tabindex: "-1", "data-nx": "rd-center-sel" },
                   h("span", {}, "Center selection"),
                   h("kbd", { class: "rd-kbd" }, "C"),
                 ),
                 h(
                   "button",
-                  { type: "button", class: "rd-menu-row", role: "menuitem", "data-nx": "rd-focus-sel" },
+                  { type: "button", class: "rd-menu-row", role: "menuitem", tabindex: "-1", "data-nx": "rd-focus-sel" },
                   h("span", {}, "Focus selected widget"),
                   h("kbd", { class: "rd-kbd" }, "F"),
                 ),

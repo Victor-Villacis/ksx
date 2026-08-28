@@ -499,6 +499,50 @@ describe("redesign canvas interaction chrome", () => {
 
       const stageItem = (id) =>
         page.locator(`.forma-canvas-stage > [data-instance-id="${id}"]`);
+      const nextPaint = async () => page.evaluate(() => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }));
+      const cameraState = async () => page.evaluate(() => {
+        const stage = document.querySelector(".forma-canvas-stage");
+        const viewport = document.querySelector(".forma-canvas-viewport");
+        const inspector = document.querySelector(".rd-inspector");
+        if (!stage || !viewport || !inspector) return null;
+        const match = stage.style.transform.match(
+          /translate\(([-\d.]+)px,\s*([-\d.]+)px\) scale\(([-\d.]+)\)/,
+        );
+        if (!match) return null;
+        const [, panX, panY, zoom] = match.map(Number);
+        const viewportRect = viewport.getBoundingClientRect();
+        const inspectorWidth = inspector.hidden ? 0 : inspector.getBoundingClientRect().width;
+        const safeWidth = viewportRect.width -
+          (inspectorWidth >= viewportRect.width - 1 ? 0 : inspectorWidth);
+        return {
+          panX,
+          panY,
+          zoom,
+          safeWidth,
+          height: viewportRect.height,
+          worldX: (safeWidth / 2 - panX) / zoom,
+          worldY: (viewportRect.height / 2 - panY) / zoom,
+          transform: stage.style.transform,
+        };
+      });
+
+      const beforeButtonZoom = await cameraState();
+      await page.locator('[data-nx="canvas-zoom-in"]').click();
+      await nextPaint();
+      const afterButtonZoom = await cameraState();
+      assert.ok(beforeButtonZoom && afterButtonZoom);
+      assert.ok(
+        Math.abs(afterButtonZoom.zoom / beforeButtonZoom.zoom - 1.25) < 0.001,
+        "the visible zoom buttons drifted from the documented 1.25× step",
+      );
+      await page.locator('[data-nx="canvas-zoom-out"]').click();
+      await nextPaint();
+      assert.ok(
+        Math.abs((await cameraState()).zoom - beforeButtonZoom.zoom) < 0.001,
+        "zooming out did not invert the 1.25× button step",
+      );
       const navigatorGeometry = async () => page.evaluate(() => {
         const area = document.querySelector(".forma-canvas-navigator-items");
         const camera = document.querySelector(".forma-canvas-navigator-viewport");
@@ -523,21 +567,85 @@ describe("redesign canvas interaction chrome", () => {
         "Inspector X must remove the panel from layout, not only set an attribute",
       );
 
+      await stageItem("mock-a").click();
+      await page.waitForFunction(
+        () =>
+          document.querySelector(".rd-inspector")?.hidden === false &&
+          document.querySelector(".rd-insp-name")?.textContent === "Mock node A",
+      );
       await stageItem("mock-b").click();
       await page.waitForFunction(
         () =>
           document.querySelector(".rd-inspector")?.hidden === false &&
           document.querySelector(".rd-insp-name")?.textContent === "Mock node B",
       );
+      const beforeFocus = await cameraState();
       await page.locator('.rd-inspector [data-nx="rd-focus-sel"]').click();
       await page.waitForFunction(
         () => document.querySelector(".forma-canvas-viewport")?.dataset.widgetFocusMode === "active",
       );
+      assert.equal(
+        await page.locator(".is-camera-animating").count(),
+        0,
+        "reduced motion removed the tween but left the canvas interaction-locked",
+      );
+      const focusedCamera = await cameraState();
+      assert.ok(
+        focusedCamera && focusedCamera.zoom >= 0.9 && focusedCamera.zoom <= 1.2,
+        "Focus escaped its documented 90–120% editing range",
+      );
+      assert.equal(await page.locator(".rd-back").getAttribute("hidden"), null);
       await page.locator('[data-nx="rd-insp-close"]').click();
       assert.equal(
         await page.locator(".forma-canvas-viewport").getAttribute("data-widget-focus-mode"),
         "inactive",
         "closing the Inspector must also leave Focus mode",
+      );
+      assert.equal(
+        (await cameraState()).transform,
+        beforeFocus.transform,
+        "closing Focus did not restore its exact entry camera",
+      );
+      assert.equal(
+        await page.locator(".rd-back").getAttribute("hidden"),
+        "",
+        "Focus restoration left a redundant Back-view entry behind",
+      );
+
+      // Resizing is a camera translation, not an implicit Fit. Focus's
+      // private restore snapshot must receive the same translation, or
+      // Escape returns to a view centred for the old window.
+      await stageItem("mock-a").click();
+      await stageItem("mock-b").click();
+      const beforeFocusResize = await cameraState();
+      await page.locator('.rd-inspector [data-nx="rd-focus-sel"]').click();
+      await page.setViewportSize({ width: 1160, height: 720 });
+      await nextPaint();
+      await page.keyboard.press("Escape");
+      const afterFocusResize = await cameraState();
+      assert.ok(beforeFocusResize && afterFocusResize);
+      assert.ok(Math.abs(afterFocusResize.zoom - beforeFocusResize.zoom) < 0.001);
+      assert.ok(
+        Math.abs(afterFocusResize.worldX - beforeFocusResize.worldX) < 0.02,
+        `resize moved the safe-centre world X: ${JSON.stringify({ beforeFocusResize, afterFocusResize })}`,
+      );
+      assert.ok(
+        Math.abs(afterFocusResize.worldY - beforeFocusResize.worldY) < 0.02,
+        `resize moved the safe-centre world Y: ${JSON.stringify({ beforeFocusResize, afterFocusResize })}`,
+      );
+      assert.equal(await page.locator(".rd-back").getAttribute("hidden"), "");
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await nextPaint();
+      const afterPlainResize = await cameraState();
+      assert.ok(afterPlainResize);
+      assert.ok(Math.abs(afterPlainResize.zoom - afterFocusResize.zoom) < 0.001);
+      assert.ok(
+        Math.abs(afterPlainResize.worldX - afterFocusResize.worldX) < 0.02,
+        `plain resize moved world X: ${JSON.stringify({ afterFocusResize, afterPlainResize })}`,
+      );
+      assert.ok(
+        Math.abs(afterPlainResize.worldY - afterFocusResize.worldY) < 0.02,
+        `plain resize moved world Y: ${JSON.stringify({ afterFocusResize, afterPlainResize })}`,
       );
 
       await stageItem("mock-a").click();
@@ -559,6 +667,89 @@ describe("redesign canvas interaction chrome", () => {
       );
 
       const stage = page.locator(".forma-canvas-stage");
+      const minimapRepresentedWidth = async () => page.evaluate(() => {
+        const area = document.querySelector(".forma-canvas-navigator-items");
+        const camera = document.querySelector(".forma-canvas-navigator-viewport");
+        const markerA = area?.querySelector('[data-instance-id="mock-a"]');
+        const markerB = area?.querySelector('[data-instance-id="mock-b"]');
+        const itemA = document.querySelector('.forma-canvas-stage > [data-instance-id="mock-a"]');
+        const itemB = document.querySelector('.forma-canvas-stage > [data-instance-id="mock-b"]');
+        const stage = document.querySelector(".forma-canvas-stage");
+        const viewport = document.querySelector(".forma-canvas-viewport");
+        const inspector = document.querySelector(".rd-inspector");
+        if (!area || !camera || !markerA || !markerB || !itemA || !itemB ||
+            !stage || !viewport || !inspector) return null;
+        const match = stage.style.transform.match(/scale\(([-\d.]+)\)/);
+        const worldDelta = Number(itemB.dataset.canvasX) - Number(itemA.dataset.canvasX);
+        const mapDelta = parseFloat(markerB.style.left) - parseFloat(markerA.style.left);
+        const projectionScale = Math.abs(mapDelta / worldDelta);
+        const zoom = Number(match?.[1]);
+        const viewportWidth = viewport.getBoundingClientRect().width;
+        const inspectorWidth = inspector.hidden ? 0 : inspector.getBoundingClientRect().width;
+        return {
+          represented: parseFloat(camera.style.width) / projectionScale * zoom,
+          safe: viewportWidth - inspectorWidth,
+          full: viewportWidth,
+        };
+      });
+      await nextPaint();
+      const safeMapWidth = await minimapRepresentedWidth();
+      assert.ok(safeMapWidth);
+      assert.ok(
+        Math.abs(safeMapWidth.represented - safeMapWidth.safe) < 3,
+        "the minimap camera rectangle included the Inspector-covered strip",
+      );
+
+      const mappedWorldPoint = await page.evaluate(() => {
+        const area = document.querySelector(".forma-canvas-navigator-items");
+        const marker = area?.querySelector('[data-instance-id="mock-a"]');
+        const item = document.querySelector('.forma-canvas-stage > [data-instance-id="mock-a"]');
+        if (!area || !marker || !item) return null;
+        const areaRect = area.getBoundingClientRect();
+        const clientX = areaRect.left + parseFloat(marker.style.left) +
+          parseFloat(marker.style.width) / 2;
+        const clientY = areaRect.top + parseFloat(marker.style.top) +
+          parseFloat(marker.style.height) / 2;
+        area.dispatchEvent(new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          clientX,
+          clientY,
+          pointerId: 91,
+        }));
+        window.dispatchEvent(new PointerEvent("pointerup", {
+          bubbles: true,
+          button: 0,
+          clientX,
+          clientY,
+          pointerId: 91,
+        }));
+        return {
+          x: Number(item.dataset.canvasX) + Number(item.dataset.canvasWidth) / 2,
+          y: Number(item.dataset.canvasY) + Number(item.dataset.canvasHeight) / 2,
+        };
+      });
+      await nextPaint();
+      const afterMapPan = await cameraState();
+      assert.ok(mappedWorldPoint && afterMapPan);
+      assert.ok(
+        Math.abs(
+          mappedWorldPoint.x * afterMapPan.zoom + afterMapPan.panX -
+            afterMapPan.safeWidth / 2,
+        ) < 2,
+        "minimap navigation centred into the full viewport instead of the safe viewport",
+      );
+
+      await page.locator('[data-nx="rd-insp-close"]').click();
+      await nextPaint();
+      const fullMapWidth = await minimapRepresentedWidth();
+      assert.ok(fullMapWidth);
+      assert.ok(
+        Math.abs(fullMapWidth.represented - fullMapWidth.full) < 3,
+        "closing the Inspector did not refresh the minimap camera rectangle",
+      );
+
       const beforeHeaderClick = await stage.evaluate((node) => node.style.transform);
       await page.locator(".rd-map-head .rd-map-title").click();
       await page.waitForTimeout(100);
@@ -608,6 +799,103 @@ describe("redesign canvas interaction chrome", () => {
         `collapsed minimap is vertically misaligned with Fit by ${collapsedMap.centerDelta}px`,
       );
 
+      const zoomMenuTrigger = page.locator('[data-nx="rd-zoom-menu"]');
+      await zoomMenuTrigger.focus();
+      assert.equal(
+        await zoomMenuTrigger.getAttribute("aria-controls"),
+        "rd-zoom-menu-popup",
+      );
+      await page.keyboard.press("Enter");
+      assert.equal(await zoomMenuTrigger.getAttribute("aria-expanded"), "true");
+      assert.equal(
+        await page.locator('[role="menuitem"]').first().evaluate((item) => item === document.activeElement),
+        true,
+        "opening the zoom menu did not place focus on its first command",
+      );
+      await page.keyboard.press("ArrowDown");
+      assert.equal(await page.locator('[role="menuitem"]').nth(1).evaluate(
+        (item) => item === document.activeElement,
+      ), true);
+      await page.keyboard.press("End");
+      assert.equal(await page.locator('[role="menuitem"]').last().evaluate(
+        (item) => item === document.activeElement,
+      ), true);
+      await page.keyboard.press("Home");
+      assert.equal(await page.locator('[role="menuitem"]').first().evaluate(
+        (item) => item === document.activeElement,
+      ), true);
+      await page.keyboard.press("Escape");
+      assert.equal(await page.locator(".rd-menu").getAttribute("hidden"), "");
+      assert.equal(await zoomMenuTrigger.getAttribute("aria-expanded"), "false");
+      assert.equal(await zoomMenuTrigger.evaluate((button) => button === document.activeElement), true);
+
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Tab");
+      assert.equal(await page.locator(".rd-menu").getAttribute("hidden"), "");
+      assert.equal(
+        await page.locator('[data-nx="canvas-zoom-in"]').evaluate(
+          (button) => button === document.activeElement,
+        ),
+        true,
+        "Tab from the menu did not continue to the next zoom control",
+      );
+      await zoomMenuTrigger.focus();
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Shift+Tab");
+      assert.equal(await page.locator(".rd-menu").getAttribute("hidden"), "");
+      assert.equal(await zoomMenuTrigger.evaluate((button) => button === document.activeElement), true);
+
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Enter");
+      assert.equal(await page.locator(".n-zoomval").textContent(), "25%");
+      assert.equal(await page.locator(".rd-menu").getAttribute("hidden"), "");
+      assert.equal(await zoomMenuTrigger.evaluate((button) => button === document.activeElement), true);
+      await page.locator(".rd-back").click();
+      await nextPaint();
+      assert.equal(
+        await page.locator(".rd-back").getAttribute("hidden"),
+        "",
+        "returning from a zoom-menu pick did not retire its one history entry",
+      );
+
+      await page.evaluate(() => {
+        const canvas = document.querySelector(".n-canvas");
+        for (let index = 0; index < 15; index += 1) {
+          const probe = document.createElement("div");
+          probe.hidden = true;
+          probe.className = "rd-palette-probe";
+          probe.dataset.instanceId = `palette-probe-${index}`;
+          probe.dataset.widgetName = `Palette probe ${index}`;
+          canvas?.append(probe);
+        }
+      });
+      await page.locator('[data-nx="rd-search"]').click();
+      assert.equal(
+        await page.locator(".rd-palette-row").count(),
+        10,
+        "the palette default did not keep the six-widget/four-command budget",
+      );
+      const paletteInput = page.locator(".rd-palette-input");
+      await paletteInput.fill("Palette probe");
+      assert.equal(
+        await page.locator(".rd-palette-row").count(),
+        10,
+        "a palette search rendered beyond its ten-result scan limit",
+      );
+      await paletteInput.fill("definitely-no-such-widget-or-command");
+      assert.equal(await page.locator(".rd-palette-row").count(), 0);
+      assert.equal(
+        await page.locator(".rd-palette-empty").textContent(),
+        "Nothing matches “definitely-no-such-widget-or-command”",
+      );
+      await page.keyboard.press("Enter");
+      assert.equal(await page.locator(".rd-palette").getAttribute("hidden"), null);
+      assert.equal(await paletteInput.evaluate((input) => input === document.activeElement), true);
+      await page.keyboard.press("Escape");
+      await page.evaluate(() => {
+        document.querySelectorAll(".rd-palette-probe").forEach((probe) => probe.remove());
+      });
+
       await page.locator('[data-nx="rd-search"]').focus();
       await page.keyboard.press("m");
       assert.equal(
@@ -615,6 +903,43 @@ describe("redesign canvas interaction chrome", () => {
         "",
         "an unmodified canvas shortcut fired while title-bar focus was outside the canvas",
       );
+
+      await stageItem("mock-b").click();
+      await page.getByLabel("X", { exact: true }).fill("2200");
+      await page.locator(".rd-insp-head .rd-map-title").click();
+      await stageItem("mock-a").click();
+      await zoomMenuTrigger.click();
+      await page.locator('[data-nx="rd-z-50"]').click();
+      await page.locator('.rd-inspector [data-nx="rd-center-sel"]').click();
+      const chip = page.locator(".rd-chip", { hasText: "Mock node B" });
+      await chip.waitFor({ state: "visible" });
+      const beforeChipJump = await stage.evaluate((node) => node.style.transform);
+      await chip.click();
+      await page.waitForFunction(
+        () =>
+          document.querySelector(".rd-insp-name")?.textContent === "Mock node B" &&
+          document.querySelector('[data-instance-id="mock-b"]')?.classList.contains("rd-pulse"),
+      );
+      assert.equal(await page.locator(".n-zoomval").textContent(), "90%");
+      const chipLanding = await cameraState();
+      const chipTarget = await stageItem("mock-b").evaluate((item) => ({
+        x: Number(item.dataset.canvasX) + Number(item.dataset.canvasWidth) / 2,
+      }));
+      assert.ok(chipLanding);
+      assert.ok(
+        Math.abs(
+          chipTarget.x * chipLanding.zoom + chipLanding.panX - chipLanding.safeWidth / 2,
+        ) < 2,
+        "a proximity chip landed its target behind the Inspector",
+      );
+      await page.locator(".rd-back").click();
+      assert.equal(
+        await stage.evaluate((node) => node.style.transform),
+        beforeChipJump,
+        "Back view did not restore the exact pre-chip camera",
+      );
+      await page.getByLabel("X", { exact: true }).fill("470");
+      await page.locator(".rd-insp-head .rd-map-title").click();
 
       await stageItem("mock-a").click();
       const beforeKeys = await stageItem("mock-a").evaluate((item) => ({
@@ -744,6 +1069,176 @@ describe("redesign canvas interaction chrome", () => {
       );
       await page.keyboard.press("Escape");
       assert.deepEqual(diagnostics, [], "/redesign emitted browser errors during interaction checks");
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("reduced-motion Focus corrects a late widget measurement without locking input", async () => {
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 800 },
+      colorScheme: "dark",
+      reducedMotion: "reduce",
+      serviceWorkers: "block",
+    });
+    const page = await context.newPage();
+    try {
+      const response = await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      assert.ok(response?.ok());
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await page.waitForFunction(
+        () => document.querySelector(
+          '.forma-canvas-stage > [data-instance-id="mock-a"]',
+        )?.dataset.canvasHeight,
+        null,
+        { timeout: 20_000 },
+      );
+      const item = page.locator('.forma-canvas-stage > [data-instance-id="mock-a"]');
+      await item.click();
+      const originalHeight = await item.evaluate((node) => Number(node.dataset.canvasHeight));
+      await page.evaluate(() => {
+        const button = document.querySelector('.rd-inspector [data-nx="rd-focus-sel"]');
+        const item = document.querySelector(
+          '.forma-canvas-stage > [data-instance-id="mock-a"]',
+        );
+        button?.addEventListener("click", () => {
+          window.setTimeout(() => {
+            if (item instanceof HTMLElement) item.style.height = `${item.offsetHeight + 80}px`;
+          }, 20);
+        }, { once: true });
+      });
+      await page.locator('.rd-inspector [data-nx="rd-focus-sel"]').click();
+      await page.waitForFunction(
+        (height) =>
+          Number(document.querySelector(
+            '.forma-canvas-stage > [data-instance-id="mock-a"]',
+          )?.dataset.canvasHeight) >=
+            height + 79,
+        originalHeight,
+        { timeout: 5_000 },
+      );
+      await page.evaluate(() => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }));
+      assert.equal(
+        await page.locator(".is-camera-animating").count(),
+        0,
+        "reduced motion left the interaction surface locked",
+      );
+      const landing = await page.evaluate(() => {
+        const viewport = document.querySelector(".forma-canvas-viewport");
+        const inspector = document.querySelector(".rd-inspector");
+        const item = document.querySelector(
+          '.forma-canvas-stage > [data-instance-id="mock-a"]',
+        );
+        if (!viewport || !inspector || !item) return null;
+        const viewportRect = viewport.getBoundingClientRect();
+        const inspectorWidth = inspector.getBoundingClientRect().width;
+        const itemRect = item.getBoundingClientRect();
+        return {
+          x: Math.abs(
+            (itemRect.left + itemRect.right) / 2 -
+              (viewportRect.left + (viewportRect.width - inspectorWidth) / 2),
+          ),
+          y: Math.abs(
+            (itemRect.top + itemRect.bottom) / 2 -
+              (viewportRect.top + viewportRect.height / 2),
+          ),
+        };
+      });
+      assert.ok(landing && landing.x <= 2 && landing.y <= 2,
+        `late widget geometry escaped reduced-motion Focus (${JSON.stringify(landing)})`);
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("normal motion slides the Inspector and flies zoom plus pan as one camera move", async () => {
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 800 },
+      colorScheme: "dark",
+      reducedMotion: "no-preference",
+      serviceWorkers: "block",
+    });
+    const page = await context.newPage();
+    try {
+      const response = await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      assert.ok(response?.ok());
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await page.waitForFunction(
+        () => Boolean(document.querySelector(".forma-canvas-stage")?.style.transform),
+        null,
+        { timeout: 20_000 },
+      );
+
+      const inspectorMotion = await page.evaluate(() => {
+        document.querySelector(
+          '.forma-canvas-stage > [data-instance-id="mock-b"]',
+        )?.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, button: 0 }),
+        );
+        const panel = document.querySelector(".rd-inspector");
+        const animation = panel?.getAnimations().find(
+          (candidate) => candidate.animationName === "rd-inspector-enter",
+        );
+        return {
+          hidden: panel?.hidden,
+          duration: animation?.effect?.getTiming().duration ?? null,
+          playState: animation?.playState ?? null,
+        };
+      });
+      assert.deepEqual(inspectorMotion, {
+        hidden: false,
+        duration: 200,
+        playState: "running",
+      });
+      await page.waitForTimeout(220);
+
+      await page.getByLabel("X", { exact: true }).fill("2200");
+      await page.locator(".rd-insp-head .rd-map-title").click();
+      await page.locator('.forma-canvas-stage > [data-instance-id="mock-a"]').click();
+      await page.locator('[data-nx="rd-zoom-menu"]').click();
+      await page.locator('[data-nx="rd-z-50"]').click();
+      await page.waitForFunction(() => !document.querySelector(".is-camera-animating"));
+      await page.locator('.rd-inspector [data-nx="rd-center-sel"]').click();
+      await page.waitForFunction(() => !document.querySelector(".is-camera-animating"));
+      const chip = page.locator(".rd-chip", { hasText: "Mock node B" });
+      await chip.waitFor({ state: "visible" });
+
+      const cameraMotion = await page.evaluate(() => {
+        const stage = document.querySelector(".forma-canvas-stage");
+        const chip = Array.from(document.querySelectorAll(".rd-chip")).find(
+          (candidate) => candidate.textContent?.includes("Mock node B"),
+        );
+        if (!(stage instanceof HTMLElement) || !(chip instanceof HTMLElement)) return null;
+        const before = new DOMMatrixReadOnly(getComputedStyle(stage).transform).a;
+        chip.click();
+        const immediate = new DOMMatrixReadOnly(getComputedStyle(stage).transform).a;
+        const target = Number(stage.style.transform.match(/scale\(([-\d.]+)\)/)?.[1]);
+        return {
+          before,
+          immediate,
+          target,
+          animating: document.querySelector(".forma-canvas-viewport")
+            ?.classList.contains("is-camera-animating"),
+        };
+      });
+      assert.ok(cameraMotion);
+      assert.ok(Math.abs(cameraMotion.before - 0.5) < 0.01);
+      assert.ok(Math.abs(cameraMotion.immediate - cameraMotion.before) < 0.03,
+        `fly-to snapped zoom before its pan (${JSON.stringify(cameraMotion)})`);
+      assert.ok(Math.abs(cameraMotion.target - 0.9) < 0.001);
+      assert.equal(cameraMotion.animating, true);
+      await page.waitForFunction(() => !document.querySelector(".is-camera-animating"));
+      assert.equal(await page.locator(".n-zoomval").textContent(), "90%");
     } finally {
       await context.close();
     }

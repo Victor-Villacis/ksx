@@ -171,7 +171,22 @@ interface VirtualizedWidgetHost {
 interface WidgetFocusSession {
   itemId: string;
   entryCamera: WidgetCanvasCamera;
+  entryViewportFrame: ViewportFrame;
   focusOptions: WidgetCanvasFocusOptions;
+  /** The Focus transaction owns this exact history entry. Restoring Focus
+   *  retires it and every camera detour made inside Focus, while preserving
+   *  the stack that existed before the transaction began. */
+  historyEntry: CameraHistoryEntry;
+}
+
+interface CameraHistoryEntry extends WidgetCanvasCamera {
+  label: string;
+}
+
+interface ViewportFrame {
+  width: number;
+  height: number;
+  safeWidth: number;
 }
 
 type CameraFramingMode = "center" | "focus-item" | "focus-mode" | "navigate";
@@ -259,6 +274,8 @@ const WIDGET_CHROME_EDGE_HYSTERESIS_PX = 12;
 const WIDGET_COMMAND_EDGE_HANDOFF_PX = 48;
 const WIDGET_COMMAND_EDGE_HANDOFF_RATIO = 0.15;
 const FOCUS_MAX_ZOOM = 1.35;
+const DESIGN_TOOL_FOCUS_MIN_ZOOM = 0.9;
+const DESIGN_TOOL_FOCUS_MAX_ZOOM = 1.2;
 // ksx: semantic-zoom reading tiers (design handoff §4). The hysteresis is
 // ±0.03 so a camera resting exactly on a boundary cannot flicker the tier.
 const ZOOM_TIER_LOW = 0.5;
@@ -266,6 +283,10 @@ const ZOOM_TIER_HIGH = 0.9;
 const ZOOM_TIER_HYSTERESIS = 0.03;
 // ksx: the camera history ring (design handoff §3) — labelled views, capped.
 const CAMERA_HISTORY_MAX = 24;
+const CAMERA_ANIMATION_MS = 260;
+const FOCUS_CAMERA_ANIMATION_MS = 300;
+const PANEL_CAMERA_ANIMATION_MS = 200;
+const CAMERA_ANIMATION_LANDING_PAD_MS = 70;
 const MIN_EFFECTIVE_SCALE = MIN_WIDGET_MANUAL_SCALE * DISTANCE_SCALE_MIN;
 const CAMERA_MOTION_SETTLE_MS = 120;
 const DEFAULT_VIRTUALIZATION_DWELL_MS = 2_000;
@@ -495,8 +516,10 @@ export class WidgetCanvas {
    *  camera command computes against the SAFE viewport — the canvas minus
    *  this — so fit/centre land in the visible area, not under the panel. */
   #safeInsetRight = 0;
-  readonly #cameraHistory: (WidgetCanvasCamera & { label: string })[] = [];
+  readonly #cameraHistory: CameraHistoryEntry[] = [];
+  #viewportFrame: ViewportFrame = { width: 0, height: 0, safeWidth: 0 };
   #zoomTier: "overview" | "structure" | "editing" | null = null;
+  #animationEndListener: ((event: TransitionEvent) => void) | null = null;
   #changeFrame = 0;
   #cameraFrame = 0;
   #navigatorFrame = 0;
@@ -559,8 +582,13 @@ export class WidgetCanvas {
     this.#resizeObserver = new this.#window.ResizeObserver((entries) => {
       let changed = false;
       let framedItemChanged = false;
+      let viewportChanged = false;
       for (const entry of entries) {
         if (!(entry.target instanceof this.#window.HTMLElement)) continue;
+        if (entry.target === this.#viewport) {
+          viewportChanged = true;
+          continue;
+        }
         const borderSize = entry.borderBoxSize[0];
         const width = borderSize?.inlineSize ?? entry.contentRect.width;
         const height = borderSize?.blockSize ?? entry.contentRect.height;
@@ -601,6 +629,7 @@ export class WidgetCanvas {
           framedItemChanged = true;
         }
       }
+      if (viewportChanged) this.#preserveViewportCenter();
       if (!changed) return;
       if (framedItemChanged) this.#retargetCameraFraming();
       this.#requestNavigatorRender();
@@ -608,17 +637,19 @@ export class WidgetCanvas {
       this.#scheduleChange();
     });
 
+    this.#resizeObserver.observe(this.#viewport);
+
     this.#bindCameraInteractions();
     this.#bindNavigatorInteractions();
     this.#viewport.dataset.widgetNavigationSurface = "";
     this.#viewport.dataset.widgetNavigationReveal = "idle";
     this.#syncNavigationFocusTargets();
     this.#window.addEventListener("resize", () => {
-      if (this.#cameraFramingTarget) this.#retargetCameraFraming();
-      else this.#renderCameraNow();
+      this.#preserveViewportCenter();
     }, { signal: this.#abort.signal });
     this.#syncFocusPresentation();
     this.#renderCameraNow();
+    this.#viewportFrame = this.#measureViewportFrame();
   }
 
   dispose(): void {
@@ -637,6 +668,10 @@ export class WidgetCanvas {
     this.#window.clearTimeout(this.#cameraMotionTimer);
     this.#window.clearTimeout(this.#virtualizationTimer);
     for (const timer of this.#transientTimers) this.#window.clearTimeout(timer);
+    if (this.#animationEndListener) {
+      this.#stage.removeEventListener("transitionend", this.#animationEndListener);
+      this.#animationEndListener = null;
+    }
     for (const host of this.#runtimeHosts.values()) host.setViewportActive(false);
     this.#runtimeHosts.clear();
     this.#virtualizedHosts.clear();
@@ -921,7 +956,13 @@ export class WidgetCanvas {
   setActive(item: HTMLElement): void {
     const id = this.#itemId(item);
     if (!this.#items.has(id)) return;
-    if (id === this.#activeId) return;
+    if (id === this.#activeId) {
+      // Re-selecting the primary item is still a fresh editing intent. Hosts
+      // with dismissible selection chrome (the redesign Inspector) need this
+      // signal to reopen it when the same item is clicked again.
+      this.#onSelectionChange(this.selectedItems());
+      return;
+    }
     const retargetFocus = this.#focusSession !== null;
     if (this.#focusSession) this.#focusSession.itemId = id;
     this.#selectItem(item, this.#canRaiseSelection());
@@ -1071,8 +1112,15 @@ export class WidgetCanvas {
     });
   }
 
-  centerItem(item: HTMLElement): void {
+  centerItem(item: HTMLElement, options: { minimumZoom?: number } = {}): void {
     this.setActive(item);
+    if (options.minimumZoom !== undefined) {
+      this.#camera.zoom = clamp(
+        Math.max(this.#camera.zoom, finiteNumber(options.minimumZoom, this.#zoomMin)),
+        this.#zoomMin,
+        this.#zoomMax,
+      );
+    }
     this.#applyCenterCamera(item);
     this.#animateCamera({ itemId: this.#itemId(item), mode: "center" });
   }
@@ -1092,12 +1140,17 @@ export class WidgetCanvas {
     this.setActive(item);
     this.#stopCameraAnimation();
     this.#renderCameraNow();
-    // ksx: the history entry rides beside the focus session's own restore —
-    // Escape uses the session (bit-identical), Back view uses this.
-    this.pushCameraHistory(`before Focus ${item.dataset.widgetName ?? "widget"}`);
+    // ksx: Focus owns a history transaction. Escape and Back both restore
+    // the bit-identical entry camera and retire this marker plus any camera
+    // detours made while Focus was active.
+    const historyEntry = this.#recordCameraHistory(
+      `before Focus ${item.dataset.widgetName ?? "widget"}`,
+    );
     this.#focusSession = {
       itemId: id,
       entryCamera: { ...this.#camera },
+      entryViewportFrame: this.#measureViewportFrame(),
+      historyEntry,
       focusOptions: {
         ...options,
         viewportInsets: options.viewportInsets ? { ...options.viewportInsets } : undefined,
@@ -1134,13 +1187,31 @@ export class WidgetCanvas {
     });
   }
 
+  #safeViewportWidth(width: number): number {
+    return Math.max(80, width - this.#safeInsetRight);
+  }
+
+  #safeViewportFrame(
+    viewport: DOMRectReadOnly,
+    insets?: WidgetCanvasViewportInsets,
+  ): WorldRect {
+    const normalized = normalizedViewportInsets(insets);
+    return insetViewportFrame(viewport, {
+      top: normalized?.top ?? 0,
+      right: Math.max(normalized?.right ?? 0, this.#safeInsetRight),
+      bottom: normalized?.bottom ?? 0,
+      left: normalized?.left ?? 0,
+    });
+  }
+
   #applyCenterCamera(item: HTMLElement): void {
     item.dataset.widgetCommandResetEdge = "true";
     const state = this.getItemState(item);
     const visual = scaledRect(state, state.manualScale);
     const viewport = this.#viewport.getBoundingClientRect();
     const zoom = this.#camera.zoom;
-    this.#camera.panX = viewport.width / 2 - (visual.x + visual.width / 2) * zoom;
+    const safeWidth = this.#safeViewportWidth(viewport.width);
+    this.#camera.panX = safeWidth / 2 - (visual.x + visual.width / 2) * zoom;
     this.#camera.panY = viewport.height / 2 - (visual.y + visual.height / 2) * zoom;
   }
 
@@ -1152,7 +1223,7 @@ export class WidgetCanvas {
     const state = this.getItemState(item);
     const visual = scaledRect(state, state.manualScale);
     const viewport = this.#viewport.getBoundingClientRect();
-    const frame = insetViewportFrame(viewport, viewportInsets);
+    const frame = this.#safeViewportFrame(viewport, viewportInsets);
     const focusGutter = clamp(Math.min(frame.width, frame.height) * 0.06, 24, 72);
     const availableWidth = Math.max(viewportInsets ? 1 : 240, frame.width - focusGutter * 2);
     const availableHeight = Math.max(viewportInsets ? 1 : 220, frame.height - focusGutter * 2);
@@ -1176,7 +1247,7 @@ export class WidgetCanvas {
     const state = this.getItemState(item);
     const visual = scaledRect(state, state.manualScale);
     const viewport = this.#viewport.getBoundingClientRect();
-    const frame = insetViewportFrame(viewport, session.focusOptions.viewportInsets);
+    const frame = this.#safeViewportFrame(viewport, session.focusOptions.viewportInsets);
     const gutter = clamp(Math.min(frame.width, frame.height) * 0.08, 32, 72);
     const availableWidth = Math.max(1, frame.width - gutter * 2);
     const availableHeight = Math.max(1, frame.height - gutter * 2);
@@ -1185,15 +1256,19 @@ export class WidgetCanvas {
       availableHeight / Math.max(1, visual.height),
       FOCUS_MAX_ZOOM,
     );
-    const targetZoom = clamp(
-      Math.max(
-        session.entryCamera.zoom,
-        desiredZoom,
-        finiteNumber(session.focusOptions.minimumZoom, this.#zoomMin),
-      ),
-      this.#zoomMin,
-      this.#zoomMax,
+    const requestedMinimum = finiteNumber(session.focusOptions.minimumZoom, this.#zoomMin);
+    const designToolFocusMax = Math.min(this.#zoomMax, DESIGN_TOOL_FOCUS_MAX_ZOOM);
+    const designToolFocusMin = Math.min(
+      designToolFocusMax,
+      Math.max(this.#zoomMin, DESIGN_TOOL_FOCUS_MIN_ZOOM, requestedMinimum),
     );
+    const targetZoom = this.#navigationModel === "design-tool"
+      ? clamp(desiredZoom, designToolFocusMin, designToolFocusMax)
+      : clamp(
+        Math.max(session.entryCamera.zoom, desiredZoom, requestedMinimum),
+        this.#zoomMin,
+        this.#zoomMax,
+      );
     this.#camera.zoom = targetZoom;
     const startOversized = session.focusOptions.oversizedAlignment === "start";
     this.#camera.panX = startOversized && visual.width * targetZoom > availableWidth
@@ -1217,7 +1292,7 @@ export class WidgetCanvas {
     const targetRect = target.getBoundingClientRect();
     if (targetRect.width <= 0 || targetRect.height <= 0) return;
     const viewport = this.#viewport.getBoundingClientRect();
-    const frame = insetViewportFrame(viewport, session.focusOptions.viewportInsets);
+    const frame = this.#safeViewportFrame(viewport, session.focusOptions.viewportInsets);
     const margin = clamp(Math.min(frame.width, frame.height) * 0.04, 18, 32);
     // insetViewportFrame is viewport-local; DOMRects are page-relative.
     const safeLeft = viewport.left + frame.x + margin;
@@ -1242,7 +1317,11 @@ export class WidgetCanvas {
 
   #retargetCameraFraming(): void {
     const target = this.#cameraFramingTarget;
-    if (!target || !this.#viewport.classList.contains("is-camera-animating")) return;
+    // Keep the framing intent alive for the short landing window after the
+    // CSS transition ends. Newly mounted runtimes can report their final
+    // height a frame or two late; dropping the target at transitionend would
+    // leave an arriving widget visibly off-centre by half that size delta.
+    if (!target) return;
     const item = this.#items.get(target.itemId);
     if (!item) return;
     if (target.mode === "center") this.#applyCenterCamera(item);
@@ -1286,7 +1365,20 @@ export class WidgetCanvas {
     this.#onFocusModeChange(focusedItem, false, restoreCamera);
 
     if (restoreCamera) {
-      this.#camera = { ...session.entryCamera };
+      const historyIndex = this.#cameraHistory.indexOf(session.historyEntry);
+      // If the marker fell off the 24-entry ring, every surviving entry was
+      // created after Focus began and belongs to that transient transaction.
+      if (historyIndex === -1) this.#cameraHistory.length = 0;
+      else this.#cameraHistory.splice(historyIndex);
+      this.#notifyCameraHistoryChange();
+      const viewportFrame = this.#measureViewportFrame();
+      this.#camera = {
+        panX: session.entryCamera.panX +
+          (viewportFrame.safeWidth - session.entryViewportFrame.safeWidth) / 2,
+        panY: session.entryCamera.panY +
+          (viewportFrame.height - session.entryViewportFrame.height) / 2,
+        zoom: session.entryCamera.zoom,
+      };
       if (animate) this.#animateCamera();
       else this.#renderCameraNow();
     } else {
@@ -1403,8 +1495,69 @@ export class WidgetCanvas {
   /** ksx: declare how much of the canvas's right edge is covered by chrome.
    *  Fit, centre and the safe-centre zoom anchors compute against what is
    *  left. The inspector calls this as it opens and closes. */
-  setSafeInsetRight(px: number): void {
-    this.#safeInsetRight = Math.max(0, px);
+  setSafeInsetRight(px: number, preserveCenter = false): void {
+    const next = Math.max(0, px);
+    const changed = next !== this.#safeInsetRight;
+    this.#safeInsetRight = next;
+    if (preserveCenter) {
+      this.#preserveViewportCenter();
+    } else {
+      // Inspector open/close has its own overlap-only camera rule. Adopt the
+      // new safe frame as the resize baseline without moving the camera.
+      this.#viewportFrame = this.#measureViewportFrame();
+      if (changed) this.#requestNavigatorRender();
+    }
+  }
+
+  #measureViewportFrame(): ViewportFrame {
+    const viewport = this.#viewport.getBoundingClientRect();
+    return {
+      width: viewport.width,
+      height: viewport.height,
+      safeWidth: this.#safeViewportWidth(viewport.width),
+    };
+  }
+
+  /** Window resizing is a camera translation, never an implicit Fit. Keep
+   *  the world point under the old safe centre under the new safe centre,
+   *  and translate stored views by the same screen-space delta so Back and
+   *  Focus restoration remain truthful after the viewport changes. */
+  #preserveViewportCenter(): void {
+    const previous = this.#viewportFrame;
+    const next = this.#measureViewportFrame();
+    this.#viewportFrame = next;
+    if (previous.width <= 0 || previous.height <= 0) {
+      this.#renderCameraNow();
+      this.#requestNavigatorRender();
+      return;
+    }
+    const deltaX = (next.safeWidth - previous.safeWidth) / 2;
+    const deltaY = (next.height - previous.height) / 2;
+    if (Math.abs(deltaX) < 0.01 && Math.abs(deltaY) < 0.01) {
+      // ResizeObserver may coalesce a brief layout squeeze and its recovery.
+      // Reframe against the settled box even when its final size equals the
+      // previous baseline; the camera may have been aimed during the squeeze.
+      if (this.#cameraFramingTarget) this.#retargetCameraFraming();
+      this.#requestNavigatorRender();
+      return;
+    }
+    for (const entry of this.#cameraHistory) {
+      entry.panX += deltaX;
+      entry.panY += deltaY;
+    }
+    if (this.#cameraFramingTarget) {
+      // A named landing (new widget, Focus, keyboard reveal) owns the current
+      // camera until it settles. Recompute that landing for the new frame;
+      // translating it as an ordinary view would leave the target off-centre.
+      this.#retargetCameraFraming();
+    } else {
+      this.#stopCameraAnimation();
+      this.#camera.panX += deltaX;
+      this.#camera.panY += deltaY;
+      this.#renderCameraNow();
+    }
+    this.#requestNavigatorRender();
+    this.#scheduleChange();
   }
 
   /** ksx: the design's panel rule — opening chrome preserves zoom and pans
@@ -1424,7 +1577,7 @@ export class WidgetCanvas {
     if (screenLeft + deltaX < margin) deltaX = margin - screenLeft;
     if (deltaX === 0) return;
     this.#camera.panX += deltaX;
-    this.#animateCamera();
+    this.#animateCamera(null, PANEL_CAMERA_ANIMATION_MS);
   }
 
   /** ksx: place one widget at exact world coordinates — the inspector's
@@ -1456,6 +1609,7 @@ export class WidgetCanvas {
       clamped,
       rect.left + (rect.width - this.#safeInsetRight) / 2,
       rect.top + rect.height / 2,
+      true,
     );
   }
 
@@ -1466,6 +1620,7 @@ export class WidgetCanvas {
       1,
       rect.left + (rect.width - this.#safeInsetRight) / 2,
       rect.top + rect.height / 2,
+      true,
     );
   }
 
@@ -1474,17 +1629,30 @@ export class WidgetCanvas {
    *  Captures the LIVE camera on purpose: during focus mode getCamera()
    *  is masked to the entry camera, which is the wrong thing to remember. */
   pushCameraHistory(label: string): void {
-    this.#cameraHistory.push({ ...this.#camera, label });
+    this.#recordCameraHistory(label);
+  }
+
+  #recordCameraHistory(label: string): CameraHistoryEntry {
+    const entry = { ...this.#camera, label };
+    this.#cameraHistory.push(entry);
     if (this.#cameraHistory.length > CAMERA_HISTORY_MAX) this.#cameraHistory.shift();
+    this.#notifyCameraHistoryChange();
+    return entry;
+  }
+
+  #notifyCameraHistoryChange(): void {
     const top = this.#cameraHistory[this.#cameraHistory.length - 1];
     this.#onCameraHistoryChange(this.#cameraHistory.length, top?.label ?? null);
   }
 
   /** ksx: pop back to the previous view. Returns whether anything moved. */
   backView(): boolean {
+    // Focus is a camera transaction with its own exact entry snapshot. One
+    // Back press must close that transaction, not expose a redundant second
+    // Back press to the same camera.
+    if (this.#focusSession) return this.#endFocusMode(true, true);
     const entry = this.#cameraHistory.pop();
-    const top = this.#cameraHistory[this.#cameraHistory.length - 1];
-    this.#onCameraHistoryChange(this.#cameraHistory.length, top?.label ?? null);
+    this.#notifyCameraHistoryChange();
     if (!entry) return false;
     this.#endFocusMode(false, false);
     this.#camera = { panX: entry.panX, panY: entry.panY, zoom: entry.zoom };
@@ -2720,7 +2888,8 @@ export class WidgetCanvas {
         const y = clamp(clientY - navigatorRect.top, 0, navigatorRect.height);
         const worldX = bounds.x + x / bounds.scale;
         const worldY = bounds.y + y / bounds.scale;
-        this.#camera.panX = viewportRect.width / 2 - worldX * this.#camera.zoom;
+        this.#camera.panX = this.#safeViewportWidth(viewportRect.width) / 2 -
+          worldX * this.#camera.zoom;
         this.#camera.panY = viewportRect.height / 2 - worldY * this.#camera.zoom;
         this.#requestCameraRender();
       };
@@ -2749,7 +2918,12 @@ export class WidgetCanvas {
     }, { signal: this.#abort.signal });
   }
 
-  #zoomAtPoint(nextZoom: number, clientX: number, clientY: number): void {
+  #zoomAtPoint(
+    nextZoom: number,
+    clientX: number,
+    clientY: number,
+    animate = false,
+  ): void {
     this.#cameraFramingTarget = null;
     const rect = this.#viewport.getBoundingClientRect();
     const oldZoom = this.#camera.zoom;
@@ -2760,27 +2934,88 @@ export class WidgetCanvas {
     this.#camera.zoom = zoom;
     this.#camera.panX = clientX - rect.left - worldX * zoom;
     this.#camera.panY = clientY - rect.top - worldY * zoom;
-    this.#requestCameraRender();
-    this.#scheduleChange();
+    if (animate) this.#animateCamera();
+    else {
+      this.#requestCameraRender();
+      this.#scheduleChange();
+    }
   }
 
-  #animateCamera(framingTarget: CameraFramingTarget | null = null): void {
+  #animateCamera(
+    framingTarget: CameraFramingTarget | null = null,
+    requestedDuration?: number,
+  ): void {
     this.#stopCameraAnimation();
     this.#cameraFramingTarget = framingTarget;
     this.#viewport.dataset.widgetNavigationReveal = framingTarget?.mode === "navigate"
       ? "active"
       : "idle";
-    this.#viewport.classList.add("is-camera-animating");
-    this.#renderCameraNow();
-    this.#animationTimer = this.#window.setTimeout(() => {
-      this.#animationTimer = 0;
-      this.#cameraFramingTarget = null;
-      this.#viewport.dataset.widgetNavigationReveal = "idle";
+    const reducedMotion = typeof this.#window.matchMedia === "function" &&
+      this.#window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const duration = requestedDuration ?? (
+      framingTarget?.mode === "focus-item" || framingTarget?.mode === "focus-mode"
+        ? FOCUS_CAMERA_ANIMATION_MS
+        : CAMERA_ANIMATION_MS
+    );
+    this.#viewport.style.setProperty("--canvas-camera-duration", `${duration}ms`);
+
+    const releaseVisualMotion = (): void => {
       this.#viewport.classList.remove("is-camera-animating");
       this.#updateItemVisibility();
       this.#requestNavigatorRender();
+    };
+    const finish = (): void => {
+      this.#window.clearTimeout(this.#animationTimer);
+      this.#animationTimer = 0;
+      if (this.#animationEndListener) {
+        this.#stage.removeEventListener("transitionend", this.#animationEndListener);
+        this.#animationEndListener = null;
+      }
+      this.#cameraFramingTarget = null;
+      this.#viewport.dataset.widgetNavigationReveal = "idle";
+      releaseVisualMotion();
       this.#onCommit();
-    }, 220);
+    };
+
+    // The target camera is written before any visual tween. That is the
+    // background-tab landing guarantee: even if the browser delivers no
+    // animation frames, the inline transform is already exact. Reduced
+    // motion skips the CSS state entirely, but a semantic framing target
+    // remains alive through the same stabilization window so late runtime
+    // measurements cannot change where the widget lands.
+    if (reducedMotion) {
+      this.#renderCameraNow();
+      releaseVisualMotion();
+      this.#scheduleChange();
+      if (framingTarget) {
+        this.#animationTimer = this.#window.setTimeout(
+          finish,
+          duration + CAMERA_ANIMATION_LANDING_PAD_MS,
+        );
+      } else {
+        finish();
+      }
+      return;
+    }
+    this.#viewport.classList.add("is-camera-animating");
+    this.#renderCameraNow();
+    this.#animationEndListener = (event) => {
+      if (event.target !== this.#stage || event.propertyName !== "transform") return;
+      this.#stage.removeEventListener("transitionend", this.#animationEndListener!);
+      this.#animationEndListener = null;
+      // The interaction surface is live again exactly when the visible tween
+      // lands. Framing metadata survives only through the 70ms stabilization
+      // pad so late widget measurements can still correct the final camera.
+      releaseVisualMotion();
+    };
+    this.#stage.addEventListener("transitionend", this.#animationEndListener);
+    // Hidden/background documents may deliver no transition event. The
+    // internal camera and inline transform are already exact; this fallback
+    // releases transient interaction state even when rendering was throttled.
+    this.#animationTimer = this.#window.setTimeout(
+      finish,
+      duration + CAMERA_ANIMATION_LANDING_PAD_MS,
+    );
     this.#scheduleChange();
   }
 
@@ -2788,6 +3023,10 @@ export class WidgetCanvas {
     const wasAnimating = this.#viewport.classList.contains("is-camera-animating");
     this.#window.clearTimeout(this.#animationTimer);
     this.#animationTimer = 0;
+    if (this.#animationEndListener) {
+      this.#stage.removeEventListener("transitionend", this.#animationEndListener);
+      this.#animationEndListener = null;
+    }
     this.#cameraFramingTarget = null;
     this.#viewport.dataset.widgetNavigationReveal = "idle";
     this.#viewport.classList.remove("is-camera-animating");
@@ -3136,7 +3375,7 @@ export class WidgetCanvas {
     const visible: WorldRect = {
       x: -this.#camera.panX / this.#camera.zoom,
       y: -this.#camera.panY / this.#camera.zoom,
-      width: viewport.width / this.#camera.zoom,
+      width: this.#safeViewportWidth(viewport.width) / this.#camera.zoom,
       height: viewport.height / this.#camera.zoom,
     };
     // ksx: the projection is FROZEN for the length of a navigator drag.

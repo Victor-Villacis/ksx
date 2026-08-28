@@ -253,10 +253,15 @@ for (const config of CONTEXTS) {
               if (!canvas) return true;
               const kb = canvas.querySelector('[data-instance-id="keyboard"]');
               if (kb) return kb.dataset.canvasX !== undefined;
-              // A WIDGET-LESS canvas (the redesign lane): the engine's first
-              // camera render writes the stage's inline transform — the served
-              // stage carries no style attribute, so that write is the
-              // engine's own alive mark.
+              // The redesign's mock widgets are client-created. Waiting only
+              // for the stage transform lets a live engine with a missing
+              // product surface pass, so require the first mock's geometry.
+              if (canvas.closest(".rd")) {
+                return canvas.querySelector('[data-instance-id="mock-a"]')?.dataset.canvasX !==
+                  undefined;
+              }
+              // Any other widget-less canvas uses the engine's first camera
+              // transform as its alive mark.
               const stage = canvas.querySelector(".forma-canvas-stage");
               return Boolean(stage && stage.style.transform);
             },
@@ -435,6 +440,315 @@ for (const config of CONTEXTS) {
     }
   });
 }
+
+describe("redesign canvas interaction chrome", () => {
+  test("Inspector, minimap, position fields, and shortcut scope stay coherent", async () => {
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 800 },
+      colorScheme: "dark",
+      reducedMotion: "reduce",
+      serviceWorkers: "block",
+    });
+    const page = await context.newPage();
+    const diagnostics = [];
+    page.on("pageerror", (error) => diagnostics.push(`pageerror: ${error.stack ?? error}`));
+    page.on("console", (message) => {
+      if (message.type() === "error") diagnostics.push(`console: ${message.text()}`);
+    });
+
+    try {
+      const response = await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      assert.ok(response?.ok(), `/redesign returned HTTP ${response?.status() ?? "none"}`);
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await page.waitForFunction(
+        () => Boolean(document.querySelector(".forma-canvas-stage")?.style.transform),
+        null,
+        { timeout: 20_000 },
+      );
+      await page.waitForFunction(
+        () => document.querySelector('[data-instance-id="mock-a"]')?.dataset.canvasX !== undefined,
+        null,
+        { timeout: 20_000 },
+      );
+      await page.evaluate(() => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }));
+      await page.waitForFunction(
+        () => !document.querySelector(".is-camera-animating"),
+        null,
+        { timeout: 20_000 },
+      );
+
+      const inspectorLayout = async () => page.locator(".rd-inspector").evaluate((panel) => {
+        const rect = panel.getBoundingClientRect();
+        return {
+          hidden: panel.hidden,
+          display: getComputedStyle(panel).display,
+          width: rect.width,
+        };
+      });
+      assert.deepEqual(
+        await inspectorLayout(),
+        { hidden: true, display: "none", width: 0 },
+        "the served-hidden Inspector must not cover the canvas before selection",
+      );
+
+      const stageItem = (id) =>
+        page.locator(`.forma-canvas-stage > [data-instance-id="${id}"]`);
+      const navigatorGeometry = async () => page.evaluate(() => {
+        const area = document.querySelector(".forma-canvas-navigator-items");
+        const camera = document.querySelector(".forma-canvas-navigator-viewport");
+        if (!area || !camera) return null;
+        const bounds = area.getBoundingClientRect();
+        const nodes = [camera, ...area.querySelectorAll(".navigator-item")];
+        const outside = nodes.flatMap((node) => {
+          const rect = node.getBoundingClientRect();
+          return rect.left < bounds.left - 1 || rect.top < bounds.top - 1 ||
+              rect.right > bounds.right + 1 || rect.bottom > bounds.bottom + 1
+            ? [node.className]
+            : [];
+        });
+        return { width: bounds.width, height: bounds.height, outside };
+      });
+      await stageItem("mock-a").click();
+      await page.waitForFunction(() => document.querySelector(".rd-inspector")?.hidden === false);
+      await page.locator('[data-nx="rd-insp-close"]').click();
+      assert.deepEqual(
+        await inspectorLayout(),
+        { hidden: true, display: "none", width: 0 },
+        "Inspector X must remove the panel from layout, not only set an attribute",
+      );
+
+      await stageItem("mock-b").click();
+      await page.waitForFunction(
+        () =>
+          document.querySelector(".rd-inspector")?.hidden === false &&
+          document.querySelector(".rd-insp-name")?.textContent === "Mock node B",
+      );
+      await page.locator('.rd-inspector [data-nx="rd-focus-sel"]').click();
+      await page.waitForFunction(
+        () => document.querySelector(".forma-canvas-viewport")?.dataset.widgetFocusMode === "active",
+      );
+      await page.locator('[data-nx="rd-insp-close"]').click();
+      assert.equal(
+        await page.locator(".forma-canvas-viewport").getAttribute("data-widget-focus-mode"),
+        "inactive",
+        "closing the Inspector must also leave Focus mode",
+      );
+
+      await stageItem("mock-a").click();
+      const beforePosition = await stageItem("mock-a").evaluate((item) => ({
+        x: Number(item.dataset.canvasX),
+        y: Number(item.dataset.canvasY),
+      }));
+      await page.getByLabel("X", { exact: true }).fill(String(beforePosition.x + 17));
+      await page.locator(".rd-insp-head .rd-map-title").click();
+      await page.getByLabel("Y", { exact: true }).fill(String(beforePosition.y + 23));
+      await page.locator(".rd-insp-head .rd-map-title").click();
+      assert.deepEqual(
+        await stageItem("mock-a").evaluate((item) => ({
+          x: Number(item.dataset.canvasX),
+          y: Number(item.dataset.canvasY),
+        })),
+        { x: beforePosition.x + 17, y: beforePosition.y + 23 },
+        "editing Y must not silently undo the preceding X edit",
+      );
+
+      const stage = page.locator(".forma-canvas-stage");
+      const beforeHeaderClick = await stage.evaluate((node) => node.style.transform);
+      await page.locator(".rd-map-head .rd-map-title").click();
+      await page.waitForTimeout(100);
+      assert.equal(
+        await stage.evaluate((node) => node.style.transform),
+        beforeHeaderClick,
+        "the minimap header is chrome, not a camera navigation target",
+      );
+      const desktopMapGeometry = await navigatorGeometry();
+      assert.ok(desktopMapGeometry?.width > 0 && desktopMapGeometry.height > 0);
+      assert.deepEqual(
+        desktopMapGeometry.outside,
+        [],
+        "minimap markers or camera viewport escaped the actual drawing area",
+      );
+
+      await page.locator('.rd-map-head [data-nx="canvas-map"]').click();
+      const collapsedMap = await page.evaluate(() => {
+        const fit = document.querySelector('.rd-zoom > [data-nx="canvas-fit"]');
+        const show = document.querySelector(".rd-zoom > .rd-mapshow");
+        if (!fit || !show) return null;
+        const fitRect = fit.getBoundingClientRect();
+        const showRect = show.getBoundingClientRect();
+        return {
+          mapHidden: document.querySelector(".forma-canvas-navigator")?.hidden,
+          showHidden: show.hidden,
+          position: getComputedStyle(show).position,
+          gap: Math.round((showRect.left - fitRect.right) * 10) / 10,
+          centerDelta: Math.round(
+            Math.abs(
+              showRect.top + showRect.height / 2 -
+                (fitRect.top + fitRect.height / 2),
+            ) * 10,
+          ) / 10,
+        };
+      });
+      assert.ok(collapsedMap, "the collapsed minimap control is missing");
+      assert.equal(collapsedMap.mapHidden, true);
+      assert.equal(collapsedMap.showHidden, false);
+      assert.equal(collapsedMap.position, "static");
+      assert.ok(
+        collapsedMap.gap >= 0 && collapsedMap.gap <= 6,
+        `collapsed minimap is ${collapsedMap.gap}px away from Fit instead of beside it`,
+      );
+      assert.ok(
+        collapsedMap.centerDelta <= 1,
+        `collapsed minimap is vertically misaligned with Fit by ${collapsedMap.centerDelta}px`,
+      );
+
+      await page.locator('[data-nx="rd-search"]').focus();
+      await page.keyboard.press("m");
+      assert.equal(
+        await page.locator(".forma-canvas-navigator").getAttribute("hidden"),
+        "",
+        "an unmodified canvas shortcut fired while title-bar focus was outside the canvas",
+      );
+
+      await stageItem("mock-a").click();
+      const beforeKeys = await stageItem("mock-a").evaluate((item) => ({
+        x: Number(item.dataset.canvasX),
+        y: Number(item.dataset.canvasY),
+      }));
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("Shift+ArrowDown");
+      assert.deepEqual(
+        await stageItem("mock-a").evaluate((item) => ({
+          x: Number(item.dataset.canvasX),
+          y: Number(item.dataset.canvasY),
+        })),
+        { x: beforeKeys.x + 12, y: beforeKeys.y + 1 },
+        "item-focused arrows must use the redesign's 12px / Shift-1px nudge",
+      );
+
+      await page.keyboard.press("m");
+      assert.equal(
+        await page.locator(".forma-canvas-navigator").getAttribute("hidden"),
+        null,
+        "item-focused M was consumed by widget chrome instead of toggling the minimap",
+      );
+      await page.keyboard.press("?");
+      assert.equal(await page.locator(".rd-sheet").getAttribute("hidden"), null);
+      assert.equal(
+        await page.locator(".rd-sheet-lede").evaluate((lede) => lede === document.activeElement),
+        true,
+        "the shortcut sheet did not move focus into its dialog",
+      );
+      await page.keyboard.press("Escape");
+      assert.equal(
+        await page.locator(".rd-sheet").getAttribute("hidden"),
+        "",
+        "Escape cleared the widget underneath instead of closing the shortcut sheet",
+      );
+      assert.equal(
+        await stageItem("mock-a").getAttribute("aria-current"),
+        "true",
+        "closing the shortcut sheet unexpectedly cleared the active widget",
+      );
+
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(
+        () => document.querySelector(".forma-canvas-viewport")?.dataset.widgetFocusMode === "active",
+      );
+      await page.keyboard.press("Escape");
+      assert.equal(
+        await page.locator(".forma-canvas-viewport").getAttribute("data-widget-focus-mode"),
+        "inactive",
+        "item-focused Escape skipped the redesign's Focus-mode rung",
+      );
+
+      const moveHandle = stageItem("mock-a").locator(".widget-drag-handle");
+      await moveHandle.focus();
+      const beforeHandleKeys = await stageItem("mock-a").evaluate((item) => ({
+        x: Number(item.dataset.canvasX),
+        y: Number(item.dataset.canvasY),
+      }));
+      await page.keyboard.press("ArrowLeft");
+      await page.keyboard.press("Shift+ArrowUp");
+      assert.deepEqual(
+        await stageItem("mock-a").evaluate((item) => ({
+          x: Number(item.dataset.canvasX),
+          y: Number(item.dataset.canvasY),
+        })),
+        { x: beforeHandleKeys.x - 12, y: beforeHandleKeys.y - 1 },
+        "move-handle focus must not switch to the shared engine's 16px / 64px scale",
+      );
+
+      // The narrow layout turns the Inspector into a full-screen drawer. It
+      // must neither feed 100vw into the camera's right inset nor strand
+      // dialog focus below a short phone viewport.
+      await page.locator('[data-nx="rd-insp-close"]').click();
+      await page.setViewportSize({ width: 390, height: 667 });
+      await page.evaluate(() => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }));
+      const mobileMapGeometry = await navigatorGeometry();
+      assert.ok(mobileMapGeometry?.width > 0 && mobileMapGeometry.height > 0);
+      assert.deepEqual(
+        mobileMapGeometry.outside,
+        [],
+        "the compact minimap projected outside its header-free drawing area",
+      );
+
+      const beforeMobileInspector = await stage.evaluate((node) => node.style.transform);
+      await stageItem("mock-b").click();
+      await page.waitForFunction(() => document.querySelector(".rd-inspector")?.hidden === false);
+      assert.equal(
+        await stage.evaluate((node) => node.style.transform),
+        beforeMobileInspector,
+        "opening the full-width mobile Inspector unexpectedly panned the hidden canvas",
+      );
+      const mobileInspector = await page.locator(".rd-inspector").evaluate((panel) => {
+        const rect = panel.getBoundingClientRect();
+        return { left: Math.round(rect.left), width: Math.round(rect.width) };
+      });
+      assert.deepEqual(mobileInspector, { left: 0, width: 390 });
+
+      await page.getByLabel("X", { exact: true }).focus();
+      await page.keyboard.press("Escape");
+      assert.equal(await stageItem("mock-b").getAttribute("aria-current"), "true");
+      assert.equal(await page.locator(".rd-inspector").getAttribute("hidden"), null);
+      await page.locator('[data-nx="rd-insp-close"]').click();
+
+      await page.keyboard.press("?");
+      const mobileSheetFocus = await page.locator(".rd-sheet-lede").evaluate((lede) => {
+        const rect = lede.getBoundingClientRect();
+        return {
+          active: lede === document.activeElement,
+          visible: rect.top >= 0 && rect.bottom <= window.innerHeight,
+        };
+      });
+      assert.deepEqual(mobileSheetFocus, { active: true, visible: true });
+      assert.equal(
+        await page.locator(".rd-sheet .rd-scrim").evaluate((scrim) => getComputedStyle(scrim).position),
+        "fixed",
+      );
+      await page.keyboard.press("Control+k");
+      assert.equal(await page.locator(".rd-sheet").getAttribute("hidden"), "");
+      assert.equal(await page.locator(".rd-palette").getAttribute("hidden"), null);
+      assert.equal(
+        await page.locator(".rd-palette-input").evaluate((input) => input === document.activeElement),
+        true,
+        "Ctrl+K focused a palette behind the shortcut sheet instead of replacing it",
+      );
+      await page.keyboard.press("Escape");
+      assert.deepEqual(diagnostics, [], "/redesign emitted browser errors during interaction checks");
+    } finally {
+      await context.close();
+    }
+  });
+});
 
 // ── Stamped themes: the server-side data-theme choice (TK2) ────────────────
 //

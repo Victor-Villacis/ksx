@@ -240,10 +240,14 @@ async function hydratedDom(url) {
         if (!canvas) return true;
         const kb = canvas.querySelector('[data-instance-id="keyboard"]');
         if (kb) return kb.dataset.canvasX !== undefined;
-        // A WIDGET-LESS canvas (the redesign lane): the engine's first
-        // camera render writes the stage's inline transform — the served
-        // stage carries no style attribute, so that write is the
-        // engine's own alive mark.
+        // The redesign's mock widgets are client-created. A stage transform
+        // alone proves only that the engine is alive, not that its current
+        // canvas content mounted.
+        if (canvas.closest(".rd")) {
+          return canvas.querySelector('[data-instance-id="mock-a"]')?.dataset.canvasX !== undefined;
+        }
+        // Any other widget-less canvas uses the stage transform as its
+        // adoption mark.
         const stage = canvas.querySelector(".forma-canvas-stage");
         return Boolean(stage && stage.style.transform);
       },

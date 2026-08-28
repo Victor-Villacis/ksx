@@ -17719,7 +17719,7 @@ a.nm-link {
 
 .rd-crumb {
   font-size: 12.5px;
-  color: var(--n-text-3);
+  color: var(--n-text-2);
 }
 
 .rd-spring {
@@ -17761,6 +17761,7 @@ a.nm-link {
   justify-content: space-between;
   padding: 3px 4px 3px 10px;
   border-bottom: 1px solid var(--n-line);
+  cursor: default;
 }
 
 .rd-map-title {
@@ -17772,20 +17773,26 @@ a.nm-link {
 }
 
 .rd .forma-canvas-navigator-items {
-  inset: 28px 0 0 0;
+  inset: 30px 0 0 0;
 }
 
 .rd .n-mapclose {
   position: static;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   opacity: 1;
 }
 
-/* The stand-in swaps corners with the panel it stands in for. */
-.rd .n-mapshow {
-  right: auto;
-  left: 14px;
+/* The collapsed map's stand-in is a normal member of the zoom cluster,
+   immediately after Fit. A redesign-only class keeps the legacy Nocturne
+   `.n-mapshow` absolute-corner positioning from pulling it out of this row. */
+.rd .rd-mapshow {
+  position: static;
+  inset: auto;
+}
+
+.rd .rd-mapshow[hidden] {
+  display: none;
 }
 
 /* ── The zoom cluster: one pill, bottom-left under the map ─────────────── */
@@ -17814,8 +17821,13 @@ a.nm-link {
   z-index: 6;
   font-size: 11px;
   letter-spacing: 0.02em;
-  color: var(--n-text-3);
+  color: var(--n-text-2);
   pointer-events: none;
+  transition: right 160ms ease-out;
+}
+
+.rd.is-inspector-open .rd-tier {
+  right: 344px;
 }
 
 /* No JavaScript: camera chrome is scripting-only, like every camera verb;
@@ -17887,7 +17899,7 @@ a.nm-link {
   border: 1px solid var(--n-line);
   border-radius: 5px;
   background: color-mix(in srgb, var(--n-bg) 60%, transparent);
-  color: var(--n-text-3);
+  color: var(--n-text-2);
   font: 600 10px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
 
@@ -17950,7 +17962,7 @@ a.nm-link {
 .rd-map-count {
   margin-left: auto;
   margin-right: 4px;
-  color: var(--n-text-3);
+  color: var(--n-text-2);
   font-size: 10px;
 }
 
@@ -17962,8 +17974,13 @@ a.nm-link {
   z-index: 40;
 }
 
+.rd-sheet {
+  overflow: auto;
+  padding-bottom: 24px;
+}
+
 .rd-scrim {
-  position: absolute;
+  position: fixed;
   inset: 0;
   background: color-mix(in srgb, var(--n-bg) 55%, transparent);
 }
@@ -18029,7 +18046,7 @@ a.nm-link {
 .rd-palette-hint {
   flex: 1;
   overflow: hidden;
-  color: var(--n-text-3);
+  color: var(--n-text-2);
   font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -18057,6 +18074,12 @@ a.nm-link {
   color: var(--n-text);
   font-size: 16px;
   font-weight: 600;
+}
+
+.rd-sheet-lede:focus-visible {
+  outline: 2px solid var(--n-accent);
+  outline-offset: 4px;
+  border-radius: 4px;
 }
 
 .rd-sheet-cols {
@@ -18122,7 +18145,7 @@ a.nm-link {
 }
 
 .rd-mock-detail dt {
-  color: var(--n-text-3);
+  color: var(--n-text-2);
   font-size: 10.5px;
 }
 
@@ -18175,6 +18198,13 @@ a.nm-link {
   box-shadow: -14px 0 40px rgba(0, 0, 0, 0.3);
 }
 
+/* Author display:flex otherwise wins over the browser's hidden rule. This is
+   the close button's actual state boundary, and also keeps the served-empty
+   Inspector from covering the right side before the first selection. */
+.rd-inspector[hidden] {
+  display: none;
+}
+
 .rd-insp-head {
   display: flex;
   align-items: center;
@@ -18206,7 +18236,7 @@ a.nm-link {
 
 .rd-insp-kind {
   margin: -8px 0 0;
-  color: var(--n-text-3);
+  color: var(--n-text-2);
   font-size: 11px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -18299,4 +18329,40 @@ a.nm-link {
 .nocturne:not(.js) .rd-inspector,
 .nocturne:not(.js) .rd-chips {
   display: none;
+}
+
+@media (pointer: coarse) {
+  .rd .n-mapclose,
+  .rd-insp-head .n-mapclose {
+    width: 40px;
+    height: 40px;
+  }
+
+  .rd .forma-canvas-navigator-items {
+    inset: 46px 0 0 0;
+  }
+}
+
+@media (max-width: 600px) {
+  .rd .forma-canvas-navigator {
+    width: 168px;
+    height: 116px;
+  }
+
+  /* On a narrow viewport the Inspector is a real drawer. Covering the title
+     bar avoids the old 44px offset slicing through a wrapped 76–110px bar. */
+  .rd-inspector {
+    top: 0;
+    width: 100vw;
+  }
+
+  .rd-tier {
+    display: none;
+  }
+}
+
+@media (min-width: 601px) and (max-width: 760px) {
+  .rd.is-inspector-open .rd-tier {
+    display: none;
+  }
 }

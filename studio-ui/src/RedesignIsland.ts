@@ -162,7 +162,7 @@ function persistCanvas(): void {
 function setCanvasMap(hidden: boolean): void {
   const root = rdRoot;
   const map = root?.querySelector<HTMLElement>(".forma-canvas-navigator");
-  const show = root?.querySelector<HTMLElement>(".n-mapshow");
+  const show = root?.querySelector<HTMLElement>(".rd-mapshow");
   if (!map) return;
   map.hidden = hidden;
   if (show) show.hidden = !hidden;
@@ -248,9 +248,45 @@ function setZoomMenu(open: boolean): void {
 function sheetOpen(): boolean {
   return rdRoot?.querySelector<HTMLElement>(".rd-sheet")?.hidden === false;
 }
+let sheetReturnFocus: HTMLElement | null = null;
+
+function activeControl(): HTMLElement | null {
+  const active = document.activeElement;
+  return active instanceof HTMLElement && active !== document.body ? active : null;
+}
+
+function focusCanvasContext(): void {
+  const item = nCanvas?.activeItem();
+  if (item?.isConnected && !item.inert) item.focus({ preventScroll: true });
+  else nCanvas?.focusViewport();
+}
+
+function restoreOverlayFocus(target: HTMLElement | null): void {
+  if (target?.isConnected && !target.closest("[hidden]")) {
+    target.focus({ preventScroll: true });
+  } else {
+    focusCanvasContext();
+  }
+}
+
 function setSheet(open: boolean): void {
   const sheet = rdRoot?.querySelector<HTMLElement>(".rd-sheet");
-  if (sheet) sheet.hidden = !open;
+  if (!sheet || sheet.hidden === !open) return;
+  if (open) {
+    if (paletteOpen()) setPalette(false);
+    setZoomMenu(false);
+    sheetReturnFocus = activeControl();
+    sheet.hidden = false;
+    // The bottom Close button can be below a short phone viewport. Land on
+    // the visible introduction instead; Tab still reaches the dialog's
+    // controls in their natural order.
+    sheet.querySelector<HTMLElement>(".rd-sheet-lede")?.focus({ preventScroll: true });
+  } else {
+    sheet.hidden = true;
+    const target = sheetReturnFocus;
+    sheetReturnFocus = null;
+    restoreOverlayFocus(target);
+  }
 }
 
 interface PaletteCommand {
@@ -286,6 +322,7 @@ function paletteCommands(): PaletteCommand[] {
 }
 
 let paletteIndex = 0;
+let paletteReturnFocus: HTMLElement | null = null;
 function paletteOpen(): boolean {
   return rdRoot?.querySelector<HTMLElement>(".rd-palette")?.hidden === false;
 }
@@ -293,8 +330,21 @@ function setPalette(open: boolean): void {
   const root = rdRoot;
   const overlay = root?.querySelector<HTMLElement>(".rd-palette");
   if (!root || !overlay) return;
+  if (overlay.hidden === !open) return;
+  if (open) {
+    // Only one modal surface owns focus at a time. In particular, Ctrl/Cmd+K
+    // must not focus a palette hidden behind the later shortcut sheet.
+    if (sheetOpen()) setSheet(false);
+    setZoomMenu(false);
+    paletteReturnFocus = activeControl();
+  }
   overlay.hidden = !open;
-  if (!open) return;
+  if (!open) {
+    const target = paletteReturnFocus;
+    paletteReturnFocus = null;
+    restoreOverlayFocus(target);
+    return;
+  }
   const input = overlay.querySelector<HTMLInputElement>(".rd-palette-input");
   if (input) {
     input.value = "";
@@ -304,17 +354,49 @@ function setPalette(open: boolean): void {
   renderPalette("");
 }
 
+function trapDialogTab(event: KeyboardEvent): void {
+  if (event.key !== "Tab") return;
+  const card = event.currentTarget as HTMLElement;
+  const controls = Array.from(
+    card.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((control) => !control.hidden && !control.closest("[hidden]"));
+  if (controls.length === 0) return;
+  const first = controls[0];
+  const last = controls[controls.length - 1];
+  const active = document.activeElement;
+  if (!card.contains(active)) {
+    event.preventDefault();
+    first.focus();
+  } else if (event.shiftKey && active === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && active === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 /** Fly the camera to one widget — the palette's landing. The design's rule:
  *  at least 90% zoom, centre it, pulse its outline so the eye finds it. */
 function flyToWidget(item: HTMLElement): void {
   const canvas = nCanvas;
   if (!canvas) return;
+  if (canvas.isFocusModeActive()) canvas.exitFocusMode();
   if (canvas.getCamera().zoom < 0.9) {
     canvas.setZoomTo(0.9, "before search jump");
   } else {
     canvas.pushCameraHistory("before search jump");
   }
   canvas.centerItem(item);
+  const panel = inspectorEl();
+  if (panel && !panel.hidden && inspectorInset() === 0) {
+    panel.querySelector<HTMLButtonElement>('[data-nx="rd-insp-close"]')
+      ?.focus({ preventScroll: true });
+  } else {
+    item.focus({ preventScroll: true });
+  }
   item.classList.add("rd-pulse");
   window.setTimeout(() => item.classList.remove("rd-pulse"), 1500);
 }
@@ -398,11 +480,26 @@ function paletteKeydown(event: KeyboardEvent): void {
 // Opening declares its width to the engine as the safe-viewport inset and
 // pans by exactly the overlap needed to keep the active widget clear.
 
-const INSPECTOR_WIDTH = 328;
-let inspectorDismissed = false;
-
 function inspectorEl(): HTMLElement | null {
   return rdRoot?.querySelector<HTMLElement>(".rd-inspector") ?? null;
+}
+
+function inspectorInset(): number {
+  const panel = inspectorEl();
+  if (!panel || panel.hidden) return 0;
+  const panelRect = panel.getBoundingClientRect();
+  const viewportRect = rdRoot
+    ?.querySelector<HTMLElement>(".forma-canvas-viewport")
+    ?.getBoundingClientRect();
+  // At the mobile breakpoint the Inspector is a full-screen drawer, not a
+  // right-side obstruction. Feeding its 100vw width into the safe-inset
+  // camera math leaves no usable canvas and produces a large hidden pan.
+  if (
+    viewportRect &&
+    panelRect.left <= viewportRect.left + 1 &&
+    panelRect.width >= viewportRect.width - 1
+  ) return 0;
+  return Math.min(panelRect.width, viewportRect?.width ?? panelRect.width);
 }
 
 function numberField(
@@ -431,6 +528,7 @@ function inspectorButton(label: string, nx: string, title: string): HTMLElement 
   button.className = "n-autobtn";
   button.dataset.nx = nx;
   button.title = title;
+  button.setAttribute("aria-label", title);
   button.textContent = label;
   return button;
 }
@@ -467,8 +565,16 @@ function renderInspector(): void {
     const position = document.createElement("div");
     position.className = "rd-insp-row";
     position.append(
-      numberField("X", Math.round(state.x), (x) => canvas.moveItemTo(item, x, state.y)),
-      numberField("Y", Math.round(state.y), (y) => canvas.moveItemTo(item, state.x, y)),
+      numberField("X", Math.round(state.x), (x) => {
+        const current = canvas.getItemState(item);
+        canvas.moveItemTo(item, x, current.y);
+        renderInspector();
+      }),
+      numberField("Y", Math.round(state.y), (y) => {
+        const current = canvas.getItemState(item);
+        canvas.moveItemTo(item, current.x, y);
+        renderInspector();
+      }),
     );
     const verbs = document.createElement("div");
     verbs.className = "rd-insp-row";
@@ -522,24 +628,28 @@ function setInspector(open: boolean): void {
   if (!panel || !canvas) return;
   const wasOpen = !panel.hidden;
   panel.hidden = !open;
-  canvas.setSafeInsetRight(open ? INSPECTOR_WIDTH : 0);
+  rdRoot?.classList.toggle("is-inspector-open", open);
+  const inset = inspectorInset();
+  canvas.setSafeInsetRight(inset);
   if (open) {
     renderInspector();
     // The design's panel rule: zoom preserved, pan by exactly the overlap —
     // often zero — and only when the panel is NEWLY open.
-    if (!wasOpen) canvas.keepActiveClear();
+    if (!wasOpen && inset > 0) canvas.keepActiveClear();
   }
   syncChips();
 }
 
 function syncInspectorToSelection(items: HTMLElement[]): void {
   if (items.length === 0) {
-    inspectorDismissed = false;
     setInspector(false);
     return;
   }
-  if (!inspectorDismissed) setInspector(true);
-  else renderInspector();
+  // Dismissal belongs to the selection that was on screen when X was
+  // pressed. A later selection is a new editing intent and reopens the
+  // inspector — otherwise its body silently updates while the panel stays
+  // closed, with no visible way back in.
+  setInspector(true);
 }
 
 // ── Off-screen proximity chips (design handoff §6.5) ────────────────────────
@@ -567,8 +677,12 @@ function syncChips(): void {
   const rect = viewport?.getBoundingClientRect();
   if (!rect) return;
   const camera = canvas.getCamera();
-  const inset = inspectorEl()?.hidden === false ? INSPECTOR_WIDTH : 0;
+  const inset = inspectorInset();
   const safeWidth = rect.width - inset;
+  if (safeWidth <= 80) {
+    rail.replaceChildren();
+    return;
+  }
   const centerWorldX = (safeWidth / 2 - camera.panX) / camera.zoom;
   const centerWorldY = (rect.height / 2 - camera.panY) / camera.zoom;
   const offscreen: { item: HTMLElement; name: string; sx: number; sy: number; dist: number }[] = [];
@@ -660,6 +774,10 @@ function wireSpotlight(stage: HTMLElement, viewport: HTMLElement): void {
       ".forma-canvas-stage > [data-instance-id]",
     );
     if (!item) return;
+    // pointerout bubbles for every child boundary. Moving from a summary into
+    // its detail rows is still hovering the same widget and must not flash the
+    // rest of the canvas off and back on.
+    if (event.relatedTarget instanceof Node && item.contains(event.relatedTarget)) return;
     stage.classList.remove("rd-spotlighting");
     item.classList.remove("rd-spot");
   });
@@ -773,11 +891,11 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
     document.createElement("div");
   if (!navigatorItems.isConnected) navigator.append(navigatorItems, navigatorViewport);
   // The engine reads pointerdown ANYWHERE in the map as "navigate to here"
-  // (it only excuses its own markers), so the hide button has to stop the
-  // press from reaching it — otherwise putting the map away jumps the view
-  // on the way out. Click still bubbles to the delegated handler.
+  // (it only excuses its own markers), so the whole header has to stop the
+  // press from reaching it. Otherwise clicking the title or putting the map
+  // away jumps the camera. Click still bubbles to the delegated handler.
   navigator
-    .querySelector<HTMLElement>(".n-mapclose")
+    .querySelector<HTMLElement>(".rd-map-head")
     ?.addEventListener("pointerdown", (event) => event.stopPropagation());
   loadCanvasPrefs();
   nCanvas = new WidgetCanvas(
@@ -813,7 +931,6 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
       // Focus opens the inspector (design handoff §3) and hides the chips.
       onFocusModeChange: (_item, focused) => {
         if (focused) {
-          inspectorDismissed = false;
           setInspector(true);
         }
         syncChips();
@@ -847,6 +964,12 @@ function typingIntoSomething(event: KeyboardEvent): boolean {
   const target = event.target;
   return target instanceof HTMLElement &&
     Boolean(target.closest("input, textarea, select, [contenteditable]"));
+}
+
+function canvasOwnsKeyboardFocus(): boolean {
+  const canvas = rdRoot?.querySelector<HTMLElement>(".n-canvas");
+  const active = document.activeElement;
+  return Boolean(canvas && active instanceof HTMLElement && canvas.contains(active));
 }
 
 export function redesignWire(root: HTMLElement): void {
@@ -902,8 +1025,12 @@ export function redesignWire(root: HTMLElement): void {
     } else if (hit === "rd-back") {
       nCanvas?.backView();
     } else if (hit === "rd-insp-close") {
-      inspectorDismissed = true;
+      // The inspector is Focus mode's editing surface. Closing it must leave
+      // that mode too, or the rest of the canvas remains inert behind a panel
+      // that is no longer visible.
+      nCanvas?.exitFocusMode();
       setInspector(false);
+      focusCanvasContext();
     } else if (hit === "rd-w-smaller" || hit === "rd-w-bigger" || hit === "rd-w-reset") {
       const widget = nCanvas?.activeItem();
       if (widget && nCanvas) {
@@ -930,9 +1057,17 @@ export function redesignWire(root: HTMLElement): void {
     renderPalette(paletteInput.value);
   });
   paletteInput?.addEventListener("keydown", paletteKeydown);
+  root.querySelector<HTMLElement>(".rd-palette-card")
+    ?.addEventListener("keydown", trapDialogTab);
+  root.querySelector<HTMLElement>(".rd-sheet-card")
+    ?.addEventListener("keydown", trapDialogTab);
+  window.addEventListener("resize", () => {
+    nCanvas?.setSafeInsetRight(inspectorInset());
+    scheduleChips();
+  });
 
   window.addEventListener("keydown", (ev) => {
-    // ⌘K / ⌘F open the palette from ANYWHERE, a text field included —
+    // Ctrl/Cmd+K / F open the palette from ANYWHERE, a text field included —
     // the one binding checked before the typing guard.
     if ((ev.metaKey || ev.ctrlKey) && (ev.key === "k" || ev.key === "f")) {
       ev.preventDefault();
@@ -944,12 +1079,22 @@ export function redesignWire(root: HTMLElement): void {
     // shell's Escape/Enter) run before this window listener and
     // preventDefault when they act — never double-handle their keys.
     if (ev.defaultPrevented) return;
+    if (ev.repeat && (
+      ev.key === "Escape" || ev.key === "f" || ev.key === "F" ||
+      ev.key === "m" || ev.key === "M" || ev.key === "?"
+    )) {
+      ev.preventDefault();
+      return;
+    }
     if (ev.key === "Escape") {
       // The escape ladder (design handoff §2), one rung per press:
       // sheet → palette → menu → focus mode → back view → clear selection.
       if (sheetOpen()) setSheet(false);
       else if (paletteOpen()) setPalette(false);
       else if (zoomMenuOpen()) setZoomMenu(false);
+      // Escape in an Inspector field belongs to that field; it must never
+      // pop camera history or clear the selection being edited.
+      else if (typingIntoSomething(ev)) return;
       else if (nCanvas?.isFocusModeActive()) {
         nCanvas.exitFocusMode();
       } else if (!nCanvas?.backView()) {
@@ -959,6 +1104,10 @@ export function redesignWire(root: HTMLElement): void {
       return;
     }
     if (typingIntoSomething(ev)) return;
+    // Unmodified design-tool shortcuts belong to the canvas. Keep them from
+    // firing while focus is in the title bar or Inspector; Cmd/Ctrl+K and the
+    // Escape ladder above remain intentionally global.
+    if (!canvasOwnsKeyboardFocus()) return;
     const key = ev.key;
     if (key === "+" || key === "=") {
       ev.preventDefault();
@@ -1054,7 +1203,7 @@ export function RedesignIsland() {
               title: "Search widgets and commands",
             },
             "Search",
-            h("kbd", { class: "rd-kbd" }, "⌘K"),
+            h("kbd", { class: "rd-kbd" }, "Ctrl K"),
           ),
           h(
             "button",
@@ -1074,7 +1223,7 @@ export function RedesignIsland() {
           { class: "forma-canvas n-canvas", "data-forma-canvas": "", "data-client-canvas": "" },
           // ── The tool cluster (design handoff §7): select and hand ───────
           // Off-screen proximity chips: client-populated, camera-settle paced.
-          h("div", { class: "rd-chips", "data-client-subtree": "", "aria-hidden": "true" }),
+          h("div", { class: "rd-chips", "data-client-subtree": "" }),
           h(
             "div",
             { class: "rd-tools", role: "group", "aria-label": "Canvas tools" },
@@ -1234,7 +1383,7 @@ export function RedesignIsland() {
                 "button",
                 {
                   type: "button",
-                  class: "n-autobtn n-zbtn n-mapshow",
+                  class: "n-autobtn n-zbtn rd-mapshow",
                   "data-nx": "canvas-map",
                   "aria-label": "Show the canvas map",
                   title: "Show the canvas map (M)",
@@ -1344,7 +1493,12 @@ export function RedesignIsland() {
       h("div", { class: "rd-scrim", "data-nx": "rd-palette-close" }),
       h(
         "div",
-        { class: "rd-palette-card", role: "dialog", "aria-label": "Search" },
+        {
+          class: "rd-palette-card",
+          role: "dialog",
+          "aria-label": "Search",
+          "aria-modal": "true",
+        },
         h("input", {
           class: "rd-palette-input",
           type: "text",
@@ -1361,10 +1515,15 @@ export function RedesignIsland() {
       h("div", { class: "rd-scrim", "data-nx": "rd-sheet-close" }),
       h(
         "div",
-        { class: "rd-sheet-card", role: "dialog", "aria-label": "Canvas control" },
+        {
+          class: "rd-sheet-card",
+          role: "dialog",
+          "aria-label": "Canvas control",
+          "aria-modal": "true",
+        },
         h(
           "p",
-          { class: "rd-sheet-lede" },
+          { class: "rd-sheet-lede", tabindex: "-1" },
           h("strong", {}, "Canvas control"),
           " Single-key shortcuts fire only when the canvas has focus — never while you are typing in a field.",
         ),
@@ -1387,7 +1546,7 @@ export function RedesignIsland() {
             { class: "rd-sheet-col" },
             h("dt", { class: "rd-sheet-kick" }, "Pointer"),
             h("dt", {}, "two-finger drag"), h("dd", {}, "pan"),
-            h("dt", {}, "pinch · ⌘ wheel"), h("dd", {}, "zoom at the pointer"),
+            h("dt", {}, "pinch · Ctrl wheel"), h("dd", {}, "zoom at the pointer"),
             h("dt", {}, "wheel / ⇧ wheel"), h("dd", {}, "pan vertically / sideways"),
             h("dt", {}, "space · middle · right drag"), h("dd", {}, "pan"),
             h("dt", {}, "left drag on empty"), h("dd", {}, "marquee select"),
@@ -1406,7 +1565,7 @@ export function RedesignIsland() {
             "dl",
             { class: "rd-sheet-col" },
             h("dt", { class: "rd-sheet-kick" }, "Chrome"),
-            h("dt", {}, "⌘K / ⌘F"), h("dd", {}, "search and fly to a widget"),
+            h("dt", {}, "Ctrl K / Ctrl F"), h("dd", {}, "search and fly to a widget"),
             h("dt", {}, "M"), h("dd", {}, "minimap"),
             h("dt", {}, "V / H"), h("dd", {}, "select / hand tool"),
             h("dt", {}, "?"), h("dd", {}, "this sheet"),

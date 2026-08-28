@@ -1694,6 +1694,10 @@ export class WidgetCanvas {
         event.preventDefault();
         event.stopPropagation();
         this.setActive(item);
+        if (this.#navigationModel === "design-tool" && event.key === "Enter") {
+          if (!event.repeat) this.toggleFocusMode(item);
+          return;
+        }
         const host = this.#runtimeHosts.get(this.#itemId(item));
         if (!host?.focusFirstInteractive()) {
           this.#onKeyboardNavigation(
@@ -1709,6 +1713,10 @@ export class WidgetCanvas {
         !event.altKey &&
         !event.shiftKey
       ) {
+        // In a design-tool canvas M belongs to the canvas minimap. Let the
+        // owning surface's shortcut handler receive it; the map-model canvas
+        // keeps its established "focus Move" command.
+        if (this.#navigationModel === "design-tool") return;
         event.preventDefault();
         event.stopPropagation();
         const moveHandle = item.querySelector<HTMLButtonElement>(".widget-drag-handle");
@@ -1736,6 +1744,10 @@ export class WidgetCanvas {
         return;
       }
       if (event.key === "Escape") {
+        // The design-tool surface owns a page-wide escape ladder (overlays,
+        // focus mode, camera history, selection). Consuming Escape here would
+        // skip its earlier rungs and clear the item underneath an open sheet.
+        if (this.#navigationModel === "design-tool") return;
         event.preventDefault();
         event.stopPropagation();
         if (event.repeat) return;
@@ -1754,6 +1766,10 @@ export class WidgetCanvas {
       }
       const direction = KEYBOARD_NAVIGATION_DIRECTIONS[event.key];
       if (!direction) return;
+      // Design-tool arrows nudge the selection (12px, Shift 1px); the owning
+      // surface applies that contract after this event bubbles. Map-model
+      // arrows retain spatial selection navigation.
+      if (this.#navigationModel === "design-tool") return;
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
       event.preventDefault();
       event.stopPropagation();
@@ -2269,6 +2285,10 @@ export class WidgetCanvas {
       }
       const direction = KEYBOARD_MOVE_DELTAS[event.key];
       if (!direction) return;
+      // The redesign's move handle is an alternative focus target, not an
+      // alternative movement scale. Let its canvas-level 12px/1px nudge own
+      // the key so shell focus and handle focus cannot move different amounts.
+      if (this.#navigationModel === "design-tool") return;
       const navigationDirection = KEYBOARD_NAVIGATION_DIRECTIONS[event.key];
       if (navigationDirection && hasPrimaryShortcutModifier(event)) {
         event.preventDefault();
@@ -2677,7 +2697,10 @@ export class WidgetCanvas {
       this.#cameraGesturePointerId = pointerId;
       this.#cameraFramingTarget = null;
       this.#viewport.classList.add("is-navigating");
-      const navigatorRect = this.#navigator.getBoundingClientRect();
+      // The visible drawing area can sit below product chrome such as the
+      // redesign's map header. Projection, hit-testing, markers, and the
+      // camera rectangle must all use this same rectangle.
+      const navigatorRect = this.#navigatorItems.getBoundingClientRect();
       const viewportRect = this.#viewport.getBoundingClientRect();
       // ksx: freeze the mapping for this gesture (see #navigatorBounds).
       const frozen = this.#navigatorBounds(viewportRect, navigatorRect);
@@ -3108,7 +3131,7 @@ export class WidgetCanvas {
 
   #navigatorBounds(
     viewport: DOMRectReadOnly = this.#viewport.getBoundingClientRect(),
-    map: DOMRectReadOnly = this.#navigator.getBoundingClientRect(),
+    map: DOMRectReadOnly = this.#navigatorItems.getBoundingClientRect(),
   ): NavigatorProjection | null {
     const visible: WorldRect = {
       x: -this.#camera.panX / this.#camera.zoom,
@@ -3193,14 +3216,17 @@ export class WidgetCanvas {
     // wider than the world would otherwise paint a rectangle larger than the
     // box containing it — which reads as a rendering fault, not as "you are
     // seeing everything".
-    const map = this.#navigator.getBoundingClientRect();
+    const map = this.#navigatorItems.getBoundingClientRect();
+    const navigator = this.#navigator.getBoundingClientRect();
+    const offsetLeft = map.left - navigator.left;
+    const offsetTop = map.top - navigator.top;
     const visible = bounds.visible;
     const left = clamp((visible.x - bounds.x) * bounds.scale, 0, Math.max(0, map.width));
     const top = clamp((visible.y - bounds.y) * bounds.scale, 0, Math.max(0, map.height));
     const width = clamp(visible.width * bounds.scale, 8, Math.max(8, map.width - left));
     const height = clamp(visible.height * bounds.scale, 6, Math.max(6, map.height - top));
-    this.#navigatorViewport.style.left = `${left}px`;
-    this.#navigatorViewport.style.top = `${top}px`;
+    this.#navigatorViewport.style.left = `${offsetLeft + left}px`;
+    this.#navigatorViewport.style.top = `${offsetTop + top}px`;
     this.#navigatorViewport.style.width = `${width}px`;
     this.#navigatorViewport.style.height = `${height}px`;
   }

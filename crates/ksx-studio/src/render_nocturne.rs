@@ -212,7 +212,9 @@ fn show_values(payload: &NocturnePayload) -> [(&'static str, bool); SHOW_COUNT] 
     ]
 }
 
-fn device_row(row: &NocturneDeviceRow) -> SlotValue {
+/// Shared with `render_redesign.rs` (the workbench picker's rows) — same
+/// serializer, so the two pages cannot spell one field two ways.
+pub(crate) fn device_row(row: &NocturneDeviceRow) -> SlotValue {
     SlotValue::object(vec![
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
         ("name".to_owned(), SlotValue::Text(row.name.clone())),
@@ -233,7 +235,8 @@ fn device_row(row: &NocturneDeviceRow) -> SlotValue {
     ])
 }
 
-fn other_row(row: &NocturneOtherRow) -> SlotValue {
+/// Shared with `render_redesign.rs`, like `device_row` above.
+pub(crate) fn other_row(row: &NocturneOtherRow) -> SlotValue {
     SlotValue::object(vec![
         ("name".to_owned(), SlotValue::Text(row.name.clone())),
         ("meta".to_owned(), SlotValue::Text(row.meta.clone())),

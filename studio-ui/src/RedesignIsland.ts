@@ -31,12 +31,54 @@ export interface RdChoiceRowView {
   chosen: boolean;
 }
 
+/** One picker device row — `NocturneDeviceRow` on the wire (snapshot.rs),
+ *  the shape /nocturne's roster consumes. `selector` is the RAW backend
+ *  string — canonicalizing it is how twin boards collide (the I-PAC
+ *  lesson), so it rides untouched into data-selector and the bench store. */
+export interface RdDeviceRowView {
+  cls: string;
+  name: string;
+  meta: string;
+  role: string;
+  selector: string;
+  alias: string;
+  label: string;
+  aria_current: string;
+  title: string;
+  chart_readable: string;
+}
+
+/** A device the picker shows but cannot offer — no keyboard interface, or
+ *  no selector to address it by. A name and a meta line and nothing else. */
+export interface RdOtherRowView {
+  name: string;
+  meta: string;
+}
+
+/** The workbench picker's truth — `RedesignDeviceRows` on the wire. */
+export interface RdDeviceRows {
+  keyboards: RdDeviceRowView[];
+  encoders: RdDeviceRowView[];
+  experimental: RdDeviceRowView[];
+  other: RdOtherRowView[];
+  keyboards_head: string;
+  keyboards_fold_cls: string;
+  encoders_head: string;
+  encoders_fold_cls: string;
+  exp_head: string;
+  exp_fold_cls: string;
+  other_head: string;
+  other_fold_cls: string;
+  scan_line: string;
+}
+
 /** The payload the server embeds and /api/redesign serves — seeded into the
  *  signals by the entry BEFORE the island returns (ledger #5). */
 export interface RedesignPayload {
   environment_label: string;
   environment_cls: string;
   theme_rows: RdChoiceRowView[];
+  devices: RdDeviceRows;
 }
 
 // ── SERVED signals — copiers, never derivers ────────────────────────────────
@@ -44,6 +86,19 @@ export interface RedesignPayload {
 const [rdEnvLabel, setRdEnvLabel] = createSignal("");
 const [rdEnvCls, setRdEnvCls] = createSignal("n-environment unknown");
 const [rdThemeRows, setRdThemeRows] = createSignal<RdChoiceRowView[]>([]);
+const [rdDevKb, setRdDevKb] = createSignal<RdDeviceRowView[]>([]);
+const [rdDevEnc, setRdDevEnc] = createSignal<RdDeviceRowView[]>([]);
+const [rdDevExp, setRdDevExp] = createSignal<RdDeviceRowView[]>([]);
+const [rdDevOther, setRdDevOther] = createSignal<RdOtherRowView[]>([]);
+const [rdDevScanLine, setRdDevScanLine] = createSignal("");
+const [rdDevKbHead, setRdDevKbHead] = createSignal("");
+const [rdDevKbFoldCls, setRdDevKbFoldCls] = createSignal("n-devfold none");
+const [rdDevEncHead, setRdDevEncHead] = createSignal("");
+const [rdDevEncFoldCls, setRdDevEncFoldCls] = createSignal("n-devfold none");
+const [rdDevExpHead, setRdDevExpHead] = createSignal("");
+const [rdDevExpFoldCls, setRdDevExpFoldCls] = createSignal("n-devfold none");
+const [rdDevOtherHead, setRdDevOtherHead] = createSignal("");
+const [rdDevOtherFoldCls, setRdDevOtherFoldCls] = createSignal("n-devfold none");
 
 // The action flash. The server fills these from the allowlisted query
 // parameter on a full-page load; the fetch-submit layer applies the same
@@ -73,6 +128,22 @@ export function applyRedesign(v: RedesignPayload): void {
   } else if (html.dataset.theme !== chosen) {
     html.dataset.theme = chosen;
   }
+  const d = v.devices;
+  setRdDevKb(d?.keyboards ?? []);
+  setRdDevEnc(d?.encoders ?? []);
+  setRdDevExp(d?.experimental ?? []);
+  setRdDevOther(d?.other ?? []);
+  setRdDevScanLine(d?.scan_line ?? "");
+  setRdDevKbHead(d?.keyboards_head ?? "");
+  setRdDevKbFoldCls(d?.keyboards_fold_cls ?? "n-devfold none");
+  setRdDevEncHead(d?.encoders_head ?? "");
+  setRdDevEncFoldCls(d?.encoders_fold_cls ?? "n-devfold none");
+  setRdDevExpHead(d?.exp_head ?? "");
+  setRdDevExpFoldCls(d?.exp_fold_cls ?? "n-devfold none");
+  setRdDevOtherHead(d?.other_head ?? "");
+  setRdDevOtherFoldCls(d?.other_fold_cls ?? "n-devfold none");
+  // The rows may have re-rendered: re-mark the workbench state onto them.
+  syncDeviceRows();
 }
 
 /** Report one action outcome (the redirect's allowlisted ?flash= copy) —
@@ -124,6 +195,11 @@ interface CanvasPrefs {
   /** The map is chrome, so it remembers like every other chrome preference.
    *  Absent means shown. */
   mapHidden?: boolean;
+  /** The workbench: which devices are on the canvas, by RAW selector (the
+   *  I-PAC lesson — canonicalizing a selector is how twin boards collide).
+   *  Arrangement state like the camera, never a daemon claim; a remembered
+   *  board whose device is gone simply does not mount until it returns. */
+  bench?: string[];
 }
 
 let canvasPrefs: CanvasPrefs = { widgets: {} };
@@ -153,6 +229,9 @@ function loadCanvasPrefs(): void {
     canvasPrefs = {
       widgets,
       mapHidden: saved.mapHidden === true,
+      bench: Array.isArray(saved.bench)
+        ? saved.bench.filter((s): s is string => typeof s === "string")
+        : undefined,
       camera:
         cam &&
         [cam.panX, cam.panY, cam.zoom].every(
@@ -201,6 +280,7 @@ function persistCanvas(): void {
     camera: canvas.getCamera(),
     widgets,
     mapHidden: canvasPrefs.mapHidden,
+    bench: canvasPrefs.bench,
   };
   saveCanvasPrefs();
 }
@@ -896,6 +976,157 @@ function mountMockNodes(): void {
   }
 }
 
+// ── The device workbench (the lane's thesis made real) ──────────────────────
+// The canvas is a WORKBENCH: the picker adds boards to it — several at once —
+// and each lands as a widget. Membership is the browser's arrangement state
+// (canvasPrefs, beside the camera and the widget geometry), never a daemon
+// claim; every fact ON a widget is served. Widgets are client-created
+// (data-client-widget — parity rule 3e), like the mock nodes they will
+// eventually replace.
+
+/** instanceId-safe slug for a selector (`usb:d209:0430:00` → the engine's id
+ *  charset). The RAW selector rides data-selector on the widget and in the
+ *  bench store — the slug is only the engine's key. */
+function deviceSlug(selector: string): string {
+  return `dev-${selector.replace(/[^A-Za-z0-9_-]/g, "-")}`.slice(0, 96);
+}
+
+function benchSelectors(): string[] {
+  return canvasPrefs.bench ?? [];
+}
+
+function deviceRowFor(selector: string): RdDeviceRowView | undefined {
+  return [...rdDevKb(), ...rdDevEnc(), ...rdDevExp()].find((r) => r.selector === selector);
+}
+
+const DEVICE_ROLE_BADGE: Record<string, string> = {
+  "panel-encoder": "Panel encoder",
+  keyboard: "Keyboard",
+};
+
+function deviceCardContent(row: RdDeviceRowView): HTMLElement {
+  const body = document.createElement("div");
+  body.className = "rd-devcard";
+  const badge = document.createElement("p");
+  badge.className = "rd-devcard-badge";
+  badge.dataset.role = row.role;
+  badge.textContent = DEVICE_ROLE_BADGE[row.role] ?? "Experimental";
+  const name = document.createElement("p");
+  name.className = "rd-devcard-name";
+  name.textContent = row.name;
+  const meta = document.createElement("p");
+  meta.className = "rd-devcard-meta";
+  meta.textContent = row.meta;
+  body.append(badge, name, meta);
+  return body;
+}
+
+/** Mount one board onto the workbench: the saved spot if this board has been
+ *  here before (removal keeps geometry), else a stagger clear of the mocks. */
+function mountDeviceWidget(row: RdDeviceRowView, index: number): void {
+  const canvas = nCanvas;
+  if (!canvas) return;
+  const slug = deviceSlug(row.selector);
+  const item = createCanvasItem({
+    instanceId: slug,
+    displayName: row.name,
+    preferredWidth: 300,
+    minHeight: 118,
+    content: deviceCardContent(row),
+    document,
+  });
+  item.dataset.clientWidget = "";
+  item.dataset.selector = row.selector;
+  item.classList.add("rd-dev-node");
+  const home: CanvasItemGeometry = {
+    x: 140 + (index % 3) * 340,
+    y: 520 + Math.floor(index / 3) * 170,
+    width: 300,
+    height: 118,
+    z: 3 + index,
+    manualScale: 1,
+  };
+  canvas.mountItem(item, canvasPrefs.widgets[slug] ?? home, { focus: false });
+}
+
+function benchItemEl(selector: string): HTMLElement | null {
+  return (
+    rdRoot?.querySelector<HTMLElement>(
+      `.forma-canvas-stage > [data-instance-id="${deviceSlug(selector)}"]`,
+    ) ?? null
+  );
+}
+
+/** Add or remove one board. Removal keeps the saved geometry, so a board
+ *  that returns lands where it lived. */
+function toggleBenchDevice(selector: string): void {
+  const bench = benchSelectors();
+  if (bench.includes(selector)) {
+    const item = benchItemEl(selector);
+    if (item) nCanvas?.removeItem(item, { selectFallback: false });
+    canvasPrefs.bench = bench.filter((s) => s !== selector);
+  } else {
+    const row = deviceRowFor(selector);
+    if (!row) return;
+    mountDeviceWidget(row, bench.length);
+    canvasPrefs.bench = [...bench, selector];
+  }
+  saveCanvasPrefs();
+  syncMapCount();
+  syncDeviceRows();
+}
+
+/** Re-mount every remembered board whose device is still in the served
+ *  roster. One that vanished stays remembered but not mounted — honestly
+ *  absent, back the moment the scan offers it again. */
+function restoreBench(): void {
+  benchSelectors().forEach((selector, i) => {
+    const row = deviceRowFor(selector);
+    if (row && !benchItemEl(selector)) mountDeviceWidget(row, i);
+  });
+  syncDeviceRows();
+}
+
+/** Decorate the picker rows with CLIENT truth — membership — after any
+ *  render: aria-pressed, the `.on` marking, the verb word. Imperative like
+ *  the map-marker labeller, because the rows re-render from SERVER data and
+ *  membership is not server data. */
+function syncDeviceRows(): void {
+  const bench = benchSelectors();
+  for (const btn of Array.from(
+    rdRoot?.querySelectorAll<HTMLElement>('[data-nx="rd-dev-toggle"]') ?? [],
+  )) {
+    const on = bench.includes(btn.dataset.selector ?? "");
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    btn.classList.toggle("on", on);
+    const word = btn.querySelector<HTMLElement>(".rd-dev-word");
+    if (word) {
+      word.textContent = on ? "On the workbench — press to remove" : "Add to workbench";
+    }
+  }
+}
+
+// ── The device picker modal ─────────────────────────────────────────────────
+
+function devModalEl(): HTMLElement | null {
+  return rdRoot?.querySelector<HTMLElement>(".rd-devmodal") ?? null;
+}
+
+function devModalIsOpen(): boolean {
+  const el = devModalEl();
+  return Boolean(el && !el.hidden);
+}
+
+function setDevModal(open: boolean): void {
+  const el = devModalEl();
+  if (!el) return;
+  el.hidden = !open;
+  if (open) {
+    syncDeviceRows();
+    el.querySelector<HTMLElement>(".rd-devmodal-panel")?.focus();
+  }
+}
+
 
 /** Adopt the served canvas skeleton. Runs once, strictly AFTER adoption (the
  *  entry's post-mount frame): the engine annotates the served nodes, and
@@ -991,6 +1222,7 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
   );
   setCanvasMap(canvasPrefs.mapHidden === true);
   mountMockNodes();
+  restoreBench();
   syncMapCount();
   syncToolRail(nCanvas.toolMode());
   wireSpotlight(stage, viewport);
@@ -1058,6 +1290,17 @@ export function redesignWire(root: HTMLElement): void {
     } else if (hit === "rd-focus-sel") {
       const item = nCanvas?.activeItem();
       if (item) nCanvas?.toggleFocusMode(item);
+    } else if (hit === "rd-devs-open") {
+      setDevModal(true);
+      return;
+    } else if (hit === "rd-devs-close") {
+      setDevModal(false);
+      return;
+    } else if (hit === "rd-dev-toggle") {
+      const selector = target?.closest<HTMLElement>('[data-nx="rd-dev-toggle"]')?.dataset
+        .selector;
+      if (selector) toggleBenchDevice(selector);
+      return;
     } else if (hit === "rd-zoom-menu") {
       setZoomMenu(!zoomMenuOpen());
       return;
@@ -1146,9 +1389,11 @@ export function redesignWire(root: HTMLElement): void {
       return;
     }
     if (ev.key === "Escape") {
-      // The escape ladder (design handoff §2), one rung per press:
-      // sheet → palette → menu → focus mode → back view → clear selection.
-      if (sheetOpen()) setSheet(false);
+      // The escape ladder (design handoff §2), one rung per press: device
+      // picker → sheet → palette → menu → focus mode → back view → clear
+      // selection.
+      if (devModalIsOpen()) setDevModal(false);
+      else if (sheetOpen()) setSheet(false);
       else if (paletteOpen()) setPalette(false);
       else if (zoomMenuOpen()) setZoomMenu(false);
       // Escape in an Inspector field belongs to that field; it must never
@@ -1239,6 +1484,18 @@ export function RedesignIsland() {
           // Which machine answers this lane — the fixture badge, so the
           // redesign workbench can never be mistaken for the cabinet.
           h("span", { class: () => rdEnvCls() }, () => rdEnvLabel()),
+          // The workbench feed: open the device picker. Scripting-only
+          // chrome (`.n-autobtn`), rightly — the canvas it feeds is too.
+          h(
+            "button",
+            {
+              type: "button",
+              class: "n-autobtn rd-adddev",
+              "data-nx": "rd-devs-open",
+              title: "Add devices to the workbench",
+            },
+            "＋ Devices",
+          ),
           h("span", { class: "rd-spring" }),
           // The action flash — the one place a verb's outcome lands. Served
           // from the allowlisted ?flash= on a full load; the entry's
@@ -1341,6 +1598,158 @@ export function RedesignIsland() {
             ),
           ),
           h("span", { role: "status", class: "n-live-sr" }),
+        ),
+        // ── The device picker (the workbench feed): near-full-page modal ──
+        // SERVED — shell, scan line, all four tiers, every row — and hidden
+        // until opened. Membership decoration (aria-pressed, the `.on`
+        // marking, the verb word) is client state painted by syncDeviceRows.
+        // No verb posts from here: adding to the workbench arranges the
+        // browser; it changes no config and stages nothing.
+        h(
+          "div",
+          {
+            class: "rd-devmodal",
+            hidden: "",
+            role: "dialog",
+            "aria-modal": "true",
+            "aria-label": "Devices on this machine",
+          },
+          h("div", { class: "rd-devmodal-back", "data-nx": "rd-devs-close" }),
+          h(
+            "div",
+            { class: "rd-devmodal-panel", tabindex: "-1" },
+            h(
+              "div",
+              { class: "rd-devmodal-head" },
+              h("span", { class: "n-kick" }, "Devices on this machine"),
+              h("span", { class: "rd-spring" }),
+              h(
+                "button",
+                {
+                  type: "button",
+                  class: "n-mapclose",
+                  "data-nx": "rd-devs-close",
+                  "aria-label": "Close the device picker",
+                  title: "Close (Esc)",
+                },
+                "×",
+              ),
+            ),
+            h("p", { class: "n-devnote" }, () => rdDevScanLine()),
+            h(
+              "div",
+              { class: () => rdDevKbFoldCls() },
+              h("h3", { class: "rd-devhead" }, () => rdDevKbHead()),
+              createList(
+                () => rdDevKb(),
+                (r) => r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title,
+                (r) =>
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      class: r.cls,
+                      "data-nx": "rd-dev-toggle",
+                      "data-selector": r.selector,
+                      "data-role": r.role,
+                      title: r.title,
+                      "aria-pressed": "false",
+                    },
+                    h(
+                      "span",
+                      { class: "n-dev-txt" },
+                      h("span", { class: "n-dev-name" }, r.name),
+                      h("span", { class: "n-dev-meta" }, r.meta),
+                      h("span", { class: "n-dev-meta rd-dev-word" }, "Add to workbench"),
+                    ),
+                    h("span", { class: "n-dev-dot" }),
+                  ),
+              ),
+            ),
+            h(
+              "div",
+              { class: () => rdDevEncFoldCls() },
+              h("h3", { class: "rd-devhead" }, () => rdDevEncHead()),
+              createList(
+                () => rdDevEnc(),
+                (r) => r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title,
+                (r) =>
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      class: r.cls,
+                      "data-nx": "rd-dev-toggle",
+                      "data-selector": r.selector,
+                      "data-role": r.role,
+                      title: r.title,
+                      "aria-pressed": "false",
+                    },
+                    h(
+                      "span",
+                      { class: "n-dev-txt" },
+                      h("span", { class: "n-dev-name" }, r.name),
+                      h("span", { class: "n-dev-meta" }, r.meta),
+                      h("span", { class: "n-dev-meta rd-dev-word" }, "Add to workbench"),
+                    ),
+                    h("span", { class: "n-dev-dot" }),
+                  ),
+              ),
+            ),
+            h(
+              "div",
+              { class: () => rdDevExpFoldCls() },
+              h("h3", { class: "rd-devhead" }, () => rdDevExpHead()),
+              createList(
+                () => rdDevExp(),
+                (r) => r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title,
+                (r) =>
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      class: r.cls,
+                      "data-nx": "rd-dev-toggle",
+                      "data-selector": r.selector,
+                      "data-role": r.role,
+                      title: r.title,
+                      "aria-pressed": "false",
+                    },
+                    h(
+                      "span",
+                      { class: "n-dev-txt" },
+                      h("span", { class: "n-dev-name" }, r.name),
+                      h("span", { class: "n-dev-meta" }, r.meta),
+                      h("span", { class: "n-dev-meta rd-dev-word" }, "Add to workbench"),
+                    ),
+                    h("span", { class: "n-dev-dot" }),
+                  ),
+              ),
+            ),
+            // The unavailable tier: shown so nobody hunts for a board the
+            // machine can see but ksx cannot offer — visibly inert, with the
+            // reason in the meta. Not a control.
+            h(
+              "div",
+              { class: () => rdDevOtherFoldCls() },
+              h("h3", { class: "rd-devhead" }, () => rdDevOtherHead()),
+              createList(
+                () => rdDevOther(),
+                (r) => r.name + "|" + r.meta,
+                (r) =>
+                  h(
+                    "div",
+                    { class: "n-dev off" },
+                    h(
+                      "span",
+                      { class: "n-dev-txt" },
+                      h("span", { class: "n-dev-name" }, r.name),
+                      h("span", { class: "n-dev-meta" }, r.meta),
+                    ),
+                  ),
+              ),
+            ),
+          ),
         ),
         h(
           "section",

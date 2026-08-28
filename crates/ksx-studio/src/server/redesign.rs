@@ -51,7 +51,21 @@ pub(super) async fn collect_redesign(state: &Arc<AppState>) -> RedesignPayload {
             .machine_cache
             .setup_state(&*redesign_state.machine)
             .ok();
-        crate::render_redesign::payload(&redesign_state.source.environment(), setup)
+        // The device scan, for the workbench picker. Deliberately UNCACHED,
+        // for the reason `/devices` gives — a board unplugged ten minutes ago
+        // must stop being offered — and affordable here because this page has
+        // no interval poller: the read runs on a page render and after a
+        // verb, not every two seconds. The refusal keeps its remedy (the
+        // `/devices` composition): it is going onto a page, and "run `ksx
+        // devices`" is the whole value of the message.
+        let scan = redesign_state
+            .machine
+            .device_scan()
+            .map_err(|refusal| match &refusal.remedy {
+                Some(remedy) => format!("{} — {remedy}", refusal.message),
+                None => refusal.message.clone(),
+            });
+        crate::render_redesign::payload(&redesign_state.source.environment(), setup, scan)
     })
     .await
     .unwrap_or_default()

@@ -62,6 +62,152 @@ pub struct RedesignPayload {
     /// serves, so the two pages cannot mark different rows.
     #[serde(default)]
     pub theme_rows: Vec<NocturneChoiceRow>,
+    /// The workbench device picker's truth — see [`RedesignDeviceRows`].
+    #[serde(default)]
+    pub devices: RedesignDeviceRows,
+}
+
+/// The workbench device roster — what `/redesign`'s picker offers, tiered by
+/// the SAME rules `NocturneDerived::of` sorts the scan with (pickable →
+/// selector → role → looks_like_a_keyboard; a board failing the first two
+/// lands in `other` with a name and a meta line and nothing else — that is
+/// exactly where a recognised encoder with no keyboard collection ends up,
+/// so the family name has to ride in the meta or it is not said anywhere).
+///
+/// The rules and the verdict sentences are copied from that loop rather than
+/// extracted because the two pages disagree ONLY in the verb: `/nocturne`'s
+/// canvas holds one staged board ("replaces the current one"), the workbench
+/// holds several at once — so the row copy differs while the tiering and the
+/// verdicts stay word-for-word. Drift between the two loops is a defect;
+/// they sit in this one file so a change to either is a diff on both.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignDeviceRows {
+    pub keyboards: Vec<NocturneDeviceRow>,
+    pub encoders: Vec<NocturneDeviceRow>,
+    pub experimental: Vec<NocturneDeviceRow>,
+    pub other: Vec<NocturneOtherRow>,
+    /// The four fold headers ("… · N") and visibility classes; an empty tier
+    /// hides its fold entirely, exactly like the nocturne device folds.
+    pub keyboards_head: String,
+    pub keyboards_fold_cls: String,
+    pub encoders_head: String,
+    pub encoders_fold_cls: String,
+    pub exp_head: String,
+    pub exp_fold_cls: String,
+    pub other_head: String,
+    pub other_fold_cls: String,
+    /// One sentence over the whole picker: the scan's own summary, or — when
+    /// the read refused — the refusal with its remedy, so an empty modal
+    /// never impersonates an empty machine.
+    pub scan_line: String,
+}
+
+impl RedesignDeviceRows {
+    /// `scan: None` means the read REFUSED (`unavailable` carries its
+    /// sentence); an empty board list inside `Some` is a real answer on a
+    /// machine with nothing plugged in.
+    pub fn of(scan: Option<&ksx_api::DeviceScanView>, unavailable: &str) -> Self {
+        let fold = |n: usize| {
+            if n == 0 {
+                "n-devfold none".to_owned()
+            } else {
+                "n-devfold".to_owned()
+            }
+        };
+        let mut keyboards = Vec::new();
+        let mut encoders = Vec::new();
+        let mut experimental = Vec::new();
+        let mut other = Vec::new();
+        if let Some(scan) = scan {
+            for b in &scan.boards {
+                if !b.pickable {
+                    other.push(NocturneOtherRow {
+                        name: b.name.clone(),
+                        meta: format!(
+                            "{} · {}{}",
+                            b.transport_label,
+                            b.backends,
+                            identity_meta(b)
+                        ),
+                    });
+                    continue;
+                }
+                let Some(selector) = b.selector.clone() else {
+                    other.push(NocturneOtherRow {
+                        name: b.name.clone(),
+                        meta: format!("{}{}", b.backends, identity_meta(b)),
+                    });
+                    continue;
+                };
+                // The verdict, verbatim from the nocturne roster loop: an
+                // encoder's reachable HID interface proves nothing about its
+                // chart, and this row must not call an unread — or
+                // deliberately cleared — EEPROM chart "ready".
+                let verdict = if b.claimed {
+                    "Held by ksx"
+                } else if b.role == ksx_api::BoardRole::PanelEncoder {
+                    if b.chart_readable {
+                        "Connected · chart not read yet"
+                    } else {
+                        "Connected · outputs not checked"
+                    }
+                } else if b.cannot_type_line.trim().is_empty() {
+                    "Ready to use"
+                } else {
+                    "Cannot type right now"
+                };
+                let row = NocturneDeviceRow {
+                    cls: "n-dev".to_owned(),
+                    name: b.name.clone(),
+                    meta: format!("{} · {}{}", b.transport_label, verdict, identity_meta(b)),
+                    // No row is "current" here: workbench membership is the
+                    // browser's arrangement state (several boards at once),
+                    // not a daemon fact this read could claim. The picker
+                    // decorates membership client-side, off its own state.
+                    aria_current: "false".to_owned(),
+                    title: {
+                        let verb = "Add this board to the workbench — several can share it. \
+                                    Nothing is saved or started.";
+                        if b.profile_detail.is_empty() || b.family_label.is_none() {
+                            verb.to_owned()
+                        } else {
+                            format!("{verb} {}", b.profile_detail)
+                        }
+                    },
+                    chart_readable: if b.chart_readable { "true" } else { "false" }.to_owned(),
+                    role: b.role.code().to_owned(),
+                    selector,
+                    alias: b.alias_hint.clone(),
+                    label: b.name.clone(),
+                };
+                if b.role == ksx_api::BoardRole::PanelEncoder {
+                    encoders.push(row);
+                } else if b.looks_like_a_keyboard {
+                    keyboards.push(row);
+                } else {
+                    experimental.push(row);
+                }
+            }
+        }
+        Self {
+            keyboards_head: format!("Keyboards · {}", keyboards.len()),
+            keyboards_fold_cls: fold(keyboards.len()),
+            encoders_head: format!("Panel encoders · {}", encoders.len()),
+            encoders_fold_cls: fold(encoders.len()),
+            exp_head: format!("Not keyboards — experimental · {}", experimental.len()),
+            exp_fold_cls: fold(experimental.len()),
+            other_head: format!("Unavailable devices · {}", other.len()),
+            other_fold_cls: fold(other.len()),
+            scan_line: match scan {
+                Some(s) => s.boards_summary.clone(),
+                None => unavailable.to_owned(),
+            },
+            keyboards,
+            encoders,
+            experimental,
+            other,
+        }
+    }
 }
 
 /// What `GET /api/pads` serves AND what the pads island's props carry — the

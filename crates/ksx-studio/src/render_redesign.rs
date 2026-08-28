@@ -13,8 +13,10 @@ use forma_ir::slot::{SlotData, SlotValue};
 use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
-use crate::render_nocturne::{mode_row, named_slot_ids};
-use crate::snapshot::{theme_rows, NocturneChoiceRow, RedesignPayload, SetupSnapshot};
+use crate::render_nocturne::{device_row, mode_row, named_slot_ids, other_row};
+use crate::snapshot::{
+    theme_rows, NocturneChoiceRow, RedesignDeviceRows, RedesignPayload, SetupSnapshot,
+};
 
 /// The island table this page compiles to: exactly one island — the whole
 /// screen. Its name is the `activateIslands` registry key in
@@ -41,6 +43,7 @@ const ANONYMOUS_SLOTS: [&str; 0] = [];
 pub(crate) fn payload(
     environment: &ksx_api::RuntimeEnvironmentView,
     setup: Option<ksx_api::SetupView>,
+    scan: Result<ksx_api::DeviceScanView, String>,
 ) -> RedesignPayload {
     RedesignPayload {
         environment_label: environment.label.clone(),
@@ -52,6 +55,13 @@ pub(crate) fn payload(
             "n-environment unknown"
         }
         .to_owned(),
+        // The picker's truth. `Err` carries the refusal's sentence (with its
+        // remedy — the `/devices` composition), so a refused read renders as
+        // one line over an empty picker, never as an empty machine.
+        devices: match &scan {
+            Ok(scan) => RedesignDeviceRows::of(Some(scan), ""),
+            Err(unavailable) => RedesignDeviceRows::of(None, unavailable),
+        },
         // The composition `/nocturne` performs (snapshot.rs), copied verbatim:
         // the ONE shared `theme_rows` composer, re-dressed as choice rows, so
         // the redesign menu and the nocturne picker can never mark different
@@ -75,10 +85,14 @@ pub(crate) fn payload(
     }
 }
 
-/// The one served list this page renders so far: the topbar theme menu's
-/// rows. The name convention is the compiler's, proven on `/nocturne`
-/// (`LIST_SLOT_THEMES` in render_nocturne.rs).
+/// The served lists this page renders: the topbar theme menu's rows and the
+/// device picker's four tiers. The name convention is the compiler's, proven
+/// on `/nocturne` (`LIST_SLOT_THEMES` in render_nocturne.rs).
 const LIST_SLOT_THEME_ROWS: &str = "list:rdThemeRows:array";
+const LIST_SLOT_DEV_KB: &str = "list:rdDevKb:array";
+const LIST_SLOT_DEV_ENC: &str = "list:rdDevEnc:array";
+const LIST_SLOT_DEV_EXP: &str = "list:rdDevExp:array";
+const LIST_SLOT_DEV_OTHER: &str = "list:rdDevOther:array";
 
 /// Scalar slot values, keyed by the signal names in RedesignIsland.ts.
 /// `flash` is the action outcome (the allowlisted `?flash=` copy) — the
@@ -94,6 +108,16 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
             Some(f) if f.starts_with("error") => "n-flash rd-flash err",
             Some(_) => "n-flash rd-flash ok",
         },
+        // The device picker's chrome: fold headers, visibility, the scan line.
+        "rdDevScanLine": payload.devices.scan_line,
+        "rdDevKbHead": payload.devices.keyboards_head,
+        "rdDevKbFoldCls": payload.devices.keyboards_fold_cls,
+        "rdDevEncHead": payload.devices.encoders_head,
+        "rdDevEncFoldCls": payload.devices.encoders_fold_cls,
+        "rdDevExpHead": payload.devices.exp_head,
+        "rdDevExpFoldCls": payload.devices.exp_fold_cls,
+        "rdDevOtherHead": payload.devices.other_head,
+        "rdDevOtherFoldCls": payload.devices.other_fold_cls,
     })
 }
 
@@ -108,6 +132,29 @@ fn build_slots(module: &IrModule, payload: &RedesignPayload, flash: Option<&str>
             id,
             SlotValue::array(payload.theme_rows.iter().map(mode_row).collect()),
         );
+    }
+    let dev = &payload.devices;
+    for (name, value) in [
+        (
+            LIST_SLOT_DEV_KB,
+            SlotValue::array(dev.keyboards.iter().map(device_row).collect()),
+        ),
+        (
+            LIST_SLOT_DEV_ENC,
+            SlotValue::array(dev.encoders.iter().map(device_row).collect()),
+        ),
+        (
+            LIST_SLOT_DEV_EXP,
+            SlotValue::array(dev.experimental.iter().map(device_row).collect()),
+        ),
+        (
+            LIST_SLOT_DEV_OTHER,
+            SlotValue::array(dev.other.iter().map(other_row).collect()),
+        ),
+    ] {
+        if let Some(id) = named_slot_ids(module, name).into_iter().next() {
+            slots.set(id, value);
+        }
     }
     slots
 }
@@ -147,6 +194,55 @@ mod tests {
     const REDESIGN_ISLAND_TS: &str = include_str!("../../../studio-ui/src/RedesignIsland.ts");
     const REDESIGN_TS: &str = include_str!("../../../studio-ui/src/redesign.ts");
 
+    /// A four-board scan exercising every tier — the macro_fixture roster,
+    /// condensed: an encoder that ALSO declares as a keyboard, a plain
+    /// keyboard, a pickable non-keyboard, and an unpickable device.
+    fn fixture_scan() -> ksx_api::DeviceScanView {
+        ksx_api::DeviceScanView {
+            boards_summary: "2 keyboard-capable boards found; 1 more device has no keyboard \
+                             interface."
+                .into(),
+            boards: vec![
+                ksx_api::BoardRow {
+                    name: "Ultimarc I-PAC 4".into(),
+                    role: ksx_api::BoardRole::PanelEncoder,
+                    transport_label: "USB".into(),
+                    selector: Some("usb:d209:0430:00".into()),
+                    alias_hint: "panel".into(),
+                    pickable: true,
+                    looks_like_a_keyboard: true,
+                    chart_readable: true,
+                    family_label: Some("Ultimarc I-PAC 4".into()),
+                    terminal_count: Some(56),
+                    ..Default::default()
+                },
+                ksx_api::BoardRow {
+                    name: "Logitech G915 TKL".into(),
+                    transport_label: "Bluetooth".into(),
+                    selector: Some("usb:046d:c545:00".into()),
+                    pickable: true,
+                    looks_like_a_keyboard: true,
+                    ..Default::default()
+                },
+                ksx_api::BoardRow {
+                    name: "AURA LED Controller".into(),
+                    transport_label: "USB".into(),
+                    selector: Some("usb:0b05:1939:00".into()),
+                    pickable: true,
+                    looks_like_a_keyboard: false,
+                    ..Default::default()
+                },
+                ksx_api::BoardRow {
+                    name: "Composite pointing device".into(),
+                    transport_label: "USB".into(),
+                    backends: "No keyboard interface — cannot be split".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
     fn fixture_payload() -> RedesignPayload {
         payload(
             &ksx_api::RuntimeEnvironmentView {
@@ -158,7 +254,88 @@ mod tests {
             },
             // A readable config with no stamp: System is the one marked row.
             Some(ksx_api::SetupView::default()),
+            Ok(fixture_scan()),
         )
+    }
+
+    /// The tier rules are the nocturne roster's, and this pins them here: an
+    /// encoder that ALSO declares as a keyboard tiers as an ENCODER (role
+    /// wins), a pickable non-keyboard is experimental, and a board with no
+    /// keyboard interface is unavailable — wearing its transport and backends
+    /// in the meta because nothing else will say them.
+    #[test]
+    fn the_workbench_tiers_sort_like_the_nocturne_roster() {
+        let devices = RedesignDeviceRows::of(Some(&fixture_scan()), "");
+        assert_eq!(devices.encoders.len(), 1, "role wins over looks_like_a_keyboard");
+        assert_eq!(devices.encoders[0].name, "Ultimarc I-PAC 4");
+        assert_eq!(devices.encoders[0].role, "panel-encoder");
+        assert!(
+            devices.encoders[0].meta.contains("chart not read yet"),
+            "an unread chart must not be called ready: {}",
+            devices.encoders[0].meta
+        );
+        assert!(devices.encoders[0].meta.contains("56 terminals"));
+        assert_eq!(devices.keyboards.len(), 1);
+        assert_eq!(devices.keyboards[0].name, "Logitech G915 TKL");
+        assert!(devices.keyboards[0].meta.contains("Ready to use"));
+        assert_eq!(devices.experimental.len(), 1);
+        assert_eq!(devices.experimental[0].name, "AURA LED Controller");
+        assert_eq!(devices.other.len(), 1);
+        assert_eq!(devices.other[0].name, "Composite pointing device");
+        // The workbench never claims a daemon selection, and never wears the
+        // nocturne canvas verb ("replaces the current one" is false here).
+        for row in devices
+            .encoders
+            .iter()
+            .chain(&devices.keyboards)
+            .chain(&devices.experimental)
+        {
+            assert_eq!(row.aria_current, "false");
+            assert_eq!(row.cls, "n-dev");
+            assert!(row.title.contains("workbench"), "{}", row.title);
+            assert!(!row.title.contains("replaces the current one"));
+        }
+        // A refused read is one sentence over an empty picker, never an
+        // empty machine.
+        let refused = RedesignDeviceRows::of(None, "the scan refused — run `ksx devices`");
+        assert!(refused.keyboards.is_empty() && refused.other.is_empty());
+        assert_eq!(refused.scan_line, "the scan refused — run `ksx devices`");
+        assert!(refused.other_fold_cls.contains("none"));
+    }
+
+    /// The picker is SERVED: the button, the modal (hidden until opened),
+    /// all four fold heads and every row — so hydration reconciles what SSR
+    /// painted instead of inventing chrome, and the rows carry the RAW
+    /// selector (canonicalizing it is how twin boards collide).
+    #[test]
+    fn the_device_picker_is_served_with_every_tier() {
+        let page = EmbeddedPage::load("/redesign").unwrap();
+        let html = render_redesign(&page, &fixture_payload(), None).html;
+        assert!(
+            html.contains(r#"data-nx="rd-devs-open""#),
+            "the topbar button is served"
+        );
+        assert!(html.contains("rd-devmodal"), "the modal shell is served");
+        for head in [
+            "Keyboards · 1",
+            "Panel encoders · 1",
+            "Not keyboards — experimental · 1",
+            "Unavailable devices · 1",
+        ] {
+            assert!(html.contains(head), "missing fold head {head:?}");
+        }
+        for name in [
+            "Ultimarc I-PAC 4",
+            "Logitech G915 TKL",
+            "AURA LED Controller",
+            "Composite pointing device",
+        ] {
+            assert!(html.contains(name), "missing device row {name:?}");
+        }
+        assert!(
+            html.contains(r#"data-selector="usb:d209:0430:00""#),
+            "rows carry the RAW selector"
+        );
     }
 
     #[test]
@@ -263,10 +440,18 @@ mod tests {
                 "scalar slot '{key}' missing from the embedded IR; slots: {names:?}"
             );
         }
-        assert!(
-            names.contains(&LIST_SLOT_THEME_ROWS),
-            "the theme-rows list slot is missing from the embedded IR; slots: {names:?}"
-        );
+        for list in [
+            LIST_SLOT_THEME_ROWS,
+            LIST_SLOT_DEV_KB,
+            LIST_SLOT_DEV_ENC,
+            LIST_SLOT_DEV_EXP,
+            LIST_SLOT_DEV_OTHER,
+        ] {
+            assert!(
+                names.contains(&list),
+                "list slot '{list}' missing from the embedded IR; slots: {names:?}"
+            );
+        }
         let islands = module.islands.entries();
         assert_eq!(islands.len(), 1, "expected exactly one island");
         assert_eq!(
@@ -322,15 +507,31 @@ mod tests {
             REDESIGN_TS.contains("RedesignIsland: (el)"),
             "redesign.ts no longer registers RedesignIsland"
         );
-        for signal in ["rdEnvLabel", "rdEnvCls", "rdFlashLine", "rdFlashCls"] {
+        for signal in [
+            "rdEnvLabel",
+            "rdEnvCls",
+            "rdFlashLine",
+            "rdFlashCls",
+            "rdDevScanLine",
+            "rdDevKbHead",
+            "rdDevKbFoldCls",
+            "rdDevEncHead",
+            "rdDevEncFoldCls",
+            "rdDevExpHead",
+            "rdDevExpFoldCls",
+            "rdDevOtherHead",
+            "rdDevOtherFoldCls",
+        ] {
             assert!(
                 REDESIGN_ISLAND_TS.contains(&format!("const [{signal}, ")),
                 "RedesignIsland.ts no longer declares the '{signal}' signal the seam injects"
             );
         }
-        assert!(
-            REDESIGN_ISLAND_TS.contains("const [rdThemeRows, "),
-            "RedesignIsland.ts no longer declares the theme-rows list signal the seam fills"
-        );
+        for signal in ["rdThemeRows", "rdDevKb", "rdDevEnc", "rdDevExp", "rdDevOther"] {
+            assert!(
+                REDESIGN_ISLAND_TS.contains(&format!("const [{signal}, ")),
+                "RedesignIsland.ts no longer declares the '{signal}' list signal the seam fills"
+            );
+        }
     }
 }

@@ -18004,6 +18004,125 @@ a.nm-link {
   white-space: nowrap;
 }
 
+/* ── The device picker: a near-full-page modal over the workbench ────────── */
+.rd-devmodal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+}
+
+.rd-devmodal[hidden] {
+  display: none;
+}
+
+.rd-devmodal-back {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--n-bg) 62%, transparent);
+  backdrop-filter: blur(3px);
+}
+
+.rd-devmodal-panel {
+  position: relative;
+  width: min(1080px, 92vw);
+  max-height: 86vh;
+  overflow-y: auto;
+  padding: 18px 22px 22px;
+  border: 1px solid var(--n-line);
+  border-radius: 16px;
+  background: var(--n-panel);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+  outline: none;
+}
+
+.rd-devmodal-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+/* `.n-kick` carries `order: 1` for the kick-row's rule-line trick; in this
+   head it must simply sit first. */
+.rd-devmodal-head .n-kick {
+  order: 0;
+}
+
+.rd-devmodal .n-dev-name,
+.rd-devmodal .n-dev-meta {
+  display: block;
+}
+
+.rd-devhead {
+  margin: 16px 0 6px;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--n-text-3);
+}
+
+/* Picker rows are BUTTONS here (a toggle, not a form): full-width, the
+   nocturne row anatomy, the `.on` state saying "on the workbench". */
+.rd-devmodal button.n-dev {
+  width: 100%;
+  background: transparent;
+  color: var(--n-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.rd-devmodal button.n-dev:hover,
+.rd-devmodal button.n-dev:focus-visible {
+  border-color: var(--n-accent-line);
+}
+
+.rd-devmodal .rd-dev-word {
+  display: block;
+  color: var(--n-accent-2);
+}
+
+.rd-devmodal .n-dev.off .n-dev-txt {
+  cursor: default;
+}
+
+/* ── A board on the workbench: the device card widget ────────────────────── */
+.rd-dev-node .rd-devcard {
+  padding: 10px 12px;
+}
+
+.rd-devcard-badge {
+  display: inline-block;
+  margin: 0 0 6px;
+  padding: 1px 8px;
+  border: 1px solid var(--n-accent-line);
+  border-radius: 999px;
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--n-accent-2);
+}
+
+.rd-devcard-badge[data-role="panel-encoder"] {
+  border-color: color-mix(in srgb, var(--n-warn, var(--n-accent)) 45%, transparent);
+}
+
+.rd-devcard-name {
+  margin: 0 0 4px;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  color: var(--n-text);
+}
+
+.rd-devcard-meta {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+  color: var(--n-text-2);
+}
+
 .rd-menu-sep {
   height: 1px;
   margin: 5px 4px;

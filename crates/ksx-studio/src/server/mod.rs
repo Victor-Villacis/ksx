@@ -495,6 +495,12 @@ pub fn serve(
             // tests/http.rs proves both, once, like every new verb.
             .route("/redesign/theme", post(redesign_form_theme))
             .route("/redesign/device", post(redesign_form_device))
+            .route("/redesign/controller", post(redesign_form_ctrl_add))
+            .route(
+                "/redesign/controller/remove",
+                post(redesign_form_ctrl_remove),
+            )
+            .route("/redesign/controller/move", post(redesign_form_ctrl_move))
             // ── THE LIVE FEED ─────────────────────────────────────────────
             // One route, and it is the keystone the button check stands on:
             // the daemon's input fan-out as Server-Sent Events. Read-only and

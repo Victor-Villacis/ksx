@@ -18,13 +18,16 @@ pub(super) struct RedesignQuery {
 /// verb's sentences ARE nocturne's constants: one wording, two pages, so the
 /// copy cannot drift between the surfaces (the cutover's "provider text"
 /// lesson, applied in advance).
-const RD_FLASH_ALLOWLIST: [&str; 7] = [
+const RD_FLASH_ALLOWLIST: [&str; 10] = [
     N_THEME_OK,
     N_THEME_UNKNOWN,
     N_DEVICE_OK,
     N_DEVICE_ALREADY_OK,
     N_FORM_UNREADABLE,
+    N_EDIT_OK,
     N_EDIT_ERROR,
+    N_MOVE_AT_END,
+    N_ADD_LAYOUT_ERROR,
     N_UNKNOWN_FLASH_ERROR,
 ];
 
@@ -219,6 +222,143 @@ pub(super) async fn redesign_form_device(
         DeviceChoice::Chosen => N_DEVICE_OK,
         DeviceChoice::Refused => N_EDIT_ERROR,
     })
+}
+
+// ── The controller verbs: the rack's add / reorder / remove, re-homed ───────
+// Each is `nocturne_form_*`'s body with this page's redirect. The daemon owns
+// every consequence — slot numbering, the XInput ceiling, persona
+// availability — and the picker re-reads the whole staged view afterwards, so
+// the workbench can never hold a slot the daemon does not.
+
+#[derive(Deserialize)]
+pub(super) struct RedesignAddForm {
+    /// A persona `name` off the served roster.
+    persona: String,
+    /// From the served `next_preset` — served, because it becomes a file name.
+    preset: String,
+    /// The served default layout, so a fresh slot binds keys and is playable
+    /// without a mapper. Optional like nocturne's — an empty value adds bare.
+    #[serde(default)]
+    layout: Option<String>,
+}
+
+/// POST /redesign/controller — stage the next slot, dressed in the served
+/// layout (`nocturne_form_add`, minus the create dialog's SOCD answer — the
+/// workbench edits that later, where the slot already exists).
+pub(super) async fn redesign_form_ctrl_add(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignAddForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let flash = tokio::task::spawn_blocking(move || {
+        let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: form.persona,
+            preset: form.preset,
+            layout: None,
+        });
+        if !added.ok {
+            return N_EDIT_ERROR;
+        }
+        let Some(number) = added.setup.slots.iter().map(|slot| slot.number).max() else {
+            return N_EDIT_ERROR;
+        };
+        if let Some(layout) = form.layout.filter(|layout| !layout.trim().is_empty()) {
+            // The nocturne dressing chain, verbatim: a layout dresses the
+            // slot's own player block when it has one; past the blocks it was
+            // authored for, fall back to the player-1 block. A slot that
+            // cannot be dressed at all is removed rather than left bare and
+            // unplayable behind a success sentence.
+            let dressed = state.control.stage_edit(&ksx_api::StageEdit::SetLayout {
+                number,
+                layout: layout.clone(),
+                player: None,
+            });
+            if !dressed.ok {
+                let redressed = state.control.stage_edit(&ksx_api::StageEdit::SetLayout {
+                    number,
+                    layout,
+                    player: Some(1),
+                });
+                if !redressed.ok {
+                    let _ = state
+                        .control
+                        .stage_edit(&ksx_api::StageEdit::RemoveSlot { number });
+                    return N_ADD_LAYOUT_ERROR;
+                }
+            }
+        }
+        N_EDIT_OK
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
+    redesign_redirect(flash)
+}
+
+#[derive(Deserialize)]
+pub(super) struct RedesignSlotForm {
+    number: u8,
+}
+
+/// POST /redesign/controller/remove — drop one staged slot. No undo stash
+/// here (the nocturne rack's short undo window is its own feature); the
+/// daemon renumbers, and the refreshed payload is the whole answer.
+pub(super) async fn redesign_form_ctrl_remove(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignSlotForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let ok = tokio::task::spawn_blocking(move || {
+        state
+            .control
+            .stage_edit(&ksx_api::StageEdit::RemoveSlot {
+                number: form.number,
+            })
+            .ok
+    })
+    .await
+    .unwrap_or(false);
+    redesign_redirect(if ok { N_EDIT_OK } else { N_EDIT_ERROR })
+}
+
+#[derive(Deserialize)]
+pub(super) struct RedesignMoveForm {
+    /// The whole slot order, space-joined — precomposed server-side onto the
+    /// card (`RedesignControllerCard::up_order`/`down_order`), one reorder
+    /// per click; the renumbering is the daemon's. Empty means the card is
+    /// already at that end: not an error and not a write.
+    order: String,
+}
+
+/// POST /redesign/controller/move — `nocturne_form_move`, re-homed.
+pub(super) async fn redesign_form_ctrl_move(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignMoveForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let numbers: Vec<u8> = form
+        .order
+        .split_whitespace()
+        .filter_map(|n| n.parse().ok())
+        .collect();
+    if numbers.is_empty() {
+        return redesign_redirect(N_MOVE_AT_END);
+    }
+    let ok = tokio::task::spawn_blocking(move || {
+        state
+            .control
+            .stage_edit(&ksx_api::StageEdit::ReorderSlots { numbers })
+            .ok
+    })
+    .await
+    .unwrap_or(false);
+    redesign_redirect(if ok { N_EDIT_OK } else { N_EDIT_ERROR })
 }
 
 #[cfg(test)]

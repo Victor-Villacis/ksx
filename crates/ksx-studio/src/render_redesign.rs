@@ -15,7 +15,8 @@ use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::render_nocturne::{device_row, mode_row, named_slot_ids, other_row};
 use crate::snapshot::{
-    theme_rows, NocturneChoiceRow, RedesignDeviceRows, RedesignPayload, SetupSnapshot,
+    theme_rows, NocturneChoiceRow, RedesignControllers, RedesignDeviceRows, RedesignPayload,
+    RedesignPersonaRow, SetupSnapshot,
 };
 
 /// The island table this page compiles to: exactly one island — the whole
@@ -109,6 +110,9 @@ pub(crate) fn payload(
             cls: row.chosen_cls,
         })
         .collect(),
+        // The staged controllers and the persona picker, off the SAME staged
+        // view the device marking reads — one truth per render.
+        controllers: RedesignControllers::of(staged),
     }
 }
 
@@ -120,6 +124,22 @@ const LIST_SLOT_DEV_KB: &str = "list:rdDevKb:array";
 const LIST_SLOT_DEV_ENC: &str = "list:rdDevEnc:array";
 const LIST_SLOT_DEV_EXP: &str = "list:rdDevExp:array";
 const LIST_SLOT_DEV_OTHER: &str = "list:rdDevOther:array";
+// The controller picker's persona rows. The staged CARDS are deliberately
+// not a slot: they mount as client-created canvas widgets off the payload
+// (parity rule 3e), exactly like the device bench.
+const LIST_SLOT_CTRL_PERSONAS: &str = "list:rdCtrlPersonas:array";
+
+/// The persona-row serializer — every field, spelled once.
+fn ctrl_persona_row(row: &RedesignPersonaRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("name".to_owned(), SlotValue::Text(row.name.clone())),
+        ("label".to_owned(), SlotValue::Text(row.label.clone())),
+        ("api".to_owned(), SlotValue::Text(row.api.clone())),
+        ("note".to_owned(), SlotValue::Text(row.note.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        ("usable".to_owned(), SlotValue::Text(row.usable.clone())),
+    ])
+}
 
 /// Scalar slot values, keyed by the signal names in RedesignIsland.ts.
 /// `flash` is the action outcome (the allowlisted `?flash=` copy) — the
@@ -145,6 +165,13 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         "rdDevExpFoldCls": payload.devices.exp_fold_cls,
         "rdDevOtherHead": payload.devices.other_head,
         "rdDevOtherFoldCls": payload.devices.other_fold_cls,
+        // The controller picker's chrome: the lede, the served ceilings, and
+        // the two served values the add form posts (preset = a future FILE
+        // NAME, layout = the default that makes a fresh slot playable).
+        "rdCtrlAddNote": payload.controllers.add_note,
+        "rdCtrlCountsLine": payload.controllers.counts_line,
+        "rdCtrlAddPreset": payload.controllers.add_preset,
+        "rdCtrlAddLayout": payload.controllers.add_layout,
     })
 }
 
@@ -185,6 +212,22 @@ fn build_slots(module: &IrModule, payload: &RedesignPayload, flash: Option<&str>
         if let Some(id) = named_slot_ids(module, name).into_iter().next() {
             slots.set(id, value);
         }
+    }
+    if let Some(id) = named_slot_ids(module, LIST_SLOT_CTRL_PERSONAS)
+        .into_iter()
+        .next()
+    {
+        slots.set(
+            id,
+            SlotValue::array(
+                payload
+                    .controllers
+                    .personas
+                    .iter()
+                    .map(ctrl_persona_row)
+                    .collect(),
+            ),
+        );
     }
     slots
 }
@@ -285,14 +328,148 @@ mod tests {
             // A readable config with no stamp: System is the one marked row.
             Some(ksx_api::SetupView::default()),
             Ok(fixture_scan()),
-            // Nothing staged, authoritatively: every row serves
-            // aria_current "false".
-            &ksx_api::StagedSetupView {
-                reachable: true,
-                empty: true,
-                ..Default::default()
-            },
+            // Nothing staged, authoritatively: every device row serves
+            // aria_current "false" and the workbench mounts no cards — but
+            // the picker still offers the roster over served ceilings.
+            &fixture_staged(Vec::new()),
         )
+    }
+
+    /// A staged view with real ceilings, the two-persona roster, and the
+    /// given slots — the shape `StagedSetupView::of` serves, condensed.
+    fn fixture_staged(slots: Vec<ksx_api::StagedSlotView>) -> ksx_api::StagedSetupView {
+        let xinput_used = slots.iter().filter(|slot| slot.is_xinput).count();
+        let full = slots.len() >= 16;
+        ksx_api::StagedSetupView {
+            reachable: true,
+            empty: slots.is_empty(),
+            next_slot: if full { None } else { Some(slots.len() as u8 + 1) },
+            next_preset: if full {
+                None
+            } else {
+                Some(format!("Player {}", slots.len() + 1))
+            },
+            default_layout: "keyboard-2p".into(),
+            max_slots: 16,
+            max_xinput_slots: 4,
+            xinput_used,
+            personas: vec![
+                ksx_api::PersonaOption {
+                    name: "xbox360".into(),
+                    label: "Xbox 360 pad".into(),
+                    backend_label: "ViGEm bus".into(),
+                    is_xinput: true,
+                    can_plug: true,
+                    available: true,
+                    ..Default::default()
+                },
+                ksx_api::PersonaOption {
+                    name: "playstation".into(),
+                    label: "PlayStation pad".into(),
+                    backend_label: "ViGEm bus".into(),
+                    is_xinput: false,
+                    can_plug: true,
+                    available: true,
+                    ..Default::default()
+                },
+            ],
+            slots,
+            ..Default::default()
+        }
+    }
+
+    fn fixture_slot(number: u8, persona: &str, is_xinput: bool, preset: &str) -> ksx_api::StagedSlotView {
+        ksx_api::StagedSlotView {
+            number,
+            persona: persona.into(),
+            persona_label: format!("{persona} label"),
+            is_xinput,
+            preset: preset.into(),
+            ..Default::default()
+        }
+    }
+
+    /// The card and picker composition speaks only the daemon's truth: slot
+    /// order precomposes the reorder strings (empty at the ends — the honest
+    /// no-write), the api line prices XInput honestly, every ceiling in the
+    /// counts line is SERVED, and an unreachable daemon disables the roster
+    /// with the reason instead of hiding it.
+    #[test]
+    fn the_controller_cards_and_picker_speak_the_daemons_truth() {
+        let staged = fixture_staged(vec![
+            fixture_slot(1, "xbox360", true, "Player 1"),
+            fixture_slot(2, "playstation", false, "Player 2"),
+            fixture_slot(3, "xbox360", true, "Player 3"),
+        ]);
+        let view = RedesignControllers::of(&staged);
+        assert_eq!(view.cards.len(), 3);
+        assert_eq!(view.cards[0].up_order, "", "the top card has no up");
+        assert_eq!(view.cards[0].down_order, "2 1 3");
+        assert_eq!(view.cards[1].up_order, "2 1 3");
+        assert_eq!(view.cards[1].down_order, "1 3 2");
+        assert_eq!(view.cards[2].down_order, "", "the bottom card has no down");
+        assert!(view.cards[0].api_line.contains("XInput"));
+        assert!(view.cards[1].api_line.contains("no XInput slot"));
+        assert_eq!(
+            view.counts_line, "3 of 16 slots staged · 2 of 4 Xbox (XInput)",
+            "every number in the counts line is the daemon's"
+        );
+        assert_eq!(view.add_preset, "Player 4", "the next preset is served — it becomes a file name");
+        assert_eq!(view.add_layout, "keyboard-2p");
+        assert!(view.add_note.contains("nothing is saved or started"), "{}", view.add_note);
+        assert!(view.personas.iter().all(|p| p.usable == "true"));
+
+        // A full house says the nocturne sentence and offers no preset.
+        let full = fixture_staged(
+            (1..=16)
+                .map(|n| fixture_slot(n, "playstation", false, "P"))
+                .collect(),
+        );
+        let full_view = RedesignControllers::of(&full);
+        assert_eq!(full_view.add_preset, "");
+        assert!(
+            full_view.add_note.contains("Every controller slot is staged"),
+            "{}",
+            full_view.add_note
+        );
+
+        // Unreachable: the roster stays listed, disabled, with the reason.
+        let mut dead = fixture_staged(Vec::new());
+        dead.reachable = false;
+        dead.error = Some("the daemon pipe is closed".into());
+        let dead_view = RedesignControllers::of(&dead);
+        assert!(dead_view.cards.is_empty());
+        assert!(dead_view.personas.iter().all(|p| p.usable == "false"));
+        assert_eq!(dead_view.add_note, "the daemon pipe is closed");
+    }
+
+    /// The picker is SERVED: the topbar button, the modal shell, the lede,
+    /// the counts, every persona row, and the add form's served values —
+    /// hidden until opened, painted before any script runs.
+    #[test]
+    fn the_controller_picker_is_served() {
+        let page = EmbeddedPage::load("/redesign").unwrap();
+        let html = render_redesign(&page, &fixture_payload(), None).html;
+        assert!(
+            html.contains(r#"data-nx="rd-ctrls-open""#),
+            "the topbar button is served"
+        );
+        assert!(html.contains("rd-ctrlmodal"), "the modal shell is served");
+        assert!(
+            html.contains("0 of 16 slots staged · 0 of 4 Xbox (XInput)"),
+            "the served counts line is painted"
+        );
+        for label in ["Xbox 360 pad", "PlayStation pad"] {
+            assert!(html.contains(label), "missing persona row {label:?}");
+        }
+        assert!(
+            html.contains(r#"data-rd-form="controller-add""#),
+            "the add form declares its wiring type"
+        );
+        assert!(
+            html.contains(r#"name="layout""#) && html.contains(r#"name="persona""#),
+            "the add form posts persona and the served layout"
+        );
     }
 
     /// The tier rules are the nocturne roster's, and this pins them here: an
@@ -531,6 +708,7 @@ mod tests {
             LIST_SLOT_DEV_ENC,
             LIST_SLOT_DEV_EXP,
             LIST_SLOT_DEV_OTHER,
+            LIST_SLOT_CTRL_PERSONAS,
         ] {
             assert!(
                 names.contains(&list),
@@ -606,6 +784,10 @@ mod tests {
             "rdDevExpFoldCls",
             "rdDevOtherHead",
             "rdDevOtherFoldCls",
+            "rdCtrlAddNote",
+            "rdCtrlCountsLine",
+            "rdCtrlAddPreset",
+            "rdCtrlAddLayout",
         ] {
             assert!(
                 REDESIGN_ISLAND_TS.contains(&format!("const [{signal}, ")),
@@ -618,6 +800,7 @@ mod tests {
             "rdDevEnc",
             "rdDevExp",
             "rdDevOther",
+            "rdCtrlPersonas",
         ] {
             assert!(
                 REDESIGN_ISLAND_TS.contains(&format!("const [{signal}, ")),

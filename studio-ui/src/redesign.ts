@@ -64,6 +64,14 @@ function wireForms(root: HTMLElement): void {
     } else if (form.matches('[data-rd-form="device"]')) {
       ev.preventDefault();
       void submitDeviceForm(form, root, submitter);
+    } else if (
+      form.matches(
+        '[data-rd-form="controller-add"], [data-rd-form="controller-move"], ' +
+          '[data-rd-form="controller-remove"]',
+      )
+    ) {
+      ev.preventDefault();
+      void submitControllerForm(form, root, submitter);
     }
   });
 }
@@ -74,17 +82,27 @@ function wireForms(root: HTMLElement): void {
 const pendingMutationRoots = new WeakSet<HTMLElement>();
 type SubmitControl = HTMLButtonElement | HTMLInputElement;
 
+/** Every fetch-enhanced submit on the page — one selector, so the mutation
+ *  lock can never miss a form type that joined later. */
+const MUTATION_SUBMIT_SELECTOR = [
+  "theme",
+  "device",
+  "controller-add",
+  "controller-move",
+  "controller-remove",
+]
+  .flatMap((kind) => [
+    `[data-rd-form="${kind}"] button[type="submit"]`,
+    `[data-rd-form="${kind}"] input[type="submit"]`,
+  ])
+  .join(", ");
+
 function beginMutation(root: HTMLElement): SubmitControl[] | null {
   if (pendingMutationRoots.has(root)) return null;
   pendingMutationRoots.add(root);
   root.dataset.rdMutationPending = "true";
   const controls = Array.from(
-    root.querySelectorAll<SubmitControl>(
-      '[data-rd-form="theme"] button[type="submit"], ' +
-        '[data-rd-form="theme"] input[type="submit"], ' +
-        '[data-rd-form="device"] button[type="submit"], ' +
-        '[data-rd-form="device"] input[type="submit"]',
-    ),
+    root.querySelectorAll<SubmitControl>(MUTATION_SUBMIT_SELECTOR),
   );
   controls.forEach((control) => {
     control.disabled = true;
@@ -97,12 +115,7 @@ function endMutation(root: HTMLElement, controls: SubmitControl[]): void {
   // A device card can be added from the still-usable picker while the
   // request is in flight. Include those newly mounted controls as well as
   // the original snapshot so none remain stuck disabled after the lock.
-  const currentControls = root.querySelectorAll<SubmitControl>(
-    '[data-rd-form="theme"] button[type="submit"], ' +
-      '[data-rd-form="theme"] input[type="submit"], ' +
-      '[data-rd-form="device"] button[type="submit"], ' +
-      '[data-rd-form="device"] input[type="submit"]',
-  );
+  const currentControls = root.querySelectorAll<SubmitControl>(MUTATION_SUBMIT_SELECTOR);
   new Set<SubmitControl>([...controls, ...currentControls]).forEach((control) => {
     control.disabled = control.dataset.rdProductDisabled === "true";
   });
@@ -217,6 +230,58 @@ async function submitDeviceForm(
     } else {
       // A refusal or failed repaint leaves the Stage verb available to retry.
       submitter?.focus({ preventScroll: true });
+    }
+  }
+}
+
+/** One handler for the three controller verbs (add / move / remove): the
+ *  daemon owns every consequence — numbering, ceilings, availability — so
+ *  the whole client answer is flash + full repaint. The picker deliberately
+ *  stays open after an add: staging several controllers in one visit is the
+ *  point. A card's verbs are rebuilt by the repaint, so when the submitter
+ *  does not survive it, focus lands on the durable opener instead of a
+ *  detached node. */
+async function submitControllerForm(
+  form: HTMLFormElement,
+  root: HTMLElement,
+  submitter: HTMLElement | null,
+): Promise<void> {
+  const submits = beginMutation(root);
+  if (!submits) return;
+  const owner = form.closest<HTMLElement>(".rd-ctrlmodal-panel, .rd-ctrl-node") ?? form;
+  try {
+    const body = new URLSearchParams();
+    new FormData(form, submitter).forEach((value, key) => {
+      if (typeof value === "string") body.append(key, value);
+    });
+    const res = await fetch(form.action, {
+      method: "POST",
+      body,
+      redirect: "follow",
+    });
+    if (!res.ok) throw new Error(`controller request failed with ${res.status}`);
+    applyRedesignFlash(new URL(res.url).searchParams.get("flash"));
+    if (!(await refresh())) {
+      applyRedesignFlash(
+        "error: the controller request completed, but the workbench could not refresh — reload to confirm.",
+      );
+    }
+  } catch {
+    applyRedesignFlash("error: request failed — is ksx studio still running?");
+  } finally {
+    const restoreFocus = actionStillOwnsFocus(owner, submitter);
+    endMutation(root, submits);
+    if (restoreFocus) {
+      if (
+        submitter?.isConnected &&
+        !(submitter as HTMLButtonElement | HTMLInputElement).disabled
+      ) {
+        submitter.focus({ preventScroll: true });
+      } else {
+        root
+          .querySelector<HTMLElement>('[data-nx="rd-ctrls-open"]')
+          ?.focus({ preventScroll: true });
+      }
     }
   }
 }

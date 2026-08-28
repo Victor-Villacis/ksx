@@ -65,6 +65,163 @@ pub struct RedesignPayload {
     /// The workbench device picker's truth — see [`RedesignDeviceRows`].
     #[serde(default)]
     pub devices: RedesignDeviceRows,
+    /// The staged controllers and the persona picker — see
+    /// [`RedesignControllers`].
+    #[serde(default)]
+    pub controllers: RedesignControllers,
+}
+
+/// One staged controller on the workbench — a card per slot, straight off
+/// [`ksx_api::StagedSetupView`]. The daemon's slot order IS the play order:
+/// pads plug in this order at session start, and Windows hands each XInput
+/// pad the lowest FREE user index at that moment — so the number chip is the
+/// authored order, while the actual P-light is discovered at Play (ViGEm's
+/// notification callback; `ksx-core/slot.rs` — "never derived from this
+/// number").
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignControllerCard {
+    /// The daemon's slot number, as text (a list body is bare member reads).
+    pub number: String,
+    /// The persona code (`xbox360` | `playstation` | …) for family styling —
+    /// presentation routes on this, never on the label's words.
+    pub persona: String,
+    pub persona_label: String,
+    pub preset: String,
+    /// What this slot costs at Play, in one served sentence: an XInput
+    /// persona occupies one of Windows' four XInput slots; a HID persona
+    /// takes none of them.
+    pub api_line: String,
+    /// The whole slot order with this card swapped one place up/down — one
+    /// reorder per click, precomposed server-side (the rack's rule). Empty
+    /// at that end of the order; the handler answers with the honest
+    /// at-that-end sentence instead of a write.
+    pub up_order: String,
+    pub down_order: String,
+}
+
+/// One persona the picker offers — or honestly refuses to, reason attached.
+/// Unavailable personas stay listed: a menu that silently drops choices
+/// teaches a user the product has fewer (the nocturne create form's rule).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignPersonaRow {
+    pub name: String,
+    pub label: String,
+    pub api: String,
+    pub note: String,
+    pub cls: String,
+    /// `"true"` when this persona can be added RIGHT NOW — the daemon's
+    /// `can_plug && available`, served as a word so the island routes on a
+    /// fact instead of parsing a class string.
+    pub usable: String,
+}
+
+/// The controller picker's truth and the workbench's staged cards, composed
+/// from the ONE [`ksx_api::StagedSetupView`] the collector already holds —
+/// every ceiling (`max_slots`, `max_xinput_slots`) and every availability
+/// flag is the daemon's, served, never re-derived here.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignControllers {
+    pub cards: Vec<RedesignControllerCard>,
+    pub personas: Vec<RedesignPersonaRow>,
+    /// `next_preset`, served because it becomes a FILE NAME (stage.rs's
+    /// rule); empty when every slot is staged.
+    pub add_preset: String,
+    /// The layout the add verb dresses a fresh slot in — the served default,
+    /// so a first-run controller binds keys and is playable without a mapper
+    /// (MAPPER-UX commandment 9).
+    pub add_layout: String,
+    /// The lede over the picker: what adding does, or why nothing can be
+    /// added (full / unreachable), in the server's words.
+    pub add_note: String,
+    /// "N of M slots staged · X of Y Xbox (XInput)" — every number served.
+    pub counts_line: String,
+    pub reachable: bool,
+}
+
+impl RedesignControllers {
+    pub fn of(staged: &ksx_api::StagedSetupView) -> Self {
+        let order: Vec<u8> = staged.slots.iter().map(|slot| slot.number).collect();
+        let swapped = |a: usize, b: usize| -> String {
+            let mut next = order.clone();
+            next.swap(a, b);
+            next.iter()
+                .map(u8::to_string)
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let cards = staged
+            .slots
+            .iter()
+            .enumerate()
+            .map(|(at, slot)| RedesignControllerCard {
+                number: slot.number.to_string(),
+                persona: slot.persona.clone(),
+                persona_label: slot.persona_label.clone(),
+                preset: slot.preset.clone(),
+                api_line: if slot.is_xinput {
+                    "XInput — takes one of Windows' four XInput slots at Play".to_owned()
+                } else {
+                    "HID — no XInput slot; games and Steam see it by connection order"
+                        .to_owned()
+                },
+                up_order: if at == 0 { String::new() } else { swapped(at - 1, at) },
+                down_order: if at + 1 == order.len() {
+                    String::new()
+                } else {
+                    swapped(at, at + 1)
+                },
+            })
+            .collect();
+        let personas = staged
+            .personas
+            .iter()
+            .map(|persona| {
+                let usable = staged.reachable && persona.can_plug && persona.available;
+                RedesignPersonaRow {
+                    name: persona.name.clone(),
+                    label: persona.label.clone(),
+                    api: if persona.is_xinput {
+                        format!("{} · XInput", persona.backend_label)
+                    } else {
+                        persona.backend_label.clone()
+                    },
+                    note: persona
+                        .unavailable_reason
+                        .clone()
+                        .or_else(|| persona.gap.clone())
+                        .unwrap_or_default(),
+                    cls: if usable { "n-dev" } else { "n-dev off" }.to_owned(),
+                    usable: if usable { "true" } else { "false" }.to_owned(),
+                }
+            })
+            .collect();
+        let add_note = if !staged.reachable {
+            staged
+                .error
+                .clone()
+                .unwrap_or_else(|| "The daemon is not answering.".to_owned())
+        } else if staged.next_slot.is_none() {
+            // The nocturne create form's own full-house sentence, verbatim.
+            "Every controller slot is staged. Remove one to add another.".to_owned()
+        } else {
+            "Adding stages the next slot — nothing is saved or started until Play.".to_owned()
+        };
+        Self {
+            counts_line: format!(
+                "{} of {} slots staged · {} of {} Xbox (XInput)",
+                staged.slots.len(),
+                staged.max_slots,
+                staged.xinput_used,
+                staged.max_xinput_slots,
+            ),
+            add_preset: staged.next_preset.clone().unwrap_or_default(),
+            add_layout: staged.default_layout.clone(),
+            add_note,
+            reachable: staged.reachable,
+            cards,
+            personas,
+        }
+    }
 }
 
 /// The workbench device roster — what `/redesign`'s picker offers, tiered by

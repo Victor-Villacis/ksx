@@ -4834,6 +4834,12 @@ fn the_profiles_write_routes_refuse_a_cross_site_post() {
             "/redesign/device",
             "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
         ),
+        (
+            "/redesign/controller",
+            "persona=xbox360&preset=Player+1&layout=keyboard-2p",
+        ),
+        ("/redesign/controller/remove", "number=1"),
+        ("/redesign/controller/move", "order=2+1"),
     ] {
         let response = http(
             addr,
@@ -5410,6 +5416,66 @@ fn the_redesign_device_verb_stages_through_the_preserving_guard() {
         again.contains("flash=That%20keyboard%20is%20still"),
         "re-staging the staged board must answer with the preserved-preparation \
          sentence, got: {again}"
+    );
+}
+
+/// The workbench's controller verbs round-trip: add stages the next slot and
+/// answers with the shared draft sentence, move applies the card's
+/// precomposed whole-order (the renumbering is the daemon's), an empty order
+/// is the honest at-that-end answer and never a write, and remove drops the
+/// slot. Every redirect lands back on /redesign.
+#[test]
+fn the_redesign_controller_verbs_stage_reorder_and_remove() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+
+    for body in [
+        "persona=xbox360&preset=Player+1",
+        "persona=playstation&preset=Player+2",
+    ] {
+        let response = post_form(addr, "/redesign/controller", body);
+        assert!(response.starts_with("HTTP/1.1 303"), "got: {response}");
+        assert!(
+            response.contains("/redesign?flash=Draft%20updated."),
+            "the outcome must ride back to THIS page, got: {response}"
+        );
+    }
+    let staged = control.staged();
+    assert_eq!(
+        staged
+            .slots
+            .iter()
+            .map(|slot| (slot.number, slot.persona.as_str().to_owned()))
+            .collect::<Vec<_>>(),
+        vec![(1, "xbox360".to_owned()), (2, "playstation".to_owned())],
+        "two adds stage two slots, in order"
+    );
+
+    let response = post_form(addr, "/redesign/controller/move", "order=2+1");
+    assert!(response.contains("flash=Draft%20updated."), "got: {response}");
+    assert_eq!(
+        control
+            .staged()
+            .slots
+            .iter()
+            .map(|slot| slot.persona.as_str().to_owned())
+            .collect::<Vec<_>>(),
+        vec!["playstation".to_owned(), "xbox360".to_owned()],
+        "the whole-order reorder took, and the daemon renumbered"
+    );
+
+    let response = post_form(addr, "/redesign/controller/move", "order=");
+    assert!(
+        response.contains("flash=That%20controller%20is%20already"),
+        "an empty order is the at-that-end sentence, never a write: {response}"
+    );
+
+    let response = post_form(addr, "/redesign/controller/remove", "number=1");
+    assert!(response.contains("flash=Draft%20updated."), "got: {response}");
+    assert_eq!(
+        control.staged().slots.len(),
+        1,
+        "the removed slot is gone from the stage"
     );
 }
 

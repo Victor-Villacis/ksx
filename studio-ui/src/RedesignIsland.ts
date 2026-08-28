@@ -4,6 +4,10 @@ import {
   claimSavedDeviceGeometryKey,
   deviceInstanceId,
 } from "./device-instance-id";
+import {
+  syncControllerWidgets,
+  type RdControllerCardView,
+} from "./redesign-controllers";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /redesign — the transplant rebuild's blank workbench.
@@ -83,6 +87,31 @@ export interface RdDeviceRows {
   staging_line: string;
 }
 
+/** One persona the controller picker offers — `RedesignPersonaRow` on the
+ *  wire (snapshot.rs). `usable` is a served word ("true"/"false"), so the
+ *  island routes on a fact instead of parsing a class string. */
+export interface RdPersonaRowView {
+  name: string;
+  label: string;
+  api: string;
+  note: string;
+  cls: string;
+  usable: string;
+}
+
+/** The controller picker's truth — `RedesignControllers` on the wire. The
+ *  CARDS are daemon truth (the staged rack), reconciled onto the canvas by
+ *  redesign-controllers.ts; the roster and every ceiling are served. */
+export interface RdControllers {
+  cards: RdControllerCardView[];
+  personas: RdPersonaRowView[];
+  add_preset: string;
+  add_layout: string;
+  add_note: string;
+  counts_line: string;
+  reachable: boolean;
+}
+
 /** The payload the server embeds and /api/redesign serves — seeded into the
  *  signals by the entry BEFORE the island returns (ledger #5). */
 export interface RedesignPayload {
@@ -90,6 +119,7 @@ export interface RedesignPayload {
   environment_cls: string;
   theme_rows: RdChoiceRowView[];
   devices: RdDeviceRows;
+  controllers: RdControllers;
 }
 
 // ── SERVED signals — copiers, never derivers ────────────────────────────────
@@ -110,6 +140,14 @@ const [rdDevExpHead, setRdDevExpHead] = createSignal("");
 const [rdDevExpFoldCls, setRdDevExpFoldCls] = createSignal("n-devfold none");
 const [rdDevOtherHead, setRdDevOtherHead] = createSignal("");
 const [rdDevOtherFoldCls, setRdDevOtherFoldCls] = createSignal("n-devfold none");
+const [rdCtrlPersonas, setRdCtrlPersonas] = createSignal<RdPersonaRowView[]>([]);
+const [rdCtrlAddNote, setRdCtrlAddNote] = createSignal("");
+const [rdCtrlCountsLine, setRdCtrlCountsLine] = createSignal("");
+const [rdCtrlAddPreset, setRdCtrlAddPreset] = createSignal("");
+const [rdCtrlAddLayout, setRdCtrlAddLayout] = createSignal("");
+/** The served card list, held for the canvas reconciler — cards are canvas
+ *  widgets, not a template list, so this is plain data, not a signal. */
+let rdCtrlCards: RdControllerCardView[] = [];
 let rdDeviceScanAuthoritative = false;
 let rdStagingReachable = false;
 let rdStagingLine = "";
@@ -164,11 +202,38 @@ export function applyRedesign(v: RedesignPayload): void {
   setRdDevExpFoldCls(d?.exp_fold_cls ?? "n-devfold none");
   setRdDevOtherHead(d?.other_head ?? "");
   setRdDevOtherFoldCls(d?.other_fold_cls ?? "n-devfold none");
+  const c = v.controllers;
+  setRdCtrlPersonas(c?.personas ?? []);
+  setRdCtrlAddNote(c?.add_note ?? "");
+  setRdCtrlCountsLine(c?.counts_line ?? "");
+  setRdCtrlAddPreset(c?.add_preset ?? "");
+  setRdCtrlAddLayout(c?.add_layout ?? "");
+  rdCtrlCards = c?.cards ?? [];
   // Reconcile browser-owned membership with the freshly served roster: a
   // disconnected board leaves the canvas without losing its remembered
   // place, and a remembered board mounts as soon as the scan sees it again.
   reconcileBenchWithRoster();
+  // The controller cards are DAEMON truth: the canvas mirrors the staged
+  // rack exactly (redesign-controllers.ts owns the reconcile).
+  syncCtrlBench();
   restoreDeviceRowFocus(deviceFocus);
+}
+
+/** Reconcile the canvas to the served controller cards. A no-op until the
+ *  engine exists; the canvas init calls it again once it does. */
+function syncCtrlBench(): void {
+  const canvas = nCanvas;
+  const root = rdRoot;
+  if (!canvas || !root) return;
+  syncControllerWidgets(rdCtrlCards, {
+    canvas,
+    root,
+    savedGeometry: (id) => canvasPrefs.widgets[id],
+    onMutation: () => {
+      syncMapCount();
+      scheduleChips();
+    },
+  });
 }
 
 /** Report one action outcome (the redirect's allowlisted ?flash= copy) —
@@ -493,6 +558,7 @@ function setSheet(open: boolean): void {
     // Close peers only through their close paths; none of those paths opens a
     // replacement, so modal coordination cannot recurse.
     if (devModalIsOpen()) setDevModal(false);
+    if (ctrlModalIsOpen()) setCtrlModal(false);
     if (paletteOpen()) setPalette(false);
     closeThemeMenu(true);
     setZoomMenu(false);
@@ -561,6 +627,7 @@ function setPalette(open: boolean): void {
     // replaces an open device picker or shortcut sheet instead of focusing a
     // palette hidden behind it.
     if (devModalIsOpen()) setDevModal(false);
+    if (ctrlModalIsOpen()) setCtrlModal(false);
     if (sheetOpen()) setSheet(false);
     closeThemeMenu(true);
     setZoomMenu(false);
@@ -1340,6 +1407,7 @@ function setDevModal(open: boolean): void {
   if (open) {
     // Opening paths close peers; closing paths only restore focus. Keeping
     // that direction one-way prevents modal hand-offs from recursing.
+    if (ctrlModalIsOpen()) setCtrlModal(false);
     if (sheetOpen()) setSheet(false);
     if (paletteOpen()) setPalette(false);
     closeThemeMenu(true);
@@ -1354,6 +1422,40 @@ function setDevModal(open: boolean): void {
     el.hidden = true;
     const target = devModalReturnFocus;
     devModalReturnFocus = null;
+    restoreOverlayFocus(target);
+  }
+}
+
+// ── The controller picker modal — the device picker's twin, one per truth ──
+
+function ctrlModalEl(): HTMLElement | null {
+  return rdRoot?.querySelector<HTMLElement>(".rd-ctrlmodal") ?? null;
+}
+
+function ctrlModalIsOpen(): boolean {
+  const el = ctrlModalEl();
+  return Boolean(el && !el.hidden);
+}
+
+let ctrlModalReturnFocus: HTMLElement | null = null;
+function setCtrlModal(open: boolean): void {
+  const el = ctrlModalEl();
+  if (!el || el.hidden === !open) return;
+  if (open) {
+    if (devModalIsOpen()) setDevModal(false);
+    if (sheetOpen()) setSheet(false);
+    if (paletteOpen()) setPalette(false);
+    closeThemeMenu(true);
+    setZoomMenu(false);
+    ctrlModalReturnFocus = activeControl();
+    el.hidden = false;
+    el.querySelector<HTMLButtonElement>(
+      '.rd-ctrlmodal-head button[data-nx="rd-ctrls-close"]',
+    )?.focus({ preventScroll: true });
+  } else {
+    el.hidden = true;
+    const target = ctrlModalReturnFocus;
+    ctrlModalReturnFocus = null;
     restoreOverlayFocus(target);
   }
 }
@@ -1453,6 +1555,7 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
   );
   setCanvasMap(canvasPrefs.mapHidden === true);
   restoreBench();
+  syncCtrlBench();
   syncMapCount();
   syncToolRail(nCanvas.toolMode());
   wireSpotlight(stage, viewport);
@@ -1531,6 +1634,12 @@ export function redesignWire(root: HTMLElement): void {
         .selector;
       if (selector) toggleBenchDevice(selector);
       return;
+    } else if (hit === "rd-ctrls-open") {
+      setCtrlModal(true);
+      return;
+    } else if (hit === "rd-ctrls-close") {
+      setCtrlModal(false);
+      return;
     } else if (hit === "rd-zoom-menu") {
       setZoomMenu(!zoomMenuOpen());
       return;
@@ -1594,6 +1703,8 @@ export function redesignWire(root: HTMLElement): void {
   root.querySelector<HTMLElement>(".rd-sheet-card")
     ?.addEventListener("keydown", trapDialogTab);
   root.querySelector<HTMLElement>(".rd-devmodal-panel")
+    ?.addEventListener("keydown", trapDialogTab);
+  root.querySelector<HTMLElement>(".rd-ctrlmodal-panel")
     ?.addEventListener("keydown", trapDialogTab);
 
   const zoomTrigger = zoomMenuTrigger();
@@ -1672,7 +1783,8 @@ export function redesignWire(root: HTMLElement): void {
         ev.preventDefault();
         return;
       }
-      if (devModalIsOpen()) setDevModal(false);
+      if (ctrlModalIsOpen()) setCtrlModal(false);
+      else if (devModalIsOpen()) setDevModal(false);
       else if (sheetOpen()) setSheet(false);
       else if (paletteOpen()) setPalette(false);
       else if (zoomMenuOpen()) setZoomMenu(false);
@@ -1775,6 +1887,19 @@ export function RedesignIsland() {
               title: "Add devices to the workbench",
             },
             "＋ Devices",
+          ),
+          // The other half of the workbench: stage virtual controllers. The
+          // daemon owns every consequence — numbering, the XInput ceiling,
+          // persona availability — and the cards mirror its slots exactly.
+          h(
+            "button",
+            {
+              type: "button",
+              class: "n-autobtn rd-addctrl",
+              "data-nx": "rd-ctrls-open",
+              title: "Stage virtual controllers on the workbench",
+            },
+            "＋ Controllers",
           ),
           h("span", { class: "rd-spring" }),
           // The action flash — the one place a verb's outcome lands. Served
@@ -2065,6 +2190,82 @@ export function RedesignIsland() {
                     ),
                   ),
               ),
+            ),
+          ),
+        ),
+        // ── The controller picker: stage virtual controllers ──────────────
+        // SERVED — shell, lede, counts, every persona row — hidden until
+        // opened. Rows the daemon cannot offer stay listed (`n-dev off`,
+        // reason in the note): a menu that silently drops choices teaches a
+        // user the product has fewer. The add form's preset and layout are
+        // SERVED values (a future file name; the layout that makes a fresh
+        // slot playable). The daemon enforces every ceiling — an add the
+        // roster disallows is refused with a sentence, so the row's disabled
+        // look is presentation, never the guard.
+        h(
+          "div",
+          {
+            class: "rd-ctrlmodal",
+            hidden: "",
+            role: "dialog",
+            "aria-modal": "true",
+            "aria-label": "Stage virtual controllers",
+          },
+          h("div", { class: "rd-ctrlmodal-back", "data-nx": "rd-ctrls-close" }),
+          h(
+            "div",
+            { class: "rd-ctrlmodal-panel", tabindex: "-1" },
+            h(
+              "div",
+              { class: "rd-ctrlmodal-head" },
+              h("span", { class: "n-kick" }, "Virtual controllers"),
+              h("span", { class: "rd-spring" }),
+              h(
+                "button",
+                {
+                  type: "button",
+                  class: "n-mapclose",
+                  "data-nx": "rd-ctrls-close",
+                  "aria-label": "Close the controller picker",
+                  title: "Close (Esc)",
+                },
+                "×",
+              ),
+            ),
+            h("p", { class: "n-devnote" }, () => rdCtrlAddNote()),
+            h("p", { class: "n-devnote rd-ctrl-counts" }, () => rdCtrlCountsLine()),
+            h("h3", { class: "rd-devhead" }, "Pick what the next slot presents as"),
+            createList(
+              () => rdCtrlPersonas(),
+              (r) =>
+                r.name + "|" + r.label + "|" + r.api + "|" + r.note + "|" + r.cls +
+                "|" + r.usable,
+              (r) =>
+                h(
+                  "form",
+                  {
+                    class: "rd-ctrladd-form",
+                    method: "post",
+                    action: "/redesign/controller",
+                    "data-rd-form": "controller-add",
+                    "data-usable": r.usable,
+                  },
+                  h("input", { type: "hidden", name: "persona", value: r.name }),
+                  h("input", { type: "hidden", name: "preset", value: () => rdCtrlAddPreset() }),
+                  h("input", { type: "hidden", name: "layout", value: () => rdCtrlAddLayout() }),
+                  h(
+                    "button",
+                    { type: "submit", class: r.cls, title: r.note },
+                    h(
+                      "span",
+                      { class: "n-dev-txt" },
+                      h("span", { class: "n-dev-name" }, r.label),
+                      h("span", { class: "n-dev-meta" }, r.api),
+                      h("span", { class: "n-dev-meta rd-ctrl-note" }, r.note),
+                    ),
+                    h("span", { class: "n-dev-dot" }),
+                  ),
+                ),
             ),
           ),
         ),

@@ -255,6 +255,11 @@ describe("the controller workbench", () => {
       "No player",
       "the ghost wears its orphaned state",
     );
+    assert.match(
+      (await page.locator(`${ghost} .rd-ctrlcard-meta`).textContent()) ?? "",
+      /bindings kept/,
+      "the ghost says the studio holds its resurrection material",
+    );
 
     // Re-slot the ghost to Player 1: staged fresh at the top, the others
     // bump down again, the ghost retires. The wait targets the POST-MOVE

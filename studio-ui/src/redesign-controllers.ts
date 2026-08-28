@@ -57,13 +57,17 @@ export interface ControllerBenchIo {
   canvas: WidgetCanvas;
   root: HTMLElement;
   parked: ParkedController[];
+  /** The ghost ids the SERVER still holds resurrection material for
+   *  (`parked_held`, served) — decides each ghost's honest wording:
+   *  bindings kept, or staged fresh after a daemon restart. */
+  parkedHeld: Set<string>;
   /** The served values a ghost re-slot posts: `next_preset` (a future file
    *  name) and the default layout that makes a fresh slot playable. */
   addPreset: string;
   addLayout: string;
   savedGeometry(id: string): CardGeometry | undefined;
-  /** Park one live card's display facts as a ghost (before its remove
-   *  posts, so the card never simply vanishes). */
+  /** Park one live card's display facts as a ghost (after its park verb
+   *  submits — a re-sync before the submit would detach the form). */
   park(entry: ParkedController): void;
   /** Called once after any mount/retire, so the island can refresh the map
    *  count and the chips. */
@@ -80,9 +84,8 @@ export function parkedInstanceId(id: string): string {
 
 const PERSONA_BADGE_FALLBACK = "Controller";
 const ORPHAN_TITLE =
-  "No player parks this controller off the draft — the others move up. " +
-  "Its slot leaves the daemon with it, so re-slotting stages it fresh on " +
-  "the default layout.";
+  "No player parks this controller off the draft — the others move up. The " +
+  "studio keeps its bindings, and re-slotting brings them back.";
 
 function playerSelect(
   positions: number,
@@ -173,6 +176,27 @@ function liveCardContent(
   order.name = "order";
   moveForm.append(order);
 
+  // The hidden park form: ONE server transaction stashes the slot's
+  // resurrection material under this ghost id, removes it, and compacts
+  // the survivors. The id is minted at render so the form and the prefs
+  // entry agree.
+  const ghostId = `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const parkForm = document.createElement("form");
+  parkForm.className = "rd-ctrlverb-form";
+  parkForm.method = "post";
+  parkForm.action = "/redesign/controller/park";
+  parkForm.dataset.rdForm = "controller-park";
+  for (const [name, value] of [
+    ["number", card.number],
+    ["ghost", ghostId],
+  ]) {
+    const hidden = document.createElement("input");
+    hidden.type = "hidden";
+    hidden.name = name;
+    hidden.value = value;
+    parkForm.append(hidden);
+  }
+
   const position = allNumbers.indexOf(card.number) + 1;
   const select = playerSelect(
     allNumbers.length,
@@ -183,17 +207,14 @@ function liveCardContent(
   );
   select.addEventListener("change", () => {
     if (select.value === "") {
-      // Submit the remove FIRST, park second — both in this one synchronous
-      // task, so the park still lands before any network settles. The other
-      // order is a trap: park() re-syncs the canvas immediately, which
-      // REPLACES this card's content, and a submit dispatched on a detached
-      // form bubbles to nobody — the remove silently never posts.
-      const remove = body.querySelector<HTMLFormElement>(
-        'form[data-rd-form="controller-remove"]',
-      );
-      remove?.requestSubmit();
+      // Submit FIRST, park second — both in this one synchronous task, so
+      // the ghost still appears before any network settles. The other order
+      // is a trap: park() re-syncs the canvas immediately, which REPLACES
+      // this card's content, and a submit dispatched on a detached form
+      // bubbles to nobody — the verb silently never posts.
+      parkForm.requestSubmit();
       io.park({
-        id: `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        id: ghostId,
         persona: card.persona,
         persona_label: card.persona_label,
         preset: card.preset,
@@ -206,18 +227,22 @@ function liveCardContent(
 
   const verbs = document.createElement("div");
   verbs.className = "rd-ctrlcard-verbs";
-  verbs.append(select, moveForm, removeForm(card.number));
+  verbs.append(select, moveForm, parkForm, removeForm(card.number));
   body.append(slot, ...badgeAndName(card.persona, card.persona_label, card.preset), meta, verbs);
   return body;
 }
 
-/** A PARKED ghost: no slot, no player — a select to re-slot it (the entry
- *  chains add + move), and ✕ to discard the ghost (browser-only). */
+/** A PARKED ghost: no slot, no player — a select to re-slot it (one server
+ *  transaction: restore-or-fresh, then seat), and ✕ to discard the ghost
+ *  (browser-only). The wording tells the truth the server serves: while the
+ *  studio holds the parked slot, re-slotting brings its bindings back; after
+ *  a daemon restart it stages fresh. */
 function ghostCardContent(
   parked: ParkedController,
   livePositions: number,
   io: ControllerBenchIo,
 ): HTMLElement {
+  const held = io.parkedHeld.has(parked.id);
   const body = document.createElement("div");
   body.className = "rd-ctrlcard rd-ctrlcard-ghost";
   const slot = document.createElement("p");
@@ -226,12 +251,14 @@ function ghostCardContent(
   slot.title = ORPHAN_TITLE;
   const meta = document.createElement("p");
   meta.className = "rd-ctrlcard-meta";
-  meta.textContent = "Parked — off the draft until re-slotted.";
+  meta.textContent = held
+    ? "Parked — bindings kept until re-slotted."
+    : "Parked before a daemon restart — re-slotting stages it fresh on the default layout.";
 
   const assignForm = document.createElement("form");
   assignForm.className = "rd-ctrlverb-form";
   assignForm.method = "post";
-  assignForm.action = "/redesign/controller";
+  assignForm.action = "/redesign/controller/assign";
   assignForm.dataset.rdForm = "controller-assign";
   for (const [name, value] of [
     ["persona", parked.persona],
@@ -249,8 +276,11 @@ function ghostCardContent(
   const select = playerSelect(
     livePositions + 1,
     null,
-    "Re-slot this controller: it is staged fresh at the chosen position " +
-      "and the others bump down in arrival order.",
+    held
+      ? "Re-slot this controller at the chosen position — its bindings come " +
+        "back with it, and the others bump down in arrival order."
+      : "Re-slot this controller: it is staged fresh at the chosen position " +
+        "and the others bump down in arrival order.",
   );
   select.addEventListener("change", () => {
     if (select.value === "") return;

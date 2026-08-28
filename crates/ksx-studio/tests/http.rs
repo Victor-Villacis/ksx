@@ -4840,6 +4840,11 @@ fn the_profiles_write_routes_refuse_a_cross_site_post() {
         ),
         ("/redesign/controller/remove", "number=1"),
         ("/redesign/controller/move", "order=2+1"),
+        ("/redesign/controller/park", "number=1&ghost=g-sweep"),
+        (
+            "/redesign/controller/assign",
+            "ghost=g-sweep&position=1&persona=xbox360&preset=Player+1&layout=keyboard-2p",
+        ),
     ] {
         let response = http(
             addr,
@@ -5483,6 +5488,89 @@ fn the_redesign_controller_verbs_stage_reorder_and_remove() {
         "the removal closes the gap: the survivor moves UP to slot 1 — a \
          card's number IS its play position on the workbench"
     );
+}
+
+/// Park keeps the slot's resurrection material and re-slotting RESTORES it:
+/// the bindings survive the round trip, the restored slot seats at the
+/// asked position, and a name another slot took meanwhile is re-issued
+/// fresh instead of aliasing two slots onto one preset file.
+#[test]
+fn park_holds_the_bindings_and_assign_restores_them_without_aliasing() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+
+    // A dressed slot: the layout binds keys, which is the material at stake.
+    post_form(
+        addr,
+        "/redesign/controller",
+        "persona=xbox360&preset=Player+1&layout=keyboard-2p",
+    );
+    assert!(
+        control.staged().slots[0].bindings > 0,
+        "the layout bound something"
+    );
+
+    let response = post_form(addr, "/redesign/controller/park", "number=1&ghost=g1");
+    assert!(response.contains("flash=Draft%20updated."), "got: {response}");
+    assert!(control.staged().slots.is_empty(), "parked = off the draft");
+
+    let response = post_form(
+        addr,
+        "/redesign/controller/assign",
+        "ghost=g1&position=1&persona=xbox360&preset=Player+9&layout=",
+    );
+    assert!(response.contains("flash=Draft%20updated."), "got: {response}");
+    let restored = control.staged();
+    assert_eq!(restored.slots.len(), 1);
+    assert_eq!(restored.slots[0].number, 1);
+    assert_eq!(
+        restored.slots[0].preset, "Player 1",
+        "a name still free is kept, not re-issued"
+    );
+    assert!(
+        restored.slots[0].bindings > 0,
+        "the park round trip must not lose the bindings"
+    );
+
+    // The aliasing rule: park it again, let another slot take the name,
+    // then re-slot — the restored preset is renamed to the served fresh
+    // name, bindings intact.
+    post_form(addr, "/redesign/controller/park", "number=1&ghost=g2");
+    post_form(
+        addr,
+        "/redesign/controller",
+        "persona=playstation&preset=Player+1&layout=keyboard-2p",
+    );
+    let response = post_form(
+        addr,
+        "/redesign/controller/assign",
+        "ghost=g2&position=2&persona=xbox360&preset=Player+9&layout=",
+    );
+    assert!(response.contains("flash=Draft%20updated."), "got: {response}");
+    let after = control.staged();
+    assert_eq!(after.slots.len(), 2);
+    assert_eq!(after.slots[1].number, 2, "seated at the asked position");
+    assert_eq!(after.slots[1].persona, "xbox360");
+    assert_ne!(
+        after.slots[1].preset, "Player 1",
+        "two slots must never share a preset file name"
+    );
+    assert!(after.slots[1].bindings > 0, "renamed, not stripped");
+
+    // A ghost the store no longer holds stages FRESH from the form's facts.
+    let response = post_form(
+        addr,
+        "/redesign/controller/assign",
+        "ghost=never-parked&position=1&persona=playstation&preset=Fresh+One&layout=keyboard-2p",
+    );
+    assert!(response.contains("flash=Draft%20updated."), "got: {response}");
+    let fresh = control.staged();
+    assert_eq!(fresh.slots.len(), 3);
+    assert_eq!(
+        fresh.slots[0].preset, "Fresh One",
+        "fresh-staged at position 1"
+    );
+    assert!(fresh.slots[0].bindings > 0, "dressed by the posted layout");
 }
 
 /// With no daemon, the config half of the page keeps working and the two verbs

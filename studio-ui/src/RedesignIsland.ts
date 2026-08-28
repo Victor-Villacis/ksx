@@ -111,6 +111,7 @@ export interface RdControllers {
   add_note: string;
   counts_line: string;
   reachable: boolean;
+  parked_held: string[];
 }
 
 /** The payload the server embeds and /api/redesign serves — seeded into the
@@ -149,6 +150,9 @@ const [rdCtrlAddLayout, setRdCtrlAddLayout] = createSignal("");
 /** The served card list, held for the canvas reconciler — cards are canvas
  *  widgets, not a template list, so this is plain data, not a signal. */
 let rdCtrlCards: RdControllerCardView[] = [];
+/** The ghost ids the server still holds parked material for — plain data
+ *  for the same reason. */
+let rdCtrlParkedHeld: string[] = [];
 let rdDeviceScanAuthoritative = false;
 let rdStagingReachable = false;
 let rdStagingLine = "";
@@ -210,6 +214,7 @@ export function applyRedesign(v: RedesignPayload): void {
   setRdCtrlAddPreset(c?.add_preset ?? "");
   setRdCtrlAddLayout(c?.add_layout ?? "");
   rdCtrlCards = c?.cards ?? [];
+  rdCtrlParkedHeld = c?.parked_held ?? [];
   // Reconcile browser-owned membership with the freshly served roster: a
   // disconnected board leaves the canvas without losing its remembered
   // place, and a remembered board mounts as soon as the scan sees it again.
@@ -231,6 +236,7 @@ function syncCtrlBench(): void {
     canvas,
     root,
     parked: canvasPrefs.parked ?? [],
+    parkedHeld: new Set(rdCtrlParkedHeld),
     addPreset: rdCtrlAddPreset(),
     addLayout: rdCtrlAddLayout(),
     savedGeometry: (id) => canvasPrefs.widgets[id],
@@ -259,12 +265,6 @@ export function unparkController(id: string): void {
   syncCtrlBench();
 }
 
-/** The served slot numbers, in the daemon's order — the entry's assign
- *  chain composes its whole-order permutation from these AFTER the add's
- *  refresh, so the move works on fresh truth. */
-export function redesignControllerNumbers(): string[] {
-  return rdCtrlCards.map((card) => card.number);
-}
 
 /** Report one action outcome (the redirect's allowlisted ?flash= copy) —
  *  the server derivation in render_redesign.rs `scalar_slots`, mirrored:

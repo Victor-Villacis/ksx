@@ -130,6 +130,12 @@ pub struct RedesignControllers {
     /// "N of M slots staged · X of Y Xbox (XInput)" — every number served.
     pub counts_line: String,
     pub reachable: bool,
+    /// The ghost ids whose parked slot the server still HOLDS (authoring
+    /// included) — set by the collector from the studio's parked store, so
+    /// a ghost card can say "bindings kept" or "staged fresh" truthfully
+    /// BEFORE the press. A daemon restart empties it.
+    #[serde(default)]
+    pub parked_held: Vec<String>,
 }
 
 impl RedesignControllers {
@@ -198,6 +204,10 @@ impl RedesignControllers {
             reachable: staged.reachable,
             cards,
             personas,
+            // The studio's parked store is not a daemon read; the collector
+            // overlays the held ids (`server/redesign.rs`), the same way the
+            // daemon overlays `dirty`/`origin` on the staged view.
+            parked_held: Vec::new(),
         }
     }
 }

@@ -129,6 +129,15 @@ struct AppState {
     /// undo window — the browser is shown a chip and a verb, never the
     /// authoring table (`server/nocturne.rs`).
     nocturne_undo: std::sync::Mutex<Option<nocturne::NocturneUndoStash>>,
+    /// The redesign workbench's PARKED controllers ("No player"), keyed by
+    /// the browser's ghost id: each entry is the removed slot's full view —
+    /// authoring included — so re-slotting restores its bindings, the same
+    /// resurrection material the rack's undo holds. Its OWN store, not the
+    /// undo's one-deep stash: several boards park at once, and a nocturne
+    /// removal must not evict a parked workbench controller (or vice
+    /// versa). In-memory like the undo — a daemon restart forgets parks,
+    /// and the page says so on the ghost (`server/redesign.rs`).
+    redesign_parked: std::sync::Mutex<Vec<(String, ksx_api::StagedSlotView)>>,
     /// The machine-read cache: the poller asks every 2 s, but a USB tree
     /// enumeration and three TOML parses per poll is work the machine did
     /// not ask for. TTL-bounded, invalidated by every mutating request and
@@ -334,6 +343,7 @@ pub fn serve(
         machine,
         live,
         nocturne_undo: std::sync::Mutex::new(None),
+        redesign_parked: std::sync::Mutex::new(Vec::new()),
         machine_cache: MachineCache::new(),
     });
 
@@ -501,6 +511,11 @@ pub fn serve(
                 post(redesign_form_ctrl_remove),
             )
             .route("/redesign/controller/move", post(redesign_form_ctrl_move))
+            .route("/redesign/controller/park", post(redesign_form_ctrl_park))
+            .route(
+                "/redesign/controller/assign",
+                post(redesign_form_ctrl_assign),
+            )
             // ── THE LIVE FEED ─────────────────────────────────────────────
             // One route, and it is the keystone the button check stands on:
             // the daemon's input fan-out as Server-Sent Events. Read-only and

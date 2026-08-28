@@ -77,7 +77,24 @@ pub(super) async fn collect_redesign(state: &Arc<AppState>) -> RedesignPayload {
         // The staged device — the daemon's answer to "which board does ksx
         // split", marked onto the picker rows and the bench cards.
         let staged = redesign_state.control.staged();
-        crate::render_redesign::payload(&redesign_state.source.environment(), setup, scan, &staged)
+        let mut payload = crate::render_redesign::payload(
+            &redesign_state.source.environment(),
+            setup,
+            scan,
+            &staged,
+        );
+        // Which parked ghosts the studio still HOLDS (authoring included),
+        // so a ghost card can say "bindings kept" vs "staged fresh" before
+        // the press. Studio state, not a daemon read — set here like the
+        // staging line, not composed in the pure payload fn.
+        payload.controllers.parked_held = redesign_state
+            .redesign_parked
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect();
+        payload
     })
     .await
     .unwrap_or_default()
@@ -327,30 +344,244 @@ pub(super) async fn redesign_form_ctrl_remove(
         if !removed {
             return false;
         }
-        let survivors: Vec<u8> = state
-            .control
-            .staged()
-            .slots
-            .iter()
-            .map(|slot| slot.number)
-            .collect();
-        let contiguous = survivors
-            .iter()
-            .enumerate()
-            .all(|(at, number)| usize::from(*number) == at + 1);
-        if survivors.is_empty() || contiguous {
-            return true;
-        }
-        // Best-effort: the removal already succeeded and is the sentence the
-        // flash reports; a daemon too old to reorder simply keeps the hole.
-        let _ = state
-            .control
-            .stage_edit(&ksx_api::StageEdit::ReorderSlots { numbers: survivors });
+        compact_staged_slots(&state);
         true
     })
     .await
     .unwrap_or(false);
     redesign_redirect(if ok { N_EDIT_OK } else { N_EDIT_ERROR })
+}
+
+/// Close any number gap: one `ReorderSlots` over the surviving order
+/// renumbers 1..N. Best-effort past the initiating edit (a daemon too old
+/// to reorder simply keeps the hole, and the flash reports the edit that
+/// DID happen). The workbench's law: a card's number IS its play position.
+fn compact_staged_slots(state: &AppState) {
+    let survivors: Vec<u8> = state
+        .control
+        .staged()
+        .slots
+        .iter()
+        .map(|slot| slot.number)
+        .collect();
+    let contiguous = survivors
+        .iter()
+        .enumerate()
+        .all(|(at, number)| usize::from(*number) == at + 1);
+    if survivors.is_empty() || contiguous {
+        return;
+    }
+    let _ = state
+        .control
+        .stage_edit(&ksx_api::StageEdit::ReorderSlots { numbers: survivors });
+}
+
+/// How many parked controllers the store holds before the OLDEST park is
+/// forgotten — enough for any real bench, small enough to stay nothing.
+const REDESIGN_PARKED_CAP: usize = 32;
+
+#[derive(Deserialize)]
+pub(super) struct RedesignParkForm {
+    number: u8,
+    /// The browser's ghost id — the key re-slotting hands back.
+    ghost: String,
+}
+
+/// POST /redesign/controller/park — "No player": take the slot OFF the
+/// draft but keep its resurrection material (the full slot view, authoring
+/// included) server-side under the ghost's id, then close the number gap.
+/// The rack undo's pattern grown a KEYED store: several boards park at
+/// once, and re-slotting restores bindings instead of staging fresh.
+pub(super) async fn redesign_form_ctrl_park(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignParkForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let ok = tokio::task::spawn_blocking(move || {
+        let Some(slot) = state
+            .control
+            .staged()
+            .slots
+            .iter()
+            .find(|slot| slot.number == form.number)
+            .cloned()
+        else {
+            return false;
+        };
+        if !state
+            .control
+            .stage_edit(&ksx_api::StageEdit::RemoveSlot {
+                number: form.number,
+            })
+            .ok
+        {
+            return false;
+        }
+        compact_staged_slots(&state);
+        let mut parked = state.redesign_parked.lock().unwrap();
+        parked.retain(|(id, _)| *id != form.ghost);
+        if parked.len() >= REDESIGN_PARKED_CAP {
+            parked.remove(0);
+        }
+        parked.push((form.ghost, slot));
+        true
+    })
+    .await
+    .unwrap_or(false);
+    redesign_redirect(if ok { N_EDIT_OK } else { N_EDIT_ERROR })
+}
+
+#[derive(Deserialize)]
+pub(super) struct RedesignAssignForm {
+    ghost: String,
+    position: u8,
+    /// The fallback facts for a ghost the store no longer holds (a daemon
+    /// restart forgets parks): stage it fresh instead, exactly like the
+    /// picker's add. The card said which outcome the press buys BEFORE the
+    /// press (`parked_held`).
+    persona: String,
+    preset: String,
+    #[serde(default)]
+    layout: Option<String>,
+}
+
+/// POST /redesign/controller/assign — re-slot a parked ghost at `position`
+/// in ONE server transaction: restore (the undo verb's add → bindings →
+/// socd chain, rollback on a failed bind) or fresh-stage when the store
+/// lost it, then seat with one whole-order reorder. Restoring renames ONLY
+/// when the old name is now worn by another slot — the duplicate verb's
+/// aliasing rule: a save writes one preset file per name — and the
+/// authoring's own name field moves with it.
+pub(super) async fn redesign_form_ctrl_assign(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignAssignForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let flash = tokio::task::spawn_blocking(move || {
+        let held = {
+            let parked = state.redesign_parked.lock().unwrap();
+            parked
+                .iter()
+                .find(|(id, _)| *id == form.ghost)
+                .map(|(_, slot)| slot.clone())
+        };
+        let staged = state.control.staged();
+        let number = match held {
+            Some(slot) => {
+                let Some(mut authoring) = slot.authoring else {
+                    return N_EDIT_ERROR;
+                };
+                let name_taken = staged.slots.iter().any(|s| s.preset == slot.preset);
+                let name = if name_taken {
+                    match staged.next_preset.clone() {
+                        Some(fresh) => fresh,
+                        None => return N_EDIT_ERROR,
+                    }
+                } else {
+                    slot.preset.clone()
+                };
+                let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
+                    number: None,
+                    persona: slot.persona.clone(),
+                    preset: name.clone(),
+                    layout: None,
+                });
+                if !added.ok {
+                    return N_EDIT_ERROR;
+                }
+                let Some(number) = added.setup.slots.iter().map(|s| s.number).max() else {
+                    return N_EDIT_ERROR;
+                };
+                authoring.name = name;
+                let bound = state.control.stage_edit(&ksx_api::StageEdit::SetBindings {
+                    number,
+                    preset: Box::new(authoring),
+                });
+                if !bound.ok {
+                    let _ = state
+                        .control
+                        .stage_edit(&ksx_api::StageEdit::RemoveSlot { number });
+                    return N_EDIT_ERROR;
+                }
+                if !slot.socd.is_empty() && slot.socd != "off" {
+                    let _ = state.control.stage_edit(&ksx_api::StageEdit::SetSocd {
+                        number,
+                        socd: slot.socd.clone(),
+                    });
+                }
+                number
+            }
+            None => {
+                let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
+                    number: None,
+                    persona: form.persona,
+                    preset: form.preset,
+                    layout: None,
+                });
+                if !added.ok {
+                    return N_EDIT_ERROR;
+                }
+                let Some(number) = added.setup.slots.iter().map(|s| s.number).max() else {
+                    return N_EDIT_ERROR;
+                };
+                if let Some(layout) = form.layout.filter(|l| !l.trim().is_empty()) {
+                    let dressed = state.control.stage_edit(&ksx_api::StageEdit::SetLayout {
+                        number,
+                        layout: layout.clone(),
+                        player: None,
+                    });
+                    if !dressed.ok {
+                        let redressed =
+                            state.control.stage_edit(&ksx_api::StageEdit::SetLayout {
+                                number,
+                                layout,
+                                player: Some(1),
+                            });
+                        if !redressed.ok {
+                            let _ = state
+                                .control
+                                .stage_edit(&ksx_api::StageEdit::RemoveSlot { number });
+                            return N_ADD_LAYOUT_ERROR;
+                        }
+                    }
+                }
+                number
+            }
+        };
+        // Seat it: the whole order with the fresh number at `position`.
+        let mut order: Vec<u8> = state
+            .control
+            .staged()
+            .slots
+            .iter()
+            .map(|slot| slot.number)
+            .filter(|n| *n != number)
+            .collect();
+        let at = usize::from(form.position.max(1) - 1).min(order.len());
+        order.insert(at, number);
+        let seated = order
+            .iter()
+            .enumerate()
+            .all(|(idx, n)| usize::from(*n) == idx + 1);
+        if !seated {
+            let _ = state
+                .control
+                .stage_edit(&ksx_api::StageEdit::ReorderSlots { numbers: order });
+        }
+        state
+            .redesign_parked
+            .lock()
+            .unwrap()
+            .retain(|(id, _)| *id != form.ghost);
+        N_EDIT_OK
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
+    redesign_redirect(flash)
 }
 
 #[derive(Deserialize)]

@@ -5473,9 +5473,15 @@ fn the_redesign_controller_verbs_stage_reorder_and_remove() {
     let response = post_form(addr, "/redesign/controller/remove", "number=1");
     assert!(response.contains("flash=Draft%20updated."), "got: {response}");
     assert_eq!(
-        control.staged().slots.len(),
-        1,
-        "the removed slot is gone from the stage"
+        control
+            .staged()
+            .slots
+            .iter()
+            .map(|slot| (slot.number, slot.persona.as_str().to_owned()))
+            .collect::<Vec<_>>(),
+        vec![(1, "xbox360".to_owned())],
+        "the removal closes the gap: the survivor moves UP to slot 1 — a \
+         card's number IS its play position on the workbench"
     );
 }
 

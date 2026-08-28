@@ -91,12 +91,6 @@ pub struct RedesignControllerCard {
     /// persona occupies one of Windows' four XInput slots; a HID persona
     /// takes none of them.
     pub api_line: String,
-    /// The whole slot order with this card swapped one place up/down — one
-    /// reorder per click, precomposed server-side (the rack's rule). Empty
-    /// at that end of the order; the handler answers with the honest
-    /// at-that-end sentence instead of a write.
-    pub up_order: String,
-    pub down_order: String,
 }
 
 /// One persona the picker offers — or honestly refuses to, reason attached.
@@ -140,20 +134,10 @@ pub struct RedesignControllers {
 
 impl RedesignControllers {
     pub fn of(staged: &ksx_api::StagedSetupView) -> Self {
-        let order: Vec<u8> = staged.slots.iter().map(|slot| slot.number).collect();
-        let swapped = |a: usize, b: usize| -> String {
-            let mut next = order.clone();
-            next.swap(a, b);
-            next.iter()
-                .map(u8::to_string)
-                .collect::<Vec<_>>()
-                .join(" ")
-        };
         let cards = staged
             .slots
             .iter()
-            .enumerate()
-            .map(|(at, slot)| RedesignControllerCard {
+            .map(|slot| RedesignControllerCard {
                 number: slot.number.to_string(),
                 persona: slot.persona.clone(),
                 persona_label: slot.persona_label.clone(),
@@ -163,12 +147,6 @@ impl RedesignControllers {
                 } else {
                     "HID — no XInput slot; games and Steam see it by connection order"
                         .to_owned()
-                },
-                up_order: if at == 0 { String::new() } else { swapped(at - 1, at) },
-                down_order: if at + 1 == order.len() {
-                    String::new()
-                } else {
-                    swapped(at, at + 1)
                 },
             })
             .collect();

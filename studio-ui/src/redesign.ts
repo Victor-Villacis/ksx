@@ -10,9 +10,12 @@ import {
   applyRedesignFlash,
   initRedesignCanvas,
   RedesignIsland,
+  redesignControllerNumbers,
   redesignWire,
+  unparkController,
   type RedesignPayload,
 } from "./RedesignIsland";
+import { composeOrderMoving } from "./redesign-controller-order";
 
 void RedesignPage; // compile-time anchor only (see above)
 
@@ -72,6 +75,9 @@ function wireForms(root: HTMLElement): void {
     ) {
       ev.preventDefault();
       void submitControllerForm(form, root, submitter);
+    } else if (form.matches('[data-rd-form="controller-assign"]')) {
+      ev.preventDefault();
+      void submitControllerAssign(form, root, submitter);
     }
   });
 }
@@ -90,6 +96,7 @@ const MUTATION_SUBMIT_SELECTOR = [
   "controller-add",
   "controller-move",
   "controller-remove",
+  "controller-assign",
 ]
   .flatMap((kind) => [
     `[data-rd-form="${kind}"] button[type="submit"]`,
@@ -282,6 +289,79 @@ async function submitControllerForm(
           .querySelector<HTMLElement>('[data-nx="rd-ctrls-open"]')
           ?.focus({ preventScroll: true });
       }
+    }
+  }
+}
+
+/** The ghost re-slot chain: stage the parked controller fresh (the add
+ *  verb), refresh, seat it at the chosen position with ONE whole-order move
+ *  composed from the POST-refresh truth, refresh again, and retire the
+ *  ghost. Two daemon writes, each answered; a failure between them leaves
+ *  an honestly live slot at the end of the order plus the flash that says
+ *  what happened — never a half-claimed position. */
+async function submitControllerAssign(
+  form: HTMLFormElement,
+  root: HTMLElement,
+  submitter: HTMLElement | null,
+): Promise<void> {
+  const submits = beginMutation(root);
+  if (!submits) return;
+  const owner = form.closest<HTMLElement>(".rd-ctrl-node") ?? form;
+  const ghost = (form.elements.namedItem("ghost") as HTMLInputElement | null)?.value ?? "";
+  const position = Number(
+    (form.elements.namedItem("position") as HTMLInputElement | null)?.value,
+  );
+  try {
+    const body = new URLSearchParams();
+    for (const name of ["persona", "preset", "layout"]) {
+      const field = form.elements.namedItem(name) as HTMLInputElement | null;
+      if (field) body.append(name, field.value);
+    }
+    const before = new Set(redesignControllerNumbers());
+    const added = await fetch(form.action, { method: "POST", body, redirect: "follow" });
+    if (!added.ok) throw new Error(`assign add failed with ${added.status}`);
+    applyRedesignFlash(new URL(added.url).searchParams.get("flash"));
+    if (!(await refresh())) {
+      applyRedesignFlash(
+        "error: the controller was staged, but the workbench could not refresh — reload to confirm.",
+      );
+      return;
+    }
+    const after = redesignControllerNumbers();
+    const fresh = after.find((n) => !before.has(n));
+    // A refused add (full house, unknown persona, dead daemon) stages no
+    // fresh slot: the chain honestly stops at the refusal's sentence and
+    // the ghost stays parked for another try.
+    if (!fresh) return;
+    unparkController(ghost);
+    if (Number.isFinite(position) && position >= 1 && position <= after.length) {
+      const order = new URLSearchParams({
+        order: composeOrderMoving(after, fresh, position),
+      });
+      const moved = await fetch("/redesign/controller/move", {
+        method: "POST",
+        body: order,
+        redirect: "follow",
+      });
+      if (!moved.ok) throw new Error(`assign move failed with ${moved.status}`);
+      applyRedesignFlash(new URL(moved.url).searchParams.get("flash"));
+      if (!(await refresh())) {
+        applyRedesignFlash(
+          "error: the controller was staged, but the workbench could not refresh — reload to confirm.",
+        );
+      }
+    }
+  } catch {
+    applyRedesignFlash("error: request failed — is ksx studio still running?");
+  } finally {
+    const restoreFocus = actionStillOwnsFocus(owner, submitter);
+    endMutation(root, submits);
+    if (restoreFocus) {
+      // The initiating ghost card retires on success; land on the durable
+      // opener either way.
+      root
+        .querySelector<HTMLElement>('[data-nx="rd-ctrls-open"]')
+        ?.focus({ preventScroll: true });
     }
   }
 }

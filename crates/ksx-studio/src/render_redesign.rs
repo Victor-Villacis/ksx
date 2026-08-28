@@ -403,11 +403,11 @@ mod tests {
         ]);
         let view = RedesignControllers::of(&staged);
         assert_eq!(view.cards.len(), 3);
-        assert_eq!(view.cards[0].up_order, "", "the top card has no up");
-        assert_eq!(view.cards[0].down_order, "2 1 3");
-        assert_eq!(view.cards[1].up_order, "2 1 3");
-        assert_eq!(view.cards[1].down_order, "1 3 2");
-        assert_eq!(view.cards[2].down_order, "", "the bottom card has no down");
+        assert_eq!(
+            view.cards.iter().map(|c| c.number.as_str()).collect::<Vec<_>>(),
+            ["1", "2", "3"],
+            "cards ride the daemon's slot order — numbers arrive with the slots"
+        );
         assert!(view.cards[0].api_line.contains("XInput"));
         assert!(view.cards[1].api_line.contains("no XInput slot"));
         assert_eq!(

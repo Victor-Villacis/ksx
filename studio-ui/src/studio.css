@@ -18569,6 +18569,42 @@ a.nm-link {
   color: var(--n-danger);
 }
 
+/* Direct player assignment — a select, not spatial arrows: "make this
+   Player 2" is one gesture, and "No player" parks the card. */
+.rd-ctrlplayer {
+  padding: 3px 8px;
+  border: 1px solid var(--n-line);
+  border-radius: 8px;
+  background: var(--n-panel);
+  color: var(--n-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rd-ctrlplayer:hover,
+.rd-ctrlplayer:focus-visible {
+  border-color: var(--n-accent-line);
+}
+
+.rd-ctrlcard-verbs {
+  align-items: center;
+}
+
+.rd-ctrlcard-verbs > form:last-child,
+.rd-ctrlcard-verbs > button:last-child {
+  margin-left: auto;
+}
+
+/* A parked ghost: on the canvas, off the draft. */
+.rd-ctrlcard-ghost {
+  opacity: 0.78;
+}
+
+.rd-ctrlcard-noplayer {
+  background: color-mix(in srgb, var(--n-text-3) 24%, transparent);
+  color: var(--n-text-2);
+}
+
 /* Semantic tiers on the slot cards, the workbench pattern: chips always;
    the meta from structure in; the verbs only at editing distance. */
 .rd [data-canvas-zoom-tier="overview"] .rd-ctrlcard-meta,

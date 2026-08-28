@@ -6,6 +6,7 @@ import {
 } from "./device-instance-id";
 import {
   syncControllerWidgets,
+  type ParkedController,
   type RdControllerCardView,
 } from "./redesign-controllers";
 
@@ -219,8 +220,9 @@ export function applyRedesign(v: RedesignPayload): void {
   restoreDeviceRowFocus(deviceFocus);
 }
 
-/** Reconcile the canvas to the served controller cards. A no-op until the
- *  engine exists; the canvas init calls it again once it does. */
+/** Reconcile the canvas to the served controller cards and the parked
+ *  ghosts. A no-op until the engine exists; the canvas init calls it again
+ *  once it does. */
 function syncCtrlBench(): void {
   const canvas = nCanvas;
   const root = rdRoot;
@@ -228,12 +230,40 @@ function syncCtrlBench(): void {
   syncControllerWidgets(rdCtrlCards, {
     canvas,
     root,
+    parked: canvasPrefs.parked ?? [],
+    addPreset: rdCtrlAddPreset(),
+    addLayout: rdCtrlAddLayout(),
     savedGeometry: (id) => canvasPrefs.widgets[id],
+    park: parkController,
     onMutation: () => {
       syncMapCount();
       scheduleChips();
     },
   });
+}
+
+/** Park one orphaned controller's display facts — called by the card the
+ *  moment "No player" is chosen, BEFORE its remove posts, so the card's
+ *  identity survives whatever the network does. */
+function parkController(entry: ParkedController): void {
+  canvasPrefs.parked = [...(canvasPrefs.parked ?? []), entry];
+  saveCanvasPrefs();
+  syncCtrlBench();
+}
+
+/** Discard one parked ghost (browser-only), or retire it after a
+ *  successful re-slot. Exported for the entry's assign chain. */
+export function unparkController(id: string): void {
+  canvasPrefs.parked = (canvasPrefs.parked ?? []).filter((p) => p.id !== id);
+  saveCanvasPrefs();
+  syncCtrlBench();
+}
+
+/** The served slot numbers, in the daemon's order — the entry's assign
+ *  chain composes its whole-order permutation from these AFTER the add's
+ *  refresh, so the move works on fresh truth. */
+export function redesignControllerNumbers(): string[] {
+  return rdCtrlCards.map((card) => card.number);
 }
 
 /** Report one action outcome (the redirect's allowlisted ?flash= copy) —
@@ -290,6 +320,10 @@ interface CanvasPrefs {
    *  Arrangement state like the camera, never a daemon claim; a remembered
    *  board whose device is gone simply does not mount until it returns. */
   bench?: string[];
+  /** Parked controllers — cards orphaned off the draft ("No player") that
+   *  wait on the canvas to be re-slotted. Display facts only: the slot
+   *  itself left the daemon when it was parked. */
+  parked?: ParkedController[];
 }
 
 let canvasPrefs: CanvasPrefs = { widgets: {} };
@@ -352,6 +386,14 @@ function loadCanvasPrefs(): void {
       bench: Array.isArray(saved.bench)
         ? saved.bench.filter((s): s is string => typeof s === "string")
         : undefined,
+      parked: Array.isArray(saved.parked)
+        ? saved.parked.filter(
+            (p): p is ParkedController =>
+              typeof p === "object" && p !== null &&
+              typeof p.id === "string" && typeof p.persona === "string" &&
+              typeof p.persona_label === "string" && typeof p.preset === "string",
+          )
+        : undefined,
       camera:
         cam &&
         [cam.panX, cam.panY, cam.zoom].every(
@@ -401,6 +443,7 @@ function persistCanvas(): void {
     widgets,
     mapHidden: canvasPrefs.mapHidden,
     bench: canvasPrefs.bench,
+    parked: canvasPrefs.parked,
   };
   saveCanvasPrefs();
 }
@@ -1639,6 +1682,11 @@ export function redesignWire(root: HTMLElement): void {
       return;
     } else if (hit === "rd-ctrls-close") {
       setCtrlModal(false);
+      return;
+    } else if (hit === "rd-ctrl-discard") {
+      const ghost = target?.closest<HTMLElement>('[data-nx="rd-ctrl-discard"]')?.dataset
+        .ghost;
+      if (ghost) unparkController(ghost);
       return;
     } else if (hit === "rd-zoom-menu") {
       setZoomMenu(!zoomMenuOpen());

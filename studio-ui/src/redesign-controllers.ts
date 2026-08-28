@@ -1,30 +1,45 @@
 // The controller workbench: one canvas card per STAGED SLOT, mounted and
-// retired to match the served payload. Unlike the device bench (browser
-// arrangement state), the controller cards are DAEMON truth — the staged
-// rack IS the list, so the server decides which cards exist and this module
-// only reconciles the canvas to it. Positions stay the browser's (the
-// arrangement store), like every widget.
+// retired to match the served payload, plus the PARKED ghosts — controllers
+// taken off the draft ("No player") that wait on the canvas to be re-slotted.
 //
-// Slot order is the play order: at session start the daemon plugs pads in
-// this order, and Windows hands each XInput pad the lowest FREE user index
-// at that moment — so card order is what "P1" means, while the actual
-// P-light is discovered at Play (ViGEm's callback; ksx-core/slot.rs).
+// Live cards are DAEMON truth: the staged rack IS the list, so the server
+// decides which live cards exist and this module only reconciles the canvas
+// to it. Ghosts are browser arrangement state (the island's prefs), like the
+// device bench. Positions stay the browser's either way.
+//
+// Player assignment is DIRECT, not spatial: every card wears a Player
+// select (P1…Pn, or "No player"). Choosing a position posts ONE whole-order
+// permutation to the existing move verb — the daemon renumbers, survivors
+// keep arrival order, exactly the rack's algorithm. Choosing "No player"
+// removes the slot (the daemon compacts the rest up) and parks the card as
+// a ghost. Re-slotting a ghost stages it fresh at the chosen position (the
+// entry chains add + move). Arrival numbering itself is the daemon's
+// `next_slot`.
 //
 // Widgets are client-created (data-client-widget — parity rule 3e).
 
 import { createCanvasItem, WidgetCanvas } from "./genui/canvas/index";
+import { composeOrderMoving } from "./redesign-controller-order";
 
 /** One staged controller — `RedesignControllerCard` on the wire
- *  (snapshot.rs). Every sentence and both precomposed reorder strings are
- *  the server's; this module words nothing. */
+ *  (snapshot.rs). Every sentence is the server's; this module words only
+ *  the assignment chrome. */
 export interface RdControllerCardView {
   number: string;
   persona: string;
   persona_label: string;
   preset: string;
   api_line: string;
-  up_order: string;
-  down_order: string;
+}
+
+/** One parked controller — browser state, held in the island's prefs. Its
+ *  slot left the daemon when it was orphaned, so only the display facts
+ *  survive; re-slotting stages it fresh. */
+export interface ParkedController {
+  id: string;
+  persona: string;
+  persona_label: string;
+  preset: string;
 }
 
 interface CardGeometry {
@@ -36,12 +51,20 @@ interface CardGeometry {
   manualScale: number;
 }
 
-/** What the island lends this module — the engine, the tree, and the
- *  arrangement store, without this file owning any of them. */
+/** What the island lends this module — the engine, the tree, the stores and
+ *  the served add values, without this file owning any of them. */
 export interface ControllerBenchIo {
   canvas: WidgetCanvas;
   root: HTMLElement;
+  parked: ParkedController[];
+  /** The served values a ghost re-slot posts: `next_preset` (a future file
+   *  name) and the default layout that makes a fresh slot playable. */
+  addPreset: string;
+  addLayout: string;
   savedGeometry(id: string): CardGeometry | undefined;
+  /** Park one live card's display facts as a ghost (before its remove
+   *  posts, so the card never simply vanishes). */
+  park(entry: ParkedController): void;
   /** Called once after any mount/retire, so the island can refresh the map
    *  count and the chips. */
   onMutation(): void;
@@ -51,49 +74,81 @@ export function controllerInstanceId(number: string): string {
   return `ctrl-slot-${number}`;
 }
 
-const PERSONA_BADGE_FALLBACK = "Controller";
+export function parkedInstanceId(id: string): string {
+  return `ctrl-parked-${id}`;
+}
 
-function verbForm(
-  kind: "controller-move" | "controller-remove",
-  action: string,
-  field: string,
-  value: string,
-  label: string,
+const PERSONA_BADGE_FALLBACK = "Controller";
+const ORPHAN_TITLE =
+  "No player parks this controller off the draft — the others move up. " +
+  "Its slot leaves the daemon with it, so re-slotting stages it fresh on " +
+  "the default layout.";
+
+function playerSelect(
+  positions: number,
+  current: number | null,
   title: string,
-  danger: boolean,
-): HTMLElement {
+): HTMLSelectElement {
+  const select = document.createElement("select");
+  select.className = "rd-ctrlplayer";
+  select.title = title;
+  select.setAttribute("aria-label", "Player position");
+  for (let p = 1; p <= positions; p += 1) {
+    const option = document.createElement("option");
+    option.value = String(p);
+    option.textContent = `Player ${p}`;
+    if (current === p) option.selected = true;
+    select.append(option);
+  }
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "No player";
+  if (current === null) none.selected = true;
+  select.append(none);
+  return select;
+}
+
+function badgeAndName(
+  persona: string,
+  personaLabel: string,
+  preset: string,
+): HTMLElement[] {
+  const badge = document.createElement("p");
+  badge.className = "rd-ctrlcard-badge";
+  badge.dataset.persona = persona;
+  badge.textContent = personaLabel || PERSONA_BADGE_FALLBACK;
+  const name = document.createElement("p");
+  name.className = "rd-ctrlcard-name";
+  name.textContent = preset;
+  return [badge, name];
+}
+
+function removeForm(number: string): HTMLElement {
   const form = document.createElement("form");
   form.className = "rd-ctrlverb-form";
   form.method = "post";
-  form.action = action;
-  form.dataset.rdForm = kind;
+  form.action = "/redesign/controller/remove";
+  form.dataset.rdForm = "controller-remove";
   const hidden = document.createElement("input");
   hidden.type = "hidden";
-  hidden.name = field;
-  hidden.value = value;
+  hidden.name = "number";
+  hidden.value = number;
   const button = document.createElement("button");
   button.type = "submit";
-  button.className = danger ? "rd-ctrlverb rd-ctrlverb-danger" : "rd-ctrlverb";
-  button.textContent = label;
-  button.title = title;
+  button.className = "rd-ctrlverb rd-ctrlverb-danger";
+  button.textContent = "✕";
+  button.title = "Remove this controller from the draft. Nothing is saved or started.";
   form.append(hidden, button);
   return form;
 }
 
-/** A reorder control with nowhere to go renders disabled with the honest
- *  reason, rather than posting the empty order the server would refuse to
- *  write anyway. */
-function inertVerb(label: string, title: string): HTMLElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "rd-ctrlverb";
-  button.disabled = true;
-  button.textContent = label;
-  button.title = title;
-  return button;
-}
-
-function cardContent(card: RdControllerCardView): HTMLElement {
+/** A LIVE card: slot chip, persona, preset, the api line, and the verbs —
+ *  the Player select (direct assignment; "No player" parks) plus remove. */
+function liveCardContent(
+  card: RdControllerCardView,
+  allNumbers: string[],
+  io: ControllerBenchIo,
+): HTMLElement {
   const body = document.createElement("div");
   body.className = "rd-ctrlcard";
   const slot = document.createElement("p");
@@ -102,104 +157,214 @@ function cardContent(card: RdControllerCardView): HTMLElement {
   slot.title =
     "The staged order. Pads plug in this order at Play, so with no real " +
     "pad holding an XInput slot, slot 1 is P1.";
-  const badge = document.createElement("p");
-  badge.className = "rd-ctrlcard-badge";
-  badge.dataset.persona = card.persona;
-  badge.textContent = card.persona_label || PERSONA_BADGE_FALLBACK;
-  const name = document.createElement("p");
-  name.className = "rd-ctrlcard-name";
-  name.textContent = card.preset;
   const meta = document.createElement("p");
   meta.className = "rd-ctrlcard-meta";
   meta.textContent = card.api_line;
+
+  // The hidden move form the select drives: ONE whole-order write per
+  // change, through the existing typed wiring.
+  const moveForm = document.createElement("form");
+  moveForm.className = "rd-ctrlverb-form";
+  moveForm.method = "post";
+  moveForm.action = "/redesign/controller/move";
+  moveForm.dataset.rdForm = "controller-move";
+  const order = document.createElement("input");
+  order.type = "hidden";
+  order.name = "order";
+  moveForm.append(order);
+
+  const position = allNumbers.indexOf(card.number) + 1;
+  const select = playerSelect(
+    allNumbers.length,
+    position > 0 ? position : null,
+    "While configuring, a controller's player position is freely " +
+      "reassignable — the others shuffle around it in arrival order. " +
+      ORPHAN_TITLE,
+  );
+  select.addEventListener("change", () => {
+    if (select.value === "") {
+      // Submit the remove FIRST, park second — both in this one synchronous
+      // task, so the park still lands before any network settles. The other
+      // order is a trap: park() re-syncs the canvas immediately, which
+      // REPLACES this card's content, and a submit dispatched on a detached
+      // form bubbles to nobody — the remove silently never posts.
+      const remove = body.querySelector<HTMLFormElement>(
+        'form[data-rd-form="controller-remove"]',
+      );
+      remove?.requestSubmit();
+      io.park({
+        id: `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        persona: card.persona,
+        persona_label: card.persona_label,
+        preset: card.preset,
+      });
+      return;
+    }
+    order.value = composeOrderMoving(allNumbers, card.number, Number(select.value));
+    moveForm.requestSubmit();
+  });
+
   const verbs = document.createElement("div");
   verbs.className = "rd-ctrlcard-verbs";
-  verbs.append(
-    card.up_order
-      ? verbForm(
-          "controller-move",
-          "/redesign/controller/move",
-          "order",
-          card.up_order,
-          "▲",
-          "Move up — the earlier position plugs first at Play",
-          false,
-        )
-      : inertVerb("▲", "Already first"),
-    card.down_order
-      ? verbForm(
-          "controller-move",
-          "/redesign/controller/move",
-          "order",
-          card.down_order,
-          "▼",
-          "Move down — the later position plugs later at Play",
-          false,
-        )
-      : inertVerb("▼", "Already last"),
-    verbForm(
-      "controller-remove",
-      "/redesign/controller/remove",
-      "number",
-      card.number,
-      "✕",
-      "Remove this controller from the draft. Nothing is saved or started.",
-      true,
-    ),
-  );
-  body.append(slot, badge, name, meta, verbs);
+  verbs.append(select, moveForm, removeForm(card.number));
+  body.append(slot, ...badgeAndName(card.persona, card.persona_label, card.preset), meta, verbs);
   return body;
 }
 
-/** Reconcile the canvas to the served card list: mount what the daemon
- *  staged, retire what it dropped, and rebuild the face of what changed
- *  (the keyed identity is the slot NUMBER — the daemon renumbers on
- *  reorder, so a renumbered slot is a different card and re-mounts; its
- *  position follows the arrangement store's memory for that number). */
+/** A PARKED ghost: no slot, no player — a select to re-slot it (the entry
+ *  chains add + move), and ✕ to discard the ghost (browser-only). */
+function ghostCardContent(
+  parked: ParkedController,
+  livePositions: number,
+  io: ControllerBenchIo,
+): HTMLElement {
+  const body = document.createElement("div");
+  body.className = "rd-ctrlcard rd-ctrlcard-ghost";
+  const slot = document.createElement("p");
+  slot.className = "rd-ctrlcard-slot rd-ctrlcard-noplayer";
+  slot.textContent = "No player";
+  slot.title = ORPHAN_TITLE;
+  const meta = document.createElement("p");
+  meta.className = "rd-ctrlcard-meta";
+  meta.textContent = "Parked — off the draft until re-slotted.";
+
+  const assignForm = document.createElement("form");
+  assignForm.className = "rd-ctrlverb-form";
+  assignForm.method = "post";
+  assignForm.action = "/redesign/controller";
+  assignForm.dataset.rdForm = "controller-assign";
+  for (const [name, value] of [
+    ["persona", parked.persona],
+    ["preset", io.addPreset],
+    ["layout", io.addLayout],
+    ["ghost", parked.id],
+    ["position", ""],
+  ]) {
+    const hidden = document.createElement("input");
+    hidden.type = "hidden";
+    hidden.name = name;
+    hidden.value = value;
+    assignForm.append(hidden);
+  }
+  const select = playerSelect(
+    livePositions + 1,
+    null,
+    "Re-slot this controller: it is staged fresh at the chosen position " +
+      "and the others bump down in arrival order.",
+  );
+  select.addEventListener("change", () => {
+    if (select.value === "") return;
+    assignForm.querySelector<HTMLInputElement>('input[name="position"]')!.value =
+      select.value;
+    assignForm.requestSubmit();
+  });
+
+  const discard = document.createElement("button");
+  discard.type = "button";
+  discard.className = "rd-ctrlverb rd-ctrlverb-danger";
+  discard.dataset.nx = "rd-ctrl-discard";
+  discard.dataset.ghost = parked.id;
+  discard.textContent = "✕";
+  discard.title = "Discard this parked controller. Nothing on the daemon changes.";
+
+  const verbs = document.createElement("div");
+  verbs.className = "rd-ctrlcard-verbs";
+  verbs.append(select, assignForm, discard);
+  body.append(slot, ...badgeAndName(parked.persona, parked.persona_label, parked.preset), meta, verbs);
+  return body;
+}
+
+function mountCard(
+  io: ControllerBenchIo,
+  id: string,
+  displayName: string,
+  content: HTMLElement,
+  extraClass: string,
+  index: number,
+): void {
+  const item = createCanvasItem({
+    instanceId: id,
+    displayName,
+    preferredWidth: 300,
+    minHeight: 190,
+    content,
+    document,
+  });
+  item.dataset.clientWidget = "";
+  item.classList.add("rd-ctrl-node");
+  if (extraClass) item.classList.add(extraClass);
+  const home: CardGeometry = {
+    x: 140 + (index % 3) * 340,
+    y: 430 + Math.floor(index / 3) * 230,
+    width: 300,
+    height: 190,
+    z: 20 + index,
+    manualScale: 1,
+  };
+  io.canvas.mountItem(item, io.savedGeometry(id) ?? home, { focus: false });
+}
+
+/** Reconcile the canvas to the served card list AND the parked ghosts:
+ *  mount what the daemon staged (keyed by slot number — the daemon
+ *  renumbers on reorder, so a renumbered slot re-mounts and follows the
+ *  arrangement store's memory for that number), retire what it dropped,
+ *  and keep one ghost per parked entry. */
 export function syncControllerWidgets(
   cards: RdControllerCardView[],
   io: ControllerBenchIo,
 ): void {
-  const wanted = new Map(cards.map((card) => [controllerInstanceId(card.number), card]));
+  const allNumbers = cards.map((card) => card.number);
+  const wantedLive = new Map(
+    cards.map((card) => [controllerInstanceId(card.number), card]),
+  );
+  const wantedGhosts = new Map(
+    io.parked.map((entry) => [parkedInstanceId(entry.id), entry]),
+  );
   let changed = false;
   for (const item of Array.from(
     io.root.querySelectorAll<HTMLElement>(
-      '.forma-canvas-stage > [data-instance-id^="ctrl-slot-"]',
+      '.forma-canvas-stage > [data-instance-id^="ctrl-slot-"], ' +
+        '.forma-canvas-stage > [data-instance-id^="ctrl-parked-"]',
     ),
   )) {
     const id = item.dataset.instanceId ?? "";
-    const card = wanted.get(id);
-    if (!card) {
+    const live = wantedLive.get(id);
+    const ghost = wantedGhosts.get(id);
+    if (live) {
+      item.querySelector(".rd-ctrlcard")?.replaceWith(liveCardContent(live, allNumbers, io));
+      wantedLive.delete(id);
+    } else if (ghost) {
+      item
+        .querySelector(".rd-ctrlcard")
+        ?.replaceWith(ghostCardContent(ghost, cards.length, io));
+      wantedGhosts.delete(id);
+    } else {
       io.canvas.removeItem(item, { selectFallback: false });
       changed = true;
-      continue;
     }
-    // Same slot number: refresh the face in place (persona, preset and the
-    // precomposed orders all may have changed under it).
-    item.querySelector(".rd-ctrlcard")?.replaceWith(cardContent(card));
-    wanted.delete(id);
   }
-  let index = cards.length - wanted.size;
-  for (const [id, card] of wanted) {
-    const item = createCanvasItem({
-      instanceId: id,
-      displayName: `Slot ${card.number} — ${card.preset}`,
-      preferredWidth: 300,
-      minHeight: 190,
-      content: cardContent(card),
-      document,
-    });
-    item.dataset.clientWidget = "";
-    item.classList.add("rd-ctrl-node");
-    const home: CardGeometry = {
-      x: 140 + (index % 3) * 340,
-      y: 430 + Math.floor(index / 3) * 230,
-      width: 300,
-      height: 190,
-      z: 20 + index,
-      manualScale: 1,
-    };
-    io.canvas.mountItem(item, io.savedGeometry(id) ?? home, { focus: false });
+  let index = cards.length + io.parked.length - wantedLive.size - wantedGhosts.size;
+  for (const [id, card] of wantedLive) {
+    mountCard(
+      io,
+      id,
+      `Slot ${card.number} — ${card.preset}`,
+      liveCardContent(card, allNumbers, io),
+      "",
+      index,
+    );
+    changed = true;
+    index += 1;
+  }
+  for (const [id, entry] of wantedGhosts) {
+    mountCard(
+      io,
+      id,
+      `No player — ${entry.preset}`,
+      ghostCardContent(entry, cards.length, io),
+      "rd-ctrl-ghost",
+      index,
+    );
     changed = true;
     index += 1;
   }

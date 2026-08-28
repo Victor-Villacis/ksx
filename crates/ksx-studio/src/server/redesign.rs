@@ -302,9 +302,14 @@ pub(super) struct RedesignSlotForm {
     number: u8,
 }
 
-/// POST /redesign/controller/remove — drop one staged slot. No undo stash
-/// here (the nocturne rack's short undo window is its own feature); the
-/// daemon renumbers, and the refreshed payload is the whole answer.
+/// POST /redesign/controller/remove — drop one staged slot, then close the
+/// gap. `RemoveSlot` alone leaves a HOLE (survivors keep their numbers and
+/// `next_slot` fills it later — the nocturne rack's choice); the workbench's
+/// law is the player line instead: survivors move UP in arrival order, so a
+/// card's number always IS its play position. One `ReorderSlots` over the
+/// surviving order renumbers 1..N — the daemon's own compaction, not ours.
+/// No undo stash here (the nocturne rack's short undo window is its own
+/// feature); the refreshed payload is the whole answer.
 pub(super) async fn redesign_form_ctrl_remove(
     State(state): State<Arc<AppState>>,
     form: RedesignForm<RedesignSlotForm>,
@@ -313,12 +318,35 @@ pub(super) async fn redesign_form_ctrl_remove(
         return redesign_redirect(N_FORM_UNREADABLE);
     };
     let ok = tokio::task::spawn_blocking(move || {
-        state
+        let removed = state
             .control
             .stage_edit(&ksx_api::StageEdit::RemoveSlot {
                 number: form.number,
             })
-            .ok
+            .ok;
+        if !removed {
+            return false;
+        }
+        let survivors: Vec<u8> = state
+            .control
+            .staged()
+            .slots
+            .iter()
+            .map(|slot| slot.number)
+            .collect();
+        let contiguous = survivors
+            .iter()
+            .enumerate()
+            .all(|(at, number)| usize::from(*number) == at + 1);
+        if survivors.is_empty() || contiguous {
+            return true;
+        }
+        // Best-effort: the removal already succeeded and is the sentence the
+        // flash reports; a daemon too old to reorder simply keeps the hole.
+        let _ = state
+            .control
+            .stage_edit(&ksx_api::StageEdit::ReorderSlots { numbers: survivors });
+        true
     })
     .await
     .unwrap_or(false);

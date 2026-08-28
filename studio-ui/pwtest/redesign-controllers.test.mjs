@@ -17,6 +17,7 @@ import path from "node:path";
 
 import { chromium } from "playwright";
 import { stopFixtureProcess } from "./fixture-process.mjs";
+import { composeOrderMoving } from "../src/redesign-controller-order.ts";
 
 /** OUR port: never 4460 (a real `ksx studio`), and never another suite's. */
 const PORT = Number(process.env.KSX_PWTEST_REDESIGN_CONTROLLERS_PORT ?? 4532);
@@ -109,6 +110,17 @@ async function openBench() {
 }
 
 describe("the controller workbench", () => {
+  test("the whole-order permutation seats a card and keeps arrival order", () => {
+    assert.equal(composeOrderMoving(["1", "2", "3"], "3", 1), "3 1 2");
+    assert.equal(composeOrderMoving(["1", "2", "3"], "1", 3), "2 3 1");
+    assert.equal(composeOrderMoving(["1", "2", "3"], "2", 2), "1 2 3");
+    assert.equal(
+      composeOrderMoving(["1", "2", "3"], "3", 99),
+      "1 2 3",
+      "an out-of-range position clamps to the end instead of inventing a slot",
+    );
+  });
+
   test("the staged rack stands on the canvas from first paint — daemon truth, not arrangement", async () => {
     const page = await openBench();
     for (const slot of [1, 2]) {
@@ -132,11 +144,17 @@ describe("the controller workbench", () => {
       /no XInput slot/,
       "the PlayStation slot says it takes none of the four",
     );
-    // The top card cannot move up, the bottom cannot move down — served
-    // honesty, disabled, never a dead POST.
+    // Direct assignment, not spatial arrows: each card wears a Player
+    // select at its own position, with a "No player" park option — and no
+    // arrow buttons anywhere.
     assert.equal(
-      await page.locator(`${cardSel(1)} .rd-ctrlcard-verbs button:disabled`).count(),
-      1,
+      await page.locator(`${cardSel(1)} select.rd-ctrlplayer`).inputValue(),
+      "1",
+    );
+    assert.equal(
+      await page.locator(`${cardSel(1)} select.rd-ctrlplayer option`).count(),
+      3,
+      "two positions plus No player",
     );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();
@@ -192,29 +210,83 @@ describe("the controller workbench", () => {
     await page.close();
   });
 
-  test("one reorder press renumbers through the daemon; remove retires the card", async () => {
+  test("direct assignment reorders; No player parks and compacts; re-slotting bumps down", async () => {
     const page = await openBench();
     await page.waitForFunction(
       (sel) => document.querySelector(sel)?.dataset.canvasX !== undefined,
       cardSel(3),
       { timeout: 20_000 },
     );
-    assert.equal(
-      (await page.locator(`${cardSel(3)} .rd-ctrlcard-name`).textContent())?.trim(),
-      "Player 3",
-    );
-    // Move the third card up one place: the daemon renumbers, so the SAME
-    // preset now answers from slot 2.
-    await page.click(`${cardSel(3)} .rd-ctrlcard-verbs form[data-rd-form="controller-move"]:first-of-type button`);
+    const nameAt = (slot) =>
+      page
+        .locator(`${cardSel(slot)} .rd-ctrlcard-name`)
+        .textContent()
+        .then((t) => t?.trim());
+    // "Make this Player 1": one select change, one whole-order write, the
+    // daemon renumbers — the others bump DOWN in arrival order.
+    await page.selectOption(`${cardSel(3)} select.rd-ctrlplayer`, "1");
     await page.waitForFunction(
       (sel) =>
         document.querySelector(`${sel} .rd-ctrlcard-name`)?.textContent?.trim() ===
           "Player 3",
-      cardSel(2),
+      cardSel(1),
       { timeout: 10_000 },
     );
-    // Remove it: the rack shrinks and the card retires.
-    await page.click(`${cardSel(2)} form[data-rd-form="controller-remove"] button`);
+    assert.equal(await nameAt(2), "Player 1", "the old P1 bumped down");
+    assert.equal(await nameAt(3), "Player 2");
+
+    // "No player": the card parks as a ghost and the survivors move UP.
+    await page.selectOption(`${cardSel(1)} select.rd-ctrlplayer`, "");
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll('.forma-canvas-stage [data-instance-id^="ctrl-slot-"]')
+          .length === 2 &&
+        document.querySelectorAll(
+          '.forma-canvas-stage [data-instance-id^="ctrl-parked-"]',
+        ).length === 1,
+      null,
+      { timeout: 10_000 },
+    );
+    assert.equal(await nameAt(1), "Player 1", "the survivors compacted up");
+    assert.equal(await nameAt(2), "Player 2");
+    const ghost = '.forma-canvas-stage [data-instance-id^="ctrl-parked-"]';
+    assert.equal(
+      (await page.locator(`${ghost} .rd-ctrlcard-noplayer`).textContent())?.trim(),
+      "No player",
+      "the ghost wears its orphaned state",
+    );
+
+    // Re-slot the ghost to Player 1: staged fresh at the top, the others
+    // bump down again, the ghost retires. The wait targets the POST-MOVE
+    // truth (the re-slotted preset AT slot 1) — "3 slots and no ghost" is
+    // already true between the chain's add and its move, and reading names
+    // in that gap is the race this predicate exists to close.
+    await page.selectOption(`${ghost} select.rd-ctrlplayer`, "1");
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll('.forma-canvas-stage [data-instance-id^="ctrl-slot-"]')
+          .length === 3 &&
+        document.querySelectorAll(
+          '.forma-canvas-stage [data-instance-id^="ctrl-parked-"]',
+        ).length === 0 &&
+        document
+          .querySelector('.forma-canvas-stage [data-instance-id="ctrl-slot-1"] .rd-ctrlcard-name')
+          ?.textContent?.trim() === "Player 3",
+      null,
+      { timeout: 15_000 },
+    );
+    assert.equal(
+      await page
+        .locator(`${cardSel(1)} .rd-ctrlcard-badge`)
+        .getAttribute("data-persona"),
+      "xbox360",
+      "the re-slotted controller sits at Player 1",
+    );
+    assert.equal(await nameAt(2), "Player 1", "bumped down by the re-slot");
+    assert.equal(await nameAt(3), "Player 2");
+
+    // ✕ deletes outright: the space fills up by arrival order.
+    await page.click(`${cardSel(1)} form[data-rd-form="controller-remove"] button`);
     await page.waitForFunction(
       () =>
         document.querySelectorAll('.forma-canvas-stage [data-instance-id^="ctrl-slot-"]')
@@ -222,15 +294,40 @@ describe("the controller workbench", () => {
       null,
       { timeout: 10_000 },
     );
+    assert.equal(await nameAt(1), "Player 1");
+    assert.equal(await nameAt(2), "Player 2");
+
+    // A ghost's ✕ discards the ghost alone — browser state, no daemon write.
+    await page.selectOption(`${cardSel(2)} select.rd-ctrlplayer`, "");
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll(
+          '.forma-canvas-stage [data-instance-id^="ctrl-parked-"]',
+        ).length === 1,
+      null,
+      { timeout: 10_000 },
+    );
+    // The clicks above selected cards, and selection opens the Inspector —
+    // which overlays the canvas's right edge where the ghost parked. Close
+    // it the way a user would before pressing the ghost's own ✕.
+    if (await page.locator(".rd-inspector:not([hidden])").count()) {
+      await page.locator('[data-nx="rd-insp-close"]').click();
+    }
+    await page.click(`${ghost} [data-nx="rd-ctrl-discard"]`);
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll(
+          '.forma-canvas-stage [data-instance-id^="ctrl-parked-"]',
+        ).length === 0,
+      null,
+      { timeout: 10_000 },
+    );
     assert.equal(
-      await page.evaluate(
-        () =>
-          Array.from(
-            document.querySelectorAll(".rd-ctrlcard-name"),
-          ).some((name) => name.textContent?.trim() === "Player 3"),
-      ),
-      false,
-      "the removed slot's card is gone",
+      await page
+        .locator('.forma-canvas-stage [data-instance-id^="ctrl-slot-"]')
+        .count(),
+      1,
+      "discarding a ghost stages nothing",
     );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();

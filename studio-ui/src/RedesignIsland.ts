@@ -172,6 +172,40 @@ function scheduleCanvasPersist(): void {
   canvasPersistTimer = window.setTimeout(persistCanvas, 1000);
 }
 
+// ── Semantic-zoom tier readout (design notes §04) ───────────────────────────
+
+/** The three reading tiers, worded once. Zooming out is not shrinking: each
+ *  tier says what a widget should show at this distance, and the readout in
+ *  the corner names the tier the camera is in. The thresholds carry ±3%
+ *  hysteresis so a camera resting on a boundary cannot flicker the line. */
+const TIER_COPY: Record<string, string> = {
+  overview: "Overview — colour, name, status",
+  structure: "Structure — type, ports, one-line summary",
+  editing: "Editing — full detail and controls",
+};
+let zoomTier = "";
+function syncZoomTier(): void {
+  const canvas = nCanvas;
+  const root = rdRoot;
+  if (!canvas || !root) return;
+  const el = root.querySelector<HTMLElement>(".rd-tier");
+  if (!el) return;
+  const pct = canvas.getCamera().zoom * 100;
+  let next = zoomTier;
+  if (!zoomTier) {
+    next = pct < 50 ? "overview" : pct <= 90 ? "structure" : "editing";
+  } else if (zoomTier === "overview") {
+    if (pct >= 53) next = pct > 93 ? "editing" : "structure";
+  } else if (zoomTier === "structure") {
+    if (pct < 47) next = "overview";
+    else if (pct > 93) next = "editing";
+  } else if (pct <= 87) {
+    next = pct < 47 ? "overview" : "structure";
+  }
+  zoomTier = next;
+  el.textContent = TIER_COPY[next];
+}
+
 /** The selected widget's controls, retargeted instead of cloned — the
  *  upstream app's own shape (one contextual group, not four buttons on
  *  every card), and the reason the page can carry a live size readout and
@@ -283,6 +317,7 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
       // within a second even if the tab dies before a durable boundary.
       onChange: () => {
         scheduleCanvasPersist();
+        syncZoomTier();
       },
       // The selection group follows the canvas, never the other way round:
       // selecting, scaling and focusing all report here.
@@ -301,6 +336,7 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
   setCanvasMap(canvasPrefs.mapHidden === true);
   if (canvasPrefs.camera) nCanvas.restoreCamera(canvasPrefs.camera);
   else window.requestAnimationFrame(() => nCanvas?.fitAll());
+  syncZoomTier();
   window.addEventListener("pagehide", () => {
     // flushPendingChange only fires the onChange callback — whose debounce
     // timer will never tick in a dying page. The synchronous persist IS the
@@ -365,7 +401,7 @@ export function redesignWire(root: HTMLElement): void {
 export function RedesignIsland() {
   return h(
     "div",
-    { class: "nocturne" },
+    { class: "nocturne rd" },
     h(
       "main",
       { class: "n-main" },
@@ -374,64 +410,14 @@ export function RedesignIsland() {
         { class: "n-center" },
         h(
           "div",
-          { class: "n-meta" },
+          { class: "n-meta rd-top" },
+          // The lane's identity, quiet: the product name and where you are.
+          h("span", { class: "rd-brand" }, "ksx Studio"),
+          h("span", { class: "rd-crumb" }, "Redesign"),
           // Which machine answers this lane — the fixture badge, so the
           // redesign workbench can never be mistaken for the cabinet.
           h("span", { class: () => rdEnvCls() }, () => rdEnvLabel()),
-          // The canvas camera's verbs, scripting-only — wheel, Space-drag
-          // and the arrow keys carry the same moves for anyone who would
-          // rather not aim at a button.
-          h(
-            "button",
-            {
-              type: "button",
-              "data-nx": "canvas-fit",
-              title: "Fit every widget on screen",
-              class: "n-autobtn",
-            },
-            "Fit",
-          ),
-          h(
-            "button",
-            {
-              type: "button",
-              "data-nx": "canvas-zoom-out",
-              "aria-label": "Zoom out",
-              title: "Zoom out",
-              class: "n-autobtn n-zbtn",
-            },
-            "−",
-          ),
-          // The engine writes the LIVE zoom into the SPAN, not the button,
-          // and clicking the button resets to 100%.
-          // ⚠️The span on purpose: handed a BUTTON the engine also rewrites
-          // its aria-label with the live number, and `data-live-chatter`
-          // exempts an element's TEXT, never its attributes — which the
-          // parity gate caught the moment this was wired the obvious way.
-          // With no aria-label at all, the button's accessible name is its
-          // own content ("Canvas zoom 84%") and follows the number for free.
-          h(
-            "button",
-            {
-              type: "button",
-              "data-nx": "canvas-zoom-reset",
-              title: "Canvas zoom — click for 100%",
-              class: "n-autobtn n-zoomread",
-            },
-            h("span", { class: "sr-head" }, "Canvas zoom "),
-            h("span", { class: "n-zoomval", "data-live-chatter": "" }, "100%"),
-          ),
-          h(
-            "button",
-            {
-              type: "button",
-              "data-nx": "canvas-zoom-in",
-              "aria-label": "Zoom in",
-              title: "Zoom in",
-              class: "n-autobtn n-zbtn",
-            },
-            "+",
-          ),
+          h("span", { class: "rd-spring" }),
           // ── The selected widget's own controls ──────────────────────────
           // One group that retargets (the upstream app's shape), not four
           // buttons on every card. Served in its RESTING state — nothing is
@@ -542,19 +528,28 @@ export function RedesignIsland() {
                 "aria-label": "Canvas map",
                 "data-client-canvas": "",
               },
-              // The map's own hide button. The meta bar's toggle would do
-              // the same thing, but nobody looks there to put away the
-              // thing in the corner — the corner is where you reach for it.
+              // The map panel's header (the design's framed-panel shape): a
+              // quiet label and the collapse control, in the corner the map
+              // lives in — nobody looks to a bar at the other end of the
+              // page to put away the thing in this corner. The button keeps
+              // the n-mapclose class: the engine treats any pointerdown in
+              // the map as "navigate to here", and init's shield stops the
+              // press from reaching it by that class.
               h(
-                "button",
-                {
-                  type: "button",
-                  class: "n-mapclose",
-                  "data-nx": "canvas-map",
-                  "aria-label": "Hide the canvas map",
-                  title: "Hide the canvas map",
-                },
-                "×",
+                "div",
+                { class: "rd-map-head" },
+                h("span", { class: "rd-map-title" }, "Canvas"),
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    class: "n-mapclose",
+                    "data-nx": "canvas-map",
+                    "aria-label": "Hide the canvas map",
+                    title: "Hide the canvas map",
+                  },
+                  "−",
+                ),
               ),
               h("div", {
                 class: "forma-canvas-navigator-items",
@@ -579,6 +574,75 @@ export function RedesignIsland() {
                 hidden: "",
               },
               "▦",
+            ),
+            // ── The zoom cluster (design: bottom-left, under the map) ─────
+            // The camera's verbs, scripting-only — wheel, Space-drag and the
+            // arrow keys carry the same moves for anyone who would rather
+            // not aim at a button.
+            h(
+              "div",
+              { class: "rd-zoom", role: "group", "aria-label": "Canvas zoom" },
+              h(
+                "button",
+                {
+                  type: "button",
+                  "data-nx": "canvas-zoom-out",
+                  "aria-label": "Zoom out",
+                  title: "Zoom out",
+                  class: "n-autobtn n-zbtn",
+                },
+                "−",
+              ),
+              // The engine writes the LIVE zoom into the SPAN, not the
+              // button, and clicking the button resets to 100%.
+              // ⚠️The span on purpose: handed a BUTTON the engine also
+              // rewrites its aria-label with the live number, and
+              // `data-live-chatter` exempts an element's TEXT, never its
+              // attributes — which the parity gate caught the moment this
+              // was wired the obvious way. With no aria-label at all, the
+              // button's accessible name is its own content ("Canvas zoom
+              // 84%") and follows the number for free.
+              h(
+                "button",
+                {
+                  type: "button",
+                  "data-nx": "canvas-zoom-reset",
+                  title: "Canvas zoom — click for 100%",
+                  class: "n-autobtn n-zoomread",
+                },
+                h("span", { class: "sr-head" }, "Canvas zoom "),
+                h("span", { class: "n-zoomval", "data-live-chatter": "" }, "100%"),
+              ),
+              h(
+                "button",
+                {
+                  type: "button",
+                  "data-nx": "canvas-zoom-in",
+                  "aria-label": "Zoom in",
+                  title: "Zoom in",
+                  class: "n-autobtn n-zbtn",
+                },
+                "+",
+              ),
+              h(
+                "button",
+                {
+                  type: "button",
+                  "data-nx": "canvas-fit",
+                  title: "Fit every widget on screen",
+                  class: "n-autobtn",
+                },
+                "Fit",
+              ),
+            ),
+            // ── The reading-tier line (design notes §04) ──────────────────
+            // Which semantic tier the camera is in. Client-written at zoom
+            // speed, so its text is chatter; served at the 100% tier the
+            // camera starts on.
+            h(
+              "span",
+              { class: "rd-tier", "aria-hidden": "true", "data-live-chatter": "" },
+              "Editing — full detail and controls",
             ),
           ),
         ),

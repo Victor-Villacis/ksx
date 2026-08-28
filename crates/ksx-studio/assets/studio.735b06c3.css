@@ -18599,3 +18599,138 @@ a.nm-link {
 .n-encoder-read-table tr[data-unknown-byte] td {
   color: var(--n-warn, var(--n-text));
 }
+
+/* ═══ THE REDESIGN LANE (/redesign) ═══════════════════════════════════════
+   The transplant rebuild's chrome, translated from the Canvas interaction
+   UI patterns design (docs/redesign/canvas-ui-patterns/). Scoped under
+   `.rd` beside the `nocturne` root class: the lane RIDES the shared sheet —
+   tokens, buttons, the engine sheet — and these rules only re-home the
+   canvas chrome: edge-to-edge ground, the framed map panel with a header,
+   the floating zoom cluster, the reading-tier line. Colors are `--n-*`
+   roles only, so every theme reaches this lane for free.
+
+   Specificity note, load-bearing: the engine sheet's minimap rules are
+   `[data-forma-canvas] .forma-canvas-*` — (0,2,0), which BEATS the one-class
+   nocturne skin and is why the map stayed engine-dark under the light theme.
+   Every override here is `.rd .forma-canvas-*` — the same (0,2,0), later in
+   the concatenated sheet, so the tie resolves this way by order. */
+
+.rd .rd-top {
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--n-panel-2);
+}
+
+.rd-brand {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.rd-crumb {
+  font-size: 12.5px;
+  color: var(--n-text-3);
+}
+
+.rd-spring {
+  flex: 1;
+}
+
+/* Edge-to-edge: the canvas IS the page in this lane. */
+.rd .n-canvas {
+  border: 0;
+  border-radius: 0;
+}
+
+/* ── The map, re-homed bottom-left as the design's framed panel ────────── */
+
+.rd .forma-canvas-navigator {
+  right: auto;
+  left: 14px;
+  bottom: 64px;
+  width: 224px;
+  height: 174px;
+  border: 1px solid var(--n-line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--n-panel) 94%, transparent);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+/* The header owns the top strip; the engine's items box (inset: 0 in the
+   engine sheet) is pushed below it so markers can never slide under the
+   label. The engine projects onto the items box's MEASURED size, so a
+   shorter box is simply a shorter map. */
+.rd-map-head {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 4px 3px 10px;
+  border-bottom: 1px solid var(--n-line);
+}
+
+.rd-map-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--n-text-2);
+}
+
+.rd .forma-canvas-navigator-items {
+  inset: 28px 0 0 0;
+}
+
+.rd .n-mapclose {
+  position: static;
+  width: 22px;
+  height: 22px;
+  opacity: 1;
+}
+
+/* The stand-in swaps corners with the panel it stands in for. */
+.rd .n-mapshow {
+  right: auto;
+  left: 14px;
+}
+
+/* ── The zoom cluster: one pill, bottom-left under the map ─────────────── */
+
+.rd-zoom {
+  position: absolute;
+  bottom: 14px;
+  left: 14px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--n-line);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--n-panel) 94%, transparent);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+/* ── The reading-tier line (design notes §04), bottom-right ────────────── */
+
+.rd-tier {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 6;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--n-text-3);
+  pointer-events: none;
+}
+
+/* No JavaScript: camera chrome is scripting-only, like every camera verb;
+   the canvas relaxation already hides the navigator itself. */
+.nocturne:not(.js) .rd-zoom,
+.nocturne:not(.js) .rd-tier {
+  display: none;
+}

@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/nocturne-1b10eb84-be95-4e24-8f71-bb1ecf0ff177/styles.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<script src="_ds/nocturne-1b10eb84-be95-4e24-8f71-bb1ecf0ff177/_ds_bundle.js"></script>
+<style>
+  body { background: var(--color-bg); }
+  * { box-sizing: border-box; }
+  a { color: var(--color-accent); }
+  a:hover { color: var(--color-accent-300); }
+  :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+</style>
+</helmet>
+<div style="min-height:100vh; background:var(--color-bg); color:var(--color-text); font-family:var(--font-body); padding:64px 56px 120px;">
+  <div style="max-width:1120px;">
+
+    <div style="display:flex; align-items:baseline; gap:14px; margin-bottom:10px;">
+      <div style="font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--color-accent-300);">Canvas behaviour</div>
+      <div style="flex:1; height:1px; background:linear-gradient(to right, var(--color-divider) 0, var(--color-divider) 60%, transparent 100%);"></div>
+    </div>
+    <h1 style="font-size:44px; max-width:16ch; margin:0 0 18px;">Seven states the canvas has to get right</h1>
+    <p style="max-width:62ch; font-size:15px; line-height:1.6; color:var(--color-neutral-300); text-wrap:pretty;">Notes beside the working prototype. Each state is one decision, the reason it is that way, and the thing that breaks if it is not. Open <a href="Spatial Canvas.dc.html">Spatial Canvas</a> to drive them.</p>
+
+    <div style="display:flex; flex-direction:column; gap:8px; margin-top:56px;">
+
+      <div style="display:grid; grid-template-columns:1fr 380px; gap:56px; align-items:start; padding:34px 0; box-shadow:inset 0 -1px 0 color-mix(in srgb, var(--color-text) 9%, transparent);">
+        <div>
+          <div style="font-size:11px; letter-spacing:0.1em; color:var(--color-neutral-600); margin-bottom:8px;">01</div>
+          <h3 style="font-size:24px; margin:0 0 12px;">Three things, never one</h3>
+          <p style="font-size:14px; line-height:1.65; color:var(--color-neutral-300); max-width:52ch; text-wrap:pretty;">The world is unbounded and holds nodes in world coordinates. The camera is <b style="font-weight:600;">x, y, zoom</b>. The viewport is whatever the browser currently shows. Nothing here ever resizes the canvas — the window resizes, the camera moves, an item resizes.</p>
+          <p style="font-size:13.5px; line-height:1.65; color:var(--color-neutral-500); max-width:52ch; margin:0;">Collapse these and you get the classic bugs: dragging the window edge moves nodes, opening a panel refits the graph, undo starts swallowing pans.</p>
+        </div>
+        <div style="position:relative; height:212px; border-radius:var(--radius-md); background:var(--color-neutral-900); box-shadow:var(--shadow-sm); overflow:hidden;">
+          <div style="position:absolute; inset:0; background-image:radial-gradient(var(--color-neutral-800) 1px, transparent 0); background-size:14px 14px;"></div>
+          <div style="position:absolute; left:22px; top:34px; width:56px; height:22px; border-radius:4px; background:var(--color-neutral-700);"></div>
+          <div style="position:absolute; left:120px; top:78px; width:56px; height:22px; border-radius:4px; background:var(--color-accent-600);"></div>
+          <div style="position:absolute; left:60px; top:132px; width:56px; height:22px; border-radius:4px; background:var(--color-neutral-700);"></div>
+          <div style="position:absolute; left:238px; top:48px; width:56px; height:22px; border-radius:4px; background:var(--color-neutral-700);"></div>
+          <div style="position:absolute; left:86px; top:52px; width:190px; height:112px; border:1px solid var(--color-accent); border-radius:5px; background:color-mix(in srgb, var(--color-accent) 8%, transparent);"></div>
+          <div style="position:absolute; left:86px; top:52px; transform:translateY(-100%); padding:2px 7px; font-size:9.5px; letter-spacing:0.06em; text-transform:uppercase; color:var(--color-accent-200); background:var(--color-accent-800); border-radius:4px 4px 0 0;">camera</div>
+          <div style="position:absolute; right:10px; bottom:8px; font-size:9.5px; letter-spacing:0.06em; text-transform:uppercase; color:var(--color-neutral-600);">world</div>
+        </div>
+      </div>
+
+      <div style="display:grid; grid-template-columns:1fr 380px; gap:56px; align-items:start; padding:34px 0; box-shadow:inset 0 -1px 0 color-mix(in srgb, var(--color-text) 9%, transparent);">
+        <div>
+          <div style="font-size:11px; letter-spacing:0.1em; color:var(--color-neutral-600); margin-bottom:8px;">02</div>
+          <h3 style="font-size:24px; margin:0 0 12px;">Design-tool gestures, not map gestures</h3>
+          <p style="font-size:14px; line-height:1.65; color:var(--color-neutral-300); max-width:52ch; text-wrap:pretty;">Left-drag on empty space marquee-selects; panning is two-finger, wheel, space, middle or right drag. The map model — where empty-space drag pans — is easier on first contact and worse from the second hour, once people select groups and organise sections. A visible hand tool covers anyone who does not know space-drag.</p>
+          <p style="font-size:13.5px; line-height:1.65; color:var(--color-neutral-500); max-width:52ch; margin:0;">Zoom always anchors on the pointer. The world point under the cursor stays under the cursor — centre-anchored zoom forces a corrective pan every time.</p>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:1px; border-radius:var(--radius-md); overflow:hidden; box-shadow:var(--shadow-sm);">
+          <sc-for list="{{ gestures }}" as="g" hint-placeholder-count="7">
+            <div style="display:flex; align-items:baseline; gap:12px; padding:8px 12px; background:var(--color-surface); font-size:12px;">
+              <span style="flex:0 0 148px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; color:var(--color-neutral-300);">{{ g.k }}</span>
+              <span style="flex:1; color:var(--color-neutral-400);">{{ g.v }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="padding:34px 0; box-shadow:inset 0 -1px 0 color-mix(in srgb, var(--color-text) 9%, transparent);">
+        <div style="font-size:11px; letter-spacing:0.1em; color:var(--color-neutral-600); margin-bottom:8px;">03</div>
+        <h3 style="font-size:24px; margin:0 0 12px;">Four camera commands that are not the same command</h3>
+        <p style="font-size:14px; line-height:1.65; color:var(--color-neutral-300); max-width:64ch; margin-bottom:26px; text-wrap:pretty;">Every one of these gets asked for as “zoom to fit”. They behave differently, so they stay separate — in the menu, on the keyboard, and in the code.</p>
+        <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:14px;">
+          <sc-for list="{{ commands }}" as="c" hint-placeholder-count="4">
+            <div style="display:flex; flex-direction:column; gap:10px; padding:14px; border-radius:var(--radius-md); background:var(--color-surface); box-shadow:var(--shadow-sm);">
+              <div style="position:relative; height:96px; border-radius:5px; background:var(--color-neutral-900); overflow:hidden;">
+                <sc-for list="{{ c.rects }}" as="r" hint-placeholder-count="4">
+                  <div style="{{ r.style }}"></div>
+                </sc-for>
+              </div>
+              <div style="display:flex; align-items:baseline; gap:6px;">
+                <div style="font-family:var(--font-heading); font-weight:500; font-size:14px;">{{ c.name }}</div>
+                <div style="font-size:10px; padding:1px 5px; border-radius:3px; background:var(--color-neutral-800); color:var(--color-neutral-300); font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">{{ c.key }}</div>
+              </div>
+              <div style="font-size:12px; line-height:1.5; color:var(--color-neutral-400);">{{ c.body }}</div>
+            </div>
+          </sc-for>
+        </div>
+        <p style="font-size:13.5px; line-height:1.65; color:var(--color-neutral-500); max-width:64ch; margin:22px 0 0;">Fit caps at 110% — a two-node workflow should not fill the screen. Full screen is a fifth thing: it hides chrome and touches the camera not at all.</p>
+      </div>
+
+      <div style="padding:34px 0; box-shadow:inset 0 -1px 0 color-mix(in srgb, var(--color-text) 9%, transparent);">
+        <div style="font-size:11px; letter-spacing:0.1em; color:var(--color-neutral-600); margin-bottom:8px;">04</div>
+        <h3 style="font-size:24px; margin:0 0 12px;">Semantic zoom — same box, different contents</h3>
+        <p style="font-size:14px; line-height:1.65; color:var(--color-neutral-300); max-width:64ch; margin-bottom:28px; text-wrap:pretty;">Zooming out is not shrinking. Below 50% a node is colour, icon, name and status; between 50 and 90% it adds type, ports and a one-line config summary; above 90% it adds port names, per-node controls and validation. The outer dimensions never change across a threshold, so nothing jumps, and the thresholds carry ±3% hysteresis so nothing flickers.</p>
+        <div style="display:grid; grid-template-columns:repeat(3,minmax(0,300px)); gap:20px;">
+
+          <div style="display:flex; flex-direction:column; gap:12px;">
+            <div style="display:flex; align-items:baseline; gap:8px;"><span style="font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:var(--color-accent-300);">Overview</span><span style="font-size:11px; color:var(--color-neutral-600);">below 50%</span></div>
+            <div style="width:220px; height:76px; border-radius:var(--radius-md); background:var(--color-surface); box-shadow:var(--shadow-sm); display:flex; align-items:center; gap:11px; padding:0 13px;">
+              <i class="ph ph-sparkle" style="font-size:30px; color:var(--color-accent-200);"></i>
+              <div style="flex:1; min-width:0; font-family:var(--font-heading); font-weight:500; font-size:20px; line-height:1.08; letter-spacing:-0.015em;">Claude Sonnet 4.5</div>
+              <div style="width:12px; height:12px; border-radius:50%; background:#7fb096;"></div>
+            </div>
+            <div style="font-size:12.5px; line-height:1.55; color:var(--color-neutral-400);">Recognition, not reading. Configuration text, buttons, port labels and edge labels are gone.</div>
+          </div>
+
+          <div style="display:flex; flex-direction:column; gap:12px;">
+            <div style="display:flex; align-items:baseline; gap:8px;"><span style="font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:var(--color-accent-300);">Structure</span><span style="font-size:11px; color:var(--color-neutral-600);">50 – 90%</span></div>
+            <div style="position:relative; width:220px; height:76px; border-radius:var(--radius-md); background:var(--color-surface); box-shadow:var(--shadow-sm);">
+              <div style="display:flex; align-items:center; gap:8px; padding:8px 10px;">
+                <div style="width:24px; height:24px; border-radius:6px; display:grid; place-items:center; font-size:13px; background:var(--color-accent-800); color:var(--color-accent-200);"><i class="ph ph-sparkle"></i></div>
+                <div style="min-width:0; flex:1;">
+                  <div style="font-family:var(--font-heading); font-weight:500; font-size:13px; line-height:1.25;">Claude Sonnet 4.5</div>
+                  <div style="font-size:10px; letter-spacing:0.06em; text-transform:uppercase; color:var(--color-neutral-500);">Model</div>
+                </div>
+                <div style="width:7px; height:7px; border-radius:50%; background:#7fb096;"></div>
+              </div>
+              <div style="padding:0 10px; font-size:11px; color:var(--color-neutral-400);">temp 0.2 · tools on · 4k out</div>
+              <div style="position:absolute; left:-3.5px; top:50%; width:7px; height:7px; border-radius:50%; background:var(--color-neutral-600); box-shadow:0 0 0 2px var(--color-bg);"></div>
+              <div style="position:absolute; right:-3.5px; top:50%; width:7px; height:7px; border-radius:50%; background:var(--color-neutral-600); box-shadow:0 0 0 2px var(--color-bg);"></div>
+            </div>
+            <div style="font-size:12.5px; line-height:1.55; color:var(--color-neutral-400);">Enough to trace the flow: what the node is, how many ports it has, what it is set to.</div>
+          </div>
+
+          <div style="display:flex; flex-direction:column; gap:12px;">
+            <div style="display:flex; align-items:baseline; gap:8px;"><span style="font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:var(--color-accent-300);">Editing</span><span style="font-size:11px; color:var(--color-neutral-600);">above 90%</span></div>
+            <div style="position:relative; width:220px; height:76px; border-radius:var(--radius-md); background:var(--color-surface); box-shadow:0 0 0 2px var(--color-accent), var(--shadow-md);">
+              <div style="display:flex; align-items:center; gap:8px; padding:8px 10px;">
+                <div style="width:24px; height:24px; border-radius:6px; display:grid; place-items:center; font-size:13px; background:var(--color-accent-800); color:var(--color-accent-200);"><i class="ph ph-sparkle"></i></div>
+                <div style="min-width:0; flex:1;">
+                  <div style="font-family:var(--font-heading); font-weight:500; font-size:13px; line-height:1.25;">Claude Sonnet 4.5</div>
+                  <div style="font-size:10px; letter-spacing:0.06em; text-transform:uppercase; color:var(--color-neutral-500);">Model</div>
+                </div>
+                <div style="display:flex; gap:2px; color:var(--color-neutral-400); font-size:11px;"><i class="ph ph-play"></i><i class="ph ph-crosshair-simple"></i></div>
+                <div style="width:7px; height:7px; border-radius:50%; background:#7fb096;"></div>
+              </div>
+              <div style="padding:0 10px; font-size:11px; color:var(--color-neutral-400);">temp 0.2 · tools on · 4k out</div>
+              <div style="position:absolute; left:-3.5px; top:50%; width:7px; height:7px; border-radius:50%; background:var(--color-neutral-600); box-shadow:0 0 0 2px var(--color-bg);"></div>
+              <div style="position:absolute; left:10px; top:calc(50% - 6px); font-size:9.5px; color:var(--color-neutral-600);">messages</div>
+              <div style="position:absolute; right:-3.5px; top:50%; width:7px; height:7px; border-radius:50%; background:var(--color-neutral-600); box-shadow:0 0 0 2px var(--color-bg);"></div>
+              <div style="position:absolute; right:-72px; top:calc(50% - 6px); font-size:9.5px; color:var(--color-neutral-600);">completion</div>
+            </div>
+            <div style="font-size:12.5px; line-height:1.55; color:var(--color-neutral-400);">Port names, run and focus controls, validation. Deeper than this is not a zoom level — it is focus.</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:grid; grid-template-columns:1fr 380px; gap:56px; align-items:start; padding:34px 0; box-shadow:inset 0 -1px 0 color-mix(in srgb, var(--color-text) 9%, transparent);">
+        <div>
+          <div style="font-size:11px; letter-spacing:0.1em; color:var(--color-neutral-600); margin-bottom:8px;">05</div>
+          <h3 style="font-size:24px; margin:0 0 12px;">Not everything gets a resize handle</h3>
+          <p style="font-size:14px; line-height:1.65; color:var(--color-neutral-300); max-width:52ch; text-wrap:pretty;">Structured nodes — API calls, branches, auth, connectors — take three width presets and let height follow content. Free drag-resize belongs to the things whose value is their size: prompt and code editors, data and response previews, notes, groups.</p>
+          <div style="display:flex; flex-direction:column; gap:7px; margin:18px 0 0;">
+            <sc-for list="{{ resizeRules }}" as="r" hint-placeholder-count="6">
+              <div style="display:flex; gap:9px; font-size:13px; line-height:1.5; color:var(--color-neutral-300);">
+                <i class="ph ph-dot-outline" style="flex:0 0 auto; color:var(--color-accent); font-size:16px; line-height:1.3;"></i>
+                <span>{{ r.t }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="position:relative; height:236px; border-radius:var(--radius-md); background:var(--color-neutral-900); box-shadow:var(--shadow-sm); overflow:hidden;">
+          <div style="position:absolute; left:24px; top:22px; right:24px; bottom:22px; border:1px solid var(--color-accent); border-radius:8px; background:color-mix(in srgb, var(--color-neutral-800) 40%, transparent);"></div>
+          <div style="position:absolute; left:34px; top:12px; padding:2px 8px; border-radius:4px; background:var(--color-bg); color:var(--color-accent); font-size:9.5px; letter-spacing:0.06em; text-transform:uppercase;">group</div>
+          <div style="position:absolute; left:46px; top:52px; width:118px; height:44px; border-radius:6px; background:var(--color-surface); box-shadow:var(--shadow-sm);"></div>
+          <div style="position:absolute; left:186px; top:52px; width:118px; height:44px; border-radius:6px; background:var(--color-surface); box-shadow:var(--shadow-sm);"></div>
+          <div style="position:absolute; left:46px; top:120px; width:258px; height:82px; border-radius:6px; background:var(--color-surface); box-shadow:var(--shadow-sm);"></div>
+          <div style="position:absolute; left:42px; top:116px; width:9px; height:9px; border-radius:2px; background:var(--color-accent); box-shadow:0 0 0 1px var(--color-bg);"></div>
+          <div style="position:absolute; left:300px; top:116px; width:9px; height:9px; border-radius:2px; background:var(--color-accent); box-shadow:0 0 0 1px var(--color-bg);"></div>
+          <div style="position:absolute; left:42px; top:198px; width:9px; height:9px; border-radius:2px; background:var(--color-accent); box-shadow:0 0 0 1px var(--color-bg);"></div>
+          <div style="position:absolute; left:300px; top:198px; width:9px; height:9px; border-radius:2px; background:var(--color-accent); box-shadow:0 0 0 1px var(--color-bg);"></div>
+          <div style="position:absolute; right:24px; bottom:22px; transform:translate(50%,50%); width:11px; height:11px; border-radius:3px; background:var(--color-accent); box-shadow:0 0 0 1px var(--color-bg);"></div>
+          <div style="position:absolute; right:12px; bottom:2px; font-size:9.5px; color:var(--color-neutral-500);">boundary only</div>
+        </div>
+      </div>
+
+      <div style="display:grid; grid-template-columns:1fr 380px; gap:56px; align-items:start; padding:34px 0; box-shadow:inset 0 -1px 0 color-mix(in srgb, var(--color-text) 9%, transparent);">
+        <div>
+          <div style="font-size:11px; letter-spacing:0.1em; color:var(--color-neutral-600); margin-bottom:8px;">06</div>
+          <h3 style="font-size:24px; margin:0 0 12px;">A panel opening is not a reason to refit</h3>
+          <p style="font-size:14px; line-height:1.65; color:var(--color-neutral-300); max-width:52ch; text-wrap:pretty;">When the 328px inspector slides in, zoom is preserved and the camera pans by exactly the overlap needed to keep the selected node clear of it — often zero. Same on window resize: hold the zoom, hold the point being worked on. Fit workflow runs on first open of a workflow and never again on its own.</p>
+          <p style="font-size:13.5px; line-height:1.65; color:var(--color-neutral-500); max-width:52ch; margin:0;">Focus mode saves the camera before it moves, dims everything but the item and its immediate neighbours, and Escape puts the view back exactly. Camera history is its own stack — panning and fitting never enter content undo.</p>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <div style="position:relative; height:104px; border-radius:var(--radius-md); background:var(--color-neutral-900); box-shadow:var(--shadow-sm); overflow:hidden;">
+            <div style="position:absolute; left:196px; top:26px; width:96px; height:38px; border-radius:5px; background:var(--color-surface); box-shadow:0 0 0 2px var(--color-accent);"></div>
+            <div style="position:absolute; left:60px; top:32px; width:96px; height:26px; border-radius:5px; background:var(--color-neutral-800);"></div>
+            <div style="position:absolute; left:8px; bottom:6px; font-size:9.5px; letter-spacing:0.06em; text-transform:uppercase; color:var(--color-neutral-600);">before</div>
+          </div>
+          <div style="position:relative; height:104px; border-radius:var(--radius-md); background:var(--color-neutral-900); box-shadow:var(--shadow-sm); overflow:hidden;">
+            <div style="position:absolute; right:0; top:0; bottom:0; width:104px; background:var(--color-surface); box-shadow:inset 1px 0 0 var(--color-divider);"></div>
+            <div style="position:absolute; right:112px; top:26px; width:96px; height:38px; border-radius:5px; background:var(--color-surface); box-shadow:0 0 0 2px var(--color-accent);"></div>
+            <div style="position:absolute; left:-24px; top:32px; width:96px; height:26px; border-radius:5px; background:var(--color-neutral-800);"></div>
+            <div style="position:absolute; left:8px; bottom:6px; font-size:9.5px; letter-spacing:0.06em; text-transform:uppercase; color:var(--color-neutral-600);">panned 56px — not refitted</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="padding:34px 0;">
+        <div style="font-size:11px; letter-spacing:0.1em; color:var(--color-neutral-600); margin-bottom:8px;">07</div>
+        <h3 style="font-size:24px; margin:0 0 12px;">Gestures are never the only way</h3>
+        <p style="font-size:14px; line-height:1.65; color:var(--color-neutral-300); max-width:64ch; margin-bottom:24px; text-wrap:pretty;">Pinch has a single-pointer equivalent, drag-to-move has arrow keys and numeric position fields, drag-to-resize has width presets and numeric width and height. Nothing on this canvas can only be reached by a two-finger gesture, and every hit target clears 24px.</p>
+        <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:16px;">
+          <sc-for list="{{ a11y }}" as="a" hint-placeholder-count="3">
+            <div style="padding:16px; border-radius:var(--radius-md); background:var(--color-surface); box-shadow:var(--shadow-sm);">
+              <div style="font-size:10px; letter-spacing:0.08em; text-transform:uppercase; color:var(--color-neutral-500); margin-bottom:7px;">{{ a.k }}</div>
+              <div style="font-size:13.5px; line-height:1.55; color:var(--color-neutral-300);">{{ a.v }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="margin-top:26px; padding:26px 30px; border-radius:var(--radius-lg); background:var(--color-section); box-shadow:0 0 60px -20px var(--color-section-glow);">
+        <div style="font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:var(--color-section-ghost); margin-bottom:10px;">The rule the rest hangs off</div>
+        <div style="font-family:var(--font-heading); font-weight:500; font-size:26px; line-height:1.25; letter-spacing:-0.015em; max-width:36ch; text-wrap:pretty;">Zoom out to understand the system, fit a section to understand the flow, focus an item to edit it — and always return to exactly where you were.</div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    const rect = (l, t, w, h, kind) => ({
+      style: {
+        position: 'absolute', left: l + '%', top: t + '%', width: w + '%', height: h + '%',
+        borderRadius: 3,
+        background: kind === 'sel' ? 'var(--color-accent-600)' : kind === 'dim' ? 'var(--color-neutral-800)' : 'var(--color-neutral-700)',
+        boxShadow: kind === 'sel' ? '0 0 0 1.5px var(--color-accent-200)' : 'none',
+        opacity: kind === 'dim' ? 0.45 : 1
+      }
+    });
+    const frame = (l, t, w, h) => ({
+      style: {
+        position: 'absolute', left: l + '%', top: t + '%', width: w + '%', height: h + '%',
+        border: '1px dashed var(--color-accent)', borderRadius: 4,
+        background: 'color-mix(in srgb, var(--color-accent) 7%, transparent)'
+      }
+    });
+
+    return {
+      gestures: [
+        { k: 'two-finger drag', v: 'pan' },
+        { k: 'pinch  ·  ⌘ wheel', v: 'zoom, anchored on the pointer' },
+        { k: 'wheel', v: 'pan vertically' },
+        { k: '⇧ wheel', v: 'pan sideways' },
+        { k: 'space  ·  middle  ·  right drag', v: 'pan' },
+        { k: 'left drag on empty', v: 'marquee select' },
+        { k: 'double-click node', v: 'focus — or enter a subflow' }
+      ],
+      commands: [
+        { name: 'Fit workflow', key: '1', body: 'Bounding box of everything visible, 68px of padding, capped at 110%.', rects: [rect(8, 14, 26, 20), rect(40, 46, 26, 20), rect(70, 18, 22, 22), rect(14, 66, 30, 18), frame(2, 6, 96, 86)] },
+        { name: 'Fit selection', key: '2', body: 'The selected nodes only. How you read one section of a large graph.', rects: [rect(8, 14, 26, 20, 'dim'), rect(40, 46, 26, 20, 'sel'), rect(70, 18, 22, 22, 'dim'), rect(14, 66, 30, 18, 'sel'), frame(8, 40, 62, 50)] },
+        { name: 'Focus item', key: 'F', body: 'Centres one item at 90–120%, opens its editor, dims the unrelated, remembers the way back.', rects: [rect(8, 14, 26, 20, 'dim'), rect(34, 40, 34, 26, 'sel'), rect(74, 18, 20, 20, 'dim'), rect(14, 70, 26, 16, 'dim'), frame(26, 30, 50, 46)] },
+        { name: '100%', key: '0', body: 'True size, keeping the current centre point. No fitting, no jump to the origin.', rects: [rect(20, 24, 40, 30), rect(66, 56, 26, 22, 'dim'), frame(14, 16, 54, 48)] }
+      ],
+      resizeRules: [
+        { t: 'Handles appear on selection, never permanently, and hold a constant screen size as zoom changes.' },
+        { t: 'The header is the drag region; fields, code areas and buttons are not.' },
+        { t: 'Minimum and maximum dimensions, live dimensions while dragging, Escape cancels.' },
+        { t: 'A whole resize gesture is one undo step.' },
+        { t: 'Resizing a group moves its boundary — children keep their own size and position.' },
+        { t: 'Edges reroute live; connector positions survive the resize.' }
+      ],
+      a11y: [
+        { k: 'Zoom', v: '+ / − buttons and a percentage menu sit beside the pinch gesture, always visible.' },
+        { k: 'Move', v: 'Arrow keys nudge 12px, shift-arrows 1px, and the inspector takes numeric X and Y.' },
+        { k: 'Resize', v: 'Width presets and numeric width and height in the inspector — no drag required.' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

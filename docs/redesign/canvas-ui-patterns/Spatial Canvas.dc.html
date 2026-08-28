@@ -1,0 +1,1218 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/nocturne-1b10eb84-be95-4e24-8f71-bb1ecf0ff177/styles.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<script src="_ds/nocturne-1b10eb84-be95-4e24-8f71-bb1ecf0ff177/_ds_bundle.js"></script>
+<style>
+  html, body { height: 100%; overflow: hidden; background: var(--color-bg); }
+  :root { --st-err: #d47a7a; --st-ok: #7fb096; --st-run: var(--color-accent-400); }
+  * { box-sizing: border-box; }
+  a { color: var(--color-accent); }
+  a:hover { color: var(--color-accent-300); }
+  :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  @keyframes nodePulse {
+    0% { filter: brightness(1); }
+    35% { filter: brightness(1.5); }
+    100% { filter: brightness(1); }
+  }
+  @keyframes runGlow {
+    0%, 100% { opacity: 0.35; }
+    50% { opacity: 1; }
+  }
+  @keyframes dashRun { to { stroke-dashoffset: -16; } }
+</style>
+</helmet>
+<div style="position:fixed; inset:0; display:grid; grid-template-rows:48px 1fr; font-family:var(--font-body); color:var(--color-text); background:var(--color-bg); user-select:none;">
+
+  <div style="display:flex; align-items:center; gap:14px; padding:0 12px; background:var(--color-bg); box-shadow:inset 0 -1px 0 var(--color-divider); position:relative; z-index:40;">
+    <div style="display:flex; align-items:center; gap:8px; padding-right:4px;">
+      <div style="width:20px; height:20px; border-radius:5px; border:1px solid var(--color-accent); display:grid; place-items:center; color:var(--color-accent); font-size:12px;"><i class="ph ph-graph"></i></div>
+      <span style="font-family:var(--font-heading); font-weight:500; font-size:14px; letter-spacing:-0.01em;">Nocturne Flow</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:6px; font-size:13px; min-width:0;">
+      <sc-for list="{{ crumbs }}" as="c" hint-placeholder-count="1">
+        <div style="display:flex; align-items:center; gap:6px;">
+          <sc-if value="{{ c.sep }}" hint-placeholder-val="{{ false }}"><span style="color:var(--color-neutral-600); font-size:11px;"><i class="ph ph-caret-right"></i></span></sc-if>
+          <button type="button" onClick="{{ c.go }}" style="{{ c.style }}" style-hover="background:color-mix(in srgb, var(--color-text) 7%, transparent);">{{ c.label }}</button>
+        </div>
+      </sc-for>
+    </div>
+    <div style="display:flex; align-items:center; gap:6px; margin-left:auto;">
+      <sc-if value="{{ canBack }}" hint-placeholder-val="{{ false }}">
+        <button type="button" onClick="{{ backView }}" title="{{ backTitle }}" class="btn btn-secondary" style="font-size:12px; padding:4px 9px; height:28px; gap:5px; white-space:nowrap;"><i class="ph ph-arrow-u-up-left"></i>Back view</button>
+      </sc-if>
+      <button type="button" onClick="{{ openSearch }}" class="btn btn-secondary" style="font-size:12px; padding:4px 9px; height:28px; gap:6px; color:var(--color-neutral-400);"><i class="ph ph-magnifying-glass"></i>Search<span style="font-size:10px; padding:1px 4px; border-radius:3px; background:var(--color-neutral-800); color:var(--color-neutral-300);">⌘K</span></button>
+      <button type="button" onClick="{{ toggleCheats }}" title="Keyboard shortcuts (?)" class="btn btn-secondary btn-icon" style="width:28px; height:28px;"><i class="ph ph-keyboard"></i></button>
+      <button type="button" onClick="{{ run }}" class="btn btn-primary" style="font-size:12px; padding:4px 11px; height:28px; gap:6px;"><i class="{{ runIcon }}"></i>{{ runLabel }}</button>
+    </div>
+  </div>
+
+  <div style="position:relative; overflow:hidden;">
+    <div ref="{{ canvasRef }}" onPointerDown="{{ onPointerDown }}" onDoubleClick="{{ onDoubleClick }}" onContextMenu="{{ noMenu }}" tabindex="0" style="position:absolute; inset:0; outline:none; background-color:var(--color-bg); background-image:radial-gradient(var(--color-neutral-800) 1px, transparent 0);">
+      <div ref="{{ worldRef }}" style="position:absolute; top:0; left:0; width:0; height:0; transform-origin:0 0;">
+
+        <svg width="1" height="1" style="position:absolute; top:0; left:0; overflow:visible; pointer-events:none;">
+          <sc-for list="{{ edges }}" as="e" hint-placeholder-count="6">
+            <path d="{{ e.d }}" fill="none" stroke="{{ e.stroke }}" stroke-width="1.6" stroke-dasharray="{{ e.dash }}" stroke-linecap="round" vector-effect="non-scaling-stroke" opacity="{{ e.opacity }}" style="{{ e.style }}"></path>
+          </sc-for>
+        </svg>
+
+        <sc-for list="{{ groups }}" as="g" hint-placeholder-count="3">
+          <div style="{{ g.style }}">
+            <div onPointerDown="{{ g.grab }}" style="{{ g.labelStyle }}"><i class="ph ph-selection-all" style="font-size:11px;"></i>{{ g.name }}</div>
+            <sc-if value="{{ g.selected }}" hint-placeholder-val="{{ false }}">
+              <div onPointerDown="{{ g.resize }}" style="position:absolute; right:0; bottom:0; width:12px; height:12px; margin:-6px -6px 0 0; border-radius:3px; background:var(--color-accent); cursor:nwse-resize; transform:translate(50%,50%) scale(var(--iz,1)); pointer-events:auto;"></div>
+            </sc-if>
+          </div>
+        </sc-for>
+
+        <sc-for list="{{ nodes }}" as="n" hint-placeholder-count="8">
+          <div data-node="{{ n.id }}" style="{{ n.style }}">
+
+            <sc-if value="{{ n.overview }}" hint-placeholder-val="{{ false }}">
+              <div style="height:100%; display:flex; align-items:center; gap:11px; padding:0 13px;">
+                <i class="ph {{ n.icon }}" style="{{ n.bigIconStyle }}"></i>
+                <div style="flex:1; min-width:0; font-family:var(--font-heading); font-weight:500; font-size:20px; line-height:1.08; letter-spacing:-0.015em; overflow:hidden; text-wrap:balance;">{{ n.name }}</div>
+                <div style="{{ n.bigDotStyle }}"></div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ n.detail }}" hint-placeholder-val="{{ true }}">
+              <div style="height:100%; display:flex; flex-direction:column;">
+                <div onPointerDown="{{ n.grab }}" style="display:flex; align-items:center; gap:8px; padding:8px 10px; cursor:grab; flex:0 0 auto;">
+                  <div style="{{ n.chipStyle }}"><i class="ph {{ n.icon }}"></i></div>
+                  <div style="min-width:0; flex:1;">
+                    <div style="font-family:var(--font-heading); font-weight:500; font-size:13px; line-height:1.25; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ n.name }}</div>
+                    <div style="font-size:10px; letter-spacing:0.06em; text-transform:uppercase; color:var(--color-neutral-500);">{{ n.typeLabel }}</div>
+                  </div>
+                  <sc-if value="{{ n.editing }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex; align-items:center; gap:2px;">
+                      <button type="button" data-nodrag="1" onClick="{{ n.runOne }}" title="Run this node" class="btn btn-secondary btn-icon" style="width:20px; height:20px; font-size:11px; color:var(--color-neutral-400);"><i class="ph ph-play"></i></button>
+                      <button type="button" data-nodrag="1" onClick="{{ n.focus }}" title="Focus (F)" class="btn btn-secondary btn-icon" style="width:20px; height:20px; font-size:11px; color:var(--color-neutral-400);"><i class="ph ph-crosshair-simple"></i></button>
+                    </div>
+                  </sc-if>
+                  <div style="{{ n.dotStyle }}"></div>
+                </div>
+
+                <sc-if value="{{ n.hasSummary }}" hint-placeholder-val="{{ true }}">
+                  <div style="padding:0 10px 8px; font-size:11px; line-height:1.35; color:var(--color-neutral-400); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ n.summary }}</div>
+                </sc-if>
+
+                <sc-if value="{{ n.isPrompt }}" hint-placeholder-val="{{ false }}">
+                  <div data-nodrag="1" style="margin:0 8px 8px; flex:1; overflow:hidden; border-radius:6px; background:var(--color-neutral-900); box-shadow:inset 0 0 0 1px var(--color-divider); padding:9px 10px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; line-height:1.6; color:var(--color-neutral-300); cursor:text;">
+                    <div>You are a support agent for <span style="color:var(--color-accent-300);"><span>{</span><span>{ account.plan }</span><span>}</span></span> customers.</div>
+                    <div style="margin-top:6px;">Answer only from the retrieved context. If the context is insufficient, say so and offer to open a ticket.</div>
+                    <div style="margin-top:6px; color:var(--color-neutral-500);">Context:</div>
+                    <div><span style="color:var(--color-accent-300);"><span>{</span><span>{ retrieval.chunks }</span><span>}</span></span></div>
+                    <div style="margin-top:6px; color:var(--color-neutral-500);">Question:</div>
+                    <div><span style="color:var(--color-accent-300);"><span>{</span><span>{ input.message }</span><span>}</span></span></div>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ n.isPreview }}" hint-placeholder-val="{{ false }}">
+                  <div data-nodrag="1" style="margin:0 8px 8px; flex:1; overflow:hidden; border-radius:6px; background:var(--color-neutral-900); box-shadow:inset 0 0 0 1px var(--color-divider); padding:9px 10px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; line-height:1.65; color:var(--color-neutral-300); cursor:text;">
+                    <div style="color:var(--color-neutral-500);">last run · 1.84s · 2,930 tok</div>
+                    <div style="margin-top:6px;">{ <span style="color:var(--color-accent-300);">"answer"</span>: "Your Pro seat renews on 12 Sep…",</div>
+                    <div style="padding-left:10px;"><span style="color:var(--color-accent-300);">"citations"</span>: [ "billing.md#renewals" ],</div>
+                    <div style="padding-left:10px;"><span style="color:var(--color-accent-300);">"escalate"</span>: false }</div>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ n.isNote }}" hint-placeholder-val="{{ false }}">
+                  <div data-nodrag="1" style="margin:0 10px 10px; flex:1; font-size:12px; line-height:1.5; color:var(--color-accent-200); cursor:text;">Retrieval runs on the <b style="font-weight:600;">pgvector</b> replica — do not point it at primary. Rerank stays inside the subflow so the token budget is capped in one place.</div>
+                </sc-if>
+
+                <sc-if value="{{ n.isSubflow }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-top:auto; display:flex; align-items:center; justify-content:space-between; padding:0 10px 8px; font-size:10.5px; color:var(--color-neutral-500);">
+                    <span>{{ n.childCount }} nodes · collapsed</span>
+                    <button type="button" data-nodrag="1" onClick="{{ n.enter }}" class="btn btn-ghost" style="font-size:10.5px; padding:2px 6px; gap:4px;">Enter<i class="ph ph-arrow-square-in"></i></button>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ n.showPorts }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute; inset:0; pointer-events:none;">
+                <sc-for list="{{ n.ports }}" as="p" hint-placeholder-count="2">
+                  <div style="{{ p.style }}">
+                    <div style="{{ p.dotStyle }}"></div>
+                    <sc-if value="{{ p.labelled }}" hint-placeholder-val="{{ false }}"><div style="{{ p.labelStyle }}">{{ p.name }}</div></sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ n.showError }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute; left:0; top:100%; margin-top:6px; display:flex; align-items:center; gap:5px; padding:3px 7px; border-radius:5px; background:var(--color-neutral-900); box-shadow:0 0 0 1px color-mix(in srgb, var(--st-err) 55%, transparent); font-size:10.5px; color:var(--st-err); white-space:nowrap;"><i class="ph ph-warning-circle"></i>{{ n.error }}</div>
+            </sc-if>
+
+            <sc-if value="{{ n.handles }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute; inset:0; pointer-events:none;">
+                <sc-for list="{{ n.handleList }}" as="h" hint-placeholder-count="4">
+                  <div onPointerDown="{{ h.grab }}" style="{{ h.style }}"></div>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ n.showDims }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute; right:0; bottom:0; transform:translate(0, 130%) scale(var(--iz,1)); transform-origin:100% 100%; padding:2px 6px; border-radius:4px; background:var(--color-accent-800); color:var(--color-accent-100); font-size:10px; font-variant-numeric:tabular-nums; white-space:nowrap;">{{ n.dimsLabel }}</div>
+            </sc-if>
+          </div>
+        </sc-for>
+
+        <sc-for list="{{ edgeLabels }}" as="l" hint-placeholder-count="0">
+          <div style="{{ l.style }}">{{ l.text }}</div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div ref="{{ marqueeRef }}" style="position:absolute; display:none; border:1px solid var(--color-accent); background:color-mix(in srgb, var(--color-accent) 12%, transparent); border-radius:2px; pointer-events:none; z-index:20;"></div>
+
+    <div style="position:absolute; left:12px; top:12px; display:flex; flex-direction:column; gap:6px; z-index:25;">
+      <div class="seg" style="background:var(--color-surface); box-shadow:var(--shadow-md); flex-direction:column; border-color:transparent;">
+        <button type="button" onClick="{{ setSelect }}" title="Select tool (V)" style="{{ selToolStyle }}"><i class="ph ph-cursor"></i></button>
+        <button type="button" onClick="{{ setHand }}" title="Hand tool (H) — or hold Space" style="{{ handToolStyle }}"><i class="ph ph-hand-grabbing"></i></button>
+      </div>
+    </div>
+
+    <sc-if value="{{ following }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute; left:50%; top:14px; transform:translateX(-50%); display:flex; align-items:center; gap:8px; padding:5px 12px; border-radius:999px; background:var(--color-surface); box-shadow:var(--shadow-md); font-size:12px; z-index:30;">
+        <span style="width:6px; height:6px; border-radius:50%; background:var(--st-run); animation:runGlow 1.1s ease-in-out infinite;"></span>
+        Following execution
+        <button type="button" onClick="{{ stopFollow }}" class="btn btn-ghost" style="font-size:11px; padding:1px 5px;">Stop</button>
+      </div>
+    </sc-if>
+
+    <div style="position:absolute; left:12px; bottom:12px; display:flex; flex-direction:column; gap:8px; align-items:flex-start; z-index:30;">
+      <sc-if value="{{ minimap }}" hint-placeholder-val="{{ true }}">
+        <div style="width:216px; border-radius:var(--radius-md); background:var(--color-surface); box-shadow:var(--shadow-md); overflow:hidden;">
+          <div style="display:flex; align-items:center; gap:6px; padding:5px 8px; font-size:10px; letter-spacing:0.07em; text-transform:uppercase; color:var(--color-neutral-500);">
+            <span style="flex:1;">{{ ctxLabel }}</span>
+            <span style="text-transform:none; letter-spacing:0; color:var(--color-neutral-600);">{{ nodeCount }} nodes</span>
+            <button type="button" onClick="{{ toggleMinimap }}" title="Hide minimap (M)" class="btn btn-secondary btn-icon" style="width:16px; height:16px; font-size:10px;"><i class="ph ph-minus"></i></button>
+          </div>
+          <div ref="{{ minimapRef }}" onPointerDown="{{ onMinimapDown }}" style="position:relative; height:132px; cursor:pointer; background:var(--color-neutral-900);">
+            <sc-for list="{{ mmNodes }}" as="m" hint-placeholder-count="8">
+              <div style="{{ m.style }}"></div>
+            </sc-for>
+            <div ref="{{ mmViewRef }}" style="position:absolute; border:1px solid var(--color-accent); background:color-mix(in srgb, var(--color-accent) 10%, transparent); border-radius:2px; pointer-events:none;"></div>
+          </div>
+        </div>
+      </sc-if>
+
+      <div style="display:flex; align-items:stretch; gap:6px;">
+        <div style="display:flex; align-items:center; border-radius:var(--radius-md); background:var(--color-surface); box-shadow:var(--shadow-md); overflow:hidden;">
+          <button type="button" onClick="{{ zoomOut }}" title="Zoom out (−)" class="btn btn-secondary btn-icon" style="width:30px; height:30px; border-radius:0;"><i class="ph ph-minus"></i></button>
+          <button type="button" onClick="{{ toggleZoomMenu }}" style="min-width:60px; height:30px; padding:0 8px; border:0; background:transparent; color:var(--color-text); font-family:var(--font-body); font-size:12px; font-variant-numeric:tabular-nums; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:4px;" style-hover="background:color-mix(in srgb, var(--color-text) 7%, transparent);">{{ zLabel }}<i class="ph ph-caret-up" style="font-size:9px; opacity:0.6;"></i></button>
+          <button type="button" onClick="{{ zoomIn }}" title="Zoom in (+)" class="btn btn-secondary btn-icon" style="width:30px; height:30px; border-radius:0;"><i class="ph ph-plus"></i></button>
+          <div style="width:1px; height:18px; background:var(--color-divider);"></div>
+          <button type="button" onClick="{{ fitAll }}" title="Fit workflow (1)" class="btn btn-secondary" style="height:30px; border-radius:0; font-size:11.5px; gap:5px; padding:0 10px;"><i class="ph ph-corners-out"></i>Fit</button>
+          <sc-if value="{{ minimapHidden }}" hint-placeholder-val="{{ false }}">
+            <button type="button" onClick="{{ toggleMinimap }}" title="Show minimap (M)" class="btn btn-secondary btn-icon" style="width:30px; height:30px; border-radius:0;"><i class="ph ph-map-trifold"></i></button>
+          </sc-if>
+        </div>
+      </div>
+
+      <sc-if value="{{ zoomMenu }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute; left:0; bottom:48px; width:212px; padding:5px; border-radius:var(--radius-md); background:var(--color-surface); box-shadow:var(--shadow-lg); display:flex; flex-direction:column; gap:1px;">
+          <sc-for list="{{ zoomMenuItems }}" as="z" hint-placeholder-count="0">
+            <button type="button" onClick="{{ z.go }}" style="{{ z.style }}" style-hover="background:color-mix(in srgb, var(--color-text) 8%, transparent);">
+              <span style="flex:1; text-align:left;">{{ z.label }}</span>
+              <span style="font-size:10.5px; color:var(--color-neutral-500);">{{ z.key }}</span>
+            </button>
+          </sc-for>
+        </div>
+      </sc-if>
+    </div>
+
+    <div style="{{ inspectorStyle }}">
+      <sc-if value="{{ insp }}" hint-placeholder-val="{{ false }}">
+        <div style="height:100%; display:flex; flex-direction:column;">
+          <div style="display:flex; align-items:flex-start; gap:9px; padding:12px 12px 10px;">
+            <div style="{{ insp.chipStyle }}"><i class="ph {{ insp.icon }}"></i></div>
+            <div style="flex:1; min-width:0;">
+              <div style="font-family:var(--font-heading); font-weight:500; font-size:15px; line-height:1.2;">{{ insp.name }}</div>
+              <div style="font-size:10px; letter-spacing:0.07em; text-transform:uppercase; color:var(--color-neutral-500); margin-top:2px;">{{ insp.typeLabel }} · {{ insp.statusLabel }}</div>
+            </div>
+            <button type="button" onClick="{{ closeInspector }}" class="btn btn-secondary btn-icon" style="width:24px; height:24px; font-size:12px;"><i class="ph ph-x"></i></button>
+          </div>
+
+          <div style="flex:1; overflow:auto; padding:0 12px 12px; display:flex; flex-direction:column; gap:14px;">
+            <div style="display:flex; gap:6px;">
+              <button type="button" onClick="{{ focusSel }}" class="btn btn-primary" style="flex:1; font-size:12px; height:28px; gap:5px;"><i class="ph ph-crosshair-simple"></i>Focus</button>
+              <button type="button" onClick="{{ fitSel }}" class="btn btn-secondary" style="flex:1; font-size:12px; height:28px; gap:5px;"><i class="ph ph-selection"></i>Fit</button>
+            </div>
+
+            <sc-if value="{{ insp.hasSize }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; flex-direction:column; gap:6px;">
+              <div style="font-size:10px; letter-spacing:0.08em; text-transform:uppercase; color:var(--color-neutral-500);">Size</div>
+              <sc-if value="{{ insp.free }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex; gap:6px;">
+                  <label class="field" style="flex:1; display:flex; flex-direction:column; gap:3px; font-size:10.5px; color:var(--color-neutral-500);">Width
+                    <input class="input" type="number" value="{{ insp.w }}" onChange="{{ insp.setW }}" style="height:28px; font-size:12px; padding:0 8px;">
+                  </label>
+                  <label class="field" style="flex:1; display:flex; flex-direction:column; gap:3px; font-size:10.5px; color:var(--color-neutral-500);">Height
+                    <input class="input" type="number" value="{{ insp.h }}" onChange="{{ insp.setH }}" style="height:28px; font-size:12px; padding:0 8px;">
+                  </label>
+                </div>
+              </sc-if>
+              <sc-if value="{{ insp.preset }}" hint-placeholder-val="{{ false }}">
+                <div class="seg" style="width:100%;">
+                  <sc-for list="{{ insp.presets }}" as="p" hint-placeholder-count="3">
+                    <button type="button" onClick="{{ p.set }}" style="{{ p.style }}">{{ p.label }}</button>
+                  </sc-for>
+                </div>
+                <div style="font-size:10.5px; color:var(--color-neutral-600); line-height:1.4;">Structured nodes take width presets — height follows content, so the graph stays scannable.</div>
+              </sc-if>
+            </div>
+            </sc-if>
+
+            <div style="display:flex; flex-direction:column; gap:6px;">
+              <div style="font-size:10px; letter-spacing:0.08em; text-transform:uppercase; color:var(--color-neutral-500);">{{ insp.posLabel }}</div>
+              <div style="display:flex; gap:6px;">
+                <label class="field" style="flex:1; display:flex; flex-direction:column; gap:3px; font-size:10.5px; color:var(--color-neutral-500);">X
+                  <input class="input" type="number" value="{{ insp.x }}" onChange="{{ insp.setX }}" style="height:28px; font-size:12px; padding:0 8px;">
+                </label>
+                <label class="field" style="flex:1; display:flex; flex-direction:column; gap:3px; font-size:10.5px; color:var(--color-neutral-500);">Y
+                  <input class="input" type="number" value="{{ insp.y }}" onChange="{{ insp.setY }}" style="height:28px; font-size:12px; padding:0 8px;">
+                </label>
+              </div>
+            </div>
+
+            <sc-if value="{{ insp.hasCfg }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; flex-direction:column; gap:5px;">
+              <div style="font-size:10px; letter-spacing:0.08em; text-transform:uppercase; color:var(--color-neutral-500);">Configuration</div>
+              <sc-for list="{{ insp.cfg }}" as="c" hint-placeholder-count="3">
+                <div style="display:flex; gap:10px; font-size:11.5px; padding:4px 0; box-shadow:inset 0 -1px 0 color-mix(in srgb, var(--color-text) 8%, transparent);">
+                  <span style="flex:0 0 88px; color:var(--color-neutral-500);">{{ c.k }}</span>
+                  <span style="flex:1; text-align:right; font-variant-numeric:tabular-nums;">{{ c.v }}</span>
+                </div>
+              </sc-for>
+            </div>
+            </sc-if>
+
+            <sc-if value="{{ insp.multi }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size:11.5px; color:var(--color-neutral-400); line-height:1.45;">{{ insp.multi }}</div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+
+    <sc-if value="{{ palette }}" hint-placeholder-val="{{ false }}">
+      <div onPointerDown="{{ closePalette }}" style="position:absolute; inset:0; background:color-mix(in srgb, var(--color-neutral-900) 45%, transparent); z-index:60; display:flex; justify-content:center; padding-top:88px;">
+        <div onPointerDown="{{ stop }}" style="width:520px; max-width:92%; align-self:flex-start; border-radius:var(--radius-lg); background:var(--color-surface); box-shadow:var(--shadow-lg); overflow:hidden;">
+          <div style="display:flex; align-items:center; gap:9px; padding:11px 13px; box-shadow:inset 0 -1px 0 var(--color-divider);">
+            <i class="ph ph-magnifying-glass" style="color:var(--color-neutral-500);"></i>
+            <input ref="{{ paletteRef }}" value="{{ query }}" onChange="{{ setQuery }}" onKeyDown="{{ paletteKey }}" placeholder="Find a node, model, prompt text — or run a command" style="flex:1; border:0; background:transparent; color:var(--color-text); font-family:var(--font-body); font-size:14px; outline:none;">
+            <span style="font-size:10px; padding:2px 5px; border-radius:3px; background:var(--color-neutral-800); color:var(--color-neutral-400);">esc</span>
+          </div>
+          <div style="max-height:330px; overflow:auto; padding:5px;">
+            <sc-for list="{{ results }}" as="r" hint-placeholder-count="0">
+              <button type="button" onClick="{{ r.go }}" onMouseEnter="{{ r.hover }}" style="{{ r.style }}">
+                <i class="ph {{ r.icon }}" style="font-size:14px; color:var(--color-neutral-400); flex:0 0 auto;"></i>
+                <span style="flex:0 0 auto; font-size:13px;">{{ r.name }}</span>
+                <span style="flex:1; min-width:0; font-size:11px; color:var(--color-neutral-500); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left;">{{ r.hint }}</span>
+                <span style="flex:0 0 auto; font-size:10px; color:var(--color-neutral-600);">{{ r.meta }}</span>
+              </button>
+            </sc-for>
+            <sc-if value="{{ noResults }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:16px; text-align:center; font-size:12.5px; color:var(--color-neutral-500);">Nothing matches “{{ query }}”</div>
+            </sc-if>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ cheats }}" hint-placeholder-val="{{ false }}">
+      <div onPointerDown="{{ toggleCheats }}" class="dialog-backdrop" style="position:absolute; z-index:70;">
+        <div onPointerDown="{{ stop }}" class="dialog" style="width:min(720px,100%); gap:var(--space-4);">
+          <div style="display:flex; align-items:baseline; gap:10px;">
+            <div class="dialog-title" style="font-size:18px; white-space:nowrap; flex:0 0 auto;">Canvas control</div>
+            <div style="font-size:11.5px; color:var(--color-neutral-500);">Single-key shortcuts fire only when the canvas has focus — never while you are typing in a prompt or a field.</div>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:var(--space-6) var(--space-8);">
+            <sc-for list="{{ cheatGroups }}" as="cg" hint-placeholder-count="4">
+              <div style="display:flex; flex-direction:column; gap:5px;">
+                <div style="font-size:10px; letter-spacing:0.09em; text-transform:uppercase; color:var(--color-accent-300); margin-bottom:2px;">{{ cg.title }}</div>
+                <sc-for list="{{ cg.rows }}" as="row" hint-placeholder-count="4">
+                  <div style="display:flex; align-items:baseline; gap:10px; font-size:12px;">
+                    <span style="flex:0 0 138px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; color:var(--color-neutral-300);">{{ row.k }}</span>
+                    <span style="flex:1; color:var(--color-neutral-400);">{{ row.v }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-for>
+          </div>
+          <div class="dialog-actions"><button type="button" onClick="{{ toggleCheats }}" class="btn btn-primary" style="font-size:12.5px;">Close</button></div>
+        </div>
+      </div>
+    </sc-if>
+
+    <div style="position:absolute; right:0; bottom:0; padding:6px 10px; font-size:10.5px; color:var(--color-neutral-600); pointer-events:none; z-index:10;">{{ lodHint }}</div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;navigationModel&quot;: {&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;design-tool&quot;,&quot;map-style&quot;],&quot;default&quot;:&quot;design-tool&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Navigation&quot;,&quot;label&quot;:&quot;Navigation model&quot;},
+  &quot;semanticZoom&quot;: {&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Navigation&quot;},
+  &quot;minimapOpen&quot;: {&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Chrome&quot;},
+  &quot;gridDots&quot;: {&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Chrome&quot;}
+}">
+class Component extends DCLogic {
+  state = {
+    ctx: 'main',
+    nodes: {
+      trig:   { ctx:'main', type:'trigger', name:'Chat webhook',      x:60,   y:150, w:220, h:76, sum:'POST /v1/agent/message', cfg:[['Method','POST'],['Auth','HMAC'],['Timeout','30s']], ports:{in:[],out:['message']} },
+      auth:   { ctx:'main', type:'auth',    name:'Verify API key',    x:60,   y:280, w:220, h:76, sum:'Workspace scope + plan tier', cfg:[['Source','Header'],['Cache','60s']], ports:{in:['request'],out:['account']} },
+      rate:   { ctx:'main', type:'guard',   name:'Rate limit',        x:60,   y:410, w:220, h:76, sum:'40 req / min / workspace', cfg:[['Window','60s'],['Burst','8'],['On limit','429']], ports:{in:['account'],out:['ok']} },
+      retr:   { ctx:'main', type:'subflow', name:'Retrieval',         x:380,  y:280, w:220, h:88, sub:'retrieval', sum:'Embed → search → rerank', cfg:[['Nodes','4'],['Top k','24 → 6'],['Index','pgvector']], ports:{in:['query'],out:['chunks']} },
+      note:   { ctx:'main', type:'note',    name:'Ops note',          x:380,  y:430, w:260, h:132, free:true, ports:{in:[],out:[]} },
+      prompt: { ctx:'main', type:'prompt',  name:'Prompt builder',    x:700,  y:120, w:300, h:230, free:true, sum:'system + context + question', cfg:[['Template','support.v4'],['Vars','3'],['Max ctx','8k tok']], ports:{in:['chunks'],out:['messages']} },
+      model:  { ctx:'main', type:'model',   name:'Claude Sonnet 4.5', x:1080, y:150, w:220, h:76, status:'ok', sum:'temp 0.2 · tools on · 4k out', cfg:[['Model','sonnet-4.5'],['Temp','0.2'],['Max out','4096'],['Tools','3 bound']], ports:{in:['messages'],out:['completion']} },
+      router: { ctx:'main', type:'branch',  name:'Tool router',       x:1080, y:290, w:220, h:76, sum:'tool_use → tools · else → output', cfg:[['Branches','2'],['Max loops','4']], ports:{in:['completion'],out:['tool_use','final']} },
+      tools:  { ctx:'main', type:'subflow', name:'Agent tools',       x:1080, y:430, w:220, h:88, sub:'tools', sum:'3 bound tools, merged', cfg:[['Nodes','4'],['Timeout','12s each']], ports:{in:['call'],out:['result']} },
+      guard:  { ctx:'main', type:'guard',   name:'Output guardrail',  x:1420, y:150, w:220, h:76, status:'error', err:'No refusal policy set', sum:'PII scrub · policy check', cfg:[['PII','redact'],['Policy','—'],['On block','fallback']], ports:{in:['final'],out:['clean']} },
+      fmt:    { ctx:'main', type:'transform', name:'Response format', x:1420, y:290, w:220, h:76, sum:'answer + citations + escalate', cfg:[['Shape','JSON'],['Schema','v2']], ports:{in:['clean'],out:['payload']} },
+      prev:   { ctx:'main', type:'preview', name:'Response preview',  x:1420, y:420, w:300, h:200, free:true, sum:'last run output', ports:{in:['payload'],out:[]} },
+      log:    { ctx:'main', type:'db',      name:'Log to Postgres',   x:1780, y:290, w:220, h:76, sum:'agent_runs · async', cfg:[['Table','agent_runs'],['Mode','async']], ports:{in:['payload'],out:[]} },
+
+      r_embed:  { ctx:'retrieval', type:'embed',   name:'Embed query',   x:80,   y:210, w:220, h:76, sum:'voyage-3 · 1024d', cfg:[['Model','voyage-3'],['Dims','1024']], ports:{in:['query'],out:['vector']} },
+      r_search: { ctx:'retrieval', type:'db',      name:'Vector search', x:420,  y:210, w:240, h:76, sum:'pgvector replica · top 24', cfg:[['Index','docs_hnsw'],['Top k','24'],['Filter','workspace_id']], ports:{in:['vector'],out:['hits']} },
+      r_rank:   { ctx:'retrieval', type:'model',   name:'Rerank top-k',  x:780,  y:210, w:220, h:76, sum:'cross-encoder → 6', cfg:[['Keep','6'],['Min score','0.42']], ports:{in:['hits'],out:['chunks']} },
+      r_ctx:    { ctx:'retrieval', type:'preview', name:'Retrieved chunks', x:1100, y:170, w:300, h:190, free:true, sum:'6 chunks · 2,140 tok', ports:{in:['chunks'],out:[]} },
+
+      t_web:   { ctx:'tools', type:'tool', name:'Search API',    x:100, y:130, w:220, h:76, sum:'GET /search · 12s', cfg:[['Provider','Brave'],['Timeout','12s']], ports:{in:['call'],out:['result']} },
+      t_cal:   { ctx:'tools', type:'tool', name:'Calendar API',  x:100, y:260, w:220, h:76, sum:'read-only · OAuth', cfg:[['Scope','read'],['Auth','OAuth']], ports:{in:['call'],out:['result']} },
+      t_sql:   { ctx:'tools', type:'tool', name:'SQL query',     x:100, y:390, w:220, h:76, sum:'allow-list · read replica', cfg:[['Mode','read'],['Allow-list','7 tables']], ports:{in:['call'],out:['rows']} },
+      t_merge: { ctx:'tools', type:'transform', name:'Merge results', x:460, y:260, w:220, h:76, sum:'tool_result blocks', cfg:[['Order','call order']], ports:{in:['result'],out:['result']} }
+    },
+    groups: {
+      g_in:  { ctx:'main', name:'Input & auth',  x:20,   y:100, w:300, h:410 },
+      g_mod: { ctx:'main', name:'Model & tools', x:660,  y:70,  w:660, h:490 },
+      g_out: { ctx:'main', name:'Output',        x:1380, y:100, w:660, h:560 }
+    },
+    sel: [],
+    selGroup: null,
+    focusId: null,
+    inspector: false,
+    zPct: 100,
+    lod: 'structure',
+    minimap: true,
+    zoomMenu: false,
+    palette: false,
+    query: '',
+    hi: 0,
+    cheats: false,
+    tool: 'select',
+    pulse: null,
+    following: false,
+    runningId: null,
+    dimsId: null,
+    backLabel: null,
+    histLen: 0
+  };
+
+  EDGES = {
+    main: [
+      ['trig','auth'], ['auth','rate'], ['rate','retr'], ['retr','prompt'], ['prompt','model'],
+      ['model','router'], ['router','tools','needs a tool'], ['tools','model','tool_result', true],
+      ['router','guard','final answer'], ['guard','fmt'], ['fmt','prev'], ['fmt','log']
+    ],
+    retrieval: [['r_embed','r_search'], ['r_search','r_rank'], ['r_rank','r_ctx']],
+    tools: [['t_web','t_merge'], ['t_cal','t_merge'], ['t_sql','t_merge']]
+  };
+
+  TYPES = {
+    trigger:  { icon:'ph-lightning',        label:'Trigger',     tone:'accent' },
+    auth:     { icon:'ph-key',              label:'Auth',        tone:'neutral' },
+    guard:    { icon:'ph-shield-check',     label:'Guardrail',   tone:'neutral' },
+    subflow:  { icon:'ph-squares-four',     label:'Subflow',     tone:'accent' },
+    prompt:   { icon:'ph-text-align-left',  label:'Prompt',      tone:'rich' },
+    model:    { icon:'ph-sparkle',          label:'Model',       tone:'accent' },
+    branch:   { icon:'ph-git-branch',       label:'Router',      tone:'neutral' },
+    tool:     { icon:'ph-plug',             label:'Tool',        tone:'neutral' },
+    transform:{ icon:'ph-function',         label:'Transform',   tone:'neutral' },
+    db:       { icon:'ph-database',         label:'Data',        tone:'neutral' },
+    preview:  { icon:'ph-monitor-play',     label:'Preview',     tone:'rich' },
+    note:     { icon:'ph-note',             label:'Note',        tone:'note' },
+    embed:    { icon:'ph-vector-three',     label:'Embedding',   tone:'accent' }
+  };
+
+  CTX_LABEL = { main:'Main workflow', retrieval:'Retrieval', tools:'Agent tools' };
+  RUN_ORDER = ['trig','auth','rate','retr','prompt','model','router','guard','fmt','prev','log'];
+
+  cam = { x: 0, y: 0, z: 1 };
+  cams = {};
+  hist = [];
+  undoStack = [];
+  canvasRef = React.createRef();
+  worldRef = React.createRef();
+  marqueeRef = React.createRef();
+  minimapRef = React.createRef();
+  mmViewRef = React.createRef();
+  paletteRef = React.createRef();
+  g = null;
+  space = false;
+  anim = null;
+
+  /* ---------- lifecycle ---------- */
+
+  componentDidMount() {
+    const c = this.canvasRef.current;
+    this.onWheel = this.onWheel.bind(this);
+    this.onKeyDown = this.onKeyDown.bind(this);
+    this.onKeyUp = this.onKeyUp.bind(this);
+    c.addEventListener('wheel', this.onWheel, { passive: false });
+    window.addEventListener('keydown', this.onKeyDown);
+    window.addEventListener('keyup', this.onKeyUp);
+    window.addEventListener('resize', () => this.apply());
+    if (this.props.minimapOpen === false) this.setState({ minimap: false });
+    this.fitAll(false);
+  }
+  componentWillUnmount() {
+    this.canvasRef.current.removeEventListener('wheel', this.onWheel);
+    window.removeEventListener('keydown', this.onKeyDown);
+    window.removeEventListener('keyup', this.onKeyUp);
+    clearInterval(this.runTimer);
+  }
+
+  /* ---------- geometry ---------- */
+
+  rect() { return this.canvasRef.current.getBoundingClientRect(); }
+  /* the safe viewport: the canvas minus whatever chrome overlays it */
+  safe() {
+    const r = this.rect();
+    const right = this.state.inspector ? 328 : 0;
+    return { x: 0, y: 0, w: r.width - right, h: r.height, cx: (r.width - right) / 2, cy: r.height / 2 };
+  }
+  toWorld(sx, sy) { return { x: (sx - this.cam.x) / this.cam.z, y: (sy - this.cam.y) / this.cam.z }; }
+  ctxNodes(ctx) {
+    const c = ctx || this.state.ctx;
+    return Object.entries(this.state.nodes).filter(([, n]) => n.ctx === c);
+  }
+  bbox(list) {
+    if (!list.length) return { x: 0, y: 0, w: 100, h: 100 };
+    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+    list.forEach(n => { a = Math.min(a, n.x); b = Math.min(b, n.y); c = Math.max(c, n.x + n.w); d = Math.max(d, n.y + n.h); });
+    return { x: a, y: b, w: c - a, h: d - b };
+  }
+  ctxBox(ctx) {
+    const ns = this.ctxNodes(ctx).map(([, n]) => n);
+    const gs = Object.values(this.state.groups).filter(g => g.ctx === (ctx || this.state.ctx));
+    return this.bbox(ns.concat(gs));
+  }
+
+  lodFor(z) {
+    if (this.props.semanticZoom === false) return 'editing';
+    const cur = this.state ? this.state.lod : 'structure';
+    const h = 0.03;
+    const lo = 0.5, hi = 0.9;
+    const loT = cur === 'overview' ? lo + h : lo - h;
+    const hiT = cur === 'editing' ? hi - h : hi + h;
+    if (z < loT) return 'overview';
+    if (z < hiT) return 'structure';
+    return 'editing';
+  }
+
+  /* ---------- camera ---------- */
+
+  apply() {
+    const w = this.worldRef.current, c = this.canvasRef.current;
+    if (!w || !c) return;
+    const { x, y, z } = this.cam;
+    w.style.transform = 'translate3d(' + x + 'px,' + y + 'px,0) scale(' + z + ')';
+    w.style.setProperty('--iz', String(1 / z));
+    if (this.props.gridDots === false) { c.style.backgroundImage = 'none'; }
+    else {
+      const step = 26 * z;
+      c.style.backgroundSize = step + 'px ' + step + 'px';
+      c.style.backgroundPosition = (x % step) + 'px ' + (y % step) + 'px';
+      c.style.opacity = z < 0.35 ? '1' : '1';
+    }
+    this.drawMinimap();
+    const pct = Math.round(z * 100);
+    const lod = this.lodFor(z);
+    if (pct !== this.state.zPct || lod !== this.state.lod) this.setState({ zPct: pct, lod });
+  }
+
+  setCam(x, y, z) {
+    this.cam = { x, y, z: Math.max(0.08, Math.min(3, z)) };
+    this.apply();
+  }
+
+  animateTo(t, ms) {
+    if (this.anim) cancelAnimationFrame(this.anim);
+    const s = { ...this.cam }, t0 = performance.now(), dur = ms == null ? 260 : ms;
+    const tick = now => {
+      const k = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+      this.setCam(s.x + (t.x - s.x) * e, s.y + (t.y - s.y) * e, s.z + (t.z - s.z) * e);
+      if (k < 1) this.anim = requestAnimationFrame(tick); else this.anim = null;
+    };
+    this.anim = requestAnimationFrame(tick);
+  }
+
+  pushHist(label) {
+    this.hist.push({ ...this.cam, label, ctx: this.state.ctx });
+    if (this.hist.length > 24) this.hist.shift();
+    this.setState({ backLabel: label, histLen: this.hist.length });
+  }
+  backView = () => {
+    const h = this.hist.pop();
+    if (!h) return;
+    const prev = this.hist[this.hist.length - 1];
+    this.setState({ backLabel: prev ? prev.label : null, histLen: this.hist.length, focusId: null });
+    if (h.ctx !== this.state.ctx) { this.setState({ ctx: h.ctx, sel: [] }); }
+    this.animateTo({ x: h.x, y: h.y, z: h.z });
+  };
+
+  zoomAt(sx, sy, factor) {
+    const z = Math.max(0.08, Math.min(3, this.cam.z * factor));
+    const k = z / this.cam.z;
+    this.setCam(sx - (sx - this.cam.x) * k, sy - (sy - this.cam.y) * k, z);
+  }
+  zoomCentre(factor) { const s = this.safe(); this.zoomAt(s.cx, s.cy, factor); }
+  zoomIn = () => this.zoomCentre(1.25);
+  zoomOut = () => this.zoomCentre(1 / 1.25);
+
+  fitBox(box, opts) {
+    const o = opts || {}, pad = o.pad == null ? 68 : o.pad, s = this.safe();
+    const z = Math.max(0.08, Math.min(o.cap == null ? 1.1 : o.cap, Math.min((s.w - pad * 2) / box.w, (s.h - pad * 2) / box.h)));
+    const t = { z, x: s.cx - (box.x + box.w / 2) * z, y: s.cy - (box.y + box.h / 2) * z };
+    if (o.animate === false) this.setCam(t.x, t.y, t.z); else this.animateTo(t, o.ms);
+  }
+  fitAll = (animate) => {
+    if (animate !== false) this.pushHist('before Fit workflow');
+    this.fitBox(this.ctxBox(), { animate: animate !== false });
+  };
+  fitSel = () => {
+    const ids = this.state.sel;
+    if (!ids.length) return this.fitAll();
+    this.pushHist('before Fit selection');
+    this.fitBox(this.bbox(ids.map(i => this.state.nodes[i])), { pad: 90, cap: 1.3 });
+  };
+  reset100 = () => { this.pushHist('before 100%'); const s = this.safe(), c = this.centreOfView(); this.animateTo({ z: 1, x: s.cx - c.x, y: s.cy - c.y }); };
+  centreOfView() { const s = this.safe(); return this.toWorld(s.cx, s.cy); }
+  centreSel = () => {
+    const ids = this.state.sel; if (!ids.length) return;
+    const b = this.bbox(ids.map(i => this.state.nodes[i])), s = this.safe();
+    this.pushHist('before Center selection');
+    this.animateTo({ z: this.cam.z, x: s.cx - (b.x + b.w / 2) * this.cam.z, y: s.cy - (b.y + b.h / 2) * this.cam.z });
+  };
+
+  /* focus: save camera, centre the item at an editing zoom, open the inspector, dim the rest */
+  focusNode = (id) => {
+    const n = this.state.nodes[id]; if (!n) return;
+    this.pushHist('before Focus ' + n.name);
+    this.setState({ sel: [id], selGroup: null, focusId: id, inspector: true }, () => {
+      const s = this.safe(), z = Math.max(0.9, Math.min(1.2, Math.min((s.w - 200) / n.w, (s.h - 160) / n.h)));
+      this.animateTo({ z, x: s.cx - (n.x + n.w / 2) * z, y: s.cy - (n.y + n.h / 2) * z }, 300);
+    });
+  };
+  focusSel = () => { if (this.state.sel.length) this.focusNode(this.state.sel[0]); };
+
+  /* opening a panel never refits — it pans only as far as needed to uncover the selection */
+  keepSelectionVisible() {
+    const id = this.state.sel[0]; if (!id) return;
+    const n = this.state.nodes[id]; if (!n) return;
+    const s = this.safe(), z = this.cam.z;
+    const r = n.x * z + this.cam.x + n.w * z, l = n.x * z + this.cam.x;
+    let dx = 0;
+    if (r > s.w - 20) dx = s.w - 20 - r;
+    else if (l < 20) dx = 20 - l;
+    if (dx) this.animateTo({ ...this.cam, x: this.cam.x + dx }, 200);
+  }
+
+  /* ---------- context / subflows ---------- */
+
+  enterCtx = (ctx) => {
+    if (ctx === this.state.ctx) return;
+    this.pushHist('before entering ' + this.CTX_LABEL[ctx]);
+    this.cams[this.state.ctx] = { ...this.cam };
+    this.setState({ ctx, sel: [], selGroup: null, focusId: null, inspector: false }, () => {
+      const saved = this.cams[ctx];
+      if (saved) this.animateTo(saved, 240);
+      else this.fitBox(this.ctxBox(ctx), { animate: true });
+    });
+  };
+
+  /* ---------- selection ---------- */
+
+  select(ids, add) {
+    const cur = this.state.sel;
+    const next = add ? Array.from(new Set(cur.concat(ids))) : ids;
+    const opening = next.length > 0;
+    this.setState({ sel: next, selGroup: null, inspector: opening, focusId: null }, () => { if (opening) this.keepSelectionVisible(); });
+  }
+
+  /* ---------- gestures ---------- */
+
+  noMenu = e => e.preventDefault();
+  stop = e => e.stopPropagation();
+  setSelect = () => this.setState({ tool: 'select' });
+  setHand = () => this.setState({ tool: 'hand' });
+
+  cursor() {
+    if (this.g && this.g.kind === 'pan') return 'grabbing';
+    return (this.state.tool === 'hand' || this.space) ? 'grab' : 'default';
+  }
+  syncCursor() { const c = this.canvasRef.current; if (c) c.style.cursor = this.cursor(); }
+
+  onPointerDown = e => {
+    const map = this.props.navigationModel === 'map-style';
+    const nodeEl = e.target.closest ? e.target.closest('[data-node]') : null;
+    const inControl = e.target.closest && e.target.closest('[data-nodrag]');
+    if (inControl) return;
+    this.setState({ zoomMenu: false });
+    const pan = e.button === 1 || e.button === 2 || this.space || this.state.tool === 'hand';
+
+    if (pan) {
+      e.preventDefault();
+      this.stopFollow();
+      this.g = { kind: 'pan', sx: e.clientX, sy: e.clientY, cx: this.cam.x, cy: this.cam.y };
+    } else if (nodeEl) {
+      const id = nodeEl.getAttribute('data-node');
+      const already = this.state.sel.includes(id);
+      if (e.shiftKey || e.metaKey) this.select([id], true);
+      else if (!already) this.select([id], false);
+      const ids = (e.shiftKey || e.metaKey || already) ? Array.from(new Set(this.state.sel.concat([id]))) : [id];
+      this.pushUndo();
+      this.g = { kind: 'move', sx: e.clientX, sy: e.clientY, ids, start: ids.map(i => ({ i, x: this.state.nodes[i].x, y: this.state.nodes[i].y })) };
+    } else if (map) {
+      if (e.shiftKey) this.beginMarquee(e); else { this.stopFollow(); this.g = { kind: 'pan', sx: e.clientX, sy: e.clientY, cx: this.cam.x, cy: this.cam.y }; }
+    } else {
+      this.beginMarquee(e);
+    }
+    this.syncCursor();
+    window.addEventListener('pointermove', this.onPointerMove);
+    window.addEventListener('pointerup', this.onPointerUp);
+  };
+
+  beginMarquee(e) {
+    const r = this.rect();
+    this.g = { kind: 'marquee', sx: e.clientX - r.left, sy: e.clientY - r.top, add: e.shiftKey || e.metaKey };
+    const m = this.marqueeRef.current;
+    m.style.display = 'block';
+    m.style.left = this.g.sx + 'px'; m.style.top = this.g.sy + 'px'; m.style.width = '0px'; m.style.height = '0px';
+  }
+
+  grabNodeHandle = (id, dir) => e => {
+    e.stopPropagation(); e.preventDefault();
+    const n = this.state.nodes[id];
+    this.pushUndo();
+    this.g = { kind: 'resize', id, dir, sx: e.clientX, sy: e.clientY, o: { x: n.x, y: n.y, w: n.w, h: n.h } };
+    this.setState({ sel: [id], inspector: true, dimsId: id });
+    window.addEventListener('pointermove', this.onPointerMove);
+    window.addEventListener('pointerup', this.onPointerUp);
+  };
+
+  grabGroup = (id) => e => {
+    e.stopPropagation();
+    const g = this.state.groups[id];
+    this.setState({ selGroup: id, sel: [], focusId: null });
+    this.pushUndo();
+    this.g = { kind: 'gmove', id, sx: e.clientX, sy: e.clientY, o: { x: g.x, y: g.y } };
+    window.addEventListener('pointermove', this.onPointerMove);
+    window.addEventListener('pointerup', this.onPointerUp);
+  };
+  grabGroupResize = (id) => e => {
+    e.stopPropagation(); e.preventDefault();
+    const g = this.state.groups[id];
+    this.pushUndo();
+    this.g = { kind: 'gresize', id, sx: e.clientX, sy: e.clientY, o: { w: g.w, h: g.h } };
+    window.addEventListener('pointermove', this.onPointerMove);
+    window.addEventListener('pointerup', this.onPointerUp);
+  };
+
+  onPointerMove = e => {
+    const g = this.g; if (!g) return;
+    if (g.kind === 'pan') { this.setCam(g.cx + (e.clientX - g.sx), g.cy + (e.clientY - g.sy), this.cam.z); return; }
+    const z = this.cam.z, dx = (e.clientX - g.sx) / z, dy = (e.clientY - g.sy) / z;
+    if (g.kind === 'move') {
+      const snap = e.altKey ? 1 : 4;
+      const nodes = { ...this.state.nodes };
+      g.start.forEach(s => { nodes[s.i] = { ...nodes[s.i], x: Math.round((s.x + dx) / snap) * snap, y: Math.round((s.y + dy) / snap) * snap }; });
+      this.setState({ nodes });
+    } else if (g.kind === 'resize') {
+      const o = g.o, min = 180, minH = 90;
+      let x = o.x, y = o.y, w = o.w, h = o.h;
+      if (g.dir.includes('e')) w = Math.max(min, o.w + dx);
+      if (g.dir.includes('s')) h = Math.max(minH, o.h + dy);
+      if (g.dir.includes('w')) { w = Math.max(min, o.w - dx); x = o.x + (o.w - w); }
+      if (g.dir.includes('n')) { h = Math.max(minH, o.h - dy); y = o.y + (o.h - h); }
+      w = Math.min(720, w); h = Math.min(620, h);
+      this.setState({ nodes: { ...this.state.nodes, [g.id]: { ...this.state.nodes[g.id], x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) } } });
+    } else if (g.kind === 'gmove') {
+      this.setState({ groups: { ...this.state.groups, [g.id]: { ...this.state.groups[g.id], x: Math.round(g.o.x + dx), y: Math.round(g.o.y + dy) } } });
+    } else if (g.kind === 'gresize') {
+      /* the boundary changes; children keep their own size and position */
+      this.setState({ groups: { ...this.state.groups, [g.id]: { ...this.state.groups[g.id], w: Math.max(240, Math.round(g.o.w + dx)), h: Math.max(180, Math.round(g.o.h + dy)) } } });
+    } else if (g.kind === 'marquee') {
+      const r = this.rect(), cx = e.clientX - r.left, cy = e.clientY - r.top, m = this.marqueeRef.current;
+      m.style.left = Math.min(g.sx, cx) + 'px'; m.style.top = Math.min(g.sy, cy) + 'px';
+      m.style.width = Math.abs(cx - g.sx) + 'px'; m.style.height = Math.abs(cy - g.sy) + 'px';
+      g.cur = { cx, cy };
+    }
+  };
+
+  onPointerUp = () => {
+    const g = this.g;
+    window.removeEventListener('pointermove', this.onPointerMove);
+    window.removeEventListener('pointerup', this.onPointerUp);
+    this.g = null;
+    if (g && g.kind === 'marquee') {
+      this.marqueeRef.current.style.display = 'none';
+      if (g.cur) {
+        const a = this.toWorld(g.sx, g.sy), b = this.toWorld(g.cur.cx, g.cur.cy);
+        const box = { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y) };
+        const hit = this.ctxNodes().filter(([, n]) => n.x < box.x + box.w && n.x + n.w > box.x && n.y < box.y + box.h && n.y + n.h > box.y).map(([i]) => i);
+        this.select(hit, g.add);
+      } else this.setState({ sel: [], selGroup: null, inspector: false, focusId: null });
+    }
+    if (g && g.kind === 'resize') this.setState({ dimsId: null });
+    this.syncCursor();
+  };
+
+  onDoubleClick = e => {
+    const el = e.target.closest ? e.target.closest('[data-node]') : null;
+    if (!el) { this.fitAll(); return; }
+    const id = el.getAttribute('data-node'), n = this.state.nodes[id];
+    if (n.sub) this.enterCtx(n.sub); else this.focusNode(id);
+  };
+
+  onWheel = e => {
+    e.preventDefault();
+    this.stopFollow();
+    const r = this.rect(), px = e.clientX - r.left, py = e.clientY - r.top;
+    if (e.ctrlKey || e.metaKey) { this.zoomAt(px, py, Math.pow(0.9985, e.deltaY * 1.6)); return; }
+    if (e.shiftKey && !e.deltaX) { this.setCam(this.cam.x - e.deltaY, this.cam.y, this.cam.z); return; }
+    this.setCam(this.cam.x - e.deltaX, this.cam.y - e.deltaY, this.cam.z);
+  };
+
+  /* ---------- minimap ---------- */
+
+  mmGeom() {
+    const el = this.minimapRef.current; if (!el) return null;
+    const box = this.ctxBox(), pad = 14;
+    const w = el.clientWidth, h = el.clientHeight;
+    const k = Math.min((w - pad * 2) / box.w, (h - pad * 2) / box.h);
+    return { k, ox: (w - box.w * k) / 2 - box.x * k, oy: (h - box.h * k) / 2 - box.y * k, w, h };
+  }
+  drawMinimap() {
+    const v = this.mmViewRef.current, gm = this.mmGeom(); if (!v || !gm) return;
+    const r = this.rect(), a = this.toWorld(0, 0), b = this.toWorld(r.width, r.height);
+    v.style.left = (a.x * gm.k + gm.ox) + 'px'; v.style.top = (a.y * gm.k + gm.oy) + 'px';
+    v.style.width = ((b.x - a.x) * gm.k) + 'px'; v.style.height = ((b.y - a.y) * gm.k) + 'px';
+  }
+  onMinimapDown = e => {
+    e.stopPropagation();
+    const gm = this.mmGeom(); if (!gm) return;
+    const r = this.minimapRef.current.getBoundingClientRect();
+    const go = ev => {
+      const wx = (ev.clientX - r.left - gm.ox) / gm.k, wy = (ev.clientY - r.top - gm.oy) / gm.k, s = this.safe();
+      this.setCam(s.cx - wx * this.cam.z, s.cy - wy * this.cam.z, this.cam.z);
+    };
+    go(e);
+    const up = () => { window.removeEventListener('pointermove', go); window.removeEventListener('pointerup', up); };
+    window.addEventListener('pointermove', go); window.addEventListener('pointerup', up);
+  };
+  toggleMinimap = () => this.setState({ minimap: !this.state.minimap }, () => this.drawMinimap());
+
+  /* ---------- undo (content only — camera moves never enter this stack) ---------- */
+
+  pushUndo() {
+    this.undoStack.push({ nodes: this.state.nodes, groups: this.state.groups });
+    if (this.undoStack.length > 40) this.undoStack.shift();
+  }
+  undo() { const s = this.undoStack.pop(); if (s) this.setState({ nodes: s.nodes, groups: s.groups }); }
+
+  /* ---------- execution ---------- */
+
+  run = () => {
+    if (this.state.runningId) { this.stopRun(); return; }
+    const order = this.RUN_ORDER.filter(id => this.state.nodes[id]);
+    let i = 0;
+    this.followOn = true;
+    this.setState({ ctx: 'main', following: true, runningId: order[0] });
+    const step = () => {
+      if (i >= order.length) { this.stopRun(); return; }
+      const id = order[i];
+      this.setState({ runningId: id });
+      if (this.followOn) this.followTo(id);
+      i++;
+    };
+    step();
+    this.runTimer = setInterval(step, 760);
+  };
+  stopRun() { clearInterval(this.runTimer); this.followOn = false; this.setState({ runningId: null, following: false }); }
+  stopFollow = () => { this.followOn = false; if (this.state.following) this.setState({ following: false }); };
+  /* moves the camera only when the active node has left the safe viewport */
+  followTo(id) {
+    const n = this.state.nodes[id]; if (!n) return;
+    const s = this.safe(), z = this.cam.z;
+    const l = n.x * z + this.cam.x, t = n.y * z + this.cam.y, r = l + n.w * z, b = t + n.h * z;
+    const inside = l > 24 && t > 24 && r < s.w - 24 && b < s.h - 24;
+    if (!inside) this.animateTo({ z, x: s.cx - (n.x + n.w / 2) * z, y: s.cy - (n.y + n.h / 2) * z }, 340);
+  }
+
+  /* ---------- palette ---------- */
+
+  openSearch = () => this.setState({ palette: true, query: '', hi: 0 }, () => { const p = this.paletteRef.current; if (p) p.focus(); });
+  closePalette = () => this.setState({ palette: false });
+  setQuery = e => this.setState({ query: e.target.value, hi: 0 });
+  toggleCheats = () => this.setState({ cheats: !this.state.cheats });
+  toggleZoomMenu = () => this.setState({ zoomMenu: !this.state.zoomMenu });
+  closeInspector = () => this.setState({ inspector: false, focusId: null });
+
+  commands() {
+    return [
+      { name: 'Fit workflow', hint: 'frame every node in this context', meta: '1', icon: 'ph-corners-out', run: () => this.fitAll() },
+      { name: 'Fit selection', hint: 'frame the selected nodes', meta: '2', icon: 'ph-selection', run: () => this.fitSel() },
+      { name: 'Zoom 100%', hint: 'true size, keeps the centre point', meta: '0', icon: 'ph-magnifying-glass', run: () => this.reset100() },
+      { name: 'Center selection', hint: 'pan without changing zoom', meta: 'C', icon: 'ph-crosshair', run: () => this.centreSel() },
+      { name: 'Toggle minimap', hint: '', meta: 'M', icon: 'ph-map-trifold', run: () => this.toggleMinimap() },
+      { name: 'Back view', hint: this.state.backLabel || 'nothing to return to', meta: 'esc', icon: 'ph-arrow-u-up-left', run: () => this.backView() },
+      { name: 'Open Retrieval subflow', hint: 'separate camera, breadcrumbed', meta: '', icon: 'ph-arrow-square-in', run: () => this.enterCtx('retrieval') },
+      { name: 'Open Agent tools subflow', hint: 'separate camera, breadcrumbed', meta: '', icon: 'ph-arrow-square-in', run: () => this.enterCtx('tools') },
+      { name: 'Main workflow', hint: 'leave the subflow', meta: '', icon: 'ph-arrow-square-out', run: () => this.enterCtx('main') }
+    ];
+  }
+  matches() {
+    const q = this.state.query.trim().toLowerCase();
+    const nodes = Object.entries(this.state.nodes).map(([id, n]) => ({
+      kind: 'node', id, name: n.name, icon: this.TYPES[n.type].icon,
+      hint: (n.sum || this.TYPES[n.type].label) + (n.cfg ? ' · ' + n.cfg.map(c => c[1]).join(' · ') : ''),
+      meta: this.CTX_LABEL[n.ctx], hay: (n.name + ' ' + n.type + ' ' + (n.sum || '') + ' ' + (n.cfg || []).flat().join(' ')).toLowerCase()
+    }));
+    const cmds = this.commands().map(c => ({ kind: 'cmd', name: c.name, icon: c.icon, hint: c.hint, meta: c.meta, run: c.run, hay: (c.name + ' ' + c.hint).toLowerCase() }));
+    const all = nodes.concat(cmds);
+    if (!q) return nodes.filter(n => n.meta === this.CTX_LABEL[this.state.ctx]).slice(0, 6).concat(cmds.slice(0, 4));
+    return all.filter(r => r.hay.includes(q)).slice(0, 10);
+  }
+  runResult(r) {
+    this.setState({ palette: false });
+    if (r.kind === 'cmd') { r.run(); return; }
+    const n = this.state.nodes[r.id];
+    this.pushHist('before search result');
+    const go = () => {
+      const s = this.safe(), z = Math.max(this.cam.z, 0.9);
+      this.setState({ sel: [r.id], selGroup: null, inspector: true, pulse: r.id });
+      this.animateTo({ z, x: s.cx - (n.x + n.w / 2) * z, y: s.cy - (n.y + n.h / 2) * z }, 320);
+      setTimeout(() => this.setState({ pulse: null }), 1500);
+    };
+    if (n.ctx !== this.state.ctx) { this.cams[this.state.ctx] = { ...this.cam }; this.setState({ ctx: n.ctx }, go); } else go();
+  }
+  paletteKey = e => {
+    const rs = this.matches();
+    if (e.key === 'ArrowDown') { e.preventDefault(); this.setState({ hi: Math.min(rs.length - 1, this.state.hi + 1) }); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); this.setState({ hi: Math.max(0, this.state.hi - 1) }); }
+    else if (e.key === 'Enter') { e.preventDefault(); const r = rs[this.state.hi]; if (r) this.runResult(r); }
+    else if (e.key === 'Escape') { e.preventDefault(); this.setState({ palette: false }); }
+  };
+
+  /* ---------- keyboard ---------- */
+
+  typing(e) {
+    const t = e.target, tag = t && t.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || (t && t.isContentEditable);
+  }
+  onKeyUp = e => { if (e.code === 'Space') { this.space = false; this.syncCursor(); } };
+  onKeyDown = e => {
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && (e.key === 'k' || e.key === 'f')) { e.preventDefault(); this.openSearch(); return; }
+    if (this.typing(e)) return;
+    if (mod && e.key === 'z') { e.preventDefault(); this.undo(); return; }
+    if (e.code === 'Space') { e.preventDefault(); if (!this.space) { this.space = true; this.syncCursor(); } return; }
+    if (e.key === 'Escape') {
+      if (this.state.cheats) return this.setState({ cheats: false });
+      if (this.state.palette) return this.setState({ palette: false });
+      if (this.g && this.g.kind === 'resize') { const s = this.undoStack.pop(); this.g = null; if (s) this.setState({ nodes: s.nodes, dimsId: null }); return; }
+      if (this.state.focusId) { this.setState({ focusId: null }); return this.backView(); }
+      if (this.state.ctx !== 'main') return this.enterCtx('main');
+      if (this.hist.length) return this.backView();
+      return this.setState({ sel: [], selGroup: null, inspector: false });
+    }
+    if (e.key === '?') { e.preventDefault(); return this.toggleCheats(); }
+    const k = e.key.toLowerCase();
+    if (k === 'arrowup' || k === 'arrowdown' || k === 'arrowleft' || k === 'arrowright') {
+      if (!this.state.sel.length) return;
+      e.preventDefault();
+      const d = e.shiftKey ? 1 : 12;
+      const dx = k === 'arrowleft' ? -d : k === 'arrowright' ? d : 0;
+      const dy = k === 'arrowup' ? -d : k === 'arrowdown' ? d : 0;
+      this.pushUndo();
+      const nodes = { ...this.state.nodes };
+      this.state.sel.forEach(i => { nodes[i] = { ...nodes[i], x: nodes[i].x + dx, y: nodes[i].y + dy }; });
+      return this.setState({ nodes });
+    }
+    if (e.key === '+' || e.key === '=') { e.preventDefault(); return this.zoomIn(); }
+    if (e.key === '-' || e.key === '_') { e.preventDefault(); return this.zoomOut(); }
+    if (e.key === '0') return this.reset100();
+    if (e.key === '1') return this.fitAll();
+    if (e.key === '2') return this.fitSel();
+    if (k === 'f') return this.focusSel();
+    if (k === 'c') return this.centreSel();
+    if (k === 'm') return this.toggleMinimap();
+    if (k === 'v') return this.setSelect();
+    if (k === 'h') return this.setHand();
+    if (e.key === 'Enter') return this.focusSel();
+  };
+
+  /* ---------- presentation helpers ---------- */
+
+  tone(t, sel) {
+    const T = { accent: ['var(--color-accent-800)', 'var(--color-accent-200)'], neutral: ['var(--color-neutral-800)', 'var(--color-neutral-200)'], rich: ['var(--color-neutral-800)', 'var(--color-accent-200)'], note: ['transparent', 'var(--color-accent-300)'] };
+    return T[t] || T.neutral;
+  }
+  statusColor(s) { return s === 'error' ? 'var(--st-err)' : s === 'ok' ? 'var(--st-ok)' : 'var(--color-neutral-700)'; }
+
+  renderVals() {
+    const st = this.state, ctx = st.ctx, lod = st.lod;
+    const overview = lod === 'overview', editing = lod === 'editing';
+    const nodesIn = this.ctxNodes(ctx);
+    const focus = st.focusId ? st.nodes[st.focusId] : null;
+    const neighbours = {};
+    if (st.focusId) {
+      (this.EDGES[ctx] || []).forEach(([a, b]) => {
+        if (a === st.focusId) neighbours[b] = 1;
+        if (b === st.focusId) neighbours[a] = 1;
+      });
+    }
+
+    const nodes = nodesIn.map(([id, n]) => {
+      const T = this.TYPES[n.type], selected = st.sel.includes(id);
+      const dim = st.focusId ? (id === st.focusId || neighbours[id] ? 1 : 0.22) : 1;
+      const free = !!n.free;
+      const ring = selected ? '0 0 0 calc(2px * var(--iz,1)) var(--color-accent), ' : '';
+      const running = st.runningId === id;
+      const isNote = n.type === 'note';
+      const style = {
+        position: 'absolute', left: 0, top: 0, width: n.w, height: n.h,
+        transform: 'translate3d(' + n.x + 'px,' + n.y + 'px,0)',
+        borderRadius: 'var(--radius-md)',
+        background: isNote ? 'var(--color-accent-900)' : 'var(--color-surface)',
+        boxShadow: ring + (isNote ? '0 0 0 1px var(--color-accent-700)' : running ? '0 0 0 1px var(--st-run), 0 0 26px -6px var(--st-run)' : selected ? 'var(--shadow-md)' : 'var(--shadow-sm)'),
+        opacity: dim, transition: 'opacity 160ms linear, box-shadow 160ms linear',
+        overflow: 'visible', cursor: 'default',
+        animation: st.pulse === id ? 'nodePulse 700ms ease-out 2' : 'none'
+      };
+      const ports = [];
+      if (!overview) {
+        (n.ports.in || []).forEach((p, i, arr) => ports.push({ side: 'in', name: p, i, len: arr.length }));
+        (n.ports.out || []).forEach((p, i, arr) => ports.push({ side: 'out', name: p, i, len: arr.length }));
+      }
+      const handleDirs = free && selected ? ['nw', 'ne', 'se', 'sw', 'n', 's', 'e', 'w'] : [];
+      return {
+        id, name: n.name, icon: T.icon, typeLabel: T.label, summary: n.sum || '', style,
+        overview, detail: !overview, editing,
+        hasSummary: !overview && !!n.sum && !isNote,
+        isPrompt: n.type === 'prompt' && !overview,
+        isPreview: n.type === 'preview' && !overview,
+        isNote: isNote && !overview,
+        isSubflow: !!n.sub && !overview,
+        childCount: n.sub ? this.ctxNodes(n.sub).length : 0,
+        chipStyle: { flex: '0 0 auto', width: 24, height: 24, borderRadius: 6, display: 'grid', placeItems: 'center', fontSize: 13, background: this.tone(T.tone)[0], color: this.tone(T.tone)[1], boxShadow: isNote ? 'inset 0 0 0 1px var(--color-accent-700)' : 'none' },
+        bigIconStyle: { fontSize: 30, color: this.tone(T.tone)[1], flex: '0 0 auto' },
+        bigDotStyle: { flex: '0 0 auto', width: 12, height: 12, borderRadius: '50%', background: this.statusColor(n.status), animation: running ? 'runGlow 900ms ease-in-out infinite' : 'none' },
+        dotStyle: { flex: '0 0 auto', width: 7, height: 7, borderRadius: '50%', background: running ? 'var(--st-run)' : this.statusColor(n.status), animation: running ? 'runGlow 900ms ease-in-out infinite' : 'none' },
+        showPorts: !overview && ports.length > 0,
+        ports: ports.map(p => ({
+          name: p.name, labelled: editing,
+          style: { position: 'absolute', top: (n.h * (p.i + 1)) / (p.len + 1), left: p.side === 'in' ? 0 : n.w, transform: 'translate(-50%,-50%)', display: 'flex', alignItems: 'center', flexDirection: p.side === 'in' ? 'row-reverse' : 'row', gap: 4 },
+          dotStyle: { width: 7, height: 7, borderRadius: '50%', background: 'var(--color-neutral-600)', boxShadow: '0 0 0 2px var(--color-bg)' },
+          labelStyle: { position: 'absolute', [p.side === 'in' ? 'right' : 'left']: 10, fontSize: 9.5, letterSpacing: '0.02em', color: 'var(--color-neutral-600)', whiteSpace: 'nowrap' }
+        })),
+        showError: !!n.err && !overview, error: n.err,
+        handles: handleDirs.length > 0,
+        handleList: handleDirs.map(d => ({
+          grab: this.grabNodeHandle(id, d),
+          style: {
+            position: 'absolute', pointerEvents: 'auto',
+            left: d.includes('w') ? 0 : d.includes('e') ? n.w : n.w / 2,
+            top: d.includes('n') ? 0 : d.includes('s') ? n.h : n.h / 2,
+            width: d.length === 2 ? 11 : 9, height: d.length === 2 ? 11 : 9,
+            marginLeft: 0, borderRadius: d.length === 2 ? 3 : 2,
+            background: 'var(--color-accent)', boxShadow: '0 0 0 1px var(--color-bg)',
+            transform: 'translate(-50%,-50%) scale(var(--iz,1))',
+            cursor: (d === 'nw' || d === 'se') ? 'nwse-resize' : (d === 'ne' || d === 'sw') ? 'nesw-resize' : (d === 'n' || d === 's') ? 'ns-resize' : 'ew-resize'
+          }
+        })),
+        showDims: st.dimsId === id, dimsLabel: Math.round(n.w) + ' × ' + Math.round(n.h),
+        grab: () => {}, runOne: e => { e.stopPropagation(); this.setState({ runningId: id }); setTimeout(() => this.setState({ runningId: null }), 900); },
+        focus: e => { e.stopPropagation(); this.focusNode(id); },
+        enter: e => { e.stopPropagation(); this.enterCtx(n.sub); }
+      };
+    });
+
+    const edges = (this.EDGES[ctx] || []).map(([a, b, label, back]) => {
+      const s = st.nodes[a], t = st.nodes[b];
+      const sx = s.x + s.w, sy = s.y + s.h / 2, tx = back ? t.x + t.w : t.x, ty = t.y + t.h / 2;
+      const d = back
+        ? 'M' + sx + ',' + sy + ' C' + (sx + 130) + ',' + sy + ' ' + (tx + 130) + ',' + ty + ' ' + tx + ',' + ty
+        : 'M' + sx + ',' + sy + ' C' + (sx + Math.max(46, (tx - sx) * 0.45)) + ',' + sy + ' ' + (tx - Math.max(46, (tx - sx) * 0.45)) + ',' + ty + ' ' + tx + ',' + ty;
+      const live = st.runningId === b || st.runningId === a;
+      const dimmed = st.focusId ? (a === st.focusId || b === st.focusId ? 1 : 0.15) : 1;
+      return {
+        d, dash: back ? '5 5' : '0', stroke: live ? 'var(--st-run)' : 'var(--color-neutral-600)', opacity: dimmed,
+        style: live ? { animation: 'dashRun 600ms linear infinite' } : {},
+        label, mx: (sx + tx) / 2, my: (sy + ty) / 2
+      };
+    });
+
+    const edgeLabels = editing ? edges.filter(e => e.label).map(e => ({
+      text: e.label,
+      style: { position: 'absolute', left: 0, top: 0, transform: 'translate3d(' + (e.mx - 44) + 'px,' + (e.my - 9) + 'px,0)', width: 88, textAlign: 'center', fontSize: 9.5, letterSpacing: '0.03em', color: 'var(--color-neutral-500)', background: 'var(--color-bg)', padding: '1px 0', pointerEvents: 'none' }
+    })) : [];
+
+    const groups = Object.entries(st.groups).filter(([, g]) => g.ctx === ctx).map(([id, g]) => ({
+      name: g.name, selected: st.selGroup === id,
+      style: { position: 'absolute', left: 0, top: 0, width: g.w, height: g.h, transform: 'translate3d(' + g.x + 'px,' + g.y + 'px,0)', borderRadius: 'var(--radius-lg)', border: '1px solid ' + (st.selGroup === id ? 'var(--color-accent)' : 'var(--color-neutral-800)'), background: 'color-mix(in srgb, var(--color-neutral-900) 45%, transparent)', pointerEvents: 'none' },
+      labelStyle: { position: 'absolute', left: 10, top: -10, transform: 'scale(var(--iz,1))', transformOrigin: '0 0', display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 8px', borderRadius: 5, background: 'var(--color-bg)', color: st.selGroup === id ? 'var(--color-accent)' : 'var(--color-neutral-500)', fontSize: 10.5, letterSpacing: '0.05em', textTransform: 'uppercase', cursor: 'grab', pointerEvents: 'auto', border: 0 },
+      grab: this.grabGroup(id), resize: this.grabGroupResize(id)
+    }));
+
+    const gm = this.mmGeom();
+    const mmNodes = gm ? nodesIn.map(([id, n]) => ({
+      style: {
+        position: 'absolute', left: n.x * gm.k + gm.ox, top: n.y * gm.k + gm.oy,
+        width: Math.max(3, n.w * gm.k), height: Math.max(2.5, n.h * gm.k), borderRadius: 1.5,
+        background: n.status === 'error' ? 'var(--st-err)' : st.runningId === id ? 'var(--st-run)' : this.TYPES[n.type].tone === 'accent' ? 'var(--color-accent-500)' : 'var(--color-neutral-600)',
+        opacity: st.sel.includes(id) ? 1 : 0.85,
+        boxShadow: st.sel.includes(id) ? '0 0 0 1px var(--color-accent-200)' : 'none',
+        animation: st.runningId === id ? 'runGlow 900ms ease-in-out infinite' : 'none'
+      }
+    })) : [];
+
+    const selNode = st.sel.length === 1 ? st.nodes[st.sel[0]] : null;
+    const insp = !st.inspector ? null : selNode ? (() => {
+      const id = st.sel[0], T = this.TYPES[selNode.type];
+      const set = (k) => e => {
+        const v = parseInt(e.target.value, 10); if (isNaN(v)) return;
+        this.pushUndo();
+        this.setState({ nodes: { ...st.nodes, [id]: { ...selNode, [k]: v } } });
+      };
+      const presets = [['Compact', 170], ['Standard', 220], ['Expanded', 300]];
+      return {
+        name: selNode.name, icon: T.icon, typeLabel: T.label,
+        statusLabel: selNode.status === 'error' ? 'invalid' : selNode.status === 'ok' ? 'passing' : 'not run',
+        chipStyle: { flex: '0 0 auto', width: 30, height: 30, borderRadius: 7, display: 'grid', placeItems: 'center', fontSize: 15, background: this.tone(T.tone)[0], color: this.tone(T.tone)[1] },
+        free: !!selNode.free, preset: !selNode.free,
+        w: Math.round(selNode.w), h: Math.round(selNode.h), x: Math.round(selNode.x), y: Math.round(selNode.y),
+        setW: set('w'), setH: set('h'), setX: set('x'), setY: set('y'),
+        presets: presets.map(([label, w]) => ({
+          label,
+          set: () => { this.pushUndo(); this.setState({ nodes: { ...st.nodes, [id]: { ...selNode, w } } }); },
+          style: { flex: 1, padding: '5px 0', border: 0, background: selNode.w === w ? 'var(--color-accent-800)' : 'transparent', color: selNode.w === w ? 'var(--color-accent-100)' : 'var(--color-neutral-400)', fontFamily: 'var(--font-body)', fontSize: 11.5, cursor: 'pointer' }
+        })),
+        cfg: (selNode.cfg || []).map(([k, v]) => ({ k, v })),
+        hasSize: true, hasPos: true, hasCfg: (selNode.cfg || []).length > 0, posLabel: 'Position',
+        multi: null
+      };
+    })() : st.sel.length > 1 ? (() => {
+      const ids = st.sel, b = this.bbox(ids.map(i => st.nodes[i]));
+      /* the box's own origin — editing it moves the whole selection by the delta */
+      const move = axis => e => {
+        const v = parseInt(e.target.value, 10); if (isNaN(v)) return;
+        const d = v - Math.round(axis === 'x' ? b.x : b.y);
+        if (!d) return;
+        this.pushUndo();
+        const nodes = { ...st.nodes };
+        ids.forEach(i => { nodes[i] = { ...nodes[i], [axis]: nodes[i][axis] + d }; });
+        this.setState({ nodes });
+      };
+      return {
+        name: ids.length + ' nodes selected', icon: 'ph-selection-plus', typeLabel: 'Selection',
+        statusLabel: Math.round(b.w) + ' × ' + Math.round(b.h) + ' box',
+        chipStyle: { flex: '0 0 auto', width: 30, height: 30, borderRadius: 7, display: 'grid', placeItems: 'center', fontSize: 15, background: 'var(--color-accent-800)', color: 'var(--color-accent-200)' },
+        free: false, preset: false, cfg: [], hasSize: false, hasCfg: false, hasPos: true,
+        posLabel: 'Selection origin',
+        w: 0, h: 0, x: Math.round(b.x), y: Math.round(b.y),
+        presets: [], setW: () => {}, setH: () => {}, setX: move('x'), setY: move('y'),
+        multi: 'Editing the origin moves all ' + ids.length + ' nodes together, as do the arrow keys. Fit selection frames the box without changing zoom anywhere else.'
+      };
+    })() : null;
+
+    const crumbs = ctx === 'main'
+      ? [{ label: 'Main workflow', sep: false, go: () => this.fitAll(), style: this.crumbStyle(true) }]
+      : [
+          { label: 'Main workflow', sep: false, go: () => this.enterCtx('main'), style: this.crumbStyle(false) },
+          { label: this.CTX_LABEL[ctx], sep: true, go: () => this.fitAll(), style: this.crumbStyle(true) }
+        ];
+
+    const zoomMenuItems = [
+      ['25%', '', () => this.setZoom(0.25)], ['50%', '', () => this.setZoom(0.5)], ['75%', '', () => this.setZoom(0.75)],
+      ['100%', '0', () => this.reset100()], ['150%', '', () => this.setZoom(1.5)],
+      ['Fit workflow', '1', () => this.fitAll()], ['Fit selection', '2', () => this.fitSel()],
+      ['Center selection', 'C', () => this.centreSel()], ['Focus selected node', 'F', () => this.focusSel()]
+    ].map(([label, key, run]) => ({
+      label, key,
+      go: () => { this.setState({ zoomMenu: false }); run(); },
+      style: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', border: 0, borderRadius: 5, background: 'transparent', color: 'var(--color-text)', fontFamily: 'var(--font-body)', fontSize: 12.5, cursor: 'pointer' }
+    }));
+
+    const results = this.matches().map((r, i) => ({
+      name: r.name, icon: r.icon, hint: r.hint, meta: r.meta,
+      go: () => this.runResult(r), hover: () => this.setState({ hi: i }),
+      style: { display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '7px 9px', border: 0, borderRadius: 6, background: st.hi === i ? 'color-mix(in srgb, var(--color-accent) 16%, transparent)' : 'transparent', color: 'var(--color-text)', fontFamily: 'var(--font-body)', cursor: 'pointer', textAlign: 'left' }
+    }));
+
+    const segBtn = on => ({ width: 30, height: 30, border: 0, background: on ? 'var(--color-accent-800)' : 'transparent', color: on ? 'var(--color-accent-100)' : 'var(--color-neutral-400)', cursor: 'pointer', display: 'grid', placeItems: 'center', fontSize: 14 });
+
+    const lodHint = { overview: 'Overview — colour, icon, name, status', structure: 'Structure — type, ports, one-line config', editing: 'Editing — port names, controls, validation' }[lod];
+
+    return {
+      nodes, edges, edgeLabels, groups, mmNodes, insp, crumbs, zoomMenuItems, results,
+      zLabel: st.zPct + '%', minimap: st.minimap, minimapHidden: !st.minimap, zoomMenu: st.zoomMenu,
+      palette: st.palette, query: st.query, noResults: st.palette && results.length === 0,
+      cheats: st.cheats, following: st.following,
+      ctxLabel: this.CTX_LABEL[ctx], nodeCount: nodesIn.length,
+      canBack: st.histLen > 0, backTitle: 'Back to ' + (st.backLabel || 'previous view').replace('before ', 'the view before '),
+      lodHint: this.props.semanticZoom === false ? 'Semantic zoom off' : lodHint,
+      runIcon: st.runningId ? 'ph ph-stop' : 'ph ph-play',
+      runLabel: st.runningId ? 'Stop' : 'Run',
+      selToolStyle: segBtn(st.tool === 'select'), handToolStyle: segBtn(st.tool === 'hand'),
+      inspectorStyle: {
+        position: 'absolute', top: 0, right: 0, bottom: 0, width: 328,
+        background: 'var(--color-surface)', boxShadow: '-1px 0 0 var(--color-divider), -18px 0 40px -24px rgba(0,0,0,0.7)',
+        transform: st.inspector ? 'translateX(0)' : 'translateX(100%)',
+        transition: 'transform 200ms cubic-bezier(0.2,0.7,0.2,1)', zIndex: 35
+      },
+      canvasRef: this.canvasRef, worldRef: this.worldRef, marqueeRef: this.marqueeRef,
+      minimapRef: this.minimapRef, mmViewRef: this.mmViewRef, paletteRef: this.paletteRef,
+      onPointerDown: this.onPointerDown, onDoubleClick: this.onDoubleClick, onMinimapDown: this.onMinimapDown,
+      noMenu: this.noMenu, stop: this.stop,
+      zoomIn: this.zoomIn, zoomOut: this.zoomOut, fitAll: this.fitAll, fitSel: this.fitSel,
+      focusSel: this.focusSel, backView: this.backView, toggleMinimap: this.toggleMinimap,
+      toggleZoomMenu: this.toggleZoomMenu, openSearch: this.openSearch, closePalette: this.closePalette,
+      setQuery: this.setQuery, paletteKey: this.paletteKey, toggleCheats: this.toggleCheats,
+      closeInspector: this.closeInspector, setSelect: this.setSelect, setHand: this.setHand,
+      run: this.run, stopFollow: this.stopFollow,
+      cheatGroups: [
+        { title: 'Camera', rows: [{ k: '+  /  −', v: 'zoom in / out' }, { k: '0', v: '100%, centre kept' }, { k: '1', v: 'fit workflow' }, { k: '2', v: 'fit selection' }, { k: 'C', v: 'centre selection' }, { k: 'Esc', v: 'back to previous view' }] },
+        { title: 'Pointer', rows: [{ k: 'two-finger drag', v: 'pan' }, { k: 'pinch  /  ⌘ wheel', v: 'zoom at the pointer' }, { k: 'wheel  /  ⇧ wheel', v: 'pan vertically / sideways' }, { k: 'space  /  middle  /  right drag', v: 'pan' }, { k: 'left drag on empty', v: 'marquee select' }] },
+        { title: 'Items', rows: [{ k: 'click  /  ⇧ click', v: 'select / add to selection' }, { k: 'double-click', v: 'focus node — or enter a subflow' }, { k: 'F  /  Enter', v: 'focus selected node' }, { k: 'arrows  /  ⇧ arrows', v: 'move by 12 / 1 px' }, { k: '⌘Z', v: 'undo content — never camera' }] },
+        { title: 'Chrome', rows: [{ k: '⌘K  /  ⌘F', v: 'search and fly to a node' }, { k: 'M', v: 'minimap' }, { k: 'V  /  H', v: 'select / hand tool' }, { k: '?', v: 'this sheet' }] }
+      ]
+    };
+  }
+
+  crumbStyle(active) {
+    return { border: 0, background: 'transparent', padding: '3px 6px', borderRadius: 5, cursor: 'pointer', fontFamily: 'var(--font-body)', fontSize: 12.5, color: active ? 'var(--color-text)' : 'var(--color-neutral-500)' };
+  }
+  setZoom(z) {
+    this.pushHist('before zoom ' + Math.round(z * 100) + '%');
+    const s = this.safe(), c = this.centreOfView();
+    this.animateTo({ z, x: s.cx - c.x * z, y: s.cy - c.y * z });
+  }
+}
+</script>
+</body>
+</html>

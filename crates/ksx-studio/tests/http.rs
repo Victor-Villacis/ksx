@@ -4876,7 +4876,6 @@ fn the_profiles_write_routes_refuse_a_cross_site_post() {
         ("/redesign/bind/turbo", "slot=1&function=a&turbo_hz=10"),
         ("/redesign/bind/toggle", "slot=1&function=a&mode=toggle"),
         ("/redesign/key/clear", "number=1&key=G"),
-        ("/redesign/board", "board=qwerty"),
         ("/redesign/blocking", "blocking=whole"),
     ] {
         let response = http(
@@ -5834,19 +5833,6 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
             .as_array()
             .is_some_and(|rows| rows.len() >= 2),
         "the picker roster serves at least follow-hardware and qwerty: {api}"
-    );
-
-    // The board verb validates the id SHAPE before any write, and answers
-    // THIS page's redirect with nocturne's own sentences.
-    let response = post_form(addr, "/redesign/board", "board=gibberish");
-    assert!(
-        response.contains("/redesign?flash=error%3A%20That%20is%20not%20a%20board"),
-        "{response}"
-    );
-    let response = post_form(addr, "/redesign/board", "");
-    assert!(
-        response.contains("flash=the%20form%20did%20not%20say%20which%20board"),
-        "{response}"
     );
 
     // The capture behaviour: one staged edit through the shared core, the

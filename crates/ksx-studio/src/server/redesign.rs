@@ -22,7 +22,7 @@ pub(super) struct RedesignQuery {
 /// verb's sentences ARE nocturne's constants: one wording, two pages, so the
 /// copy cannot drift between the surfaces (the cutover's "provider text"
 /// lesson, applied in advance).
-const RD_FLASH_ALLOWLIST: [&str; 28] = [
+const RD_FLASH_ALLOWLIST: [&str; 25] = [
     N_THEME_OK,
     N_THEME_UNKNOWN,
     N_DEVICE_OK,
@@ -47,9 +47,6 @@ const RD_FLASH_ALLOWLIST: [&str; 28] = [
     N_TOGGLE_UNBOUND_ERROR,
     N_KEY_CLEAR_OK,
     N_KEY_CLEAR_NONE,
-    N_BOARD_OK,
-    N_BOARD_UNKNOWN,
-    N_BOARD_MISSING,
     N_BLOCKING_OK,
 ];
 
@@ -775,22 +772,10 @@ pub(super) async fn redesign_form_blocking(
     redesign_redirect(blocking_write_flash(&state, form.blocking).await)
 }
 
-#[derive(Deserialize)]
-pub(super) struct RedesignBoardForm {
-    board: Option<String>,
-}
-
-/// POST /redesign/board — which board the keyboard widget draws, one config
-/// write through the shared core (the nocturne picker's verb, re-homed).
-pub(super) async fn redesign_form_board(
-    State(state): State<Arc<AppState>>,
-    form: RedesignForm<RedesignBoardForm>,
-) -> Response {
-    let Ok(Form(form)) = form else {
-        return redesign_redirect(N_FORM_UNREADABLE);
-    };
-    redesign_redirect(board_write_flash(&state, form.board).await)
-}
+// NO /redesign/board verb, deliberately (Victor, 2026-08-29): the plate
+// always draws the standard keyboard on this page — a keyboard looks like a
+// keyboard. Alternate pictures (saved panels, drawn boards) stay a 4460
+// affair until an "advanced" home earns its place here.
 
 #[derive(Deserialize)]
 pub(super) struct RedesignKeyClearForm {
@@ -899,10 +884,7 @@ mod tests {
             // the Keys tab's row ✕
             N_KEY_CLEAR_OK,
             N_KEY_CLEAR_NONE,
-            // the keyboard widget's board + capture pickers
-            N_BOARD_OK,
-            N_BOARD_UNKNOWN,
-            N_BOARD_MISSING,
+            // the keyboard widget: the While-playing picker
             N_BLOCKING_OK,
         ] {
             assert_eq!(

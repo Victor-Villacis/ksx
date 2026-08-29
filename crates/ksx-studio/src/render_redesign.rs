@@ -52,10 +52,8 @@ pub(crate) fn payload(
     selected_slot: Option<u8>,
     undo_label: Option<&str>,
 ) -> RedesignPayload {
-    // Facts borrowed BEFORE the payload construction consumes their owners:
-    // the saved board choice (setup is consumed by the theme rows) and the
-    // scan's boards (for the keyboard title's transport word).
-    let setup_board = setup.as_ref().map(|s| s.board.clone());
+    // Borrowed BEFORE the payload construction consumes its owner: the
+    // scan boards, for the keyboard title's transport word.
     let scan_boards: &[ksx_api::BoardRow] = match &scan {
         Ok(scan) => scan.boards.as_slice(),
         Err(_) => &[],
@@ -136,17 +134,15 @@ pub(crate) fn payload(
         // view the device marking reads — one truth per render.
         controllers: RedesignControllers::of(staged, selected_slot, undo_label),
         // The keyboard widget, off the ONE shared board composer. The board
-        // choice honours the saved config; the panel/drawn stores are not
-        // collected on this page yet (they arrive with the panel migration),
-        // so their rosters are empty and their errors silent — the standard
-        // keyboard and any `panel:`/`board:` choice degrade exactly like
-        // nocturne with empty stores.
+        // picture is ALWAYS the standard keyboard on this page (Victor,
+        // 2026-08-29): a keyboard looks like a keyboard, and a saved panel
+        // choice in config.toml must not morph it here. Alternate pictures
+        // stay a 4460 affair until an "advanced" home earns its place.
         board: {
             let selected = selected_slot
                 .and_then(|number| staged.slots.iter().find(|slot| slot.number == number))
                 .or_else(|| staged.slots.first());
-            let chosen_board = setup_board.as_deref().unwrap_or_default();
-            let resolved = crate::board::Board::resolve(chosen_board, &[], &[], encoder_staged);
+            let resolved = crate::board::Board::resolve("", &[], &[], false);
             let transport = staged.device.as_ref().and_then(|d| {
                 scan_boards
                     .iter()
@@ -157,7 +153,7 @@ pub(crate) fn payload(
                 staged,
                 selected,
                 &resolved,
-                chosen_board,
+                "",
                 &[],
                 &[],
                 encoder_staged,
@@ -190,7 +186,6 @@ const LIST_SLOT_KB_ROW5: &str = "list:rdKbRow5:array";
 const LIST_SLOT_KB_ROW6: &str = "list:rdKbRow6:array";
 const LIST_SLOT_KB_TRAY: &str = "list:rdKbTray:array";
 const LIST_SLOT_KB_LEGEND: &str = "list:rdKbLegend:array";
-const LIST_SLOT_BOARD_ROWS: &str = "list:rdBoardRows:array";
 const LIST_SLOT_CAPTURE_ROWS: &str = "list:rdCaptureRows:array";
 
 /// One plate cell, every field spelled once (the nocturne row's shape).
@@ -281,7 +276,6 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         "rdKbCls": payload.board.kb_cls,
         "rdBoardCaseStyle": payload.board.board_case_style,
         "rdBoardOrigin": payload.board.board_origin,
-        "rdBoardLine": payload.board.board_line,
         "rdKbTrayHead": payload.board.kb_tray_head,
         "rdKbTrayCls": payload.board.kb_tray_cls,
         "rdKbNote": payload.board.kb_note,
@@ -378,10 +372,6 @@ fn build_slots(module: &IrModule, payload: &RedesignPayload, flash: Option<&str>
         (
             LIST_SLOT_KB_LEGEND,
             SlotValue::array(board.legend.iter().map(kb_legend_row).collect()),
-        ),
-        (
-            LIST_SLOT_BOARD_ROWS,
-            SlotValue::array(board.board_rows.iter().map(board_choice_row).collect()),
         ),
         (
             LIST_SLOT_CAPTURE_ROWS,
@@ -1060,7 +1050,6 @@ mod tests {
             "rdKbCls",
             "rdBoardCaseStyle",
             "rdBoardOrigin",
-            "rdBoardLine",
             "rdKbTrayHead",
             "rdKbTrayCls",
             "rdKbNote",
@@ -1088,7 +1077,6 @@ mod tests {
             "rdKbRow6",
             "rdKbTray",
             "rdKbLegend",
-            "rdBoardRows",
             "rdCaptureRows",
         ] {
             assert!(

@@ -243,12 +243,10 @@ const [rdKbRow5, setRdKbRow5] = createSignal<RdKeyCellView[]>([]);
 const [rdKbRow6, setRdKbRow6] = createSignal<RdKeyCellView[]>([]);
 const [rdKbTray, setRdKbTray] = createSignal<RdKeyCellView[]>([]);
 const [rdKbLegend, setRdKbLegend] = createSignal<RdLegendRowView[]>([]);
-const [rdBoardRows, setRdBoardRows] = createSignal<RdChoiceRowView[]>([]);
 const [rdKbTitle, setRdKbTitle] = createSignal("");
 const [rdKbCls, setRdKbCls] = createSignal("n-kb");
 const [rdBoardCaseStyle, setRdBoardCaseStyle] = createSignal("");
 const [rdBoardOrigin, setRdBoardOrigin] = createSignal("");
-const [rdBoardLine, setRdBoardLine] = createSignal("");
 const [rdKbTrayHead, setRdKbTrayHead] = createSignal("");
 const [rdKbTrayCls, setRdKbTrayCls] = createSignal("n-kbtray none");
 const [rdKbNote, setRdKbNote] = createSignal("");
@@ -462,6 +460,10 @@ export function applyRedesign(v: RedesignPayload): void {
   rdStagingReachable = d?.staging_reachable === true;
   rdStagingLine = d?.staging_line ?? "";
   setRdDevKb(d?.keyboards ?? []);
+  // The encoder rows drop the transient `chart not read yet` phrase the
+  // moment the page owns the live read (the encoder surface starts it at
+  // mount) — the modal meta span is marked data-live-chatter for exactly
+  // this: its TEXT follows the session, by the parity contract.
   setRdDevEnc((d?.encoders ?? []).map((row) => ({
     ...row,
     meta: deviceCardMeta(row),
@@ -499,12 +501,10 @@ export function applyRedesign(v: RedesignPayload): void {
     setRdKbRow6(board.kb_row6 ?? []);
     setRdKbTray(board.kb_tray ?? []);
     setRdKbLegend(board.legend ?? []);
-    setRdBoardRows(board.board_rows ?? []);
     setRdKbTitle(board.kb_title ?? "");
     setRdKbCls(board.kb_cls || "n-kb");
     setRdBoardCaseStyle(board.board_case_style ?? "");
     setRdBoardOrigin(board.board_origin ?? "");
-    setRdBoardLine(board.board_line ?? "");
     setRdKbTrayHead(board.kb_tray_head ?? "");
     setRdKbTrayCls(board.kb_tray_cls || "n-kbtray none");
     setRdKbNote(board.kb_note ?? "");
@@ -2813,7 +2813,11 @@ export function RedesignIsland() {
               "aria-hidden": "true",
               tabindex: "-1",
               hidden: "",
-              title: "Internal encoder research harness",
+              // The NOT-SHOWN state's words — first paint's truth. The sync
+              // fn rewrites this title at every toggle, and hydration runs
+              // it once, so the served bytes must say what that first run
+              // says or the parity gate reads the rewrite as drift.
+              title: "Inspect connected and reference encoder profiles on the canvas",
             },
             "◇ Encoders",
           ),
@@ -3052,7 +3056,12 @@ export function RedesignIsland() {
                       // parent with a dynamic text, and the parity gate is
                       // what caught the chip existing only after hydration.
                       h("span", { class: "rd-dev-stagedchip" }, "staged"),
-                      h("span", { class: "n-dev-meta" }, r.meta),
+                      // An ENCODER's meta line follows the live session: the
+                      // surface reads the chart over the wire at mount, and
+                      // the roster's "chart not read yet" is stale the moment
+                      // it starts — connection chatter, by the parity
+                      // contract, so hydration may reword it.
+                      h("span", { class: "n-dev-meta", "data-live-chatter": "" }, r.meta),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Add to workbench"),
                     ),
                     h("span", { class: "n-dev-dot" }),
@@ -3400,44 +3409,10 @@ export function RedesignIsland() {
                       ),
                     ),
                     h("div", { class: "n-spring" }),
-                    // The board picker — which picture the plate draws; a
-                    // real form per row through the re-homed board verb.
-                    h(
-                      "details",
-                      { class: "rd-boardpick" },
-                      h("summary", { class: "n-autobtn rd-boardpick-sum" }, "Board"),
-                      h(
-                        "div",
-                        { class: "rd-boardpick-pop" },
-                        h("p", { class: "n-devnote" }, () => rdBoardLine()),
-                        createList(
-                          () => rdBoardRows(),
-                          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls,
-                          (r) =>
-                            h(
-                              "form",
-                              {
-                                class: "n-modeform",
-                                method: "post",
-                                action: "/redesign/board",
-                                "data-rd-form": "board",
-                              },
-                              h("input", { type: "hidden", name: "board", value: r.name }),
-                              h(
-                                "button",
-                                { type: "submit", class: r.cls },
-                                h("span", { class: "n-radio-dot" }),
-                                h(
-                                  "span",
-                                  { class: "n-radio-txt" },
-                                  h("span", { class: "n-radio-title" }, r.title),
-                                  h("span", { class: "n-radio-detail" }, r.detail),
-                                ),
-                              ),
-                            ),
-                        ),
-                      ),
-                    ),
+                    // NO board picker here, deliberately (Victor, 2026-08-29):
+                    // a keyboard looks like a keyboard on this page. Choosing
+                    // a different picture (a saved panel, a drawn board) is a
+                    // 4460 affair until an "advanced" home earns its place.
                     // While playing: how this input's keys behave during a
                     // session — freeze (drive pads only), split (mapped
                     // keys drive, the rest still type), or take nothing.

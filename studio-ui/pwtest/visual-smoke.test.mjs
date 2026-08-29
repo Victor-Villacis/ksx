@@ -708,7 +708,21 @@ describe("redesign canvas interaction chrome", () => {
         if (!area || !camera || !markerA || !markerB || !itemA || !itemB ||
             !stage || !viewport || !inspector) return null;
         const match = stage.style.transform.match(/scale\(([-\d.]+)\)/);
-        const worldDelta = Number(itemB.dataset.canvasX) - Number(itemA.dataset.canvasX);
+        // Markers are positioned by their ATTENTION-scaled visual rect
+        // (semantic zoom shrinks a marker around its own centre), so the
+        // projection must be derived from the same visual X the engine
+        // renders — deriving it from raw canvasX reads an item whose
+        // attention differs from its neighbour's as a projection change,
+        // and every width computed with it inflates.
+        const visualX = (item) => {
+          const x = Number(item.dataset.canvasX);
+          const width = Number(item.dataset.canvasWidth);
+          const eff = Number(
+            item.dataset.attentionScale ?? item.dataset.canvasManualScale ?? 1,
+          );
+          return x + (width - width * eff) / 2;
+        };
+        const worldDelta = visualX(itemB) - visualX(itemA);
         const mapDelta = parseFloat(markerB.style.left) - parseFloat(markerA.style.left);
         const projectionScale = Math.abs(mapDelta / worldDelta);
         const zoom = Number(match?.[1]);
@@ -783,12 +797,30 @@ describe("redesign canvas interaction chrome", () => {
       );
 
       await page.locator('[data-nx="rd-insp-close"]').click();
-      await nextPaint();
-      const fullMapWidth = await minimapRepresentedWidth();
+      // The rectangle renormalizes when the engine's navigator refresh
+      // lands — one frame on a light canvas, later once the keyboard and
+      // encoder benches stand on it. WAIT for the refresh rather than
+      // sampling a single paint; the tolerance stays projection-precision
+      // aware (the safe-width check's rule above).
+      let fullMapWidth = null;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await nextPaint();
+        fullMapWidth = await minimapRepresentedWidth();
+        if (
+          fullMapWidth &&
+          Math.abs(fullMapWidth.represented - fullMapWidth.full) <
+            Math.max(3, 2 * fullMapWidth.pxWorth)
+        ) {
+          break;
+        }
+      }
       assert.ok(fullMapWidth);
       assert.ok(
-        Math.abs(fullMapWidth.represented - fullMapWidth.full) < 3,
-        "closing the Inspector did not refresh the minimap camera rectangle",
+        Math.abs(fullMapWidth.represented - fullMapWidth.full) <
+          Math.max(3, 2 * fullMapWidth.pxWorth),
+        `closing the Inspector did not refresh the minimap camera rectangle: ${
+          JSON.stringify(fullMapWidth)
+        }`,
       );
 
       const beforeHeaderClick = await stage.evaluate((node) => node.style.transform);
@@ -1071,8 +1103,38 @@ describe("redesign canvas interaction chrome", () => {
         "the compact minimap projected outside its header-free drawing area",
       );
 
+      // The 390px viewport shows a sliver of the world, and the merged
+      // canvas (keyboard + encoder benches beside the device cards) spreads
+      // it wider than one phone screen — navigate to B through the map (the
+      // canvas's own door to an off-screen widget) before clicking it.
+      await page.evaluate((benchB) => {
+        document
+          .querySelector(`.navigator-item[data-instance-id="${benchB}"]`)
+          ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      }, BENCH_B);
+      await page.waitForFunction(
+        (benchB) =>
+          !document.querySelector(".is-camera-animating") &&
+          document.querySelector(
+            `.forma-canvas-stage > [data-instance-id="${benchB}"]`,
+          ),
+        BENCH_B,
+      );
+      // The map navigation SELECTED the item, and selection opens the
+      // Inspector — at this width a full-screen drawer over the canvas.
+      // The scenario under test is "clicking the widget opens the drawer",
+      // so put the drawer away first.
+      if (await page.locator(".rd-inspector:not([hidden])").count()) {
+        await page.locator('[data-nx="rd-insp-close"]').click();
+        await page.waitForFunction(
+          () => document.querySelector(".rd-inspector")?.hidden === true,
+        );
+      }
       const beforeMobileInspector = await stage.evaluate((node) => node.style.transform);
-      await stageItem(BENCH_B).click();
+      // The encoder card is wider than a phone screen, so its CENTRE (the
+      // default click point) can sit outside the viewport even when the
+      // camera frames its corner — aim at the near corner instead.
+      await stageItem(BENCH_B).click({ position: { x: 24, y: 24 } });
       await page.waitForFunction(() => document.querySelector(".rd-inspector")?.hidden === false);
       assert.equal(
         await stage.evaluate((node) => node.style.transform),

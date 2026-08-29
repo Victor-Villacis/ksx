@@ -533,7 +533,6 @@ pub fn serve(
             .route("/redesign/bind/turbo", post(redesign_form_bind_turbo))
             .route("/redesign/bind/toggle", post(redesign_form_bind_toggle))
             .route("/redesign/key/clear", post(redesign_form_key_clear))
-            .route("/redesign/board", post(redesign_form_board))
             .route("/redesign/blocking", post(redesign_form_blocking))
             // ── THE LIVE FEED ─────────────────────────────────────────────
             // One route, and it is the keystone the button check stands on:

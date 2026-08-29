@@ -578,12 +578,11 @@ pub(super) async fn redesign_form_ctrl_assign(
                         player: None,
                     });
                     if !dressed.ok {
-                        let redressed =
-                            state.control.stage_edit(&ksx_api::StageEdit::SetLayout {
-                                number,
-                                layout,
-                                player: Some(1),
-                            });
+                        let redressed = state.control.stage_edit(&ksx_api::StageEdit::SetLayout {
+                            number,
+                            layout,
+                            player: Some(1),
+                        });
                         if !redressed.ok {
                             let _ = state
                                 .control
@@ -716,11 +715,10 @@ pub(super) async fn redesign_form_ctrl_duplicate(
 /// old number is usually re-occupied, so the shared core seats it at the
 /// next free slot — the arrival law's own answer.
 pub(super) async fn redesign_form_ctrl_undo(State(state): State<Arc<AppState>>) -> Response {
-    let flash = tokio::task::spawn_blocking(move || {
-        undo_removal_flash(&state, &state.redesign_undo)
-    })
-    .await
-    .unwrap_or(N_EDIT_ERROR);
+    let flash =
+        tokio::task::spawn_blocking(move || undo_removal_flash(&state, &state.redesign_undo))
+            .await
+            .unwrap_or(N_EDIT_ERROR);
     redesign_redirect(flash)
 }
 

@@ -46,8 +46,7 @@ pub(super) const N_BLOCKING_OK: &str =
 
 pub(super) const N_THEME_OK: &str = "Studio theme updated.";
 pub(super) const N_BOARD_OK: &str = "Board updated.";
-pub(super) const N_BOARD_MISSING: &str =
-    "the form did not say which board — pick one on the page";
+pub(super) const N_BOARD_MISSING: &str = "the form did not say which board — pick one on the page";
 /// Shown when the board store itself refuses — the folder is unreadable, a
 /// saved board is corrupt, or another writer holds it. Authored here because
 /// the store's own text for those carries an absolute path and raw io/serde
@@ -1545,10 +1544,7 @@ pub(super) async fn nocturne_form_blocking(
 
 /// The capture-behaviour write, shared with `/redesign`: one staged edit in
 /// the daemon (freeze / split / take nothing), nothing saved or started.
-pub(super) async fn blocking_write_flash(
-    state: &Arc<AppState>,
-    blocking: String,
-) -> &'static str {
+pub(super) async fn blocking_write_flash(state: &Arc<AppState>, blocking: String) -> &'static str {
     let state = Arc::clone(state);
     let ok = tokio::task::spawn_blocking(move || {
         state
@@ -2085,11 +2081,10 @@ pub(super) async fn nocturne_form_remove(
 /// duplicate's composition), at its own number when that is still free.
 /// One shot: the stash is consumed whatever happens next.
 pub(super) async fn nocturne_form_undo(State(state): State<Arc<AppState>>) -> Response {
-    let flash = tokio::task::spawn_blocking(move || {
-        undo_removal_flash(&state, &state.nocturne_undo)
-    })
-    .await
-    .unwrap_or(N_EDIT_ERROR);
+    let flash =
+        tokio::task::spawn_blocking(move || undo_removal_flash(&state, &state.nocturne_undo))
+            .await
+            .unwrap_or(N_EDIT_ERROR);
     nocturne_redirect(flash)
 }
 

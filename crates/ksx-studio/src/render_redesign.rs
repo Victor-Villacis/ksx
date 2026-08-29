@@ -15,9 +15,8 @@ use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::render_nocturne::{device_row, mode_row, named_slot_ids, other_row};
 use crate::snapshot::{
-    compose_board_panel, BoardPanel,
-    theme_rows, NocturneChoiceRow, RedesignControllers, RedesignDeviceRows, RedesignPayload,
-    RedesignPersonaRow, SetupSnapshot,
+    compose_board_panel, theme_rows, NocturneChoiceRow, RedesignControllers, RedesignDeviceRows,
+    RedesignPayload, RedesignPersonaRow, SetupSnapshot,
 };
 
 /// The island table this page compiles to: exactly one island — the whole
@@ -147,8 +146,7 @@ pub(crate) fn payload(
                 .and_then(|number| staged.slots.iter().find(|slot| slot.number == number))
                 .or_else(|| staged.slots.first());
             let chosen_board = setup_board.as_deref().unwrap_or_default();
-            let resolved =
-                crate::board::Board::resolve(chosen_board, &[], &[], encoder_staged);
+            let resolved = crate::board::Board::resolve(chosen_board, &[], &[], encoder_staged);
             let transport = staged.device.as_ref().and_then(|d| {
                 scan_boards
                     .iter()
@@ -513,7 +511,11 @@ mod tests {
         ksx_api::StagedSetupView {
             reachable: true,
             empty: slots.is_empty(),
-            next_slot: if full { None } else { Some(slots.len() as u8 + 1) },
+            next_slot: if full {
+                None
+            } else {
+                Some(slots.len() as u8 + 1)
+            },
             next_preset: if full {
                 None
             } else {
@@ -548,7 +550,12 @@ mod tests {
         }
     }
 
-    fn fixture_slot(number: u8, persona: &str, is_xinput: bool, preset: &str) -> ksx_api::StagedSlotView {
+    fn fixture_slot(
+        number: u8,
+        persona: &str,
+        is_xinput: bool,
+        preset: &str,
+    ) -> ksx_api::StagedSlotView {
         ksx_api::StagedSlotView {
             number,
             persona: persona.into(),
@@ -615,7 +622,10 @@ mod tests {
         let view = RedesignControllers::of(&staged, None, None);
         assert_eq!(view.cards.len(), 3);
         assert_eq!(
-            view.cards.iter().map(|c| c.number.as_str()).collect::<Vec<_>>(),
+            view.cards
+                .iter()
+                .map(|c| c.number.as_str())
+                .collect::<Vec<_>>(),
             ["1", "2", "3"],
             "cards ride the daemon's slot order — numbers arrive with the slots"
         );
@@ -625,9 +635,16 @@ mod tests {
             view.counts_line, "3 of 16 slots staged · 2 of 4 Xbox (XInput)",
             "every number in the counts line is the daemon's"
         );
-        assert_eq!(view.add_preset, "Player 4", "the next preset is served — it becomes a file name");
+        assert_eq!(
+            view.add_preset, "Player 4",
+            "the next preset is served — it becomes a file name"
+        );
         assert_eq!(view.add_layout, "keyboard-2p");
-        assert!(view.add_note.contains("nothing is saved or started"), "{}", view.add_note);
+        assert!(
+            view.add_note.contains("nothing is saved or started"),
+            "{}",
+            view.add_note
+        );
         assert!(view.personas.iter().all(|p| p.usable == "true"));
 
         // The presentation rides the ONE total record (`pad_presentation`):
@@ -639,11 +656,17 @@ mod tests {
             ("playstation", "ps", "/_assets/pad-ds4.svg"),
             ("dualsense", "ps5", "/_assets/pad-ds4.svg"),
             ("snes", "xbox", "/_assets/pad-xbox.svg"),
-            ("a-persona-from-the-future", "unknown", "/_assets/pad-xbox.svg"),
+            (
+                "a-persona-from-the-future",
+                "unknown",
+                "/_assets/pad-xbox.svg",
+            ),
         ] {
-            let one = RedesignControllers::of(&fixture_staged(vec![fixture_slot(
-                1, persona, false, "P",
-            )]), None, None);
+            let one = RedesignControllers::of(
+                &fixture_staged(vec![fixture_slot(1, persona, false, "P")]),
+                None,
+                None,
+            );
             assert_eq!(one.cards[0].family, family, "{persona}");
             assert_eq!(one.cards[0].art, art, "{persona}");
         }
@@ -657,7 +680,9 @@ mod tests {
         let full_view = RedesignControllers::of(&full, None, None);
         assert_eq!(full_view.add_preset, "");
         assert!(
-            full_view.add_note.contains("Every controller slot is staged"),
+            full_view
+                .add_note
+                .contains("Every controller slot is staged"),
             "{}",
             full_view.add_note
         );

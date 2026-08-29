@@ -78,7 +78,7 @@ export interface ParkedController {
   art: string;
 }
 
-interface CardGeometry {
+export interface CardGeometry {
   x: number;
   y: number;
   width: number;
@@ -104,6 +104,9 @@ export interface ControllerBenchIo {
   addPreset: string;
   addLayout: string;
   savedGeometry(id: string): CardGeometry | undefined;
+  /** Assign a collision-free home and current stack position to a widget
+   *  that has no saved user geometry. */
+  allocateFreshGeometry(geometry: CardGeometry): CardGeometry;
   /** Park one live card's display facts as a ghost (after its park verb
    *  submits — a re-sync before the submit would detach the form). */
   park(entry: ParkedController): void;
@@ -563,7 +566,11 @@ function mountCard(
     z: 20 + index,
     manualScale: 1,
   };
-  io.canvas.mountItem(item, io.savedGeometry(id) ?? home, { focus: false });
+  io.canvas.mountItem(
+    item,
+    io.savedGeometry(id) ?? io.allocateFreshGeometry(home),
+    { focus: false },
+  );
 }
 
 /** Reconcile the canvas to the served card list AND the parked ghosts:

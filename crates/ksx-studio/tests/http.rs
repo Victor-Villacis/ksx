@@ -5490,7 +5490,10 @@ fn the_redesign_controller_verbs_stage_reorder_and_remove() {
     );
 
     let response = post_form(addr, "/redesign/controller/move", "order=2+1");
-    assert!(response.contains("flash=Draft%20updated."), "got: {response}");
+    assert!(
+        response.contains("flash=Draft%20updated."),
+        "got: {response}"
+    );
     assert_eq!(
         control
             .staged()
@@ -5509,7 +5512,10 @@ fn the_redesign_controller_verbs_stage_reorder_and_remove() {
     );
 
     let response = post_form(addr, "/redesign/controller/remove", "number=1");
-    assert!(response.contains("flash=Draft%20updated."), "got: {response}");
+    assert!(
+        response.contains("flash=Draft%20updated."),
+        "got: {response}"
+    );
     assert_eq!(
         control
             .staged()
@@ -5544,7 +5550,10 @@ fn park_holds_the_bindings_and_assign_restores_them_without_aliasing() {
     );
 
     let response = post_form(addr, "/redesign/controller/park", "number=1&ghost=g1");
-    assert!(response.contains("flash=Draft%20updated."), "got: {response}");
+    assert!(
+        response.contains("flash=Draft%20updated."),
+        "got: {response}"
+    );
     assert!(control.staged().slots.is_empty(), "parked = off the draft");
 
     let response = post_form(
@@ -5552,7 +5561,10 @@ fn park_holds_the_bindings_and_assign_restores_them_without_aliasing() {
         "/redesign/controller/assign",
         "ghost=g1&position=1&persona=xbox360&preset=Player+9&layout=",
     );
-    assert!(response.contains("flash=Draft%20updated."), "got: {response}");
+    assert!(
+        response.contains("flash=Draft%20updated."),
+        "got: {response}"
+    );
     let restored = control.staged();
     assert_eq!(restored.slots.len(), 1);
     assert_eq!(restored.slots[0].number, 1);
@@ -5579,7 +5591,10 @@ fn park_holds_the_bindings_and_assign_restores_them_without_aliasing() {
         "/redesign/controller/assign",
         "ghost=g2&position=2&persona=xbox360&preset=Player+9&layout=",
     );
-    assert!(response.contains("flash=Draft%20updated."), "got: {response}");
+    assert!(
+        response.contains("flash=Draft%20updated."),
+        "got: {response}"
+    );
     let after = control.staged();
     assert_eq!(after.slots.len(), 2);
     assert_eq!(after.slots[1].number, 2, "seated at the asked position");
@@ -5596,7 +5611,10 @@ fn park_holds_the_bindings_and_assign_restores_them_without_aliasing() {
         "/redesign/controller/assign",
         "ghost=never-parked&position=1&persona=playstation&preset=Fresh+One&layout=keyboard-2p",
     );
-    assert!(response.contains("flash=Draft%20updated."), "got: {response}");
+    assert!(
+        response.contains("flash=Draft%20updated."),
+        "got: {response}"
+    );
     let fresh = control.staged();
     assert_eq!(fresh.slots.len(), 3);
     assert_eq!(
@@ -5670,14 +5688,21 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
     );
 
     // The opposite-directions rule, off the served roster.
-    let response = post_form(addr, "/redesign/controller/socd", "number=1&socd=last-input");
+    let response = post_form(
+        addr,
+        "/redesign/controller/socd",
+        "number=1&socd=last-input",
+    );
     assert!(response.contains("flash=Draft%20updated."), "{response}");
     assert_eq!(control.staged().slots[0].socd, "last-input");
 
     // Duplicate: same persona and rules in the next free slot, its OWN
     // preset name (one preset file per name — the aliasing rule).
     let response = post_form(addr, "/redesign/controller/duplicate", "number=1");
-    assert!(response.contains("flash=Controller%20duplicated"), "{response}");
+    assert!(
+        response.contains("flash=Controller%20duplicated"),
+        "{response}"
+    );
     let staged = control.staged();
     assert_eq!(staged.slots.len(), 2);
     assert_eq!(staged.slots[1].persona, staged.slots[0].persona);
@@ -5703,7 +5728,10 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
 
     // Unbind-all empties the whole slot in one write.
     let response = post_form(addr, "/redesign/bind/clear-all", "number=1");
-    assert!(response.contains("flash=Every%20key%20unbound"), "{response}");
+    assert!(
+        response.contains("flash=Every%20key%20unbound"),
+        "{response}"
+    );
     assert_eq!(control.staged().slots[0].bindings, 0);
 
     // ✕ remove offers the server-held undo; the payload serves the chip and
@@ -5755,8 +5783,7 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
         response.contains("flash=That%20key%20is%20free%20again"),
         "{response}"
     );
-    let after = ksx_api::staged_mapper_slot(&control.staged().slots[1], "(none)")
-        .expect("mapper");
+    let after = ksx_api::staged_mapper_slot(&control.staged().slots[1], "(none)").expect("mapper");
     assert!(
         after
             .bindings

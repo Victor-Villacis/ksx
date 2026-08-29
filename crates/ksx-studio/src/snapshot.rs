@@ -3189,8 +3189,7 @@ pub(crate) fn compose_controller_panel(
     // The selected slot's opposite-directions editor. Hidden when nothing is
     // staged — and when the daemon serves no policy roster, because a select
     // of names the engine never listed would be an invented value.
-    let socd_editable =
-        staged.reachable && selected.is_some() && !staged.socd_options.is_empty();
+    let socd_editable = staged.reachable && selected.is_some() && !staged.socd_options.is_empty();
     let socd_cls = if socd_editable {
         "n-socdform".to_owned()
     } else {
@@ -3350,11 +3349,10 @@ pub(crate) fn compose_controller_panel(
     // whose rows are all hidden hides whole. The island's sweep applies
     // the SAME rule imperatively — the two must not drift, which is why
     // both read these exact labels.
-    let query =
-        q
-            .map(str::trim)
-            .filter(|q| !q.is_empty())
-            .map(str::to_lowercase);
+    let query = q
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+        .map(str::to_lowercase);
     let mut bind_group_cls: [String; 6] = std::array::from_fn(|_| "n-bindg".to_owned());
     if let Some(query) = query.as_deref() {
         for group in 0..6 {
@@ -3376,9 +3374,7 @@ pub(crate) fn compose_controller_panel(
                     chip.cls.push_str(" hide");
                 }
             }
-            if visible == 0
-                && !(bind_groups[group].is_empty() && avail_groups[group].is_empty())
-            {
+            if visible == 0 && !(bind_groups[group].is_empty() && avail_groups[group].is_empty()) {
                 bind_group_cls[group] = "n-bindg empty".to_owned();
             }
         }
@@ -3408,8 +3404,7 @@ pub(crate) fn compose_controller_panel(
             None => "n-bindgroups".to_owned(),
         }
     };
-    let [bind_face, bind_dpad, bind_shoulders, bind_lstick, bind_rstick, bind_system] =
-        bind_groups;
+    let [bind_face, bind_dpad, bind_shoulders, bind_lstick, bind_rstick, bind_system] = bind_groups;
     let [avail_face, avail_dpad, avail_shoulders, avail_lstick, avail_rstick, avail_system] =
         avail_groups;
     let [bind_face_n, bind_dpad_n, bind_shoulders_n, bind_lstick_n, bind_rstick_n, bind_system_n]: [String; 6] =
@@ -3788,8 +3783,7 @@ pub(crate) fn compose_board_panel(
         .as_ref()
         .map(|device| device.label.as_str())
         .unwrap_or("(none)");
-    let mapper =
-        selected.and_then(|slot| ksx_api::staged_mapper_slot(slot, keyboard_name).ok());
+    let mapper = selected.and_then(|slot| ksx_api::staged_mapper_slot(slot, keyboard_name).ok());
     // ⚠️ A MACRO TRIGGER IS A BINDING TOO. `MapperSlot.bindings` is built
     // from the preset's CONTROL entries only — a macro trigger lives in a
     // separate table with no `Binding` variant — so every inversion built
@@ -4184,8 +4178,7 @@ pub(crate) fn compose_capture_rows(
     } else if staged.reachable {
         String::new()
     } else {
-        "The draft could not be read, so the capture answer cannot be shown. Reopen ksx."
-            .to_owned()
+        "The draft could not be read, so the capture answer cannot be shown. Reopen ksx.".to_owned()
     };
     let current_mode = staged.blocking.as_deref().unwrap_or("");
     let rows = if staged.reachable {
@@ -4712,7 +4705,6 @@ impl NocturneDerived {
             p.unavailable.clone()
         };
 
-
         let selected_is_panel_encoder = chosen.is_some_and(|selector| {
             dev_encoders
                 .iter()
@@ -4722,8 +4714,7 @@ impl NocturneDerived {
         // composer (`compose_capture_rows`): the redesign's While-playing
         // menu serves the same struct, so the two pickers cannot disagree
         // about a word.
-        let (mode_rows, mode_note) =
-            compose_capture_rows(staged, selected_is_panel_encoder);
+        let (mode_rows, mode_note) = compose_capture_rows(staged, selected_is_panel_encoder);
 
         let cap = StartCaptureView::from_parts(staged, &p.scan, scan_read);
         let mode = cap.mode_word();
@@ -5178,7 +5169,6 @@ impl NocturneDerived {
             }
             _ => crate::macro_editor::NocturneMacroEditor::closed(),
         };
-
 
         // ── The configuration menu, served ────────────────────────────────
         // The saved-config row: what config.toml holds, and whether THIS

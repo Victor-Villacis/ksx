@@ -157,10 +157,40 @@ async function openBench({ onRequest } = {}) {
   return page;
 }
 
+/** Use the canvas's own minimap navigation contract to bring a potentially
+ *  off-screen workbench item into view before exercising visible controls. */
+async function revealCanvasItem(page, instanceId) {
+  await page.waitForFunction(
+    (id) => document.querySelector(
+      `.forma-canvas-stage > [data-instance-id="${id}"][data-canvas-x]`,
+    ),
+    instanceId,
+  );
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
+  await page.waitForFunction(() => !document.querySelector(".is-camera-animating"));
+  await page.locator(`.navigator-item[data-instance-id="${instanceId}"]`)
+    .evaluate((marker) => marker.click());
+  await page.waitForFunction(
+    (id) => {
+      const item = document.querySelector(
+        `.forma-canvas-stage > [data-instance-id="${id}"]`,
+      );
+      return item?.getAttribute("aria-current") === "true" &&
+        !document.querySelector(".is-camera-animating");
+    },
+    instanceId,
+  );
+}
+
 /** The catalog/evidence comparison surface remains as an internal regression
  * harness, but it is deliberately absent from the product chrome. */
 async function toggleEncoderResearchHarness(page) {
-  await page.locator('[data-nx="rd-encoder-profiles"]').evaluate((button) => button.click());
+  const toggle = page.locator('[data-nx="rd-encoder-profiles"]');
+  const opening = await toggle.getAttribute("aria-pressed") !== "true";
+  await toggle.evaluate((button) => button.click());
+  if (opening) await revealCanvasItem(page, "encoder-profile-lab");
 }
 
 describe("the device workbench", () => {
@@ -578,6 +608,36 @@ describe("the device workbench", () => {
         `.forma-canvas-stage > .rd-encoder-device-node[data-instance-id="${IPAC_SLUG}"]`,
       );
       await node.waitFor({ state: "attached" });
+      assert.equal(
+        await node.getAttribute("aria-current"),
+        "true",
+        "the visible Add gesture selects and reveals the encoder it created",
+      );
+      assert.deepEqual(
+        await node.evaluate((item) => {
+          const geometry = (candidate) => ({
+            id: candidate.dataset.instanceId,
+            x: Number(candidate.dataset.canvasX),
+            y: Number(candidate.dataset.canvasY),
+            width: Number(candidate.dataset.canvasWidth),
+            height: Number(candidate.dataset.canvasHeight),
+          });
+          const target = geometry(item);
+          return Array.from(
+            item.parentElement?.querySelectorAll(":scope > [data-instance-id][data-canvas-x]") ?? [],
+          ).filter((candidate) => candidate !== item)
+            .map(geometry)
+            .filter((candidate) =>
+              target.x < candidate.x + candidate.width &&
+              target.x + target.width > candidate.x &&
+              target.y < candidate.y + candidate.height &&
+              target.y + target.height > candidate.y
+            )
+            .map((candidate) => candidate.id);
+        }),
+        [],
+        "a fresh encoder lands beside the keyboard and controllers, never beneath them",
+      );
       assert.equal(await node.getAttribute("data-selector"), IPAC);
       assert.equal(await node.getAttribute("data-canvas-width"), "960");
       assert.ok(Number(await node.getAttribute("data-canvas-height")) >= 760);
@@ -623,7 +683,8 @@ describe("the device workbench", () => {
         "the board exposes one roving keyboard entry point",
       );
       await node.focus();
-      await page.locator('[data-nx="rd-center-sel"]').evaluate((button) => button.click());
+      await page.getByRole("button", { name: "Pan it to the middle (C)", exact: true })
+        .evaluate((button) => button.click());
       await page.locator('[data-nx="rd-z-100"]').evaluate((button) => button.click());
       await page.waitForFunction(
         () => document.querySelector(".n-zoomval")?.textContent?.trim() === "100%" &&
@@ -1143,6 +1204,12 @@ describe("the device workbench", () => {
       );
       assert.match(await node.locator(".rd-encoder-product-actions").textContent(), /read is still settling/i);
       assert.doesNotMatch(await node.textContent(), /Reading this board/i);
+      await page.waitForFunction(
+        (id) => document.activeElement === document.querySelector(
+          `.forma-canvas-stage > [data-instance-id="${id}"]`,
+        ),
+        IPAC_SLUG,
+      );
       assert.equal(
         await node.evaluate((item) => document.activeElement === item),
         true,
@@ -1511,6 +1578,7 @@ describe("the device workbench", () => {
       );
 
       const heldRefresh = gateNextChart();
+      await revealCanvasItem(page, IPAC_SLUG);
       await primary.getByRole("button", { name: "Refresh stored assignments" }).click();
       assert.deepEqual(await heldRefresh.seen, { selector: IPAC });
       await page.waitForFunction(
@@ -1954,7 +2022,7 @@ describe("the device workbench", () => {
 
   test("selected picker removal clears the Inspector and survives a reload", async () => {
     const page = await openBench();
-    await page.locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`).click();
+    await revealCanvasItem(page, G915_SLUG);
     await page.waitForFunction(() => document.querySelector(".rd-inspector")?.hidden === false);
     await page.click('[data-nx="rd-devs-open"]');
     await page.click(`.rd-devmodal button[data-selector="${G915}"]`);
@@ -2122,6 +2190,7 @@ describe("the device workbench", () => {
     });
     try {
       const requestStarted = page.waitForRequest(`${BASE}/redesign/device`);
+      await revealCanvasItem(page, IPAC_SLUG);
       await page.click(`.forma-canvas-stage [data-instance-id="${IPAC_SLUG}"] .rd-stagebtn`);
       await requestStarted;
       assert.equal(
@@ -2190,6 +2259,7 @@ describe("the device workbench", () => {
       await route.fulfill({ response, json: payload });
     });
     try {
+      await revealCanvasItem(page, G915_SLUG);
       await card.locator(".rd-devcard-name").click();
       await page.waitForFunction(() => document.querySelector(".rd-inspector")?.hidden === false);
       await card.locator(".rd-stagebtn").click();
@@ -2287,11 +2357,18 @@ describe("the device workbench", () => {
         true,
         "an unreachable staging provider keeps Stage visible but safely disabled",
       );
+      await page.waitForFunction(() => !document.querySelector("[data-rd-mutation-pending]"));
+      await item.focus();
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(
+        () => document.querySelector(".forma-canvas-viewport")?.dataset.canvasZoomTier === "editing",
+      );
       assert.equal(
         await item.locator(".rd-stagebtn").isVisible(),
         true,
-        "the disabled action remains discoverable beside its reason",
+        "the disabled action remains discoverable beside its reason at editing distance",
       );
+      await page.keyboard.press("Escape");
       assert.match(
         await item.locator(".rd-devcard-staged").textContent(),
         /Staging unavailable/,
@@ -2382,6 +2459,18 @@ describe("the device workbench", () => {
     const node = page.locator(".rd-encoder-profile-node");
     const model = node.locator("[data-rd-encoder-model]");
     const encoderStatus = node.locator("[data-rd-encoder-status]");
+    assert.equal(
+      await node.evaluate((item) => {
+        const ownZ = Number(item.dataset.canvasZ);
+        const otherZ = Array.from(
+          item.parentElement?.querySelectorAll(":scope > [data-instance-id][data-canvas-z]") ?? [],
+        ).filter((candidate) => candidate !== item)
+          .map((candidate) => Number(candidate.dataset.canvasZ));
+        return otherZ.every((z) => ownZ > z);
+      }),
+      true,
+      "the newly opened research surface owns the top canvas layer",
+    );
     assert.equal(await toggle.getAttribute("aria-pressed"), "true");
     assert.equal(await node.locator("svg").count(), 1, "the lab has one native SVG slot");
     assert.equal(
@@ -3645,6 +3734,7 @@ describe("the device workbench", () => {
     const submitTheme = async (theme) => {
       await page.click(".rd-themed > summary");
       await page.click(`.rd-thememenu form:has(input[value="${theme}"]) button`);
+      await page.waitForFunction(() => !document.querySelector("[data-rd-mutation-pending]"));
     };
     try {
       assert.equal(await model.inputValue(), `connected:${IPAC}`);

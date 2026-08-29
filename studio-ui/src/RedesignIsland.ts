@@ -547,6 +547,7 @@ function syncCtrlBench(): void {
     addPreset: rdCtrlAddPreset(),
     addLayout: rdCtrlAddLayout(),
     savedGeometry: (id) => canvasPrefs.widgets[id],
+    allocateFreshGeometry: allocateFreshCanvasGeometry,
     park: parkController,
     onMutation: () => {
       syncMapCount();
@@ -627,6 +628,107 @@ interface CanvasItemGeometry {
   z: number;
   manualScale: number;
 }
+
+interface CanvasVisualRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** A fresh widget should land beside the existing work, never underneath it.
+ *  Saved geometry is user intent and bypasses this allocator completely. */
+const CANVAS_FRESH_PLACEMENT_GAP = 40;
+const CANVAS_FRESH_PLACEMENT_STEPS = 12;
+
+function canvasVisualRect(geometry: CanvasItemGeometry): CanvasVisualRect {
+  const width = geometry.width * geometry.manualScale;
+  const height = geometry.height * geometry.manualScale;
+  return {
+    x: geometry.x + (geometry.width - width) / 2,
+    y: geometry.y + (geometry.height - height) / 2,
+    width,
+    height,
+  };
+}
+
+function canvasRectsOverlap(left: CanvasVisualRect, right: CanvasVisualRect): boolean {
+  const gap = CANVAS_FRESH_PLACEMENT_GAP;
+  return (
+    left.x < right.x + right.width + gap &&
+    left.x + left.width + gap > right.x &&
+    left.y < right.y + right.height + gap &&
+    left.y + left.height + gap > right.y
+  );
+}
+
+function mountedCanvasGeometries(): CanvasItemGeometry[] {
+  const canvas = nCanvas;
+  const root = rdRoot;
+  if (!canvas || !root) return [];
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(
+      ".forma-canvas-stage > [data-instance-id][data-canvas-x]",
+    ),
+    (item) => canvas.getItemState(item),
+  );
+}
+
+function nextCanvasZ(minimum = 1): number {
+  return Math.max(
+    minimum,
+    ...mountedCanvasGeometries().map((geometry) => geometry.z + 1),
+  );
+}
+
+function allocateFreshCanvasGeometry(preferred: CanvasItemGeometry): CanvasItemGeometry {
+  const occupied = mountedCanvasGeometries().map(canvasVisualRect);
+  const withFreshZ = { ...preferred, z: nextCanvasZ(preferred.z) };
+  const isOpen = (candidate: CanvasItemGeometry) => {
+    const visual = canvasVisualRect(candidate);
+    return occupied.every((other) => !canvasRectsOverlap(visual, other));
+  };
+  if (isOpen(withFreshZ)) return withFreshZ;
+
+  const strideX = preferred.width + CANVAS_FRESH_PLACEMENT_GAP;
+  const strideY = preferred.height + CANVAS_FRESH_PLACEMENT_GAP;
+  const offsets: { x: number; y: number; score: number }[] = [];
+  for (let x = 0; x <= CANVAS_FRESH_PLACEMENT_STEPS; x += 1) {
+    for (let y = 0; y <= CANVAS_FRESH_PLACEMENT_STEPS; y += 1) {
+      if (x === 0 && y === 0) continue;
+      offsets.push({ x: x * strideX, y: y * strideY, score: x + y * 1.5 });
+    }
+  }
+  offsets.sort((left, right) =>
+    left.score - right.score || left.y - right.y || left.x - right.x
+  );
+  for (const offset of offsets) {
+    const candidate = {
+      ...withFreshZ,
+      x: preferred.x + offset.x,
+      y: preferred.y + offset.y,
+    };
+    if (isOpen(candidate)) return candidate;
+  }
+
+  // The positive quadrant is intentionally preferred because it keeps the
+  // workbench reading left-to-right. A very dense custom arrangement still
+  // gets a bounded escape hatch before the engine applies its world clamp.
+  for (let step = 1; step <= CANVAS_FRESH_PLACEMENT_STEPS; step += 1) {
+    for (const candidate of [
+      { ...withFreshZ, x: preferred.x - step * strideX },
+      { ...withFreshZ, y: preferred.y - step * strideY },
+    ]) {
+      if (isOpen(candidate)) return candidate;
+    }
+  }
+  const rightEdge = Math.max(...occupied.map((rect) => rect.x + rect.width));
+  return {
+    ...withFreshZ,
+    x: rightEdge + CANVAS_FRESH_PLACEMENT_GAP,
+  };
+}
+
 interface CanvasPrefs {
   camera?: { panX: number; panY: number; zoom: number };
   widgets: Record<string, CanvasItemGeometry>;
@@ -1667,6 +1769,7 @@ function mountDeviceWidget(
   row: RdDeviceRowView,
   index: number,
   readStoredAssignmentsOnMount = false,
+  focusOnMount = false,
 ): void {
   const canvas = nCanvas;
   if (!canvas) return;
@@ -1713,10 +1816,11 @@ function mountDeviceWidget(
     manualScale: 1,
   };
   try {
+    const savedGeometry = savedGeometryKey ? canvasPrefs.widgets[savedGeometryKey] : undefined;
     canvas.mountItem(
       item,
-      (savedGeometryKey ? canvasPrefs.widgets[savedGeometryKey] : undefined) ?? home,
-      { focus: false },
+      savedGeometry ?? allocateFreshCanvasGeometry(home),
+      { focus: focusOnMount },
     );
   } catch (error) {
     disposeEncoderWorkbenchItem(item);
@@ -1759,7 +1863,7 @@ function toggleBenchDevice(selector: string): void {
     if (!row) return;
     // The visible picker Add gesture authorizes one immediate, read-only chart
     // transaction. Passive restore/reconnect mounts use the default false.
-    mountDeviceWidget(row, bench.length, true);
+    mountDeviceWidget(row, bench.length, true, true);
     canvasPrefs.bench = [...bench, selector];
   }
   saveCanvasPrefs();
@@ -1847,7 +1951,11 @@ function mountEncoderProfileLab(): void {
     const returnCamera = canvas.getCamera();
     encoderLabReturnCamera = returnCamera;
     try {
-      reservation.mountItem(lab.item, lab.home, { focus: false });
+      reservation.mountItem(
+        lab.item,
+        { ...lab.home, z: nextCanvasZ(lab.home.z) },
+        { focus: false },
+      );
       refreshEncoderProfileLab = lab.updateConnectedEncoders;
       disposeEncoderProfileLab = lab.dispose;
     } catch (error) {

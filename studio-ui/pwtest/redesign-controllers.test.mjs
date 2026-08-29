@@ -109,6 +109,26 @@ async function openBench() {
   return page;
 }
 
+/** Navigate through the canvas's own minimap before pressing controls that
+ *  semantic zoom intentionally hides at overview distance. */
+async function revealCanvasItem(page, instanceId) {
+  await page.waitForFunction(
+    (id) => document.querySelector(
+      `.forma-canvas-stage > [data-instance-id="${id}"][data-canvas-x]`,
+    ),
+    instanceId,
+  );
+  await page.locator(`.navigator-item[data-instance-id="${instanceId}"]`)
+    .evaluate((marker) => marker.click());
+  await page.waitForFunction(
+    (id) => document.querySelector(
+      `.forma-canvas-stage > [data-instance-id="${id}"]`,
+    )?.getAttribute("aria-current") === "true" &&
+      !document.querySelector(".is-camera-animating"),
+    instanceId,
+  );
+}
+
 describe("the controller workbench", () => {
   test("the whole-order permutation seats a card and keeps arrival order", () => {
     assert.equal(composeOrderMoving(["1", "2", "3"], "3", 1), "3 1 2");
@@ -343,17 +363,11 @@ describe("the controller workbench", () => {
       null,
       { timeout: 10_000 },
     );
-    // The clicks above selected cards, and selection opens the Inspector —
-    // which overlays the canvas's right edge where the ghost parked. Close
-    // it the way a user would before pressing the ghost's own ✕, and frame
-    // the world: the pad-sized cards (440-wide, the real silhouettes) home
-    // onto a larger grid than the old text mocks, so a fresh ghost can
-    // mount outside the current camera.
-    if (await page.locator(".rd-inspector:not([hidden])").count()) {
-      await page.locator('[data-nx="rd-insp-close"]').click();
-    }
-    await page.click('[data-nx="canvas-fit"]');
-    await page.waitForTimeout(500);
+    // The pad-sized ghost may sit outside the current camera. Navigate to it
+    // through the real minimap contract so editing-distance verbs reappear.
+    const ghostId = await page.locator(ghost).getAttribute("data-instance-id");
+    assert.ok(ghostId);
+    await revealCanvasItem(page, ghostId);
     await page.click(`${ghost} [data-nx="rd-ctrl-discard"]`);
     await page.waitForFunction(
       () =>
@@ -510,13 +524,10 @@ describe("the controller workbench", () => {
         { timeout: 20_000 },
       );
 
-    // Frame the world first: earlier tests in this shared-fixture suite
-    // left the camera where THEIR gestures ended, and a canvas item outside
-    // the viewport cannot be clicked (the engine transforms, nothing
-    // scrolls). The pill's Fit verb needs no focus scope, unlike the "1"
-    // shortcut.
-    await page.click('[data-nx="canvas-fit"]');
-    await page.waitForTimeout(600);
+    // Earlier tests leave the camera where their own gestures ended. Use the
+    // real minimap navigation path so this card is both visible and at the
+    // semantic editing tier before opening its panel.
+    await revealCanvasItem(page, "ctrl-slot-1");
     // Selecting the card opens the inspector with the transplanted nocturne
     // panel — six groups, the meta strip, the SOCD editor — and the slot
     // rides the URL (the nocturne selection door), so a reload keeps it.
@@ -650,6 +661,7 @@ describe("the controller workbench", () => {
 
     // ✕ remove offers the server-held undo; Undo restores the controller
     // with its bindings (nocturne's chip contract on this page's stash).
+    await revealCanvasItem(page, "ctrl-slot-1");
     await page.locator(`${cardSel(1)} .rd-ctrlverb-danger`).click();
     await page.waitForFunction(
       () => {

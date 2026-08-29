@@ -1690,10 +1690,7 @@ impl ksx_api::MachineSource for NoMachine {
     /// cell's twin. The route has already validated the id shape, so storing
     /// the spec verbatim is the whole job; without this the redesign lane's
     /// Board picker answered every choice with the generic edit error.
-    fn set_board(
-        &self,
-        spec: &ksx_api::BoardSpec,
-    ) -> Result<ksx_api::BoardView, ksx_api::Refusal> {
+    fn set_board(&self, spec: &ksx_api::BoardSpec) -> Result<ksx_api::BoardView, ksx_api::Refusal> {
         *fixture_board_cell().lock().unwrap() = spec.board.clone();
         Ok(ksx_api::BoardView {
             board: spec.board.clone(),

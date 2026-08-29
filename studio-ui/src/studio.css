@@ -18131,27 +18131,27 @@ a.nm-link {
   color: var(--n-text-2);
 }
 
-/* ── Encoder visual lab ────────────────────────────────────────────────────
-   Three temporary, source-labelled product concepts. The SVG geometry is
-   native and data-shaped; every paint comes from semantic theme roles so the
-   concepts can be judged in the same six themes as the rest of the rebuild. */
+/* ── Encoder profile lab ──────────────────────────────────────────────────
+   One stable, data-driven SVG surface. Identity, topology, configured output,
+   observed input, and user declarations keep independent visual treatments. */
 
 .rd-encoder-lab-toggle[aria-pressed="true"] {
   border-color: var(--n-accent-line);
   color: var(--n-accent-2);
 }
 
-.rd-encoder-concept-node {
-  --rd-player-color: var(--n-accent);
+.rd-encoder-profile-node {
+  --rd-encoder-slot: var(--n-accent);
 }
 
-.rd-encoder-concept {
+[data-forma-canvas] .widget-instance .rd-encoder-profile[data-forma-runtime-host] {
   box-sizing: border-box;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: var(--sp-2);
   width: 100%;
-  min-height: 520px;
+  height: 100%;
+  min-height: 700px;
   padding: var(--sp-4);
   overflow: hidden;
   border: 1px solid var(--n-line);
@@ -18162,24 +18162,24 @@ a.nm-link {
   font-family: var(--n-font);
 }
 
-.rd-encoder-concept-head {
+.rd-encoder-profile-head {
   display: flex;
   align-items: flex-start;
   gap: var(--sp-4);
 }
 
-.rd-encoder-heading-copy {
+.rd-encoder-profile-heading-copy {
   min-width: 0;
 }
 
-.rd-encoder-eyebrow,
-.rd-encoder-subtitle,
-.rd-encoder-note,
-.rd-encoder-safety {
+.rd-encoder-profile-eyebrow,
+.rd-encoder-profile-subtitle,
+.rd-encoder-profile-thesis,
+.rd-encoder-profile-foot {
   margin: 0;
 }
 
-.rd-encoder-eyebrow {
+.rd-encoder-profile-eyebrow {
   color: var(--n-accent-2);
   font-size: var(--fs-micro);
   font-weight: var(--fw-semibold);
@@ -18187,22 +18187,26 @@ a.nm-link {
   text-transform: uppercase;
 }
 
-.rd-encoder-title {
+.rd-encoder-profile-title {
   margin: var(--sp-1) 0 0;
+  overflow: hidden;
   color: var(--n-text);
   font-size: var(--fs-lg);
   font-weight: var(--fw-semibold);
   line-height: var(--lh-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.rd-encoder-subtitle {
+.rd-encoder-profile-subtitle {
   color: var(--n-text-2);
   font-size: var(--fs-xs);
   line-height: var(--lh-snug);
 }
 
-.rd-encoder-recommendation {
+.rd-encoder-profile-safety {
   flex: none;
+  margin-left: auto;
   padding: var(--sp-1) var(--sp-2);
   border: 1px solid color-mix(in srgb, var(--n-ok) 55%, var(--n-line));
   border-radius: var(--r-pill);
@@ -18215,14 +18219,117 @@ a.nm-link {
   white-space: nowrap;
 }
 
-.rd-encoder-metrics {
+.rd-encoder-profile-toolbar {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(260px, 0.85fr) minmax(0, 1.15fr);
+  gap: var(--sp-3);
+  align-items: end;
+  padding: var(--sp-2);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-lg);
+  background: var(--n-panel-2);
+}
+
+.rd-encoder-profile-toolbar label,
+.rd-encoder-profile-manual label {
+  display: grid;
+  gap: var(--sp-1);
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-mono);
+  text-transform: uppercase;
+}
+
+.rd-encoder-profile-toolbar select,
+.rd-encoder-profile-manual textarea {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--n-line-2);
+  border-radius: var(--r-md);
+  background: var(--n-bg);
+  color: var(--n-text);
+  font: var(--fw-medium) var(--fs-xs) / var(--lh-snug) var(--n-font);
+}
+
+.rd-encoder-profile-toolbar select {
+  min-height: 34px;
+  padding: 0 var(--sp-2);
+}
+
+.rd-encoder-profile-toolbar select:focus-visible,
+.rd-encoder-profile-manual textarea:focus-visible,
+.rd-encoder-profile-manual button:focus-visible,
+.rd-encoder-profile-candidates input:focus-visible + span,
+.rd-encoder-profile-roster summary:focus-visible,
+.rd-encoder-profile-sources a:focus-visible {
+  outline: 2px solid var(--n-accent);
+  outline-offset: 2px;
+}
+
+.rd-encoder-profile-thesis {
+  padding: 0 var(--sp-1) var(--sp-1);
+  color: var(--n-text-2);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-profile-host {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-color: var(--n-line-2) transparent;
+}
+
+.rd-encoder-profile-dynamic {
+  display: grid;
+  gap: var(--sp-2);
+  min-height: 100%;
+}
+
+.rd-encoder-profile-evidence {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-md);
+  background: var(--n-panel-2);
+  color: var(--n-text-2);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-profile-evidence strong {
+  color: var(--n-text);
+}
+
+.rd-encoder-profile-evidence[data-evidence-state="backend-exact"],
+.rd-encoder-profile-evidence[data-evidence-state="backend-family"] {
+  border-color: color-mix(in srgb, var(--n-ok) 52%, var(--n-line));
+  background: var(--ok-dim);
+}
+
+.rd-encoder-profile-evidence[data-evidence-state="manual"] {
+  border-color: color-mix(in srgb, var(--n-accent) 48%, var(--n-line));
+  background: var(--n-accent-dim);
+}
+
+.rd-encoder-profile-evidence[data-evidence-state="ambiguous-family"],
+.rd-encoder-profile-evidence[data-evidence-state="known-family"],
+.rd-encoder-profile-evidence[data-evidence-state="identity-conflict"] {
+  border-color: color-mix(in srgb, var(--n-warn) 55%, var(--n-line));
+  background: var(--warn-dim);
+}
+
+.rd-encoder-profile-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--sp-2);
   margin: 0;
 }
 
-.rd-encoder-metric {
+.rd-encoder-profile-metric {
   min-width: 0;
   padding: var(--sp-2);
   border: 1px solid var(--n-line);
@@ -18230,17 +18337,17 @@ a.nm-link {
   background: var(--n-panel-2);
 }
 
-.rd-encoder-metric[data-tone="read"],
-.rd-encoder-metric[data-tone="observed"],
-.rd-encoder-metric[data-tone="verified"] {
-  border-color: color-mix(in srgb, var(--n-accent) 44%, var(--n-line));
+.rd-encoder-profile-metric[data-tone="topology"],
+.rd-encoder-profile-metric[data-tone="supported"],
+.rd-encoder-profile-metric[data-tone="observed"] {
+  border-color: color-mix(in srgb, var(--n-accent) 42%, var(--n-line));
 }
 
-.rd-encoder-metric[data-tone="declared"] {
-  border-color: color-mix(in srgb, var(--n-warn) 40%, var(--n-line));
+.rd-encoder-profile-metric[data-tone="unsupported"] {
+  border-color: color-mix(in srgb, var(--n-warn) 44%, var(--n-line));
 }
 
-.rd-encoder-metric dt {
+.rd-encoder-profile-metric dt {
   overflow: hidden;
   color: var(--n-text-3);
   font-size: var(--fs-micro);
@@ -18250,349 +18357,453 @@ a.nm-link {
   white-space: nowrap;
 }
 
-.rd-encoder-metric dd {
+.rd-encoder-profile-metric dd {
   margin: var(--sp-1) 0 0;
   overflow: hidden;
   color: var(--n-text);
-  font: var(--fw-semibold) var(--fs-base) / var(--lh-tight) var(--mono);
+  font: var(--fw-semibold) var(--fs-sm) / var(--lh-tight) var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.rd-encoder-figure {
+.rd-encoder-profile-candidates {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2);
+  min-width: 0;
+  margin: 0;
+  padding: var(--sp-2);
+  border: 1px solid color-mix(in srgb, var(--n-warn) 48%, var(--n-line));
+  border-radius: var(--r-md);
+  background: var(--warn-dim);
+}
+
+.rd-encoder-profile-candidates legend {
+  grid-column: 1 / -1;
+  padding: 0 var(--sp-1);
+  color: var(--n-text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-encoder-profile-candidates label {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  padding: var(--sp-2);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-md);
+  background: var(--n-bg);
+  cursor: pointer;
+}
+
+.rd-encoder-profile-candidates label:has(input:checked) {
+  border-color: var(--n-accent-line);
+  background: var(--n-accent-dim);
+}
+
+.rd-encoder-profile-candidates span,
+.rd-encoder-profile-candidates small {
+  display: block;
+  min-width: 0;
+}
+
+.rd-encoder-profile-candidates strong {
+  color: var(--n-text);
+  font-size: var(--fs-xs);
+}
+
+.rd-encoder-profile-candidates small {
+  margin-top: var(--sp-1);
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+}
+
+.rd-encoder-profile-work {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) minmax(220px, 0.8fr);
+  gap: var(--sp-2);
   min-height: 0;
+}
+
+.rd-encoder-profile-figure {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 344px;
   margin: 0;
   overflow: hidden;
-  place-items: center;
   border: 1px solid var(--n-line);
   border-radius: var(--r-lg);
   background:
-    linear-gradient(
-      color-mix(in srgb, var(--n-line) 22%, transparent) 1px,
-      transparent 1px
-    ),
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--n-line) 22%, transparent) 1px,
-      transparent 1px
-    ),
+    linear-gradient(color-mix(in srgb, var(--n-line) 22%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--n-line) 22%, transparent) 1px, transparent 1px),
     color-mix(in srgb, var(--n-panel) 70%, transparent);
   background-size: var(--sp-5) var(--sp-5);
 }
 
-.rd-encoder-svg {
-  display: block;
-  width: 100%;
-  height: 250px;
-  overflow: visible;
+.rd-encoder-profile-figure figcaption {
+  padding: var(--sp-1) var(--sp-2) var(--sp-2);
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+  text-align: center;
 }
 
-.rd-encoder-svg text {
+.rd-encoder-profile-svg {
+  display: block;
+  width: 100%;
+  height: 310px;
+}
+
+.rd-encoder-profile-svg text {
   fill: var(--n-text-2);
   font-family: var(--n-font);
   pointer-events: none;
   user-select: none;
 }
 
-.rd-encoder-board,
-.rd-encoder-faceplate {
+.rd-encoder-profile-board {
   fill: var(--n-panel-2);
   stroke: var(--n-line-2);
   stroke-width: 1.5;
 }
 
-.rd-encoder-hybrid-board {
-  fill: var(--n-panel-2);
+.rd-encoder-profile-board.is-harness-board {
+  stroke-dasharray: 8 3;
 }
 
-.rd-encoder-port {
+.rd-encoder-profile-board.is-jamma-board {
+  stroke: color-mix(in srgb, var(--n-warn) 54%, var(--n-line-2));
+}
+
+.rd-encoder-profile-board.is-fight-board,
+.rd-encoder-profile-board.is-firmware-reference {
+  fill: color-mix(in srgb, var(--n-panel-3) 76%, var(--n-panel-2));
+}
+
+.rd-encoder-profile-board.is-unknown {
+  fill: color-mix(in srgb, var(--n-panel-2) 70%, transparent);
+  stroke-dasharray: 8 7;
+}
+
+.rd-encoder-profile-port {
   fill: var(--n-panel-3);
   stroke: var(--n-line-2);
 }
 
-.rd-encoder-port-label,
-.rd-encoder-faceplate-label {
+.rd-encoder-profile-port-label,
+.rd-encoder-profile-unknown-kick {
   fill: var(--n-text-3) !important;
   font-size: var(--fs-micro);
   font-weight: var(--fw-semibold);
   letter-spacing: var(--track-eyebrow);
 }
 
-.rd-encoder-mount circle:first-child {
+.rd-encoder-profile-mount circle:first-child {
   fill: var(--n-bg);
   stroke: var(--n-line-2);
   stroke-width: 2;
 }
 
-.rd-encoder-mount-core {
+.rd-encoder-profile-mount-core {
   fill: var(--n-panel-3);
 }
 
-.rd-encoder-traces path {
+.rd-encoder-profile-traces path {
   fill: none;
-  stroke: color-mix(in srgb, var(--n-accent) 34%, var(--n-line));
+  stroke: color-mix(in srgb, var(--n-accent) 30%, var(--n-line));
   stroke-dasharray: 3 4;
   stroke-linecap: round;
   stroke-width: 1.5;
 }
 
-.rd-encoder-bank-p1 { --rd-player-color: var(--kb1, var(--n-accent)); }
-.rd-encoder-bank-p2 { --rd-player-color: var(--kb2, var(--n-accent-2)); }
-.rd-encoder-bank-p3 { --rd-player-color: var(--kb3, var(--n-warn)); }
-.rd-encoder-bank-p4 { --rd-player-color: var(--kb4, var(--n-ok)); }
-
-.rd-encoder-bank-body {
-  fill: color-mix(in srgb, var(--n-bg) 56%, transparent);
-  stroke: color-mix(in srgb, var(--rd-player-color) 42%, var(--n-line));
+.rd-encoder-profile-group-body {
+  fill: color-mix(in srgb, var(--n-bg) 58%, transparent);
+  stroke: color-mix(in srgb, var(--n-accent) 38%, var(--n-line));
 }
 
-.rd-encoder-bank-label {
-  fill: var(--rd-player-color) !important;
+.rd-encoder-profile-group-label {
+  fill: var(--n-accent-2) !important;
   font-size: var(--fs-micro);
   font-weight: var(--fw-semibold);
   letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
 }
 
-.rd-encoder-terminal rect {
+.rd-encoder-profile-terminal rect {
   fill: var(--n-panel-3);
-  stroke: color-mix(in srgb, var(--rd-player-color) 58%, var(--n-line));
+  stroke: color-mix(in srgb, var(--rd-encoder-slot) 62%, var(--n-line));
   stroke-width: 1;
 }
 
-.rd-encoder-terminal-label {
+.rd-encoder-profile-terminal.is-logical-control rect {
+  stroke-dasharray: 3 2;
+}
+
+.rd-encoder-profile-terminal.is-variant rect {
+  fill: var(--warn-dim);
+  stroke: var(--n-warn);
+  stroke-dasharray: 2 2;
+}
+
+.rd-encoder-profile-terminal-label {
   fill: var(--n-text) !important;
   font: var(--fw-semibold) var(--fs-micro) / var(--lh-flat) var(--mono);
 }
 
-.rd-encoder-processor rect {
+.rd-encoder-profile-processor rect {
   fill: var(--n-panel-2);
   stroke: var(--n-accent-line);
   stroke-width: 1.5;
 }
 
-.rd-encoder-chip-kick {
+.rd-encoder-profile-chip-kick,
+.rd-encoder-profile-chip-unit {
   fill: var(--n-accent-2) !important;
-  font-size: var(--fs-micro);
+  font-size: calc(var(--fs-micro) * 0.78);
   font-weight: var(--fw-semibold);
   letter-spacing: var(--track-eyebrow);
 }
 
-.rd-encoder-chip-count {
+.rd-encoder-profile-chip-value {
   fill: var(--n-text) !important;
-  font: var(--fw-semibold) var(--fs-xl) / var(--lh-flat) var(--mono);
+  font: var(--fw-semibold) var(--fs-lg) / var(--lh-flat) var(--mono);
 }
 
-.rd-encoder-svg-caption {
+.rd-encoder-profile-svg-caption,
+.rd-encoder-profile-empty {
   fill: var(--n-text-3) !important;
   font-size: var(--fs-micro);
   letter-spacing: var(--track-mono);
 }
 
-.rd-encoder-teach-step rect {
-  fill: color-mix(in srgb, var(--n-panel-2) 78%, transparent);
-  stroke: var(--n-line-2);
-}
-
-.rd-encoder-teach-step:nth-of-type(3) rect {
-  fill: var(--n-accent-dim);
-  stroke: var(--n-accent-line);
-}
-
-.rd-encoder-teach-step-label {
-  fill: var(--n-text) !important;
-  font-size: var(--fs-micro);
-  font-weight: var(--fw-semibold);
-}
-
-.rd-encoder-step-link,
-.rd-truth-layer-link,
-.rd-truth-layer-arrow {
-  fill: none;
-  stroke: var(--n-accent-line);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.5;
-}
-
-.rd-encoder-joystick-guide {
-  fill: color-mix(in srgb, var(--n-panel) 44%, transparent);
-  stroke: color-mix(in srgb, var(--n-line-2) 75%, transparent);
-  stroke-dasharray: 4 5;
-}
-
-.rd-observed-control > circle,
-.rd-observed-control > rect:first-of-type {
+.rd-encoder-profile-signal rect {
   fill: var(--n-panel-3);
   stroke: var(--n-accent-line);
   stroke-width: 1.5;
 }
 
-.rd-observed-control-label {
-  fill: var(--n-text) !important;
-  font-size: var(--fs-micro);
-  font-weight: var(--fw-semibold);
-}
-
-.rd-observed-signal-badge {
-  fill: var(--n-accent);
-  stroke: color-mix(in srgb, var(--n-accent-2) 60%, var(--n-accent));
-}
-
-.rd-observed-signal-label {
-  fill: var(--n-accent-ink) !important;
-  font: var(--fw-semibold) var(--fs-micro) / var(--lh-flat) var(--mono);
-}
-
-.rd-encoder-add-next rect {
-  fill: transparent;
-  stroke: var(--n-line-2);
-  stroke-dasharray: 3 3;
-}
-
-.rd-encoder-add-next-label {
-  fill: var(--n-text-3) !important;
-  font-size: var(--fs-micro);
-}
-
-.rd-hybrid-channel rect {
-  fill: var(--n-panel-3);
-  stroke: var(--n-line-2);
-}
-
-.rd-hybrid-channel.has-observation rect {
-  fill: var(--n-panel-3);
-  stroke: var(--n-accent);
-}
-
-.rd-hybrid-channel.has-declaration rect {
-  fill: var(--n-panel-3);
-  stroke: var(--n-warn);
-}
-
-/* The combined treatment is derived for this sample. The two source
-   attributes stay independent on every channel so a future conflict is
-   representable instead of being flattened into one truth value. */
-.rd-hybrid-channel.has-observation.has-declaration rect {
-  fill: var(--n-panel-3);
-  stroke: var(--n-ok);
-}
-
-.rd-hybrid-channel-label {
-  fill: var(--n-text) !important;
-  font: var(--fw-semibold) var(--fs-micro) / var(--lh-flat) var(--mono);
-}
-
-.rd-truth-layer rect {
-  fill: color-mix(in srgb, var(--n-panel-3) 82%, transparent);
-  stroke: var(--n-line-2);
-  stroke-width: 1.5;
-}
-
-.rd-truth-layer-2 rect {
-  stroke: color-mix(in srgb, var(--n-warn) 54%, var(--n-line));
-}
-
-.rd-truth-layer-3 rect {
-  fill: var(--n-panel-3);
-  stroke: color-mix(in srgb, var(--n-ok) 60%, var(--n-line));
-}
-
-.rd-truth-layer-kick {
+.rd-encoder-profile-signal-source {
   fill: var(--n-text-3) !important;
   font-size: var(--fs-micro);
   font-weight: var(--fw-semibold);
   letter-spacing: var(--track-eyebrow);
 }
 
-.rd-truth-layer-value {
+.rd-encoder-profile-signal-value {
   fill: var(--n-text) !important;
+  font: var(--fw-semibold) var(--fs-base) / var(--lh-tight) var(--mono);
+}
+
+.rd-encoder-profile-declared-slot rect {
+  fill: var(--warn-dim);
+  stroke: var(--n-warn);
+  stroke-dasharray: 3 2;
+}
+
+.rd-encoder-profile-declared-label {
+  fill: var(--n-text) !important;
+  font: var(--fw-medium) var(--fs-micro) / var(--lh-flat) var(--mono);
+}
+
+.rd-encoder-profile-unknown-mark {
+  fill: var(--n-panel-3);
+  stroke: var(--n-line-2);
+  stroke-dasharray: 5 5;
+  stroke-width: 2;
+}
+
+.rd-encoder-profile-unknown-value {
+  fill: var(--n-text-3) !important;
   font: var(--fw-semibold) var(--fs-2xl) / var(--lh-flat) var(--mono);
 }
 
-.rd-truth-layer-detail {
-  fill: var(--n-text-2) !important;
+.rd-encoder-profile-facts {
+  box-sizing: border-box;
+  min-width: 0;
+  max-height: 344px;
+  padding: var(--sp-3);
+  overflow: auto;
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-lg);
+  background: var(--n-panel-2);
+}
+
+.rd-encoder-profile-facts h3,
+.rd-encoder-profile-manual h3 {
+  margin: 0;
+  color: var(--n-text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-encoder-profile-facts > dl {
+  display: grid;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0 var(--sp-3);
+}
+
+.rd-encoder-profile-fact {
+  padding-left: var(--sp-2);
+  border-left: 2px solid var(--n-line-2);
+}
+
+.rd-encoder-profile-fact[data-profile-provenance="backend-profile"],
+.rd-encoder-profile-fact[data-profile-provenance="backend-family"] {
+  border-left-color: var(--n-ok);
+}
+
+.rd-encoder-profile-fact[data-profile-provenance="manual"] {
+  border-left-color: var(--n-accent);
+}
+
+.rd-encoder-profile-fact dt {
+  color: var(--n-text-3);
   font-size: var(--fs-micro);
+  letter-spacing: var(--track-mono);
+  text-transform: uppercase;
 }
 
-.rd-encoder-concept-foot {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-1) var(--sp-3);
-  align-items: start;
-}
-
-.rd-encoder-legend {
-  display: flex;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-  gap: var(--sp-1) var(--sp-3);
-  order: 1;
-}
-
-.rd-encoder-legend-item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-1);
-  color: var(--n-text-2);
-  font-size: var(--fs-micro);
-}
-
-.rd-encoder-legend-item i {
-  width: var(--sp-2);
-  height: var(--sp-2);
-  border: 1px solid var(--n-line-2);
-  border-radius: 50%;
-  background: var(--n-panel-3);
-}
-
-.rd-encoder-legend-item[data-tone="read"] i,
-.rd-encoder-legend-item[data-tone="observed"] i {
-  border-color: var(--n-accent);
-  background: var(--n-accent-dim);
-}
-
-.rd-encoder-legend-item[data-tone="verified"] i {
-  border-color: var(--n-ok);
-  background: var(--ok-dim);
-}
-
-.rd-encoder-legend-item[data-tone="declared"] i {
-  border-color: var(--n-warn);
-  background: var(--warn-dim);
-}
-
-.rd-encoder-note {
-  flex: 1 0 100%;
-  order: 3;
+.rd-encoder-profile-fact dd {
+  margin: var(--sp-1) 0 0;
   color: var(--n-text-2);
   font-size: var(--fs-micro);
   line-height: var(--lh-snug);
 }
 
-.rd-encoder-safety {
-  flex: 0 1 auto;
-  margin-left: auto;
-  order: 2;
+.rd-encoder-profile-sources {
+  display: grid;
+  gap: var(--sp-1);
+  margin: var(--sp-2) 0 0;
+  padding-left: var(--sp-4);
   color: var(--n-text-3);
   font-size: var(--fs-micro);
 }
 
-/* At a distance the native schematic remains the identity. Evidence prose
-   progressively yields, following the canvas's existing semantic tiers. */
-.rd [data-canvas-zoom-tier="overview"] .rd-encoder-metrics,
-.rd [data-canvas-zoom-tier="overview"] .rd-encoder-note,
-.rd [data-canvas-zoom-tier="overview"] .rd-encoder-safety,
-.rd [data-canvas-zoom-tier="overview"] .rd-encoder-legend {
+.rd-encoder-profile-sources a {
+  color: var(--n-accent-2);
+  overflow-wrap: anywhere;
+}
+
+.rd-encoder-profile-roster {
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-md);
+  background: var(--n-panel-2);
+}
+
+.rd-encoder-profile-roster summary {
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--n-text-2);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+}
+
+.rd-encoder-profile-roster-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  max-height: 170px;
+  overflow: auto;
+  border-top: 1px solid var(--n-line);
+  background: var(--n-line);
+}
+
+.rd-encoder-profile-roster-grid > span {
+  display: grid;
+  grid-template-columns: minmax(52px, auto) minmax(0, 1fr);
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--n-bg);
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+}
+
+.rd-encoder-profile-roster-grid code {
+  color: var(--n-accent-2);
+  font-family: var(--mono);
+}
+
+.rd-encoder-profile-manual {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr) max-content;
+  gap: var(--sp-3);
+  align-items: end;
+  padding: var(--sp-3);
+  border: 1px dashed var(--n-line-2);
+  border-radius: var(--r-md);
+  background: var(--n-panel-2);
+}
+
+.rd-encoder-profile-manual p {
+  margin: var(--sp-1) 0 0;
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-profile-manual textarea {
+  min-height: 52px;
+  padding: var(--sp-2);
+  resize: vertical;
+}
+
+.rd-encoder-profile-manual button {
+  min-height: 34px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--n-accent-line);
+  border-radius: var(--r-md);
+  background: var(--n-accent-dim);
+  color: var(--n-accent-2);
+  font: var(--fw-semibold) var(--fs-xs) / var(--lh-flat) var(--n-font);
+  cursor: pointer;
+}
+
+.rd-encoder-profile-foot {
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-toolbar,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-evidence,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-metrics,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-facts,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-candidates,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-roster,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-manual,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-foot {
   display: none;
 }
 
-.rd [data-canvas-zoom-tier="overview"] .rd-encoder-concept {
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
-.rd [data-canvas-zoom-tier="structure"] .rd-encoder-note {
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-work {
+  grid-template-columns: 1fr;
+}
+
+.rd [data-canvas-zoom-tier="structure"] .rd-encoder-profile-fact dd,
+.rd [data-canvas-zoom-tier="structure"] .rd-encoder-profile-sources-heading,
+.rd [data-canvas-zoom-tier="structure"] .rd-encoder-profile-sources,
+.rd [data-canvas-zoom-tier="structure"] .rd-encoder-profile-foot {
   display: none;
+}
+
+@media (forced-colors: active) {
+  .rd-encoder-profile :is(select, textarea, button, fieldset, figure, aside, details),
+  .rd-encoder-profile-terminal rect,
+  .rd-encoder-profile-signal rect,
+  .rd-encoder-profile-declared-slot rect {
+    border-color: CanvasText;
+    stroke: CanvasText;
+  }
+
+  .rd-encoder-profile :is(select, textarea, button):focus-visible {
+    outline-color: Highlight;
+  }
 }
 
 .rd-menu-sep {

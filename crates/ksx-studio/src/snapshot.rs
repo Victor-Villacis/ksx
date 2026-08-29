@@ -195,6 +195,10 @@ impl RedesignDeviceRows {
                         }
                     },
                     chart_readable: if b.chart_readable { "true" } else { "false" }.to_owned(),
+                    family_id: b.family_id.clone(),
+                    protocol_profile: b.protocol_profile.clone(),
+                    profile_state: b.profile_state.clone(),
+                    terminal_count: b.terminal_count,
                     role: b.role.code().to_owned(),
                     selector,
                     alias: b.alias_hint.clone(),
@@ -1842,6 +1846,21 @@ pub struct NocturneDeviceRow {
     /// presentation; it never identifies an encoder by matching the display
     /// name."
     pub chart_readable: String,
+    /// Stable backend-owned family/profile facts for presentation joins. Their
+    /// absence is meaningful: the browser must not reconstruct either from a
+    /// display label, VID/PID, or terminal count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_profile: Option<String>,
+    /// `profiled` | `unprofiled-release` | `unrecognised`, copied from the
+    /// device scan rather than re-derived in the island.
+    #[serde(default)]
+    pub profile_state: String,
+    /// Exact measured profile capacity when one exists. Never a browser guess
+    /// about the family's physical screw count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_count: Option<usize>,
 }
 
 /// One board that cannot be picked, and why — kept visible, never hidden:
@@ -3326,6 +3345,10 @@ impl NocturneDerived {
                         }
                     },
                     chart_readable: if b.chart_readable { "true" } else { "false" }.to_owned(),
+                    family_id: b.family_id.clone(),
+                    protocol_profile: b.protocol_profile.clone(),
+                    profile_state: b.profile_state.clone(),
+                    terminal_count: b.terminal_count,
                     role: b.role.code().to_owned(),
                     selector,
                     alias: b.alias_hint.clone(),

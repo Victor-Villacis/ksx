@@ -1,7 +1,6 @@
 import { createList, createSignal, h } from "@getforma/core";
 import {
   createCanvasItem,
-  type WidgetCanvasMountReservation,
   WidgetCanvas,
   WidgetCanvasCapacityError,
 } from "./genui/canvas/index";
@@ -10,8 +9,9 @@ import {
   deviceInstanceId,
 } from "./device-instance-id";
 import {
-  createEncoderConceptCanvasItems,
-  ENCODER_CONCEPT_INSTANCE_IDS,
+  createEncoderProfileLabCanvasItem,
+  ENCODER_PROFILE_LAB_INSTANCE_ID,
+  type EncoderProfileLabDevice,
 } from "./encoderConceptArt";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -63,6 +63,10 @@ export interface RdDeviceRowView {
   aria_current: string;
   title: string;
   chart_readable: string;
+  family_id?: string | null;
+  protocol_profile?: string | null;
+  profile_state: string;
+  terminal_count?: number | null;
 }
 
 /** A device the picker shows but cannot offer — no keyboard interface, or
@@ -162,6 +166,7 @@ export function applyRedesign(v: RedesignPayload): void {
   rdStagingLine = d?.staging_line ?? "";
   setRdDevKb(d?.keyboards ?? []);
   setRdDevEnc(d?.encoders ?? []);
+  refreshEncoderProfileLab?.(encoderProfileLabDevices());
   setRdDevExp(d?.experimental ?? []);
   setRdDevOther(d?.other ?? []);
   setRdDevScanLine(d?.scan_line ?? "");
@@ -198,10 +203,8 @@ export function applyRedesignFlash(flash: string | null): void {
 /** The lane's OWN store key — sharing /nocturne's would inherit and corrupt
  *  its camera and widget geometry. */
 const CANVAS_STORE = "ksx-redesign-canvas";
-const ENCODER_CONCEPT_ID_SET = new Set<string>(ENCODER_CONCEPT_INSTANCE_IDS);
-
-function isEncoderConceptInstanceId(instanceId: string): boolean {
-  return ENCODER_CONCEPT_ID_SET.has(instanceId);
+function isEncoderProfileLabInstanceId(instanceId: string): boolean {
+  return instanceId === ENCODER_PROFILE_LAB_INSTANCE_ID;
 }
 
 /** One press of canvas zoom. The engine's own wheel step is finer; a button
@@ -245,6 +248,7 @@ let canvasPrefs: CanvasPrefs = { widgets: {} };
 let nCanvas: WidgetCanvas | null = null;
 let rdRoot: HTMLElement | null = null;
 let encoderLabReturnCamera: { panX: number; panY: number; zoom: number } | null = null;
+let refreshEncoderProfileLab: ((devices: readonly EncoderProfileLabDevice[]) => void) | null = null;
 
 interface DeviceRowFocus {
   element: HTMLElement;
@@ -295,7 +299,7 @@ function loadCanvasPrefs(): void {
     for (const [key, g] of Object.entries(saved.widgets ?? {})) {
       // Older prototype builds could strand review-only geometry in the
       // durable arrangement. Drop it on read as well as refusing it on write.
-      if (!isEncoderConceptInstanceId(key) && isGeometry(g)) widgets[key] = g;
+      if (!isEncoderProfileLabInstanceId(key) && isGeometry(g)) widgets[key] = g;
     }
     const cam = saved.camera;
     canvasPrefs = {
@@ -344,7 +348,7 @@ function persistCanvas(): void {
     root.querySelectorAll<HTMLElement>(".n-canvas [data-instance-id]"),
   )) {
     const id = item.dataset.instanceId;
-    if (id && !isEncoderConceptInstanceId(id) && item.dataset.canvasX !== undefined) {
+    if (id && !isEncoderProfileLabInstanceId(id) && item.dataset.canvasX !== undefined) {
       widgets[id] = canvas.getItemState(item);
     }
   }
@@ -563,10 +567,10 @@ function paletteCommands(): PaletteCommand[] {
       run: () => setCanvasMap(!(canvasPrefs.mapHidden === true)),
     },
     {
-      name: "Toggle encoder concepts",
-      hint: "three sample-data approaches for review",
+      name: "Toggle encoder profiles",
+      hint: "inspect detected and reference encoder topology",
       key: "",
-      run: toggleEncoderConceptLab,
+      run: toggleEncoderProfileLab,
     },
   ];
 }
@@ -1211,114 +1215,115 @@ function restoreBench(): void {
   reconcileBenchWithRoster();
 }
 
-// ── Encoder visual lab (temporary review surface) ──────────────────────────
-// This is intentionally NOT a fourth browser-owned document type. One button
-// mounts three source-labelled sample widgets for a product decision; another
-// press removes them. No daemon verb runs, no chart is read, and visibility is
-// not persisted. Once a direction is chosen, its renderer can consume the
-// existing PanelTruthView / Board models in a proper product transplant.
+// ── Encoder profile lab (temporary review surface) ─────────────────────────
+// One stable widget consumes passive backend identity facts and a sourced
+// visual registry. Opening it never reads a chart; selecting a catalog model
+// changes the drawing only and can never authorize a protocol.
 
-function encoderConceptNodes(): HTMLElement[] {
-  return Array.from(
-    rdRoot?.querySelectorAll<HTMLElement>(
-      ".forma-canvas-stage > .rd-encoder-concept-node[data-instance-id]",
-    ) ?? [],
-  );
+function encoderProfileLabNode(): HTMLElement | null {
+  return rdRoot?.querySelector<HTMLElement>(
+    `.forma-canvas-stage > .rd-encoder-profile-node[data-instance-id="${ENCODER_PROFILE_LAB_INSTANCE_ID}"]`,
+  ) ?? null;
 }
 
-function syncEncoderConceptButton(): void {
+function syncEncoderProfileLabButton(): void {
   const button = rdRoot?.querySelector<HTMLButtonElement>(
-    '[data-nx="rd-encoder-concepts"]',
+    '[data-nx="rd-encoder-profiles"]',
   );
   if (!button) return;
-  const shown = encoderConceptNodes().length > 0;
+  const shown = encoderProfileLabNode() !== null;
   button.setAttribute("aria-pressed", String(shown));
-  // A toggle keeps one accessible name. aria-pressed and the selected styling
-  // carry its state without turning it into a different command.
-  button.textContent = "◇ Encoder concepts";
+  button.textContent = "◇ Encoders";
   button.title = shown
-    ? "Remove the three encoder review prototypes"
-    : "Show three sample-data encoder approaches on the canvas";
+    ? "Remove the encoder profile lab"
+    : "Inspect connected and reference encoder profiles on the canvas";
 }
 
-function announceEncoderConcepts(message: string): void {
+function announceEncoderProfileLab(message: string): void {
   const status = rdRoot?.querySelector<HTMLElement>(".n-live-sr");
   if (status) status.textContent = message;
 }
 
-function removeEncoderConceptLab(): void {
+function removeEncoderProfileLab(): void {
   const canvas = nCanvas;
   if (!canvas) return;
   const returnCamera = encoderLabReturnCamera;
-  for (const item of encoderConceptNodes()) {
-    canvas.removeItem(item, { selectFallback: false });
-  }
+  const item = encoderProfileLabNode();
+  if (item) canvas.removeItem(item, { selectFallback: false });
+  refreshEncoderProfileLab = null;
   if (returnCamera) canvas.restoreCamera(returnCamera);
   encoderLabReturnCamera = null;
-  // Camera commits can briefly capture prototype geometry. Delete those keys
-  // when the lab closes so a disposable comparison never becomes arrangement
-  // data or influences a later real encoder transplant.
   const widgets = { ...canvasPrefs.widgets };
-  for (const instanceId of ENCODER_CONCEPT_INSTANCE_IDS) delete widgets[instanceId];
+  delete widgets[ENCODER_PROFILE_LAB_INSTANCE_ID];
   canvasPrefs.widgets = widgets;
   if (returnCamera) canvasPrefs.camera = returnCamera;
   saveCanvasPrefs();
-  syncEncoderConceptButton();
+  syncEncoderProfileLabButton();
   syncMapCount();
   scheduleChips();
-  announceEncoderConcepts("Encoder review prototypes removed. No hardware state changed.");
+  announceEncoderProfileLab("Encoder profile lab removed. No hardware state changed.");
 }
 
-function mountEncoderConceptLab(): void {
+function encoderProfileLabDevices(): EncoderProfileLabDevice[] {
+  return rdDevEnc().map((row) => ({
+    selector: row.selector,
+    name: row.name,
+    alias: row.alias,
+    backend: {
+      role: row.role,
+      familyId: row.family_id,
+      familyLabel: row.family_id ? row.name : undefined,
+      protocolProfileId: row.protocol_profile,
+      profileState: row.profile_state,
+      profileTerminalCount: row.terminal_count,
+      capabilities: { canReadChart: row.chart_readable === "true" },
+    },
+  }));
+}
+
+function mountEncoderProfileLab(): void {
   const canvas = nCanvas;
   if (!canvas) return;
-  const concepts = createEncoderConceptCanvasItems(document);
-  let reservation: WidgetCanvasMountReservation;
+  const lab = createEncoderProfileLabCanvasItem(document, {
+    connectedEncoders: encoderProfileLabDevices(),
+  });
   try {
-    // All three concepts are one comparison. Reserve the whole batch first so
-    // a nearly-full canvas gets either the complete lab or nothing at all.
-    reservation = canvas.reserveItems(concepts.length);
+    const reservation = canvas.reserveItems(1);
+    const returnCamera = canvas.getCamera();
+    encoderLabReturnCamera = returnCamera;
+    try {
+      reservation.mountItem(lab.item, lab.home, { focus: false });
+      refreshEncoderProfileLab = lab.updateConnectedEncoders;
+    } catch (error) {
+      encoderLabReturnCamera = null;
+      refreshEncoderProfileLab = null;
+      throw error;
+    } finally {
+      reservation.release();
+    }
   } catch (error) {
     if (error instanceof WidgetCanvasCapacityError) {
       const free = Math.max(0, error.limit - error.current);
-      announceEncoderConcepts(
-        `Encoder concepts need ${error.requested} open widget spaces; this canvas has ${free}. ` +
+      announceEncoderProfileLab(
+        `The encoder profile lab needs one open widget space; this canvas has ${free}. ` +
           "Remove widgets and try again.",
       );
       return;
     }
     throw error;
   }
-  const returnCamera = canvas.getCamera();
-  encoderLabReturnCamera = returnCamera;
-  const mounted: HTMLElement[] = [];
-  try {
-    for (const { item, home } of concepts) {
-      reservation.mountItem(item, home, { focus: false });
-      mounted.push(item);
-    }
-  } catch (error) {
-    // Capacity is reserved, so this is an unexpected construction failure.
-    // Roll back before surfacing it; a three-way comparison must never strand
-    // one or two plausible-looking options on the workbench.
-    for (const item of mounted.reverse()) canvas.removeItem(item, { selectFallback: false });
-    encoderLabReturnCamera = null;
-    throw error;
-  } finally {
-    reservation.release();
-  }
-  syncEncoderConceptButton();
+  syncEncoderProfileLabButton();
   syncMapCount();
   scheduleChips();
-  announceEncoderConcepts(
-    "Three encoder review prototypes added. They use sample data and perform no hardware action.",
+  announceEncoderProfileLab(
+    "Encoder profile lab added. It used passive identity facts and performed no hardware read or write.",
   );
   window.requestAnimationFrame(() => nCanvas?.fitAll());
 }
 
-function toggleEncoderConceptLab(): void {
-  if (encoderConceptNodes().length > 0) removeEncoderConceptLab();
-  else mountEncoderConceptLab();
+function toggleEncoderProfileLab(): void {
+  if (encoderProfileLabNode()) removeEncoderProfileLab();
+  else mountEncoderProfileLab();
 }
 
 /** Reconcile browser-owned bench membership against current served truth.
@@ -1577,6 +1582,24 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
       onCameraHistoryChange: syncBackView,
       onSelectionChange: syncInspectorToSelection,
       onActiveItemStateChange: () => renderInspector(),
+      // Native controls inside client-authored widgets are not Forma runtime
+      // components. Enter on the move handle / Ctrl+Enter on the item still
+      // needs a deterministic way into them.
+      onOpenActiveControls: (item) => {
+        const control = item.querySelector<HTMLElement>("[data-forma-runtime-host]")
+          ?.querySelector<HTMLElement>(
+          "select:not(:disabled), input:not(:disabled), textarea:not(:disabled), button:not(:disabled), a[href]",
+          );
+        if (!control) return false;
+        // Semantic overview intentionally hides editing chrome. F2 is an
+        // explicit request to enter it, so cross the editing threshold before
+        // focusing rather than claiming success on a display:none control.
+        if (control.getClientRects().length === 0) {
+          nCanvas?.setZoomTo(0.94, "before opening widget controls");
+        }
+        control.focus({ preventScroll: true });
+        return document.activeElement === control;
+      },
       // Focus opens the inspector (design handoff §3) and hides the chips.
       onFocusModeChange: (_item, focused) => {
         if (focused) {
@@ -1588,7 +1611,7 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
   );
   setCanvasMap(canvasPrefs.mapHidden === true);
   restoreBench();
-  syncEncoderConceptButton();
+  syncEncoderProfileLabButton();
   syncMapCount();
   syncToolRail(nCanvas.toolMode());
   wireSpotlight(stage, viewport);
@@ -1656,8 +1679,8 @@ export function redesignWire(root: HTMLElement): void {
     } else if (hit === "rd-focus-sel") {
       const item = nCanvas?.activeItem();
       if (item) nCanvas?.toggleFocusMode(item);
-    } else if (hit === "rd-encoder-concepts") {
-      toggleEncoderConceptLab();
+    } else if (hit === "rd-encoder-profiles") {
+      toggleEncoderProfileLab();
       return;
     } else if (hit === "rd-devs-open") {
       setDevModal(true);
@@ -1920,12 +1943,12 @@ export function RedesignIsland() {
             {
               type: "button",
               class: "n-autobtn rd-encoder-lab-toggle",
-              "data-nx": "rd-encoder-concepts",
+              "data-nx": "rd-encoder-profiles",
               "aria-pressed": "false",
-              "aria-label": "Encoder concepts",
-              title: "Show three sample-data encoder approaches on the canvas",
+              "aria-label": "Encoder profiles",
+              title: "Inspect connected and reference encoder profiles on the canvas",
             },
-            "◇ Encoder concepts",
+            "◇ Encoders",
           ),
           h("span", { class: "rd-spring" }),
           // The action flash — the one place a verb's outcome lands. Served

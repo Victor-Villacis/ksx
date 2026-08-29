@@ -16,6 +16,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+import { build as bundle } from "esbuild";
 import { chromium } from "playwright";
 import { stopFixtureProcess } from "./fixture-process.mjs";
 import {
@@ -28,6 +29,29 @@ import {
 const PORT = Number(process.env.KSX_PWTEST_REDESIGN_DEVICES_PORT ?? 4531);
 const BASE = `http://127.0.0.1:${PORT}`;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const encoderContractBundle = await bundle({
+  stdin: {
+    contents: [
+      'export { detectEncoderVisualProfile, validateEncoderDetectionRules } from "../src/encoderDetection.ts";',
+      'export { getEncoderVisualProfile, validateEncoderVisualRegistry } from "../src/encoderVisualRegistry.ts";',
+    ].join("\n"),
+    resolveDir: path.join(repoRoot, "studio-ui", "pwtest"),
+    sourcefile: "encoder-profile-contract-entry.ts",
+  },
+  bundle: true,
+  format: "esm",
+  platform: "node",
+  target: "node24",
+  write: false,
+});
+const {
+  detectEncoderVisualProfile,
+  getEncoderVisualProfile,
+  validateEncoderDetectionRules,
+  validateEncoderVisualRegistry,
+} = await import(
+  `data:text/javascript;base64,${Buffer.from(encoderContractBundle.outputFiles[0].text).toString("base64")}`
+);
 const targetDir = process.env.CARGO_TARGET_DIR
   ? path.resolve(process.env.CARGO_TARGET_DIR)
   : path.join(repoRoot, "target");
@@ -174,6 +198,132 @@ describe("the device workbench", () => {
       claimSavedDeviceGeometryKey(punctuationTwinA, savedKeys, owners),
       legacyKey,
       "the same board can reclaim its position after a remove/add cycle",
+    );
+  });
+
+  test("encoder profile detection fails closed on contradictory or impossible facts", () => {
+    assert.equal(validateEncoderVisualRegistry().valid, true);
+    assert.equal(validateEncoderDetectionRules().valid, true);
+
+    const jpac = getEncoderVisualProfile("ultimarc-jpac");
+    assert.deepEqual(jpac.topology.capacity, { kind: "discrete", inputCounts: [27, 31] });
+    assert.equal(
+      jpac.topology.terminals.every((terminal) =>
+        terminal.identityScope === "logical-control" && terminal.connection === "logical"
+      ),
+      true,
+      "a family-level J-PAC drawing must not invent variant-specific edge/screw routing",
+    );
+    assert.equal(
+      detectEncoderVisualProfile({
+        backend: {
+          role: "panel-encoder",
+          familyId: "ultimarc-jpac",
+          profileState: "unprofiled-release",
+          profileTerminalCount: 28,
+        },
+      }).resolution,
+      "identity-conflict",
+      "the discrete 27/31 J-PAC family never accepts an impossible in-between count",
+    );
+
+    const narrowedMiniPac = detectEncoderVisualProfile({
+      backend: {
+        role: "panel-encoder",
+        familyId: "ultimarc-minipac",
+        profileState: "unprofiled-release",
+        profileTerminalCount: 32,
+      },
+    });
+    assert.equal(narrowedMiniPac.resolution, "backend-family");
+    assert.equal(narrowedMiniPac.profile.id, "ultimarc-minipac-32");
+    assert.equal(
+      detectEncoderVisualProfile({
+        backend: {
+          role: "panel-encoder",
+          familyId: "ultimarc-minipac",
+          profileState: "unprofiled-release",
+          profileTerminalCount: 999,
+        },
+      }).resolution,
+      "identity-conflict",
+    );
+    assert.equal(
+      detectEncoderVisualProfile({
+        backend: {
+          role: "panel-encoder",
+          familyId: "ultimarc-minipac",
+          profileState: "unprofiled-release",
+        },
+        manualProfileId: "brook-ufb-fusion",
+      }).resolution,
+      "identity-conflict",
+      "a manual catalog choice cannot override an incompatible backend family",
+    );
+
+    for (const familyId of ["ultimarc-uhid", "constructor", "__proto__"]) {
+      const knownWithoutVisual = detectEncoderVisualProfile({
+        backend: {
+          role: "panel-encoder",
+          familyId,
+          familyLabel: familyId,
+          profileState: "unprofiled-release",
+        },
+      });
+      assert.equal(knownWithoutVisual.resolution, "known-family");
+      assert.equal(knownWithoutVisual.identity.source, "backend-family");
+      assert.equal(knownWithoutVisual.profile.id, "unknown-hid");
+    }
+    assert.equal(
+      detectEncoderVisualProfile({
+        backend: {
+          role: "keyboard",
+          familyId: "ultimarc-ipac4",
+          profileState: "unrecognised",
+        },
+      }).resolution,
+      "identity-conflict",
+      "contradictory role and recognition facts never select a board drawing",
+    );
+
+    const exactButUnprofiled = detectEncoderVisualProfile({
+      backend: {
+        role: "panel-encoder",
+        familyId: "ultimarc-ipac4",
+        visualProfileId: "ultimarc-ipac4",
+        profileState: "unprofiled-release",
+        capabilities: { canReadChart: false },
+      },
+    });
+    assert.equal(exactButUnprofiled.resolution, "backend-exact");
+    assert.equal(exactButUnprofiled.profile.id, "ultimarc-ipac4");
+    assert.equal(
+      exactButUnprofiled.protocol.chartRead,
+      "unsupported",
+      "exact visual identity does not invent support for an unprofiled firmware release",
+    );
+    assert.equal(
+      detectEncoderVisualProfile({
+        backend: {
+          role: "panel-encoder",
+          visualProfileId: "ultimarc-ipac4",
+          profileState: "unrecognised",
+        },
+      }).resolution,
+      "identity-conflict",
+      "an unrecognised state still cannot claim an exact board visual",
+    );
+    assert.equal(
+      detectEncoderVisualProfile({
+        backend: {
+          role: "panel-encoder",
+          familyId: "ultimarc-ipac2",
+          profileState: "unprofiled-release",
+          capabilities: { canReadChart: true },
+        },
+      }).resolution,
+      "identity-conflict",
+      "an unprofiled release cannot advertise a configuration reader",
     );
   });
 
@@ -731,9 +881,15 @@ describe("the device workbench", () => {
     await page.close();
   });
 
-  test("the encoder lab compares three truthful native-SVG approaches without touching hardware", async () => {
+  test("one dynamic encoder profile lab renders only what its evidence justifies", async () => {
     const page = await openBench();
-    const toggle = page.locator('[data-nx="rd-encoder-concepts"]');
+    const hardwareCalls = [];
+    page.on("request", (request) => {
+      if (/\/api\/panel\/(?:chart|truth)/.test(new URL(request.url()).pathname)) {
+        hardwareCalls.push({ method: request.method(), url: request.url() });
+      }
+    });
+    const toggle = page.locator('[data-nx="rd-encoder-profiles"]');
     const beforeCount = await page.locator(
       ".forma-canvas-stage > [data-instance-id]",
     ).count();
@@ -742,124 +898,278 @@ describe("the device workbench", () => {
     );
 
     assert.equal(await toggle.getAttribute("aria-pressed"), "false");
-    assert.equal(await toggle.getAttribute("aria-label"), "Encoder concepts");
+    assert.equal(await toggle.getAttribute("aria-label"), "Encoder profiles");
     await toggle.click();
     await page.waitForFunction(
-      () => document.querySelectorAll(".rd-encoder-concept-node").length === 3,
+      () => document.querySelectorAll(".rd-encoder-profile-node").length === 1,
     );
+
+    const node = page.locator(".rd-encoder-profile-node");
+    const model = node.locator("[data-rd-encoder-model]");
+    const encoderStatus = node.locator("[data-rd-encoder-status]");
     assert.equal(await toggle.getAttribute("aria-pressed"), "true");
+    assert.equal(await node.locator("svg").count(), 1, "the lab has one native SVG slot");
     assert.equal(
-      await toggle.getAttribute("aria-label"),
-      "Encoder concepts",
-      "the toggle keeps one accessible name while aria-pressed carries state",
+      await node.getAttribute("data-canvas-resizable"),
+      "false",
+      "the review hull stays stable while evidence changes",
     );
-    assert.equal(
-      await page.locator(".rd-encoder-concept-node[data-sample-data='true']").count(),
-      3,
-      "every option is explicitly sample data",
-    );
-    assert.equal(
-      await page.locator(".rd-encoder-concept-node svg").evaluateAll((svgs) =>
-        svgs.filter((svg) => svg.namespaceURI === "http://www.w3.org/2000/svg").length
-      ),
-      3,
-      "all three visuals are native SVG rather than raster assets",
-    );
-    assert.equal(
-      await page.locator('.rd-encoder-concept-node[data-canvas-resizable="false"]').count(),
-      3,
-      "fixed comparison layouts cannot be width-resized into clipped mini-cards",
-    );
-
-    const readBacked = page.locator(
-      '.rd-encoder-concept-node[data-concept-id="read-backed"]',
-    );
-    assert.equal(
-      await readBacked.locator("[data-terminal-id]").count(),
-      56,
-      "the measured I-PAC profile renders its complete 56-terminal roster",
-    );
-    assert.equal(
-      await readBacked.locator("svg").getAttribute("data-capacity-source"),
-      "measured-profile",
-    );
-    assert.deepEqual(
-      await readBacked.locator("[data-terminal-id]").evaluateAll((terminals) =>
-        [terminals[0]?.getAttribute("data-terminal-id"), terminals.at(-1)?.getAttribute("data-terminal-id")]
-      ),
-      ["1up", "4coin"],
-      "SVG hooks use the backend's canonical terminal identity",
-    );
-    assert.match(await readBacked.textContent(), /physical wiring/i);
-
-    const guided = page.locator(
-      '.rd-encoder-concept-node[data-concept-id="guided-teach"]',
-    );
-    assert.equal(await guided.locator("[data-control-id]").count(), 12);
-    assert.equal(await guided.locator("svg").getAttribute("data-capacity"), "unknown");
-    assert.match(await guided.textContent(), /terminal capacity/i);
-
-    const hybrid = page.locator(
-      '.rd-encoder-concept-node[data-concept-id="hybrid-truth"]',
-    );
-    assert.equal(await hybrid.locator("[data-channel-id]").count(), 32);
-    assert.equal(await hybrid.locator('[data-observed="true"]').count(), 10);
-    assert.equal(await hybrid.locator('[data-declared="true"]').count(), 12);
-    assert.equal(
-      await hybrid.locator('[data-observed="false"][data-declared="false"]').count(),
-      20,
-    );
-    assert.equal(
-      await hybrid.locator("svg").getAttribute("data-capacity-source"),
-      "sample-catalog",
-      "the hypothetical model count never masquerades as a generic HID read",
-    );
-    assert.match(await hybrid.textContent(), /declared mappings/i);
-    assert.match(await hybrid.textContent(), /generic HID does not read model capacity/i);
-    assert.match(await hybrid.textContent(), /Recommended/);
-
     assert.equal(
       await page.locator(".rd-map-count").textContent(),
-      `${beforeCount + 3} widgets`,
-      "the minimap count includes the review widgets",
+      `${beforeCount + 1} widgets`,
+      "the minimap counts one lab, not one node per profile",
     );
     assert.match(
-      await page.locator(".n-live-sr").textContent(),
-      /sample data.*no hardware action/i,
-      "the action is announced as a harmless prototype",
+      await page.locator(".n-live-sr:not([data-rd-encoder-status])").textContent(),
+      /passive identity facts.*no hardware read or write/i,
+    );
+
+    const initialGeometry = await node.evaluate((item) => ({
+      x: item.dataset.canvasX,
+      y: item.dataset.canvasY,
+      width: item.dataset.canvasWidth,
+      height: item.dataset.canvasHeight,
+    }));
+    // Keyboard focus may legitimately reveal a clipped native control once.
+    // Take the stability baseline after that accessibility adjustment.
+    await model.focus();
+    await page.waitForTimeout(50);
+    let fittedTransform = await page.locator(".forma-canvas-stage").evaluate(
+      (stage) => stage.style.transform,
+    );
+
+    assert.equal(await model.inputValue(), `connected:${IPAC}`);
+    assert.match(
+      await model.locator("option:checked").textContent(),
+      /usb:d209:0430:00/i,
+      "the connected option exposes the collision-free backend identity",
+    );
+    assert.equal(
+      await node.locator(".rd-encoder-profile").getAttribute("data-profile-id"),
+      "ultimarc-ipac4",
+    );
+    assert.equal(
+      await node.locator("[data-rd-encoder-evidence]").getAttribute("data-evidence-state"),
+      "backend-family",
+    );
+    assert.equal(await node.locator("[data-terminal-id]").count(), 56);
+    assert.deepEqual(
+      await node.locator("[data-terminal-id]").evaluateAll((terminals) => {
+        const ids = terminals.map((terminal) => terminal.getAttribute("data-terminal-id"));
+        return {
+          first: ids[0],
+          last: ids.at(-1),
+          unique: new Set(ids).size,
+        };
+      }),
+      { first: "1up", last: "4coin", unique: 56 },
+      "the connected I-PAC uses the measured backend terminal vocabulary",
+    );
+    assert.match(await node.textContent(), /configuration read available/i);
+    assert.match(await node.textContent(), /this lab did not read it/i);
+    assert.equal(hardwareCalls.length, 0, "opening the lab never starts a chart transaction");
+
+    const rosterSummary = node.locator(".rd-encoder-profile-roster > summary");
+    await rosterSummary.focus();
+    await rosterSummary.press("Escape");
+    await page.waitForFunction(
+      () => document.activeElement?.classList.contains("rd-encoder-profile-node"),
+    );
+    assert.equal(
+      await node.evaluate((item) => item === document.activeElement),
+      true,
+      "Escape returns from a native details summary to the widget shell",
+    );
+    fittedTransform = await page.locator(".forma-canvas-stage").evaluate(
+      (stage) => stage.style.transform,
+    );
+
+    await model.selectOption("catalog:ultimarc-ultimate-io");
+    await page.waitForFunction(
+      () => document.querySelector(".rd-encoder-profile")?.dataset.profileId ===
+        "ultimarc-ultimate-io",
+    );
+    assert.equal(await node.locator("[data-terminal-id]").count(), 48);
+    assert.equal(await encoderStatus.count(), 1, "the live status remains one stable node");
+    await page.waitForFunction(
+      () => document.querySelector("[data-rd-encoder-status]")?.textContent
+        ?.includes("User-selected reference"),
+    );
+    assert.match(await node.textContent(), /96 LED output channels/i);
+    assert.match(await node.textContent(), /six inputs may be reassigned to optical axes/i);
+
+    await model.selectOption("catalog:brook-ufb-fusion");
+    await page.waitForFunction(
+      () => document.querySelector(".rd-encoder-profile")?.dataset.profileId ===
+        "brook-ufb-fusion",
+    );
+    assert.equal(await node.locator("[data-terminal-id]").count(), 18);
+    assert.equal(
+      await node.locator('[data-terminal-id][data-identity-scope="physical-terminal"]').count(),
+      0,
+      "Brook is a logical control reference, not a fabricated screw layout",
+    );
+    assert.match(await node.textContent(), /does not claim a physical terminal count/i);
+    assert.equal(
+      await page.locator(".forma-canvas-stage").evaluate((stage) => stage.style.transform),
+      fittedTransform,
+      "switching profile drawings does not move the camera",
+    );
+
+    await model.selectOption("catalog:ultimarc-jpac");
+    await page.waitForFunction(
+      () => document.querySelector(".rd-encoder-profile")?.dataset.profileId ===
+        "ultimarc-jpac",
+    );
+    assert.equal(await node.locator("[data-terminal-id]").count(), 31);
+    assert.equal(
+      await node.locator('[data-terminal-id][data-connection]:not([data-connection="logical"])').count(),
+      0,
+      "the merged J-PAC family never invents variant-specific edge/screw routing",
+    );
+    assert.deepEqual(
+      await node.locator('[data-terminal-id="1b7"], [data-terminal-id="1b8"]').evaluateAll(
+        (terminals) => terminals.map((terminal) =>
+          terminal.querySelector(".rd-encoder-profile-terminal-label")?.textContent
+        ),
+      ),
+      ["B7", "B8"],
+      "variant buttons remain visually distinguishable in the compact board drawing",
+    );
+    assert.match(await node.textContent(), /27 or 31 variant-dependent controls/i);
+
+    await model.selectOption("sample:ambiguous-minipac");
+    await page.waitForFunction(
+      () => document.querySelector("[data-rd-encoder-evidence]")?.getAttribute(
+        "data-evidence-state",
+      ) === "ambiguous-family",
+    );
+    assert.equal(await node.locator("[data-terminal-id]").count(), 0);
+    assert.equal(await node.locator("[data-profile-candidate]").count(), 2);
+    assert.match(await node.textContent(), /knows the family, not the variant/i);
+    await node.locator(
+      '[data-profile-candidate="ultimarc-minipac-four"] input',
+    ).click();
+    await page.waitForFunction(
+      () => document.querySelector(".rd-encoder-profile")?.dataset.profileId ===
+        "ultimarc-minipac-four",
+    );
+    assert.equal(await node.locator("[data-terminal-id]").count(), 56);
+    assert.equal(
+      await node.locator("[data-rd-encoder-evidence]").getAttribute("data-profile-provenance"),
+      "manual",
+      "confirmation changes the drawing but remains user provenance",
+    );
+    assert.match(await model.inputValue(), /ambiguous-minipac$/);
+    await page.waitForFunction(
+      () => document.activeElement?.hasAttribute("data-rd-encoder-model"),
+    );
+    assert.equal(
+      await model.evaluate((select) => select === document.activeElement),
+      true,
+      "confirmation returns focus to the stable model selector",
+    );
+
+    await model.selectOption("sample:unknown-hid");
+    await page.waitForFunction(
+      () => document.querySelector(".rd-encoder-profile")?.dataset.profileId === "unknown-hid",
+    );
+    assert.equal(await node.locator("[data-terminal-id]").count(), 0);
+    assert.equal(
+      await node.locator(".rd-encoder-profile-svg [data-observed-signal-id]").count(),
+      6,
+    );
+    assert.equal(await node.locator("svg").getAttribute("data-capacity"), "unknown");
+    assert.match(await node.textContent(), /terminal capacity unknown/i);
+    assert.match(await node.textContent(), /terminal not associated/i);
+    assert.match(await node.textContent(), /no exact backend encoder identity is available/i);
+    assert.doesNotMatch(
+      await node.textContent(),
+      /backend classified this as an encoder/i,
+      "the generic sample does not pretend the backend recognized an unknown model",
+    );
+
+    const manualLabels = node.locator("[data-rd-encoder-manual-labels]");
+    await manualLabels.fill("UP, DOWN, LEFT, RIGHT, SW1, SW2");
+    await node.getByRole("button", { name: "Apply declared labels" }).click();
+    await page.waitForFunction(
+      () => document.querySelectorAll("[data-declared-terminal-id]").length === 6,
+    );
+    assert.equal(await node.locator("[data-terminal-id]").count(), 0);
+    assert.equal(await node.locator("[data-declared-terminal-id]").count(), 6);
+    assert.match(await node.textContent(), /user-declared slots only/i);
+
+    assert.deepEqual(
+      await node.evaluate((item) => ({
+        x: item.dataset.canvasX,
+        y: item.dataset.canvasY,
+        width: item.dataset.canvasWidth,
+        height: item.dataset.canvasHeight,
+      })),
+      initialGeometry,
+      "profile changes repaint one node without changing canvas geometry",
+    );
+    assert.equal(hardwareCalls.length, 0, "catalog, ambiguity, and fallback stay read-only");
+
+    await page.waitForTimeout(50);
+    const canvasViewport = page.locator(".forma-canvas-viewport");
+    for (let step = 0; step < 8; step += 1) {
+      if (await canvasViewport.getAttribute("data-canvas-zoom-tier") === "overview") break;
+      await page.click('[data-nx="canvas-zoom-out"]');
+    }
+    assert.equal(await canvasViewport.getAttribute("data-canvas-zoom-tier"), "overview");
+    await node.focus();
+    await node.press("F2");
+    await page.waitForFunction(
+      () => document.querySelector(".forma-canvas-viewport")?.dataset.canvasZoomTier === "editing",
+    );
+    assert.deepEqual(
+      await page.evaluate(() => ({
+        tag: document.activeElement?.tagName,
+        model: document.activeElement?.hasAttribute("data-rd-encoder-model") ?? false,
+        manual: document.activeElement?.hasAttribute("data-rd-encoder-manual-labels") ?? false,
+      })),
+      { tag: "SELECT", model: true, manual: false },
+      "F2 enters the lab's first native control",
+    );
+    await model.press("Escape");
+    await page.waitForFunction(
+      () => document.activeElement?.classList.contains("rd-encoder-profile-node"),
+    );
+    assert.equal(
+      await node.evaluate((item) => item === document.activeElement),
+      true,
+      "Escape returns from an adapter-less native control to the widget shell",
     );
 
     await page.setViewportSize({ width: 420, height: 900 });
     const narrowToggle = await toggle.boundingBox();
-    assert.ok(narrowToggle, "the concept toggle stays rendered on a narrow canvas");
+    assert.ok(narrowToggle, "the encoder toggle stays rendered on a narrow canvas");
     assert.ok(
       narrowToggle.x >= 0 && narrowToggle.x + narrowToggle.width <= 420,
-      "the concept toggle stays inside the narrow viewport",
+      "the compact toggle stays inside the viewport",
     );
     assert.equal(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       true,
-      "the added topbar verb does not create page-level horizontal overflow",
+      "the lab adds no page-level horizontal overflow",
     );
     assert.deepEqual(
-      await page.locator(".rd-encoder-concept").evaluateAll((cards) =>
-        cards.map((card) => ({
-          horizontal: card.scrollWidth <= card.clientWidth,
-          vertical: card.scrollHeight <= card.clientHeight,
-        }))
-      ),
-      Array.from({ length: 3 }, () => ({ horizontal: true, vertical: true })),
-      "all three cards keep their source labels and notes inside the widget hull",
+      await node.locator(".rd-encoder-profile").evaluate((card) => ({
+        horizontal: card.scrollWidth <= card.clientWidth,
+        vertical: card.scrollHeight <= card.clientHeight,
+      })),
+      { horizontal: true, vertical: true },
+      "the fixed review hull contains every state",
     );
     await page.setViewportSize({ width: 1600, height: 1000 });
 
     await toggle.click();
     await page.waitForFunction(
-      () => document.querySelectorAll(".rd-encoder-concept-node").length === 0,
+      () => document.querySelectorAll(".rd-encoder-profile-node").length === 0,
     );
     await page.waitForFunction(
-      (transform) =>
-        document.querySelector(".forma-canvas-stage")?.style.transform === transform,
+      (transform) => document.querySelector(".forma-canvas-stage")?.style.transform === transform,
       beforeTransform,
     );
     assert.equal(await toggle.getAttribute("aria-pressed"), "false");
@@ -870,19 +1180,15 @@ describe("the device workbench", () => {
     assert.deepEqual(
       await page.evaluate(() => {
         const saved = JSON.parse(localStorage.getItem("ksx-redesign-canvas") ?? "{}");
-        return Object.keys(saved.widgets ?? {}).filter((key) =>
-          key.startsWith("encoder-concept-")
-        );
+        return Object.keys(saved.widgets ?? {}).filter((key) => key === "encoder-profile-lab");
       }),
       [],
-      "explicit Hide leaves no prototype geometry in the durable arrangement",
+      "hiding the lab leaves no review geometry in the durable arrangement",
     );
 
-    // Closing the tab or reloading while the lab is open is just as clean:
-    // its temporary fit must not replace the user's real workbench camera.
     await toggle.click();
     await page.waitForFunction(
-      () => document.querySelectorAll(".rd-encoder-concept-node").length === 3,
+      () => document.querySelectorAll(".rd-encoder-profile-node").length === 1,
     );
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.waitForFunction(
@@ -891,23 +1197,175 @@ describe("the device workbench", () => {
       { timeout: 20_000 },
     );
     await page.waitForFunction(
-      (transform) =>
-        document.querySelector(".forma-canvas-stage")?.style.transform === transform,
+      (transform) => document.querySelector(".forma-canvas-stage")?.style.transform === transform,
       beforeTransform,
       { timeout: 20_000 },
     );
-    assert.equal(await page.locator(".rd-encoder-concept-node").count(), 0);
+    assert.equal(await page.locator(".rd-encoder-profile-node").count(), 0);
     assert.equal(await toggle.getAttribute("aria-pressed"), "false");
-    assert.deepEqual(
-      await page.evaluate(() => {
-        const saved = JSON.parse(localStorage.getItem("ksx-redesign-canvas") ?? "{}");
-        return Object.keys(saved.widgets ?? {}).filter((key) =>
-          key.startsWith("encoder-concept-")
-        );
-      }),
-      [],
-      "reload while open leaves neither prototype geometry nor its comparison camera",
-    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("an open encoder lab reconciles connected truth by raw selector", async () => {
+    const page = await openBench();
+    await page.click('[data-nx="rd-encoder-profiles"]');
+    const node = page.locator(".rd-encoder-profile-node");
+    const model = node.locator("[data-rd-encoder-model]");
+    const twinSelector = `${IPAC}:mi_01`;
+    let rosterMode = "twins";
+    await page.route(`${BASE}/api/redesign`, async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      const original = payload.devices.encoders.find((row) => row.selector === IPAC);
+      assert.ok(original, "the fixture must serve its I-PAC encoder");
+      const left = { ...original, name: "Twin encoder", alias: "left bay" };
+      const right = {
+        ...original,
+        selector: twinSelector,
+        name: "Twin encoder",
+        alias: rosterMode === "unrelated-roster" ? "right bay renamed" : "right bay",
+      };
+      if (rosterMode === "ambiguous-minipac" || rosterMode === "measured-minipac-32") {
+        Object.assign(left, {
+          name: "Ultimarc Mini-PAC",
+          family_id: "ultimarc-minipac",
+          protocol_profile: null,
+          profile_state: "unprofiled-release",
+          terminal_count: rosterMode === "measured-minipac-32" ? 32 : null,
+          chart_readable: "false",
+        });
+      } else if (rosterMode === "known-family") {
+        Object.assign(left, {
+          name: "Ultimarc U-HID",
+          family_id: "ultimarc-uhid",
+          protocol_profile: null,
+          profile_state: "unprofiled-release",
+          terminal_count: null,
+          chart_readable: "false",
+        });
+      }
+      payload.devices.encoders = rosterMode === "only-twin" ? [right] : [left, right];
+      await route.fulfill({ response, json: payload });
+    });
+    const submitTheme = async (theme) => {
+      await page.click(".rd-themed > summary");
+      await page.click(`.rd-thememenu form:has(input[value="${theme}"]) button`);
+    };
+    try {
+      assert.equal(await model.inputValue(), `connected:${IPAC}`);
+      await submitTheme("dark");
+      await page.waitForFunction(
+        () => document.querySelectorAll('[data-rd-encoder-model] option[value^="connected:"]')
+          .length === 2,
+      );
+      assert.equal(
+        await model.inputValue(),
+        `connected:${IPAC}`,
+        "a served refresh preserves the selected physical encoder",
+      );
+      assert.deepEqual(
+        await model.locator('option[value^="connected:"]').evaluateAll((options) => ({
+          values: options.map((option) => option.value),
+          labels: options.map((option) => option.textContent),
+          uniqueLabels: new Set(options.map((option) => option.textContent)).size,
+        })),
+        {
+          values: [`connected:${IPAC}`, `connected:${twinSelector}`],
+          labels: [
+            `Twin encoder · left bay · ${IPAC}`,
+            `Twin encoder · right bay · ${twinSelector}`,
+          ],
+          uniqueLabels: 2,
+        },
+        "identical models retain distinct identities and visible path context",
+      );
+
+      await model.selectOption("sample:unknown-hid");
+      const draft = node.locator("[data-rd-encoder-manual-labels]");
+      await draft.fill("UP, DOWN, UNAPPLIED DRAFT");
+      await draft.evaluate((textarea) => {
+        window.__ksxEncoderDraftNode = textarea;
+      });
+      rosterMode = "unrelated-roster";
+      await submitTheme("matrix");
+      assert.equal(
+        await draft.inputValue(),
+        "UP, DOWN, UNAPPLIED DRAFT",
+        "an unrelated connected-device refresh preserves an unapplied fallback draft",
+      );
+      assert.equal(
+        await draft.evaluate((textarea) => textarea === window.__ksxEncoderDraftNode),
+        true,
+        "an unrelated roster change does not replace the active form subtree",
+      );
+
+      rosterMode = "ambiguous-minipac";
+      await submitTheme("light");
+      await model.selectOption(`connected:${IPAC}`);
+      await page.waitForFunction(
+        () => document.querySelector(".rd-encoder-profile")?.dataset.evidenceState ===
+          "ambiguous-family",
+      );
+      await node.locator(
+        '[data-profile-candidate="ultimarc-minipac-four"] input',
+      ).click();
+      await page.waitForFunction(
+        () => document.querySelector(".rd-encoder-profile")?.dataset.profileId ===
+          "ultimarc-minipac-four",
+      );
+
+      rosterMode = "measured-minipac-32";
+      await submitTheme("dark");
+      await page.waitForFunction(
+        () => document.querySelector(".rd-encoder-profile")?.dataset.profileId ===
+          "ultimarc-minipac-32",
+      );
+      assert.equal(
+        await node.locator(".rd-encoder-profile").getAttribute("data-evidence-state"),
+        "backend-family",
+        "changed backend evidence invalidates the old user-confirmed variant",
+      );
+      assert.equal(await node.locator("[data-terminal-id]").count(), 32);
+
+      rosterMode = "known-family";
+      await submitTheme("system");
+      await page.waitForFunction(
+        () => document.querySelector(".rd-encoder-profile")?.dataset.evidenceState ===
+          "known-family",
+      );
+      assert.equal(await model.inputValue(), `connected:${IPAC}`);
+      assert.equal(await node.locator("[data-terminal-id]").count(), 0);
+      assert.match(await node.textContent(), /known family · visual topology unavailable/i);
+      assert.match(await node.textContent(), /no verified visual topology is registered yet/i);
+      assert.match(
+        await node.locator("svg title").textContent(),
+        /Ultimarc U-HID · visual topology unavailable/i,
+        "the accessible drawing keeps known identity separate from missing topology",
+      );
+      assert.match(
+        await node.textContent(),
+        /no verified visual source is registered for this known family/i,
+      );
+      assert.doesNotMatch(
+        await node.textContent(),
+        /no exact backend family\/profile fact is available/i,
+      );
+
+      rosterMode = "only-twin";
+      await submitTheme("light");
+      await page.waitForFunction(
+        (value) => document.querySelector("[data-rd-encoder-model]")?.value === value,
+        `connected:${twinSelector}`,
+      );
+      assert.equal(
+        await model.inputValue(),
+        `connected:${twinSelector}`,
+        "a disconnected selection falls back to the remaining real encoder",
+      );
+    } finally {
+      await page.unroute(`${BASE}/api/redesign`);
+    }
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();
   });

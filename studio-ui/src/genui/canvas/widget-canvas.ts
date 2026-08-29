@@ -78,7 +78,8 @@ export interface WidgetCanvasOptions {
     focused: boolean,
     restoredCamera: boolean,
   ) => void;
-  onOpenActiveControls?: (item: HTMLElement) => void;
+  /** Return true when a page-owned fallback moved focus into native controls. */
+  onOpenActiveControls?: (item: HTMLElement) => boolean | void;
   onEscapeActiveControls?: (item: HTMLElement) => boolean;
   onKeyboardNavigation?: (message: string) => void;
   onCapacityChange?: (snapshot: WidgetCanvasCapacitySnapshot) => void;
@@ -459,7 +460,7 @@ export class WidgetCanvas {
     focused: boolean,
     restoredCamera: boolean,
   ) => void;
-  readonly #onOpenActiveControls: (item: HTMLElement) => void;
+  readonly #onOpenActiveControls: (item: HTMLElement) => boolean | void;
   readonly #onEscapeActiveControls: (item: HTMLElement) => boolean;
   readonly #onKeyboardNavigation: (message: string) => void;
   readonly #onCapacityChange: (snapshot: WidgetCanvasCapacitySnapshot) => void;
@@ -1853,12 +1854,27 @@ export class WidgetCanvas {
     item.addEventListener("keydown", (event) => {
       const origin = event.composedPath()[0];
       if (origin !== item) {
+        const pathOwnsNativeControl = event.composedPath().some((candidate) =>
+          candidate instanceof this.#window.HTMLElement &&
+          item.contains(candidate) &&
+          candidate.matches(
+            "select, input, textarea, button, summary, a[href], [contenteditable]:not([contenteditable='false'])",
+          )
+        );
         if (
           event.key === "Escape" &&
           !event.defaultPrevented &&
-          event.composedPath().some((candidate) => this.#runtimeAdapter.ownsEventTarget(candidate))
+          (
+            event.composedPath().some((candidate) => this.#runtimeAdapter.ownsEventTarget(candidate)) ||
+            pathOwnsNativeControl
+          )
         ) {
           event.stopPropagation();
+          // A client-authored control can receive pointer focus before its
+          // containing item becomes the canvas selection. Escape still has a
+          // deterministic destination: activate that item, then return to its
+          // keyboard proxy.
+          this.setActive(item);
           this.#queueTransientTimeout(() => this.#focusItemProxy(item), 0);
         }
         return;
@@ -1891,7 +1907,9 @@ export class WidgetCanvas {
           return;
         }
         const host = this.#runtimeHosts.get(this.#itemId(item));
-        if (!host?.focusFirstInteractive()) {
+        const opened = host?.focusFirstInteractive() === true ||
+          this.#onOpenActiveControls(item) === true;
+        if (!opened) {
           this.#onKeyboardNavigation(
             `${item.dataset.widgetName ?? "Widget"} has no available interactive controls.`,
           );

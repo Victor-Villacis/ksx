@@ -532,6 +532,7 @@ pub fn serve(
             .route("/redesign/bind/clear-all", post(redesign_form_clear_all))
             .route("/redesign/bind/turbo", post(redesign_form_bind_turbo))
             .route("/redesign/bind/toggle", post(redesign_form_bind_toggle))
+            .route("/redesign/key/clear", post(redesign_form_key_clear))
             // ── THE LIVE FEED ─────────────────────────────────────────────
             // One route, and it is the keystone the button check stands on:
             // the daemon's input fan-out as Server-Sent Events. Read-only and

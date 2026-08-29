@@ -86,9 +86,47 @@ export interface RdPanelView {
   socd_edit_opts: RdOptionView[];
 }
 
+/** One BY-KEY row — `NocturneKeyRow` on the wire (snapshot.rs). */
+export interface RdKeyRowView {
+  key: string;
+  targets: string;
+  fns: string;
+  cls: string;
+  slot: string;
+}
+
+/** The Keys tab — `KeyPanel` on the wire, the same struct `/nocturne`'s
+ *  By-key view serves (over this page's standard board). */
+export interface RdKeyPanelView {
+  key_rows: RdKeyRowView[];
+  keys_note: string;
+  avail_main: RdKeyRowView[];
+  avail_nav: RdKeyRowView[];
+  avail_num: RdKeyRowView[];
+  avail_main_head: string;
+  avail_nav_head: string;
+  avail_num_head: string;
+  avail_main_cls: string;
+  avail_nav_cls: string;
+  avail_num_cls: string;
+}
+
+/** Which of the pane's two READINGS is showing — by control (game side) or
+ *  by key (hand side). Same facts, opposite subject (the 4460 tab pair). */
+export type InspectorTab = "controls" | "keys";
+
 /** Why a learn-flow control is inert on this page, said on hover. */
 const LEARN_PENDING_TITLE =
   "Key mapping arrives with the keyboard migration — Clear, Hold/Toggle and Turbo work now.";
+
+/** A Keys-tab jump's target functions, consumed by the next Controls
+ *  render (the island's locate pass). */
+let pendingJumpFns: string | null = null;
+export function takePendingJumpFns(): string | null {
+  const fns = pendingJumpFns;
+  pendingJumpFns = null;
+  return fns;
+}
 
 /** The six group headings, exactly as nocturne's markup spells them (the
  *  server's filter matches against these words — one vocabulary). */
@@ -283,9 +321,82 @@ function bindGroup(
   return section;
 }
 
-/** The whole controller panel, as inspector rows. `undo` is the served
- *  chip pair (cls carries `none` while no removal window is open). */
-export function renderControllerPanel(panel: RdPanelView): HTMLElement[] {
+/** One key row of the Keys tab — nocturne's `.n-krow`, class-for-class.
+ *  The ✕ clear is a REAL form twin (the re-homed /redesign/key/clear); the
+ *  jump button opens the same functions in the Controls tab; +/− are the
+ *  learn flow and wait for the keyboard migration. */
+function keyRow(r: RdKeyRowView, onJump: (fns: string) => void): HTMLElement {
+  const row = el("div", r.cls);
+  row.dataset.key = r.key;
+  row.dataset.fns = r.fns;
+  row.append(el("span", "n-krow-chip", r.key), el("span", "n-krow-verb", "drives"));
+  const jump = el("button", "n-krow-tg door", r.targets);
+  jump.type = "button";
+  jump.title = "Open these controls in the Controls view";
+  jump.addEventListener("click", () => onJump(r.fns));
+  const add = inertChip("n-addchip", "", LEARN_PENDING_TITLE);
+  add.setAttribute("aria-label", "Assign this key to another control");
+  add.append(svgIcon(ICON_PLUS));
+  const minus = inertChip("n-minus", "", LEARN_PENDING_TITLE);
+  minus.setAttribute("aria-label", "Remove this key from one control");
+  minus.append(svgIcon(ICON_MINUS));
+  const clear = inlineForm("/redesign/key/clear", "key-clear", [
+    ["number", r.slot],
+    ["key", r.key],
+  ]);
+  const clearBtn = el("button", "n-krow-clear");
+  clearBtn.type = "submit";
+  clearBtn.title = "Unbind this key from everything it drives";
+  clearBtn.setAttribute("aria-label", "Unbind this key from everything it drives");
+  clearBtn.append(svgIcon(ICON_X));
+  clear.append(clearBtn);
+  row.append(jump, add, minus, clear);
+  return row;
+}
+
+function availSection(head: string, cls: string, chips: RdKeyRowView[]): HTMLElement {
+  const section = el("div", cls);
+  const bar = el("div", "n-bindg-head");
+  bar.append(el("span", "n-bindg-lab", head));
+  const grid = el("div", "n-akey-grid");
+  for (const chip of chips) {
+    const free = inertChip("n-akey", chip.key, "Free — " + LEARN_PENDING_TITLE);
+    free.dataset.key = chip.key;
+    grid.append(free);
+  }
+  section.append(bar, grid);
+  return section;
+}
+
+/** The Keys tab body — nocturne's `.n-krows` view. */
+function renderKeysView(keys: RdKeyPanelView, onJump: (fns: string) => void): HTMLElement {
+  const wrap = el("div", "n-krows rd-insp-krows");
+  wrap.append(
+    el(
+      "p",
+      "n-teach",
+      "Each key, and everything it drives. + assigns the key to another control — click that control on the pad.",
+    ),
+    el("p", "n-foot", keys.keys_note),
+  );
+  for (const row of keys.key_rows) wrap.append(keyRow(row, onJump));
+  wrap.append(
+    availSection(keys.avail_main_head, keys.avail_main_cls, keys.avail_main),
+    availSection(keys.avail_nav_head, keys.avail_nav_cls, keys.avail_nav),
+    availSection(keys.avail_num_head, keys.avail_num_cls, keys.avail_num),
+  );
+  return wrap;
+}
+
+/** The whole controller panel, as inspector rows: the meta strip and slot
+ *  verbs always, then the active tab's reading — Controls (six bind groups)
+ *  or Keys (the by-key rows). The tab pair is 4460's `.n-vseg`. */
+export function renderControllerPanel(
+  panel: RdPanelView,
+  keys: RdKeyPanelView,
+  tab: InspectorTab,
+  onTab: (next: InspectorTab) => void,
+): HTMLElement[] {
   const rows: HTMLElement[] = [];
 
   // The meta strip — nocturne's center words, moved to where this page
@@ -340,6 +451,39 @@ export function renderControllerPanel(panel: RdPanelView): HTMLElement[] {
   clearAll.append(clearAllBtn);
   verbs.append(dup, clearAll);
   rows.push(verbs);
+
+  // The pane's two READINGS of one relation: by control (game side) and by
+  // key (hand side) — 4460's own tab pair, wording and classes kept.
+  const vseg = el("div", "n-vseg rd-insp-vseg");
+  vseg.setAttribute("role", "group");
+  vseg.setAttribute("aria-label", "Mapping view");
+  for (const [id, label] of [
+    ["controls", "Controls"],
+    ["keys", "Keys"],
+  ] as const) {
+    const button = el("button", `n-vseg-btn ${id === "controls" ? "vc" : "vk"}`, label);
+    button.type = "button";
+    button.setAttribute("aria-pressed", String(tab === id));
+    button.addEventListener("click", () => {
+      if (tab !== id) onTab(id);
+    });
+    vseg.append(button);
+  }
+  rows.push(vseg);
+
+  if (tab === "keys") {
+    rows.push(
+      renderKeysView(keys, (fns) => {
+        // The jump's target is stashed BEFORE the tab change: onTab
+        // re-renders synchronously, and the fresh Controls paint consumes
+        // it (the island's pending-locate pass).
+        pendingJumpFns = fns;
+        onTab("controls");
+      }),
+    );
+    if (panel.bind_foot) rows.push(el("p", "n-foot", panel.bind_foot));
+    return rows;
+  }
 
   // The six groups, under the one served visibility class.
   const groups = el("div", panel.bind_g_cls);

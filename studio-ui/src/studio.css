@@ -18598,13 +18598,17 @@ a.nm-link {
 /* The REAL body drawing — a CLONE of the shared inline master is the
    widget's face (the nocturne widget's mechanism). The clone is an inline
    <svg> with its source viewBox, so its box is intrinsic — no async load,
-   no reserved-ratio guard needed. The wrap (not the svg) blocks pointer
-   interaction: the canvas item owns drag/select, but the finish swatches
-   in the head stay clickable. */
+   no reserved-ratio guard needed. Fully interactive like 4460's widgets:
+   every control zone carries data-fn, and clicking one jumps the inspector
+   to that binding row (pointer-events:none here was the bug that made the
+   Xbox art dead while the premium hooks' own pointer rules leaked through). */
 .rd-ctrlcard-artwrap {
   margin: 6px 0 4px;
-  pointer-events: none;
   user-select: none;
+}
+
+.rd-ctrlcard-artwrap svg [data-fn] {
+  cursor: pointer;
 }
 
 .rd-ctrlcard-artwrap svg.rd-ctrlcard-art {
@@ -18694,6 +18698,43 @@ form.rd-undochip .n-undo-btn {
 .rd-inspector .n-bind-sum {
   flex-wrap: wrap;
   row-gap: 4px;
+}
+
+/* The Controls|Keys pair and the Keys view, in the overlay. The shared
+   sheet keys `.n-krows` visibility to nocturne's right-pane mode class;
+   here the ACTIVE TAB decides what is mounted, so the wrapper shows
+   unconditionally. */
+.rd-inspector .rd-insp-vseg {
+  margin: 10px 0 4px;
+}
+
+.rd-inspector .rd-insp-krows {
+  display: block;
+}
+
+.rd-inspector .rd-insp-krows .n-krow {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.rd-inspector .n-akeysec.none {
+  display: none;
+}
+
+/* The locate pulse: a pad-art zone or a Keys-row jump named this row. */
+@keyframes rd-row-pulse {
+  0% {
+    outline-color: color-mix(in srgb, var(--n-accent) 90%, transparent);
+  }
+  100% {
+    outline-color: transparent;
+  }
+}
+
+.rd-row-pulse {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  animation: rd-row-pulse 1.4s ease-out;
 }
 
 /* The art credit, a quiet overlay in the canvas's corner — MIT terms travel

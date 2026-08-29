@@ -432,8 +432,14 @@ describe("the controller workbench", () => {
       { timeout: 20_000 },
     );
 
-    // Auto-fire: a preset rate lands and joins the badge.
-    await row().locator(".n-bind-label").click();
+    // Auto-fire: a preset rate lands and joins the badge. The row is STILL
+    // open — a repaint preserves the reader's place (open rows and scroll
+    // survive every refresh), so no second click to reopen it.
+    assert.equal(
+      await row().evaluate((r) => r.open),
+      true,
+      "the edited row stays open across the verb's repaint",
+    );
     await row().locator('button[title="Standard — 10 presses a second"]').click();
     await flashIs("Auto-fire updated");
     await page.waitForFunction(
@@ -465,6 +471,48 @@ describe("the controller workbench", () => {
     await page.selectOption(".rd-insp-body .n-socd-sel", socdValue);
     await page.locator(".rd-insp-body .n-socd-set").click();
     await flashIs("Draft updated.");
+
+    // The Keys tab — 4460's By-key reading of the same facts: every bound
+    // key with its fan-out, the still-free keys below, and the row ✕ that
+    // takes a key away from everything it drives (a re-homed real verb).
+    await page.click(".rd-insp-vseg .n-vseg-btn.vk");
+    await page.waitForFunction(
+      () => document.querySelectorAll(".rd-insp-krows .n-krow").length > 0,
+      null,
+      { timeout: 20_000 },
+    );
+    const keyCount = await page.locator(".rd-insp-krows .n-krow").count();
+    const victim = await page
+      .locator(".rd-insp-krows .n-krow")
+      .first()
+      .getAttribute("data-key");
+    await page
+      .locator(`.rd-insp-krows .n-krow[data-key="${victim}"] .n-krow-clear`)
+      .click();
+    await flashIs("That key is free again");
+    await page.waitForFunction(
+      ([key, before]) =>
+        !document.querySelector(`.rd-insp-krows .n-krow[data-key="${key}"]`) &&
+        document.querySelectorAll(".rd-insp-krows .n-krow").length === before - 1,
+      [victim, keyCount],
+      { timeout: 20_000 },
+    );
+    // A key row's "drives" door jumps to the Controls view and opens the
+    // named row — and clicking a control ON THE PAD ART does the same (the
+    // 4460 pointer enhancement).
+    await page.locator(".rd-insp-krows .n-krow").first().locator(".n-krow-tg").click();
+    await page.waitForFunction(
+      () => Boolean(document.querySelector(".rd-insp-body details.n-bind[open]")),
+      null,
+      { timeout: 20_000 },
+    );
+    const zoneFn = await page.evaluate(() => {
+      const zone = document.querySelector(
+        '.forma-canvas-stage [data-instance-id^="ctrl-slot-"] .rd-ctrlcard-artwrap [data-fn]',
+      );
+      return zone?.getAttribute("data-fn")?.split(/\s+/)[0] ?? "";
+    });
+    assert.ok(zoneFn, "the clone's zones carry their mapper functions");
 
     // ✕ remove offers the server-held undo; Undo restores the controller
     // with its bindings (nocturne's chip contract on this page's stash).

@@ -156,6 +156,11 @@ pub struct RedesignControllers {
     /// `/nocturne`'s right pane serves, from the one composer.
     #[serde(default)]
     pub panel: ControllerPanel,
+    /// The panel's other reading: the BY-KEY view, from the one
+    /// [`compose_key_panel`] composer, over the standard board (this page
+    /// has no board picker yet — the keyboard migration brings it).
+    #[serde(default)]
+    pub keys: KeyPanel,
     /// The short server-held undo window after a removal (the nocturne
     /// chip's contract: no browser state, a reload keeps the offer).
     #[serde(default)]
@@ -176,6 +181,15 @@ impl RedesignControllers {
             .and_then(|number| staged.slots.iter().find(|slot| slot.number == number))
             .or_else(|| staged.slots.first());
         let panel = compose_controller_panel(staged, selected, None);
+        // The Keys tab over the STANDARD board (no saved choice, no panel
+        // stores, no encoder staged): the same fallback nocturne draws when
+        // nothing is chosen. The board picker arrives with the keyboard
+        // migration.
+        let keys = compose_key_panel(
+            staged,
+            selected,
+            &crate::board::Board::resolve("", &[], &[], false),
+        );
         let pads = compose_pad_views(staged);
         let (undo_cls, undo_label) = match undo_label {
             Some(label) => ("rd-undochip".to_owned(), label.to_owned()),
@@ -256,6 +270,7 @@ impl RedesignControllers {
             parked_held: Vec::new(),
             pads,
             panel,
+            keys,
             undo_cls,
             undo_label,
         }
@@ -3497,6 +3512,203 @@ pub(crate) fn compose_pad_views(staged: &ksx_api::StagedSetupView) -> Vec<Noctur
         .collect()
 }
 
+/// The BY-KEY reading of the selected controller — each bound key with its
+/// whole fan-out, the still-free keys of the given board in the keyboard's
+/// own geography, and the counting note. Composed once for every page that
+/// offers the Keys tab; `/nocturne` passes its resolved board, `/redesign`
+/// the standard one.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyPanel {
+    pub key_rows: Vec<NocturneKeyRow>,
+    pub keys_note: String,
+    pub avail_main: Vec<NocturneKeyRow>,
+    pub avail_nav: Vec<NocturneKeyRow>,
+    pub avail_num: Vec<NocturneKeyRow>,
+    pub avail_main_head: String,
+    pub avail_nav_head: String,
+    pub avail_num_head: String,
+    pub avail_main_cls: String,
+    pub avail_nav_cls: String,
+    pub avail_num_cls: String,
+}
+
+pub(crate) fn compose_key_panel(
+    staged: &ksx_api::StagedSetupView,
+    selected: Option<&ksx_api::StagedSlotView>,
+    board: &crate::board::Board,
+) -> KeyPanel {
+    let selected_number = selected.map(|slot| slot.number);
+    let keyboard_name = staged
+        .device
+        .as_ref()
+        .map(|device| device.label.as_str())
+        .unwrap_or("(none)");
+    let mapper = selected.and_then(|slot| ksx_api::staged_mapper_slot(slot, keyboard_name).ok());
+    let trigger_keys = |slot: &ksx_api::StagedSlotView| -> Vec<(String, Vec<String>)> {
+        ksx_api::staged_macro_snapshot(slot)
+            .macros
+            .into_iter()
+            .filter(|m| !m.triggers.is_empty())
+            .map(|m| (format!("macro.{}", m.name), m.triggers))
+            .collect()
+    };
+    let selected_triggers: Vec<(String, Vec<String>)> =
+        selected.map(trigger_keys).unwrap_or_default();
+    // The same inversion the board reads: key → every function it drives,
+    // alphabetical (BTreeMap order), macro triggers included.
+    let mut key_fns: std::collections::BTreeMap<&str, Vec<&str>> =
+        std::collections::BTreeMap::new();
+    if let Some(mapper) = mapper.as_ref() {
+        for (fn_name, keys) in &mapper.bindings {
+            for key in keys {
+                key_fns
+                    .entry(key.as_str())
+                    .or_default()
+                    .push(fn_name.as_str());
+            }
+        }
+    }
+    for (fn_name, keys) in &selected_triggers {
+        for key in keys {
+            key_fns
+                .entry(key.as_str())
+                .or_default()
+                .push(fn_name.as_str());
+        }
+    }
+    // The READABLE control names — the zone tables' own labels, looked up
+    // case-bridged because the mapper spells face functions UPPERCASE.
+    let persona = selected
+        .map(|slot| slot.persona.as_str())
+        .unwrap_or("xbox360");
+    let zone_labels: std::collections::HashMap<String, String> =
+        crate::render_map::zones_for(persona)
+            .iter()
+            .map(|zone| {
+                (
+                    zone.fn_name.to_ascii_lowercase(),
+                    crate::render_map::legend_label_for_persona(persona, zone),
+                )
+            })
+            .collect();
+    let readable = |f: &str| -> String {
+        if let Some(name) = f.strip_prefix("macro.") {
+            format!("macro \"{name}\"")
+        } else {
+            zone_labels
+                .get(&f.to_ascii_lowercase())
+                .cloned()
+                .unwrap_or_else(|| f.to_owned())
+        }
+    };
+    let key_rows: Vec<NocturneKeyRow> = key_fns
+        .iter()
+        .map(|(key, fns)| NocturneKeyRow {
+            key: (*key).to_owned(),
+            targets: fns
+                .iter()
+                .map(|f| readable(f))
+                .collect::<Vec<_>>()
+                .join(" · "),
+            fns: fns
+                .iter()
+                .map(|f| f.to_lowercase())
+                .collect::<Vec<_>>()
+                .join(" "),
+            cls: if fns.len() > 1 {
+                "n-krow shared".to_owned()
+            } else {
+                "n-krow".to_owned()
+            },
+            slot: selected_number.map(|n| n.to_string()).unwrap_or_default(),
+        })
+        .collect();
+    // Every key of the given board NOT yet bound, in the keyboard's own
+    // geography: main block, navigation cluster, numpad.
+    const NAV_KEYS: [&str; 13] = [
+        "Insert",
+        "Delete",
+        "Home",
+        "End",
+        "PageUp",
+        "PageDown",
+        "Up",
+        "Down",
+        "Left",
+        "Right",
+        "PrintScreen",
+        "ScrollLock",
+        "Pause",
+    ];
+    let mut avail_main: Vec<NocturneKeyRow> = Vec::new();
+    let mut avail_nav: Vec<NocturneKeyRow> = Vec::new();
+    let mut avail_num: Vec<NocturneKeyRow> = Vec::new();
+    if selected.is_some() {
+        // **One chip per KEY, not per cell** — a Board makes duplicates
+        // ordinary and deliberate (shared-key encoder terminals), and an
+        // undeduped list hands a differ's recycled node to the wrong row.
+        let mut offered: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for cell in &board.cells {
+            if cell.ghost
+                || cell.key.is_empty()
+                || key_fns.contains_key(cell.key.as_str())
+                || !offered.insert(cell.key.as_str())
+            {
+                continue;
+            }
+            let chip = NocturneKeyRow {
+                key: cell.key.clone(),
+                targets: String::new(),
+                fns: String::new(),
+                cls: "n-akey".to_owned(),
+                slot: String::new(),
+            };
+            if cell.key.starts_with("Numpad") || cell.key == "NumLock" {
+                avail_num.push(chip);
+            } else if NAV_KEYS.contains(&cell.key.as_str()) {
+                avail_nav.push(chip);
+            } else {
+                avail_main.push(chip);
+            }
+        }
+    }
+    let section = |name: &str, rows: &Vec<NocturneKeyRow>| -> (String, String) {
+        if rows.is_empty() {
+            (String::new(), "n-akeysec none".to_owned())
+        } else {
+            (format!("{name} · {}", rows.len()), "n-akeysec".to_owned())
+        }
+    };
+    let (avail_main_head, avail_main_cls) = section("Main block", &avail_main);
+    let (avail_nav_head, avail_nav_cls) = section("Navigation", &avail_nav);
+    let (avail_num_head, avail_num_cls) = section("Numpad", &avail_num);
+    let avail_total = avail_main.len() + avail_nav.len() + avail_num.len();
+    let keys_note = match selected {
+        Some(_) if !key_rows.is_empty() => format!(
+            "{} keys drive this controller · {} more available below.",
+            key_rows.len(),
+            avail_total
+        ),
+        Some(_) => {
+            "No keys bound yet — click an available key, then a control on the pad.".to_owned()
+        }
+        None => String::new(),
+    };
+    KeyPanel {
+        key_rows,
+        keys_note,
+        avail_main,
+        avail_nav,
+        avail_num,
+        avail_main_head,
+        avail_nav_head,
+        avail_num_head,
+        avail_main_cls,
+        avail_nav_cls,
+        avail_num_cls,
+    }
+}
+
 /// A human-scannable order independent of the art tables' drawing order.
 /// The tables remain the source of which controls and persona labels exist;
 /// this rank only normalizes those controls into face, D-pad, shoulders,
@@ -4717,111 +4929,23 @@ impl NocturneDerived {
                 }
             })
             .collect();
-        // The BY-KEY view's rows: the same inversion the board reads,
-        // alphabetical (BTreeMap order), each key with its whole fan-out.
-        let key_rows: Vec<NocturneKeyRow> = key_fns
-            .iter()
-            .map(|(key, fns)| NocturneKeyRow {
-                key: (*key).to_owned(),
-                targets: fns
-                    .iter()
-                    .map(|f| readable(f))
-                    .collect::<Vec<_>>()
-                    .join(" · "),
-                fns: fns
-                    .iter()
-                    .map(|f| f.to_lowercase())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                cls: if fns.len() > 1 {
-                    "n-krow shared".to_owned()
-                } else {
-                    "n-krow".to_owned()
-                },
-                slot: selected_number.map(|n| n.to_string()).unwrap_or_default(),
-            })
-            .collect();
-        // Every key on the standard board NOT yet bound — the REAL roster
-        // (the board table is unit-pinned against `ksx_core::Key`), served
-        // so the By-key view can offer what is still free.
-        // The free keys, in the keyboard's own geography: main block,
-        // navigation cluster, numpad — classified by canonical name.
-        const NAV_KEYS: [&str; 13] = [
-            "Insert",
-            "Delete",
-            "Home",
-            "End",
-            "PageUp",
-            "PageDown",
-            "Up",
-            "Down",
-            "Left",
-            "Right",
-            "PrintScreen",
-            "ScrollLock",
-            "Pause",
-        ];
-        let mut avail_main: Vec<NocturneKeyRow> = Vec::new();
-        let mut avail_nav: Vec<NocturneKeyRow> = Vec::new();
-        let mut avail_num: Vec<NocturneKeyRow> = Vec::new();
-        if selected.is_some() {
-            // **One chip per KEY, not per cell.**
-            //
-            // The old source was `keyboard_layout::ROWS`, whose keys a test
-            // pinned unique, so nothing here had to dedupe. A Board makes
-            // duplicates ordinary and deliberate: a saved encoder layout may
-            // wire two terminals to one key (`allow_shared_key`), and two drawn
-            // controls may send the same key on purpose. Without this the tray
-            // showed "5" twice, the section headings counted cells rather than
-            // keys, and the list's `(r) => r.key` reconcile key had collisions —
-            // which is how a differ hands a recycled node to the wrong row.
-            let mut offered: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-            for cell in &board.cells {
-                if cell.ghost
-                    || cell.key.is_empty()
-                    || key_fns.contains_key(cell.key.as_str())
-                    || !offered.insert(cell.key.as_str())
-                {
-                    continue;
-                }
-                let chip = NocturneKeyRow {
-                    key: cell.key.clone(),
-                    targets: String::new(),
-                    fns: String::new(),
-                    cls: "n-akey".to_owned(),
-                    slot: String::new(),
-                };
-                if cell.key.starts_with("Numpad") || cell.key == "NumLock" {
-                    avail_num.push(chip);
-                } else if NAV_KEYS.contains(&cell.key.as_str()) {
-                    avail_nav.push(chip);
-                } else {
-                    avail_main.push(chip);
-                }
-            }
-        }
-        let section = |name: &str, rows: &Vec<NocturneKeyRow>| -> (String, String) {
-            if rows.is_empty() {
-                (String::new(), "n-akeysec none".to_owned())
-            } else {
-                (format!("{name} · {}", rows.len()), "n-akeysec".to_owned())
-            }
-        };
-        let (avail_main_head, avail_main_cls) = section("Main block", &avail_main);
-        let (avail_nav_head, avail_nav_cls) = section("Navigation", &avail_nav);
-        let (avail_num_head, avail_num_cls) = section("Numpad", &avail_num);
-        let avail_total = avail_main.len() + avail_nav.len() + avail_num.len();
-        let keys_note = match selected {
-            Some(_) if !key_rows.is_empty() => format!(
-                "{} keys drive this controller · {} more available below.",
-                key_rows.len(),
-                avail_total
-            ),
-            Some(_) => {
-                "No keys bound yet — click an available key, then a control on the pad.".to_owned()
-            }
-            None => String::new(),
-        };
+        // The BY-KEY view — rows, free-key sections and the note — comes
+        // from the ONE shared composer (`compose_key_panel`), against THIS
+        // page's resolved board. `/redesign` serves the same struct over the
+        // standard board, so the two Keys tabs cannot disagree about a row.
+        let KeyPanel {
+            key_rows,
+            keys_note,
+            avail_main,
+            avail_nav,
+            avail_num,
+            avail_main_head,
+            avail_nav_head,
+            avail_num_head,
+            avail_main_cls,
+            avail_nav_cls,
+            avail_num_cls,
+        } = compose_key_panel(staged, selected, &board);
         let kb_tray_head = format!("Bound off this board · {}", kb_tray.len());
         let kb_tray_cls = if kb_tray.is_empty() {
             "n-kbtray none".to_owned()

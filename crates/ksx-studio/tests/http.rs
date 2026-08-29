@@ -4852,6 +4852,7 @@ fn the_profiles_write_routes_refuse_a_cross_site_post() {
         ("/redesign/bind/clear-all", "number=1"),
         ("/redesign/bind/turbo", "slot=1&function=a&turbo_hz=10"),
         ("/redesign/bind/toggle", "slot=1&function=a&mode=toggle"),
+        ("/redesign/key/clear", "number=1&key=G"),
     ] {
         let response = http(
             addr,
@@ -5707,8 +5708,51 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
     let response = post_form(addr, "/redesign/controller/undo", "");
     assert!(response.contains("no%20longer%20be%20undone"), "{response}");
 
+    // The Keys tab's ✕: one key away from EVERYTHING it drives. The
+    // restored duplicate still has bindings — pick one of its keys from the
+    // same mapper inversion the By-key rows render, clear it, and the
+    // inversion answers without it.
+    let slot2 = control.staged().slots[1].clone();
+    let mapper = ksx_api::staged_mapper_slot(&slot2, "(none)").expect("mapper");
+    let victim = mapper
+        .bindings
+        .values()
+        .flatten()
+        .next()
+        .cloned()
+        .expect("a bound key to clear");
+    let response = post_form(
+        addr,
+        "/redesign/key/clear",
+        &format!("number={}&key={victim}", slot2.number),
+    );
+    assert!(
+        response.contains("flash=That%20key%20is%20free%20again"),
+        "{response}"
+    );
+    let after = ksx_api::staged_mapper_slot(&control.staged().slots[1], "(none)")
+        .expect("mapper");
+    assert!(
+        after
+            .bindings
+            .values()
+            .flatten()
+            .all(|k| !k.eq_ignore_ascii_case(&victim)),
+        "{victim} still drives something"
+    );
+    // And the second ask is the honest no-op refusal.
+    let response = post_form(
+        addr,
+        "/redesign/key/clear",
+        &format!("number={}&key={victim}", slot2.number),
+    );
+    assert!(
+        response.contains("flash=error%3A%20That%20key%20was%20not%20driving%20anything"),
+        "{response}"
+    );
+
     // The payload's panel is the shared composer's: the selected slot's
-    // groups and pads carry the same truth the verbs just edited.
+    // groups, pads and BY-KEY rows carry the same truth the verbs edited.
     let api: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/redesign?slot=2"))).expect("payload");
     assert_eq!(api["controllers"]["panel"]["slot_val"], "2", "{api}");
@@ -5717,6 +5761,12 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
             .as_array()
             .is_some_and(|pads| pads.len() == 2),
         "{api}"
+    );
+    assert!(
+        api["controllers"]["keys"]["key_rows"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()),
+        "the Keys tab serves the remaining bound keys: {api}"
     );
 }
 

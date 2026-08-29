@@ -22,7 +22,7 @@ pub(super) struct RedesignQuery {
 /// verb's sentences ARE nocturne's constants: one wording, two pages, so the
 /// copy cannot drift between the surfaces (the cutover's "provider text"
 /// lesson, applied in advance).
-const RD_FLASH_ALLOWLIST: [&str; 22] = [
+const RD_FLASH_ALLOWLIST: [&str; 24] = [
     N_THEME_OK,
     N_THEME_UNKNOWN,
     N_DEVICE_OK,
@@ -45,6 +45,8 @@ const RD_FLASH_ALLOWLIST: [&str; 22] = [
     N_TOGGLE_OK,
     N_TOGGLE_OLD_DAEMON,
     N_TOGGLE_UNBOUND_ERROR,
+    N_KEY_CLEAR_OK,
+    N_KEY_CLEAR_NONE,
 ];
 
 pub(super) fn redesign_flash_from_query(flash: Option<&str>) -> Option<String> {
@@ -748,6 +750,27 @@ pub(super) async fn redesign_form_clear_all(
         return redesign_redirect(N_FORM_UNREADABLE);
     };
     let flash = tokio::task::spawn_blocking(move || clear_all_flash(&state, form.number))
+        .await
+        .unwrap_or(N_EDIT_ERROR);
+    redesign_redirect(flash)
+}
+
+#[derive(Deserialize)]
+pub(super) struct RedesignKeyClearForm {
+    number: u8,
+    key: String,
+}
+
+/// POST /redesign/key/clear — take one key away from EVERYTHING it drives
+/// on one slot's draft (the Keys tab's row ✕).
+pub(super) async fn redesign_form_key_clear(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignKeyClearForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let flash = tokio::task::spawn_blocking(move || key_clear_flash(&state, form.number, form.key))
         .await
         .unwrap_or(N_EDIT_ERROR);
     redesign_redirect(flash)

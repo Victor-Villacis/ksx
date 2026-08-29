@@ -78,6 +78,7 @@ function wireForms(root: HTMLElement): void {
           '[data-rd-form="controller-assign"], [data-rd-form="controller-socd"], ' +
           '[data-rd-form="controller-duplicate"], [data-rd-form="controller-undo"], ' +
           '[data-rd-form="bind-clear"], [data-rd-form="bind-clear-all"], ' +
+          '[data-rd-form="key-clear"], ' +
           '[data-rd-form="bind-turbo"], [data-rd-form="bind-toggle"]',
       )
     ) {
@@ -115,6 +116,7 @@ const MUTATION_SUBMIT_SELECTOR = [
   "controller-undo",
   "bind-clear",
   "bind-clear-all",
+  "key-clear",
   "bind-turbo",
   "bind-toggle",
 ]

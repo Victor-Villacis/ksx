@@ -7,8 +7,12 @@ import {
 import { Ds4PremiumPadArt } from "./ds4PremiumPadArt";
 import { DualSensePremiumArt } from "./dualSensePremiumArt";
 import { loadControllerFinishes, loadDs4Variants } from "./padFinishes";
+import { PadPaintServers } from "./padPaintServers";
 import {
   renderControllerPanel,
+  takePendingJumpFns,
+  type InspectorTab,
+  type RdKeyPanelView,
   type RdPanelView,
 } from "./redesign-controller-inspector";
 import {
@@ -129,6 +133,9 @@ export interface RdControllers {
   /** The selected controller's whole panel — the same `ControllerPanel`
    *  /nocturne's right pane serves. */
   panel: RdPanelView;
+  /** The panel's other reading — the Keys tab, the same `KeyPanel`
+   *  /nocturne's By-key view serves. */
+  keys: RdKeyPanelView;
   /** The short server-held undo window after a ✕ removal. */
   undo_cls: string;
   undo_label: string;
@@ -179,6 +186,53 @@ let rdCtrlPads: RdPadView[] = [];
 /** The selected controller's served panel — plain data (the inspector body
  *  is client-painted, renderInspector's own pattern). */
 let rdCtrlPanel: RdPanelView | null = null;
+/** The Keys tab's served rows — plain data for the same reason. */
+let rdCtrlKeys: RdKeyPanelView | null = null;
+/** Which reading the inspector shows (4460's Controls|Keys pair), kept per
+ *  browser like the nocturne UI store. */
+const RD_UI_STORE = "ksx-redesign-ui";
+let inspTab: InspectorTab = "controls";
+try {
+  const saved = JSON.parse(window.localStorage.getItem(RD_UI_STORE) ?? "{}") as {
+    inspTab?: string;
+  };
+  inspTab = saved.inspTab === "keys" ? "keys" : "controls";
+} catch {
+  inspTab = "controls";
+}
+function setInspTab(next: InspectorTab): void {
+  inspTab = next;
+  try {
+    window.localStorage.setItem(RD_UI_STORE, JSON.stringify({ inspTab }));
+  } catch {
+    // A view preference is chrome; blocked storage only makes it temporary.
+  }
+  renderInspector();
+}
+/** A control the next Controls render should open and show — set by a
+ *  click on the pad art's own zone (the 4460 pointer enhancement) or by a
+ *  Keys-row jump. */
+let pendingLocateFns: string | null = null;
+
+/** Open, reveal and pulse the row (or free chip) for one control inside the
+ *  freshly painted panel body. Case-bridged: zones spell functions
+ *  lowercase, the mapper may spell them UPPERCASE. */
+function locateBindRow(body: HTMLElement, fns: string): void {
+  const wanted = fns.split(/\s+/)[0]?.toLowerCase() ?? "";
+  if (!wanted) return;
+  const rows = Array.from(body.querySelectorAll<HTMLElement>("details.n-bind[data-fn]"));
+  const row = rows.find((r) => (r.dataset.fn ?? "").toLowerCase() === wanted);
+  const target =
+    row ??
+    Array.from(body.querySelectorAll<HTMLElement>(".n-ctlstrip [data-fn]")).find(
+      (chip) => (chip.dataset.fn ?? "").toLowerCase() === wanted,
+    );
+  if (!target) return;
+  if (target instanceof HTMLDetailsElement) target.open = true;
+  target.scrollIntoView({ block: "center" });
+  target.classList.add("rd-row-pulse");
+  window.setTimeout(() => target.classList.remove("rd-row-pulse"), 1400);
+}
 // The removal-undo chip: SSR chrome (it must show without the inspector,
 // exactly like nocturne's rack chip), so these two are signals with slots.
 const [rdUndoCls, setRdUndoCls] = createSignal("rd-undochip none");
@@ -247,6 +301,7 @@ export function applyRedesign(v: RedesignPayload): void {
   rdCtrlParkedHeld = c?.parked_held ?? [];
   rdCtrlPads = c?.pads ?? [];
   rdCtrlPanel = c?.panel ?? null;
+  rdCtrlKeys = c?.keys ?? null;
   setRdUndoCls(c?.undo_cls || "rd-undochip none");
   setRdUndoLabel(c?.undo_label ?? "");
   // Reconcile browser-owned membership with the freshly served roster: a
@@ -957,6 +1012,15 @@ function renderInspector(): void {
   const canvas = nCanvas;
   const body = inspectorEl()?.querySelector<HTMLElement>(".rd-insp-body");
   if (!canvas || !body) return;
+  // A repaint must not lose the reader's place: every camera nudge and
+  // item-state change lands here, and a full rebuild would collapse the
+  // row someone just opened (or the one a pad-art click just located).
+  const openFns = new Set(
+    Array.from(body.querySelectorAll<HTMLElement>("details.n-bind[open]")).map(
+      (row) => row.dataset.fn ?? "",
+    ),
+  );
+  const keptScroll = body.scrollTop;
   const selected = canvas.selectedItems();
   const rows: (HTMLElement | null)[] = [];
   if (selected.length === 1) {
@@ -1011,8 +1075,8 @@ function renderInspector(): void {
     const ctrlSlot = /^ctrl-slot-(\d+)$/.exec(item.dataset.instanceId ?? "")?.[1];
     if (ctrlSlot) {
       const moved = mergeSlotIntoUrl(ctrlSlot);
-      if (rdCtrlPanel && rdCtrlPanel.slot_val === ctrlSlot) {
-        rows.push(...renderControllerPanel(rdCtrlPanel));
+      if (rdCtrlPanel && rdCtrlKeys && rdCtrlPanel.slot_val === ctrlSlot) {
+        rows.push(...renderControllerPanel(rdCtrlPanel, rdCtrlKeys, inspTab, setInspTab));
       } else {
         const wait = document.createElement("p");
         wait.className = "rd-insp-kind";
@@ -1057,6 +1121,25 @@ function renderInspector(): void {
     rows.push(title, kind, origin, verbs);
   }
   body.replaceChildren(...rows.filter((row): row is HTMLElement => Boolean(row)));
+  // Restore the reader's place: rows they had open stay open, and the
+  // panel does not jump back to its top on every repaint.
+  for (const row of Array.from(body.querySelectorAll<HTMLElement>("details.n-bind"))) {
+    if (openFns.has(row.dataset.fn ?? "")) (row as HTMLDetailsElement).open = true;
+  }
+  body.scrollTop = keptScroll;
+  // The locate pass: a click on a pad-art zone (the 4460 pointer
+  // enhancement) or a Keys-row jump named a control — open its row in the
+  // freshly painted Controls view. A jump's target wins (it just switched
+  // the tab); an unmatched pending target survives one repaint so the
+  // panel refetch can satisfy it.
+  const jump = takePendingJumpFns();
+  if (jump) pendingLocateFns = jump;
+  if (pendingLocateFns && inspTab === "controls") {
+    if (body.querySelector("details.n-bind")) {
+      locateBindRow(body, pendingLocateFns);
+      pendingLocateFns = null;
+    }
+  }
 }
 
 function setInspector(open: boolean): void {
@@ -1753,6 +1836,25 @@ export function redesignWire(root: HTMLElement): void {
     if (themeMenu && !target?.closest(".rd-themed")) {
       closeThemeMenu();
     }
+    // Pad art → binding row: every control on a card's silhouette carries
+    // its mapper function(s) in data-fn (the 4460 pointer enhancement).
+    // The click already selected the card through the engine; opening the
+    // inspector and locating the row is this page's half.
+    const zone = target?.closest<Element>(".rd-ctrlcard-artwrap [data-fn]");
+    if (zone) {
+      pendingLocateFns = zone.getAttribute("data-fn") ?? "";
+      if (inspTab !== "controls") {
+        inspTab = "controls";
+        try {
+          window.localStorage.setItem(RD_UI_STORE, JSON.stringify({ inspTab }));
+        } catch {
+          // chrome only
+        }
+      }
+      setInspector(true);
+      renderInspector();
+      return;
+    }
     if (!hit) return;
     const closeMenuAfter = Boolean(target?.closest(".rd-menu"));
     if (hit === "canvas-fit") {
@@ -2434,6 +2536,11 @@ export function RedesignIsland() {
         h(
           "section",
           { class: "forma-canvas n-canvas", "data-forma-canvas": "", "data-client-canvas": "" },
+          // The paint servers the silhouettes draw with — document-wide
+          // defs, mounted OUTSIDE the hidden masters (the nocturne hoisting
+          // rule: gradient url() into a display:none subtree is refused by
+          // non-Chromium engines, and the visible clones resolve here).
+          h(PadPaintServers, null),
           // The hidden pad masters the controller cards CLONE — the same
           // five shared drawings /nocturne mounts (one component per
           // family; `.n-padmasters` is display:none, clone templates only).

@@ -2224,84 +2224,90 @@ pub(super) async fn nocturne_form_key_clear(
     let Ok(Form(form)) = form else {
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
-    let flash = tokio::task::spawn_blocking(move || {
-        let staged = state.control.staged();
-        let Some(slot) = staged.slots.iter().find(|s| s.number == form.number) else {
-            return N_EDIT_ERROR;
-        };
-        let key = form.key.trim().to_owned();
-        if key.is_empty() {
-            return N_EDIT_ERROR;
-        }
-        let keyboard = staged
-            .device
-            .as_ref()
-            .map(|device| device.label.as_str())
-            .unwrap_or("(none)");
-        let Ok(mapper) = ksx_api::staged_mapper_slot(slot, keyboard) else {
-            return N_EDIT_ERROR;
-        };
-        let without = |keys: &[String]| -> Vec<String> {
-            keys.iter()
-                .filter(|k| !k.eq_ignore_ascii_case(&key))
-                .cloned()
-                .collect()
-        };
-        let mut driven: Vec<(String, Vec<String>)> = mapper
-            .bindings
-            .iter()
-            .filter(|(_, keys)| keys.iter().any(|k| k.eq_ignore_ascii_case(&key)))
-            .map(|(function, keys)| (function.clone(), without(keys)))
-            .collect();
-        // ⚠️ AND THE MACROS THIS KEY STARTS. A trigger is not in
-        // `MapperSlot.bindings` — that table is built from the preset's CONTROL
-        // entries — so the ✕ answered "nothing to clear" on a key whose own row
-        // says it drives a macro. The board shows triggers now; every per-key
-        // affordance has to act on them.
-        driven.extend(
-            ksx_api::staged_macro_snapshot(slot)
-                .macros
-                .into_iter()
-                .filter(|m| m.triggers.iter().any(|k| k.eq_ignore_ascii_case(&key)))
-                .map(|m| (format!("macro.{}", m.name), without(&m.triggers))),
-        );
-        if driven.is_empty() {
-            return N_KEY_CLEAR_NONE;
-        }
-        for (function, rest) in driven {
-            let keys = if rest.is_empty() {
-                vec!["none".to_owned()]
-            } else {
-                rest
-            };
-            let outcome = state.control.stage_bind(&ksx_api::StagedBindRequest {
-                number: slot.number,
-                expected_device: staged
-                    .device
-                    .as_ref()
-                    .map(|device| device.selector.clone())
-                    .unwrap_or_default(),
-                // This action intentionally performs several serial edits
-                // from one snapshot. Each edit still carries the exact input
-                // selector; the API route below adds the stronger per-target
-                // revision around its slow hardware proof.
-                expected_target_revision: String::new(),
-                preset: slot.preset.clone(),
-                function,
-                keys,
-                force: true,
-                turbo_hz: None,
-                toggle: None,
-            });
-            if !outcome.ok {
-                return N_EDIT_ERROR;
-            }
-        }
-        N_KEY_CLEAR_OK
-    })
-    .await
-    .unwrap_or(N_EDIT_ERROR);
+    let flash = tokio::task::spawn_blocking(move || key_clear_flash(&state, form.number, form.key))
+        .await
+        .unwrap_or(N_EDIT_ERROR);
     nocturne_redirect(flash)
+}
+
+/// Take ONE key away from everything it drives on one slot's draft. The
+/// list of touched functions comes from the same staged mapper inversion
+/// the By-key rows render — never from anything a browser sent. Shared
+/// with `/redesign`'s Keys tab.
+pub(super) fn key_clear_flash(state: &AppState, number: u8, key: String) -> &'static str {
+    let staged = state.control.staged();
+    let Some(slot) = staged.slots.iter().find(|s| s.number == number) else {
+        return N_EDIT_ERROR;
+    };
+    let key = key.trim().to_owned();
+    if key.is_empty() {
+        return N_EDIT_ERROR;
+    }
+    let keyboard = staged
+        .device
+        .as_ref()
+        .map(|device| device.label.as_str())
+        .unwrap_or("(none)");
+    let Ok(mapper) = ksx_api::staged_mapper_slot(slot, keyboard) else {
+        return N_EDIT_ERROR;
+    };
+    let without = |keys: &[String]| -> Vec<String> {
+        keys.iter()
+            .filter(|k| !k.eq_ignore_ascii_case(&key))
+            .cloned()
+            .collect()
+    };
+    let mut driven: Vec<(String, Vec<String>)> = mapper
+        .bindings
+        .iter()
+        .filter(|(_, keys)| keys.iter().any(|k| k.eq_ignore_ascii_case(&key)))
+        .map(|(function, keys)| (function.clone(), without(keys)))
+        .collect();
+    // ⚠️ AND THE MACROS THIS KEY STARTS. A trigger is not in
+    // `MapperSlot.bindings` — that table is built from the preset's CONTROL
+    // entries — so the ✕ answered "nothing to clear" on a key whose own row
+    // says it drives a macro. The board shows triggers now; every per-key
+    // affordance has to act on them.
+    driven.extend(
+        ksx_api::staged_macro_snapshot(slot)
+            .macros
+            .into_iter()
+            .filter(|m| m.triggers.iter().any(|k| k.eq_ignore_ascii_case(&key)))
+            .map(|m| (format!("macro.{}", m.name), without(&m.triggers))),
+    );
+    if driven.is_empty() {
+        return N_KEY_CLEAR_NONE;
+    }
+    for (function, rest) in driven {
+        let keys = if rest.is_empty() {
+            vec!["none".to_owned()]
+        } else {
+            rest
+        };
+        let outcome = state.control.stage_bind(&ksx_api::StagedBindRequest {
+            number: slot.number,
+            expected_device: staged
+                .device
+                .as_ref()
+                .map(|device| device.selector.clone())
+                .unwrap_or_default(),
+            // This action intentionally performs several serial edits
+            // from one snapshot. Each edit still carries the exact input
+            // selector; the API route below adds the stronger per-target
+            // revision around its slow hardware proof.
+            expected_target_revision: String::new(),
+            preset: slot.preset.clone(),
+            function,
+            keys,
+            force: true,
+            turbo_hz: None,
+            toggle: None,
+        });
+        if !outcome.ok {
+            return N_EDIT_ERROR;
+        }
+    }
+    N_KEY_CLEAR_OK
 }
 
 /// POST /nocturne/controller/duplicate (and /workspace/controller/duplicate)

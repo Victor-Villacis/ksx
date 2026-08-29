@@ -524,7 +524,7 @@ function renderKnownProfileSvg(
   svg.append(svgText(
     document_,
     chart
-      ? `${profile.topology.terminals.length} terminal rows · configured emissions read now · wiring still not inferred`
+      ? `${profile.topology.terminals.length} terminal rows · stored assignments read now · wiring still not inferred`
       : `${confidenceLabel(profile)} · ${profile.topology.terminals.length} visible rows · wiring state not inferred`,
     420, 344, "rd-encoder-profile-svg-caption", "middle",
   ));
@@ -541,6 +541,7 @@ interface ProductTerminalInteraction {
 function productTerminalAriaBase(
   terminal: EncoderVisualTerminal,
   configuredEmission: string | null,
+  configuredKeyKnown: boolean,
   sharedKeyCount: number,
 ): string {
   const identity = terminal.identityScope === "logical-control"
@@ -549,10 +550,14 @@ function productTerminalAriaBase(
       ? "Available only on some documented variants."
       : "Physical profile terminal.";
   const emission = configuredEmission
-    ? `Configured to emit ${configuredEmission}.`
-    : "Keys not read yet.";
+    ? `${configuredKeyKnown ? "Configured key" : "Stored output"} ${configuredEmission}.`
+    : "Stored assignment not read yet.";
   const shared = sharedKeyCount > 1 ? ` Shared by ${sharedKeyCount} profile rows.` : "";
   return `${terminal.label}. ${identity} ${emission}${shared} Controller assignment not set.`;
+}
+
+function chartShiftedAssignmentsReachable(chart: EncoderChartSnapshot | null): boolean {
+  return chart?.shift?.state === "enabled";
 }
 
 function productTerminalGroups(profile: EncoderVisualProfile): Array<{
@@ -654,16 +659,22 @@ function renderProductProfileSvg(
   const profile = result.profile;
   const chartByTerminal = encoderChartTerminalMap(chart);
   const configuredKeyCounts = new Map<string, number>();
+  const shiftedAssignmentsReachable = chartShiftedAssignmentsReachable(chart);
   if (chart) {
     for (const terminal of chart.terminals) {
-      const key = terminal.normal.key?.trim();
-      if (key) configuredKeyCounts.set(key, (configuredKeyCounts.get(key) ?? 0) + 1);
+      const keys = new Set([
+        terminal.normal.key?.trim() ?? "",
+        shiftedAssignmentsReachable ? terminal.shifted.key?.trim() ?? "" : "",
+      ].filter(Boolean));
+      for (const key of keys) {
+        configuredKeyCounts.set(key, (configuredKeyCounts.get(key) ?? 0) + 1);
+      }
     }
   }
   const svg = createProfileSvg(
     document_,
     profile,
-    `${profile.manufacturer} ${profile.model}. Select a terminal to inspect the key stored for it.`,
+    `${profile.manufacturer} ${profile.model}. Select a terminal to inspect its stored output.`,
   );
   svg.setAttribute("viewBox", "0 0 1000 520");
   svg.classList.add("rd-encoder-product-svg");
@@ -732,7 +743,7 @@ function renderProductProfileSvg(
   silk.append(
     svgText(document_, "KSX · INTERACTIVE ENCODER", 122, 230, "rd-encoder-product-brand"),
     svgText(document_, profile.manufacturer.toUpperCase(), 122, 253, "rd-encoder-product-maker"),
-    svgText(document_, chart ? "KEYS READ" : "KEYS NOT READ", 878, 230, "rd-encoder-product-read-state", "end"),
+    svgText(document_, chart ? "CHART READ" : "CHART NOT READ", 878, 230, "rd-encoder-product-read-state", "end"),
     svgText(document_, productTopologySilkscreen(profile), 878, 253, "rd-encoder-product-maker", "end"),
   );
   svg.append(silk);
@@ -786,19 +797,25 @@ function renderProductProfileSvg(
     group.terminals.forEach((terminal, index) => {
       const configured = chartByTerminal.get(terminal.id);
       const normalKey = configured?.normal.key?.trim() ?? "";
-      const shiftedKey = configured?.shifted.key?.trim() ?? "";
+      const shiftedKey = shiftedAssignmentsReachable
+        ? configured?.shifted.key?.trim() ?? ""
+        : "";
       const seen = Boolean((normalKey && interaction.observedSignals.has(normalKey)) ||
         (shiftedKey && interaction.observedSignals.has(shiftedKey)));
       const held = Boolean((normalKey && interaction.heldSignals.has(normalKey)) ||
         (shiftedKey && interaction.heldSignals.has(shiftedKey)));
       const selected = interaction.selectedTerminalId === terminal.id;
-      const sharedKeyCount = normalKey ? configuredKeyCounts.get(normalKey) ?? 0 : 0;
+      const sharedKeyCount = Math.max(0, ...[normalKey, shiftedKey]
+        .filter(Boolean)
+        .map((key) => configuredKeyCounts.get(key) ?? 0));
       const column = index % columns;
       const row = Math.floor(index / columns);
       const x = group.x + column * pitch + (pitch - width) / 2;
       const y = firstRowY + row * rowPitch;
       const configuredEmission = configured ? encoderEmissionLabel(configured.normal) : null;
-      const ariaBase = productTerminalAriaBase(terminal, configuredEmission, sharedKeyCount);
+      const ariaBase = productTerminalAriaBase(
+        terminal, configuredEmission, Boolean(configured?.normal.key?.trim()), sharedKeyCount,
+      );
       const terminalNode = svgElement(document_, "g", {
         class: `rd-encoder-product-terminal player-${terminal.player ?? 0}` +
           (terminal.presence === "variant-only" ? " is-variant" : "") +
@@ -813,7 +830,7 @@ function renderProductProfileSvg(
         tabindex: terminal.id === activeTerminalId ? 0 : -1,
         role: "button",
         "aria-pressed": selected ? "true" : "false",
-        "aria-label": `${ariaBase}${held ? " Matching key pressed now." : seen
+        "aria-label": `${ariaBase}${held ? " Matching key held now." : seen
           ? " Matching key seen during this test." : ""}`,
         "data-terminal-id": terminal.id,
         "data-terminal-label": terminal.label,
@@ -866,7 +883,7 @@ function renderProductProfileSvg(
       });
       const title = svgElement(document_, "title");
       title.textContent = `${terminal.label}${configured
-        ? ` · ${encoderEmissionLabel(configured.normal)}` : " · read keys to inspect"}`;
+        ? ` · ${encoderEmissionLabel(configured.normal)}` : " · read stored assignments to inspect"}`;
       terminalNode.append(
         title,
         svgElement(document_, "rect", {
@@ -1299,7 +1316,7 @@ function terminalRoster(
   const summary = html(document_, "summary");
   summary.textContent = presentation === "product"
     ? profile.topology.capacity.kind === "exact"
-      ? `All terminal keys · ${profile.topology.terminals.length}`
+      ? `All terminal assignments · ${profile.topology.terminals.length}`
       : `All profile controls · ${profile.topology.terminals.length}`
     : chart
     ? `Inspect terminal emissions · ${profile.topology.terminals.length}`
@@ -1446,24 +1463,25 @@ function chartReadPanel(
   presentation: "research" | "product" = "research",
   hardwareAvailable = true,
   hardwareUnavailableReason = "",
+  hardwareUnavailableLabel = "Wait for device",
 ): HTMLElement {
   const panel = html(document_, "section", "rd-encoder-profile-read");
   panel.dataset.rdEncoderChart = "";
   panel.dataset.state = state.kind;
   const copy = html(document_, "div", "rd-encoder-profile-read-copy");
   const heading = html(document_, "h3");
-  heading.textContent = presentation === "product" ? "Keys on this encoder" : "Configured emissions";
+  heading.textContent = presentation === "product" ? "Stored assignments on this encoder" : "Configured emissions";
   const description = html(document_, "p");
   const canRead = chartReadIsAdmitted(result, selection);
   description.textContent = !hardwareAvailable && presentation === "product"
     ? hardwareUnavailableReason || "Wait until KSX confirms this device before reading it."
     : canRead
-    ? presentation === "product"
-      ? "Read the keyboard key stored for every terminal. KSX will not change the encoder."
+      ? presentation === "product"
+      ? "KSX reads the stored output for every terminal when you add this encoder. Refresh after changing assignments in WinIPAC or another encoder utility. Nothing is written."
       : "Ask this exact board what each terminal is configured to emit. Read only: this does not map controls, write firmware, or prove a wire."
     : selection.device
       ? presentation === "product"
-        ? "KSX cannot read stored keys from this model yet. You can still test the signals it sends."
+        ? "KSX cannot read stored assignments from this model yet. You can still test the signals it sends."
         : "This exact release has no admitted KSX chart reader. Its sourced topology remains visible, but no stored emissions are guessed."
       : "Connect an exact backend-supported board to read stored emissions. Catalog profiles never authorize a hardware protocol.";
   copy.append(heading, description);
@@ -1475,7 +1493,7 @@ function chartReadPanel(
     button.dataset.rdEncoderRead = "";
     button.disabled = !hardwareAvailable || state.kind === "loading" || observationBlock !== null;
     button.textContent = !hardwareAvailable
-      ? "Wait for device"
+      ? hardwareUnavailableLabel
       : observationBlock !== null
       ? observationBlock === "listening" || observationBlock === "unknown" ||
           observationBlock === "stopping"
@@ -1485,9 +1503,11 @@ function chartReadPanel(
           : "Wait for observation"
       : state.kind === "loading"
       ? "Reading…"
+      : state.kind === "error"
+        ? presentation === "product" ? "Retry stored assignments" : "Read again"
       : state.kind === "loaded"
-        ? presentation === "product" ? "Refresh keys" : "Read again"
-        : presentation === "product" ? "Read keys" : "Read configured emissions";
+        ? presentation === "product" ? "Refresh stored assignments" : "Read again"
+        : presentation === "product" ? "Read stored assignments" : "Read configured emissions";
     button.addEventListener("click", onRead);
     controls.append(button);
   }
@@ -1502,7 +1522,7 @@ function chartReadPanel(
   } else if (state.kind === "loaded") {
     const headline = html(document_, "strong");
     headline.textContent = presentation === "product"
-      ? `${state.snapshot.terminals.length} terminal keys loaded.`
+      ? `${state.snapshot.terminals.length} terminal assignments read from the encoder.`
       : `Read ${state.snapshot.terminals.length} exact terminals from ${state.snapshot.boardName}.`;
     const freshness = html(document_, "p");
     const time = html(document_, "time");
@@ -1534,7 +1554,7 @@ function chartReadPanel(
     }
   } else {
     status.textContent = canRead
-      ? presentation === "product" ? "Keys have not been read yet." :
+      ? presentation === "product" ? "Waiting to read stored assignments from this encoder." :
         "Not read. Opening this lab never talks to encoder configuration hardware."
       : "No configuration read is available for this selection.";
   }
@@ -1987,9 +2007,13 @@ function appendProductPill(
 function productTerminalInspector(
   document_: Document,
   result: EncoderDetectionResult,
-  chart: EncoderChartSnapshot | null,
+  chartState: ChartReadState,
   selectedTerminalId: string | undefined,
   observationState: SignalObservationState,
+  onReadChart: () => void,
+  chartAvailable: boolean,
+  chartUnavailableReason: string,
+  chartUnavailableLabel: string,
 ): HTMLElement {
   const inspector = html(document_, "aside", "rd-encoder-product-inspector");
   inspector.dataset.rdEncoderTerminalInspector = "";
@@ -2005,13 +2029,17 @@ function productTerminalInspector(
     return inspector;
   }
   inspector.dataset.selectedTerminalId = terminal.id;
+  const chart = chartState.kind === "loaded" ? chartState.snapshot : null;
   const chartByTerminal = encoderChartTerminalMap(chart);
   const configured = chartByTerminal.get(terminal.id);
   const view = observationView(observationState);
   const held = new Set(view?.held ?? []);
   const seen = new Set(view?.seen ?? []);
   const normalKey = configured?.normal.key?.trim() ?? "";
-  const shiftedKey = configured?.shifted.key?.trim() ?? "";
+  const shiftedAssignmentsReachable = chartShiftedAssignmentsReachable(chart);
+  const shiftedKey = shiftedAssignmentsReachable
+    ? configured?.shifted.key?.trim() ?? ""
+    : "";
   const isHeld = Boolean((normalKey && held.has(normalKey)) || (shiftedKey && held.has(shiftedKey)));
   const isSeen = Boolean((normalKey && seen.has(normalKey)) || (shiftedKey && seen.has(shiftedKey)));
   inspector.dataset.liveState = isHeld ? "held" : isSeen ? "seen" : "idle";
@@ -2041,13 +2069,46 @@ function productTerminalInspector(
     emissions.append(row);
   };
   if (configured) {
-    appendEmission("Configured key", encoderEmissionLabel(configured.normal),
+    appendEmission(configured.normal.key?.trim() ? "Configured key" : "Stored output",
+      encoderEmissionLabel(configured.normal),
       configured.normal.supported ? "configured" : "unknown");
-    appendEmission("Shifted key", encoderEmissionLabel(configured.shifted),
+    appendEmission(shiftedAssignmentsReachable && configured.shifted.key?.trim()
+      ? "Configured shifted key" : "Stored shifted value",
+    encoderEmissionLabel(configured.shifted),
       configured.shifted.supported ? "shifted" : "unknown");
   } else {
-    appendEmission("Configured key", "Read keys", "unread");
-    appendEmission("Shifted key", "Not loaded", "unread");
+    const row = html(document_, "div");
+    row.dataset.tone = chartState.kind === "error" ? "unknown" : "unread";
+    const term = html(document_, "dt");
+    term.textContent = "Stored assignment";
+    const definition = html(document_, "dd");
+    if (chartState.kind === "loading") {
+      const loading = html(document_, "span", "rd-encoder-product-read-inline is-loading");
+      loading.setAttribute("role", "status");
+      loading.textContent = "Reading from encoder…";
+      definition.append(loading);
+    } else {
+      const read = html(document_, "button", "rd-encoder-product-read-inline");
+      read.type = "button";
+      read.dataset.rdEncoderInspectorRead = "";
+      read.disabled = !chartAvailable;
+      read.textContent = !chartAvailable
+        ? chartUnavailableLabel
+        : chartState.kind === "error" ? "Retry stored-assignment read" : "Read stored assignments";
+      if (!chartAvailable && chartUnavailableReason) {
+        read.title = chartUnavailableReason;
+        read.setAttribute("aria-label", `${chartUnavailableLabel}. ${chartUnavailableReason}`);
+      }
+      read.addEventListener("click", onReadChart);
+      definition.append(read);
+      if (!chartAvailable && chartUnavailableReason) {
+        const reason = html(document_, "span", "rd-encoder-product-read-reason");
+        reason.textContent = chartUnavailableReason;
+        definition.append(reason);
+      }
+    }
+    row.append(term, definition);
+    emissions.append(row);
   }
 
   const live = html(document_, "div", "rd-encoder-product-live");
@@ -2059,15 +2120,22 @@ function productTerminalInspector(
   const liveDot = html(document_, "span");
   liveDot.setAttribute("aria-hidden", "true");
   const liveCopy = html(document_, "span");
-  liveCopy.textContent = isHeld ? "Pressed now" : isSeen ? "Seen in this test" :
-    view ? "Waiting for this key" : "Run a button test for live feedback";
+  liveCopy.textContent = isHeld ? "Matching key held now" : isSeen ? "Matching key seen in this test" :
+    view ? "Waiting for a matching key" : "Run a button test for live feedback";
   live.append(liveDot, liveCopy);
 
-  if (normalKey && chart) {
-    const shared = chart.terminals.filter((row) => row.normal.key?.trim() === normalKey);
+  const selectedKeys = new Set([normalKey, shiftedKey].filter(Boolean));
+  if (selectedKeys.size > 0 && chart) {
+    const shared = chart.terminals.filter((row) => {
+      const rowKeys = [
+        row.normal.key?.trim() ?? "",
+        shiftedAssignmentsReachable ? row.shifted.key?.trim() ?? "" : "",
+      ];
+      return rowKeys.some((key) => key && selectedKeys.has(key));
+    });
     if (shared.length > 1) {
       const warning = html(document_, "p", "rd-encoder-product-shared");
-      warning.textContent = `Shared key · ${shared.length} terminals emit ${encoderEmissionLabel(configured!.normal)}. Give them unique keys in the encoder software before assigning separate controls.`;
+      warning.textContent = `Shared key assignment · ${shared.length} terminals match ${Array.from(selectedKeys).join(" / ")}. Give them unique keys in the encoder software before assigning separate controls.`;
       inspector.append(eyebrow, headingRow, emissions, live, warning);
     } else inspector.append(eyebrow, headingRow, emissions, live);
   } else inspector.append(eyebrow, headingRow, emissions, live);
@@ -2103,6 +2171,12 @@ function productUnknownInspector(
   return inspector;
 }
 
+function productDeviceMeta(device: EncoderProfileLabDevice | undefined, chartLoaded: boolean): string {
+  const meta = device?.meta?.trim() ?? "";
+  if (!meta || !chartLoaded) return meta;
+  return meta.split(/\s*·\s*/).filter((part) => !/^chart\b/i.test(part.trim())).join(" · ");
+}
+
 function productDeviceDetails(
   document_: Document,
   result: EncoderDetectionResult,
@@ -2125,9 +2199,10 @@ function productDeviceDetails(
     row.append(term, definition);
     facts.append(row);
   };
+  const connectionLine = productDeviceMeta(selection.device, chart !== null);
   append("Device", selection.device?.name ?? result.profile.model);
   append("Connection", connectionConfirmed
-    ? selection.device?.meta?.trim() || "Connected USB device"
+    ? connectionLine || "Connected USB device"
     : "Unconfirmed — latest device scan did not answer");
   append("Detected model", result.profile.id === "unknown-hid"
     ? result.identity.familyLabel ?? "Not recognized"
@@ -2135,7 +2210,7 @@ function productDeviceDetails(
   append("Inputs", result.profile.topology.capacity.kind === "unknown"
     ? "Not known"
     : `${topologyValue(result.profile)} ${topologyUnit(result.profile)}`);
-  append("Keys", chart ? `${chart.terminals.length} loaded this session` :
+  append("Assignments", chart ? `${chart.terminals.length} read from the encoder this session` :
     result.protocol.chartRead === "supported" ? "Ready to read" : "Direct read unavailable");
   body.append(facts);
 
@@ -2222,6 +2297,42 @@ function productDynamicContent(
     ? result.profile.topology.terminals.find((terminal) => terminal.id === selectedTerminalId)?.id ??
       result.profile.topology.terminals[0]?.id
     : undefined;
+  const observationBusy = observationState.kind === "reconciling" ||
+    observationState.kind === "starting" || observationState.kind === "listening" ||
+    observationState.kind === "stopping" || observationState.kind === "unknown" ||
+    observationState.kind === "foreign-live";
+  const chartHardwareAvailable = connectionConfirmed && chartHardwareBlock === null;
+  const inspectorChartAvailable = chartHardwareAvailable && !observationBusy &&
+    chartState.kind !== "loading";
+  const observationAvailable = connectionConfirmed && observationHardwareBlock === null;
+  const hardwareBlockCopy = (lease: EncoderHardwareActionLease | null): string => {
+    if (!connectionConfirmed) {
+      return "The latest device scan did not answer. Existing results stay visible, but a new hardware action waits for a confirmed scan.";
+    }
+    if (!lease) return "";
+    if (lease.owner === hardwareActionOwner) {
+      return lease.kind === "chart"
+        ? "The previous stored-assignment read is still settling. Wait for it before starting another hardware action."
+        : "The previous button-test request is still settling. Wait for its exact cleanup before starting another hardware action.";
+    }
+    return lease.kind === "chart"
+      ? "Another encoder is reading its stored assignments. Finish that read before starting this action."
+      : "A button test is active for another encoder. Finish it before starting this action.";
+  };
+  const chartUnavailableReason = observationBusy
+    ? "Finish the active button test before reading stored assignments."
+    : hardwareBlockCopy(chartHardwareBlock);
+  const chartUnavailableLabel = !connectionConfirmed
+    ? "Wait for device"
+    : observationBusy
+      ? "Stop button test first"
+      : chartHardwareBlock?.kind === "chart"
+        ? chartHardwareBlock.owner === hardwareActionOwner
+          ? "Wait for prior read"
+          : "Another encoder is reading"
+        : chartHardwareBlock?.kind === "observation"
+          ? "Wait for button test"
+          : "Wait to read";
 
   const status = html(document_, "div", "rd-encoder-product-status");
   appendProductPill(
@@ -2236,9 +2347,11 @@ function productDynamicContent(
     ? productTopologyLabel(result.profile)
     : "Capacity unknown", known ? "ready" : "attention");
   appendProductPill(document_, status, chart
-    ? "Keys loaded"
-    : result.protocol.chartRead === "supported" ? "Keys ready to read" : "Test emitted keys",
-  chart ? "recognized" : "ready");
+    ? "Stored assignments loaded"
+    : chartState.kind === "loading" ? "Reading stored assignments"
+    : chartState.kind === "error" ? "Stored-assignment read needs attention"
+    : result.protocol.chartRead === "supported" ? "Stored assignments ready" : "Test emitted keys",
+  chart ? "recognized" : chartState.kind === "error" ? "attention" : "ready");
   region.append(status);
 
   const candidate = candidateConfirmation(document_, result, onConfirm);
@@ -2258,44 +2371,27 @@ function productDynamicContent(
   caption.textContent = known
     ? result.profile.topology.capacity.kind === "exact"
       ? chart
-        ? "Select a terminal to inspect its configured keyboard output. Lit terminals match keys seen in the current button test."
-        : "Select any terminal now, then read the board to show the keyboard key configured for every input."
+        ? "Select a terminal to inspect its stored output. Lit terminals match reachable keys seen in the current button test."
+        : "Select any terminal now, then read the board to show the stored assignment for every input."
       : "This profile shows documented logical or variant controls, not a claimed physical terminal count. Select one to inspect what KSX actually knows."
     : "The generic board grows only from labels you provide and signals heard from this exact device.";
   figure.append(caption);
   work.append(
     figure,
     known
-      ? productTerminalInspector(document_, result, chart, selected, observationState)
+      ? productTerminalInspector(
+        document_, result, chartState, selected, observationState, onReadChart,
+        inspectorChartAvailable, chartUnavailableReason, chartUnavailableLabel,
+      )
       : productUnknownInspector(document_, signals, observationsAreLive),
   );
   region.append(work);
 
-  const observationBusy = observationState.kind === "reconciling" ||
-    observationState.kind === "starting" || observationState.kind === "listening" ||
-    observationState.kind === "stopping" || observationState.kind === "unknown" ||
-    observationState.kind === "foreign-live";
   const actions = html(document_, "div", "rd-encoder-product-actions");
-  const chartAvailable = connectionConfirmed && chartHardwareBlock === null;
-  const observationAvailable = connectionConfirmed && observationHardwareBlock === null;
-  const hardwareBlockCopy = (lease: EncoderHardwareActionLease | null): string => {
-    if (!connectionConfirmed) {
-      return "The latest device scan did not answer. Existing results stay visible, but a new hardware action waits for a confirmed scan.";
-    }
-    if (!lease) return "";
-    if (lease.owner === hardwareActionOwner) {
-      return lease.kind === "chart"
-        ? "The previous stored-key read is still settling. Wait for it before starting another hardware action."
-        : "The previous button-test request is still settling. Wait for its exact cleanup before starting another hardware action.";
-    }
-    return lease.kind === "chart"
-      ? "Another encoder is reading its stored keys. Finish that read before starting this action."
-      : "A button test is active for another encoder. Finish it before starting this action.";
-  };
   actions.append(
     chartReadPanel(document_, result, selection, chartState,
       observationBusy ? observationState.kind : null, onReadChart, "product",
-      chartAvailable, hardwareBlockCopy(chartHardwareBlock)),
+      chartHardwareAvailable, hardwareBlockCopy(chartHardwareBlock), chartUnavailableLabel),
     signalObservationPanel(document_, selection, observationState, chartState.kind === "loading",
       onStartObservation, onStopObservation, onEscapeObservationCapture, "product",
       observationAvailable, hardwareBlockCopy(observationHardwareBlock)),
@@ -2388,6 +2484,9 @@ function createProfileLabContent(
   let pageHiding = false;
   let announcementFrame = 0;
   let connectionConfirmed = true;
+  let automaticChartReadPending = presentation === "product";
+  let automaticChartReadActive = false;
+  let automaticChartReadFrame = 0;
   const hardwareActionOwner = Symbol("encoder-workbench-surface");
   const hardwareActionHolds: Record<EncoderHardwareActionKind, Set<symbol>> = {
     chart: new Set<symbol>(),
@@ -2476,6 +2575,7 @@ function createProfileLabContent(
   const dynamicHost = html(document_, "div", "rd-encoder-profile-host");
   const liveStatus = html(document_, "span", "n-live-sr");
   liveStatus.dataset.rdEncoderStatus = "";
+  liveStatus.tabIndex = -1;
   liveStatus.setAttribute("role", "status");
   liveStatus.setAttribute("aria-live", "polite");
   liveStatus.setAttribute("aria-atomic", "true");
@@ -2493,6 +2593,8 @@ function createProfileLabContent(
     });
   };
   const paintHeader = (result: EncoderDetectionResult): void => {
+    const chartLoaded = chartState.kind === "loaded";
+    const deviceMeta = productDeviceMeta(current.device, chartLoaded);
     title.textContent = presentation === "product"
       ? current.device?.name ?? (result.profile.id === "unknown-hid"
         ? result.identity.familyLabel ?? result.profile.model
@@ -2502,8 +2604,8 @@ function createProfileLabContent(
         : `${result.profile.manufacturer} ${result.profile.model}`;
     subtitle.textContent = presentation === "product"
       ? result.profile.id === "unknown-hid"
-        ? `${current.device?.meta?.trim() || "USB input device"} · build a truthful control surface from this device’s signals`
-        : `${result.profile.manufacturer} ${result.profile.model} · ${productTopologyLabel(result.profile)}${current.device?.meta?.trim() ? ` · ${current.device.meta.trim()}` : ""}`
+        ? `${deviceMeta || "USB input device"} · build a truthful control surface from this device’s signals`
+        : `${result.profile.manufacturer} ${result.profile.model} · ${productTopologyLabel(result.profile)}${deviceMeta ? ` · ${deviceMeta}` : ""}`
       : result.resolution === "ambiguous-family" ||
           result.resolution === "known-family" || result.resolution === "identity-conflict"
         ? result.warnings[0] ?? result.profile.summary
@@ -2540,6 +2642,7 @@ function createProfileLabContent(
     confirmedCandidate = profileId;
     selectedTerminalId = undefined;
     repaint();
+    scheduleAutomaticChartRead();
     document_.defaultView?.requestAnimationFrame(() => {
       if (presentation === "product") {
         dynamicHost.querySelector<SVGGElement>('[data-terminal-id][tabindex="0"]')
@@ -2636,7 +2739,7 @@ function createProfileLabContent(
       ));
     announce(presentation === "product"
       ? `${result.profile.id === "unknown-hid" ? "Generic encoder setup" : "Recognized encoder"}. ${
-        chartState.kind === "loaded" ? `${chartState.snapshot.terminals.length} keys loaded.` :
+        chartState.kind === "loaded" ? `${chartState.snapshot.terminals.length} assignments loaded.` :
           "No hardware was changed."
       }`
       : `${resolutionLabel(result)}. ${result.warnings[0] ?? result.profile.topology.confidenceDetail}`);
@@ -2662,7 +2765,7 @@ function createProfileLabContent(
       terminal.classList.toggle("is-held", isHeld);
       const ariaBase = terminal.dataset.terminalAriaBase ?? terminal.dataset.terminalLabel ?? "Terminal";
       const nextAriaLabel = `${ariaBase}${isHeld
-        ? " Matching key pressed now."
+        ? " Matching key held now."
         : isSeen ? " Matching key seen during this test." : ""}`;
       if (terminal.getAttribute("aria-label") !== nextAriaLabel) {
         terminal.setAttribute("aria-label", nextAriaLabel);
@@ -2682,8 +2785,8 @@ function createProfileLabContent(
     if (inspector && inspector.dataset.liveState !== nextState) inspector.dataset.liveState = nextState;
     if (live.dataset.state !== nextState) live.dataset.state = nextState;
     const copy = live.lastElementChild;
-    const nextCopy = isHeld ? "Pressed now" : isSeen ? "Seen in this test" :
-      view ? "Waiting for this key" : "Run a button test for live feedback";
+    const nextCopy = isHeld ? "Matching key held now" : isSeen ? "Matching key seen in this test" :
+      view ? "Waiting for a matching key" : "Run a button test for live feedback";
     if (copy && copy.textContent !== nextCopy) copy.textContent = nextCopy;
   };
   const patchObservationSurface = (): void => {
@@ -3115,9 +3218,12 @@ function createProfileLabContent(
       releaseHardwareActionHold("observation", stopHold);
     }
   };
-  const readCurrentChart = async (): Promise<void> => {
+  const readCurrentChart = async (restoreFocus = true): Promise<void> => {
     const result = selectedDetection(current, confirmedCandidate);
     const selector = current.device?.selector;
+    const restoreTerminalFocus = presentation === "product" &&
+      document_.activeElement instanceof Element &&
+      Boolean(document_.activeElement.closest("[data-rd-encoder-terminal-inspector]"));
     const observationBusy = observationState.kind === "reconciling" ||
       observationState.kind === "starting" || observationState.kind === "listening" ||
       observationState.kind === "stopping" || observationState.kind === "unknown" ||
@@ -3126,12 +3232,12 @@ function createProfileLabContent(
         chartState.kind === "loading" ||
         observationBusy) return;
     if (hardwareActionHolds.chart.size > 0) {
-      announce("The previous stored-key read is still settling. Wait before reading again.");
+      announce("The previous stored-assignment read is still settling. Wait before reading again.");
       repaint();
       return;
     }
     if (encoderHardwareActionBlockedFor(hardwareActionOwner, "chart")) {
-      announce("Another encoder hardware action is still active. Finish it before reading these keys.");
+      announce("Another encoder hardware action is still active. Finish it before reading these stored assignments.");
       repaint();
       return;
     }
@@ -3144,8 +3250,10 @@ function createProfileLabContent(
       repaint();
       return;
     }
+    automaticChartReadPending = false;
+    if (restoreFocus) liveStatus.focus({ preventScroll: true });
     repaint();
-    announce(`Reading configured emissions from ${current.device?.name ?? "the selected encoder"}.`);
+    announce(`Reading stored assignments from ${current.device?.name ?? "the selected encoder"}.`);
     try {
       // The observer lease is daemon-global and may have been started by a
       // different tab/process, so a local coordinator alone is insufficient.
@@ -3159,7 +3267,7 @@ function createProfileLabContent(
         chartState = {
           kind: "error",
           message: observation.generation !== null
-            ? "A button test is active. Finish it before reading stored encoder keys."
+            ? "A button test is active. Finish it before reading stored encoder assignments."
             : observation.error || observation.detail ||
               "KSX could not confirm that the button-test lease is idle.",
         };
@@ -3191,11 +3299,46 @@ function createProfileLabContent(
     if (epoch !== chartRequestEpoch || current.value !== requestedSelection) return;
     repaint();
     announce(chartState.kind === "loaded"
-      ? `Read ${chartState.snapshot.terminals.length} configured terminal emissions. No hardware was changed.`
+      ? `Read ${chartState.snapshot.terminals.length} stored terminal assignments. No hardware was changed.`
       : chartState.kind === "error" ? chartState.message : "");
-    document_.defaultView?.requestAnimationFrame(() => {
-      dynamicHost.querySelector<HTMLButtonElement>("[data-rd-encoder-read]")
-        ?.focus({ preventScroll: true });
+    if (restoreFocus) {
+      if (restoreTerminalFocus) {
+        if (chartState.kind === "error") {
+          document_.defaultView?.requestAnimationFrame(() => {
+            dynamicHost.querySelector<HTMLButtonElement>("[data-rd-encoder-inspector-read]")
+              ?.focus({ preventScroll: true });
+          });
+        } else focusProductTerminalOrWidget();
+      }
+      else {
+        document_.defaultView?.requestAnimationFrame(() => {
+          dynamicHost.querySelector<HTMLButtonElement>("[data-rd-encoder-read]")
+            ?.focus({ preventScroll: true });
+        });
+      }
+    }
+  };
+  const scheduleAutomaticChartRead = (): void => {
+    if (presentation !== "product" || !automaticChartReadPending || automaticChartReadFrame ||
+        pageHiding || chartState.kind !== "idle") return;
+    const view = document_.defaultView;
+    if (!view) return;
+    automaticChartReadFrame = view.requestAnimationFrame(() => {
+      automaticChartReadFrame = 0;
+      if (!automaticChartReadPending || pageHiding || !content.isConnected ||
+          !connectionConfirmed || chartState.kind !== "idle") return;
+      const result = selectedDetection(current, confirmedCandidate);
+      const observationBusy = observationState.kind === "reconciling" ||
+        observationState.kind === "starting" || observationState.kind === "listening" ||
+        observationState.kind === "stopping" || observationState.kind === "unknown" ||
+        observationState.kind === "foreign-live";
+      if (!chartReadIsAdmitted(result, current) || observationBusy ||
+          hardwareActionHolds.chart.size > 0 ||
+          encoderHardwareActionBlockedFor(hardwareActionOwner, "chart")) return;
+      automaticChartReadActive = true;
+      void readCurrentChart(false).finally(() => {
+        automaticChartReadActive = false;
+      });
     });
   };
   select.addEventListener("change", () => {
@@ -3205,35 +3348,49 @@ function createProfileLabContent(
     current = next;
     chartRequestEpoch += 1;
     chartState = { kind: "idle" };
+    automaticChartReadPending = presentation === "product";
     confirmedCandidate = undefined;
     declaredLabels = [];
     selectedTerminalId = undefined;
     if (current.profileId) options.onProfileChange?.(current.profileId);
     repaint();
+    scheduleAutomaticChartRead();
   });
   const footer = html(document_, "footer", "rd-encoder-profile-foot");
   footer.textContent = presentation === "product"
-    ? "This block reads and tests the encoder. Assigning its keys to a virtual controller is the next canvas block."
+    ? "This block reads and tests the encoder. Mapping its emitted keys to a virtual controller is the next canvas block."
     : "Read-only inspection. KSX control assignment comes later; this surface stops at terminal identity, stored configuration, and device-scoped host signals.";
   if (presentation === "product") content.append(header, dynamicHost, footer, liveStatus);
   else content.append(header, toolbar, dynamicHost, footer, liveStatus);
   let disposed = false;
   const unsubscribeHardwareActions = subscribeEncoderHardwareActions(() => {
-    if (!disposed && !pageHiding) repaint();
+    if (!disposed && !pageHiding) {
+      repaint();
+      scheduleAutomaticChartRead();
+    }
   });
   const onPageHide = (): void => {
     pageHiding = true;
+    if (automaticChartReadFrame) {
+      document_.defaultView?.cancelAnimationFrame(automaticChartReadFrame);
+      automaticChartReadFrame = 0;
+    }
     chartRequestEpoch += 1;
-    if (chartState.kind === "loading") chartState = { kind: "idle" };
+    if (chartState.kind === "loading") {
+      chartState = { kind: "idle" };
+      if (automaticChartReadActive && presentation === "product") automaticChartReadPending = true;
+    }
     releaseObservation(true);
   };
   const onPageShow = (): void => {
     pageHiding = false;
     repaint();
+    scheduleAutomaticChartRead();
   };
   document_.defaultView?.addEventListener("pagehide", onPageHide);
   document_.defaultView?.addEventListener("pageshow", onPageShow);
   repaint();
+  scheduleAutomaticChartRead();
   return {
     content,
     updateConnectedEncoders: (devices) => {
@@ -3253,6 +3410,7 @@ function createProfileLabContent(
         releaseObservation();
         chartRequestEpoch += 1;
         chartState = { kind: "idle" };
+        automaticChartReadPending = presentation === "product";
         confirmedCandidate = undefined;
         declaredLabels = [];
         selectedTerminalId = undefined;
@@ -3268,17 +3426,20 @@ function createProfileLabContent(
           );
           if (deviceFact) deviceFact.textContent = current.device?.name ?? "Connected encoder";
           if (connectionFact) {
+            const connectionLine = productDeviceMeta(current.device, chartState.kind === "loaded");
             connectionFact.textContent = connectionConfirmed
-              ? current.device?.meta?.trim() || "Connected USB device"
+              ? connectionLine || "Connected USB device"
               : "Unconfirmed — latest device scan did not answer";
           }
         }
       }
+      scheduleAutomaticChartRead();
     },
     setConnectionConfirmed: (confirmed) => {
       if (presentation !== "product" || confirmed === connectionConfirmed) return;
       connectionConfirmed = confirmed;
       repaint();
+      scheduleAutomaticChartRead();
       announce(confirmed
         ? "Device connection confirmed. Read and button-test actions are available."
         : "Device connection is unconfirmed. Existing results remain visible; new hardware actions are paused.");
@@ -3292,6 +3453,8 @@ function createProfileLabContent(
       // Ordinary widget removal keeps the page alive, so use a normal request.
       // `pagehide` above owns the only lifecycle that needs keepalive delivery.
       releaseObservation();
+      if (automaticChartReadFrame) document_.defaultView?.cancelAnimationFrame(automaticChartReadFrame);
+      automaticChartReadFrame = 0;
       if (announcementFrame) document_.defaultView?.cancelAnimationFrame(announcementFrame);
       announcementFrame = 0;
     },

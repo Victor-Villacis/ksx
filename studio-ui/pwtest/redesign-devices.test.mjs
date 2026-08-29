@@ -398,10 +398,10 @@ describe("the device workbench", () => {
       generation: state === "idle" ? null : observationGeneration,
       selector: state === "idle" ? null : IPAC,
       remaining_ms: state === "listening" ? 29_000 : null,
-      held: state === "listening" ? ["ArrowDown"] : [],
-      seen: state === "idle" ? [] : ["ArrowDown"],
+      held: state === "listening" ? ["K"] : [],
+      seen: state === "idle" ? [] : ["K", "H", "E"],
       peak: state === "idle" ? 0 : 1,
-      events: state === "idle" ? 0 : 2,
+      events: state === "idle" ? 0 : 6,
       dropped: 0,
       rollover_visibility: "unavailable",
       detail: state === "idle" ? "No observation is active." : "Exact product-device test.",
@@ -421,6 +421,23 @@ describe("the device workbench", () => {
           json: observationView(observationActive ? "listening" : "idle"),
         });
       }
+    });
+    await page.route("**/api/panel/chart", async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      for (const [terminalId, key, code] of [
+        ["1sw1", "E", 0x08],
+        ["1sw4", "H", 0x0B],
+        ["1sw7", "K", 0x0E],
+      ]) {
+        const terminal = payload.terminals.find((row) => row.terminal_id === terminalId);
+        assert.ok(terminal, `fixture chart contains ${terminalId}`);
+        terminal.normal = { code, key, label: key, supported: true };
+      }
+      const unreachableShift = payload.terminals.find((row) => row.terminal_id === "1sw2");
+      assert.ok(unreachableShift);
+      unreachableShift.shifted = { code: 0x0E, key: "K", label: "K", supported: true };
+      await route.fulfill({ response, json: payload });
     });
     try {
       await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
@@ -456,6 +473,36 @@ describe("the device workbench", () => {
       assert.match(await node.textContent(), /recognized/i);
       assert.match(await node.textContent(), /56 inputs/i);
       assert.equal(await node.locator("[data-terminal-id]").count(), 56);
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-chart][data-state="loaded"]`,
+        ),
+        IPAC_SLUG,
+      );
+      assert.equal(
+        hardwareCalls.filter((call) => /\/api\/panel\/chart/.test(call.url)).length,
+        1,
+        "adding the recognized encoder automatically reads its stored chart once",
+      );
+      assert.equal(await node.locator("[data-terminal-id][data-configured-emission]").count(), 56);
+      assert.equal(await node.locator('[data-terminal-id="1sw1"][data-configured-key="E"]').count(), 1);
+      assert.equal(await node.locator('[data-terminal-id="1sw4"][data-configured-key="H"]').count(), 1);
+      assert.equal(await node.locator('[data-terminal-id="1sw7"][data-configured-key="K"]').count(), 1);
+      assert.equal(
+        await node.locator('[data-terminal-id="1sw2"][data-configured-shift-key=""]').count(),
+        1,
+        "a shifted value is not treated as reachable when the chart reports no enabled Shift",
+      );
+      assert.doesNotMatch(await node.textContent(), /chart not read yet/i);
+      assert.doesNotMatch(
+        await page.locator("main").textContent(),
+        /chart not read yet/i,
+        "the hidden picker does not retain stale pre-read copy after hydration",
+      );
+      assert.doesNotMatch(
+        await node.locator('[data-rd-encoder-terminal-inspector]').textContent(),
+        /configured key\s*read keys/i,
+      );
       assert.equal(
         await node.locator('[data-terminal-id][tabindex="0"]').count(),
         1,
@@ -518,8 +565,6 @@ describe("the device workbench", () => {
         { count: 56, undersized: [], wrongCenters: [], overlaps: [] },
         "all rendered terminal targets are at least 44 CSS px, disjoint, and own their centre hit",
       );
-      assert.equal(hardwareCalls.length, 0, "adding the device performs no implicit hardware action");
-
       const firstTerminal = node.locator('[data-terminal-id="1up"]');
       await firstTerminal.focus();
       await firstTerminal.press("ArrowRight");
@@ -542,21 +587,6 @@ describe("the device workbench", () => {
         () => document.activeElement?.getAttribute("data-terminal-id") === "1down",
       );
 
-      const read = node.getByRole("button", { name: "Read keys" });
-      await read.click();
-      await page.waitForFunction(
-        (id) => document.querySelector(
-          `[data-instance-id="${id}"] [data-rd-encoder-chart][data-state="loaded"]`,
-        ),
-        IPAC_SLUG,
-      );
-      assert.equal(hardwareCalls.filter((call) => /\/api\/panel\/chart/.test(call.url)).length, 1);
-      assert.equal(await node.locator("[data-terminal-id][data-configured-emission]").count(), 56);
-      assert.doesNotMatch(
-        await node.locator('[data-rd-encoder-terminal-inspector]').textContent(),
-        /configured key\s*read keys/i,
-      );
-
       const start = node.getByRole("button", { name: "Start button test" });
       await start.click();
       await page.waitForFunction(
@@ -573,6 +603,14 @@ describe("the device workbench", () => {
         IPAC_SLUG,
       );
       assert.equal(await start.isDisabled(), true, "the active test keeps Start disabled");
+      assert.equal(await node.locator('[data-terminal-id="1sw7"].is-held').count(), 1);
+      assert.equal(await node.locator('[data-terminal-id="1sw4"].is-seen').count(), 1);
+      assert.equal(await node.locator('[data-terminal-id="1sw1"].is-seen').count(), 1);
+      assert.equal(
+        await node.locator('[data-terminal-id="1sw2"].is-held, [data-terminal-id="1sw2"].is-seen').count(),
+        0,
+        "an unreachable shifted K never borrows the live state of the real K terminal",
+      );
       await sink.press("Escape");
       await page.waitForFunction(
         ({ id, terminalId }) => {
@@ -612,6 +650,137 @@ describe("the device workbench", () => {
       assert.deepEqual(noise, [], "the product encoder stays error-free");
     } finally {
       await productContext.close();
+    }
+  });
+
+  test("a failed stored-assignment read keeps live K/H/E unassigned and offers a real retry", async () => {
+    const failureContext = await browser.newContext({
+      viewport: { width: 1600, height: 1000 },
+      colorScheme: "dark",
+    });
+    const page = await failureContext.newPage();
+    const noise = [];
+    let chartReads = 0;
+    let observationActive = false;
+    let releaseRetryChart;
+    let reportRetryChart;
+    const retryChartGate = new Promise((resolve) => { releaseRetryChart = resolve; });
+    const retryChartSeen = new Promise((resolve) => { reportRetryChart = resolve; });
+    page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
+    page.on("console", (message) => {
+      if (message.type() === "error") noise.push(`console: ${message.text()}`);
+    });
+    await page.route("**/api/panel/chart", async (route) => {
+      chartReads += 1;
+      if (chartReads === 2) {
+        reportRetryChart(route.request().postDataJSON());
+        await retryChartGate;
+      }
+      await route.fulfill({
+        status: 200,
+        json: {
+          ok: false,
+          error: "The encoder did not return a stable chart.",
+          remedy: "Reconnect it and retry the stored-assignment read.",
+        },
+      });
+    });
+    const observationView = (state) => ({
+      ok: true,
+      state,
+      generation: state === "idle" ? null : 551,
+      selector: state === "idle" ? null : IPAC,
+      remaining_ms: state === "listening" ? 29_000 : null,
+      held: state === "listening" ? ["K"] : [],
+      seen: state === "idle" ? [] : ["K", "H", "E"],
+      peak: state === "idle" ? 0 : 1,
+      events: state === "idle" ? 0 : 6,
+      dropped: 0,
+      rollover_visibility: "unavailable",
+      detail: state === "idle" ? "No observation is active." : "Exact device signals only.",
+      error: null,
+    });
+    await page.route("**/api/input-test**", async (route) => {
+      const pathName = new URL(route.request().url()).pathname;
+      if (pathName === "/api/input-test/start") observationActive = true;
+      if (pathName === "/api/input-test/cancel") observationActive = false;
+      await route.fulfill({
+        status: 200,
+        json: observationView(observationActive ? "listening" :
+          pathName === "/api/input-test/cancel" ? "cancelled" : "idle"),
+      });
+    });
+
+    try {
+      await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await page.click('[data-nx="rd-devs-open"]');
+      await page.click(`.rd-devmodal button[data-selector="${IPAC}"]`);
+      await page.keyboard.press("Escape");
+      const node = page.locator(`.rd-encoder-device-node[data-instance-id="${IPAC_SLUG}"]`);
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-chart][data-state="error"]`,
+        ),
+        IPAC_SLUG,
+      );
+      assert.equal(chartReads, 1, "adding the encoder makes one automatic, read-only chart attempt");
+      const retry = node.getByRole("button", { name: "Retry stored-assignment read" });
+      assert.equal(await retry.count(), 1, "the inspector exposes a genuine retry button");
+      assert.equal(await retry.evaluate((element) => element.tagName), "BUTTON");
+      assert.equal(await retry.isEnabled(), true);
+      assert.equal(await node.locator("[data-configured-emission]").count(), 0);
+      assert.equal(await node.locator("[data-configured-key]").count(), 0);
+
+      await retry.focus();
+      await retry.click();
+      assert.deepEqual(await retryChartSeen, { selector: IPAC });
+      assert.equal(
+        await node.locator("[data-rd-encoder-status]").evaluate((element) =>
+          document.activeElement === element),
+        true,
+        "the durable status target owns focus while the inspector is repainted",
+      );
+      releaseRetryChart();
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-chart][data-state="error"]`,
+        ),
+        IPAC_SLUG,
+      );
+      await page.waitForFunction(
+        (id) => document.activeElement === document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-inspector-read]`,
+        ),
+        IPAC_SLUG,
+      );
+      assert.equal(chartReads, 2, "Retry performs exactly one new read and restores its focus target");
+
+      await node.getByRole("button", { name: "Start button test" }).click();
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-observation][data-state="listening"]`,
+        ),
+        IPAC_SLUG,
+      );
+      assert.deepEqual(
+        await node.locator("[data-rd-encoder-observed-seen] code").allTextContents(),
+        ["K", "H", "E"],
+        "live signals remain visible even when terminal association is unavailable",
+      );
+      assert.equal(
+        await node.locator("[data-terminal-id].is-held, [data-terminal-id].is-seen").count(),
+        0,
+        "Button Test never invents terminal ownership without a valid stored-key chart",
+      );
+      assert.deepEqual(noise, []);
+    } finally {
+      releaseRetryChart?.();
+      await failureContext.close();
     }
   });
 
@@ -671,7 +840,7 @@ describe("the device workbench", () => {
       assert.equal(await node.locator("[data-terminal-id]").count(), 0);
       assert.match(await node.textContent(), /generic setup/i);
       assert.match(await node.textContent(), /capacity unknown/i);
-      assert.equal(await node.getByRole("button", { name: "Read keys" }).count(), 0);
+      assert.equal(await node.getByRole("button", { name: "Read stored assignments" }).count(), 0);
       assert.equal(await node.getByRole("button", { name: "Start button test" }).count(), 1);
       const labels = node.locator("[data-rd-encoder-manual-labels]");
       await labels.fill("P1 UP, P1 FIRE, COIN");
@@ -702,10 +871,12 @@ describe("the device workbench", () => {
     });
     let releaseChart;
     let reportChart;
+    const chartBodies = [];
     const chartGate = new Promise((resolve) => { releaseChart = resolve; });
     const chartSeen = new Promise((resolve) => { reportChart = resolve; });
     let chartReported = false;
     await page.route("**/api/panel/chart", async (route) => {
+      chartBodies.push(route.request().postDataJSON());
       if (!chartReported) {
         chartReported = true;
         reportChart(route.request().postDataJSON());
@@ -761,7 +932,6 @@ describe("the device workbench", () => {
       await page.click(`.rd-devmodal button[data-selector="${IPAC}"]`);
       await page.keyboard.press("Escape");
       const node = page.locator(`.rd-encoder-device-node[data-instance-id="${IPAC_SLUG}"]`);
-      await node.getByRole("button", { name: "Read keys" }).click();
       assert.deepEqual(await chartSeen, { selector: IPAC });
       assert.equal(
         await node.locator('[data-rd-encoder-chart][data-state="loading"]').count(),
@@ -792,17 +962,22 @@ describe("the device workbench", () => {
       releaseChart();
       await staleChartResponse;
       await page.waitForFunction(
-        (id) => !document.querySelector(
-          `[data-instance-id="${id}"] [data-rd-encoder-read]`,
-        )?.disabled,
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-chart][data-state="loaded"]`,
+        ),
         IPAC_SLUG,
       );
       assert.equal(
-        await node.locator('[data-rd-encoder-chart][data-state="idle"]').count(),
+        await node.locator('[data-rd-encoder-chart][data-state="loaded"]').count(),
         1,
-        "the late pre-pagehide chart cannot restore stale Reading or loaded results",
+        "the late pre-pagehide response is discarded and a fresh automatic read completes",
       );
-      assert.equal(await node.locator("[data-configured-emission]").count(), 0);
+      assert.equal(await node.locator("[data-configured-emission]").count(), 56);
+      assert.deepEqual(
+        chartBodies,
+        [{ selector: IPAC }, { selector: IPAC }],
+        "BFCache restoration re-arms exactly one fresh chart read after the stale request settles",
+      );
 
       await node.getByRole("button", { name: "Start button test" }).click();
       await page.waitForFunction(
@@ -914,7 +1089,6 @@ describe("the device workbench", () => {
       await page.click(`.rd-devmodal button[data-selector="${IPAC}"]`);
       await page.keyboard.press("Escape");
       const node = page.locator(`.rd-encoder-device-node[data-instance-id="${IPAC_SLUG}"]`);
-      await node.getByRole("button", { name: "Read keys" }).click();
       await page.waitForFunction(
         (id) => document.querySelector(
           `[data-instance-id="${id}"] [data-rd-encoder-chart][data-state="loaded"]`,
@@ -1009,19 +1183,13 @@ describe("the device workbench", () => {
       }
       await route.fulfill({ response, json: payload });
     });
-    let releaseChart;
-    let reportChart;
-    const chartGate = new Promise((resolve) => { releaseChart = resolve; });
-    const chartSeen = new Promise((resolve) => { reportChart = resolve; });
     let laterChartGate = null;
     let reportLaterChart = null;
+    let releaseOutstandingChart = null;
     await page.route("**/api/panel/chart", async (route) => {
       const body = route.request().postDataJSON();
       chartBodies.push(body);
-      if (chartBodies.length === 1) {
-        reportChart(body);
-        await chartGate;
-      } else if (laterChartGate) {
+      if (laterChartGate) {
         const gate = laterChartGate;
         const report = reportLaterChart;
         laterChartGate = null;
@@ -1029,8 +1197,30 @@ describe("the device workbench", () => {
         report?.(body);
         await gate;
       }
-      await route.continue();
+      // The browser roster is extended with a synthetic second instance, but
+      // both surfaces share the fixture's verified 56-terminal profile. Read
+      // the fixture chart through its real selector so each UI instance can
+      // exercise automatic loading and the global hardware lease.
+      const response = await route.fetch({
+        postData: JSON.stringify({ selector: IPAC }),
+      });
+      await route.fulfill({ response });
     });
+    const gateNextChart = () => {
+      let report;
+      let release;
+      const seen = new Promise((resolve) => { report = resolve; });
+      laterChartGate = new Promise((resolve) => { release = resolve; });
+      reportLaterChart = report;
+      releaseOutstandingChart = release;
+      return {
+        seen,
+        release: () => {
+          releaseOutstandingChart = null;
+          release();
+        },
+      };
+    };
     let activeSelector = null;
     let generation = 700;
     let heldStartGate = null;
@@ -1110,9 +1300,21 @@ describe("the device workbench", () => {
       const twin = page.locator(`.rd-encoder-device-node[data-instance-id="${IPAC_TWIN_SLUG}"]`);
       assert.equal(await primary.count(), 1);
       assert.equal(await twin.count(), 1);
+      await page.waitForFunction(
+        ({ primaryId, twinId }) => [primaryId, twinId].every((id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-chart][data-state="loaded"]`,
+        )),
+        { primaryId: IPAC_SLUG, twinId: IPAC_TWIN_SLUG },
+      );
+      assert.deepEqual(
+        chartBodies,
+        [{ selector: IPAC }, { selector: IPAC_TWIN }],
+        "adding each encoder reads its stored assignments once, through one serialized hardware lane",
+      );
 
-      await primary.getByRole("button", { name: "Read keys" }).click();
-      assert.deepEqual(await chartSeen, { selector: IPAC });
+      const heldRefresh = gateNextChart();
+      await primary.getByRole("button", { name: "Refresh stored assignments" }).click();
+      assert.deepEqual(await heldRefresh.seen, { selector: IPAC });
       await page.waitForFunction(
         (id) => document.querySelector(
           `[data-instance-id="${id}"] [data-rd-encoder-chart][data-state="loading"]`,
@@ -1121,18 +1323,27 @@ describe("the device workbench", () => {
       );
       assert.equal(await twin.locator("[data-rd-encoder-read]").isDisabled(), true);
       assert.equal(await twin.locator('[data-rd-encoder-observe="start"]').isDisabled(), true);
+      assert.equal(
+        await twin.getByRole("button", { name: "Another encoder is reading", exact: true }).count(),
+        1,
+        "the blocked action names the actual hardware lane instead of a generic wait state",
+      );
       assert.match(
         await twin.locator(".rd-encoder-product-actions").textContent(),
-        /another encoder is reading its stored keys/i,
+        /another encoder is reading its stored assignments/i,
       );
       await twin.locator("[data-rd-encoder-read]").evaluate((button) => button.click());
       await page.waitForTimeout(25);
-      assert.deepEqual(chartBodies, [{ selector: IPAC }], "the disabled twin cannot race the read");
+      assert.deepEqual(
+        chartBodies,
+        [{ selector: IPAC }, { selector: IPAC_TWIN }, { selector: IPAC }],
+        "the disabled twin cannot race the refresh",
+      );
 
       const chartResponse = page.waitForResponse((response) =>
         new URL(response.url()).pathname === "/api/panel/chart"
       );
-      releaseChart();
+      heldRefresh.release();
       await chartResponse;
       await page.waitForFunction(
         (id) => document.querySelector(
@@ -1159,7 +1370,11 @@ describe("the device workbench", () => {
       );
       await primary.locator("[data-rd-encoder-read]").evaluate((button) => button.click());
       await page.waitForTimeout(25);
-      assert.deepEqual(chartBodies, [{ selector: IPAC }], "an active twin test blocks a second read");
+      assert.deepEqual(
+        chartBodies,
+        [{ selector: IPAC }, { selector: IPAC_TWIN }, { selector: IPAC }],
+        "an active twin test blocks another read",
+      );
       assert.deepEqual(
         inputCalls.filter((call) => call.path === "/api/input-test/start").map((call) => call.body),
         [{ selector: IPAC_TWIN, duration_ms: 30_000 }],
@@ -1277,13 +1492,9 @@ describe("the device workbench", () => {
       abandoned.releaseCancelRequest();
       await waitForBothSurfacesReady();
 
-      let releaseLaterChart;
-      let reportLaterChartSeen;
-      const laterChartSeen = new Promise((resolve) => { reportLaterChartSeen = resolve; });
-      laterChartGate = new Promise((resolve) => { releaseLaterChart = resolve; });
-      reportLaterChart = reportLaterChartSeen;
+      const heldLateChart = gateNextChart();
       await primary.locator("[data-rd-encoder-read]").evaluate((button) => button.click());
-      assert.deepEqual(await laterChartSeen, { selector: IPAC });
+      assert.deepEqual(await heldLateChart.seen, { selector: IPAC });
       await page.evaluate(() => {
         window.dispatchEvent(new Event("pagehide"));
         window.dispatchEvent(new Event("pageshow"));
@@ -1302,7 +1513,7 @@ describe("the device workbench", () => {
       const laterChartResponse = page.waitForResponse((response) =>
         new URL(response.url()).pathname === "/api/panel/chart"
       );
-      releaseLaterChart();
+      heldLateChart.release();
       await laterChartResponse;
       await waitForBothSurfacesReady();
       assert.equal(
@@ -1312,7 +1523,7 @@ describe("the device workbench", () => {
       );
       assert.deepEqual(noise, []);
     } finally {
-      releaseChart?.();
+      releaseOutstandingChart?.();
       await page.unroute(`${BASE}/api/redesign`);
       await leaseContext.close();
     }

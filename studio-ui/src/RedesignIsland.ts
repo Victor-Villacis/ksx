@@ -168,7 +168,10 @@ export function applyRedesign(v: RedesignPayload): void {
   rdStagingReachable = d?.staging_reachable === true;
   rdStagingLine = d?.staging_line ?? "";
   setRdDevKb(d?.keyboards ?? []);
-  setRdDevEnc(d?.encoders ?? []);
+  setRdDevEnc((d?.encoders ?? []).map((row) => ({
+    ...row,
+    meta: deviceCardMeta(row),
+  })));
   refreshEncoderProfileLab?.(encoderProfileLabDevices());
   setRdDevExp(d?.experimental ?? []);
   setRdDevOther(d?.other ?? []);
@@ -1075,6 +1078,16 @@ const STAGED_DEVICE_TITLE =
   "This board is the background helper's staged choice. Staging it again changes nothing — " +
   "a keyboard prepared for play keeps its preparation.";
 
+function deviceCardMeta(row: RdDeviceRowView): string {
+  if (row.role !== "panel-encoder") return row.meta;
+  // The encoder surface owns the live read/loading/error state. The roster's
+  // initial `chart not read yet` phrase becomes stale as soon as the automatic
+  // read starts and should not survive beside the authoritative surface.
+  return row.meta.split(/\s*·\s*/)
+    .filter((part) => !/^chart\b/i.test(part.trim()))
+    .join(" · ");
+}
+
 function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   const body = document.createElement("div");
   body.className = "rd-devcard";
@@ -1087,7 +1100,7 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   name.textContent = row.name;
   const meta = document.createElement("p");
   meta.className = "rd-devcard-meta";
-  meta.textContent = row.meta;
+  meta.textContent = deviceCardMeta(row);
   // The daemon chip and the daemon verb. `data-staged` on the ITEM decides
   // which shows (syncBenchCards keeps it true to the served rows): a staged
   // board wears the chip; every other pickable board offers the act. The
@@ -1469,7 +1482,7 @@ function syncBenchCards(): void {
     item.querySelector<HTMLElement>(".rd-devcard-badge")!.textContent =
       DEVICE_ROLE_BADGE[row.role] ?? "Experimental";
     item.querySelector<HTMLElement>(".rd-devcard-name")!.textContent = row.name;
-    if (meta) meta.textContent = row.meta;
+    if (meta) meta.textContent = deviceCardMeta(row);
     item.querySelector<HTMLElement>(".widget-drag-handle")?.setAttribute(
       "aria-label",
       `Move ${row.name}`,
@@ -1502,9 +1515,13 @@ function syncDeviceRows(): void {
   for (const btn of Array.from(
     rdRoot?.querySelectorAll<HTMLElement>('[data-nx="rd-dev-toggle"]') ?? [],
   )) {
-    const on = bench.includes(btn.dataset.selector ?? "");
+    const selector = btn.dataset.selector ?? "";
+    const on = bench.includes(selector);
     btn.setAttribute("aria-pressed", on ? "true" : "false");
     btn.classList.toggle("on", on);
+    const row = deviceRowFor(selector);
+    const meta = btn.querySelector<HTMLElement>(".n-dev-meta:not(.rd-dev-word)");
+    if (row && meta) meta.textContent = deviceCardMeta(row);
     const word = btn.querySelector<HTMLElement>(".rd-dev-word");
     if (word) {
       word.textContent = on ? "On the workbench — press to remove" : "Add to workbench";

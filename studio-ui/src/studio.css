@@ -19919,6 +19919,49 @@ a.nm-link {
   color: var(--n-warn);
 }
 
+.rd-encoder-product-read-inline {
+  display: inline-flex;
+  min-height: 44px;
+  max-width: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 12px;
+  border: 1px solid color-mix(in srgb, var(--n-accent) 64%, var(--n-line-2));
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--n-accent) 16%, var(--n-panel-3));
+  color: var(--n-text);
+  font: var(--fw-semibold) var(--fs-xs) / var(--lh-tight) var(--sans);
+  text-align: center;
+}
+
+button.rd-encoder-product-read-inline {
+  cursor: pointer;
+}
+
+button.rd-encoder-product-read-inline:hover:not(:disabled) {
+  border-color: var(--n-accent);
+  background: color-mix(in srgb, var(--n-accent) 24%, var(--n-panel-3));
+}
+
+.rd-encoder-product-read-inline.is-loading {
+  border-style: dashed;
+  color: var(--n-text-2);
+}
+
+button.rd-encoder-product-read-inline:disabled {
+  cursor: not-allowed;
+  opacity: .62;
+}
+
+.rd-encoder-product-read-reason {
+  display: block;
+  max-width: 280px;
+  margin-top: var(--sp-1);
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-normal);
+}
+
 .rd-encoder-product-live {
   display: flex;
   gap: var(--sp-2);

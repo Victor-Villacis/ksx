@@ -677,9 +677,9 @@ describe("redesign canvas interaction chrome", () => {
         x: Number(item.dataset.canvasX),
         y: Number(item.dataset.canvasY),
       }));
-      await page.getByLabel("X", { exact: true }).fill(String(beforePosition.x + 17));
+      await page.getByRole("spinbutton", { name: "X", exact: true }).fill(String(beforePosition.x + 17));
       await page.locator(".rd-insp-head .rd-map-title").click();
-      await page.getByLabel("Y", { exact: true }).fill(String(beforePosition.y + 23));
+      await page.getByRole("spinbutton", { name: "Y", exact: true }).fill(String(beforePosition.y + 23));
       await page.locator(".rd-insp-head .rd-map-title").click();
       assert.deepEqual(
         await stageItem(BENCH_A).evaluate((item) => ({
@@ -949,7 +949,7 @@ describe("redesign canvas interaction chrome", () => {
       const beforeChipTargetX = await stageItem(BENCH_B).evaluate(
         (item) => Number(item.dataset.canvasX),
       );
-      await page.getByLabel("X", { exact: true }).fill("2200");
+      await page.getByRole("spinbutton", { name: "X", exact: true }).fill("2200");
       await page.locator(".rd-insp-head .rd-map-title").click();
       await stageItem(BENCH_A).click();
       await zoomMenuTrigger.click();
@@ -983,7 +983,7 @@ describe("redesign canvas interaction chrome", () => {
         beforeChipJump,
         "Back view did not restore the exact pre-chip camera",
       );
-      await page.getByLabel("X", { exact: true }).fill(String(beforeChipTargetX));
+      await page.getByRole("spinbutton", { name: "X", exact: true }).fill(String(beforeChipTargetX));
       await page.locator(".rd-insp-head .rd-map-title").click();
 
       await stageItem(BENCH_A).click();
@@ -1085,7 +1085,7 @@ describe("redesign canvas interaction chrome", () => {
       });
       assert.deepEqual(mobileInspector, { left: 0, width: 390 });
 
-      await page.getByLabel("X", { exact: true }).focus();
+      await page.getByRole("spinbutton", { name: "X", exact: true }).focus();
       await page.keyboard.press("Escape");
       assert.equal(await stageItem(BENCH_B).getAttribute("aria-current"), "true");
       assert.equal(await page.locator(".rd-inspector").getAttribute("hidden"), null);
@@ -1258,7 +1258,7 @@ describe("redesign canvas interaction chrome", () => {
       });
       await page.waitForTimeout(220);
 
-      await page.getByLabel("X", { exact: true }).fill("2200");
+      await page.getByRole("spinbutton", { name: "X", exact: true }).fill("2200");
       await page.locator(".rd-insp-head .rd-map-title").click();
       await page.locator(
         `.forma-canvas-stage > [data-instance-id="${BENCH_A}"]`,

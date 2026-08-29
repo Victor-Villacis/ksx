@@ -22,7 +22,7 @@ pub(super) struct RedesignQuery {
 /// verb's sentences ARE nocturne's constants: one wording, two pages, so the
 /// copy cannot drift between the surfaces (the cutover's "provider text"
 /// lesson, applied in advance).
-const RD_FLASH_ALLOWLIST: [&str; 24] = [
+const RD_FLASH_ALLOWLIST: [&str; 27] = [
     N_THEME_OK,
     N_THEME_UNKNOWN,
     N_DEVICE_OK,
@@ -47,6 +47,9 @@ const RD_FLASH_ALLOWLIST: [&str; 24] = [
     N_TOGGLE_UNBOUND_ERROR,
     N_KEY_CLEAR_OK,
     N_KEY_CLEAR_NONE,
+    N_BOARD_OK,
+    N_BOARD_UNKNOWN,
+    N_BOARD_MISSING,
 ];
 
 pub(super) fn redesign_flash_from_query(flash: Option<&str>) -> Option<String> {
@@ -753,6 +756,23 @@ pub(super) async fn redesign_form_clear_all(
         .await
         .unwrap_or(N_EDIT_ERROR);
     redesign_redirect(flash)
+}
+
+#[derive(Deserialize)]
+pub(super) struct RedesignBoardForm {
+    board: Option<String>,
+}
+
+/// POST /redesign/board — which board the keyboard widget draws, one config
+/// write through the shared core (the nocturne picker's verb, re-homed).
+pub(super) async fn redesign_form_board(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignBoardForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    redesign_redirect(board_write_flash(&state, form.board).await)
 }
 
 #[derive(Deserialize)]

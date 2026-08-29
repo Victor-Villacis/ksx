@@ -141,6 +141,49 @@ export interface RdControllers {
   undo_label: string;
 }
 
+/** One plate cell — `NocturneKeyCell` on the wire (snapshot.rs). */
+export interface RdKeyCellView {
+  cap: string;
+  key: string;
+  cls: string;
+  short: string;
+  title: string;
+  aria: string;
+  style: string;
+}
+
+/** One legend chip — `NocturneLegendRow` on the wire. */
+export interface RdLegendRowView {
+  slot: string;
+  badge: string;
+  name: string;
+  cls: string;
+}
+
+/** The keyboard widget's serving — `BoardPanel` on the wire, the same
+ *  struct /nocturne's plate destructures. */
+export interface RdBoardPanel {
+  kb_title: string;
+  kb_cls: string;
+  board_case_style: string;
+  board_origin: string;
+  board_line: string;
+  board_rows: RdChoiceRowView[];
+  kb_row1: RdKeyCellView[];
+  kb_row2: RdKeyCellView[];
+  kb_row3: RdKeyCellView[];
+  kb_row4: RdKeyCellView[];
+  kb_row5: RdKeyCellView[];
+  kb_row6: RdKeyCellView[];
+  kb_tray: RdKeyCellView[];
+  kb_tray_head: string;
+  kb_tray_cls: string;
+  legend: RdLegendRowView[];
+  solo_label: string;
+  kb_more_cls: string;
+  kb_note: string;
+}
+
 /** The payload the server embeds and /api/redesign serves — seeded into the
  *  signals by the entry BEFORE the island returns (ledger #5). */
 export interface RedesignPayload {
@@ -149,6 +192,7 @@ export interface RedesignPayload {
   theme_rows: RdChoiceRowView[];
   devices: RdDeviceRows;
   controllers: RdControllers;
+  board: RdBoardPanel;
 }
 
 // ── SERVED signals — copiers, never derivers ────────────────────────────────
@@ -170,6 +214,26 @@ const [rdDevExpFoldCls, setRdDevExpFoldCls] = createSignal("n-devfold none");
 const [rdDevOtherHead, setRdDevOtherHead] = createSignal("");
 const [rdDevOtherFoldCls, setRdDevOtherFoldCls] = createSignal("n-devfold none");
 const [rdCtrlPersonas, setRdCtrlPersonas] = createSignal<RdPersonaRowView[]>([]);
+// The keyboard widget's served slots (the nocturne plate's own signal set).
+const [rdKbRow1, setRdKbRow1] = createSignal<RdKeyCellView[]>([]);
+const [rdKbRow2, setRdKbRow2] = createSignal<RdKeyCellView[]>([]);
+const [rdKbRow3, setRdKbRow3] = createSignal<RdKeyCellView[]>([]);
+const [rdKbRow4, setRdKbRow4] = createSignal<RdKeyCellView[]>([]);
+const [rdKbRow5, setRdKbRow5] = createSignal<RdKeyCellView[]>([]);
+const [rdKbRow6, setRdKbRow6] = createSignal<RdKeyCellView[]>([]);
+const [rdKbTray, setRdKbTray] = createSignal<RdKeyCellView[]>([]);
+const [rdKbLegend, setRdKbLegend] = createSignal<RdLegendRowView[]>([]);
+const [rdBoardRows, setRdBoardRows] = createSignal<RdChoiceRowView[]>([]);
+const [rdKbTitle, setRdKbTitle] = createSignal("");
+const [rdKbCls, setRdKbCls] = createSignal("n-kb");
+const [rdBoardCaseStyle, setRdBoardCaseStyle] = createSignal("");
+const [rdBoardOrigin, setRdBoardOrigin] = createSignal("");
+const [rdBoardLine, setRdBoardLine] = createSignal("");
+const [rdKbTrayHead, setRdKbTrayHead] = createSignal("");
+const [rdKbTrayCls, setRdKbTrayCls] = createSignal("n-kbtray none");
+const [rdKbNote, setRdKbNote] = createSignal("");
+const [rdKbMoreCls, setRdKbMoreCls] = createSignal("n-lgdmore none");
+const [rdSoloLbl, setRdSoloLbl] = createSignal("Only this player");
 const [rdCtrlAddNote, setRdCtrlAddNote] = createSignal("");
 const [rdCtrlCountsLine, setRdCtrlCountsLine] = createSignal("");
 const [rdCtrlAddPreset, setRdCtrlAddPreset] = createSignal("");
@@ -202,17 +266,113 @@ try {
 }
 function setInspTab(next: InspectorTab): void {
   inspTab = next;
-  try {
-    window.localStorage.setItem(RD_UI_STORE, JSON.stringify({ inspTab }));
-  } catch {
-    // A view preference is chrome; blocked storage only makes it temporary.
-  }
+  saveKbUi();
   renderInspector();
 }
 /** A control the next Controls render should open and show — set by a
  *  click on the pad art's own zone (the 4460 pointer enhancement) or by a
  *  Keys-row jump. */
 let pendingLocateFns: string | null = null;
+/** A KEY the next Keys render should reveal — set by a click on a plate
+ *  cell (the board is the Keys tab's own picture). */
+let pendingLocateKey: string | null = null;
+
+// ── The keyboard lens: mute chips, the solo shortcut, the finish ──────────
+// The crossings share 4460's store (a crossing belongs to the CONTROLLER,
+// keyed by preset, and follows it across pages); solo and the finish are
+// this page's own view preferences in RD_UI_STORE.
+const KB_STRIPS_STORE = "ksx-nocturne-strips2";
+let kbHiddenStrips = new Set<string>();
+try {
+  const raw = window.localStorage.getItem(KB_STRIPS_STORE);
+  kbHiddenStrips = new Set(raw ? (JSON.parse(raw) as string[]) : []);
+} catch {
+  kbHiddenStrips = new Set();
+}
+function saveKbStrips(): void {
+  try {
+    window.localStorage.setItem(KB_STRIPS_STORE, JSON.stringify([...kbHiddenStrips]));
+  } catch {
+    // A crossing is chrome; blocked storage only makes it temporary.
+  }
+}
+let kbSolo = false;
+let kbTheme = "carbon-forge";
+try {
+  const saved = JSON.parse(window.localStorage.getItem(RD_UI_STORE) ?? "{}") as {
+    kbSolo?: boolean;
+    kbTheme?: string;
+  };
+  kbSolo = saved.kbSolo === true;
+  if (typeof saved.kbTheme === "string" && saved.kbTheme) kbTheme = saved.kbTheme;
+} catch {
+  // defaults hold
+}
+function saveKbUi(): void {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(RD_UI_STORE) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    saved.kbSolo = kbSolo;
+    saved.kbTheme = kbTheme;
+    saved.inspTab = inspTab;
+    window.localStorage.setItem(RD_UI_STORE, JSON.stringify(saved));
+  } catch {
+    // chrome only
+  }
+}
+function presetOfSlotRd(slot: number): string | undefined {
+  return rdCtrlCards.find((card) => card.number === String(slot))?.preset;
+}
+
+/** Paint the mute/solo lens and the finish. The nocturne CSS drives the
+ *  same effect through `.n-center.muteN` classes; here the identical
+ *  custom properties are written inline on the plate — one mechanism, no
+ *  second sheet. Solo mutes every band and hands the selected controller
+ *  its color back (nothing is hidden, so a key never looks unbound). */
+function syncKbLens(): void {
+  const root = rdRoot;
+  const widget = root?.querySelector<HTMLElement>('[data-instance-id="keyboard"]');
+  if (!root || !widget) return;
+  widget.setAttribute("data-keyboard-theme", kbTheme);
+  const kb = widget.querySelector<HTMLElement>(".n-kb");
+  if (kb) {
+    const selectedSlot = Number(rdCtrlPanel?.slot_val || "0");
+    for (let n = 1; n <= 16; n += 1) {
+      const preset = presetOfSlotRd(n);
+      const muted = kbSolo
+        ? n !== selectedSlot
+        : preset !== undefined && kbHiddenStrips.has(preset);
+      if (muted) kb.style.setProperty(`--kb${n}`, "var(--band-mute)");
+      else kb.style.removeProperty(`--kb${n}`);
+    }
+  }
+  // The chips speak their own state (nocturne's syncLegend wording).
+  for (const chip of Array.from(
+    widget.querySelectorAll<HTMLElement>('[data-nx="legend-mute"]'),
+  )) {
+    const preset = presetOfSlotRd(Number(chip.getAttribute("data-slot") ?? ""));
+    const byHand = preset !== undefined && kbHiddenStrips.has(preset);
+    const off = kbSolo ? !chip.classList.contains("on") : byHand;
+    chip.setAttribute("aria-pressed", off ? "false" : "true");
+    chip.classList.toggle("muted", !kbSolo && byHand);
+    chip.title = off
+      ? "Show this controller's color on the keys"
+      : "Hide this controller's color on the keys";
+  }
+  widget
+    .querySelector(".n-kbcolors")
+    ?.setAttribute("aria-pressed", kbSolo ? "true" : "false");
+  for (const button of Array.from(
+    widget.querySelectorAll<HTMLElement>('[data-nx="kb-theme"]'),
+  )) {
+    button.setAttribute(
+      "aria-pressed",
+      String(button.getAttribute("data-keyboard-theme") === kbTheme),
+    );
+  }
+}
 
 /** Open, reveal and pulse the row (or free chip) for one control inside the
  *  freshly painted panel body. Case-bridged: zones spell functions
@@ -302,6 +462,30 @@ export function applyRedesign(v: RedesignPayload): void {
   rdCtrlPads = c?.pads ?? [];
   rdCtrlPanel = c?.panel ?? null;
   rdCtrlKeys = c?.keys ?? null;
+  const board = v.board;
+  if (board) {
+    setRdKbRow1(board.kb_row1 ?? []);
+    setRdKbRow2(board.kb_row2 ?? []);
+    setRdKbRow3(board.kb_row3 ?? []);
+    setRdKbRow4(board.kb_row4 ?? []);
+    setRdKbRow5(board.kb_row5 ?? []);
+    setRdKbRow6(board.kb_row6 ?? []);
+    setRdKbTray(board.kb_tray ?? []);
+    setRdKbLegend(board.legend ?? []);
+    setRdBoardRows(board.board_rows ?? []);
+    setRdKbTitle(board.kb_title ?? "");
+    setRdKbCls(board.kb_cls || "n-kb");
+    setRdBoardCaseStyle(board.board_case_style ?? "");
+    setRdBoardOrigin(board.board_origin ?? "");
+    setRdBoardLine(board.board_line ?? "");
+    setRdKbTrayHead(board.kb_tray_head ?? "");
+    setRdKbTrayCls(board.kb_tray_cls || "n-kbtray none");
+    setRdKbNote(board.kb_note ?? "");
+    setRdKbMoreCls(board.kb_more_cls || "n-lgdmore none");
+    setRdSoloLbl(board.solo_label || "Only this player");
+  }
+  // The mute/solo lens and the finish repaint follow every served update.
+  syncKbLens();
   setRdUndoCls(c?.undo_cls || "rd-undochip none");
   setRdUndoLabel(c?.undo_label ?? "");
   // Reconcile browser-owned membership with the freshly served roster: a
@@ -1140,6 +1324,24 @@ function renderInspector(): void {
       pendingLocateFns = null;
     }
   }
+  // A plate-cell click named a KEY: reveal its row (bound) or its free
+  // chip in the freshly painted Keys view.
+  if (pendingLocateKey && inspTab === "keys") {
+    const wanted = pendingLocateKey;
+    const row =
+      body.querySelector<HTMLElement>(`.rd-insp-krows .n-krow[data-key="${CSS.escape(wanted)}"]`) ??
+      body.querySelector<HTMLElement>(`.rd-insp-krows .n-akey[data-key="${CSS.escape(wanted)}"]`);
+    if (row) {
+      row.scrollIntoView({ block: "center" });
+      row.classList.add("rd-row-pulse");
+      window.setTimeout(() => row.classList.remove("rd-row-pulse"), 1400);
+      pendingLocateKey = null;
+    } else if (body.querySelector(".rd-insp-krows")) {
+      // The Keys view painted and the key is genuinely absent (another
+      // player's, or not on this slot) — consume rather than loop.
+      pendingLocateKey = null;
+    }
+  }
 }
 
 function setInspector(open: boolean): void {
@@ -1774,6 +1976,18 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
     },
   );
   setCanvasMap(canvasPrefs.mapHidden === true);
+  // The served keyboard widget: mountItem on the CONNECTED article adopts
+  // it with its remembered spot (nocturne's own mechanism), the plate on
+  // top of the workbench and the controller rows beneath.
+  const kbItem = stage.querySelector<HTMLElement>('[data-instance-id="keyboard"]');
+  if (kbItem) {
+    nCanvas.mountItem(
+      kbItem,
+      canvasPrefs.widgets["kb"] ?? { x: 140, y: 24, width: 980, height: 360, z: 1, manualScale: 1 },
+      { focus: false },
+    );
+  }
+  syncKbLens();
   restoreBench();
   syncCtrlBench();
   syncMapCount();
@@ -1836,6 +2050,37 @@ export function redesignWire(root: HTMLElement): void {
     if (themeMenu && !target?.closest(".rd-themed")) {
       closeThemeMenu();
     }
+    // Plate cell → Keys row: the board is the Keys tab's own picture, so
+    // clicking a key reveals that key's row (a bound cap) or its free chip.
+    const cell = target?.closest<HTMLElement>(
+      '[data-instance-id="keyboard"] .n-kb [data-key], [data-instance-id="keyboard"] .n-kbtray-row [data-key]',
+    );
+    if (cell) {
+      pendingLocateKey = cell.getAttribute("data-key") ?? "";
+      if (inspTab !== "keys") {
+        inspTab = "keys";
+        saveKbUi();
+      }
+      // The Keys view is the SELECTED CONTROLLER's — but the click itself
+      // just selected the KEYBOARD widget through the engine. Hand the
+      // selection to the card the served panel speaks for, so the panel
+      // (not the keyboard's generic geometry) is what opens.
+      const canvas = nCanvas;
+      const slot = rdCtrlPanel?.slot_val ?? "";
+      const item = rdRoot?.querySelector<HTMLElement>(
+        `.forma-canvas-stage > [data-instance-id="ctrl-slot-${slot}"]`,
+      );
+      if (canvas && item) canvas.setSelection([item]);
+      // A selection CHANGE opened the inspector and located the key through
+      // its own callback chain; any further repaint here would wipe that
+      // pulse. Only when the card was already selected (no callback ran —
+      // the pending key survives) does this branch open and paint itself.
+      if (pendingLocateKey) {
+        setInspector(true);
+        renderInspector();
+      }
+      return;
+    }
     // Pad art → binding row: every control on a card's silhouette carries
     // its mapper function(s) in data-fn (the 4460 pointer enhancement).
     // The click already selected the card through the engine; opening the
@@ -1859,6 +2104,40 @@ export function redesignWire(root: HTMLElement): void {
     const closeMenuAfter = Boolean(target?.closest(".rd-menu"));
     if (hit === "canvas-fit") {
       nCanvas?.fitAll();
+    } else if (hit === "kb-theme") {
+      const theme = target?.closest<HTMLElement>("[data-keyboard-theme]")
+        ?.dataset.keyboardTheme ?? "";
+      if (theme) {
+        kbTheme = theme;
+        saveKbUi();
+        syncKbLens();
+      }
+    } else if (hit === "kb-colors") {
+      kbSolo = !kbSolo;
+      saveKbUi();
+      syncKbLens();
+    } else if (hit === "legend-mute") {
+      // One chip, one player's color on the keys — keyed by PRESET like
+      // 4460's, so a crossing follows a controller through a reorder. A
+      // click after solo CONTINUES from what the lens was showing: the
+      // shortcut becomes the real mute set, then this chip toggles in it.
+      const chip = target?.closest<HTMLElement>("[data-slot]");
+      const preset = presetOfSlotRd(Number(chip?.getAttribute("data-slot") ?? ""));
+      if (chip && preset !== undefined) {
+        if (kbSolo) {
+          kbSolo = false;
+          const selectedSlot = rdCtrlPanel?.slot_val ?? "";
+          for (const card of rdCtrlCards) {
+            if (card.number === selectedSlot) kbHiddenStrips.delete(card.preset);
+            else kbHiddenStrips.add(card.preset);
+          }
+        }
+        if (kbHiddenStrips.has(preset)) kbHiddenStrips.delete(preset);
+        else kbHiddenStrips.add(preset);
+        saveKbStrips();
+        saveKbUi();
+        syncKbLens();
+      }
     } else if (hit === "rd-fit-sel") {
       nCanvas?.fitSelection();
     } else if (hit === "rd-center-sel") {
@@ -2625,12 +2904,353 @@ export function RedesignIsland() {
               "aria-label": "Redesign canvas",
             },
             h("div", { class: "forma-canvas-grid", "aria-hidden": "true" }),
-            h("div", {
-              class: "forma-canvas-stage",
-              "data-forma-canvas-stage": "",
-              "data-client-canvas": "",
-              role: "list",
-            }),
+            h(
+              "div",
+              {
+                class: "forma-canvas-stage",
+                "data-forma-canvas-stage": "",
+                "data-client-canvas": "",
+                role: "list",
+              },
+              // ── The KEYBOARD, as a served canvas widget ────────────────
+              // The nocturne plate's article shell, adapted: the engine
+              // adopts it on init (exactly like 4460's), the six rows +
+              // tray + legend are the SAME served cells, and the finish
+              // rides data-keyboard-theme (client-repainted from the shared
+              // preference). The workbench deck, capture card and learn cue
+              // stay on 4460 until their own migrations.
+              h(
+                "article",
+                {
+                  class: "widget-instance n-widget n-widget-kb",
+                  id: "keyboard-source-widget",
+                  role: "listitem",
+                  "aria-label": "Input source",
+                  tabindex: "-1",
+                  "data-client-canvas": "",
+                  "data-instance-id": "keyboard",
+                  "data-widget-name": "Input source",
+                  "data-widget-navigation-item": "",
+                  "data-canvas-preferred-width": "980",
+                  "data-canvas-min-height": "320",
+                  "data-canvas-resizable": "false",
+                  // The engine writes this on mount; carrying it in the
+                  // shell keeps adoption byte-neutral (the nocturne rule).
+                  "aria-keyshortcuts":
+                    "ArrowLeft ArrowRight ArrowUp ArrowDown Home End Enter F2 M Meta+Enter Control+Enter",
+                  "data-keyboard-theme": "carbon-forge",
+                },
+                h(
+                  "header",
+                  { class: "widget-chrome" },
+                  h(
+                    "div",
+                    { class: "widget-command-region", "data-widget-command-region": "" },
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        class: "widget-drag-handle",
+                        "aria-label": "Move input source",
+                        title:
+                          "Drag input source to move · Arrow keys nudge · Enter opens the widget",
+                      },
+                      h("span", {
+                        class: "widget-drag-rail",
+                        "data-widget-command-rail": "",
+                        "aria-hidden": "true",
+                      }),
+                    ),
+                  ),
+                ),
+                h(
+                  "div",
+                  {
+                    class: "n-widget-body",
+                    "data-forma-runtime-host": "",
+                    "aria-hidden": "false",
+                  },
+                  h(
+                    "div",
+                    { class: "n-kbhead" },
+                    h("span", { class: "n-kick" }, () => rdKbTitle()),
+                    // Which color speaks for which controller; each chip
+                    // mutes that player's color on the keys.
+                    h(
+                      "div",
+                      { class: "n-legend" },
+                      createList(
+                        () => rdKbLegend(),
+                        (r) => r.slot + "|" + r.badge + "|" + r.name + "|" + r.cls,
+                        (r) =>
+                          h(
+                            "button",
+                            {
+                              type: "button",
+                              "data-nx": "legend-mute",
+                              "data-slot": r.slot,
+                              "aria-pressed": "true",
+                              title: "Hide this controller's color on the keys",
+                              class: r.cls,
+                            },
+                            h("span", { class: "n-lgd-dot" }),
+                            h("span", { class: "n-lgd-badge" }, r.badge),
+                            h("span", { class: "n-lgd-name" }, r.name),
+                          ),
+                      ),
+                      h(
+                        "span",
+                        {
+                          title:
+                            "A key five or more controllers share shows how many, instead of their colors.",
+                          class: () => rdKbMoreCls(),
+                        },
+                        h("span", { class: "n-lgdmore-sw" }),
+                        h("span", { class: "n-lgdmore-lbl" }, "5+"),
+                        h("span", { class: "n-lgdmore-name" }, "share a key"),
+                      ),
+                    ),
+                    h("div", { class: "n-spring" }),
+                    // The board picker — which picture the plate draws; a
+                    // real form per row through the re-homed board verb.
+                    h(
+                      "details",
+                      { class: "rd-boardpick" },
+                      h("summary", { class: "n-autobtn rd-boardpick-sum" }, "Board"),
+                      h(
+                        "div",
+                        { class: "rd-boardpick-pop" },
+                        h("p", { class: "n-devnote" }, () => rdBoardLine()),
+                        createList(
+                          () => rdBoardRows(),
+                          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls,
+                          (r) =>
+                            h(
+                              "form",
+                              {
+                                class: "n-modeform",
+                                method: "post",
+                                action: "/redesign/board",
+                                "data-rd-form": "board",
+                              },
+                              h("input", { type: "hidden", name: "board", value: r.name }),
+                              h(
+                                "button",
+                                { type: "submit", class: r.cls },
+                                h("span", { class: "n-radio-dot" }),
+                                h(
+                                  "span",
+                                  { class: "n-radio-txt" },
+                                  h("span", { class: "n-radio-title" }, r.title),
+                                  h("span", { class: "n-radio-detail" }, r.detail),
+                                ),
+                              ),
+                            ),
+                        ),
+                      ),
+                    ),
+                    // Material belongs to the keyboard, never to a seat:
+                    // six app-owned paints over one semantic geometry.
+                    h(
+                      "div",
+                      { class: "n-kbthemes", role: "group", "aria-label": "Keyboard finish" },
+                      h("button", {
+                        type: "button",
+                        class: "n-kbtheme",
+                        "data-nx": "kb-theme",
+                        "data-keyboard-theme": "carbon-forge",
+                        title: "Carbon Forge",
+                        "aria-label": "Carbon Forge keyboard finish",
+                        "aria-pressed": "true",
+                      }),
+                      h("button", {
+                        type: "button",
+                        class: "n-kbtheme",
+                        "data-nx": "kb-theme",
+                        "data-keyboard-theme": "lunar-shell",
+                        title: "Lunar Shell",
+                        "aria-label": "Lunar Shell keyboard finish",
+                        "aria-pressed": "false",
+                      }),
+                      h("button", {
+                        type: "button",
+                        class: "n-kbtheme",
+                        "data-nx": "kb-theme",
+                        "data-keyboard-theme": "violet-circuit",
+                        title: "Violet Circuit",
+                        "aria-label": "Violet Circuit keyboard finish",
+                        "aria-pressed": "false",
+                      }),
+                      h("button", {
+                        type: "button",
+                        class: "n-kbtheme",
+                        "data-nx": "kb-theme",
+                        "data-keyboard-theme": "glacier-current",
+                        title: "Glacier Current",
+                        "aria-label": "Glacier Current keyboard finish",
+                        "aria-pressed": "false",
+                      }),
+                      h("button", {
+                        type: "button",
+                        class: "n-kbtheme",
+                        "data-nx": "kb-theme",
+                        "data-keyboard-theme": "ghost-mint",
+                        title: "Ghost Mint",
+                        "aria-label": "Ghost Mint keyboard finish",
+                        "aria-pressed": "false",
+                      }),
+                      h("button", {
+                        type: "button",
+                        class: "n-kbtheme",
+                        "data-nx": "kb-theme",
+                        "data-keyboard-theme": "retro-terminal",
+                        title: "Retro Terminal",
+                        "aria-label": "Retro Terminal keyboard finish",
+                        "aria-pressed": "false",
+                      }),
+                    ),
+                    // Focus the board on the controller being edited:
+                    // everyone else's color greys out — nothing is hidden.
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        "data-nx": "kb-colors",
+                        "aria-pressed": "false",
+                        title:
+                          "Show only this controller's color on the keys. Switch it off and your own crossings come back; click a chip while it is on to keep what you see.",
+                        class: "n-kbcolors",
+                      },
+                      () => rdSoloLbl(),
+                    ),
+                  ),
+                  h(
+                    "div",
+                    { class: () => rdKbCls() },
+                    h(
+                      "div",
+                      {
+                        class: "n-kbcase",
+                        style: () => rdBoardCaseStyle(),
+                        "data-origin": () => rdBoardOrigin(),
+                      },
+                      h(
+                        "div",
+                        { class: "n-kbrow" },
+                        createList(
+                          () => rdKbRow1(),
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) =>
+                            h(
+                              "div",
+                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              h("span", { class: "n-key-cap" }, r.cap),
+                              h("span", { class: "n-key-short" }, r.short),
+                            ),
+                        ),
+                      ),
+                      h(
+                        "div",
+                        { class: "n-kbrow" },
+                        createList(
+                          () => rdKbRow2(),
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) =>
+                            h(
+                              "div",
+                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              h("span", { class: "n-key-cap" }, r.cap),
+                              h("span", { class: "n-key-short" }, r.short),
+                            ),
+                        ),
+                      ),
+                      h(
+                        "div",
+                        { class: "n-kbrow" },
+                        createList(
+                          () => rdKbRow3(),
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) =>
+                            h(
+                              "div",
+                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              h("span", { class: "n-key-cap" }, r.cap),
+                              h("span", { class: "n-key-short" }, r.short),
+                            ),
+                        ),
+                      ),
+                      h(
+                        "div",
+                        { class: "n-kbrow" },
+                        createList(
+                          () => rdKbRow4(),
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) =>
+                            h(
+                              "div",
+                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              h("span", { class: "n-key-cap" }, r.cap),
+                              h("span", { class: "n-key-short" }, r.short),
+                            ),
+                        ),
+                      ),
+                      h(
+                        "div",
+                        { class: "n-kbrow" },
+                        createList(
+                          () => rdKbRow5(),
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) =>
+                            h(
+                              "div",
+                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              h("span", { class: "n-key-cap" }, r.cap),
+                              h("span", { class: "n-key-short" }, r.short),
+                            ),
+                        ),
+                      ),
+                      h(
+                        "div",
+                        { class: "n-kbrow" },
+                        createList(
+                          () => rdKbRow6(),
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) =>
+                            h(
+                              "div",
+                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              h("span", { class: "n-key-cap" }, r.cap),
+                              h("span", { class: "n-key-short" }, r.short),
+                            ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Bound keys not on this board — honest, never dropped.
+                  h(
+                    "div",
+                    { class: () => rdKbTrayCls() },
+                    h("span", { class: "n-kbtray-head" }, () => rdKbTrayHead()),
+                    h(
+                      "div",
+                      { class: "n-kbtray-row" },
+                      createList(
+                        () => rdKbTray(),
+                        (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                        (r) =>
+                          h(
+                            "div",
+                            { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                            h("span", { class: "n-key-cap" }, r.cap),
+                            h("span", { class: "n-key-short" }, r.short),
+                          ),
+                      ),
+                    ),
+                  ),
+                  h("p", { class: "n-devnote" }, () => rdKbNote()),
+                ),
+              ),
+            ),
             // The map in the corner: a button per widget (click to jump) and
             // a pale rectangle for the camera (drag inside to pan). Both are
             // filled by the engine — the ITEMS box is client-populated by

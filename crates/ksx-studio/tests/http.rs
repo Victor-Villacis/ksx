@@ -4853,6 +4853,7 @@ fn the_profiles_write_routes_refuse_a_cross_site_post() {
         ("/redesign/bind/turbo", "slot=1&function=a&turbo_hz=10"),
         ("/redesign/bind/toggle", "slot=1&function=a&mode=toggle"),
         ("/redesign/key/clear", "number=1&key=G"),
+        ("/redesign/board", "board=qwerty"),
     ] {
         let response = http(
             addr,
@@ -5767,6 +5768,34 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
             .as_array()
             .is_some_and(|rows| !rows.is_empty()),
         "the Keys tab serves the remaining bound keys: {api}"
+    );
+
+    // The KEYBOARD widget rides the same payload: the standard plate's rows
+    // and the picker roster, from the one shared board composer.
+    assert!(
+        api["board"]["kb_row1"]
+            .as_array()
+            .is_some_and(|cells| !cells.is_empty()),
+        "the plate's first row serves cells: {api}"
+    );
+    assert!(
+        api["board"]["board_rows"]
+            .as_array()
+            .is_some_and(|rows| rows.len() >= 2),
+        "the picker roster serves at least follow-hardware and qwerty: {api}"
+    );
+
+    // The board verb validates the id SHAPE before any write, and answers
+    // THIS page's redirect with nocturne's own sentences.
+    let response = post_form(addr, "/redesign/board", "board=gibberish");
+    assert!(
+        response.contains("/redesign?flash=error%3A%20That%20is%20not%20a%20board"),
+        "{response}"
+    );
+    let response = post_form(addr, "/redesign/board", "");
+    assert!(
+        response.contains("flash=the%20form%20did%20not%20say%20which%20board"),
+        "{response}"
     );
 }
 

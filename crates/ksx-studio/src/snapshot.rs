@@ -69,6 +69,10 @@ pub struct RedesignPayload {
     /// [`RedesignControllers`].
     #[serde(default)]
     pub controllers: RedesignControllers,
+    /// The keyboard widget's whole serving — the SAME [`BoardPanel`]
+    /// `/nocturne`'s plate destructures, from the one composer.
+    #[serde(default)]
+    pub board: BoardPanel,
 }
 
 /// One staged controller on the workbench — a card per slot, straight off
@@ -3709,6 +3713,436 @@ pub(crate) fn compose_key_panel(
     }
 }
 
+/// The KEYBOARD widget's whole serving — the drawn plate (cells placed as
+/// percentages of the board's own bounds), the off-board tray, the legend
+/// with its solo lens, the picker roster and the honest picker sentence —
+/// composed once for every page that mounts the board. `/nocturne` passes
+/// its resolved board and store errors; `/redesign` the same over its own
+/// collect. One implementation, so the two keyboards cannot disagree about
+/// a cap, a band, or a sentence.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardPanel {
+    pub kb_title: String,
+    pub kb_cls: String,
+    pub board_case_style: String,
+    pub board_origin: String,
+    pub board_line: String,
+    pub board_rows: Vec<NocturneChoiceRow>,
+    pub kb_row1: Vec<NocturneKeyCell>,
+    pub kb_row2: Vec<NocturneKeyCell>,
+    pub kb_row3: Vec<NocturneKeyCell>,
+    pub kb_row4: Vec<NocturneKeyCell>,
+    pub kb_row5: Vec<NocturneKeyCell>,
+    pub kb_row6: Vec<NocturneKeyCell>,
+    pub kb_tray: Vec<NocturneKeyCell>,
+    pub kb_tray_head: String,
+    pub kb_tray_cls: String,
+    pub legend: Vec<NocturneLegendRow>,
+    pub solo_label: String,
+    pub kb_more_cls: String,
+    pub kb_note: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compose_board_panel(
+    staged: &ksx_api::StagedSetupView,
+    selected: Option<&ksx_api::StagedSlotView>,
+    board: &crate::board::Board,
+    chosen_board: &str,
+    panel_profiles: &[ksx_api::PanelHardwareProfile],
+    drawn_boards: &[ksx_api::BoardDocument],
+    encoder_staged: bool,
+    transport: Option<&str>,
+    drawn_error: &str,
+    panels_error: &str,
+) -> BoardPanel {
+    let selected_number = selected.map(|slot| slot.number);
+    let keyboard_name = staged
+        .device
+        .as_ref()
+        .map(|device| device.label.as_str())
+        .unwrap_or("(none)");
+    let mapper =
+        selected.and_then(|slot| ksx_api::staged_mapper_slot(slot, keyboard_name).ok());
+    // ⚠️ A MACRO TRIGGER IS A BINDING TOO. `MapperSlot.bindings` is built
+    // from the preset's CONTROL entries only — a macro trigger lives in a
+    // separate table with no `Binding` variant — so every inversion built
+    // on it alone was blind to them: the key that starts a macro painted
+    // UNBOUND on the board, and "add another trigger key" appended to a
+    // list it could not see, which is a replace.
+    let trigger_keys = |slot: &ksx_api::StagedSlotView| -> Vec<(String, Vec<String>)> {
+        ksx_api::staged_macro_snapshot(slot)
+            .macros
+            .into_iter()
+            .filter(|m| !m.triggers.is_empty())
+            .map(|m| (format!("macro.{}", m.name), m.triggers))
+            .collect()
+    };
+    let selected_triggers: Vec<(String, Vec<String>)> =
+        selected.map(trigger_keys).unwrap_or_default();
+    let mut key_fns: std::collections::BTreeMap<&str, Vec<&str>> =
+        std::collections::BTreeMap::new();
+    if let Some(mapper) = mapper.as_ref() {
+        for (fn_name, keys) in &mapper.bindings {
+            for key in keys {
+                key_fns
+                    .entry(key.as_str())
+                    .or_default()
+                    .push(fn_name.as_str());
+            }
+        }
+    }
+    for (fn_name, keys) in &selected_triggers {
+        for key in keys {
+            key_fns
+                .entry(key.as_str())
+                .or_default()
+                .push(fn_name.as_str());
+        }
+    }
+    // The GLOBAL ownership read: which controllers each key drives,
+    // across EVERY staged slot — the board's color strips wear it.
+    let mut key_slots: std::collections::BTreeMap<String, Vec<u8>> =
+        std::collections::BTreeMap::new();
+    for slot in &staged.slots {
+        let mut own = |key: &String| {
+            let owners = key_slots.entry(key.clone()).or_default();
+            if !owners.contains(&slot.number) {
+                owners.push(slot.number);
+            }
+        };
+        if let Ok(m) = ksx_api::staged_mapper_slot(slot, keyboard_name) {
+            for keys in m.bindings.values() {
+                for key in keys {
+                    own(key);
+                }
+            }
+        }
+        // …and the keys that START a macro on this controller.
+        for (_, keys) in trigger_keys(slot) {
+            for key in &keys {
+                own(key);
+            }
+        }
+    }
+    // OWNERSHIP IS THE CAP'S FILL. Every key that some controller drives
+    // paints that controller's color; a key several controllers share
+    // splits into one band each, ALWAYS in slot order. The order is
+    // stable on purpose: a key P1 and P2 share reads blue|coral whoever
+    // you are editing, so the stripe itself tells you who is on it and
+    // the map never rearranges under you. (Which of them is YOURS is
+    // the ring's job — see `--mine` in the sheet.) Four bands is the
+    // honest ceiling at 30px; past it the cap stops naming owners
+    // altogether and becomes a STACK.
+    let bands = |owners: &[u8]| -> String {
+        if owners.is_empty() {
+            return String::new();
+        }
+        if owners.len() > BAND_MAX {
+            // THE STACK. Three colors out of eight would be an arbitrary
+            // three, and a band plus a separate "+N" makes you add two
+            // marks that stand for the same controllers. So past four the
+            // face becomes one woven texture that names NOBODY, and the
+            // cap carries the TOTAL: nothing to add, nothing to guess.
+            // (Every owner is still named in the cap's own sentence, and
+            // the ring still says whether one of them is yours.)
+            return format!(" bstack bcount{}", owners.len());
+        }
+        let mut order: Vec<u8> = owners.to_vec();
+        order.sort_unstable();
+        let mut cls = format!(" bn{}", order.len());
+        for (at, slot) in order.iter().enumerate() {
+            cls.push_str(&format!(" {}{slot}", BAND_KEYS[at]));
+        }
+        cls
+    };
+    // Does any key carry more owners than the bands can name? Then the
+    // legend explains the stacked cap in words, beside the colors it
+    // stands in for — a mark nothing names is a mark you have to guess.
+    let kb_more_cls = if key_slots.values().any(|owners| owners.len() > BAND_MAX) {
+        "n-lgdmore".to_owned()
+    } else {
+        "n-lgdmore none".to_owned()
+    };
+    // The board's legend: every staged controller with its color, so
+    // "which color is who" is answerable without the left pane, and
+    // each chip is the door to muting that player on the keys.
+    let legend: Vec<NocturneLegendRow> = staged
+        .slots
+        .iter()
+        .map(|slot| NocturneLegendRow {
+            slot: slot.number.to_string(),
+            badge: format!("P{}", slot.number),
+            name: slot.persona_label.clone(),
+            // The selected controller's chip is marked, so "only this
+            // one" can cross out every OTHER chip without the browser
+            // having to work out which is which.
+            cls: if selected_number == Some(slot.number) {
+                format!("n-lgd np{} on", slot.number)
+            } else {
+                format!("n-lgd np{}", slot.number)
+            },
+        })
+        .collect();
+    let solo_label = match selected_number {
+        Some(number) => format!("Only P{number}"),
+        None => "Only this player".to_owned(),
+    };
+    let persona = selected
+        .map(|slot| slot.persona.as_str())
+        .unwrap_or("xbox360");
+    // The READABLE control names for hover/assistive sentences — the
+    // zone tables' own labels ("LS ↑", "D-pad ←", "△"), looked up
+    // case-bridged because the mapper spells face functions UPPERCASE.
+    let zone_labels: std::collections::HashMap<String, String> =
+        crate::render_map::zones_for(persona)
+            .iter()
+            .map(|zone| {
+                (
+                    zone.fn_name.to_ascii_lowercase(),
+                    crate::render_map::legend_label_for_persona(persona, zone),
+                )
+            })
+            .collect();
+    let readable = |f: &str| -> String {
+        if let Some(name) = f.strip_prefix("macro.") {
+            format!("macro \"{name}\"")
+        } else {
+            zone_labels
+                .get(&f.to_ascii_lowercase())
+                .cloned()
+                .unwrap_or_else(|| f.to_owned())
+        }
+    };
+    let drives_whom = selected
+        .map(|slot| format!(" on P{}", slot.number))
+        .unwrap_or_default();
+    // The plate's own coordinate system. Cells are placed as PERCENTAGES
+    // of it, which is what retires the hand-fitted board width: studio.css
+    // had to pick 35.5px so the plate filled one 980px card and warns
+    // against 36px because that lands it wider than its scroll container.
+    // A percentage board fits whatever card it is given, and a panel — a
+    // different shape entirely — needs no second hand-fitting.
+    let (board_w, board_h) = board.bounds;
+    let board_origin = board.origin.as_str().to_owned();
+    let pct = |value: f32, span: f32| {
+        if span > 0.0 {
+            value / span * 100.0
+        } else {
+            0.0
+        }
+    };
+    let dress = |cell: &&crate::board::BoardCell| {
+        let mut cls = String::from("n-key");
+        if !cell.unit.is_empty() {
+            cls.push(' ');
+            cls.push_str(&cell.unit);
+        }
+        if cell.sp {
+            cls.push_str(" sp");
+        }
+        if cell.ghost {
+            cls.push_str(" ghost");
+        }
+        let fns = key_fns.get(cell.key.as_str()).filter(|fns| !fns.is_empty());
+        let (short, title) = match fns {
+            Some(fns) => {
+                cls.push_str(" bound");
+                if fns.len() > 1 {
+                    cls.push_str(" shared");
+                }
+                let short = crate::keyboard_layout::short_for(persona, fns[0]);
+                let spoken: Vec<String> = fns.iter().map(|f| readable(f)).collect();
+                (
+                    short,
+                    format!("{} — drives {}{drives_whom}", cell.cap, spoken.join(" · ")),
+                )
+            }
+            None => (String::new(), String::new()),
+        };
+        let owners = key_slots
+            .get(cell.key.as_str())
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        let others: Vec<String> = owners
+            .iter()
+            .filter(|n| Some(**n) != selected_number)
+            .map(|n| format!("P{n}"))
+            .collect();
+        let title = if !others.is_empty() {
+            if title.is_empty() {
+                format!("{} — bound on {}", cell.cap, others.join(" · "))
+            } else {
+                format!("{title}; also bound on {}", others.join(" · "))
+            }
+        } else {
+            title
+        };
+        let aria = if title.is_empty() {
+            cell.cap.to_owned()
+        } else {
+            title.clone()
+        };
+        cls.push_str(&bands(owners));
+        NocturneKeyCell {
+            cap: cell.cap.clone(),
+            key: cell.key.clone(),
+            cls,
+            short,
+            title,
+            aria,
+            style: format!(
+                "left:{:.4}%;top:{:.4}%;width:{:.4}%;height:{:.4}%",
+                pct(cell.x, board_w),
+                pct(cell.y, board_h),
+                pct(cell.w, board_w),
+                pct(cell.h, board_h)
+            ),
+        }
+    };
+    let kb_rows: Vec<Vec<NocturneKeyCell>> = board
+        .rows()
+        .iter()
+        .map(|row| row.iter().map(dress).collect())
+        .collect();
+    let mut kb_rows = kb_rows.into_iter();
+    let kb_row1 = kb_rows.next().unwrap_or_default();
+    let kb_row2 = kb_rows.next().unwrap_or_default();
+    let kb_row3 = kb_rows.next().unwrap_or_default();
+    let kb_row4 = kb_rows.next().unwrap_or_default();
+    let kb_row5 = kb_rows.next().unwrap_or_default();
+    let kb_row6 = kb_rows.next().unwrap_or_default();
+    // Off-board keys: bound in the table but not on the standard board.
+    let board_keys: std::collections::BTreeSet<&str> = board
+        .cells
+        .iter()
+        .filter(|cell| !cell.key.is_empty())
+        .map(|cell| cell.key.as_str())
+        .collect();
+    let kb_tray: Vec<NocturneKeyCell> = key_fns
+        .iter()
+        .filter(|(key, _)| !board_keys.contains(*key))
+        .map(|(key, fns)| {
+            let tray_owners = key_slots.get(*key).map(|v| v.as_slice()).unwrap_or(&[]);
+            let spoken: Vec<String> = fns.iter().map(|f| readable(f)).collect();
+            let title = format!("{key} — drives {}{drives_whom}", spoken.join(" · "));
+            // The board's cells name the other owners; so does the tray.
+            let others: Vec<String> = tray_owners
+                .iter()
+                .filter(|n| Some(**n) != selected_number)
+                .map(|n| format!("P{n}"))
+                .collect();
+            let title = if others.is_empty() {
+                title
+            } else {
+                format!("{title}; also bound on {}", others.join(" · "))
+            };
+            NocturneKeyCell {
+                cap: (*key).to_owned(),
+                key: (*key).to_owned(),
+                cls: {
+                    let mut cls = if fns.len() > 1 {
+                        "n-key tray bound shared".to_owned()
+                    } else {
+                        "n-key tray bound".to_owned()
+                    };
+                    cls.push_str(&bands(tray_owners));
+                    cls
+                },
+                short: crate::keyboard_layout::short_for(persona, fns[0]),
+                aria: title.clone(),
+                title,
+                // The TRAY is not on the plate. These are keys bound off
+                // whatever board is drawn, so they have no place on it —
+                // they stay a flowed strip, and an empty style is what
+                // says so rather than a position that means nothing.
+                style: String::new(),
+            }
+        })
+        .collect();
+    let kb_tray_head = format!("Bound off this board · {}", kb_tray.len());
+    let kb_tray_cls = if kb_tray.is_empty() {
+        "n-kbtray none".to_owned()
+    } else {
+        "n-kbtray".to_owned()
+    };
+    let kb_note = match selected {
+        Some(slot) if mapper.is_some() => format!(
+            "Key shorts show what drives P{} · {} — on a standard board layout.",
+            slot.number, slot.persona_label
+        ),
+        _ => String::new(),
+    };
+    let kb_title = match staged.device.as_ref() {
+        _ if !staged.reachable => "The draft could not be read — reopen ksx".to_owned(),
+        Some(d) => match transport.filter(|t| !t.trim().is_empty()) {
+            Some(t) => format!("{} · {}", d.label, t),
+            None => d.label.clone(),
+        },
+        None => "No keyboard selected — pick one on the left".to_owned(),
+    };
+    // The ramp digit on the plate: the selected controller's bound-cap tint.
+    let kb_cls = match selected_number {
+        Some(digit) => format!("n-kb np{digit}"),
+        None => "n-kb".to_owned(),
+    };
+    let board_case_style = format!(
+        "aspect-ratio:{board_w:.2} / {board_h:.2};         max-width:min(100%, calc(var(--n-kbcase-max-h) * {board_w:.2} / {board_h:.2}))"
+    );
+    let board_rows: Vec<NocturneChoiceRow> =
+        crate::board::Board::roster(panel_profiles, drawn_boards)
+            .into_iter()
+            .map(|choice| NocturneChoiceRow {
+                chosen: choice.id == board.id,
+                cls: if choice.id == board.id {
+                    "n-radio on".to_owned()
+                } else {
+                    "n-radio".to_owned()
+                },
+                name: choice.id,
+                title: choice.name,
+                detail: choice.detail,
+            })
+            .collect();
+    let board_line = if !drawn_error.is_empty() && !panels_error.is_empty() {
+        format!("{drawn_error} {panels_error}")
+    } else if !drawn_error.is_empty() {
+        drawn_error.to_owned()
+    } else if !panels_error.is_empty() {
+        panels_error.to_owned()
+    } else if encoder_staged && panel_profiles.len() > 1 && chosen_board.is_empty() {
+        "You have more than one saved panel layout, and a saved          layout does not record which board it came off. Pick the          one that matches the encoder you plugged in."
+            .to_owned()
+    } else if encoder_staged && panel_profiles.is_empty() {
+        "Your arcade panel can be a board here too — but ksx cannot          guess what it emits, because an encoder only ever tells the          host that a key arrived. Save a panel layout and it joins          this list."
+            .to_owned()
+    } else {
+        "The picture only. Which key drives which control is the same          whichever board is on screen."
+            .to_owned()
+    };
+    BoardPanel {
+        kb_title,
+        kb_cls,
+        board_case_style,
+        board_origin,
+        board_line,
+        board_rows,
+        kb_row1,
+        kb_row2,
+        kb_row3,
+        kb_row4,
+        kb_row5,
+        kb_row6,
+        kb_tray,
+        kb_tray_head,
+        kb_tray_cls,
+        legend,
+        solo_label,
+        kb_more_cls,
+        kb_note,
+    }
+}
+
 /// A human-scannable order independent of the art tables' drawing order.
 /// The tables remain the source of which controls and persona labels exist;
 /// this rank only normalizes those controls into face, D-pad, shoulders,
@@ -4184,23 +4618,6 @@ impl NocturneDerived {
             p.unavailable.clone()
         };
 
-        let kb_title = match staged.device.as_ref() {
-            _ if !staged.reachable => "The draft could not be read — reopen ksx".to_owned(),
-            Some(d) => {
-                let transport = p
-                    .scan
-                    .boards
-                    .iter()
-                    .find(|b| b.selector.as_deref() == Some(d.selector.as_str()))
-                    .map(|b| b.transport_label.as_str())
-                    .filter(|t| !t.trim().is_empty());
-                match transport {
-                    Some(t) => format!("{} · {}", d.label, t),
-                    None => d.label.clone(),
-                }
-            }
-            None => "No keyboard selected — pick one on the left".to_owned(),
-        };
 
         let selected_is_panel_encoder = chosen.is_some_and(|selector| {
             dev_encoders
@@ -4546,13 +4963,6 @@ impl NocturneDerived {
             socd_lab,
             socd_edit_opts,
         } = compose_controller_panel(staged, selected, p.q.as_deref());
-        // The selected slot's ramp digit for the BOARD's bound-cap tint (the
-        // badge and pane wear theirs inside the shared panel).
-        let ramp = selected.map(|slot| slot.number);
-        let kb_cls = match ramp {
-            Some(digit) => format!("n-kb np{digit}"),
-            None => "n-kb".to_owned(),
-        };
         let (undo_cls, undo_label) = match p.undo_label.as_ref() {
             Some(label) => ("n-undochip".to_owned(), label.clone()),
             None => ("n-undochip none".to_owned(), String::new()),
@@ -4601,156 +5011,9 @@ impl NocturneDerived {
         // on it alone was blind to them: the key that starts a macro painted
         // UNBOUND on the board, and "add another trigger key" appended to a
         // list it could not see, which is a replace.
-        let trigger_keys = |slot: &ksx_api::StagedSlotView| -> Vec<(String, Vec<String>)> {
-            ksx_api::staged_macro_snapshot(slot)
-                .macros
-                .into_iter()
-                .filter(|m| !m.triggers.is_empty())
-                .map(|m| (format!("macro.{}", m.name), m.triggers))
-                .collect()
-        };
-        let selected_triggers: Vec<(String, Vec<String>)> =
-            selected.map(trigger_keys).unwrap_or_default();
-        let mut key_fns: std::collections::BTreeMap<&str, Vec<&str>> =
-            std::collections::BTreeMap::new();
-        if let Some(mapper) = mapper.as_ref() {
-            for (fn_name, keys) in &mapper.bindings {
-                for key in keys {
-                    key_fns
-                        .entry(key.as_str())
-                        .or_default()
-                        .push(fn_name.as_str());
-                }
-            }
-        }
-        for (fn_name, keys) in &selected_triggers {
-            for key in keys {
-                key_fns
-                    .entry(key.as_str())
-                    .or_default()
-                    .push(fn_name.as_str());
-            }
-        }
-        // The GLOBAL ownership read: which controllers each key drives,
-        // across EVERY staged slot — the board's color strips wear it.
-        let mut key_slots: std::collections::BTreeMap<String, Vec<u8>> =
-            std::collections::BTreeMap::new();
-        for slot in &staged.slots {
-            let mut own = |key: &String| {
-                let owners = key_slots.entry(key.clone()).or_default();
-                if !owners.contains(&slot.number) {
-                    owners.push(slot.number);
-                }
-            };
-            if let Ok(m) = ksx_api::staged_mapper_slot(slot, keyboard_name) {
-                for keys in m.bindings.values() {
-                    for key in keys {
-                        own(key);
-                    }
-                }
-            }
-            // …and the keys that START a macro on this controller.
-            for (_, keys) in trigger_keys(slot) {
-                for key in &keys {
-                    own(key);
-                }
-            }
-        }
-        // OWNERSHIP IS THE CAP'S FILL. Every key that some controller drives
-        // paints that controller's color; a key several controllers share
-        // splits into one band each, ALWAYS in slot order. The order is
-        // stable on purpose: a key P1 and P2 share reads blue|coral whoever
-        // you are editing, so the stripe itself tells you who is on it and
-        // the map never rearranges under you. (Which of them is YOURS is
-        // the ring's job — see `--mine` in the sheet.) Four bands is the
-        // honest ceiling at 30px; past it the cap stops naming owners
-        // altogether and becomes a STACK.
-        let bands = |owners: &[u8]| -> String {
-            if owners.is_empty() {
-                return String::new();
-            }
-            if owners.len() > BAND_MAX {
-                // THE STACK. Three colors out of eight would be an arbitrary
-                // three, and a band plus a separate "+N" makes you add two
-                // marks that stand for the same controllers. So past four the
-                // face becomes one woven texture that names NOBODY, and the
-                // cap carries the TOTAL: nothing to add, nothing to guess.
-                // (Every owner is still named in the cap's own sentence, and
-                // the ring still says whether one of them is yours.)
-                return format!(" bstack bcount{}", owners.len());
-            }
-            let mut order: Vec<u8> = owners.to_vec();
-            order.sort_unstable();
-            let mut cls = format!(" bn{}", order.len());
-            for (at, slot) in order.iter().enumerate() {
-                cls.push_str(&format!(" {}{slot}", BAND_KEYS[at]));
-            }
-            cls
-        };
-        // Does any key carry more owners than the bands can name? Then the
-        // legend explains the stacked cap in words, beside the colors it
-        // stands in for — a mark nothing names is a mark you have to guess.
-        let kb_more_cls = if key_slots.values().any(|owners| owners.len() > BAND_MAX) {
-            "n-lgdmore".to_owned()
-        } else {
-            "n-lgdmore none".to_owned()
-        };
-        // The board's legend: every staged controller with its color, so
-        // "which color is who" is answerable without the left pane, and
-        // each chip is the door to muting that player on the keys.
-        let legend: Vec<NocturneLegendRow> = staged
-            .slots
-            .iter()
-            .map(|slot| NocturneLegendRow {
-                slot: slot.number.to_string(),
-                badge: format!("P{}", slot.number),
-                name: slot.persona_label.clone(),
-                // The selected controller's chip is marked, so "only this
-                // one" can cross out every OTHER chip without the browser
-                // having to work out which is which.
-                cls: if selected_number == Some(slot.number) {
-                    format!("n-lgd np{} on", slot.number)
-                } else {
-                    format!("n-lgd np{}", slot.number)
-                },
-            })
-            .collect();
-        let solo_label = match selected_number {
-            Some(number) => format!("Only P{number}"),
-            None => "Only this player".to_owned(),
-        };
         // The multi-pad grid's data: every staged controller, its family,
         // its callout chips and its readable control names.
         let pads = compose_pad_views(staged);
-        let persona = selected
-            .map(|slot| slot.persona.as_str())
-            .unwrap_or("xbox360");
-        // The READABLE control names for hover/assistive sentences — the
-        // zone tables' own labels ("LS ↑", "D-pad ←", "△"), looked up
-        // case-bridged because the mapper spells face functions UPPERCASE.
-        let zone_labels: std::collections::HashMap<String, String> =
-            crate::render_map::zones_for(persona)
-                .iter()
-                .map(|zone| {
-                    (
-                        zone.fn_name.to_ascii_lowercase(),
-                        crate::render_map::legend_label_for_persona(persona, zone),
-                    )
-                })
-                .collect();
-        let readable = |f: &str| -> String {
-            if let Some(name) = f.strip_prefix("macro.") {
-                format!("macro \"{name}\"")
-            } else {
-                zone_labels
-                    .get(&f.to_ascii_lowercase())
-                    .cloned()
-                    .unwrap_or_else(|| f.to_owned())
-            }
-        };
-        let drives_whom = selected
-            .map(|slot| format!(" on P{}", slot.number))
-            .unwrap_or_default();
         // The BOARD, not the authored table. One source for the drawn
         // cells, the tray's "off this board" test, and the available-key
         // rosters below — three readers that used to walk `ROWS`
@@ -4786,149 +5049,6 @@ impl NocturneDerived {
             drawn_boards,
             encoder_staged,
         );
-        // The plate's own coordinate system. Cells are placed as PERCENTAGES
-        // of it, which is what retires the hand-fitted board width: studio.css
-        // had to pick 35.5px so the plate filled one 980px card and warns
-        // against 36px because that lands it wider than its scroll container.
-        // A percentage board fits whatever card it is given, and a panel — a
-        // different shape entirely — needs no second hand-fitting.
-        let (board_w, board_h) = board.bounds;
-        let board_origin = board.origin.as_str().to_owned();
-        let pct = |value: f32, span: f32| {
-            if span > 0.0 {
-                value / span * 100.0
-            } else {
-                0.0
-            }
-        };
-        let dress = |cell: &&crate::board::BoardCell| {
-            let mut cls = String::from("n-key");
-            if !cell.unit.is_empty() {
-                cls.push(' ');
-                cls.push_str(&cell.unit);
-            }
-            if cell.sp {
-                cls.push_str(" sp");
-            }
-            if cell.ghost {
-                cls.push_str(" ghost");
-            }
-            let fns = key_fns.get(cell.key.as_str()).filter(|fns| !fns.is_empty());
-            let (short, title) = match fns {
-                Some(fns) => {
-                    cls.push_str(" bound");
-                    if fns.len() > 1 {
-                        cls.push_str(" shared");
-                    }
-                    let short = crate::keyboard_layout::short_for(persona, fns[0]);
-                    let spoken: Vec<String> = fns.iter().map(|f| readable(f)).collect();
-                    (
-                        short,
-                        format!("{} — drives {}{drives_whom}", cell.cap, spoken.join(" · ")),
-                    )
-                }
-                None => (String::new(), String::new()),
-            };
-            let owners = key_slots
-                .get(cell.key.as_str())
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]);
-            let others: Vec<String> = owners
-                .iter()
-                .filter(|n| Some(**n) != selected_number)
-                .map(|n| format!("P{n}"))
-                .collect();
-            let title = if !others.is_empty() {
-                if title.is_empty() {
-                    format!("{} — bound on {}", cell.cap, others.join(" · "))
-                } else {
-                    format!("{title}; also bound on {}", others.join(" · "))
-                }
-            } else {
-                title
-            };
-            let aria = if title.is_empty() {
-                cell.cap.to_owned()
-            } else {
-                title.clone()
-            };
-            cls.push_str(&bands(owners));
-            NocturneKeyCell {
-                cap: cell.cap.clone(),
-                key: cell.key.clone(),
-                cls,
-                short,
-                title,
-                aria,
-                style: format!(
-                    "left:{:.4}%;top:{:.4}%;width:{:.4}%;height:{:.4}%",
-                    pct(cell.x, board_w),
-                    pct(cell.y, board_h),
-                    pct(cell.w, board_w),
-                    pct(cell.h, board_h)
-                ),
-            }
-        };
-        let kb_rows: Vec<Vec<NocturneKeyCell>> = board
-            .rows()
-            .iter()
-            .map(|row| row.iter().map(dress).collect())
-            .collect();
-        let mut kb_rows = kb_rows.into_iter();
-        let kb_row1 = kb_rows.next().unwrap_or_default();
-        let kb_row2 = kb_rows.next().unwrap_or_default();
-        let kb_row3 = kb_rows.next().unwrap_or_default();
-        let kb_row4 = kb_rows.next().unwrap_or_default();
-        let kb_row5 = kb_rows.next().unwrap_or_default();
-        let kb_row6 = kb_rows.next().unwrap_or_default();
-        // Off-board keys: bound in the table but not on the standard board.
-        let board_keys: std::collections::BTreeSet<&str> = board
-            .cells
-            .iter()
-            .filter(|cell| !cell.key.is_empty())
-            .map(|cell| cell.key.as_str())
-            .collect();
-        let kb_tray: Vec<NocturneKeyCell> = key_fns
-            .iter()
-            .filter(|(key, _)| !board_keys.contains(*key))
-            .map(|(key, fns)| {
-                let tray_owners = key_slots.get(*key).map(|v| v.as_slice()).unwrap_or(&[]);
-                let spoken: Vec<String> = fns.iter().map(|f| readable(f)).collect();
-                let title = format!("{key} — drives {}{drives_whom}", spoken.join(" · "));
-                // The board's cells name the other owners; so does the tray.
-                let others: Vec<String> = tray_owners
-                    .iter()
-                    .filter(|n| Some(**n) != selected_number)
-                    .map(|n| format!("P{n}"))
-                    .collect();
-                let title = if others.is_empty() {
-                    title
-                } else {
-                    format!("{title}; also bound on {}", others.join(" · "))
-                };
-                NocturneKeyCell {
-                    cap: (*key).to_owned(),
-                    key: (*key).to_owned(),
-                    cls: {
-                        let mut cls = if fns.len() > 1 {
-                            "n-key tray bound shared".to_owned()
-                        } else {
-                            "n-key tray bound".to_owned()
-                        };
-                        cls.push_str(&bands(tray_owners));
-                        cls
-                    },
-                    short: crate::keyboard_layout::short_for(persona, fns[0]),
-                    aria: title.clone(),
-                    title,
-                    // The TRAY is not on the plate. These are keys bound off
-                    // whatever board is drawn, so they have no place on it —
-                    // they stay a flowed strip, and an empty style is what
-                    // says so rather than a position that means nothing.
-                    style: String::new(),
-                }
-            })
-            .collect();
         // The BY-KEY view — rows, free-key sections and the note — comes
         // from the ONE shared composer (`compose_key_panel`), against THIS
         // page's resolved board. `/redesign` serves the same struct over the
@@ -4946,12 +5066,48 @@ impl NocturneDerived {
             avail_nav_cls,
             avail_num_cls,
         } = compose_key_panel(staged, selected, &board);
-        let kb_tray_head = format!("Bound off this board · {}", kb_tray.len());
-        let kb_tray_cls = if kb_tray.is_empty() {
-            "n-kbtray none".to_owned()
-        } else {
-            "n-kbtray".to_owned()
-        };
+        // The KEYBOARD widget's serving — plate, tray, legend, picker — off
+        // the ONE shared board composer (the redesign mounts the same
+        // struct), over THIS page's resolved board and store errors.
+        let kb_transport = staged.device.as_ref().and_then(|d| {
+            p.scan
+                .boards
+                .iter()
+                .find(|b| b.selector.as_deref() == Some(d.selector.as_str()))
+                .map(|b| b.transport_label.as_str())
+        });
+        let BoardPanel {
+            kb_title,
+            kb_cls,
+            board_case_style,
+            board_origin,
+            board_line,
+            board_rows,
+            kb_row1,
+            kb_row2,
+            kb_row3,
+            kb_row4,
+            kb_row5,
+            kb_row6,
+            kb_tray,
+            kb_tray_head,
+            kb_tray_cls,
+            legend,
+            solo_label,
+            kb_more_cls,
+            kb_note,
+        } = compose_board_panel(
+            staged,
+            selected,
+            &board,
+            chosen_board,
+            panel_profiles,
+            drawn_boards,
+            encoder_staged,
+            kb_transport,
+            &p.drawn_error,
+            &p.panels_error,
+        );
         // ── The macro STEP editor, when one is open ───────────────────────
         // A macro is addressed by NAME on the selected controller; an unknown
         // name simply leaves the dialog closed rather than inventing a macro.
@@ -4975,13 +5131,6 @@ impl NocturneDerived {
             _ => crate::macro_editor::NocturneMacroEditor::closed(),
         };
 
-        let kb_note = match selected {
-            Some(slot) if mapper.is_some() => format!(
-                "Key shorts show what drives P{} · {} — on a standard board layout.",
-                slot.number, slot.persona_label
-            ),
-            _ => String::new(),
-        };
 
         // ── The configuration menu, served ────────────────────────────────
         // The saved-config row: what config.toml holds, and whether THIS
@@ -5218,25 +5367,9 @@ impl NocturneDerived {
             // without distorting anything. `min()` keeps the card's own
             // width the ceiling for a landscape board, where the budget is
             // far wider than the card and must not win.
-            board_case_style: format!(
-                "aspect-ratio:{board_w:.2} / {board_h:.2};\
-                 max-width:min(100%, calc(var(--n-kbcase-max-h) * {board_w:.2} / {board_h:.2}))"
-            ),
+            board_case_style,
             board_origin,
-            board_rows: crate::board::Board::roster(panel_profiles, drawn_boards)
-                .into_iter()
-                .map(|choice| NocturneChoiceRow {
-                    chosen: choice.id == board.id,
-                    cls: if choice.id == board.id {
-                        "n-radio on".to_owned()
-                    } else {
-                        "n-radio".to_owned()
-                    },
-                    name: choice.id,
-                    title: choice.name,
-                    detail: choice.detail,
-                })
-                .collect(),
+            board_rows,
             // The sentence under the picker, and the only place these states
             // are told apart. They are genuinely different advice: a refused
             // read means try again, nothing saved means go and make one, and
@@ -5249,32 +5382,7 @@ impl NocturneDerived {
             // `board:` row, and said "The picture only" as though all was
             // well. A store that would not answer must never look like a
             // store with nothing in it.
-            board_line: if !p.drawn_error.is_empty() && !p.panels_error.is_empty() {
-                format!("{} {}", p.drawn_error, p.panels_error)
-            } else if !p.drawn_error.is_empty() {
-                p.drawn_error.clone()
-            } else if !p.panels_error.is_empty() {
-                p.panels_error.clone()
-            } else if encoder_staged && panel_profiles.len() > 1 && chosen_board.is_empty() {
-                // More than one saved layout and no choice made. ksx cannot
-                // tell which belongs to the encoder that is plugged in — a
-                // saved layout carries no device identity at all — so it
-                // says so instead of drawing whichever sorted first.
-                "You have more than one saved panel layout, and a saved \
-                 layout does not record which board it came off. Pick the \
-                 one that matches the encoder you plugged in."
-                    .to_owned()
-            } else if encoder_staged && panel_profiles.is_empty() {
-                "Your arcade panel can be a board here too — but ksx cannot \
-                 guess what it emits, because an encoder only ever tells the \
-                 host that a key arrived. Save a panel layout and it joins \
-                 this list."
-                    .to_owned()
-            } else {
-                "The picture only. Which key drives which control is the same \
-                 whichever board is on screen."
-                    .to_owned()
-            },
+            board_line,
             theme_rows: theme_rows(&SetupSnapshot {
                 available: p.setup.is_some(),
                 source: String::new(),

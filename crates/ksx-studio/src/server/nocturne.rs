@@ -46,6 +46,8 @@ pub(super) const N_BLOCKING_OK: &str =
 
 pub(super) const N_THEME_OK: &str = "Studio theme updated.";
 pub(super) const N_BOARD_OK: &str = "Board updated.";
+pub(super) const N_BOARD_MISSING: &str =
+    "the form did not say which board — pick one on the page";
 /// Shown when the board store itself refuses — the folder is unreadable, a
 /// saved board is corrupt, or another writer holds it. Authored here because
 /// the store's own text for those carries an absolute path and raw io/serde
@@ -1486,15 +1488,23 @@ pub(super) async fn nocturne_form_board(
     State(state): State<Arc<AppState>>,
     Form(form): Form<NocturneBoardForm>,
 ) -> Response {
-    let Some(field) = form.board else {
-        return nocturne_redirect("the form did not say which board — pick one on the page");
+    nocturne_redirect(board_write_flash(&state, form.board).await)
+}
+
+/// The board write, shared with `/redesign`: validate the id shape, then one
+/// config write. `panel:` is a saved encoder layout, `board:` is one somebody
+/// drew — both are refused if the id half is empty, so the config can never
+/// be wedged with a prefix that names nothing. A board that merely does not
+/// exist RIGHT NOW is a different case, handled at render time by falling
+/// back to the keyboard.
+pub(super) async fn board_write_flash(
+    state: &Arc<AppState>,
+    board: Option<String>,
+) -> &'static str {
+    let Some(field) = board else {
+        return N_BOARD_MISSING;
     };
     let wanted = field.trim().to_owned();
-    // `panel:` is a saved encoder layout, `board:` is one somebody drew. Both
-    // are refused here if the id half is empty, so the config can never be
-    // wedged with a prefix that names nothing. A board that merely does not
-    // exist RIGHT NOW is a different case and is handled at render time by
-    // falling back to the keyboard.
     let known = wanted.is_empty()
         || wanted == crate::board::AUTO_ID
         || wanted == crate::board::QWERTY_ID
@@ -1502,8 +1512,9 @@ pub(super) async fn nocturne_form_board(
             .iter()
             .any(|prefix| wanted.strip_prefix(prefix).is_some_and(|id| !id.is_empty()));
     if !known {
-        return nocturne_redirect(N_BOARD_UNKNOWN);
+        return N_BOARD_UNKNOWN;
     }
+    let state = Arc::clone(state);
     let ok = tokio::task::spawn_blocking(move || {
         state
             .machine
@@ -1512,7 +1523,11 @@ pub(super) async fn nocturne_form_board(
     })
     .await
     .unwrap_or(false);
-    nocturne_redirect(if ok { N_BOARD_OK } else { N_EDIT_ERROR })
+    if ok {
+        N_BOARD_OK
+    } else {
+        N_EDIT_ERROR
+    }
 }
 
 /// POST /nocturne/blocking (and /start/blocking) — the capture answer,

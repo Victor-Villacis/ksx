@@ -374,6 +374,81 @@ describe("the controller workbench", () => {
     await page.close();
   });
 
+  test("the keyboard stands on the canvas: served plate, finish, lens, and the key→Keys door", async () => {
+    const page = await openBench();
+    await page.waitForFunction(
+      () => document.querySelector('[data-instance-id="keyboard"]')?.dataset.canvasX !== undefined,
+      null,
+      { timeout: 20_000 },
+    );
+    await page.click('[data-nx="canvas-fit"]');
+    await page.waitForTimeout(600);
+    // The SERVED plate: six rows of real cells, bound caps wearing their
+    // control shorts and ownership bands, the legend naming every player.
+    assert.equal(await page.locator('.forma-canvas-stage > [data-instance-id="keyboard"] .n-kbrow').count(), 6);
+    const bound = page.locator('.forma-canvas-stage > [data-instance-id="keyboard"] .n-kb .n-key.bound');
+    assert.ok((await bound.count()) > 0, "the fixture bindings tint their caps");
+    assert.ok(
+      ((await bound.first().locator(".n-key-short").textContent()) ?? "").length > 0,
+      "a bound cap says WHICH control drives it",
+    );
+    assert.ok(
+      (await page.locator('.forma-canvas-stage > [data-instance-id="keyboard"] .n-legend .n-lgd').count()) > 0,
+      "the legend chips name the players",
+    );
+    // The finish is the keyboard's own material — a click restamps the
+    // widget and the preference survives in this browser.
+    await page.click('[data-nx="kb-theme"][data-keyboard-theme="retro-terminal"]');
+    assert.equal(
+      await page
+        .locator('.forma-canvas-stage > [data-instance-id="keyboard"]')
+        .getAttribute("data-keyboard-theme"),
+      "retro-terminal",
+    );
+    await page.click('[data-nx="kb-theme"][data-keyboard-theme="carbon-forge"]');
+    // The mute lens: one chip, one player's color — the same custom
+    // property the nocturne sheet drives, written on the plate.
+    await page.click('.n-legend [data-nx="legend-mute"][data-slot="1"]');
+    assert.equal(
+      await page.evaluate(() =>
+        document
+          .querySelector('[data-instance-id="keyboard"] .n-kb')
+          ?.style.getPropertyValue("--kb1"),
+      ),
+      "var(--band-mute)",
+    );
+    await page.click('.n-legend [data-nx="legend-mute"][data-slot="1"]');
+    assert.equal(
+      await page.evaluate(() =>
+        document
+          .querySelector('[data-instance-id="keyboard"] .n-kb')
+          ?.style.getPropertyValue("--kb1"),
+      ),
+      "",
+    );
+    // A plate key is the Keys tab's own door: clicking a bound cap opens
+    // the inspector on the Keys view with that key's row revealed.
+    const key = await bound.first().getAttribute("data-key");
+    await bound.first().click();
+    await page.waitForFunction(
+      (wanted) =>
+        document.querySelector(".rd-insp-vseg .vk")?.getAttribute("aria-pressed") === "true" &&
+        document.querySelector(".rd-row-pulse")?.getAttribute("data-key") === wanted,
+      key,
+      { timeout: 20_000 },
+    );
+    // The board picker offers the served roster; choosing the row already
+    // chosen is a write the fixture accepts or refuses HONESTLY — either
+    // sentence is an allowlisted outcome, never a dead control.
+    await page.click(".rd-boardpick-sum");
+    assert.ok(
+      (await page.locator(".rd-boardpick-pop form").count()) >= 2,
+      "the roster serves follow-hardware and the standard board",
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
   test("selecting a card serves ITS panel; the row verbs edit the draft; ✕ offers the undo", async () => {
     const page = await openBench();
     await page.waitForFunction(
@@ -399,6 +474,18 @@ describe("the controller workbench", () => {
     // panel — six groups, the meta strip, the SOCD editor — and the slot
     // rides the URL (the nocturne selection door), so a reload keeps it.
     await page.click(`${cardSel(1)} .rd-ctrlcard-slot`);
+    // The tab choice persists per browser (the keyboard test may have left
+    // Keys showing) — this test speaks for the Controls reading.
+    await page.waitForFunction(
+      () => Boolean(document.querySelector(".rd-insp-vseg .vc")),
+      null,
+      { timeout: 20_000 },
+    );
+    if (
+      (await page.locator(".rd-insp-vseg .vc").getAttribute("aria-pressed")) !== "true"
+    ) {
+      await page.click(".rd-insp-vseg .vc");
+    }
     await page.waitForFunction(
       () => document.querySelectorAll(".rd-insp-body .n-bindg-head").length === 6,
       null,

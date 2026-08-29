@@ -15,6 +15,7 @@ use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::render_nocturne::{device_row, mode_row, named_slot_ids, other_row};
 use crate::snapshot::{
+    compose_board_panel, BoardPanel,
     theme_rows, NocturneChoiceRow, RedesignControllers, RedesignDeviceRows, RedesignPayload,
     RedesignPersonaRow, SetupSnapshot,
 };
@@ -52,6 +53,14 @@ pub(crate) fn payload(
     selected_slot: Option<u8>,
     undo_label: Option<&str>,
 ) -> RedesignPayload {
+    // Facts borrowed BEFORE the payload construction consumes their owners:
+    // the saved board choice (setup is consumed by the theme rows) and the
+    // scan's boards (for the keyboard title's transport word).
+    let setup_board = setup.as_ref().map(|s| s.board.clone());
+    let scan_boards: &[ksx_api::BoardRow] = match &scan {
+        Ok(scan) => scan.boards.as_slice(),
+        Err(_) => &[],
+    };
     let staged_selector = staged
         .reachable
         .then(|| {
@@ -115,6 +124,37 @@ pub(crate) fn payload(
         // The staged controllers and the persona picker, off the SAME staged
         // view the device marking reads — one truth per render.
         controllers: RedesignControllers::of(staged, selected_slot, undo_label),
+        // The keyboard widget, off the ONE shared board composer. The board
+        // choice honours the saved config; the panel/drawn stores are not
+        // collected on this page yet (they arrive with the panel migration),
+        // so their rosters are empty and their errors silent — the standard
+        // keyboard and any `panel:`/`board:` choice degrade exactly like
+        // nocturne with empty stores.
+        board: {
+            let selected = selected_slot
+                .and_then(|number| staged.slots.iter().find(|slot| slot.number == number))
+                .or_else(|| staged.slots.first());
+            let chosen_board = setup_board.as_deref().unwrap_or_default();
+            let resolved = crate::board::Board::resolve(chosen_board, &[], &[], false);
+            let transport = staged.device.as_ref().and_then(|d| {
+                scan_boards
+                    .iter()
+                    .find(|b| b.selector.as_deref() == Some(d.selector.as_str()))
+                    .map(|b| b.transport_label.as_str())
+            });
+            compose_board_panel(
+                staged,
+                selected,
+                &resolved,
+                chosen_board,
+                &[],
+                &[],
+                false,
+                transport,
+                "",
+                "",
+            )
+        },
     }
 }
 
@@ -126,6 +166,50 @@ const LIST_SLOT_DEV_KB: &str = "list:rdDevKb:array";
 const LIST_SLOT_DEV_ENC: &str = "list:rdDevEnc:array";
 const LIST_SLOT_DEV_EXP: &str = "list:rdDevExp:array";
 const LIST_SLOT_DEV_OTHER: &str = "list:rdDevOther:array";
+// The keyboard widget's served lists: the six plate rows, the off-board
+// tray, the legend and the board-picker roster (the nocturne plate's own
+// slot shapes).
+const LIST_SLOT_KB_ROW1: &str = "list:rdKbRow1:array";
+const LIST_SLOT_KB_ROW2: &str = "list:rdKbRow2:array";
+const LIST_SLOT_KB_ROW3: &str = "list:rdKbRow3:array";
+const LIST_SLOT_KB_ROW4: &str = "list:rdKbRow4:array";
+const LIST_SLOT_KB_ROW5: &str = "list:rdKbRow5:array";
+const LIST_SLOT_KB_ROW6: &str = "list:rdKbRow6:array";
+const LIST_SLOT_KB_TRAY: &str = "list:rdKbTray:array";
+const LIST_SLOT_KB_LEGEND: &str = "list:rdKbLegend:array";
+const LIST_SLOT_BOARD_ROWS: &str = "list:rdBoardRows:array";
+
+/// One plate cell, every field spelled once (the nocturne row's shape).
+fn kb_cell(row: &crate::snapshot::NocturneKeyCell) -> SlotValue {
+    SlotValue::object(vec![
+        ("cap".to_owned(), SlotValue::Text(row.cap.clone())),
+        ("key".to_owned(), SlotValue::Text(row.key.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        ("short".to_owned(), SlotValue::Text(row.short.clone())),
+        ("title".to_owned(), SlotValue::Text(row.title.clone())),
+        ("aria".to_owned(), SlotValue::Text(row.aria.clone())),
+        ("style".to_owned(), SlotValue::Text(row.style.clone())),
+    ])
+}
+
+fn kb_legend_row(row: &crate::snapshot::NocturneLegendRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("slot".to_owned(), SlotValue::Text(row.slot.clone())),
+        ("badge".to_owned(), SlotValue::Text(row.badge.clone())),
+        ("name".to_owned(), SlotValue::Text(row.name.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+    ])
+}
+
+fn board_choice_row(row: &NocturneChoiceRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("name".to_owned(), SlotValue::Text(row.name.clone())),
+        ("title".to_owned(), SlotValue::Text(row.title.clone())),
+        ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+    ])
+}
+
 // The controller picker's persona rows. The staged CARDS are deliberately
 // not a slot: they mount as client-created canvas widgets off the payload
 // (parity rule 3e), exactly like the device bench.
@@ -178,6 +262,17 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         // the server-held window lasts — the nocturne chip's contract).
         "rdUndoCls": payload.controllers.undo_cls,
         "rdUndoLabel": payload.controllers.undo_label,
+        // The keyboard widget's chrome — every word the plate wears.
+        "rdKbTitle": payload.board.kb_title,
+        "rdKbCls": payload.board.kb_cls,
+        "rdBoardCaseStyle": payload.board.board_case_style,
+        "rdBoardOrigin": payload.board.board_origin,
+        "rdBoardLine": payload.board.board_line,
+        "rdKbTrayHead": payload.board.kb_tray_head,
+        "rdKbTrayCls": payload.board.kb_tray_cls,
+        "rdKbNote": payload.board.kb_note,
+        "rdKbMoreCls": payload.board.kb_more_cls,
+        "rdSoloLbl": payload.board.solo_label,
     })
 }
 
@@ -234,6 +329,49 @@ fn build_slots(module: &IrModule, payload: &RedesignPayload, flash: Option<&str>
                     .collect(),
             ),
         );
+    }
+    let board = &payload.board;
+    for (name, value) in [
+        (
+            LIST_SLOT_KB_ROW1,
+            SlotValue::array(board.kb_row1.iter().map(kb_cell).collect()),
+        ),
+        (
+            LIST_SLOT_KB_ROW2,
+            SlotValue::array(board.kb_row2.iter().map(kb_cell).collect()),
+        ),
+        (
+            LIST_SLOT_KB_ROW3,
+            SlotValue::array(board.kb_row3.iter().map(kb_cell).collect()),
+        ),
+        (
+            LIST_SLOT_KB_ROW4,
+            SlotValue::array(board.kb_row4.iter().map(kb_cell).collect()),
+        ),
+        (
+            LIST_SLOT_KB_ROW5,
+            SlotValue::array(board.kb_row5.iter().map(kb_cell).collect()),
+        ),
+        (
+            LIST_SLOT_KB_ROW6,
+            SlotValue::array(board.kb_row6.iter().map(kb_cell).collect()),
+        ),
+        (
+            LIST_SLOT_KB_TRAY,
+            SlotValue::array(board.kb_tray.iter().map(kb_cell).collect()),
+        ),
+        (
+            LIST_SLOT_KB_LEGEND,
+            SlotValue::array(board.legend.iter().map(kb_legend_row).collect()),
+        ),
+        (
+            LIST_SLOT_BOARD_ROWS,
+            SlotValue::array(board.board_rows.iter().map(board_choice_row).collect()),
+        ),
+    ] {
+        if let Some(id) = named_slot_ids(module, name).into_iter().next() {
+            slots.set(id, value);
+        }
     }
     slots
 }
@@ -859,6 +997,16 @@ mod tests {
             "rdCtrlAddLayout",
             "rdUndoCls",
             "rdUndoLabel",
+            "rdKbTitle",
+            "rdKbCls",
+            "rdBoardCaseStyle",
+            "rdBoardOrigin",
+            "rdBoardLine",
+            "rdKbTrayHead",
+            "rdKbTrayCls",
+            "rdKbNote",
+            "rdKbMoreCls",
+            "rdSoloLbl",
         ] {
             assert!(
                 REDESIGN_ISLAND_TS.contains(&format!("const [{signal}, ")),
@@ -872,6 +1020,15 @@ mod tests {
             "rdDevExp",
             "rdDevOther",
             "rdCtrlPersonas",
+            "rdKbRow1",
+            "rdKbRow2",
+            "rdKbRow3",
+            "rdKbRow4",
+            "rdKbRow5",
+            "rdKbRow6",
+            "rdKbTray",
+            "rdKbLegend",
+            "rdBoardRows",
         ] {
             assert!(
                 REDESIGN_ISLAND_TS.contains(&format!("const [{signal}, ")),

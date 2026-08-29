@@ -10,7 +10,10 @@ import {
   applyRedesignFlash,
   initRedesignCanvas,
   RedesignIsland,
+  redesignGhostHeld,
   redesignWire,
+  setRedesignRefresh,
+  unparkController,
   type RedesignPayload,
 } from "./RedesignIsland";
 
@@ -35,7 +38,11 @@ function embeddedPayload<T>(): T | null {
  *  enough until a transplant brings live data. */
 async function refresh(): Promise<boolean> {
   try {
-    const res = await fetch("/api/redesign", { headers: { accept: "application/json" } });
+    // The selected controller rides the URL (the nocturne `?slot=` door),
+    // so a refresh serves the panel the canvas selection is looking at.
+    const slot = new URLSearchParams(window.location.search).get("slot");
+    const url = slot ? `/api/redesign?slot=${encodeURIComponent(slot)}` : "/api/redesign";
+    const res = await fetch(url, { headers: { accept: "application/json" } });
     if (!res.ok) return false;
     applyRedesign((await res.json()) as RedesignPayload);
     return true;
@@ -64,6 +71,23 @@ function wireForms(root: HTMLElement): void {
     } else if (form.matches('[data-rd-form="device"]')) {
       ev.preventDefault();
       void submitDeviceForm(form, root, submitter);
+    } else if (
+      form.matches(
+        '[data-rd-form="controller-add"], [data-rd-form="controller-move"], ' +
+          '[data-rd-form="controller-remove"], [data-rd-form="controller-park"], ' +
+          '[data-rd-form="controller-assign"], [data-rd-form="controller-socd"], ' +
+          '[data-rd-form="controller-duplicate"], [data-rd-form="controller-undo"], ' +
+          '[data-rd-form="bind-clear"], [data-rd-form="bind-clear-all"], ' +
+          '[data-rd-form="key-clear"], [data-rd-form="board"], [data-rd-form="blocking"], ' +
+          '[data-rd-form="bind-turbo"], [data-rd-form="bind-toggle"]',
+      )
+    ) {
+      // Park and assign are ONE server transaction each (stash + remove +
+      // compact; restore-or-fresh + seat), and the inspector's re-homed
+      // nocturne verbs are each one shared-core POST — so every controller
+      // verb rides the same single-post handler.
+      ev.preventDefault();
+      void submitControllerForm(form, root, submitter);
     }
   });
 }
@@ -72,19 +96,45 @@ function wireForms(root: HTMLElement): void {
  * island as one mutation surface so an older refresh can never arrive last
  * and temporarily roll back the other verb's visible truth. */
 const pendingMutationRoots = new WeakSet<HTMLElement>();
-type SubmitControl = HTMLButtonElement | HTMLInputElement;
+type SubmitControl = HTMLButtonElement | HTMLInputElement | HTMLSelectElement;
+
+/** Every fetch-enhanced submit on the page — one selector, so the mutation
+ *  lock can never miss a form type that joined later. The Player selects
+ *  belong in it too: a change during a pending mutation would mint a ghost
+ *  whose park verb the lock silently swallowed — the select must be as
+ *  disabled as the submit it drives. */
+const MUTATION_SUBMIT_SELECTOR = [
+  "theme",
+  "device",
+  "controller-add",
+  "controller-move",
+  "controller-remove",
+  "controller-park",
+  "controller-assign",
+  "controller-socd",
+  "controller-duplicate",
+  "controller-undo",
+  "bind-clear",
+  "bind-clear-all",
+  "key-clear",
+  "board",
+  "blocking",
+  "bind-turbo",
+  "bind-toggle",
+]
+  .flatMap((kind) => [
+    `[data-rd-form="${kind}"] button[type="submit"]`,
+    `[data-rd-form="${kind}"] input[type="submit"]`,
+  ])
+  .concat(["select.rd-ctrlplayer"])
+  .join(", ");
 
 function beginMutation(root: HTMLElement): SubmitControl[] | null {
   if (pendingMutationRoots.has(root)) return null;
   pendingMutationRoots.add(root);
   root.dataset.rdMutationPending = "true";
   const controls = Array.from(
-    root.querySelectorAll<SubmitControl>(
-      '[data-rd-form="theme"] button[type="submit"], ' +
-        '[data-rd-form="theme"] input[type="submit"], ' +
-        '[data-rd-form="device"] button[type="submit"], ' +
-        '[data-rd-form="device"] input[type="submit"]',
-    ),
+    root.querySelectorAll<SubmitControl>(MUTATION_SUBMIT_SELECTOR),
   );
   controls.forEach((control) => {
     control.disabled = true;
@@ -97,12 +147,7 @@ function endMutation(root: HTMLElement, controls: SubmitControl[]): void {
   // A device card can be added from the still-usable picker while the
   // request is in flight. Include those newly mounted controls as well as
   // the original snapshot so none remain stuck disabled after the lock.
-  const currentControls = root.querySelectorAll<SubmitControl>(
-    '[data-rd-form="theme"] button[type="submit"], ' +
-      '[data-rd-form="theme"] input[type="submit"], ' +
-      '[data-rd-form="device"] button[type="submit"], ' +
-      '[data-rd-form="device"] input[type="submit"]',
-  );
+  const currentControls = root.querySelectorAll<SubmitControl>(MUTATION_SUBMIT_SELECTOR);
   new Set<SubmitControl>([...controls, ...currentControls]).forEach((control) => {
     control.disabled = control.dataset.rdProductDisabled === "true";
   });
@@ -221,6 +266,71 @@ async function submitDeviceForm(
   }
 }
 
+/** One handler for the three controller verbs (add / move / remove): the
+ *  daemon owns every consequence — numbering, ceilings, availability — so
+ *  the whole client answer is flash + full repaint. The picker deliberately
+ *  stays open after an add: staging several controllers in one visit is the
+ *  point. A card's verbs are rebuilt by the repaint, so when the submitter
+ *  does not survive it, focus lands on the durable opener instead of a
+ *  detached node. */
+async function submitControllerForm(
+  form: HTMLFormElement,
+  root: HTMLElement,
+  submitter: HTMLElement | null,
+): Promise<void> {
+  const submits = beginMutation(root);
+  if (!submits) return;
+  const owner = form.closest<HTMLElement>(".rd-ctrlmodal-panel, .rd-ctrl-node") ?? form;
+  // An assign form names the ghost it re-slots; a successful assign retires
+  // that ghost from the arrangement store.
+  const ghost = form.matches('[data-rd-form="controller-assign"]')
+    ? (form.elements.namedItem("ghost") as HTMLInputElement | null)?.value ?? ""
+    : "";
+  try {
+    const body = new URLSearchParams();
+    new FormData(form, submitter).forEach((value, key) => {
+      if (typeof value === "string") body.append(key, value);
+    });
+    const res = await fetch(form.action, {
+      method: "POST",
+      body,
+      redirect: "follow",
+    });
+    if (!res.ok) throw new Error(`controller request failed with ${res.status}`);
+    const outcome = new URL(res.url).searchParams.get("flash");
+    applyRedesignFlash(outcome);
+    if (!(await refresh())) {
+      applyRedesignFlash(
+        "error: the controller request completed, but the workbench could not refresh — reload to confirm.",
+      );
+    }
+    // A re-slot SUCCEEDED exactly when the server dropped the ghost's stash
+    // entry — the id leaving the refreshed `parked_held` is the structural
+    // signal, never a sentence comparison. The error-prefix guard keeps a
+    // REFUSED fresh-fallback (which was never held) parked for another try.
+    if (ghost && outcome && !outcome.startsWith("error") && !redesignGhostHeld(ghost)) {
+      unparkController(ghost);
+    }
+  } catch {
+    applyRedesignFlash("error: request failed — is ksx studio still running?");
+  } finally {
+    const restoreFocus = actionStillOwnsFocus(owner, submitter);
+    endMutation(root, submits);
+    if (restoreFocus) {
+      if (
+        submitter?.isConnected &&
+        !(submitter as HTMLButtonElement | HTMLInputElement).disabled
+      ) {
+        submitter.focus({ preventScroll: true });
+      } else {
+        root
+          .querySelector<HTMLElement>('[data-nx="rd-ctrls-open"]')
+          ?.focus({ preventScroll: true });
+      }
+    }
+  }
+}
+
 /** Hydration must start the action signals from the already-sanitized SSR
  *  flash. It intentionally is not part of /api/redesign: polling is not an
  *  action and must not replay old feedback. */
@@ -243,6 +353,9 @@ activateIslands({
     const seed = embeddedPayload<RedesignPayload>();
     if (seed) applyRedesign(seed);
     seedRenderedFlash(el);
+    // The island asks for another slot's panel through this (selection →
+    // ?slot merge → refetch) without ever owning fetch.
+    setRedesignRefresh(refresh);
     redesignWire(el);
     wireForms(el);
     window.requestAnimationFrame(() => {

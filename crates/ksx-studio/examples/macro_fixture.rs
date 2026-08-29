@@ -311,6 +311,18 @@ fn fixture_theme() -> String {
     fixture_theme_cell().lock().unwrap().clone()
 }
 
+/// The board choice, remembered in memory like the theme — so the redesign
+/// lane's Board picker round-trips against this fixture.
+static FIXTURE_BOARD: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
+
+fn fixture_board_cell() -> &'static std::sync::Mutex<String> {
+    FIXTURE_BOARD.get_or_init(|| std::sync::Mutex::new(String::new()))
+}
+
+fn fixture_board() -> String {
+    fixture_board_cell().lock().unwrap().clone()
+}
+
 /// The configuration menu for the explicit first-run scenario. It begins as
 /// a real absence (`config_exists == false`), then reflects a successful Save
 /// from the shared in-memory restore point so the same browser session can
@@ -1674,6 +1686,21 @@ impl ksx_api::MachineSource for NoMachine {
         })
     }
 
+    /// Accept the board write the real store performs, in memory — the theme
+    /// cell's twin. The route has already validated the id shape, so storing
+    /// the spec verbatim is the whole job; without this the redesign lane's
+    /// Board picker answered every choice with the generic edit error.
+    fn set_board(
+        &self,
+        spec: &ksx_api::BoardSpec,
+    ) -> Result<ksx_api::BoardView, ksx_api::Refusal> {
+        *fixture_board_cell().lock().unwrap() = spec.board.clone();
+        Ok(ksx_api::BoardView {
+            board: spec.board.clone(),
+            backup: None,
+        })
+    }
+
     /// The configuration menu's identity row: a config.toml with the two
     /// seeded controllers. `KSX_FIXTURE_THEME` seeds the stored theme id
     /// (the `KSX_FIXTURE_SESSION` precedent) so the browser suites can
@@ -1687,6 +1714,7 @@ impl ksx_api::MachineSource for NoMachine {
         Ok(ksx_api::SetupView {
             config_exists: true,
             theme: fixture_theme(),
+            board: fixture_board(),
             slots: vec![
                 ksx_api::SetupSlotRow {
                     number: 1,

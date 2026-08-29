@@ -677,9 +677,9 @@ describe("redesign canvas interaction chrome", () => {
         x: Number(item.dataset.canvasX),
         y: Number(item.dataset.canvasY),
       }));
-      await page.getByLabel("X", { exact: true }).fill(String(beforePosition.x + 17));
+      await page.getByRole("spinbutton", { name: "X", exact: true }).fill(String(beforePosition.x + 17));
       await page.locator(".rd-insp-head .rd-map-title").click();
-      await page.getByLabel("Y", { exact: true }).fill(String(beforePosition.y + 23));
+      await page.getByRole("spinbutton", { name: "Y", exact: true }).fill(String(beforePosition.y + 23));
       await page.locator(".rd-insp-head .rd-map-title").click();
       assert.deepEqual(
         await stageItem(BENCH_A).evaluate((item) => ({
@@ -718,14 +718,25 @@ describe("redesign canvas interaction chrome", () => {
           represented: parseFloat(camera.style.width) / projectionScale * zoom,
           safe: viewportWidth - inspectorWidth,
           full: viewportWidth,
+          // How many SCREEN pixels one minimap pixel stands for at this
+          // projection — the measurement's own granularity. The workbench's
+          // content envelope sets the projection scale, so a fixed tolerance
+          // silently tightens as real widgets join the canvas.
+          pxWorth: zoom / projectionScale,
         };
       }, { benchA: BENCH_A, benchB: BENCH_B });
       await nextPaint();
       const safeMapWidth = await minimapRepresentedWidth();
       assert.ok(safeMapWidth);
+      // The claim is safe-vs-full (a 300px+ distinction), asserted at the
+      // projection's own precision: a couple of minimap pixels of rounding,
+      // whatever the content envelope has made one worth.
       assert.ok(
-        Math.abs(safeMapWidth.represented - safeMapWidth.safe) < 3,
-        "the minimap camera rectangle included the Inspector-covered strip",
+        Math.abs(safeMapWidth.represented - safeMapWidth.safe) <
+          Math.max(3, 2 * safeMapWidth.pxWorth),
+        `the minimap camera rectangle included the Inspector-covered strip: ${
+          JSON.stringify(safeMapWidth)
+        }`,
       );
 
       const mappedWorldPoint = await page.evaluate((benchA) => {
@@ -938,7 +949,7 @@ describe("redesign canvas interaction chrome", () => {
       const beforeChipTargetX = await stageItem(BENCH_B).evaluate(
         (item) => Number(item.dataset.canvasX),
       );
-      await page.getByLabel("X", { exact: true }).fill("2200");
+      await page.getByRole("spinbutton", { name: "X", exact: true }).fill("2200");
       await page.locator(".rd-insp-head .rd-map-title").click();
       await stageItem(BENCH_A).click();
       await zoomMenuTrigger.click();
@@ -972,7 +983,7 @@ describe("redesign canvas interaction chrome", () => {
         beforeChipJump,
         "Back view did not restore the exact pre-chip camera",
       );
-      await page.getByLabel("X", { exact: true }).fill(String(beforeChipTargetX));
+      await page.getByRole("spinbutton", { name: "X", exact: true }).fill(String(beforeChipTargetX));
       await page.locator(".rd-insp-head .rd-map-title").click();
 
       await stageItem(BENCH_A).click();
@@ -1074,7 +1085,7 @@ describe("redesign canvas interaction chrome", () => {
       });
       assert.deepEqual(mobileInspector, { left: 0, width: 390 });
 
-      await page.getByLabel("X", { exact: true }).focus();
+      await page.getByRole("spinbutton", { name: "X", exact: true }).focus();
       await page.keyboard.press("Escape");
       assert.equal(await stageItem(BENCH_B).getAttribute("aria-current"), "true");
       assert.equal(await page.locator(".rd-inspector").getAttribute("hidden"), null);
@@ -1247,7 +1258,7 @@ describe("redesign canvas interaction chrome", () => {
       });
       await page.waitForTimeout(220);
 
-      await page.getByLabel("X", { exact: true }).fill("2200");
+      await page.getByRole("spinbutton", { name: "X", exact: true }).fill("2200");
       await page.locator(".rd-insp-head .rd-map-title").click();
       await page.locator(
         `.forma-canvas-stage > [data-instance-id="${BENCH_A}"]`,

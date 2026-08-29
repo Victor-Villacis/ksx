@@ -599,16 +599,21 @@ describe("the device workbench", () => {
 
       await page.getByRole("button", { name: "Fit", exact: true }).click();
       await page.waitForFunction(() => !document.querySelector(".is-camera-animating"));
-      const centerError = await page.evaluate((id) => {
+      // Measure the UNION of every mounted widget, not one widget: the
+      // workbench also carries the staged controller cards now, so a single
+      // card legitimately sits off-centre after Fit. A stale Inspector inset
+      // would shift the whole union, so the claim under test is unchanged —
+      // it is just population-independent.
+      const centerError = await page.evaluate(() => {
         const viewport = document.querySelector(".forma-canvas-viewport")?.getBoundingClientRect();
-        const item = document
-          .querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)
-          ?.getBoundingClientRect();
-        if (!viewport || !item) return Number.POSITIVE_INFINITY;
-        return Math.abs(
-          item.left + item.width / 2 - (viewport.left + viewport.width / 2),
-        );
-      }, IPAC_SLUG);
+        const items = Array.from(
+          document.querySelectorAll(".forma-canvas-stage > [data-instance-id]"),
+        ).map((item) => item.getBoundingClientRect());
+        if (!viewport || items.length === 0) return Number.POSITIVE_INFINITY;
+        const left = Math.min(...items.map((r) => r.left));
+        const right = Math.max(...items.map((r) => r.right));
+        return Math.abs((left + right) / 2 - (viewport.left + viewport.width / 2));
+      });
       assert.ok(
         centerError <= 2,
         `Fit still used a stale Inspector inset (${centerError}px from the full canvas centre)`,

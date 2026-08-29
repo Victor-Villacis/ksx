@@ -537,7 +537,30 @@ impl StagedSetupView {
                 .collect(),
             blocking: setup.blocking().map(|b| b.as_str().to_owned()),
             next_slot: setup.next_free_slot(),
-            next_preset: setup.next_free_slot().map(preset_name_for_slot),
+            // The lowest UNUSED "Player k", not blindly the next slot
+            // number: once slots have been reordered or removed, preset
+            // names decouple from slot numbers, and `preset_name_for_slot
+            // (next_slot)` can offer a name another staged slot still
+            // wears. A save writes one preset FILE per slot (the duplicate
+            // verb's own warning: two slots pointing at one file alias
+            // their edits forever after), so the served suggestion must
+            // never collide with a staged name. A slot can also wear a
+            // CUSTOM name (an adopted config), which the scan below simply
+            // treats as taken.
+            next_preset: setup.next_free_slot().map(|_| {
+                let used: std::collections::HashSet<&str> = setup
+                    .slots()
+                    .iter()
+                    .map(|slot| slot.preset.name.as_str())
+                    .collect();
+                (1..=MAX_SLOTS)
+                    .map(preset_name_for_slot)
+                    .find(|name| !used.contains(name.as_str()))
+                    // Unreachable while MAX_SLOTS names cover MAX_SLOTS
+                    // slots minus the free one; kept total rather than
+                    // panicking a view.
+                    .unwrap_or_else(|| preset_name_for_slot(MAX_SLOTS))
+            }),
             xinput_used: setup.xinput_slots(),
             max_slots: MAX_SLOTS,
             max_xinput_slots: MAX_XINPUT_SLOTS,
@@ -2417,6 +2440,52 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
     /// Breaks against an `apply` that mapped everything to one code: "you typed
     /// gamecube" and "Windows has only four XInput slots" would then flash the
     /// same colour and offer the same next step.
+    /// After reorders and removals decouple preset names from slot numbers,
+    /// the served suggestion must still never collide with a staged name —
+    /// a save writes one preset FILE per name, and two slots on one file
+    /// alias their edits forever after (the duplicate verb's own warning).
+    #[test]
+    fn next_preset_offers_the_lowest_unused_name_never_a_staged_one() {
+        let setup = staged();
+        let setup = StageEdit::AddSlot {
+            number: None,
+            persona: "playstation".into(),
+            preset: "Player 2".into(),
+            layout: None,
+        }
+        .apply(&setup)
+        .unwrap();
+        let setup = StageEdit::AddSlot {
+            number: None,
+            persona: "playstation".into(),
+            preset: "Player 3".into(),
+            layout: None,
+        }
+        .apply(&setup)
+        .unwrap();
+        // Slots 1 and 2 wear "Player 2" and "Player 3" (the post-compaction
+        // shape): the next suggestion must be the unused "Player 1", not
+        // slot 3's number-derived "Player 3".
+        let view = StagedSetupView::of(&setup);
+        assert_eq!(view.next_slot, Some(3));
+        assert_eq!(view.next_preset.as_deref(), Some("Player 1"));
+
+        let setup = StageEdit::AddSlot {
+            number: None,
+            persona: "playstation".into(),
+            preset: "Player 1".into(),
+            layout: None,
+        }
+        .apply(&setup)
+        .unwrap();
+        let view = StagedSetupView::of(&setup);
+        assert_eq!(
+            view.next_preset.as_deref(),
+            Some("Player 4"),
+            "with Player 1..3 all worn, the sequence continues"
+        );
+    }
+
     #[test]
     fn a_typo_and_a_domain_rule_carry_different_codes() {
         let setup = staged();

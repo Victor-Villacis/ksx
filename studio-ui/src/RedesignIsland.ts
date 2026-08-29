@@ -4,6 +4,26 @@ import {
   claimSavedDeviceGeometryKey,
   deviceInstanceId,
 } from "./device-instance-id";
+import { Ds4PremiumPadArt } from "./ds4PremiumPadArt";
+import { DualSensePremiumArt } from "./dualSensePremiumArt";
+import { loadControllerFinishes, loadDs4Variants } from "./padFinishes";
+import { PadPaintServers } from "./padPaintServers";
+import {
+  renderControllerPanel,
+  takePendingJumpFns,
+  type InspectorTab,
+  type RdKeyPanelView,
+  type RdPanelView,
+} from "./redesign-controller-inspector";
+import {
+  syncControllerWidgets,
+  type ParkedController,
+  type RdControllerCardView,
+  type RdPadView,
+} from "./redesign-controllers";
+import { SwitchProPremiumArt } from "./switchProPremiumArt";
+import { X360PadArt } from "./x360PadArt";
+import { XboxSeriesPremiumArt } from "./xboxSeriesPremiumArt";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /redesign — the transplant rebuild's blank workbench.
@@ -83,6 +103,87 @@ export interface RdDeviceRows {
   staging_line: string;
 }
 
+/** One persona the controller picker offers — `RedesignPersonaRow` on the
+ *  wire (snapshot.rs). `usable` is a served word ("true"/"false"), so the
+ *  island routes on a fact instead of parsing a class string. */
+export interface RdPersonaRowView {
+  name: string;
+  label: string;
+  api: string;
+  note: string;
+  cls: string;
+  usable: string;
+}
+
+/** The controller picker's truth — `RedesignControllers` on the wire. The
+ *  CARDS are daemon truth (the staged rack), reconciled onto the canvas by
+ *  redesign-controllers.ts; the roster and every ceiling are served. */
+export interface RdControllers {
+  cards: RdControllerCardView[];
+  personas: RdPersonaRowView[];
+  add_preset: string;
+  add_layout: string;
+  add_note: string;
+  counts_line: string;
+  reachable: boolean;
+  parked_held: string[];
+  /** Every staged controller's canvas dressing — the same `NocturnePadView`
+   *  rows /nocturne's widgets clone and dress, from the one composer. */
+  pads: RdPadView[];
+  /** The selected controller's whole panel — the same `ControllerPanel`
+   *  /nocturne's right pane serves. */
+  panel: RdPanelView;
+  /** The panel's other reading — the Keys tab, the same `KeyPanel`
+   *  /nocturne's By-key view serves. */
+  keys: RdKeyPanelView;
+  /** The short server-held undo window after a ✕ removal. */
+  undo_cls: string;
+  undo_label: string;
+}
+
+/** One plate cell — `NocturneKeyCell` on the wire (snapshot.rs). */
+export interface RdKeyCellView {
+  cap: string;
+  key: string;
+  cls: string;
+  short: string;
+  title: string;
+  aria: string;
+  style: string;
+}
+
+/** One legend chip — `NocturneLegendRow` on the wire. */
+export interface RdLegendRowView {
+  slot: string;
+  badge: string;
+  name: string;
+  cls: string;
+}
+
+/** The keyboard widget's serving — `BoardPanel` on the wire, the same
+ *  struct /nocturne's plate destructures. */
+export interface RdBoardPanel {
+  kb_title: string;
+  kb_cls: string;
+  board_case_style: string;
+  board_origin: string;
+  board_line: string;
+  board_rows: RdChoiceRowView[];
+  kb_row1: RdKeyCellView[];
+  kb_row2: RdKeyCellView[];
+  kb_row3: RdKeyCellView[];
+  kb_row4: RdKeyCellView[];
+  kb_row5: RdKeyCellView[];
+  kb_row6: RdKeyCellView[];
+  kb_tray: RdKeyCellView[];
+  kb_tray_head: string;
+  kb_tray_cls: string;
+  legend: RdLegendRowView[];
+  solo_label: string;
+  kb_more_cls: string;
+  kb_note: string;
+}
+
 /** The payload the server embeds and /api/redesign serves — seeded into the
  *  signals by the entry BEFORE the island returns (ledger #5). */
 export interface RedesignPayload {
@@ -90,6 +191,12 @@ export interface RedesignPayload {
   environment_cls: string;
   theme_rows: RdChoiceRowView[];
   devices: RdDeviceRows;
+  controllers: RdControllers;
+  board: RdBoardPanel;
+  /** The staged input's capture behaviour — `compose_capture_rows` on the
+   *  wire (freeze / split / take nothing, the current answer marked). */
+  capture_rows: RdChoiceRowView[];
+  capture_note: string;
 }
 
 // ── SERVED signals — copiers, never derivers ────────────────────────────────
@@ -110,6 +217,193 @@ const [rdDevExpHead, setRdDevExpHead] = createSignal("");
 const [rdDevExpFoldCls, setRdDevExpFoldCls] = createSignal("n-devfold none");
 const [rdDevOtherHead, setRdDevOtherHead] = createSignal("");
 const [rdDevOtherFoldCls, setRdDevOtherFoldCls] = createSignal("n-devfold none");
+const [rdCtrlPersonas, setRdCtrlPersonas] = createSignal<RdPersonaRowView[]>([]);
+// The keyboard widget's served slots (the nocturne plate's own signal set).
+const [rdKbRow1, setRdKbRow1] = createSignal<RdKeyCellView[]>([]);
+const [rdKbRow2, setRdKbRow2] = createSignal<RdKeyCellView[]>([]);
+const [rdKbRow3, setRdKbRow3] = createSignal<RdKeyCellView[]>([]);
+const [rdKbRow4, setRdKbRow4] = createSignal<RdKeyCellView[]>([]);
+const [rdKbRow5, setRdKbRow5] = createSignal<RdKeyCellView[]>([]);
+const [rdKbRow6, setRdKbRow6] = createSignal<RdKeyCellView[]>([]);
+const [rdKbTray, setRdKbTray] = createSignal<RdKeyCellView[]>([]);
+const [rdKbLegend, setRdKbLegend] = createSignal<RdLegendRowView[]>([]);
+const [rdBoardRows, setRdBoardRows] = createSignal<RdChoiceRowView[]>([]);
+const [rdKbTitle, setRdKbTitle] = createSignal("");
+const [rdKbCls, setRdKbCls] = createSignal("n-kb");
+const [rdBoardCaseStyle, setRdBoardCaseStyle] = createSignal("");
+const [rdBoardOrigin, setRdBoardOrigin] = createSignal("");
+const [rdBoardLine, setRdBoardLine] = createSignal("");
+const [rdKbTrayHead, setRdKbTrayHead] = createSignal("");
+const [rdKbTrayCls, setRdKbTrayCls] = createSignal("n-kbtray none");
+const [rdKbNote, setRdKbNote] = createSignal("");
+const [rdKbMoreCls, setRdKbMoreCls] = createSignal("n-lgdmore none");
+const [rdSoloLbl, setRdSoloLbl] = createSignal("Only this player");
+// The staged input's capture behaviour (freeze / split / take nothing).
+const [rdCaptureRows, setRdCaptureRows] = createSignal<RdChoiceRowView[]>([]);
+const [rdCaptureNote, setRdCaptureNote] = createSignal("");
+const [rdCtrlAddNote, setRdCtrlAddNote] = createSignal("");
+const [rdCtrlCountsLine, setRdCtrlCountsLine] = createSignal("");
+const [rdCtrlAddPreset, setRdCtrlAddPreset] = createSignal("");
+const [rdCtrlAddLayout, setRdCtrlAddLayout] = createSignal("");
+/** The served card list, held for the canvas reconciler — cards are canvas
+ *  widgets, not a template list, so this is plain data, not a signal. */
+let rdCtrlCards: RdControllerCardView[] = [];
+/** The ghost ids the server still holds parked material for — plain data
+ *  for the same reason. */
+let rdCtrlParkedHeld: string[] = [];
+/** The served pad dressing rows, keyed to the cards by slot — plain data
+ *  (the canvas reconciler consumes them, no template list). */
+let rdCtrlPads: RdPadView[] = [];
+/** The selected controller's served panel — plain data (the inspector body
+ *  is client-painted, renderInspector's own pattern). */
+let rdCtrlPanel: RdPanelView | null = null;
+/** The Keys tab's served rows — plain data for the same reason. */
+let rdCtrlKeys: RdKeyPanelView | null = null;
+/** Which reading the inspector shows (4460's Controls|Keys pair), kept per
+ *  browser like the nocturne UI store. */
+const RD_UI_STORE = "ksx-redesign-ui";
+let inspTab: InspectorTab = "controls";
+try {
+  const saved = JSON.parse(window.localStorage.getItem(RD_UI_STORE) ?? "{}") as {
+    inspTab?: string;
+  };
+  inspTab = saved.inspTab === "keys" ? "keys" : "controls";
+} catch {
+  inspTab = "controls";
+}
+function setInspTab(next: InspectorTab): void {
+  inspTab = next;
+  saveKbUi();
+  renderInspector();
+}
+/** A control the next Controls render should open and show — set by a
+ *  click on the pad art's own zone (the 4460 pointer enhancement) or by a
+ *  Keys-row jump. */
+let pendingLocateFns: string | null = null;
+/** A KEY the next Keys render should reveal — set by a click on a plate
+ *  cell (the board is the Keys tab's own picture). */
+let pendingLocateKey: string | null = null;
+
+// ── The keyboard lens: mute chips, the solo shortcut, the finish ──────────
+// The crossings share 4460's store (a crossing belongs to the CONTROLLER,
+// keyed by preset, and follows it across pages); solo and the finish are
+// this page's own view preferences in RD_UI_STORE.
+const KB_STRIPS_STORE = "ksx-nocturne-strips2";
+let kbHiddenStrips = new Set<string>();
+try {
+  const raw = window.localStorage.getItem(KB_STRIPS_STORE);
+  kbHiddenStrips = new Set(raw ? (JSON.parse(raw) as string[]) : []);
+} catch {
+  kbHiddenStrips = new Set();
+}
+function saveKbStrips(): void {
+  try {
+    window.localStorage.setItem(KB_STRIPS_STORE, JSON.stringify([...kbHiddenStrips]));
+  } catch {
+    // A crossing is chrome; blocked storage only makes it temporary.
+  }
+}
+let kbSolo = false;
+let kbTheme = "carbon-forge";
+try {
+  const saved = JSON.parse(window.localStorage.getItem(RD_UI_STORE) ?? "{}") as {
+    kbSolo?: boolean;
+    kbTheme?: string;
+  };
+  kbSolo = saved.kbSolo === true;
+  if (typeof saved.kbTheme === "string" && saved.kbTheme) kbTheme = saved.kbTheme;
+} catch {
+  // defaults hold
+}
+function saveKbUi(): void {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(RD_UI_STORE) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    saved.kbSolo = kbSolo;
+    saved.kbTheme = kbTheme;
+    saved.inspTab = inspTab;
+    window.localStorage.setItem(RD_UI_STORE, JSON.stringify(saved));
+  } catch {
+    // chrome only
+  }
+}
+function presetOfSlotRd(slot: number): string | undefined {
+  return rdCtrlCards.find((card) => card.number === String(slot))?.preset;
+}
+
+/** Paint the mute/solo lens and the finish. The nocturne CSS drives the
+ *  same effect through `.n-center.muteN` classes; here the identical
+ *  custom properties are written inline on the plate — one mechanism, no
+ *  second sheet. Solo mutes every band and hands the selected controller
+ *  its color back (nothing is hidden, so a key never looks unbound). */
+function syncKbLens(): void {
+  const root = rdRoot;
+  const widget = root?.querySelector<HTMLElement>('[data-instance-id="keyboard"]');
+  if (!root || !widget) return;
+  widget.setAttribute("data-keyboard-theme", kbTheme);
+  const kb = widget.querySelector<HTMLElement>(".n-kb");
+  if (kb) {
+    const selectedSlot = Number(rdCtrlPanel?.slot_val || "0");
+    for (let n = 1; n <= 16; n += 1) {
+      const preset = presetOfSlotRd(n);
+      const muted = kbSolo
+        ? n !== selectedSlot
+        : preset !== undefined && kbHiddenStrips.has(preset);
+      if (muted) kb.style.setProperty(`--kb${n}`, "var(--band-mute)");
+      else kb.style.removeProperty(`--kb${n}`);
+    }
+  }
+  // The chips speak their own state (nocturne's syncLegend wording).
+  for (const chip of Array.from(
+    widget.querySelectorAll<HTMLElement>('[data-nx="legend-mute"]'),
+  )) {
+    const preset = presetOfSlotRd(Number(chip.getAttribute("data-slot") ?? ""));
+    const byHand = preset !== undefined && kbHiddenStrips.has(preset);
+    const off = kbSolo ? !chip.classList.contains("on") : byHand;
+    chip.setAttribute("aria-pressed", off ? "false" : "true");
+    chip.classList.toggle("muted", !kbSolo && byHand);
+    chip.title = off
+      ? "Show this controller's color on the keys"
+      : "Hide this controller's color on the keys";
+  }
+  widget
+    .querySelector(".n-kbcolors")
+    ?.setAttribute("aria-pressed", kbSolo ? "true" : "false");
+  for (const button of Array.from(
+    widget.querySelectorAll<HTMLElement>('[data-nx="kb-theme"]'),
+  )) {
+    button.setAttribute(
+      "aria-pressed",
+      String(button.getAttribute("data-keyboard-theme") === kbTheme),
+    );
+  }
+}
+
+/** Open, reveal and pulse the row (or free chip) for one control inside the
+ *  freshly painted panel body. Case-bridged: zones spell functions
+ *  lowercase, the mapper may spell them UPPERCASE. */
+function locateBindRow(body: HTMLElement, fns: string): void {
+  const wanted = fns.split(/\s+/)[0]?.toLowerCase() ?? "";
+  if (!wanted) return;
+  const rows = Array.from(body.querySelectorAll<HTMLElement>("details.n-bind[data-fn]"));
+  const row = rows.find((r) => (r.dataset.fn ?? "").toLowerCase() === wanted);
+  const target =
+    row ??
+    Array.from(body.querySelectorAll<HTMLElement>(".n-ctlstrip [data-fn]")).find(
+      (chip) => (chip.dataset.fn ?? "").toLowerCase() === wanted,
+    );
+  if (!target) return;
+  if (target instanceof HTMLDetailsElement) target.open = true;
+  target.scrollIntoView({ block: "center" });
+  target.classList.add("rd-row-pulse");
+  window.setTimeout(() => target.classList.remove("rd-row-pulse"), 1400);
+}
+// The removal-undo chip: SSR chrome (it must show without the inspector,
+// exactly like nocturne's rack chip), so these two are signals with slots.
+const [rdUndoCls, setRdUndoCls] = createSignal("rd-undochip none");
+const [rdUndoLabel, setRdUndoLabel] = createSignal("");
 let rdDeviceScanAuthoritative = false;
 let rdStagingReachable = false;
 let rdStagingLine = "";
@@ -164,12 +458,108 @@ export function applyRedesign(v: RedesignPayload): void {
   setRdDevExpFoldCls(d?.exp_fold_cls ?? "n-devfold none");
   setRdDevOtherHead(d?.other_head ?? "");
   setRdDevOtherFoldCls(d?.other_fold_cls ?? "n-devfold none");
+  const c = v.controllers;
+  setRdCtrlPersonas(c?.personas ?? []);
+  setRdCtrlAddNote(c?.add_note ?? "");
+  setRdCtrlCountsLine(c?.counts_line ?? "");
+  setRdCtrlAddPreset(c?.add_preset ?? "");
+  setRdCtrlAddLayout(c?.add_layout ?? "");
+  rdCtrlCards = c?.cards ?? [];
+  rdCtrlParkedHeld = c?.parked_held ?? [];
+  rdCtrlPads = c?.pads ?? [];
+  rdCtrlPanel = c?.panel ?? null;
+  rdCtrlKeys = c?.keys ?? null;
+  const board = v.board;
+  if (board) {
+    setRdKbRow1(board.kb_row1 ?? []);
+    setRdKbRow2(board.kb_row2 ?? []);
+    setRdKbRow3(board.kb_row3 ?? []);
+    setRdKbRow4(board.kb_row4 ?? []);
+    setRdKbRow5(board.kb_row5 ?? []);
+    setRdKbRow6(board.kb_row6 ?? []);
+    setRdKbTray(board.kb_tray ?? []);
+    setRdKbLegend(board.legend ?? []);
+    setRdBoardRows(board.board_rows ?? []);
+    setRdKbTitle(board.kb_title ?? "");
+    setRdKbCls(board.kb_cls || "n-kb");
+    setRdBoardCaseStyle(board.board_case_style ?? "");
+    setRdBoardOrigin(board.board_origin ?? "");
+    setRdBoardLine(board.board_line ?? "");
+    setRdKbTrayHead(board.kb_tray_head ?? "");
+    setRdKbTrayCls(board.kb_tray_cls || "n-kbtray none");
+    setRdKbNote(board.kb_note ?? "");
+    setRdKbMoreCls(board.kb_more_cls || "n-lgdmore none");
+    setRdSoloLbl(board.solo_label || "Only this player");
+  }
+  setRdCaptureRows(v.capture_rows ?? []);
+  setRdCaptureNote(v.capture_note ?? "");
+  // The mute/solo lens and the finish repaint follow every served update.
+  syncKbLens();
+  setRdUndoCls(c?.undo_cls || "rd-undochip none");
+  setRdUndoLabel(c?.undo_label ?? "");
   // Reconcile browser-owned membership with the freshly served roster: a
   // disconnected board leaves the canvas without losing its remembered
   // place, and a remembered board mounts as soon as the scan sees it again.
   reconcileBenchWithRoster();
+  // The controller cards are DAEMON truth: the canvas mirrors the staged
+  // rack exactly (redesign-controllers.ts owns the reconcile).
+  syncCtrlBench();
+  // A refresh carries a possibly different panel (new bindings, new SOCD,
+  // new selection): an open inspector repaints from the fresh truth.
+  const panel = inspectorEl();
+  if (panel && !panel.hidden) renderInspector();
   restoreDeviceRowFocus(deviceFocus);
 }
+
+/** Reconcile the canvas to the served controller cards and the parked
+ *  ghosts. A no-op until the engine exists; the canvas init calls it again
+ *  once it does. */
+function syncCtrlBench(): void {
+  const canvas = nCanvas;
+  const root = rdRoot;
+  if (!canvas || !root) return;
+  syncControllerWidgets(rdCtrlCards, {
+    canvas,
+    root,
+    pads: rdCtrlPads,
+    parked: canvasPrefs.parked ?? [],
+    parkedHeld: new Set(rdCtrlParkedHeld),
+    addPreset: rdCtrlAddPreset(),
+    addLayout: rdCtrlAddLayout(),
+    savedGeometry: (id) => canvasPrefs.widgets[id],
+    park: parkController,
+    onMutation: () => {
+      syncMapCount();
+      scheduleChips();
+    },
+  });
+}
+
+/** Park one orphaned controller's display facts — called by the card the
+ *  moment "No player" is chosen, BEFORE its remove posts, so the card's
+ *  identity survives whatever the network does. */
+function parkController(entry: ParkedController): void {
+  canvasPrefs.parked = [...(canvasPrefs.parked ?? []), entry];
+  saveCanvasPrefs();
+  syncCtrlBench();
+}
+
+/** Whether the server still holds parked material for this ghost — the
+ *  entry's post-assign check: a re-slot SUCCEEDED exactly when the id left
+ *  the served `parked_held` (the stash entry is dropped only on the success
+ *  path), which is a structural signal, never a sentence comparison. */
+export function redesignGhostHeld(id: string): boolean {
+  return rdCtrlParkedHeld.includes(id);
+}
+
+/** Discard one parked ghost (browser-only), or retire it after a
+ *  successful re-slot. Exported for the entry's assign chain. */
+export function unparkController(id: string): void {
+  canvasPrefs.parked = (canvasPrefs.parked ?? []).filter((p) => p.id !== id);
+  saveCanvasPrefs();
+  syncCtrlBench();
+}
+
 
 /** Report one action outcome (the redirect's allowlisted ?flash= copy) —
  *  the server derivation in render_redesign.rs `scalar_slots`, mirrored:
@@ -225,6 +615,10 @@ interface CanvasPrefs {
    *  Arrangement state like the camera, never a daemon claim; a remembered
    *  board whose device is gone simply does not mount until it returns. */
   bench?: string[];
+  /** Parked controllers — cards orphaned off the draft ("No player") that
+   *  wait on the canvas to be re-slotted. Display facts only: the slot
+   *  itself left the daemon when it was parked. */
+  parked?: ParkedController[];
 }
 
 let canvasPrefs: CanvasPrefs = { widgets: {} };
@@ -287,6 +681,22 @@ function loadCanvasPrefs(): void {
       bench: Array.isArray(saved.bench)
         ? saved.bench.filter((s): s is string => typeof s === "string")
         : undefined,
+      parked: Array.isArray(saved.parked)
+        ? saved.parked
+            .filter(
+              (p): p is ParkedController =>
+                typeof p === "object" && p !== null &&
+                typeof p.id === "string" && typeof p.persona === "string" &&
+                typeof p.persona_label === "string" && typeof p.preset === "string",
+            )
+            // Entries stored before the art fields existed draw the named
+            // placeholder rather than crashing the ghost.
+            .map((p) => ({
+              ...p,
+              family: typeof p.family === "string" ? p.family : "",
+              art: typeof p.art === "string" ? p.art : "",
+            }))
+        : undefined,
       camera:
         cam &&
         [cam.panX, cam.panY, cam.zoom].every(
@@ -336,6 +746,7 @@ function persistCanvas(): void {
     widgets,
     mapHidden: canvasPrefs.mapHidden,
     bench: canvasPrefs.bench,
+    parked: canvasPrefs.parked,
   };
   saveCanvasPrefs();
 }
@@ -493,6 +904,7 @@ function setSheet(open: boolean): void {
     // Close peers only through their close paths; none of those paths opens a
     // replacement, so modal coordination cannot recurse.
     if (devModalIsOpen()) setDevModal(false);
+    if (ctrlModalIsOpen()) setCtrlModal(false);
     if (paletteOpen()) setPalette(false);
     closeThemeMenu(true);
     setZoomMenu(false);
@@ -561,6 +973,7 @@ function setPalette(open: boolean): void {
     // replaces an open device picker or shortcut sheet instead of focusing a
     // palette hidden behind it.
     if (devModalIsOpen()) setDevModal(false);
+    if (ctrlModalIsOpen()) setCtrlModal(false);
     if (sheetOpen()) setSheet(false);
     closeThemeMenu(true);
     setZoomMenu(false);
@@ -766,12 +1179,41 @@ function inspectorButton(label: string, nx: string, title: string): HTMLElement 
   return button;
 }
 
+/** The entry's payload refetcher — registered at activation (setNocturnePoll's
+ *  pattern) so the island can ask for another slot's panel without owning
+ *  fetch. */
+let redesignRefreshFn: () => Promise<boolean> = async () => false;
+export function setRedesignRefresh(fn: () => Promise<boolean>): void {
+  redesignRefreshFn = fn;
+}
+
+/** Merge `?slot=N` into the URL — the nocturne selection door's rule:
+ *  MERGE, never replace, so other params survive, and a reload keeps the
+ *  selection. Returns whether the URL actually changed (the guard that
+ *  stops a repaint→refetch loop when a slot's panel cannot be served). */
+function mergeSlotIntoUrl(slot: string): boolean {
+  const url = new URL(window.location.href);
+  if (url.searchParams.get("slot") === slot) return false;
+  url.searchParams.set("slot", slot);
+  window.history.replaceState(null, "", `${url.pathname}?${url.searchParams.toString()}`);
+  return true;
+}
+
 /** Repaint the inspector's body from the live selection. Called on every
  *  selection or item-state change while open. */
 function renderInspector(): void {
   const canvas = nCanvas;
   const body = inspectorEl()?.querySelector<HTMLElement>(".rd-insp-body");
   if (!canvas || !body) return;
+  // A repaint must not lose the reader's place: every camera nudge and
+  // item-state change lands here, and a full rebuild would collapse the
+  // row someone just opened (or the one a pad-art click just located).
+  const openFns = new Set(
+    Array.from(body.querySelectorAll<HTMLElement>("details.n-bind[open]")).map(
+      (row) => row.dataset.fn ?? "",
+    ),
+  );
+  const keptScroll = body.scrollTop;
   const selected = canvas.selectedItems();
   const rows: (HTMLElement | null)[] = [];
   if (selected.length === 1) {
@@ -817,6 +1259,25 @@ function renderInspector(): void {
       inspectorButton("Center", "rd-center-sel", "Pan it to the middle (C)"),
     );
     rows.push(title, kind, scale, position, verbs);
+    // A CONTROLLER card carries the whole transplanted nocturne panel: the
+    // meta strip, SOCD editor, slot verbs and the six bind groups, painted
+    // from the served `ControllerPanel`. The panel is served for ONE slot
+    // (the nocturne `?slot=` rule), so selecting a different card merges the
+    // slot into the URL and refetches; the repaint lands here again with the
+    // matching truth.
+    const ctrlSlot = /^ctrl-slot-(\d+)$/.exec(item.dataset.instanceId ?? "")?.[1];
+    if (ctrlSlot) {
+      const moved = mergeSlotIntoUrl(ctrlSlot);
+      if (rdCtrlPanel && rdCtrlKeys && rdCtrlPanel.slot_val === ctrlSlot) {
+        rows.push(...renderControllerPanel(rdCtrlPanel, rdCtrlKeys, inspTab, setInspTab));
+      } else {
+        const wait = document.createElement("p");
+        wait.className = "rd-insp-kind";
+        wait.textContent = "Fetching this controller's panel…";
+        rows.push(wait);
+        if (moved) void redesignRefreshFn();
+      }
+    }
   } else if (selected.length > 1) {
     // The multi-selection rules (design handoff §7): no empty sections —
     // only what applies to many. Selection origin moves the whole group by
@@ -853,6 +1314,43 @@ function renderInspector(): void {
     rows.push(title, kind, origin, verbs);
   }
   body.replaceChildren(...rows.filter((row): row is HTMLElement => Boolean(row)));
+  // Restore the reader's place: rows they had open stay open, and the
+  // panel does not jump back to its top on every repaint.
+  for (const row of Array.from(body.querySelectorAll<HTMLElement>("details.n-bind"))) {
+    if (openFns.has(row.dataset.fn ?? "")) (row as HTMLDetailsElement).open = true;
+  }
+  body.scrollTop = keptScroll;
+  // The locate pass: a click on a pad-art zone (the 4460 pointer
+  // enhancement) or a Keys-row jump named a control — open its row in the
+  // freshly painted Controls view. A jump's target wins (it just switched
+  // the tab); an unmatched pending target survives one repaint so the
+  // panel refetch can satisfy it.
+  const jump = takePendingJumpFns();
+  if (jump) pendingLocateFns = jump;
+  if (pendingLocateFns && inspTab === "controls") {
+    if (body.querySelector("details.n-bind")) {
+      locateBindRow(body, pendingLocateFns);
+      pendingLocateFns = null;
+    }
+  }
+  // A plate-cell click named a KEY: reveal its row (bound) or its free
+  // chip in the freshly painted Keys view.
+  if (pendingLocateKey && inspTab === "keys") {
+    const wanted = pendingLocateKey;
+    const row =
+      body.querySelector<HTMLElement>(`.rd-insp-krows .n-krow[data-key="${CSS.escape(wanted)}"]`) ??
+      body.querySelector<HTMLElement>(`.rd-insp-krows .n-akey[data-key="${CSS.escape(wanted)}"]`);
+    if (row) {
+      row.scrollIntoView({ block: "center" });
+      row.classList.add("rd-row-pulse");
+      window.setTimeout(() => row.classList.remove("rd-row-pulse"), 1400);
+      pendingLocateKey = null;
+    } else if (body.querySelector(".rd-insp-krows")) {
+      // The Keys view painted and the key is genuinely absent (another
+      // player's, or not on this slot) — consume rather than loop.
+      pendingLocateKey = null;
+    }
+  }
 }
 
 function setInspector(open: boolean): void {
@@ -1340,6 +1838,7 @@ function setDevModal(open: boolean): void {
   if (open) {
     // Opening paths close peers; closing paths only restore focus. Keeping
     // that direction one-way prevents modal hand-offs from recursing.
+    if (ctrlModalIsOpen()) setCtrlModal(false);
     if (sheetOpen()) setSheet(false);
     if (paletteOpen()) setPalette(false);
     closeThemeMenu(true);
@@ -1354,6 +1853,40 @@ function setDevModal(open: boolean): void {
     el.hidden = true;
     const target = devModalReturnFocus;
     devModalReturnFocus = null;
+    restoreOverlayFocus(target);
+  }
+}
+
+// ── The controller picker modal — the device picker's twin, one per truth ──
+
+function ctrlModalEl(): HTMLElement | null {
+  return rdRoot?.querySelector<HTMLElement>(".rd-ctrlmodal") ?? null;
+}
+
+function ctrlModalIsOpen(): boolean {
+  const el = ctrlModalEl();
+  return Boolean(el && !el.hidden);
+}
+
+let ctrlModalReturnFocus: HTMLElement | null = null;
+function setCtrlModal(open: boolean): void {
+  const el = ctrlModalEl();
+  if (!el || el.hidden === !open) return;
+  if (open) {
+    if (devModalIsOpen()) setDevModal(false);
+    if (sheetOpen()) setSheet(false);
+    if (paletteOpen()) setPalette(false);
+    closeThemeMenu(true);
+    setZoomMenu(false);
+    ctrlModalReturnFocus = activeControl();
+    el.hidden = false;
+    el.querySelector<HTMLButtonElement>(
+      '.rd-ctrlmodal-head button[data-nx="rd-ctrls-close"]',
+    )?.focus({ preventScroll: true });
+  } else {
+    el.hidden = true;
+    const target = ctrlModalReturnFocus;
+    ctrlModalReturnFocus = null;
     restoreOverlayFocus(target);
   }
 }
@@ -1452,7 +1985,24 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
     },
   );
   setCanvasMap(canvasPrefs.mapHidden === true);
+  // The served keyboard widget: mountItem on the CONNECTED article adopts
+  // it with its remembered spot (nocturne's own mechanism), the plate on
+  // top of the workbench and the controller rows beneath.
+  const kbItem = stage.querySelector<HTMLElement>('[data-instance-id="keyboard"]');
+  if (kbItem) {
+    // ⚠️ The remembered spot lives under the INSTANCE ID: persistCanvas
+    // stores every item by data-instance-id, so restoring from any other
+    // key silently snaps the keyboard home on each reload.
+    nCanvas.mountItem(
+      kbItem,
+      canvasPrefs.widgets["keyboard"] ??
+        { x: 140, y: 24, width: 980, height: 360, z: 1, manualScale: 1 },
+      { focus: false },
+    );
+  }
+  syncKbLens();
   restoreBench();
+  syncCtrlBench();
   syncMapCount();
   syncToolRail(nCanvas.toolMode());
   wireSpotlight(stage, viewport);
@@ -1491,6 +2041,10 @@ export function redesignWire(root: HTMLElement): void {
   // The wire's own "JavaScript is live" marker: scripting-only chrome (the
   // camera buttons) reveals off it, and the parity gate normalizes it.
   root.classList.add("js");
+  // The shared finish stores (padFinishes): a DS4 color or premium finish
+  // chosen on /nocturne is the same controller's finish here.
+  loadDs4Variants();
+  loadControllerFinishes();
   root.addEventListener("click", (ev) => {
     const target = ev.target as HTMLElement | null;
     const hit = target?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
@@ -1509,10 +2063,102 @@ export function redesignWire(root: HTMLElement): void {
     if (themeMenu && !target?.closest(".rd-themed")) {
       closeThemeMenu();
     }
+    // The board and While-playing pickers keep the same convention: a
+    // click outside a popover puts it away (each one for itself, so
+    // opening one closes the other).
+    for (const pick of Array.from(
+      rdRoot?.querySelectorAll<HTMLElement>(".rd-boardpick[open]") ?? [],
+    )) {
+      if (target && !pick.contains(target)) pick.removeAttribute("open");
+    }
+    // Plate cell → Keys row: the board is the Keys tab's own picture, so
+    // clicking a key reveals that key's row (a bound cap) or its free chip.
+    const cell = target?.closest<HTMLElement>(
+      '[data-instance-id="keyboard"] .n-kb [data-key], [data-instance-id="keyboard"] .n-kbtray-row [data-key]',
+    );
+    if (cell) {
+      pendingLocateKey = cell.getAttribute("data-key") ?? "";
+      if (inspTab !== "keys") {
+        inspTab = "keys";
+        saveKbUi();
+      }
+      // The Keys view is the SELECTED CONTROLLER's — but the click itself
+      // just selected the KEYBOARD widget through the engine. Hand the
+      // selection to the card the served panel speaks for, so the panel
+      // (not the keyboard's generic geometry) is what opens.
+      const canvas = nCanvas;
+      const slot = rdCtrlPanel?.slot_val ?? "";
+      const item = rdRoot?.querySelector<HTMLElement>(
+        `.forma-canvas-stage > [data-instance-id="ctrl-slot-${slot}"]`,
+      );
+      if (canvas && item) canvas.setSelection([item]);
+      // A selection CHANGE opened the inspector and located the key through
+      // its own callback chain; any further repaint here would wipe that
+      // pulse. Only when the card was already selected (no callback ran —
+      // the pending key survives) does this branch open and paint itself.
+      if (pendingLocateKey) {
+        setInspector(true);
+        renderInspector();
+      }
+      return;
+    }
+    // Pad art → binding row: every control on a card's silhouette carries
+    // its mapper function(s) in data-fn (the 4460 pointer enhancement).
+    // The click already selected the card through the engine; opening the
+    // inspector and locating the row is this page's half.
+    const zone = target?.closest<Element>(".rd-ctrlcard-artwrap [data-fn]");
+    if (zone) {
+      pendingLocateFns = zone.getAttribute("data-fn") ?? "";
+      if (inspTab !== "controls") {
+        inspTab = "controls";
+        try {
+          window.localStorage.setItem(RD_UI_STORE, JSON.stringify({ inspTab }));
+        } catch {
+          // chrome only
+        }
+      }
+      setInspector(true);
+      renderInspector();
+      return;
+    }
     if (!hit) return;
     const closeMenuAfter = Boolean(target?.closest(".rd-menu"));
     if (hit === "canvas-fit") {
       nCanvas?.fitAll();
+    } else if (hit === "kb-theme") {
+      const theme = target?.closest<HTMLElement>("[data-keyboard-theme]")
+        ?.dataset.keyboardTheme ?? "";
+      if (theme) {
+        kbTheme = theme;
+        saveKbUi();
+        syncKbLens();
+      }
+    } else if (hit === "kb-colors") {
+      kbSolo = !kbSolo;
+      saveKbUi();
+      syncKbLens();
+    } else if (hit === "legend-mute") {
+      // One chip, one player's color on the keys — keyed by PRESET like
+      // 4460's, so a crossing follows a controller through a reorder. A
+      // click after solo CONTINUES from what the lens was showing: the
+      // shortcut becomes the real mute set, then this chip toggles in it.
+      const chip = target?.closest<HTMLElement>("[data-slot]");
+      const preset = presetOfSlotRd(Number(chip?.getAttribute("data-slot") ?? ""));
+      if (chip && preset !== undefined) {
+        if (kbSolo) {
+          kbSolo = false;
+          const selectedSlot = rdCtrlPanel?.slot_val ?? "";
+          for (const card of rdCtrlCards) {
+            if (card.number === selectedSlot) kbHiddenStrips.delete(card.preset);
+            else kbHiddenStrips.add(card.preset);
+          }
+        }
+        if (kbHiddenStrips.has(preset)) kbHiddenStrips.delete(preset);
+        else kbHiddenStrips.add(preset);
+        saveKbStrips();
+        saveKbUi();
+        syncKbLens();
+      }
     } else if (hit === "rd-fit-sel") {
       nCanvas?.fitSelection();
     } else if (hit === "rd-center-sel") {
@@ -1530,6 +2176,17 @@ export function redesignWire(root: HTMLElement): void {
       const selector = target?.closest<HTMLElement>('[data-nx="rd-dev-toggle"]')?.dataset
         .selector;
       if (selector) toggleBenchDevice(selector);
+      return;
+    } else if (hit === "rd-ctrls-open") {
+      setCtrlModal(true);
+      return;
+    } else if (hit === "rd-ctrls-close") {
+      setCtrlModal(false);
+      return;
+    } else if (hit === "rd-ctrl-discard") {
+      const ghost = target?.closest<HTMLElement>('[data-nx="rd-ctrl-discard"]')?.dataset
+        .ghost;
+      if (ghost) unparkController(ghost);
       return;
     } else if (hit === "rd-zoom-menu") {
       setZoomMenu(!zoomMenuOpen());
@@ -1594,6 +2251,8 @@ export function redesignWire(root: HTMLElement): void {
   root.querySelector<HTMLElement>(".rd-sheet-card")
     ?.addEventListener("keydown", trapDialogTab);
   root.querySelector<HTMLElement>(".rd-devmodal-panel")
+    ?.addEventListener("keydown", trapDialogTab);
+  root.querySelector<HTMLElement>(".rd-ctrlmodal-panel")
     ?.addEventListener("keydown", trapDialogTab);
 
   const zoomTrigger = zoomMenuTrigger();
@@ -1672,7 +2331,8 @@ export function redesignWire(root: HTMLElement): void {
         ev.preventDefault();
         return;
       }
-      if (devModalIsOpen()) setDevModal(false);
+      if (ctrlModalIsOpen()) setCtrlModal(false);
+      else if (devModalIsOpen()) setDevModal(false);
       else if (sheetOpen()) setSheet(false);
       else if (paletteOpen()) setPalette(false);
       else if (zoomMenuOpen()) setZoomMenu(false);
@@ -1776,11 +2436,40 @@ export function RedesignIsland() {
             },
             "＋ Devices",
           ),
+          // The other half of the workbench: stage virtual controllers. The
+          // daemon owns every consequence — numbering, the XInput ceiling,
+          // persona availability — and the cards mirror its slots exactly.
+          h(
+            "button",
+            {
+              type: "button",
+              class: "n-autobtn rd-addctrl",
+              "data-nx": "rd-ctrls-open",
+              title: "Stage virtual controllers on the workbench",
+            },
+            "＋ Controllers",
+          ),
           h("span", { class: "rd-spring" }),
           // The action flash — the one place a verb's outcome lands. Served
           // from the allowlisted ?flash= on a full load; the entry's
           // fetch-submit layer applies the same copy without one.
           h("span", { role: "status", class: () => rdFlashCls() }, () => rdFlashLine()),
+          // The short undo window after a ✕ removal — the nocturne chip's
+          // contract verbatim: the SERVER holds the resurrection material
+          // and serves this chip while the window lasts; the verb replays
+          // it. No JavaScript state — a reload keeps the offer.
+          h(
+            "form",
+            {
+              role: "status",
+              method: "post",
+              action: "/redesign/controller/undo",
+              "data-rd-form": "controller-undo",
+              class: () => rdUndoCls(),
+            },
+            h("span", { class: "n-undo-lab" }, () => rdUndoLabel()),
+            h("button", { class: "n-undo-btn", type: "submit" }, "Undo"),
+          ),
           // Back view: appears the moment the camera history is non-empty;
           // its title carries the top entry's label.
           h(
@@ -2068,12 +2757,136 @@ export function RedesignIsland() {
             ),
           ),
         ),
+        // ── The controller picker: stage virtual controllers ──────────────
+        // SERVED — shell, lede, counts, every persona row — hidden until
+        // opened. Rows the daemon cannot offer stay listed (`n-dev off`,
+        // reason in the note): a menu that silently drops choices teaches a
+        // user the product has fewer. The add form's preset and layout are
+        // SERVED values (a future file name; the layout that makes a fresh
+        // slot playable). The daemon enforces every ceiling — an add the
+        // roster disallows is refused with a sentence, so the row's disabled
+        // look is presentation, never the guard.
+        h(
+          "div",
+          {
+            class: "rd-ctrlmodal",
+            hidden: "",
+            role: "dialog",
+            "aria-modal": "true",
+            "aria-label": "Stage virtual controllers",
+          },
+          h("div", { class: "rd-ctrlmodal-back", "data-nx": "rd-ctrls-close" }),
+          h(
+            "div",
+            { class: "rd-ctrlmodal-panel", tabindex: "-1" },
+            h(
+              "div",
+              { class: "rd-ctrlmodal-head" },
+              h("span", { class: "n-kick" }, "Virtual controllers"),
+              h("span", { class: "rd-spring" }),
+              h(
+                "button",
+                {
+                  type: "button",
+                  class: "n-mapclose",
+                  "data-nx": "rd-ctrls-close",
+                  "aria-label": "Close the controller picker",
+                  title: "Close (Esc)",
+                },
+                "×",
+              ),
+            ),
+            h("p", { class: "n-devnote" }, () => rdCtrlAddNote()),
+            h("p", { class: "n-devnote rd-ctrl-counts" }, () => rdCtrlCountsLine()),
+            h("h3", { class: "rd-devhead" }, "Pick what the next slot presents as"),
+            createList(
+              () => rdCtrlPersonas(),
+              (r) =>
+                r.name + "|" + r.label + "|" + r.api + "|" + r.note + "|" + r.cls +
+                "|" + r.usable,
+              (r) =>
+                h(
+                  "form",
+                  {
+                    class: "rd-ctrladd-form",
+                    method: "post",
+                    action: "/redesign/controller",
+                    "data-rd-form": "controller-add",
+                    "data-usable": r.usable,
+                  },
+                  h("input", { type: "hidden", name: "persona", value: r.name }),
+                  h("input", { type: "hidden", name: "preset", value: () => rdCtrlAddPreset() }),
+                  h("input", { type: "hidden", name: "layout", value: () => rdCtrlAddLayout() }),
+                  h(
+                    "button",
+                    { type: "submit", class: r.cls, title: r.note },
+                    h(
+                      "span",
+                      { class: "n-dev-txt" },
+                      h("span", { class: "n-dev-name" }, r.label),
+                      h("span", { class: "n-dev-meta" }, r.api),
+                      h("span", { class: "n-dev-meta rd-ctrl-note" }, r.note),
+                    ),
+                    h("span", { class: "n-dev-dot" }),
+                  ),
+                ),
+            ),
+          ),
+        ),
         h(
           "section",
           { class: "forma-canvas n-canvas", "data-forma-canvas": "", "data-client-canvas": "" },
+          // The paint servers the silhouettes draw with — document-wide
+          // defs, mounted OUTSIDE the hidden masters (the nocturne hoisting
+          // rule: gradient url() into a display:none subtree is refused by
+          // non-Chromium engines, and the visible clones resolve here).
+          h(PadPaintServers, null),
+          // The hidden pad masters the controller cards CLONE — the same
+          // five shared drawings /nocturne mounts (one component per
+          // family; `.n-padmasters` is display:none, clone templates only).
+          // Static classes on purpose: this page has no no-JS pad display,
+          // so no visibility signals ride the wraps.
+          h(
+            "div",
+            { class: "n-padmasters", "aria-hidden": "true" },
+            h("div", { class: "n-padwrap", "data-pad-family": "xbox" }, h(X360PadArt, null)),
+            h("div", { class: "n-padwrap", "data-pad-family": "ps" }, h(Ds4PremiumPadArt, null)),
+            h(
+              "div",
+              { class: "n-padwrap", "data-pad-family": "ps5" },
+              h(DualSensePremiumArt, null),
+            ),
+            h(
+              "div",
+              { class: "n-padwrap", "data-pad-family": "switchpro" },
+              h(SwitchProPremiumArt, null),
+            ),
+            h(
+              "div",
+              { class: "n-padwrap", "data-pad-family": "xboxseries" },
+              h(XboxSeriesPremiumArt, null),
+            ),
+          ),
           // ── The tool cluster (design handoff §7): select and hand ───────
           // Off-screen proximity chips: client-populated, camera-settle paced.
           h("div", { class: "rd-chips", "data-client-subtree": "" }),
+          // The controller silhouettes' visible credit — the vendored art's
+          // MIT terms travel with the art onto every page that draws it (the
+          // /pads footer's exact line). A corner OVERLAY, deliberately not in
+          // the topbar's flex flow: a nowrap span there overflows narrow
+          // windows, and the page's horizontal scrollbar then steals viewport
+          // height mid-resize — which the camera's centre-preserving math
+          // reads as a phantom translation.
+          h(
+            "span",
+            { class: "rd-artcredit" },
+            "controller art: ",
+            h(
+              "a",
+              { href: "https://github.com/AL2009man/Gamepad-Asset-Pack" },
+              "Gamepad-Asset-Pack (MIT) by AL2009man",
+            ),
+          ),
           h(
             "div",
             { class: "rd-tools", role: "group", "aria-label": "Canvas tools" },
@@ -2112,12 +2925,403 @@ export function RedesignIsland() {
               "aria-label": "Redesign canvas",
             },
             h("div", { class: "forma-canvas-grid", "aria-hidden": "true" }),
-            h("div", {
-              class: "forma-canvas-stage",
-              "data-forma-canvas-stage": "",
-              "data-client-canvas": "",
-              role: "list",
-            }),
+            h(
+              "div",
+              {
+                class: "forma-canvas-stage",
+                "data-forma-canvas-stage": "",
+                "data-client-canvas": "",
+                role: "list",
+              },
+              // ── The KEYBOARD, as a served canvas widget ────────────────
+              // The nocturne plate's article shell, adapted: the engine
+              // adopts it on init (exactly like 4460's), the six rows +
+              // tray + legend are the SAME served cells, and the finish
+              // rides data-keyboard-theme (client-repainted from the shared
+              // preference). The workbench deck, capture card and learn cue
+              // stay on 4460 until their own migrations.
+              h(
+                "article",
+                {
+                  class: "widget-instance n-widget n-widget-kb",
+                  id: "keyboard-source-widget",
+                  role: "listitem",
+                  "aria-label": "Input source",
+                  tabindex: "-1",
+                  "data-client-canvas": "",
+                  "data-instance-id": "keyboard",
+                  "data-widget-name": "Input source",
+                  "data-widget-navigation-item": "",
+                  "data-canvas-preferred-width": "980",
+                  "data-canvas-min-height": "320",
+                  "data-canvas-resizable": "false",
+                  // The engine writes this on mount; carrying it in the
+                  // shell keeps adoption byte-neutral (the nocturne rule).
+                  "aria-keyshortcuts":
+                    "ArrowLeft ArrowRight ArrowUp ArrowDown Home End Enter F2 M Meta+Enter Control+Enter",
+                  "data-keyboard-theme": "carbon-forge",
+                },
+                h(
+                  "header",
+                  { class: "widget-chrome" },
+                  h(
+                    "div",
+                    { class: "widget-command-region", "data-widget-command-region": "" },
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        class: "widget-drag-handle",
+                        "aria-label": "Move input source",
+                        title:
+                          "Drag input source to move · Arrow keys nudge · Enter opens the widget",
+                      },
+                      h("span", {
+                        class: "widget-drag-rail",
+                        "data-widget-command-rail": "",
+                        "aria-hidden": "true",
+                      }),
+                    ),
+                  ),
+                ),
+                h(
+                  "div",
+                  {
+                    class: "n-widget-body",
+                    "data-forma-runtime-host": "",
+                    "aria-hidden": "false",
+                  },
+                  h(
+                    "div",
+                    { class: "n-kbhead" },
+                    h("span", { class: "n-kick" }, () => rdKbTitle()),
+                    // Which color speaks for which controller; each chip
+                    // mutes that player's color on the keys.
+                    h(
+                      "div",
+                      { class: "n-legend" },
+                      createList(
+                        () => rdKbLegend(),
+                        (r) => r.slot + "|" + r.badge + "|" + r.name + "|" + r.cls,
+                        (r) =>
+                          h(
+                            "button",
+                            {
+                              type: "button",
+                              "data-nx": "legend-mute",
+                              "data-slot": r.slot,
+                              "aria-pressed": "true",
+                              title: "Hide this controller's color on the keys",
+                              class: r.cls,
+                            },
+                            h("span", { class: "n-lgd-dot" }),
+                            h("span", { class: "n-lgd-badge" }, r.badge),
+                            h("span", { class: "n-lgd-name" }, r.name),
+                          ),
+                      ),
+                      h(
+                        "span",
+                        {
+                          title:
+                            "A key five or more controllers share shows how many, instead of their colors.",
+                          class: () => rdKbMoreCls(),
+                        },
+                        h("span", { class: "n-lgdmore-sw" }),
+                        h("span", { class: "n-lgdmore-lbl" }, "5+"),
+                        h("span", { class: "n-lgdmore-name" }, "share a key"),
+                      ),
+                    ),
+                    h("div", { class: "n-spring" }),
+                    // The board picker — which picture the plate draws; a
+                    // real form per row through the re-homed board verb.
+                    h(
+                      "details",
+                      { class: "rd-boardpick" },
+                      h("summary", { class: "n-autobtn rd-boardpick-sum" }, "Board"),
+                      h(
+                        "div",
+                        { class: "rd-boardpick-pop" },
+                        h("p", { class: "n-devnote" }, () => rdBoardLine()),
+                        createList(
+                          () => rdBoardRows(),
+                          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls,
+                          (r) =>
+                            h(
+                              "form",
+                              {
+                                class: "n-modeform",
+                                method: "post",
+                                action: "/redesign/board",
+                                "data-rd-form": "board",
+                              },
+                              h("input", { type: "hidden", name: "board", value: r.name }),
+                              h(
+                                "button",
+                                { type: "submit", class: r.cls },
+                                h("span", { class: "n-radio-dot" }),
+                                h(
+                                  "span",
+                                  { class: "n-radio-txt" },
+                                  h("span", { class: "n-radio-title" }, r.title),
+                                  h("span", { class: "n-radio-detail" }, r.detail),
+                                ),
+                              ),
+                            ),
+                        ),
+                      ),
+                    ),
+                    // While playing: how this input's keys behave during a
+                    // session — freeze (drive pads only), split (mapped
+                    // keys drive, the rest still type), or take nothing.
+                    // The staged input's OWN behaviour, so it lives on the
+                    // input's widget; the composer rewords the rows for an
+                    // encoder (wired buttons, not typing). One staged edit
+                    // per row through the re-homed blocking verb.
+                    h(
+                      "details",
+                      { class: "rd-boardpick rd-capture" },
+                      h(
+                        "summary",
+                        { class: "n-autobtn rd-boardpick-sum" },
+                        "While playing",
+                      ),
+                      h(
+                        "div",
+                        { class: "rd-boardpick-pop" },
+                        h("p", { class: "n-devnote" }, () => rdCaptureNote()),
+                        createList(
+                          () => rdCaptureRows(),
+                          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
+                          (r) =>
+                            h(
+                              "form",
+                              {
+                                class: "n-modeform",
+                                method: "post",
+                                action: "/redesign/blocking",
+                                "data-rd-form": "blocking",
+                              },
+                              h("input", { type: "hidden", name: "blocking", value: r.name }),
+                              h(
+                                "button",
+                                // Bound as a PLAIN property (the theme rows'
+                                // rule): the compiler drops a bare `||` form
+                                // from the server render.
+                                { type: "submit", class: r.cls, "aria-current": r.chosen },
+                                h("span", { class: "n-radio-dot" }),
+                                h(
+                                  "span",
+                                  { class: "n-radio-txt" },
+                                  h("span", { class: "n-radio-title" }, r.title),
+                                  h("span", { class: "n-radio-detail" }, r.detail),
+                                ),
+                              ),
+                            ),
+                        ),
+                      ),
+                    ),
+                    // Material belongs to the keyboard, never to a seat:
+                    // six app-owned paints over one semantic geometry.
+                    h(
+                      "div",
+                      { class: "n-kbthemes", role: "group", "aria-label": "Keyboard finish" },
+                      h("button", {
+                        type: "button",
+                        class: "n-kbtheme",
+                        "data-nx": "kb-theme",
+                        "data-keyboard-theme": "carbon-forge",
+                        title: "Carbon Forge",
+                        "aria-label": "Carbon Forge keyboard finish",
+                        "aria-pressed": "true",
+                      }),
+                      h("button", {
+                        type: "button",
+                        class: "n-kbtheme",
+                        "data-nx": "kb-theme",
+                        "data-keyboard-theme": "lunar-shell",
+                        title: "Lunar Shell",
+                        "aria-label": "Lunar Shell keyboard finish",
+                        "aria-pressed": "false",
+                      }),
+                      h("button", {
+                        type: "button",
+                        class: "n-kbtheme",
+                        "data-nx": "kb-theme",
+                        "data-keyboard-theme": "violet-circuit",
+                        title: "Violet Circuit",
+                        "aria-label": "Violet Circuit keyboard finish",
+                        "aria-pressed": "false",
+                      }),
+                      h("button", {
+                        type: "button",
+                        class: "n-kbtheme",
+                        "data-nx": "kb-theme",
+                        "data-keyboard-theme": "glacier-current",
+                        title: "Glacier Current",
+                        "aria-label": "Glacier Current keyboard finish",
+                        "aria-pressed": "false",
+                      }),
+                      h("button", {
+                        type: "button",
+                        class: "n-kbtheme",
+                        "data-nx": "kb-theme",
+                        "data-keyboard-theme": "ghost-mint",
+                        title: "Ghost Mint",
+                        "aria-label": "Ghost Mint keyboard finish",
+                        "aria-pressed": "false",
+                      }),
+                      h("button", {
+                        type: "button",
+                        class: "n-kbtheme",
+                        "data-nx": "kb-theme",
+                        "data-keyboard-theme": "retro-terminal",
+                        title: "Retro Terminal",
+                        "aria-label": "Retro Terminal keyboard finish",
+                        "aria-pressed": "false",
+                      }),
+                    ),
+                    // Focus the board on the controller being edited:
+                    // everyone else's color greys out — nothing is hidden.
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        "data-nx": "kb-colors",
+                        "aria-pressed": "false",
+                        title:
+                          "Show only this controller's color on the keys. Switch it off and your own crossings come back; click a chip while it is on to keep what you see.",
+                        class: "n-kbcolors",
+                      },
+                      () => rdSoloLbl(),
+                    ),
+                  ),
+                  h(
+                    "div",
+                    { class: () => rdKbCls() },
+                    h(
+                      "div",
+                      {
+                        class: "n-kbcase",
+                        style: () => rdBoardCaseStyle(),
+                        "data-origin": () => rdBoardOrigin(),
+                      },
+                      h(
+                        "div",
+                        { class: "n-kbrow" },
+                        createList(
+                          () => rdKbRow1(),
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) =>
+                            h(
+                              "div",
+                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              h("span", { class: "n-key-cap" }, r.cap),
+                              h("span", { class: "n-key-short" }, r.short),
+                            ),
+                        ),
+                      ),
+                      h(
+                        "div",
+                        { class: "n-kbrow" },
+                        createList(
+                          () => rdKbRow2(),
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) =>
+                            h(
+                              "div",
+                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              h("span", { class: "n-key-cap" }, r.cap),
+                              h("span", { class: "n-key-short" }, r.short),
+                            ),
+                        ),
+                      ),
+                      h(
+                        "div",
+                        { class: "n-kbrow" },
+                        createList(
+                          () => rdKbRow3(),
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) =>
+                            h(
+                              "div",
+                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              h("span", { class: "n-key-cap" }, r.cap),
+                              h("span", { class: "n-key-short" }, r.short),
+                            ),
+                        ),
+                      ),
+                      h(
+                        "div",
+                        { class: "n-kbrow" },
+                        createList(
+                          () => rdKbRow4(),
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) =>
+                            h(
+                              "div",
+                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              h("span", { class: "n-key-cap" }, r.cap),
+                              h("span", { class: "n-key-short" }, r.short),
+                            ),
+                        ),
+                      ),
+                      h(
+                        "div",
+                        { class: "n-kbrow" },
+                        createList(
+                          () => rdKbRow5(),
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) =>
+                            h(
+                              "div",
+                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              h("span", { class: "n-key-cap" }, r.cap),
+                              h("span", { class: "n-key-short" }, r.short),
+                            ),
+                        ),
+                      ),
+                      h(
+                        "div",
+                        { class: "n-kbrow" },
+                        createList(
+                          () => rdKbRow6(),
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) =>
+                            h(
+                              "div",
+                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              h("span", { class: "n-key-cap" }, r.cap),
+                              h("span", { class: "n-key-short" }, r.short),
+                            ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Bound keys not on this board — honest, never dropped.
+                  h(
+                    "div",
+                    { class: () => rdKbTrayCls() },
+                    h("span", { class: "n-kbtray-head" }, () => rdKbTrayHead()),
+                    h(
+                      "div",
+                      { class: "n-kbtray-row" },
+                      createList(
+                        () => rdKbTray(),
+                        (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                        (r) =>
+                          h(
+                            "div",
+                            { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                            h("span", { class: "n-key-cap" }, r.cap),
+                            h("span", { class: "n-key-short" }, r.short),
+                          ),
+                      ),
+                    ),
+                  ),
+                  h("p", { class: "n-devnote" }, () => rdKbNote()),
+                ),
+              ),
+            ),
             // The map in the corner: a button per widget (click to jump) and
             // a pale rectangle for the camera (drag inside to pan). Both are
             // filled by the engine — the ITEMS box is client-populated by

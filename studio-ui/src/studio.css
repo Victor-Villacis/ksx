@@ -18405,6 +18405,406 @@ a.nm-link {
   display: inline-block;
 }
 
+/* ── The controller picker: the device modal's twin, its own class family ──
+   (additive on purpose — no shared selectors to fight the canvas lane over) */
+.rd-ctrlmodal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+}
+
+.rd-ctrlmodal[hidden] {
+  display: none;
+}
+
+.rd-ctrlmodal-back {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--n-bg) 62%, transparent);
+  backdrop-filter: blur(3px);
+}
+
+.rd-ctrlmodal-panel {
+  position: relative;
+  width: min(880px, 92vw);
+  max-height: 86vh;
+  overflow-y: auto;
+  padding: 18px 22px 22px;
+  border: 1px solid var(--n-line);
+  border-radius: 16px;
+  background: var(--n-panel);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+  outline: none;
+}
+
+.rd-ctrlmodal-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.rd-ctrlmodal-head .n-kick {
+  order: 0;
+}
+
+.rd-ctrl-counts {
+  color: var(--n-text-2);
+}
+
+.rd-ctrladd-form button.n-dev {
+  width: 100%;
+  background: transparent;
+  color: var(--n-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.rd-ctrladd-form button.n-dev:hover,
+.rd-ctrladd-form button.n-dev:focus-visible {
+  border-color: var(--n-accent-line);
+}
+
+.rd-ctrlmodal .n-dev-name,
+.rd-ctrlmodal .n-dev-meta {
+  display: block;
+}
+
+.rd-ctrl-note:empty {
+  display: none;
+}
+
+/* The daemon cannot offer this persona right now: presentation only — the
+   server refuses the write regardless. */
+.rd-ctrladd-form[data-usable="false"] button.n-dev {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ── A staged controller on the workbench: the slot card ─────────────────── */
+.rd-ctrl-node .rd-ctrlcard {
+  padding: 10px 12px;
+}
+
+.rd-ctrlcard-slot {
+  display: inline-block;
+  margin: 0 0 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--n-accent) 22%, transparent);
+  color: var(--n-accent-2);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+.rd-ctrlcard-badge {
+  display: inline-block;
+  margin: 0 0 6px 6px;
+  padding: 1px 8px;
+  border: 1px solid var(--n-accent-line);
+  border-radius: 999px;
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--n-accent-2);
+}
+
+.rd-ctrlcard-badge[data-persona="playstation"] {
+  border-color: color-mix(in srgb, var(--n-warn, var(--n-accent)) 45%, transparent);
+}
+
+.rd-ctrlcard-name {
+  margin: 0 0 4px;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  color: var(--n-text);
+}
+
+.rd-ctrlcard-meta {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+  color: var(--n-text-2);
+}
+
+.rd-ctrlcard-verbs {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.rd-ctrlverb-form {
+  margin: 0;
+}
+
+.rd-ctrlverb {
+  padding: 3px 10px;
+  border: 1px solid var(--n-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--n-text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rd-ctrlverb:hover:not(:disabled),
+.rd-ctrlverb:focus-visible {
+  border-color: var(--n-accent-line);
+  color: var(--n-accent-2);
+}
+
+.rd-ctrlverb:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.rd-ctrlverb-danger:hover:not(:disabled),
+.rd-ctrlverb-danger:focus-visible {
+  border-color: color-mix(in srgb, var(--n-danger) 55%, transparent);
+  color: var(--n-danger);
+}
+
+/* Direct player assignment — a select, not spatial arrows: "make this
+   Player 2" is one gesture, and "No player" parks the card. */
+.rd-ctrlplayer {
+  padding: 3px 8px;
+  border: 1px solid var(--n-line);
+  border-radius: 8px;
+  background: var(--n-panel);
+  color: var(--n-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rd-ctrlplayer:hover,
+.rd-ctrlplayer:focus-visible {
+  border-color: var(--n-accent-line);
+}
+
+.rd-ctrlcard-verbs {
+  align-items: center;
+}
+
+.rd-ctrlcard-verbs > form:last-child,
+.rd-ctrlcard-verbs > button:last-child {
+  margin-left: auto;
+}
+
+/* The REAL body drawing — a CLONE of the shared inline master is the
+   widget's face (the nocturne widget's mechanism). The clone is an inline
+   <svg> with its source viewBox, so its box is intrinsic — no async load,
+   no reserved-ratio guard needed. Fully interactive like 4460's widgets:
+   every control zone carries data-fn, and clicking one jumps the inspector
+   to that binding row (pointer-events:none here was the bug that made the
+   Xbox art dead while the premium hooks' own pointer rules leaked through). */
+.rd-ctrlcard-artwrap {
+  margin: 6px 0 4px;
+  user-select: none;
+}
+
+.rd-ctrlcard-artwrap svg [data-fn] {
+  cursor: pointer;
+}
+
+.rd-ctrlcard-artwrap svg.rd-ctrlcard-art {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.rd-ctrlcard-noart {
+  margin: 6px 0 4px;
+  font-style: italic;
+}
+
+.rd-ctrlcard-refusal {
+  font-style: italic;
+  color: var(--n-warn, #d0a458);
+}
+
+/* The removal-undo chip — the nocturne rack chip's contract, floated under
+   this page's topbar beside the flash (it must show with no inspector
+   open: the card it undoes is gone). */
+form.rd-undochip {
+  position: absolute;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 14px;
+  border: 1px solid color-mix(in srgb, var(--n-accent) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--n-panel) 88%, var(--n-accent));
+  font-size: var(--fs-small);
+}
+
+form.rd-undochip.none {
+  display: none;
+}
+
+form.rd-undochip .n-undo-btn {
+  border: 1px solid color-mix(in srgb, var(--n-accent) 60%, transparent);
+  border-radius: 999px;
+  padding: 3px 12px;
+  background: color-mix(in srgb, var(--n-accent) 24%, transparent);
+  color: var(--n-text);
+  cursor: pointer;
+}
+
+/* The controller panel inside the inspector: nocturne's right-pane
+   sections, compacted for the 328px overlay. Wide rows scroll inside the
+   panel body, never the page. */
+.rd-inspector .rd-insp-ctrlmeta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0 2px;
+}
+
+.rd-inspector .n-socdform {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.rd-inspector .n-socdform.none {
+  display: none;
+}
+
+.rd-inspector .rd-insp-ctrlverbs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rd-inspector .n-bindgroups {
+  margin-top: 8px;
+}
+
+.rd-inspector .n-bindgroups.none {
+  display: none;
+}
+
+.rd-inspector .n-bind-sum {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+/* The Controls|Keys pair and the Keys view, in the overlay. The shared
+   sheet keys `.n-krows` visibility to nocturne's right-pane mode class;
+   here the ACTIVE TAB decides what is mounted, so the wrapper shows
+   unconditionally. */
+.rd-inspector .rd-insp-vseg {
+  margin: 10px 0 4px;
+}
+
+.rd-inspector .rd-insp-krows {
+  display: block;
+}
+
+.rd-inspector .rd-insp-krows .n-krow {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.rd-inspector .n-akeysec.none {
+  display: none;
+}
+
+/* The board picker on the keyboard widget's head — a small details
+   popover of the served roster (the nocturne picker rows re-homed). */
+.rd-boardpick {
+  position: relative;
+}
+
+.rd-boardpick-sum {
+  list-style: none;
+  cursor: pointer;
+}
+
+.rd-boardpick-sum::-webkit-details-marker {
+  display: none;
+}
+
+.rd-boardpick-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  min-width: 300px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid var(--n-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--n-panel) 97%, transparent);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.35);
+}
+
+/* The locate pulse: a pad-art zone or a Keys-row jump named this row. */
+@keyframes rd-row-pulse {
+  0% {
+    outline-color: color-mix(in srgb, var(--n-accent) 90%, transparent);
+  }
+  100% {
+    outline-color: transparent;
+  }
+}
+
+.rd-row-pulse {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  animation: rd-row-pulse 1.4s ease-out;
+}
+
+/* The art credit, a quiet overlay in the canvas's corner — MIT terms travel
+   with the silhouettes onto every page that draws them. Absolutely
+   positioned so it can never widen the layout (a topbar nowrap span
+   overflowed narrow windows and the scrollbar's stolen height read as a
+   camera translation). */
+.rd-artcredit {
+  position: absolute;
+  right: 12px;
+  bottom: 34px;
+  z-index: 5;
+  font-size: var(--fs-micro);
+  color: var(--n-text-3);
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.rd-artcredit a {
+  color: var(--n-text-3);
+}
+
+/* A parked ghost: on the canvas, off the draft. */
+.rd-ctrlcard-ghost {
+  opacity: 0.78;
+}
+
+.rd-ctrlcard-noplayer {
+  background: color-mix(in srgb, var(--n-text-3) 24%, transparent);
+  color: var(--n-text-2);
+}
+
+/* Semantic tiers on the slot cards, the workbench pattern: chips always;
+   the meta from structure in; the verbs only at editing distance. */
+.rd [data-canvas-zoom-tier="overview"] .rd-ctrlcard-meta,
+.rd [data-canvas-zoom-tier="overview"] .rd-ctrlcard-verbs,
+.rd [data-canvas-zoom-tier="structure"] .rd-ctrlcard-verbs {
+  display: none;
+}
+
 /* The palette landing pulse — the eye needs to find what the camera flew to. */
 @keyframes rd-pulse {
   0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--n-accent) 70%, transparent); }

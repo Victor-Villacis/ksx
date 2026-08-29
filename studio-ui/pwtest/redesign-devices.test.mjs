@@ -34,6 +34,8 @@ const encoderContractBundle = await bundle({
     contents: [
       'export { detectEncoderVisualProfile, validateEncoderDetectionRules } from "../src/encoderDetection.ts";',
       'export { getEncoderVisualProfile, validateEncoderVisualRegistry } from "../src/encoderVisualRegistry.ts";',
+      'export { validateEncoderChart } from "../src/encoderChartRead.ts";',
+      'export { parseEncoderObservationView } from "../src/encoderSignalObservation.ts";',
     ].join("\n"),
     resolveDir: path.join(repoRoot, "studio-ui", "pwtest"),
     sourcefile: "encoder-profile-contract-entry.ts",
@@ -47,6 +49,8 @@ const encoderContractBundle = await bundle({
 const {
   detectEncoderVisualProfile,
   getEncoderVisualProfile,
+  parseEncoderObservationView,
+  validateEncoderChart,
   validateEncoderDetectionRules,
   validateEncoderVisualRegistry,
 } = await import(
@@ -324,6 +328,40 @@ describe("the device workbench", () => {
       }).resolution,
       "identity-conflict",
       "an unprofiled release cannot advertise a configuration reader",
+    );
+  });
+
+  test("signal-observation responses preserve unique-set semantics", () => {
+    const valid = {
+      ok: true,
+      state: "listening",
+      generation: 9,
+      selector: IPAC,
+      remaining_ms: 10_000,
+      held: ["ArrowUp"],
+      seen: ["ArrowUp", "KeyA"],
+      peak: 2,
+      events: 4,
+      dropped: 0,
+      rollover_visibility: "unavailable",
+      detail: "Exact-device evidence.",
+      error: null,
+    };
+    assert.ok(parseEncoderObservationView(valid));
+    assert.equal(
+      parseEncoderObservationView({ ...valid, seen: ["ArrowUp", "ArrowUp"] }),
+      null,
+      "seen is a unique signal set, not an event log",
+    );
+    assert.equal(
+      parseEncoderObservationView({ ...valid, held: ["KeyB"] }),
+      null,
+      "a held signal must already belong to the seen set",
+    );
+    assert.equal(
+      parseEncoderObservationView({ ...valid, seen: ["ArrowUp", ""] }),
+      null,
+      "empty signal names never become evidence chips",
     );
   });
 
@@ -1081,6 +1119,11 @@ describe("the device workbench", () => {
     );
     assert.equal(await node.locator("svg").getAttribute("data-capacity"), "unknown");
     assert.match(await node.textContent(), /terminal capacity unknown/i);
+    assert.equal(
+      await node.locator(".rd-encoder-profile-metric dt").last().textContent(),
+      "illustrative signal sample",
+      "fixture-only keys are never counted as observed hardware evidence",
+    );
     assert.match(await node.textContent(), /terminal not associated/i);
     assert.match(await node.textContent(), /no exact backend encoder identity is available/i);
     assert.doesNotMatch(
@@ -1207,6 +1250,916 @@ describe("the device workbench", () => {
     await page.close();
   });
 
+  test("the encoder lab reads one exact complete chart only after explicit consent", async () => {
+    const page = await openBench();
+    const chartRequests = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/panel/chart") chartRequests.push(request);
+    });
+    await page.click('[data-nx="rd-encoder-profiles"]');
+    const node = page.locator(".rd-encoder-profile-node");
+    const expectedIds = getEncoderVisualProfile("ultimarc-ipac4").topology.terminals
+      .map((terminal) => terminal.id);
+
+    assert.equal(chartRequests.length, 0, "opening the lab makes no chart request");
+    assert.equal(await node.locator('[data-rd-encoder-chart][data-state="idle"]').count(), 1);
+    const [response] = await Promise.all([
+      page.waitForResponse((candidate) =>
+        new URL(candidate.url()).pathname === "/api/panel/chart" &&
+        candidate.request().method() === "POST"
+      ),
+      node.getByRole("button", { name: "Read configured emissions" }).click(),
+    ]);
+    const payload = await response.json();
+    assert.equal(chartRequests.length, 1, "one activation makes one read transaction");
+    assert.deepEqual(chartRequests[0].postDataJSON(), { selector: IPAC });
+    assert.deepEqual(
+      payload.terminals.map((terminal) => terminal.terminal_id),
+      expectedIds,
+      "the fixture and visual profile agree on the complete ordered 56-terminal roster",
+    );
+    assert.equal(validateEncoderChart(payload, expectedIds, "2026-08-28T00:00:00Z").ok, true);
+    assert.equal(
+      validateEncoderChart({ ...payload, terminals: payload.terminals.slice(0, -1) }, expectedIds).ok,
+      false,
+      "a partial chart is withheld atomically",
+    );
+    assert.equal(
+      validateEncoderChart({
+        ...payload,
+        terminals: [...payload.terminals.slice(0, -1), payload.terminals[0]],
+      }, expectedIds).ok,
+      false,
+      "a duplicate terminal cannot masquerade as a complete chart",
+    );
+    assert.equal(
+      validateEncoderChart({ ...payload, image_sha256: "not-a-proof" }, expectedIds).ok,
+      false,
+      "an invalid proof hash is withheld",
+    );
+    const { shift: _omittedShift, ...withoutShift } = payload;
+    assert.equal(
+      validateEncoderChart(withoutShift, expectedIds).ok,
+      false,
+      "a successful roster without its board-level Shift summary is withheld",
+    );
+    assert.equal(
+      validateEncoderChart({
+        ...payload,
+        terminals: payload.terminals.map((terminal, index) => index === 0
+          ? { ...terminal, normal: { ...terminal.normal, code: 65_536 } }
+          : terminal),
+      }, expectedIds).ok,
+      false,
+      "a value outside the backend's u16 contract is withheld",
+    );
+    assert.equal(
+      validateEncoderChart({
+        ...payload,
+        shift: { state: "enabled", terminal_id: "not-a-terminal", terminal_label: "Ghost", reachable: 1 },
+      }, expectedIds).ok,
+      false,
+      "a board-level Shift claim cannot point outside the exact roster",
+    );
+    assert.equal(
+      validateEncoderChart({
+        ...payload,
+        shift: { state: "none-enabled", stranded: expectedIds.length + 1, opaque: 0 },
+      }, expectedIds).ok,
+      false,
+      "impossible board-level Shift counts are withheld",
+    );
+    const twoShiftRows = payload.terminals.map((terminal, index) => index < 2
+      ? { ...terminal, shift_state: "enabled", is_shift: true }
+      : terminal);
+    assert.equal(
+      validateEncoderChart({
+        ...payload,
+        terminals: twoShiftRows,
+        shift: {
+          state: "enabled",
+          terminal_id: twoShiftRows[0].terminal_id,
+          terminal_label: twoShiftRows[0].terminal_label,
+          reachable: 1,
+        },
+      }, expectedIds).ok,
+      false,
+      "an enabled summary cannot hide a second Shift row",
+    );
+
+    await page.waitForFunction(
+      () => document.querySelector('[data-rd-encoder-chart]')?.getAttribute("data-state") ===
+        "loaded",
+    );
+    assert.equal(await node.locator("[data-rd-encoder-chart-row]").count(), 56);
+    assert.equal(
+      await node.locator('[data-rd-encoder-chart-row] th[scope="row"]').count(),
+      56,
+      "terminal identity is the accessible row header for each emission pair",
+    );
+    assert.equal(
+      await node.locator('[data-rd-encoder-chart-row] th[scope="row"]').first()
+        .evaluate((cell) => getComputedStyle(cell).position),
+      "static",
+      "row headers never stick over the column header while the table scrolls",
+    );
+    assert.deepEqual(
+      await node.locator("[data-rd-encoder-chart-row]").evaluateAll((rows) =>
+        rows.map((row) => row.getAttribute("data-terminal-roster-id"))
+      ),
+      expectedIds,
+      "the detailed table joins every stored emission to the profile-owned terminal ID",
+    );
+    assert.equal(
+      await node.locator("[data-terminal-id][data-configured-emission]").count(),
+      56,
+      "the compact board paints only the validated all-terminal snapshot",
+    );
+    assert.match(await node.textContent(), /proof [0-9a-f]{16}/i);
+    assert.match(await node.locator("[data-rd-encoder-chart-status] time").textContent(), /read at/i);
+    assert.match(
+      await node.textContent(),
+      /nothing stored.*or a macro/i,
+      "zero bytes retain their on-board macro ambiguity",
+    );
+    assert.match(await node.textContent(), /physical wiring remains a separate, unknown fact/i);
+    assert.equal(
+      await node.locator('[data-rd-encoder-observe="start"]').isDisabled(),
+      false,
+      "a completed read releases the observer control",
+    );
+
+    await node.locator("[data-rd-encoder-model]").selectOption("catalog:ultimarc-ipac2");
+    assert.equal(await node.locator("[data-rd-encoder-read]").count(), 0);
+    assert.equal(await node.locator("[data-rd-encoder-chart-row]").count(), 0);
+    assert.equal(chartRequests.length, 1, "catalog selection never authorizes another read");
+    await page.click('[data-nx="rd-encoder-profiles"]');
+    await page.waitForFunction(() => !document.querySelector(".rd-encoder-profile-node"));
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("a pending chart locks observation and a stale response cannot repaint another profile", async () => {
+    const page = await openBench();
+    let releaseChart;
+    let reportChart;
+    let reportFulfilled;
+    const chartGate = new Promise((resolve) => { releaseChart = resolve; });
+    const chartSeen = new Promise((resolve) => { reportChart = resolve; });
+    const chartFulfilled = new Promise((resolve) => { reportFulfilled = resolve; });
+    await page.route("**/api/panel/chart", async (route) => {
+      const request = route.request();
+      const response = await route.fetch();
+      const payload = await response.json();
+      reportChart({ method: request.method(), body: request.postDataJSON() });
+      await chartGate;
+      await route.fulfill({ response, json: payload });
+      reportFulfilled();
+    });
+
+    try {
+      await page.click('[data-nx="rd-encoder-profiles"]');
+      const node = page.locator(".rd-encoder-profile-node");
+      await node.getByRole("button", { name: "Read configured emissions" }).click();
+      assert.deepEqual(
+        await chartSeen,
+        { method: "POST", body: { selector: IPAC } },
+      );
+      assert.equal(await node.locator('[data-rd-encoder-chart][data-state="loading"]').count(), 1);
+      assert.equal(await node.locator('[data-rd-encoder-observe="start"]').isDisabled(), true);
+      assert.equal(await node.locator('[data-rd-encoder-observe="start"]').textContent(), "Wait for chart read");
+
+      await node.locator("[data-rd-encoder-model]").selectOption("catalog:ultimarc-ipac2");
+      assert.equal(await node.locator("[data-rd-encoder-read]").count(), 0);
+      releaseChart();
+      await chartFulfilled;
+      await page.waitForTimeout(50);
+      assert.equal(await node.locator("[data-rd-encoder-model]").inputValue(), "catalog:ultimarc-ipac2");
+      assert.equal(await node.locator("[data-rd-encoder-chart-row]").count(), 0);
+      assert.equal(await node.locator('[data-rd-encoder-chart][data-state="loaded"]').count(), 0);
+      assert.doesNotMatch(await node.textContent(), /proof [0-9a-f]{16}/i);
+      assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    } finally {
+      releaseChart?.();
+      if (!page.isClosed()) await page.close();
+    }
+  });
+
+  test("signal observation is exact-device, generation-bound, contained, and releasable", async () => {
+    const page = await openBench();
+    const calls = [];
+    const allRequests = [];
+    page.on("request", (request) => {
+      allRequests.push({
+        path: new URL(request.url()).pathname,
+        method: request.method(),
+      });
+    });
+    let active = false;
+    let pollUnexpected = false;
+    let preflightMode = "normal";
+    let startAsUnknown = false;
+    let generation = 40;
+    const view = (state, overrides = {}) => ({
+      ok: true,
+      state,
+      generation: state === "idle" ? null : generation,
+      selector: state === "idle" ? null : IPAC,
+      remaining_ms: state === "listening" ? 29_500 : null,
+      held: state === "listening" ? ["ArrowRight"] : [],
+      seen: state === "idle" ? [] : ["ArrowRight", "Digit1", "Enter"],
+      peak: state === "idle" ? 0 : 2,
+      events: state === "idle" ? 0 : 6,
+      dropped: 0,
+      rollover_visibility: "unavailable",
+      detail: state === "idle" ? "No observation is active." : "Exact-device evidence only.",
+      error: null,
+      ...overrides,
+    });
+    await page.route("**/api/input-test**", async (route) => {
+      const request = route.request();
+      const pathName = new URL(request.url()).pathname;
+      const body = request.postData() ? request.postDataJSON() : null;
+      calls.push({ path: pathName, method: request.method(), body });
+      if (pathName === "/api/input-test/start") {
+        generation += 1;
+        active = true;
+        await route.fulfill({
+          status: 200,
+          json: view(startAsUnknown ? "future-running" : "listening"),
+        });
+      } else if (pathName === "/api/input-test/cancel") {
+        assert.deepEqual(body, { generation });
+        active = false;
+        await route.fulfill({
+          status: 200,
+          json: view("cancelled", { generation: body.generation }),
+        });
+      } else {
+        await route.fulfill({
+          status: 200,
+          json: preflightMode === "unknown"
+            ? view("future-lease", { generation: 700, selector: IPAC })
+            : preflightMode === "listening-exact"
+              ? view("listening", { generation: 700, selector: IPAC })
+            : active
+              ? pollUnexpected
+                ? view("unavailable", {
+                  ok: false,
+                  generation: null,
+                  selector: null,
+                  error: "The observer returned an unexpected owned state.",
+                })
+                : view("listening")
+              : view("idle"),
+        });
+      }
+    });
+
+    try {
+      await page.click('[data-nx="rd-encoder-profiles"]');
+      const node = page.locator(".rd-encoder-profile-node");
+      assert.deepEqual(calls, [], "opening and selecting the lab never starts observation");
+      const beforeGeometry = await node.evaluate((item) => ({
+        x: item.dataset.canvasX,
+        y: item.dataset.canvasY,
+        width: item.dataset.canvasWidth,
+        height: item.dataset.canvasHeight,
+      }));
+
+      await node.getByRole("button", { name: "Observe emitted signals" }).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "listening",
+      );
+      assert.deepEqual(calls.slice(0, 2), [
+        { path: "/api/input-test", method: "GET", body: null },
+        {
+          path: "/api/input-test/start",
+          method: "POST",
+          body: { selector: IPAC, duration_ms: 30_000 },
+        },
+      ]);
+      assert.equal(await node.locator("[data-rd-encoder-read]").isDisabled(), true);
+      await page.waitForFunction(
+        () => document.activeElement?.hasAttribute("data-rd-encoder-observation-sink"),
+      );
+      const capturedTransform = await page.locator(".forma-canvas-stage").evaluate(
+        (stage) => stage.style.transform,
+      );
+      const sink = node.locator("[data-rd-encoder-observation-sink]");
+      for (const key of ["ArrowRight", "Digit1", "Enter"]) await sink.press(key);
+      assert.equal(
+        await node.locator('[data-rd-encoder-observation][data-state="listening"]').count(),
+        1,
+        "captured encoder keys cannot activate Stop",
+      );
+      assert.equal(
+        await page.locator(".forma-canvas-stage").evaluate((stage) => stage.style.transform),
+        capturedTransform,
+        "captured arrows and number keys do not move the canvas",
+      );
+      assert.deepEqual(
+        await node.evaluate((item) => ({
+          x: item.dataset.canvasX,
+          y: item.dataset.canvasY,
+          width: item.dataset.canvasWidth,
+          height: item.dataset.canvasHeight,
+        })),
+        beforeGeometry,
+      );
+      assert.equal(calls.filter((call) => call.path === "/api/input-test/cancel").length, 0);
+      await sink.press("Tab");
+      assert.equal(
+        await page.evaluate(() =>
+          document.activeElement?.matches('[data-rd-encoder-observe="stop"]')
+        ),
+        true,
+        "Tab stays inside the two-stop Capture/Done focus loop",
+      );
+      await page.keyboard.press("Enter");
+      assert.equal(
+        calls.filter((call) => call.path === "/api/input-test/cancel").length,
+        0,
+        "ordinary Enter on Done is treated as captured encoder input",
+      );
+      await page.keyboard.press("Tab");
+      assert.equal(
+        await page.evaluate(() =>
+          document.activeElement?.hasAttribute("data-rd-encoder-observation-sink")
+        ),
+        true,
+        "Tab wraps from Done back to Capture",
+      );
+      pollUnexpected = true;
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "unknown",
+      );
+      assert.match(await node.textContent(), /stop remains bound to that exact observation/i);
+      assert.match(await node.textContent(), /held at last confirmed snapshot/i);
+
+      await node.getByRole("button", { name: "Done — stop listening" }).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "complete",
+      );
+      assert.deepEqual(
+        calls.find((call) => call.path === "/api/input-test/cancel")?.body,
+        { generation: 41 },
+        "Stop carries only the exact owned generation",
+      );
+      assert.match(await node.textContent(), /terminal association: none/i);
+      assert.match(await node.textContent(), /usb:d209:0430:00/i);
+      assert.equal(await node.locator("[data-terminal-id]").count(), 56);
+      assert.equal(await node.locator("[data-rd-encoder-chart-row]").count(), 0);
+
+      pollUnexpected = false;
+      preflightMode = "listening-exact";
+      await node.getByRole("button", { name: "Check and observe again" }).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "foreign-live",
+      );
+      assert.equal(
+        calls.filter((call) => call.path === "/api/input-test/start").length,
+        1,
+        "an existing exact preflight generation blocks rather than being adopted or restarted",
+      );
+      assert.match(await node.textContent(), /this lab did not start it/i);
+      assert.equal(
+        await node.getByRole("button", { name: "Recheck observation lease" }).count(),
+        1,
+      );
+      assert.equal(await node.locator("[data-rd-encoder-read]").textContent(), "Observation lease busy");
+
+      preflightMode = "unknown";
+      await node.getByRole("button", { name: "Recheck observation lease" }).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "foreign-live",
+      );
+      assert.equal(
+        calls.filter((call) => call.path === "/api/input-test/start").length,
+        1,
+        "a recheck never claims or starts over a future live lease",
+      );
+
+      preflightMode = "normal";
+      await node.getByRole("button", { name: "Recheck observation lease" }).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "idle",
+      );
+      assert.equal(
+        calls.filter((call) => call.path === "/api/input-test/start").length,
+        1,
+        "rechecking a cleared foreign lease never starts a new observation",
+      );
+      assert.equal(await node.locator("[data-rd-encoder-read]").isDisabled(), false);
+
+      startAsUnknown = true;
+      await node.getByRole("button", { name: "Observe emitted signals" }).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "unknown",
+      );
+      assert.match(await node.textContent(), /exact Stop action remains available/i);
+      const model = node.locator("[data-rd-encoder-model]");
+      const selectionCancel = page.waitForRequest((request) =>
+        new URL(request.url()).pathname === "/api/input-test/cancel" &&
+        request.postDataJSON()?.generation === 42
+      );
+      await model.selectOption("catalog:ultimarc-ipac2");
+      await selectionCancel;
+      assert.equal(await node.locator("[data-rd-encoder-read]").count(), 0);
+
+      await model.selectOption(`connected:${IPAC}`);
+      startAsUnknown = false;
+      await node.getByRole("button", { name: "Observe emitted signals" }).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "listening",
+      );
+      assert.equal(generation, 43, "each successful start owns a distinct generation");
+      const removalCancel = page.waitForRequest((request) =>
+        new URL(request.url()).pathname === "/api/input-test/cancel" &&
+        request.postDataJSON()?.generation === 43
+      );
+      await page.click('[data-nx="rd-encoder-profiles"]');
+      await removalCancel;
+      await page.waitForFunction(() => !document.querySelector(".rd-encoder-profile-node"));
+      assert.deepEqual(
+        calls.filter((call) => call.path === "/api/input-test/cancel").map((call) => call.body),
+        [{ generation: 41 }, { generation: 42 }, { generation: 43 }],
+        "Stop, selection change, and removal each release only their current exact generation",
+      );
+      assert.equal(
+        allRequests.filter((request) =>
+          request.method === "POST" &&
+          !["/api/input-test/start", "/api/input-test/cancel"].includes(request.path)
+        ).length,
+        0,
+        `the whole page request log stays read/observe-only: ${JSON.stringify(allRequests)}`,
+      );
+      assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    } finally {
+      if (!page.isClosed()) await page.close();
+    }
+  });
+
+  test("a replaced observer is never cancelled and a failed Stop retries the same generation", async () => {
+    const page = await openBench();
+    const calls = [];
+    let active = false;
+    let generation = 300;
+    let pollMode = "normal";
+    let failNextCancel = true;
+    const view = (state, overrides = {}) => ({
+      ok: true,
+      state,
+      generation: state === "idle" ? null : generation,
+      selector: state === "idle" ? null : IPAC,
+      remaining_ms: state === "listening" ? 29_500 : null,
+      held: state === "listening" ? ["ArrowUp"] : [],
+      seen: state === "idle" ? [] : ["ArrowUp"],
+      peak: state === "idle" ? 0 : 1,
+      events: state === "idle" ? 0 : 2,
+      dropped: 0,
+      rollover_visibility: "unavailable",
+      detail: state === "idle" ? "No observation is active." : "Exact-device evidence.",
+      error: null,
+      ...overrides,
+    });
+    await page.route("**/api/input-test**", async (route) => {
+      const request = route.request();
+      const pathName = new URL(request.url()).pathname;
+      const body = request.postData() ? request.postDataJSON() : null;
+      calls.push({ path: pathName, method: request.method(), body });
+      if (pathName === "/api/input-test/start") {
+        generation += 1;
+        active = true;
+        await route.fulfill({ status: 200, json: view("listening") });
+      } else if (pathName === "/api/input-test/cancel") {
+        if (failNextCancel) {
+          failNextCancel = false;
+          await route.fulfill({
+            status: 200,
+            json: view("unavailable", {
+              ok: false,
+              generation: null,
+              selector: null,
+              error: "Cancellation acknowledgement was unavailable.",
+            }),
+          });
+        } else {
+          active = false;
+          await route.fulfill({ status: 200, json: view("cancelled") });
+        }
+      } else {
+        await route.fulfill({
+          status: 200,
+          json: pollMode === "replacement"
+            ? view("listening", { generation: 999, selector: G915 })
+            : view(active ? "listening" : "idle"),
+        });
+      }
+    });
+
+    try {
+      await page.click('[data-nx="rd-encoder-profiles"]');
+      const node = page.locator(".rd-encoder-profile-node");
+      await node.getByRole("button", { name: "Observe emitted signals" }).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "listening",
+      );
+      pollMode = "replacement";
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "foreign-live",
+      );
+      assert.equal(
+        calls.filter((call) => call.path === "/api/input-test/cancel").length,
+        0,
+        "a replacement selector/generation is never cancelled by the old owner",
+      );
+      assert.equal(await node.locator('[data-rd-encoder-observe="stop"]').count(), 0);
+      assert.match(await node.textContent(), /will not stop or reuse that foreign generation/i);
+
+      active = false;
+      pollMode = "normal";
+      await node.getByRole("button", { name: "Recheck observation lease" }).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "idle",
+      );
+      await node.getByRole("button", { name: "Observe emitted signals" }).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "listening",
+      );
+      assert.equal(generation, 302);
+      await node.getByRole("button", { name: "Done — stop listening" }).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "unknown",
+      );
+      assert.equal(await node.locator('[data-rd-encoder-observe="stop"]').count(), 1);
+      assert.match(
+        await node.textContent(),
+        /retry Stop for (?:that exact observation|this exact generation)/i,
+      );
+      assert.deepEqual(
+        calls.filter((call) => call.path === "/api/input-test/cancel").map((call) => call.body),
+        [{ generation: 302 }],
+      );
+
+      await node.getByRole("button", { name: "Done — stop listening" }).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "complete",
+      );
+      assert.deepEqual(
+        calls.filter((call) => call.path === "/api/input-test/cancel").map((call) => call.body),
+        [{ generation: 302 }, { generation: 302 }],
+        "retry never broadens or changes the owned generation",
+      );
+      assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    } finally {
+      if (!page.isClosed()) await page.close();
+    }
+  });
+
+  test("pending starts and page hide release their exact generations while capture stays contained", async () => {
+    const page = await openBench();
+    const calls = [];
+    let active = false;
+    let generation = 90;
+    let releaseStart;
+    let reportStart;
+    let reportStartFulfilled;
+    const startGate = new Promise((resolve) => { releaseStart = resolve; });
+    const startSeen = new Promise((resolve) => { reportStart = resolve; });
+    const startFulfilled = new Promise((resolve) => { reportStartFulfilled = resolve; });
+    const view = (state, overrides = {}) => ({
+      ok: true,
+      state,
+      generation: state === "idle" ? null : generation,
+      selector: state === "idle" ? null : IPAC,
+      remaining_ms: state === "listening" ? 29_500 : null,
+      held: [],
+      seen: [],
+      peak: 0,
+      events: 0,
+      dropped: 0,
+      rollover_visibility: "unavailable",
+      detail: state === "idle" ? "No observation is active." : "Late exact start.",
+      error: null,
+      ...overrides,
+    });
+    await page.route("**/api/input-test**", async (route) => {
+      const request = route.request();
+      const pathName = new URL(request.url()).pathname;
+      const body = request.postData() ? request.postDataJSON() : null;
+      calls.push({ path: pathName, method: request.method(), body });
+      if (pathName === "/api/input-test/start") {
+        generation += 1;
+        active = true;
+        reportStart();
+        if (generation === 91) await startGate;
+        await route.fulfill({ status: 200, json: view("listening") });
+        if (generation === 91) reportStartFulfilled();
+      } else if (pathName === "/api/input-test/cancel") {
+        active = false;
+        await route.fulfill({
+          status: 200,
+          json: view("cancelled", { generation: body.generation }),
+        });
+      } else {
+        await route.fulfill({ status: 200, json: view(active ? "listening" : "idle") });
+      }
+    });
+
+    try {
+      await page.click('[data-nx="rd-encoder-profiles"]');
+      const node = page.locator(".rd-encoder-profile-node");
+      await node.getByRole("button", { name: "Observe emitted signals" }).click();
+      await startSeen;
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "starting" && document.activeElement?.hasAttribute("data-rd-encoder-observation-sink"),
+      );
+      const beforeTransform = await page.locator(".forma-canvas-stage").evaluate(
+        (stage) => stage.style.transform,
+      );
+      const sink = node.locator("[data-rd-encoder-observation-sink]");
+      for (const key of ["ArrowLeft", "Digit2", "Enter"]) await sink.press(key);
+      assert.equal(
+        await page.locator(".forma-canvas-stage").evaluate((stage) => stage.style.transform),
+        beforeTransform,
+        "the start-response gap is already a contained capture state",
+      );
+
+      await sink.press("Escape");
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "error" && document.activeElement?.matches('[data-rd-encoder-observe="start"]'),
+      );
+      assert.match(await node.textContent(), /capture focus was released while start is still resolving/i);
+      const lateCancel = page.waitForRequest((request) =>
+        new URL(request.url()).pathname === "/api/input-test/cancel" &&
+        request.postDataJSON()?.generation === 91
+      );
+      releaseStart();
+      await startFulfilled;
+      await lateCancel;
+
+      await node.getByRole("button", { name: "Observe emitted signals" }).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "listening",
+      );
+      const pageHideCalls = await page.evaluate(() => {
+        const originalFetch = window.fetch;
+        const captured = [];
+        window.fetch = (input, init) => {
+          const url = typeof input === "string" ? input : input instanceof Request ? input.url : String(input);
+          if (new URL(url, location.href).pathname === "/api/input-test/cancel") {
+            captured.push({
+              method: init?.method,
+              keepalive: init?.keepalive,
+              body: JSON.parse(String(init?.body ?? "{}")),
+            });
+            return Promise.resolve(new Response(JSON.stringify({
+              ok: true,
+              state: "cancelled",
+              generation: 92,
+              selector: "usb:d209:0430:00",
+              remaining_ms: null,
+              held: [],
+              seen: [],
+              peak: 0,
+              events: 0,
+              dropped: 0,
+              rollover_visibility: "unavailable",
+              detail: "Stopped on page hide.",
+              error: null,
+            }), { status: 200, headers: { "content-type": "application/json" } }));
+          }
+          return originalFetch(input, init);
+        };
+        window.dispatchEvent(new Event("pagehide"));
+        window.fetch = originalFetch;
+        return captured;
+      });
+      await page.evaluate(() => window.dispatchEvent(new Event("pageshow")));
+      assert.deepEqual(
+        calls.filter((call) => call.path === "/api/input-test/cancel").map((call) => call.body),
+        [{ generation: 91 }],
+        "a superseded pending start releases only the late exact generation",
+      );
+      assert.deepEqual(
+        pageHideCalls,
+        [{ method: "POST", keepalive: true, body: { generation: 92 } }],
+        "page hide sends one keepalive cancellation for only the currently owned generation",
+      );
+      assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    } finally {
+      releaseStart?.();
+      if (!page.isClosed()) await page.close();
+    }
+  });
+
+  test("an unknown connected encoder shows a bounded 12-signal preview and releases on disappearance", async () => {
+    const page = await openBench();
+    const emissions = Array.from({ length: 12 }, (_, index) => `Signal-${index + 1}`);
+    const inputCalls = [];
+    let active = false;
+    let rosterMode = "unknown";
+    await page.route(`${BASE}/api/redesign`, async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      const original = payload.devices.encoders.find((row) => row.selector === IPAC);
+      assert.ok(original, "the fixture must serve its I-PAC encoder");
+      const unknown = {
+        ...original,
+        name: "Unidentified twelve-signal encoder",
+        family_id: null,
+        protocol_profile: null,
+        profile_state: "unrecognised",
+        terminal_count: null,
+        chart_readable: "false",
+      };
+      payload.devices.encoders = rosterMode === "unknown" ? [unknown] : [];
+      await route.fulfill({ response, json: payload });
+    });
+    const observationView = (state) => ({
+      ok: true,
+      state,
+      generation: state === "idle" ? null : 61,
+      selector: state === "idle" ? null : IPAC,
+      remaining_ms: state === "listening" ? 29_000 : null,
+      held: state === "listening" ? emissions.slice(0, 2) : [],
+      seen: state === "idle" ? [] : emissions,
+      peak: 2,
+      events: emissions.length,
+      dropped: 0,
+      rollover_visibility: "unavailable",
+      detail: state === "idle" ? "No observation is active." : "Exact-device signals.",
+      error: null,
+    });
+    await page.route("**/api/input-test**", async (route) => {
+      const request = route.request();
+      const pathName = new URL(request.url()).pathname;
+      const body = request.postData() ? request.postDataJSON() : null;
+      inputCalls.push({ path: pathName, body });
+      if (pathName === "/api/input-test/start") {
+        active = true;
+        await route.fulfill({ status: 200, json: observationView("listening") });
+      } else if (pathName === "/api/input-test/cancel") {
+        assert.deepEqual(body, { generation: 61 });
+        active = false;
+        await route.fulfill({ status: 200, json: observationView("cancelled") });
+      } else {
+        await route.fulfill({
+          status: 200,
+          json: observationView(active ? "listening" : "idle"),
+        });
+      }
+    });
+
+    try {
+      await page.click(".rd-themed > summary");
+      await page.click('.rd-thememenu form:has(input[value="system"]) button');
+      await page.waitForFunction(
+        (selector) => document.querySelector(`button[data-selector="${selector}"]`)?.textContent
+          ?.includes("Unidentified twelve-signal encoder"),
+        IPAC,
+      );
+      await page.click('[data-nx="rd-encoder-profiles"]');
+      const node = page.locator(".rd-encoder-profile-node");
+      assert.equal(await node.locator(".rd-encoder-profile").getAttribute("data-profile-id"), "unknown-hid");
+      assert.equal(await node.locator("[data-rd-encoder-read]").count(), 0);
+      await node.getByRole("button", { name: "Observe emitted signals" }).click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+          "listening",
+      );
+      const drawing = node.locator('svg[data-profile-id="unknown-hid"]');
+      assert.deepEqual(
+        await drawing.evaluate((svg) => ({
+          observed: svg.dataset.observedCount,
+          hidden: svg.dataset.hiddenObservedCount,
+          kind: svg.dataset.observationKind,
+        })),
+        { observed: "12", hidden: "3", kind: "exact-device" },
+      );
+      assert.equal(await drawing.locator("[data-observed-signal-id]").count(), 9);
+      assert.equal(
+        await drawing.locator("[data-observed-signal-id]").evaluateAll((signals) =>
+          signals.every((signal) => {
+            const box = signal.getBoundingClientRect();
+            const board = signal.ownerSVGElement
+              ?.querySelector(".rd-encoder-profile-board")?.getBoundingClientRect();
+            return Boolean(board) && box.left >= board.left && box.right <= board.right &&
+              box.top >= board.top && box.bottom <= board.bottom;
+          })
+        ),
+        true,
+        "every compact signal card stays inside the board body",
+      );
+      assert.match(await drawing.locator("desc").textContent(), /complete evidence list remains available/i);
+      assert.equal(
+        await node.locator('.rd-encoder-profile-roster[data-observation-sample="false"] [role="listitem"]').count(),
+        12,
+        "the detailed evidence list retains every observed signal",
+      );
+      assert.equal(await node.locator("[data-terminal-id]").count(), 0);
+
+      rosterMode = "gone";
+      const disappearanceCancel = page.waitForRequest((request) =>
+        new URL(request.url()).pathname === "/api/input-test/cancel" &&
+        request.postDataJSON()?.generation === 61
+      );
+      await page.click(".rd-themed > summary");
+      await page.click('.rd-thememenu form:has(input[value="matrix"]) button');
+      await disappearanceCancel;
+      await page.waitForFunction(
+        () => !document.querySelector('[data-rd-encoder-model] option[value^="connected:"]'),
+      );
+      assert.equal(
+        inputCalls.filter((call) => call.path === "/api/input-test/cancel").length,
+        1,
+        "device disappearance releases the exact owned generation once",
+      );
+      assert.equal(await node.locator('[data-rd-encoder-observe="start"]').count(), 0);
+      assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    } finally {
+      if (!page.isClosed()) await page.close();
+    }
+  });
+
+  test("encoder controls keep accessible targets in forced colors and coarse-pointer mode", async () => {
+    const accessibleContext = await browser.newContext({
+      viewport: { width: 420, height: 900 },
+      colorScheme: "dark",
+      forcedColors: "active",
+      hasTouch: true,
+    });
+    const page = await accessibleContext.newPage();
+    try {
+      await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await page.click('[data-nx="rd-encoder-profiles"]');
+      const node = page.locator(".rd-encoder-profile-node");
+      await node.focus();
+      await node.press("F2");
+      await page.waitForFunction(
+        () => document.querySelector(".forma-canvas-viewport")?.dataset.canvasZoomTier ===
+          "editing",
+      );
+      assert.deepEqual(
+        await page.evaluate(() => ({
+          forced: matchMedia("(forced-colors: active)").matches,
+          coarse: matchMedia("(pointer: coarse)").matches,
+          overflow: document.documentElement.scrollWidth <= innerWidth,
+        })),
+        { forced: true, coarse: true, overflow: true },
+      );
+      for (const control of [
+        node.locator("[data-rd-encoder-read]"),
+        node.locator('[data-rd-encoder-observe="start"]'),
+        node.locator(".rd-encoder-profile-roster > summary"),
+      ]) {
+        const size = await control.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return {
+            height: Number.parseFloat(style.height),
+            minHeight: Number.parseFloat(style.minHeight),
+          };
+        });
+        assert.ok(
+          size.height >= 44 || size.minHeight >= 44,
+          `coarse target CSS height was ${JSON.stringify(size)}`,
+        );
+      }
+      assert.equal(
+        await node.locator("[data-terminal-id]").first().evaluate((terminal) =>
+          getComputedStyle(terminal.querySelector("rect")).stroke !== "none"
+        ),
+        true,
+        "terminal slots retain a forced-colors outline",
+      );
+    } finally {
+      await accessibleContext.close();
+    }
+  });
+
   test("an open encoder lab reconciles connected truth by raw selector", async () => {
     const page = await openBench();
     await page.click('[data-nx="rd-encoder-profiles"]');
@@ -1243,6 +2196,15 @@ describe("the device workbench", () => {
           profile_state: "unprofiled-release",
           terminal_count: null,
           chart_readable: "false",
+        });
+      } else if (rosterMode === "identity-conflict") {
+        Object.assign(left, {
+          name: "Contradictory I-PAC4",
+          family_id: "ultimarc-ipac4",
+          protocol_profile: "ipac4-pac256-v1",
+          profile_state: "profiled",
+          terminal_count: 999,
+          chart_readable: "true",
         });
       }
       payload.devices.encoders = rosterMode === "only-twin" ? [right] : [left, right];
@@ -1327,6 +2289,19 @@ describe("the device workbench", () => {
         "changed backend evidence invalidates the old user-confirmed variant",
       );
       assert.equal(await node.locator("[data-terminal-id]").count(), 32);
+
+      rosterMode = "identity-conflict";
+      await submitTheme("matrix");
+      await page.waitForFunction(
+        () => document.querySelector(".rd-encoder-profile")?.dataset.evidenceState ===
+          "identity-conflict",
+      );
+      assert.equal(
+        await node.locator("[data-rd-encoder-read]").count(),
+        0,
+        "a protocol capability cannot authorize reads while visual identity facts conflict",
+      );
+      assert.equal(await node.locator("[data-terminal-id]").count(), 0);
 
       rosterMode = "known-family";
       await submitTheme("system");

@@ -10,6 +10,7 @@ import {
 } from "./device-instance-id";
 import {
   createEncoderProfileLabCanvasItem,
+  disposeEncoderProfileLabCanvasItem,
   ENCODER_PROFILE_LAB_INSTANCE_ID,
   type EncoderProfileLabDevice,
 } from "./encoderConceptArt";
@@ -249,6 +250,7 @@ let nCanvas: WidgetCanvas | null = null;
 let rdRoot: HTMLElement | null = null;
 let encoderLabReturnCamera: { panX: number; panY: number; zoom: number } | null = null;
 let refreshEncoderProfileLab: ((devices: readonly EncoderProfileLabDevice[]) => void) | null = null;
+let disposeEncoderProfileLab: (() => void) | null = null;
 
 interface DeviceRowFocus {
   element: HTMLElement;
@@ -1246,12 +1248,17 @@ function announceEncoderProfileLab(message: string): void {
 
 function removeEncoderProfileLab(): void {
   const canvas = nCanvas;
-  if (!canvas) return;
   const returnCamera = encoderLabReturnCamera;
   const item = encoderProfileLabNode();
-  if (item) canvas.removeItem(item, { selectFallback: false });
+  if (item) disposeEncoderProfileLabCanvasItem(item);
+  else disposeEncoderProfileLab?.();
+  disposeEncoderProfileLab = null;
+  if (item) {
+    if (canvas) canvas.removeItem(item, { selectFallback: false });
+    else item.remove();
+  }
   refreshEncoderProfileLab = null;
-  if (returnCamera) canvas.restoreCamera(returnCamera);
+  if (returnCamera && canvas) canvas.restoreCamera(returnCamera);
   encoderLabReturnCamera = null;
   const widgets = { ...canvasPrefs.widgets };
   delete widgets[ENCODER_PROFILE_LAB_INSTANCE_ID];
@@ -1294,14 +1301,20 @@ function mountEncoderProfileLab(): void {
     try {
       reservation.mountItem(lab.item, lab.home, { focus: false });
       refreshEncoderProfileLab = lab.updateConnectedEncoders;
+      disposeEncoderProfileLab = lab.dispose;
     } catch (error) {
+      lab.dispose();
       encoderLabReturnCamera = null;
       refreshEncoderProfileLab = null;
+      disposeEncoderProfileLab = null;
       throw error;
     } finally {
       reservation.release();
     }
   } catch (error) {
+    // The controller installs a pagehide listener before capacity is known.
+    // Every failed mount path must release that detached controller.
+    lab.dispose();
     if (error instanceof WidgetCanvasCapacityError) {
       const free = Math.max(0, error.limit - error.current);
       announceEncoderProfileLab(

@@ -18260,6 +18260,7 @@ a.nm-link {
 .rd-encoder-profile-toolbar select:focus-visible,
 .rd-encoder-profile-manual textarea:focus-visible,
 .rd-encoder-profile-manual button:focus-visible,
+.rd-encoder-profile-read button:focus-visible,
 .rd-encoder-profile-candidates input:focus-visible + span,
 .rd-encoder-profile-roster summary:focus-visible,
 .rd-encoder-profile-sources a:focus-visible {
@@ -18364,6 +18365,264 @@ a.nm-link {
   font: var(--fw-semibold) var(--fs-sm) / var(--lh-tight) var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.rd-encoder-profile-read {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 1.15fr);
+  gap: var(--sp-3);
+  align-items: center;
+  padding: var(--sp-3);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-lg);
+  background: var(--n-panel-2);
+}
+
+.rd-encoder-profile-read[data-state="loaded"] {
+  border-color: color-mix(in srgb, var(--n-ok) 52%, var(--n-line));
+  background: var(--ok-dim);
+}
+
+.rd-encoder-profile-read[data-state="error"] {
+  border-color: color-mix(in srgb, var(--n-warn) 55%, var(--n-line));
+  background: var(--warn-dim);
+}
+
+.rd-encoder-profile-read h3,
+.rd-encoder-profile-read p {
+  margin: 0;
+}
+
+.rd-encoder-profile-read h3 {
+  color: var(--n-text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-encoder-profile-read-copy p,
+.rd-encoder-profile-read-status {
+  margin-top: var(--sp-1);
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-profile-read-controls {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--sp-3);
+  align-items: center;
+  min-width: 0;
+}
+
+.rd-encoder-profile-read-controls > .rd-encoder-profile-read-status:only-child {
+  grid-column: 1 / -1;
+}
+
+.rd-encoder-profile-read button {
+  min-height: 36px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--n-accent-line);
+  border-radius: var(--r-md);
+  background: var(--n-accent-dim);
+  color: var(--n-accent-2);
+  font: var(--fw-semibold) var(--fs-xs) / var(--lh-flat) var(--n-font);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.rd-encoder-profile-read button:disabled {
+  cursor: progress;
+  opacity: 0.68;
+}
+
+.rd-encoder-profile-read-status strong,
+.rd-encoder-profile-read-status p {
+  display: block;
+}
+
+.rd-encoder-profile-read-status strong {
+  color: var(--n-text);
+}
+
+.rd-encoder-profile-read-status ul {
+  margin: var(--sp-1) 0 0;
+  padding-left: var(--sp-4);
+}
+
+.rd-encoder-profile-observe {
+  display: grid;
+  grid-template-columns: minmax(0, 0.72fr) minmax(360px, 1.28fr);
+  gap: var(--sp-3);
+  align-items: start;
+  padding: var(--sp-3);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-lg);
+  background: var(--n-panel-2);
+}
+
+.rd-encoder-profile-observe[data-state="listening"],
+.rd-encoder-profile-observe[data-state="complete"] {
+  border-color: color-mix(in srgb, var(--n-accent) 48%, var(--n-line));
+}
+
+.rd-encoder-profile-observe[data-state="unknown"],
+.rd-encoder-profile-observe[data-state="foreign-live"],
+.rd-encoder-profile-observe[data-state="error"],
+.rd-encoder-profile-observe[data-backend-state="failed"] {
+  border-color: color-mix(in srgb, var(--n-warn) 55%, var(--n-line));
+  background: var(--warn-dim);
+}
+
+.rd-encoder-profile-observe h3,
+.rd-encoder-profile-observe p {
+  margin: 0;
+}
+
+.rd-encoder-profile-observe h3 {
+  color: var(--n-text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-encoder-profile-observe-copy p,
+.rd-encoder-profile-observe-status {
+  margin-top: var(--sp-1);
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-profile-observe-controls {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.rd-encoder-profile-observe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+.rd-encoder-profile-observe button {
+  min-height: 36px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--n-accent-line);
+  border-radius: var(--r-md);
+  background: var(--n-accent-dim);
+  color: var(--n-accent-2);
+  font: var(--fw-semibold) var(--fs-xs) / var(--lh-flat) var(--n-font);
+  cursor: pointer;
+}
+
+.rd-encoder-profile-observe button:disabled {
+  cursor: progress;
+  opacity: 0.68;
+}
+
+.rd-encoder-profile-observe button:focus-visible {
+  outline: 2px solid var(--n-accent);
+  outline-offset: 2px;
+}
+
+.rd-encoder-profile-observe-sink {
+  min-height: 34px;
+  padding: 0 var(--sp-2);
+  border: 1px dashed var(--n-accent-line);
+  border-radius: var(--r-pill);
+  color: var(--n-accent-2);
+  font: var(--fw-semibold) var(--fs-micro) / 34px var(--n-font);
+  letter-spacing: var(--track-mono);
+  text-transform: uppercase;
+}
+
+.rd-encoder-profile-observe-sink:focus-visible {
+  outline: 2px solid var(--n-accent);
+  outline-offset: 2px;
+}
+
+.rd-encoder-profile-observe-status strong {
+  display: block;
+  color: var(--n-text);
+}
+
+.rd-encoder-profile-observe-status > p {
+  margin-top: var(--sp-1);
+}
+
+.rd-encoder-profile-observe-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-1);
+  margin: var(--sp-2) 0;
+}
+
+.rd-encoder-profile-observe-metrics > div {
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--n-bg) 68%, transparent);
+}
+
+.rd-encoder-profile-observe-metrics dt {
+  color: var(--n-text-3);
+  letter-spacing: var(--track-mono);
+  text-transform: uppercase;
+}
+
+.rd-encoder-profile-observe-metrics dd {
+  margin: var(--sp-1) 0 0;
+  color: var(--n-text);
+  font: var(--fw-semibold) var(--fs-sm) / var(--lh-flat) var(--mono);
+}
+
+.rd-encoder-profile-observe-signals {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.rd-encoder-profile-observe-signals > div {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: start;
+}
+
+.rd-encoder-profile-observe-signals > div > span {
+  color: var(--n-text-3);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-encoder-profile-observe-signals > div > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.rd-encoder-profile-observe-signals code {
+  padding: 1px var(--sp-1);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-sm);
+  background: var(--n-bg);
+  color: var(--n-accent-2);
+  font-family: var(--mono);
+}
+
+.rd-encoder-profile-observe-signals [data-empty] {
+  color: var(--n-text-3);
+}
+
+.rd-encoder-profile-observe-provenance {
+  overflow-wrap: anywhere;
+  color: var(--n-text-3);
+  font-family: var(--mono);
+}
+
+.rd-encoder-profile-observe-warning {
+  color: var(--n-warn) !important;
+  font-weight: var(--fw-semibold);
 }
 
 .rd-encoder-profile-candidates {
@@ -18547,9 +18806,30 @@ a.nm-link {
   stroke-dasharray: 2 2;
 }
 
+.rd-encoder-profile-terminal.has-configured-emission rect {
+  fill: color-mix(in srgb, var(--n-accent) 13%, var(--n-panel-3));
+  stroke-width: 1.5;
+}
+
+.rd-encoder-profile-terminal.is-zero-emission rect {
+  fill: color-mix(in srgb, var(--n-warn) 10%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--n-warn) 68%, var(--n-line));
+}
+
+.rd-encoder-profile-terminal.is-opaque-emission rect {
+  fill: var(--warn-dim);
+  stroke: var(--n-warn);
+  stroke-dasharray: 2 2;
+}
+
 .rd-encoder-profile-terminal-label {
   fill: var(--n-text) !important;
   font: var(--fw-semibold) var(--fs-micro) / var(--lh-flat) var(--mono);
+}
+
+.rd-encoder-profile-terminal-emission {
+  fill: var(--n-accent-2) !important;
+  font: var(--fw-semibold) calc(var(--fs-micro) * 0.84) / var(--lh-flat) var(--mono);
 }
 
 .rd-encoder-profile-processor rect {
@@ -18725,6 +19005,76 @@ a.nm-link {
   font-family: var(--mono);
 }
 
+.rd-encoder-profile-chart-table {
+  width: 100%;
+  border-spacing: 0;
+  border-top: 1px solid var(--n-line);
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+}
+
+.rd-encoder-profile-chart-table caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.rd-encoder-profile-chart-table :is(th, td) {
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--n-line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.rd-encoder-profile-chart-scroll {
+  max-height: 230px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.rd-encoder-profile-chart-scroll:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.rd-encoder-profile-chart-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--n-panel-3);
+  color: var(--n-text-3);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-mono);
+  text-transform: uppercase;
+}
+
+.rd-encoder-profile-chart-table tbody th {
+  position: static;
+  background: var(--n-bg);
+  color: var(--n-text-2);
+  font-weight: var(--fw-semibold);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.rd-encoder-profile-chart-table tbody {
+  background: var(--n-bg);
+}
+
+.rd-encoder-profile-chart-table code {
+  color: var(--n-accent-2);
+  font-family: var(--mono);
+}
+
+.rd-encoder-profile-chart-table tr[data-zero-byte] td:nth-child(3),
+.rd-encoder-profile-chart-table tr[data-unknown-byte] td:nth-child(3) {
+  color: var(--n-warn);
+}
+
 .rd-encoder-profile-manual {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr) max-content;
@@ -18769,6 +19119,8 @@ a.nm-link {
 .rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-toolbar,
 .rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-evidence,
 .rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-metrics,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-read,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-observe,
 .rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-facts,
 .rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-candidates,
 .rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-roster,
@@ -18803,6 +19155,33 @@ a.nm-link {
 
   .rd-encoder-profile :is(select, textarea, button):focus-visible {
     outline-color: Highlight;
+  }
+}
+
+@media (pointer: coarse) {
+  .rd-encoder-profile-toolbar select,
+  .rd-encoder-profile-manual button,
+  .rd-encoder-profile-read button,
+  .rd-encoder-profile-observe button,
+  .rd-encoder-profile-observe-sink,
+  .rd-encoder-profile-roster summary {
+    min-height: 44px;
+  }
+
+  .rd-encoder-profile-observe-sink {
+    line-height: 44px;
+  }
+}
+
+@media (max-width: 600px) {
+  .rd-encoder-profile-read,
+  .rd-encoder-profile-observe,
+  .rd-encoder-profile-work {
+    grid-template-columns: 1fr;
+  }
+
+  .rd-encoder-profile-observe-signals > div {
+    grid-template-columns: 1fr;
   }
 }
 

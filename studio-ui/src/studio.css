@@ -18642,7 +18642,7 @@ form.rd-undochip {
   padding: 6px 10px 6px 14px;
   border: 1px solid color-mix(in srgb, var(--n-accent) 45%, transparent);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--n-bg-1) 88%, var(--n-accent));
+  background: color-mix(in srgb, var(--n-panel) 88%, var(--n-accent));
   font-size: var(--fs-small);
 }
 
@@ -18655,7 +18655,7 @@ form.rd-undochip .n-undo-btn {
   border-radius: 999px;
   padding: 3px 12px;
   background: color-mix(in srgb, var(--n-accent) 24%, transparent);
-  color: var(--n-text-1);
+  color: var(--n-text);
   cursor: pointer;
 }
 
@@ -18745,9 +18745,9 @@ form.rd-undochip .n-undo-btn {
   max-height: 320px;
   overflow-y: auto;
   padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--n-text-3) 35%, transparent);
+  border: 1px solid var(--n-line);
   border-radius: 10px;
-  background: var(--n-bg-1);
+  background: color-mix(in srgb, var(--n-panel) 97%, transparent);
   box-shadow: 0 12px 32px rgb(0 0 0 / 0.35);
 }
 

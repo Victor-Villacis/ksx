@@ -847,6 +847,55 @@ pub(super) async fn redesign_form_bind_toggle(
 mod tests {
     use super::*;
 
+    /// Every sentence a handler in THIS module can answer must resolve to
+    /// itself through the allowlist — a missing entry silently renders as
+    /// the unknown-flash sentence on the no-JS path, which is exactly the
+    /// drift this pairing exists to catch. Adding a verb sentence means
+    /// adding it in BOTH arrays, and the reviewer sees the pairing.
+    #[test]
+    fn every_verb_sentence_survives_the_allowlist() {
+        for sentence in [
+            // theme + device (the first transplants)
+            N_THEME_OK,
+            N_THEME_UNKNOWN,
+            N_DEVICE_OK,
+            N_DEVICE_ALREADY_OK,
+            // the staging verbs' shared answers
+            N_FORM_UNREADABLE,
+            N_EDIT_OK,
+            N_EDIT_ERROR,
+            N_MOVE_AT_END,
+            N_ADD_LAYOUT_ERROR,
+            // the inspector's re-homed controller verbs
+            N_CLEAR_ALL_OK,
+            N_UNDO_OK,
+            N_UNDO_GONE,
+            N_UNDO_FULL,
+            N_DUP_OK,
+            N_DUP_FULL,
+            N_TURBO_OK,
+            N_TURBO_INPUT_ERROR,
+            N_TURBO_UNBOUND_ERROR,
+            N_TOGGLE_OK,
+            N_TOGGLE_OLD_DAEMON,
+            N_TOGGLE_UNBOUND_ERROR,
+            // the Keys tab's row ✕
+            N_KEY_CLEAR_OK,
+            N_KEY_CLEAR_NONE,
+            // the keyboard widget's board picker
+            N_BOARD_OK,
+            N_BOARD_UNKNOWN,
+            N_BOARD_MISSING,
+        ] {
+            assert_eq!(
+                redesign_flash_from_query(Some(sentence)).as_deref(),
+                Some(sentence),
+                "a verb can answer this sentence but the allowlist would \
+                 render it as the unknown-flash text"
+            );
+        }
+    }
+
     fn theme_row(name: &str, chosen: bool) -> crate::snapshot::NocturneChoiceRow {
         crate::snapshot::NocturneChoiceRow {
             name: name.to_owned(),

@@ -361,7 +361,7 @@ pub(super) const N_PLAY_OUTPUT_UNKNOWN: &str = "error: Play cannot start — ksx
      the controller outputs this setup needs, and it will not plug a pad it cannot vouch for. \
      The setup is still ready to save; reopen ksx and try again. Nothing was started.";
 
-pub(super) const N_FLASH_ALLOWLIST: [&str; 94] = [
+pub(super) const N_FLASH_ALLOWLIST: [&str; 95] = [
     // Save and Play's own refusals. They are composed from a stable daemon
     // CODE rather than from the daemon's sentence, precisely so they can sit
     // on this list — a refusal that only exists at runtime cannot be
@@ -391,6 +391,7 @@ pub(super) const N_FLASH_ALLOWLIST: [&str; 94] = [
     N_LAYOUT_DELETE_OK,
     N_THEME_OK,
     N_BOARD_OK,
+    N_BOARD_MISSING,
     N_GAME_ADD_ERROR,
     N_GAME_UPDATE_ERROR,
     N_GAME_DELETE_ERROR,

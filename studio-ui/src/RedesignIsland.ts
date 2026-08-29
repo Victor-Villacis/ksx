@@ -1981,9 +1981,13 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
   // top of the workbench and the controller rows beneath.
   const kbItem = stage.querySelector<HTMLElement>('[data-instance-id="keyboard"]');
   if (kbItem) {
+    // ⚠️ The remembered spot lives under the INSTANCE ID: persistCanvas
+    // stores every item by data-instance-id, so restoring from any other
+    // key silently snaps the keyboard home on each reload.
     nCanvas.mountItem(
       kbItem,
-      canvasPrefs.widgets["kb"] ?? { x: 140, y: 24, width: 980, height: 360, z: 1, manualScale: 1 },
+      canvasPrefs.widgets["keyboard"] ??
+        { x: 140, y: 24, width: 980, height: 360, z: 1, manualScale: 1 },
       { focus: false },
     );
   }
@@ -2049,6 +2053,11 @@ export function redesignWire(root: HTMLElement): void {
     const themeMenu = rdRoot?.querySelector<HTMLElement>(".rd-themed[open]");
     if (themeMenu && !target?.closest(".rd-themed")) {
       closeThemeMenu();
+    }
+    // The board picker keeps the same convention.
+    const boardPick = rdRoot?.querySelector<HTMLElement>(".rd-boardpick[open]");
+    if (boardPick && !target?.closest(".rd-boardpick")) {
+      boardPick.removeAttribute("open");
     }
     // Plate cell → Keys row: the board is the Keys tab's own picture, so
     // clicking a key reveals that key's row (a bound cap) or its free chip.

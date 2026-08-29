@@ -110,6 +110,20 @@ pub trait ControlSource: Send + Sync {
         InputTestView::unavailable("this control source has no simultaneous-input tester")
     }
 
+    /// Fence a following hardware transaction against the input test's
+    /// observer lifetime. A cancelled or timed-out test may already report a
+    /// terminal phase while its Raw Input window, panel tap, or temporary
+    /// claim is still being destroyed; providers that own such an observer
+    /// override this with a bounded wait and refuse while it is listening or
+    /// cannot release within that budget.
+    ///
+    /// The default is safe for providers that use the default input-test
+    /// methods above: they own no observer, so there is no release tail to
+    /// fence.
+    fn input_test_release_fence(&self) -> Result<(), Refusal> {
+        Ok(())
+    }
+
     /// Write one binding (pipe `map`). `request.key == None` clears it.
     fn bind(&self, _request: &BindRequest) -> BindOutcome {
         BindOutcome::failed("this control source cannot write bindings")

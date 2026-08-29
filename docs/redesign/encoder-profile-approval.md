@@ -13,6 +13,25 @@ changing the information architecture?
 It does not admit new hardware protocols. Visual-profile admission is a
 separate, per-device decision below.
 
+Two surfaces share the renderer but have deliberately different lifecycle
+contracts:
+
+- The temporary **Encoder profile lab** (`◇ Encoders`) is a passive research
+  harness. Opening it and changing connected/reference selections performs no
+  hardware request. A chart read or signal observation begins only from its
+  explicit controls. Catalog selections can never authorize a device request.
+- The product workbench surface is created when the user chooses a connected
+  encoder in **+ Devices**. The Add action persists that exact selector as
+  workbench membership and, for an exact profile with an admitted chart reader,
+  schedules one automatic read-only chart attempt. It does not write, map,
+  claim, stage, or reconfigure the encoder. The visible **Refresh stored
+  assignments** action is the deliberate reread after the user changes the
+  board in WinIPAC or another vendor utility.
+
+The lab proves profiles and edge states; the + Devices surface is the product
+behavior being approved. A statement about one must not silently become a
+requirement for the other.
+
 ## How to approve this candidate
 
 1. Build the candidate and run `node --test --test-concurrency=1
@@ -34,32 +53,70 @@ allows that styling to begin without changing those contract surfaces.
 
 ## The contract to approve
 
-The surface keeps three facts visibly separate:
+Both surfaces keep three facts visibly separate:
 
 1. **Terminal identity** comes from an admitted visual profile. Its stable join
    key is `terminal_id`; its printed name is `terminal_label`.
-2. **Configured emission** appears only after an explicit read against one exact
-   connected-device selector. It describes what the encoder has stored, not
-   what is physically wired.
+2. **Configured emission** appears only after a validated read against one exact
+   connected-device selector. In the research lab that read is explicit. On the
+   product workbench the first attempt is automatic only on the current Add
+   gesture; persisted restore and authoritative reconnect wait for visible
+   Read, and later attempts use Refresh/Retry. It describes what the encoder has
+   stored, not what is physically wired.
 3. **Observed host signal** appears only after an explicit, bounded observation
    of one exact connected device. It is never assigned to a terminal and never
    used to infer capacity or wiring.
 
 The diagram, facts, provenance, and detailed roster must tell the same story.
-Catalog and manual selections are reference drawings only and never authorize a
-hardware request. Unknown devices remain unknown until the user supplies labels
-or KSX admits an exact profile.
+Catalog and manual selections in the research lab are reference drawings only
+and never authorize a hardware request. Unknown devices remain unknown until
+the user supplies labels or KSX admits an exact profile.
+
+## Product membership and read lifecycle
+
+The + Devices Add action owns browser arrangement state, not daemon or hardware
+state. The exact selector and canvas geometry are persisted; chart values and
+observation sessions are not. On a page reload, a remembered encoder that is in
+the authoritative served roster is remounted at its saved geometry with a
+visible **Read stored assignments** action. A page lifecycle never authorizes a
+hardware transaction.
+
+An authoritative scan that no longer contains the encoder unmounts it but keeps
+its remembered membership and geometry. If that exact selector returns, KSX
+remounts it in the same place and waits for visible Read. Reconnection is served
+truth, not renewed authorization for an exclusive configuration transaction. A
+failed/non-authoritative scan is unknown—not proof of absence—so it neither
+forgets nor falsely removes the product surface; hardware actions remain
+blocked until connection truth is restored. Removing the encoder through
++ Devices removes membership while retaining its last geometry for a later
+deliberate re-add.
+
+Automatic means one admitted read attempt per deliberate + Devices Add—not per
+mount, page load, BFCache restore, scan refresh, or reconnect. KSX does not poll
+or monitor WinIPAC. After external configuration changes, the user presses
+**Refresh stored assignments**. A failed automatic attempt becomes a truthful,
+explicit Retry state; it never paints a partial or cached roster.
 
 ## Global information-architecture gate
 
 Approve the information architecture only when all of these are true:
 
-- [ ] Opening the lab and changing profiles starts no chart read, observation,
-  firmware write, backup, restore, bind, or mapping request. Cancelling an exact
-  observation generation already owned by this lab is the sole cleanup exception.
-- [ ] A chart read requires a visible explicit action, posts exactly
+- [ ] Opening the research lab and changing its profiles starts no chart read,
+  observation, firmware write, backup, restore, bind, or mapping request.
+  Cancelling an exact observation generation already owned by this lab is the
+  sole cleanup exception.
+- [ ] Adding an admitted connected encoder through + Devices performs exactly
+  one automatic read-only chart attempt. It starts no observation, firmware
+  write, backup, restore, bind, mapping, staging, or daemon-selection request.
+- [ ] Product membership and geometry survive reload. Authoritative absence
+  unmounts without forgetting; reconnect remounts at the saved geometry and
+  waits for visible Read. Reload, BFCache restore, scan refresh, and reconnect
+  perform no chart transaction. A non-authoritative scan is represented as
+  unknown and does not erase the remembered board.
+- [ ] Every automatic, Refresh, Retry, or research-lab chart read posts exactly
   `{ "selector": <raw exact selector> }` to `/api/panel/chart`, and displays a
-  complete atomic roster or nothing.
+  complete atomic roster or nothing. Refresh is visible after a successful
+  product read and is the only reread promised after external configuration.
 - [ ] The returned terminal IDs match the selected profile's complete unique ID
   set. A missing, duplicate, extra, invalid-hash, stale, or mismatched response
   is withheld rather than partly painted.
@@ -105,22 +162,34 @@ Use the redesign preview and review at Fit, 100%, overview zoom, 420-pixel narro
 viewport, Windows High Contrast/forced colors, keyboard-only navigation, and a
 coarse-pointer/touch emulation.
 
-1. Open **Encoders**. Confirm the default connected I-PAC4 drawing is clear and
-   no hardware action has occurred.
-2. Read its configured emissions. Confirm all 56 terminals remain legible,
-   normal/shifted values are distinguishable, proof hash and freshness are
-   visible, and the UI never claims physical wiring.
-3. Observe emitted signals. Press multiple wired controls, duplicate-emission
+1. Open the temporary **◇ Encoders** research lab. Confirm the default connected
+   I-PAC4 drawing is clear, profile/catalog changes perform no hardware action,
+   and its chart read remains explicit.
+2. Close the lab, open **+ Devices**, and Add the connected I-PAC4. Confirm the
+   product surface—not the lab—appears and makes exactly one automatic read-only
+   chart attempt. Confirm all 56 terminals remain legible, normal/shifted values
+   are distinguishable, freshness is visible, and the UI never claims physical
+   wiring or mapping.
+3. Reload with the encoder remembered, then test authoritative unplug/reconnect.
+   Confirm membership and geometry survive, absence is honest, reconnect returns
+   the same widget to the same place, and neither remount makes a chart request.
+   Confirm the visible Read action is available after connection truth returns.
+   Repeat with a refused scan and confirm unknown is not treated as absence.
+4. Change assignments in WinIPAC, return to KSX, and activate **Refresh stored
+   assignments**. Confirm no background watcher claim is made, exactly one new
+   request occurs, the complete roster changes atomically, and Retry is explicit
+   if the read fails.
+5. Observe emitted signals. Press multiple wired controls, duplicate-emission
    controls, arrows, numbers, and Enter. Confirm signals stay device-scoped,
    canvas shortcuts do not fire while Capture focus is active, and Done stops
    only the owned generation.
-4. Switch to catalog profiles. Confirm read/observe actions are absent and their
-   reference provenance is explicit.
-5. Select an ambiguous family and an unknown encoder. Confirm no canonical board
+6. In the research lab, switch to catalog profiles. Confirm read/observe actions
+   are absent and their reference provenance is explicit.
+7. Select an ambiguous family and an unknown encoder. Confirm no canonical board
    is drawn before variant confirmation and observed keys do not create terminal
    identities. Confirm the manual fallback uses hardware labels, not emitted
    key names.
-6. Change or remove the selected device during each operation. Confirm stale
+8. Change or remove the selected device during each operation. Confirm stale
    evidence clears and no foreign observer is cancelled.
 
 ## Approval record

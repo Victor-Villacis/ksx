@@ -204,6 +204,10 @@ struct ScriptedControl {
     input_test_generation: AtomicUsize,
     input_test_spec: Mutex<Option<ksx_api::InputTestSpec>>,
     input_test_cancelled: AtomicBool,
+    /// Script the daemon-owned observer-release fence used before a chart
+    /// opens the encoder's configuration collection.
+    input_test_release_fence_refusal: Mutex<Option<Refusal>>,
+    input_test_release_fence_calls: AtomicUsize,
     /// The daemon's StageMeta dirty stamp, scripted: set by the test that
     /// exercises the Apply button's running+dirty visibility.
     dirty: AtomicBool,
@@ -247,6 +251,8 @@ impl ScriptedControl {
             input_test_generation: AtomicUsize::new(0),
             input_test_spec: Mutex::new(None),
             input_test_cancelled: AtomicBool::new(false),
+            input_test_release_fence_refusal: Mutex::new(None),
+            input_test_release_fence_calls: AtomicUsize::new(0),
             dirty: AtomicBool::new(false),
             stage_revision: AtomicUsize::new(0),
             apply_needs_restart: AtomicBool::new(false),
@@ -557,6 +563,20 @@ impl ControlSource for ScriptedControl {
         }
         self.input_test_cancelled.store(true, Ordering::SeqCst);
         self.input_test_poll()
+    }
+
+    fn input_test_release_fence(&self) -> Result<(), Refusal> {
+        self.input_test_release_fence_calls
+            .fetch_add(1, Ordering::SeqCst);
+        match self
+            .input_test_release_fence_refusal
+            .lock()
+            .unwrap()
+            .clone()
+        {
+            Some(refusal) => Err(refusal),
+            None => Ok(()),
+        }
     }
 
     // ── The staged setup, the way the daemon holds it ────────────────────
@@ -2579,6 +2599,9 @@ fn start_server_with_sources(
         }
         fn input_test_cancel_generation(&self, generation: Option<u64>) -> ksx_api::InputTestView {
             self.0.input_test_cancel_generation(generation)
+        }
+        fn input_test_release_fence(&self) -> Result<(), Refusal> {
+            self.0.input_test_release_fence()
         }
         fn bind(&self, request: &BindRequest) -> BindOutcome {
             self.0.bind(request)
@@ -10260,6 +10283,43 @@ fn panel_chart_carries_the_browsers_selector_and_never_asks_for_a_backup() {
         !specs[0].backup,
         "a page asked for a BACKUP, which writes a file and advances this \
          board's write-qualification state"
+    );
+}
+
+/// A terminal Button Test phase is not proof that its observer is gone:
+/// Cancel answers before the Raw Input window/panel tap/temporary claim has
+/// necessarily finished closing. The route must ask the daemon-owned release
+/// fence and must not touch the encoder when that bounded handoff refuses.
+#[test]
+fn panel_chart_waits_for_the_button_test_observer_release_fence() {
+    let control = Arc::new(ScriptedControl::new(true));
+    *control.input_test_release_fence_refusal.lock().unwrap() = Some(Refusal::new(
+        "observer-busy",
+        "scripted terminal observer is still releasing a private device path",
+    ));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+
+    let body = post_json(addr, "/api/panel/chart", r#"{"selector":"x"}"#);
+
+    assert!(
+        body.contains("Button Test is still listening or releasing"),
+        "the bounded observer refusal was not explained: {body}"
+    );
+    assert!(
+        !body.contains("private device path"),
+        "a backend observer diagnostic reached the browser: {body}"
+    );
+    assert_eq!(
+        control
+            .input_test_release_fence_calls
+            .load(Ordering::SeqCst),
+        1,
+        "the chart route skipped or repeated the daemon fence"
+    );
+    assert!(
+        machine.panel_chart_specs.lock().unwrap().is_empty(),
+        "the encoder was opened after the observer fence refused"
     );
 }
 

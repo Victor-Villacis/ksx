@@ -71,9 +71,18 @@ function isIntegerInRange(value: unknown, maximum: number): boolean {
 
 function isKeyValue(value: unknown): value is EncoderChartKeyValue {
   if (!isRecord(value)) return false;
-  return isIntegerInRange(value.code, 0xFFFF) &&
-    (value.key === undefined || value.key === null || typeof value.key === "string") &&
-    typeof value.label === "string" && typeof value.supported === "boolean";
+  if (!isIntegerInRange(value.code, 0xFFFF) ||
+      (value.key !== undefined && value.key !== null && typeof value.key !== "string") ||
+      typeof value.label !== "string" || typeof value.supported !== "boolean") return false;
+
+  const key = typeof value.key === "string" ? value.key.trim() : "";
+  if (key) return value.code !== 0 && value.supported;
+  if (value.code === 0) return value.supported;
+  return !value.supported;
+}
+
+function observableKey(value: EncoderChartKeyValue): string {
+  return value.supported && value.code !== 0 ? value.key?.trim() ?? "" : "";
 }
 
 function isTerminal(value: unknown): value is EncoderChartTerminal {
@@ -111,6 +120,8 @@ function shiftMatchesRoster(
   if (!shift) return false;
   const rowById = new Map(terminals.map((terminal) => [terminal.terminal_id, terminal]));
   const enabledRows = terminals.filter((terminal) => terminal.is_shift);
+  const shiftedCount = terminals.filter((terminal) => observableKey(terminal.shifted)).length;
+  const opaqueCount = terminals.filter((terminal) => terminal.shift_state === "opaque").length;
   switch (shift.state) {
     case "unreadable": return terminals.length === 0 && enabledRows.length === 0;
     case "enabled": {
@@ -118,17 +129,15 @@ function shiftMatchesRoster(
       return enabledRows.length === 1 && enabledRows[0]?.terminal_id === shift.terminal_id &&
         terminalIds.has(shift.terminal_id) && row?.is_shift === true &&
         row.terminal_label === shift.terminal_label &&
-        shift.reachable <= terminals.length;
+        shift.reachable === shiftedCount;
     }
     case "none-enabled":
       return terminals.every((terminal) => !terminal.is_shift) &&
-        shift.stranded <= terminals.length && shift.opaque <= terminals.length;
+        shift.stranded === shiftedCount && shift.opaque === opaqueCount;
     case "ambiguous": {
-      const unique = new Set(shift.terminal_ids);
-      return shift.terminal_ids.length >= 2 && unique.size === shift.terminal_ids.length &&
-        enabledRows.length === unique.size &&
-        enabledRows.every((row) => unique.has(row.terminal_id)) &&
-        shift.terminal_ids.every((id) => terminalIds.has(id) && rowById.get(id)?.is_shift === true);
+      return enabledRows.length >= 2 && shift.terminal_ids.length === enabledRows.length &&
+        shift.terminal_ids.every((id, index) => id === enabledRows[index]?.terminal_id &&
+          terminalIds.has(id));
     }
   }
 }
@@ -251,14 +260,14 @@ export function encoderChartTerminalMap(
 /** A zero byte is intentionally not called “unassigned”: onboard macros and an
  * empty assignment are byte-identical in the measured PAC256 image. */
 export function encoderEmissionLabel(value: EncoderChartKeyValue): string {
-  const key = value.key?.trim();
+  const key = observableKey(value);
   if (key) return key;
   if (value.supported && value.code === 0) return "Nothing stored — or a macro, which looks the same";
   return value.label || `Preserved byte 0x${value.code.toString(16).padStart(2, "0").toUpperCase()}`;
 }
 
 export function encoderEmissionShortLabel(value: EncoderChartKeyValue): string {
-  const key = value.key?.trim();
+  const key = observableKey(value);
   if (key) {
     const arrows: Record<string, string> = {
       ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→",

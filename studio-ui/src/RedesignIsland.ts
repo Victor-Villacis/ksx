@@ -1165,7 +1165,11 @@ function disposeEncoderWorkbenchItem(item: HTMLElement): void {
 
 /** Mount one board onto the workbench: the saved spot if this board has been
  *  here before (removal keeps geometry), otherwise a staggered open spot. */
-function mountDeviceWidget(row: RdDeviceRowView, index: number): void {
+function mountDeviceWidget(
+  row: RdDeviceRowView,
+  index: number,
+  readStoredAssignmentsOnMount = false,
+): void {
   const canvas = nCanvas;
   if (!canvas) return;
   const slug = deviceInstanceId(row.selector);
@@ -1175,7 +1179,9 @@ function mountDeviceWidget(row: RdDeviceRowView, index: number): void {
     legacyGeometryOwners,
   );
   const encoderSurface = row.role === "panel-encoder"
-    ? createEncoderWorkbenchSurface(document, encoderDeviceFromRow(row))
+    ? createEncoderWorkbenchSurface(document, encoderDeviceFromRow(row), {
+      readStoredAssignmentsOnMount,
+    })
     : null;
   const content = encoderSurface ? document.createElement("div") : deviceCardContent(row);
   if (encoderSurface) {
@@ -1253,7 +1259,9 @@ function toggleBenchDevice(selector: string): void {
   } else {
     const row = deviceRowFor(selector);
     if (!row) return;
-    mountDeviceWidget(row, bench.length);
+    // The visible picker Add gesture authorizes one immediate, read-only chart
+    // transaction. Passive restore/reconnect mounts use the default false.
+    mountDeviceWidget(row, bench.length, true);
     canvasPrefs.bench = [...bench, selector];
   }
   saveCanvasPrefs();

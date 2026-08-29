@@ -34,7 +34,7 @@ const encoderContractBundle = await bundle({
     contents: [
       'export { detectEncoderVisualProfile, validateEncoderDetectionRules } from "../src/encoderDetection.ts";',
       'export { getEncoderVisualProfile, validateEncoderVisualRegistry } from "../src/encoderVisualRegistry.ts";',
-      'export { validateEncoderChart } from "../src/encoderChartRead.ts";',
+      'export { encoderEmissionLabel, encoderEmissionShortLabel, validateEncoderChart } from "../src/encoderChartRead.ts";',
       'export { parseEncoderObservationView } from "../src/encoderSignalObservation.ts";',
     ].join("\n"),
     resolveDir: path.join(repoRoot, "studio-ui", "pwtest"),
@@ -48,6 +48,8 @@ const encoderContractBundle = await bundle({
 });
 const {
   detectEncoderVisualProfile,
+  encoderEmissionLabel,
+  encoderEmissionShortLabel,
   getEncoderVisualProfile,
   parseEncoderObservationView,
   validateEncoderChart,
@@ -132,13 +134,14 @@ after(async () => {
  *  empty, so the engine's first camera transform is the adoption mark —
  *  restoreBench runs in the same init, so any remembered boards are mounted
  *  by the time the transform lands. */
-async function openBench() {
+async function openBench({ onRequest } = {}) {
   const page = await context.newPage();
   const noise = [];
   page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
   page.on("console", (message) => {
     if (message.type() === "error") noise.push(`console: ${message.text()}`);
   });
+  if (onRequest) page.on("request", onRequest);
   page.ksxNoise = noise;
   await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(
@@ -339,6 +342,115 @@ describe("the device workbench", () => {
     );
   });
 
+  test("encoder charts require backend-consistent key tuples and exact Shift summaries", () => {
+    const expectedIds = ["1sw1", "1sw2", "1sw3"];
+    const unassigned = () => ({ code: 0, key: null, label: "Unassigned", supported: true });
+    const terminal = (terminalId, terminalLabel) => ({
+      terminal_id: terminalId,
+      terminal_label: terminalLabel,
+      player: 1,
+      kind: "button",
+      normal: unassigned(),
+      shifted: unassigned(),
+      shift_state: "disabled",
+      is_shift: false,
+      press_resolves: true,
+    });
+    const terminals = [
+      terminal("1sw1", "Player 1 · Button 1"),
+      terminal("1sw2", "Player 1 · Button 2"),
+      terminal("1sw3", "Player 1 · Button 3"),
+    ];
+    const outcome = (rows, shift) => ({
+      ok: true,
+      board_name: "Contract board",
+      image_sha256: "a".repeat(64),
+      terminals: rows,
+      shift,
+    });
+    const validates = (rows, shift) => validateEncoderChart(outcome(rows, shift), expectedIds).ok;
+
+    assert.equal(
+      validates(terminals, { state: "none-enabled", stranded: 0, opaque: 0 }),
+      true,
+      "the backend's unassigned tuple remains valid",
+    );
+
+    const contradictoryNormalValues = [
+      { code: 0, key: "KeyK", label: "KeyK", supported: true },
+      { code: 0x0e, key: "KeyK", label: "KeyK", supported: false },
+      { code: 0x0e, key: null, label: "KeyK", supported: true },
+      { code: 0, key: null, label: "Preserved action", supported: false },
+    ];
+    for (const normal of contradictoryNormalValues) {
+      const rows = terminals.map((row, index) => index === 0 ? { ...row, normal } : row);
+      assert.equal(
+        validates(rows, { state: "none-enabled", stranded: 0, opaque: 0 }),
+        false,
+        `the impossible key tuple ${JSON.stringify(normal)} is withheld`,
+      );
+    }
+    const zeroNamedKey = { code: 0, key: "K", label: "K", supported: true };
+    const unsupportedNamedKey = {
+      code: 0x0e,
+      key: "K",
+      label: "Preserved action 0x0E",
+      supported: false,
+    };
+    assert.notEqual(encoderEmissionLabel(zeroNamedKey), "K");
+    assert.notEqual(encoderEmissionShortLabel(zeroNamedKey), "K");
+    assert.notEqual(encoderEmissionLabel(unsupportedNamedKey), "K");
+    assert.notEqual(encoderEmissionShortLabel(unsupportedNamedKey), "K");
+
+    const oneShiftedKey = terminals.map((row, index) => index === 0
+      ? { ...row, shifted: { code: 0x0e, key: "KeyK", label: "KeyK", supported: true } }
+      : index === 1
+        ? { ...row, shift_state: "opaque" }
+        : row);
+    assert.equal(
+      validates(oneShiftedKey, { state: "none-enabled", stranded: 1, opaque: 1 }),
+      true,
+      "none-enabled counts exactly one observable shifted key and one opaque Shift byte",
+    );
+    assert.equal(
+      validates(oneShiftedKey, { state: "none-enabled", stranded: 0, opaque: 1 }),
+      false,
+      "a lower stranded count cannot hide a reachable shifted key",
+    );
+    assert.equal(
+      validates(oneShiftedKey, { state: "none-enabled", stranded: 1, opaque: 0 }),
+      false,
+      "a lower opaque count cannot hide an unknown Shift byte",
+    );
+
+    const oneEnabledShift = oneShiftedKey.map((row, index) => index === 2
+      ? { ...row, shift_state: "enabled", is_shift: true }
+      : row);
+    const enabledSummary = {
+      state: "enabled",
+      terminal_id: oneEnabledShift[2].terminal_id,
+      terminal_label: oneEnabledShift[2].terminal_label,
+      reachable: 1,
+    };
+    assert.equal(validates(oneEnabledShift, enabledSummary), true);
+    assert.equal(
+      validates(oneEnabledShift, { ...enabledSummary, reachable: 0 }),
+      false,
+      "an enabled summary cannot under-report the observable shifted plane",
+    );
+
+    const ambiguousShift = oneShiftedKey.map((row, index) => index === 0 || index === 2
+      ? { ...row, shift_state: "enabled", is_shift: true }
+      : row);
+    const enabledIds = [ambiguousShift[0].terminal_id, ambiguousShift[2].terminal_id];
+    assert.equal(validates(ambiguousShift, { state: "ambiguous", terminal_ids: enabledIds }), true);
+    assert.equal(
+      validates(ambiguousShift, { state: "ambiguous", terminal_ids: enabledIds.toReversed() }),
+      false,
+      "an ambiguous summary preserves the backend's enabled-row order",
+    );
+  });
+
   test("signal-observation responses preserve unique-set semantics", () => {
     const valid = {
       ok: true,
@@ -437,6 +549,8 @@ describe("the device workbench", () => {
       const unreachableShift = payload.terminals.find((row) => row.terminal_id === "1sw2");
       assert.ok(unreachableShift);
       unreachableShift.shifted = { code: 0x0E, key: "K", label: "K", supported: true };
+      assert.equal(payload.shift.state, "none-enabled");
+      payload.shift.stranded += 1;
       await route.fulfill({ response, json: payload });
     });
     try {
@@ -811,6 +925,32 @@ describe("the device workbench", () => {
       });
       await route.fulfill({ response, json: payload });
     });
+    let observationActive = false;
+    const observationView = (state) => ({
+      ok: true,
+      state,
+      generation: state === "idle" ? null : 581,
+      selector: state === "idle" ? null : IPAC,
+      remaining_ms: state === "listening" ? 29_000 : null,
+      held: [],
+      seen: state === "idle" ? [] : ["K"],
+      peak: state === "idle" ? 0 : 1,
+      events: state === "idle" ? 0 : 1,
+      dropped: 0,
+      rollover_visibility: "unavailable",
+      detail: state === "idle" ? "No observation is active." : "Generic-draft fixture.",
+      error: null,
+    });
+    await page.route("**/api/input-test**", async (route) => {
+      const pathName = new URL(route.request().url()).pathname;
+      if (pathName === "/api/input-test/start") observationActive = true;
+      if (pathName === "/api/input-test/cancel") observationActive = false;
+      await route.fulfill({
+        status: 200,
+        json: observationView(observationActive ? "listening" :
+          pathName === "/api/input-test/cancel" ? "cancelled" : "idle"),
+      });
+    });
     try {
       await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(
@@ -843,7 +983,39 @@ describe("the device workbench", () => {
       assert.equal(await node.getByRole("button", { name: "Read stored assignments" }).count(), 0);
       assert.equal(await node.getByRole("button", { name: "Start button test" }).count(), 1);
       const labels = node.locator("[data-rd-encoder-manual-labels]");
-      await labels.fill("P1 UP, P1 FIRE, COIN");
+      const draft = "P1 UP, P1 FIRE, COIN";
+      await labels.fill(draft);
+      await labels.evaluate((input) => {
+        input.focus();
+        input.setSelectionRange(7, 7);
+        window.dispatchEvent(new Event("pageshow"));
+      });
+      assert.deepEqual(
+        await labels.evaluate((input) => ({
+          value: input.value,
+          focused: document.activeElement === input,
+          selectionStart: input.selectionStart,
+          selectionEnd: input.selectionEnd,
+        })),
+        { value: draft, focused: true, selectionStart: 7, selectionEnd: 7 },
+        "an unrelated surface repaint preserves the exact generic draft and caret",
+      );
+      await node.getByRole("button", { name: "Start button test" })
+        .evaluate((button) => button.click());
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-observation][data-state="listening"]`,
+        ),
+        IPAC_SLUG,
+      );
+      assert.equal(await labels.inputValue(), draft, "Button Test does not erase the unbuilt draft");
+      await node.getByRole("button", { name: "Done", exact: true }).click();
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-observation][data-state="complete"]`,
+        ),
+        IPAC_SLUG,
+      );
       await node.getByRole("button", { name: "Build control list" }).click();
       assert.equal(await node.locator("[data-declared-terminal-id]").count(), 3);
       assert.equal(
@@ -854,6 +1026,7 @@ describe("the device workbench", () => {
       assert.deepEqual(noise, []);
     } finally {
       await page.unroute(`${BASE}/api/redesign`);
+      await page.unroute("**/api/input-test**");
       await genericContext.close();
     }
   });
@@ -869,19 +1042,17 @@ describe("the device workbench", () => {
     page.on("console", (message) => {
       if (message.type() === "error") noise.push(`console: ${message.text()}`);
     });
-    let releaseChart;
-    let reportChart;
+    let releaseManualChart;
+    let reportManualChart;
     const chartBodies = [];
-    const chartGate = new Promise((resolve) => { releaseChart = resolve; });
-    const chartSeen = new Promise((resolve) => { reportChart = resolve; });
-    let chartReported = false;
+    const manualChartGate = new Promise((resolve) => { releaseManualChart = resolve; });
+    const manualChartSeen = new Promise((resolve) => { reportManualChart = resolve; });
     await page.route("**/api/panel/chart", async (route) => {
       chartBodies.push(route.request().postDataJSON());
-      if (!chartReported) {
-        chartReported = true;
-        reportChart(route.request().postDataJSON());
+      if (chartBodies.length === 2) {
+        reportManualChart(route.request().postDataJSON());
+        await manualChartGate;
       }
-      await chartGate;
       await route.continue();
     });
     let observationActive = false;
@@ -932,10 +1103,26 @@ describe("the device workbench", () => {
       await page.click(`.rd-devmodal button[data-selector="${IPAC}"]`);
       await page.keyboard.press("Escape");
       const node = page.locator(`.rd-encoder-device-node[data-instance-id="${IPAC_SLUG}"]`);
-      assert.deepEqual(await chartSeen, { selector: IPAC });
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-chart][data-state="loaded"]`,
+        ),
+        IPAC_SLUG,
+      );
+      assert.deepEqual(chartBodies, [{ selector: IPAC }], "the Add gesture performs one initial read");
+      const refresh = node.getByRole("button", { name: "Refresh stored assignments" });
+      await refresh.focus();
+      await refresh.click();
+      assert.deepEqual(await manualChartSeen, { selector: IPAC });
       assert.equal(
         await node.locator('[data-rd-encoder-chart][data-state="loading"]').count(),
         1,
+      );
+      assert.equal(
+        await node.locator("[data-rd-encoder-status]").evaluate((element) =>
+          document.activeElement === element),
+        true,
+        "the durable live target owns focus while the manual read repaints",
       );
       assert.match(await node.textContent(), /Reading this board/i);
 
@@ -956,27 +1143,38 @@ describe("the device workbench", () => {
       );
       assert.match(await node.locator(".rd-encoder-product-actions").textContent(), /read is still settling/i);
       assert.doesNotMatch(await node.textContent(), /Reading this board/i);
-      const staleChartResponse = page.waitForResponse((response) =>
-        new URL(response.url()).pathname === "/api/panel/chart"
-      );
-      releaseChart();
-      await staleChartResponse;
-      await page.waitForFunction(
-        (id) => document.querySelector(
-          `[data-instance-id="${id}"] [data-rd-encoder-chart][data-state="loaded"]`,
-        ),
-        IPAC_SLUG,
-      );
       assert.equal(
-        await node.locator('[data-rd-encoder-chart][data-state="loaded"]').count(),
-        1,
-        "the late pre-pagehide response is discarded and a fresh automatic read completes",
+        await node.evaluate((item) => document.activeElement === item),
+        true,
+        "BFCache returns focus to the visible canvas object while its read button is settling",
       );
-      assert.equal(await node.locator("[data-configured-emission]").count(), 56);
+      await page.waitForTimeout(50);
       assert.deepEqual(
         chartBodies,
         [{ selector: IPAC }, { selector: IPAC }],
-        "BFCache restoration re-arms exactly one fresh chart read after the stale request settles",
+        "pageshow never turns an interrupted manual read into a page-load hardware action",
+      );
+      const staleChartResponse = page.waitForResponse((response) =>
+        new URL(response.url()).pathname === "/api/panel/chart"
+      );
+      releaseManualChart();
+      await staleChartResponse;
+      await page.waitForFunction(
+        (id) => !document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-read]`,
+        )?.disabled,
+        IPAC_SLUG,
+      );
+      assert.equal(
+        await node.locator('[data-rd-encoder-chart][data-state="idle"]').count(),
+        1,
+        "the late pre-pagehide response is discarded without an implicit retry",
+      );
+      assert.equal(await node.locator("[data-configured-emission]").count(), 0);
+      assert.deepEqual(
+        chartBodies,
+        [{ selector: IPAC }, { selector: IPAC }],
+        "the user can explicitly read again after the stale transaction settles",
       );
 
       await node.getByRole("button", { name: "Start button test" }).click();
@@ -1021,7 +1219,7 @@ describe("the device workbench", () => {
       );
       assert.deepEqual(noise, []);
     } finally {
-      releaseChart?.();
+      releaseManualChart?.();
       await lifecycleContext.close();
     }
   });
@@ -1665,8 +1863,38 @@ describe("the device workbench", () => {
     await page.close();
   });
 
-  test("the workbench survives a reload — the arrangement store remembers", async () => {
-    const page = await openBench();
+  test("reload and authoritative reconnect restore the workbench without passive chart reads", async () => {
+    // Seed the persisted arrangement explicitly so this regression is valid
+    // both in the full ordered suite and under a focused name filter.
+    const seed = await openBench();
+    await seed.click('[data-nx="rd-devs-open"]');
+    let addedEncoder = false;
+    for (const selector of [G915, IPAC]) {
+      const row = seed.locator(`.rd-devmodal button[data-selector="${selector}"]`);
+      if (await row.getAttribute("aria-pressed") !== "true") {
+        await row.click();
+        if (selector === IPAC) addedEncoder = true;
+      }
+    }
+    await seed.keyboard.press("Escape");
+    if (addedEncoder) {
+      await seed.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-chart][data-state="loaded"]`,
+        ),
+        IPAC_SLUG,
+      );
+    }
+    await seed.close();
+
+    const chartCalls = [];
+    const page = await openBench({
+      onRequest: (request) => {
+        if (new URL(request.url()).pathname === "/api/panel/chart") {
+          chartCalls.push(request.postDataJSON());
+        }
+      },
+    });
     for (const slug of [G915_SLUG, IPAC_SLUG]) {
       await page.waitForFunction(
         (id) =>
@@ -1682,6 +1910,44 @@ describe("the device workbench", () => {
       2,
       "both rows still marked after the reload",
     );
+    await page.waitForTimeout(50);
+    assert.deepEqual(chartCalls, [], "restoring persisted membership performs no chart transaction");
+    await page.keyboard.press("Escape");
+
+    let rosterMode = "absent";
+    await page.route(`${BASE}/api/redesign`, async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      if (rosterMode === "absent") {
+        payload.devices.encoders = payload.devices.encoders.filter((row) => row.selector !== IPAC);
+      }
+      await route.fulfill({ response, json: payload });
+    });
+    try {
+      await page.click(".rd-themed > summary");
+      await page.click('.rd-thememenu form:has(input[value="matrix"]) button');
+      await page.waitForFunction(
+        (id) => !document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`),
+        IPAC_SLUG,
+      );
+      rosterMode = "present";
+      await page.click(".rd-themed > summary");
+      await page.click('.rd-thememenu form:has(input[value="system"]) button');
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `.forma-canvas-stage [data-instance-id="${id}"] [data-rd-encoder-read]`,
+        ),
+        IPAC_SLUG,
+      );
+      await page.waitForTimeout(50);
+      assert.deepEqual(
+        chartCalls,
+        [],
+        "an encoder returning through an authoritative roster refresh waits for explicit Read",
+      );
+    } finally {
+      await page.unroute(`${BASE}/api/redesign`);
+    }
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();
   });

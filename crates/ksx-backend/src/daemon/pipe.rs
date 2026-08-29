@@ -6,9 +6,11 @@
 //! through the same [`crate::mapping::apply`] the CLI verb uses — no
 //! pipe-private editor), `learn-key` / `learn-poll` / `learn-cancel` (the
 //! asynchronous "press the panel key" recorder, [`super::learn`]), and the
-//! bounded `input-test-*` diagnostic. `ksx session`, `ksx input-test`, and
-//! Studio are thin clients of this; docs/CONTROL-SURFACE.md carries the
-//! request/response examples.
+//! bounded `input-test-*` diagnostic. `input-test-release-fence` is the
+//! server-facing handoff that keeps a following hardware transaction out of
+//! the observer's short OS-resource teardown tail. `ksx session`,
+//! `ksx input-test`, and Studio are thin clients of this;
+//! docs/CONTROL-SURFACE.md carries the request/response examples.
 //!
 //! # Reach
 //!
@@ -808,11 +810,30 @@ fn handle_request_with_shutdown(
             };
             deps.input_test.cancel(generation)
         }
+        "input-test-release-fence" => {
+            if request.as_object().is_none_or(|fields| fields.len() != 1) {
+                return err_code(
+                    "bad-request",
+                    "input-test-release-fence accepts no fields other than its fixed verb",
+                );
+            }
+            if deps
+                .input_test
+                .wait_for_terminal_observer_release(OBSERVER_HANDOFF_GRACE)
+            {
+                ok_msg("the simultaneous-input observer is released".to_owned())
+            } else {
+                err_code(
+                    "observer-busy",
+                    "the simultaneous-input test is still listening or releasing its device; stop it and try again",
+                )
+            }
+        }
         other => err_msg(format!(
             "unknown verb '{other}' (status | start | stop | reload | quit | map | map-macro | \
              map-restore | map-clear-all | map-backups | slot-assign | stage | stage-edit | \
              stage-commit | stage-play | stage-apply | learn-key | learn-poll | learn-cancel | \
-             input-test-start | input-test-poll | input-test-cancel)"
+             input-test-start | input-test-poll | input-test-cancel | input-test-release-fence)"
         )),
     }
 }
@@ -2874,6 +2895,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             }),
             Request::InputTestPoll,
             Request::InputTestCancel { generation: None },
+            Request::InputTestReleaseFence,
             // The pure dispatcher has no process-owned rendezvous and must
             // refuse rather than pretending an in-process call closed a pipe.
             Request::Quit,
@@ -2903,7 +2925,8 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
                             | Request::Stop
                             | Request::Resume
                             | Request::Reload
-                            | Request::Quit,
+                            | Request::Quit
+                            | Request::InputTestReleaseFence,
                         Response::Action(_)
                     )
                     | (Request::Map(_), Response::Map(_))
@@ -6085,6 +6108,85 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             "a fresh generation was not opened: {second}"
         );
         handle_request(r#"{"verb":"input-test-cancel"}"#, &d, FAST);
+    }
+
+    /// A chart read runs in Studio, outside the daemon process. Its release
+    /// fence therefore has to ask the daemon-owned service rather than trust
+    /// the public `cancelled` phase: Cancel is deliberately terminal before
+    /// the observer has finished destroying its OS resources.
+    #[test]
+    fn the_hardware_release_fence_absorbs_a_short_terminal_tail_and_refuses_a_long_one() {
+        fn releasing_input_test(
+            released: Arc<std::sync::atomic::AtomicBool>,
+        ) -> super::super::input_test::InputTestService {
+            super::super::input_test::InputTestService::new(Arc::new(
+                move |_selector, _deadline, cancel, _emit| {
+                    while !cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    while !released.load(std::sync::atomic::Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    Ok(0)
+                },
+            ))
+        }
+
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state, no_profiles());
+        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        d.input_test = releasing_input_test(Arc::clone(&release));
+        assert_eq!(
+            handle_request(
+                r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+                &d,
+                FAST,
+            )["state"],
+            "listening"
+        );
+        assert_eq!(
+            handle_request(r#"{"verb":"input-test-cancel"}"#, &d, FAST)["state"],
+            "cancelled"
+        );
+        assert!(d.input_test.observer_active(), "cleanup tail was not live");
+        let release_now = Arc::clone(&release);
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            release_now.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let handed_off = handle_request(r#"{"verb":"input-test-release-fence"}"#, &d, FAST);
+        releaser.join().unwrap();
+        assert_eq!(handed_off["ok"], true, "{handed_off}");
+        assert!(
+            !d.input_test.observer_active(),
+            "the fence answered before cleanup released"
+        );
+
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state, no_profiles());
+        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        d.input_test = releasing_input_test(Arc::clone(&release));
+        handle_request(
+            r#"{"verb":"input-test-start","selector":"usb:d209:0430:00","duration_ms":5000}"#,
+            &d,
+            FAST,
+        );
+        handle_request(r#"{"verb":"input-test-cancel"}"#, &d, FAST);
+        let began = Instant::now();
+        let refused = handle_request(r#"{"verb":"input-test-release-fence"}"#, &d, FAST);
+        assert_eq!(refused["code"], "observer-busy", "{refused}");
+        assert!(
+            began.elapsed() < Duration::from_secs(1),
+            "the release fence exceeded its bounded handoff budget"
+        );
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while d.input_test.observer_active() {
+            assert!(Instant::now() < deadline, "observer did not release");
+            std::thread::sleep(Duration::from_millis(2));
+        }
     }
 
     /// Four ways to say nothing, four different answers — and the answer has to

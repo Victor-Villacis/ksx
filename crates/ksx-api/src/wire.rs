@@ -127,6 +127,10 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         generation: Option<u64>,
     },
+    /// Give a terminal simultaneous-input observer a bounded chance to
+    /// release its OS resources before another hardware owner proceeds.
+    /// Refuses immediately while the test is still listening.
+    InputTestReleaseFence,
 }
 
 impl Request {
@@ -159,6 +163,7 @@ impl Request {
             Self::InputTestStart(_) => "input-test-start",
             Self::InputTestPoll => "input-test-poll",
             Self::InputTestCancel { .. } => "input-test-cancel",
+            Self::InputTestReleaseFence => "input-test-release-fence",
         }
     }
 
@@ -710,7 +715,10 @@ impl Response {
             | Request::Stop
             | Request::Resume
             | Request::Reload
-            | Request::Quit => Self::Action(serde_json::from_value(value).map_err(read(verb))?),
+            | Request::Quit
+            | Request::InputTestReleaseFence => {
+                Self::Action(serde_json::from_value(value).map_err(read(verb))?)
+            }
             Request::Map(_) => Self::Map(serde_json::from_value(value).map_err(read(verb))?),
             Request::StageBind(_) => Self::Map(serde_json::from_value(value).map_err(read(verb))?),
             Request::MapMacro(_) => Self::Macro(serde_json::from_value(value).map_err(read(verb))?),
@@ -1283,6 +1291,10 @@ mod tests {
             r#"{"verb":"input-test-poll"}"#
         );
         assert_eq!(
+            Request::InputTestReleaseFence.to_line(),
+            r#"{"verb":"input-test-release-fence"}"#
+        );
+        assert_eq!(
             Request::LearnCancel { generation: None }.to_line(),
             r#"{"verb":"learn-cancel"}"#
         );
@@ -1378,6 +1390,7 @@ steps = [{ hold = ["A"], frames = 2, allow_short = true }]
             Request::InputTestCancel {
                 generation: Some(9),
             },
+            Request::InputTestReleaseFence,
         ];
         for request in requests {
             let line = request.to_line();

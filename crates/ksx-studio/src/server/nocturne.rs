@@ -2668,6 +2668,16 @@ pub(super) async fn nocturne_api_board_save(
 pub(super) const N_PANEL_CHART_ERROR: &str =
     "That board's chart could not be read. Nothing on the board was changed.";
 
+/// The daemon may have already reported Button Test as cancelled or timed
+/// out while its Raw Input window, panel tap, or temporary claim is still
+/// closing. The chart route fences that release before opening the board's
+/// configuration collection; this is the authored browser-safe refusal when
+/// the observer is still listening or outlives the bounded handoff.
+const N_PANEL_CHART_OBSERVER_BUSY: &str =
+    "Button Test is still listening or releasing this device. The encoder was not read.";
+const N_PANEL_CHART_OBSERVER_REMEDY: &str =
+    "Stop Button Test, wait for it to close, then read the encoder again.";
+
 /// The chart route's answer when the selector matched no board, or more than
 /// one.
 ///
@@ -2762,6 +2772,28 @@ pub(super) async fn nocturne_api_panel_chart(
     axum::Json(body): axum::Json<NocturnePanelChartBody>,
 ) -> Response {
     let outcome = tokio::task::spawn_blocking(move || {
+        // Cancel is terminal to the Button Test caller before the worker has
+        // necessarily destroyed its Raw Input window/panel tap/temporary
+        // claim. Ask the daemon-owned service to absorb that short tail (or
+        // refuse, bounded) before this process opens the board's exclusive
+        // configuration collection. Polling the public phase is insufficient:
+        // `cancelled` deliberately arrives before observer teardown finishes.
+        if let Err(refusal) = state.control.input_test_release_fence() {
+            return if refusal.code == "observer-busy" {
+                NocturnePanelChartOutcome {
+                    ok: false,
+                    error: Some(N_PANEL_CHART_OBSERVER_BUSY.to_owned()),
+                    remedy: Some(N_PANEL_CHART_OBSERVER_REMEDY.to_owned()),
+                    ..Default::default()
+                }
+            } else {
+                NocturnePanelChartOutcome {
+                    ok: false,
+                    error: Some(N_PANEL_CHART_ERROR.to_owned()),
+                    ..Default::default()
+                }
+            };
+        }
         // The browser's selector reaches `device` verbatim. I-PAC instance
         // paths are serial-anchored, so canonicalising the string here would
         // pick a different board than the row the user pressed.

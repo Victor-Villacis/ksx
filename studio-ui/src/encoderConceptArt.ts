@@ -96,6 +96,13 @@ export interface EncoderWorkbenchSurface {
   dispose: () => void;
 }
 
+export interface EncoderWorkbenchSurfaceOptions {
+  /** A fresh, visible `+ Devices` Add gesture may authorize one initial
+   * read-only chart transaction. Restores, reconnects, and passive roster
+   * refreshes must leave this false so page lifecycle never starts hardware. */
+  readStoredAssignmentsOnMount?: boolean;
+}
+
 interface ObservedSignal {
   id: string;
   source: string;
@@ -108,6 +115,8 @@ type ChartReadState =
   | { kind: "loading" }
   | { kind: "loaded"; snapshot: EncoderChartSnapshot }
   | { kind: "error"; message: string };
+
+type ChartReadFocusTarget = "inspector" | "panel";
 
 type SignalObservationState =
   | { kind: "idle" }
@@ -1416,6 +1425,8 @@ function manualFallback(
   currentLabels: readonly string[],
   onApply: (labels: readonly string[]) => void,
   presentation: "research" | "product" = "research",
+  draft = currentLabels.join(", "),
+  onDraftChange: (value: string) => void = () => undefined,
 ): HTMLElement {
   const panel = html(document_, "section", "rd-encoder-profile-manual");
   panel.dataset.manualProfileBuilder = "";
@@ -1432,8 +1443,9 @@ function manualFallback(
   const input = html(document_, "textarea");
   input.rows = 2;
   input.placeholder = "UP, DOWN, LEFT, RIGHT, SW1, SW2 …";
-  input.value = currentLabels.join(", ");
+  input.value = draft;
   input.dataset.rdEncoderManualLabels = "";
+  input.addEventListener("input", () => onDraftChange(input.value));
   field.append(input);
   const button = html(document_, "button");
   button.type = "button";
@@ -1477,7 +1489,7 @@ function chartReadPanel(
     ? hardwareUnavailableReason || "Wait until KSX confirms this device before reading it."
     : canRead
       ? presentation === "product"
-      ? "KSX reads the stored output for every terminal when you add this encoder. Refresh after changing assignments in WinIPAC or another encoder utility. Nothing is written."
+      ? "A fresh + Devices Add reads the stored output once. Restored boards wait for Read; use Refresh after changing assignments in WinIPAC or another encoder utility. Nothing is written."
       : "Ask this exact board what each terminal is configured to emit. Read only: this does not map controls, write firmware, or prove a wire."
     : selection.device
       ? presentation === "product"
@@ -1851,10 +1863,12 @@ function dynamicProfileContent(
   result: EncoderDetectionResult,
   selection: LabSelection,
   declaredLabels: readonly string[],
+  declaredLabelsDraft: string,
   chartState: ChartReadState,
   observationState: SignalObservationState,
   onConfirm: (profileId: EncoderVisualProfileId) => void,
   onDeclaredLabels: (labels: readonly string[]) => void,
+  onDeclaredLabelsDraft: (value: string) => void,
   onReadChart: () => void,
   onStartObservation: () => void,
   onStopObservation: () => void,
@@ -1987,7 +2001,10 @@ function dynamicProfileContent(
     if (observations) region.append(observations);
   }
   if (result.resolution === "unrecognised" || result.resolution === "known-family") {
-    region.append(manualFallback(document_, declaredLabels, onDeclaredLabels));
+    region.append(manualFallback(
+      document_, declaredLabels, onDeclaredLabels, "research",
+      declaredLabelsDraft, onDeclaredLabelsDraft,
+    ));
   }
   return region;
 }
@@ -2267,12 +2284,14 @@ function productDynamicContent(
   result: EncoderDetectionResult,
   selection: LabSelection,
   declaredLabels: readonly string[],
+  declaredLabelsDraft: string,
   chartState: ChartReadState,
   observationState: SignalObservationState,
   selectedTerminalId: string | undefined,
   onSelectTerminal: (terminalId: string) => void,
   onConfirm: (profileId: EncoderVisualProfileId) => void,
   onDeclaredLabels: (labels: readonly string[]) => void,
+  onDeclaredLabelsDraft: (value: string) => void,
   onReadChart: () => void,
   onStartObservation: () => void,
   onStopObservation: () => void,
@@ -2399,7 +2418,10 @@ function productDynamicContent(
   region.append(actions);
   if (!known && (result.resolution === "unrecognised" || result.resolution === "known-family" ||
       result.resolution === "identity-conflict")) {
-    region.append(manualFallback(document_, declaredLabels, onDeclaredLabels, "product"));
+    region.append(manualFallback(
+      document_, declaredLabels, onDeclaredLabels, "product",
+      declaredLabelsDraft, onDeclaredLabelsDraft,
+    ));
   }
   region.append(productDeviceDetails(document_, result, selection, chart, connectionConfirmed));
   return region;
@@ -2453,6 +2475,7 @@ function selectionEvidenceSignature(selection: LabSelection): string {
 function createProfileLabContent(
   document_: Document,
   options: EncoderProfileLabOptions,
+  readStoredAssignmentsOnMount = false,
 ): ProfileLabContentController {
   const presentation = options.presentation ?? "research";
   const makeSelections = (devices: readonly EncoderProfileLabDevice[] = []): LabSelection[] => {
@@ -2474,9 +2497,12 @@ function createProfileLabContent(
     : "encoder profile lab has no selections");
   let confirmedCandidate: EncoderVisualProfileId | undefined;
   let declaredLabels: readonly string[] = [];
+  let declaredLabelsDraft = "";
   let selectedTerminalId: string | undefined;
   let chartState: ChartReadState = { kind: "idle" };
   let chartRequestEpoch = 0;
+  let activeChartReadFocusTarget: ChartReadFocusTarget | null = null;
+  let pageShowChartFocusTarget: ChartReadFocusTarget | null = null;
   let observationState: SignalObservationState = { kind: "idle" };
   let observationOwnership: { selector: string; generation: number } | null = null;
   let observationRequestEpoch = 0;
@@ -2484,8 +2510,10 @@ function createProfileLabContent(
   let pageHiding = false;
   let announcementFrame = 0;
   let connectionConfirmed = true;
-  let automaticChartReadPending = presentation === "product";
-  let automaticChartReadActive = false;
+  // Only a fresh `+ Devices` Add gesture may set this. A product surface also
+  // mounts during restore/reconnect, but those passive lifecycles must never
+  // acquire the machine-wide programming lease.
+  let automaticChartReadPending = presentation === "product" && readStoredAssignmentsOnMount;
   let automaticChartReadFrame = 0;
   const hardwareActionOwner = Symbol("encoder-workbench-surface");
   const hardwareActionHolds: Record<EncoderHardwareActionKind, Set<symbol>> = {
@@ -2638,6 +2666,35 @@ function createProfileLabContent(
       else content.closest<HTMLElement>(".widget-instance")?.focus({ preventScroll: true });
     });
   };
+  const restoreChartReadFocus = (
+    target: ChartReadFocusTarget,
+    allowVisibleFallback = false,
+  ): void => {
+    document_.defaultView?.requestAnimationFrame(() => {
+      const selector = target === "inspector"
+        ? "[data-rd-encoder-inspector-read]"
+        : "[data-rd-encoder-read]";
+      const button = dynamicHost.querySelector<HTMLButtonElement>(selector);
+      if (button && !button.disabled) {
+        button.focus({ preventScroll: true });
+        return;
+      }
+      if (!allowVisibleFallback) return;
+      if (target === "inspector") {
+        const preferred = selectedTerminalId
+          ? Array.from(dynamicHost.querySelectorAll<SVGGElement>("[data-terminal-id]"))
+            .find((terminal) => terminal.dataset.terminalId === selectedTerminalId) ?? null
+          : null;
+        const terminal = preferred ??
+          dynamicHost.querySelector<SVGGElement>('[data-terminal-id][tabindex="0"]');
+        if (terminal) {
+          terminal.focus({ preventScroll: true });
+          return;
+        }
+      }
+      content.closest<HTMLElement>(".widget-instance")?.focus({ preventScroll: true });
+    });
+  };
   const confirmProfile = (profileId: EncoderVisualProfileId): void => {
     confirmedCandidate = profileId;
     selectedTerminalId = undefined;
@@ -2693,6 +2750,17 @@ function createProfileLabContent(
     else select.focus({ preventScroll: true });
   };
   function repaint(): void {
+    const activeManualInput = document_.activeElement instanceof HTMLTextAreaElement &&
+        document_.activeElement.matches("[data-rd-encoder-manual-labels]")
+      ? document_.activeElement
+      : null;
+    const manualSelection = activeManualInput ? {
+      start: activeManualInput.selectionStart,
+      end: activeManualInput.selectionEnd,
+      direction: activeManualInput.selectionDirection,
+      scrollTop: activeManualInput.scrollTop,
+      scrollLeft: activeManualInput.scrollLeft,
+    } : null;
     const result = selectedDetection(current, confirmedCandidate);
     paintHeader(result);
     const observationLeaseIsVisible = observationState.kind === "reconciling" ||
@@ -2710,7 +2778,7 @@ function createProfileLabContent(
     if (!selectedStillExists) selectedTerminalId = result.profile.topology.terminals[0]?.id;
     dynamicHost.replaceChildren(presentation === "product"
       ? productDynamicContent(
-        document_, result, current, declaredLabels, chartState, observationState,
+        document_, result, current, declaredLabels, declaredLabelsDraft, chartState, observationState,
         selectedTerminalId,
         (terminalId) => {
           selectedTerminalId = terminalId;
@@ -2719,6 +2787,7 @@ function createProfileLabContent(
         },
         confirmProfile,
         applyDeclaredLabels,
+        (value) => { declaredLabelsDraft = value; },
         () => { void readCurrentChart(); },
         () => { void startCurrentObservation(); },
         () => { void stopCurrentObservation(); },
@@ -2729,14 +2798,30 @@ function createProfileLabContent(
         hardwareActionOwner,
       )
       : dynamicProfileContent(
-        document_, result, current, declaredLabels, chartState, observationState,
+        document_, result, current, declaredLabels, declaredLabelsDraft, chartState, observationState,
         confirmProfile,
         applyDeclaredLabels,
+        (value) => { declaredLabelsDraft = value; },
         () => { void readCurrentChart(); },
         () => { void startCurrentObservation(); },
         () => { void stopCurrentObservation(); },
         escapeObservationCapture,
       ));
+    if (manualSelection) {
+      const replacement = dynamicHost.querySelector<HTMLTextAreaElement>(
+        "[data-rd-encoder-manual-labels]",
+      );
+      if (replacement) {
+        replacement.focus({ preventScroll: true });
+        replacement.setSelectionRange(
+          Math.min(manualSelection.start, replacement.value.length),
+          Math.min(manualSelection.end, replacement.value.length),
+          manualSelection.direction ?? undefined,
+        );
+        replacement.scrollTop = manualSelection.scrollTop;
+        replacement.scrollLeft = manualSelection.scrollLeft;
+      }
+    }
     announce(presentation === "product"
       ? `${result.profile.id === "unknown-hid" ? "Generic encoder setup" : "Recognized encoder"}. ${
         chartState.kind === "loaded" ? `${chartState.snapshot.terminals.length} assignments loaded.` :
@@ -3221,9 +3306,13 @@ function createProfileLabContent(
   const readCurrentChart = async (restoreFocus = true): Promise<void> => {
     const result = selectedDetection(current, confirmedCandidate);
     const selector = current.device?.selector;
-    const restoreTerminalFocus = presentation === "product" &&
+    const chartFocusTarget: ChartReadFocusTarget | null = restoreFocus
+      ? presentation === "product" &&
       document_.activeElement instanceof Element &&
-      Boolean(document_.activeElement.closest("[data-rd-encoder-terminal-inspector]"));
+      Boolean(document_.activeElement.closest("[data-rd-encoder-terminal-inspector]"))
+        ? "inspector"
+        : "panel"
+      : null;
     const observationBusy = observationState.kind === "reconciling" ||
       observationState.kind === "starting" || observationState.kind === "listening" ||
       observationState.kind === "stopping" || observationState.kind === "unknown" ||
@@ -3251,7 +3340,8 @@ function createProfileLabContent(
       return;
     }
     automaticChartReadPending = false;
-    if (restoreFocus) liveStatus.focus({ preventScroll: true });
+    activeChartReadFocusTarget = chartFocusTarget;
+    if (chartFocusTarget) liveStatus.focus({ preventScroll: true });
     repaint();
     announce(`Reading stored assignments from ${current.device?.name ?? "the selected encoder"}.`);
     try {
@@ -3301,21 +3391,11 @@ function createProfileLabContent(
     announce(chartState.kind === "loaded"
       ? `Read ${chartState.snapshot.terminals.length} stored terminal assignments. No hardware was changed.`
       : chartState.kind === "error" ? chartState.message : "");
-    if (restoreFocus) {
-      if (restoreTerminalFocus) {
-        if (chartState.kind === "error") {
-          document_.defaultView?.requestAnimationFrame(() => {
-            dynamicHost.querySelector<HTMLButtonElement>("[data-rd-encoder-inspector-read]")
-              ?.focus({ preventScroll: true });
-          });
-        } else focusProductTerminalOrWidget();
-      }
-      else {
-        document_.defaultView?.requestAnimationFrame(() => {
-          dynamicHost.querySelector<HTMLButtonElement>("[data-rd-encoder-read]")
-            ?.focus({ preventScroll: true });
-        });
-      }
+    if (chartFocusTarget) {
+      activeChartReadFocusTarget = null;
+      if (chartFocusTarget === "inspector" && chartState.kind !== "error") {
+        focusProductTerminalOrWidget();
+      } else restoreChartReadFocus(chartFocusTarget);
     }
   };
   const scheduleAutomaticChartRead = (): void => {
@@ -3335,10 +3415,7 @@ function createProfileLabContent(
       if (!chartReadIsAdmitted(result, current) || observationBusy ||
           hardwareActionHolds.chart.size > 0 ||
           encoderHardwareActionBlockedFor(hardwareActionOwner, "chart")) return;
-      automaticChartReadActive = true;
-      void readCurrentChart(false).finally(() => {
-        automaticChartReadActive = false;
-      });
+      void readCurrentChart(false);
     });
   };
   select.addEventListener("change", () => {
@@ -3347,10 +3424,13 @@ function createProfileLabContent(
     releaseObservation();
     current = next;
     chartRequestEpoch += 1;
+    activeChartReadFocusTarget = null;
+    pageShowChartFocusTarget = null;
     chartState = { kind: "idle" };
-    automaticChartReadPending = presentation === "product";
+    automaticChartReadPending = false;
     confirmedCandidate = undefined;
     declaredLabels = [];
+    declaredLabelsDraft = "";
     selectedTerminalId = undefined;
     if (current.profileId) options.onProfileChange?.(current.profileId);
     repaint();
@@ -3378,14 +3458,20 @@ function createProfileLabContent(
     chartRequestEpoch += 1;
     if (chartState.kind === "loading") {
       chartState = { kind: "idle" };
-      if (automaticChartReadActive && presentation === "product") automaticChartReadPending = true;
+      pageShowChartFocusTarget = activeChartReadFocusTarget;
+      activeChartReadFocusTarget = null;
     }
+    // A BFCache restore is a page lifecycle, not a renewed user Add gesture.
+    automaticChartReadPending = false;
     releaseObservation(true);
   };
   const onPageShow = (): void => {
     pageHiding = false;
+    const focusTarget = pageShowChartFocusTarget;
+    pageShowChartFocusTarget = null;
     repaint();
     scheduleAutomaticChartRead();
+    if (focusTarget) restoreChartReadFocus(focusTarget, true);
   };
   document_.defaultView?.addEventListener("pagehide", onPageHide);
   document_.defaultView?.addEventListener("pageshow", onPageShow);
@@ -3409,10 +3495,13 @@ function createProfileLabContent(
       if (selectionChanged || evidenceChanged) {
         releaseObservation();
         chartRequestEpoch += 1;
+        activeChartReadFocusTarget = null;
+        pageShowChartFocusTarget = null;
         chartState = { kind: "idle" };
-        automaticChartReadPending = presentation === "product";
+        automaticChartReadPending = false;
         confirmedCandidate = undefined;
         declaredLabels = [];
+        declaredLabelsDraft = "";
         selectedTerminalId = undefined;
       }
       repaintOptions();
@@ -3438,6 +3527,7 @@ function createProfileLabContent(
     setConnectionConfirmed: (confirmed) => {
       if (presentation !== "product" || confirmed === connectionConfirmed) return;
       connectionConfirmed = confirmed;
+      if (!confirmed) automaticChartReadPending = false;
       repaint();
       scheduleAutomaticChartRead();
       announce(confirmed
@@ -3450,6 +3540,8 @@ function createProfileLabContent(
       document_.defaultView?.removeEventListener("pagehide", onPageHide);
       document_.defaultView?.removeEventListener("pageshow", onPageShow);
       chartRequestEpoch += 1;
+      activeChartReadFocusTarget = null;
+      pageShowChartFocusTarget = null;
       // Ordinary widget removal keeps the page alive, so use a normal request.
       // `pagehide` above owns the only lifecycle that needs keepalive delivery.
       releaseObservation();
@@ -3466,11 +3558,12 @@ function createProfileLabContent(
 export function createEncoderWorkbenchSurface(
   document_: Document,
   device: EncoderProfileLabDevice,
+  options: EncoderWorkbenchSurfaceOptions = {},
 ): EncoderWorkbenchSurface {
   const surface = createProfileLabContent(document_, {
     connectedEncoders: [device],
     presentation: "product",
-  });
+  }, options.readStoredAssignmentsOnMount === true);
   return {
     content: surface.content,
     updateDevice: (next) => surface.updateConnectedEncoders([next]),

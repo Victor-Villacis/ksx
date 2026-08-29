@@ -12,6 +12,7 @@ import {
   RedesignIsland,
   redesignGhostHeld,
   redesignWire,
+  setRedesignRefresh,
   unparkController,
   type RedesignPayload,
 } from "./RedesignIsland";
@@ -37,7 +38,11 @@ function embeddedPayload<T>(): T | null {
  *  enough until a transplant brings live data. */
 async function refresh(): Promise<boolean> {
   try {
-    const res = await fetch("/api/redesign", { headers: { accept: "application/json" } });
+    // The selected controller rides the URL (the nocturne `?slot=` door),
+    // so a refresh serves the panel the canvas selection is looking at.
+    const slot = new URLSearchParams(window.location.search).get("slot");
+    const url = slot ? `/api/redesign?slot=${encodeURIComponent(slot)}` : "/api/redesign";
+    const res = await fetch(url, { headers: { accept: "application/json" } });
     if (!res.ok) return false;
     applyRedesign((await res.json()) as RedesignPayload);
     return true;
@@ -70,12 +75,16 @@ function wireForms(root: HTMLElement): void {
       form.matches(
         '[data-rd-form="controller-add"], [data-rd-form="controller-move"], ' +
           '[data-rd-form="controller-remove"], [data-rd-form="controller-park"], ' +
-          '[data-rd-form="controller-assign"]',
+          '[data-rd-form="controller-assign"], [data-rd-form="controller-socd"], ' +
+          '[data-rd-form="controller-duplicate"], [data-rd-form="controller-undo"], ' +
+          '[data-rd-form="bind-clear"], [data-rd-form="bind-clear-all"], ' +
+          '[data-rd-form="bind-turbo"], [data-rd-form="bind-toggle"]',
       )
     ) {
       // Park and assign are ONE server transaction each (stash + remove +
-      // compact; restore-or-fresh + seat), so every controller verb rides
-      // the same single-post handler.
+      // compact; restore-or-fresh + seat), and the inspector's re-homed
+      // nocturne verbs are each one shared-core POST — so every controller
+      // verb rides the same single-post handler.
       ev.preventDefault();
       void submitControllerForm(form, root, submitter);
     }
@@ -101,6 +110,13 @@ const MUTATION_SUBMIT_SELECTOR = [
   "controller-remove",
   "controller-park",
   "controller-assign",
+  "controller-socd",
+  "controller-duplicate",
+  "controller-undo",
+  "bind-clear",
+  "bind-clear-all",
+  "bind-turbo",
+  "bind-toggle",
 ]
   .flatMap((kind) => [
     `[data-rd-form="${kind}"] button[type="submit"]`,
@@ -333,6 +349,9 @@ activateIslands({
     const seed = embeddedPayload<RedesignPayload>();
     if (seed) applyRedesign(seed);
     seedRenderedFlash(el);
+    // The island asks for another slot's panel through this (selection →
+    // ?slot merge → refetch) without ever owning fetch.
+    setRedesignRefresh(refresh);
     redesignWire(el);
     wireForms(el);
     window.requestAnimationFrame(() => {

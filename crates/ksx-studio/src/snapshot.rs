@@ -145,10 +145,42 @@ pub struct RedesignControllers {
     /// BEFORE the press. A daemon restart empties it.
     #[serde(default)]
     pub parked_held: Vec<String>,
+    /// Every staged controller's canvas dressing — the SAME
+    /// [`NocturnePadView`] rows `/nocturne`'s widgets clone and dress
+    /// (family, fn→keys callouts, honest mapping availability), from the one
+    /// [`compose_pad_views`] composer.
+    #[serde(default)]
+    pub pads: Vec<NocturnePadView>,
+    /// The selected controller's whole panel — meta words, six bind groups,
+    /// free-control chips, SOCD editor — the SAME [`ControllerPanel`]
+    /// `/nocturne`'s right pane serves, from the one composer.
+    #[serde(default)]
+    pub panel: ControllerPanel,
+    /// The short server-held undo window after a removal (the nocturne
+    /// chip's contract: no browser state, a reload keeps the offer).
+    #[serde(default)]
+    pub undo_cls: String,
+    #[serde(default)]
+    pub undo_label: String,
 }
 
 impl RedesignControllers {
-    pub fn of(staged: &ksx_api::StagedSetupView) -> Self {
+    pub fn of(
+        staged: &ksx_api::StagedSetupView,
+        selected_slot: Option<u8>,
+        undo_label: Option<&str>,
+    ) -> Self {
+        // The nocturne selection rule verbatim: an explicit `?slot=` wins,
+        // otherwise the first staged controller speaks for the pane.
+        let selected = selected_slot
+            .and_then(|number| staged.slots.iter().find(|slot| slot.number == number))
+            .or_else(|| staged.slots.first());
+        let panel = compose_controller_panel(staged, selected, None);
+        let pads = compose_pad_views(staged);
+        let (undo_cls, undo_label) = match undo_label {
+            Some(label) => ("rd-undochip".to_owned(), label.to_owned()),
+            None => ("rd-undochip none".to_owned(), String::new()),
+        };
         let cards = staged
             .slots
             .iter()
@@ -222,6 +254,10 @@ impl RedesignControllers {
             // overlays the held ids (`server/redesign.rs`), the same way the
             // daemon overlays `dirty`/`origin` on the staged view.
             parked_held: Vec::new(),
+            pads,
+            panel,
+            undo_cls,
+            undo_label,
         }
     }
 }
@@ -3054,6 +3090,413 @@ fn nocturne_bind_group(function: &str) -> usize {
     }
 }
 
+/// The selected controller's WHOLE panel — the meta-strip words, the six
+/// bind groups with their free-control chips and counts, the SOCD editor —
+/// composed once for every page that shows a controller. `/nocturne`'s
+/// right pane and `/redesign`'s inspector both serve exactly this struct,
+/// so the two pages cannot disagree about a row, a count, or a class.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControllerPanel {
+    pub slot_val: String,
+    pub pad_badge: String,
+    pub pad_badge_cls: String,
+    pub pad_name: String,
+    pub pad_sub: String,
+    pub bind_title: String,
+    pub bind_foot: String,
+    pub bind_face: Vec<NocturneBindRow>,
+    pub bind_dpad: Vec<NocturneBindRow>,
+    pub bind_shoulders: Vec<NocturneBindRow>,
+    pub bind_lstick: Vec<NocturneBindRow>,
+    pub bind_rstick: Vec<NocturneBindRow>,
+    pub bind_system: Vec<NocturneBindRow>,
+    pub avail_face: Vec<NocturneCtlChip>,
+    pub avail_dpad: Vec<NocturneCtlChip>,
+    pub avail_shoulders: Vec<NocturneCtlChip>,
+    pub avail_lstick: Vec<NocturneCtlChip>,
+    pub avail_rstick: Vec<NocturneCtlChip>,
+    pub avail_system: Vec<NocturneCtlChip>,
+    pub bind_face_n: String,
+    pub bind_dpad_n: String,
+    pub bind_shoulders_n: String,
+    pub bind_lstick_n: String,
+    pub bind_rstick_n: String,
+    pub bind_system_n: String,
+    pub bind_face_cls: String,
+    pub bind_dpad_cls: String,
+    pub bind_shoulders_cls: String,
+    pub bind_lstick_cls: String,
+    pub bind_rstick_cls: String,
+    pub bind_system_cls: String,
+    pub bind_g_cls: String,
+    pub socd_cls: String,
+    pub socd_num: String,
+    pub socd_lab: String,
+    pub socd_edit_opts: Vec<NocturneOptionRow>,
+}
+
+pub(crate) fn compose_controller_panel(
+    staged: &ksx_api::StagedSetupView,
+    selected: Option<&ksx_api::StagedSlotView>,
+    q: Option<&str>,
+) -> ControllerPanel {
+    let selected_number = selected.map(|slot| slot.number);
+    // The selected slot's opposite-directions editor. Hidden when nothing is
+    // staged — and when the daemon serves no policy roster, because a select
+    // of names the engine never listed would be an invented value.
+    let socd_editable =
+        staged.reachable && selected.is_some() && !staged.socd_options.is_empty();
+    let socd_cls = if socd_editable {
+        "n-socdform".to_owned()
+    } else {
+        "n-socdform none".to_owned()
+    };
+    let socd_num = if socd_editable {
+        selected_number.map(|n| n.to_string()).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let socd_lab = if socd_editable {
+        selected
+            .map(|slot| format!("Opposites — P{}", slot.number))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let socd_edit_opts: Vec<NocturneOptionRow> = if socd_editable {
+        staged
+            .socd_options
+            .iter()
+            .map(|option| NocturneOptionRow {
+                value: option.name.clone(),
+                label: option.title.clone(),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    // The selected slot's ramp digit, worn by the meta badge and the pane's
+    // dots (the keyboard's tint stays with the board composer).
+    let pad_badge_cls = match selected_number {
+        Some(digit) => format!("n-pbadge np{digit}"),
+        None => "n-pbadge".to_owned(),
+    };
+    let slot_val = selected_number.map(|n| n.to_string()).unwrap_or_default();
+    let (pad_badge, pad_name, pad_sub) = match selected {
+        Some(slot) => (
+            format!("P{}", slot.number),
+            slot.persona_label.clone(),
+            format!("\"{}\" preset · SOCD {}", slot.preset, slot.socd_label),
+        ),
+        None => (String::new(), String::new(), String::new()),
+    };
+    let binds = workspace_bind_rows(staged, selected);
+    // The pane groups its rows the way the physical controller is
+    // organised — face cluster, D-pad, shoulders & triggers, each
+    // stick, system — so a row is found where a hand would find the
+    // control. Six served lists (a list body is one flat template; the
+    // group headers live in the island markup over these).
+    let mut bind_groups: [Vec<NocturneBindRow>; 6] = Default::default();
+    let mut avail_groups: [Vec<NocturneCtlChip>; 6] = Default::default();
+    let mut bind_bound = [0usize; 6];
+    for row in &binds.rows {
+        // The mapper's own unbound placeholder (`key_tag`).
+        let bound = row.keys != "—";
+        let group = nocturne_bind_group(&row.function);
+        if !bound {
+            // A free control is a CHIP, not a row: its whole story is
+            // "available" — click it to give it a key.
+            avail_groups[group].push(NocturneCtlChip {
+                function: row.function.clone(),
+                label: row.label.clone(),
+                cls: "n-ctlchip".to_owned(),
+            });
+            continue;
+        }
+        bind_bound[group] += 1;
+        bind_groups[group].push(NocturneBindRow {
+            function: row.function.clone(),
+            label: row.label.clone(),
+            chip: if bound {
+                row.keys.clone()
+            } else {
+                "Unbound".to_owned()
+            },
+            note: row.share_note.clone(),
+            chip_title: if bound {
+                format!(
+                    "Driven by {} — click, then press a new key to replace",
+                    row.keys.replace(" · ", " or ")
+                )
+            } else {
+                "Not bound — click, then press a key".to_owned()
+            },
+            badge: {
+                let mut parts: Vec<String> = Vec::new();
+                if row.toggle {
+                    parts.push("Toggle".to_owned());
+                }
+                if !row.turbo_hz.is_empty() {
+                    parts.push(format!("{}/s", row.turbo_hz));
+                }
+                parts.join(" · ")
+            },
+            badge_cls: if row.toggle || !row.turbo_hz.is_empty() {
+                "n-rowbadge".to_owned()
+            } else {
+                "n-rowbadge none".to_owned()
+            },
+            add_cls: if bound {
+                "n-addchip".to_owned()
+            } else {
+                "n-addchip none".to_owned()
+            },
+            cls: if bound {
+                "n-bind on".to_owned()
+            } else {
+                "n-bind".to_owned()
+            },
+            chip_cls: match (bound, row.share_note.is_empty()) {
+                (true, true) => "n-keychip".to_owned(),
+                // The ONE shared-key signal, the board's dashed ring.
+                (true, false) => "n-keychip shared".to_owned(),
+                (false, _) => "n-keychip ghost".to_owned(),
+            },
+            minus_cls: if bound && row.keys.contains(" · ") {
+                "n-minus".to_owned()
+            } else {
+                "n-minus none".to_owned()
+            },
+            clear_cls: if bound {
+                "n-rowclear".to_owned()
+            } else {
+                "n-rowclear none".to_owned()
+            },
+            slot: row.slot.clone(),
+            turbo: row.turbo_hz.clone(),
+            hold_cls: if row.toggle {
+                "n-bpill".to_owned()
+            } else {
+                "n-bpill on".to_owned()
+            },
+            tog_cls: if row.toggle {
+                "n-bpill on".to_owned()
+            } else {
+                "n-bpill".to_owned()
+            },
+        });
+    }
+    // Within a group the rows read in the canonical spoken order (A B X
+    // Y; LB RB LT RT) rather than the zone table's diamond geometry — a
+    // LIST is scanned by name, not by position on the pad.
+    for (group, order) in [
+        (0usize, ["a", "b", "x", "y"]),
+        (2, ["lb", "rb", "lt", "rt"]),
+    ] {
+        bind_groups[group].sort_by_key(|row| {
+            order
+                .iter()
+                .position(|f| row.function.eq_ignore_ascii_case(f))
+                .unwrap_or(usize::MAX)
+        });
+    }
+    // The `?q=` filter, SERVER-resolved: a row matches on its own label
+    // or its group's ("stick" keeps both stick clusters), and a group
+    // whose rows are all hidden hides whole. The island's sweep applies
+    // the SAME rule imperatively — the two must not drift, which is why
+    // both read these exact labels.
+    let query =
+        q
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+            .map(str::to_lowercase);
+    let mut bind_group_cls: [String; 6] = std::array::from_fn(|_| "n-bindg".to_owned());
+    if let Some(query) = query.as_deref() {
+        for group in 0..6 {
+            let gmatch = NOCTURNE_BIND_GROUP_LABELS[group]
+                .to_lowercase()
+                .contains(query);
+            let mut visible = 0usize;
+            for row in bind_groups[group].iter_mut() {
+                if gmatch || row.label.to_lowercase().contains(query) {
+                    visible += 1;
+                } else {
+                    row.cls.push_str(" hide");
+                }
+            }
+            for chip in avail_groups[group].iter_mut() {
+                if gmatch || chip.label.to_lowercase().contains(query) {
+                    visible += 1;
+                } else {
+                    chip.cls.push_str(" hide");
+                }
+            }
+            if visible == 0
+                && !(bind_groups[group].is_empty() && avail_groups[group].is_empty())
+            {
+                bind_group_cls[group] = "n-bindg empty".to_owned();
+            }
+        }
+    }
+    let [bind_face_cls, bind_dpad_cls, bind_shoulders_cls, bind_lstick_cls, bind_rstick_cls, bind_system_cls] =
+        bind_group_cls;
+    let bind_heads: Vec<String> = bind_groups
+        .iter()
+        .zip(avail_groups.iter())
+        .zip(bind_bound)
+        .map(|((rows, avail), bound)| {
+            let total = rows.len() + avail.len();
+            if total == 0 {
+                String::new()
+            } else if bound == 0 {
+                "none bound".to_owned()
+            } else {
+                format!("{bound} of {total} bound")
+            }
+        })
+        .collect();
+    let bind_g_cls = if binds.rows.is_empty() {
+        "n-bindgroups none".to_owned()
+    } else {
+        match selected.map(|slot| slot.number) {
+            Some(digit) => format!("n-bindgroups np{digit}"),
+            None => "n-bindgroups".to_owned(),
+        }
+    };
+    let [bind_face, bind_dpad, bind_shoulders, bind_lstick, bind_rstick, bind_system] =
+        bind_groups;
+    let [avail_face, avail_dpad, avail_shoulders, avail_lstick, avail_rstick, avail_system] =
+        avail_groups;
+    let [bind_face_n, bind_dpad_n, bind_shoulders_n, bind_lstick_n, bind_rstick_n, bind_system_n]: [String; 6] =
+        bind_heads.try_into().expect("six groups");
+    ControllerPanel {
+        slot_val,
+        pad_badge,
+        pad_badge_cls,
+        pad_name,
+        pad_sub,
+        bind_title: binds.title,
+        bind_foot: binds.foot,
+        bind_face,
+        bind_dpad,
+        bind_shoulders,
+        bind_lstick,
+        bind_rstick,
+        bind_system,
+        avail_face,
+        avail_dpad,
+        avail_shoulders,
+        avail_lstick,
+        avail_rstick,
+        avail_system,
+        bind_face_n,
+        bind_dpad_n,
+        bind_shoulders_n,
+        bind_lstick_n,
+        bind_rstick_n,
+        bind_system_n,
+        bind_face_cls,
+        bind_dpad_cls,
+        bind_shoulders_cls,
+        bind_lstick_cls,
+        bind_rstick_cls,
+        bind_system_cls,
+        bind_g_cls,
+        socd_cls,
+        socd_num,
+        socd_lab,
+        socd_edit_opts,
+    }
+}
+
+/// Every staged controller as the canvas widget's dressing — slot, family
+/// (the ONE server-side art decision), preset identity, the fn→keys callout
+/// table and the authoring/macro projections. Composed once for every page
+/// that mounts pad widgets (`/nocturne` and `/redesign`).
+pub(crate) fn compose_pad_views(staged: &ksx_api::StagedSetupView) -> Vec<NocturnePadView> {
+    let keyboard_name = staged
+        .device
+        .as_ref()
+        .map(|device| device.label.as_str())
+        .unwrap_or("(none)");
+    staged
+        .slots
+        .iter()
+        .map(|slot| {
+            let mut fn_keys = std::collections::BTreeMap::new();
+            let mut mapping_available = true;
+            let mut mapping_reason = String::new();
+            let mapper = match ksx_api::staged_mapper_slot(slot, keyboard_name) {
+                Ok(mapper) => Some(mapper),
+                Err(refusal) => {
+                    mapping_available = false;
+                    mapping_reason = refusal.message;
+                    None
+                }
+            };
+            if let Some(m) = mapper.as_ref() {
+                for (fn_name, keys) in &m.bindings {
+                    if !keys.is_empty() {
+                        fn_keys.insert(fn_name.clone(), keys.join(" · "));
+                    }
+                }
+            }
+            let controls = mapper
+                .as_ref()
+                .map(|mapper| nocturne_control_authoring(&slot.persona, mapper))
+                .unwrap_or_default();
+            let fn_names = crate::render_map::zones_for(&slot.persona)
+                .iter()
+                .map(|zone| {
+                    (
+                        zone.fn_name.to_owned(),
+                        crate::render_map::legend_label_for_persona(&slot.persona, zone),
+                    )
+                })
+                .collect();
+            let macro_snapshot = ksx_api::staged_macro_snapshot(slot);
+            let macros = macro_snapshot
+                .macros
+                .iter()
+                .map(|mac| NocturneMacroFlow {
+                    name: mac.name.clone(),
+                    triggers: mac.triggers.clone(),
+                    outputs: nocturne_macro_outputs(mac),
+                    timeline: mac
+                        .steps
+                        .iter()
+                        .map(|step| {
+                            crate::render_map::hold_text_for_persona(&slot.persona, &step.hold)
+                        })
+                        .collect(),
+                    meta: nocturne_macro_meta(mac),
+                    disabled: mac.disabled,
+                    edit_href: format!(
+                        "/nocturne?slot={}&macro={}",
+                        slot.number,
+                        crate::render_map::urlencode_value(&mac.name)
+                    ),
+                })
+                .collect();
+            NocturnePadView {
+                slot: slot.number,
+                target_revision: slot.target_revision.clone(),
+                family: pad_art_family(Some(slot.persona.as_str())).to_owned(),
+                preset: slot.preset.clone(),
+                title: format!("{} — \"{}\" preset", slot.persona_label, slot.preset),
+                fn_keys,
+                mapping_available,
+                mapping_reason,
+                controls,
+                fn_names,
+                macros,
+                macro_available: macro_snapshot.available,
+                macro_reason: macro_snapshot.reason,
+            }
+        })
+        .collect()
+}
+
 /// A human-scannable order independent of the art tables' drawing order.
 /// The tables remain the source of which controls and persona labels exist;
 /// this rank only normalizes those controls into face, D-pad, shoulders,
@@ -3849,55 +4292,55 @@ impl NocturneDerived {
                     })
                     .collect()
             };
-        // The selected slot's opposite-directions editor, under the rack.
-        // Hidden when nothing is staged — and when the daemon serves no
-        // policy roster, because a select of names the engine never listed
-        // would be an invented value.
-        let socd_editable =
-            staged.reachable && selected.is_some() && !staged.socd_options.is_empty();
-        let socd_cls = if socd_editable {
-            "n-socdform".to_owned()
-        } else {
-            "n-socdform none".to_owned()
-        };
-        let socd_num = if socd_editable {
-            selected_number.map(|n| n.to_string()).unwrap_or_default()
-        } else {
-            String::new()
-        };
-        let socd_lab = if socd_editable {
-            selected
-                .map(|slot| format!("Opposites — P{}", slot.number))
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-        let socd_edit_opts: Vec<NocturneOptionRow> = if socd_editable {
-            staged
-                .socd_options
-                .iter()
-                .map(|option| NocturneOptionRow {
-                    value: option.name.clone(),
-                    label: option.title.clone(),
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        // The selected slot's ramp digit, worn by every surface that speaks
-        // for it: the meta badge, the board's bound-cap tint, and the
-        // binding pane's dots.
+        // The meta strip, SOCD editor and the whole six-group binding pane
+        // come from the ONE shared controller-panel composer — the redesign
+        // inspector serves the same struct, so the two pages cannot disagree
+        // about a row (`compose_controller_panel`'s doc).
+        let ControllerPanel {
+            slot_val,
+            pad_badge,
+            pad_badge_cls,
+            pad_name,
+            pad_sub,
+            bind_title,
+            bind_foot,
+            bind_face,
+            bind_dpad,
+            bind_shoulders,
+            bind_lstick,
+            bind_rstick,
+            bind_system,
+            avail_face,
+            avail_dpad,
+            avail_shoulders,
+            avail_lstick,
+            avail_rstick,
+            avail_system,
+            bind_face_n,
+            bind_dpad_n,
+            bind_shoulders_n,
+            bind_lstick_n,
+            bind_rstick_n,
+            bind_system_n,
+            bind_face_cls,
+            bind_dpad_cls,
+            bind_shoulders_cls,
+            bind_lstick_cls,
+            bind_rstick_cls,
+            bind_system_cls,
+            bind_g_cls,
+            socd_cls,
+            socd_num,
+            socd_lab,
+            socd_edit_opts,
+        } = compose_controller_panel(staged, selected, p.q.as_deref());
+        // The selected slot's ramp digit for the BOARD's bound-cap tint (the
+        // badge and pane wear theirs inside the shared panel).
         let ramp = selected.map(|slot| slot.number);
-        let pad_badge_cls = match ramp {
-            Some(digit) => format!("n-pbadge np{digit}"),
-            None => "n-pbadge".to_owned(),
-        };
         let kb_cls = match ramp {
             Some(digit) => format!("n-kb np{digit}"),
             None => "n-kb".to_owned(),
         };
-        let slot_val = selected_number.map(|n| n.to_string()).unwrap_or_default();
         let (undo_cls, undo_label) = match p.undo_label.as_ref() {
             Some(label) => ("n-undochip".to_owned(), label.clone()),
             None => ("n-undochip none".to_owned(), String::new()),
@@ -3908,14 +4351,6 @@ impl NocturneDerived {
             "Running".to_owned()
         } else {
             String::new()
-        };
-        let (pad_badge, pad_name, pad_sub) = match selected {
-            Some(slot) => (
-                format!("P{}", slot.number),
-                slot.persona_label.clone(),
-                format!("\"{}\" preset · SOCD {}", slot.preset, slot.socd_label),
-            ),
-            None => (String::new(), String::new(), String::new()),
         };
         // Which vendored silhouette the no-JS page draws — the selected
         // slot's OWN family (the workspace's `pad_ps` rule), so a
@@ -4074,82 +4509,7 @@ impl NocturneDerived {
         };
         // The multi-pad grid's data: every staged controller, its family,
         // its callout chips and its readable control names.
-        let pads: Vec<NocturnePadView> = staged
-            .slots
-            .iter()
-            .map(|slot| {
-                let mut fn_keys = std::collections::BTreeMap::new();
-                let mut mapping_available = true;
-                let mut mapping_reason = String::new();
-                let mapper = match ksx_api::staged_mapper_slot(slot, keyboard_name) {
-                    Ok(mapper) => Some(mapper),
-                    Err(refusal) => {
-                        mapping_available = false;
-                        mapping_reason = refusal.message;
-                        None
-                    }
-                };
-                if let Some(m) = mapper.as_ref() {
-                    for (fn_name, keys) in &m.bindings {
-                        if !keys.is_empty() {
-                            fn_keys.insert(fn_name.clone(), keys.join(" · "));
-                        }
-                    }
-                }
-                let controls = mapper
-                    .as_ref()
-                    .map(|mapper| nocturne_control_authoring(&slot.persona, mapper))
-                    .unwrap_or_default();
-                let fn_names = crate::render_map::zones_for(&slot.persona)
-                    .iter()
-                    .map(|zone| {
-                        (
-                            zone.fn_name.to_owned(),
-                            crate::render_map::legend_label_for_persona(&slot.persona, zone),
-                        )
-                    })
-                    .collect();
-                let macro_snapshot = ksx_api::staged_macro_snapshot(slot);
-                let macros = macro_snapshot
-                    .macros
-                    .iter()
-                    .map(|mac| NocturneMacroFlow {
-                        name: mac.name.clone(),
-                        triggers: mac.triggers.clone(),
-                        outputs: nocturne_macro_outputs(mac),
-                        timeline: mac
-                            .steps
-                            .iter()
-                            .map(|step| {
-                                crate::render_map::hold_text_for_persona(&slot.persona, &step.hold)
-                            })
-                            .collect(),
-                        meta: nocturne_macro_meta(mac),
-                        disabled: mac.disabled,
-                        edit_href: format!(
-                            "/nocturne?slot={}&macro={}",
-                            slot.number,
-                            crate::render_map::urlencode_value(&mac.name)
-                        ),
-                    })
-                    .collect();
-                NocturnePadView {
-                    slot: slot.number,
-                    target_revision: slot.target_revision.clone(),
-                    family: pad_art_family(Some(slot.persona.as_str())).to_owned(),
-                    preset: slot.preset.clone(),
-                    title: format!("{} — \"{}\" preset", slot.persona_label, slot.preset),
-                    fn_keys,
-                    mapping_available,
-                    mapping_reason,
-                    controls,
-                    fn_names,
-                    macros,
-                    macro_available: macro_snapshot.available,
-                    macro_reason: macro_snapshot.reason,
-                }
-            })
-            .collect();
+        let pads = compose_pad_views(staged);
         let persona = selected
             .map(|slot| slot.persona.as_str())
             .unwrap_or("xbox360");
@@ -4633,186 +4993,6 @@ impl NocturneDerived {
             "n-capform none".to_owned()
         };
 
-        let binds = workspace_bind_rows(staged, selected);
-        // The pane groups its rows the way the physical controller is
-        // organised — face cluster, D-pad, shoulders & triggers, each
-        // stick, system — so a row is found where a hand would find the
-        // control. Six served lists (a list body is one flat template; the
-        // group headers live in the island markup over these).
-        let mut bind_groups: [Vec<NocturneBindRow>; 6] = Default::default();
-        let mut avail_groups: [Vec<NocturneCtlChip>; 6] = Default::default();
-        let mut bind_bound = [0usize; 6];
-        for row in &binds.rows {
-            // The mapper's own unbound placeholder (`key_tag`).
-            let bound = row.keys != "—";
-            let group = nocturne_bind_group(&row.function);
-            if !bound {
-                // A free control is a CHIP, not a row: its whole story is
-                // "available" — click it to give it a key.
-                avail_groups[group].push(NocturneCtlChip {
-                    function: row.function.clone(),
-                    label: row.label.clone(),
-                    cls: "n-ctlchip".to_owned(),
-                });
-                continue;
-            }
-            bind_bound[group] += 1;
-            bind_groups[group].push(NocturneBindRow {
-                function: row.function.clone(),
-                label: row.label.clone(),
-                chip: if bound {
-                    row.keys.clone()
-                } else {
-                    "Unbound".to_owned()
-                },
-                note: row.share_note.clone(),
-                chip_title: if bound {
-                    format!(
-                        "Driven by {} — click, then press a new key to replace",
-                        row.keys.replace(" · ", " or ")
-                    )
-                } else {
-                    "Not bound — click, then press a key".to_owned()
-                },
-                badge: {
-                    let mut parts: Vec<String> = Vec::new();
-                    if row.toggle {
-                        parts.push("Toggle".to_owned());
-                    }
-                    if !row.turbo_hz.is_empty() {
-                        parts.push(format!("{}/s", row.turbo_hz));
-                    }
-                    parts.join(" · ")
-                },
-                badge_cls: if row.toggle || !row.turbo_hz.is_empty() {
-                    "n-rowbadge".to_owned()
-                } else {
-                    "n-rowbadge none".to_owned()
-                },
-                add_cls: if bound {
-                    "n-addchip".to_owned()
-                } else {
-                    "n-addchip none".to_owned()
-                },
-                cls: if bound {
-                    "n-bind on".to_owned()
-                } else {
-                    "n-bind".to_owned()
-                },
-                chip_cls: match (bound, row.share_note.is_empty()) {
-                    (true, true) => "n-keychip".to_owned(),
-                    // The ONE shared-key signal, the board's dashed ring.
-                    (true, false) => "n-keychip shared".to_owned(),
-                    (false, _) => "n-keychip ghost".to_owned(),
-                },
-                minus_cls: if bound && row.keys.contains(" · ") {
-                    "n-minus".to_owned()
-                } else {
-                    "n-minus none".to_owned()
-                },
-                clear_cls: if bound {
-                    "n-rowclear".to_owned()
-                } else {
-                    "n-rowclear none".to_owned()
-                },
-                slot: row.slot.clone(),
-                turbo: row.turbo_hz.clone(),
-                hold_cls: if row.toggle {
-                    "n-bpill".to_owned()
-                } else {
-                    "n-bpill on".to_owned()
-                },
-                tog_cls: if row.toggle {
-                    "n-bpill on".to_owned()
-                } else {
-                    "n-bpill".to_owned()
-                },
-            });
-        }
-        // Within a group the rows read in the canonical spoken order (A B X
-        // Y; LB RB LT RT) rather than the zone table's diamond geometry — a
-        // LIST is scanned by name, not by position on the pad.
-        for (group, order) in [
-            (0usize, ["a", "b", "x", "y"]),
-            (2, ["lb", "rb", "lt", "rt"]),
-        ] {
-            bind_groups[group].sort_by_key(|row| {
-                order
-                    .iter()
-                    .position(|f| row.function.eq_ignore_ascii_case(f))
-                    .unwrap_or(usize::MAX)
-            });
-        }
-        // The `?q=` filter, SERVER-resolved: a row matches on its own label
-        // or its group's ("stick" keeps both stick clusters), and a group
-        // whose rows are all hidden hides whole. The island's sweep applies
-        // the SAME rule imperatively — the two must not drift, which is why
-        // both read these exact labels.
-        let query =
-            p.q.as_deref()
-                .map(str::trim)
-                .filter(|q| !q.is_empty())
-                .map(str::to_lowercase);
-        let mut bind_group_cls: [String; 6] = std::array::from_fn(|_| "n-bindg".to_owned());
-        if let Some(query) = query.as_deref() {
-            for group in 0..6 {
-                let gmatch = NOCTURNE_BIND_GROUP_LABELS[group]
-                    .to_lowercase()
-                    .contains(query);
-                let mut visible = 0usize;
-                for row in bind_groups[group].iter_mut() {
-                    if gmatch || row.label.to_lowercase().contains(query) {
-                        visible += 1;
-                    } else {
-                        row.cls.push_str(" hide");
-                    }
-                }
-                for chip in avail_groups[group].iter_mut() {
-                    if gmatch || chip.label.to_lowercase().contains(query) {
-                        visible += 1;
-                    } else {
-                        chip.cls.push_str(" hide");
-                    }
-                }
-                if visible == 0
-                    && !(bind_groups[group].is_empty() && avail_groups[group].is_empty())
-                {
-                    bind_group_cls[group] = "n-bindg empty".to_owned();
-                }
-            }
-        }
-        let [bind_face_cls, bind_dpad_cls, bind_shoulders_cls, bind_lstick_cls, bind_rstick_cls, bind_system_cls] =
-            bind_group_cls;
-        let bind_heads: Vec<String> = bind_groups
-            .iter()
-            .zip(avail_groups.iter())
-            .zip(bind_bound)
-            .map(|((rows, avail), bound)| {
-                let total = rows.len() + avail.len();
-                if total == 0 {
-                    String::new()
-                } else if bound == 0 {
-                    "none bound".to_owned()
-                } else {
-                    format!("{bound} of {total} bound")
-                }
-            })
-            .collect();
-        let bind_g_cls = if binds.rows.is_empty() {
-            "n-bindgroups none".to_owned()
-        } else {
-            match selected.map(|slot| slot.number) {
-                Some(digit) => format!("n-bindgroups np{digit}"),
-                None => "n-bindgroups".to_owned(),
-            }
-        };
-        let [bind_face, bind_dpad, bind_shoulders, bind_lstick, bind_rstick, bind_system] =
-            bind_groups;
-        let [avail_face, avail_dpad, avail_shoulders, avail_lstick, avail_rstick, avail_system] =
-            avail_groups;
-        let [bind_face_n, bind_dpad_n, bind_shoulders_n, bind_lstick_n, bind_rstick_n, bind_system_n]: [String; 6] =
-            bind_heads.try_into().expect("six groups");
-
         // ── The selected slot's macros: lifecycle rows off the SAME staged
         // authoring the mapper reads. Step editing stays on Controls until
         // its own pass, and the rows say so with a link, not a pretence.
@@ -5025,7 +5205,7 @@ impl NocturneDerived {
             pad_ps5_cls,
             pad_switchpro_cls,
             pad_xboxseries_cls,
-            bind_title: binds.title,
+            bind_title,
             journey,
             journey_line,
             bind_face,
@@ -5048,7 +5228,7 @@ impl NocturneDerived {
             bind_system_cls,
             slot_val,
             bind_g_cls,
-            bind_foot: binds.foot,
+            bind_foot,
             macros_head,
             macro_rows,
             macros_note,

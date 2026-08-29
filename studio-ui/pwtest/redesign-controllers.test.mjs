@@ -144,15 +144,36 @@ describe("the controller workbench", () => {
       /no XInput slot/,
       "the PlayStation slot says it takes none of the four",
     );
-    // The REAL silhouettes, per the served total record: the Xbox slot
-    // wears the Xbox body, the PlayStation slot the DS4 body.
+    // The REAL silhouettes: each card CLONES the shared hidden master for
+    // its served family (nocturne's widget mechanism — five masters, one
+    // drawing each), and the clone's callouts are dressed from the slot's
+    // OWN served fn→keys table.
     assert.equal(
-      await page.locator(`${cardSel(1)} img.rd-ctrlcard-art`).getAttribute("src"),
-      "/_assets/pad-xbox.svg",
+      await page.locator(".n-padmasters .n-padwrap").count(),
+      5,
+      "the five shared masters are mounted as clone templates",
     );
     assert.equal(
-      await page.locator(`${cardSel(2)} img.rd-ctrlcard-art`).getAttribute("src"),
-      "/_assets/pad-ds4.svg",
+      await page.locator(`${cardSel(1)} svg.wspad.x360a`).count(),
+      1,
+      "the Xbox slot wears the Xbox 360 clone",
+    );
+    assert.equal(
+      await page.locator(`${cardSel(2)} svg.ds4premium`).count(),
+      1,
+      "the PlayStation slot wears the DS4 premium clone",
+    );
+    const callouts = await page
+      .locator(`${cardSel(1)} text.n-fnkey`)
+      .evaluateAll((nodes) => nodes.map((n) => n.textContent).filter(Boolean));
+    assert.ok(
+      callouts.length > 0,
+      "the fixture layout's bindings dress the clone's callouts",
+    );
+    assert.equal(
+      await page.locator(`${cardSel(2)} .n-ds4-variant`).count(),
+      4,
+      "the DS4 finish swatches ride the card head (the shared padFinishes store)",
     );
     // Direct assignment, not spatial arrows: each card wears a Player
     // select at its own position, with a "No player" park option — and no
@@ -324,10 +345,15 @@ describe("the controller workbench", () => {
     );
     // The clicks above selected cards, and selection opens the Inspector —
     // which overlays the canvas's right edge where the ghost parked. Close
-    // it the way a user would before pressing the ghost's own ✕.
+    // it the way a user would before pressing the ghost's own ✕, and frame
+    // the world: the pad-sized cards (440-wide, the real silhouettes) home
+    // onto a larger grid than the old text mocks, so a fresh ghost can
+    // mount outside the current camera.
     if (await page.locator(".rd-inspector:not([hidden])").count()) {
       await page.locator('[data-nx="rd-insp-close"]').click();
     }
+    await page.click('[data-nx="canvas-fit"]');
+    await page.waitForTimeout(500);
     await page.click(`${ghost} [data-nx="rd-ctrl-discard"]`);
     await page.waitForFunction(
       () =>
@@ -343,6 +369,127 @@ describe("the controller workbench", () => {
         .count(),
       1,
       "discarding a ghost stages nothing",
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("selecting a card serves ITS panel; the row verbs edit the draft; ✕ offers the undo", async () => {
+    const page = await openBench();
+    await page.waitForFunction(
+      (sel) => document.querySelector(sel)?.dataset.canvasX !== undefined,
+      cardSel(1),
+      { timeout: 20_000 },
+    );
+    const flashIs = (want) =>
+      page.waitForFunction(
+        (text) => document.querySelector(".rd-flash")?.textContent?.startsWith(text),
+        want,
+        { timeout: 20_000 },
+      );
+
+    // Frame the world first: earlier tests in this shared-fixture suite
+    // left the camera where THEIR gestures ended, and a canvas item outside
+    // the viewport cannot be clicked (the engine transforms, nothing
+    // scrolls). The pill's Fit verb needs no focus scope, unlike the "1"
+    // shortcut.
+    await page.click('[data-nx="canvas-fit"]');
+    await page.waitForTimeout(600);
+    // Selecting the card opens the inspector with the transplanted nocturne
+    // panel — six groups, the meta strip, the SOCD editor — and the slot
+    // rides the URL (the nocturne selection door), so a reload keeps it.
+    await page.click(`${cardSel(1)} .rd-ctrlcard-slot`);
+    await page.waitForFunction(
+      () => document.querySelectorAll(".rd-insp-body .n-bindg-head").length === 6,
+      null,
+      { timeout: 20_000 },
+    );
+    assert.equal(
+      await page.evaluate(() => new URLSearchParams(window.location.search).get("slot")),
+      "1",
+    );
+    assert.equal(
+      (await page.locator(".rd-insp-body .n-socd-lab").textContent())?.trim(),
+      "Opposites — P1",
+    );
+    const boundRows = page.locator(".rd-insp-body details.n-bind.on");
+    assert.ok((await boundRows.count()) > 0, "the layout bound rows to edit");
+    const fn = await boundRows.first().getAttribute("data-fn");
+    const row = () => page.locator(`.rd-insp-body details.n-bind[data-fn="${fn}"]`);
+
+    // Press behaviour: the row's Toggle pill is a REAL form twin of the
+    // re-homed verb — the outcome is nocturne's sentence, and the repaint
+    // shows the latch on the row badge.
+    await row().locator(".n-bind-label").click();
+    await row().locator('button[title="A press holds until the next press"]').click();
+    await flashIs("Press behaviour updated.");
+    await page.waitForFunction(
+      (fnName) =>
+        document
+          .querySelector(`.rd-insp-body details.n-bind[data-fn="${fnName}"] .n-rowbadge`)
+          ?.textContent?.includes("Toggle"),
+      fn,
+      { timeout: 20_000 },
+    );
+
+    // Auto-fire: a preset rate lands and joins the badge.
+    await row().locator(".n-bind-label").click();
+    await row().locator('button[title="Standard — 10 presses a second"]').click();
+    await flashIs("Auto-fire updated");
+    await page.waitForFunction(
+      (fnName) =>
+        document
+          .querySelector(`.rd-insp-body details.n-bind[data-fn="${fnName}"] .n-rowbadge`)
+          ?.textContent?.includes("10/s"),
+      fn,
+      { timeout: 20_000 },
+    );
+
+    // The row's own ✕: back to unbound — the row leaves the bound list and
+    // the control reappears as a free chip in its group's strip.
+    await row().locator('button[aria-label="Unbind this control"]').click();
+    await flashIs("Draft updated.");
+    await page.waitForFunction(
+      (fnName) =>
+        !document.querySelector(`.rd-insp-body details.n-bind[data-fn="${fnName}"]`) &&
+        Boolean(document.querySelector(`.rd-insp-body .n-ctlstrip [data-fn="${fnName}"]`)),
+      fn,
+      { timeout: 20_000 },
+    );
+
+    // The opposite-directions editor writes through the served roster.
+    const socdValue = await page
+      .locator(".rd-insp-body .n-socd-sel option")
+      .last()
+      .getAttribute("value");
+    await page.selectOption(".rd-insp-body .n-socd-sel", socdValue);
+    await page.locator(".rd-insp-body .n-socd-set").click();
+    await flashIs("Draft updated.");
+
+    // ✕ remove offers the server-held undo; Undo restores the controller
+    // with its bindings (nocturne's chip contract on this page's stash).
+    await page.locator(`${cardSel(1)} .rd-ctrlverb-danger`).click();
+    await page.waitForFunction(
+      () => {
+        const chip = document.querySelector("form.rd-undochip");
+        return chip && !chip.classList.contains("none");
+      },
+      null,
+      { timeout: 20_000 },
+    );
+    assert.match(
+      (await page.locator("form.rd-undochip .n-undo-lab").textContent()) ?? "",
+      /removed/,
+    );
+    await page.locator("form.rd-undochip .n-undo-btn").click();
+    await flashIs("Controller restored with its bindings.");
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll('.forma-canvas-stage [data-instance-id^="ctrl-slot-"]')
+          .length === 1 &&
+        document.querySelector("form.rd-undochip")?.classList.contains("none"),
+      null,
+      { timeout: 20_000 },
     );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();

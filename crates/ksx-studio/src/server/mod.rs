@@ -138,6 +138,11 @@ struct AppState {
     /// versa). In-memory like the undo — a daemon restart forgets parks,
     /// and the page says so on the ghost (`server/redesign.rs`).
     redesign_parked: std::sync::Mutex<Vec<(String, ksx_api::StagedSlotView)>>,
+    /// The redesign workbench's own removal-undo stash — the same
+    /// server-held six-second window as `nocturne_undo`, kept SEPARATE so
+    /// the two pages' chips cannot consume each other's resurrection
+    /// material.
+    redesign_undo: std::sync::Mutex<Option<nocturne::NocturneUndoStash>>,
     /// The machine-read cache: the poller asks every 2 s, but a USB tree
     /// enumeration and three TOML parses per poll is work the machine did
     /// not ask for. TTL-bounded, invalidated by every mutating request and
@@ -344,6 +349,7 @@ pub fn serve(
         live,
         nocturne_undo: std::sync::Mutex::new(None),
         redesign_parked: std::sync::Mutex::new(Vec::new()),
+        redesign_undo: std::sync::Mutex::new(None),
         machine_cache: MachineCache::new(),
     });
 
@@ -516,6 +522,16 @@ pub fn serve(
                 "/redesign/controller/assign",
                 post(redesign_form_ctrl_assign),
             )
+            .route("/redesign/controller/socd", post(redesign_form_ctrl_socd))
+            .route(
+                "/redesign/controller/duplicate",
+                post(redesign_form_ctrl_duplicate),
+            )
+            .route("/redesign/controller/undo", post(redesign_form_ctrl_undo))
+            .route("/redesign/bind/clear", post(redesign_form_bind_clear))
+            .route("/redesign/bind/clear-all", post(redesign_form_clear_all))
+            .route("/redesign/bind/turbo", post(redesign_form_bind_turbo))
+            .route("/redesign/bind/toggle", post(redesign_form_bind_toggle))
             // ── THE LIVE FEED ─────────────────────────────────────────────
             // One route, and it is the keystone the button check stands on:
             // the daemon's input fan-out as Server-Sent Events. Read-only and

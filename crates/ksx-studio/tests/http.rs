@@ -4845,6 +4845,13 @@ fn the_profiles_write_routes_refuse_a_cross_site_post() {
             "/redesign/controller/assign",
             "ghost=g-sweep&position=1&persona=xbox360&preset=Player+1&layout=keyboard-2p",
         ),
+        ("/redesign/controller/socd", "number=1&socd=last-input"),
+        ("/redesign/controller/duplicate", "number=1"),
+        ("/redesign/controller/undo", ""),
+        ("/redesign/bind/clear", "slot=1&function=a"),
+        ("/redesign/bind/clear-all", "number=1"),
+        ("/redesign/bind/turbo", "slot=1&function=a&turbo_hz=10"),
+        ("/redesign/bind/toggle", "slot=1&function=a&mode=toggle"),
     ] {
         let response = http(
             addr,
@@ -5571,6 +5578,146 @@ fn park_holds_the_bindings_and_assign_restores_them_without_aliasing() {
         "fresh-staged at position 1"
     );
     assert!(fresh.slots[0].bindings > 0, "dressed by the posted layout");
+}
+
+/// The inspector's re-homed controller verbs edit the selected slot end to
+/// end — SOCD, press behaviour, auto-fire, one-control clear, unbind-all,
+/// duplicate — and ✕ remove offers the server-held undo that restores the
+/// bindings. Every outcome sentence is nocturne's own constant riding THIS
+/// page's redirect (the shared-core claim, proven per verb).
+#[test]
+fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+    let response = post_form(
+        addr,
+        "/redesign/controller",
+        "persona=xbox360&preset=Player+1&layout=keyboard-2p",
+    );
+    assert!(response.contains("flash=Draft%20updated."), "{response}");
+
+    // The layout bound real controls — pick one from the staged mapper, the
+    // SAME table the panel's rows are composed from.
+    let staged = control.staged();
+    let slot = staged.slots.first().expect("one staged slot").clone();
+    let mapper = ksx_api::staged_mapper_slot(&slot, "(none)").expect("mapper");
+    let (function, keys) = mapper
+        .bindings
+        .iter()
+        .find(|(_, keys)| !keys.is_empty())
+        .map(|(f, k)| (f.clone(), k.clone()))
+        .expect("the layout bound at least one control");
+    assert!(!keys.is_empty());
+
+    // Press behaviour: Toggle latches, and the sentence is the nocturne one.
+    let response = post_form(
+        addr,
+        "/redesign/bind/toggle",
+        &format!("slot=1&function={function}&mode=toggle"),
+    );
+    assert!(
+        response.contains("/redesign?flash=Press%20behaviour%20updated."),
+        "{response}"
+    );
+    let latched = ksx_api::staged_mapper_slot(&control.staged().slots[0], "(none)")
+        .expect("mapper")
+        .toggle
+        .iter()
+        .any(|f| f.eq_ignore_ascii_case(&function));
+    assert!(latched, "the latch took on {function}");
+
+    // Auto-fire: a rate lands; a blank box refuses without a silent clear.
+    let response = post_form(
+        addr,
+        "/redesign/bind/turbo",
+        &format!("slot=1&function={function}&turbo_hz=12"),
+    );
+    assert!(response.contains("flash=Auto-fire%20updated"), "{response}");
+    let response = post_form(
+        addr,
+        "/redesign/bind/turbo",
+        &format!("slot=1&function={function}&turbo_hz="),
+    );
+    assert!(
+        response.contains("flash=error%3A%20Type%20a%20number"),
+        "{response}"
+    );
+
+    // The opposite-directions rule, off the served roster.
+    let response = post_form(addr, "/redesign/controller/socd", "number=1&socd=last-input");
+    assert!(response.contains("flash=Draft%20updated."), "{response}");
+    assert_eq!(control.staged().slots[0].socd, "last-input");
+
+    // Duplicate: same persona and rules in the next free slot, its OWN
+    // preset name (one preset file per name — the aliasing rule).
+    let response = post_form(addr, "/redesign/controller/duplicate", "number=1");
+    assert!(response.contains("flash=Controller%20duplicated"), "{response}");
+    let staged = control.staged();
+    assert_eq!(staged.slots.len(), 2);
+    assert_eq!(staged.slots[1].persona, staged.slots[0].persona);
+    assert_ne!(staged.slots[1].preset, staged.slots[0].preset);
+    assert_eq!(staged.slots[1].socd, "last-input", "the rule copied");
+    assert!(staged.slots[1].bindings > 0, "the bindings copied");
+
+    // One control back to unbound, from the row's own ✕ twin.
+    let response = post_form(
+        addr,
+        "/redesign/bind/clear",
+        &format!("slot=1&function={function}"),
+    );
+    assert!(response.contains("flash=Draft%20updated."), "{response}");
+    let cleared = ksx_api::staged_mapper_slot(&control.staged().slots[0], "(none)")
+        .expect("mapper")
+        .bindings
+        .iter()
+        .find(|(f, _)| f.eq_ignore_ascii_case(&function))
+        .map(|(_, keys)| keys.clone())
+        .unwrap_or_default();
+    assert!(cleared.is_empty(), "{function} is unbound, got {cleared:?}");
+
+    // Unbind-all empties the whole slot in one write.
+    let response = post_form(addr, "/redesign/bind/clear-all", "number=1");
+    assert!(response.contains("flash=Every%20key%20unbound"), "{response}");
+    assert_eq!(control.staged().slots[0].bindings, 0);
+
+    // ✕ remove offers the server-held undo; the payload serves the chip and
+    // the restore brings the duplicate's bindings back (appended at the next
+    // free number — the compacted workbench re-occupied its old one).
+    let response = post_form(addr, "/redesign/controller/remove", "number=2");
+    assert!(response.contains("flash=Draft%20updated."), "{response}");
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("payload");
+    assert_eq!(api["controllers"]["undo_cls"], "rd-undochip", "{api}");
+    assert!(
+        api["controllers"]["undo_label"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("removed"),
+        "{api}"
+    );
+    let response = post_form(addr, "/redesign/controller/undo", "");
+    assert!(
+        response.contains("flash=Controller%20restored%20with%20its%20bindings."),
+        "{response}"
+    );
+    let staged = control.staged();
+    assert_eq!(staged.slots.len(), 2, "the removed controller is back");
+    assert!(staged.slots[1].bindings > 0, "with its bindings");
+    // One shot: the stash was consumed.
+    let response = post_form(addr, "/redesign/controller/undo", "");
+    assert!(response.contains("no%20longer%20be%20undone"), "{response}");
+
+    // The payload's panel is the shared composer's: the selected slot's
+    // groups and pads carry the same truth the verbs just edited.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign?slot=2"))).expect("payload");
+    assert_eq!(api["controllers"]["panel"]["slot_val"], "2", "{api}");
+    assert!(
+        api["controllers"]["pads"]
+            .as_array()
+            .is_some_and(|pads| pads.len() == 2),
+        "{api}"
+    );
 }
 
 /// With no daemon, the config half of the page keeps working and the two verbs

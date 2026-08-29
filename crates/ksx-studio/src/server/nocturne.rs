@@ -607,23 +607,9 @@ pub(super) async fn collect_nocturne(
             Err(_) => (None, N_READ_BOARDS_ERROR.to_owned()),
         };
         // The undo chip: composed from the SERVER-held stash while its
-        // window is open; an expired stash is dropped here so a late click
-        // cannot find it either.
-        let undo_label = {
-            let mut held = state.nocturne_undo.lock().unwrap();
-            if held
-                .as_ref()
-                .is_some_and(|stash| stash.at.elapsed() > NOCTURNE_UNDO_WINDOW)
-            {
-                *held = None;
-            }
-            held.as_ref().map(|stash| {
-                format!(
-                    "P{} ({}) removed — its bindings are held for a moment",
-                    stash.slot.number, stash.slot.persona_label
-                )
-            })
-        };
+        // window is open (the shared helper also sweeps an expired stash so
+        // a late click cannot find it either).
+        let undo_label = undo_chip_label(&state.nocturne_undo);
         let payload = NocturnePayload {
             environment,
             staged,
@@ -1850,6 +1836,102 @@ pub(super) struct NocturneUndoStash {
 
 pub(super) const NOCTURNE_UNDO_WINDOW: std::time::Duration = std::time::Duration::from_secs(6);
 
+/// The slot's resurrection material, read BEFORE a removal — an older daemon
+/// serves no authoring table, and then nothing is stashed and no chip makes
+/// a promise the server cannot keep. Shared with `/redesign`'s remove verb.
+pub(super) fn stash_removed_slot(
+    staged: &ksx_api::StagedSetupView,
+    number: u8,
+) -> Option<NocturneUndoStash> {
+    staged
+        .slots
+        .iter()
+        .find(|slot| slot.number == number && slot.authoring.is_some())
+        .map(|slot| NocturneUndoStash {
+            slot: slot.clone(),
+            at: std::time::Instant::now(),
+        })
+}
+
+/// The undo chip's label while a stash's window is open — and the expiry
+/// sweep: an expired stash is dropped HERE so a late click cannot find it
+/// either. One wording for every page that offers the chip.
+pub(super) fn undo_chip_label(
+    held: &std::sync::Mutex<Option<NocturneUndoStash>>,
+) -> Option<String> {
+    let mut held = held.lock().unwrap();
+    if held
+        .as_ref()
+        .is_some_and(|stash| stash.at.elapsed() > NOCTURNE_UNDO_WINDOW)
+    {
+        *held = None;
+    }
+    held.as_ref().map(|stash| {
+        format!(
+            "P{} ({}) removed — its bindings are held for a moment",
+            stash.slot.number, stash.slot.persona_label
+        )
+    })
+}
+
+/// Put the last removed controller back from one page's SERVER-held stash:
+/// add + set-bindings + set-socd (the duplicate's composition), at its own
+/// number when that is still free. One shot: the stash is consumed whatever
+/// happens next. Shared with `/redesign`, each page passing its OWN stash.
+pub(super) fn undo_removal_flash(
+    state: &AppState,
+    held: &std::sync::Mutex<Option<NocturneUndoStash>>,
+) -> &'static str {
+    let Some(stash) = held.lock().unwrap().take() else {
+        return N_UNDO_GONE;
+    };
+    if stash.at.elapsed() > NOCTURNE_UNDO_WINDOW {
+        return N_UNDO_GONE;
+    }
+    let Some(authoring) = stash.slot.authoring else {
+        return N_UNDO_GONE;
+    };
+    let staged = state.control.staged();
+    let number = if staged
+        .slots
+        .iter()
+        .any(|slot| slot.number == stash.slot.number)
+    {
+        match staged.next_slot {
+            Some(next) => next,
+            None => return N_UNDO_FULL,
+        }
+    } else {
+        stash.slot.number
+    };
+    let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
+        number: Some(number),
+        persona: stash.slot.persona,
+        preset: stash.slot.preset,
+        layout: None,
+    });
+    if !added.ok {
+        return N_EDIT_ERROR;
+    }
+    let bound = state.control.stage_edit(&ksx_api::StageEdit::SetBindings {
+        number,
+        preset: Box::new(authoring),
+    });
+    if !bound.ok {
+        let _ = state
+            .control
+            .stage_edit(&ksx_api::StageEdit::RemoveSlot { number });
+        return N_EDIT_ERROR;
+    }
+    if !stash.slot.socd.is_empty() && stash.slot.socd != "off" {
+        let _ = state.control.stage_edit(&ksx_api::StageEdit::SetSocd {
+            number,
+            socd: stash.slot.socd,
+        });
+    }
+    N_UNDO_OK
+}
+
 /// Run one staging edit off the async workers and 303 back with this page's
 /// sentence. One value in the daemon and nothing else — no file, no driver,
 /// no session (`FIRST-RUN.md` §2), which is why there is no confirm step.
@@ -1954,14 +2036,7 @@ pub(super) async fn nocturne_form_remove(
     };
     let flash = tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
-        let stash = staged
-            .slots
-            .iter()
-            .find(|slot| slot.number == form.number && slot.authoring.is_some())
-            .map(|slot| NocturneUndoStash {
-                slot: slot.clone(),
-                at: std::time::Instant::now(),
-            });
+        let stash = stash_removed_slot(&staged, form.number);
         let removed = state.control.stage_edit(&ksx_api::StageEdit::RemoveSlot {
             number: form.number,
         });
@@ -1983,54 +2058,7 @@ pub(super) async fn nocturne_form_remove(
 /// One shot: the stash is consumed whatever happens next.
 pub(super) async fn nocturne_form_undo(State(state): State<Arc<AppState>>) -> Response {
     let flash = tokio::task::spawn_blocking(move || {
-        let Some(stash) = state.nocturne_undo.lock().unwrap().take() else {
-            return N_UNDO_GONE;
-        };
-        if stash.at.elapsed() > NOCTURNE_UNDO_WINDOW {
-            return N_UNDO_GONE;
-        }
-        let Some(authoring) = stash.slot.authoring else {
-            return N_UNDO_GONE;
-        };
-        let staged = state.control.staged();
-        let number = if staged
-            .slots
-            .iter()
-            .any(|slot| slot.number == stash.slot.number)
-        {
-            match staged.next_slot {
-                Some(next) => next,
-                None => return N_UNDO_FULL,
-            }
-        } else {
-            stash.slot.number
-        };
-        let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
-            number: Some(number),
-            persona: stash.slot.persona,
-            preset: stash.slot.preset,
-            layout: None,
-        });
-        if !added.ok {
-            return N_EDIT_ERROR;
-        }
-        let bound = state.control.stage_edit(&ksx_api::StageEdit::SetBindings {
-            number,
-            preset: Box::new(authoring),
-        });
-        if !bound.ok {
-            let _ = state
-                .control
-                .stage_edit(&ksx_api::StageEdit::RemoveSlot { number });
-            return N_EDIT_ERROR;
-        }
-        if !stash.slot.socd.is_empty() && stash.slot.socd != "off" {
-            let _ = state.control.stage_edit(&ksx_api::StageEdit::SetSocd {
-                number,
-                socd: stash.slot.socd,
-            });
-        }
-        N_UNDO_OK
+        undo_removal_flash(&state, &state.nocturne_undo)
     })
     .await
     .unwrap_or(N_EDIT_ERROR);
@@ -2149,28 +2177,33 @@ pub(super) async fn nocturne_form_clear_all(
     let Ok(Form(form)) = form else {
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
-    let flash = tokio::task::spawn_blocking(move || {
-        let staged = state.control.staged();
-        let Some(slot) = staged.slots.iter().find(|slot| slot.number == form.number) else {
-            return N_EDIT_ERROR;
-        };
-        let Some(mut authoring) = slot.authoring.clone() else {
-            return N_EDIT_ERROR;
-        };
-        authoring.bindings.clear();
-        let cleared = state.control.stage_edit(&ksx_api::StageEdit::SetBindings {
-            number: form.number,
-            preset: Box::new(authoring),
-        });
-        if cleared.ok {
-            N_CLEAR_ALL_OK
-        } else {
-            N_EDIT_ERROR
-        }
-    })
-    .await
-    .unwrap_or(N_EDIT_ERROR);
+    let flash = tokio::task::spawn_blocking(move || clear_all_flash(&state, form.number))
+        .await
+        .unwrap_or(N_EDIT_ERROR);
     nocturne_redirect(flash)
+}
+
+/// Unbind EVERY key of one slot's draft in a single write (macro trigger
+/// keys are bindings, so they unbind too; the macros keep their steps). One
+/// SetBindings, so a refusal changes nothing. Shared with `/redesign`.
+pub(super) fn clear_all_flash(state: &AppState, number: u8) -> &'static str {
+    let staged = state.control.staged();
+    let Some(slot) = staged.slots.iter().find(|slot| slot.number == number) else {
+        return N_EDIT_ERROR;
+    };
+    let Some(mut authoring) = slot.authoring.clone() else {
+        return N_EDIT_ERROR;
+    };
+    authoring.bindings.clear();
+    let cleared = state.control.stage_edit(&ksx_api::StageEdit::SetBindings {
+        number,
+        preset: Box::new(authoring),
+    });
+    if cleared.ok {
+        N_CLEAR_ALL_OK
+    } else {
+        N_EDIT_ERROR
+    }
 }
 
 #[derive(Deserialize)]
@@ -2282,57 +2315,61 @@ pub(super) async fn nocturne_form_duplicate(
     let Ok(Form(form)) = form else {
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
-    let flash = tokio::task::spawn_blocking(move || {
-        let staged = state.control.staged();
-        let Some(source) = staged.slots.iter().find(|slot| slot.number == form.number) else {
-            return N_EDIT_ERROR;
-        };
-        let (Some(new_number), Some(new_preset)) = (staged.next_slot, staged.next_preset.clone())
-        else {
-            return N_DUP_FULL;
-        };
-        let Some(mut authoring) = source.authoring.clone() else {
-            // An older daemon serves no authoring table; there is nothing
-            // honest to copy from.
-            return N_EDIT_ERROR;
-        };
-        let persona = source.persona.clone();
-        let socd = source.socd.clone();
-
-        let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
-            number: Some(new_number),
-            persona,
-            preset: new_preset.clone(),
-            layout: None,
-        });
-        if !added.ok {
-            return N_EDIT_ERROR;
-        }
-        // The copy keeps everything except the NAME, which must be the served
-        // fresh one — a save writes one preset file per slot, and two slots
-        // pointing at one file would alias their edits forever after.
-        authoring.name = new_preset;
-        let bound = state.control.stage_edit(&ksx_api::StageEdit::SetBindings {
-            number: new_number,
-            preset: Box::new(authoring),
-        });
-        if !bound.ok {
-            let _ = state
-                .control
-                .stage_edit(&ksx_api::StageEdit::RemoveSlot { number: new_number });
-            return N_EDIT_ERROR;
-        }
-        if !socd.is_empty() && socd != "off" {
-            let _ = state.control.stage_edit(&ksx_api::StageEdit::SetSocd {
-                number: new_number,
-                socd,
-            });
-        }
-        N_DUP_OK
-    })
-    .await
-    .unwrap_or(N_EDIT_ERROR);
+    let flash = tokio::task::spawn_blocking(move || duplicate_slot_flash(&state, form.number))
+        .await
+        .unwrap_or(N_EDIT_ERROR);
     nocturne_redirect(flash)
+}
+
+/// The duplicate composition (add + set-bindings + set-socd, fresh slot
+/// removed again if the middle step refuses), shared with `/redesign`.
+pub(super) fn duplicate_slot_flash(state: &AppState, number: u8) -> &'static str {
+    let staged = state.control.staged();
+    let Some(source) = staged.slots.iter().find(|slot| slot.number == number) else {
+        return N_EDIT_ERROR;
+    };
+    let (Some(new_number), Some(new_preset)) = (staged.next_slot, staged.next_preset.clone())
+    else {
+        return N_DUP_FULL;
+    };
+    let Some(mut authoring) = source.authoring.clone() else {
+        // An older daemon serves no authoring table; there is nothing
+        // honest to copy from.
+        return N_EDIT_ERROR;
+    };
+    let persona = source.persona.clone();
+    let socd = source.socd.clone();
+
+    let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
+        number: Some(new_number),
+        persona,
+        preset: new_preset.clone(),
+        layout: None,
+    });
+    if !added.ok {
+        return N_EDIT_ERROR;
+    }
+    // The copy keeps everything except the NAME, which must be the served
+    // fresh one — a save writes one preset file per slot, and two slots
+    // pointing at one file would alias their edits forever after.
+    authoring.name = new_preset;
+    let bound = state.control.stage_edit(&ksx_api::StageEdit::SetBindings {
+        number: new_number,
+        preset: Box::new(authoring),
+    });
+    if !bound.ok {
+        let _ = state
+            .control
+            .stage_edit(&ksx_api::StageEdit::RemoveSlot { number: new_number });
+        return N_EDIT_ERROR;
+    }
+    if !socd.is_empty() && socd != "off" {
+        let _ = state.control.stage_edit(&ksx_api::StageEdit::SetSocd {
+            number: new_number,
+            socd,
+        });
+    }
+    N_DUP_OK
 }
 
 // ── The learner (moved from /map 2026-08-17, rebind-editor migration) ──────
@@ -2997,49 +3034,60 @@ pub(super) async fn nocturne_form_bind_turbo(
     let Ok(Form(form)) = form else {
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
-    let raw = form.turbo_hz.as_deref().map(str::trim).unwrap_or("");
-    let Ok(hz) = raw.parse::<u32>() else {
-        return nocturne_redirect(N_TURBO_INPUT_ERROR);
-    };
     let flash = tokio::task::spawn_blocking(move || {
-        let staged = state.control.staged();
-        let Some(slot) = staged.slots.iter().find(|s| s.number == form.slot) else {
-            return N_EDIT_ERROR;
-        };
-        let current = nocturne_current_keys(&staged, slot, &form.function);
-        if current.is_empty() {
-            // An unbound control has no rate to set OR clear; saying
-            // "updated" would claim a write that never happened.
-            return N_TURBO_UNBOUND_ERROR;
-        }
-        let outcome = state.control.stage_bind(&ksx_api::StagedBindRequest {
-            number: slot.number,
-            expected_device: staged
-                .device
-                .as_ref()
-                .map(|device| device.selector.clone())
-                .unwrap_or_default(),
-            expected_target_revision: slot.target_revision.clone(),
-            preset: slot.preset.clone(),
-            function: form.function,
-            keys: current,
-            // The key list is exactly what the control already holds, so no
-            // NEW fan-out is being consented to — without this, a key that
-            // was deliberately shared across players would re-trip the
-            // conflict refusal on every rate edit.
-            force: true,
-            turbo_hz: Some(hz),
-            toggle: None,
-        });
-        if outcome.ok {
-            N_TURBO_OK
-        } else {
-            N_EDIT_ERROR
-        }
+        bind_turbo_flash(&state, form.slot, form.function, form.turbo_hz.as_deref())
     })
     .await
     .unwrap_or(N_EDIT_ERROR);
     nocturne_redirect(flash)
+}
+
+/// Set (or clear, with `0`) a control's auto-fire rate — validation and all,
+/// so the two pages cannot disagree about a refusal. Shared with `/redesign`.
+pub(super) fn bind_turbo_flash(
+    state: &AppState,
+    slot: u8,
+    function: String,
+    turbo_hz: Option<&str>,
+) -> &'static str {
+    let raw = turbo_hz.map(str::trim).unwrap_or("");
+    let Ok(hz) = raw.parse::<u32>() else {
+        return N_TURBO_INPUT_ERROR;
+    };
+    let staged = state.control.staged();
+    let Some(row) = staged.slots.iter().find(|s| s.number == slot) else {
+        return N_EDIT_ERROR;
+    };
+    let current = nocturne_current_keys(&staged, row, &function);
+    if current.is_empty() {
+        // An unbound control has no rate to set OR clear; saying
+        // "updated" would claim a write that never happened.
+        return N_TURBO_UNBOUND_ERROR;
+    }
+    let outcome = state.control.stage_bind(&ksx_api::StagedBindRequest {
+        number: row.number,
+        expected_device: staged
+            .device
+            .as_ref()
+            .map(|device| device.selector.clone())
+            .unwrap_or_default(),
+        expected_target_revision: row.target_revision.clone(),
+        preset: row.preset.clone(),
+        function,
+        keys: current,
+        // The key list is exactly what the control already holds, so no
+        // NEW fan-out is being consented to — without this, a key that
+        // was deliberately shared across players would re-trip the
+        // conflict refusal on every rate edit.
+        force: true,
+        turbo_hz: Some(hz),
+        toggle: None,
+    });
+    if outcome.ok {
+        N_TURBO_OK
+    } else {
+        N_EDIT_ERROR
+    }
 }
 
 #[derive(Deserialize)]
@@ -3060,62 +3108,74 @@ pub(super) async fn nocturne_form_bind_toggle(
     let Ok(Form(form)) = form else {
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
-    let latch = match form.mode.as_str() {
-        "toggle" => true,
-        "hold" => false,
-        _ => return nocturne_redirect(N_EDIT_ERROR),
-    };
     let flash = tokio::task::spawn_blocking(move || {
-        let staged = state.control.staged();
-        let Some(slot) = staged.slots.iter().find(|s| s.number == form.slot) else {
-            return N_EDIT_ERROR;
-        };
-        let current = nocturne_current_keys(&staged, slot, &form.function);
-        if current.is_empty() {
-            return N_TOGGLE_UNBOUND_ERROR;
-        }
-        let slot_number = slot.number;
-        let function = form.function.clone();
-        let outcome = state.control.stage_bind(&ksx_api::StagedBindRequest {
-            number: slot.number,
-            expected_device: staged
-                .device
-                .as_ref()
-                .map(|device| device.selector.clone())
-                .unwrap_or_default(),
-            expected_target_revision: slot.target_revision.clone(),
-            preset: slot.preset.clone(),
-            function: form.function,
-            keys: current,
-            // Unchanged key list — re-affirmed, not newly shared (see the
-            // turbo twin's note).
-            force: true,
-            turbo_hz: None,
-            toggle: Some(latch),
-        });
-        if !outcome.ok {
-            return N_EDIT_ERROR;
-        }
-        // An OLDER daemon ignores the toggle field it does not know and
-        // still answers ok — read the draft back before claiming success.
-        let took = state
-            .control
-            .staged()
-            .slots
-            .iter()
-            .find(|s| s.number == slot_number)
-            .and_then(|s| ksx_api::staged_mapper_slot(s, "").ok())
-            .map(|m| m.toggle.contains(&function))
-            .unwrap_or(false);
-        if took == latch {
-            N_TOGGLE_OK
-        } else {
-            N_TOGGLE_OLD_DAEMON
-        }
+        bind_toggle_flash(&state, form.slot, form.function, &form.mode)
     })
     .await
     .unwrap_or(N_EDIT_ERROR);
     nocturne_redirect(flash)
+}
+
+/// The Hold|Toggle pill pair's write — `mode` is `hold` or `toggle`,
+/// anything else refuses; the latch is the only thing that changes. Shared
+/// with `/redesign`.
+pub(super) fn bind_toggle_flash(
+    state: &AppState,
+    slot: u8,
+    function: String,
+    mode: &str,
+) -> &'static str {
+    let latch = match mode {
+        "toggle" => true,
+        "hold" => false,
+        _ => return N_EDIT_ERROR,
+    };
+    let staged = state.control.staged();
+    let Some(row) = staged.slots.iter().find(|s| s.number == slot) else {
+        return N_EDIT_ERROR;
+    };
+    let current = nocturne_current_keys(&staged, row, &function);
+    if current.is_empty() {
+        return N_TOGGLE_UNBOUND_ERROR;
+    }
+    let slot_number = row.number;
+    let function_name = function.clone();
+    let outcome = state.control.stage_bind(&ksx_api::StagedBindRequest {
+        number: row.number,
+        expected_device: staged
+            .device
+            .as_ref()
+            .map(|device| device.selector.clone())
+            .unwrap_or_default(),
+        expected_target_revision: row.target_revision.clone(),
+        preset: row.preset.clone(),
+        function,
+        keys: current,
+        // Unchanged key list — re-affirmed, not newly shared (see the
+        // turbo twin's note).
+        force: true,
+        turbo_hz: None,
+        toggle: Some(latch),
+    });
+    if !outcome.ok {
+        return N_EDIT_ERROR;
+    }
+    // An OLDER daemon ignores the toggle field it does not know and
+    // still answers ok — read the draft back before claiming success.
+    let took = state
+        .control
+        .staged()
+        .slots
+        .iter()
+        .find(|s| s.number == slot_number)
+        .and_then(|s| ksx_api::staged_mapper_slot(s, "").ok())
+        .map(|m| m.toggle.contains(&function_name))
+        .unwrap_or(false);
+    if took == latch {
+        N_TOGGLE_OK
+    } else {
+        N_TOGGLE_OLD_DAEMON
+    }
 }
 
 // ── The macro machinery (moved from /map 2026-08-17, macro migration) ──────
@@ -3340,33 +3400,43 @@ pub(super) async fn nocturne_form_bind_clear(
     let Ok(Form(form)) = form else {
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
-    let ok = tokio::task::spawn_blocking(move || {
-        let staged = state.control.staged();
-        let Some(slot) = staged.slots.iter().find(|s| s.number == form.slot) else {
-            return false;
-        };
-        state
-            .control
-            .stage_bind(&ksx_api::StagedBindRequest {
-                number: form.slot,
-                expected_device: staged
-                    .device
-                    .as_ref()
-                    .map(|device| device.selector.clone())
-                    .unwrap_or_default(),
-                expected_target_revision: slot.target_revision.clone(),
-                preset: slot.preset.clone(),
-                function: form.function,
-                keys: vec!["none".to_owned()],
-                force: false,
-                turbo_hz: None,
-                toggle: None,
-            })
-            .ok
-    })
-    .await
-    .unwrap_or(false);
-    nocturne_redirect(if ok { N_EDIT_OK } else { N_EDIT_ERROR })
+    let flash =
+        tokio::task::spawn_blocking(move || bind_clear_flash(&state, form.slot, form.function))
+            .await
+            .unwrap_or(N_EDIT_ERROR);
+    nocturne_redirect(flash)
+}
+
+/// One control back to unbound (`keys: ["none"]` through the daemon's own
+/// staged-bind verb). Shared with `/redesign`.
+pub(super) fn bind_clear_flash(state: &AppState, slot: u8, function: String) -> &'static str {
+    let staged = state.control.staged();
+    let Some(row) = staged.slots.iter().find(|s| s.number == slot) else {
+        return N_EDIT_ERROR;
+    };
+    let ok = state
+        .control
+        .stage_bind(&ksx_api::StagedBindRequest {
+            number: slot,
+            expected_device: staged
+                .device
+                .as_ref()
+                .map(|device| device.selector.clone())
+                .unwrap_or_default(),
+            expected_target_revision: row.target_revision.clone(),
+            preset: row.preset.clone(),
+            function,
+            keys: vec!["none".to_owned()],
+            force: false,
+            turbo_hz: None,
+            toggle: None,
+        })
+        .ok;
+    if ok {
+        N_EDIT_OK
+    } else {
+        N_EDIT_ERROR
+    }
 }
 
 /// POST /nocturne/save — the ONE writing verb: stage-commit.

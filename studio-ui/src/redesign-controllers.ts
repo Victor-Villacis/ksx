@@ -19,7 +19,32 @@
 // Widgets are client-created (data-client-widget — parity rule 3e).
 
 import { createCanvasItem, WidgetCanvas } from "./genui/canvas/index";
+import {
+  applyDs4Variant,
+  applyPremiumControllerVariant,
+  controllerFinishFor,
+  ds4VariantFor,
+  premiumControllerConfig,
+  type PremiumControllerFamily,
+} from "./padFinishes";
+import { DS4_PREMIUM_VARIANTS } from "./ds4PremiumGeometry";
 import { composeOrderMoving } from "./redesign-controller-order";
+
+/** One staged pad's canvas dressing — `NocturnePadView` on the wire
+ *  (snapshot.rs), the same rows /nocturne's widgets clone and dress. Only
+ *  the fields this workbench draws are named; the rest ride along. */
+export interface RdPadView {
+  slot: number;
+  family: string;
+  preset: string;
+  title: string;
+  /** Canonical fn → its key chip ("G · H"), for the clone's callouts. */
+  fn_keys: Record<string, string>;
+  /** `false` means the provider could not project this slot's mapper table
+   *  — an empty `fn_keys` is otherwise the valid fact "nothing is bound". */
+  mapping_available: boolean;
+  mapping_reason: string;
+}
 
 /** One staged controller — `RedesignControllerCard` on the wire
  *  (snapshot.rs). Every sentence is the server's; this module words only
@@ -67,6 +92,8 @@ interface CardGeometry {
 export interface ControllerBenchIo {
   canvas: WidgetCanvas;
   root: HTMLElement;
+  /** The served pad dressing rows, keyed to the cards by slot number. */
+  pads: RdPadView[];
   parked: ParkedController[];
   /** The ghost ids the SERVER still holds resurrection material for
    *  (`parked_held`, served) — decides each ghost's honest wording:
@@ -137,27 +164,157 @@ function badgeAndName(
   return [badge, name];
 }
 
-/** The REAL body drawing — the served vendored silhouette for the served
- *  family. An `"unknown"` family deliberately draws no body (the record's
- *  rule: a named placeholder, never a wrong silhouette); the badge above
- *  already names the persona, and the note says why there is no picture. */
-function padArt(family: string, art: string, personaLabel: string): HTMLElement {
-  if (family === "unknown" || !art) {
-    const note = document.createElement("p");
-    note.className = "rd-ctrlcard-meta rd-ctrlcard-noart";
-    note.textContent =
-      "This build does not recognise the persona, so it draws no body rather " +
-      "than the wrong one.";
-    return note;
+/** The unknown-family placeholder — nocturne's wording verbatim: a NAMED
+ *  outcome, never a wrong silhouette. */
+function unrecognisedPadBody(family: string): HTMLElement {
+  const body = document.createElement("p");
+  body.className = "n-mini-unknown rd-ctrlcard-noart";
+  body.setAttribute("role", "status");
+  body.textContent = "No controller art for this device" +
+    (family && family !== "unknown" ? ` ("${family}")` : "") +
+    ". Its buttons still bind — update ksx Studio to see it drawn.";
+  return body;
+}
+
+/** The callout chip's compression — nocturne's `calloutText`, with the
+ *  identity cap map: this page has no board picture yet, so key names are
+ *  spoken as the mapper spells them. */
+function calloutText(chip: string): string {
+  let text = chip.split(" · ").join("·");
+  if (text.length > 9) text = text.slice(0, 8) + "…";
+  return text;
+}
+
+/** A widget's durable identity for the FINISH stores: the controller is its
+ *  PRESET (nocturne's `padStoreKeys` rule — twin seats on one preset get
+ *  #2/#3… suffixes in slot order, or both twins fight over one saved
+ *  finish). */
+function finishStoreKeys(cards: readonly RdControllerCardView[]): Map<string, string> {
+  const seen = new Map<string, number>();
+  const keys = new Map<string, string>();
+  for (const card of cards) {
+    const n = (seen.get(card.preset) ?? 0) + 1;
+    seen.set(card.preset, n);
+    keys.set(card.number, "p:" + card.preset + (n > 1 ? "#" + n : ""));
   }
-  const img = document.createElement("img");
-  img.className = "rd-ctrlcard-art";
-  img.src = art;
-  img.alt = personaLabel || PERSONA_BADGE_FALLBACK;
-  // The art is the widget's face, never a drag/select target of its own —
-  // and never the browser's native image drag.
-  img.draggable = false;
-  return img;
+  return keys;
+}
+
+/** The REAL body — a CLONE of the shared hidden master for the served
+ *  family (the nocturne widget's exact mechanism: `pv.family` is READ,
+ *  never re-decided; a family with no master is a visible failure), dressed
+ *  with the slot's own fn→keys callouts and the saved DS4/premium finish.
+ *  `swatches` (when the family has variants) mounts into the card so the
+ *  finish is choosable right on the workbench, exactly like 4460. */
+function padBody(
+  io: ControllerBenchIo,
+  family: string,
+  personaLabel: string,
+  fnKeys: Record<string, string> | null,
+  storeKey: string,
+): { art: HTMLElement; swatches: HTMLElement | null } {
+  const master = io.root.querySelector<HTMLElement>(
+    `.n-padmasters .n-padwrap[data-pad-family="${CSS.escape(family)}"]`,
+  );
+  const source = master?.querySelector(".ps5a") ?? master?.querySelector("svg");
+  if (!source) return { art: unrecognisedPadBody(family), swatches: null };
+  const clone = source.cloneNode(true) as SVGSVGElement;
+  clone.classList.add("rd-ctrlcard-art");
+  clone.setAttribute("aria-label", personaLabel || PERSONA_BADGE_FALLBACK);
+  // Dress the callouts from THIS slot's own served table (empty for a
+  // ghost, whose slot left the daemon).
+  const byFn = new Map<string, string>();
+  for (const [fnName, keys] of Object.entries(fnKeys ?? {})) {
+    byFn.set(fnName.toLowerCase(), keys);
+  }
+  for (const el of Array.from(clone.querySelectorAll<SVGTextElement>("text.n-fnkey"))) {
+    const fns = (el.getAttribute("data-fn") ?? "").split(/\s+/);
+    const parts: string[] = [];
+    for (const fnName of fns) {
+      const keys = byFn.get(fnName.toLowerCase());
+      if (keys) parts.push(calloutText(keys));
+    }
+    el.textContent = parts.join("·");
+  }
+  // The finish swatches — the nocturne widget's DS4-variant / premium
+  // machinery, off the SHARED padFinishes module and stores.
+  let swatches: HTMLElement | null = null;
+  if (family === "ps" && clone.matches("svg.ds4premium")) {
+    const controls = document.createElement("div");
+    controls.className = "n-ds4-variants";
+    controls.setAttribute("role", "group");
+    controls.setAttribute("aria-label", "DualShock 4 color");
+    for (const variant of DS4_PREMIUM_VARIANTS) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "n-ds4-variant";
+      button.dataset.ds4Variant = variant.slug;
+      button.setAttribute("aria-label", variant.label + " controller finish");
+      button.setAttribute("aria-pressed", "false");
+      button.title = variant.label;
+      button.style.setProperty("--ds4-variant-swatch", variant.swatch);
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        applyDs4Variant(clone, controls, storeKey, variant.slug, true);
+      });
+      controls.append(button);
+    }
+    // A swatch press must not begin a canvas drag before its click lands.
+    controls.addEventListener("pointerdown", (event) => event.stopPropagation());
+    applyDs4Variant(
+      clone,
+      controls,
+      storeKey,
+      ds4VariantFor(storeKey) ?? DS4_PREMIUM_VARIANTS[0].slug,
+      false,
+    );
+    swatches = controls;
+  } else {
+    const config = premiumControllerConfig(family);
+    if (config && clone.matches(config.selector)) {
+      const premiumFamily = family as PremiumControllerFamily;
+      const controls = document.createElement("div");
+      controls.className = "n-controller-variants";
+      controls.setAttribute("role", "group");
+      controls.setAttribute("aria-label", config.label + " color");
+      for (const variant of config.variants) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "n-controller-variant";
+        button.dataset.controllerVariant = variant.slug;
+        button.setAttribute("aria-label", variant.label + " controller finish");
+        button.setAttribute("aria-pressed", "false");
+        button.title = variant.label;
+        button.style.setProperty("--controller-variant-swatch", variant.swatch);
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          applyPremiumControllerVariant(
+            clone,
+            controls,
+            premiumFamily,
+            storeKey,
+            variant.slug,
+            true,
+          );
+        });
+        controls.append(button);
+      }
+      controls.addEventListener("pointerdown", (event) => event.stopPropagation());
+      applyPremiumControllerVariant(
+        clone,
+        controls,
+        premiumFamily,
+        storeKey,
+        controllerFinishFor(premiumFamily, storeKey) ?? config.variants[0].slug,
+        false,
+      );
+      swatches = controls;
+    }
+  }
+  const art = document.createElement("div");
+  art.className = "rd-ctrlcard-artwrap";
+  art.append(clone);
+  return { art, swatches };
 }
 
 function removeForm(number: string): HTMLElement {
@@ -185,9 +342,15 @@ function liveCardContent(
   card: RdControllerCardView,
   allNumbers: string[],
   io: ControllerBenchIo,
+  pad: RdPadView | undefined,
+  storeKey: string,
 ): HTMLElement {
   const body = document.createElement("div");
   body.className = "rd-ctrlcard";
+  // The ramp digit — every surface speaking for this slot wears np{n}
+  // (the shared sheet's per-player tint vocabulary).
+  body.classList.add(`np${card.number}`);
+  body.setAttribute("data-pad-slot", card.number);
   const slot = document.createElement("p");
   slot.className = "rd-ctrlcard-slot";
   slot.textContent = `Slot ${card.number}`;
@@ -265,13 +428,25 @@ function liveCardContent(
   verbs.className = "rd-ctrlcard-verbs";
   verbs.append(select, moveForm, parkForm, removeForm(card.number));
   body.dataset.family = card.family;
-  body.append(
-    slot,
-    ...badgeAndName(card.persona, card.persona_label, card.preset),
-    padArt(card.family, card.art, card.persona_label),
-    meta,
-    verbs,
+  const { art, swatches } = padBody(
+    io,
+    card.family,
+    card.persona_label,
+    pad?.fn_keys ?? null,
+    storeKey,
   );
+  const head = [slot, ...badgeAndName(card.persona, card.persona_label, card.preset)];
+  if (swatches) head.push(swatches);
+  body.append(...head, art);
+  // The provider's own refusal, when the mapper table could not be read —
+  // an empty callout set is otherwise the valid fact "nothing is bound".
+  if (pad && !pad.mapping_available && pad.mapping_reason) {
+    const refusal = document.createElement("p");
+    refusal.className = "rd-ctrlcard-meta rd-ctrlcard-refusal";
+    refusal.textContent = pad.mapping_reason;
+    body.append(refusal);
+  }
+  body.append(meta, verbs);
   return body;
 }
 
@@ -344,13 +519,18 @@ function ghostCardContent(
   verbs.className = "rd-ctrlcard-verbs";
   verbs.append(select, assignForm, discard);
   body.dataset.family = parked.family || "unknown";
-  body.append(
-    slot,
-    ...badgeAndName(parked.persona, parked.persona_label, parked.preset),
-    padArt(parked.family, parked.art, parked.persona_label),
-    meta,
-    verbs,
+  // A ghost's slot left the daemon, so its clone wears no callouts; the
+  // finish still follows its preset identity.
+  const { art, swatches } = padBody(
+    io,
+    parked.family || "unknown",
+    parked.persona_label,
+    null,
+    "p:" + parked.preset,
   );
+  const head = [slot, ...badgeAndName(parked.persona, parked.persona_label, parked.preset)];
+  if (swatches) head.push(swatches);
+  body.append(...head, art, meta, verbs);
   return body;
 }
 
@@ -365,8 +545,10 @@ function mountCard(
   const item = createCanvasItem({
     instanceId: id,
     displayName,
-    preferredWidth: 320,
-    minHeight: 380,
+    // The nocturne pad widget's width class (440): the real silhouettes are
+    // wide drawings, and their callout text must stay legible.
+    preferredWidth: 440,
+    minHeight: 420,
     content,
     document,
   });
@@ -374,10 +556,10 @@ function mountCard(
   item.classList.add("rd-ctrl-node");
   if (extraClass) item.classList.add(extraClass);
   const home: CardGeometry = {
-    x: 140 + (index % 3) * 360,
-    y: 430 + Math.floor(index / 3) * 430,
-    width: 320,
-    height: 380,
+    x: 140 + (index % 3) * 480,
+    y: 430 + Math.floor(index / 3) * 520,
+    width: 440,
+    height: 420,
     z: 20 + index,
     manualScale: 1,
   };
@@ -394,6 +576,16 @@ export function syncControllerWidgets(
   io: ControllerBenchIo,
 ): void {
   const allNumbers = cards.map((card) => card.number);
+  const storeKeys = finishStoreKeys(cards);
+  const padBySlot = new Map(io.pads.map((pad) => [String(pad.slot), pad]));
+  const dress = (card: RdControllerCardView): HTMLElement =>
+    liveCardContent(
+      card,
+      allNumbers,
+      io,
+      padBySlot.get(card.number),
+      storeKeys.get(card.number) ?? "p:" + card.preset,
+    );
   const wantedLive = new Map(
     cards.map((card) => [controllerInstanceId(card.number), card]),
   );
@@ -411,7 +603,7 @@ export function syncControllerWidgets(
     const live = wantedLive.get(id);
     const ghost = wantedGhosts.get(id);
     if (live) {
-      item.querySelector(".rd-ctrlcard")?.replaceWith(liveCardContent(live, allNumbers, io));
+      item.querySelector(".rd-ctrlcard")?.replaceWith(dress(live));
       wantedLive.delete(id);
     } else if (ghost) {
       item
@@ -429,7 +621,7 @@ export function syncControllerWidgets(
       io,
       id,
       `Slot ${card.number} — ${card.preset}`,
-      liveCardContent(card, allNumbers, io),
+      dress(card),
       "",
       index,
     );

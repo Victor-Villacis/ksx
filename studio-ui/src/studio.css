@@ -18595,29 +18595,105 @@ a.nm-link {
   margin-left: auto;
 }
 
-/* The REAL body drawing — the vendored silhouette is the widget's face.
-   Never a pointer target of its own: the canvas item owns drag/select.
-   The box is RESERVED with the file's own aspect ratio (the two vendored
-   viewBoxes), so an async image load cannot grow the card and shift the
-   canvas's world bounds mid-gesture. */
-.rd-ctrlcard-art {
-  display: block;
-  width: 100%;
-  height: auto;
-  aspect-ratio: 112.456 / 76.663; /* pad-xbox.svg's viewBox */
+/* The REAL body drawing — a CLONE of the shared inline master is the
+   widget's face (the nocturne widget's mechanism). The clone is an inline
+   <svg> with its source viewBox, so its box is intrinsic — no async load,
+   no reserved-ratio guard needed. The wrap (not the svg) blocks pointer
+   interaction: the canvas item owns drag/select, but the finish swatches
+   in the head stay clickable. */
+.rd-ctrlcard-artwrap {
   margin: 6px 0 4px;
   pointer-events: none;
   user-select: none;
 }
 
-.rd-ctrlcard[data-family="ps"] .rd-ctrlcard-art,
-.rd-ctrlcard[data-family="ps5"] .rd-ctrlcard-art {
-  aspect-ratio: 112.689 / 72.532; /* pad-ds4.svg's viewBox */
+.rd-ctrlcard-artwrap svg.rd-ctrlcard-art {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 .rd-ctrlcard-noart {
   margin: 6px 0 4px;
   font-style: italic;
+}
+
+.rd-ctrlcard-refusal {
+  font-style: italic;
+  color: var(--n-warn, #d0a458);
+}
+
+/* The removal-undo chip — the nocturne rack chip's contract, floated under
+   this page's topbar beside the flash (it must show with no inspector
+   open: the card it undoes is gone). */
+form.rd-undochip {
+  position: absolute;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 14px;
+  border: 1px solid color-mix(in srgb, var(--n-accent) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--n-bg-1) 88%, var(--n-accent));
+  font-size: var(--fs-small);
+}
+
+form.rd-undochip.none {
+  display: none;
+}
+
+form.rd-undochip .n-undo-btn {
+  border: 1px solid color-mix(in srgb, var(--n-accent) 60%, transparent);
+  border-radius: 999px;
+  padding: 3px 12px;
+  background: color-mix(in srgb, var(--n-accent) 24%, transparent);
+  color: var(--n-text-1);
+  cursor: pointer;
+}
+
+/* The controller panel inside the inspector: nocturne's right-pane
+   sections, compacted for the 328px overlay. Wide rows scroll inside the
+   panel body, never the page. */
+.rd-inspector .rd-insp-ctrlmeta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0 2px;
+}
+
+.rd-inspector .n-socdform {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.rd-inspector .n-socdform.none {
+  display: none;
+}
+
+.rd-inspector .rd-insp-ctrlverbs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rd-inspector .n-bindgroups {
+  margin-top: 8px;
+}
+
+.rd-inspector .n-bindgroups.none {
+  display: none;
+}
+
+.rd-inspector .n-bind-sum {
+  flex-wrap: wrap;
+  row-gap: 4px;
 }
 
 /* The art credit, a quiet overlay in the canvas's corner — MIT terms travel

@@ -11,6 +11,10 @@ use super::*;
 #[derive(Deserialize)]
 pub(super) struct RedesignQuery {
     flash: Option<String>,
+    /// The selected controller slot — the nocturne selection rule: an
+    /// explicit `?slot=` wins, otherwise the first staged controller speaks
+    /// for the inspector panel.
+    slot: Option<u8>,
 }
 
 /// The sentences this page may be asked to repeat after a redirect, resolved
@@ -18,7 +22,7 @@ pub(super) struct RedesignQuery {
 /// verb's sentences ARE nocturne's constants: one wording, two pages, so the
 /// copy cannot drift between the surfaces (the cutover's "provider text"
 /// lesson, applied in advance).
-const RD_FLASH_ALLOWLIST: [&str; 10] = [
+const RD_FLASH_ALLOWLIST: [&str; 22] = [
     N_THEME_OK,
     N_THEME_UNKNOWN,
     N_DEVICE_OK,
@@ -29,6 +33,18 @@ const RD_FLASH_ALLOWLIST: [&str; 10] = [
     N_MOVE_AT_END,
     N_ADD_LAYOUT_ERROR,
     N_UNKNOWN_FLASH_ERROR,
+    N_CLEAR_ALL_OK,
+    N_UNDO_OK,
+    N_UNDO_GONE,
+    N_UNDO_FULL,
+    N_DUP_OK,
+    N_DUP_FULL,
+    N_TURBO_OK,
+    N_TURBO_INPUT_ERROR,
+    N_TURBO_UNBOUND_ERROR,
+    N_TOGGLE_OK,
+    N_TOGGLE_OLD_DAEMON,
+    N_TOGGLE_UNBOUND_ERROR,
 ];
 
 pub(super) fn redesign_flash_from_query(flash: Option<&str>) -> Option<String> {
@@ -53,7 +69,10 @@ fn redesign_redirect(flash: &str) -> Response {
 /// roster, on a blocking worker like every other collector read. The page
 /// derives its `<html data-theme>` stamp from the chosen row in this payload,
 /// so the stamp and the menu cannot disagree within a render.
-pub(super) async fn collect_redesign(state: &Arc<AppState>) -> RedesignPayload {
+pub(super) async fn collect_redesign(
+    state: &Arc<AppState>,
+    selected_slot: Option<u8>,
+) -> RedesignPayload {
     let redesign_state = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
         let setup = redesign_state
@@ -77,11 +96,16 @@ pub(super) async fn collect_redesign(state: &Arc<AppState>) -> RedesignPayload {
         // The staged device — the daemon's answer to "which board does ksx
         // split", marked onto the picker rows and the bench cards.
         let staged = redesign_state.control.staged();
+        // The undo chip label off this page's OWN stash (the shared helper
+        // also sweeps an expired stash).
+        let undo_label = undo_chip_label(&redesign_state.redesign_undo);
         let mut payload = crate::render_redesign::payload(
             &redesign_state.source.environment(),
             setup,
             scan,
             &staged,
+            selected_slot,
+            undo_label.as_deref(),
         );
         // Which parked ghosts the studio still HOLDS (authoring included),
         // so a ghost card can say "bindings kept" vs "staged fresh" before
@@ -121,7 +145,7 @@ pub(super) async fn redesign_page(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RedesignQuery>,
 ) -> Response {
-    let payload = collect_redesign(&state).await;
+    let payload = collect_redesign(&state, query.slot).await;
     let flash = redesign_flash_from_query(query.flash.as_deref());
     let out = crate::render::with_theme(
         render_redesign(&state.redesign_page.get(), &payload, flash.as_deref()),
@@ -147,8 +171,11 @@ pub(super) async fn redesign_page(
 
 /// The poller's endpoint — the same [`RedesignPayload`] the /redesign page
 /// embeds as island props (parity unit-tested in render_redesign.rs).
-pub(super) async fn api_redesign(State(state): State<Arc<AppState>>) -> Response {
-    let payload = collect_redesign(&state).await;
+pub(super) async fn api_redesign(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<RedesignQuery>,
+) -> Response {
+    let payload = collect_redesign(&state, query.slot).await;
     (
         [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
         axum::Json(payload),
@@ -335,6 +362,10 @@ pub(super) async fn redesign_form_ctrl_remove(
         return redesign_redirect(N_FORM_UNREADABLE);
     };
     let ok = tokio::task::spawn_blocking(move || {
+        // The nocturne chip's contract on this page's own stash: the
+        // resurrection material is read BEFORE the removal, server-held for
+        // the short window, and never handed to the browser.
+        let stash = stash_removed_slot(&state.control.staged(), form.number);
         let removed = state
             .control
             .stage_edit(&ksx_api::StageEdit::RemoveSlot {
@@ -344,6 +375,7 @@ pub(super) async fn redesign_form_ctrl_remove(
         if !removed {
             return false;
         }
+        *state.redesign_undo.lock().unwrap() = stash;
         compact_staged_slots(&state);
         true
     })
@@ -623,6 +655,149 @@ pub(super) async fn redesign_form_ctrl_move(
     .await
     .unwrap_or(false);
     redesign_redirect(if ok { N_EDIT_OK } else { N_EDIT_ERROR })
+}
+
+// ── The inspector's controller verbs — each a re-homed nocturne verb: the
+// shared core does the work and answers the SAME sentence; only the 303
+// target belongs to this page. ────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub(super) struct RedesignSocdForm {
+    number: u8,
+    socd: String,
+}
+
+/// POST /redesign/controller/socd — the selected slot's opposite-directions
+/// rule, a name off the served roster (`nocturne_form_socd`'s one edit).
+pub(super) async fn redesign_form_ctrl_socd(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignSocdForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let ok = tokio::task::spawn_blocking(move || {
+        state
+            .control
+            .stage_edit(&ksx_api::StageEdit::SetSocd {
+                number: form.number,
+                socd: form.socd,
+            })
+            .ok
+    })
+    .await
+    .unwrap_or(false);
+    redesign_redirect(if ok { N_EDIT_OK } else { N_EDIT_ERROR })
+}
+
+/// POST /redesign/controller/duplicate — the same controller again, next
+/// free slot, bindings and rule copied (the shared composition).
+pub(super) async fn redesign_form_ctrl_duplicate(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignSlotForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let flash = tokio::task::spawn_blocking(move || duplicate_slot_flash(&state, form.number))
+        .await
+        .unwrap_or(N_EDIT_ERROR);
+    redesign_redirect(flash)
+}
+
+/// POST /redesign/controller/undo — put the last ✕-removed controller back
+/// from THIS page's server-held stash. After the workbench's compaction its
+/// old number is usually re-occupied, so the shared core seats it at the
+/// next free slot — the arrival law's own answer.
+pub(super) async fn redesign_form_ctrl_undo(State(state): State<Arc<AppState>>) -> Response {
+    let flash = tokio::task::spawn_blocking(move || {
+        undo_removal_flash(&state, &state.redesign_undo)
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
+    redesign_redirect(flash)
+}
+
+#[derive(Deserialize)]
+pub(super) struct RedesignBindForm {
+    slot: u8,
+    function: String,
+}
+
+/// POST /redesign/bind/clear — one control back to unbound.
+pub(super) async fn redesign_form_bind_clear(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignBindForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let flash =
+        tokio::task::spawn_blocking(move || bind_clear_flash(&state, form.slot, form.function))
+            .await
+            .unwrap_or(N_EDIT_ERROR);
+    redesign_redirect(flash)
+}
+
+/// POST /redesign/bind/clear-all — every key unbound on one slot's draft.
+pub(super) async fn redesign_form_clear_all(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignSlotForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let flash = tokio::task::spawn_blocking(move || clear_all_flash(&state, form.number))
+        .await
+        .unwrap_or(N_EDIT_ERROR);
+    redesign_redirect(flash)
+}
+
+#[derive(Deserialize)]
+pub(super) struct RedesignTurboForm {
+    slot: u8,
+    function: String,
+    #[serde(default)]
+    turbo_hz: Option<String>,
+}
+
+/// POST /redesign/bind/turbo — a control's auto-fire rate (0 clears).
+pub(super) async fn redesign_form_bind_turbo(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignTurboForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let flash = tokio::task::spawn_blocking(move || {
+        bind_turbo_flash(&state, form.slot, form.function, form.turbo_hz.as_deref())
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
+    redesign_redirect(flash)
+}
+
+#[derive(Deserialize)]
+pub(super) struct RedesignToggleForm {
+    slot: u8,
+    function: String,
+    mode: String,
+}
+
+/// POST /redesign/bind/toggle — the Hold|Toggle pill pair's write.
+pub(super) async fn redesign_form_bind_toggle(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignToggleForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let flash = tokio::task::spawn_blocking(move || {
+        bind_toggle_flash(&state, form.slot, form.function, &form.mode)
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
+    redesign_redirect(flash)
 }
 
 #[cfg(test)]

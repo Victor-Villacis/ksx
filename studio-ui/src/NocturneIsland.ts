@@ -2,32 +2,23 @@ import { createList, createShow, createSignal, h } from "@getforma/core";
 import { fetchJSON } from "@getforma/core/http";
 
 import { WidgetCanvas, createCanvasItem } from "./genui/canvas/index";
+import { DS4_PREMIUM_VARIANTS } from "./ds4PremiumGeometry";
+import { Ds4PremiumPadArt } from "./ds4PremiumPadArt";
 import {
-  DS4_PREMIUM_SHELL_TONE,
-  DS4_PREMIUM_VARIANTS,
-  Ds4PremiumButtonHooks,
-  Ds4PremiumDepth,
-  Ds4PremiumGeometry,
-  type Ds4PremiumVariantSlug,
-} from "./ds4PremiumGeometry";
+  applyDs4Variant,
+  applyPremiumControllerVariant,
+  controllerFinishFor,
+  ds4VariantFor,
+  loadControllerFinishes,
+  loadDs4Variants,
+  premiumControllerConfig,
+  type PremiumControllerConfig,
+  type PremiumControllerFamily,
+} from "./padFinishes";
 import { DualSensePremiumArt } from "./dualSensePremiumArt";
-import {
-  DUALSENSE_PREMIUM_SHELL_TONE,
-  DUALSENSE_PREMIUM_VARIANTS,
-  type DualSensePremiumVariantSlug,
-} from "./dualSensePremiumGeometry";
 import { SwitchProPremiumArt } from "./switchProPremiumArt";
-import {
-  SWITCH_PRO_PREMIUM_SHELL_TONE,
-  SWITCH_PRO_PREMIUM_VARIANTS,
-  type SwitchProPremiumVariantSlug,
-} from "./switchProPremiumGeometry";
+import { X360PadArt } from "./x360PadArt";
 import { XboxSeriesPremiumArt } from "./xboxSeriesPremiumArt";
-import {
-  XBOX_SERIES_PREMIUM_SHELL_TONE,
-  XBOX_SERIES_PREMIUM_VARIANTS,
-  type XboxSeriesPremiumVariantSlug,
-} from "./xboxSeriesPremiumGeometry";
 import {
   DEFAULT_KEYBOARD_WORKBENCH_STATE,
   KEYBOARD_CAP_PROFILES,
@@ -1310,56 +1301,8 @@ let lastBindView: NocturneView | null = null;
 // renumber, identity travels), loaded before the engine mounts, saved on the
 // engine's own durable commits.
 const CANVAS_STORE = "ksx-nocturne-canvas";
-const DS4_VARIANT_STORE = "ksx-nocturne-ds4-variants1";
-const DS4_VARIANT_SLUGS = new Set<string>(DS4_PREMIUM_VARIANTS.map((variant) => variant.slug));
-let ds4Variants: Record<string, Ds4PremiumVariantSlug> = {};
-const CONTROLLER_FINISH_STORE = "ksx-nocturne-controller-finishes1";
-
-type PremiumControllerFamily = "ps5" | "switchpro" | "xboxseries";
-type PremiumControllerVariantSlug =
-  | DualSensePremiumVariantSlug
-  | SwitchProPremiumVariantSlug
-  | XboxSeriesPremiumVariantSlug;
-type PremiumControllerVariant = {
-  readonly slug: PremiumControllerVariantSlug;
-  readonly label: string;
-  readonly swatch: string;
-  readonly gradient: string;
-  readonly tones: Readonly<Record<string, string>>;
-};
-type PremiumControllerConfig = {
-  readonly label: string;
-  readonly selector: string;
-  readonly variantAttribute: string;
-  readonly shellTone: string;
-  readonly variants: readonly PremiumControllerVariant[];
-};
-
-const PREMIUM_CONTROLLER_CONFIGS: Record<PremiumControllerFamily, PremiumControllerConfig> = {
-  ps5: {
-    label: "DualSense",
-    selector: "svg.dualsensepremium",
-    variantAttribute: "data-dualsense-variant",
-    shellTone: DUALSENSE_PREMIUM_SHELL_TONE,
-    variants: DUALSENSE_PREMIUM_VARIANTS,
-  },
-  switchpro: {
-    label: "Switch Pro",
-    selector: "svg.switchpropremium",
-    variantAttribute: "data-switchpro-variant",
-    shellTone: SWITCH_PRO_PREMIUM_SHELL_TONE,
-    variants: SWITCH_PRO_PREMIUM_VARIANTS,
-  },
-  xboxseries: {
-    label: "Xbox Series",
-    selector: "svg.xboxseriespremium",
-    variantAttribute: "data-xboxseries-variant",
-    shellTone: XBOX_SERIES_PREMIUM_SHELL_TONE,
-    variants: XBOX_SERIES_PREMIUM_VARIANTS,
-  },
-};
-
-let controllerFinishes: Record<string, PremiumControllerVariantSlug> = {};
+// The DS4/premium finish machinery lives in the SHARED padFinishes module
+// (one implementation, one localStorage store, both product pages).
 
 /** One press of canvas zoom. The engine's own wheel step is finer; a button
  *  press should be a visible move, not a nudge. */
@@ -1641,89 +1584,9 @@ function removeProcessorOffset(processorId: string): boolean {
   return true;
 }
 
-function loadDs4Variants(): void {
-  try {
-    const raw = window.localStorage.getItem(DS4_VARIANT_STORE);
-    const saved = raw ? JSON.parse(raw) as Record<string, unknown> : {};
-    const clean: Record<string, Ds4PremiumVariantSlug> = {};
-    for (const [key, value] of Object.entries(saved)) {
-      if (typeof value === "string" && DS4_VARIANT_SLUGS.has(value)) {
-        clean[key] = value as Ds4PremiumVariantSlug;
-      }
-    }
-    ds4Variants = clean;
-  } catch {
-    ds4Variants = {};
-  }
-}
-
-function saveDs4Variants(): void {
-  try {
-    window.localStorage.setItem(DS4_VARIANT_STORE, JSON.stringify(ds4Variants));
-  } catch {
-    // A controller finish is chrome; blocked storage only makes it temporary.
-  }
-}
-
-/** Repaint one clone through the four source-authored color palettes. The
- *  geometry never changes: every finish writes the same ten CSS paint tones,
- *  with only the main shell upgraded to the shared Studio gradient server. */
-function applyDs4Variant(
-  svg: SVGSVGElement,
-  controls: HTMLElement,
-  storeKey: string,
-  slug: Ds4PremiumVariantSlug,
-  persist: boolean,
-): void {
-  const variant = DS4_PREMIUM_VARIANTS.find((item) => item.slug === slug) ?? DS4_PREMIUM_VARIANTS[0];
-  for (const [name, value] of Object.entries(variant.tones)) svg.style.setProperty(name, value);
-  svg.style.setProperty(DS4_PREMIUM_SHELL_TONE, `url(#${variant.gradient})`);
-  svg.dataset.ds4Variant = variant.slug;
-  for (const button of Array.from(controls.querySelectorAll<HTMLButtonElement>("button[data-ds4-variant]"))) {
-    button.setAttribute("aria-pressed", String(button.dataset.ds4Variant === variant.slug));
-  }
-  if (persist) {
-    ds4Variants[storeKey] = variant.slug;
-    saveDs4Variants();
-  }
-}
-
-function premiumControllerConfig(family: string): PremiumControllerConfig | null {
-  return Object.prototype.hasOwnProperty.call(PREMIUM_CONTROLLER_CONFIGS, family)
-    ? PREMIUM_CONTROLLER_CONFIGS[family as PremiumControllerFamily]
-    : null;
-}
-
-function controllerFinishKey(family: PremiumControllerFamily, storeKey: string): string {
-  return family + ":" + storeKey;
-}
-
-function loadControllerFinishes(): void {
-  try {
-    const raw = window.localStorage.getItem(CONTROLLER_FINISH_STORE);
-    const saved = raw ? JSON.parse(raw) as Record<string, unknown> : {};
-    const clean: Record<string, PremiumControllerVariantSlug> = {};
-    for (const [key, value] of Object.entries(saved)) {
-      const separator = key.indexOf(":");
-      const family = separator > 0 ? key.slice(0, separator) : "";
-      const config = premiumControllerConfig(family);
-      if (config && typeof value === "string" && config.variants.some((variant) => variant.slug === value)) {
-        clean[key] = value as PremiumControllerVariantSlug;
-      }
-    }
-    controllerFinishes = clean;
-  } catch {
-    controllerFinishes = {};
-  }
-}
-
-function saveControllerFinishes(): void {
-  try {
-    window.localStorage.setItem(CONTROLLER_FINISH_STORE, JSON.stringify(controllerFinishes));
-  } catch {
-    // A finish is visual chrome; blocked storage only makes it temporary.
-  }
-}
+// loadDs4Variants / applyDs4Variant / premiumControllerConfig /
+// loadControllerFinishes and friends: imported from the shared padFinishes
+// module (moved verbatim).
 
 // ── KEYBOARD MATERIAL + CONTROL-SURFACE WORKBENCH ────────────────────────
 // The daemon owns key identity and bindings. This browser-kept model owns
@@ -3141,29 +3004,6 @@ function reconcileControlSurfaceIdentity(): void {
 /** Repaint a premium controller without moving a single source-authored path
  * or transparent mapper hook. The body keeps its native geometry; only the
  * source's semantic paint variables and the shared shell gradient change. */
-function applyPremiumControllerVariant(
-  svg: SVGSVGElement,
-  controls: HTMLElement,
-  family: PremiumControllerFamily,
-  storeKey: string,
-  slug: PremiumControllerVariantSlug,
-  persist: boolean,
-): void {
-  const config = PREMIUM_CONTROLLER_CONFIGS[family];
-  const variant = config.variants.find((item) => item.slug === slug) ?? config.variants[0];
-  for (const [name, value] of Object.entries(variant.tones)) svg.style.setProperty(name, value);
-  svg.style.setProperty(config.shellTone, `url(#${variant.gradient})`);
-  svg.setAttribute("data-controller-variant", variant.slug);
-  svg.setAttribute(config.variantAttribute, variant.slug);
-  for (const button of Array.from(controls.querySelectorAll<HTMLButtonElement>("button[data-controller-variant]"))) {
-    button.setAttribute("aria-pressed", String(button.dataset.controllerVariant === variant.slug));
-  }
-  if (persist) {
-    controllerFinishes[controllerFinishKey(family, storeKey)] = variant.slug;
-    saveControllerFinishes();
-  }
-}
-
 /** A widget's durable identity in the store: the keyboard is itself; a
  *  controller is its PRESET, so its spot survives seat renumbering. Twin
  *  seats on the SAME preset get #2/#3… suffixes in slot order — without
@@ -6368,7 +6208,7 @@ export function syncPadWidgets(): void {
           artClone,
           controls,
           storeKey,
-          ds4Variants[storeKey] ?? DS4_PREMIUM_VARIANTS[0].slug,
+          ds4VariantFor(storeKey) ?? DS4_PREMIUM_VARIANTS[0].slug,
           false,
         );
         head.append(controls);
@@ -6405,7 +6245,7 @@ export function syncPadWidgets(): void {
             controls.append(button);
           }
           controls.addEventListener("pointerdown", (event) => event.stopPropagation());
-          const saved = controllerFinishes[controllerFinishKey(premiumFamily, storeKey)];
+          const saved = controllerFinishFor(premiumFamily, storeKey);
           applyPremiumControllerVariant(
             artClone,
             controls,
@@ -11542,205 +11382,7 @@ export function NocturneIsland() {
           h(
             "div",
             { class: () => nPadXboxCls(), "data-pad-family": "xbox" },
-            h(
-              "svg",
-              { class: "wspad x360a", viewBox: "0 0 751 660", "aria-hidden": "true", focusable: "false" },
-              h(
-                "defs",
-                null,
-                h(
-                  "linearGradient",
-                  { id: "x360a-pill", x1: "0", y1: "0", x2: "0", y2: "1" },
-                  h("stop", { offset: "0", "stop-color": "#3a3b44" }),
-                  h("stop", { offset: "0.55", "stop-color": "#2c2d34" }),
-                  h("stop", { offset: "1", "stop-color": "#232429" }),
-                ),
-                h("filter", { id: "x360a-soft" }, h("feGaussianBlur", { stdDeviation: "16" })),
-              ),
-              // ── SCENARIO A: the CC0 Open Clip Art Xbox 360 gamepad
-              // (Grumbel, public domain), recolored to the carbon palette.
-              // The trigger/bumper pills stay ours, scaled into this file's
-              // coordinate space; a transparent overlay carries the data-fn
-              // hooks so the live echo lights the art untouched.
-              h(
-                "g",
-                null,
-                h("rect", { "data-fn": "lt", x: "134", y: "6", width: "147", height: "43", rx: "21", fill: "url(#x360a-pill)", stroke: "#0c0d12", "stroke-width": "2.5" }),
-                h("rect", { "data-fn": "rt", x: "471", y: "6", width: "147", height: "43", rx: "21", fill: "url(#x360a-pill)", stroke: "#0c0d12", "stroke-width": "2.5" }),
-                h("text", { class: "wspad-sys x360a-sys", x: "207", y: "37", "text-anchor": "middle" }, "LT"),
-                h("text", { class: "wspad-sys x360a-sys", x: "544", y: "37", "text-anchor": "middle" }, "RT"),
-                h("rect", { "data-fn": "lb", x: "100", y: "69", width: "214", height: "37", rx: "18", fill: "url(#x360a-pill)", stroke: "#0c0d12", "stroke-width": "2.5" }),
-                h("rect", { "data-fn": "rb", x: "438", y: "69", width: "214", height: "37", rx: "18", fill: "url(#x360a-pill)", stroke: "#0c0d12", "stroke-width": "2.5" }),
-                h("text", { class: "wspad-sys x360a-sys", x: "207", y: "97", "text-anchor": "middle" }, "LB"),
-                h("text", { class: "wspad-sys x360a-sys", x: "544", y: "97", "text-anchor": "middle" }, "RB"),
-              ),
-              h(
-                "g",
-                { transform: "translate(0,120)" },
-                h(
-                  "g",
-                  { "transform": "translate(0.15288,-260.35206)" },
-                  h(
-                    "g",
-                    { "transform": "matrix(0.5752286,0,0,0.5752286,161.90411,275.5957)", "stroke": "#0c0d12", "stroke-width": "2", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" },
-                    h("rect", { "fill": "#26272d", "fill-opacity": "1", "stroke": "#0c0d12", "stroke-width": "2", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "width": "45.344299", "height": "27.532085", "x": "390.84552", "y": "630.43866", "ry": "4.973381", "rx": "4.973381" }),
-                    h("rect", { "rx": "4.973381", "ry": "4.973381", "y": "630.43866", "x": "305.26193", "height": "27.532085", "width": "45.344299", "fill": "#26272d", "fill-opacity": "1", "stroke": "#0c0d12", "stroke-width": "2", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" }),
-                    h("rect", { "fill": "#26272d", "fill-opacity": "1", "stroke": "#0c0d12", "stroke-width": "2", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "width": "32.910625", "height": "27.325605", "x": "354.27057", "y": "630.23145", "ry": "4.973381", "rx": "4.973381" }),
-                  ),
-                  h("path", { "d": "M 655.50745,318.60794 C 655.28894,317.5154 651.35577,300.47167 650.91876,297.63105 C 650.48174,294.79043 649.82621,293.26086 646.33006,290.85726 C 613.51647,268.29793 575.1238,257.40679 537.07541,263.5436 C 530.30162,264.63614 521.56124,281.67987 521.56124,281.67987 L 655.50745,318.60794 z", "fill": "#34353d", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "#0c0d12", "stroke-width": "3", "stroke-linecap": "butt", "stroke-linejoin": "miter", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" }),
-                  h("path", { "fill": "#34353d", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "#0c0d12", "stroke-width": "3", "stroke-linecap": "butt", "stroke-linejoin": "miter", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "d": "M 97.673659,318.60794 C 97.892168,317.5154 101.82534,300.47167 102.26235,297.63105 C 102.69937,294.79043 103.3549,293.26086 106.85105,290.85726 C 139.66464,268.29793 178.05731,257.40679 216.1057,263.5436 C 222.87949,264.63614 231.61987,281.67987 231.61987,281.67987 L 97.673659,318.60794 z" }),
-                  h("path", { "fill": "#2c2d34", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "3", "stroke-linecap": "butt", "stroke-linejoin": "miter", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "d": "M 692.40625,795.6875 C 729.24632,796.78087 745.21397,776.84954 748.8125,678.25 C 752.58374,574.91798 685.51396,378.56055 665.84375,329.03125 C 646.1735,279.50196 547.13046,253.20593 502.1875,281.53125 C 465.20101,304.842 424.68118,307.90625 375.15625,307.90625 C 325.63133,307.90625 285.14275,304.842 248.15625,281.53125 C 235.51605,273.56475 218.57513,269.89652 200.34375,269.875 C 153.75246,269.82 98.606739,293.43208 84.46875,329.03125 C 64.798509,378.56054 -2.2712417,574.91797 1.5,678.25 C 5.0785642,776.30266 20.906856,796.56763 57.3125,795.70312 C 141.78831,786.65213 150.45828,738.83858 207.40625,694.09375 C 260.20364,652.61006 297.18742,648.83525 374.875,650.34375 C 452.56257,648.83527 489.51511,652.61009 542.3125,694.09375 C 599.26048,738.83855 607.93044,786.63651 692.40625,795.6875 z" }),
-                  h("path", { "fill": "#15161b", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "3", "stroke-linecap": "butt", "stroke-linejoin": "miter", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "d": "M 376.55538,626.9578 C 306.48411,626.95781 270.99132,628.49411 235.21163,648.0828 C 160.64529,688.90646 145.67483,753.41543 66.61787,795.67655 C 143.80716,784.49429 153.68236,737.39373 208.80537,694.0828 C 261.60277,652.59914 298.58655,648.8243 376.27413,650.3328 C 453.9617,648.82429 490.91424,652.59914 543.71163,694.0828 C 599.02621,737.54424 608.78338,784.83136 686.71163,795.80155 C 607.46105,753.54261 592.53505,688.94455 517.89913,648.0828 C 482.11944,628.49411 446.62665,626.9578 376.55538,626.9578 z" }),
-                  h("path", { "opacity": "1", "fill": "#303138", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "0.92916417", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "cx": "160.65491", "cy": "389.37787", "rx": "68.636604", "ry": "68.636604", "d": "M 229.29151,389.37787 A 68.636604,68.636604 0 1 1 92.018303,389.37787 A 68.636604,68.636604 0 1 1 229.29151,389.37787 z", "transform": "matrix(1.3186813,0,0,1.3571428,273.88333,-12.726922)" }),
-                  h("path", { "opacity": "1", "fill": "#303138", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "0.92916417", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "cx": "160.65491", "cy": "389.37787", "rx": "68.636604", "ry": "68.636604", "d": "M 229.29151,389.37787 A 68.636604,68.636604 0 1 1 92.018303,389.37787 A 68.636604,68.636604 0 1 1 229.29151,389.37787 z", "transform": "matrix(1.1153846,0,0,1.0384615,-16.651483,-22.141431)" }),
-                  h("path", { "transform": "matrix(1.3186813,0,0,1.3571428,52.888559,-12.726922)", "d": "M 229.29151,389.37787 A 68.636604,68.636604 0 1 1 92.018303,389.37787 A 68.636604,68.636604 0 1 1 229.29151,389.37787 z", "ry": "68.636604", "rx": "68.636604", "cy": "389.37787", "cx": "160.65491", "opacity": "1", "fill": "#303138", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "0.92916417", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" }),
-                  h("path", { "opacity": "1", "fill": "#1b1c21", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "#0c0d12", "stroke-width": "2.64638782", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "cx": "211.80083", "cy": "443.66501", "rx": "53.410645", "ry": "53.410645", "d": "M 265.21147,443.66501 A 53.410645,53.410645 0 1 1 158.39018,443.66501 A 53.410645,53.410645 0 1 1 265.21147,443.66501 z", "transform": "matrix(1.1336207,0,0,1.1336207,25.800327,-1.4980324)" }),
-                  h("path", { "fill": "#1f2026", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "#515151", "stroke-width": "3.00000024", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-opacity": "1", "d": "M 249.60884,556.05516 C 249.60884,561.4302 282.19542,561.01814 282.19542,556.05516 C 282.19542,536.00091 298.47109,519.72501 318.52506,519.72501 C 323.77385,520.88166 325.80104,484.17294 318.52506,483.17466 C 298.47109,483.17466 282.19542,466.89876 282.19542,446.84451 C 282.19542,441.44945 249.60884,441.0386 249.60884,446.84451 C 249.60884,466.89876 233.33317,483.17466 213.2792,483.17466 C 207.39917,482.94968 206.22358,519.51869 213.2792,519.72501 C 233.33317,519.72501 249.60884,536.00091 249.60884,556.05516 z" }),
-                  h(
-                    "g",
-                    null,
-                    h("rect", { "ry": "16.450199", "rx": "16.450203", "y": "372.24924", "x": "437.39334", "height": "29.558952", "width": "37.428303", "opacity": "1", "fill": "#d1d1d1", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "#6d6d6d", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" }),
-                    h("path", { "transform": "matrix(0,1.1259413,1.1259413,0,20.719223,57.395722)", "d": "M 300.92577,381.6729 L 292.76215,395.81271 L 284.59852,381.6729 L 300.92577,381.6729 z", "cy": "386.38617", "cx": "292.76215", "opacity": "1", "fill": "#585a64", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "3", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" }),
-                  ),
-                  h(
-                    "g",
-                    { "transform": "matrix(-1,0,0,1,757.22326,0)" },
-                    h("rect", { "opacity": "1", "fill": "#d1d1d1", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "#6d6d6d", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "width": "37.428303", "height": "29.558952", "x": "437.39334", "y": "372.24924", "rx": "16.450203", "ry": "16.450199" }),
-                    h("path", { "opacity": "1", "fill": "#585a64", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "3", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "cx": "292.76215", "cy": "386.38617", "d": "M 300.92577,381.6729 L 292.76215,395.81271 L 284.59852,381.6729 L 300.92577,381.6729 z", "transform": "matrix(0,1.1259413,1.1259413,0,20.719223,57.395722)" }),
-                  ),
-                  h("path", { "transform": "matrix(1.1370745,0,0,1.1370745,-54.470362,-59.078494)", "d": "M 418.96601,392.55499 A 37.527016,37.527016 0 1 1 343.91198,392.55499 A 37.527016,37.527016 0 1 1 418.96601,392.55499 z", "ry": "37.527016", "rx": "37.527016", "cy": "392.55499", "cx": "381.439", "opacity": "1", "fill": "#6fbe58", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "#0c0d12", "stroke-width": "0.87944984", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" }),
-                  h("path", { "opacity": "1", "fill": "#c9cbd1", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "#0c0d12", "stroke-width": "1.03515577", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "cx": "381.439", "cy": "392.55499", "rx": "37.527016", "ry": "37.527016", "d": "M 418.96601,392.55499 A 37.527016,37.527016 0 1 1 343.91198,392.55499 A 37.527016,37.527016 0 1 1 418.96601,392.55499 z", "transform": "matrix(0.9660382,0,0,0.9660382,10.769546,8.0626522)" }),
-                  h("path", { "transform": "matrix(0.719677,0,0,0.719677,104.74129,99.730104)", "d": "M 418.96601,392.55499 A 37.527016,37.527016 0 1 1 343.91198,392.55499 A 37.527016,37.527016 0 1 1 418.96601,392.55499 z", "ry": "37.527016", "rx": "37.527016", "cy": "392.55499", "cx": "381.439", "opacity": "1", "fill": "#8f9198", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "1.48899412", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" }),
-                  h("path", { "fill": "#6fbe58", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "0.25pt", "stroke-linecap": "butt", "stroke-linejoin": "miter", "stroke-opacity": "1", "d": "M 344.94011,404.6356 C 356.55517,375.84775 372.81663,358.36941 399.68843,354.25686 L 402.77285,356.8272 C 380.82322,364.71715 359.94283,386.25936 349.05266,410.29035 L 344.94011,404.6356 z" }),
-                  h("path", { "d": "M 411.22775,403.33198 C 400.48541,376.70717 385.44579,360.5421 360.59307,356.73856 L 357.7404,359.11577 C 378.0408,366.41289 397.35229,386.33648 407.42421,408.56185 L 411.22775,403.33198 z", "fill": "#6fbe58", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "0.25pt", "stroke-linecap": "butt", "stroke-linejoin": "miter", "stroke-opacity": "1" }),
-                  h("path", { "d": "M 542.19462,503.98223 C 542.19462,535.38796 516.70589,560.87669 485.30015,560.87669 C 453.89441,560.87669 428.40568,535.38796 428.40568,503.98223 C 428.40568,472.57648 453.89441,447.08775 485.30015,447.08775 C 516.70589,447.08775 542.19462,472.57648 542.19462,503.98223 z M 533.89089,503.98222 C 533.89089,530.80431 512.12223,552.57296 485.30015,552.57296 C 458.47806,552.57296 436.7094,530.80431 436.7094,503.98222 C 436.7094,477.16013 458.47806,455.39148 485.30015,455.39148 C 512.12223,455.39148 533.89089,477.16013 533.89089,503.98222 z", "fill": "#232430", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "2.06702876", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-opacity": "1" }),
-                  h("path", { "fill": "#232430", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "2.06702876", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-opacity": "1", "d": "M 218.67656,375.05998 C 218.67656,405.28811 194.14356,429.82111 163.91542,429.82111 C 133.68728,429.82111 109.15428,405.28811 109.15428,375.05998 C 109.15428,344.83183 133.68728,320.29883 163.91542,320.29883 C 194.14356,320.29883 218.67656,344.83183 218.67656,375.05998 z M 210.68419,375.05997 C 210.68419,400.87633 189.73177,421.82874 163.91542,421.82874 C 138.09906,421.82874 117.14664,400.87633 117.14664,375.05997 C 117.14664,349.24361 138.09906,328.2912 163.91542,328.2912 C 189.73177,328.2912 210.68419,349.24361 210.68419,375.05997 z" }),
-                  h("path", { "fill": "none", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "#969696", "stroke-width": "0.81337047", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-opacity": "1", "d": "M 379.23104,433.61031 C 391.84679,433.61031 403.58355,428.83839 411.56194,420.32531 C 418.67644,412.73401 427.24865,406.41041 434.19669,406.41041 C 441.14473,406.41041 433.66336,406.41041 433.66336,406.41041 C 433.66336,406.41041 461.60758,406.41041 461.60758,406.41041 C 472.06124,406.41041 480.54536,397.92629 480.54536,387.3792 C 480.54536,376.83212 472.06124,368.348 461.60758,368.348 C 461.60758,368.348 433.66336,368.348 433.66336,368.348 C 433.66336,368.348 441.14473,368.348 434.19669,368.348 C 427.24865,368.348 418.67644,362.0244 411.56194,354.4331 C 403.58355,345.92002 391.82365,341.1481 379.23104,341.1481 C 366.63844,341.1481 354.87854,345.92002 346.90015,354.4331 C 339.78565,362.0244 331.21344,368.348 324.2654,368.348 C 317.31736,368.348 324.79873,368.348 324.79873,368.348 C 324.79873,368.348 296.85451,368.348 296.85451,368.348 C 286.40085,368.348 277.91673,376.83212 277.91673,387.3792 C 277.91673,397.92629 286.40085,406.41041 296.85451,406.41041 C 296.85451,406.41041 324.79873,406.41041 324.79873,406.41041 C 324.79873,406.41041 317.31736,406.41041 324.2654,406.41041 C 331.21344,406.41041 339.78565,412.73401 346.90015,420.32531 C 354.87854,428.83839 366.6153,433.61031 379.23104,433.61031 z" }),
-                  h("path", { "fill": "#232430", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "2.06702876", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-opacity": "1", "d": "M 338.14038,501.44979 C 338.14038,541.32529 305.77763,573.68804 265.90212,573.68804 C 226.0266,573.68804 193.66386,541.32529 193.66386,501.44979 C 193.66386,461.57427 226.0266,429.21152 265.90212,429.21152 C 305.77763,429.21152 338.14038,461.57427 338.14038,501.44979 z M 327.59723,501.44978 C 327.59723,535.50548 299.95781,563.14489 265.90212,563.14489 C 231.84642,563.14489 204.207,535.50548 204.207,501.44978 C 204.207,467.39408 231.84642,439.75467 265.90212,439.75467 C 299.95781,439.75467 327.59723,467.39408 327.59723,501.44978 z" }),
-                  h(
-                    "g",
-                    { "transform": "translate(-321.84517,-119.25308)" },
-                    h("path", { "opacity": "1", "fill": "#26272d", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "#0c0d12", "stroke-width": "3", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "cx": "491.28583", "cy": "494.31305", "rx": "49.266716", "ry": "49.266716", "d": "M 540.55254,494.31305 A 49.266716,49.266716 0 1 1 442.01911,494.31305 A 49.266716,49.266716 0 1 1 540.55254,494.31305 z", "transform": "translate(-5.525239,0)" }),
-                    h("path", { "transform": "matrix(0.7102804,0,0,0.7102804,136.8099,143.21219)", "d": "M 540.55254,494.31305 A 49.266716,49.266716 0 1 1 442.01911,494.31305 A 49.266716,49.266716 0 1 1 540.55254,494.31305 z", "ry": "49.266716", "rx": "49.266716", "cy": "494.31305", "cx": "491.28583", "opacity": "1", "fill": "#1b1c21", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "4.22368431", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" }),
-                    h(
-                      "g",
-                      { "transform": "matrix(1.0746269,0,0,1.0746269,-36.250788,-36.889032)" },
-                      h("path", { "transform": "matrix(8.4112218e-2,0,0,8.4112218e-2,471.14277,452.73529)", "d": "M 540.55254,494.31305 A 49.266716,49.266716 0 1 1 442.01911,494.31305 A 49.266716,49.266716 0 1 1 540.55254,494.31305 z", "ry": "49.266716", "rx": "49.266716", "cy": "494.31305", "cx": "491.28583", "fill": "#3d3e46", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "26.74999046", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" }),
-                      h("path", { "fill": "#3d3e46", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "26.74999046", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "cx": "491.28583", "cy": "494.31305", "rx": "49.266716", "ry": "49.266716", "d": "M 540.55254,494.31305 A 49.266716,49.266716 0 1 1 442.01911,494.31305 A 49.266716,49.266716 0 1 1 540.55254,494.31305 z", "transform": "matrix(8.4112218e-2,0,0,8.4112218e-2,417.73213,452.73529)" }),
-                      h("path", { "fill": "#3d3e46", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "26.74999046", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "cx": "491.28583", "cy": "494.31305", "rx": "49.266716", "ry": "49.266716", "d": "M 540.55254,494.31305 A 49.266716,49.266716 0 1 1 442.01911,494.31305 A 49.266716,49.266716 0 1 1 540.55254,494.31305 z", "transform": "matrix(0,8.4112218e-2,-8.4112218e-2,0,527.33836,479.69524)" }),
-                      h("path", { "transform": "matrix(0,8.4112218e-2,-8.4112218e-2,0,527.33836,426.2846)", "d": "M 540.55254,494.31305 A 49.266716,49.266716 0 1 1 442.01911,494.31305 A 49.266716,49.266716 0 1 1 540.55254,494.31305 z", "ry": "49.266716", "rx": "49.266716", "cy": "494.31305", "cx": "491.28583", "fill": "#3d3e46", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "26.74999046", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" }),
-                    ),
-                  ),
-                  h(
-                    "g",
-                    { "transform": "translate(-0.4604366,9.6691683)" },
-                    h("path", { "transform": "translate(-5.525239,0)", "d": "M 540.55254,494.31305 A 49.266716,49.266716 0 1 1 442.01911,494.31305 A 49.266716,49.266716 0 1 1 540.55254,494.31305 z", "ry": "49.266716", "rx": "49.266716", "cy": "494.31305", "cx": "491.28583", "opacity": "1", "fill": "#26272d", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "#0c0d12", "stroke-width": "3", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" }),
-                    h("path", { "opacity": "1", "fill": "#1b1c21", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "4.22368431", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "cx": "491.28583", "cy": "494.31305", "rx": "49.266716", "ry": "49.266716", "d": "M 540.55254,494.31305 A 49.266716,49.266716 0 1 1 442.01911,494.31305 A 49.266716,49.266716 0 1 1 540.55254,494.31305 z", "transform": "matrix(0.7102804,0,0,0.7102804,136.8099,143.21219)" }),
-                    h(
-                      "g",
-                      { "transform": "matrix(1.0746269,0,0,1.0746269,-36.250788,-36.889032)" },
-                      h("path", { "fill": "#3d3e46", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "26.74999046", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "cx": "491.28583", "cy": "494.31305", "rx": "49.266716", "ry": "49.266716", "d": "M 540.55254,494.31305 A 49.266716,49.266716 0 1 1 442.01911,494.31305 A 49.266716,49.266716 0 1 1 540.55254,494.31305 z", "transform": "matrix(8.4112218e-2,0,0,8.4112218e-2,471.14277,452.73529)" }),
-                      h("path", { "transform": "matrix(8.4112218e-2,0,0,8.4112218e-2,417.73213,452.73529)", "d": "M 540.55254,494.31305 A 49.266716,49.266716 0 1 1 442.01911,494.31305 A 49.266716,49.266716 0 1 1 540.55254,494.31305 z", "ry": "49.266716", "rx": "49.266716", "cy": "494.31305", "cx": "491.28583", "fill": "#3d3e46", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "26.74999046", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" }),
-                      h("path", { "transform": "matrix(0,8.4112218e-2,-8.4112218e-2,0,527.33836,479.69524)", "d": "M 540.55254,494.31305 A 49.266716,49.266716 0 1 1 442.01911,494.31305 A 49.266716,49.266716 0 1 1 540.55254,494.31305 z", "ry": "49.266716", "rx": "49.266716", "cy": "494.31305", "cx": "491.28583", "fill": "#3d3e46", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "26.74999046", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" }),
-                      h("path", { "fill": "#3d3e46", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "26.74999046", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "cx": "491.28583", "cy": "494.31305", "rx": "49.266716", "ry": "49.266716", "d": "M 540.55254,494.31305 A 49.266716,49.266716 0 1 1 442.01911,494.31305 A 49.266716,49.266716 0 1 1 540.55254,494.31305 z", "transform": "matrix(0,8.4112218e-2,-8.4112218e-2,0,527.33836,426.2846)" }),
-                    ),
-                  ),
-                  h("path", { "transform": "matrix(1.2631579,0,0,1.2631579,-32.710591,-100.04633)", "d": "M 565.68628,384.47525 A 28.661438,28.661438 0 1 1 508.3634,384.47525 A 28.661438,28.661438 0 1 1 565.68628,384.47525 z", "ry": "28.661438", "rx": "28.661438", "cy": "384.47525", "cx": "537.02484", "opacity": "1", "fill": "#2b2c33", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" }),
-                  h("path", { "d": "M 692.40625,795.6875 C 729.24632,796.78087 745.21397,776.84954 748.8125,678.25 C 752.58374,574.91798 685.51396,378.56055 665.84375,329.03125 C 646.1735,279.50196 547.13046,253.20593 502.1875,281.53125 C 465.20101,304.842 424.68118,307.90625 375.15625,307.90625 C 325.63133,307.90625 285.14275,304.842 248.15625,281.53125 C 235.51605,273.56475 218.57513,269.89652 200.34375,269.875 C 153.75246,269.82 98.606739,293.43208 84.46875,329.03125 C 64.798509,378.56054 -2.2712417,574.91797 1.5,678.25 C 5.0785642,776.30266 20.906856,796.56763 57.3125,795.70312 C 141.78831,786.65213 150.45828,738.83858 207.40625,694.09375 C 260.20364,652.61006 297.18742,648.83525 374.875,650.34375 C 452.56257,648.83527 489.51511,652.61009 542.3125,694.09375 C 599.26048,738.83855 607.93044,786.63651 692.40625,795.6875 z", "fill": "none", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "#0c0d12", "stroke-width": "3", "stroke-linecap": "butt", "stroke-linejoin": "miter", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" }),
-                  h("path", { "opacity": "1", "fill": "#2b2c33", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "cx": "537.02484", "cy": "384.47525", "rx": "28.661438", "ry": "28.661438", "d": "M 565.68628,384.47525 A 28.661438,28.661438 0 1 1 508.3634,384.47525 A 28.661438,28.661438 0 1 1 565.68628,384.47525 z", "transform": "matrix(1.2631579,0,0,1.2631579,-141.69948,-100.04633)" }),
-                  h("path", { "opacity": "1", "fill": "#4a7fd6", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "#0c0d12", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "cx": "536.64771", "cy": "382.96677", "rx": "25.267321", "ry": "25.267321", "d": "M 561.91503,382.96677 A 25.267321,25.267321 0 1 1 511.38038,382.96677 A 25.267321,25.267321 0 1 1 561.91503,382.96677 z" }),
-                  h("path", { "opacity": "1", "fill": "#2b2c33", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "cx": "537.02484", "cy": "384.47525", "rx": "28.661438", "ry": "28.661438", "d": "M 565.68628,384.47525 A 28.661438,28.661438 0 1 1 508.3634,384.47525 A 28.661438,28.661438 0 1 1 565.68628,384.47525 z", "transform": "matrix(1.2631579,0,0,1.2631579,-87.393598,-152.08947)" }),
-                  h("path", { "d": "M 561.91503,382.96677 A 25.267321,25.267321 0 1 1 511.38038,382.96677 A 25.267321,25.267321 0 1 1 561.91503,382.96677 z", "ry": "25.267321", "rx": "25.267321", "cy": "382.96677", "cx": "536.64771", "opacity": "1", "fill": "#cc4f4f", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "#0c0d12", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "transform": "translate(109.36601,0)" }),
-                  h("path", { "d": "M 561.91503,382.96677 A 25.267321,25.267321 0 1 1 511.38038,382.96677 A 25.267321,25.267321 0 1 1 561.91503,382.96677 z", "ry": "25.267321", "rx": "25.267321", "cy": "382.96677", "cx": "536.64771", "fill": "#d9bd45", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "#0c0d12", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "transform": "matrix(-1,0,0,-1,1127.9784,711.25052)" }),
-                  h("path", { "transform": "matrix(1.2631579,0,0,1.2631579,-87.393598,-44.609078)", "d": "M 565.68628,384.47525 A 28.661438,28.661438 0 1 1 508.3634,384.47525 A 28.661438,28.661438 0 1 1 565.68628,384.47525 z", "ry": "28.661438", "rx": "28.661438", "cy": "384.47525", "cx": "537.02484", "opacity": "1", "fill": "#2b2c33", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1" }),
-                  h("path", { "transform": "matrix(-1,0,0,-1,1127.9784,820.61655)", "fill": "#6fbe58", "fill-opacity": "1", "fill-rule": "evenodd", "stroke": "#0c0d12", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-dasharray": "none", "stroke-opacity": "1", "cx": "536.64771", "cy": "382.96677", "rx": "25.267321", "ry": "25.267321", "d": "M 561.91503,382.96677 A 25.267321,25.267321 0 1 1 511.38038,382.96677 A 25.267321,25.267321 0 1 1 561.91503,382.96677 z" }),
-                  h("path", { "fill": "#b9bcc6", "fill-opacity": "0.48677243", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-opacity": "1", "d": "M 553.83094,369.19255 C 553.83094,375.08056 546.1101,370.82393 536.59692,370.82393 C 527.08374,370.82393 519.3629,375.08056 519.3629,369.19255 C 519.3629,363.30455 527.08374,358.52587 536.59692,358.52587 C 546.1101,358.52587 553.83094,363.30455 553.83094,369.19255 z" }),
-                  h("path", { "d": "M 609.04671,315.31534 C 609.04671,321.20335 601.32587,316.94672 591.81269,316.94672 C 582.29951,316.94672 574.57867,321.20335 574.57867,315.31534 C 574.57867,309.42734 582.29951,304.64866 591.81269,304.64866 C 601.32587,304.64866 609.04671,309.42734 609.04671,315.31534 z", "fill": "#b9bcc6", "fill-opacity": "0.48677243", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-opacity": "1" }),
-                  h("path", { "fill": "#b9bcc6", "fill-opacity": "0.48677243", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-opacity": "1", "d": "M 609.04671,423.73903 C 609.04671,429.62704 601.32587,425.37041 591.81269,425.37041 C 582.29951,425.37041 574.57867,429.62704 574.57867,423.73903 C 574.57867,417.85103 582.29951,413.07235 591.81269,413.07235 C 601.32587,413.07235 609.04671,417.85103 609.04671,423.73903 z" }),
-                  h("path", { "d": "M 663.92784,369.52718 C 663.92784,375.41519 656.207,371.15856 646.69382,371.15856 C 637.18064,371.15856 629.4598,375.41519 629.4598,369.52718 C 629.4598,363.63918 637.18064,358.8605 646.69382,358.8605 C 656.207,358.8605 663.92784,363.63918 663.92784,369.52718 z", "fill": "#b9bcc6", "fill-opacity": "0.48677243", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-opacity": "1" }),
-                  h("path", { "d": "M 612.51723,341.12116 C 612.51723,334.58641 602.05531,345.61344 591.49718,345.61344 C 580.93905,345.61344 570.47713,334.90191 570.47713,341.43666 C 570.47713,347.97141 580.93905,352.95949 591.49718,352.95949 C 602.05531,352.95949 612.51723,347.65591 612.51723,341.12116 z", "fill": "#101114", "fill-opacity": "0.26455024", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-opacity": "1" }),
-                  h("path", { "fill": "#101114", "fill-opacity": "0.26455024", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-opacity": "1", "d": "M 612.51723,450.91606 C 612.51723,444.38131 602.05531,455.40834 591.49718,455.40834 C 580.93905,455.40834 570.47713,444.69681 570.47713,451.23156 C 570.47713,457.76631 580.93905,462.75439 591.49718,462.75439 C 602.05531,462.75439 612.51723,457.45081 612.51723,450.91606 z" }),
-                  h("path", { "d": "M 557.61978,396.01861 C 557.61978,389.48386 547.15786,400.51089 536.59973,400.51089 C 526.0416,400.51089 515.57968,389.79936 515.57968,396.33411 C 515.57968,402.86886 526.0416,407.85694 536.59973,407.85694 C 547.15786,407.85694 557.61978,402.55336 557.61978,396.01861 z", "fill": "#101114", "fill-opacity": "0.26455024", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-opacity": "1" }),
-                  h("path", { "fill": "#101114", "fill-opacity": "0.26455024", "fill-rule": "evenodd", "stroke": "none", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "4", "stroke-opacity": "1", "d": "M 667.73018,396.01861 C 667.73018,389.48386 657.26826,400.51089 646.71013,400.51089 C 636.152,400.51089 625.69008,389.79936 625.69008,396.33411 C 625.69008,402.86886 636.152,407.85694 646.71013,407.85694 C 657.26826,407.85694 667.73018,402.55336 667.73018,396.01861 z" }),
-                ),
-              ),
-              // The dressing the flat art lacks: light, and its lost lettering.
-              h(
-                "g",
-                { transform: "translate(0,120)" },
-                h("ellipse", { cx: "376", cy: "150", rx: "255", ry: "95", fill: "rgba(255,255,255,0.05)", filter: "url(#x360a-soft)" }),
-                h("ellipse", { cx: "168", cy: "470", rx: "85", ry: "140", fill: "rgba(0,0,0,0.22)", filter: "url(#x360a-soft)" }),
-                h("ellipse", { cx: "585", cy: "470", rx: "85", ry: "140", fill: "rgba(0,0,0,0.22)", filter: "url(#x360a-soft)" }),
-                h("ellipse", { cx: "368", cy: "106", rx: "13", ry: "8", fill: "rgba(255,255,255,0.35)", filter: "url(#x360a-soft)" }),
-                h("text", { class: "x360a-face", x: "592", y: "79", "text-anchor": "middle", fill: "#16181f" }, "Y"),
-                h("text", { class: "x360a-face", x: "537", y: "135", "text-anchor": "middle", fill: "#16181f" }, "X"),
-                h("text", { class: "x360a-face", x: "646", y: "135", "text-anchor": "middle", fill: "#16181f" }, "B"),
-                h("text", { class: "x360a-face", x: "592", y: "191", "text-anchor": "middle", fill: "#16181f" }, "A"),
-                h("text", { class: "x360a-lab", x: "299", y: "99", "text-anchor": "middle", fill: "#7c808c" }, "BACK"),
-                h("text", { class: "x360a-lab", x: "459", y: "99", "text-anchor": "middle", fill: "#7c808c" }, "START"),
-                h("text", { class: "x360a-num", x: "340", y: "84", "text-anchor": "middle", fill: "#565a64" }, "1"),
-                h("text", { class: "x360a-num", x: "420", y: "84", "text-anchor": "middle", fill: "#565a64" }, "2"),
-                h("text", { class: "x360a-num", x: "340", y: "172", "text-anchor": "middle", fill: "#565a64" }, "3"),
-                h("text", { class: "x360a-num", x: "420", y: "172", "text-anchor": "middle", fill: "#565a64" }, "4"),
-              ),
-              // The hook overlay: invisible until the live echo fills it.
-              h(
-                "g",
-                { transform: "translate(0,120)" },
-                h("circle", { "data-fn": "lthumb", cx: "163", cy: "115", r: "22", fill: "transparent" }),
-                h("circle", { "data-fn": "ly.max", cx: "163", cy: "84", r: "16", fill: "transparent" }),
-                h("circle", { "data-fn": "ly.min", cx: "163", cy: "146", r: "16", fill: "transparent" }),
-                h("circle", { "data-fn": "lx.min", cx: "132", cy: "115", r: "16", fill: "transparent" }),
-                h("circle", { "data-fn": "lx.max", cx: "194", cy: "115", r: "16", fill: "transparent" }),
-                h("circle", { "data-fn": "rthumb", cx: "487", cy: "243", r: "22", fill: "transparent" }),
-                h("circle", { "data-fn": "ry.max", cx: "487", cy: "212", r: "16", fill: "transparent" }),
-                h("circle", { "data-fn": "ry.min", cx: "487", cy: "274", r: "16", fill: "transparent" }),
-                h("circle", { "data-fn": "rx.min", cx: "456", cy: "243", r: "16", fill: "transparent" }),
-                h("circle", { "data-fn": "rx.max", cx: "518", cy: "243", r: "16", fill: "transparent" }),
-                h("circle", { "data-fn": "dpad.up", cx: "266", cy: "204", r: "18", fill: "transparent" }),
-                h("circle", { "data-fn": "dpad.down", cx: "266", cy: "278", r: "18", fill: "transparent" }),
-                h("circle", { "data-fn": "dpad.left", cx: "230", cy: "241", r: "18", fill: "transparent" }),
-                h("circle", { "data-fn": "dpad.right", cx: "301", cy: "241", r: "18", fill: "transparent" }),
-                h("circle", { "data-fn": "guide", cx: "380", cy: "120", r: "43", fill: "transparent" }),
-                h("circle", { "data-fn": "back", cx: "299", cy: "127", r: "17", fill: "transparent" }),
-                h("circle", { "data-fn": "start", cx: "459", cy: "127", r: "17", fill: "transparent" }),
-                h("circle", { "data-fn": "y", cx: "592", cy: "68", r: "29", fill: "transparent" }),
-                h("circle", { "data-fn": "x", cx: "537", cy: "124", r: "29", fill: "transparent" }),
-                h("circle", { "data-fn": "b", cx: "646", cy: "124", r: "29", fill: "transparent" }),
-                h("circle", { "data-fn": "a", cx: "592", cy: "180", r: "29", fill: "transparent" }),
-                // The glance callouts: which KEY presses each control,
-                // filled imperatively per payload (data-live-chatter).
-                h("text", { class: "n-fnkey", "data-fn": "lthumb", "data-live-chatter": "", x: "163", y: "121", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "ly.max", "data-live-chatter": "", x: "163", y: "57", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "ly.min", "data-live-chatter": "", x: "163", y: "183", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "lx.min", "data-live-chatter": "", x: "105", y: "121", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "lx.max", "data-live-chatter": "", x: "221", y: "121", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "rthumb", "data-live-chatter": "", x: "487", y: "249", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "ry.max", "data-live-chatter": "", x: "487", y: "186", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "ry.min", "data-live-chatter": "", x: "487", y: "311", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "rx.min", "data-live-chatter": "", x: "430", y: "249", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "rx.max", "data-live-chatter": "", x: "544", y: "249", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "dpad.up", "data-live-chatter": "", x: "266", y: "174", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "dpad.down", "data-live-chatter": "", x: "266", y: "316", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "dpad.left", "data-live-chatter": "", x: "202", y: "247", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "dpad.right", "data-live-chatter": "", x: "329", y: "247", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "guide", "data-live-chatter": "", x: "380", y: "179", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "back", "data-live-chatter": "", x: "299", y: "158", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "start", "data-live-chatter": "", x: "459", y: "158", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "y", "data-live-chatter": "", x: "592", y: "29", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "x", "data-live-chatter": "", x: "498", y: "130", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "b", "data-live-chatter": "", x: "685", y: "130", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "a", "data-live-chatter": "", x: "592", y: "227", "text-anchor": "middle" }),
-              ),
-              h(
-                "g",
-                null,
-                h("text", { class: "n-fnkey", "data-fn": "lt", "data-live-chatter": "", x: "101", y: "34", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "lb", "data-live-chatter": "", x: "101", y: "94", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "rt", "data-live-chatter": "", x: "650", y: "34", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "rb", "data-live-chatter": "", x: "650", y: "94", "text-anchor": "start" }),
-              ),
-            ),
+            h(X360PadArt, null),
           ),
           // ── Hybrid DualShock 4 (ViGEm PlayStation) ────────────────────
           // Funky Designs' CC0 geometry supplies the real product detail;
@@ -11749,128 +11391,7 @@ export function NocturneIsland() {
           h(
             "div",
             { class: () => nPadPsCls(), "data-pad-family": "ps" },
-            h(
-              "svg",
-              {
-                class: "wspad ds4a ds4premium",
-                viewBox: "-28 -18 696 550",
-                preserveAspectRatio: "xMidYMid meet",
-                "data-ds4-variant": "jet-black",
-                "aria-hidden": "true",
-                focusable: "false",
-              },
-              h(
-                "g",
-                { class: "ds4premium-body" },
-                h(
-                  "g",
-                  { class: "ds4premium-trigger-bridges" },
-                  h("path", { class: "ds4premium-trigger-bridge", d: "M96 77 C109 68 151 68 164 78 L166 123 C143 120 116 120 90 126 L90 96 C90 87 92 82 96 77 Z" }),
-                  h("path", { class: "ds4premium-trigger-bridge", d: "M544 77 C531 68 489 68 476 78 L474 123 C497 120 524 120 550 126 L550 96 C550 87 548 82 544 77 Z" }),
-                ),
-                h(
-                  "g",
-                  { class: "ds4premium-paid", transform: "matrix(0.1684210526 0 0 0.1684210526 0 105)" },
-                  h(Ds4PremiumDepth, null),
-                  h(Ds4PremiumGeometry, null),
-                  // The 40 KB source dot-grid becomes one shared pattern.
-                  h("path", { class: "ds4premium-touch-overlay", d: "M1355.79,842.942c-49.66,0 -89.98,-40.32 -89.98,-89.98l0,-612.415c0,-10.354 8.39,-18.748 18.75,-18.748l1230.88,0c10.36,0 18.75,8.394 18.75,18.748l0,612.415c0,49.66 -40.32,89.98 -89.98,89.98l-1088.42,0Z" }),
-                ),
-              ),
-              // Two app-authored L2 zones plus 23 exact duplicates of the
-              // paid drawing's whole controls. The paid duplicates carry the
-              // same matrix as the art, so hover borders cannot drift.
-              h(
-                "g",
-                { class: "ds4premium-hooks" },
-                h("path", { "data-fn": "lt", class: "ds4premium-hook", d: "M167.27,80.69l-2.79-35.54c-1.25-15.98-14.77-28.21-30.8-27.85-13.24.3-24.75,9.19-28.38,21.93L93.72,79.86c-.77,2.71,1.26,5.4,4.08,5.4h65.24c2.47,0,4.42-2.11,4.23-4.57Z", fill: "transparent", "vector-effect": "non-scaling-stroke" }),
-                h("path", { "data-fn": "rt", class: "ds4premium-hook", d: "M472.73,80.69l2.79-35.54c1.25-15.98,14.77-28.21,30.8-27.85,13.24.3,24.75,9.19,28.38,21.93l11.58,40.63c.77,2.71-1.26,5.4-4.08,5.4h-65.24c-2.47,0-4.42-2.11-4.23-4.57Z", fill: "transparent", "vector-effect": "non-scaling-stroke" }),
-                h(Ds4PremiumButtonHooks, null),
-                h("path", { "data-fn": "lt", class: "ds4free-hook", d: "M167.27,80.69l-2.79-35.54c-1.25-15.98-14.77-28.21-30.8-27.85-13.24.3-24.75,9.19-28.38,21.93L93.72,79.86c-.77,2.71,1.26,5.4,4.08,5.4h65.24c2.47,0,4.42-2.11,4.23-4.57Z", fill: "transparent" }),
-                h("path", { "data-fn": "rt", class: "ds4free-hook", d: "M472.73,80.69l2.79-35.54c1.25-15.98,14.77-28.21,30.8-27.85,13.24.3,24.75,9.19,28.38,21.93l11.58,40.63c.77,2.71-1.26,5.4-4.08,5.4h-65.24c-2.47,0-4.42-2.11-4.23-4.57Z", fill: "transparent" }),
-                h("path", { "data-fn": "lb", class: "ds4free-hook", d: "M165.32,123.06v-3.76c0-3.2-2.11-6.02-5.17-6.96-31.09-9.5-55.53-1.1-65.02,3.2-2.6,1.18-4.28,3.76-4.28,6.62v3.34s38.5-2.96,74.48-2.44Z", fill: "transparent" }),
-                h("path", { "data-fn": "rb", class: "ds4free-hook", d: "M549.16,125.5v-3.34c0-2.86-1.68-5.44-4.28-6.62-9.49-4.3-33.93-12.7-65.02-3.2-3.06.94-5.17,3.75-5.17,6.96v3.76s34.84-.67,74.48,2.44Z", fill: "transparent" }),
-                h("rect", { "data-fn": "back", class: "ds4free-hook", x: "183", y: "141", width: "22", height: "39", rx: "10", fill: "transparent" }),
-                h("rect", { "data-fn": "start", class: "ds4free-hook", x: "435", y: "141", width: "22", height: "39", rx: "10", fill: "transparent" }),
-                h("path", { "data-fn": "dpad.up", class: "ds4free-hook", d: "M140.7,184.19v6.44c0,5.03-1.96,9.87-5.46,13.49l-7.64,7.89c-3,3.09-8,2.99-10.87-.22l-6.95-7.79c-3.17-3.55-4.92-8.14-4.92-12.9v-6.9c0-6.43,5.21-11.64,11.64-11.64h12.57c6.43,0,11.64,5.21,11.64,11.64Z", fill: "transparent" }),
-                h("path", { "data-fn": "dpad.right", class: "ds4free-hook", d: "M163.28,242.61h-6.44c-5.03,0-9.87-1.96-13.49-5.46l-7.89-7.64c-3.09-3-2.99-8,.22-10.87l7.79-6.95c3.55-3.17,8.14-4.92,12.9-4.92h6.9c6.43,0,11.64,5.21,11.64,11.64v12.57c0,6.43-5.21,11.64-11.64,11.64Z", fill: "transparent" }),
-                h("path", { "data-fn": "dpad.down", class: "ds4free-hook", d: "M104.86,265.19v-6.44c0-5.03,1.96-9.87,5.46-13.49l7.64-7.89c3-3.09,8-2.99,10.87.22l6.95,7.79c3.17,3.55,4.92,8.14,4.92,12.9v6.9c0,6.43-5.21,11.64-11.64,11.64h-12.57c-6.43,0-11.64-5.21-11.64-11.64Z", fill: "transparent" }),
-                h("path", { "data-fn": "dpad.left", class: "ds4free-hook", d: "M82.28,206.77h6.44c5.03,0,9.87,1.96,13.49,5.46l7.89,7.64c3.09,3,2.99,8-.22,10.87l-7.79,6.95c-3.55,3.17-8.14,4.92-12.9,4.92h-6.9c-6.43,0-11.64-5.21-11.64-11.64v-12.57c0-6.43,5.21-11.64,11.64-11.64Z", fill: "transparent" }),
-                // y=triangle, b=circle, a=cross, x=square.
-                h("circle", { "data-fn": "y", class: "ds4free-hook", cx: "517.22", cy: "178.98", r: "22", fill: "transparent" }),
-                h("circle", { "data-fn": "b", class: "ds4free-hook", cx: "563.04", cy: "224.8", r: "22", fill: "transparent" }),
-                h("circle", { "data-fn": "a", class: "ds4free-hook", cx: "517.22", cy: "270.62", r: "22", fill: "transparent" }),
-                h("circle", { "data-fn": "x", class: "ds4free-hook", cx: "471.4", cy: "224.8", r: "22", fill: "transparent" }),
-                h("circle", { "data-fn": "guide", class: "ds4free-hook", cx: "320.16", cy: "314.85", r: "17", fill: "transparent" }),
-                h("circle", { "data-fn": "lthumb", class: "ds4free-hook", cx: "219.94", cy: "314.85", r: "24", fill: "transparent" }),
-                h("circle", { "data-fn": "ly.max", class: "ds4free-hook", cx: "219.94", cy: "280", r: "13", fill: "transparent" }),
-                h("circle", { "data-fn": "ly.min", class: "ds4free-hook", cx: "219.94", cy: "350", r: "13", fill: "transparent" }),
-                h("circle", { "data-fn": "lx.min", class: "ds4free-hook", cx: "185", cy: "314.85", r: "13", fill: "transparent" }),
-                h("circle", { "data-fn": "lx.max", class: "ds4free-hook", cx: "255", cy: "314.85", r: "13", fill: "transparent" }),
-                h("circle", { "data-fn": "rthumb", class: "ds4free-hook", cx: "420.06", cy: "314.85", r: "24", fill: "transparent" }),
-                h("circle", { "data-fn": "ry.max", class: "ds4free-hook", cx: "420.06", cy: "280", r: "13", fill: "transparent" }),
-                h("circle", { "data-fn": "ry.min", class: "ds4free-hook", cx: "420.06", cy: "350", r: "13", fill: "transparent" }),
-                h("circle", { "data-fn": "rx.min", class: "ds4free-hook", cx: "385", cy: "314.85", r: "13", fill: "transparent" }),
-                h("circle", { "data-fn": "rx.max", class: "ds4free-hook", cx: "455", cy: "314.85", r: "13", fill: "transparent" }),
-              ),
-              // The free source intentionally has no retail face symbols or
-              // lightbar; this app-owned dressing supplies those details.
-              h(
-                "g",
-                { class: "ds4free-dressing" },
-                h("path", { class: "ds4free-grip-shade", d: "M18 328 C8 372 5 433 27 470 C43 497 75 504 99 491 C119 480 133 457 143 429 C126 449 107 460 84 463 C52 466 29 443 24 410 C20 378 24 349 32 320 Z" }),
-                h("path", { class: "ds4free-grip-shade", d: "M622 328 C632 372 635 433 613 470 C597 497 565 504 541 491 C521 480 507 457 497 429 C514 449 533 460 556 463 C588 466 611 443 616 410 C620 378 616 349 608 320 Z" }),
-                h("path", { class: "ds4free-touch-texture", d: "M419.35,234.87v-102.38c0-2.12-1.73-3.85-3.85-3.85h-191.01c-2.12,0-3.85,1.73-3.85,3.85v102.38c0,4.13,3.36,7.5,7.5,7.5h183.71c4.13,0,7.5-3.36,7.5-7.5Z" }),
-                h("path", { class: "ds4free-lightbar", d: "M235 131 Q320 119 405 131" }),
-                h("path", { class: "ds4free-touch-sheen", d: "M235 142 Q320 132 405 142" }),
-                h("path", { class: "ds4free-dpad-mark", d: "M122.78 179 l-6.2 10.5 h12.4 Z" }),
-                h("path", { class: "ds4free-dpad-mark", d: "M168.3 224.69 l-10.5 -6.2 v12.4 Z" }),
-                h("path", { class: "ds4free-dpad-mark", d: "M122.78 270.2 l-6.2 -10.5 h12.4 Z" }),
-                h("path", { class: "ds4free-dpad-mark", d: "M77.3 224.69 l10.5 -6.2 v12.4 Z" }),
-                h("rect", { class: "ds4free-face-mark ds4free-square-mark", x: "463.2", y: "216.6", width: "16.4", height: "16.4", rx: "1" }),
-                h("circle", { class: "ds4free-face-mark ds4free-circle-mark", cx: "563.04", cy: "224.8", r: "8.7" }),
-                h("path", { class: "ds4free-face-mark ds4free-triangle-mark", d: "M517.22 169.1 l9.1 16.1 h-18.2 Z" }),
-                h("path", { class: "ds4free-face-mark ds4free-cross-mark", d: "M510.7 264.1 l13 13 M523.7 264.1 l-13 13" }),
-                h("path", { class: "ds4free-stick-highlight", d: "M196 304 A27 27 0 0 1 243 304" }),
-                h("path", { class: "ds4free-stick-highlight", d: "M396 304 A27 27 0 0 1 444 304" }),
-                h("text", { class: "ds4free-guide-mark", x: "320.16", y: "318.5", "text-anchor": "middle" }, "PS"),
-                h("text", { class: "ds4free-sys", x: "133", y: "63", "text-anchor": "middle" }, "L2"),
-                h("text", { class: "ds4free-sys", x: "507", y: "63", "text-anchor": "middle" }, "R2"),
-                h("text", { class: "ds4free-sys", x: "129", y: "121", "text-anchor": "middle" }, "L1"),
-                h("text", { class: "ds4free-sys", x: "511", y: "121", "text-anchor": "middle" }, "R1"),
-                h("text", { class: "ds4free-legend", x: "194", y: "137", "text-anchor": "middle" }, "SHARE"),
-                h("text", { class: "ds4free-legend", x: "446", y: "137", "text-anchor": "middle" }, "OPTIONS"),
-              ),
-              h(
-                "g",
-                { class: "ds4premium-callouts" },
-                h("text", { class: "n-fnkey", "data-fn": "lt", "data-live-chatter": "", x: "88", y: "48", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "lb", "data-live-chatter": "", x: "82", y: "122", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "rt", "data-live-chatter": "", x: "552", y: "48", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "rb", "data-live-chatter": "", x: "558", y: "122", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "back", "data-live-chatter": "", x: "194", y: "193", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "start", "data-live-chatter": "", x: "446", y: "193", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "dpad.up", "data-live-chatter": "", x: "123", y: "159", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "dpad.down", "data-live-chatter": "", x: "123", y: "298", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "dpad.left", "data-live-chatter": "", x: "56", y: "229", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "dpad.right", "data-live-chatter": "", x: "190", y: "229", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "lthumb", "data-live-chatter": "", x: "220", y: "319", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "ly.max", "data-live-chatter": "", x: "220", y: "270", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "ly.min", "data-live-chatter": "", x: "220", y: "382", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "lx.min", "data-live-chatter": "", x: "171", y: "319", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "lx.max", "data-live-chatter": "", x: "269", y: "319", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "rthumb", "data-live-chatter": "", x: "420", y: "319", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "ry.max", "data-live-chatter": "", x: "420", y: "270", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "ry.min", "data-live-chatter": "", x: "420", y: "382", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "rx.min", "data-live-chatter": "", x: "371", y: "319", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "rx.max", "data-live-chatter": "", x: "469", y: "319", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "guide", "data-live-chatter": "", x: "320", y: "350", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "y", "data-live-chatter": "", x: "517", y: "149", "text-anchor": "middle" }),
-                h("text", { class: "n-fnkey", "data-fn": "b", "data-live-chatter": "", x: "592", y: "229", "text-anchor": "start" }),
-                h("text", { class: "n-fnkey", "data-fn": "x", "data-live-chatter": "", x: "442", y: "229", "text-anchor": "end" }),
-                h("text", { class: "n-fnkey", "data-fn": "a", "data-live-chatter": "", x: "517", y: "317", "text-anchor": "middle" }),
-              ),
-            ),
+            h(Ds4PremiumPadArt, null),
           ),
           // ── Premium CC0 DualSense ─────────────────────────────────────
           h(

@@ -49,6 +49,8 @@ pub(crate) fn payload(
     setup: Option<ksx_api::SetupView>,
     scan: Result<ksx_api::DeviceScanView, String>,
     staged: &ksx_api::StagedSetupView,
+    selected_slot: Option<u8>,
+    undo_label: Option<&str>,
 ) -> RedesignPayload {
     let staged_selector = staged
         .reachable
@@ -112,7 +114,7 @@ pub(crate) fn payload(
         .collect(),
         // The staged controllers and the persona picker, off the SAME staged
         // view the device marking reads — one truth per render.
-        controllers: RedesignControllers::of(staged),
+        controllers: RedesignControllers::of(staged, selected_slot, undo_label),
     }
 }
 
@@ -172,6 +174,10 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         "rdCtrlCountsLine": payload.controllers.counts_line,
         "rdCtrlAddPreset": payload.controllers.add_preset,
         "rdCtrlAddLayout": payload.controllers.add_layout,
+        // The removal-undo chip: SSR chrome (a reload keeps the offer while
+        // the server-held window lasts — the nocturne chip's contract).
+        "rdUndoCls": payload.controllers.undo_cls,
+        "rdUndoLabel": payload.controllers.undo_label,
     })
 }
 
@@ -332,6 +338,8 @@ mod tests {
             // aria_current "false" and the workbench mounts no cards — but
             // the picker still offers the roster over served ceilings.
             &fixture_staged(Vec::new()),
+            None,
+            None,
         )
     }
 
@@ -389,6 +397,47 @@ mod tests {
         }
     }
 
+    /// The inspector payload rides the ONE shared controller-panel and pad
+    /// composers: selection defaults to the first slot (the nocturne rule),
+    /// an explicit slot wins, every pad row carries the server-decided
+    /// family, an authoring-less slot serves its honest mapping refusal
+    /// instead of an empty-but-valid callout table, and the undo chip's
+    /// class pair folds exactly like nocturne's.
+    #[test]
+    fn the_inspector_panel_and_pads_ride_the_shared_composers() {
+        let staged = fixture_staged(vec![
+            fixture_slot(1, "xbox360", true, "Player 1"),
+            fixture_slot(2, "playstation", false, "Player 2"),
+        ]);
+        let defaulted = RedesignControllers::of(&staged, None, None);
+        assert_eq!(defaulted.panel.slot_val, "1", "no ?slot → the first slot");
+        assert_eq!(defaulted.panel.pad_badge, "P1");
+        assert_eq!(defaulted.panel.pad_badge_cls, "n-pbadge np1");
+        let chosen = RedesignControllers::of(&staged, Some(2), None);
+        assert_eq!(chosen.panel.slot_val, "2", "an explicit ?slot wins");
+        assert!(
+            chosen.panel.pad_sub.contains("\"Player 2\" preset"),
+            "{}",
+            chosen.panel.pad_sub
+        );
+        assert_eq!(chosen.pads.len(), 2);
+        assert_eq!(chosen.pads[0].family, "xbox");
+        assert_eq!(chosen.pads[1].family, "ps");
+        for pad in &chosen.pads {
+            assert!(
+                !pad.mapping_available && !pad.mapping_reason.is_empty(),
+                "a fixture slot serves no authoring table — the refusal must \
+                 travel, never an empty-but-valid callout table: {pad:?}"
+            );
+        }
+        let (quiet_cls, quiet_label) = (&chosen.undo_cls, &chosen.undo_label);
+        assert_eq!(quiet_cls, "rd-undochip none");
+        assert!(quiet_label.is_empty());
+        let chip = RedesignControllers::of(&staged, Some(2), Some("P9 (X) removed"));
+        assert_eq!(chip.undo_cls, "rd-undochip");
+        assert_eq!(chip.undo_label, "P9 (X) removed");
+    }
+
     /// The card and picker composition speaks only the daemon's truth: slot
     /// order precomposes the reorder strings (empty at the ends — the honest
     /// no-write), the api line prices XInput honestly, every ceiling in the
@@ -401,7 +450,7 @@ mod tests {
             fixture_slot(2, "playstation", false, "Player 2"),
             fixture_slot(3, "xbox360", true, "Player 3"),
         ]);
-        let view = RedesignControllers::of(&staged);
+        let view = RedesignControllers::of(&staged, None, None);
         assert_eq!(view.cards.len(), 3);
         assert_eq!(
             view.cards.iter().map(|c| c.number.as_str()).collect::<Vec<_>>(),
@@ -432,7 +481,7 @@ mod tests {
         ] {
             let one = RedesignControllers::of(&fixture_staged(vec![fixture_slot(
                 1, persona, false, "P",
-            )]));
+            )]), None, None);
             assert_eq!(one.cards[0].family, family, "{persona}");
             assert_eq!(one.cards[0].art, art, "{persona}");
         }
@@ -443,7 +492,7 @@ mod tests {
                 .map(|n| fixture_slot(n, "playstation", false, "P"))
                 .collect(),
         );
-        let full_view = RedesignControllers::of(&full);
+        let full_view = RedesignControllers::of(&full, None, None);
         assert_eq!(full_view.add_preset, "");
         assert!(
             full_view.add_note.contains("Every controller slot is staged"),
@@ -455,7 +504,7 @@ mod tests {
         let mut dead = fixture_staged(Vec::new());
         dead.reachable = false;
         dead.error = Some("the daemon pipe is closed".into());
-        let dead_view = RedesignControllers::of(&dead);
+        let dead_view = RedesignControllers::of(&dead, None, None);
         assert!(dead_view.cards.is_empty());
         assert!(dead_view.personas.iter().all(|p| p.usable == "false"));
         assert_eq!(dead_view.add_note, "the daemon pipe is closed");
@@ -566,6 +615,8 @@ mod tests {
             Some(ksx_api::SetupView::default()),
             Ok(fixture_scan()),
             &staged,
+            None,
+            None,
         );
         assert!(!payload.devices.staging_reachable);
         assert!(payload.devices.staging_line.contains("background helper"));
@@ -806,6 +857,8 @@ mod tests {
             "rdCtrlCountsLine",
             "rdCtrlAddPreset",
             "rdCtrlAddLayout",
+            "rdUndoCls",
+            "rdUndoLabel",
         ] {
             assert!(
                 REDESIGN_ISLAND_TS.contains(&format!("const [{signal}, ")),

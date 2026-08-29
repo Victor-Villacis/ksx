@@ -4,11 +4,22 @@ import {
   claimSavedDeviceGeometryKey,
   deviceInstanceId,
 } from "./device-instance-id";
+import { Ds4PremiumPadArt } from "./ds4PremiumPadArt";
+import { DualSensePremiumArt } from "./dualSensePremiumArt";
+import { loadControllerFinishes, loadDs4Variants } from "./padFinishes";
+import {
+  renderControllerPanel,
+  type RdPanelView,
+} from "./redesign-controller-inspector";
 import {
   syncControllerWidgets,
   type ParkedController,
   type RdControllerCardView,
+  type RdPadView,
 } from "./redesign-controllers";
+import { SwitchProPremiumArt } from "./switchProPremiumArt";
+import { X360PadArt } from "./x360PadArt";
+import { XboxSeriesPremiumArt } from "./xboxSeriesPremiumArt";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /redesign — the transplant rebuild's blank workbench.
@@ -112,6 +123,15 @@ export interface RdControllers {
   counts_line: string;
   reachable: boolean;
   parked_held: string[];
+  /** Every staged controller's canvas dressing — the same `NocturnePadView`
+   *  rows /nocturne's widgets clone and dress, from the one composer. */
+  pads: RdPadView[];
+  /** The selected controller's whole panel — the same `ControllerPanel`
+   *  /nocturne's right pane serves. */
+  panel: RdPanelView;
+  /** The short server-held undo window after a ✕ removal. */
+  undo_cls: string;
+  undo_label: string;
 }
 
 /** The payload the server embeds and /api/redesign serves — seeded into the
@@ -153,6 +173,16 @@ let rdCtrlCards: RdControllerCardView[] = [];
 /** The ghost ids the server still holds parked material for — plain data
  *  for the same reason. */
 let rdCtrlParkedHeld: string[] = [];
+/** The served pad dressing rows, keyed to the cards by slot — plain data
+ *  (the canvas reconciler consumes them, no template list). */
+let rdCtrlPads: RdPadView[] = [];
+/** The selected controller's served panel — plain data (the inspector body
+ *  is client-painted, renderInspector's own pattern). */
+let rdCtrlPanel: RdPanelView | null = null;
+// The removal-undo chip: SSR chrome (it must show without the inspector,
+// exactly like nocturne's rack chip), so these two are signals with slots.
+const [rdUndoCls, setRdUndoCls] = createSignal("rd-undochip none");
+const [rdUndoLabel, setRdUndoLabel] = createSignal("");
 let rdDeviceScanAuthoritative = false;
 let rdStagingReachable = false;
 let rdStagingLine = "";
@@ -215,6 +245,10 @@ export function applyRedesign(v: RedesignPayload): void {
   setRdCtrlAddLayout(c?.add_layout ?? "");
   rdCtrlCards = c?.cards ?? [];
   rdCtrlParkedHeld = c?.parked_held ?? [];
+  rdCtrlPads = c?.pads ?? [];
+  rdCtrlPanel = c?.panel ?? null;
+  setRdUndoCls(c?.undo_cls || "rd-undochip none");
+  setRdUndoLabel(c?.undo_label ?? "");
   // Reconcile browser-owned membership with the freshly served roster: a
   // disconnected board leaves the canvas without losing its remembered
   // place, and a remembered board mounts as soon as the scan sees it again.
@@ -222,6 +256,10 @@ export function applyRedesign(v: RedesignPayload): void {
   // The controller cards are DAEMON truth: the canvas mirrors the staged
   // rack exactly (redesign-controllers.ts owns the reconcile).
   syncCtrlBench();
+  // A refresh carries a possibly different panel (new bindings, new SOCD,
+  // new selection): an open inspector repaints from the fresh truth.
+  const panel = inspectorEl();
+  if (panel && !panel.hidden) renderInspector();
   restoreDeviceRowFocus(deviceFocus);
 }
 
@@ -235,6 +273,7 @@ function syncCtrlBench(): void {
   syncControllerWidgets(rdCtrlCards, {
     canvas,
     root,
+    pads: rdCtrlPads,
     parked: canvasPrefs.parked ?? [],
     parkedHeld: new Set(rdCtrlParkedHeld),
     addPreset: rdCtrlAddPreset(),
@@ -892,6 +931,26 @@ function inspectorButton(label: string, nx: string, title: string): HTMLElement 
   return button;
 }
 
+/** The entry's payload refetcher — registered at activation (setNocturnePoll's
+ *  pattern) so the island can ask for another slot's panel without owning
+ *  fetch. */
+let redesignRefreshFn: () => Promise<boolean> = async () => false;
+export function setRedesignRefresh(fn: () => Promise<boolean>): void {
+  redesignRefreshFn = fn;
+}
+
+/** Merge `?slot=N` into the URL — the nocturne selection door's rule:
+ *  MERGE, never replace, so other params survive, and a reload keeps the
+ *  selection. Returns whether the URL actually changed (the guard that
+ *  stops a repaint→refetch loop when a slot's panel cannot be served). */
+function mergeSlotIntoUrl(slot: string): boolean {
+  const url = new URL(window.location.href);
+  if (url.searchParams.get("slot") === slot) return false;
+  url.searchParams.set("slot", slot);
+  window.history.replaceState(null, "", `${url.pathname}?${url.searchParams.toString()}`);
+  return true;
+}
+
 /** Repaint the inspector's body from the live selection. Called on every
  *  selection or item-state change while open. */
 function renderInspector(): void {
@@ -943,6 +1002,25 @@ function renderInspector(): void {
       inspectorButton("Center", "rd-center-sel", "Pan it to the middle (C)"),
     );
     rows.push(title, kind, scale, position, verbs);
+    // A CONTROLLER card carries the whole transplanted nocturne panel: the
+    // meta strip, SOCD editor, slot verbs and the six bind groups, painted
+    // from the served `ControllerPanel`. The panel is served for ONE slot
+    // (the nocturne `?slot=` rule), so selecting a different card merges the
+    // slot into the URL and refetches; the repaint lands here again with the
+    // matching truth.
+    const ctrlSlot = /^ctrl-slot-(\d+)$/.exec(item.dataset.instanceId ?? "")?.[1];
+    if (ctrlSlot) {
+      const moved = mergeSlotIntoUrl(ctrlSlot);
+      if (rdCtrlPanel && rdCtrlPanel.slot_val === ctrlSlot) {
+        rows.push(...renderControllerPanel(rdCtrlPanel));
+      } else {
+        const wait = document.createElement("p");
+        wait.className = "rd-insp-kind";
+        wait.textContent = "Fetching this controller's panel…";
+        rows.push(wait);
+        if (moved) void redesignRefreshFn();
+      }
+    }
   } else if (selected.length > 1) {
     // The multi-selection rules (design handoff §7): no empty sections —
     // only what applies to many. Selection origin moves the whole group by
@@ -1653,6 +1731,10 @@ export function redesignWire(root: HTMLElement): void {
   // The wire's own "JavaScript is live" marker: scripting-only chrome (the
   // camera buttons) reveals off it, and the parity gate normalizes it.
   root.classList.add("js");
+  // The shared finish stores (padFinishes): a DS4 color or premium finish
+  // chosen on /nocturne is the same controller's finish here.
+  loadDs4Variants();
+  loadControllerFinishes();
   root.addEventListener("click", (ev) => {
     const target = ev.target as HTMLElement | null;
     const hit = target?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
@@ -1970,6 +2052,22 @@ export function RedesignIsland() {
           // from the allowlisted ?flash= on a full load; the entry's
           // fetch-submit layer applies the same copy without one.
           h("span", { role: "status", class: () => rdFlashCls() }, () => rdFlashLine()),
+          // The short undo window after a ✕ removal — the nocturne chip's
+          // contract verbatim: the SERVER holds the resurrection material
+          // and serves this chip while the window lasts; the verb replays
+          // it. No JavaScript state — a reload keeps the offer.
+          h(
+            "form",
+            {
+              role: "status",
+              method: "post",
+              action: "/redesign/controller/undo",
+              "data-rd-form": "controller-undo",
+              class: () => rdUndoCls(),
+            },
+            h("span", { class: "n-undo-lab" }, () => rdUndoLabel()),
+            h("button", { class: "n-undo-btn", type: "submit" }, "Undo"),
+          ),
           // Back view: appears the moment the camera history is non-empty;
           // its title carries the top entry's label.
           h(
@@ -2336,6 +2434,32 @@ export function RedesignIsland() {
         h(
           "section",
           { class: "forma-canvas n-canvas", "data-forma-canvas": "", "data-client-canvas": "" },
+          // The hidden pad masters the controller cards CLONE — the same
+          // five shared drawings /nocturne mounts (one component per
+          // family; `.n-padmasters` is display:none, clone templates only).
+          // Static classes on purpose: this page has no no-JS pad display,
+          // so no visibility signals ride the wraps.
+          h(
+            "div",
+            { class: "n-padmasters", "aria-hidden": "true" },
+            h("div", { class: "n-padwrap", "data-pad-family": "xbox" }, h(X360PadArt, null)),
+            h("div", { class: "n-padwrap", "data-pad-family": "ps" }, h(Ds4PremiumPadArt, null)),
+            h(
+              "div",
+              { class: "n-padwrap", "data-pad-family": "ps5" },
+              h(DualSensePremiumArt, null),
+            ),
+            h(
+              "div",
+              { class: "n-padwrap", "data-pad-family": "switchpro" },
+              h(SwitchProPremiumArt, null),
+            ),
+            h(
+              "div",
+              { class: "n-padwrap", "data-pad-family": "xboxseries" },
+              h(XboxSeriesPremiumArt, null),
+            ),
+          ),
           // ── The tool cluster (design handoff §7): select and hand ───────
           // Off-screen proximity chips: client-populated, camera-settle paced.
           h("div", { class: "rd-chips", "data-client-subtree": "" }),

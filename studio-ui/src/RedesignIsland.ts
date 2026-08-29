@@ -10,9 +10,11 @@ import {
 } from "./device-instance-id";
 import {
   createEncoderProfileLabCanvasItem,
+  createEncoderWorkbenchSurface,
   disposeEncoderProfileLabCanvasItem,
   ENCODER_PROFILE_LAB_INSTANCE_ID,
   type EncoderProfileLabDevice,
+  type EncoderWorkbenchSurface,
 } from "./encoderConceptArt";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -251,6 +253,7 @@ let rdRoot: HTMLElement | null = null;
 let encoderLabReturnCamera: { panX: number; panY: number; zoom: number } | null = null;
 let refreshEncoderProfileLab: ((devices: readonly EncoderProfileLabDevice[]) => void) | null = null;
 let disposeEncoderProfileLab: (() => void) | null = null;
+const encoderWorkbenchSurfaces = new WeakMap<HTMLElement, EncoderWorkbenchSurface>();
 
 interface DeviceRowFocus {
   element: HTMLElement;
@@ -567,12 +570,6 @@ function paletteCommands(): PaletteCommand[] {
       hint: "the map in the corner",
       key: "M",
       run: () => setCanvasMap(!(canvasPrefs.mapHidden === true)),
-    },
-    {
-      name: "Toggle encoder profiles",
-      hint: "inspect detected and reference encoder topology",
-      key: "",
-      run: toggleEncoderProfileLab,
     },
   ];
 }
@@ -1128,6 +1125,31 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   return body;
 }
 
+function encoderDeviceFromRow(row: RdDeviceRowView): EncoderProfileLabDevice {
+  return {
+    selector: row.selector,
+    name: row.name,
+    alias: row.alias,
+    meta: row.meta,
+    backend: {
+      role: row.role,
+      familyId: row.family_id,
+      familyLabel: row.family_id ? row.name : undefined,
+      protocolProfileId: row.protocol_profile,
+      profileState: row.profile_state,
+      profileTerminalCount: row.terminal_count,
+      capabilities: { canReadChart: row.chart_readable === "true" },
+    },
+  };
+}
+
+function disposeEncoderWorkbenchItem(item: HTMLElement): void {
+  const surface = encoderWorkbenchSurfaces.get(item);
+  if (!surface) return;
+  encoderWorkbenchSurfaces.delete(item);
+  surface.dispose();
+}
+
 /** Mount one board onto the workbench: the saved spot if this board has been
  *  here before (removal keeps geometry), otherwise a staggered open spot. */
 function mountDeviceWidget(row: RdDeviceRowView, index: number): void {
@@ -1139,31 +1161,50 @@ function mountDeviceWidget(row: RdDeviceRowView, index: number): void {
     new Set(Object.keys(canvasPrefs.widgets)),
     legacyGeometryOwners,
   );
+  const encoderSurface = row.role === "panel-encoder"
+    ? createEncoderWorkbenchSurface(document, encoderDeviceFromRow(row))
+    : null;
+  const content = encoderSurface ? document.createElement("div") : deviceCardContent(row);
+  if (encoderSurface) {
+    content.className = "rd-encoder-device-shell";
+    content.append(deviceCardContent(row), encoderSurface.content);
+  }
+  const preferredWidth = encoderSurface ? 960 : 300;
+  const minHeight = encoderSurface ? 900 : 150;
   const item = createCanvasItem({
     instanceId: slug,
     displayName: row.name,
-    preferredWidth: 300,
-    minHeight: 150,
-    content: deviceCardContent(row),
+    preferredWidth,
+    minHeight,
+    content,
     document,
   });
   item.dataset.clientWidget = "";
   item.dataset.selector = row.selector;
   item.dataset.staged = row.aria_current === "true" ? "true" : "false";
   item.classList.add("rd-dev-node");
+  if (encoderSurface) {
+    item.classList.add("rd-encoder-device-node");
+    encoderWorkbenchSurfaces.set(item, encoderSurface);
+  }
   const home: CanvasItemGeometry = {
     x: 140 + (index % 3) * 340,
     y: 160 + Math.floor(index / 3) * 200,
-    width: 300,
-    height: 150,
+    width: preferredWidth,
+    height: minHeight,
     z: 3 + index,
     manualScale: 1,
   };
-  canvas.mountItem(
-    item,
-    (savedGeometryKey ? canvasPrefs.widgets[savedGeometryKey] : undefined) ?? home,
-    { focus: false },
-  );
+  try {
+    canvas.mountItem(
+      item,
+      (savedGeometryKey ? canvasPrefs.widgets[savedGeometryKey] : undefined) ?? home,
+      { focus: false },
+    );
+  } catch (error) {
+    disposeEncoderWorkbenchItem(item);
+    throw error;
+  }
 }
 
 function benchItemEl(selector: string): HTMLElement | null {
@@ -1192,6 +1233,7 @@ function toggleBenchDevice(selector: string): void {
     const item = benchItemEl(selector);
     if (item) {
       rememberDeviceGeometry(item);
+      disposeEncoderWorkbenchItem(item);
       nCanvas?.removeItem(item, { selectFallback: false });
     }
     canvasPrefs.bench = bench.filter((s) => s !== selector);
@@ -1272,20 +1314,7 @@ function removeEncoderProfileLab(): void {
 }
 
 function encoderProfileLabDevices(): EncoderProfileLabDevice[] {
-  return rdDevEnc().map((row) => ({
-    selector: row.selector,
-    name: row.name,
-    alias: row.alias,
-    backend: {
-      role: row.role,
-      familyId: row.family_id,
-      familyLabel: row.family_id ? row.name : undefined,
-      protocolProfileId: row.protocol_profile,
-      profileState: row.profile_state,
-      profileTerminalCount: row.terminal_count,
-      capabilities: { canReadChart: row.chart_readable === "true" },
-    },
-  }));
+  return rdDevEnc().map(encoderDeviceFromRow);
 }
 
 function mountEncoderProfileLab(): void {
@@ -1355,13 +1384,17 @@ function reconcileBenchWithRoster(): void {
     rdRoot?.querySelectorAll<HTMLElement>(".rd-dev-node[data-selector]") ?? [],
   )) {
     const selector = item.dataset.selector ?? "";
+    const row = deviceRowFor(selector);
+    const presentationMatches = !row ||
+      item.classList.contains("rd-encoder-device-node") === (row.role === "panel-encoder");
     // A refused scan is UNKNOWN, not an authoritative empty roster. Keep the
     // remembered card mounted and let syncBenchCards mark its status unknown.
     if (
       bench.has(selector) &&
-      (deviceRowFor(selector) || !rdDeviceScanAuthoritative)
+      ((row && presentationMatches) || (!row && !rdDeviceScanAuthoritative))
     ) continue;
     rememberDeviceGeometry(item);
+    disposeEncoderWorkbenchItem(item);
     canvas.removeItem(item, { selectFallback: false });
     changed = true;
   }
@@ -1407,6 +1440,9 @@ function syncBenchCards(): void {
       stageButton.disabled = !actionAvailable || rdRoot?.dataset.rdMutationPending === "true";
     }
 
+    const encoderSurface = encoderWorkbenchSurfaces.get(item);
+    encoderSurface?.setConnectionConfirmed(rdDeviceScanAuthoritative && Boolean(row));
+
     if (!rdDeviceScanAuthoritative) {
       if (meta) meta.textContent = `Status unavailable — ${rdDevScanLine()}`;
       if (status) {
@@ -1416,6 +1452,7 @@ function syncBenchCards(): void {
       continue;
     }
     if (!row) continue;
+    encoderSurface?.updateDevice(encoderDeviceFromRow(row));
 
     if (!rdStagingReachable) {
       if (status) {
@@ -1599,9 +1636,14 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
       // components. Enter on the move handle / Ctrl+Enter on the item still
       // needs a deterministic way into them.
       onOpenActiveControls: (item) => {
-        const control = item.querySelector<HTMLElement>("[data-forma-runtime-host]")
-          ?.querySelector<HTMLElement>(
-          "select:not(:disabled), input:not(:disabled), textarea:not(:disabled), button:not(:disabled), a[href]",
+        const runtime = item.querySelector<HTMLElement>("[data-forma-runtime-host]");
+        const control = item.classList.contains("rd-encoder-device-node")
+          ? runtime?.querySelector<HTMLElement>('[data-terminal-id][tabindex="0"]') ??
+            runtime?.querySelector<HTMLElement>(
+              "button:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href]",
+            )
+          : runtime?.querySelector<HTMLElement>(
+            "select:not(:disabled), input:not(:disabled), textarea:not(:disabled), button:not(:disabled), a[href]",
           );
         if (!control) return false;
         // Semantic overview intentionally hides editing chrome. F2 is an
@@ -1959,7 +2001,10 @@ export function RedesignIsland() {
               "data-nx": "rd-encoder-profiles",
               "aria-pressed": "false",
               "aria-label": "Encoder profiles",
-              title: "Inspect connected and reference encoder profiles on the canvas",
+              "aria-hidden": "true",
+              tabindex: "-1",
+              hidden: "",
+              title: "Internal encoder research harness",
             },
             "◇ Encoders",
           ),

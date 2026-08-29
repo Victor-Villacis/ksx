@@ -46,6 +46,7 @@ export function disposeEncoderProfileLabCanvasItem(item: HTMLElement): void {
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+let encoderSvgSequence = 0;
 const CATALOG_PREFIX = "catalog:";
 const CONNECTED_PREFIX = "connected:";
 const AMBIGUOUS_SAMPLE = "sample:ambiguous-minipac";
@@ -55,6 +56,8 @@ export interface EncoderProfileLabDevice {
   selector: string;
   name: string;
   alias?: string;
+  /** Served, human-facing transport / firmware line from the device picker. */
+  meta?: string;
   backend: BackendEncoderFacts;
 }
 
@@ -63,6 +66,9 @@ export interface EncoderProfileLabOptions {
   /** A catalog id only. Connected-device selectors are never stored. */
   initialProfileId?: EncoderVisualProfileId;
   onProfileChange?: (profileId: EncoderVisualProfileId) => void;
+  /** `research` keeps the internal comparison harness. `product` fixes the
+   * surface to one connected device selected by the workbench picker. */
+  presentation?: "research" | "product";
 }
 
 export interface EncoderProfileLabHome {
@@ -78,6 +84,15 @@ export interface EncoderProfileLabCanvasItem {
   item: HTMLElement;
   home: EncoderProfileLabHome;
   updateConnectedEncoders: (devices: readonly EncoderProfileLabDevice[]) => void;
+  dispose: () => void;
+}
+
+export interface EncoderWorkbenchSurface {
+  content: HTMLElement;
+  updateDevice: (device: EncoderProfileLabDevice) => void;
+  /** A refused/failed roster scan is not a disconnect. It does mean that a
+   * fresh hardware action must wait until KSX can confirm the device again. */
+  setConnectionConfirmed: (confirmed: boolean) => void;
   dispose: () => void;
 }
 
@@ -104,6 +119,59 @@ type SignalObservationState =
   | { kind: "unknown"; view: EncoderObservationView; message: string }
   | { kind: "foreign-live"; message: string }
   | { kind: "error"; message: string };
+
+type EncoderHardwareActionKind = "chart" | "observation";
+
+interface EncoderHardwareActionLease {
+  owner: symbol;
+  kind: EncoderHardwareActionKind;
+  selector: string;
+}
+
+/** Chart reads and the input observer both touch exclusive encoder/host state.
+ * The old single profile lab could enforce that locally; product workbench
+ * objects need one coordinator shared by every mounted encoder surface. */
+let encoderHardwareActionLease: EncoderHardwareActionLease | null = null;
+const encoderHardwareActionSubscribers = new Set<() => void>();
+
+function notifyEncoderHardwareActionChange(): void {
+  for (const subscriber of Array.from(encoderHardwareActionSubscribers)) subscriber();
+}
+
+function claimEncoderHardwareAction(
+  owner: symbol,
+  kind: EncoderHardwareActionKind,
+  selector: string,
+): boolean {
+  const active = encoderHardwareActionLease;
+  if (active && (active.owner !== owner || active.kind !== kind)) return false;
+  if (!active) {
+    encoderHardwareActionLease = { owner, kind, selector };
+    notifyEncoderHardwareActionChange();
+  }
+  return true;
+}
+
+function releaseEncoderHardwareAction(owner: symbol, kind?: EncoderHardwareActionKind): void {
+  const active = encoderHardwareActionLease;
+  if (!active || active.owner !== owner || (kind && active.kind !== kind)) return;
+  encoderHardwareActionLease = null;
+  notifyEncoderHardwareActionChange();
+}
+
+function encoderHardwareActionBlockedFor(
+  owner: symbol,
+  requested: EncoderHardwareActionKind,
+): EncoderHardwareActionLease | null {
+  const active = encoderHardwareActionLease;
+  if (!active || (active.owner === owner && active.kind === requested)) return null;
+  return active;
+}
+
+function subscribeEncoderHardwareActions(subscriber: () => void): () => void {
+  encoderHardwareActionSubscribers.add(subscriber);
+  return () => encoderHardwareActionSubscribers.delete(subscriber);
+}
 
 interface LabSelection {
   value: string;
@@ -191,6 +259,29 @@ function topologyUnit(profile: EncoderVisualProfile): string {
   }
 }
 
+/** Product copy must preserve the registry's epistemic distinction. Only an
+ * exact profile may call its capacity physical inputs; family/discrete and
+ * logical drawings are useful control rosters, not asserted terminal counts. */
+function productTopologyLabel(profile: EncoderVisualProfile): string {
+  switch (profile.topology.capacity.kind) {
+    case "exact": return `${profile.topology.capacity.inputCount} inputs`;
+    case "discrete": return `${topologyValue(profile)} documented variants`;
+    case "range": return `${topologyValue(profile)} family controls`;
+    case "logical": return `${profile.topology.capacity.controlCount} logical controls`;
+    case "unknown": return "Capacity unknown";
+  }
+}
+
+function productTopologySilkscreen(profile: EncoderVisualProfile): string {
+  switch (profile.topology.capacity.kind) {
+    case "exact": return `${profile.topology.capacity.inputCount} INPUTS`;
+    case "discrete": return `${topologyValue(profile)} VARIANTS`;
+    case "range": return `${topologyValue(profile)} FAMILY RANGE`;
+    case "logical": return `${profile.topology.capacity.controlCount} LOGICAL CONTROLS`;
+    case "unknown": return "CAPACITY UNKNOWN";
+  }
+}
+
 function confidenceLabel(profile: EncoderVisualProfile): string {
   switch (profile.topology.confidence) {
     case "measured": return "Measured roster";
@@ -262,8 +353,9 @@ function createProfileSvg(
   profile: EncoderVisualProfile,
   description: string,
 ): SVGSVGElement {
-  const titleId = `rd-encoder-svg-${profile.id}-title`;
-  const descriptionId = `rd-encoder-svg-${profile.id}-description`;
+  const svgId = `rd-encoder-svg-${profile.id}-${++encoderSvgSequence}`;
+  const titleId = `${svgId}-title`;
+  const descriptionId = `${svgId}-description`;
   const svg = svgElement(document_, "svg", {
     class: "rd-encoder-profile-svg",
     viewBox: "0 0 840 360",
@@ -273,6 +365,7 @@ function createProfileSvg(
     focusable: "false",
     "data-profile-id": profile.id,
     "data-layout-fidelity": profile.topology.confidence,
+    "data-svg-id": svgId,
   });
   const title = svgElement(document_, "title", { id: titleId });
   title.textContent = profile.id === "unknown-hid"
@@ -434,6 +527,510 @@ function renderKnownProfileSvg(
       ? `${profile.topology.terminals.length} terminal rows · configured emissions read now · wiring still not inferred`
       : `${confidenceLabel(profile)} · ${profile.topology.terminals.length} visible rows · wiring state not inferred`,
     420, 344, "rd-encoder-profile-svg-caption", "middle",
+  ));
+  return svg;
+}
+
+interface ProductTerminalInteraction {
+  selectedTerminalId?: string;
+  observedSignals: ReadonlySet<string>;
+  heldSignals: ReadonlySet<string>;
+  onSelect: (terminalId: string) => void;
+}
+
+function productTerminalAriaBase(
+  terminal: EncoderVisualTerminal,
+  configuredEmission: string | null,
+  sharedKeyCount: number,
+): string {
+  const identity = terminal.identityScope === "logical-control"
+    ? "Logical control; physical terminal not asserted."
+    : terminal.presence === "variant-only"
+      ? "Available only on some documented variants."
+      : "Physical profile terminal.";
+  const emission = configuredEmission
+    ? `Configured to emit ${configuredEmission}.`
+    : "Keys not read yet.";
+  const shared = sharedKeyCount > 1 ? ` Shared by ${sharedKeyCount} profile rows.` : "";
+  return `${terminal.label}. ${identity} ${emission}${shared} Controller assignment not set.`;
+}
+
+function productTerminalGroups(profile: EncoderVisualProfile): Array<{
+  id: string;
+  terminals: readonly EncoderVisualTerminal[];
+  x: number;
+  y: number;
+  width: number;
+  edge: "top" | "bottom";
+}> {
+  const grouped = new Map<string, EncoderVisualTerminal[]>();
+  for (const terminal of profile.topology.terminals) {
+    const values = grouped.get(terminal.groupId) ?? [];
+    values.push(terminal);
+    grouped.set(terminal.groupId, values);
+  }
+  const ids = [
+    ...profile.layout.groupOrder.filter((id) => grouped.has(id)),
+    ...Array.from(grouped.keys()).filter((id) => !profile.layout.groupOrder.includes(id)),
+  ];
+  if (ids.length === 1) {
+    return [{ id: ids[0]!, terminals: grouped.get(ids[0]!) ?? [], x: 82, y: 70, width: 836, edge: "top" }];
+  }
+  if (ids.length === 2) {
+    return ids.map((id, index) => ({
+      id,
+      terminals: grouped.get(id) ?? [],
+      x: 82,
+      y: index === 0 ? 70 : 394,
+      width: 836,
+      edge: index === 0 ? "top" : "bottom",
+    }));
+  }
+  if (ids.length === 3) {
+    return ids.map((id, index) => ({
+      id,
+      terminals: grouped.get(id) ?? [],
+      x: index < 2 ? 82 + index * 426 : 82,
+      y: index < 2 ? 70 : 394,
+      width: index < 2 ? 410 : 836,
+      edge: index < 2 ? "top" : "bottom",
+    }));
+  }
+  const half = Math.ceil(ids.length / 2);
+  return ids.map((id, index) => {
+    const rowIndex = index < half ? index : index - half;
+    const rowCount = index < half ? half : ids.length - half;
+    const gap = 18;
+    const width = (836 - gap * Math.max(0, rowCount - 1)) / rowCount;
+    return {
+      id,
+      terminals: grouped.get(id) ?? [],
+      x: 82 + rowIndex * (width + gap),
+      y: index < half ? 70 : 394,
+      width,
+      edge: index < half ? "top" : "bottom",
+    };
+  });
+}
+
+function appendProductBoardDefs(document_: Document, svg: SVGSVGElement): {
+  boardGradientId: string;
+  metalGradientId: string;
+} {
+  const namespace = svg.dataset.svgId ?? `rd-encoder-svg-${++encoderSvgSequence}`;
+  const boardGradientId = `${namespace}-board-gradient`;
+  const metalGradientId = `${namespace}-metal-gradient`;
+  const defs = svgElement(document_, "defs");
+  const board = svgElement(document_, "linearGradient", {
+    id: boardGradientId, x1: "0", y1: "0", x2: "1", y2: "1",
+  });
+  board.append(
+    svgElement(document_, "stop", { offset: "0%", class: "rd-encoder-board-stop-a" }),
+    svgElement(document_, "stop", { offset: "58%", class: "rd-encoder-board-stop-b" }),
+    svgElement(document_, "stop", { offset: "100%", class: "rd-encoder-board-stop-c" }),
+  );
+  const metal = svgElement(document_, "linearGradient", {
+    id: metalGradientId, x1: "0", y1: "0", x2: "0", y2: "1",
+  });
+  metal.append(
+    svgElement(document_, "stop", { offset: "0%", class: "rd-encoder-metal-stop-a" }),
+    svgElement(document_, "stop", { offset: "48%", class: "rd-encoder-metal-stop-b" }),
+    svgElement(document_, "stop", { offset: "100%", class: "rd-encoder-metal-stop-c" }),
+  );
+  defs.append(board, metal);
+  svg.append(defs);
+  return { boardGradientId, metalGradientId };
+}
+
+/** Product drawing: a premium schematic of the detected board, not a
+ * photogrammetric claim. Every interactive terminal still joins by the exact
+ * profile-owned terminal id, and only a validated chart may paint emissions. */
+function renderProductProfileSvg(
+  document_: Document,
+  result: EncoderDetectionResult,
+  chart: EncoderChartSnapshot | null,
+  interaction: ProductTerminalInteraction,
+): SVGSVGElement {
+  const profile = result.profile;
+  const chartByTerminal = encoderChartTerminalMap(chart);
+  const configuredKeyCounts = new Map<string, number>();
+  if (chart) {
+    for (const terminal of chart.terminals) {
+      const key = terminal.normal.key?.trim();
+      if (key) configuredKeyCounts.set(key, (configuredKeyCounts.get(key) ?? 0) + 1);
+    }
+  }
+  const svg = createProfileSvg(
+    document_,
+    profile,
+    `${profile.manufacturer} ${profile.model}. Select a terminal to inspect the key stored for it.`,
+  );
+  svg.setAttribute("viewBox", "0 0 1000 520");
+  svg.classList.add("rd-encoder-product-svg");
+  svg.dataset.capacity = topologyValue(profile);
+  svg.dataset.capacitySource = profile.topology.confidence;
+  svg.dataset.resolution = result.resolution;
+  svg.dataset.interactive = "true";
+  svg.setAttribute("role", "group");
+  const gradients = appendProductBoardDefs(document_, svg);
+
+  svg.append(
+    svgElement(document_, "rect", {
+      x: 36, y: 58, width: 928, height: 404, rx: 32,
+      class: `rd-encoder-product-board is-${profile.visualKind}`,
+      fill: `url(#${gradients.boardGradientId})`,
+    }),
+    svgElement(document_, "rect", {
+      x: 48, y: 70, width: 904, height: 380, rx: 24,
+      class: "rd-encoder-product-board-inset",
+    }),
+  );
+
+  const usb = svgElement(document_, "g", { class: "rd-encoder-product-usb" });
+  usb.append(
+    svgElement(document_, "rect", {
+      x: 8, y: 205, width: 90, height: 110, rx: 16,
+      fill: `url(#${gradients.metalGradientId})`,
+    }),
+    svgElement(document_, "rect", { x: 19, y: 222, width: 60, height: 76, rx: 9, class: "rd-encoder-product-usb-mouth" }),
+    svgText(document_, "USB", 53, 330, "rd-encoder-product-silk", "middle"),
+  );
+  svg.append(usb);
+
+  for (const [cx, cy] of [[67, 91], [933, 91], [67, 429], [933, 429]]) {
+    const mount = svgElement(document_, "g", { class: "rd-encoder-product-mount" });
+    mount.append(
+      svgElement(document_, "circle", { cx, cy, r: 13 }),
+      svgElement(document_, "circle", { cx, cy, r: 5, class: "rd-encoder-product-mount-core" }),
+    );
+    svg.append(mount);
+  }
+
+  const traces = svgElement(document_, "g", { class: "rd-encoder-product-traces" });
+  for (const d of [
+    "M 130 144 C 260 155 332 198 430 222",
+    "M 870 144 C 740 155 668 198 570 222",
+    "M 130 376 C 260 365 332 322 430 298",
+    "M 870 376 C 740 365 668 322 570 298",
+    "M 114 181 C 264 190 338 224 430 242",
+    "M 886 181 C 736 190 662 224 570 242",
+    "M 114 339 C 264 330 338 296 430 278",
+    "M 886 339 C 736 330 662 296 570 278",
+  ]) traces.append(svgElement(document_, "path", { d }));
+  svg.append(traces);
+
+  const chip = svgElement(document_, "g", { class: "rd-encoder-product-chip" });
+  chip.append(
+    svgElement(document_, "rect", { x: 425, y: 202, width: 150, height: 116, rx: 18 }),
+    svgText(document_, profile.shortLabel.toUpperCase(), 500, 239, "rd-encoder-product-chip-name", "middle"),
+    svgText(document_, topologyValue(profile), 500, 279, "rd-encoder-product-chip-count", "middle"),
+    svgText(document_, topologyUnit(profile).toUpperCase(), 500, 300, "rd-encoder-product-chip-unit", "middle"),
+  );
+  svg.append(chip);
+
+  const silk = svgElement(document_, "g", { class: "rd-encoder-product-silkscreen" });
+  silk.append(
+    svgText(document_, "KSX · INTERACTIVE ENCODER", 122, 230, "rd-encoder-product-brand"),
+    svgText(document_, profile.manufacturer.toUpperCase(), 122, 253, "rd-encoder-product-maker"),
+    svgText(document_, chart ? "KEYS READ" : "KEYS NOT READ", 878, 230, "rd-encoder-product-read-state", "end"),
+    svgText(document_, productTopologySilkscreen(profile), 878, 253, "rd-encoder-product-maker", "end"),
+  );
+  svg.append(silk);
+
+  const components = svgElement(document_, "g", { class: "rd-encoder-product-components" });
+  for (let index = 0; index < 9; index += 1) {
+    const x = 144 + index * 78;
+    components.append(
+      svgElement(document_, "rect", { x, y: 282, width: 38, height: 13, rx: 4 }),
+      svgElement(document_, "circle", { cx: x + 12, cy: 318, r: 7 }),
+      svgElement(document_, "circle", { cx: x + 30, cy: 318, r: 7 }),
+    );
+  }
+  components.append(
+    svgElement(document_, "circle", { cx: 882, cy: 292, r: 8, class: "rd-encoder-product-led" }),
+    svgText(document_, "STATUS", 882, 316, "rd-encoder-product-led-label", "middle"),
+  );
+  svg.append(components);
+
+  const orderedTerminals = productTerminalGroups(profile).flatMap((group) => group.terminals);
+  const activeTerminalId = interaction.selectedTerminalId &&
+      orderedTerminals.some((terminal) => terminal.id === interaction.selectedTerminalId)
+    ? interaction.selectedTerminalId
+    : orderedTerminals[0]?.id;
+  for (const group of productTerminalGroups(profile)) {
+    const groupNode = svgElement(document_, "g", {
+      class: `rd-encoder-product-group is-${group.edge}`,
+      "data-terminal-group": group.id,
+    });
+    const labelY = group.edge === "top" ? group.y - 12 : group.y + 68;
+    groupNode.append(svgText(
+      document_, groupLabel(group.id).toUpperCase(), group.x + group.width / 2, labelY,
+      "rd-encoder-product-group-label", "middle",
+    ));
+    const count = Math.max(1, group.terminals.length);
+    // Dense boards need more than one row. Keeping a genuine gap between the
+    // 50×52 hit rectangles prevents a neighbouring SVG sibling from stealing
+    // pointer input, while the full-width product figure renders them at the
+    // 44 CSS-pixel target size used by the workbench.
+    const maximumColumns = Math.max(1, Math.floor(group.width / 56));
+    const columns = Math.max(1, Math.min(maximumColumns, Math.ceil(count / 2)));
+    const rows = Math.max(1, Math.ceil(count / columns));
+    const pitch = group.width / columns;
+    const rowPitch = 56;
+    const width = Math.max(24, Math.min(38, pitch - 12));
+    const hitWidth = Math.min(52, pitch - 4);
+    const hitHeight = 52;
+    const firstRowY = group.edge === "bottom"
+      ? group.y - (rows - 1) * rowPitch
+      : group.y;
+    group.terminals.forEach((terminal, index) => {
+      const configured = chartByTerminal.get(terminal.id);
+      const normalKey = configured?.normal.key?.trim() ?? "";
+      const shiftedKey = configured?.shifted.key?.trim() ?? "";
+      const seen = Boolean((normalKey && interaction.observedSignals.has(normalKey)) ||
+        (shiftedKey && interaction.observedSignals.has(shiftedKey)));
+      const held = Boolean((normalKey && interaction.heldSignals.has(normalKey)) ||
+        (shiftedKey && interaction.heldSignals.has(shiftedKey)));
+      const selected = interaction.selectedTerminalId === terminal.id;
+      const sharedKeyCount = normalKey ? configuredKeyCounts.get(normalKey) ?? 0 : 0;
+      const column = index % columns;
+      const row = Math.floor(index / columns);
+      const x = group.x + column * pitch + (pitch - width) / 2;
+      const y = firstRowY + row * rowPitch;
+      const configuredEmission = configured ? encoderEmissionLabel(configured.normal) : null;
+      const ariaBase = productTerminalAriaBase(terminal, configuredEmission, sharedKeyCount);
+      const terminalNode = svgElement(document_, "g", {
+        class: `rd-encoder-product-terminal player-${terminal.player ?? 0}` +
+          (terminal.presence === "variant-only" ? " is-variant" : "") +
+          (terminal.identityScope === "logical-control" ? " is-logical" : "") +
+          (configured ? " has-configured-emission" : "") +
+          (configured && !configured.normal.supported ? " is-opaque-emission" : "") +
+          (configured?.normal.supported && configured.normal.code === 0 ? " is-zero-emission" : "") +
+          (sharedKeyCount > 1 ? " is-shared-emission" : "") +
+          (selected ? " is-selected" : "") + (seen ? " is-seen" : "") +
+          (held ? " is-held" : ""),
+        transform: `translate(${x} ${y})`,
+        tabindex: terminal.id === activeTerminalId ? 0 : -1,
+        role: "button",
+        "aria-pressed": selected ? "true" : "false",
+        "aria-label": `${ariaBase}${held ? " Matching key pressed now." : seen
+          ? " Matching key seen during this test." : ""}`,
+        "data-terminal-id": terminal.id,
+        "data-terminal-label": terminal.label,
+        "data-terminal-aria-base": ariaBase,
+        "data-terminal-column": column,
+        "data-terminal-row": row,
+        "data-identity-scope": terminal.identityScope,
+        "data-connection": terminal.connection,
+        "data-presence": terminal.presence,
+        ...(configured ? {
+          "data-configured-emission": encoderEmissionLabel(configured.normal),
+          "data-configured-code": configured.normal.code,
+          "data-configured-key": normalKey,
+          "data-configured-shift-key": shiftedKey,
+          ...(normalKey && configured.normal.supported ? { "data-key": normalKey } : {}),
+          ...(shiftedKey && configured.shifted.supported ? { "data-shift-key": shiftedKey } : {}),
+          ...(sharedKeyCount > 1 ? { "data-shared-key-count": sharedKeyCount } : {}),
+        } : {}),
+      });
+      const activate = (): void => interaction.onSelect(terminal.id);
+      terminalNode.addEventListener("click", activate);
+      terminalNode.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          svg.closest<HTMLElement>(".widget-instance")?.focus({ preventScroll: true });
+          return;
+        }
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          event.stopPropagation();
+          activate();
+          return;
+        }
+        const currentIndex = orderedTerminals.findIndex((value) => value.id === terminal.id);
+        let nextIndex = currentIndex;
+        if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+          nextIndex = (currentIndex + 1) % orderedTerminals.length;
+        } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+          nextIndex = (currentIndex - 1 + orderedTerminals.length) % orderedTerminals.length;
+        } else if (event.key === "Home") {
+          nextIndex = 0;
+        } else if (event.key === "End") {
+          nextIndex = orderedTerminals.length - 1;
+        } else return;
+        event.preventDefault();
+        event.stopPropagation();
+        const next = orderedTerminals[nextIndex];
+        if (next) interaction.onSelect(next.id);
+      });
+      const title = svgElement(document_, "title");
+      title.textContent = `${terminal.label}${configured
+        ? ` · ${encoderEmissionLabel(configured.normal)}` : " · read keys to inspect"}`;
+      terminalNode.append(
+        title,
+        svgElement(document_, "rect", {
+          x: (width - hitWidth) / 2, y: 0, width: hitWidth, height: hitHeight, rx: 8,
+          class: "rd-encoder-product-terminal-hit",
+        }),
+        svgElement(document_, "rect", { width, height: 48, rx: 6, class: "rd-encoder-product-terminal-body" }),
+        svgElement(document_, "circle", { cx: width / 2, cy: 12, r: 6.5, class: "rd-encoder-product-terminal-screw" }),
+        svgElement(document_, "path", {
+          d: `M ${width / 2 - 4} 12 H ${width / 2 + 4}`,
+          class: "rd-encoder-product-terminal-slot",
+        }),
+        svgText(document_, terminalShortLabel(terminal), width / 2, 29,
+          "rd-encoder-product-terminal-label", "middle"),
+        svgText(document_, configured ? encoderEmissionShortLabel(configured.normal) : "—", width / 2, 42,
+          "rd-encoder-product-terminal-emission", "middle"),
+      );
+      groupNode.append(terminalNode);
+    });
+    svg.append(groupNode);
+  }
+  return svg;
+}
+
+/** An unknown board may show only facts the user or exact-device observer
+ * supplied. This intentionally has no `data-terminal-id` nodes: heard keys and
+ * printed labels are useful setup material, but neither discovers a terminal. */
+function renderProductUnknownSvg(
+  document_: Document,
+  result: EncoderDetectionResult,
+  observations: readonly ObservedSignal[],
+  declaredLabels: readonly string[],
+  observationsAreLive: boolean,
+): SVGSVGElement {
+  const profile = getEncoderVisualProfile("unknown-hid");
+  const svg = createProfileSvg(
+    document_, profile,
+    "Unknown encoder. User-declared control labels and exact-device keys are kept separate; terminal capacity and wiring are not inferred.",
+  );
+  svg.setAttribute("viewBox", "0 0 1000 520");
+  svg.classList.add("rd-encoder-product-svg", "is-unknown");
+  svg.dataset.capacity = "unknown";
+  svg.dataset.resolution = result.resolution;
+  svg.dataset.observedCount = String(observations.length);
+  svg.dataset.declaredCount = String(declaredLabels.length);
+  svg.dataset.hiddenDeclaredCount = String(Math.max(0, declaredLabels.length - 16));
+  const gradients = appendProductBoardDefs(document_, svg);
+  svg.append(
+    svgElement(document_, "rect", {
+      x: 36, y: 58, width: 928, height: 404, rx: 32,
+      class: "rd-encoder-product-board is-generic-hid",
+      fill: `url(#${gradients.boardGradientId})`,
+    }),
+    svgElement(document_, "rect", {
+      x: 48, y: 70, width: 904, height: 380, rx: 24,
+      class: "rd-encoder-product-board-inset",
+    }),
+  );
+  const usb = svgElement(document_, "g", { class: "rd-encoder-product-usb" });
+  usb.append(
+    svgElement(document_, "rect", {
+      x: 8, y: 205, width: 90, height: 110, rx: 16,
+      fill: `url(#${gradients.metalGradientId})`,
+    }),
+    svgElement(document_, "rect", {
+      x: 19, y: 222, width: 60, height: 76, rx: 9,
+      class: "rd-encoder-product-usb-mouth",
+    }),
+    svgText(document_, "USB", 53, 330, "rd-encoder-product-silk", "middle"),
+  );
+  svg.append(usb);
+  for (const [cx, cy] of [[67, 91], [933, 91], [67, 429], [933, 429]]) {
+    const mount = svgElement(document_, "g", { class: "rd-encoder-product-mount" });
+    mount.append(
+      svgElement(document_, "circle", { cx, cy, r: 13 }),
+      svgElement(document_, "circle", {
+        cx, cy, r: 5, class: "rd-encoder-product-mount-core",
+      }),
+    );
+    svg.append(mount);
+  }
+  svg.append(
+    svgText(document_, "GENERIC ENCODER", 112, 126, "rd-encoder-product-brand"),
+    svgText(document_, "BUILD FROM WHAT THIS DEVICE ACTUALLY SENDS", 112, 150,
+      "rd-encoder-product-maker"),
+  );
+
+  const visibleLabels = declaredLabels.slice(0, 16);
+  const labelColumns = Math.max(1, Math.min(8, visibleLabels.length));
+  const labelRows = Math.max(1, Math.ceil(visibleLabels.length / labelColumns));
+  const labelWidth = 80;
+  const labelPitchX = 88;
+  const labelPitchY = 60;
+  const labelStartX = 500 - ((labelColumns - 1) * labelPitchX + labelWidth) / 2;
+  const labelStartY = 218 - ((labelRows - 1) * labelPitchY) / 2;
+  visibleLabels.forEach((label, index) => {
+    const column = index % labelColumns;
+    const row = Math.floor(index / labelColumns);
+    const x = labelStartX + column * labelPitchX;
+    const y = labelStartY + row * labelPitchY;
+    const node = svgElement(document_, "g", {
+      class: "rd-encoder-product-declared",
+      transform: `translate(${x} ${y})`,
+      "data-declared-terminal-id": `declared-${index + 1}`,
+      "data-declared-label": label,
+      "aria-hidden": "true",
+    });
+    node.append(
+      svgElement(document_, "rect", {
+        x: 0, y: 0, width: labelWidth, height: 52, rx: 7,
+      }),
+      svgText(document_, label.slice(0, 9).toUpperCase(), labelWidth / 2,
+        33, "rd-encoder-product-terminal-label", "middle"),
+    );
+    svg.append(node);
+  });
+
+  if (visibleLabels.length === 0) {
+    const chip = svgElement(document_, "g", { class: "rd-encoder-product-chip is-unknown" });
+    chip.append(
+      svgElement(document_, "rect", { x: 390, y: 192, width: 220, height: 132, rx: 22 }),
+      svgText(document_, "UNKNOWN", 500, 235, "rd-encoder-product-chip-name", "middle"),
+      svgText(document_, observations.length > 0 ? String(observations.length) : "—", 500, 279,
+        "rd-encoder-product-chip-count", "middle"),
+      svgText(document_, observationsAreLive ? "KEYS HEARD" : "KEYS NOT TESTED", 500, 303,
+        "rd-encoder-product-chip-unit", "middle"),
+    );
+    svg.append(chip);
+  } else if (declaredLabels.length > visibleLabels.length) {
+    svg.append(svgText(
+      document_, `+${declaredLabels.length - visibleLabels.length} more declared labels`,
+      500, 320, "rd-encoder-product-maker", "middle",
+    ));
+  }
+
+  const visibleSignals = observations.slice(0, 10);
+  const signalStart = 500 - ((visibleSignals.length - 1) * 76) / 2;
+  visibleSignals.forEach((signal, index) => {
+    const x = signalStart + index * 76;
+    const key = svgElement(document_, "g", {
+      class: "rd-encoder-product-signal",
+      transform: `translate(${x - 31} 352)`,
+      "data-observed-signal-id": signal.id,
+    });
+    key.append(
+      svgElement(document_, "rect", { width: 62, height: 48, rx: 10 }),
+      svgText(document_, signal.emission.slice(0, 8), 31, 30,
+        "rd-encoder-product-signal-label", "middle"),
+    );
+    svg.append(key);
+  });
+  if (visibleSignals.length === 0) {
+    svg.append(svgText(document_, "Run a button test to see this device’s keys", 500, 383,
+      "rd-encoder-product-empty", "middle"));
+  } else if (observations.length > visibleSignals.length) {
+    svg.append(svgText(document_, `+${observations.length - visibleSignals.length} more`, 900, 417,
+      "rd-encoder-product-maker", "end"));
+  }
+  svg.append(svgText(
+    document_,
+    declaredLabels.length > 0
+      ? `${declaredLabels.length} user-declared labels · terminal capacity still unknown`
+      : "No terminal layout has been invented",
+    500, 444, "rd-encoder-product-read-state", "middle",
   ));
   return svg;
 }
@@ -694,12 +1291,17 @@ function terminalRoster(
   document_: Document,
   profile: EncoderVisualProfile,
   chart: EncoderChartSnapshot | null,
+  presentation: "research" | "product" = "research",
 ): HTMLDetailsElement {
   const details = html(document_, "details", "rd-encoder-profile-roster");
   details.dataset.profileId = profile.id;
   if (chart) details.dataset.chartLoaded = "true";
   const summary = html(document_, "summary");
-  summary.textContent = chart
+  summary.textContent = presentation === "product"
+    ? profile.topology.capacity.kind === "exact"
+      ? `All terminal keys · ${profile.topology.terminals.length}`
+      : `All profile controls · ${profile.topology.terminals.length}`
+    : chart
     ? `Inspect terminal emissions · ${profile.topology.terminals.length}`
     : `Inspect profile rows · ${profile.topology.terminals.length}`;
   if (chart) {
@@ -796,15 +1398,17 @@ function manualFallback(
   document_: Document,
   currentLabels: readonly string[],
   onApply: (labels: readonly string[]) => void,
+  presentation: "research" | "product" = "research",
 ): HTMLElement {
   const panel = html(document_, "section", "rd-encoder-profile-manual");
   panel.dataset.manualProfileBuilder = "";
   const copy = html(document_, "div");
   const heading = html(document_, "h3");
-  heading.textContent = "Build an honest fallback";
+  heading.textContent = presentation === "product" ? "Define this board’s controls" : "Build an honest fallback";
   const note = html(document_, "p");
-  note.textContent =
-    "Enter labels printed on the board or its manual. These become user-declared slots only; pressing buttons cannot reveal terminal capacity or wiring.";
+  note.textContent = presentation === "product"
+    ? "Add labels printed on the board or in its manual. Then use the button test to see which keyboard keys reach Windows. KSX keeps those facts separate; a selector-scoped one-button teach step will join them in the mapping block."
+    : "Enter labels printed on the board or its manual. These become user-declared slots only; pressing buttons cannot reveal terminal capacity or wiring.";
   copy.append(heading, note);
   const field = html(document_, "label");
   field.textContent = "Printed terminal labels";
@@ -816,7 +1420,7 @@ function manualFallback(
   field.append(input);
   const button = html(document_, "button");
   button.type = "button";
-  button.textContent = "Apply declared labels";
+  button.textContent = presentation === "product" ? "Build control list" : "Apply declared labels";
   button.addEventListener("click", () => {
     const seen = new Set<string>();
     const labels = input.value.split(/[\n,]+/).map((value) => value.trim()).filter((value) => {
@@ -839,19 +1443,28 @@ function chartReadPanel(
   state: ChartReadState,
   observationBlock: SignalObservationState["kind"] | null,
   onRead: () => void,
+  presentation: "research" | "product" = "research",
+  hardwareAvailable = true,
+  hardwareUnavailableReason = "",
 ): HTMLElement {
   const panel = html(document_, "section", "rd-encoder-profile-read");
   panel.dataset.rdEncoderChart = "";
   panel.dataset.state = state.kind;
   const copy = html(document_, "div", "rd-encoder-profile-read-copy");
   const heading = html(document_, "h3");
-  heading.textContent = "Configured emissions";
+  heading.textContent = presentation === "product" ? "Keys on this encoder" : "Configured emissions";
   const description = html(document_, "p");
   const canRead = chartReadIsAdmitted(result, selection);
-  description.textContent = canRead
-    ? "Ask this exact board what each terminal is configured to emit. Read only: this does not map controls, write firmware, or prove a wire."
+  description.textContent = !hardwareAvailable && presentation === "product"
+    ? hardwareUnavailableReason || "Wait until KSX confirms this device before reading it."
+    : canRead
+    ? presentation === "product"
+      ? "Read the keyboard key stored for every terminal. KSX will not change the encoder."
+      : "Ask this exact board what each terminal is configured to emit. Read only: this does not map controls, write firmware, or prove a wire."
     : selection.device
-      ? "This exact release has no admitted KSX chart reader. Its sourced topology remains visible, but no stored emissions are guessed."
+      ? presentation === "product"
+        ? "KSX cannot read stored keys from this model yet. You can still test the signals it sends."
+        : "This exact release has no admitted KSX chart reader. Its sourced topology remains visible, but no stored emissions are guessed."
       : "Connect an exact backend-supported board to read stored emissions. Catalog profiles never authorize a hardware protocol.";
   copy.append(heading, description);
 
@@ -860,8 +1473,10 @@ function chartReadPanel(
     const button = html(document_, "button");
     button.type = "button";
     button.dataset.rdEncoderRead = "";
-    button.disabled = state.kind === "loading" || observationBlock !== null;
-    button.textContent = observationBlock !== null
+    button.disabled = !hardwareAvailable || state.kind === "loading" || observationBlock !== null;
+    button.textContent = !hardwareAvailable
+      ? "Wait for device"
+      : observationBlock !== null
       ? observationBlock === "listening" || observationBlock === "unknown" ||
           observationBlock === "stopping"
         ? "Stop observation first"
@@ -870,7 +1485,9 @@ function chartReadPanel(
           : "Wait for observation"
       : state.kind === "loading"
       ? "Reading…"
-      : state.kind === "loaded" ? "Read again" : "Read configured emissions";
+      : state.kind === "loaded"
+        ? presentation === "product" ? "Refresh keys" : "Read again"
+        : presentation === "product" ? "Read keys" : "Read configured emissions";
     button.addEventListener("click", onRead);
     controls.append(button);
   }
@@ -884,7 +1501,9 @@ function chartReadPanel(
     status.textContent = state.message;
   } else if (state.kind === "loaded") {
     const headline = html(document_, "strong");
-    headline.textContent = `Read ${state.snapshot.terminals.length} exact terminals from ${state.snapshot.boardName}.`;
+    headline.textContent = presentation === "product"
+      ? `${state.snapshot.terminals.length} terminal keys loaded.`
+      : `Read ${state.snapshot.terminals.length} exact terminals from ${state.snapshot.boardName}.`;
     const freshness = html(document_, "p");
     const time = html(document_, "time");
     time.dateTime = state.snapshot.readAt;
@@ -893,16 +1512,18 @@ function chartReadPanel(
       ? "Read this session"
       : `Read at ${readDate.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`;
     time.title = state.snapshot.readAt;
-    freshness.append(
-      time,
-      document_.createTextNode(
+    freshness.append(time);
+    if (presentation === "research") {
+      freshness.append(document_.createTextNode(
         ` · proof ${state.snapshot.imageSha256.slice(0, 16)} · not watched; read again after WinIPAC changes.`,
-      ),
-    );
+      ));
+    } else {
+      freshness.append(document_.createTextNode(" · refresh after changing keys in the encoder software."));
+    }
     const shift = html(document_, "p");
     shift.textContent = encoderChartShiftSentence(state.snapshot.shift);
     status.append(headline, freshness, shift);
-    if (state.snapshot.notes.length > 0) {
+    if (presentation === "research" && state.snapshot.notes.length > 0) {
       const notes = html(document_, "ul");
       for (const value of state.snapshot.notes) {
         const note = html(document_, "li");
@@ -913,7 +1534,8 @@ function chartReadPanel(
     }
   } else {
     status.textContent = canRead
-      ? "Not read. Opening this lab never talks to encoder configuration hardware."
+      ? presentation === "product" ? "Keys have not been read yet." :
+        "Not read. Opening this lab never talks to encoder configuration hardware."
       : "No configuration read is available for this selection.";
   }
   controls.append(status);
@@ -990,14 +1612,19 @@ function paintSignalObservationStatus(
   status: HTMLElement,
   selection: LabSelection,
   state: SignalObservationState,
+  presentation: "research" | "product" = "research",
 ): void {
   status.replaceChildren();
   status.dataset.state = state.kind;
   const view = observationView(state);
   if (state.kind === "reconciling") {
-    status.textContent = "Checking whether the daemon already owns an observation…";
+    status.textContent = presentation === "product"
+      ? "Checking whether another button test is already running…"
+      : "Checking whether the daemon already owns an observation…";
   } else if (state.kind === "starting") {
-    status.textContent = "Asking the daemon to listen to this exact device…";
+    status.textContent = presentation === "product"
+      ? "Starting the button test for this device…"
+      : "Asking the daemon to listen to this exact device…";
   } else if (state.kind === "error") {
     status.textContent = `Signal observation unavailable — ${state.message}`;
   } else if (state.kind === "foreign-live") {
@@ -1014,21 +1641,24 @@ function paintSignalObservationStatus(
       : state.kind === "stopping" ? "Stopping this exact observation…"
       : `${view.seen.length} unique host signal${view.seen.length === 1 ? "" : "s"} observed.`;
     const detail = html(document_, "p");
-    detail.textContent = view.error || view.detail ||
-      "Duplicate terminal assignments collapse to one signal; no terminal association is inferred.";
+    detail.textContent = view.error || view.detail || (presentation === "product"
+      ? "Press the cabinet buttons. Matching configured keys light on the board; duplicate key assignments may light more than one terminal."
+      : "Duplicate terminal assignments collapse to one signal; no terminal association is inferred.");
     const metrics = html(document_, "dl", "rd-encoder-profile-observe-metrics");
-    for (const [label, value] of [
-      ["Peak held", view.peak],
-      ["Events", view.events],
-      ["Dropped", view.dropped],
-    ] as const) {
-      const metric = html(document_, "div");
-      const term = html(document_, "dt");
-      term.textContent = label;
-      const definition = html(document_, "dd");
-      definition.textContent = String(value);
-      metric.append(term, definition);
-      metrics.append(metric);
+    if (presentation === "research") {
+      for (const [label, value] of [
+        ["Peak held", view.peak],
+        ["Events", view.events],
+        ["Dropped", view.dropped],
+      ] as const) {
+        const metric = html(document_, "div");
+        const term = html(document_, "dt");
+        term.textContent = label;
+        const definition = html(document_, "dd");
+        definition.textContent = String(value);
+        metric.append(term, definition);
+        metrics.append(metric);
+      }
     }
     const signalRows = html(document_, "div", "rd-encoder-profile-observe-signals");
     const heldRow = html(document_, "div");
@@ -1050,10 +1680,14 @@ function paintSignalObservationStatus(
     appendObservationSignals(document_, seen, view.seen);
     seenRow.append(seenLabel, seen);
     signalRows.append(heldRow, seenRow);
-    status.append(headline, detail, metrics, signalRows);
-    const provenance = html(document_, "p", "rd-encoder-profile-observe-provenance");
-    provenance.textContent = `Exact selector: ${view.selector ?? selection.device?.selector ?? "unavailable"} · terminal association: none · rollover visibility: ${view.rollover_visibility || "unavailable"}.`;
-    status.append(provenance);
+    status.append(headline, detail);
+    if (presentation === "research") status.append(metrics);
+    status.append(signalRows);
+    if (presentation === "research") {
+      const provenance = html(document_, "p", "rd-encoder-profile-observe-provenance");
+      provenance.textContent = `Exact selector: ${view.selector ?? selection.device?.selector ?? "unavailable"} · terminal association: none · rollover visibility: ${view.rollover_visibility || "unavailable"}.`;
+      status.append(provenance);
+    }
     if (view.dropped > 0) {
       const warning = html(document_, "p", "rd-encoder-profile-observe-warning");
       warning.textContent = `KSX dropped ${view.dropped} event${view.dropped === 1 ? "" : "s"}; repeat this run before judging the device.`;
@@ -1066,7 +1700,9 @@ function paintSignalObservationStatus(
     }
   } else if (state.kind === "idle") {
     status.textContent = selection.device
-      ? "Not listening. Opening or changing this lab never starts input capture."
+      ? presentation === "product"
+        ? "Not testing. Start when you are ready to press the wired controls."
+        : "Not listening. Opening or changing this lab never starts input capture."
       : "No live device is selected.";
   }
 }
@@ -1079,6 +1715,9 @@ function signalObservationPanel(
   onStart: () => void,
   onStop: () => void,
   onEscapeCapture: () => void,
+  presentation: "research" | "product" = "research",
+  hardwareAvailable = true,
+  hardwareUnavailableReason = "",
 ): HTMLElement {
   const panel = html(document_, "section", "rd-encoder-profile-observe");
   panel.dataset.rdEncoderObservation = "";
@@ -1088,10 +1727,14 @@ function signalObservationPanel(
   if (selection.device) panel.dataset.selector = selection.device.selector;
   const copy = html(document_, "div", "rd-encoder-profile-observe-copy");
   const heading = html(document_, "h3");
-  heading.textContent = "Observed host signals";
+  heading.textContent = presentation === "product" ? "Test your buttons" : "Observed host signals";
   const description = html(document_, "p");
-  description.textContent = selection.device
-    ? "Listen to this exact device for 30 seconds. Signals are device-scoped evidence—not terminals, wiring, capacity, or a KSX mapping. Tab stays inside Capture/Done; Ctrl/Cmd+Enter activates Done; Esc leaves Capture without stopping. Windows and system shortcuts can still escape."
+  description.textContent = !hardwareAvailable && presentation === "product"
+    ? hardwareUnavailableReason || "Wait until KSX confirms this device before starting a button test."
+    : selection.device
+    ? presentation === "product"
+      ? "Listen for 30 seconds and press the wired controls. This shows the keys reaching Windows; controller mapping comes next."
+      : "Listen to this exact device for 30 seconds. Signals are device-scoped evidence—not terminals, wiring, capacity, or a KSX mapping. Tab stays inside Capture/Done; Ctrl/Cmd+Enter activates Done; Esc leaves Capture without stopping. Windows and system shortcuts can still escape."
     : "Choose a connected encoder to observe what reaches Windows. Reference profiles cannot emit live evidence.";
   copy.append(heading, description);
   panel.append(copy);
@@ -1104,9 +1747,11 @@ function signalObservationPanel(
     const start = html(document_, "button");
     start.type = "button";
     start.dataset.rdEncoderObserve = "start";
-    start.disabled = state.kind === "reconciling" || state.kind === "starting" ||
+    start.disabled = !hardwareAvailable || state.kind === "reconciling" || state.kind === "starting" ||
       state.kind === "stopping" || listening || blockedByChart;
-    start.textContent = blockedByChart
+    start.textContent = !hardwareAvailable
+      ? "Wait for device"
+      : blockedByChart
       ? "Wait for chart read"
       : state.kind === "reconciling"
       ? "Checking…"
@@ -1115,7 +1760,8 @@ function signalObservationPanel(
       : state.kind === "foreign-live"
         ? "Recheck observation lease"
         : state.kind === "complete"
-          ? "Check and observe again" : "Observe emitted signals";
+          ? presentation === "product" ? "Test again" : "Check and observe again"
+          : presentation === "product" ? "Start button test" : "Observe emitted signals";
     start.addEventListener("click", onStart);
     actions.append(start);
     const sink = html(document_, "div", "rd-encoder-profile-observe-sink");
@@ -1134,7 +1780,7 @@ function signalObservationPanel(
       stop = html(document_, "button");
       stop.type = "button";
       stop.dataset.rdEncoderObserve = "stop";
-      stop.textContent = "Done — stop listening";
+      stop.textContent = presentation === "product" ? "Done" : "Done — stop listening";
       stop.title = "Stop this exact observation (Ctrl/Cmd+Enter from keyboard)";
       stop.setAttribute("aria-keyshortcuts", "Control+Enter Meta+Enter");
       stop.addEventListener("keydown", (event) => {
@@ -1174,7 +1820,7 @@ function signalObservationPanel(
   }
   const status = html(document_, "div", "rd-encoder-profile-observe-status");
   status.dataset.rdEncoderObservationStatus = "";
-  paintSignalObservationStatus(document_, status, selection, state);
+  paintSignalObservationStatus(document_, status, selection, state, presentation);
   controls.append(status);
   panel.append(controls);
   return panel;
@@ -1198,6 +1844,7 @@ function dynamicProfileContent(
   region.dataset.rdEncoderEvidence = "";
   region.dataset.evidenceState = result.resolution;
   region.dataset.profileId = result.profile.id;
+  if (selection.device) region.dataset.sourceSelector = selection.device.selector;
   region.dataset.profileProvenance = result.identity.source;
   const evidence = html(document_, "div", "rd-encoder-profile-evidence");
   evidence.dataset.evidenceState = result.resolution;
@@ -1325,9 +1972,347 @@ function dynamicProfileContent(
   return region;
 }
 
+function appendProductPill(
+  document_: Document,
+  container: HTMLElement,
+  label: string,
+  tone: "connected" | "recognized" | "ready" | "attention" = "ready",
+): void {
+  const pill = html(document_, "span", "rd-encoder-product-pill");
+  pill.dataset.tone = tone;
+  pill.textContent = label;
+  container.append(pill);
+}
+
+function productTerminalInspector(
+  document_: Document,
+  result: EncoderDetectionResult,
+  chart: EncoderChartSnapshot | null,
+  selectedTerminalId: string | undefined,
+  observationState: SignalObservationState,
+): HTMLElement {
+  const inspector = html(document_, "aside", "rd-encoder-product-inspector");
+  inspector.dataset.rdEncoderTerminalInspector = "";
+  const profile = result.profile;
+  const terminal = profile.topology.terminals.find((value) => value.id === selectedTerminalId) ??
+    profile.topology.terminals[0];
+  if (!terminal) {
+    const heading = html(document_, "h3");
+    heading.textContent = "No verified terminal layout";
+    const copy = html(document_, "p");
+    copy.textContent = "Test the device to see its keyboard signals, then define only the controls you can verify.";
+    inspector.append(heading, copy);
+    return inspector;
+  }
+  inspector.dataset.selectedTerminalId = terminal.id;
+  const chartByTerminal = encoderChartTerminalMap(chart);
+  const configured = chartByTerminal.get(terminal.id);
+  const view = observationView(observationState);
+  const held = new Set(view?.held ?? []);
+  const seen = new Set(view?.seen ?? []);
+  const normalKey = configured?.normal.key?.trim() ?? "";
+  const shiftedKey = configured?.shifted.key?.trim() ?? "";
+  const isHeld = Boolean((normalKey && held.has(normalKey)) || (shiftedKey && held.has(shiftedKey)));
+  const isSeen = Boolean((normalKey && seen.has(normalKey)) || (shiftedKey && seen.has(shiftedKey)));
+  inspector.dataset.liveState = isHeld ? "held" : isSeen ? "seen" : "idle";
+
+  const eyebrow = html(document_, "p", "rd-encoder-product-inspector-eyebrow");
+  eyebrow.textContent = `${terminal.identityScope === "logical-control"
+    ? "Selected logical control"
+    : terminal.presence === "variant-only" ? "Selected variant terminal" : "Selected terminal"} · ${groupLabel(terminal.groupId)}`;
+  const headingRow = html(document_, "div", "rd-encoder-product-inspector-heading");
+  const heading = html(document_, "h3");
+  heading.textContent = terminal.label;
+  const id = html(document_, "code");
+  id.textContent = terminal.id;
+  headingRow.append(heading, id);
+
+  const emissions = html(document_, "dl", "rd-encoder-product-emissions");
+  const appendEmission = (label: string, value: string, tone: string): void => {
+    const row = html(document_, "div");
+    row.dataset.tone = tone;
+    const term = html(document_, "dt");
+    term.textContent = label;
+    const definition = html(document_, "dd");
+    const keycap = html(document_, "kbd", "rd-encoder-product-keycap");
+    keycap.textContent = value;
+    definition.append(keycap);
+    row.append(term, definition);
+    emissions.append(row);
+  };
+  if (configured) {
+    appendEmission("Configured key", encoderEmissionLabel(configured.normal),
+      configured.normal.supported ? "configured" : "unknown");
+    appendEmission("Shifted key", encoderEmissionLabel(configured.shifted),
+      configured.shifted.supported ? "shifted" : "unknown");
+  } else {
+    appendEmission("Configured key", "Read keys", "unread");
+    appendEmission("Shifted key", "Not loaded", "unread");
+  }
+
+  const live = html(document_, "div", "rd-encoder-product-live");
+  live.dataset.rdEncoderTerminalLive = "";
+  live.dataset.state = isHeld ? "held" : isSeen ? "seen" : "idle";
+  live.setAttribute("role", "status");
+  live.setAttribute("aria-live", "polite");
+  live.setAttribute("aria-atomic", "true");
+  const liveDot = html(document_, "span");
+  liveDot.setAttribute("aria-hidden", "true");
+  const liveCopy = html(document_, "span");
+  liveCopy.textContent = isHeld ? "Pressed now" : isSeen ? "Seen in this test" :
+    view ? "Waiting for this key" : "Run a button test for live feedback";
+  live.append(liveDot, liveCopy);
+
+  if (normalKey && chart) {
+    const shared = chart.terminals.filter((row) => row.normal.key?.trim() === normalKey);
+    if (shared.length > 1) {
+      const warning = html(document_, "p", "rd-encoder-product-shared");
+      warning.textContent = `Shared key · ${shared.length} terminals emit ${encoderEmissionLabel(configured!.normal)}. Give them unique keys in the encoder software before assigning separate controls.`;
+      inspector.append(eyebrow, headingRow, emissions, live, warning);
+    } else inspector.append(eyebrow, headingRow, emissions, live);
+  } else inspector.append(eyebrow, headingRow, emissions, live);
+
+  const next = html(document_, "p", "rd-encoder-product-next");
+  next.textContent = "Controller assignment will attach here in the next workbench block.";
+  inspector.append(next);
+  return inspector;
+}
+
+function productUnknownInspector(
+  document_: Document,
+  signals: readonly ObservedSignal[],
+  observationsAreLive: boolean,
+): HTMLElement {
+  const inspector = html(document_, "aside", "rd-encoder-product-inspector is-unknown");
+  inspector.dataset.rdEncoderTerminalInspector = "";
+  const eyebrow = html(document_, "p", "rd-encoder-product-inspector-eyebrow");
+  eyebrow.textContent = "Generic setup";
+  const heading = html(document_, "h3");
+  heading.textContent = signals.length > 0 ? "Keys heard from this device" : "No keys tested yet";
+  const copy = html(document_, "p");
+  copy.textContent = signals.length > 0
+    ? `${signals.length} unique keyboard signal${signals.length === 1 ? "" : "s"} ${observationsAreLive ? "reached Windows" : "are shown"}. They are not treated as discovered terminals.`
+    : "Start a button test and press every wired control. KSX will show what the device emits without inventing its physical layout.";
+  const chips = html(document_, "div", "rd-encoder-product-signal-chips");
+  for (const signal of signals) {
+    const chip = html(document_, "kbd", "rd-encoder-product-keycap");
+    chip.textContent = signal.emission;
+    chips.append(chip);
+  }
+  inspector.append(eyebrow, heading, copy, chips);
+  return inspector;
+}
+
+function productDeviceDetails(
+  document_: Document,
+  result: EncoderDetectionResult,
+  selection: LabSelection,
+  chart: EncoderChartSnapshot | null,
+  connectionConfirmed: boolean,
+): HTMLDetailsElement {
+  const details = html(document_, "details", "rd-encoder-product-details");
+  const summary = html(document_, "summary");
+  summary.textContent = "Device details";
+  const body = html(document_, "div", "rd-encoder-product-details-body");
+  const facts = html(document_, "dl", "rd-encoder-product-device-facts");
+  const append = (label: string, value: string): void => {
+    const row = html(document_, "div");
+    row.dataset.deviceFact = label.toLocaleLowerCase().replace(/\s+/g, "-");
+    const term = html(document_, "dt");
+    term.textContent = label;
+    const definition = html(document_, "dd");
+    definition.textContent = value;
+    row.append(term, definition);
+    facts.append(row);
+  };
+  append("Device", selection.device?.name ?? result.profile.model);
+  append("Connection", connectionConfirmed
+    ? selection.device?.meta?.trim() || "Connected USB device"
+    : "Unconfirmed — latest device scan did not answer");
+  append("Detected model", result.profile.id === "unknown-hid"
+    ? result.identity.familyLabel ?? "Not recognized"
+    : `${result.profile.manufacturer} ${result.profile.model}`);
+  append("Inputs", result.profile.topology.capacity.kind === "unknown"
+    ? "Not known"
+    : `${topologyValue(result.profile)} ${topologyUnit(result.profile)}`);
+  append("Keys", chart ? `${chart.terminals.length} loaded this session` :
+    result.protocol.chartRead === "supported" ? "Ready to read" : "Direct read unavailable");
+  body.append(facts);
+
+  const technical = html(document_, "details", "rd-encoder-product-technical");
+  const technicalSummary = html(document_, "summary");
+  technicalSummary.textContent = "Technical evidence";
+  const technicalFacts = html(document_, "dl", "rd-encoder-profile-facts");
+  appendFact(document_, technicalFacts, "Resolution", resolutionLabel(result), result.identity.source);
+  appendFact(document_, technicalFacts, "Topology", result.profile.topology.confidenceDetail,
+    result.profile.topology.confidence);
+  appendFact(document_, technicalFacts, "Protocol", protocolLabel(result), result.protocol.source);
+  if (selection.device?.selector) {
+    appendFact(document_, technicalFacts, "Exact selector", selection.device.selector, "backend-selector");
+  }
+  if (chart) {
+    appendFact(document_, technicalFacts, "Latest chart proof",
+      `${chart.imageSha256} · ${chart.readAt}`, "fresh-chart-read");
+  }
+  technical.append(technicalSummary, technicalFacts);
+  if (result.warnings.length > 0) {
+    const warnings = html(document_, "ul", "rd-encoder-product-warnings");
+    for (const value of result.warnings) {
+      const row = html(document_, "li");
+      row.textContent = value;
+      warnings.append(row);
+    }
+    technical.append(warnings);
+  }
+  const sources = html(document_, "ul", "rd-encoder-profile-sources");
+  for (const source of result.profile.sources) {
+    const row = html(document_, "li");
+    if (source.url) {
+      const link = html(document_, "a");
+      link.href = source.url;
+      link.target = "_blank";
+      link.rel = "noreferrer noopener";
+      link.textContent = source.title;
+      row.append(link);
+    } else row.textContent = `${source.title} · ${source.repositoryPath ?? "repository evidence"}`;
+    sources.append(row);
+  }
+  if (sources.childElementCount > 0) technical.append(sources);
+  if (result.profile.id !== "unknown-hid" &&
+      result.resolution !== "identity-conflict" && result.resolution !== "ambiguous-family") {
+    technical.append(terminalRoster(document_, result.profile, chart, "product"));
+  }
+  body.append(technical);
+  details.append(summary, body);
+  return details;
+}
+
+function productDynamicContent(
+  document_: Document,
+  result: EncoderDetectionResult,
+  selection: LabSelection,
+  declaredLabels: readonly string[],
+  chartState: ChartReadState,
+  observationState: SignalObservationState,
+  selectedTerminalId: string | undefined,
+  onSelectTerminal: (terminalId: string) => void,
+  onConfirm: (profileId: EncoderVisualProfileId) => void,
+  onDeclaredLabels: (labels: readonly string[]) => void,
+  onReadChart: () => void,
+  onStartObservation: () => void,
+  onStopObservation: () => void,
+  onEscapeObservationCapture: () => void,
+  connectionConfirmed: boolean,
+  chartHardwareBlock: EncoderHardwareActionLease | null,
+  observationHardwareBlock: EncoderHardwareActionLease | null,
+  hardwareActionOwner: symbol,
+): HTMLElement {
+  const region = html(document_, "div", "rd-encoder-product-dynamic");
+  region.dataset.rdEncoderEvidence = "";
+  region.dataset.evidenceState = result.resolution;
+  region.dataset.profileId = result.profile.id;
+  if (selection.device) region.dataset.sourceSelector = selection.device.selector;
+  const chart = chartState.kind === "loaded" ? chartState.snapshot : null;
+  const view = observationView(observationState);
+  const signals = observedSignals(selection, observationState);
+  const observationsAreLive = view !== null;
+  const known = result.profile.id !== "unknown-hid" &&
+    result.resolution !== "identity-conflict" && result.resolution !== "ambiguous-family";
+  const selected = known
+    ? result.profile.topology.terminals.find((terminal) => terminal.id === selectedTerminalId)?.id ??
+      result.profile.topology.terminals[0]?.id
+    : undefined;
+
+  const status = html(document_, "div", "rd-encoder-product-status");
+  appendProductPill(
+    document_, status,
+    connectionConfirmed ? "Connected" : "Connection unconfirmed",
+    connectionConfirmed ? "connected" : "attention",
+  );
+  appendProductPill(document_, status, known ? "Recognized" :
+    result.resolution === "ambiguous-family" ? "Confirm model" : "Generic setup",
+  known ? "recognized" : "attention");
+  appendProductPill(document_, status, known
+    ? productTopologyLabel(result.profile)
+    : "Capacity unknown", known ? "ready" : "attention");
+  appendProductPill(document_, status, chart
+    ? "Keys loaded"
+    : result.protocol.chartRead === "supported" ? "Keys ready to read" : "Test emitted keys",
+  chart ? "recognized" : "ready");
+  region.append(status);
+
+  const candidate = candidateConfirmation(document_, result, onConfirm);
+  if (candidate) region.append(candidate);
+
+  const work = html(document_, "div", "rd-encoder-product-work");
+  const figure = html(document_, "figure", "rd-encoder-product-figure");
+  figure.append(known
+    ? renderProductProfileSvg(document_, result, chart, {
+      selectedTerminalId: selected,
+      observedSignals: new Set(view?.seen ?? []),
+      heldSignals: new Set(view?.held ?? []),
+      onSelect: onSelectTerminal,
+    })
+    : renderProductUnknownSvg(document_, result, signals, declaredLabels, observationsAreLive));
+  const caption = html(document_, "figcaption");
+  caption.textContent = known
+    ? result.profile.topology.capacity.kind === "exact"
+      ? chart
+        ? "Select a terminal to inspect its configured keyboard output. Lit terminals match keys seen in the current button test."
+        : "Select any terminal now, then read the board to show the keyboard key configured for every input."
+      : "This profile shows documented logical or variant controls, not a claimed physical terminal count. Select one to inspect what KSX actually knows."
+    : "The generic board grows only from labels you provide and signals heard from this exact device.";
+  figure.append(caption);
+  work.append(
+    figure,
+    known
+      ? productTerminalInspector(document_, result, chart, selected, observationState)
+      : productUnknownInspector(document_, signals, observationsAreLive),
+  );
+  region.append(work);
+
+  const observationBusy = observationState.kind === "reconciling" ||
+    observationState.kind === "starting" || observationState.kind === "listening" ||
+    observationState.kind === "stopping" || observationState.kind === "unknown" ||
+    observationState.kind === "foreign-live";
+  const actions = html(document_, "div", "rd-encoder-product-actions");
+  const chartAvailable = connectionConfirmed && chartHardwareBlock === null;
+  const observationAvailable = connectionConfirmed && observationHardwareBlock === null;
+  const hardwareBlockCopy = (lease: EncoderHardwareActionLease | null): string => {
+    if (!connectionConfirmed) {
+      return "The latest device scan did not answer. Existing results stay visible, but a new hardware action waits for a confirmed scan.";
+    }
+    if (!lease) return "";
+    if (lease.owner === hardwareActionOwner) {
+      return lease.kind === "chart"
+        ? "The previous stored-key read is still settling. Wait for it before starting another hardware action."
+        : "The previous button-test request is still settling. Wait for its exact cleanup before starting another hardware action.";
+    }
+    return lease.kind === "chart"
+      ? "Another encoder is reading its stored keys. Finish that read before starting this action."
+      : "A button test is active for another encoder. Finish it before starting this action.";
+  };
+  actions.append(
+    chartReadPanel(document_, result, selection, chartState,
+      observationBusy ? observationState.kind : null, onReadChart, "product",
+      chartAvailable, hardwareBlockCopy(chartHardwareBlock)),
+    signalObservationPanel(document_, selection, observationState, chartState.kind === "loading",
+      onStartObservation, onStopObservation, onEscapeObservationCapture, "product",
+      observationAvailable, hardwareBlockCopy(observationHardwareBlock)),
+  );
+  region.append(actions);
+  if (!known && (result.resolution === "unrecognised" || result.resolution === "known-family" ||
+      result.resolution === "identity-conflict")) {
+    region.append(manualFallback(document_, declaredLabels, onDeclaredLabels, "product"));
+  }
+  region.append(productDeviceDetails(document_, result, selection, chart, connectionConfirmed));
+  return region;
+}
+
 interface ProfileLabContentController {
   content: HTMLElement;
   updateConnectedEncoders: (devices: readonly EncoderProfileLabDevice[]) => void;
+  setConnectionConfirmed: (confirmed: boolean) => void;
   dispose: () => void;
 }
 
@@ -1336,6 +2321,7 @@ function connectedDevicesSignature(devices: readonly EncoderProfileLabDevice[]):
     selector: device.selector,
     name: device.name,
     alias: device.alias ?? "",
+    meta: device.meta ?? "",
     backend: device.backend,
   })));
 }
@@ -1372,17 +2358,27 @@ function createProfileLabContent(
   document_: Document,
   options: EncoderProfileLabOptions,
 ): ProfileLabContentController {
+  const presentation = options.presentation ?? "research";
+  const makeSelections = (devices: readonly EncoderProfileLabDevice[] = []): LabSelection[] => {
+    const built = buildSelections(devices);
+    return presentation === "product"
+      ? built.filter((selection) => selection.group === "connected")
+      : built;
+  };
   let connectedSignature = connectedDevicesSignature(options.connectedEncoders ?? []);
-  let selections = buildSelections(options.connectedEncoders);
+  let selections = makeSelections(options.connectedEncoders);
   const initialCatalog = options.initialProfileId ? `${CATALOG_PREFIX}${options.initialProfileId}` : "";
   const defaultSelection = (): LabSelection | undefined =>
     selections.find((selection) => selection.group === "connected") ??
       selections.find((selection) => selection.value === `${CATALOG_PREFIX}ultimarc-ipac4`) ??
       selections[0];
   let current = selections.find((selection) => selection.value === initialCatalog) ?? defaultSelection();
-  if (!current) throw new Error("encoder profile lab has no selections");
+  if (!current) throw new Error(presentation === "product"
+    ? "encoder workbench surface requires one connected device"
+    : "encoder profile lab has no selections");
   let confirmedCandidate: EncoderVisualProfileId | undefined;
   let declaredLabels: readonly string[] = [];
+  let selectedTerminalId: string | undefined;
   let chartState: ChartReadState = { kind: "idle" };
   let chartRequestEpoch = 0;
   let observationState: SignalObservationState = { kind: "idle" };
@@ -1391,18 +2387,60 @@ function createProfileLabContent(
   let observationPollTimer: number | undefined;
   let pageHiding = false;
   let announcementFrame = 0;
+  let connectionConfirmed = true;
+  const hardwareActionOwner = Symbol("encoder-workbench-surface");
+  const hardwareActionHolds: Record<EncoderHardwareActionKind, Set<symbol>> = {
+    chart: new Set<symbol>(),
+    observation: new Set<symbol>(),
+  };
+  let observationSessionHold: symbol | null = null;
+  const acquireHardwareActionHold = (
+    kind: EncoderHardwareActionKind,
+    selector: string,
+  ): symbol | null => {
+    if (!claimEncoderHardwareAction(hardwareActionOwner, kind, selector)) return null;
+    const hold = Symbol(`encoder-${kind}-hold`);
+    hardwareActionHolds[kind].add(hold);
+    return hold;
+  };
+  const releaseHardwareActionHold = (
+    kind: EncoderHardwareActionKind,
+    hold: symbol | null,
+  ): void => {
+    if (!hold || !hardwareActionHolds[kind].delete(hold)) return;
+    if (hardwareActionHolds[kind].size === 0) {
+      releaseEncoderHardwareAction(hardwareActionOwner, kind);
+    }
+  };
+  const releaseObservationSessionHold = (): void => {
+    const hold = observationSessionHold;
+    observationSessionHold = null;
+    releaseHardwareActionHold("observation", hold);
+  };
+  const ownedSettlingHardwareAction = (
+    kind: EncoderHardwareActionKind,
+  ): EncoderHardwareActionLease | null => {
+    if (hardwareActionHolds[kind].size === 0) return null;
+    const active = encoderHardwareActionLease;
+    return active?.owner === hardwareActionOwner && active.kind === kind ? active : null;
+  };
   const content = html(document_, "section", "rd-encoder-profile");
   content.dataset.formaRuntimeHost = "";
   content.dataset.rdEncoderLab = "";
+  content.dataset.presentation = presentation;
   const header = html(document_, "header", "rd-encoder-profile-head");
   const headingCopy = html(document_, "div", "rd-encoder-profile-heading-copy");
   const eyebrow = html(document_, "p", "rd-encoder-profile-eyebrow");
-  eyebrow.textContent = "Encoder profile lab · research-backed preview";
+  eyebrow.textContent = presentation === "product"
+    ? "Panel encoder"
+    : "Encoder profile lab · research-backed preview";
   const title = html(document_, "h2", "rd-encoder-profile-title");
   const subtitle = html(document_, "p", "rd-encoder-profile-subtitle");
   headingCopy.append(eyebrow, title, subtitle);
   const safety = html(document_, "span", "rd-encoder-profile-safety");
-  safety.textContent = "Explicit reads only · never writes";
+  safety.textContent = presentation === "product"
+    ? "Connected · read only"
+    : "Explicit reads only · never writes";
   header.append(headingCopy, safety);
   const toolbar = html(document_, "div", "rd-encoder-profile-toolbar");
   const field = html(document_, "label");
@@ -1455,75 +2493,198 @@ function createProfileLabContent(
     });
   };
   const paintHeader = (result: EncoderDetectionResult): void => {
-    title.textContent = result.profile.id === "unknown-hid"
-      ? current.device?.name ?? result.identity.familyLabel ?? result.profile.model
-      : `${result.profile.manufacturer} ${result.profile.model}`;
-    subtitle.textContent = result.resolution === "ambiguous-family" ||
-        result.resolution === "known-family" || result.resolution === "identity-conflict"
-      ? result.warnings[0] ?? result.profile.summary
-      : result.profile.summary;
+    title.textContent = presentation === "product"
+      ? current.device?.name ?? (result.profile.id === "unknown-hid"
+        ? result.identity.familyLabel ?? result.profile.model
+        : `${result.profile.manufacturer} ${result.profile.model}`)
+      : result.profile.id === "unknown-hid"
+        ? current.device?.name ?? result.identity.familyLabel ?? result.profile.model
+        : `${result.profile.manufacturer} ${result.profile.model}`;
+    subtitle.textContent = presentation === "product"
+      ? result.profile.id === "unknown-hid"
+        ? `${current.device?.meta?.trim() || "USB input device"} · build a truthful control surface from this device’s signals`
+        : `${result.profile.manufacturer} ${result.profile.model} · ${productTopologyLabel(result.profile)}${current.device?.meta?.trim() ? ` · ${current.device.meta.trim()}` : ""}`
+      : result.resolution === "ambiguous-family" ||
+          result.resolution === "known-family" || result.resolution === "identity-conflict"
+        ? result.warnings[0] ?? result.profile.summary
+        : result.profile.summary;
     content.dataset.profileId = result.profile.id;
     content.dataset.evidenceState = result.resolution;
+    content.dataset.connectionConfirmed = connectionConfirmed ? "true" : "false";
+    safety.textContent = presentation === "product"
+      ? connectionConfirmed ? "Connected · read only" : "Connection unconfirmed · results preserved"
+      : "Explicit reads only · never writes";
   };
-  const repaint = (): void => {
+  const focusProductTerminal = (terminalId: string): void => {
+    document_.defaultView?.requestAnimationFrame(() => {
+      const terminals = Array.from(
+        dynamicHost.querySelectorAll<SVGGElement>("[data-terminal-id]"),
+      );
+      terminals.find((terminal) => terminal.dataset.terminalId === terminalId)
+        ?.focus({ preventScroll: true });
+    });
+  };
+  const focusProductTerminalOrWidget = (): void => {
+    document_.defaultView?.requestAnimationFrame(() => {
+      const preferred = selectedTerminalId
+        ? Array.from(dynamicHost.querySelectorAll<SVGGElement>("[data-terminal-id]"))
+          .find((terminal) => terminal.dataset.terminalId === selectedTerminalId) ?? null
+        : null;
+      const terminal = preferred ??
+        dynamicHost.querySelector<SVGGElement>('[data-terminal-id][tabindex="0"]');
+      if (terminal) terminal.focus({ preventScroll: true });
+      else content.closest<HTMLElement>(".widget-instance")?.focus({ preventScroll: true });
+    });
+  };
+  const confirmProfile = (profileId: EncoderVisualProfileId): void => {
+    confirmedCandidate = profileId;
+    selectedTerminalId = undefined;
+    repaint();
+    document_.defaultView?.requestAnimationFrame(() => {
+      if (presentation === "product") {
+        dynamicHost.querySelector<SVGGElement>('[data-terminal-id][tabindex="0"]')
+          ?.focus({ preventScroll: true });
+      } else select.focus({ preventScroll: true });
+    });
+  };
+  const applyDeclaredLabels = (labels: readonly string[]): void => {
+    declaredLabels = labels;
+    repaint();
+    document_.defaultView?.requestAnimationFrame(() => {
+      dynamicHost.querySelector<HTMLTextAreaElement>("[data-rd-encoder-manual-labels]")
+        ?.focus({ preventScroll: true });
+    });
+  };
+  const escapeObservationCapture = (): void => {
+    if (observationState.kind === "starting") {
+      observationRequestEpoch += 1;
+      clearObservationPoll();
+      observationState = {
+        kind: "error",
+        message: "Capture focus was released while start is still resolving. KSX will release any exact generation returned by that request.",
+      };
+      // Clear the visible capture session now, but keep the request hold until
+      // the late start response and any exact-generation cleanup have settled.
+      releaseObservationSessionHold();
+      repaint();
+      announce("Capture focus released. Any late exact start generation will be cancelled.");
+      if (presentation === "product") focusProductTerminalOrWidget();
+      else focusObservationStart();
+      return;
+    }
+    if (observationState.kind === "stopping") {
+      const owned = observationState.view;
+      observationRequestEpoch += 1;
+      clearObservationPoll();
+      observationState = {
+        kind: "unknown",
+        view: owned,
+        message: `Capture focus was released while generation ${owned.generation ?? "unknown"} is stopping. Exact Stop remains available for retry.`,
+      };
+      repaint();
+      announce("Capture focus released. Exact Stop remains available for retry.");
+    } else {
+      announce("Capture focus released. The exact observation continues until Done or timeout.");
+    }
+    if (presentation === "product") focusProductTerminalOrWidget();
+    else select.focus({ preventScroll: true });
+  };
+  function repaint(): void {
     const result = selectedDetection(current, confirmedCandidate);
     paintHeader(result);
-    dynamicHost.replaceChildren(dynamicProfileContent(
-      document_, result, current, declaredLabels, chartState, observationState,
-      (profileId) => {
-        confirmedCandidate = profileId;
-        repaint();
-        document_.defaultView?.requestAnimationFrame(() => {
-          select.focus({ preventScroll: true });
-        });
-      },
-      (labels) => {
-        declaredLabels = labels;
-        repaint();
-        document_.defaultView?.requestAnimationFrame(() => {
-          dynamicHost.querySelector<HTMLTextAreaElement>("[data-rd-encoder-manual-labels]")
-            ?.focus({ preventScroll: true });
-        });
-      },
-      () => { void readCurrentChart(); },
-      () => { void startCurrentObservation(); },
-      () => { void stopCurrentObservation(); },
-      () => {
-        if (observationState.kind === "starting") {
-          observationRequestEpoch += 1;
-          clearObservationPoll();
-          observationState = {
-            kind: "error",
-            message: "Capture focus was released while start is still resolving. KSX will release any exact generation returned by that request.",
-          };
+    const observationLeaseIsVisible = observationState.kind === "reconciling" ||
+      observationState.kind === "starting" || observationState.kind === "listening" ||
+      observationState.kind === "stopping" || observationState.kind === "unknown" ||
+      observationState.kind === "foreign-live";
+    const chartHardwareBlock = encoderHardwareActionBlockedFor(hardwareActionOwner, "chart") ??
+      (chartState.kind === "loading" ? null : ownedSettlingHardwareAction("chart"));
+    const observationHardwareBlock =
+      encoderHardwareActionBlockedFor(hardwareActionOwner, "observation") ??
+      (observationLeaseIsVisible ? null : ownedSettlingHardwareAction("observation"));
+    const selectedStillExists = result.profile.topology.terminals.some(
+      (terminal) => terminal.id === selectedTerminalId,
+    );
+    if (!selectedStillExists) selectedTerminalId = result.profile.topology.terminals[0]?.id;
+    dynamicHost.replaceChildren(presentation === "product"
+      ? productDynamicContent(
+        document_, result, current, declaredLabels, chartState, observationState,
+        selectedTerminalId,
+        (terminalId) => {
+          selectedTerminalId = terminalId;
           repaint();
-          announce("Capture focus released. Any late exact start generation will be cancelled.");
-          focusObservationStart();
-          return;
-        }
-        if (observationState.kind === "stopping") {
-          const owned = observationState.view;
-          observationRequestEpoch += 1;
-          clearObservationPoll();
-          observationState = {
-            kind: "unknown",
-            view: owned,
-            message: `Capture focus was released while generation ${owned.generation ?? "unknown"} is stopping. Exact Stop remains available for retry.`,
-          };
-          repaint();
-          announce("Capture focus released. Exact Stop remains available for retry.");
-        } else {
-          announce("Capture focus released. The exact observation continues until Done or timeout.");
-        }
-        select.focus({ preventScroll: true });
-      },
-    ));
-    announce(`${resolutionLabel(result)}. ${result.warnings[0] ?? result.profile.topology.confidenceDetail}`);
-  };
+          focusProductTerminal(terminalId);
+        },
+        confirmProfile,
+        applyDeclaredLabels,
+        () => { void readCurrentChart(); },
+        () => { void startCurrentObservation(); },
+        () => { void stopCurrentObservation(); },
+        escapeObservationCapture,
+        connectionConfirmed,
+        chartHardwareBlock,
+        observationHardwareBlock,
+        hardwareActionOwner,
+      )
+      : dynamicProfileContent(
+        document_, result, current, declaredLabels, chartState, observationState,
+        confirmProfile,
+        applyDeclaredLabels,
+        () => { void readCurrentChart(); },
+        () => { void startCurrentObservation(); },
+        () => { void stopCurrentObservation(); },
+        escapeObservationCapture,
+      ));
+    announce(presentation === "product"
+      ? `${result.profile.id === "unknown-hid" ? "Generic encoder setup" : "Recognized encoder"}. ${
+        chartState.kind === "loaded" ? `${chartState.snapshot.terminals.length} keys loaded.` :
+          "No hardware was changed."
+      }`
+      : `${resolutionLabel(result)}. ${result.warnings[0] ?? result.profile.topology.confidenceDetail}`);
+  }
   const clearObservationPoll = (): void => {
     const view = document_.defaultView;
     if (observationPollTimer !== undefined && view) view.clearTimeout(observationPollTimer);
     observationPollTimer = undefined;
+  };
+  const patchProductSignalState = (): void => {
+    if (presentation !== "product") return;
+    const view = observationView(observationState);
+    const seen = new Set(view?.seen ?? []);
+    const held = new Set(view?.held ?? []);
+    for (const terminal of Array.from(
+      dynamicHost.querySelectorAll<SVGGElement>("[data-terminal-id]"),
+    )) {
+      const normal = terminal.dataset.configuredKey ?? "";
+      const shifted = terminal.dataset.configuredShiftKey ?? "";
+      const isSeen = Boolean((normal && seen.has(normal)) || (shifted && seen.has(shifted)));
+      const isHeld = Boolean((normal && held.has(normal)) || (shifted && held.has(shifted)));
+      terminal.classList.toggle("is-seen", isSeen);
+      terminal.classList.toggle("is-held", isHeld);
+      const ariaBase = terminal.dataset.terminalAriaBase ?? terminal.dataset.terminalLabel ?? "Terminal";
+      const nextAriaLabel = `${ariaBase}${isHeld
+        ? " Matching key pressed now."
+        : isSeen ? " Matching key seen during this test." : ""}`;
+      if (terminal.getAttribute("aria-label") !== nextAriaLabel) {
+        terminal.setAttribute("aria-label", nextAriaLabel);
+      }
+    }
+    const selected = dynamicHost.querySelector<SVGGElement>(
+      ".rd-encoder-product-terminal.is-selected",
+    );
+    const live = dynamicHost.querySelector<HTMLElement>("[data-rd-encoder-terminal-live]");
+    if (!live) return;
+    const normal = selected?.dataset.configuredKey ?? "";
+    const shifted = selected?.dataset.configuredShiftKey ?? "";
+    const isSeen = Boolean((normal && seen.has(normal)) || (shifted && seen.has(shifted)));
+    const isHeld = Boolean((normal && held.has(normal)) || (shifted && held.has(shifted)));
+    const inspector = dynamicHost.querySelector<HTMLElement>("[data-rd-encoder-terminal-inspector]");
+    const nextState = isHeld ? "held" : isSeen ? "seen" : "idle";
+    if (inspector && inspector.dataset.liveState !== nextState) inspector.dataset.liveState = nextState;
+    if (live.dataset.state !== nextState) live.dataset.state = nextState;
+    const copy = live.lastElementChild;
+    const nextCopy = isHeld ? "Pressed now" : isSeen ? "Seen in this test" :
+      view ? "Waiting for this key" : "Run a button test for live feedback";
+    if (copy && copy.textContent !== nextCopy) copy.textContent = nextCopy;
   };
   const patchObservationSurface = (): void => {
     const panel = dynamicHost.querySelector<HTMLElement>("[data-rd-encoder-observation]");
@@ -1533,7 +2694,8 @@ function createProfileLabContent(
     const currentView = observationView(observationState);
     if (currentView) panel.dataset.backendState = currentView.state;
     else delete panel.dataset.backendState;
-    paintSignalObservationStatus(document_, status, current, observationState);
+    paintSignalObservationStatus(document_, status, current, observationState, presentation);
+    patchProductSignalState();
     const start = panel.querySelector<HTMLButtonElement>('[data-rd-encoder-observe="start"]');
     const stop = panel.querySelector<HTMLButtonElement>('[data-rd-encoder-observe="stop"]');
     const listening = observationState.kind === "listening" || observationState.kind === "unknown";
@@ -1543,7 +2705,7 @@ function createProfileLabContent(
     if (stop) {
       stop.disabled = observationState.kind === "stopping";
       stop.textContent = observationState.kind === "stopping"
-        ? "Stopping…" : "Done — stop listening";
+        ? "Stopping…" : presentation === "product" ? "Done" : "Done — stop listening";
     }
   };
   const focusObservationSink = (): void => {
@@ -1570,8 +2732,17 @@ function createProfileLabContent(
     observationRequestEpoch += 1;
     clearObservationPoll();
     observationState = { kind: "idle" };
+    // A visible session and an HTTP request have different lifetimes. Add the
+    // cleanup hold before dropping the session hold so another surface cannot
+    // enter the hardware lane between those two operations.
+    const cleanupHold = owned
+      ? acquireHardwareActionHold("observation", owned.selector)
+      : null;
+    releaseObservationSessionHold();
     if (owned) {
-      void cancelEncoderObservation(owned.generation, fetch, keepalive).catch(() => undefined);
+      void cancelEncoderObservation(owned.generation, fetch, keepalive)
+        .catch(() => undefined)
+        .finally(() => releaseHardwareActionHold("observation", cleanupHold));
     }
   };
   const scheduleObservationPoll = (epoch: number, selector: string, generation: number): void => {
@@ -1614,6 +2785,7 @@ function createProfileLabContent(
           (view.state === "timeout" || view.state === "cancelled" || view.state === "failed")) {
         observationOwnership = null;
         observationState = { kind: "complete", view };
+        releaseObservationSessionHold();
         repaint();
         announce(view.state === "failed"
           ? "Signal observation failed; partial evidence remains visible."
@@ -1663,35 +2835,70 @@ function createProfileLabContent(
   };
   const startCurrentObservation = async (): Promise<void> => {
     const selector = current.device?.selector;
-    if (!selector || chartState.kind === "loading" || observationState.kind === "reconciling" ||
+    if (!connectionConfirmed || !selector || chartState.kind === "loading" ||
+        observationState.kind === "reconciling" ||
         observationState.kind === "starting" || observationState.kind === "listening" ||
         observationState.kind === "stopping" || observationState.kind === "unknown") return;
-    const requestedSelection = current.value;
     const recheckOnly = observationState.kind === "foreign-live";
+    if (!recheckOnly && hardwareActionHolds.observation.size > 0) {
+      announce("The previous button-test request is still settling. Wait for its exact cleanup before starting again.");
+      repaint();
+      return;
+    }
+    if (encoderHardwareActionBlockedFor(hardwareActionOwner, "observation")) {
+      announce("Another encoder hardware action is still active. Finish it before starting this button test.");
+      repaint();
+      return;
+    }
+    const requestedSelection = current.value;
     const epoch = ++observationRequestEpoch;
     clearObservationPoll();
     observationState = { kind: "reconciling" };
+    if (!observationSessionHold) {
+      observationSessionHold = acquireHardwareActionHold("observation", selector);
+      if (!observationSessionHold) {
+        observationState = { kind: "idle" };
+        repaint();
+        return;
+      }
+    }
+    const reconciliationHold = acquireHardwareActionHold("observation", selector);
+    if (!reconciliationHold) {
+      observationState = { kind: "idle" };
+      releaseObservationSessionHold();
+      repaint();
+      return;
+    }
     repaint();
     announce("Checking the current signal-observation lease before starting.");
     let existing: EncoderObservationView;
     try {
       existing = await pollEncoderObservation();
     } catch (error) {
+      releaseHardwareActionHold("observation", reconciliationHold);
       if (epoch !== observationRequestEpoch || current.value !== requestedSelection) return;
-      observationState = {
-        kind: "error",
-        message: error instanceof Error ? error.message : "KSX could not inspect the current observation lease.",
-      };
+      const message = error instanceof Error
+        ? error.message
+        : "KSX could not inspect the current observation lease.";
+      observationState = recheckOnly
+        ? {
+          kind: "foreign-live",
+          message: `${message} KSX still cannot prove that the foreign observation ended.`,
+        }
+        : { kind: "error", message };
       repaint();
-      announce(`Signal observation unavailable — ${observationState.message}`);
+      announce(`${recheckOnly ? "Observation lease still unconfirmed" : "Signal observation unavailable"} — ${observationState.message}`);
+      if (!recheckOnly) releaseObservationSessionHold();
       focusObservationStart();
       return;
     }
+    releaseHardwareActionHold("observation", reconciliationHold);
     if (epoch !== observationRequestEpoch || current.value !== requestedSelection) return;
     if (recheckOnly) {
       if (existing.ok && (existing.state === "idle" || existing.state === "timeout" ||
           existing.state === "cancelled" || existing.state === "failed")) {
         observationState = { kind: "idle" };
+        releaseObservationSessionHold();
         repaint();
         announce("The foreign observation lease has ended. No new observation was started.");
       } else {
@@ -1740,10 +2947,19 @@ function createProfileLabContent(
       };
       repaint();
       announce(`Signal observation unavailable — ${observationState.message}`);
+      releaseObservationSessionHold();
       focusObservationStart();
       return;
     }
 
+    const startHold = acquireHardwareActionHold("observation", selector);
+    if (!startHold) {
+      observationState = { kind: "error", message: "KSX could not reserve the button-test request." };
+      releaseObservationSessionHold();
+      repaint();
+      focusObservationStart();
+      return;
+    }
     observationState = { kind: "starting" };
     repaint();
     focusObservationSink();
@@ -1752,8 +2968,9 @@ function createProfileLabContent(
       if (epoch !== observationRequestEpoch || current.value !== requestedSelection) {
         if ((view.state === "listening" || view.state === "unknown") &&
             observationBelongsTo(view, selector) && view.generation !== null) {
-          void cancelEncoderObservation(view.generation, fetch, pageHiding).catch(() => undefined);
+          await cancelEncoderObservation(view.generation, fetch, pageHiding).catch(() => undefined);
         }
+        releaseObservationSessionHold();
         return;
       }
       if (adoptListeningObservation(view, selector, epoch)) return;
@@ -1782,6 +2999,7 @@ function createProfileLabContent(
         observationState = { kind: "error", message: view.error || view.detail ||
           "KSX did not begin an exact-device signal observation." };
       }
+      releaseObservationSessionHold();
       repaint();
       announce(observationState.kind === "complete"
         ? `Observation ended with ${observationState.view.seen.length} unique host signals.`
@@ -1798,8 +3016,9 @@ function createProfileLabContent(
             recoveredGeneration !== null &&
             observationBelongsTo(recovered, selector, recoveredGeneration)) {
           if (nowStale) {
-            void cancelEncoderObservation(recoveredGeneration, fetch, pageHiding)
+            await cancelEncoderObservation(recoveredGeneration, fetch, pageHiding)
               .catch(() => undefined);
+            releaseObservationSessionHold();
             return;
           }
           observationOwnership = {
@@ -1818,18 +3037,27 @@ function createProfileLabContent(
           announce("The start response was lost, but an exact owned generation remains. Its exact Stop action is available.");
           return;
         }
-        if (nowStale) return;
+        if (nowStale) {
+          releaseObservationSessionHold();
+          return;
+        }
       } catch {
         // Keep the original start error; no exact live generation was proven.
       }
-      if (stale || epoch !== observationRequestEpoch || current.value !== requestedSelection) return;
+      if (stale || epoch !== observationRequestEpoch || current.value !== requestedSelection) {
+        releaseObservationSessionHold();
+        return;
+      }
       observationState = {
         kind: "error",
         message: error instanceof Error ? error.message : "The signal observation could not start.",
       };
+      releaseObservationSessionHold();
       repaint();
       announce(`Signal observation unavailable — ${observationState.message}`);
       focusObservationStart();
+    } finally {
+      releaseHardwareActionHold("observation", startHold);
     }
   };
   const stopCurrentObservation = async (): Promise<void> => {
@@ -1839,6 +3067,8 @@ function createProfileLabContent(
     clearObservationPoll();
     const generation = owned.generation;
     const selector = owned.selector;
+    const stopHold = acquireHardwareActionHold("observation", selector);
+    if (!stopHold) return;
     observationState = { kind: "stopping", view: owned };
     patchObservationSurface();
     focusObservationSink();
@@ -1855,6 +3085,7 @@ function createProfileLabContent(
           (view.state === "cancelled" || view.state === "timeout" || view.state === "failed")) {
         observationOwnership = null;
         observationState = { kind: "complete", view };
+        releaseObservationSessionHold();
       } else {
         observationState = {
           kind: "unknown",
@@ -1880,6 +3111,8 @@ function createProfileLabContent(
       repaint();
       announce("KSX could not confirm the stop. The exact Stop action remains available for retry.");
       focusObservationSink();
+    } finally {
+      releaseHardwareActionHold("observation", stopHold);
     }
   };
   const readCurrentChart = async (): Promise<void> => {
@@ -1889,26 +3122,73 @@ function createProfileLabContent(
       observationState.kind === "starting" || observationState.kind === "listening" ||
       observationState.kind === "stopping" || observationState.kind === "unknown" ||
       observationState.kind === "foreign-live";
-    if (!selector || !chartReadIsAdmitted(result, current) || chartState.kind === "loading" ||
+    if (!connectionConfirmed || !selector || !chartReadIsAdmitted(result, current) ||
+        chartState.kind === "loading" ||
         observationBusy) return;
+    if (hardwareActionHolds.chart.size > 0) {
+      announce("The previous stored-key read is still settling. Wait before reading again.");
+      repaint();
+      return;
+    }
+    if (encoderHardwareActionBlockedFor(hardwareActionOwner, "chart")) {
+      announce("Another encoder hardware action is still active. Finish it before reading these keys.");
+      repaint();
+      return;
+    }
     const requestedSelection = current.value;
     const epoch = ++chartRequestEpoch;
     chartState = { kind: "loading" };
+    const chartHold = acquireHardwareActionHold("chart", selector);
+    if (!chartHold) {
+      chartState = { kind: "idle" };
+      repaint();
+      return;
+    }
     repaint();
     announce(`Reading configured emissions from ${current.device?.name ?? "the selected encoder"}.`);
-    const response = await requestEncoderChart(selector);
-    if (epoch !== chartRequestEpoch || current.value !== requestedSelection) return;
-    if (response.kind !== "answered") {
-      chartState = { kind: "error", message: response.message };
-    } else {
-      const validation = validateEncoderChart(
-        response.outcome,
-        result.profile.topology.terminals.map((terminal) => terminal.id),
-      );
-      chartState = validation.ok
-        ? { kind: "loaded", snapshot: validation.snapshot }
-        : { kind: "error", message: validation.message };
+    try {
+      // The observer lease is daemon-global and may have been started by a
+      // different tab/process, so a local coordinator alone is insufficient.
+      const observation = await pollEncoderObservation();
+      if (epoch !== chartRequestEpoch || current.value !== requestedSelection) return;
+      const observationIdle = (observation.ok && (
+        observation.state === "idle" || observation.state === "timeout" ||
+        observation.state === "cancelled" || observation.state === "failed"
+      )) || (observation.state === "unavailable" && observation.generation === null);
+      if (!observationIdle) {
+        chartState = {
+          kind: "error",
+          message: observation.generation !== null
+            ? "A button test is active. Finish it before reading stored encoder keys."
+            : observation.error || observation.detail ||
+              "KSX could not confirm that the button-test lease is idle.",
+        };
+      } else {
+        const response = await requestEncoderChart(selector);
+        if (epoch !== chartRequestEpoch || current.value !== requestedSelection) return;
+        if (response.kind !== "answered") {
+          chartState = { kind: "error", message: response.message };
+        } else {
+          const validation = validateEncoderChart(
+            response.outcome,
+            result.profile.topology.terminals.map((terminal) => terminal.id),
+          );
+          chartState = validation.ok
+            ? { kind: "loaded", snapshot: validation.snapshot }
+            : { kind: "error", message: validation.message };
+        }
+      }
+    } catch (error) {
+      if (epoch !== chartRequestEpoch || current.value !== requestedSelection) return;
+      chartState = {
+        kind: "error",
+        message: error instanceof Error ? error.message :
+          "KSX could not verify the button-test lease before reading this encoder.",
+      };
+    } finally {
+      releaseHardwareActionHold("chart", chartHold);
     }
+    if (epoch !== chartRequestEpoch || current.value !== requestedSelection) return;
     repaint();
     announce(chartState.kind === "loaded"
       ? `Read ${chartState.snapshot.terminals.length} configured terminal emissions. No hardware was changed.`
@@ -1927,20 +3207,29 @@ function createProfileLabContent(
     chartState = { kind: "idle" };
     confirmedCandidate = undefined;
     declaredLabels = [];
+    selectedTerminalId = undefined;
     if (current.profileId) options.onProfileChange?.(current.profileId);
     repaint();
   });
   const footer = html(document_, "footer", "rd-encoder-profile-foot");
-  footer.textContent =
-    "Read-only inspection. KSX control assignment comes later; this surface stops at terminal identity, stored configuration, and device-scoped host signals.";
-  content.append(header, toolbar, dynamicHost, footer, liveStatus);
+  footer.textContent = presentation === "product"
+    ? "This block reads and tests the encoder. Assigning its keys to a virtual controller is the next canvas block."
+    : "Read-only inspection. KSX control assignment comes later; this surface stops at terminal identity, stored configuration, and device-scoped host signals.";
+  if (presentation === "product") content.append(header, dynamicHost, footer, liveStatus);
+  else content.append(header, toolbar, dynamicHost, footer, liveStatus);
+  let disposed = false;
+  const unsubscribeHardwareActions = subscribeEncoderHardwareActions(() => {
+    if (!disposed && !pageHiding) repaint();
+  });
   const onPageHide = (): void => {
     pageHiding = true;
     chartRequestEpoch += 1;
+    if (chartState.kind === "loading") chartState = { kind: "idle" };
     releaseObservation(true);
   };
   const onPageShow = (): void => {
     pageHiding = false;
+    repaint();
   };
   document_.defaultView?.addEventListener("pagehide", onPageHide);
   document_.defaultView?.addEventListener("pageshow", onPageShow);
@@ -1953,7 +3242,7 @@ function createProfileLabContent(
       connectedSignature = nextSignature;
       const previousValue = current.value;
       const previousEvidence = selectionEvidenceSignature(current);
-      selections = buildSelections(devices);
+      selections = makeSelections(devices);
       const replacement = selections.find((selection) => selection.value === previousValue) ??
         defaultSelection();
       if (!replacement) return;
@@ -1966,12 +3255,37 @@ function createProfileLabContent(
         chartState = { kind: "idle" };
         confirmedCandidate = undefined;
         declaredLabels = [];
+        selectedTerminalId = undefined;
       }
       repaintOptions();
       if (selectionChanged || evidenceChanged) repaint();
-      else paintHeader(selectedDetection(current, confirmedCandidate));
+      else {
+        paintHeader(selectedDetection(current, confirmedCandidate));
+        if (presentation === "product") {
+          const deviceFact = dynamicHost.querySelector<HTMLElement>('[data-device-fact="device"] dd');
+          const connectionFact = dynamicHost.querySelector<HTMLElement>(
+            '[data-device-fact="connection"] dd',
+          );
+          if (deviceFact) deviceFact.textContent = current.device?.name ?? "Connected encoder";
+          if (connectionFact) {
+            connectionFact.textContent = connectionConfirmed
+              ? current.device?.meta?.trim() || "Connected USB device"
+              : "Unconfirmed — latest device scan did not answer";
+          }
+        }
+      }
+    },
+    setConnectionConfirmed: (confirmed) => {
+      if (presentation !== "product" || confirmed === connectionConfirmed) return;
+      connectionConfirmed = confirmed;
+      repaint();
+      announce(confirmed
+        ? "Device connection confirmed. Read and button-test actions are available."
+        : "Device connection is unconfirmed. Existing results remain visible; new hardware actions are paused.");
     },
     dispose: () => {
+      disposed = true;
+      unsubscribeHardwareActions();
       document_.defaultView?.removeEventListener("pagehide", onPageHide);
       document_.defaultView?.removeEventListener("pageshow", onPageShow);
       chartRequestEpoch += 1;
@@ -1984,11 +3298,29 @@ function createProfileLabContent(
   };
 }
 
+/** One connected encoder selected in `+ Devices`, rendered as a normal
+ * workbench object. It intentionally exposes no catalog/evidence selector. */
+export function createEncoderWorkbenchSurface(
+  document_: Document,
+  device: EncoderProfileLabDevice,
+): EncoderWorkbenchSurface {
+  const surface = createProfileLabContent(document_, {
+    connectedEncoders: [device],
+    presentation: "product",
+  });
+  return {
+    content: surface.content,
+    updateDevice: (next) => surface.updateConnectedEncoders([next]),
+    setConnectionConfirmed: surface.setConnectionConfirmed,
+    dispose: surface.dispose,
+  };
+}
+
 export function createEncoderProfileLabCanvasItem(
   document_: Document,
   options: EncoderProfileLabOptions = {},
 ): EncoderProfileLabCanvasItem {
-  const lab = createProfileLabContent(document_, options);
+  const lab = createProfileLabContent(document_, { ...options, presentation: "research" });
   const item = createCanvasItem({
     instanceId: ENCODER_PROFILE_LAB_INSTANCE_ID,
     displayName: "Encoder profile lab",

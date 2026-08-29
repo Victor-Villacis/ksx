@@ -62,8 +62,10 @@ const targetDir = process.env.CARGO_TARGET_DIR
 
 // The fixture's roster, by RAW selector (macro_fixture.rs device_scan).
 const IPAC = "usb:d209:0430:00";
+const IPAC_TWIN = "usb:d209:0430:01";
 const G915 = "usb:046d:c545:00";
 const IPAC_SLUG = deviceInstanceId(IPAC);
+const IPAC_TWIN_SLUG = deviceInstanceId(IPAC_TWIN);
 const G915_SLUG = deviceInstanceId(G915);
 
 let server;
@@ -150,6 +152,12 @@ async function openBench() {
     { timeout: 20_000 },
   );
   return page;
+}
+
+/** The catalog/evidence comparison surface remains as an internal regression
+ * harness, but it is deliberately absent from the product chrome. */
+async function toggleEncoderResearchHarness(page) {
+  await page.locator('[data-nx="rd-encoder-profiles"]').evaluate((button) => button.click());
 }
 
 describe("the device workbench", () => {
@@ -363,6 +371,951 @@ describe("the device workbench", () => {
       null,
       "empty signal names never become evidence chips",
     );
+  });
+
+  test("adding a detected encoder creates the product terminal workbench", async () => {
+    const productContext = await browser.newContext({
+      viewport: { width: 1600, height: 1000 },
+      colorScheme: "dark",
+    });
+    const page = await productContext.newPage();
+    const noise = [];
+    const hardwareCalls = [];
+    page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
+    page.on("console", (message) => {
+      if (message.type() === "error") noise.push(`console: ${message.text()}`);
+    });
+    page.on("request", (request) => {
+      if (/\/api\/(?:panel\/chart|input-test)/.test(new URL(request.url()).pathname)) {
+        hardwareCalls.push({ method: request.method(), url: request.url() });
+      }
+    });
+    let observationActive = false;
+    const observationGeneration = 501;
+    const observationView = (state) => ({
+      ok: true,
+      state,
+      generation: state === "idle" ? null : observationGeneration,
+      selector: state === "idle" ? null : IPAC,
+      remaining_ms: state === "listening" ? 29_000 : null,
+      held: state === "listening" ? ["ArrowDown"] : [],
+      seen: state === "idle" ? [] : ["ArrowDown"],
+      peak: state === "idle" ? 0 : 1,
+      events: state === "idle" ? 0 : 2,
+      dropped: 0,
+      rollover_visibility: "unavailable",
+      detail: state === "idle" ? "No observation is active." : "Exact product-device test.",
+      error: null,
+    });
+    await page.route("**/api/input-test**", async (route) => {
+      const pathName = new URL(route.request().url()).pathname;
+      if (pathName === "/api/input-test/start") {
+        observationActive = true;
+        await route.fulfill({ status: 200, json: observationView("listening") });
+      } else if (pathName === "/api/input-test/cancel") {
+        observationActive = false;
+        await route.fulfill({ status: 200, json: observationView("cancelled") });
+      } else {
+        await route.fulfill({
+          status: 200,
+          json: observationView(observationActive ? "listening" : "idle"),
+        });
+      }
+    });
+    try {
+      await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await page.waitForFunction(
+        () => Boolean(document.querySelector(".forma-canvas-stage")?.style.transform),
+        null,
+        { timeout: 20_000 },
+      );
+
+      assert.equal(
+        await page.locator('[data-nx="rd-encoder-profiles"]').isHidden(),
+        true,
+        "the internal profile catalog is absent from product chrome",
+      );
+      await page.click('[data-nx="rd-devs-open"]');
+      await page.click(`.rd-devmodal button[data-selector="${IPAC}"]`);
+      await page.keyboard.press("Escape");
+      const node = page.locator(
+        `.forma-canvas-stage > .rd-encoder-device-node[data-instance-id="${IPAC_SLUG}"]`,
+      );
+      await node.waitFor({ state: "attached" });
+      assert.equal(await node.getAttribute("data-selector"), IPAC);
+      assert.equal(await node.getAttribute("data-canvas-width"), "960");
+      assert.ok(Number(await node.getAttribute("data-canvas-height")) >= 760);
+      assert.equal(await node.locator("[data-rd-encoder-model]").count(), 0);
+      assert.doesNotMatch(await node.textContent(), /profile or evidence case|research-backed preview/i);
+      assert.match(await node.textContent(), /connected/i);
+      assert.match(await node.textContent(), /recognized/i);
+      assert.match(await node.textContent(), /56 inputs/i);
+      assert.equal(await node.locator("[data-terminal-id]").count(), 56);
+      assert.equal(
+        await node.locator('[data-terminal-id][tabindex="0"]').count(),
+        1,
+        "the board exposes one roving keyboard entry point",
+      );
+      await node.focus();
+      await page.locator('[data-nx="rd-center-sel"]').evaluate((button) => button.click());
+      await page.locator('[data-nx="rd-z-100"]').evaluate((button) => button.click());
+      await page.waitForFunction(
+        () => document.querySelector(".n-zoomval")?.textContent?.trim() === "100%" &&
+          !document.querySelector(".is-camera-animating"),
+      );
+      assert.equal(
+        await page.locator(".forma-canvas-viewport").getAttribute("data-canvas-zoom-tier"),
+        "editing",
+        "rendered target QA runs at the canvas's editing-distance 100% zoom",
+      );
+      const hitAudit = await node.locator(".rd-encoder-product-terminal-hit").evaluateAll(
+        (targets) => {
+          const entries = targets.map((target) => {
+            const terminal = target.closest("[data-terminal-id]");
+            const box = target.getBoundingClientRect();
+            const centerX = box.left + box.width / 2;
+            const centerY = box.top + box.height / 2;
+            const hit = document.elementFromPoint(centerX, centerY)?.closest("[data-terminal-id]");
+            return {
+              id: terminal?.getAttribute("data-terminal-id") ?? "",
+              centerHit: hit?.getAttribute("data-terminal-id") ?? "",
+              left: box.left,
+              right: box.right,
+              top: box.top,
+              bottom: box.bottom,
+              width: box.width,
+              height: box.height,
+            };
+          });
+          const overlaps = [];
+          for (let left = 0; left < entries.length; left += 1) {
+            for (let right = left + 1; right < entries.length; right += 1) {
+              const a = entries[left];
+              const b = entries[right];
+              if (a.left < b.right - 0.25 && a.right > b.left + 0.25 &&
+                  a.top < b.bottom - 0.25 && a.bottom > b.top + 0.25) {
+                overlaps.push(`${a.id}:${b.id}`);
+              }
+            }
+          }
+          return {
+            count: entries.length,
+            undersized: entries.filter((entry) => entry.width < 44 || entry.height < 44)
+              .map((entry) => `${entry.id}:${entry.width.toFixed(2)}x${entry.height.toFixed(2)}`),
+            wrongCenters: entries.filter((entry) => entry.centerHit !== entry.id)
+              .map((entry) => `${entry.id}->${entry.centerHit || "none"}`),
+            overlaps,
+          };
+        },
+      );
+      assert.deepEqual(
+        hitAudit,
+        { count: 56, undersized: [], wrongCenters: [], overlaps: [] },
+        "all rendered terminal targets are at least 44 CSS px, disjoint, and own their centre hit",
+      );
+      assert.equal(hardwareCalls.length, 0, "adding the device performs no implicit hardware action");
+
+      const firstTerminal = node.locator('[data-terminal-id="1up"]');
+      await firstTerminal.focus();
+      await firstTerminal.press("ArrowRight");
+      await page.waitForFunction(
+        () => document.activeElement?.getAttribute("data-terminal-id") === "1down",
+      );
+      assert.equal(
+        await node.locator('[data-rd-encoder-terminal-inspector][data-selected-terminal-id="1down"]').count(),
+        1,
+        "arrow navigation selects the corresponding terminal inspector",
+      );
+      assert.equal(
+        await node.locator('[data-rd-encoder-terminal-inspector]').getAttribute("data-selected-terminal-id"),
+        "1down",
+      );
+      await page.keyboard.press("Escape");
+      assert.equal(await node.evaluate((item) => document.activeElement === item), true);
+      await node.press("F2");
+      await page.waitForFunction(
+        () => document.activeElement?.getAttribute("data-terminal-id") === "1down",
+      );
+
+      const read = node.getByRole("button", { name: "Read keys" });
+      await read.click();
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-chart][data-state="loaded"]`,
+        ),
+        IPAC_SLUG,
+      );
+      assert.equal(hardwareCalls.filter((call) => /\/api\/panel\/chart/.test(call.url)).length, 1);
+      assert.equal(await node.locator("[data-terminal-id][data-configured-emission]").count(), 56);
+      assert.doesNotMatch(
+        await node.locator('[data-rd-encoder-terminal-inspector]').textContent(),
+        /configured key\s*read keys/i,
+      );
+
+      const start = node.getByRole("button", { name: "Start button test" });
+      await start.click();
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-observation][data-state="listening"]`,
+        ),
+        IPAC_SLUG,
+      );
+      const sink = node.locator("[data-rd-encoder-observation-sink]");
+      await page.waitForFunction(
+        (id) => document.activeElement === document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-observation-sink]`,
+        ),
+        IPAC_SLUG,
+      );
+      assert.equal(await start.isDisabled(), true, "the active test keeps Start disabled");
+      await sink.press("Escape");
+      await page.waitForFunction(
+        ({ id, terminalId }) => {
+          const item = document.querySelector(`[data-instance-id="${id}"]`);
+          return document.activeElement === item ||
+            document.activeElement?.getAttribute("data-terminal-id") === terminalId;
+        },
+        { id: IPAC_SLUG, terminalId: "1down" },
+      );
+      assert.deepEqual(
+        await node.evaluate((item) => ({
+          onSelectedTerminal: document.activeElement?.getAttribute("data-terminal-id") === "1down",
+          onWidget: document.activeElement === item,
+          onDisabledStart: document.activeElement?.matches('[data-rd-encoder-observe="start"]') ?? false,
+        })),
+        { onSelectedTerminal: true, onWidget: false, onDisabledStart: false },
+        "Escape leaves capture on the selected terminal, never on disabled Start",
+      );
+      assert.equal(
+        await node.locator('[data-rd-encoder-observation][data-state="listening"]').count(),
+        1,
+        "Escape releases keyboard capture without silently ending the button test",
+      );
+      await node.getByRole("button", { name: "Done", exact: true }).click();
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-observation][data-state="complete"]`,
+        ),
+        IPAC_SLUG,
+      );
+
+      const details = node.locator(".rd-encoder-product-details");
+      assert.equal(await details.getAttribute("open"), null, "technical facts are closed by default");
+      await details.locator(":scope > summary").click();
+      assert.match(await details.textContent(), /technical evidence/i);
+      assert.match(await details.textContent(), new RegExp(IPAC, "i"));
+      assert.deepEqual(noise, [], "the product encoder stays error-free");
+    } finally {
+      await productContext.close();
+    }
+  });
+
+  test("an unrecognized encoder builds from declared labels without inventing terminals", async () => {
+    const genericContext = await browser.newContext({
+      viewport: { width: 1400, height: 900 },
+      colorScheme: "dark",
+    });
+    const page = await genericContext.newPage();
+    const noise = [];
+    page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
+    page.on("console", (message) => {
+      if (message.type() === "error") noise.push(`console: ${message.text()}`);
+    });
+    await page.route(`${BASE}/api/redesign`, async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      const encoder = payload.devices.encoders.find((row) => row.selector === IPAC);
+      assert.ok(encoder);
+      Object.assign(encoder, {
+        name: "Cabinet HID encoder",
+        meta: "USB · Connected · model not recognized",
+        family_id: null,
+        protocol_profile: null,
+        profile_state: "unrecognised",
+        terminal_count: null,
+        chart_readable: "false",
+      });
+      await route.fulfill({ response, json: payload });
+    });
+    try {
+      await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await page.waitForFunction(
+        () => Boolean(document.querySelector(".forma-canvas-stage")?.style.transform),
+        null,
+        { timeout: 20_000 },
+      );
+      // Initial HTML carries the fixture's normal roster. A theme mutation
+      // performs the live `/api/redesign` repaint this test has overridden.
+      await page.click(".rd-themed > summary");
+      await page.click('.rd-thememenu form:has(input[value="light"]) button');
+      await page.waitForFunction(
+        (selector) => document.querySelector(
+          `.rd-devmodal button[data-selector="${selector}"] .n-dev-name`,
+        )?.textContent === "Cabinet HID encoder",
+        IPAC,
+      );
+      await page.click('[data-nx="rd-devs-open"]');
+      await page.click(`.rd-devmodal button[data-selector="${IPAC}"]`);
+      await page.keyboard.press("Escape");
+      const node = page.locator(`.rd-encoder-device-node[data-instance-id="${IPAC_SLUG}"]`);
+      assert.equal(await node.locator("[data-terminal-id]").count(), 0);
+      assert.match(await node.textContent(), /generic setup/i);
+      assert.match(await node.textContent(), /capacity unknown/i);
+      assert.equal(await node.getByRole("button", { name: "Read keys" }).count(), 0);
+      assert.equal(await node.getByRole("button", { name: "Start button test" }).count(), 1);
+      const labels = node.locator("[data-rd-encoder-manual-labels]");
+      await labels.fill("P1 UP, P1 FIRE, COIN");
+      await node.getByRole("button", { name: "Build control list" }).click();
+      assert.equal(await node.locator("[data-declared-terminal-id]").count(), 3);
+      assert.equal(
+        await node.locator("[data-terminal-id]").count(),
+        0,
+        "declared controls never masquerade as discovered hardware terminals",
+      );
+      assert.deepEqual(noise, []);
+    } finally {
+      await page.unroute(`${BASE}/api/redesign`);
+      await genericContext.close();
+    }
+  });
+
+  test("product encoder clears transient Reading and Listening UI across page lifecycle", async () => {
+    const lifecycleContext = await browser.newContext({
+      viewport: { width: 1600, height: 1000 },
+      colorScheme: "dark",
+    });
+    const page = await lifecycleContext.newPage();
+    const noise = [];
+    page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
+    page.on("console", (message) => {
+      if (message.type() === "error") noise.push(`console: ${message.text()}`);
+    });
+    let releaseChart;
+    let reportChart;
+    const chartGate = new Promise((resolve) => { releaseChart = resolve; });
+    const chartSeen = new Promise((resolve) => { reportChart = resolve; });
+    let chartReported = false;
+    await page.route("**/api/panel/chart", async (route) => {
+      if (!chartReported) {
+        chartReported = true;
+        reportChart(route.request().postDataJSON());
+      }
+      await chartGate;
+      await route.continue();
+    });
+    let observationActive = false;
+    const observationGeneration = 601;
+    const inputCalls = [];
+    const observationView = (state, selector = IPAC) => ({
+      ok: true,
+      state,
+      generation: state === "idle" ? null : observationGeneration,
+      selector: state === "idle" ? null : selector,
+      remaining_ms: state === "listening" ? 28_500 : null,
+      held: state === "listening" ? ["ArrowUp"] : [],
+      seen: state === "idle" ? [] : ["ArrowUp"],
+      peak: state === "idle" ? 0 : 1,
+      events: state === "idle" ? 0 : 2,
+      dropped: 0,
+      rollover_visibility: "unavailable",
+      detail: state === "idle" ? "No observation is active." : "Lifecycle fixture.",
+      error: null,
+    });
+    await page.route("**/api/input-test**", async (route) => {
+      const request = route.request();
+      const pathName = new URL(request.url()).pathname;
+      const body = request.postData() ? request.postDataJSON() : null;
+      inputCalls.push({ path: pathName, body });
+      if (pathName === "/api/input-test/start") {
+        observationActive = true;
+        await route.fulfill({ status: 200, json: observationView("listening") });
+      } else if (pathName === "/api/input-test/cancel") {
+        observationActive = false;
+        await route.fulfill({ status: 200, json: observationView("cancelled") });
+      } else {
+        await route.fulfill({
+          status: 200,
+          json: observationView(observationActive ? "listening" : "idle"),
+        });
+      }
+    });
+
+    try {
+      await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await page.click('[data-nx="rd-devs-open"]');
+      await page.click(`.rd-devmodal button[data-selector="${IPAC}"]`);
+      await page.keyboard.press("Escape");
+      const node = page.locator(`.rd-encoder-device-node[data-instance-id="${IPAC_SLUG}"]`);
+      await node.getByRole("button", { name: "Read keys" }).click();
+      assert.deepEqual(await chartSeen, { selector: IPAC });
+      assert.equal(
+        await node.locator('[data-rd-encoder-chart][data-state="loading"]').count(),
+        1,
+      );
+      assert.match(await node.textContent(), /Reading this board/i);
+
+      await page.evaluate(() => {
+        window.dispatchEvent(new Event("pagehide"));
+        window.dispatchEvent(new Event("pageshow"));
+      });
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-chart][data-state="idle"]`,
+        ),
+        IPAC_SLUG,
+      );
+      assert.equal(
+        await node.locator("[data-rd-encoder-read]").isDisabled(),
+        true,
+        "BFCache restore clears stale Reading UI but keeps the unfinished hardware lane closed",
+      );
+      assert.match(await node.locator(".rd-encoder-product-actions").textContent(), /read is still settling/i);
+      assert.doesNotMatch(await node.textContent(), /Reading this board/i);
+      const staleChartResponse = page.waitForResponse((response) =>
+        new URL(response.url()).pathname === "/api/panel/chart"
+      );
+      releaseChart();
+      await staleChartResponse;
+      await page.waitForFunction(
+        (id) => !document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-read]`,
+        )?.disabled,
+        IPAC_SLUG,
+      );
+      assert.equal(
+        await node.locator('[data-rd-encoder-chart][data-state="idle"]').count(),
+        1,
+        "the late pre-pagehide chart cannot restore stale Reading or loaded results",
+      );
+      assert.equal(await node.locator("[data-configured-emission]").count(), 0);
+
+      await node.getByRole("button", { name: "Start button test" }).click();
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-observation][data-state="listening"]`,
+        ),
+        IPAC_SLUG,
+      );
+      assert.match(await node.textContent(), /Listening/i);
+      const cancelSeen = page.waitForRequest((request) =>
+        new URL(request.url()).pathname === "/api/input-test/cancel" &&
+        request.postDataJSON()?.generation === observationGeneration
+      );
+      await page.evaluate(() => {
+        window.dispatchEvent(new Event("pagehide"));
+        window.dispatchEvent(new Event("pageshow"));
+      });
+      await cancelSeen;
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-observation][data-state="idle"]`,
+        ),
+        IPAC_SLUG,
+      );
+      await page.waitForFunction(
+        (id) => !document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-observe="start"]`,
+        )?.disabled,
+        IPAC_SLUG,
+      );
+      assert.equal(
+        await node.getByRole("button", { name: "Start button test" }).isEnabled(),
+        true,
+      );
+      assert.equal(await node.getByRole("button", { name: "Done", exact: true }).count(), 0);
+      assert.doesNotMatch(await node.textContent(), /Listening\s*(?:·|$)/i);
+      assert.deepEqual(
+        inputCalls.filter((call) => call.path === "/api/input-test/cancel").map((call) => call.body),
+        [{ generation: observationGeneration }],
+        "pagehide releases only the exact active product observation",
+      );
+      assert.deepEqual(noise, []);
+    } finally {
+      releaseChart?.();
+      await lifecycleContext.close();
+    }
+  });
+
+  test("a non-authoritative scan preserves product results but pauses new hardware actions", async () => {
+    const authorityContext = await browser.newContext({
+      viewport: { width: 1600, height: 1000 },
+      colorScheme: "dark",
+    });
+    const page = await authorityContext.newPage();
+    const noise = [];
+    const hardwareCalls = [];
+    let authoritative = true;
+    page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
+    page.on("console", (message) => {
+      if (message.type() === "error") noise.push(`console: ${message.text()}`);
+    });
+    page.on("request", (request) => {
+      const pathName = new URL(request.url()).pathname;
+      if (/^\/api\/(?:panel\/chart|input-test)/.test(pathName)) {
+        hardwareCalls.push({ path: pathName, method: request.method() });
+      }
+    });
+    await page.route(`${BASE}/api/redesign`, async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      if (!authoritative) {
+        payload.devices.scan_authoritative = false;
+        payload.devices.scan_line = "Device scan unavailable — retain last confirmed results.";
+        for (const tier of ["keyboards", "encoders", "experimental", "other"]) {
+          payload.devices[tier] = [];
+        }
+      }
+      await route.fulfill({ response, json: payload });
+    });
+    await page.route("**/api/input-test**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        json: {
+          ok: true,
+          state: "idle",
+          generation: null,
+          selector: null,
+          remaining_ms: null,
+          held: [],
+          seen: [],
+          peak: 0,
+          events: 0,
+          dropped: 0,
+          rollover_visibility: "unavailable",
+          detail: "No observation is active.",
+          error: null,
+        },
+      });
+    });
+
+    try {
+      await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await page.click('[data-nx="rd-devs-open"]');
+      await page.click(`.rd-devmodal button[data-selector="${IPAC}"]`);
+      await page.keyboard.press("Escape");
+      const node = page.locator(`.rd-encoder-device-node[data-instance-id="${IPAC_SLUG}"]`);
+      await node.getByRole("button", { name: "Read keys" }).click();
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-chart][data-state="loaded"]`,
+        ),
+        IPAC_SLUG,
+      );
+      assert.equal(await node.locator("[data-configured-emission]").count(), 56);
+      const beforeUnknown = hardwareCalls.length;
+
+      authoritative = false;
+      await page.click(".rd-themed > summary");
+      await page.click('.rd-thememenu form:has(input[value="matrix"]) button');
+      await page.waitForFunction(
+        (id) => document.querySelector(`[data-instance-id="${id}"]`)?.dataset
+          .scanAuthoritative === "false",
+        IPAC_SLUG,
+        { timeout: 10_000 },
+      );
+      assert.equal(await node.count(), 1, "an unanswered scan does not remove the encoder");
+      assert.equal(
+        await node.locator('.rd-encoder-profile[data-presentation="product"]')
+          .getAttribute("data-connection-confirmed"),
+        "false",
+      );
+      assert.match(await node.locator(".rd-encoder-product-status").textContent(), /connection unconfirmed/i);
+      assert.match(
+        await node.locator('[data-device-fact="connection"] dd').textContent(),
+        /unconfirmed.*latest device scan did not answer/i,
+      );
+      assert.equal(
+        await node.locator('[data-rd-encoder-chart][data-state="loaded"]').count(),
+        1,
+        "the last explicit result stays available",
+      );
+      assert.equal(await node.locator("[data-configured-emission]").count(), 56);
+      const read = node.locator("[data-rd-encoder-read]");
+      const start = node.locator('[data-rd-encoder-observe="start"]');
+      assert.deepEqual(
+        {
+          readDisabled: await read.isDisabled(),
+          readLabel: await read.textContent(),
+          testDisabled: await start.isDisabled(),
+          testLabel: await start.textContent(),
+        },
+        {
+          readDisabled: true,
+          readLabel: "Wait for device",
+          testDisabled: true,
+          testLabel: "Wait for device",
+        },
+      );
+      assert.match(
+        await node.locator(".rd-encoder-product-actions").textContent(),
+        /existing results stay visible.*confirmed scan/i,
+      );
+      assert.equal(hardwareCalls.length, beforeUnknown, "a refused scan starts no new hardware work");
+      assert.deepEqual(noise, []);
+    } finally {
+      authoritative = true;
+      await page.unroute(`${BASE}/api/redesign`);
+      await authorityContext.close();
+    }
+  });
+
+  test("two product encoders retain one hardware-action lease through abandoned requests", async () => {
+    const leaseContext = await browser.newContext({
+      viewport: { width: 1800, height: 1100 },
+      colorScheme: "dark",
+    });
+    const page = await leaseContext.newPage();
+    const noise = [];
+    const chartBodies = [];
+    const inputCalls = [];
+    page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
+    page.on("console", (message) => {
+      if (message.type() === "error") noise.push(`console: ${message.text()}`);
+    });
+    await page.route(`${BASE}/api/redesign`, async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      const original = payload.devices.encoders.find((row) => row.selector === IPAC);
+      assert.ok(original, "the fixture must serve the primary I-PAC");
+      if (!payload.devices.encoders.some((row) => row.selector === IPAC_TWIN)) {
+        payload.devices.encoders.push({
+          ...original,
+          selector: IPAC_TWIN,
+          name: "Ultimarc I-PAC 4X · second cabinet",
+          alias: "Second cabinet",
+          label: "Second cabinet I-PAC 4X",
+          aria_current: "false",
+        });
+      }
+      await route.fulfill({ response, json: payload });
+    });
+    let releaseChart;
+    let reportChart;
+    const chartGate = new Promise((resolve) => { releaseChart = resolve; });
+    const chartSeen = new Promise((resolve) => { reportChart = resolve; });
+    let laterChartGate = null;
+    let reportLaterChart = null;
+    await page.route("**/api/panel/chart", async (route) => {
+      const body = route.request().postDataJSON();
+      chartBodies.push(body);
+      if (chartBodies.length === 1) {
+        reportChart(body);
+        await chartGate;
+      } else if (laterChartGate) {
+        const gate = laterChartGate;
+        const report = reportLaterChart;
+        laterChartGate = null;
+        reportLaterChart = null;
+        report?.(body);
+        await gate;
+      }
+      await route.continue();
+    });
+    let activeSelector = null;
+    let generation = 700;
+    let heldStartGate = null;
+    let reportHeldStart = null;
+    let heldCancelGate = null;
+    let reportHeldCancel = null;
+    const observationView = (state, selector = activeSelector) => ({
+      ok: true,
+      state,
+      generation: state === "idle" ? null : generation,
+      selector: state === "idle" ? null : selector,
+      remaining_ms: state === "listening" ? 28_000 : null,
+      held: state === "listening" ? ["KeyA"] : [],
+      seen: state === "idle" ? [] : ["KeyA"],
+      peak: state === "idle" ? 0 : 1,
+      events: state === "idle" ? 0 : 2,
+      dropped: 0,
+      rollover_visibility: "unavailable",
+      detail: state === "idle" ? "No observation is active." : "Shared lease fixture.",
+      error: null,
+    });
+    await page.route("**/api/input-test**", async (route) => {
+      const request = route.request();
+      const pathName = new URL(request.url()).pathname;
+      const body = request.postData() ? request.postDataJSON() : null;
+      inputCalls.push({ path: pathName, body });
+      if (pathName === "/api/input-test/start") {
+        generation += 1;
+        const requestedSelector = body.selector;
+        const gate = heldStartGate;
+        const report = reportHeldStart;
+        heldStartGate = null;
+        reportHeldStart = null;
+        report?.(body);
+        if (gate) await gate;
+        activeSelector = requestedSelector;
+        await route.fulfill({ status: 200, json: observationView("listening") });
+      } else if (pathName === "/api/input-test/cancel") {
+        const stoppedSelector = activeSelector;
+        const gate = heldCancelGate;
+        const report = reportHeldCancel;
+        heldCancelGate = null;
+        reportHeldCancel = null;
+        report?.(body);
+        if (gate) await gate;
+        activeSelector = null;
+        await route.fulfill({
+          status: 200,
+          json: observationView("cancelled", stoppedSelector),
+        });
+      } else {
+        await route.fulfill({
+          status: 200,
+          json: observationView(activeSelector ? "listening" : "idle"),
+        });
+      }
+    });
+
+    try {
+      await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await page.click(".rd-themed > summary");
+      await page.click('.rd-thememenu form:has(input[value="light"]) button');
+      await page.waitForFunction(
+        (selector) => Boolean(document.querySelector(`.rd-devmodal button[data-selector="${selector}"]`)),
+        IPAC_TWIN,
+      );
+      await page.click('[data-nx="rd-devs-open"]');
+      await page.click(`.rd-devmodal button[data-selector="${IPAC}"]`);
+      await page.click(`.rd-devmodal button[data-selector="${IPAC_TWIN}"]`);
+      await page.keyboard.press("Escape");
+      const primary = page.locator(`.rd-encoder-device-node[data-instance-id="${IPAC_SLUG}"]`);
+      const twin = page.locator(`.rd-encoder-device-node[data-instance-id="${IPAC_TWIN_SLUG}"]`);
+      assert.equal(await primary.count(), 1);
+      assert.equal(await twin.count(), 1);
+
+      await primary.getByRole("button", { name: "Read keys" }).click();
+      assert.deepEqual(await chartSeen, { selector: IPAC });
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-chart][data-state="loading"]`,
+        ),
+        IPAC_SLUG,
+      );
+      assert.equal(await twin.locator("[data-rd-encoder-read]").isDisabled(), true);
+      assert.equal(await twin.locator('[data-rd-encoder-observe="start"]').isDisabled(), true);
+      assert.match(
+        await twin.locator(".rd-encoder-product-actions").textContent(),
+        /another encoder is reading its stored keys/i,
+      );
+      await twin.locator("[data-rd-encoder-read]").evaluate((button) => button.click());
+      await page.waitForTimeout(25);
+      assert.deepEqual(chartBodies, [{ selector: IPAC }], "the disabled twin cannot race the read");
+
+      const chartResponse = page.waitForResponse((response) =>
+        new URL(response.url()).pathname === "/api/panel/chart"
+      );
+      releaseChart();
+      await chartResponse;
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-chart][data-state="loaded"]`,
+        ),
+        IPAC_SLUG,
+      );
+      assert.equal(await twin.locator("[data-rd-encoder-read]").isEnabled(), true);
+      assert.equal(await twin.locator('[data-rd-encoder-observe="start"]').isEnabled(), true);
+
+      await twin.getByRole("button", { name: "Start button test" })
+        .evaluate((button) => button.click());
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-observation][data-state="listening"]`,
+        ),
+        IPAC_TWIN_SLUG,
+      );
+      assert.equal(await primary.locator("[data-rd-encoder-read]").isDisabled(), true);
+      assert.equal(await primary.locator('[data-rd-encoder-observe="start"]').isDisabled(), true);
+      assert.match(
+        await primary.locator(".rd-encoder-product-actions").textContent(),
+        /button test is active for another encoder/i,
+      );
+      await primary.locator("[data-rd-encoder-read]").evaluate((button) => button.click());
+      await page.waitForTimeout(25);
+      assert.deepEqual(chartBodies, [{ selector: IPAC }], "an active twin test blocks a second read");
+      assert.deepEqual(
+        inputCalls.filter((call) => call.path === "/api/input-test/start").map((call) => call.body),
+        [{ selector: IPAC_TWIN, duration_ms: 30_000 }],
+      );
+
+      await twin.getByRole("button", { name: "Done", exact: true })
+        .evaluate((button) => button.click());
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-observation][data-state="complete"]`,
+        ),
+        IPAC_TWIN_SLUG,
+      );
+      assert.equal(await primary.locator("[data-rd-encoder-read]").isEnabled(), true);
+      assert.equal(await primary.locator('[data-rd-encoder-observe="start"]').isEnabled(), true);
+
+      const gateObservationCleanup = () => {
+        let releaseStartRequest;
+        let releaseCancelRequest;
+        const startRequestSeen = new Promise((resolve) => { reportHeldStart = resolve; });
+        const cancelRequestSeen = new Promise((resolve) => { reportHeldCancel = resolve; });
+        heldStartGate = new Promise((resolve) => { releaseStartRequest = resolve; });
+        heldCancelGate = new Promise((resolve) => { releaseCancelRequest = resolve; });
+        return {
+          startRequestSeen,
+          cancelRequestSeen,
+          releaseStartRequest,
+          releaseCancelRequest,
+        };
+      };
+      const assertBothSurfacesBlocked = async (reason) => {
+        for (const surface of [primary, twin]) {
+          assert.equal(await surface.locator("[data-rd-encoder-read]").isDisabled(), true, reason);
+          assert.equal(
+            await surface.locator('[data-rd-encoder-observe="start"]').isDisabled(),
+            true,
+            reason,
+          );
+        }
+      };
+      const waitForBothSurfacesReady = () => page.waitForFunction(
+        ({ primaryId, twinId }) => [primaryId, twinId].every((id) => {
+          const item = document.querySelector(`[data-instance-id="${id}"]`);
+          const read = item?.querySelector("[data-rd-encoder-read]");
+          const start = item?.querySelector('[data-rd-encoder-observe="start"]');
+          return read && !read.disabled && start && !start.disabled;
+        }),
+        { primaryId: IPAC_SLUG, twinId: IPAC_TWIN_SLUG },
+      );
+
+      let abandoned = gateObservationCleanup();
+      await twin.locator('[data-rd-encoder-observe="start"]')
+        .evaluate((button) => button.click());
+      assert.deepEqual(await abandoned.startRequestSeen, {
+        selector: IPAC_TWIN,
+        duration_ms: 30_000,
+      });
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-observation]`,
+        )?.getAttribute("data-state") === "starting",
+        IPAC_TWIN_SLUG,
+      );
+      await twin.locator("[data-rd-encoder-observation-sink]").press("Escape");
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-observation]`,
+        )?.getAttribute("data-state") === "error",
+        IPAC_TWIN_SLUG,
+      );
+      await assertBothSurfacesBlocked("Escape clears capture UI without releasing the pending start");
+      assert.match(
+        await twin.locator(".rd-encoder-product-actions").textContent(),
+        /button-test request is still settling.*exact cleanup/i,
+      );
+      const callsBeforeLateStart = { charts: chartBodies.length, inputs: inputCalls.length };
+      abandoned.releaseStartRequest();
+      assert.deepEqual(await abandoned.cancelRequestSeen, { generation: 702 });
+      await assertBothSurfacesBlocked("the late exact generation keeps the lane closed through cancel");
+      assert.deepEqual(
+        { charts: chartBodies.length, inputs: inputCalls.length },
+        { charts: callsBeforeLateStart.charts, inputs: callsBeforeLateStart.inputs + 1 },
+        "only the exact cleanup request is admitted while cancellation is pending",
+      );
+      abandoned.releaseCancelRequest();
+      await waitForBothSurfacesReady();
+
+      abandoned = gateObservationCleanup();
+      await primary.locator('[data-rd-encoder-observe="start"]')
+        .evaluate((button) => button.click());
+      assert.deepEqual(await abandoned.startRequestSeen, {
+        selector: IPAC,
+        duration_ms: 30_000,
+      });
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-observation]`,
+        )?.getAttribute("data-state") === "starting",
+        IPAC_SLUG,
+      );
+      await page.evaluate(() => {
+        window.dispatchEvent(new Event("pagehide"));
+        window.dispatchEvent(new Event("pageshow"));
+      });
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-observation]`,
+        )?.getAttribute("data-state") === "idle",
+        IPAC_SLUG,
+      );
+      await assertBothSurfacesBlocked("BFCache clears pending-start UI without opening either surface");
+      abandoned.releaseStartRequest();
+      assert.deepEqual(await abandoned.cancelRequestSeen, { generation: 703 });
+      await assertBothSurfacesBlocked("BFCache late-start cleanup remains exclusive until acknowledged");
+      abandoned.releaseCancelRequest();
+      await waitForBothSurfacesReady();
+
+      let releaseLaterChart;
+      let reportLaterChartSeen;
+      const laterChartSeen = new Promise((resolve) => { reportLaterChartSeen = resolve; });
+      laterChartGate = new Promise((resolve) => { releaseLaterChart = resolve; });
+      reportLaterChart = reportLaterChartSeen;
+      await primary.locator("[data-rd-encoder-read]").evaluate((button) => button.click());
+      assert.deepEqual(await laterChartSeen, { selector: IPAC });
+      await page.evaluate(() => {
+        window.dispatchEvent(new Event("pagehide"));
+        window.dispatchEvent(new Event("pageshow"));
+      });
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `[data-instance-id="${id}"] [data-rd-encoder-chart]`,
+        )?.getAttribute("data-state") === "idle",
+        IPAC_SLUG,
+      );
+      await assertBothSurfacesBlocked("BFCache clears Reading UI but the held chart still owns the lane");
+      const inputsBeforeChartRelease = inputCalls.length;
+      await twin.locator('[data-rd-encoder-observe="start"]').evaluate((button) => button.click());
+      await page.waitForTimeout(25);
+      assert.equal(inputCalls.length, inputsBeforeChartRelease, "a disabled twin cannot overlap the held chart");
+      const laterChartResponse = page.waitForResponse((response) =>
+        new URL(response.url()).pathname === "/api/panel/chart"
+      );
+      releaseLaterChart();
+      await laterChartResponse;
+      await waitForBothSurfacesReady();
+      assert.equal(
+        await primary.locator('[data-rd-encoder-chart][data-state="idle"]').count(),
+        1,
+        "the pre-pagehide chart remains stale after its coordinator hold settles",
+      );
+      assert.deepEqual(noise, []);
+    } finally {
+      releaseChart?.();
+      await page.unroute(`${BASE}/api/redesign`);
+      await leaseContext.close();
+    }
   });
 
   test("the picker serves every tier; picking two boards benches two widgets", async () => {
@@ -937,7 +1890,9 @@ describe("the device workbench", () => {
 
     assert.equal(await toggle.getAttribute("aria-pressed"), "false");
     assert.equal(await toggle.getAttribute("aria-label"), "Encoder profiles");
-    await toggle.click();
+    assert.equal(await toggle.getAttribute("hidden"), "");
+    assert.equal(await toggle.getAttribute("aria-hidden"), "true");
+    await toggleEncoderResearchHarness(page);
     await page.waitForFunction(
       () => document.querySelectorAll(".rd-encoder-profile-node").length === 1,
     );
@@ -954,7 +1909,7 @@ describe("the device workbench", () => {
     );
     assert.equal(
       await page.locator(".rd-map-count").textContent(),
-      `${beforeCount + 1} widgets`,
+      `${beforeCount + 1} widget${beforeCount + 1 === 1 ? "" : "s"}`,
       "the minimap counts one lab, not one node per profile",
     );
     assert.match(
@@ -1024,13 +1979,13 @@ describe("the device workbench", () => {
 
     await model.selectOption("catalog:ultimarc-ultimate-io");
     await page.waitForFunction(
-      () => document.querySelector(".rd-encoder-profile")?.dataset.profileId ===
+        () => document.querySelector('.rd-encoder-profile[data-presentation="research"]')?.dataset.profileId ===
         "ultimarc-ultimate-io",
     );
     assert.equal(await node.locator("[data-terminal-id]").count(), 48);
     assert.equal(await encoderStatus.count(), 1, "the live status remains one stable node");
     await page.waitForFunction(
-      () => document.querySelector("[data-rd-encoder-status]")?.textContent
+      () => document.querySelector(".rd-encoder-profile-node [data-rd-encoder-status]")?.textContent
         ?.includes("User-selected reference"),
     );
     assert.match(await node.textContent(), /96 LED output channels/i);
@@ -1038,7 +1993,7 @@ describe("the device workbench", () => {
 
     await model.selectOption("catalog:brook-ufb-fusion");
     await page.waitForFunction(
-      () => document.querySelector(".rd-encoder-profile")?.dataset.profileId ===
+        () => document.querySelector('.rd-encoder-profile[data-presentation="research"]')?.dataset.profileId ===
         "brook-ufb-fusion",
     );
     assert.equal(await node.locator("[data-terminal-id]").count(), 18);
@@ -1056,7 +2011,7 @@ describe("the device workbench", () => {
 
     await model.selectOption("catalog:ultimarc-jpac");
     await page.waitForFunction(
-      () => document.querySelector(".rd-encoder-profile")?.dataset.profileId ===
+        () => document.querySelector('.rd-encoder-profile[data-presentation="research"]')?.dataset.profileId ===
         "ultimarc-jpac",
     );
     assert.equal(await node.locator("[data-terminal-id]").count(), 31);
@@ -1078,7 +2033,7 @@ describe("the device workbench", () => {
 
     await model.selectOption("sample:ambiguous-minipac");
     await page.waitForFunction(
-      () => document.querySelector("[data-rd-encoder-evidence]")?.getAttribute(
+      () => document.querySelector(".rd-encoder-profile-node [data-rd-encoder-evidence]")?.getAttribute(
         "data-evidence-state",
       ) === "ambiguous-family",
     );
@@ -1089,7 +2044,7 @@ describe("the device workbench", () => {
       '[data-profile-candidate="ultimarc-minipac-four"] input',
     ).click();
     await page.waitForFunction(
-      () => document.querySelector(".rd-encoder-profile")?.dataset.profileId ===
+      () => document.querySelector('.rd-encoder-profile[data-presentation="research"]')?.dataset.profileId ===
         "ultimarc-minipac-four",
     );
     assert.equal(await node.locator("[data-terminal-id]").count(), 56);
@@ -1110,7 +2065,7 @@ describe("the device workbench", () => {
 
     await model.selectOption("sample:unknown-hid");
     await page.waitForFunction(
-      () => document.querySelector(".rd-encoder-profile")?.dataset.profileId === "unknown-hid",
+      () => document.querySelector('.rd-encoder-profile[data-presentation="research"]')?.dataset.profileId === "unknown-hid",
     );
     assert.equal(await node.locator("[data-terminal-id]").count(), 0);
     assert.equal(
@@ -1136,7 +2091,7 @@ describe("the device workbench", () => {
     await manualLabels.fill("UP, DOWN, LEFT, RIGHT, SW1, SW2");
     await node.getByRole("button", { name: "Apply declared labels" }).click();
     await page.waitForFunction(
-      () => document.querySelectorAll("[data-declared-terminal-id]").length === 6,
+      () => document.querySelectorAll(".rd-encoder-profile-node [data-declared-terminal-id]").length === 6,
     );
     assert.equal(await node.locator("[data-terminal-id]").count(), 0);
     assert.equal(await node.locator("[data-declared-terminal-id]").count(), 6);
@@ -1186,12 +2141,7 @@ describe("the device workbench", () => {
     );
 
     await page.setViewportSize({ width: 420, height: 900 });
-    const narrowToggle = await toggle.boundingBox();
-    assert.ok(narrowToggle, "the encoder toggle stays rendered on a narrow canvas");
-    assert.ok(
-      narrowToggle.x >= 0 && narrowToggle.x + narrowToggle.width <= 420,
-      "the compact toggle stays inside the viewport",
-    );
+    assert.equal(await toggle.isHidden(), true, "the internal harness has no product chrome");
     assert.equal(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       true,
@@ -1207,7 +2157,7 @@ describe("the device workbench", () => {
     );
     await page.setViewportSize({ width: 1600, height: 1000 });
 
-    await toggle.click();
+    await toggleEncoderResearchHarness(page);
     await page.waitForFunction(
       () => document.querySelectorAll(".rd-encoder-profile-node").length === 0,
     );
@@ -1229,7 +2179,7 @@ describe("the device workbench", () => {
       "hiding the lab leaves no review geometry in the durable arrangement",
     );
 
-    await toggle.click();
+    await toggleEncoderResearchHarness(page);
     await page.waitForFunction(
       () => document.querySelectorAll(".rd-encoder-profile-node").length === 1,
     );
@@ -1256,7 +2206,7 @@ describe("the device workbench", () => {
     page.on("request", (request) => {
       if (new URL(request.url()).pathname === "/api/panel/chart") chartRequests.push(request);
     });
-    await page.click('[data-nx="rd-encoder-profiles"]');
+    await toggleEncoderResearchHarness(page);
     const node = page.locator(".rd-encoder-profile-node");
     const expectedIds = getEncoderVisualProfile("ultimarc-ipac4").topology.terminals
       .map((terminal) => terminal.id);
@@ -1348,7 +2298,7 @@ describe("the device workbench", () => {
     );
 
     await page.waitForFunction(
-      () => document.querySelector('[data-rd-encoder-chart]')?.getAttribute("data-state") ===
+      () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-chart]')?.getAttribute("data-state") ===
         "loaded",
     );
     assert.equal(await node.locator("[data-rd-encoder-chart-row]").count(), 56);
@@ -1393,7 +2343,7 @@ describe("the device workbench", () => {
     assert.equal(await node.locator("[data-rd-encoder-read]").count(), 0);
     assert.equal(await node.locator("[data-rd-encoder-chart-row]").count(), 0);
     assert.equal(chartRequests.length, 1, "catalog selection never authorizes another read");
-    await page.click('[data-nx="rd-encoder-profiles"]');
+    await toggleEncoderResearchHarness(page);
     await page.waitForFunction(() => !document.querySelector(".rd-encoder-profile-node"));
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();
@@ -1418,7 +2368,7 @@ describe("the device workbench", () => {
     });
 
     try {
-      await page.click('[data-nx="rd-encoder-profiles"]');
+      await toggleEncoderResearchHarness(page);
       const node = page.locator(".rd-encoder-profile-node");
       await node.getByRole("button", { name: "Read configured emissions" }).click();
       assert.deepEqual(
@@ -1517,7 +2467,7 @@ describe("the device workbench", () => {
     });
 
     try {
-      await page.click('[data-nx="rd-encoder-profiles"]');
+      await toggleEncoderResearchHarness(page);
       const node = page.locator(".rd-encoder-profile-node");
       assert.deepEqual(calls, [], "opening and selecting the lab never starts observation");
       const beforeGeometry = await node.evaluate((item) => ({
@@ -1529,7 +2479,7 @@ describe("the device workbench", () => {
 
       await node.getByRole("button", { name: "Observe emitted signals" }).click();
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "listening",
       );
       assert.deepEqual(calls.slice(0, 2), [
@@ -1593,7 +2543,7 @@ describe("the device workbench", () => {
       );
       pollUnexpected = true;
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "unknown",
       );
       assert.match(await node.textContent(), /stop remains bound to that exact observation/i);
@@ -1601,7 +2551,7 @@ describe("the device workbench", () => {
 
       await node.getByRole("button", { name: "Done — stop listening" }).click();
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "complete",
       );
       assert.deepEqual(
@@ -1618,7 +2568,7 @@ describe("the device workbench", () => {
       preflightMode = "listening-exact";
       await node.getByRole("button", { name: "Check and observe again" }).click();
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "foreign-live",
       );
       assert.equal(
@@ -1636,7 +2586,7 @@ describe("the device workbench", () => {
       preflightMode = "unknown";
       await node.getByRole("button", { name: "Recheck observation lease" }).click();
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "foreign-live",
       );
       assert.equal(
@@ -1648,7 +2598,7 @@ describe("the device workbench", () => {
       preflightMode = "normal";
       await node.getByRole("button", { name: "Recheck observation lease" }).click();
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "idle",
       );
       assert.equal(
@@ -1661,7 +2611,7 @@ describe("the device workbench", () => {
       startAsUnknown = true;
       await node.getByRole("button", { name: "Observe emitted signals" }).click();
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "unknown",
       );
       assert.match(await node.textContent(), /exact Stop action remains available/i);
@@ -1678,7 +2628,7 @@ describe("the device workbench", () => {
       startAsUnknown = false;
       await node.getByRole("button", { name: "Observe emitted signals" }).click();
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "listening",
       );
       assert.equal(generation, 43, "each successful start owns a distinct generation");
@@ -1686,7 +2636,7 @@ describe("the device workbench", () => {
         new URL(request.url()).pathname === "/api/input-test/cancel" &&
         request.postDataJSON()?.generation === 43
       );
-      await page.click('[data-nx="rd-encoder-profiles"]');
+      await toggleEncoderResearchHarness(page);
       await removalCancel;
       await page.waitForFunction(() => !document.querySelector(".rd-encoder-profile-node"));
       assert.deepEqual(
@@ -1767,16 +2717,16 @@ describe("the device workbench", () => {
     });
 
     try {
-      await page.click('[data-nx="rd-encoder-profiles"]');
+      await toggleEncoderResearchHarness(page);
       const node = page.locator(".rd-encoder-profile-node");
       await node.getByRole("button", { name: "Observe emitted signals" }).click();
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "listening",
       );
       pollMode = "replacement";
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "foreign-live",
       );
       assert.equal(
@@ -1791,18 +2741,18 @@ describe("the device workbench", () => {
       pollMode = "normal";
       await node.getByRole("button", { name: "Recheck observation lease" }).click();
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "idle",
       );
       await node.getByRole("button", { name: "Observe emitted signals" }).click();
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "listening",
       );
       assert.equal(generation, 302);
       await node.getByRole("button", { name: "Done — stop listening" }).click();
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "unknown",
       );
       assert.equal(await node.locator('[data-rd-encoder-observe="stop"]').count(), 1);
@@ -1817,7 +2767,7 @@ describe("the device workbench", () => {
 
       await node.getByRole("button", { name: "Done — stop listening" }).click();
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "complete",
       );
       assert.deepEqual(
@@ -1882,12 +2832,12 @@ describe("the device workbench", () => {
     });
 
     try {
-      await page.click('[data-nx="rd-encoder-profiles"]');
+      await toggleEncoderResearchHarness(page);
       const node = page.locator(".rd-encoder-profile-node");
       await node.getByRole("button", { name: "Observe emitted signals" }).click();
       await startSeen;
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "starting" && document.activeElement?.hasAttribute("data-rd-encoder-observation-sink"),
       );
       const beforeTransform = await page.locator(".forma-canvas-stage").evaluate(
@@ -1903,7 +2853,7 @@ describe("the device workbench", () => {
 
       await sink.press("Escape");
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "error" && document.activeElement?.matches('[data-rd-encoder-observe="start"]'),
       );
       assert.match(await node.textContent(), /capture focus was released while start is still resolving/i);
@@ -1917,7 +2867,7 @@ describe("the device workbench", () => {
 
       await node.getByRole("button", { name: "Observe emitted signals" }).click();
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "listening",
       );
       const pageHideCalls = await page.evaluate(() => {
@@ -2037,13 +2987,13 @@ describe("the device workbench", () => {
           ?.includes("Unidentified twelve-signal encoder"),
         IPAC,
       );
-      await page.click('[data-nx="rd-encoder-profiles"]');
+      await toggleEncoderResearchHarness(page);
       const node = page.locator(".rd-encoder-profile-node");
       assert.equal(await node.locator(".rd-encoder-profile").getAttribute("data-profile-id"), "unknown-hid");
       assert.equal(await node.locator("[data-rd-encoder-read]").count(), 0);
       await node.getByRole("button", { name: "Observe emitted signals" }).click();
       await page.waitForFunction(
-        () => document.querySelector('[data-rd-encoder-observation]')?.getAttribute("data-state") ===
+        () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "listening",
       );
       const drawing = node.locator('svg[data-profile-id="unknown-hid"]');
@@ -2086,7 +3036,7 @@ describe("the device workbench", () => {
       await page.click('.rd-thememenu form:has(input[value="matrix"]) button');
       await disappearanceCancel;
       await page.waitForFunction(
-        () => !document.querySelector('[data-rd-encoder-model] option[value^="connected:"]'),
+        () => !document.querySelector('.rd-encoder-profile-node [data-rd-encoder-model] option[value^="connected:"]'),
       );
       assert.equal(
         inputCalls.filter((call) => call.path === "/api/input-test/cancel").length,
@@ -2115,7 +3065,7 @@ describe("the device workbench", () => {
         null,
         { timeout: 20_000 },
       );
-      await page.click('[data-nx="rd-encoder-profiles"]');
+      await toggleEncoderResearchHarness(page);
       const node = page.locator(".rd-encoder-profile-node");
       await node.focus();
       await node.press("F2");
@@ -2162,7 +3112,7 @@ describe("the device workbench", () => {
 
   test("an open encoder lab reconciles connected truth by raw selector", async () => {
     const page = await openBench();
-    await page.click('[data-nx="rd-encoder-profiles"]');
+    await toggleEncoderResearchHarness(page);
     const node = page.locator(".rd-encoder-profile-node");
     const model = node.locator("[data-rd-encoder-model]");
     const twinSelector = `${IPAC}:mi_01`;
@@ -2218,7 +3168,7 @@ describe("the device workbench", () => {
       assert.equal(await model.inputValue(), `connected:${IPAC}`);
       await submitTheme("dark");
       await page.waitForFunction(
-        () => document.querySelectorAll('[data-rd-encoder-model] option[value^="connected:"]')
+        () => document.querySelectorAll('.rd-encoder-profile-node [data-rd-encoder-model] option[value^="connected:"]')
           .length === 2,
       );
       assert.equal(
@@ -2266,21 +3216,21 @@ describe("the device workbench", () => {
       await submitTheme("light");
       await model.selectOption(`connected:${IPAC}`);
       await page.waitForFunction(
-        () => document.querySelector(".rd-encoder-profile")?.dataset.evidenceState ===
+        () => document.querySelector('.rd-encoder-profile[data-presentation="research"]')?.dataset.evidenceState ===
           "ambiguous-family",
       );
       await node.locator(
         '[data-profile-candidate="ultimarc-minipac-four"] input',
       ).click();
       await page.waitForFunction(
-        () => document.querySelector(".rd-encoder-profile")?.dataset.profileId ===
+        () => document.querySelector('.rd-encoder-profile[data-presentation="research"]')?.dataset.profileId ===
           "ultimarc-minipac-four",
       );
 
       rosterMode = "measured-minipac-32";
       await submitTheme("dark");
       await page.waitForFunction(
-        () => document.querySelector(".rd-encoder-profile")?.dataset.profileId ===
+        () => document.querySelector('.rd-encoder-profile[data-presentation="research"]')?.dataset.profileId ===
           "ultimarc-minipac-32",
       );
       assert.equal(
@@ -2293,7 +3243,7 @@ describe("the device workbench", () => {
       rosterMode = "identity-conflict";
       await submitTheme("matrix");
       await page.waitForFunction(
-        () => document.querySelector(".rd-encoder-profile")?.dataset.evidenceState ===
+        () => document.querySelector('.rd-encoder-profile[data-presentation="research"]')?.dataset.evidenceState ===
           "identity-conflict",
       );
       assert.equal(
@@ -2306,7 +3256,7 @@ describe("the device workbench", () => {
       rosterMode = "known-family";
       await submitTheme("system");
       await page.waitForFunction(
-        () => document.querySelector(".rd-encoder-profile")?.dataset.evidenceState ===
+        () => document.querySelector('.rd-encoder-profile[data-presentation="research"]')?.dataset.evidenceState ===
           "known-family",
       );
       assert.equal(await model.inputValue(), `connected:${IPAC}`);
@@ -2330,7 +3280,7 @@ describe("the device workbench", () => {
       rosterMode = "only-twin";
       await submitTheme("light");
       await page.waitForFunction(
-        (value) => document.querySelector("[data-rd-encoder-model]")?.value === value,
+        (value) => document.querySelector(".rd-encoder-profile-node [data-rd-encoder-model]")?.value === value,
         `connected:${twinSelector}`,
       );
       assert.equal(

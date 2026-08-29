@@ -74,6 +74,18 @@ pub(crate) fn payload(
         Ok(scan) => RedesignDeviceRows::of(Some(scan), "", staged_selector),
         Err(unavailable) => RedesignDeviceRows::of(None, unavailable, staged_selector),
     };
+    // Is the staged input an arcade encoder? The nocturne rule: the staged
+    // selector sits in the picker's ENCODER tier. It reword's the capture
+    // rows (wired buttons, not typing) and lets the board resolution offer
+    // the panel fallbacks.
+    let encoder_staged = staged.device.as_ref().is_some_and(|device| {
+        devices
+            .encoders
+            .iter()
+            .any(|row| row.selector.eq_ignore_ascii_case(&device.selector))
+    });
+    let (capture_rows, capture_note) =
+        crate::snapshot::compose_capture_rows(staged, encoder_staged);
     devices.staging_reachable = staged.reachable;
     devices.staging_line = if staged.reachable {
         String::new()
@@ -135,7 +147,8 @@ pub(crate) fn payload(
                 .and_then(|number| staged.slots.iter().find(|slot| slot.number == number))
                 .or_else(|| staged.slots.first());
             let chosen_board = setup_board.as_deref().unwrap_or_default();
-            let resolved = crate::board::Board::resolve(chosen_board, &[], &[], false);
+            let resolved =
+                crate::board::Board::resolve(chosen_board, &[], &[], encoder_staged);
             let transport = staged.device.as_ref().and_then(|d| {
                 scan_boards
                     .iter()
@@ -149,12 +162,14 @@ pub(crate) fn payload(
                 chosen_board,
                 &[],
                 &[],
-                false,
+                encoder_staged,
                 transport,
                 "",
                 "",
             )
         },
+        capture_rows,
+        capture_note,
     }
 }
 
@@ -178,6 +193,7 @@ const LIST_SLOT_KB_ROW6: &str = "list:rdKbRow6:array";
 const LIST_SLOT_KB_TRAY: &str = "list:rdKbTray:array";
 const LIST_SLOT_KB_LEGEND: &str = "list:rdKbLegend:array";
 const LIST_SLOT_BOARD_ROWS: &str = "list:rdBoardRows:array";
+const LIST_SLOT_CAPTURE_ROWS: &str = "list:rdCaptureRows:array";
 
 /// One plate cell, every field spelled once (the nocturne row's shape).
 fn kb_cell(row: &crate::snapshot::NocturneKeyCell) -> SlotValue {
@@ -273,6 +289,7 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         "rdKbNote": payload.board.kb_note,
         "rdKbMoreCls": payload.board.kb_more_cls,
         "rdSoloLbl": payload.board.solo_label,
+        "rdCaptureNote": payload.capture_note,
     })
 }
 
@@ -367,6 +384,10 @@ fn build_slots(module: &IrModule, payload: &RedesignPayload, flash: Option<&str>
         (
             LIST_SLOT_BOARD_ROWS,
             SlotValue::array(board.board_rows.iter().map(board_choice_row).collect()),
+        ),
+        (
+            LIST_SLOT_CAPTURE_ROWS,
+            SlotValue::array(payload.capture_rows.iter().map(board_choice_row).collect()),
         ),
     ] {
         if let Some(id) = named_slot_ids(module, name).into_iter().next() {
@@ -1007,6 +1028,7 @@ mod tests {
             "rdKbNote",
             "rdKbMoreCls",
             "rdSoloLbl",
+            "rdCaptureNote",
         ] {
             assert!(
                 REDESIGN_ISLAND_TS.contains(&format!("const [{signal}, ")),
@@ -1029,6 +1051,7 @@ mod tests {
             "rdKbTray",
             "rdKbLegend",
             "rdBoardRows",
+            "rdCaptureRows",
         ] {
             assert!(
                 REDESIGN_ISLAND_TS.contains(&format!("const [{signal}, ")),

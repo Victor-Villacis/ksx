@@ -1540,17 +1540,29 @@ pub(super) async fn nocturne_form_blocking(
     let Ok(Form(form)) = form else {
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
+    nocturne_redirect(blocking_write_flash(&state, form.blocking).await)
+}
+
+/// The capture-behaviour write, shared with `/redesign`: one staged edit in
+/// the daemon (freeze / split / take nothing), nothing saved or started.
+pub(super) async fn blocking_write_flash(
+    state: &Arc<AppState>,
+    blocking: String,
+) -> &'static str {
+    let state = Arc::clone(state);
     let ok = tokio::task::spawn_blocking(move || {
         state
             .control
-            .stage_edit(&ksx_api::StageEdit::SetBlocking {
-                blocking: form.blocking,
-            })
+            .stage_edit(&ksx_api::StageEdit::SetBlocking { blocking })
             .ok
     })
     .await
     .unwrap_or(false);
-    nocturne_redirect(if ok { N_BLOCKING_OK } else { N_EDIT_ERROR })
+    if ok {
+        N_BLOCKING_OK
+    } else {
+        N_EDIT_ERROR
+    }
 }
 
 // ── WinUSB prepare/release (moved from /start, with every guard intact) ─────

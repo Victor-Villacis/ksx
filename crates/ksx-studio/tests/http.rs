@@ -4854,6 +4854,7 @@ fn the_profiles_write_routes_refuse_a_cross_site_post() {
         ("/redesign/bind/toggle", "slot=1&function=a&mode=toggle"),
         ("/redesign/key/clear", "number=1&key=G"),
         ("/redesign/board", "board=qwerty"),
+        ("/redesign/blocking", "blocking=whole"),
     ] {
         let response = http(
             addr,
@@ -5797,6 +5798,25 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
         response.contains("flash=the%20form%20did%20not%20say%20which%20board"),
         "{response}"
     );
+
+    // The capture behaviour: one staged edit through the shared core, the
+    // answer read back from the daemon, and the payload's rows re-marked.
+    let response = post_form(addr, "/redesign/blocking", "blocking=whole");
+    assert!(
+        response.contains("/redesign?flash=Capture%20behaviour%20updated."),
+        "{response}"
+    );
+    assert_eq!(control.staged().blocking.as_deref(), Some("whole"));
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("payload");
+    let chosen: Vec<&str> = api["capture_rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| row["chosen"] == true)
+        .filter_map(|row| row["name"].as_str())
+        .collect();
+    assert_eq!(chosen, ["whole"], "{api}");
 }
 
 /// With no daemon, the config half of the page keeps working and the two verbs

@@ -376,6 +376,12 @@ describe("the controller workbench", () => {
 
   test("the keyboard stands on the canvas: served plate, finish, lens, and the key→Keys door", async () => {
     const page = await openBench();
+    const flashKb = (want) =>
+      page.waitForFunction(
+        (text) => document.querySelector(".rd-flash")?.textContent?.startsWith(text),
+        want,
+        { timeout: 20_000 },
+      );
     await page.waitForFunction(
       () => document.querySelector('[data-instance-id="keyboard"]')?.dataset.canvasX !== undefined,
       null,
@@ -437,13 +443,54 @@ describe("the controller workbench", () => {
       key,
       { timeout: 20_000 },
     );
-    // The board picker offers the served roster; choosing the row already
-    // chosen is a write the fixture accepts or refuses HONESTLY — either
-    // sentence is an allowlisted outcome, never a dead control.
-    await page.click(".rd-boardpick-sum");
+    // The board picker offers the served roster and the write ROUND-TRIPS:
+    // the fixture remembers the choice like the real store (the in-memory
+    // board cell), so the row comes back marked — never a dead control.
+    await page.click(".rd-boardpick:not(.rd-capture) .rd-boardpick-sum");
     assert.ok(
-      (await page.locator(".rd-boardpick-pop form").count()) >= 2,
+      (await page.locator(".rd-boardpick:not(.rd-capture) .rd-boardpick-pop form").count()) >= 2,
       "the roster serves follow-hardware and the standard board",
+    );
+    await page
+      .locator('.rd-boardpick:not(.rd-capture) form input[value="qwerty-104"]')
+      .locator("..")
+      .locator("button")
+      .click();
+    await flashKb("Board updated.");
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('.rd-boardpick:not(.rd-capture) form input[value="qwerty-104"]')
+          ?.closest("form")
+          ?.querySelector("button")
+          ?.className.includes("on"),
+      null,
+      { timeout: 20_000 },
+    );
+    // While playing — the staged input's capture behaviour (freeze / split
+    // / take nothing), the 4460 device-section picker re-homed onto the
+    // input's own widget. One staged edit; the daemon's answer re-marks.
+    await page.click(".rd-capture .rd-boardpick-sum");
+    assert.equal(
+      await page.locator(".rd-capture .rd-boardpick-pop form").count(),
+      3,
+      "the daemon's three-answer roster",
+    );
+    await page
+      .locator('.rd-capture form input[value="whole"]')
+      .locator("..")
+      .locator("button")
+      .click();
+    await flashKb("Capture behaviour updated.");
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('.rd-capture form input[value="whole"]')
+          ?.closest("form")
+          ?.querySelector("button")
+          ?.className.includes("on"),
+      null,
+      { timeout: 20_000 },
     );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();

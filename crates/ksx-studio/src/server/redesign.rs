@@ -22,7 +22,7 @@ pub(super) struct RedesignQuery {
 /// verb's sentences ARE nocturne's constants: one wording, two pages, so the
 /// copy cannot drift between the surfaces (the cutover's "provider text"
 /// lesson, applied in advance).
-const RD_FLASH_ALLOWLIST: [&str; 27] = [
+const RD_FLASH_ALLOWLIST: [&str; 28] = [
     N_THEME_OK,
     N_THEME_UNKNOWN,
     N_DEVICE_OK,
@@ -50,6 +50,7 @@ const RD_FLASH_ALLOWLIST: [&str; 27] = [
     N_BOARD_OK,
     N_BOARD_UNKNOWN,
     N_BOARD_MISSING,
+    N_BLOCKING_OK,
 ];
 
 pub(super) fn redesign_flash_from_query(flash: Option<&str>) -> Option<String> {
@@ -759,6 +760,24 @@ pub(super) async fn redesign_form_clear_all(
 }
 
 #[derive(Deserialize)]
+pub(super) struct RedesignBlockingForm {
+    blocking: String,
+}
+
+/// POST /redesign/blocking — how the staged input's keys behave while Play
+/// runs (freeze / split / take nothing), through the shared core. One
+/// staged edit in the daemon; nothing saved or started.
+pub(super) async fn redesign_form_blocking(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignBlockingForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    redesign_redirect(blocking_write_flash(&state, form.blocking).await)
+}
+
+#[derive(Deserialize)]
 pub(super) struct RedesignBoardForm {
     board: Option<String>,
 }
@@ -882,10 +901,11 @@ mod tests {
             // the Keys tab's row ✕
             N_KEY_CLEAR_OK,
             N_KEY_CLEAR_NONE,
-            // the keyboard widget's board picker
+            // the keyboard widget's board + capture pickers
             N_BOARD_OK,
             N_BOARD_UNKNOWN,
             N_BOARD_MISSING,
+            N_BLOCKING_OK,
         ] {
             assert_eq!(
                 redesign_flash_from_query(Some(sentence)).as_deref(),

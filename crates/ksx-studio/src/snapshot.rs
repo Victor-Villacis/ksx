@@ -73,6 +73,13 @@ pub struct RedesignPayload {
     /// `/nocturne`'s plate destructures, from the one composer.
     #[serde(default)]
     pub board: BoardPanel,
+    /// The staged input's capture behaviour — the daemon's roster with the
+    /// current answer marked, from the one [`compose_capture_rows`]
+    /// composer (freeze / split / take nothing, reworded for an encoder).
+    #[serde(default)]
+    pub capture_rows: Vec<NocturneChoiceRow>,
+    #[serde(default)]
+    pub capture_note: String,
 }
 
 /// One staged controller on the workbench — a card per slot, straight off
@@ -4143,6 +4150,70 @@ pub(crate) fn compose_board_panel(
     }
 }
 
+/// The staged input's capture behaviour, as choice rows — the daemon's own
+/// roster with the current answer marked, reworded for an arcade encoder
+/// (its "keys" are wired buttons, not typing). Composed once for every page
+/// that offers the picker: `/nocturne`'s device section and `/redesign`'s
+/// While-playing menu on the keyboard widget.
+pub(crate) fn compose_capture_rows(
+    staged: &ksx_api::StagedSetupView,
+    selected_is_panel_encoder: bool,
+) -> (Vec<NocturneChoiceRow>, String) {
+    let note = if staged.reachable && selected_is_panel_encoder {
+        "Choose how this encoder's Windows key signals behave while Play is running. Hardware assignments stay unchanged."
+            .to_owned()
+    } else if staged.reachable {
+        String::new()
+    } else {
+        "The draft could not be read, so the capture answer cannot be shown. Reopen ksx."
+            .to_owned()
+    };
+    let current_mode = staged.blocking.as_deref().unwrap_or("");
+    let rows = if staged.reachable {
+        staged
+            .blocking_options
+            .iter()
+            .map(|option| {
+                let (title, detail) = if selected_is_panel_encoder {
+                    match option.name.as_str() {
+                        "whole" => (
+                            "Dedicated arcade panel".to_owned(),
+                            "Capture every I-PAC signal during Play so cabinet buttons never type into Windows or trigger shortcuts."
+                                .to_owned(),
+                        ),
+                        "bound-keys" => (
+                            "Share unused outputs with Windows".to_owned(),
+                            "Capture mapped I-PAC signals; outputs that KSX does not use still pass through to Windows."
+                                .to_owned(),
+                        ),
+                        _ => (
+                            "Observe and pass through".to_owned(),
+                            "KSX routes mapped outputs while Windows receives those same I-PAC key signals too."
+                                .to_owned(),
+                        ),
+                    }
+                } else {
+                    (option.title.clone(), option.detail.clone())
+                };
+                NocturneChoiceRow {
+                chosen: option.name == current_mode,
+                name: option.name.clone(),
+                title,
+                detail,
+                cls: if option.name == current_mode {
+                    "n-radio on".to_owned()
+                } else {
+                    "n-radio".to_owned()
+                },
+            }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    (rows, note)
+}
+
 /// A human-scannable order independent of the art tables' drawing order.
 /// The tables remain the source of which controls and persona labels exist;
 /// this rank only normalizes those controls into face, D-pad, shoulders,
@@ -4624,58 +4695,12 @@ impl NocturneDerived {
                 .iter()
                 .any(|row| row.selector.eq_ignore_ascii_case(selector))
         });
-        let mode_note = if staged.reachable && selected_is_panel_encoder {
-            "Choose how this encoder's Windows key signals behave while Play is running. Hardware assignments stay unchanged."
-                .to_owned()
-        } else if staged.reachable {
-            String::new()
-        } else {
-            "The draft could not be read, so the capture answer cannot be shown. Reopen ksx."
-                .to_owned()
-        };
-        let current_mode = staged.blocking.as_deref().unwrap_or("");
-        let mode_rows = if staged.reachable {
-            staged
-                .blocking_options
-                .iter()
-                .map(|option| {
-                    let (title, detail) = if selected_is_panel_encoder {
-                        match option.name.as_str() {
-                            "whole" => (
-                                "Dedicated arcade panel".to_owned(),
-                                "Capture every I-PAC signal during Play so cabinet buttons never type into Windows or trigger shortcuts."
-                                    .to_owned(),
-                            ),
-                            "bound-keys" => (
-                                "Share unused outputs with Windows".to_owned(),
-                                "Capture mapped I-PAC signals; outputs that KSX does not use still pass through to Windows."
-                                    .to_owned(),
-                            ),
-                            _ => (
-                                "Observe and pass through".to_owned(),
-                                "KSX routes mapped outputs while Windows receives those same I-PAC key signals too."
-                                    .to_owned(),
-                            ),
-                        }
-                    } else {
-                        (option.title.clone(), option.detail.clone())
-                    };
-                    NocturneChoiceRow {
-                    chosen: option.name == current_mode,
-                    name: option.name.clone(),
-                    title,
-                    detail,
-                    cls: if option.name == current_mode {
-                        "n-radio on".to_owned()
-                    } else {
-                        "n-radio".to_owned()
-                    },
-                }
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        // The capture-behaviour picker — rows and note off the ONE shared
+        // composer (`compose_capture_rows`): the redesign's While-playing
+        // menu serves the same struct, so the two pickers cannot disagree
+        // about a word.
+        let (mode_rows, mode_note) =
+            compose_capture_rows(staged, selected_is_panel_encoder);
 
         let cap = StartCaptureView::from_parts(staged, &p.scan, scan_read);
         let mode = cap.mode_word();

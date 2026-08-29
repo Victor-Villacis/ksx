@@ -193,6 +193,10 @@ export interface RedesignPayload {
   devices: RdDeviceRows;
   controllers: RdControllers;
   board: RdBoardPanel;
+  /** The staged input's capture behaviour — `compose_capture_rows` on the
+   *  wire (freeze / split / take nothing, the current answer marked). */
+  capture_rows: RdChoiceRowView[];
+  capture_note: string;
 }
 
 // ── SERVED signals — copiers, never derivers ────────────────────────────────
@@ -234,6 +238,9 @@ const [rdKbTrayCls, setRdKbTrayCls] = createSignal("n-kbtray none");
 const [rdKbNote, setRdKbNote] = createSignal("");
 const [rdKbMoreCls, setRdKbMoreCls] = createSignal("n-lgdmore none");
 const [rdSoloLbl, setRdSoloLbl] = createSignal("Only this player");
+// The staged input's capture behaviour (freeze / split / take nothing).
+const [rdCaptureRows, setRdCaptureRows] = createSignal<RdChoiceRowView[]>([]);
+const [rdCaptureNote, setRdCaptureNote] = createSignal("");
 const [rdCtrlAddNote, setRdCtrlAddNote] = createSignal("");
 const [rdCtrlCountsLine, setRdCtrlCountsLine] = createSignal("");
 const [rdCtrlAddPreset, setRdCtrlAddPreset] = createSignal("");
@@ -484,6 +491,8 @@ export function applyRedesign(v: RedesignPayload): void {
     setRdKbMoreCls(board.kb_more_cls || "n-lgdmore none");
     setRdSoloLbl(board.solo_label || "Only this player");
   }
+  setRdCaptureRows(v.capture_rows ?? []);
+  setRdCaptureNote(v.capture_note ?? "");
   // The mute/solo lens and the finish repaint follow every served update.
   syncKbLens();
   setRdUndoCls(c?.undo_cls || "rd-undochip none");
@@ -2054,10 +2063,13 @@ export function redesignWire(root: HTMLElement): void {
     if (themeMenu && !target?.closest(".rd-themed")) {
       closeThemeMenu();
     }
-    // The board picker keeps the same convention.
-    const boardPick = rdRoot?.querySelector<HTMLElement>(".rd-boardpick[open]");
-    if (boardPick && !target?.closest(".rd-boardpick")) {
-      boardPick.removeAttribute("open");
+    // The board and While-playing pickers keep the same convention: a
+    // click outside a popover puts it away (each one for itself, so
+    // opening one closes the other).
+    for (const pick of Array.from(
+      rdRoot?.querySelectorAll<HTMLElement>(".rd-boardpick[open]") ?? [],
+    )) {
+      if (target && !pick.contains(target)) pick.removeAttribute("open");
     }
     // Plate cell → Keys row: the board is the Keys tab's own picture, so
     // clicking a key reveals that key's row (a bound cap) or its free chip.
@@ -3046,6 +3058,56 @@ export function RedesignIsland() {
                               h(
                                 "button",
                                 { type: "submit", class: r.cls },
+                                h("span", { class: "n-radio-dot" }),
+                                h(
+                                  "span",
+                                  { class: "n-radio-txt" },
+                                  h("span", { class: "n-radio-title" }, r.title),
+                                  h("span", { class: "n-radio-detail" }, r.detail),
+                                ),
+                              ),
+                            ),
+                        ),
+                      ),
+                    ),
+                    // While playing: how this input's keys behave during a
+                    // session — freeze (drive pads only), split (mapped
+                    // keys drive, the rest still type), or take nothing.
+                    // The staged input's OWN behaviour, so it lives on the
+                    // input's widget; the composer rewords the rows for an
+                    // encoder (wired buttons, not typing). One staged edit
+                    // per row through the re-homed blocking verb.
+                    h(
+                      "details",
+                      { class: "rd-boardpick rd-capture" },
+                      h(
+                        "summary",
+                        { class: "n-autobtn rd-boardpick-sum" },
+                        "While playing",
+                      ),
+                      h(
+                        "div",
+                        { class: "rd-boardpick-pop" },
+                        h("p", { class: "n-devnote" }, () => rdCaptureNote()),
+                        createList(
+                          () => rdCaptureRows(),
+                          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
+                          (r) =>
+                            h(
+                              "form",
+                              {
+                                class: "n-modeform",
+                                method: "post",
+                                action: "/redesign/blocking",
+                                "data-rd-form": "blocking",
+                              },
+                              h("input", { type: "hidden", name: "blocking", value: r.name }),
+                              h(
+                                "button",
+                                // Bound as a PLAIN property (the theme rows'
+                                // rule): the compiler drops a bare `||` form
+                                // from the server render.
+                                { type: "submit", class: r.cls, "aria-current": r.chosen },
                                 h("span", { class: "n-radio-dot" }),
                                 h(
                                   "span",

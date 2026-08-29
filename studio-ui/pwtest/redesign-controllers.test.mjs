@@ -144,6 +144,16 @@ describe("the controller workbench", () => {
       /no XInput slot/,
       "the PlayStation slot says it takes none of the four",
     );
+    // The REAL silhouettes, per the served total record: the Xbox slot
+    // wears the Xbox body, the PlayStation slot the DS4 body.
+    assert.equal(
+      await page.locator(`${cardSel(1)} img.rd-ctrlcard-art`).getAttribute("src"),
+      "/_assets/pad-xbox.svg",
+    );
+    assert.equal(
+      await page.locator(`${cardSel(2)} img.rd-ctrlcard-art`).getAttribute("src"),
+      "/_assets/pad-ds4.svg",
+    );
     // Direct assignment, not spatial arrows: each card wears a Player
     // select at its own position, with a "No player" park option — and no
     // arrow buttons anywhere.

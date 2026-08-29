@@ -395,12 +395,20 @@ function loadCanvasPrefs(): void {
         ? saved.bench.filter((s): s is string => typeof s === "string")
         : undefined,
       parked: Array.isArray(saved.parked)
-        ? saved.parked.filter(
-            (p): p is ParkedController =>
-              typeof p === "object" && p !== null &&
-              typeof p.id === "string" && typeof p.persona === "string" &&
-              typeof p.persona_label === "string" && typeof p.preset === "string",
-          )
+        ? saved.parked
+            .filter(
+              (p): p is ParkedController =>
+                typeof p === "object" && p !== null &&
+                typeof p.id === "string" && typeof p.persona === "string" &&
+                typeof p.persona_label === "string" && typeof p.preset === "string",
+            )
+            // Entries stored before the art fields existed draw the named
+            // placeholder rather than crashing the ghost.
+            .map((p) => ({
+              ...p,
+              family: typeof p.family === "string" ? p.family : "",
+              art: typeof p.art === "string" ? p.art : "",
+            }))
         : undefined,
       camera:
         cam &&
@@ -2331,6 +2339,23 @@ export function RedesignIsland() {
           // ── The tool cluster (design handoff §7): select and hand ───────
           // Off-screen proximity chips: client-populated, camera-settle paced.
           h("div", { class: "rd-chips", "data-client-subtree": "" }),
+          // The controller silhouettes' visible credit — the vendored art's
+          // MIT terms travel with the art onto every page that draws it (the
+          // /pads footer's exact line). A corner OVERLAY, deliberately not in
+          // the topbar's flex flow: a nowrap span there overflows narrow
+          // windows, and the page's horizontal scrollbar then steals viewport
+          // height mid-resize — which the camera's centre-preserving math
+          // reads as a phantom translation.
+          h(
+            "span",
+            { class: "rd-artcredit" },
+            "controller art: ",
+            h(
+              "a",
+              { href: "https://github.com/AL2009man/Gamepad-Asset-Pack" },
+              "Gamepad-Asset-Pack (MIT) by AL2009man",
+            ),
+          ),
           h(
             "div",
             { class: "rd-tools", role: "group", "aria-label": "Canvas tools" },

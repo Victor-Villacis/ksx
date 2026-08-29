@@ -30,6 +30,12 @@ export interface RdControllerCardView {
   persona_label: string;
   preset: string;
   api_line: string;
+  /** The presentation family from the server's ONE total record — never
+   *  re-decided here. `"unknown"` draws a named placeholder, not a wrong
+   *  silhouette (the pad-presentation rule). */
+  family: string;
+  /** The vendored body drawing for that family, served beside it. */
+  art: string;
 }
 
 /** One parked controller — browser state, held in the island's prefs. Its
@@ -40,6 +46,11 @@ export interface ParkedController {
   persona: string;
   persona_label: string;
   preset: string;
+  /** The served presentation captured at park time, so the ghost keeps the
+   *  real body drawing. Older stored entries may lack them — an empty
+   *  family draws the named placeholder. */
+  family: string;
+  art: string;
 }
 
 interface CardGeometry {
@@ -124,6 +135,29 @@ function badgeAndName(
   name.className = "rd-ctrlcard-name";
   name.textContent = preset;
   return [badge, name];
+}
+
+/** The REAL body drawing — the served vendored silhouette for the served
+ *  family. An `"unknown"` family deliberately draws no body (the record's
+ *  rule: a named placeholder, never a wrong silhouette); the badge above
+ *  already names the persona, and the note says why there is no picture. */
+function padArt(family: string, art: string, personaLabel: string): HTMLElement {
+  if (family === "unknown" || !art) {
+    const note = document.createElement("p");
+    note.className = "rd-ctrlcard-meta rd-ctrlcard-noart";
+    note.textContent =
+      "This build does not recognise the persona, so it draws no body rather " +
+      "than the wrong one.";
+    return note;
+  }
+  const img = document.createElement("img");
+  img.className = "rd-ctrlcard-art";
+  img.src = art;
+  img.alt = personaLabel || PERSONA_BADGE_FALLBACK;
+  // The art is the widget's face, never a drag/select target of its own —
+  // and never the browser's native image drag.
+  img.draggable = false;
+  return img;
 }
 
 function removeForm(number: string): HTMLElement {
@@ -218,6 +252,8 @@ function liveCardContent(
         persona: card.persona,
         persona_label: card.persona_label,
         preset: card.preset,
+        family: card.family,
+        art: card.art,
       });
       return;
     }
@@ -228,7 +264,14 @@ function liveCardContent(
   const verbs = document.createElement("div");
   verbs.className = "rd-ctrlcard-verbs";
   verbs.append(select, moveForm, parkForm, removeForm(card.number));
-  body.append(slot, ...badgeAndName(card.persona, card.persona_label, card.preset), meta, verbs);
+  body.dataset.family = card.family;
+  body.append(
+    slot,
+    ...badgeAndName(card.persona, card.persona_label, card.preset),
+    padArt(card.family, card.art, card.persona_label),
+    meta,
+    verbs,
+  );
   return body;
 }
 
@@ -300,7 +343,14 @@ function ghostCardContent(
   const verbs = document.createElement("div");
   verbs.className = "rd-ctrlcard-verbs";
   verbs.append(select, assignForm, discard);
-  body.append(slot, ...badgeAndName(parked.persona, parked.persona_label, parked.preset), meta, verbs);
+  body.dataset.family = parked.family || "unknown";
+  body.append(
+    slot,
+    ...badgeAndName(parked.persona, parked.persona_label, parked.preset),
+    padArt(parked.family, parked.art, parked.persona_label),
+    meta,
+    verbs,
+  );
   return body;
 }
 
@@ -315,8 +365,8 @@ function mountCard(
   const item = createCanvasItem({
     instanceId: id,
     displayName,
-    preferredWidth: 300,
-    minHeight: 190,
+    preferredWidth: 320,
+    minHeight: 380,
     content,
     document,
   });
@@ -324,10 +374,10 @@ function mountCard(
   item.classList.add("rd-ctrl-node");
   if (extraClass) item.classList.add(extraClass);
   const home: CardGeometry = {
-    x: 140 + (index % 3) * 340,
-    y: 430 + Math.floor(index / 3) * 230,
-    width: 300,
-    height: 190,
+    x: 140 + (index % 3) * 360,
+    y: 430 + Math.floor(index / 3) * 430,
+    width: 320,
+    height: 380,
     z: 20 + index,
     manualScale: 1,
   };

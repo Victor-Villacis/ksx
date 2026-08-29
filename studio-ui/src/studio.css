@@ -18595,6 +18595,51 @@ a.nm-link {
   margin-left: auto;
 }
 
+/* The REAL body drawing — the vendored silhouette is the widget's face.
+   Never a pointer target of its own: the canvas item owns drag/select.
+   The box is RESERVED with the file's own aspect ratio (the two vendored
+   viewBoxes), so an async image load cannot grow the card and shift the
+   canvas's world bounds mid-gesture. */
+.rd-ctrlcard-art {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 112.456 / 76.663; /* pad-xbox.svg's viewBox */
+  margin: 6px 0 4px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.rd-ctrlcard[data-family="ps"] .rd-ctrlcard-art,
+.rd-ctrlcard[data-family="ps5"] .rd-ctrlcard-art {
+  aspect-ratio: 112.689 / 72.532; /* pad-ds4.svg's viewBox */
+}
+
+.rd-ctrlcard-noart {
+  margin: 6px 0 4px;
+  font-style: italic;
+}
+
+/* The art credit, a quiet overlay in the canvas's corner — MIT terms travel
+   with the silhouettes onto every page that draws them. Absolutely
+   positioned so it can never widen the layout (a topbar nowrap span
+   overflowed narrow windows and the scrollbar's stolen height read as a
+   camera translation). */
+.rd-artcredit {
+  position: absolute;
+  right: 12px;
+  bottom: 34px;
+  z-index: 5;
+  font-size: var(--fs-micro);
+  color: var(--n-text-3);
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.rd-artcredit a {
+  color: var(--n-text-3);
+}
+
 /* A parked ghost: on the canvas, off the draft. */
 .rd-ctrlcard-ghost {
   opacity: 0.78;

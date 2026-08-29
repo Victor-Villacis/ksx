@@ -419,6 +419,24 @@ mod tests {
         assert!(view.add_note.contains("nothing is saved or started"), "{}", view.add_note);
         assert!(view.personas.iter().all(|p| p.usable == "true"));
 
+        // The presentation rides the ONE total record (`pad_presentation`):
+        // family and art are served together, the browser never re-decides,
+        // and an unrecognised persona is the NAMED unknown — not a silent
+        // silhouette.
+        for (persona, family, art) in [
+            ("xbox360", "xbox", "/_assets/pad-xbox.svg"),
+            ("playstation", "ps", "/_assets/pad-ds4.svg"),
+            ("dualsense", "ps5", "/_assets/pad-ds4.svg"),
+            ("snes", "xbox", "/_assets/pad-xbox.svg"),
+            ("a-persona-from-the-future", "unknown", "/_assets/pad-xbox.svg"),
+        ] {
+            let one = RedesignControllers::of(&fixture_staged(vec![fixture_slot(
+                1, persona, false, "P",
+            )]));
+            assert_eq!(one.cards[0].family, family, "{persona}");
+            assert_eq!(one.cards[0].art, art, "{persona}");
+        }
+
         // A full house says the nocturne sentence and offers no preset.
         let full = fixture_staged(
             (1..=16)

@@ -91,6 +91,15 @@ pub struct RedesignControllerCard {
     /// persona occupies one of Windows' four XInput slots; a HID persona
     /// takes none of them.
     pub api_line: String,
+    /// The presentation family, from the ONE total [`pad_presentation`]
+    /// record — never re-decided in the browser. `"unknown"` means "draw a
+    /// named placeholder, not a wrong silhouette" (the record's rule).
+    #[serde(default)]
+    pub family: String,
+    /// The vendored body drawing for that family (`/_assets/pad-*.svg`),
+    /// served beside it so the two can never disagree.
+    #[serde(default)]
+    pub art: String,
 }
 
 /// One persona the picker offers — or honestly refuses to, reason attached.
@@ -143,17 +152,22 @@ impl RedesignControllers {
         let cards = staged
             .slots
             .iter()
-            .map(|slot| RedesignControllerCard {
-                number: slot.number.to_string(),
-                persona: slot.persona.clone(),
-                persona_label: slot.persona_label.clone(),
-                preset: slot.preset.clone(),
-                api_line: if slot.is_xinput {
-                    "XInput — takes one of Windows' four XInput slots at Play".to_owned()
-                } else {
-                    "HID — no XInput slot; games and Steam see it by connection order"
-                        .to_owned()
-                },
+            .map(|slot| {
+                let presentation = pad_presentation(&slot.persona);
+                RedesignControllerCard {
+                    number: slot.number.to_string(),
+                    persona: slot.persona.clone(),
+                    persona_label: slot.persona_label.clone(),
+                    preset: slot.preset.clone(),
+                    api_line: if slot.is_xinput {
+                        "XInput — takes one of Windows' four XInput slots at Play".to_owned()
+                    } else {
+                        "HID — no XInput slot; games and Steam see it by connection order"
+                            .to_owned()
+                    },
+                    family: presentation.family.to_owned(),
+                    art: presentation.art.to_owned(),
+                }
             })
             .collect();
         let personas = staged

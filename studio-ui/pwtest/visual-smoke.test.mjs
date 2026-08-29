@@ -718,14 +718,25 @@ describe("redesign canvas interaction chrome", () => {
           represented: parseFloat(camera.style.width) / projectionScale * zoom,
           safe: viewportWidth - inspectorWidth,
           full: viewportWidth,
+          // How many SCREEN pixels one minimap pixel stands for at this
+          // projection — the measurement's own granularity. The workbench's
+          // content envelope sets the projection scale, so a fixed tolerance
+          // silently tightens as real widgets join the canvas.
+          pxWorth: zoom / projectionScale,
         };
       }, { benchA: BENCH_A, benchB: BENCH_B });
       await nextPaint();
       const safeMapWidth = await minimapRepresentedWidth();
       assert.ok(safeMapWidth);
+      // The claim is safe-vs-full (a 300px+ distinction), asserted at the
+      // projection's own precision: a couple of minimap pixels of rounding,
+      // whatever the content envelope has made one worth.
       assert.ok(
-        Math.abs(safeMapWidth.represented - safeMapWidth.safe) < 3,
-        "the minimap camera rectangle included the Inspector-covered strip",
+        Math.abs(safeMapWidth.represented - safeMapWidth.safe) <
+          Math.max(3, 2 * safeMapWidth.pxWorth),
+        `the minimap camera rectangle included the Inspector-covered strip: ${
+          JSON.stringify(safeMapWidth)
+        }`,
       );
 
       const mappedWorldPoint = await page.evaluate((benchA) => {

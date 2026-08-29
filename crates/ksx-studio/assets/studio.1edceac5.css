@@ -19043,6 +19043,2260 @@ a.nm-link {
   color: var(--n-text-2);
 }
 
+/* ── Encoder profile lab ──────────────────────────────────────────────────
+   One stable, data-driven SVG surface. Identity, topology, configured output,
+   observed input, and user declarations keep independent visual treatments. */
+
+.rd-encoder-lab-toggle[aria-pressed="true"] {
+  border-color: var(--n-accent-line);
+  color: var(--n-accent-2);
+}
+
+.rd-encoder-lab-toggle[hidden] {
+  display: none !important;
+}
+
+.rd-encoder-profile-node {
+  --rd-encoder-slot: var(--n-accent);
+}
+
+[data-forma-canvas] .widget-instance .rd-encoder-profile[data-forma-runtime-host] {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  width: 100%;
+  height: 100%;
+  min-height: 700px;
+  padding: var(--sp-4);
+  overflow: hidden;
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-xl);
+  background: var(--n-bg);
+  color: var(--n-text);
+  box-shadow: 0 18px 46px color-mix(in srgb, var(--n-bg) 54%, transparent);
+  font-family: var(--n-font);
+}
+
+.rd-encoder-profile-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-4);
+}
+
+.rd-encoder-profile-heading-copy {
+  min-width: 0;
+}
+
+.rd-encoder-profile-eyebrow,
+.rd-encoder-profile-subtitle,
+.rd-encoder-profile-thesis,
+.rd-encoder-profile-foot {
+  margin: 0;
+}
+
+.rd-encoder-profile-eyebrow {
+  color: var(--n-accent-2);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+.rd-encoder-profile-title {
+  margin: var(--sp-1) 0 0;
+  overflow: hidden;
+  color: var(--n-text);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-encoder-profile-subtitle {
+  color: var(--n-text-2);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-profile-safety {
+  flex: none;
+  margin-left: auto;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid color-mix(in srgb, var(--n-ok) 55%, var(--n-line));
+  border-radius: var(--r-pill);
+  background: var(--ok-dim);
+  color: var(--n-ok);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.rd-encoder-profile-toolbar {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.85fr) minmax(0, 1.15fr);
+  gap: var(--sp-3);
+  align-items: end;
+  padding: var(--sp-2);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-lg);
+  background: var(--n-panel-2);
+}
+
+.rd-encoder-profile-toolbar label,
+.rd-encoder-profile-manual label {
+  display: grid;
+  gap: var(--sp-1);
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-mono);
+  text-transform: uppercase;
+}
+
+.rd-encoder-profile-toolbar select,
+.rd-encoder-profile-manual textarea {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--n-line-2);
+  border-radius: var(--r-md);
+  background: var(--n-bg);
+  color: var(--n-text);
+  font: var(--fw-medium) var(--fs-xs) / var(--lh-snug) var(--n-font);
+}
+
+.rd-encoder-profile-toolbar select {
+  min-height: 34px;
+  padding: 0 var(--sp-2);
+}
+
+.rd-encoder-profile-toolbar select:focus-visible,
+.rd-encoder-profile-manual textarea:focus-visible,
+.rd-encoder-profile-manual button:focus-visible,
+.rd-encoder-profile-read button:focus-visible,
+.rd-encoder-profile-candidates input:focus-visible + span,
+.rd-encoder-profile-roster summary:focus-visible,
+.rd-encoder-profile-sources a:focus-visible {
+  outline: 2px solid var(--n-accent);
+  outline-offset: 2px;
+}
+
+.rd-encoder-profile-thesis {
+  padding: 0 var(--sp-1) var(--sp-1);
+  color: var(--n-text-2);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-profile-host {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-color: var(--n-line-2) transparent;
+}
+
+.rd-encoder-profile-dynamic {
+  display: grid;
+  gap: var(--sp-2);
+  min-height: 100%;
+}
+
+.rd-encoder-profile-evidence {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-md);
+  background: var(--n-panel-2);
+  color: var(--n-text-2);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-profile-evidence strong {
+  color: var(--n-text);
+}
+
+.rd-encoder-profile-evidence[data-evidence-state="backend-exact"],
+.rd-encoder-profile-evidence[data-evidence-state="backend-family"] {
+  border-color: color-mix(in srgb, var(--n-ok) 52%, var(--n-line));
+  background: var(--ok-dim);
+}
+
+.rd-encoder-profile-evidence[data-evidence-state="manual"] {
+  border-color: color-mix(in srgb, var(--n-accent) 48%, var(--n-line));
+  background: var(--n-accent-dim);
+}
+
+.rd-encoder-profile-evidence[data-evidence-state="ambiguous-family"],
+.rd-encoder-profile-evidence[data-evidence-state="known-family"],
+.rd-encoder-profile-evidence[data-evidence-state="identity-conflict"] {
+  border-color: color-mix(in srgb, var(--n-warn) 55%, var(--n-line));
+  background: var(--warn-dim);
+}
+
+.rd-encoder-profile-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin: 0;
+}
+
+.rd-encoder-profile-metric {
+  min-width: 0;
+  padding: var(--sp-2);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-md);
+  background: var(--n-panel-2);
+}
+
+.rd-encoder-profile-metric[data-tone="topology"],
+.rd-encoder-profile-metric[data-tone="supported"],
+.rd-encoder-profile-metric[data-tone="observed"] {
+  border-color: color-mix(in srgb, var(--n-accent) 42%, var(--n-line));
+}
+
+.rd-encoder-profile-metric[data-tone="unsupported"] {
+  border-color: color-mix(in srgb, var(--n-warn) 44%, var(--n-line));
+}
+
+.rd-encoder-profile-metric dt {
+  overflow: hidden;
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-mono);
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.rd-encoder-profile-metric dd {
+  margin: var(--sp-1) 0 0;
+  overflow: hidden;
+  color: var(--n-text);
+  font: var(--fw-semibold) var(--fs-sm) / var(--lh-tight) var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-encoder-profile-read {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 1.15fr);
+  gap: var(--sp-3);
+  align-items: center;
+  padding: var(--sp-3);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-lg);
+  background: var(--n-panel-2);
+}
+
+.rd-encoder-profile-read[data-state="loaded"] {
+  border-color: color-mix(in srgb, var(--n-ok) 52%, var(--n-line));
+  background: var(--ok-dim);
+}
+
+.rd-encoder-profile-read[data-state="error"] {
+  border-color: color-mix(in srgb, var(--n-warn) 55%, var(--n-line));
+  background: var(--warn-dim);
+}
+
+.rd-encoder-profile-read h3,
+.rd-encoder-profile-read p {
+  margin: 0;
+}
+
+.rd-encoder-profile-read h3 {
+  color: var(--n-text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-encoder-profile-read-copy p,
+.rd-encoder-profile-read-status {
+  margin-top: var(--sp-1);
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-profile-read-controls {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--sp-3);
+  align-items: center;
+  min-width: 0;
+}
+
+.rd-encoder-profile-read-controls > .rd-encoder-profile-read-status:only-child {
+  grid-column: 1 / -1;
+}
+
+.rd-encoder-profile-read button {
+  min-height: 36px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--n-accent-line);
+  border-radius: var(--r-md);
+  background: var(--n-accent-dim);
+  color: var(--n-accent-2);
+  font: var(--fw-semibold) var(--fs-xs) / var(--lh-flat) var(--n-font);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.rd-encoder-profile-read button:disabled {
+  cursor: progress;
+  opacity: 0.68;
+}
+
+.rd-encoder-profile-read-status strong,
+.rd-encoder-profile-read-status p {
+  display: block;
+}
+
+.rd-encoder-profile-read-status strong {
+  color: var(--n-text);
+}
+
+.rd-encoder-profile-read-status ul {
+  margin: var(--sp-1) 0 0;
+  padding-left: var(--sp-4);
+}
+
+.rd-encoder-profile-observe {
+  display: grid;
+  grid-template-columns: minmax(0, 0.72fr) minmax(360px, 1.28fr);
+  gap: var(--sp-3);
+  align-items: start;
+  padding: var(--sp-3);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-lg);
+  background: var(--n-panel-2);
+}
+
+.rd-encoder-profile-observe[data-state="listening"],
+.rd-encoder-profile-observe[data-state="complete"] {
+  border-color: color-mix(in srgb, var(--n-accent) 48%, var(--n-line));
+}
+
+.rd-encoder-profile-observe[data-state="unknown"],
+.rd-encoder-profile-observe[data-state="foreign-live"],
+.rd-encoder-profile-observe[data-state="error"],
+.rd-encoder-profile-observe[data-backend-state="failed"] {
+  border-color: color-mix(in srgb, var(--n-warn) 55%, var(--n-line));
+  background: var(--warn-dim);
+}
+
+.rd-encoder-profile-observe h3,
+.rd-encoder-profile-observe p {
+  margin: 0;
+}
+
+.rd-encoder-profile-observe h3 {
+  color: var(--n-text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-encoder-profile-observe-copy p,
+.rd-encoder-profile-observe-status {
+  margin-top: var(--sp-1);
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-profile-observe-controls {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.rd-encoder-profile-observe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+.rd-encoder-profile-observe button {
+  min-height: 36px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--n-accent-line);
+  border-radius: var(--r-md);
+  background: var(--n-accent-dim);
+  color: var(--n-accent-2);
+  font: var(--fw-semibold) var(--fs-xs) / var(--lh-flat) var(--n-font);
+  cursor: pointer;
+}
+
+.rd-encoder-profile-observe button:disabled {
+  cursor: progress;
+  opacity: 0.68;
+}
+
+.rd-encoder-profile-observe button:focus-visible {
+  outline: 2px solid var(--n-accent);
+  outline-offset: 2px;
+}
+
+.rd-encoder-profile-observe-sink {
+  min-height: 34px;
+  padding: 0 var(--sp-2);
+  border: 1px dashed var(--n-accent-line);
+  border-radius: var(--r-pill);
+  color: var(--n-accent-2);
+  font: var(--fw-semibold) var(--fs-micro) / 34px var(--n-font);
+  letter-spacing: var(--track-mono);
+  text-transform: uppercase;
+}
+
+.rd-encoder-profile-observe-sink:focus-visible {
+  outline: 2px solid var(--n-accent);
+  outline-offset: 2px;
+}
+
+.rd-encoder-profile-observe-status strong {
+  display: block;
+  color: var(--n-text);
+}
+
+.rd-encoder-profile-observe-status > p {
+  margin-top: var(--sp-1);
+}
+
+.rd-encoder-profile-observe-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-1);
+  margin: var(--sp-2) 0;
+}
+
+.rd-encoder-profile-observe-metrics > div {
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--n-bg) 68%, transparent);
+}
+
+.rd-encoder-profile-observe-metrics dt {
+  color: var(--n-text-3);
+  letter-spacing: var(--track-mono);
+  text-transform: uppercase;
+}
+
+.rd-encoder-profile-observe-metrics dd {
+  margin: var(--sp-1) 0 0;
+  color: var(--n-text);
+  font: var(--fw-semibold) var(--fs-sm) / var(--lh-flat) var(--mono);
+}
+
+.rd-encoder-profile-observe-signals {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.rd-encoder-profile-observe-signals > div {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: start;
+}
+
+.rd-encoder-profile-observe-signals > div > span {
+  color: var(--n-text-3);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-encoder-profile-observe-signals > div > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.rd-encoder-profile-observe-signals code {
+  padding: 1px var(--sp-1);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-sm);
+  background: var(--n-bg);
+  color: var(--n-accent-2);
+  font-family: var(--mono);
+}
+
+.rd-encoder-profile-observe-signals [data-empty] {
+  color: var(--n-text-3);
+}
+
+.rd-encoder-profile-observe-provenance {
+  overflow-wrap: anywhere;
+  color: var(--n-text-3);
+  font-family: var(--mono);
+}
+
+.rd-encoder-profile-observe-warning {
+  color: var(--n-warn) !important;
+  font-weight: var(--fw-semibold);
+}
+
+.rd-encoder-profile-candidates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2);
+  min-width: 0;
+  margin: 0;
+  padding: var(--sp-2);
+  border: 1px solid color-mix(in srgb, var(--n-warn) 48%, var(--n-line));
+  border-radius: var(--r-md);
+  background: var(--warn-dim);
+}
+
+.rd-encoder-profile-candidates legend {
+  grid-column: 1 / -1;
+  padding: 0 var(--sp-1);
+  color: var(--n-text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-encoder-profile-candidates label {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  padding: var(--sp-2);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-md);
+  background: var(--n-bg);
+  cursor: pointer;
+}
+
+.rd-encoder-profile-candidates label:has(input:checked) {
+  border-color: var(--n-accent-line);
+  background: var(--n-accent-dim);
+}
+
+.rd-encoder-profile-candidates span,
+.rd-encoder-profile-candidates small {
+  display: block;
+  min-width: 0;
+}
+
+.rd-encoder-profile-candidates strong {
+  color: var(--n-text);
+  font-size: var(--fs-xs);
+}
+
+.rd-encoder-profile-candidates small {
+  margin-top: var(--sp-1);
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+}
+
+.rd-encoder-profile-work {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) minmax(220px, 0.8fr);
+  gap: var(--sp-2);
+  min-height: 0;
+}
+
+.rd-encoder-profile-figure {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 344px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-lg);
+  background:
+    linear-gradient(color-mix(in srgb, var(--n-line) 22%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--n-line) 22%, transparent) 1px, transparent 1px),
+    color-mix(in srgb, var(--n-panel) 70%, transparent);
+  background-size: var(--sp-5) var(--sp-5);
+}
+
+.rd-encoder-profile-figure figcaption {
+  padding: var(--sp-1) var(--sp-2) var(--sp-2);
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+  text-align: center;
+}
+
+.rd-encoder-profile-svg {
+  display: block;
+  width: 100%;
+  height: 310px;
+}
+
+.rd-encoder-profile-svg text {
+  fill: var(--n-text-2);
+  font-family: var(--n-font);
+  pointer-events: none;
+  user-select: none;
+}
+
+.rd-encoder-profile-board {
+  fill: var(--n-panel-2);
+  stroke: var(--n-line-2);
+  stroke-width: 1.5;
+}
+
+.rd-encoder-profile-board.is-harness-board {
+  stroke-dasharray: 8 3;
+}
+
+.rd-encoder-profile-board.is-jamma-board {
+  stroke: color-mix(in srgb, var(--n-warn) 54%, var(--n-line-2));
+}
+
+.rd-encoder-profile-board.is-fight-board,
+.rd-encoder-profile-board.is-firmware-reference {
+  fill: color-mix(in srgb, var(--n-panel-3) 76%, var(--n-panel-2));
+}
+
+.rd-encoder-profile-board.is-unknown {
+  fill: color-mix(in srgb, var(--n-panel-2) 70%, transparent);
+  stroke-dasharray: 8 7;
+}
+
+.rd-encoder-profile-port {
+  fill: var(--n-panel-3);
+  stroke: var(--n-line-2);
+}
+
+.rd-encoder-profile-port-label,
+.rd-encoder-profile-unknown-kick {
+  fill: var(--n-text-3) !important;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-eyebrow);
+}
+
+.rd-encoder-profile-mount circle:first-child {
+  fill: var(--n-bg);
+  stroke: var(--n-line-2);
+  stroke-width: 2;
+}
+
+.rd-encoder-profile-mount-core {
+  fill: var(--n-panel-3);
+}
+
+.rd-encoder-profile-traces path {
+  fill: none;
+  stroke: color-mix(in srgb, var(--n-accent) 30%, var(--n-line));
+  stroke-dasharray: 3 4;
+  stroke-linecap: round;
+  stroke-width: 1.5;
+}
+
+.rd-encoder-profile-group-body {
+  fill: color-mix(in srgb, var(--n-bg) 58%, transparent);
+  stroke: color-mix(in srgb, var(--n-accent) 38%, var(--n-line));
+}
+
+.rd-encoder-profile-group-label {
+  fill: var(--n-accent-2) !important;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+.rd-encoder-profile-terminal rect {
+  fill: var(--n-panel-3);
+  stroke: color-mix(in srgb, var(--rd-encoder-slot) 62%, var(--n-line));
+  stroke-width: 1;
+}
+
+.rd-encoder-profile-terminal.is-logical-control rect {
+  stroke-dasharray: 3 2;
+}
+
+.rd-encoder-profile-terminal.is-variant rect {
+  fill: var(--warn-dim);
+  stroke: var(--n-warn);
+  stroke-dasharray: 2 2;
+}
+
+.rd-encoder-profile-terminal.has-configured-emission rect {
+  fill: color-mix(in srgb, var(--n-accent) 13%, var(--n-panel-3));
+  stroke-width: 1.5;
+}
+
+.rd-encoder-profile-terminal.is-zero-emission rect {
+  fill: color-mix(in srgb, var(--n-warn) 10%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--n-warn) 68%, var(--n-line));
+}
+
+.rd-encoder-profile-terminal.is-opaque-emission rect {
+  fill: var(--warn-dim);
+  stroke: var(--n-warn);
+  stroke-dasharray: 2 2;
+}
+
+.rd-encoder-profile-terminal-label {
+  fill: var(--n-text) !important;
+  font: var(--fw-semibold) var(--fs-micro) / var(--lh-flat) var(--mono);
+}
+
+.rd-encoder-profile-terminal-emission {
+  fill: var(--n-accent-2) !important;
+  font: var(--fw-semibold) calc(var(--fs-micro) * 0.84) / var(--lh-flat) var(--mono);
+}
+
+.rd-encoder-profile-processor rect {
+  fill: var(--n-panel-2);
+  stroke: var(--n-accent-line);
+  stroke-width: 1.5;
+}
+
+.rd-encoder-profile-chip-kick,
+.rd-encoder-profile-chip-unit {
+  fill: var(--n-accent-2) !important;
+  font-size: calc(var(--fs-micro) * 0.78);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-eyebrow);
+}
+
+.rd-encoder-profile-chip-value {
+  fill: var(--n-text) !important;
+  font: var(--fw-semibold) var(--fs-lg) / var(--lh-flat) var(--mono);
+}
+
+.rd-encoder-profile-svg-caption,
+.rd-encoder-profile-empty {
+  fill: var(--n-text-3) !important;
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-mono);
+}
+
+.rd-encoder-profile-signal rect {
+  fill: var(--n-panel-3);
+  stroke: var(--n-accent-line);
+  stroke-width: 1.5;
+}
+
+.rd-encoder-profile-signal-source {
+  fill: var(--n-text-3) !important;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-eyebrow);
+}
+
+.rd-encoder-profile-signal-value {
+  fill: var(--n-text) !important;
+  font: var(--fw-semibold) var(--fs-base) / var(--lh-tight) var(--mono);
+}
+
+.rd-encoder-profile-declared-slot rect {
+  fill: var(--warn-dim);
+  stroke: var(--n-warn);
+  stroke-dasharray: 3 2;
+}
+
+.rd-encoder-profile-declared-label {
+  fill: var(--n-text) !important;
+  font: var(--fw-medium) var(--fs-micro) / var(--lh-flat) var(--mono);
+}
+
+.rd-encoder-profile-unknown-mark {
+  fill: var(--n-panel-3);
+  stroke: var(--n-line-2);
+  stroke-dasharray: 5 5;
+  stroke-width: 2;
+}
+
+.rd-encoder-profile-unknown-value {
+  fill: var(--n-text-3) !important;
+  font: var(--fw-semibold) var(--fs-2xl) / var(--lh-flat) var(--mono);
+}
+
+.rd-encoder-profile-facts {
+  box-sizing: border-box;
+  min-width: 0;
+  max-height: 344px;
+  padding: var(--sp-3);
+  overflow: auto;
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-lg);
+  background: var(--n-panel-2);
+}
+
+.rd-encoder-profile-facts h3,
+.rd-encoder-profile-manual h3 {
+  margin: 0;
+  color: var(--n-text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-encoder-profile-facts > dl {
+  display: grid;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0 var(--sp-3);
+}
+
+.rd-encoder-profile-fact {
+  padding-left: var(--sp-2);
+  border-left: 2px solid var(--n-line-2);
+}
+
+.rd-encoder-profile-fact[data-profile-provenance="backend-profile"],
+.rd-encoder-profile-fact[data-profile-provenance="backend-family"] {
+  border-left-color: var(--n-ok);
+}
+
+.rd-encoder-profile-fact[data-profile-provenance="manual"] {
+  border-left-color: var(--n-accent);
+}
+
+.rd-encoder-profile-fact dt {
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-mono);
+  text-transform: uppercase;
+}
+
+.rd-encoder-profile-fact dd {
+  margin: var(--sp-1) 0 0;
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-profile-sources {
+  display: grid;
+  gap: var(--sp-1);
+  margin: var(--sp-2) 0 0;
+  padding-left: var(--sp-4);
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+}
+
+.rd-encoder-profile-sources a {
+  color: var(--n-accent-2);
+  overflow-wrap: anywhere;
+}
+
+.rd-encoder-profile-roster {
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-md);
+  background: var(--n-panel-2);
+}
+
+.rd-encoder-profile-roster summary {
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--n-text-2);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+}
+
+.rd-encoder-profile-roster-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  max-height: 170px;
+  overflow: auto;
+  border-top: 1px solid var(--n-line);
+  background: var(--n-line);
+}
+
+.rd-encoder-profile-roster-grid > span {
+  display: grid;
+  grid-template-columns: minmax(52px, auto) minmax(0, 1fr);
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--n-bg);
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+}
+
+.rd-encoder-profile-roster-grid code {
+  color: var(--n-accent-2);
+  font-family: var(--mono);
+}
+
+.rd-encoder-profile-chart-table {
+  width: 100%;
+  border-spacing: 0;
+  border-top: 1px solid var(--n-line);
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+}
+
+.rd-encoder-profile-chart-table caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.rd-encoder-profile-chart-table :is(th, td) {
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--n-line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.rd-encoder-profile-chart-scroll {
+  max-height: 230px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.rd-encoder-profile-chart-scroll:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.rd-encoder-profile-chart-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--n-panel-3);
+  color: var(--n-text-3);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-mono);
+  text-transform: uppercase;
+}
+
+.rd-encoder-profile-chart-table tbody th {
+  position: static;
+  background: var(--n-bg);
+  color: var(--n-text-2);
+  font-weight: var(--fw-semibold);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.rd-encoder-profile-chart-table tbody {
+  background: var(--n-bg);
+}
+
+.rd-encoder-profile-chart-table code {
+  color: var(--n-accent-2);
+  font-family: var(--mono);
+}
+
+.rd-encoder-profile-chart-table tr[data-zero-byte] td:nth-child(3),
+.rd-encoder-profile-chart-table tr[data-unknown-byte] td:nth-child(3) {
+  color: var(--n-warn);
+}
+
+.rd-encoder-profile-manual {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr) max-content;
+  gap: var(--sp-3);
+  align-items: end;
+  padding: var(--sp-3);
+  border: 1px dashed var(--n-line-2);
+  border-radius: var(--r-md);
+  background: var(--n-panel-2);
+}
+
+.rd-encoder-profile-manual p {
+  margin: var(--sp-1) 0 0;
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-profile-manual textarea {
+  min-height: 52px;
+  padding: var(--sp-2);
+  resize: vertical;
+}
+
+.rd-encoder-profile-manual button {
+  min-height: 34px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--n-accent-line);
+  border-radius: var(--r-md);
+  background: var(--n-accent-dim);
+  color: var(--n-accent-2);
+  font: var(--fw-semibold) var(--fs-xs) / var(--lh-flat) var(--n-font);
+  cursor: pointer;
+}
+
+.rd-encoder-profile-foot {
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-toolbar,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-evidence,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-metrics,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-read,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-observe,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-facts,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-candidates,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-roster,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-manual,
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-foot {
+  display: none;
+}
+
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.rd [data-canvas-zoom-tier="overview"] .rd-encoder-profile-work {
+  grid-template-columns: 1fr;
+}
+
+.rd [data-canvas-zoom-tier="structure"] .rd-encoder-profile-fact dd,
+.rd [data-canvas-zoom-tier="structure"] .rd-encoder-profile-sources-heading,
+.rd [data-canvas-zoom-tier="structure"] .rd-encoder-profile-sources,
+.rd [data-canvas-zoom-tier="structure"] .rd-encoder-profile-foot {
+  display: none;
+}
+
+@media (forced-colors: active) {
+  .rd-encoder-profile :is(select, textarea, button, fieldset, figure, aside, details),
+  .rd-encoder-profile-terminal rect,
+  .rd-encoder-profile-signal rect,
+  .rd-encoder-profile-declared-slot rect {
+    border-color: CanvasText;
+    stroke: CanvasText;
+  }
+
+  .rd-encoder-profile :is(select, textarea, button):focus-visible {
+    outline-color: Highlight;
+  }
+}
+
+@media (pointer: coarse) {
+  .rd-encoder-profile-toolbar select,
+  .rd-encoder-profile-manual button,
+  .rd-encoder-profile-read button,
+  .rd-encoder-profile-observe button,
+  .rd-encoder-profile-observe-sink,
+  .rd-encoder-profile-roster summary {
+    min-height: 44px;
+  }
+
+  .rd-encoder-profile-observe-sink {
+    line-height: 44px;
+  }
+}
+
+@media (max-width: 600px) {
+  .rd-encoder-profile-read,
+  .rd-encoder-profile-observe,
+  .rd-encoder-profile-work {
+    grid-template-columns: 1fr;
+  }
+
+  .rd-encoder-profile-observe-signals > div {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── The product encoder: one connected board on the workbench ───────────
+   The research lab above keeps provenance visible because that is its job.
+   This surface instead gives the person using KSX the physical nouns first:
+   board, terminal, configured key and live press. Evidence remains available
+   behind Device details, but never competes with the interactive board. */
+
+.rd-encoder-device-node {
+  --rd-encoder-pcb-a: color-mix(in srgb, var(--n-ok) 28%, var(--n-bg));
+  --rd-encoder-pcb-b: color-mix(in srgb, var(--n-ok) 18%, var(--n-panel-2));
+  --rd-encoder-pcb-c: color-mix(in srgb, var(--n-bg) 76%, var(--n-ok));
+  --rd-encoder-copper: color-mix(in srgb, #d9b96e 52%, var(--n-accent));
+  --rd-encoder-metal: color-mix(in srgb, var(--n-text-2) 62%, var(--n-panel));
+  --rd-encoder-terminal-accent: var(--n-accent);
+  --rd-encoder-terminal-ink: var(--n-text);
+  height: var(--widget-min-height, 900px);
+}
+
+.rd-encoder-device-shell {
+  box-sizing: border-box;
+  container: rd-encoder-workbench / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--n-text);
+  font-family: var(--n-font);
+}
+
+/* The ordinary device card remains in the object so staging and live roster
+   reconciliation keep one implementation. On the larger encoder object it
+   becomes a compact connection strip rather than a second full card. */
+.rd-encoder-device-shell > .rd-devcard {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  grid-template-rows: auto auto;
+  gap: 1px var(--sp-2);
+  align-items: center;
+  flex: none;
+  min-width: 0;
+  min-height: 52px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-lg);
+  background:
+    linear-gradient(110deg, color-mix(in srgb, var(--n-accent) 8%, transparent), transparent 46%),
+    var(--n-panel-2);
+  box-shadow: inset 0 1px color-mix(in srgb, var(--n-text) 5%, transparent);
+}
+
+.rd-encoder-device-shell > .rd-devcard .rd-devcard-badge {
+  grid-row: 1 / 3;
+  margin: 0;
+}
+
+.rd-encoder-device-shell > .rd-devcard .rd-devcard-name {
+  align-self: end;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-encoder-device-shell > .rd-devcard .rd-devcard-meta {
+  align-self: start;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-encoder-device-shell > .rd-devcard :is(.rd-devcard-staged, .rd-stageform) {
+  grid-column: 3;
+  grid-row: 1 / 3;
+  align-self: center;
+  margin: 0;
+}
+
+.rd-encoder-device-shell > .rd-devcard .rd-stagebtn {
+  min-height: 34px;
+}
+
+[data-forma-canvas]
+  .widget-instance
+  .rd-encoder-profile[data-forma-runtime-host][data-presentation="product"] {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  flex: 1 1 auto;
+  width: 100%;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--sp-3);
+  overflow: hidden;
+  border-color: color-mix(in srgb, var(--n-accent) 20%, var(--n-line));
+  background:
+    radial-gradient(circle at 16% -8%, color-mix(in srgb, var(--n-accent) 13%, transparent), transparent 36%),
+    linear-gradient(160deg, color-mix(in srgb, var(--n-panel-2) 84%, var(--n-bg)), var(--n-bg));
+  box-shadow:
+    0 18px 46px color-mix(in srgb, var(--n-bg) 48%, transparent),
+    inset 0 1px color-mix(in srgb, var(--n-text) 5%, transparent);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-head {
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+  padding: 0 var(--sp-1);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-heading-copy {
+  overflow: hidden;
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-title {
+  margin-top: 2px;
+  font-size: var(--fs-md);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-safety {
+  position: relative;
+  padding-left: calc(var(--sp-2) + 9px);
+  border-color: color-mix(in srgb, var(--n-ok) 44%, var(--n-line));
+  background: color-mix(in srgb, var(--n-ok) 9%, var(--n-panel-2));
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-safety::before {
+  position: absolute;
+  top: 50%;
+  left: var(--sp-2);
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+  content: "";
+  transform: translateY(-50%);
+}
+
+.rd-encoder-profile[data-presentation="product"][data-connection-confirmed="false"]
+  .rd-encoder-profile-safety {
+  border-color: color-mix(in srgb, var(--n-warn) 58%, var(--n-line));
+  background: var(--warn-dim);
+  color: var(--n-warn);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host {
+  min-width: 0;
+  min-height: 0;
+  padding-right: 2px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.rd-encoder-product-dynamic {
+  display: grid;
+  gap: var(--sp-2);
+  align-content: start;
+  min-width: 0;
+}
+
+.rd-encoder-product-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  align-items: center;
+  min-height: 24px;
+}
+
+.rd-encoder-product-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 1px var(--sp-2);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--n-panel-3) 82%, transparent);
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-mono);
+  line-height: var(--lh-flat);
+  white-space: nowrap;
+}
+
+.rd-encoder-product-pill[data-tone="connected"] {
+  border-color: color-mix(in srgb, var(--n-ok) 48%, var(--n-line));
+  background: color-mix(in srgb, var(--n-ok) 10%, var(--n-panel-2));
+  color: var(--n-ok);
+}
+
+.rd-encoder-product-pill[data-tone="recognized"] {
+  border-color: color-mix(in srgb, var(--n-accent) 52%, var(--n-line));
+  background: var(--n-accent-dim);
+  color: var(--n-accent-2);
+}
+
+.rd-encoder-product-pill[data-tone="attention"] {
+  border-color: color-mix(in srgb, var(--n-warn) 52%, var(--n-line));
+  background: var(--warn-dim);
+  color: var(--n-warn);
+}
+
+.rd-encoder-product-work {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: stretch;
+  min-width: 0;
+  min-height: 0;
+}
+
+.rd-encoder-product-figure {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--n-accent) 23%, var(--n-line));
+  border-radius: var(--r-xl);
+  background:
+    radial-gradient(circle at 50% 48%, color-mix(in srgb, var(--n-accent) 11%, transparent), transparent 43%),
+    linear-gradient(color-mix(in srgb, var(--n-line) 26%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--n-line) 26%, transparent) 1px, transparent 1px),
+    color-mix(in srgb, var(--n-bg) 82%, var(--n-panel-2));
+  background-size: auto, var(--sp-5) var(--sp-5), var(--sp-5) var(--sp-5), auto;
+  box-shadow:
+    inset 0 1px color-mix(in srgb, var(--n-text) 5%, transparent),
+    inset 0 -28px 60px color-mix(in srgb, var(--n-bg) 18%, transparent);
+}
+
+.rd-encoder-product-figure::before {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  background: linear-gradient(118deg, color-mix(in srgb, var(--n-text) 4%, transparent), transparent 32%);
+  content: "";
+  pointer-events: none;
+}
+
+.rd-encoder-product-figure figcaption {
+  position: relative;
+  z-index: 1;
+  padding: var(--sp-1) var(--sp-3) var(--sp-2);
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+  text-align: center;
+}
+
+.rd-encoder-product-svg {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 250px;
+  max-height: none;
+  margin: auto;
+  overflow: visible;
+  filter: drop-shadow(0 18px 22px color-mix(in srgb, var(--n-bg) 56%, transparent));
+  user-select: none;
+}
+
+.rd-encoder-product-svg text {
+  font-family: var(--n-font);
+  pointer-events: none;
+}
+
+.rd-encoder-board-stop-a { stop-color: var(--rd-encoder-pcb-a); }
+.rd-encoder-board-stop-b { stop-color: var(--rd-encoder-pcb-b); }
+.rd-encoder-board-stop-c { stop-color: var(--rd-encoder-pcb-c); }
+.rd-encoder-metal-stop-a { stop-color: color-mix(in srgb, white 58%, var(--rd-encoder-metal)); }
+.rd-encoder-metal-stop-b { stop-color: var(--rd-encoder-metal); }
+.rd-encoder-metal-stop-c { stop-color: color-mix(in srgb, var(--n-bg) 76%, var(--rd-encoder-metal)); }
+
+.rd-encoder-product-board {
+  stroke: color-mix(in srgb, var(--n-ok) 44%, var(--n-line-2));
+  stroke-width: 2;
+}
+
+.rd-encoder-product-board.is-harness-board {
+  stroke-dasharray: 9 4;
+}
+
+.rd-encoder-product-board.is-jamma-board {
+  stroke: color-mix(in srgb, var(--n-warn) 62%, var(--n-line-2));
+}
+
+.rd-encoder-product-board.is-fight-board,
+.rd-encoder-product-board.is-firmware-reference,
+.rd-encoder-product-board.is-generic-hid {
+  stroke: color-mix(in srgb, var(--n-accent) 48%, var(--n-line-2));
+}
+
+.rd-encoder-product-board-inset {
+  fill: none;
+  stroke: color-mix(in srgb, var(--n-text) 10%, transparent);
+  stroke-width: 1.2;
+}
+
+.rd-encoder-product-usb > rect:first-child {
+  stroke: color-mix(in srgb, var(--n-text-2) 60%, var(--n-line));
+  stroke-width: 1.5;
+}
+
+.rd-encoder-product-usb-mouth {
+  fill: color-mix(in srgb, var(--n-bg) 88%, black);
+  stroke: color-mix(in srgb, var(--n-text-3) 54%, var(--n-line));
+  stroke-width: 1.5;
+}
+
+.rd-encoder-product-silk,
+.rd-encoder-product-maker,
+.rd-encoder-product-read-state,
+.rd-encoder-product-led-label,
+.rd-encoder-product-group-label {
+  fill: color-mix(in srgb, var(--n-text) 74%, var(--n-text-3));
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+  letter-spacing: 1.5px;
+}
+
+.rd-encoder-product-brand {
+  fill: color-mix(in srgb, var(--n-text) 86%, var(--n-accent-2));
+  font-size: 15px;
+  font-weight: var(--fw-semibold);
+  letter-spacing: 1.8px;
+}
+
+.rd-encoder-product-maker,
+.rd-encoder-product-read-state,
+.rd-encoder-product-led-label {
+  fill: color-mix(in srgb, var(--n-text-2) 72%, var(--n-ok));
+  font-size: 10px;
+}
+
+.rd-encoder-product-mount circle:first-child {
+  fill: color-mix(in srgb, var(--rd-encoder-copper) 72%, var(--n-panel));
+  stroke: color-mix(in srgb, var(--rd-encoder-copper) 88%, white);
+  stroke-width: 1.4;
+}
+
+.rd-encoder-product-mount-core {
+  fill: color-mix(in srgb, var(--n-bg) 88%, black);
+  stroke: color-mix(in srgb, var(--n-line-2) 80%, black);
+  stroke-width: 1;
+}
+
+.rd-encoder-product-traces path {
+  fill: none;
+  stroke: color-mix(in srgb, var(--rd-encoder-copper) 36%, transparent);
+  stroke-linecap: round;
+  stroke-width: 2;
+}
+
+.rd-encoder-product-chip rect {
+  fill: color-mix(in srgb, var(--n-bg) 86%, #06080c);
+  stroke: color-mix(in srgb, var(--n-accent) 46%, var(--n-line-2));
+  stroke-width: 1.8;
+}
+
+.rd-encoder-product-chip.is-unknown rect {
+  stroke: color-mix(in srgb, var(--n-warn) 54%, var(--n-line-2));
+  stroke-dasharray: 6 4;
+}
+
+.rd-encoder-product-chip-name {
+  fill: var(--n-accent-2);
+  font-size: 13px;
+  font-weight: var(--fw-semibold);
+  letter-spacing: 1.2px;
+}
+
+.rd-encoder-product-chip-count {
+  fill: var(--n-text);
+  font: var(--fw-semibold) 30px / 1 var(--mono);
+}
+
+.rd-encoder-product-chip-unit {
+  fill: var(--n-text-3);
+  font-size: 9px;
+  font-weight: var(--fw-semibold);
+  letter-spacing: 1.4px;
+}
+
+.rd-encoder-product-components rect,
+.rd-encoder-product-components circle:not(.rd-encoder-product-led) {
+  fill: color-mix(in srgb, var(--n-bg) 76%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--rd-encoder-copper) 42%, var(--n-line));
+  stroke-width: 1;
+}
+
+.rd-encoder-product-led {
+  fill: var(--n-ok);
+  stroke: color-mix(in srgb, var(--n-ok) 64%, white);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--n-ok) 72%, transparent));
+}
+
+.rd-encoder-product-group-label {
+  fill: var(--n-text-3);
+}
+
+.rd-encoder-product-group[data-terminal-group="player-1"] .rd-encoder-product-group-label {
+  fill: color-mix(in srgb, var(--pcs1) 78%, white);
+}
+
+.rd-encoder-product-group[data-terminal-group="player-2"] .rd-encoder-product-group-label {
+  fill: color-mix(in srgb, var(--pcs2) 78%, white);
+}
+
+.rd-encoder-product-group[data-terminal-group="player-3"] .rd-encoder-product-group-label {
+  fill: color-mix(in srgb, var(--pcs3) 78%, white);
+}
+
+.rd-encoder-product-group[data-terminal-group="player-4"] .rd-encoder-product-group-label {
+  fill: color-mix(in srgb, var(--pcs4) 78%, white);
+}
+
+.rd-encoder-product-terminal.player-1 {
+  --rd-encoder-terminal-accent: var(--pcs1);
+  --rd-encoder-terminal-ink: var(--pcs1-ink);
+}
+
+.rd-encoder-product-terminal.player-2 {
+  --rd-encoder-terminal-accent: var(--pcs2);
+  --rd-encoder-terminal-ink: var(--pcs2-ink);
+}
+
+.rd-encoder-product-terminal.player-3 {
+  --rd-encoder-terminal-accent: var(--pcs3);
+  --rd-encoder-terminal-ink: var(--pcs3-ink);
+}
+
+.rd-encoder-product-terminal.player-4 {
+  --rd-encoder-terminal-accent: var(--pcs4);
+  --rd-encoder-terminal-ink: var(--pcs4-ink);
+}
+
+.rd-encoder-product-terminal {
+  cursor: pointer;
+  transition: filter 120ms ease, opacity 120ms ease;
+}
+
+.rd-encoder-product-terminal-hit {
+  fill: transparent;
+  stroke: transparent;
+  stroke-width: 3;
+  pointer-events: all;
+}
+
+.rd-encoder-product-terminal-body {
+  fill: color-mix(in srgb, var(--n-panel-3) 88%, var(--n-bg));
+  stroke: color-mix(in srgb, var(--rd-encoder-terminal-accent) 48%, var(--n-line-2));
+  stroke-width: 1.2;
+  transition: fill 120ms ease, stroke 120ms ease, stroke-width 120ms ease;
+}
+
+.rd-encoder-product-terminal-screw {
+  fill: color-mix(in srgb, var(--rd-encoder-copper) 70%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--rd-encoder-copper) 82%, var(--n-text-2));
+  stroke-width: 1;
+}
+
+.rd-encoder-product-terminal-slot {
+  fill: none;
+  stroke: color-mix(in srgb, var(--n-bg) 74%, black);
+  stroke-linecap: round;
+  stroke-width: 1.4;
+}
+
+.rd-encoder-product-terminal-label {
+  fill: var(--n-text);
+  font: var(--fw-semibold) 10px / 1 var(--mono);
+  letter-spacing: -0.2px;
+}
+
+.rd-encoder-product-terminal-emission {
+  fill: var(--n-text-3);
+  font: var(--fw-semibold) 8px / 1 var(--mono);
+}
+
+.rd-encoder-product-terminal.has-configured-emission .rd-encoder-product-terminal-body {
+  fill: color-mix(in srgb, var(--rd-encoder-terminal-accent) 13%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--rd-encoder-terminal-accent) 72%, var(--n-line-2));
+}
+
+.rd-encoder-product-terminal.has-configured-emission .rd-encoder-product-terminal-emission {
+  fill: color-mix(in srgb, var(--rd-encoder-terminal-accent) 75%, var(--n-text));
+}
+
+.rd-encoder-product-terminal:is(:hover, :focus-visible) .rd-encoder-product-terminal-body,
+.rd-encoder-product-terminal.is-selected .rd-encoder-product-terminal-body {
+  fill: color-mix(in srgb, var(--rd-encoder-terminal-accent) 24%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--rd-encoder-terminal-accent) 78%, white);
+  stroke-width: 2.4;
+}
+
+.rd-encoder-product-terminal:focus-visible {
+  outline: none;
+}
+
+.rd-encoder-product-terminal:focus-visible .rd-encoder-product-terminal-hit {
+  stroke: var(--n-accent);
+  stroke-dasharray: 4 3;
+}
+
+.rd-encoder-product-terminal.is-selected {
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--rd-encoder-terminal-accent) 70%, transparent));
+}
+
+.rd-encoder-product-terminal.is-selected .rd-encoder-product-terminal-emission {
+  fill: var(--n-text);
+}
+
+.rd-encoder-product-terminal.is-seen .rd-encoder-product-terminal-body {
+  fill: color-mix(in srgb, var(--n-accent) 28%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--n-accent) 84%, white);
+  stroke-width: 2.2;
+}
+
+.rd-encoder-product-terminal.is-seen .rd-encoder-product-terminal-emission {
+  fill: var(--n-accent-2);
+}
+
+.rd-encoder-product-terminal.is-held {
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--n-ok) 76%, transparent));
+}
+
+.rd-encoder-product-terminal.is-held .rd-encoder-product-terminal-body {
+  fill: color-mix(in srgb, var(--n-ok) 42%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--n-ok) 82%, white);
+  stroke-width: 2.8;
+}
+
+.rd-encoder-product-terminal.is-held .rd-encoder-product-terminal-emission {
+  fill: color-mix(in srgb, var(--n-ok) 72%, white);
+}
+
+.rd-encoder-product-terminal.is-shared-emission .rd-encoder-product-terminal-body {
+  stroke: var(--n-warn);
+  stroke-dasharray: 3 2;
+}
+
+.rd-encoder-product-terminal.is-shared-emission .rd-encoder-product-terminal-emission,
+.rd-encoder-product-terminal:is(.is-zero-emission, .is-opaque-emission) .rd-encoder-product-terminal-emission {
+  fill: var(--n-warn);
+}
+
+.rd-encoder-product-terminal.is-opaque-emission .rd-encoder-product-terminal-body {
+  fill: var(--warn-dim);
+}
+
+.rd-encoder-product-terminal.is-variant .rd-encoder-product-terminal-body {
+  stroke-dasharray: 4 2;
+}
+
+.rd-encoder-product-terminal.is-logical .rd-encoder-product-terminal-body {
+  fill: color-mix(in srgb, var(--n-accent) 8%, var(--n-panel-3));
+  stroke-dasharray: 2 2;
+}
+
+.rd-encoder-product-declared rect {
+  fill: color-mix(in srgb, var(--n-warn) 12%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--n-warn) 70%, var(--n-line));
+  stroke-dasharray: 4 3;
+  stroke-width: 1.4;
+}
+
+.rd-encoder-product-signal rect {
+  fill: color-mix(in srgb, var(--n-accent) 18%, var(--n-panel-3));
+  stroke: var(--n-accent-line);
+  stroke-width: 1.6;
+}
+
+.rd-encoder-product-signal-label {
+  fill: var(--n-accent-2);
+  font: var(--fw-semibold) 12px / 1 var(--mono);
+}
+
+.rd-encoder-product-empty {
+  fill: var(--n-text-3);
+  font-size: 13px;
+  letter-spacing: 0.5px;
+}
+
+.rd-encoder-product-inspector {
+  box-sizing: border-box;
+  min-width: 0;
+  max-height: 374px;
+  padding: var(--sp-3);
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--n-accent) 28%, var(--n-line));
+  border-radius: var(--r-xl);
+  background:
+    linear-gradient(150deg, color-mix(in srgb, var(--n-accent) 10%, transparent), transparent 45%),
+    var(--n-panel-2);
+  box-shadow: inset 0 1px color-mix(in srgb, var(--n-text) 5%, transparent);
+}
+
+.rd-encoder-product-inspector[data-live-state="seen"] {
+  border-color: color-mix(in srgb, var(--n-accent) 58%, var(--n-line));
+}
+
+.rd-encoder-product-inspector[data-live-state="held"] {
+  border-color: color-mix(in srgb, var(--n-ok) 68%, var(--n-line));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-ok) 17%, transparent);
+}
+
+.rd-encoder-product-inspector :is(h3, p, dl) {
+  margin: 0;
+}
+
+.rd-encoder-product-inspector-eyebrow {
+  color: var(--n-accent-2);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+.rd-encoder-product-inspector-heading {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: baseline;
+  justify-content: space-between;
+  min-width: 0;
+  margin-top: var(--sp-1);
+}
+
+.rd-encoder-product-inspector-heading h3,
+.rd-encoder-product-inspector.is-unknown h3 {
+  overflow: hidden;
+  color: var(--n-text);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+  text-overflow: ellipsis;
+}
+
+.rd-encoder-product-inspector-heading code {
+  flex: none;
+  padding: 2px var(--sp-1);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-sm);
+  color: var(--n-text-3);
+  font: var(--fw-medium) var(--fs-micro) / var(--lh-flat) var(--mono);
+}
+
+.rd-encoder-product-emissions {
+  display: grid;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3) !important;
+}
+
+.rd-encoder-product-emissions > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: var(--sp-2);
+  align-items: center;
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--n-line);
+}
+
+.rd-encoder-product-emissions dt {
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-mono);
+  text-transform: uppercase;
+}
+
+.rd-encoder-product-emissions dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.rd-encoder-product-keycap {
+  display: inline-flex;
+  justify-content: center;
+  min-width: 42px;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 5px 9px 6px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--n-accent) 48%, var(--n-line-2));
+  border-bottom-width: 3px;
+  border-radius: 7px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--n-text) 7%, transparent), transparent 48%),
+    color-mix(in srgb, var(--n-accent) 13%, var(--n-panel-3));
+  color: var(--n-text);
+  font: var(--fw-semibold) var(--fs-xs) / var(--lh-flat) var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-shadow: 0 2px 0 color-mix(in srgb, var(--n-bg) 72%, transparent);
+}
+
+.rd-encoder-product-emissions [data-tone="unread"] .rd-encoder-product-keycap {
+  border-style: dashed;
+  color: var(--n-text-3);
+}
+
+.rd-encoder-product-emissions [data-tone="unknown"] .rd-encoder-product-keycap {
+  border-color: color-mix(in srgb, var(--n-warn) 60%, var(--n-line));
+  background: var(--warn-dim);
+  color: var(--n-warn);
+}
+
+.rd-encoder-product-read-inline {
+  display: inline-flex;
+  min-height: 44px;
+  max-width: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 12px;
+  border: 1px solid color-mix(in srgb, var(--n-accent) 64%, var(--n-line-2));
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--n-accent) 16%, var(--n-panel-3));
+  color: var(--n-text);
+  font: var(--fw-semibold) var(--fs-xs) / var(--lh-tight) var(--sans);
+  text-align: center;
+}
+
+button.rd-encoder-product-read-inline {
+  cursor: pointer;
+}
+
+button.rd-encoder-product-read-inline:hover:not(:disabled) {
+  border-color: var(--n-accent);
+  background: color-mix(in srgb, var(--n-accent) 24%, var(--n-panel-3));
+}
+
+.rd-encoder-product-read-inline.is-loading {
+  border-style: dashed;
+  color: var(--n-text-2);
+}
+
+button.rd-encoder-product-read-inline:disabled {
+  cursor: not-allowed;
+  opacity: .62;
+}
+
+.rd-encoder-product-read-reason {
+  display: block;
+  max-width: 280px;
+  margin-top: var(--sp-1);
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-normal);
+}
+
+.rd-encoder-product-live {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  margin-top: var(--sp-3);
+  padding: var(--sp-2);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--n-bg) 58%, transparent);
+  color: var(--n-text-2);
+  font-size: var(--fs-xs);
+}
+
+.rd-encoder-product-live > span:first-child {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--n-text-3);
+}
+
+.rd-encoder-product-live[data-state="seen"] {
+  border-color: color-mix(in srgb, var(--n-accent) 48%, var(--n-line));
+  color: var(--n-accent-2);
+}
+
+.rd-encoder-product-live[data-state="seen"] > span:first-child {
+  background: var(--n-accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--n-accent) 70%, transparent);
+}
+
+.rd-encoder-product-live[data-state="held"] {
+  border-color: color-mix(in srgb, var(--n-ok) 58%, var(--n-line));
+  background: color-mix(in srgb, var(--n-ok) 10%, var(--n-bg));
+  color: var(--n-ok);
+}
+
+.rd-encoder-product-live[data-state="held"] > span:first-child {
+  background: var(--n-ok);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--n-ok) 76%, transparent);
+}
+
+.rd-encoder-product-shared {
+  margin-top: var(--sp-2) !important;
+  padding: var(--sp-2);
+  border-left: 2px solid var(--n-warn);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--warn-dim);
+  color: color-mix(in srgb, var(--n-warn) 76%, var(--n-text));
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-product-next {
+  margin-top: var(--sp-3) !important;
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-product-inspector.is-unknown > p:not(.rd-encoder-product-inspector-eyebrow) {
+  margin-top: var(--sp-2);
+  color: var(--n-text-2);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-product-signal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-top: var(--sp-3);
+}
+
+.rd-encoder-product-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.rd-encoder-profile[data-presentation="product"]
+  .rd-encoder-product-actions > :is(.rd-encoder-profile-read, .rd-encoder-profile-observe) {
+  grid-template-columns: 1fr;
+  gap: var(--sp-2);
+  align-content: start;
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--n-panel-2) 84%, transparent);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-read-controls {
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--sp-2);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-observe-controls {
+  gap: var(--sp-1);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-observe-actions {
+  gap: var(--sp-1);
+}
+
+.rd-encoder-profile[data-presentation="product"]
+  :is(.rd-encoder-profile-read, .rd-encoder-profile-observe) button {
+  min-height: 34px;
+}
+
+.rd-encoder-profile[data-presentation="product"]
+  :is(.rd-encoder-profile-read-status, .rd-encoder-profile-observe-status) {
+  min-width: 0;
+  margin-top: 0;
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-observe-signals > div {
+  grid-template-columns: 74px minmax(0, 1fr);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-manual {
+  grid-template-columns: minmax(0, 1.2fr) minmax(250px, 0.9fr) max-content;
+  background: color-mix(in srgb, var(--n-warn) 6%, var(--n-panel-2));
+}
+
+.rd-encoder-product-details {
+  overflow: clip;
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--n-panel-2) 82%, transparent);
+}
+
+.rd-encoder-product-details > summary,
+.rd-encoder-product-technical > summary {
+  min-height: 38px;
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--n-text-2);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.rd-encoder-product-details > summary:hover,
+.rd-encoder-product-details > summary:focus-visible,
+.rd-encoder-product-technical > summary:hover,
+.rd-encoder-product-technical > summary:focus-visible {
+  color: var(--n-accent-2);
+}
+
+.rd-encoder-product-details > summary:focus-visible,
+.rd-encoder-product-technical > summary:focus-visible {
+  outline: 2px solid var(--n-accent);
+  outline-offset: -3px;
+}
+
+.rd-encoder-product-details-body {
+  display: grid;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-3) var(--sp-3);
+  border-top: 1px solid var(--n-line);
+}
+
+.rd-encoder-product-device-facts {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0 0;
+}
+
+.rd-encoder-product-device-facts > div {
+  min-width: 0;
+  padding: 0 var(--sp-2);
+  border-left: 2px solid color-mix(in srgb, var(--n-accent) 44%, var(--n-line));
+}
+
+.rd-encoder-product-device-facts dt {
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-mono);
+  text-transform: uppercase;
+}
+
+.rd-encoder-product-device-facts dd {
+  margin: var(--sp-1) 0 0;
+  overflow: hidden;
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+  overflow-wrap: anywhere;
+}
+
+.rd-encoder-product-technical {
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--n-bg) 46%, transparent);
+}
+
+.rd-encoder-product-technical > :not(summary) {
+  margin-right: var(--sp-3);
+  margin-left: var(--sp-3);
+}
+
+.rd-encoder-product-technical > .rd-encoder-profile-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin-top: 0;
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--n-line);
+}
+
+.rd-encoder-product-technical > .rd-encoder-profile-roster {
+  margin-top: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+
+.rd-encoder-product-warnings {
+  margin-top: var(--sp-3);
+  margin-bottom: 0;
+  padding: var(--sp-2) var(--sp-3) var(--sp-2) calc(var(--sp-5) + var(--sp-1));
+  border-left: 2px solid var(--n-warn);
+  background: var(--warn-dim);
+  color: color-mix(in srgb, var(--n-warn) 72%, var(--n-text));
+  font-size: var(--fs-micro);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-foot {
+  padding: 0 var(--sp-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes rd-encoder-held-pulse {
+    50% {
+      filter: drop-shadow(0 0 12px color-mix(in srgb, var(--n-ok) 88%, transparent));
+    }
+  }
+
+  .rd-encoder-product-terminal.is-held {
+    animation: rd-encoder-held-pulse 820ms ease-in-out infinite;
+  }
+}
+
+/* At overview distance the object remains recognizable as this encoder.
+   Controls and diagnostics disappear; the detected model and physical board
+   are the useful landmarks for navigation. */
+.rd [data-canvas-zoom-tier="overview"]
+  .rd-encoder-profile[data-presentation="product"]
+  :is(
+    .rd-encoder-profile-subtitle,
+    .rd-encoder-profile-safety,
+    .rd-encoder-product-status,
+    .rd-encoder-product-inspector,
+    .rd-encoder-product-actions,
+    .rd-encoder-product-details,
+    .rd-encoder-profile-candidates,
+    .rd-encoder-profile-manual,
+    .rd-encoder-product-figure figcaption
+  ) {
+  display: none;
+}
+
+.rd [data-canvas-zoom-tier="overview"]
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host,
+.rd [data-canvas-zoom-tier="overview"]
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-product-dynamic,
+.rd [data-canvas-zoom-tier="overview"]
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-product-work,
+.rd [data-canvas-zoom-tier="overview"]
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-product-figure {
+  height: 100%;
+  min-height: 0;
+}
+
+.rd [data-canvas-zoom-tier="overview"]
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-product-work {
+  grid-template-columns: 1fr;
+}
+
+.rd [data-canvas-zoom-tier="overview"]
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-product-svg {
+  height: 100%;
+  max-height: none;
+}
+
+.rd [data-canvas-zoom-tier="structure"]
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-product-details-body {
+  display: none;
+}
+
+@container rd-encoder-workbench (width < 780px) {
+  .rd-encoder-device-shell > .rd-devcard {
+    grid-template-columns: max-content minmax(0, 1fr);
+  }
+
+  .rd-encoder-device-shell > .rd-devcard :is(.rd-devcard-staged, .rd-stageform) {
+    display: none;
+  }
+
+  .rd-encoder-product-work,
+  .rd-encoder-product-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .rd-encoder-product-inspector {
+    max-height: none;
+  }
+
+  .rd-encoder-product-device-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-manual {
+    grid-template-columns: 1fr;
+  }
+}
+
+@container rd-encoder-workbench (width < 560px) {
+  .rd-encoder-device-shell > .rd-devcard .rd-devcard-badge,
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-safety,
+  .rd-encoder-product-pill:nth-child(n + 3) {
+    display: none;
+  }
+
+  .rd-encoder-device-shell > .rd-devcard {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-head {
+    align-items: flex-start;
+  }
+
+  .rd-encoder-product-device-facts,
+  .rd-encoder-product-technical > .rd-encoder-profile-facts,
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-read-controls,
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-observe-signals > div {
+    grid-template-columns: 1fr;
+  }
+
+  .rd-encoder-product-svg {
+    min-height: 190px;
+  }
+}
+
+@media (pointer: coarse) {
+  .rd-encoder-device-shell > .rd-devcard .rd-stagebtn,
+  .rd-encoder-profile[data-presentation="product"]
+    :is(.rd-encoder-profile-read, .rd-encoder-profile-observe) button,
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-product-details > summary,
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-product-technical > summary {
+    min-height: 44px;
+  }
+
+  .rd-encoder-product-terminal-hit {
+    stroke-width: 5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rd-encoder-product-terminal,
+  .rd-encoder-product-terminal-body,
+  .rd-encoder-product-terminal.is-held {
+    transition: none;
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .rd-encoder-device-shell > .rd-devcard,
+  .rd-encoder-profile[data-presentation="product"],
+  .rd-encoder-product-figure,
+  .rd-encoder-product-inspector,
+  .rd-encoder-product-details,
+  .rd-encoder-product-technical,
+  .rd-encoder-product-keycap {
+    border-color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+
+  .rd-encoder-product-board,
+  .rd-encoder-product-board-inset,
+  .rd-encoder-product-usb rect,
+  .rd-encoder-product-mount circle,
+  .rd-encoder-product-chip rect,
+  .rd-encoder-product-components :is(rect, circle),
+  .rd-encoder-product-declared rect,
+  .rd-encoder-product-signal rect,
+  .rd-encoder-product-terminal-body,
+  .rd-encoder-product-terminal-screw {
+    fill: Canvas;
+    stroke: CanvasText;
+    filter: none;
+  }
+
+  .rd-encoder-product-svg text,
+  .rd-encoder-product-terminal-slot,
+  .rd-encoder-product-traces path {
+    fill: CanvasText;
+    stroke: CanvasText;
+  }
+
+  .rd-encoder-product-terminal:is(.is-selected, .is-seen, .is-held)
+    .rd-encoder-product-terminal-body,
+  .rd-encoder-product-terminal:focus-visible .rd-encoder-product-terminal-hit {
+    fill: Highlight;
+    stroke: Highlight;
+  }
+
+  .rd-encoder-product-terminal:is(.is-selected, .is-seen, .is-held)
+    :is(.rd-encoder-product-terminal-label, .rd-encoder-product-terminal-emission) {
+    fill: HighlightText;
+  }
+
+  .rd-encoder-product-terminal,
+  .rd-encoder-product-svg {
+    filter: none;
+  }
+}
+
 .rd-menu-sep {
   height: 1px;
   margin: 5px 4px;
@@ -19315,6 +21569,406 @@ a.nm-link {
 
 .rd-devmodal button[aria-current="true"] .rd-dev-stagedchip {
   display: inline-block;
+}
+
+/* ── The controller picker: the device modal's twin, its own class family ──
+   (additive on purpose — no shared selectors to fight the canvas lane over) */
+.rd-ctrlmodal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+}
+
+.rd-ctrlmodal[hidden] {
+  display: none;
+}
+
+.rd-ctrlmodal-back {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--n-bg) 62%, transparent);
+  backdrop-filter: blur(3px);
+}
+
+.rd-ctrlmodal-panel {
+  position: relative;
+  width: min(880px, 92vw);
+  max-height: 86vh;
+  overflow-y: auto;
+  padding: 18px 22px 22px;
+  border: 1px solid var(--n-line);
+  border-radius: 16px;
+  background: var(--n-panel);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+  outline: none;
+}
+
+.rd-ctrlmodal-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.rd-ctrlmodal-head .n-kick {
+  order: 0;
+}
+
+.rd-ctrl-counts {
+  color: var(--n-text-2);
+}
+
+.rd-ctrladd-form button.n-dev {
+  width: 100%;
+  background: transparent;
+  color: var(--n-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.rd-ctrladd-form button.n-dev:hover,
+.rd-ctrladd-form button.n-dev:focus-visible {
+  border-color: var(--n-accent-line);
+}
+
+.rd-ctrlmodal .n-dev-name,
+.rd-ctrlmodal .n-dev-meta {
+  display: block;
+}
+
+.rd-ctrl-note:empty {
+  display: none;
+}
+
+/* The daemon cannot offer this persona right now: presentation only — the
+   server refuses the write regardless. */
+.rd-ctrladd-form[data-usable="false"] button.n-dev {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ── A staged controller on the workbench: the slot card ─────────────────── */
+.rd-ctrl-node .rd-ctrlcard {
+  padding: 10px 12px;
+}
+
+.rd-ctrlcard-slot {
+  display: inline-block;
+  margin: 0 0 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--n-accent) 22%, transparent);
+  color: var(--n-accent-2);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+.rd-ctrlcard-badge {
+  display: inline-block;
+  margin: 0 0 6px 6px;
+  padding: 1px 8px;
+  border: 1px solid var(--n-accent-line);
+  border-radius: 999px;
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--n-accent-2);
+}
+
+.rd-ctrlcard-badge[data-persona="playstation"] {
+  border-color: color-mix(in srgb, var(--n-warn, var(--n-accent)) 45%, transparent);
+}
+
+.rd-ctrlcard-name {
+  margin: 0 0 4px;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  color: var(--n-text);
+}
+
+.rd-ctrlcard-meta {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+  color: var(--n-text-2);
+}
+
+.rd-ctrlcard-verbs {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.rd-ctrlverb-form {
+  margin: 0;
+}
+
+.rd-ctrlverb {
+  padding: 3px 10px;
+  border: 1px solid var(--n-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--n-text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rd-ctrlverb:hover:not(:disabled),
+.rd-ctrlverb:focus-visible {
+  border-color: var(--n-accent-line);
+  color: var(--n-accent-2);
+}
+
+.rd-ctrlverb:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.rd-ctrlverb-danger:hover:not(:disabled),
+.rd-ctrlverb-danger:focus-visible {
+  border-color: color-mix(in srgb, var(--n-danger) 55%, transparent);
+  color: var(--n-danger);
+}
+
+/* Direct player assignment — a select, not spatial arrows: "make this
+   Player 2" is one gesture, and "No player" parks the card. */
+.rd-ctrlplayer {
+  padding: 3px 8px;
+  border: 1px solid var(--n-line);
+  border-radius: 8px;
+  background: var(--n-panel);
+  color: var(--n-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rd-ctrlplayer:hover,
+.rd-ctrlplayer:focus-visible {
+  border-color: var(--n-accent-line);
+}
+
+.rd-ctrlcard-verbs {
+  align-items: center;
+}
+
+.rd-ctrlcard-verbs > form:last-child,
+.rd-ctrlcard-verbs > button:last-child {
+  margin-left: auto;
+}
+
+/* The REAL body drawing — a CLONE of the shared inline master is the
+   widget's face (the nocturne widget's mechanism). The clone is an inline
+   <svg> with its source viewBox, so its box is intrinsic — no async load,
+   no reserved-ratio guard needed. Fully interactive like 4460's widgets:
+   every control zone carries data-fn, and clicking one jumps the inspector
+   to that binding row (pointer-events:none here was the bug that made the
+   Xbox art dead while the premium hooks' own pointer rules leaked through). */
+.rd-ctrlcard-artwrap {
+  margin: 6px 0 4px;
+  user-select: none;
+}
+
+.rd-ctrlcard-artwrap svg [data-fn] {
+  cursor: pointer;
+}
+
+.rd-ctrlcard-artwrap svg.rd-ctrlcard-art {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.rd-ctrlcard-noart {
+  margin: 6px 0 4px;
+  font-style: italic;
+}
+
+.rd-ctrlcard-refusal {
+  font-style: italic;
+  color: var(--n-warn, #d0a458);
+}
+
+/* The removal-undo chip — the nocturne rack chip's contract, floated under
+   this page's topbar beside the flash (it must show with no inspector
+   open: the card it undoes is gone). */
+form.rd-undochip {
+  position: absolute;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 14px;
+  border: 1px solid color-mix(in srgb, var(--n-accent) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--n-panel) 88%, var(--n-accent));
+  font-size: var(--fs-small);
+}
+
+form.rd-undochip.none {
+  display: none;
+}
+
+form.rd-undochip .n-undo-btn {
+  border: 1px solid color-mix(in srgb, var(--n-accent) 60%, transparent);
+  border-radius: 999px;
+  padding: 3px 12px;
+  background: color-mix(in srgb, var(--n-accent) 24%, transparent);
+  color: var(--n-text);
+  cursor: pointer;
+}
+
+/* The controller panel inside the inspector: nocturne's right-pane
+   sections, compacted for the 328px overlay. Wide rows scroll inside the
+   panel body, never the page. */
+.rd-inspector .rd-insp-ctrlmeta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0 2px;
+}
+
+.rd-inspector .n-socdform {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.rd-inspector .n-socdform.none {
+  display: none;
+}
+
+.rd-inspector .rd-insp-ctrlverbs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rd-inspector .n-bindgroups {
+  margin-top: 8px;
+}
+
+.rd-inspector .n-bindgroups.none {
+  display: none;
+}
+
+.rd-inspector .n-bind-sum {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+/* The Controls|Keys pair and the Keys view, in the overlay. The shared
+   sheet keys `.n-krows` visibility to nocturne's right-pane mode class;
+   here the ACTIVE TAB decides what is mounted, so the wrapper shows
+   unconditionally. */
+.rd-inspector .rd-insp-vseg {
+  margin: 10px 0 4px;
+}
+
+.rd-inspector .rd-insp-krows {
+  display: block;
+}
+
+.rd-inspector .rd-insp-krows .n-krow {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.rd-inspector .n-akeysec.none {
+  display: none;
+}
+
+/* The board picker on the keyboard widget's head — a small details
+   popover of the served roster (the nocturne picker rows re-homed). */
+.rd-boardpick {
+  position: relative;
+}
+
+.rd-boardpick-sum {
+  list-style: none;
+  cursor: pointer;
+}
+
+.rd-boardpick-sum::-webkit-details-marker {
+  display: none;
+}
+
+.rd-boardpick-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  min-width: 300px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid var(--n-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--n-panel) 97%, transparent);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.35);
+}
+
+/* The locate pulse: a pad-art zone or a Keys-row jump named this row. */
+@keyframes rd-row-pulse {
+  0% {
+    outline-color: color-mix(in srgb, var(--n-accent) 90%, transparent);
+  }
+  100% {
+    outline-color: transparent;
+  }
+}
+
+.rd-row-pulse {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  animation: rd-row-pulse 1.4s ease-out;
+}
+
+/* The art credit, a quiet overlay in the canvas's corner — MIT terms travel
+   with the silhouettes onto every page that draws them. Absolutely
+   positioned so it can never widen the layout (a topbar nowrap span
+   overflowed narrow windows and the scrollbar's stolen height read as a
+   camera translation). */
+.rd-artcredit {
+  position: absolute;
+  right: 12px;
+  bottom: 34px;
+  z-index: 5;
+  font-size: var(--fs-micro);
+  color: var(--n-text-3);
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.rd-artcredit a {
+  color: var(--n-text-3);
+}
+
+/* A parked ghost: on the canvas, off the draft. */
+.rd-ctrlcard-ghost {
+  opacity: 0.78;
+}
+
+.rd-ctrlcard-noplayer {
+  background: color-mix(in srgb, var(--n-text-3) 24%, transparent);
+  color: var(--n-text-2);
+}
+
+/* Semantic tiers on the slot cards, the workbench pattern: chips always;
+   the meta from structure in; the verbs only at editing distance. */
+.rd [data-canvas-zoom-tier="overview"] .rd-ctrlcard-meta,
+.rd [data-canvas-zoom-tier="overview"] .rd-ctrlcard-verbs,
+.rd [data-canvas-zoom-tier="structure"] .rd-ctrlcard-verbs {
+  display: none;
 }
 
 /* The palette landing pulse — the eye needs to find what the camera flew to. */

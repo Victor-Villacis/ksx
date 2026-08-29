@@ -479,9 +479,13 @@ fn board_row(board: &Board<'_>) -> ksx_api::BoardRow {
         selector: None,
         alias_hint: String::new(),
         family_label: known.map(|(family, _)| family.label.to_owned()),
+        family_id: known.map(|(family, _)| family.id.to_owned()),
         firmware_label: known
             .and_then(|(_, profile)| profile)
             .map(|profile| profile.firmware_label.to_owned()),
+        protocol_profile: known
+            .and_then(|(_, profile)| profile)
+            .map(|profile| profile.protocol_profile.to_owned()),
         profile_state: profile_state.to_owned(),
         profile_detail,
         terminal_count: known
@@ -1370,6 +1374,8 @@ mod tests {
             "the board fell through to the display table instead of the catalog"
         );
         assert_eq!(board.family_label.as_deref(), Some("Ultimarc Mini-PAC"));
+        assert_eq!(board.family_id.as_deref(), Some("ultimarc-minipac"));
+        assert_eq!(board.protocol_profile, None);
         // Recognised, and deliberately not readable: only one measured profile
         // exists and it is not this model.
         assert_eq!(board.profile_state, "unprofiled-release");
@@ -1405,7 +1411,9 @@ mod tests {
             .expect("the I-PAC board");
         assert_eq!(ipac.profile_state, "profiled");
         assert_eq!(ipac.family_label.as_deref(), Some("Ultimarc I-PAC 4X"));
+        assert_eq!(ipac.family_id.as_deref(), Some("ultimarc-ipac4"));
         assert_eq!(ipac.firmware_label.as_deref(), Some("1.56"));
+        assert_eq!(ipac.protocol_profile.as_deref(), Some("ipac4-pac256-v1"));
         assert_eq!(ipac.terminal_count, Some(56));
         assert!(ipac.chart_readable);
 
@@ -1417,6 +1425,8 @@ mod tests {
             .expect("a non-encoder board");
         assert_eq!(other.profile_state, "unrecognised");
         assert_eq!(other.family_label, None);
+        assert_eq!(other.family_id, None);
+        assert_eq!(other.protocol_profile, None);
         assert!(!other.chart_readable);
     }
 

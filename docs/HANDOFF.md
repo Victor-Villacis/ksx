@@ -390,6 +390,44 @@ a clean rebuild leaves `git status` clean — if it does not, something really
 changed. A hand-resolved manifest yields a page whose HTML and JS disagree. No
 Rust test sees that seam; the CI Playwright parity guard does.
 
+**Parallel redesign feature branches do not own generated assets.** A
+`codex/redesign/*` or `claude/redesign/*` worktree commits authoring source,
+tests, and documentation only. It may run the guarded asset build to preview or
+test its source, but it must restore every generated output before handoff. The
+handoff is clean only when this comparison prints nothing:
+
+```powershell
+git diff --name-status redesign-product...HEAD -- `
+  crates/ksx-studio/assets `
+  studio-ui/tokens/zones.json `
+  studio-ui/src/tokens.gen.css `
+  studio-ui/src/zones.gen.ts `
+  crates/ksx-studio/src/theme_tokens.rs
+```
+
+After merging all accepted source commits into `redesign-product`, the
+integrator—and only the integrator—runs:
+
+```powershell
+tools/studio-env/build-assets.ps1
+git add -- `
+  crates/ksx-studio/assets `
+  studio-ui/tokens/zones.json `
+  studio-ui/src/tokens.gen.css `
+  studio-ui/src/zones.gen.ts `
+  crates/ksx-studio/src/theme_tokens.rs
+git commit -m "chore(studio): regenerate integrated redesign assets"
+```
+
+That regeneration commit is part of the integration, not a conflict resolution
+and not optional release housekeeping. Push `redesign-product` only after it.
+Both the `test` and `studio-browser` CI jobs rebuild and byte-diff this complete
+output set; `release-binary` depends on both jobs. Therefore an integration
+commit with stale, partial, or extra UI assets cannot enter the official
+packaging job. A source-only feature branch can legitimately fail those two
+asset-reproduction jobs until the integrator performs this step; it is not a
+packaging candidate.
+
 **A failed asset build deletes 24 tracked files, and that is not a broken
 tree.** `studio-ui/build.mjs` `rmSync`s `crates/ksx-studio/assets/` *before* it
 emits anything, so an interrupted or crashed generator leaves the directory

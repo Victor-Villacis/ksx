@@ -1877,10 +1877,12 @@ impl ksx_api::MachineSource for NoMachine {
                     // never goes through the roster.
                     chart_readable: true,
                     family_label: Some("Ultimarc I-PAC 4".into()),
+                    family_id: Some("ultimarc-ipac4".into()),
                     // The BARE version, as device_scan serves it: the studio
                     // renderer prepends the word "firmware" itself, so prose
                     // here rendered "firmware firmware 1.56" on /nocturne.
                     firmware_label: Some("1.56".into()),
+                    protocol_profile: Some("ipac4-pac256-v1".into()),
                     profile_state: "profiled".into(),
                     profile_detail:
                         "ksx has a measured protocol profile for this firmware and can read the \

@@ -168,7 +168,7 @@ have to re-implement.** Violating it is how Studio gets forked.
 | Session status + live health | tray tooltip (`DaemonState::tooltip`: `RunState` + `LiveHealth` while running, `LastSession` after); stdin `status` → `DaemonCommand::Status`; pipe `status` / `ksx session status [--json]` (state + game + profiles + last/live health); `ksx run --latency` for the rolling latency summary | M9: poll the same `SharedState` snapshot (`DaemonState`) the tray polls — small, cloneable, no borrows of anything live. **M10: Studio's session panel renders the pipe `status` response (live)** | exists — pipe + CLI + Studio live |
 | Reload config | tray "Reload config" / stdin `reload` / pipe `reload` / `ksx session reload` → `DaemonCommand::Reload` — a clean stop and a clean start from disk. A mapper SAVE takes the narrower `DaemonCommand::ApplyBindings` instead: binding-only edits hot-swap into the live engine with the pads left plugged, structural changes fall back to the same bounce (see "the binding hot-swap") | M9: `DaemonCommand::Reload`. **M10: Studio's Reload button POSTs `/config/reload` → pipe `reload` (live)** | exists — pipe + CLI + Studio live |
 | List / identify devices | `ksx devices [--json]` (both backends, read-only); `ksx winusb status [--json]` for the USB/claim view | M9: same enumeration in-process — strictly read-only, safe mid-session. M10: api devices | exists |
-| **Measure simultaneous keyboard / encoder host signals** | Typed pipe `input-test-start` / `input-test-poll` / generation-stamped `input-test-cancel`; CLI: `ksx input-test start SELECTOR [--duration-ms 1000..=60000]`, then `poll`, and `cancel --generation N` | **Studio is primary**: keyboard Workbench / Control Surface Builder → `/api/input-test*`. Exact selected selector, bounded wall-clock observation, no mapping or hardware mutation. Reports host-visible `held`, `seen`, `peak`, `events`, `dropped` and explicitly unavailable rollover visibility; duplicate terminals emitting one key cannot be distinguished | exists — pipe + CLI + Studio |
+| **Measure simultaneous keyboard / encoder host signals** | Typed pipe `input-test-start` / `input-test-poll` / generation-stamped `input-test-cancel`; server-internal `input-test-release-fence` gives a terminal observer one bounded teardown handoff before another hardware transaction; CLI: `ksx input-test start SELECTOR [--duration-ms 1000..=60000]`, then `poll`, and `cancel --generation N` | **Studio is primary**: keyboard Workbench / Control Surface Builder → `/api/input-test*`. Exact selected selector, bounded wall-clock observation, no mapping or hardware mutation. Reports host-visible `held`, `seen`, `peak`, `events`, `dropped` and explicitly unavailable rollover visibility; duplicate terminals emitting one key cannot be distinguished | exists — pipe + CLI + Studio |
 | **First-contact setup** | `ksx setup [--slot N] [--preset NAME] [--profile TITLE] [--step-secs N] [--dry-run] [--json]` — the wizard (`ksx-backend/src/setup.rs`): identify the panel by PRESS (Raw Input, the same observer the pipe's `learn-key` uses), then sequential position-named prompts (`SOUTH`, not `A`), auto-advance, inline ALREADY TAKEN, a completeness audit (warns when the panel can reach neither START nor BACK), and a TRANSACTIONAL commit — nothing is written until the review screen is confirmed, and the slot wiring (`config.toml` or a `games.toml` profile) is a separate question it ASKS. Chains P1→P4 in one run. Skipping is "press nothing": each prompt runs a visible countdown, two silent prompts end the run | M9: the same `Wizard` state machine behind a modal — it is deliberately pure (`Input` in, `Reaction` out), so the UI supplies the observer and the printer and decides nothing. M10: needs the live socket to carry presses; the audit and the transaction are already shared | exists — CLI |
 | **Preset templates** | `ksx preset list [--templates] [--json]`; `ksx preset new <NAME> --from-template <ID> [--player N] [--force] [--dry-run] [--json]`. Templates ship in code (`ksx-core/src/templates.rs`), beside the `default`/`empty` built-ins they sit with: `arcade-6button` (I-PAC/MAME six-button, P1–P2 blocks), `arcade-4way` (MAME four-player chart, P1–P4), `keyboard-wasd`, `keyboard-2p` (two players on ONE keyboard — WASD against the arrows, P1–P2 blocks), plus `default`/`empty` as named seeds. Instantiating writes an ORDINARY preset (never protected), refuses to clobber without `--force`, and backs up first when it does | M9/M10: a "new preset from…" picker over the same registry — the list and the instantiation are one call each and carry the panel notes with them | exists — CLI |
 | Pad test | `ksx pads --count N --persona xbox360\|playstation [--json]` (plug, test pattern, unplug) | M9: same routine in-process, only while emulation is stopped (test pads compete for the four XInput slots). M10: api | exists |
@@ -355,6 +355,8 @@ The M7 mapper slice adds four verbs on the same channel:
    "rollover_visibility":"unavailable","detail":"KSX observed a peak …"}
 → {"verb":"input-test-cancel","generation":7}
 ← {"ok":true,"state":"timeout", …}
+→ {"verb":"input-test-release-fence"}   (server handoff, not a CLI/user verb)
+← {"ok":true,"message":"the simultaneous-input observer is released"}
 ```
 
 ### Whole-preset writes: three restore destinations, plus clear-all
@@ -754,6 +756,20 @@ therefore carry `ok:true`; it still means the observer failed. The CLI prints
 its `error` and exits 1, while `timeout` and `cancelled` are successful terminal
 snapshots. `ksx input-test start|poll|cancel --json` prints the daemon's exact
 one-object response, so scripts and Studio consume the same field set.
+
+A terminal snapshot is intentionally visible before the observer worker has
+necessarily destroyed its Raw Input window, panel tap, or temporary claim.
+Before Studio opens an encoder's exclusive configuration collection, its
+server sends `input-test-release-fence`: a listening generation refuses
+immediately, while a terminal generation gets only the bounded 250 ms handoff
+budget already used by daemon hardware transitions. An over-budget teardown
+refuses the chart read without opening the encoder. This fence is a
+server-to-daemon coordination verb, not a new user or CLI workflow. A Studio
+feature preview beside an older installed daemon recognizes only that daemon's
+exact `unknown verb 'input-test-release-fence'` response and falls back to the
+chart transaction's existing machine-wide lease; every other fence refusal
+remains closed. This keeps parallel redesign previews compatible without
+weakening the matched-build handoff or replacing the lease safety boundary.
 
 Action verbs poll the snapshot up to 5 s for the outcome; an unsettled command
 answers `ok:true` with a "requested — check `ksx session status`" message

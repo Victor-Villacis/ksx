@@ -2479,12 +2479,23 @@ pub struct BoardRow {
     /// board can be called by its real name instead of "USB Input Device".
     #[serde(default)]
     pub family_label: Option<String>,
+    /// Stable backend catalog id for the exact family match behind
+    /// [`Self::family_label`]. Surfaces use this identity to select presentation
+    /// profiles; they never recover it from a display name or USB ids.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_id: Option<String>,
     /// The release this board reports, spelled the way its measured profile
     /// spells it. `None` unless an exact profile matched: a family alone says
     /// nothing about firmware, and guessing one from `bcd_device` would be
     /// inventing a version the board never claimed.
     #[serde(default)]
     pub firmware_label: Option<String>,
+    /// Versioned backend protocol/profile id for the exact measured release.
+    /// Absent for recognized-but-unprofiled and unrecognized boards. This is a
+    /// presentation join key, not permission to perform a report transaction;
+    /// [`Self::chart_readable`] remains the independently served capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_profile: Option<String>,
     /// `profiled` | `unprofiled-release` | `unrecognised`.
     ///
     /// The three tiers are genuinely different advice, which is why they are
@@ -4810,6 +4821,8 @@ mod tests {
             .remove("role");
         let decoded: BoardRow = serde_json::from_value(old_row).unwrap();
         assert_eq!(decoded.role, BoardRole::Keyboard);
+        assert_eq!(decoded.family_id, None);
+        assert_eq!(decoded.protocol_profile, None);
     }
 
     /// **A surface picks a board by SELECTOR, and it never derives one.**

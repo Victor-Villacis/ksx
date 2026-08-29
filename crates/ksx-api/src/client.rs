@@ -299,6 +299,31 @@ impl<S: VerbSink> ControlSource for Client<S> {
         self.input_test(Request::InputTestCancel { generation })
     }
 
+    fn input_test_release_fence(&self) -> Result<(), Refusal> {
+        match self.action(Request::InputTestReleaseFence) {
+            Ok(_) => Ok(()),
+            // The observer is daemon-owned. A definitively absent control
+            // pipe means there is no daemon observer to release, and machine
+            // reads intentionally remain available without a daemon.
+            Err(refusal) if refusal.is_no_channel() => Ok(()),
+            // Studio feature previews can legitimately run beside the stable
+            // installed daemon. Older daemons do not know this coordination
+            // verb; retain the pre-fence behavior in that one exact case and
+            // let the following hardware transaction's machine-wide lease be
+            // the safety backstop. Matched daemons still provide the stronger
+            // bounded teardown handoff above.
+            Err(refusal)
+                if refusal.code == codes::REFUSED
+                    && refusal
+                        .message
+                        .starts_with("unknown verb 'input-test-release-fence'") =>
+            {
+                Ok(())
+            }
+            Err(refusal) => Err(refusal),
+        }
+    }
+
     fn bind(&self, request: &BindRequest) -> BindOutcome {
         self.map(Request::Map(request.to_request()))
     }
@@ -563,6 +588,55 @@ mod tests {
         assert_eq!(view.held, ["A", "S"]);
         assert_eq!(view.peak, 3);
         assert_eq!(client.sink().last(), Request::InputTestStart(spec));
+    }
+
+    #[test]
+    fn input_test_release_fence_is_a_typed_refusable_action() {
+        let client = Client::new(Fake::answering(Response::Action(crate::ActionResponse {
+            ok: true,
+            message: Some("the simultaneous-input observer is released".into()),
+            ..crate::ActionResponse::default()
+        })));
+
+        client
+            .input_test_release_fence()
+            .expect("released observer");
+        assert_eq!(client.sink().last(), Request::InputTestReleaseFence);
+
+        let absent = Client::new(Fake::failing(Refusal::new(
+            codes::NO_CHANNEL,
+            "no daemon owns an observer",
+        )));
+        absent
+            .input_test_release_fence()
+            .expect("no daemon means no daemon-owned observer");
+        assert_eq!(absent.sink().last(), Request::InputTestReleaseFence);
+
+        let older_daemon = Client::new(Fake::answering(Response::Action(
+            crate::ActionResponse {
+                ok: false,
+                error: Some(
+                    "unknown verb 'input-test-release-fence' (input-test-start | input-test-poll | input-test-cancel)"
+                        .into(),
+                ),
+                ..crate::ActionResponse::default()
+            },
+        )));
+        older_daemon
+            .input_test_release_fence()
+            .expect("an older daemon falls back to the hardware lease");
+        assert_eq!(older_daemon.sink().last(), Request::InputTestReleaseFence);
+
+        let busy = Client::new(Fake::answering(Response::Action(crate::ActionResponse {
+            ok: false,
+            code: Some("observer-busy".into()),
+            error: Some("the observer is still releasing".into()),
+            ..crate::ActionResponse::default()
+        })));
+        let refusal = busy
+            .input_test_release_fence()
+            .expect_err("a matched daemon's busy fence must stay closed");
+        assert_eq!(refusal.code, "observer-busy");
     }
 
     #[test]

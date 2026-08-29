@@ -451,6 +451,9 @@ mod tests {
                     looks_like_a_keyboard: true,
                     chart_readable: true,
                     family_label: Some("Ultimarc I-PAC 4".into()),
+                    family_id: Some("ultimarc-ipac4".into()),
+                    protocol_profile: Some("ipac4-pac256-v1".into()),
+                    profile_state: "profiled".into(),
                     terminal_count: Some(56),
                     ..Default::default()
                 },
@@ -713,6 +716,16 @@ mod tests {
         );
         assert_eq!(devices.encoders[0].name, "Ultimarc I-PAC 4");
         assert_eq!(devices.encoders[0].role, "panel-encoder");
+        assert_eq!(
+            devices.encoders[0].family_id.as_deref(),
+            Some("ultimarc-ipac4")
+        );
+        assert_eq!(
+            devices.encoders[0].protocol_profile.as_deref(),
+            Some("ipac4-pac256-v1")
+        );
+        assert_eq!(devices.encoders[0].profile_state, "profiled");
+        assert_eq!(devices.encoders[0].terminal_count, Some(56));
         assert!(
             devices.encoders[0].meta.contains("chart not read yet"),
             "an unread chart must not be called ready: {}",

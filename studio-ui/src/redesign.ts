@@ -39,11 +39,39 @@ function embeddedPayload<T>(): T | null {
   }
 }
 
-/** One fresh copy of the served payload — the fetch-submit layer's repaint.
- *  No interval poller on this page yet: the canvas is client state, and the
- *  seam's fields change on human actions, so a refresh after each verb is
- *  enough until a transplant brings live data. */
-async function refresh(): Promise<boolean> {
+/** Every payload read crosses one coordinator. A foreground repaint supersedes
+ *  an older read; a background tick never interrupts a foreground one. The
+ *  generation check remains after AbortController because an already-resolved
+ *  response can still queue its continuation before the abort is observed. */
+type RefreshKind = "foreground" | "poll";
+interface ActiveRefresh {
+  generation: number;
+  kind: RefreshKind;
+  controller: AbortController;
+  promise: Promise<boolean>;
+}
+
+let refreshGeneration = 0;
+let activeRefresh: ActiveRefresh | null = null;
+let newestSettledRefresh = { generation: 0, result: false };
+
+function newerRefresh(generation: number): Promise<boolean> | null {
+  const active = activeRefresh;
+  return active && active.generation > generation ? active.promise : null;
+}
+
+async function successorRefreshResult(generation: number): Promise<boolean> {
+  const active = newerRefresh(generation);
+  if (active) return active;
+  return newestSettledRefresh.generation > generation
+    ? newestSettledRefresh.result
+    : false;
+}
+
+async function performRefresh(
+  generation: number,
+  controller: AbortController,
+): Promise<boolean> {
   try {
     // The selected controller and the open macro ride the URL (the
     // nocturne `?slot=&macro=` doors), so a refresh serves what the page
@@ -57,14 +85,52 @@ async function refresh(): Promise<boolean> {
     const query = params.toString();
     const res = await fetch(query ? `/api/redesign?${query}` : "/api/redesign", {
       headers: { accept: "application/json" },
+      signal: controller.signal,
     });
-    if (!res.ok) return false;
-    applyRedesign((await res.json()) as RedesignPayload);
+    if (!res.ok) return successorRefreshResult(generation);
+    const payload = (await res.json()) as RedesignPayload;
+    if (generation !== refreshGeneration) {
+      return successorRefreshResult(generation);
+    }
+    applyRedesign(payload);
     return true;
   } catch {
-    // The flash already said what failed; the page keeps its last truth.
-    return false;
+    // A superseded caller follows the newer repaint instead of reporting a
+    // false failure while that repaint is still in flight. A genuinely failed
+    // latest request keeps the page's last truth.
+    return successorRefreshResult(generation);
+  } finally {
+    if (activeRefresh?.generation === generation) activeRefresh = null;
   }
+}
+
+function refresh(kind: RefreshKind = "foreground"): Promise<boolean> {
+  // A tick is opportunistic. It never aborts or queues behind a user-driven
+  // repaint; the next two-second tick will carry the same external truth.
+  if (kind === "poll" && activeRefresh !== null) return Promise.resolve(false);
+
+  const generation = ++refreshGeneration;
+  activeRefresh?.controller.abort();
+  const controller = new AbortController();
+  const promise = performRefresh(generation, controller).then((result) => {
+    if (generation > newestSettledRefresh.generation) {
+      newestSettledRefresh = { generation, result };
+    }
+    return result;
+  });
+  activeRefresh = { generation, kind, controller, promise };
+  return promise;
+}
+
+/** Beginning a mutation retires a poll that may have sampled the pre-write
+ *  draft. Advancing the generation is the backstop when the network stack has
+ *  already completed the response and abort can no longer recall it. */
+function cancelBackgroundRefresh(): void {
+  const active = activeRefresh;
+  if (!active || active.kind !== "poll") return;
+  refreshGeneration += 1;
+  activeRefresh = null;
+  active.controller.abort();
 }
 
 /** The background tick nocturne keeps (its 2 s poll): between verb-driven
@@ -72,13 +138,17 @@ async function refresh(): Promise<boolean> {
  *  gestures retire when their authority goes stale, cords repaint, counts
  *  follow. Paused while the tab is hidden; the visibility return refreshes
  *  once immediately. */
-function startBackgroundPoll(): void {
+function startBackgroundPoll(root: HTMLElement): void {
   let inFlight = false;
   const tick = async () => {
-    if (document.visibilityState !== "visible" || inFlight) return;
+    if (
+      document.visibilityState !== "visible" ||
+      inFlight ||
+      pendingMutationRoots.has(root)
+    ) return;
     inFlight = true;
     try {
-      await refresh();
+      await refresh("poll");
     } finally {
       inFlight = false;
     }
@@ -173,6 +243,7 @@ const MUTATION_SUBMIT_SELECTOR = [
 function beginMutation(root: HTMLElement): SubmitControl[] | null {
   if (pendingMutationRoots.has(root)) return null;
   pendingMutationRoots.add(root);
+  cancelBackgroundRefresh();
   root.dataset.rdMutationPending = "true";
   const controls = Array.from(
     root.querySelectorAll<SubmitControl>(MUTATION_SUBMIT_SELECTOR),
@@ -414,7 +485,7 @@ activateIslands({
     });
     // The macro step editor (its dialog, draft, and save) — same ports.
     macWire({ root: () => el, refresh });
-    startBackgroundPoll();
+    startBackgroundPoll(el);
     redesignWire(el);
     wireForms(el);
     window.requestAnimationFrame(() => {

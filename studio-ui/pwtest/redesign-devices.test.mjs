@@ -1861,9 +1861,14 @@ describe("the device workbench", () => {
       );
     }
     assert.match(
-      (await page.locator(".rd-devmodal .n-devnote").textContent()) ?? "",
+      (await page.locator(".rd-devmodal .n-devnote:not(.rd-devmodal-purpose)").textContent()) ?? "",
       /keyboard-capable/,
       "the scan line speaks",
+    );
+    assert.match(
+      (await page.locator(".rd-devmodal-purpose").textContent()) ?? "",
+      /Show adds a device card.*does not change mapping.*Use as mapping input/s,
+      "the picker explains canvas membership versus the one mapping source",
     );
     // The unavailable tier is visible but NEVER a control.
     assert.equal(
@@ -1912,7 +1917,7 @@ describe("the device workbench", () => {
     );
     assert.match(
       (await page.locator(`.rd-devmodal button[data-selector="${G915}"] .rd-dev-word`).textContent()) ?? "",
-      /On the workbench/,
+      /On canvas/,
       "the row says where the board went",
     );
     // Escape is the picker's rung on the ladder.
@@ -2112,6 +2117,26 @@ describe("the device workbench", () => {
         .getAttribute("data-staged"),
       "false",
       "an unstaged board's card offers the verb",
+    );
+    assert.equal(
+      await page
+        .locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`)
+        .getAttribute("data-canvas-height"),
+      "220",
+      "fresh ordinary cards use the canvas engine's real minimum geometry",
+    );
+    assert.equal(
+      (await page
+        .locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"] .rd-stagebtn`)
+        .textContent())?.trim(),
+      "Use as mapping input",
+      "the product verb names the relationship to the Input source instead of backend staging",
+    );
+    assert.match(
+      (await page
+        .locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"] .rd-devcard-purpose`)
+        .textContent()) ?? "",
+      /inspection.*mapping input.*Input source/s,
     );
     await page.click(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"] .rd-stagebtn`);
     await page.waitForFunction(

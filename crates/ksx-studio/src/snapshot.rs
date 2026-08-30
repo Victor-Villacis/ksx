@@ -222,8 +222,7 @@ impl RedesignControllers {
         // The macro lifecycle rows + the step editor, exactly nocturne's
         // composition: the editor opens only on a name `?macro=` carries AND
         // the selected slot actually has.
-        let (macros_head, macro_rows, macros_note) =
-            compose_macro_rows(selected, "/redesign");
+        let (macros_head, macro_rows, macros_note) = compose_macro_rows(selected, "/redesign");
         let keyboard_name = staged
             .device
             .as_ref()
@@ -246,7 +245,9 @@ impl RedesignControllers {
                             "/redesign",
                         )
                     })
-                    .unwrap_or_else(|| crate::macro_editor::NocturneMacroEditor::closed_on("/redesign"))
+                    .unwrap_or_else(|| {
+                        crate::macro_editor::NocturneMacroEditor::closed_on("/redesign")
+                    })
             }
             _ => crate::macro_editor::NocturneMacroEditor::closed_on("/redesign"),
         };
@@ -2325,6 +2326,11 @@ pub struct NocturneCtlChip {
 /// drives, the relation read from the keyboard's side.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NocturneKeyRow {
+    /// The board-authored cap text ("Ctrl", "↑", "1"), kept separate from
+    /// [`Self::key`] so a surface can speak like the physical keyboard without
+    /// ever posting presentation text back to the mapper.
+    #[serde(default)]
+    pub key_label: String,
     pub key: String,
     /// The controls this key drives, in readable zone labels ("A · RB").
     pub targets: String,
@@ -2522,6 +2528,12 @@ pub struct NocturneKeyCell {
     /// The assistive name (`role="img"` + `aria-label`): the same sentence
     /// on a bound cap, the bare cap otherwise — never empty.
     pub aria: String,
+    /// Spacer cells share the plate's geometry grammar but are not controls.
+    /// Serve their interaction state explicitly so SSR and hydration agree:
+    /// an empty ghost must never become an unnamed keyboard Tab stop.
+    pub disabled: bool,
+    pub tab: String,
+    pub aria_hidden: String,
     /// **Where this control sits on the board**, as an inline `style`.
     ///
     /// Percentages of the board's own bounds — `left`, `top`, `width`,
@@ -3239,6 +3251,11 @@ pub struct ControllerPanel {
     pub socd_cls: String,
     pub socd_num: String,
     pub socd_lab: String,
+    /// The selected slot's canonical SOCD name. The option roster is not
+    /// ordered by current value, so browsers must not mistake its first row
+    /// for the saved policy.
+    #[serde(default)]
+    pub socd_current: String,
     pub socd_edit_opts: Vec<NocturneOptionRow>,
 }
 
@@ -3265,6 +3282,19 @@ pub(crate) fn compose_controller_panel(
     let socd_lab = if socd_editable {
         selected
             .map(|slot| format!("Opposites — P{}", slot.number))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let socd_current = if socd_editable {
+        selected
+            .map(|slot| {
+                if slot.socd.is_empty() {
+                    "off".to_owned()
+                } else {
+                    slot.socd.clone()
+                }
+            })
             .unwrap_or_default()
     } else {
         String::new()
@@ -3507,6 +3537,7 @@ pub(crate) fn compose_controller_panel(
         socd_cls,
         socd_num,
         socd_lab,
+        socd_current,
         socd_edit_opts,
     }
 }
@@ -3691,9 +3722,31 @@ pub(crate) fn compose_key_panel(
                 .unwrap_or_else(|| f.to_owned())
         }
     };
+    // A key's identity and its printed cap are deliberately different facts
+    // (`board.rs`). Keep the canonical name on the row for every mapper verb,
+    // but serve the cap alongside it for the inspector's human-facing chips.
+    // First physical occurrence wins on boards that intentionally repeat one
+    // emitted key across several cells.
+    let mut key_labels: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for cell in &board.cells {
+        if !cell.ghost && !cell.key.is_empty() && !cell.cap.is_empty() {
+            key_labels
+                .entry(cell.key.as_str())
+                .or_insert(cell.cap.as_str());
+        }
+    }
+    let key_label = |key: &str| -> String {
+        key_labels
+            .get(key)
+            .copied()
+            .filter(|label| !label.is_empty())
+            .unwrap_or(key)
+            .to_owned()
+    };
     let key_rows: Vec<NocturneKeyRow> = key_fns
         .iter()
         .map(|(key, fns)| NocturneKeyRow {
+            key_label: key_label(key),
             key: (*key).to_owned(),
             targets: fns
                 .iter()
@@ -3747,6 +3800,7 @@ pub(crate) fn compose_key_panel(
                 continue;
             }
             let chip = NocturneKeyRow {
+                key_label: key_label(&cell.key),
                 key: cell.key.clone(),
                 targets: String::new(),
                 fns: String::new(),
@@ -4076,6 +4130,17 @@ pub(crate) fn compose_board_panel(
             short,
             title,
             aria,
+            disabled: cell.ghost || cell.key.is_empty(),
+            tab: if cell.ghost || cell.key.is_empty() {
+                "-1".to_owned()
+            } else {
+                "0".to_owned()
+            },
+            aria_hidden: if cell.ghost || cell.key.is_empty() {
+                "true".to_owned()
+            } else {
+                "false".to_owned()
+            },
             style: format!(
                 "left:{:.4}%;top:{:.4}%;width:{:.4}%;height:{:.4}%",
                 pct(cell.x, board_w),
@@ -4137,6 +4202,9 @@ pub(crate) fn compose_board_panel(
                 short: crate::keyboard_layout::short_for(persona, fns[0]),
                 aria: title.clone(),
                 title,
+                disabled: false,
+                tab: "0".to_owned(),
+                aria_hidden: "false".to_owned(),
                 // The TRAY is not on the plate. These are keys bound off
                 // whatever board is drawn, so they have no place on it —
                 // they stay a flowed strip, and an empty style is what
@@ -4364,8 +4432,7 @@ pub(crate) fn compose_macro_rows(
                     .collect();
                 let head = format!("Macros · {}", rows.len());
                 let note = if rows.is_empty() {
-                    "No macros in this layout yet — author them in the Controls editor."
-                        .to_owned()
+                    "No macros in this layout yet — author them in the Controls editor.".to_owned()
                 } else {
                     String::new()
                 };
@@ -5149,6 +5216,7 @@ impl NocturneDerived {
             socd_cls,
             socd_num,
             socd_lab,
+            socd_current: _,
             socd_edit_opts,
         } = compose_controller_panel(staged, selected, p.q.as_deref());
         let (undo_cls, undo_label) = match p.undo_label.as_ref() {
@@ -5460,8 +5528,7 @@ impl NocturneDerived {
         // The selected slot's macro lifecycle rows, off the ONE shared
         // composer — `/redesign`'s inspector serves the same rows, with
         // its own page in the edit door.
-        let (macros_head, macro_rows, macros_note) =
-            compose_macro_rows(selected, "/nocturne");
+        let (macros_head, macro_rows, macros_note) = compose_macro_rows(selected, "/nocturne");
 
         Self {
             // The board picker. Marked the way the theme picker is — the
@@ -5659,6 +5726,76 @@ impl NocturneDerived {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The controller inspector needs two facts browsers previously guessed:
+    /// which SOCD row is current, and what each canonical key prints on the
+    /// selected board. Keep both on the wire while retaining the mapper value.
+    #[test]
+    fn controller_inspector_serves_current_socd_and_board_key_labels() {
+        let mut setup = ksx_core::stage::StagedSetup::new();
+        for edit in [
+            ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4".to_owned(),
+            },
+            ksx_api::StageEdit::AddSlot {
+                number: None,
+                persona: "xbox360".to_owned(),
+                preset: "Inspector P1".to_owned(),
+                layout: Some("keyboard-2p".to_owned()),
+            },
+            ksx_api::StageEdit::SetSocd {
+                number: 1,
+                socd: "last-input".to_owned(),
+            },
+        ] {
+            setup = edit
+                .apply(&setup)
+                .unwrap_or_else(|refusal| panic!("fixture edit refused: {}", refusal.message));
+        }
+
+        let staged = ksx_api::StagedSetupView::of(&setup);
+        let selected = staged.slots.first().expect("one staged controller");
+        let panel = compose_controller_panel(&staged, Some(selected), None);
+        assert_eq!(panel.socd_current, "last-input");
+        assert!(
+            panel
+                .socd_edit_opts
+                .iter()
+                .any(|option| option.value == panel.socd_current),
+            "the explicit current value must resolve to the served roster"
+        );
+        let mut legacy = staged.clone();
+        legacy.slots[0].socd.clear();
+        assert_eq!(
+            compose_controller_panel(&legacy, legacy.slots.first(), None).socd_current,
+            "off",
+            "an older omitted SOCD field means the engine's effective default"
+        );
+
+        let board = crate::board::Board::resolve("", &[], &[], false);
+        let keys = compose_key_panel(&staged, Some(selected), &board);
+        let row_for = |canonical: &str| {
+            keys.key_rows
+                .iter()
+                .chain(keys.avail_main.iter())
+                .chain(keys.avail_nav.iter())
+                .chain(keys.avail_num.iter())
+                .find(|row| row.key == canonical)
+                .unwrap_or_else(|| panic!("standard board did not serve {canonical}"))
+        };
+
+        let up = row_for("Up");
+        assert_eq!(up.key_label, "↑");
+        assert_eq!(up.key, "Up", "display text must never replace identity");
+        let control = row_for("LeftControl");
+        assert_eq!(control.key_label, "Ctrl");
+        assert_eq!(control.key, "LeftControl");
+        let tilde = row_for("Tilde");
+        assert_eq!(tilde.key_label, "`");
+        assert_eq!(tilde.key, "Tilde");
+    }
 
     /// **Every persona ksx ships has a presentation, and no two share a row.**
     ///

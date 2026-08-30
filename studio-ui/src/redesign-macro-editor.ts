@@ -163,8 +163,76 @@ let macSayText = "";
 let macSayKind: "" | "warn" | "err" = "";
 let macSaveLabel = "Save this macro";
 
+type MacroFocusAttribute =
+  | "data-maccell"
+  | "data-macdur"
+  | "data-macrate"
+  | "data-macmotion"
+  | "data-macpol"
+  | "data-macact"
+  | "data-macfocus";
+
+interface MacroFocusBookmark {
+  attribute: MacroFocusAttribute;
+  value: string;
+}
+
+interface MacroReturnTarget {
+  element: HTMLElement | null;
+  name: string;
+  slot: string;
+}
+
+let macWiredRoot: HTMLElement | null = null;
+let macDialogWasOpen = false;
+let macDialogIdentity = "";
+let macGridFocusCell: string | null = null;
+let macFocusBookmark: MacroFocusBookmark | null = null;
+let macReturnTarget: MacroReturnTarget | null = null;
+let macCloseRefreshPending = false;
+let macFocusEpoch = 0;
+let macRestoringFocus = false;
+
+function macroDoor(target: EventTarget | null): HTMLAnchorElement | null {
+  const anchor = target instanceof Element ? target.closest<HTMLAnchorElement>("a[href]") : null;
+  if (!anchor) return null;
+  try {
+    const url = new URL(anchor.href, window.location.origin);
+    return url.pathname === "/redesign" && url.searchParams.has("macro") ? anchor : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberMacroOpener(anchor: HTMLAnchorElement): void {
+  if (macRestoringFocus) return;
+  const url = new URL(anchor.href, window.location.origin);
+  macReturnTarget = {
+    element: anchor,
+    name: url.searchParams.get("macro") ?? "",
+    slot: url.searchParams.get("slot") ?? "",
+  };
+}
+
+function captureMacroOpener(event: Event): void {
+  const anchor = macroDoor(event.target);
+  if (anchor) rememberMacroOpener(anchor);
+}
+
 export function macWire(h: MacHost): void {
   host = h;
+  const root = h.root();
+  if (root !== macWiredRoot) {
+    macWiredRoot?.removeEventListener("click", captureMacroOpener, true);
+    macWiredRoot?.removeEventListener("focusin", captureMacroOpener, true);
+    macWiredRoot = root;
+    macWiredRoot?.addEventListener("click", captureMacroOpener, true);
+    macWiredRoot?.addEventListener("focusin", captureMacroOpener, true);
+  }
+  // The embedded payload is applied before the island gives this module its
+  // host. A cold ?macro= URL must therefore paint once the holder is known,
+  // even though the served view key has not changed.
+  if (macView) renderDialog(macView);
 }
 
 export function rdMacOpen(): boolean {
@@ -173,6 +241,99 @@ export function rdMacOpen(): boolean {
 
 function holderEl(): HTMLElement | null {
   return host?.root()?.querySelector<HTMLElement>(".rd-macdlg") ?? null;
+}
+
+function bookmarkFor(target: Element | null): MacroFocusBookmark | null {
+  if (!target) return null;
+  const attributes: MacroFocusAttribute[] = [
+    "data-maccell",
+    "data-macdur",
+    "data-macrate",
+    "data-macmotion",
+    "data-macpol",
+    "data-macact",
+    "data-macfocus",
+  ];
+  for (const attribute of attributes) {
+    const owner = target.closest<HTMLElement>(`[${attribute}]`);
+    const value = owner?.getAttribute(attribute);
+    if (value !== null && value !== undefined) return { attribute, value };
+  }
+  return null;
+}
+
+function findBookmark(dlg: HTMLElement, bookmark: MacroFocusBookmark | null): HTMLElement | null {
+  if (!bookmark) return null;
+  return Array.from(dlg.querySelectorAll<HTMLElement>(`[${bookmark.attribute}]`)).find(
+    (candidate) => candidate.getAttribute(bookmark.attribute) === bookmark.value,
+  ) ?? null;
+}
+
+function macroFocusable(dlg: HTMLElement): HTMLElement[] {
+  const candidates = dlg.querySelectorAll<HTMLElement>(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+      'textarea:not([disabled]), details > summary, [tabindex]:not([tabindex="-1"])',
+  );
+  return Array.from(candidates).filter((candidate) => {
+    if (candidate.closest("[inert], [hidden], [aria-hidden=\"true\"]")) return false;
+    return candidate.getClientRects().length > 0;
+  });
+}
+
+function focusMacroTarget(target: HTMLElement | null, scrollCell = false): boolean {
+  if (!target?.isConnected) return false;
+  target.focus({ preventScroll: true });
+  if (document.activeElement !== target) return false;
+  if (scrollCell) target.scrollIntoView({ block: "nearest", inline: "nearest" });
+  return true;
+}
+
+function focusDoorForView(root: HTMLElement, v: RdMacView): HTMLElement | null {
+  const exact = Array.from(root.querySelectorAll<HTMLAnchorElement>("a[href]")).find((anchor) => {
+    try {
+      const url = new URL(anchor.href, window.location.origin);
+      const name = macReturnTarget?.name || v.name;
+      const slot = macReturnTarget?.slot || v.slot;
+      return url.pathname === "/redesign" && url.searchParams.get("macro") === name &&
+        (!slot || url.searchParams.get("slot") === slot);
+    } catch {
+      return false;
+    }
+  });
+  if (exact) return exact;
+  const instanceId = `ctrl-slot-${macReturnTarget?.slot || v.slot}`;
+  return Array.from(root.querySelectorAll<HTMLElement>("[data-instance-id]")).find(
+    (candidate) => candidate.dataset.instanceId === instanceId,
+  ) ?? root.querySelector<HTMLElement>('[data-nx="rd-ctrls-open"]');
+}
+
+function restoreMacroOpener(
+  v: RdMacView,
+  expected: MacroReturnTarget | null,
+  clearAfter: boolean,
+): void {
+  if (expected && macReturnTarget !== expected) return;
+  const root = host?.root();
+  if (!root || rdMacOpen()) return;
+  let target = expected?.element?.isConnected ? expected.element : null;
+  if (!target) target = focusDoorForView(root, v);
+  const details = target?.closest("details");
+  if (details instanceof HTMLDetailsElement) details.open = true;
+  macRestoringFocus = true;
+  try {
+    focusMacroTarget(target);
+  } finally {
+    macRestoringFocus = false;
+  }
+  if (clearAfter && (!expected || macReturnTarget === expected)) macReturnTarget = null;
+}
+
+function scheduleMacroOpenerRestore(
+  v: RdMacView,
+  expected: MacroReturnTarget | null,
+  clearAfter: boolean,
+): void {
+  window.requestAnimationFrame(() => restoreMacroOpener(v, expected, clearAfter));
 }
 
 /** The served projection arrives (payload or edit answer). THE DRAFT WINS:
@@ -372,8 +533,20 @@ export function rdMacClose(): void {
   const query = url.searchParams.toString();
   window.history.replaceState(null, "", query ? `${url.pathname}?${query}` : url.pathname);
   // Close NOW (the served answer confirms on the next payload).
+  const closingView = macView;
+  const returnTarget = macReturnTarget;
+  macCloseRefreshPending = true;
   if (macView) applyView({ ...macView, open: false, back_cls: "nd-back none" }, true);
-  void host?.refresh();
+  const refresh = host?.refresh();
+  if (!refresh || !closingView) {
+    macCloseRefreshPending = false;
+    if (closingView) scheduleMacroOpenerRestore(closingView, returnTarget, true);
+    return;
+  }
+  void refresh.finally(() => {
+    macCloseRefreshPending = false;
+    restoreMacroOpener(closingView, returnTarget, true);
+  });
 }
 
 /** The dialog's clicks, dispatched by the island's one listener. Returns
@@ -454,25 +627,183 @@ function btn(cls: string, text: string, attrs: Record<string, string>): HTMLButt
   return b;
 }
 
+function gridRows(grid: HTMLElement): HTMLElement[][] {
+  return Array.from(grid.children)
+    .filter((candidate): candidate is HTMLElement =>
+      candidate instanceof HTMLElement && candidate.getAttribute("role") === "row"
+    )
+    .map((row) => Array.from(row.querySelectorAll<HTMLElement>('[role="gridcell"]')));
+}
+
+function moveGridFocus(cell: HTMLElement, event: KeyboardEvent): boolean {
+  const grid = cell.closest<HTMLElement>('[role="grid"]');
+  if (!grid) return false;
+  const rows = gridRows(grid);
+  const rowIndex = rows.findIndex((row) => row.includes(cell));
+  const colIndex = rowIndex >= 0 ? rows[rowIndex].indexOf(cell) : -1;
+  if (rowIndex < 0 || colIndex < 0) return false;
+
+  let nextRow = rowIndex;
+  let nextCol = colIndex;
+  const wholeGrid = event.ctrlKey || event.metaKey;
+  switch (event.key) {
+    case "ArrowLeft":
+      nextCol -= 1;
+      break;
+    case "ArrowRight":
+      nextCol += 1;
+      break;
+    case "ArrowUp":
+      nextRow -= 1;
+      break;
+    case "ArrowDown":
+      nextRow += 1;
+      break;
+    case "Home":
+      nextRow = wholeGrid ? 0 : rowIndex;
+      nextCol = 0;
+      break;
+    case "End":
+      nextRow = wholeGrid ? rows.length - 1 : rowIndex;
+      nextCol = Number.MAX_SAFE_INTEGER;
+      break;
+    default:
+      return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  nextRow = Math.min(Math.max(nextRow, 0), rows.length - 1);
+  const destinationRow = rows[nextRow];
+  if (!destinationRow?.length) return true;
+  nextCol = Math.min(Math.max(nextCol, 0), destinationRow.length - 1);
+  const next = destinationRow[nextCol];
+  for (const candidate of rows.flat()) candidate.tabIndex = candidate === next ? 0 : -1;
+  macGridFocusCell = next.dataset.maccell ?? null;
+  macFocusBookmark = bookmarkFor(next);
+  focusMacroTarget(next, true);
+  return true;
+}
+
+function handleMacDialogFocus(event: FocusEvent): void {
+  const target = event.target instanceof Element ? event.target : null;
+  const bookmark = bookmarkFor(target);
+  if (bookmark) macFocusBookmark = bookmark;
+  const cell = target?.closest<HTMLElement>("[data-maccell]");
+  if (cell) macGridFocusCell = cell.dataset.maccell ?? null;
+}
+
+function handleMacDialogKey(event: KeyboardEvent): void {
+  const dlg = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+  if (!dlg) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    rdMacClose();
+    return;
+  }
+  const target = event.target instanceof Element ? event.target : null;
+  const duration = target?.closest<HTMLInputElement>("[data-macdur]");
+  if (duration && event.key === "Enter") {
+    event.preventDefault();
+    duration.blur();
+    return;
+  }
+  const cell = target?.closest<HTMLElement>("[data-maccell]");
+  if (cell && moveGridFocus(cell, event)) return;
+  if (event.key !== "Tab") return;
+
+  const focusable = macroFocusable(dlg);
+  if (focusable.length === 0) {
+    event.preventDefault();
+    dlg.focus({ preventScroll: true });
+    return;
+  }
+  const active = document.activeElement;
+  const at = active instanceof HTMLElement ? focusable.indexOf(active) : -1;
+  const wrapsBackward = event.shiftKey && at <= 0;
+  const wrapsForward = !event.shiftKey && (at < 0 || at === focusable.length - 1);
+  if (!wrapsBackward && !wrapsForward) return;
+  event.preventDefault();
+  event.stopPropagation();
+  focusMacroTarget(event.shiftKey ? focusable[focusable.length - 1] : focusable[0]);
+}
+
+function scheduleDialogFocus(
+  dlg: HTMLElement,
+  bookmark: MacroFocusBookmark | null,
+  opening: boolean,
+  epoch: number,
+): void {
+  window.requestAnimationFrame(() => {
+    if (epoch !== macFocusEpoch || !rdMacOpen() || !dlg.isConnected) return;
+    const target = opening
+      ? dlg.querySelector<HTMLElement>('[data-macfocus="close-top"]')
+      : findBookmark(dlg, bookmark) ??
+        dlg.querySelector<HTMLElement>('[data-macfocus="close-top"]');
+    focusMacroTarget(target, Boolean(target?.matches("[data-maccell]")));
+  });
+}
+
 function renderDialog(v: RdMacView): void {
   const holder = holderEl();
   if (!holder) return;
   holder.className = `rd-macdlg ${v.back_cls}`;
   const dlg = holder.querySelector<HTMLElement>(".nd-mac");
   if (!dlg) return;
+  const wasOpen = macDialogWasOpen;
+  const identity = `${v.slot}\u0000${v.name}`;
+  const changedDialog = identity !== macDialogIdentity;
+  const active = document.activeElement;
+  const activeBookmark = active instanceof Element && dlg.contains(active)
+    ? bookmarkFor(active)
+    : null;
+  const continuingBookmark = activeBookmark ?? macFocusBookmark;
+  const epoch = ++macFocusEpoch;
   if (!v.open) {
     dlg.replaceChildren();
+    macDialogWasOpen = false;
+    macDialogIdentity = "";
+    macGridFocusCell = null;
+    macFocusBookmark = null;
+    if (wasOpen) {
+      scheduleMacroOpenerRestore(v, macReturnTarget, !macCloseRefreshPending);
+    }
     return;
   }
 
+  const opening = !wasOpen || changedDialog;
+  if (opening) {
+    if (!macReturnTarget && active instanceof HTMLElement && active !== document.body &&
+      !holder.contains(active)) {
+      macReturnTarget = { element: active, name: v.name, slot: v.slot };
+    }
+    macGridFocusCell = null;
+    macFocusBookmark = null;
+  }
+  const restoreBookmark = opening ? null : continuingBookmark;
+  macDialogWasOpen = true;
+  macDialogIdentity = identity;
+  dlg.setAttribute("role", "dialog");
+  dlg.setAttribute("aria-modal", "true");
+  dlg.setAttribute("tabindex", "-1");
+  dlg.onkeydown = handleMacDialogKey;
+  dlg.addEventListener("focusin", handleMacDialogFocus);
+
   // ── Header ──
   const head = el("div", "n-machd");
+  const title = el("div", "nd-title", v.name);
+  title.id = "rd-mac-title";
+  const note = el("div", "n-macdis", v.note);
+  note.id = "rd-mac-description";
+  dlg.removeAttribute("aria-label");
+  dlg.setAttribute("aria-labelledby", title.id);
+  dlg.setAttribute("aria-describedby", note.id);
   head.append(
     el("div", "nd-kick", "Macro"),
-    el("div", "nd-title", v.name),
+    title,
     el("div", "nd-lede", v.trigger),
     el("div", "n-macmeta", v.head),
-    el("div", "n-macdis", v.note),
+    note,
   );
   const say = el(
     "div",
@@ -484,6 +815,7 @@ function renderDialog(v: RdMacView): void {
   const close = document.createElement("a");
   close.className = "n-macx";
   close.dataset.nx = "mac-close";
+  close.dataset.macfocus = "close-top";
   close.setAttribute("aria-label", "Close the macro editor");
   close.href = v.close_href;
   close.textContent = "✕";
@@ -543,16 +875,46 @@ function renderDialog(v: RdMacView): void {
   }
   const matrix = el("div", "n-macmatrix");
   matrix.setAttribute("role", "grid");
-  matrix.setAttribute("aria-label", "Steps by control");
-  for (const c of v.cells) {
-    const cell = btn(c.cls, c.mark, {
-      title: c.title,
-      "aria-label": c.title,
-      "aria-pressed": c.on,
-      tabindex: c.tab,
-      "data-maccell": c.cell,
-    });
-    matrix.append(cell);
+  matrix.setAttribute("aria-label", `Steps by control for ${v.name}`);
+  matrix.setAttribute("aria-multiselectable", "true");
+  const colCount = Math.max(v.cols.length, 1);
+  const rowCount = Math.ceil(v.cells.length / colCount);
+  matrix.setAttribute("aria-colcount", String(v.cols.length));
+  matrix.setAttribute("aria-rowcount", String(rowCount));
+  matrix.style.gridTemplateColumns = `repeat(${colCount}, var(--maccol-w))`;
+  const servedRoving = v.cells.find((cell) => cell.tab === "0")?.cell ?? v.cells[0]?.cell ?? null;
+  const rememberedRoving = restoreBookmark?.attribute === "data-maccell"
+    ? restoreBookmark.value
+    : macGridFocusCell;
+  const rovingCell = v.cells.some((cell) => cell.cell === rememberedRoving)
+    ? rememberedRoving
+    : servedRoving;
+  macGridFocusCell = rovingCell;
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+    const gridRow = el("div", "n-macgridrow");
+    gridRow.setAttribute("role", "row");
+    gridRow.setAttribute("aria-rowindex", String(rowIndex + 1));
+    gridRow.setAttribute("aria-label", `Step ${v.rows[rowIndex]?.n ?? rowIndex + 1}`);
+    gridRow.style.display = "grid";
+    gridRow.style.gridTemplateColumns = `repeat(${colCount}, var(--maccol-w))`;
+    gridRow.style.gridColumn = "1 / -1";
+    const from = rowIndex * colCount;
+    const rowCells = v.cells.slice(from, from + colCount);
+    for (let colIndex = 0; colIndex < rowCells.length; colIndex += 1) {
+      const c = rowCells[colIndex];
+      const cell = btn(c.cls, c.mark, {
+        title: c.title,
+        "aria-label": c.title,
+        "aria-selected": c.on === "true" ? "true" : "false",
+        "aria-rowindex": String(rowIndex + 1),
+        "aria-colindex": String(colIndex + 1),
+        role: "gridcell",
+        tabindex: c.cell === rovingCell ? "0" : "-1",
+        "data-maccell": c.cell,
+      });
+      gridRow.append(cell);
+    }
+    matrix.append(gridRow);
   }
   scroll.append(grps, cols, matrix);
   roll.append(bar, scroll);
@@ -561,6 +923,7 @@ function renderDialog(v: RdMacView): void {
   const help = document.createElement("details");
   help.className = "n-machelp";
   const helpSum = document.createElement("summary");
+  helpSum.dataset.macfocus = "help";
   helpSum.textContent = "How to read this roll";
   help.append(helpSum, el("p", "n-macring", v.ring), el("p", "n-macrule", v.rule));
 
@@ -606,6 +969,7 @@ function renderDialog(v: RdMacView): void {
   const toml = document.createElement("details");
   toml.className = "n-mactoml";
   const tomlSum = document.createElement("summary");
+  tomlSum.dataset.macfocus = "table";
   tomlSum.textContent = "The table this writes";
   toml.append(tomlSum, el("pre", "n-mactomlbox", v.toml));
 
@@ -617,9 +981,11 @@ function renderDialog(v: RdMacView): void {
   const closeBtn = document.createElement("a");
   closeBtn.className = "n-bbtn ghost";
   closeBtn.dataset.nx = "mac-close";
+  closeBtn.dataset.macfocus = "close-bottom";
   closeBtn.href = v.close_href;
   closeBtn.textContent = "Close";
   foot.append(closeBtn);
 
   dlg.replaceChildren(head, roll, help, edit, motions, pols, toml, foot);
+  scheduleDialogFocus(dlg, restoreBookmark, opening, epoch);
 }

@@ -15,9 +15,8 @@ use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::render_nocturne::{device_row, mode_row, named_slot_ids, other_row};
 use crate::snapshot::{
-    StartCaptureView,
     compose_board_panel, theme_rows, NocturneChoiceRow, RedesignControllers, RedesignDeviceRows,
-    RedesignPayload, RedesignPersonaRow, SetupSnapshot,
+    RedesignPayload, RedesignPersonaRow, SetupSnapshot, StartCaptureView,
 };
 
 /// The island table this page compiles to: exactly one island — the whole
@@ -91,11 +90,7 @@ pub(crate) fn payload(
     // Refused scan → empty pair → the mapper refuses to arm, like 4460.
     let learn_cap = match &scan {
         Ok(scan_view) => StartCaptureView::from_parts(staged, scan_view, true),
-        Err(_) => StartCaptureView::from_parts(
-            staged,
-            &ksx_api::DeviceScanView::default(),
-            false,
-        ),
+        Err(_) => StartCaptureView::from_parts(staged, &ksx_api::DeviceScanView::default(), false),
     };
     devices.staging_reachable = staged.reachable;
     devices.staging_line = if staged.reachable {
@@ -213,6 +208,12 @@ fn kb_cell(row: &crate::snapshot::NocturneKeyCell) -> SlotValue {
         ("short".to_owned(), SlotValue::Text(row.short.clone())),
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
         ("aria".to_owned(), SlotValue::Text(row.aria.clone())),
+        ("disabled".to_owned(), SlotValue::Bool(row.disabled)),
+        ("tab".to_owned(), SlotValue::Text(row.tab.clone())),
+        (
+            "aria_hidden".to_owned(),
+            SlotValue::Text(row.aria_hidden.clone()),
+        ),
         ("style".to_owned(), SlotValue::Text(row.style.clone())),
     ])
 }
@@ -734,6 +735,77 @@ mod tests {
             html.contains(r#"name="layout""#) && html.contains(r#"name="persona""#),
             "the add form posts persona and the served layout"
         );
+    }
+
+    /// Keyboard geometry contains real controls and inert spacer cells in the
+    /// same served list. Their interaction state must cross BOTH seams: the
+    /// Rust list-slot object and the SSR attributes Forma paints from it. A
+    /// hydration-only promotion makes the scripted page look correct while a
+    /// no-JS reader receives a board made entirely of disabled buttons.
+    #[test]
+    fn the_served_keyboard_distinguishes_keys_from_spacers_before_hydration() {
+        let payload = fixture_payload();
+        let cells: Vec<&crate::snapshot::NocturneKeyCell> = [
+            &payload.board.kb_row1,
+            &payload.board.kb_row2,
+            &payload.board.kb_row3,
+            &payload.board.kb_row4,
+            &payload.board.kb_row5,
+            &payload.board.kb_row6,
+        ]
+        .into_iter()
+        .flat_map(|row| row.iter())
+        .collect();
+        let real = cells
+            .iter()
+            .copied()
+            .find(|cell| cell.key == "A")
+            .expect("the standard board's A key");
+        assert!(!real.disabled);
+        assert_eq!(real.tab, "0");
+        assert_eq!(real.aria_hidden, "false");
+        let spacer = cells
+            .iter()
+            .copied()
+            .find(|cell| cell.key.is_empty() && cell.cls.split_whitespace().any(|c| c == "ghost"))
+            .expect("the standard board's spacer geometry");
+        assert!(spacer.disabled);
+        assert_eq!(spacer.tab, "-1");
+        assert_eq!(spacer.aria_hidden, "true");
+
+        let page = EmbeddedPage::load("/redesign").unwrap();
+        let html = render_redesign(&page, &payload, None).html;
+        let button_tags: Vec<&str> = html
+            .match_indices("<button")
+            .filter_map(|(start, _)| {
+                let tail = &html[start..];
+                tail.find('>').map(|end| &tail[..=end])
+            })
+            .collect();
+        let real_tag = button_tags
+            .iter()
+            .copied()
+            .find(|tag| tag.contains(r#"class="n-key"#) && tag.contains(r#"data-key="A""#))
+            .expect("SSR A key button");
+        assert!(!real_tag.split_whitespace().any(|part| part == "disabled"));
+        assert!(real_tag.contains(r#"tabindex="0""#), "{real_tag}");
+        assert!(real_tag.contains(r#"aria-hidden="false""#), "{real_tag}");
+
+        let spacer_tag = button_tags
+            .iter()
+            .copied()
+            .find(|tag| {
+                tag.contains(r#"class="n-key"#)
+                    && tag.contains(" ghost")
+                    && tag.contains(r#"data-key="""#)
+            })
+            .expect("SSR spacer button");
+        assert!(
+            spacer_tag.split_whitespace().any(|part| part == "disabled"),
+            "{spacer_tag}"
+        );
+        assert!(spacer_tag.contains(r#"tabindex="-1""#), "{spacer_tag}");
+        assert!(spacer_tag.contains(r#"aria-hidden="true""#), "{spacer_tag}");
     }
 
     /// The tier rules are the nocturne roster's, and this pins them here: an

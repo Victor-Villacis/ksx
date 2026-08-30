@@ -234,6 +234,64 @@ function finishStoreKeys(cards: readonly RdControllerCardView[]): Map<string, st
   return keys;
 }
 
+function liveCardFingerprint(
+  card: RdControllerCardView,
+  allNumbers: readonly string[],
+  pad: RdPadView | undefined,
+  storeKey: string,
+): string {
+  return JSON.stringify(["live", card, allNumbers, pad ?? null, storeKey]);
+}
+
+function ghostCardFingerprint(
+  parked: ParkedController,
+  livePositions: number,
+  io: ControllerBenchIo,
+): string {
+  return JSON.stringify([
+    "ghost",
+    parked,
+    livePositions,
+    io.parkedHeld.has(parked.id),
+    io.addPreset,
+    io.addLayout,
+  ]);
+}
+
+/** A payload may legitimately change while a card-owned control has focus.
+ * Preserve that logical control across the necessary replacement; unchanged
+ * two-second polls skip replacement entirely. */
+function cardFocusSelector(card: HTMLElement): string | null {
+  const active = document.activeElement;
+  if (!(active instanceof Element) || !card.contains(active)) return null;
+  const padControl = active.closest<Element>("[data-rd-pad-action][data-fn]");
+  if (padControl) {
+    const fn = padControl.getAttribute("data-fn");
+    if (fn) return `[data-rd-pad-action][data-fn="${CSS.escape(fn)}"]`;
+  }
+  if (active instanceof HTMLElement) {
+    if (active.dataset.ds4Variant) {
+      return `[data-ds4-variant="${CSS.escape(active.dataset.ds4Variant)}"]`;
+    }
+    if (active.dataset.controllerVariant) {
+      return `[data-controller-variant="${CSS.escape(active.dataset.controllerVariant)}"]`;
+    }
+    if (active.matches(".rd-ctrlplayer")) return ".rd-ctrlplayer";
+    const nx = active.dataset.nx;
+    if (nx) return `[data-nx="${CSS.escape(nx)}"]`;
+    if (active.matches(".rd-ctrlverb-danger")) return ".rd-ctrlverb-danger";
+  }
+  return null;
+}
+
+function restoreCardFocus(card: HTMLElement, selector: string | null): void {
+  if (!selector) return;
+  const target = card.querySelector<Element>(selector);
+  if (target && "focus" in target && typeof (target as HTMLElement).focus === "function") {
+    (target as HTMLElement).focus({ preventScroll: true });
+  }
+}
+
 /** The REAL body — a CLONE of the shared hidden master for the served
  *  family (the nocturne widget's exact mechanism: `pv.family` is READ,
  *  never re-decided; a family with no master is a visible failure), dressed
@@ -245,6 +303,7 @@ function padBody(
   family: string,
   personaLabel: string,
   fnKeys: Record<string, string> | null,
+  controls: RdPadView["controls"],
   storeKey: string,
 ): { art: HTMLElement; swatches: HTMLElement | null } {
   const master = io.root.querySelector<HTMLElement>(
@@ -254,6 +313,12 @@ function padBody(
   if (!source) return { art: unrecognisedPadBody(family), swatches: null };
   const clone = source.cloneNode(true) as SVGSVGElement;
   clone.classList.add("rd-ctrlcard-art");
+  // The vendored masters are hidden templates. Their clones are visible,
+  // interactive controller groups, so template-only accessibility state must
+  // not survive onto the canvas copy.
+  clone.removeAttribute("aria-hidden");
+  clone.removeAttribute("focusable");
+  clone.setAttribute("role", "group");
   clone.setAttribute("aria-label", personaLabel || PERSONA_BADGE_FALLBACK);
   // Dress the callouts from THIS slot's own served table (empty for a
   // ghost, whose slot left the daemon).
@@ -269,6 +334,51 @@ function padBody(
       if (keys) parts.push(calloutText(keys));
     }
     el.textContent = parts.join("·");
+  }
+  // The transparent SVG hooks are real direct-manipulation controls, not
+  // decorative hit regions. Expose one focus stop for each canonical
+  // function (some premium drawings carry duplicate paint variants), name it
+  // from the served controller vocabulary, and make Enter/Space take the
+  // exact same bubbling click path as a pointer.
+  const labels = new Map(
+    (controls ?? []).map((control) => [control.function.toLowerCase(), control.label]),
+  );
+  const focusableFns = new Set<string>();
+  const padZones = Array.from(
+    clone.querySelectorAll<SVGElement>("[data-fn]:not(.n-fnkey)"),
+  );
+  // Parked cards deliberately have no served control table or player slot.
+  // Their drawing is a visual identity only until re-slotted; leaving the
+  // old data-fn hooks in place could route a click to the last live panel.
+  if (controls === undefined) {
+    for (const el of Array.from(clone.querySelectorAll<SVGElement>("[data-fn]"))) {
+      el.removeAttribute("data-fn");
+    }
+  }
+  for (const el of controls === undefined ? [] : padZones) {
+    const fnName = (el.getAttribute("data-fn") ?? "").split(/\s+/)[0]?.trim() ?? "";
+    const key = fnName.toLowerCase();
+    if (!fnName || focusableFns.has(key)) continue;
+    focusableFns.add(key);
+    const label = labels.get(key) || fnName;
+    el.setAttribute("role", "button");
+    el.setAttribute("tabindex", "0");
+    el.setAttribute("aria-label", `${label} controller control`);
+    el.setAttribute("data-rd-pad-action", "");
+    el.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      event.stopPropagation();
+      el.dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        shiftKey: event.shiftKey,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey,
+      }));
+    });
   }
   // The finish swatches — the nocturne widget's DS4-variant / premium
   // machinery, off the SHARED padFinishes module and stores.
@@ -381,6 +491,7 @@ function liveCardContent(
 ): HTMLElement {
   const body = document.createElement("div");
   body.className = "rd-ctrlcard";
+  body.dataset.renderFingerprint = liveCardFingerprint(card, allNumbers, pad, storeKey);
   // The ramp digit — every surface speaking for this slot wears np{n}
   // (the shared sheet's per-player tint vocabulary).
   body.classList.add(`np${card.number}`);
@@ -467,6 +578,7 @@ function liveCardContent(
     card.family,
     card.persona_label,
     pad?.fn_keys ?? null,
+    pad?.controls,
     storeKey,
   );
   const head = [slot, ...badgeAndName(card.persona, card.persona_label, card.preset)];
@@ -497,6 +609,7 @@ function ghostCardContent(
   const held = io.parkedHeld.has(parked.id);
   const body = document.createElement("div");
   body.className = "rd-ctrlcard rd-ctrlcard-ghost";
+  body.dataset.renderFingerprint = ghostCardFingerprint(parked, livePositions, io);
   const slot = document.createElement("p");
   slot.className = "rd-ctrlcard-slot rd-ctrlcard-noplayer";
   slot.textContent = "No player";
@@ -560,6 +673,7 @@ function ghostCardContent(
     parked.family || "unknown",
     parked.persona_label,
     null,
+    undefined,
     "p:" + parked.preset,
   );
   const head = [slot, ...badgeAndName(parked.persona, parked.persona_label, parked.preset)];
@@ -646,12 +760,26 @@ export function syncControllerWidgets(
     const live = wantedLive.get(id);
     const ghost = wantedGhosts.get(id);
     if (live) {
-      item.querySelector(".rd-ctrlcard")?.replaceWith(dress(live));
+      const current = item.querySelector<HTMLElement>(".rd-ctrlcard");
+      const pad = padBySlot.get(live.number);
+      const storeKey = storeKeys.get(live.number) ?? "p:" + live.preset;
+      const fingerprint = liveCardFingerprint(live, allNumbers, pad, storeKey);
+      if (current?.dataset.renderFingerprint !== fingerprint) {
+        const focusSelector = current ? cardFocusSelector(current) : null;
+        const replacement = dress(live);
+        current?.replaceWith(replacement);
+        restoreCardFocus(replacement, focusSelector);
+      }
       wantedLive.delete(id);
     } else if (ghost) {
-      item
-        .querySelector(".rd-ctrlcard")
-        ?.replaceWith(ghostCardContent(ghost, cards.length, io));
+      const current = item.querySelector<HTMLElement>(".rd-ctrlcard");
+      const fingerprint = ghostCardFingerprint(ghost, cards.length, io);
+      if (current?.dataset.renderFingerprint !== fingerprint) {
+        const focusSelector = current ? cardFocusSelector(current) : null;
+        const replacement = ghostCardContent(ghost, cards.length, io);
+        current?.replaceWith(replacement);
+        restoreCardFocus(replacement, focusSelector);
+      }
       wantedGhosts.delete(id);
     } else {
       io.canvas.removeItem(item, { selectFallback: false });

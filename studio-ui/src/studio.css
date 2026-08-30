@@ -10066,8 +10066,12 @@ a.wsrow-title:hover {
   width: var(--nku);
   height: calc(var(--nku) * 34 / 30);
   flex: none;
+  padding: 0;
   border: none;
+  appearance: none;
   border-radius: 6px;
+  color: inherit;
+  font: inherit;
   background: linear-gradient(
     180deg,
     var(--n-kb-key-side-top),
@@ -18131,6 +18135,14 @@ a.nm-link {
   color: var(--n-text-2);
 }
 
+.rd-devcard-purpose {
+  margin: 7px 0 0;
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+  color: var(--n-text-3);
+  text-wrap: pretty;
+}
+
 /* ── Encoder profile lab ──────────────────────────────────────────────────
    One stable, data-driven SVG surface. Identity, topology, configured output,
    observed input, and user declarations keep independent visual treatments. */
@@ -20609,8 +20621,10 @@ button.rd-encoder-product-read-inline:disabled {
 /* State decides whether the chip or verb exists; semantic zoom remains the
    final presentation authority and hides either outside editing distance. */
 .rd [data-canvas-zoom-tier="overview"] .rd-devcard-meta,
+.rd [data-canvas-zoom-tier="overview"] .rd-devcard-purpose,
 .rd [data-canvas-zoom-tier="overview"] .rd-devcard-staged,
 .rd [data-canvas-zoom-tier="overview"] .rd-stageform,
+.rd [data-canvas-zoom-tier="structure"] .rd-devcard-purpose,
 .rd [data-canvas-zoom-tier="structure"] .rd-devcard-staged,
 .rd [data-canvas-zoom-tier="structure"] .rd-stageform {
   display: none;
@@ -20863,6 +20877,13 @@ button.rd-encoder-product-read-inline:disabled {
 
 .rd-ctrlcard-artwrap svg [data-fn] {
   cursor: pointer;
+}
+
+.rd-ctrlcard-artwrap svg [data-rd-pad-action]:focus-visible {
+  outline: none;
+  stroke: var(--n-accent-2);
+  stroke-width: 5px;
+  filter: drop-shadow(0 0 5px var(--n-accent));
 }
 
 .rd-ctrlcard-artwrap svg.rd-ctrlcard-art {

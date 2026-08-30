@@ -342,6 +342,10 @@ function targetAuthorityCurrent(row: MapperTarget): boolean {
 export function mapperReconcile(): void {
   let retired = false;
   if (learnRow && !(sourceAuthorityCurrent(learnRow) && targetAuthorityCurrent(learnRow))) {
+    // An auto-map walk owns this learn row. Retiring only the listener leaves
+    // an invisible walk behind; the next ordinary learn would then inherit its
+    // stale steps and continue mapping controls the user did not reopen.
+    autoMap = null;
     void cancelLearn();
     retired = true;
   }
@@ -350,6 +354,7 @@ export function mapperReconcile(): void {
     retired = true;
   }
   if (pendingConflict && !targetAuthorityCurrent(pendingConflict.row)) {
+    autoMap = null;
     dismissConflict();
     retired = true;
   }
@@ -440,6 +445,10 @@ export async function startLearn(row: MapperTarget): Promise<void> {
   }
   // PadForge convention: clicking the control being recorded cancels it.
   if (learnRow && learnRow.fn === row.fn && learnRow.slot === row.slot && learnRow.mode === row.mode) {
+    // A row toggle is the banner's whole-run Cancel twin, not its one-step
+    // Skip verb. Retire the walk before the listener so a later ordinary
+    // learn cannot inherit an invisible auto-map queue.
+    autoMap = null;
     void cancelLearn();
     return;
   }
@@ -455,6 +464,7 @@ export async function startLearn(row: MapperTarget): Promise<void> {
     learn = await flight;
   } catch {
     if (learnGen === gen) {
+      autoMap = null;
       retireLearn();
       host?.flash("error: Key listening could not start — is ksx studio still running?");
     }
@@ -463,10 +473,21 @@ export async function startLearn(row: MapperTarget): Promise<void> {
     if (learnStartFlight === flight) learnStartFlight = null;
   }
   if (learnGen !== gen) {
-    // Superseded while starting: the newer action owns the daemon listener.
+    // Superseded while starting. A newer waiter may share this same flight;
+    // let every already-queued promise continuation run, then cancel the
+    // returned generation unless one of them actually adopted it. Without
+    // this cleanup a quick cancel leaves the daemon consuming keys until its
+    // timeout even though the page shows no active listener.
+    if (validGen(learn.generation)) {
+      const staleGeneration = learn.generation;
+      window.queueMicrotask(() => {
+        if (daemonGen !== staleGeneration) void cancelDaemonGen(staleGeneration);
+      });
+    }
     return;
   }
   if (!learn.ok || !validGen(learn.generation)) {
+    autoMap = null;
     retireLearn();
     host?.flash(`error: ${learn.error ?? "Key listening could not start. Nothing changed."}`);
     return;
@@ -512,6 +533,7 @@ async function pollLearn(observed?: RdLearnView): Promise<void> {
   }
   if (learnGen !== gen) return;
   if (expected === null || !validGen(learn.generation) || learn.generation !== expected) {
+    autoMap = null;
     retireLearn();
     host?.flash("error: Another key-listening action replaced this one. Nothing changed.");
     return;
@@ -526,7 +548,11 @@ async function pollLearn(observed?: RdLearnView): Promise<void> {
     case "hit": {
       const chain = chainWanted();
       retireLearn();
-      if (!learn.key) break;
+      if (!learn.key) {
+        autoMap = null;
+        host?.flash("error: Key listening stopped without a key. Auto-map was cancelled.");
+        break;
+      }
       if (!hitBelongsToPin(row, learn)) {
         autoMap = null;
         host?.flash(
@@ -561,6 +587,7 @@ async function pollLearn(observed?: RdLearnView): Promise<void> {
       autoMap = null;
       break;
     default:
+      autoMap = null;
       retireLearn();
       host?.flash("error: Key listening stopped. Nothing changed.");
       break;
@@ -588,6 +615,7 @@ async function writeLearnedKey(row: MapperTarget, key: string, force: boolean): 
     gate = host?.beginMutation() ?? null;
   }
   if (gate === null) {
+    autoMap = null;
     host?.flash("error: The page is busy with another change — try again.");
     return false;
   }
@@ -670,39 +698,211 @@ function conflictDialog(): HTMLElement | null {
   return host?.root()?.querySelector<HTMLElement>(".rd-confdlg") ?? null;
 }
 
+let conflictReturnFocus: Element | null = null;
+let conflictReturnSelector: string | null = null;
+let conflictTrapPanel: HTMLElement | null = null;
+
+interface ConflictFocusReturn {
+  element: Element | null;
+  selector: string | null;
+}
+
+function conflictOpenerSelector(active: Element): string | null {
+  const holder = active.closest<HTMLElement>("[data-fn], [data-key]");
+  const identity = holder?.dataset.fn
+    ? `[data-fn="${CSS.escape(holder.dataset.fn)}"]`
+    : holder?.dataset.key
+      ? `[data-key="${CSS.escape(holder.dataset.key)}"]`
+      : "";
+  const ownSlot = holder?.dataset.slot;
+  const padSlot = holder?.closest<HTMLElement>("[data-pad-slot]")?.dataset.padSlot;
+  const instanceId = holder?.closest<HTMLElement>("[data-instance-id]")?.dataset.instanceId;
+  const nx = active.getAttribute("data-nx");
+  if (!holder || !identity) return null;
+  const holderSelector = `${identity}${
+    ownSlot ? `[data-slot="${CSS.escape(ownSlot)}"]` : ""
+  }`;
+  if (!nx && holder === active) {
+    if (active.hasAttribute("data-rd-pad-action")) {
+      return padSlot
+        ? `[data-pad-slot="${CSS.escape(padSlot)}"] ${holderSelector}[data-rd-pad-action]`
+        : `${holderSelector}[data-rd-pad-action]`;
+    }
+    // The keyboard plate is also direct manipulation, but it is native HTML
+    // and deliberately has no pad-action marker. Scope its canonical key to
+    // the durable canvas instance so a refresh can find the replacement cap.
+    return instanceId
+      ? `[data-instance-id="${CSS.escape(instanceId)}"] ${holderSelector}`
+      : holderSelector;
+  }
+  if (!nx) return null;
+  return holder === active
+    ? `${holderSelector}[data-nx="${CSS.escape(nx)}"]`
+    : `${holderSelector} [data-nx="${CSS.escape(nx)}"]`;
+}
+
+function conflictFocusables(panel: HTMLElement): HTMLElement[] {
+  return Array.from(
+    panel.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+        'textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter(
+    (control) =>
+      !control.hidden &&
+      !control.closest("[hidden]") &&
+      control.getAttribute("aria-hidden") !== "true",
+  );
+}
+
+/** The consequence question is modal keyboard state. Keep Tab inside its two
+ *  answers; Escape continues to bubble to the island's single escape ladder. */
+function trapConflictFocus(event: KeyboardEvent): void {
+  if (event.key !== "Tab") return;
+  const panel = event.currentTarget as HTMLElement;
+  const controls = conflictFocusables(panel);
+  if (controls.length === 0) {
+    event.preventDefault();
+    panel.focus({ preventScroll: true });
+    return;
+  }
+  const first = controls[0];
+  const last = controls[controls.length - 1];
+  const active = document.activeElement;
+  if (!panel.contains(active)) {
+    event.preventDefault();
+    first.focus({ preventScroll: true });
+  } else if (event.shiftKey && (active === first || active === panel)) {
+    event.preventDefault();
+    last.focus({ preventScroll: true });
+  } else if (!event.shiftKey && active === last) {
+    event.preventDefault();
+    first.focus({ preventScroll: true });
+  }
+}
+
+function wireConflictTrap(panel: HTMLElement): void {
+  if (conflictTrapPanel === panel) return;
+  conflictTrapPanel?.removeEventListener("keydown", trapConflictFocus);
+  conflictTrapPanel = panel;
+  conflictTrapPanel.addEventListener("keydown", trapConflictFocus);
+}
+
+function focusConflictTarget(target: Element | null): boolean {
+  if (!target?.isConnected || !("focus" in target)) return false;
+  const focus = (target as HTMLElement).focus;
+  if (typeof focus !== "function") return false;
+  focus.call(target, { preventScroll: true });
+  return document.activeElement === target;
+}
+
+function takeConflictFocus(): ConflictFocusReturn {
+  const saved = {
+    element: conflictReturnFocus,
+    selector: conflictReturnSelector,
+  };
+  conflictReturnFocus = null;
+  conflictReturnSelector = null;
+  return saved;
+}
+
+function restoreConflictFocus(saved: ConflictFocusReturn = takeConflictFocus()): void {
+  if (focusConflictTarget(saved.element)) return;
+  const replacement = saved.selector
+    ? host?.root()?.querySelector<Element>(saved.selector) ?? null
+    : null;
+  if (focusConflictTarget(replacement)) return;
+  host
+    ?.root()
+    ?.querySelector<HTMLElement>('.forma-canvas-viewport, [data-nx="rd-ctrls-open"]')
+    ?.focus({ preventScroll: true });
+}
+
 function openConflict(title: string, lines: string): void {
   const dialog = conflictDialog();
   if (!dialog) return;
+  const panel = dialog.querySelector<HTMLElement>(".nd");
+  const active = document.activeElement;
+  if (
+    active instanceof Element &&
+    active !== document.body &&
+    active !== document.documentElement &&
+    !dialog.contains(active)
+  ) {
+    conflictReturnFocus = active;
+    conflictReturnSelector = conflictOpenerSelector(active);
+  }
   const t = dialog.querySelector<HTMLElement>(".nd-title");
   const l = dialog.querySelector<HTMLElement>(".nd-lede");
   if (t) t.textContent = title;
   if (l) l.textContent = lines;
   dialog.classList.remove("none");
-  dialog.querySelector<HTMLElement>(".nd")?.focus();
+  if (panel) {
+    // RedesignIsland carries the SSR twin; stamping it here keeps this module
+    // self-contained if a fixture or future host supplies only role=dialog.
+    panel.setAttribute("aria-modal", "true");
+    wireConflictTrap(panel);
+    panel.focus({ preventScroll: true });
+  }
 }
 
-function dismissConflict(): void {
+function dismissConflict(restoreFocus = true): void {
   pendingConflict = null;
   const dialog = conflictDialog();
+  const wasOpen = Boolean(dialog && !dialog.classList.contains("none"));
   if (dialog) dialog.classList.add("none");
+  if (restoreFocus && (wasOpen || conflictReturnFocus !== null)) restoreConflictFocus();
+}
+
+/** Accepting a conflict hides the modal before its write/refresh completes.
+ * Restore only while focus still belongs to that dismissed modal (or the
+ * browser dropped it to the document during repaint). A user who deliberately
+ * moved to another live control while the request was pending keeps it. */
+function acceptedConflictOwnsFocus(dialog: HTMLElement | null, owner: Element | null): boolean {
+  const active = document.activeElement;
+  if (
+    active === null ||
+    active === document.body ||
+    active === document.documentElement ||
+    !active.isConnected
+  ) {
+    return true;
+  }
+  // The shared dialog may already have reopened for a newer conflict; that
+  // newer modal owns focus and the completed older write must not disturb it.
+  if (dialog && !dialog.classList.contains("none")) return false;
+  return active === owner || Boolean(dialog?.contains(active));
 }
 
 /** The dialog's two verbs (wired by the island's click dispatch). */
 export function conflictForce(): void {
   const held = pendingConflict;
-  dismissConflict();
-  if (!held) return;
+  // The accepted write refreshes both the inspector and controller card.
+  // Hold the logical return target until that repaint completes; restoring
+  // before the write would focus a node the refresh immediately detaches.
+  const returnFocus = takeConflictFocus();
+  const dialog = conflictDialog();
+  const focusOwner = document.activeElement;
+  dismissConflict(false);
+  if (!held) {
+    if (acceptedConflictOwnsFocus(dialog, focusOwner)) restoreConflictFocus(returnFocus);
+    return;
+  }
   lastWrite = { origin: held.origin, chain: held.chain, assignMode: held.assignMode };
-  void writeLearnedKey(held.row, held.key, true).then((ok) => {
-    if (!ok || !held.chain) return;
-    if (held.origin === "assign") {
-      armAssign(held.key, held.assignMode);
-      setChainBox(true);
-    } else if (!autoMap) {
-      void startLearn(reopenTarget(held.row, "add"));
-      setChainBox(true);
-    }
-  });
+  void writeLearnedKey(held.row, held.key, true)
+    .then((ok) => {
+      if (!ok || !held.chain) return;
+      if (held.origin === "assign") {
+        armAssign(held.key, held.assignMode);
+        setChainBox(true);
+      } else if (!autoMap) {
+        void startLearn(reopenTarget(held.row, "add"));
+        setChainBox(true);
+      }
+    })
+    .finally(() => {
+      if (acceptedConflictOwnsFocus(dialog, focusOwner)) restoreConflictFocus(returnFocus);
+    });
 }
 
 export function conflictCancel(): void {

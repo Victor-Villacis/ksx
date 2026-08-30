@@ -82,11 +82,13 @@ export interface RdPanelView {
   socd_cls: string;
   socd_num: string;
   socd_lab: string;
+  socd_current: string;
   socd_edit_opts: RdOptionView[];
 }
 
 /** One BY-KEY row — `NocturneKeyRow` on the wire (snapshot.rs). */
 export interface RdKeyRowView {
+  key_label: string;
   key: string;
   targets: string;
   fns: string;
@@ -155,6 +157,29 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+function keyLabelMap(keys: RdKeyPanelView): Map<string, string> {
+  const labels = new Map<string, string>();
+  for (const row of [
+    ...keys.key_rows,
+    ...keys.avail_main,
+    ...keys.avail_nav,
+    ...keys.avail_num,
+  ]) {
+    labels.set(row.key, row.key_label || row.key);
+  }
+  return labels;
+}
+
+/** Binding rows carry canonical keys joined by the server's ` · ` separator.
+ *  Only their visible cap text changes; mapper identity remains on the served
+ *  row, data attributes and hidden form fields. */
+function displayKeyList(canonical: string, labels: ReadonlyMap<string, string>): string {
+  return canonical
+    .split(" · ")
+    .map((key) => labels.get(key) ?? key)
+    .join(" · ");
+}
+
 function svgIcon(pathD: string): SVGSVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("class", "n-ico");
@@ -196,7 +221,7 @@ function inlineForm(action: string, kind: string, fields: [string, string][]): H
 
 
 /** One bind row — nocturne's `details.n-bind` shape, class-for-class. */
-function bindRow(r: RdBindRowView): HTMLElement {
+function bindRow(r: RdBindRowView, keyLabels: ReadonlyMap<string, string>): HTMLElement {
   const row = document.createElement("details");
   row.className = r.cls;
   row.dataset.fn = r.function;
@@ -206,7 +231,12 @@ function bindRow(r: RdBindRowView): HTMLElement {
   sum.className = "n-bind-sum";
   const txt = el("span", "n-bind-txt");
   txt.append(el("span", "n-bind-label", r.label), el("span", "n-bind-note", r.note));
-  const chip = liveChip(r.chip_cls, r.chip, r.chip_title, "chip-learn");
+  const chip = liveChip(
+    r.chip_cls,
+    displayKeyList(r.chip, keyLabels),
+    r.chip_title,
+    "chip-learn",
+  );
   const add = liveChip(r.add_cls, "", "Add another key to this control", "chip-add");
   add.setAttribute("aria-label", "Add another key to this control");
   add.append(svgIcon(ICON_PLUS));
@@ -309,12 +339,13 @@ function bindGroup(
   count: string,
   rows: RdBindRowView[],
   chips: RdCtlChipView[],
+  keyLabels: ReadonlyMap<string, string>,
 ): HTMLElement {
   const section = el("section", cls);
   const head = el("div", "n-bindg-head");
   head.append(el("span", "n-bindg-lab", label), el("span", "n-bindg-n", count));
   section.append(head);
-  for (const row of rows) section.append(bindRow(row));
+  for (const row of rows) section.append(bindRow(row, keyLabels));
   const strip = el("div", "n-ctlstrip");
   for (const chip of chips) {
     const free = liveChip(
@@ -338,7 +369,10 @@ function keyRow(r: RdKeyRowView, onJump: (fns: string) => void): HTMLElement {
   const row = el("div", r.cls);
   row.dataset.key = r.key;
   row.dataset.fns = r.fns;
-  row.append(el("span", "n-krow-chip", r.key), el("span", "n-krow-verb", "drives"));
+  const keyLabel = r.key_label || r.key;
+  const keyChip = el("span", "n-krow-chip", keyLabel);
+  if (keyLabel !== r.key) keyChip.title = `Canonical key: ${r.key}`;
+  row.append(keyChip, el("span", "n-krow-verb", "drives"));
   const jump = el("button", "n-krow-tg door", r.targets);
   jump.type = "button";
   jump.title = "Open these controls in the Controls view";
@@ -379,13 +413,16 @@ function availSection(head: string, cls: string, chips: RdKeyRowView[]): HTMLEle
   bar.append(el("span", "n-bindg-lab", head));
   const grid = el("div", "n-akey-grid");
   for (const chip of chips) {
+    const keyLabel = chip.key_label || chip.key;
     const free = liveChip(
       "n-akey",
-      chip.key,
+      keyLabel,
       "Free — click to take this key in hand, then click a control on the pad",
       "rd-akey",
     );
     free.dataset.key = chip.key;
+    free.setAttribute("aria-label", `${keyLabel} — free key`);
+    if (keyLabel !== chip.key) free.title = `Free key — canonical name ${chip.key}`;
     grid.append(free);
   }
   section.append(bar, grid);
@@ -552,6 +589,7 @@ export function renderControllerPanel(
   onTab: (next: InspectorTab) => void,
 ): HTMLElement[] {
   const rows: HTMLElement[] = [];
+  const keyLabels = keyLabelMap(keys);
 
   // The meta strip — nocturne's center words, moved to where this page
   // talks about the selected thing.
@@ -570,14 +608,19 @@ export function renderControllerPanel(
   socd.method = "post";
   socd.action = "/redesign/controller/socd";
   socd.dataset.rdForm = "controller-socd";
-  socd.append(el("span", "n-socd-lab", panel.socd_lab), hidden("number", panel.socd_num));
+  const socdSelectId = `rd-socd-${panel.socd_num || "selected"}`;
+  const socdLabel = el("label", "n-socd-lab", panel.socd_lab);
+  socdLabel.htmlFor = socdSelectId;
+  socd.append(socdLabel, hidden("number", panel.socd_num));
   const select = document.createElement("select");
+  select.id = socdSelectId;
   select.className = "n-socd-sel";
   select.name = "socd";
   for (const option of panel.socd_edit_opts) {
     const row = document.createElement("option");
     row.value = option.value;
     row.textContent = option.label;
+    row.selected = option.value === panel.socd_current;
     select.append(row);
   }
   const set = el("button", "n-socd-set", "Set");
@@ -603,12 +646,26 @@ export function renderControllerPanel(
   mapAll.dataset.nx = "rd-automap";
   mapAll.title =
     "Walk every UNBOUND control in turn — press a key for each. Esc skips one; Cancel stops the run.";
-  const clearAllBtn = el("button", "n-autobtn danger", "Unbind all");
+  const clearAllDetails = el("details", "n-clearall");
+  const clearAllSummary = el("summary", "n-clearall-sum", "Unbind all…");
+  const clearAllBody = el("div", "n-clearall-body");
+  const clearAllBtn = el("button", "n-bbtn sm danger", "Unbind every key");
   clearAllBtn.type = "submit";
-  clearAllBtn.title =
-    "Every key unbound on this controller — its macros lose their triggers but keep their steps";
+  const clearAllImpact =
+    "Removes every direct key binding and every macro trigger from this controller. Macro steps remain, but the keys must be mapped again.";
+  const clearAllImpactId = `rd-unbind-all-impact-${panel.slot_val || "selected"}`;
+  const clearAllDescription = el("p", "n-foot", clearAllImpact);
+  clearAllDescription.id = clearAllImpactId;
+  clearAllBtn.title = clearAllImpact;
+  clearAllBtn.setAttribute("aria-describedby", clearAllImpactId);
+  clearAllBtn.setAttribute(
+    "aria-label",
+    `Unbind every key from Player ${panel.slot_val || "selected"}`,
+  );
   clearAll.append(clearAllBtn);
-  verbs.append(dup, mapAll, clearAll);
+  clearAllBody.append(clearAllDescription, clearAll);
+  clearAllDetails.append(clearAllSummary, clearAllBody);
+  verbs.append(dup, mapAll, clearAllDetails);
   rows.push(verbs);
 
   // The pane's two READINGS of one relation: by control (game side) and by
@@ -652,14 +709,29 @@ export function renderControllerPanel(
       "n-teach",
       "Click a key chip, then press the new key; + adds one, ✕ unbinds. Open a row for press behaviour and turbo.",
     ),
-    bindGroup(GROUPS[0], panel.bind_face_cls, panel.bind_face_n, panel.bind_face, panel.avail_face),
-    bindGroup(GROUPS[1], panel.bind_dpad_cls, panel.bind_dpad_n, panel.bind_dpad, panel.avail_dpad),
+    bindGroup(
+      GROUPS[0],
+      panel.bind_face_cls,
+      panel.bind_face_n,
+      panel.bind_face,
+      panel.avail_face,
+      keyLabels,
+    ),
+    bindGroup(
+      GROUPS[1],
+      panel.bind_dpad_cls,
+      panel.bind_dpad_n,
+      panel.bind_dpad,
+      panel.avail_dpad,
+      keyLabels,
+    ),
     bindGroup(
       GROUPS[2],
       panel.bind_shoulders_cls,
       panel.bind_shoulders_n,
       panel.bind_shoulders,
       panel.avail_shoulders,
+      keyLabels,
     ),
     bindGroup(
       GROUPS[3],
@@ -667,6 +739,7 @@ export function renderControllerPanel(
       panel.bind_lstick_n,
       panel.bind_lstick,
       panel.avail_lstick,
+      keyLabels,
     ),
     bindGroup(
       GROUPS[4],
@@ -674,6 +747,7 @@ export function renderControllerPanel(
       panel.bind_rstick_n,
       panel.bind_rstick,
       panel.avail_rstick,
+      keyLabels,
     ),
     bindGroup(
       GROUPS[5],
@@ -681,6 +755,7 @@ export function renderControllerPanel(
       panel.bind_system_n,
       panel.bind_system,
       panel.avail_system,
+      keyLabels,
     ),
   );
   rows.push(groups);

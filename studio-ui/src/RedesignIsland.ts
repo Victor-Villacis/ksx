@@ -212,6 +212,9 @@ export interface RdKeyCellView {
   short: string;
   title: string;
   aria: string;
+  disabled: boolean;
+  tab: string;
+  aria_hidden: string;
   style: string;
 }
 
@@ -1519,12 +1522,73 @@ function mergeSlotIntoUrl(slot: string): boolean {
   return true;
 }
 
+function inspectorFocusBookmark(body: HTMLElement): string | null {
+  const active = document.activeElement;
+  if (!(active instanceof Element) || !body.contains(active)) return null;
+  if (active.id) return `#${CSS.escape(active.id)}`;
+  if (active.matches("details.n-clearall > summary")) return "details.n-clearall > summary";
+  if (active.matches("details.n-clearall button")) return "details.n-clearall button";
+  if (active.matches("select.n-socd-sel")) return "select.n-socd-sel";
+  if (active.matches("button.n-socd-set")) return "button.n-socd-set";
+  if (active.matches(".rd-insp-vseg .vc")) return ".rd-insp-vseg .vc";
+  if (active.matches(".rd-insp-vseg .vk")) return ".rd-insp-vseg .vk";
+
+  const owner = active.closest<HTMLElement>("[data-fn], [data-key]");
+  if (owner) {
+    const attr = owner.dataset.fn !== undefined ? "data-fn" : "data-key";
+    const value = owner.dataset.fn ?? owner.dataset.key ?? "";
+    const ownerSelector = `[${attr}="${CSS.escape(value)}"]`;
+    if (active.matches("summary")) return `${ownerSelector} > summary`;
+    const nx = active.closest<HTMLElement>("[data-nx]")?.dataset.nx;
+    if (nx) return `${ownerSelector} [data-nx="${CSS.escape(nx)}"]`;
+    if (active.matches("a[href]")) {
+      const href = active.getAttribute("href");
+      if (href) return `${ownerSelector} a[href="${CSS.escape(href)}"]`;
+    }
+  }
+  const nx = active.closest<HTMLElement>("[data-nx]")?.dataset.nx;
+  return nx ? `[data-nx="${CSS.escape(nx)}"]` : null;
+}
+
+function restoreInspectorFocus(body: HTMLElement, selector: string | null): void {
+  if (!selector) return;
+  body.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
+}
+
 /** Repaint the inspector's body from the live selection. Called on every
  *  selection or item-state change while open. */
 function renderInspector(): void {
   const canvas = nCanvas;
   const body = inspectorEl()?.querySelector<HTMLElement>(".rd-insp-body");
   if (!canvas || !body) return;
+  const selected = canvas.selectedItems();
+  const focusBookmark = inspectorFocusBookmark(body);
+  // A background payload often changes nothing this inspector can show.
+  // Keep the existing controls alive in that case: replacing an identical
+  // tree would collapse consequence disclosures, reset an unsubmitted select
+  // choice, and throw keyboard focus back to the page every two seconds.
+  const controllerSelected = selected.some((item) =>
+    /^ctrl-slot-\d+$/.test(item.dataset.instanceId ?? "")
+  );
+  const renderFingerprint = JSON.stringify([
+    inspTab,
+    selected.map((item) => [
+      item.dataset.instanceId ?? "",
+      item.dataset.widgetName ?? "",
+      canvas.getItemState(item),
+    ]),
+    controllerSelected
+      ? [rdCtrlPanel, rdCtrlKeys, rdCtrlMacrosHead, rdCtrlMacroRows, rdCtrlMacrosNote]
+      : null,
+  ]);
+  if (
+    body.dataset.renderFingerprint === renderFingerprint &&
+    pendingLocateFns === null &&
+    pendingLocateKey === null
+  ) {
+    mapperRemark();
+    return;
+  }
   // A repaint must not lose the reader's place: every camera nudge and
   // item-state change lands here, and a full rebuild would collapse the
   // row someone just opened (or the one a pad-art click just located).
@@ -1533,8 +1597,10 @@ function renderInspector(): void {
       (row) => row.dataset.fn ?? "",
     ),
   );
+  const clearAllWasOpen = Boolean(
+    body.querySelector<HTMLDetailsElement>("details.n-clearall[open]"),
+  );
   const keptScroll = body.scrollTop;
-  const selected = canvas.selectedItems();
   const rows: (HTMLElement | null)[] = [];
   if (selected.length === 1) {
     const item = selected[0];
@@ -1648,12 +1714,18 @@ function renderInspector(): void {
     rows.push(title, kind, origin, verbs);
   }
   body.replaceChildren(...rows.filter((row): row is HTMLElement => Boolean(row)));
+  body.dataset.renderFingerprint = renderFingerprint;
   // Restore the reader's place: rows they had open stay open, and the
   // panel does not jump back to its top on every repaint.
   for (const row of Array.from(body.querySelectorAll<HTMLElement>("details.n-bind"))) {
     if (openFns.has(row.dataset.fn ?? "")) (row as HTMLDetailsElement).open = true;
   }
+  if (clearAllWasOpen) {
+    const clearAll = body.querySelector<HTMLDetailsElement>("details.n-clearall");
+    if (clearAll) clearAll.open = true;
+  }
   body.scrollTop = keptScroll;
+  restoreInspectorFocus(body, focusBookmark);
   // The locate pass: a click on a pad-art zone (the 4460 pointer
   // enhancement) or a Keys-row jump named a control — open its row in the
   // freshly painted Controls view. A jump's target wins (it just switched
@@ -1877,8 +1949,16 @@ const DEVICE_ROLE_BADGE: Record<string, string> = {
   keyboard: "Keyboard",
 };
 const STAGED_DEVICE_TITLE =
-  "This board is the background helper's staged choice. Staging it again changes nothing — " +
+  "This board is the background helper's mapping input. Choosing it again changes nothing — " +
   "a keyboard prepared for play keeps its preparation.";
+const DEVICE_CARD_MIN_HEIGHT = 220;
+const DEVICE_CARD_ROW_STRIDE = DEVICE_CARD_MIN_HEIGHT + CANVAS_FRESH_PLACEMENT_GAP;
+
+function deviceCardPurpose(row: RdDeviceRowView): string {
+  return row.aria_current === "true"
+    ? "This is the mapping input. Its emitted keys appear on the Input source keyboard."
+    : "This card is on the canvas for inspection. Use it as the mapping input when you want its emitted keys on the Input source keyboard.";
+}
 
 function deviceCardMeta(row: RdDeviceRowView): string {
   if (row.role !== "panel-encoder") return row.meta;
@@ -1910,8 +1990,11 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   // flash speaks, and the refresh moves the marking wherever it now belongs.
   const staged = document.createElement("p");
   staged.className = "rd-devcard-staged";
-  staged.textContent = "Staged — the board ksx splits";
+  staged.textContent = "Mapping input — shown on Input source";
   staged.title = STAGED_DEVICE_TITLE;
+  const purpose = document.createElement("p");
+  purpose.className = "rd-devcard-purpose";
+  purpose.textContent = deviceCardPurpose(row);
   const form = document.createElement("form");
   form.className = "rd-stageform";
   form.method = "post";
@@ -1931,12 +2014,12 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   const submit = document.createElement("button");
   submit.type = "submit";
   submit.className = "rd-stagebtn";
-  submit.textContent = "Stage this board";
+  submit.textContent = "Use as mapping input";
   submit.title =
-    "Make this the board ksx splits — replaces the daemon's current choice. " +
+    "Make this the board ksx reads for mapping — replaces the daemon's current choice. " +
     "Nothing is saved or started, and a board already prepared keeps its preparation.";
   form.append(submit);
-  body.append(badge, name, meta, staged, form);
+  body.append(badge, name, meta, purpose, staged, form);
   return body;
 }
 
@@ -1992,7 +2075,10 @@ function mountDeviceWidget(
     content.append(deviceCardContent(row), encoderSurface.content);
   }
   const preferredWidth = encoderSurface ? 960 : 300;
-  const minHeight = encoderSurface ? 900 : 150;
+  // Match the canvas engine's effective minimum exactly. Supplying a smaller
+  // candidate makes collision allocation reason about geometry it will later
+  // clamp, which can leave fresh rows closer than the engine's 40 px gap.
+  const minHeight = encoderSurface ? 900 : DEVICE_CARD_MIN_HEIGHT;
   const item = createCanvasItem({
     instanceId: slug,
     displayName: row.name,
@@ -2011,7 +2097,10 @@ function mountDeviceWidget(
   }
   const home: CanvasItemGeometry = {
     x: 140 + (index % 3) * 340,
-    y: 160 + Math.floor(index / 3) * 200,
+    y: 160 + Math.floor(index / 3) * Math.max(
+      DEVICE_CARD_ROW_STRIDE,
+      minHeight + CANVAS_FRESH_PLACEMENT_GAP,
+    ),
     width: preferredWidth,
     height: minHeight,
     z: 3 + index,
@@ -2265,6 +2354,7 @@ function syncBenchCards(): void {
     const row = deviceRowFor(item.dataset.selector ?? "");
     const status = item.querySelector<HTMLElement>(".rd-devcard-staged");
     const meta = item.querySelector<HTMLElement>(".rd-devcard-meta");
+    const purpose = item.querySelector<HTMLElement>(".rd-devcard-purpose");
     const stageButton = item.querySelector<HTMLButtonElement>(".rd-stagebtn");
     const actionAvailable = rdDeviceScanAuthoritative && rdStagingReachable && Boolean(row);
     item.dataset.scanAuthoritative = rdDeviceScanAuthoritative ? "true" : "false";
@@ -2297,7 +2387,7 @@ function syncBenchCards(): void {
         status.title = rdStagingLine || "Staging unavailable";
       }
     } else if (status) {
-      status.textContent = "Staged — the board ksx splits";
+      status.textContent = "Mapping input — shown on Input source";
       status.title = STAGED_DEVICE_TITLE;
     }
     item.dataset.widgetName = row.name;
@@ -2307,6 +2397,7 @@ function syncBenchCards(): void {
       DEVICE_ROLE_BADGE[row.role] ?? "Experimental";
     item.querySelector<HTMLElement>(".rd-devcard-name")!.textContent = row.name;
     if (meta) meta.textContent = deviceCardMeta(row);
+    if (purpose) purpose.textContent = deviceCardPurpose(row);
     item.querySelector<HTMLElement>(".widget-drag-handle")?.setAttribute(
       "aria-label",
       `Move ${row.name}`,
@@ -2348,7 +2439,7 @@ function syncDeviceRows(): void {
     if (row && meta) meta.textContent = deviceCardMeta(row);
     const word = btn.querySelector<HTMLElement>(".rd-dev-word");
     if (word) {
-      word.textContent = on ? "On the workbench — press to remove" : "Add to workbench";
+      word.textContent = on ? "On canvas — press to remove" : "Show on canvas";
     }
   }
 }
@@ -2618,7 +2709,10 @@ function typingIntoSomething(event: KeyboardEvent): boolean {
 function canvasOwnsKeyboardFocus(): boolean {
   const canvas = rdRoot?.querySelector<HTMLElement>(".n-canvas");
   const active = document.activeElement;
-  return Boolean(canvas && active instanceof HTMLElement && canvas.contains(active));
+  // Interactive controller regions are SVG elements, not HTMLElements. They
+  // still belong to the canvas keyboard context, so keep canvas-level Escape
+  // and shortcut handling available while one of those regions owns focus.
+  return Boolean(canvas && active instanceof Element && canvas.contains(active));
 }
 
 export function redesignWire(root: HTMLElement): void {
@@ -2737,6 +2831,18 @@ export function redesignWire(root: HTMLElement): void {
     // inspector and locating the row is this page's half. With a KEY IN
     // HAND, the pad IS the picker: the clicked control takes the key.
     const zone = target?.closest<Element>(".rd-ctrlcard-artwrap [data-fn]");
+    // Pointer activation selected the containing card on pointerdown. A
+    // keyboard or assistive-technology click has no pointerdown, so make the
+    // same selection explicitly before the inspector reads it. `detail === 0`
+    // is the click contract for non-pointer activation; keeping this guard is
+    // what preserves the canvas engine's Shift/Ctrl/Cmd pointer multi-select.
+    if (zone && ev.detail === 0) {
+      const card = zone.closest<HTMLElement>(
+        '.widget-instance[data-instance-id^="ctrl-slot-"]',
+      );
+      const canvas = nCanvas;
+      if (card && canvas && canvas.activeItem() !== card) canvas.setActive(card);
+    }
     if (zone && assignHeld()) {
       const fnName = (zone.getAttribute("data-fn") ?? "").split(/\s+/)[0] ?? "";
       const padSlot =
@@ -2760,11 +2866,7 @@ export function redesignWire(root: HTMLElement): void {
       pendingLocateFns = zone.getAttribute("data-fn") ?? "";
       if (inspTab !== "controls") {
         inspTab = "controls";
-        try {
-          window.localStorage.setItem(RD_UI_STORE, JSON.stringify({ inspTab }));
-        } catch {
-          // chrome only
-        }
+        saveKbUi();
       }
       setInspector(true);
       renderInspector();
@@ -3412,6 +3514,11 @@ export function RedesignIsland() {
             ),
             h("p", { class: "n-devnote" }, () => rdDevScanLine()),
             h(
+              "p",
+              { class: "n-devnote rd-devmodal-purpose" },
+              "Show adds a device card to this canvas for inspection. It does not change mapping. On the card, Use as mapping input chooses the one device whose emitted keys appear on the Input source keyboard.",
+            ),
+            h(
               "div",
               { class: () => rdDevKbFoldCls() },
               h("h3", { class: "rd-devhead" }, () => rdDevKbHead()),
@@ -3446,7 +3553,7 @@ export function RedesignIsland() {
                       // what caught the chip existing only after hydration.
                       h("span", { class: "rd-dev-stagedchip" }, "staged"),
                       h("span", { class: "n-dev-meta" }, r.meta),
-                      h("span", { class: "n-dev-meta rd-dev-word" }, "Add to workbench"),
+                      h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
                     ),
                     h("span", { class: "n-dev-dot" }),
                   ),
@@ -3492,7 +3599,7 @@ export function RedesignIsland() {
                       // it starts — connection chatter, by the parity
                       // contract, so hydration may reword it.
                       h("span", { class: "n-dev-meta", "data-live-chatter": "" }, r.meta),
-                      h("span", { class: "n-dev-meta rd-dev-word" }, "Add to workbench"),
+                      h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
                     ),
                     h("span", { class: "n-dev-dot" }),
                   ),
@@ -3533,7 +3640,7 @@ export function RedesignIsland() {
                       // what caught the chip existing only after hydration.
                       h("span", { class: "rd-dev-stagedchip" }, "staged"),
                       h("span", { class: "n-dev-meta" }, r.meta),
-                      h("span", { class: "n-dev-meta rd-dev-word" }, "Add to workbench"),
+                      h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
                     ),
                     h("span", { class: "n-dev-dot" }),
                   ),
@@ -3653,6 +3760,7 @@ export function RedesignIsland() {
               class: "nd",
               "data-nx": "dlg-noop",
               role: "dialog",
+              "aria-modal": "true",
               tabindex: "-1",
               "aria-label": "Key conflict",
             },
@@ -4042,11 +4150,21 @@ export function RedesignIsland() {
                         { class: "n-kbrow" },
                         createList(
                           () => rdKbRow1(),
-                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.tab + "|" + r.aria_hidden + "|" + r.style,
                           (r) =>
                             h(
-                              "div",
-                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              "button",
+                              {
+                                type: "button",
+                                disabled: r.disabled,
+                                tabindex: r.tab,
+                                "aria-hidden": r.aria_hidden,
+                                "data-key": r.key,
+                                title: r.title,
+                                "aria-label": r.aria,
+                                class: r.cls,
+                                style: r.style,
+                              },
                               h("span", { class: "n-key-cap" }, r.cap),
                               h("span", { class: "n-key-short" }, r.short),
                             ),
@@ -4057,11 +4175,21 @@ export function RedesignIsland() {
                         { class: "n-kbrow" },
                         createList(
                           () => rdKbRow2(),
-                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.tab + "|" + r.aria_hidden + "|" + r.style,
                           (r) =>
                             h(
-                              "div",
-                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              "button",
+                              {
+                                type: "button",
+                                disabled: r.disabled,
+                                tabindex: r.tab,
+                                "aria-hidden": r.aria_hidden,
+                                "data-key": r.key,
+                                title: r.title,
+                                "aria-label": r.aria,
+                                class: r.cls,
+                                style: r.style,
+                              },
                               h("span", { class: "n-key-cap" }, r.cap),
                               h("span", { class: "n-key-short" }, r.short),
                             ),
@@ -4072,11 +4200,21 @@ export function RedesignIsland() {
                         { class: "n-kbrow" },
                         createList(
                           () => rdKbRow3(),
-                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.tab + "|" + r.aria_hidden + "|" + r.style,
                           (r) =>
                             h(
-                              "div",
-                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              "button",
+                              {
+                                type: "button",
+                                disabled: r.disabled,
+                                tabindex: r.tab,
+                                "aria-hidden": r.aria_hidden,
+                                "data-key": r.key,
+                                title: r.title,
+                                "aria-label": r.aria,
+                                class: r.cls,
+                                style: r.style,
+                              },
                               h("span", { class: "n-key-cap" }, r.cap),
                               h("span", { class: "n-key-short" }, r.short),
                             ),
@@ -4087,11 +4225,21 @@ export function RedesignIsland() {
                         { class: "n-kbrow" },
                         createList(
                           () => rdKbRow4(),
-                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.tab + "|" + r.aria_hidden + "|" + r.style,
                           (r) =>
                             h(
-                              "div",
-                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              "button",
+                              {
+                                type: "button",
+                                disabled: r.disabled,
+                                tabindex: r.tab,
+                                "aria-hidden": r.aria_hidden,
+                                "data-key": r.key,
+                                title: r.title,
+                                "aria-label": r.aria,
+                                class: r.cls,
+                                style: r.style,
+                              },
                               h("span", { class: "n-key-cap" }, r.cap),
                               h("span", { class: "n-key-short" }, r.short),
                             ),
@@ -4102,11 +4250,21 @@ export function RedesignIsland() {
                         { class: "n-kbrow" },
                         createList(
                           () => rdKbRow5(),
-                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.tab + "|" + r.aria_hidden + "|" + r.style,
                           (r) =>
                             h(
-                              "div",
-                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              "button",
+                              {
+                                type: "button",
+                                disabled: r.disabled,
+                                tabindex: r.tab,
+                                "aria-hidden": r.aria_hidden,
+                                "data-key": r.key,
+                                title: r.title,
+                                "aria-label": r.aria,
+                                class: r.cls,
+                                style: r.style,
+                              },
                               h("span", { class: "n-key-cap" }, r.cap),
                               h("span", { class: "n-key-short" }, r.short),
                             ),
@@ -4117,11 +4275,21 @@ export function RedesignIsland() {
                         { class: "n-kbrow" },
                         createList(
                           () => rdKbRow6(),
-                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.tab + "|" + r.aria_hidden + "|" + r.style,
                           (r) =>
                             h(
-                              "div",
-                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              "button",
+                              {
+                                type: "button",
+                                disabled: r.disabled,
+                                tabindex: r.tab,
+                                "aria-hidden": r.aria_hidden,
+                                "data-key": r.key,
+                                title: r.title,
+                                "aria-label": r.aria,
+                                class: r.cls,
+                                style: r.style,
+                              },
                               h("span", { class: "n-key-cap" }, r.cap),
                               h("span", { class: "n-key-short" }, r.short),
                             ),
@@ -4139,11 +4307,21 @@ export function RedesignIsland() {
                       { class: "n-kbtray-row" },
                       createList(
                         () => rdKbTray(),
-                        (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                        (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.tab + "|" + r.aria_hidden + "|" + r.style,
                         (r) =>
                           h(
-                            "div",
-                            { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                            "button",
+                            {
+                              type: "button",
+                              disabled: r.disabled,
+                              tabindex: r.tab,
+                              "aria-hidden": r.aria_hidden,
+                              "data-key": r.key,
+                              title: r.title,
+                              "aria-label": r.aria,
+                              class: r.cls,
+                              style: r.style,
+                            },
                             h("span", { class: "n-key-cap" }, r.cap),
                             h("span", { class: "n-key-short" }, r.short),
                           ),

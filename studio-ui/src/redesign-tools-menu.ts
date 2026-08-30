@@ -172,10 +172,17 @@ export function wireRedesignToolsDisclosures(root: HTMLElement): void {
   );
   const compact = window.matchMedia("(max-width: 680px)");
   compact.addEventListener("change", (event) => {
+    // Chromium moves focus to <body> as soon as CSS hides the outgoing
+    // summary, before MediaQueryList dispatches `change`. The still-open
+    // disclosure is therefore the durable proof that this breakpoint owns
+    // the handoff; reading activeElement alone is already one event too late.
+    const hadOpenDisclosure = Boolean(
+      root.querySelector("[data-rd-tools-menu][open]"),
+    );
     const active = document.activeElement;
     const ownedFocus = active instanceof Element && Boolean(active.closest("[data-rd-tools-menu]"));
     closeRedesignToolsDisclosure(root);
-    if (!ownedFocus) return;
+    if (!ownedFocus && !hadOpenDisclosure) return;
 
     // A media-query change is already observing the destination layout, but
     // `getClientRects()` can still report the outgoing copy for this event's

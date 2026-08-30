@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "build_hash": "0d2fa17656c69dfbff40669f78844bd025387b25e6534bbdeb614a8bff18d2b2",
+  "build_hash": "fc319d8c048677e9300ffae98f36552a27e4f791d8c01c165495328f268797fb",
   "assets": {
     "check.ir": "check.f5325a7a.ir",
     "check.js": "check.32ed38ef.js",
@@ -10,9 +10,9 @@
     "nocturne.js": "nocturne.0276311b.js",
     "pads.ir": "pads.cf21377b.ir",
     "pads.js": "pads.303eac94.js",
-    "redesign.ir": "redesign.dbbc40be.ir",
-    "redesign.js": "redesign.bfaaebfe.js",
-    "studio.css": "studio.1edceac5.css"
+    "redesign.ir": "redesign.50edf837.ir",
+    "redesign.js": "redesign.56da89b5.js",
+    "studio.css": "studio.a29aa473.css"
   },
   "routes": {
     "/nocturne": {
@@ -20,10 +20,10 @@
         "nocturne.0276311b.js"
       ],
       "css": [
-        "studio.1edceac5.css"
+        "studio.a29aa473.css"
       ],
       "fonts": [],
-      "total_size_br": 265193,
+      "total_size_br": 269233,
       "budget_warn_threshold": 282500,
       "ir": "nocturne.aad79e87.ir"
     },
@@ -32,10 +32,10 @@
         "check.32ed38ef.js"
       ],
       "css": [
-        "studio.1edceac5.css"
+        "studio.a29aa473.css"
       ],
       "fonts": [],
-      "total_size_br": 100187,
+      "total_size_br": 104227,
       "budget_warn_threshold": 282500,
       "ir": "check.f5325a7a.ir"
     },
@@ -44,10 +44,10 @@
         "pads.303eac94.js"
       ],
       "css": [
-        "studio.1edceac5.css"
+        "studio.a29aa473.css"
       ],
       "fonts": [],
-      "total_size_br": 100307,
+      "total_size_br": 104347,
       "budget_warn_threshold": 282500,
       "ir": "pads.cf21377b.ir"
     },
@@ -56,24 +56,24 @@
         "devices.6a10a654.js"
       ],
       "css": [
-        "studio.1edceac5.css"
+        "studio.a29aa473.css"
       ],
       "fonts": [],
-      "total_size_br": 101823,
+      "total_size_br": 105863,
       "budget_warn_threshold": 282500,
       "ir": "devices.04fde940.ir"
     },
     "/redesign": {
       "js": [
-        "redesign.bfaaebfe.js"
+        "redesign.56da89b5.js"
       ],
       "css": [
-        "studio.1edceac5.css"
+        "studio.a29aa473.css"
       ],
       "fonts": [],
-      "total_size_br": 243966,
+      "total_size_br": 278708,
       "budget_warn_threshold": 282500,
-      "ir": "redesign.dbbc40be.ir"
+      "ir": "redesign.50edf837.ir"
     }
   }
 }

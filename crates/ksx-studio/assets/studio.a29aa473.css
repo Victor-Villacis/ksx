@@ -10978,8 +10978,12 @@ a.wsrow-title:hover {
   width: var(--nku);
   height: calc(var(--nku) * 34 / 30);
   flex: none;
+  padding: 0;
   border: none;
+  appearance: none;
   border-radius: 6px;
+  color: inherit;
+  font: inherit;
   background: linear-gradient(
     180deg,
     var(--n-kb-key-side-top),
@@ -18862,19 +18866,25 @@ a.nm-link {
    A native details, so the roster works with scripting off — which is why
    its summary is NOT an `.n-autobtn` (that class is scripting-only chrome,
    hidden until the wire stamps `.js`). */
-.rd-themed {
+:is(.rd-themed, .rd-themed-compact) {
   position: relative;
+}
+
+/* The compact copy lives inside Setup so the 390px lifecycle rail never has
+   to trade away Save/Apply/Stop for appearance preferences. */
+.rd-theme-compact-home {
+  display: none;
 }
 
 /* The Inspector is fixed at layer 35. Lift only the open disclosure above it
    so the resting topbar does not become an unnecessary stacking context. */
-.rd-themed[open] {
+:is(.rd-themed, .rd-themed-compact)[open] {
   /* The disclosure must remain above the Inspector while it is open, but
      below the modal layer. */
   z-index: 36;
 }
 
-.rd-theme-sum {
+:is(.rd-theme-sum, .rd-theme-compact-sum) {
   display: inline-block;
   padding: 5px 11px;
   border: 1px solid var(--n-line);
@@ -18888,17 +18898,17 @@ a.nm-link {
   user-select: none;
 }
 
-.rd-theme-sum::-webkit-details-marker {
+:is(.rd-theme-sum, .rd-theme-compact-sum)::-webkit-details-marker {
   display: none;
 }
 
-.rd-theme-sum:hover,
-.rd-themed[open] .rd-theme-sum {
+:is(.rd-theme-sum, .rd-theme-compact-sum):hover,
+:is(.rd-themed, .rd-themed-compact)[open] > :is(.rd-theme-sum, .rd-theme-compact-sum) {
   border-color: var(--n-accent-line);
   color: var(--n-accent-2);
 }
 
-.rd-thememenu {
+:is(.rd-thememenu, .rd-thememenu-compact) {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
@@ -18911,17 +18921,1169 @@ a.nm-link {
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.4);
 }
 
-/* The action flash, worn as a topbar pill: the shared `.n-flash` state
-   machine (ok/err/none) with the page-line chrome swapped out. */
-.rd-flash {
-  margin-left: 4px;
-  padding: 2px 10px;
-  border: 0;
-  border-radius: 999px;
-  max-width: 340px;
+/* ── The operational shell ─────────────────────────────────────────────────────
+   Draft, session and exact-device capture are three separate state machines.
+   Their compact summary lives in the bar; the native disclosure keeps the
+   complete recovery path available before the client wire has loaded (and
+   when it never loads). */
+
+.rd .rd-top {
+  position: relative;
+  z-index: 37;
+  flex: 0 0 52px;
+  flex-wrap: nowrap;
+  gap: var(--sp-2);
+  height: 52px;
+  min-height: 52px;
+  padding: var(--sp-2) var(--sp-3);
+  background: color-mix(in srgb, var(--n-panel) 94%, transparent);
+  backdrop-filter: saturate(135%) blur(12px);
+}
+
+.rd-setupd {
+  position: relative;
+  flex: none;
+  min-width: 0;
+}
+
+.rd-setupd[open] {
+  z-index: 38;
+}
+
+.rd-setup-sum {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  max-width: 280px;
+  min-height: 34px;
+  padding: 0 var(--sp-3);
+  overflow: hidden;
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--n-panel-2) 72%, transparent);
+  color: var(--n-text-2);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.rd-setup-sum::-webkit-details-marker {
+  display: none;
+}
+
+.rd-setup-sum:hover,
+.rd-setupd[open] > .rd-setup-sum {
+  border-color: var(--n-accent-line);
+  background: var(--n-accent-dim);
+  color: var(--n-text);
+}
+
+.rd[data-rd-refresh-state="stale"] .rd-setup-sum {
+  border-color: color-mix(in srgb, var(--n-warn) 62%, var(--n-line));
+  box-shadow: inset 3px 0 var(--n-warn);
+}
+
+.rd[data-rd-refresh-state="stale"] .rd-setup-mark {
+  color: var(--n-warn);
+}
+
+.rd-setup-sum:active {
+  background: color-mix(in srgb, var(--n-accent) 16%, transparent);
+}
+
+.rd-setup-sum:focus-visible {
+  outline: 2px solid var(--n-accent);
+  outline-offset: 2px;
+}
+
+.rd-setup-mark {
+  flex: none;
+  color: var(--n-accent-2);
+  font-size: var(--fs-micro);
+}
+
+.rd-setup-compact,
+.rd-draft-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.rd-setup-compact {
+  color: var(--n-text);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-setup-divider {
+  color: var(--n-text-3);
+}
+
+.rd-setup-sum .rd-caret {
+  flex: none;
+  margin-left: auto;
+  transition: transform 140ms ease-out;
+}
+
+.rd-setupd[open] > .rd-setup-sum .rd-caret {
+  transform: rotate(180deg);
+}
+
+.rd-setup-panel {
+  position: fixed;
+  top: 52px;
+  right: var(--sp-3);
+  left: var(--sp-3);
+  z-index: 38;
+  display: grid;
+  gap: var(--sp-3);
+  max-height: calc(100vh - 64px);
+  padding: var(--sp-4);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--n-line-2);
+  border-radius: 0 0 var(--r-xl) var(--r-xl);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--n-accent) 5%, transparent), transparent 44%),
+    color-mix(in srgb, var(--n-panel) 98%, transparent);
+  box-shadow: 0 22px 56px color-mix(in srgb, var(--n-bg) 78%, transparent);
+}
+
+.rd-setupd:not([open]) > .rd-setup-panel {
+  display: none;
+}
+
+.rd-setup-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+.rd-setup-panel-head > div {
+  min-width: 0;
+}
+
+.rd-setup-panel-head .n-kick {
+  color: var(--n-accent-2);
+}
+
+.rd-setup-line {
+  margin-top: var(--sp-1);
+  color: var(--n-text-2);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+  text-wrap: pretty;
+}
+
+.rd-refresh-health:not([hidden]) {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: 320px;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid color-mix(in srgb, var(--n-warn) 52%, var(--n-line));
+  border-radius: var(--r-pill);
+  background: var(--warn-dim);
+  color: var(--n-warn);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-snug);
+}
+
+.rd-refresh-health:not([hidden])::before {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+/* Four steps, four facts. The active step gets space; completed and later
+   steps remain readable without turning this status rail into a wizard. */
+.rd-journey {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-2);
+}
+
+.rd-journey-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: start;
+  min-width: 0;
+  min-height: 62px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--n-panel-2) 74%, transparent);
+}
+
+.rd-journey-step::after {
+  position: absolute;
+  right: calc(var(--sp-2) * -1 - 1px);
+  top: 50%;
+  width: var(--sp-2);
+  border-top: 1px solid var(--n-line);
+  content: "";
+}
+
+.rd-journey-step:last-child::after {
+  display: none;
+}
+
+.rd-journey-badge {
+  min-width: 48px;
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--n-line-2);
+  border-radius: var(--r-pill);
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--track-mono);
+  line-height: var(--lh-snug);
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.rd-journey-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rd-journey-copy strong {
+  color: var(--n-text-2);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-journey-copy > span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.rd-journey-step.done {
+  border-color: color-mix(in srgb, var(--n-ok) 32%, var(--n-line));
+}
+
+.rd-journey-step.done .rd-journey-badge {
+  border-color: color-mix(in srgb, var(--n-ok) 54%, var(--n-line));
+  background: var(--ok-dim);
+  color: var(--n-ok);
+}
+
+.rd-journey-step.now {
+  border-color: var(--n-accent-line);
+  background: var(--n-accent-dim);
+  box-shadow: inset 3px 0 var(--n-accent);
+}
+
+.rd-journey-step.now .rd-journey-badge {
+  border-color: var(--n-accent-line);
+  color: var(--n-accent-2);
+}
+
+.rd-journey-step.now .rd-journey-copy strong,
+.rd-journey-step.blocked .rd-journey-copy strong {
+  color: var(--n-text);
+}
+
+.rd-journey-step.blocked {
+  border-color: color-mix(in srgb, var(--n-warn) 54%, var(--n-line));
+  background: var(--warn-dim);
+  box-shadow: inset 3px 0 var(--n-warn);
+}
+
+.rd-journey-step.blocked .rd-journey-badge {
+  border-color: color-mix(in srgb, var(--n-warn) 62%, var(--n-line));
+  color: var(--n-warn);
+}
+
+.rd-journey-step.later {
+  opacity: 0.72;
+}
+
+.rd-setup-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-3);
+  align-items: start;
+}
+
+.rd-setup-card,
+.rd-session-state {
+  display: grid;
+  gap: var(--sp-2);
+  align-content: start;
+  min-width: 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--n-panel-2) 76%, transparent);
+}
+
+.rd-setup-card > h2,
+.rd-session-state > h2 {
+  color: var(--n-text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+
+.rd-card-lede,
+.rd-escape-line,
+.rd-capture-recovery-line,
+.rd-action-reason {
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+  text-wrap: pretty;
+}
+
+:is(.rd-escape-line, .rd-capture-recovery-line, .rd-action-reason):empty,
+.rd-held-note:empty {
+  display: none;
+}
+
+.rd-saved-row {
+  display: grid;
+  gap: 2px;
+  padding: var(--sp-2);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--n-bg) 48%, transparent);
+}
+
+.rd-saved-row strong {
+  color: var(--n-text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-saved-row span {
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd-setup-card form,
+.rd-session-state form,
+.rd-restart-dialog form,
+.rd-runform {
+  margin: 0;
+}
+
+.rd-panel-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--n-line-2);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--n-panel-3) 76%, transparent);
+  color: var(--n-text-2);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-flat);
+  cursor: pointer;
+}
+
+.rd-panel-action:not(:disabled):hover {
+  border-color: var(--n-accent-line);
+  color: var(--n-accent-2);
+}
+
+.rd-panel-action:not(:disabled):active {
+  background: var(--n-accent-dim);
+}
+
+.rd-panel-action.primary {
+  border-color: var(--n-accent-line);
+  background: var(--n-accent-dim);
+  color: var(--n-accent-2);
+}
+
+.rd-panel-action.danger {
+  border-color: color-mix(in srgb, var(--n-danger) 48%, var(--n-line));
+  background: var(--danger-dim);
+  color: var(--n-danger);
+}
+
+.rd-panel-action:disabled,
+.rd-panel-action[data-rd-product-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.rd-start-over {
+  padding-top: var(--sp-1);
+  border-top: 1px solid var(--n-line);
+}
+
+.rd-start-over:not([open]) > :not(summary) {
+  display: none;
+}
+
+.rd-start-over > summary {
+  width: fit-content;
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  cursor: pointer;
+}
+
+.rd-start-over > summary:hover,
+.rd-start-over[open] > summary {
+  color: var(--n-danger);
+}
+
+.rd-start-over > form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: center;
+  margin-top: var(--sp-2);
+}
+
+.rd-danger-confirm {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd-danger-confirm.none,
+.rd-capture-prepare.none,
+.rd-held-recovery.none {
+  display: none;
+}
+
+.rd-danger-confirm input,
+.rd-consent input {
+  flex: none;
+  margin: 2px 0 0;
+  accent-color: var(--n-accent);
+}
+
+.rd-session-state.running {
+  border-color: color-mix(in srgb, var(--n-ok) 46%, var(--n-line));
+  background:
+    linear-gradient(140deg, var(--ok-dim), transparent 54%),
+    color-mix(in srgb, var(--n-panel-2) 76%, transparent);
+}
+
+.rd-session-state.down {
+  border-color: color-mix(in srgb, var(--n-warn) 46%, var(--n-line));
+}
+
+.rd-escape-line:not(:empty),
+.rd-capture-recovery-line:not(:empty) {
+  padding: var(--sp-2);
+  border-left: 2px solid var(--n-warn);
+  background: var(--warn-dim);
+  color: color-mix(in srgb, var(--n-warn) 74%, var(--n-text));
+}
+
+.rd-action-notes {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--sp-1) var(--sp-2);
+  margin: 0;
+  padding-top: var(--sp-1);
+  border-top: 1px solid var(--n-line);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd-action-notes dt {
+  color: var(--n-text-3);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-action-notes dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--n-text-2);
+}
+
+.rd-panel-replace {
+  padding-top: var(--sp-1);
+  border-top: 1px solid var(--n-line);
+}
+
+.rd-capture-card[data-capture-mode="prepare"],
+.rd-capture-card[data-capture-mode="held"],
+.rd-capture-card[data-capture-mode="blocked"],
+.rd-capture-card[data-capture-mode="unavailable"],
+.rd-capture-card[data-capture-mode="release-held"] {
+  border-color: color-mix(in srgb, var(--n-warn) 52%, var(--n-line));
+}
+
+.rd-capture-card[data-capture-mode="release"],
+.rd-capture-card[data-capture-mode="ready"],
+.rd-capture-card[data-capture-mode="prepare-optional"] {
+  border-color: color-mix(in srgb, var(--n-ok) 40%, var(--n-line));
+}
+
+.rd-capture-prepare {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--n-bg) 48%, transparent);
+}
+
+.rd-consent {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+  cursor: pointer;
+}
+
+.rd-consent.compact {
+  max-width: 220px;
+}
+
+.rd-held-recovery {
+  display: grid;
+  gap: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px solid color-mix(in srgb, var(--n-warn) 42%, var(--n-line));
+}
+
+.rd-held-recovery > h3 {
+  color: var(--n-warn);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-held-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-3);
+  align-items: center;
+  padding: var(--sp-2);
+  border: 1px solid color-mix(in srgb, var(--n-warn) 42%, var(--n-line));
+  border-radius: var(--r-md);
+  background: var(--warn-dim);
+}
+
+.rd-held-row > div,
+.rd-held-row > form {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rd-held-row strong {
+  color: var(--n-text);
+  font-size: var(--fs-xs);
+}
+
+.rd-held-row span {
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+  overflow-wrap: anywhere;
+}
+
+.rd-held-note:not(:empty) {
+  color: var(--n-warn);
+}
+
+/* The always-visible verb dock. Save is intentionally neutral; Play is the
+   primary transition; Apply and Stop appear only when session truth warrants
+   them. Live state is a witness, never a lifecycle control. */
+.rd-run-actions {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.rd-runbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  min-width: 58px;
+  min-height: 34px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--n-text-2);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-flat);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.rd-runbtn:not(:disabled):hover {
+  border-color: var(--n-accent-line);
+  background: color-mix(in srgb, var(--n-accent) 6%, transparent);
+  color: var(--n-accent-2);
+}
+
+.rd-runbtn:not(:disabled):active {
+  background: var(--n-accent-dim);
+}
+
+.rd-runbtn.primary,
+.rd-runbtn.apply {
+  border-color: var(--n-accent-line);
+  background: var(--n-accent-dim);
+  color: var(--n-accent-2);
+}
+
+.rd-runbtn.stop {
+  border-color: color-mix(in srgb, var(--n-warn) 48%, var(--n-line));
+  background: var(--warn-dim);
+  color: var(--n-warn);
+}
+
+.rd-runbtn:disabled,
+.rd-runbtn[data-rd-product-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.46;
+}
+
+.rd-live-state:not([hidden]),
+.rd-live-stats:not(:empty) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+
+.rd-live-state:not([hidden]) {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rd-live-state:not([hidden])::before {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.rd-live-stats:not(:empty) {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rd-live-ticker:not(:empty) {
+  position: absolute;
+  top: calc(100% + var(--sp-2));
+  right: 0;
+  z-index: 7;
+  max-width: min(420px, 60vw);
+  padding: var(--sp-1) var(--sp-2);
+  overflow: hidden;
+  border: 1px solid var(--n-accent-line);
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--n-panel) 94%, transparent);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--n-bg) 78%, transparent);
+  color: var(--n-accent-2);
+  font: var(--fw-medium) var(--fs-micro) / var(--lh-snug) var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd[data-rd-live-state="active"] .rd-live-state,
+.rd[data-rd-live-state="degraded"] .rd-live-state {
+  color: var(--n-ok);
+}
+
+.rd[data-rd-live-state="degraded"] .rd-live-state,
+.rd[data-rd-live-state="stale"] .rd-live-state,
+.rd[data-rd-live-state="offline"] .rd-live-state,
+.rd[data-rd-live-state="unreadable"] .rd-live-state {
+  color: var(--n-warn);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes rd-live-status-pulse {
+    50% {
+      opacity: 0.42;
+      transform: scale(0.76);
+    }
+  }
+
+  .rd[data-rd-live-state="active"] .rd-live-state::before {
+    animation: rd-live-status-pulse 1.35s ease-in-out infinite;
+  }
+}
+
+/* Action outcomes are recovery instructions, not disposable toast copy. The
+   banner takes the width it needs and wraps instead of hiding the remedy in
+   a topbar ellipsis. */
+.rd-flash {
+  flex: none;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: var(--sp-2) var(--sp-4);
+  overflow: visible;
+  border: 0;
+  border-bottom: 1px solid var(--n-line);
+  border-left: 3px solid currentColor;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--n-panel-2) 78%, transparent);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.rd-flash.ok {
+  background: var(--ok-dim);
+  color: var(--n-ok);
+}
+
+.rd-flash.err {
+  background: var(--danger-dim);
+  color: var(--n-danger);
+}
+
+/* Apply's structural-change boundary. The normal Apply form still works
+   without scripting; this focused dialog only makes the restart consequence
+   explicit before replacing a running virtual-device session. */
+.rd-restart-back {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-4);
+}
+
+.rd-restart-back[hidden] {
+  display: none;
+}
+
+.rd-restart-scrim {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--n-bg) 68%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.rd-restart-dialog {
+  position: relative;
+  display: grid;
+  gap: var(--sp-3);
+  width: min(520px, calc(100vw - var(--sp-6)));
+  max-height: calc(100vh - var(--sp-6));
+  padding: var(--sp-5);
+  overflow: auto;
+  border: 1px solid var(--n-line-2);
+  border-radius: var(--r-xl);
+  background:
+    linear-gradient(145deg, var(--warn-dim), transparent 48%),
+    var(--n-panel);
+  box-shadow: 0 24px 64px color-mix(in srgb, var(--n-bg) 76%, transparent);
+  outline: none;
+}
+
+.rd-restart-dialog > h2 {
+  color: var(--n-text);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+  text-wrap: balance;
+}
+
+.rd-restart-dialog > p {
+  color: var(--n-text-2);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  text-wrap: pretty;
+}
+
+.rd-restart-note {
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 2px solid var(--n-warn);
+  background: var(--warn-dim);
+}
+
+.rd-restart-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding-top: var(--sp-1);
+}
+
+/* Native disclosure and lifecycle forms are the no-script product, not an
+   error fallback. Only the streaming witness disappears without its client. */
+.nocturne:not(.js) :is(.rd-live-state, .rd-live-stats, .rd-live-ticker, .rd-refresh-health) {
+  display: none;
+}
+
+@media (max-width: 1280px) {
+  .rd-crumb,
+  .rd-live-stats,
+  .rd-live-ticker {
+    display: none !important;
+  }
+
+  .rd-setup-sum {
+    max-width: 240px;
+  }
+}
+
+/* The complete 1280 px rail fits exactly. Below that point, secondary view
+   chrome yields before a lifecycle verb can be pushed off-screen. */
+@media (width < 1280px) {
+  .rd-search,
+  .rd-back,
+  .rd [data-nx="rd-keys"] {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .rd .rd-top {
+    gap: var(--sp-1);
+    padding-right: var(--sp-2);
+    padding-left: var(--sp-2);
+  }
+
+  .rd-setup-sum {
+    max-width: 190px;
+    padding-right: var(--sp-2);
+    padding-left: var(--sp-2);
+  }
+
+  .rd-setup-divider,
+  .rd-draft-label {
+    display: none;
+  }
+
+  .rd-setup-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rd-capture-card {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 680px) {
+  .rd .rd-top {
+    padding-right: var(--sp-1);
+    padding-left: var(--sp-1);
+  }
+
+  .rd-brand {
+    display: none;
+    font-size: var(--fs-xs);
+  }
+
+  .rd-theme-rail-home {
+    display: none;
+  }
+
+  .rd-theme-compact-home {
+    display: block;
+    width: min(100%, 300px);
+  }
+
+  .rd-theme-compact-home .rd-themed-compact {
+    width: 100%;
+  }
+
+  .rd-theme-compact-sum {
+    display: inline-flex;
+    align-items: center;
+    min-height: 34px;
+  }
+
+  .rd-theme-compact-home .rd-thememenu-compact {
+    position: static;
+    width: 100%;
+    margin-top: var(--sp-2);
+    box-shadow: none;
+  }
+
+  .rd-setup-sum {
+    max-width: 144px;
+  }
+
+  .rd-setup-mark {
+    display: none;
+  }
+
+  .rd-setup-panel {
+    right: var(--sp-1);
+    left: var(--sp-1);
+    gap: var(--sp-2);
+    max-height: calc(100vh - 56px);
+    padding: var(--sp-3);
+    border-radius: 0 0 var(--r-lg) var(--r-lg);
+  }
+
+  .rd-setup-panel-head {
+    display: grid;
+    gap: var(--sp-2);
+  }
+
+  .rd-refresh-health:not([hidden]) {
+    max-width: none;
+    width: fit-content;
+  }
+
+  .rd-journey,
+  .rd-setup-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .rd-journey-step {
+    min-height: 0;
+  }
+
+  .rd-journey-step::after {
+    top: auto;
+    right: auto;
+    bottom: calc(var(--sp-2) * -1 - 1px);
+    left: 25px;
+    width: 0;
+    height: var(--sp-2);
+    border-top: 0;
+    border-left: 1px solid var(--n-line);
+  }
+
+  .rd-capture-card {
+    grid-column: auto;
+  }
+
+  .rd-held-row,
+  .rd-held-row > form {
+    grid-template-columns: 1fr;
+  }
+
+  .rd-consent.compact {
+    max-width: none;
+  }
+
+  .rd-restart-dialog {
+    padding: var(--sp-4);
+  }
+
+  .rd-restart-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .rd-restart-actions .rd-panel-action {
+    width: 100%;
+  }
+}
+
+/* At compact desktop/tablet widths, primary workbench verbs use their short
+   visual forms. The environment badge contracts to a colored safety beacon
+   while retaining its text and tooltip; live truth likewise contracts to its
+   witness dot. Full sentences remain available to assistive technology. */
+@media (max-width: 1140px) {
+  .rd .rd-top > .n-environment {
+    display: block;
+    flex: none;
+    width: 12px;
+    min-width: 12px;
+    max-width: 12px;
+    height: 12px;
+    min-height: 12px;
+    padding: 0;
+    overflow: hidden;
+    border-radius: 50%;
+    color: transparent;
+    font-size: 0;
+  }
+
+  .rd-setup-sum {
+    max-width: 144px;
+  }
+
+  .rd-adddev,
+  .rd-addctrl {
+    position: relative;
+    width: 36px;
+    min-width: 36px;
+    height: 34px;
+    padding: 0;
+    overflow: hidden;
+    color: transparent;
+  }
+
+  .rd-adddev::after,
+  .rd-addctrl::after {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--n-text-2);
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-semibold);
+  }
+
+  .rd-adddev::after {
+    content: "+D";
+  }
+
+  .rd-addctrl::after {
+    content: "+C";
+  }
+
+  .rd-run-actions {
+    gap: 2px;
+  }
+
+  .rd-live-state:not([hidden]) {
+    width: 12px;
+    max-width: 12px;
+    color: transparent;
+  }
+
+  .rd-live-state:not([hidden])::before {
+    color: var(--n-text-3);
+  }
+
+  .rd[data-rd-live-state="active"] .rd-live-state::before,
+  .rd[data-rd-live-state="degraded"] .rd-live-state::before {
+    color: var(--n-ok);
+  }
+
+  .rd[data-rd-live-state="stale"] .rd-live-state::before,
+  .rd[data-rd-live-state="offline"] .rd-live-state::before,
+  .rd[data-rd-live-state="unreadable"] .rd-live-state::before {
+    color: var(--n-warn);
+  }
+
+  .rd-runbtn {
+    min-width: 48px;
+    padding-right: var(--sp-1);
+    padding-left: var(--sp-1);
+  }
+}
+
+@media (max-width: 480px) {
+  .rd-setup-sum {
+    max-width: 112px;
+  }
+
+  /* Keep the product words in the DOM for names and speech, while the visual
+     rail uses the unambiguous short verbs that fit beside setup at 390 px. */
+  .rd-runbtn {
+    position: relative;
+    width: 46px;
+    min-width: 46px;
+    max-width: 46px;
+    padding: 0;
+    overflow: hidden;
+    color: transparent;
+  }
+
+  .rd-runbtn::after {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--n-text-2);
+  }
+
+  .rd-saveform .rd-runbtn::after {
+    content: "Save";
+  }
+
+  .rd-applyform .rd-runbtn::after {
+    color: var(--n-accent-2);
+    content: "Apply";
+  }
+
+  .rd-playform .rd-runbtn::after {
+    color: var(--n-accent-2);
+    content: "Play";
+  }
+
+  .rd-stopform .rd-runbtn::after {
+    color: var(--n-warn);
+    content: "Stop";
+  }
+}
+
+@media (pointer: coarse) {
+  .rd-setup-sum,
+  .rd-runbtn,
+  .rd-panel-action,
+  .rd-start-over > summary {
+    min-height: 40px;
+  }
+
+  .rd-consent {
+    min-height: 36px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rd-setup-sum .rd-caret,
+  .rd-live-state::before {
+    transition: none;
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .rd-setup-panel,
+  .rd-setup-sum,
+  .rd-journey-step,
+  .rd-setup-card,
+  .rd-session-state,
+  .rd-held-row,
+  .rd-capture-prepare,
+  .rd-runbtn,
+  .rd-panel-action,
+  .rd-restart-dialog,
+  .rd-flash {
+    border-color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+    color: CanvasText;
+  }
+
+  :is(.rd-runbtn, .rd-panel-action):disabled {
+    color: GrayText;
+  }
 }
 
 /* ── The device picker: a near-full-page modal over the workbench ────────── */
@@ -19041,6 +20203,14 @@ a.nm-link {
   font-size: var(--fs-xs);
   line-height: var(--lh-snug);
   color: var(--n-text-2);
+}
+
+.rd-devcard-purpose {
+  margin: 7px 0 0;
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+  color: var(--n-text-3);
+  text-wrap: pretty;
 }
 
 /* ── Encoder profile lab ──────────────────────────────────────────────────
@@ -20189,7 +21359,7 @@ a.nm-link {
 }
 
 .rd-encoder-device-shell > .rd-devcard .rd-stagebtn {
-  min-height: 34px;
+  min-height: 44px;
 }
 
 [data-forma-canvas]
@@ -20197,7 +21367,7 @@ a.nm-link {
   .rd-encoder-profile[data-forma-runtime-host][data-presentation="product"] {
   box-sizing: border-box;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: var(--sp-2);
   flex: 1 1 auto;
   width: 100%;
@@ -20216,10 +21386,7 @@ a.nm-link {
 }
 
 .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-head {
-  align-items: center;
-  gap: var(--sp-3);
-  min-width: 0;
-  padding: 0 var(--sp-1);
+  display: none;
 }
 
 .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-heading-copy {
@@ -20228,7 +21395,7 @@ a.nm-link {
 
 .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-title {
   margin-top: 2px;
-  font-size: var(--fs-md);
+  font-size: var(--fs-sm);
 }
 
 .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-subtitle {
@@ -20285,7 +21452,7 @@ a.nm-link {
   flex-wrap: wrap;
   gap: var(--sp-1);
   align-items: center;
-  min-height: 24px;
+  min-height: 22px;
 }
 
 .rd-encoder-product-pill {
@@ -20363,13 +21530,7 @@ a.nm-link {
 }
 
 .rd-encoder-product-figure figcaption {
-  position: relative;
-  z-index: 1;
-  padding: var(--sp-1) var(--sp-3) var(--sp-2);
-  color: var(--n-text-3);
-  font-size: var(--fs-micro);
-  line-height: var(--lh-snug);
-  text-align: center;
+  display: none;
 }
 
 .rd-encoder-product-svg {
@@ -20515,6 +21676,43 @@ a.nm-link {
   stroke-width: 1;
 }
 
+.rd-encoder-product-interface-label {
+  fill: color-mix(in srgb, var(--n-text-3) 82%, var(--n-accent-2));
+  font: var(--fw-semibold) 9px / 1 var(--mono);
+  letter-spacing: 1.4px;
+}
+
+.rd-encoder-product-interface-harness {
+  fill: color-mix(in srgb, var(--n-bg) 80%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--n-accent) 46%, var(--n-line-2));
+  stroke-width: 1.5;
+}
+
+.rd-encoder-product-interface-edge {
+  fill: color-mix(in srgb, var(--rd-encoder-copper) 74%, var(--n-warn));
+  stroke: color-mix(in srgb, var(--n-warn) 76%, var(--n-text-2));
+  stroke-width: 1.2;
+}
+
+.rd-encoder-product-interface-edge-pad {
+  fill: none;
+  stroke: color-mix(in srgb, var(--n-bg) 64%, black);
+  stroke-width: 1;
+}
+
+.rd-encoder-product-interface-node {
+  fill: color-mix(in srgb, var(--n-accent) 14%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--n-accent) 66%, var(--n-line-2));
+  stroke-width: 1.4;
+}
+
+.rd-encoder-product-interface.is-terminal-board > rect,
+.rd-encoder-product-interface.is-terminal-board > circle {
+  fill: color-mix(in srgb, var(--n-bg) 76%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--rd-encoder-copper) 42%, var(--n-line));
+  stroke-width: 1;
+}
+
 .rd-encoder-product-led {
   fill: var(--n-ok);
   stroke: color-mix(in srgb, var(--n-ok) 64%, white);
@@ -20592,6 +21790,57 @@ a.nm-link {
   stroke: color-mix(in srgb, var(--n-bg) 74%, black);
   stroke-linecap: round;
   stroke-width: 1.4;
+}
+
+.rd-encoder-product-terminal-socket {
+  fill: color-mix(in srgb, var(--n-bg) 72%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--rd-encoder-terminal-accent) 66%, var(--n-line-2));
+  stroke-width: 1.2;
+}
+
+.rd-encoder-product-terminal-pins,
+.rd-encoder-product-terminal-key {
+  fill: none;
+  stroke: color-mix(in srgb, var(--rd-encoder-copper) 74%, var(--n-text-2));
+  stroke-linecap: round;
+  stroke-width: 1.2;
+}
+
+.rd-encoder-product-terminal-key {
+  stroke: color-mix(in srgb, var(--n-accent) 76%, var(--n-text-2));
+  stroke-width: 2;
+}
+
+.rd-encoder-product-terminal-edge {
+  fill: color-mix(in srgb, var(--rd-encoder-copper) 74%, var(--n-warn));
+  stroke: color-mix(in srgb, var(--n-warn) 74%, var(--n-line-2));
+  stroke-width: 1.2;
+}
+
+.rd-encoder-product-terminal-edge-divider {
+  fill: none;
+  stroke: color-mix(in srgb, var(--n-bg) 68%, black);
+  stroke-width: 1;
+}
+
+.rd-encoder-product-terminal-logical-node {
+  fill: color-mix(in srgb, var(--n-accent) 13%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--rd-encoder-terminal-accent) 62%, var(--n-accent-line));
+  stroke-width: 1.4;
+}
+
+.rd-encoder-product-terminal-logical-route {
+  fill: none;
+  stroke: color-mix(in srgb, var(--rd-encoder-terminal-accent) 80%, var(--n-text));
+  stroke-linecap: round;
+  stroke-width: 1.3;
+}
+
+.rd-encoder-product-terminal-optical {
+  fill: var(--n-warn);
+  stroke: color-mix(in srgb, var(--n-warn) 68%, white);
+  stroke-width: 1;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--n-warn) 58%, transparent));
 }
 
 .rd-encoder-product-terminal-label {
@@ -20711,12 +21960,19 @@ a.nm-link {
 
 .rd-encoder-product-inspector {
   box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(150px, .7fr) minmax(300px, 1.35fr) minmax(190px, .8fr);
+  grid-template-areas:
+    "eyebrow emissions live"
+    "heading emissions live";
+  gap: var(--sp-1) var(--sp-3);
+  align-items: center;
   min-width: 0;
-  max-height: 374px;
-  padding: var(--sp-3);
-  overflow: auto;
+  max-height: none;
+  padding: var(--sp-2) var(--sp-3);
+  overflow: visible;
   border: 1px solid color-mix(in srgb, var(--n-accent) 28%, var(--n-line));
-  border-radius: var(--r-xl);
+  border-radius: var(--r-lg);
   background:
     linear-gradient(150deg, color-mix(in srgb, var(--n-accent) 10%, transparent), transparent 45%),
     var(--n-panel-2);
@@ -20737,6 +21993,7 @@ a.nm-link {
 }
 
 .rd-encoder-product-inspector-eyebrow {
+  grid-area: eyebrow;
   color: var(--n-accent-2);
   font-size: var(--fs-micro);
   font-weight: var(--fw-semibold);
@@ -20745,12 +22002,13 @@ a.nm-link {
 }
 
 .rd-encoder-product-inspector-heading {
+  grid-area: heading;
   display: flex;
   gap: var(--sp-2);
   align-items: baseline;
   justify-content: space-between;
   min-width: 0;
-  margin-top: var(--sp-1);
+  margin-top: 0;
 }
 
 .rd-encoder-product-inspector-heading h3,
@@ -20773,18 +22031,28 @@ a.nm-link {
 }
 
 .rd-encoder-product-emissions {
+  grid-area: emissions;
   display: grid;
-  gap: var(--sp-2);
-  margin-top: var(--sp-3) !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-1);
+  margin-top: 0 !important;
 }
 
 .rd-encoder-product-emissions > div {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  gap: var(--sp-2);
-  align-items: center;
-  padding-bottom: var(--sp-2);
-  border-bottom: 1px solid var(--n-line);
+  grid-template-columns: 1fr;
+  gap: 3px;
+  align-content: center;
+  min-width: 0;
+  min-height: 52px;
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 2px solid color-mix(in srgb, var(--n-accent) 34%, var(--n-line));
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: color-mix(in srgb, var(--n-bg) 42%, transparent);
+}
+
+.rd-encoder-product-emissions > div:only-child {
+  grid-column: 1 / -1;
 }
 
 .rd-encoder-product-emissions dt {
@@ -20833,11 +22101,11 @@ a.nm-link {
 
 .rd-encoder-product-read-inline {
   display: inline-flex;
-  min-height: 44px;
+  min-height: 30px;
   max-width: 100%;
   align-items: center;
   justify-content: center;
-  padding: 7px 12px;
+  padding: 4px 9px 5px;
   border: 1px solid color-mix(in srgb, var(--n-accent) 64%, var(--n-line-2));
   border-radius: var(--r-md);
   background: color-mix(in srgb, var(--n-accent) 16%, var(--n-panel-3));
@@ -20875,10 +22143,11 @@ button.rd-encoder-product-read-inline:disabled {
 }
 
 .rd-encoder-product-live {
+  grid-area: live;
   display: flex;
   gap: var(--sp-2);
   align-items: center;
-  margin-top: var(--sp-3);
+  margin-top: 0;
   padding: var(--sp-2);
   border: 1px solid var(--n-line);
   border-radius: var(--r-md);
@@ -20917,6 +22186,7 @@ button.rd-encoder-product-read-inline:disabled {
 }
 
 .rd-encoder-product-shared {
+  grid-column: 1 / -1;
   margin-top: var(--sp-2) !important;
   padding: var(--sp-2);
   border-left: 2px solid var(--n-warn);
@@ -20927,43 +22197,100 @@ button.rd-encoder-product-read-inline:disabled {
   line-height: var(--lh-snug);
 }
 
-.rd-encoder-product-next {
-  margin-top: var(--sp-3) !important;
-  color: var(--n-text-3);
-  font-size: var(--fs-micro);
-  line-height: var(--lh-snug);
-}
-
 .rd-encoder-product-inspector.is-unknown > p:not(.rd-encoder-product-inspector-eyebrow) {
+  grid-column: 2;
+  grid-row: 1 / 3;
   margin-top: var(--sp-2);
   color: var(--n-text-2);
   font-size: var(--fs-xs);
   line-height: var(--lh-snug);
 }
 
+.rd-encoder-product-inspector.is-unknown > h3 {
+  grid-area: heading;
+}
+
 .rd-encoder-product-signal-chips {
+  grid-column: 3;
+  grid-row: 1 / 3;
   display: flex;
   flex-wrap: wrap;
   gap: var(--sp-1);
-  margin-top: var(--sp-3);
+  margin-top: 0;
 }
 
 .rd-encoder-product-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--sp-2);
+  gap: 0;
   min-width: 0;
+  overflow: clip;
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--n-panel-2) 82%, transparent);
+  box-shadow: inset 0 1px color-mix(in srgb, var(--n-text) 4%, transparent);
 }
 
 .rd-encoder-profile[data-presentation="product"]
   .rd-encoder-product-actions > :is(.rd-encoder-profile-read, .rd-encoder-profile-observe) {
-  grid-template-columns: 1fr;
-  gap: var(--sp-2);
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-1);
   align-content: start;
   min-width: 0;
   padding: var(--sp-2) var(--sp-3);
-  border-radius: var(--r-lg);
-  background: color-mix(in srgb, var(--n-panel-2) 84%, transparent);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.rd-encoder-profile[data-presentation="product"]
+  .rd-encoder-product-actions > .rd-encoder-profile-observe {
+  border-left: 1px solid var(--n-line);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-command-help {
+  margin-top: 2px;
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-command-help > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  width: max-content;
+  max-width: 100%;
+  color: var(--n-text-3);
+  cursor: pointer;
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-command-help > summary:hover,
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-command-help > summary:focus-visible {
+  color: var(--n-accent-2);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-command-help > summary:focus-visible {
+  border-radius: var(--r-sm);
+  outline: 2px solid var(--n-accent);
+  outline-offset: 2px;
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-command-help > p {
+  margin-top: var(--sp-1);
+  padding-left: var(--sp-2);
+  border-left: 2px solid var(--n-line-2);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-command-blocked {
+  grid-column: 1 / -1;
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 2px solid var(--n-warn);
+  background: var(--warn-dim);
+  color: color-mix(in srgb, var(--n-warn) 78%, var(--n-text));
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
 }
 
 .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-read-controls {
@@ -20981,7 +22308,7 @@ button.rd-encoder-product-read-inline:disabled {
 
 .rd-encoder-profile[data-presentation="product"]
   :is(.rd-encoder-profile-read, .rd-encoder-profile-observe) button {
-  min-height: 34px;
+  min-height: 44px;
 }
 
 .rd-encoder-profile[data-presentation="product"]
@@ -21008,7 +22335,7 @@ button.rd-encoder-product-read-inline:disabled {
 
 .rd-encoder-product-details > summary,
 .rd-encoder-product-technical > summary {
-  min-height: 38px;
+  min-height: 44px;
   padding: var(--sp-2) var(--sp-3);
   color: var(--n-text-2);
   font-size: var(--fs-xs);
@@ -21102,6 +22429,9 @@ button.rd-encoder-product-read-inline:disabled {
 }
 
 .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-foot {
+  display: flex;
+  align-items: center;
+  min-height: 20px;
   padding: 0 var(--sp-1);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -21167,6 +22497,51 @@ button.rd-encoder-product-read-inline:disabled {
   display: none;
 }
 
+/* A transformed 960px board only meets its 44px terminal-target contract near
+   editing scale. Keep the full schematic as the structure/overview landmark,
+   but remove tiny native controls and verbose command chrome from routing and
+   layout until the host stamps this exact item as editable. */
+.rd-encoder-device-node[data-encoder-editable="false"]
+  :is(.rd-stageform, .rd-encoder-profile-foot),
+.rd-encoder-device-node[data-encoder-editable="false"]
+  .rd-encoder-profile[data-presentation="product"]
+  :is(
+    .rd-encoder-profile-subtitle,
+    .rd-encoder-profile-safety,
+    .rd-encoder-product-status,
+    .rd-encoder-product-inspector,
+    .rd-encoder-product-actions,
+    .rd-encoder-product-details,
+    .rd-encoder-profile-candidates,
+    .rd-encoder-profile-manual,
+    .rd-encoder-product-figure figcaption
+  ) {
+  display: none;
+}
+
+.rd-encoder-device-node[data-encoder-editable="false"]
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host {
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.rd-encoder-device-node[data-encoder-editable="false"]
+  .rd-encoder-profile[data-presentation="product"] :is(
+    .rd-encoder-profile-host,
+    .rd-encoder-product-dynamic,
+    .rd-encoder-product-work,
+    .rd-encoder-product-figure
+  ) {
+  height: 100%;
+  min-height: 0;
+}
+
+.rd-encoder-device-node[data-encoder-editable="false"]
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-product-svg {
+  height: 100%;
+  max-height: none;
+}
+
 @container rd-encoder-workbench (width < 780px) {
   .rd-encoder-device-shell > .rd-devcard {
     grid-template-columns: max-content minmax(0, 1fr);
@@ -21182,7 +22557,29 @@ button.rd-encoder-product-read-inline:disabled {
   }
 
   .rd-encoder-product-inspector {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "eyebrow"
+      "heading"
+      "emissions"
+      "live";
     max-height: none;
+  }
+
+  .rd-encoder-product-emissions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rd-encoder-product-inspector.is-unknown > p:not(.rd-encoder-product-inspector-eyebrow),
+  .rd-encoder-product-signal-chips {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .rd-encoder-profile[data-presentation="product"]
+    .rd-encoder-product-actions > .rd-encoder-profile-observe {
+    border-top: 1px solid var(--n-line);
+    border-left: 0;
   }
 
   .rd-encoder-product-device-facts {
@@ -21225,6 +22622,7 @@ button.rd-encoder-product-read-inline:disabled {
   .rd-encoder-device-shell > .rd-devcard .rd-stagebtn,
   .rd-encoder-profile[data-presentation="product"]
     :is(.rd-encoder-profile-read, .rd-encoder-profile-observe) button,
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-command-help > summary,
   .rd-encoder-profile[data-presentation="product"] .rd-encoder-product-details > summary,
   .rd-encoder-profile[data-presentation="product"] .rd-encoder-product-technical > summary {
     min-height: 44px;
@@ -21263,10 +22661,15 @@ button.rd-encoder-product-read-inline:disabled {
   .rd-encoder-product-mount circle,
   .rd-encoder-product-chip rect,
   .rd-encoder-product-components :is(rect, circle),
+  .rd-encoder-product-interface :is(rect, circle),
   .rd-encoder-product-declared rect,
   .rd-encoder-product-signal rect,
   .rd-encoder-product-terminal-body,
-  .rd-encoder-product-terminal-screw {
+  .rd-encoder-product-terminal-screw,
+  .rd-encoder-product-terminal-socket,
+  .rd-encoder-product-terminal-edge,
+  .rd-encoder-product-terminal-logical-node,
+  .rd-encoder-product-terminal-optical {
     fill: Canvas;
     stroke: CanvasText;
     filter: none;
@@ -21274,6 +22677,11 @@ button.rd-encoder-product-read-inline:disabled {
 
   .rd-encoder-product-svg text,
   .rd-encoder-product-terminal-slot,
+  .rd-encoder-product-terminal-pins,
+  .rd-encoder-product-terminal-key,
+  .rd-encoder-product-terminal-edge-divider,
+  .rd-encoder-product-terminal-logical-route,
+  .rd-encoder-product-interface-edge-pad,
   .rd-encoder-product-traces path {
     fill: CanvasText;
     stroke: CanvasText;
@@ -21521,8 +22929,10 @@ button.rd-encoder-product-read-inline:disabled {
 /* State decides whether the chip or verb exists; semantic zoom remains the
    final presentation authority and hides either outside editing distance. */
 .rd [data-canvas-zoom-tier="overview"] .rd-devcard-meta,
+.rd [data-canvas-zoom-tier="overview"] .rd-devcard-purpose,
 .rd [data-canvas-zoom-tier="overview"] .rd-devcard-staged,
 .rd [data-canvas-zoom-tier="overview"] .rd-stageform,
+.rd [data-canvas-zoom-tier="structure"] .rd-devcard-purpose,
 .rd [data-canvas-zoom-tier="structure"] .rd-devcard-staged,
 .rd [data-canvas-zoom-tier="structure"] .rd-stageform {
   display: none;
@@ -21775,6 +23185,13 @@ button.rd-encoder-product-read-inline:disabled {
 
 .rd-ctrlcard-artwrap svg [data-fn] {
   cursor: pointer;
+}
+
+.rd-ctrlcard-artwrap svg [data-rd-pad-action]:focus-visible {
+  outline: none;
+  stroke: var(--n-accent-2);
+  stroke-width: 5px;
+  filter: drop-shadow(0 0 5px var(--n-accent));
 }
 
 .rd-ctrlcard-artwrap svg.rd-ctrlcard-art {
@@ -22160,7 +23577,7 @@ form.rd-undochip .n-undo-btn {
 }
 
 @media (pointer: coarse) {
-  .rd-theme-sum {
+  :is(.rd-theme-sum, .rd-theme-compact-sum) {
     min-height: 40px;
   }
 

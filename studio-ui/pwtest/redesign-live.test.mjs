@@ -302,7 +302,7 @@ describe("redesign live feedback", { concurrency: false }, () => {
     await emit("open");
     view = await snapshot();
     assert.equal(view.state, "stale");
-    assert.match(view.status, /Apply the current staged changes/i);
+    assert.match(view.status, /Apply the current draft changes/i);
 
     // LiveEnvelope's unavailable reason is authoritative even when its empty
     // frame is also marked idle; transport failure must not be flattened to

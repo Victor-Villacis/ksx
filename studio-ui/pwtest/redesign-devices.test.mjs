@@ -2550,7 +2550,7 @@ describe("the device workbench", () => {
     );
     assert.match(
       (await page.locator(".rd-devmodal-purpose").textContent()) ?? "",
-      /Show adds a device card.*does not change mapping.*Use as mapping input/s,
+      /Show adds a device card.*does not change mapping.*Use as input source/s,
       "the picker explains canvas membership versus the one mapping source",
     );
     // The unavailable tier is visible but NEVER a control.
@@ -2940,14 +2940,14 @@ describe("the device workbench", () => {
       (await page
         .locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"] .rd-stagebtn`)
         .textContent())?.trim(),
-      "Use as mapping input",
+      "Use as input source",
       "the product verb names the relationship to the Input source instead of backend staging",
     );
     assert.match(
       (await page
         .locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"] .rd-devcard-purpose`)
         .textContent()) ?? "",
-      /inspection.*mapping input.*Input source/s,
+      /inspection.*input source.*Input source/s,
     );
     await page.click(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"] .rd-stagebtn`);
     await page.waitForFunction(

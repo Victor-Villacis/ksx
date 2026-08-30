@@ -331,6 +331,8 @@ export interface RdOperationalState {
 }
 
 export interface RdHeldCaptureRow {
+  /** Opaque, server-authored identity; selector/instance may both be absent. */
+  key: string;
   name: string;
   transport: string;
   detail: string;
@@ -345,6 +347,8 @@ export interface RdHeldCaptureRow {
 
 export interface RdCaptureState {
   mode: string;
+  /** Server-authored exact selected/held device identity for compact alerts. */
+  device_label: string;
   heading: string;
   line: string;
   recovery_line: string;
@@ -357,6 +361,8 @@ export interface RdCaptureState {
 
 export interface RdJourneyRow {
   key: string;
+  /** Stable UI destination. Never infer this from customer-facing copy. */
+  action: string;
   title: string;
   detail: string;
   badge: string;
@@ -419,6 +425,8 @@ const [rdOpSavedLabel, setRdOpSavedLabel] = createSignal("Nothing saved yet");
 const [rdOpSavedDetail, setRdOpSavedDetail] = createSignal("");
 const [rdOpSessionLine, setRdOpSessionLine] = createSignal("Session status unavailable");
 const [rdOpSessionCls, setRdOpSessionCls] = createSignal("rd-session-state down");
+const [rdOpSessionBadge, setRdOpSessionBadge] = createSignal("Status unavailable");
+const [rdOpSessionBadgeState, setRdOpSessionBadgeState] = createSignal("attention");
 const [rdOpEscapeLine, setRdOpEscapeLine] = createSignal("");
 const [rdDraftDirty, setRdDraftDirty] = createSignal(false);
 const [rdDraftRevision, setRdDraftRevision] = createSignal("");
@@ -452,6 +460,7 @@ const [rdJourneyCompact, setRdJourneyCompact] = createSignal("Setup · 0/4");
 const [rdJourneyRows, setRdJourneyRows] = createSignal<RdJourneyRow[]>([]);
 
 const [rdCaptureMode, setRdCaptureMode] = createSignal("none");
+const [rdCaptureDeviceLabel, setRdCaptureDeviceLabel] = createSignal("");
 const [rdCaptureHeading, setRdCaptureHeading] = createSignal("No input selected");
 const [rdCaptureLine, setRdCaptureLine] = createSignal("Pick the input this setup will listen to.");
 const [rdCaptureRecoveryLine, setRdCaptureRecoveryLine] = createSignal("");
@@ -794,6 +803,20 @@ export function applyRedesign(v: RedesignPayload): void {
   setRdOpSavedDetail(operations?.saved_detail ?? "Save writes this draft for later.");
   setRdOpSessionLine(operations?.session?.line ?? "Session status unavailable");
   setRdOpSessionCls(`rd-session-state ${operations?.session_cls || "down"}`);
+  setRdOpSessionBadge(
+    operations?.session?.reachable !== true
+      ? "Status unavailable"
+      : operations.session.running
+        ? "Playing"
+        : "Stopped",
+  );
+  setRdOpSessionBadgeState(
+    operations?.session?.reachable !== true
+      ? "attention"
+      : operations.session.running
+        ? "playing"
+        : "stopped",
+  );
   setRdOpEscapeLine(operations?.escape_line ?? "");
   const draftDirty = operations?.draft_dirty === true;
   setRdDraftDirty(draftDirty);
@@ -854,6 +877,7 @@ export function applyRedesign(v: RedesignPayload): void {
 
   const capture = v.capture;
   setRdCaptureMode(capture?.mode ?? "none");
+  setRdCaptureDeviceLabel(capture?.device_label ?? "");
   setRdCaptureHeading(capture?.heading ?? "No input selected");
   setRdCaptureLine(capture?.line ?? "Pick the input this setup will listen to.");
   setRdCaptureRecoveryLine(capture?.recovery_line ?? "");
@@ -1063,18 +1087,129 @@ export function setRedesignRefreshHealth(
 ): void {
   const root = rdRoot;
   if (!root) return;
-  const status = root.querySelector<HTMLElement>(".rd-refresh-health");
-  if (!status) return;
   root.dataset.rdRefreshState = state;
-  status.dataset.state = state;
-  status.textContent = message;
-  status.hidden = state === "online" || message.trim() === "";
+  for (const status of Array.from(
+    root.querySelectorAll<HTMLElement>(".rd-refresh-health"),
+  )) {
+    status.dataset.state = state;
+    status.textContent = message;
+    status.hidden = state === "online" || message.trim() === "";
+  }
+  const alert = root.querySelector<HTMLElement>("[data-rd-health-alert]");
+  const alertMessage = alert?.querySelector<HTMLElement>("[data-rd-health-message]");
+  if (alert && alertMessage) {
+    alert.dataset.state = state;
+    alertMessage.textContent = message;
+    alert.hidden = state === "online" || message.trim() === "";
+  }
   const summary = root.querySelector<HTMLElement>(".rd-setup-sum");
   if (summary) {
     summary.title = state === "stale" && message.trim()
       ? `${message} Open Setup for details.`
       : "Setup progress, draft, session and input readiness";
   }
+}
+
+const RD_CAPTURE_ATTENTION_MODES = new Set([
+  "prepare",
+  "held",
+  "blocked",
+  "unavailable",
+  "release-held",
+]);
+
+function captureIdentityMatches(row: RdHeldCaptureRow): boolean {
+  return Boolean(
+    row.selector && row.instance &&
+    row.selector === rdCaptureSelector() &&
+    row.instance.toLowerCase() === rdCaptureInstance().toLowerCase(),
+  );
+}
+
+/** A prepared selected input may coexist with a second stranded keyboard.
+ * Keep that independent recovery fact visible instead of reducing the whole
+ * machine to the selected input's healthy mode. */
+function additionalHeldCaptureRows(): RdHeldCaptureRow[] {
+  return rdCaptureHeld().filter((row) => !captureIdentityMatches(row));
+}
+
+function captureAttentionVisible(): boolean {
+  return RD_CAPTURE_ATTENTION_MODES.has(rdCaptureMode()) || additionalHeldCaptureRows().length > 0;
+}
+
+function captureAttentionCls(): string {
+  return captureAttentionVisible() ? "rd-attention" : "rd-attention none";
+}
+
+function captureAttentionDevice(): string {
+  if (RD_CAPTURE_ATTENTION_MODES.has(rdCaptureMode())) {
+    return rdCaptureDeviceLabel() || "Selected input";
+  }
+  const extra = additionalHeldCaptureRows();
+  if (extra.length === 1) return extra[0].name;
+  return `${extra.length} held keyboards`;
+}
+
+function captureAttentionHeading(): string {
+  if (RD_CAPTURE_ATTENTION_MODES.has(rdCaptureMode())) return rdCaptureHeading();
+  return additionalHeldCaptureRows().length === 1
+    ? "Another keyboard needs recovery"
+    : "Other keyboards need recovery";
+}
+
+function captureAttentionLine(): string {
+  if (RD_CAPTURE_ATTENTION_MODES.has(rdCaptureMode())) return rdCaptureLine();
+  const extra = additionalHeldCaptureRows();
+  return extra.length === 1
+    ? `${extra[0].name} is held by ksx and cannot type normally until it is recovered.`
+    : `${extra.length} keyboards are held by ksx and need individual recovery.`;
+}
+
+function captureAttentionDetail(): string {
+  if (RD_CAPTURE_ATTENTION_MODES.has(rdCaptureMode())) return rdCaptureRecoveryLine();
+  const extra = additionalHeldCaptureRows();
+  return extra.length === 1 && extra[0].note
+    ? extra[0].note
+    : "Review each exact device before returning it to ordinary typing.";
+}
+
+function captureAttentionReviewLabel(): string {
+  if (rdCaptureMode() === "prepare") return "Review preparation";
+  const rows = RD_CAPTURE_ATTENTION_MODES.has(rdCaptureMode())
+    ? rdCaptureHeld()
+    : additionalHeldCaptureRows();
+  if (rows.length === 1 && rows[0].can_release) return "Review release";
+  return "Review recovery";
+}
+
+function captureAttentionRetryCls(): string {
+  return rdCaptureMode() === "blocked" || rdCaptureMode() === "unavailable"
+    ? "rd-panel-action rd-attention-retry"
+    : "rd-panel-action rd-attention-retry none";
+}
+
+function captureStateLabel(): string {
+  switch (rdCaptureMode()) {
+    case "prepare":
+      return "Preparation required";
+    case "release":
+      return "Prepared";
+    case "ready":
+    case "prepare-optional":
+      return "Ready";
+    case "none":
+      return "No input";
+    default:
+      return "Action required";
+  }
+}
+
+function captureStateTone(): string {
+  return ["release", "ready", "prepare-optional"].includes(rdCaptureMode())
+    ? "ready"
+    : rdCaptureMode() === "none"
+      ? "stopped"
+      : "attention";
 }
 
 // ── The canvas (lifted from NocturneIsland's canvas section) ────────────────
@@ -2334,15 +2469,15 @@ const DEVICE_ROLE_BADGE: Record<string, string> = {
   keyboard: "Keyboard",
 };
 const STAGED_DEVICE_TITLE =
-  "This board is the background helper's mapping input. Choosing it again changes nothing — " +
+  "This board is the background helper's input source. Choosing it again changes nothing — " +
   "a keyboard prepared for play keeps its preparation.";
 const DEVICE_CARD_MIN_HEIGHT = 220;
 const DEVICE_CARD_ROW_STRIDE = DEVICE_CARD_MIN_HEIGHT + CANVAS_FRESH_PLACEMENT_GAP;
 
 function deviceCardPurpose(row: RdDeviceRowView): string {
   return row.aria_current === "true"
-    ? "This is the mapping input. Its emitted keys appear on the Input source keyboard."
-    : "This card is on the canvas for inspection. Use it as the mapping input when you want its emitted keys on the Input source keyboard.";
+    ? "This is the input source. Its emitted keys appear on the Input source keyboard."
+    : "This card is on the canvas for inspection. Use it as the input source when you want its emitted keys on the Input source keyboard.";
 }
 
 function deviceCardMeta(row: RdDeviceRowView): string {
@@ -2353,6 +2488,57 @@ function deviceCardMeta(row: RdDeviceRowView): string {
   return row.meta.split(/\s*·\s*/)
     .filter((part) => !/^chart\b/i.test(part.trim()))
     .join(" · ");
+}
+
+interface RdDeviceStateBadge {
+  label: string;
+  state: "connected" | "canvas" | "source" | "ready" | "attention";
+}
+
+function deviceCaptureBadge(row: RdDeviceRowView): { label: string; state: "ready" | "attention" } {
+  if (row.aria_current !== "true") return { label: "", state: "ready" };
+  const mode = rdCaptureMode();
+  if (mode === "prepare") return { label: "Preparation required", state: "attention" };
+  if (mode === "release") return { label: "Prepared", state: "ready" };
+  if (mode === "ready" || mode === "prepare-optional") return { label: "Ready", state: "ready" };
+  if (["held", "blocked", "unavailable", "release-held"].includes(mode)) {
+    return { label: "Needs attention", state: "attention" };
+  }
+  return { label: "", state: "ready" };
+}
+
+/** One vocabulary for device state everywhere it appears. A board can hold
+ * several independent facts at once (connected + on canvas + input source),
+ * so these are badges rather than one lossy status sentence. */
+function deviceStateBadges(row: RdDeviceRowView): RdDeviceStateBadge[] {
+  const badges: RdDeviceStateBadge[] = [];
+  if (rdDeviceScanAuthoritative) badges.push({ label: "Connected", state: "connected" });
+  badges.push({ label: "On canvas", state: "canvas" });
+  if (row.aria_current !== "true") return badges;
+
+  badges.push({ label: "Input source", state: "source" });
+  const captureMatches = Boolean(
+    rdCaptureSelector().trim() && rdCaptureSelector().trim() === row.selector.trim(),
+  );
+  if (captureMatches) {
+    const capture = deviceCaptureBadge(row);
+    if (capture.label) badges.push(capture);
+  }
+  return badges;
+}
+
+function syncDeviceCardStateBadges(item: HTMLElement, row: RdDeviceRowView): void {
+  const list = item.querySelector<HTMLElement>(".rd-devcard-states");
+  if (!list) return;
+  list.replaceChildren(
+    ...deviceStateBadges(row).map((badge) => {
+      const chip = document.createElement("span");
+      chip.className = "rd-device-state";
+      chip.dataset.state = badge.state;
+      chip.textContent = badge.label;
+      return chip;
+    }),
+  );
 }
 
 function deviceCardContent(row: RdDeviceRowView): HTMLElement {
@@ -2368,6 +2554,8 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   const meta = document.createElement("p");
   meta.className = "rd-devcard-meta";
   meta.textContent = deviceCardMeta(row);
+  const states = document.createElement("p");
+  states.className = "rd-devcard-states";
   // The daemon chip and the daemon verb. `data-staged` on the ITEM decides
   // which shows (syncBenchCards keeps it true to the served rows): a staged
   // board wears the chip; every other pickable board offers the act. The
@@ -2375,7 +2563,7 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   // flash speaks, and the refresh moves the marking wherever it now belongs.
   const staged = document.createElement("p");
   staged.className = "rd-devcard-staged";
-  staged.textContent = "Mapping input — shown on Input source";
+  staged.textContent = "Input source";
   staged.title = STAGED_DEVICE_TITLE;
   const purpose = document.createElement("p");
   purpose.className = "rd-devcard-purpose";
@@ -2399,12 +2587,13 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   const submit = document.createElement("button");
   submit.type = "submit";
   submit.className = "rd-stagebtn";
-  submit.textContent = "Use as mapping input";
+  submit.textContent = "Use as input source";
   submit.title =
-    "Make this the board ksx reads for mapping — replaces the daemon's current choice. " +
+    "Make this the board ksx reads as the input source — replaces the daemon's current choice. " +
     "Nothing is saved or started, and a board already prepared keeps its preparation.";
   form.append(submit);
-  body.append(badge, name, meta, purpose, staged, form);
+  body.append(badge, name, meta, states, purpose, staged, form);
+  syncDeviceCardStateBadges(body, row);
   return body;
 }
 
@@ -2779,7 +2968,7 @@ function syncBenchCards(): void {
         status.title = rdStagingLine || "Staging unavailable";
       }
     } else if (status) {
-      status.textContent = "Mapping input — shown on Input source";
+      status.textContent = "Input source";
       status.title = STAGED_DEVICE_TITLE;
     }
     item.dataset.widgetName = row.name;
@@ -2790,6 +2979,7 @@ function syncBenchCards(): void {
     item.querySelector<HTMLElement>(".rd-devcard-name")!.textContent = row.name;
     if (meta) meta.textContent = deviceCardMeta(row);
     if (purpose) purpose.textContent = deviceCardPurpose(row);
+    syncDeviceCardStateBadges(item, row);
     item.querySelector<HTMLElement>(".widget-drag-handle")?.setAttribute(
       "aria-label",
       `Move ${row.name}`,
@@ -3218,6 +3408,141 @@ function canvasOwnsKeyboardFocus(): boolean {
   return Boolean(canvas && active instanceof Element && canvas.contains(active));
 }
 
+function setupDetails(): HTMLDetailsElement | null {
+  return rdRoot?.querySelector<HTMLDetailsElement>(".rd-setupd") ?? null;
+}
+
+function closeSetupForWorkbenchAction(): void {
+  const setup = setupDetails();
+  if (setup) setup.open = false;
+}
+
+function focusCaptureRecovery(): void {
+  const setup = setupDetails();
+  if (!setup) return;
+  setup.open = true;
+  window.requestAnimationFrame(() => {
+    const rows = RD_CAPTURE_ATTENTION_MODES.has(rdCaptureMode())
+      ? rdCaptureHeld()
+      : additionalHeldCaptureRows();
+    const wanted = rows.length === 1 ? rows[0] : null;
+    const held = wanted
+      ? Array.from(setup.querySelectorAll<HTMLElement>(".rd-held-row")).find(
+        (row) => row.dataset.heldKey === wanted.key,
+      )
+      : null;
+    const target = held ?? setup.querySelector<HTMLElement>("#rd-capture-readiness");
+    target?.scrollIntoView({ block: "center" });
+    target?.focus({ preventScroll: true });
+  });
+}
+
+function openJourneyDevicePicker(kind: "devices" | "controllers"): void {
+  closeSetupForWorkbenchAction();
+  const opener = rdRoot?.querySelector<HTMLElement>(
+    kind === "devices" ? '[data-nx="rd-devs-open"]' : '[data-nx="rd-ctrls-open"]',
+  );
+  opener?.focus({ preventScroll: true });
+  if (kind === "devices") setDevModal(true);
+  else setCtrlModal(true);
+}
+
+function focusJourneyMapping(): void {
+  const slot = rdCtrlPanel?.slot_val || rdCtrlCards[0]?.number || "";
+  const item = slot
+    ? rdRoot?.querySelector<HTMLElement>(
+      `.forma-canvas-stage > [data-instance-id="ctrl-slot-${CSS.escape(slot)}"]`,
+    ) ?? null
+    : null;
+  if (!item || !nCanvas) {
+    openJourneyDevicePicker("controllers");
+    return;
+  }
+  closeSetupForWorkbenchAction();
+  nCanvas.setSelection([item]);
+  setInspector(true);
+  renderInspector();
+  window.requestAnimationFrame(() => {
+    const target = rdRoot?.querySelector<HTMLElement>(
+      '.rd-insp-body [data-nx="rd-automap"], .rd-insp-body details.n-bind > summary, ' +
+        '.rd-inspector [data-nx="rd-insp-close"]',
+    );
+    target?.focus({ preventScroll: true });
+  });
+}
+
+function focusJourneyPlay(): void {
+  const formKind = rdOperations?.session?.running === true ? "stop" : "play";
+  const action = Array.from(
+    rdRoot?.querySelectorAll<HTMLButtonElement>(
+      `[data-rd-form="${formKind}"] button[type="submit"]:not([disabled])`,
+    ) ?? [],
+  ).find((button) => button.offsetParent !== null);
+  if (action) {
+    closeSetupForWorkbenchAction();
+    action.focus({ preventScroll: true });
+    return;
+  }
+  const setup = setupDetails();
+  if (setup) setup.open = true;
+  const reason = rdRoot?.querySelector<HTMLElement>("#rd-play-reason");
+  reason?.scrollIntoView({ block: "center" });
+  reason?.focus({ preventScroll: true });
+}
+
+async function retryJourney(button: HTMLButtonElement | null): Promise<void> {
+  if (rdRoot?.dataset.rdMutationPending === "true" || button?.dataset.rdRetryPending === "true") {
+    return;
+  }
+  const journeyStep = button?.dataset.journeyStep ?? "";
+  const badge = button?.querySelector<HTMLElement>(".rd-journey-badge") ?? null;
+  const settled = badge?.textContent ?? "Retry";
+  if (button) {
+    button.dataset.rdRetryPending = "true";
+    button.setAttribute("aria-busy", "true");
+    button.disabled = true;
+  }
+  if (badge) badge.textContent = "Checking…";
+  rdAnnounce("Checking workbench status…");
+  try {
+    await redesignRefreshFn();
+  } finally {
+    if (button) {
+      delete button.dataset.rdRetryPending;
+      button.removeAttribute("aria-busy");
+      button.disabled = false;
+      if (badge?.isConnected) badge.textContent = settled;
+    }
+    // A successful retry can change this row's badge/detail, which gives the
+    // keyed list a new identity and disconnects the initiating button. Keep
+    // focus on the same setup step after that authoritative repaint; if the
+    // step disappeared, the always-present Setup summary is the stable home.
+    const replacement = button?.isConnected
+      ? button
+      : journeyStep
+        ? rdRoot?.querySelector<HTMLButtonElement>(
+            `[data-journey-step="${CSS.escape(journeyStep)}"]`,
+          ) ?? null
+        : null;
+    (replacement ?? rdRoot?.querySelector<HTMLElement>(".rd-setup-sum"))
+      ?.focus({ preventScroll: true });
+  }
+}
+
+function runJourneyAction(action: string, button: HTMLButtonElement | null): void {
+  if (action === "devices" || action === "controllers") {
+    openJourneyDevicePicker(action);
+  } else if (action === "capture") {
+    focusCaptureRecovery();
+  } else if (action === "mapping") {
+    focusJourneyMapping();
+  } else if (action === "play") {
+    focusJourneyPlay();
+  } else if (action === "retry") {
+    void retryJourney(button);
+  }
+}
+
 export function redesignWire(root: HTMLElement): void {
   rdRoot = root;
   wireRedesignToolsDisclosures(root);
@@ -3389,6 +3714,17 @@ export function redesignWire(root: HTMLElement): void {
     }
     if (hit === "rd-conf-force") {
       conflictForce();
+      return;
+    }
+    if (hit === "rd-journey-action") {
+      ev.preventDefault();
+      const button = target?.closest<HTMLButtonElement>('[data-nx="rd-journey-action"]') ?? null;
+      runJourneyAction(button?.dataset.journeyAction ?? "", button);
+      return;
+    }
+    if (hit === "rd-review-recovery") {
+      ev.preventDefault();
+      focusCaptureRecovery();
       return;
     }
     if (hit === "rd-conf-cancel") {
@@ -3965,11 +4301,20 @@ export function RedesignIsland() {
                 { class: "rd-journey", "aria-label": "Setup progress" },
                 createList(
                   () => rdJourneyRows(),
-                  (row) => `${row.key}|${row.badge}|${row.cls}|${row.title}|${row.detail}`,
+                  (row) => `${row.key}|${row.action}|${row.badge}|${row.cls}|${row.title}|${row.detail}`,
                   (row) =>
                     h(
-                      "div",
-                      { class: row.cls, "data-journey-step": row.key },
+                      "button",
+                      {
+                        type: "button",
+                        class: row.cls,
+                        "data-nx": "rd-journey-action",
+                        "data-journey-step": row.key,
+                        "data-journey-action": row.action,
+                        "aria-current": row.badge === "Done" || row.badge === "Next"
+                          ? "false"
+                          : "step",
+                      },
                       h("span", { class: "rd-journey-badge" }, row.badge),
                       h(
                         "span",
@@ -4005,7 +4350,8 @@ export function RedesignIsland() {
                         disabled: () => rdAdoptDisabled(),
                         "aria-describedby": "rd-adopt-reason",
                       },
-                      () => rdAdoptLabel(),
+                      h("span", { class: "rd-action-label" }, () => rdAdoptLabel()),
+                      h("span", { class: "rd-action-pending", hidden: "" }, "Loading…"),
                     ),
                   ),
                   h("p", { id: "rd-adopt-reason", class: "rd-action-reason" }, () => rdAdoptReason()),
@@ -4041,7 +4387,8 @@ export function RedesignIsland() {
                           disabled: () => rdDiscardDisabled(),
                           "aria-describedby": "rd-discard-reason",
                         },
-                        () => rdDiscardLabel(),
+                        h("span", { class: "rd-action-label" }, () => rdDiscardLabel()),
+                        h("span", { class: "rd-action-pending", hidden: "" }, "Clearing…"),
                       ),
                     ),
                   ),
@@ -4053,13 +4400,25 @@ export function RedesignIsland() {
                     "aria-labelledby": "rd-session-head",
                   },
                   h("h2", { id: "rd-session-head" }, "Session"),
+                  h(
+                    "p",
+                    { class: "rd-state-strip", "aria-label": "Session state" },
+                    h(
+                      "span",
+                      {
+                        class: "rd-state-badge",
+                        "data-state": () => rdOpSessionBadgeState(),
+                      },
+                      () => rdOpSessionBadge(),
+                    ),
+                  ),
                   h("p", { class: "rd-card-lede" }, () => rdOpSessionLine()),
                   h("p", { class: "rd-escape-line" }, () => rdOpEscapeLine()),
                   h("dl", { class: "rd-action-notes" },
                     h("dt", null, "Save"),
                     h("dd", { id: "rd-save-reason" }, () => rdSaveReason()),
                     h("dt", null, "Play"),
-                    h("dd", { id: "rd-play-reason" }, () => rdPlayReason()),
+                    h("dd", { id: "rd-play-reason", tabindex: "-1" }, () => rdPlayReason()),
                     h("dt", null, "Apply"),
                     h("dd", { id: "rd-apply-reason" }, () => rdApplyReason()),
                     h("dt", null, "Stop"),
@@ -4071,7 +4430,7 @@ export function RedesignIsland() {
                       class: () => rdReplacePlayCls(),
                       method: "post",
                       action: "/redesign/play",
-                      "data-rd-form": "play",
+                      "data-rd-form": "play-replace",
                     },
                     h("input", {
                       type: "hidden",
@@ -4086,7 +4445,8 @@ export function RedesignIsland() {
                         disabled: () => rdPlayDisabled(),
                         "aria-describedby": "rd-play-reason",
                       },
-                      "Replace session",
+                      h("span", { class: "rd-action-label" }, "Replace session"),
+                      h("span", { class: "rd-action-pending", hidden: "" }, "Replacing…"),
                     ),
                   ),
                 ),
@@ -4095,10 +4455,24 @@ export function RedesignIsland() {
                   {
                     class: "rd-setup-card rd-capture-card",
                     id: "rd-capture-readiness",
+                    tabindex: "-1",
                     "data-capture-mode": () => rdCaptureMode(),
                     "aria-labelledby": "rd-capture-head",
                   },
                   h("h2", { id: "rd-capture-head" }, () => rdCaptureHeading()),
+                  h(
+                    "p",
+                    { class: "rd-state-strip", "aria-label": "Input state" },
+                    h(
+                      "span",
+                      {
+                        class: "rd-state-badge",
+                        "data-state": () => captureStateTone(),
+                      },
+                      () => captureStateLabel(),
+                    ),
+                    h("span", { class: "rd-state-device" }, () => rdCaptureDeviceLabel()),
+                  ),
                   h("p", { class: "rd-card-lede" }, () => rdCaptureLine()),
                   h("p", { class: "rd-capture-recovery-line" }, () => rdCaptureRecoveryLine()),
                   h(
@@ -4136,7 +4510,8 @@ export function RedesignIsland() {
                         class: "rd-panel-action primary",
                         "data-rd-product-disabled": "false",
                       },
-                      "Prepare this input",
+                      h("span", { class: "rd-action-label" }, "Prepare this input"),
+                      h("span", { class: "rd-action-pending", hidden: "" }, "Preparing…"),
                     ),
                     h("p", { class: "rd-action-reason" }, "Windows will ask for permission. ksx stays open and returns here afterward."),
                   ),
@@ -4147,11 +4522,17 @@ export function RedesignIsland() {
                     h("p", { class: "rd-action-reason" }, "Release is resolved from the current Windows device tree, even when the draft is empty."),
                     createList(
                       () => rdCaptureHeld(),
-                      (row) => `${row.selector}|${row.instance}|${row.can_release}|${row.name}|${row.note}`,
+                      (row) => row.key,
                       (row) =>
                         h(
                           "article",
-                          { class: "rd-held-row" },
+                          {
+                            class: "rd-held-row",
+                            tabindex: "-1",
+                            "data-held-key": row.key,
+                            "data-held-selector": row.selector,
+                            "data-held-instance": row.instance,
+                          },
                           h(
                             "div",
                             null,
@@ -4166,8 +4547,14 @@ export function RedesignIsland() {
                             h("input", { type: "hidden", name: "instance_id", value: row.instance }),
                             h(
                               "label",
-                              { class: "rd-consent compact" },
-                              h("input", { type: "checkbox", name: "confirm_release", value: "yes", required: "" }),
+                              { class: row.disabled ? "rd-consent compact disabled" : "rd-consent compact" },
+                              h("input", {
+                                type: "checkbox",
+                                name: "confirm_release",
+                                value: "yes",
+                                required: "",
+                                disabled: row.disabled,
+                              }),
                               h("span", null, "Return this keyboard to ordinary typing"),
                             ),
                             h(
@@ -4177,7 +4564,8 @@ export function RedesignIsland() {
                                 class: "rd-panel-action",
                                 disabled: row.disabled,
                               },
-                              "Release",
+                              h("span", { class: "rd-action-label" }, "Release"),
+                              h("span", { class: "rd-action-pending", hidden: "" }, "Releasing…"),
                             ),
                           ),
                         ),
@@ -4254,6 +4642,20 @@ export function RedesignIsland() {
                 "data-live-chatter": "",
                 role: "status",
               },
+              h("span", { class: "rd-live-short", "aria-hidden": "true" }),
+              h("span", { class: "rd-live-detail" }),
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                class: "rd-live-retry",
+                "data-nx": "rd-live-retry",
+                "data-rd-live-retry": "",
+                "data-live-chatter": "",
+                "aria-label": "Check live input status again",
+              },
+              "Retry",
             ),
             h("span", {
               class: "rd-live-stats",
@@ -4283,7 +4685,8 @@ export function RedesignIsland() {
                   disabled: () => rdSaveDisabled(),
                   "aria-describedby": "rd-save-reason",
                 },
-                () => rdSaveLabel(),
+                h("span", { class: "rd-action-label" }, () => rdSaveLabel()),
+                h("span", { class: "rd-action-pending", hidden: "" }, "Saving…"),
               ),
             ),
             h(
@@ -4302,7 +4705,8 @@ export function RedesignIsland() {
                   disabled: () => rdApplyDisabled(),
                   "aria-describedby": "rd-apply-reason",
                 },
-                () => rdApplyLabel(),
+                h("span", { class: "rd-action-label" }, () => rdApplyLabel()),
+                h("span", { class: "rd-action-pending", hidden: "" }, "Applying…"),
               ),
             ),
             h(
@@ -4321,8 +4725,9 @@ export function RedesignIsland() {
                   disabled: () => rdPlayDisabled(),
                   "aria-describedby": "rd-play-reason",
                 },
-                h("span", { "aria-hidden": "true" }, "▷"),
-                () => rdPlayLabel(),
+                h("span", { class: "rd-action-icon", "aria-hidden": "true" }, "▷"),
+                h("span", { class: "rd-action-label" }, () => rdPlayLabel()),
+                h("span", { class: "rd-action-pending", hidden: "" }, "Starting…"),
               ),
             ),
             h(
@@ -4336,8 +4741,9 @@ export function RedesignIsland() {
                   disabled: () => rdStopDisabled(),
                   "aria-describedby": "rd-stop-reason",
                 },
-                h("span", { "aria-hidden": "true" }, "■"),
-                () => rdStopLabel(),
+                h("span", { class: "rd-action-icon", "aria-hidden": "true" }, "■"),
+                h("span", { class: "rd-action-label" }, () => rdStopLabel()),
+                h("span", { class: "rd-action-pending", hidden: "" }, "Stopping…"),
               ),
             ),
           ),
@@ -4436,6 +4842,78 @@ export function RedesignIsland() {
           ),
           h("span", { role: "status", class: "n-live-sr", "data-live-chatter": "" }),
         ),
+        // Persistent machine recovery: unlike the Setup summary, this cannot
+        // be collapsed away. It is intentionally not a live region—polls may
+        // refresh its facts every two seconds, while actions announce through
+        // the page's one shared status channel.
+        h(
+          "section",
+          {
+            class: () => captureAttentionCls(),
+            "data-rd-attention": "",
+            role: "region",
+            "aria-labelledby": "rd-attention-title",
+          },
+          h("span", { class: "rd-attention-mark", "aria-hidden": "true" }, "!"),
+          h(
+            "div",
+            { class: "rd-attention-copy" },
+            h("span", { class: "rd-attention-kick" }, "Action required"),
+            h(
+              "h2",
+              { id: "rd-attention-title" },
+              () => `${captureAttentionDevice()} · ${captureAttentionHeading()}`,
+            ),
+            h("p", { class: "rd-attention-line" }, () => captureAttentionLine()),
+            h("p", { class: "rd-attention-detail" }, () => captureAttentionDetail()),
+          ),
+          h(
+            "div",
+            { class: "rd-attention-actions" },
+            h(
+              "button",
+              {
+                type: "button",
+                class: "rd-panel-action primary",
+                "data-nx": "rd-review-recovery",
+              },
+              () => captureAttentionReviewLabel(),
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                class: () => captureAttentionRetryCls(),
+                "data-nx": "rd-refresh-retry",
+              },
+              "Check again",
+            ),
+          ),
+        ),
+        // Transport freshness is separate from product/capture state. Keep
+        // the last authoritative workbench visible, but give stale state a
+        // named, persistent retry action instead of a border on Setup alone.
+        h(
+          "section",
+          {
+            class: "rd-health-alert",
+            "data-rd-health-alert": "",
+            role: "region",
+            "aria-labelledby": "rd-health-title",
+            hidden: "",
+          },
+          h(
+            "div",
+            null,
+            h("strong", { id: "rd-health-title" }, "Workbench connection"),
+            h("p", { "data-rd-health-message": "", role: "status", "aria-live": "polite" }),
+          ),
+          h(
+            "button",
+            { type: "button", class: "rd-panel-action", "data-nx": "rd-refresh-retry" },
+            "Retry now",
+          ),
+        ),
         // Identify is also a native transaction. The modal is intentionally
         // scripting-only, so this compact server form is its no-script door:
         // the same next-key listen, the same explicit staging consequence,
@@ -4449,7 +4927,7 @@ export function RedesignIsland() {
           h(
             "div",
             { class: "rd-identify-copy" },
-            h("h2", { id: "rd-identify-native-title" }, "Identify a mapping input"),
+            h("h2", { id: "rd-identify-native-title" }, "Identify an input source"),
             h(
               "p",
               null,
@@ -4462,7 +4940,7 @@ export function RedesignIsland() {
             h(
               "button",
               { type: "submit", class: "rd-panel-action rd-identify-start" },
-              "Identify and use as mapping input",
+              "Identify and use as input source",
             ),
           ),
         ),
@@ -4525,7 +5003,8 @@ export function RedesignIsland() {
                     class: "rd-panel-action primary",
                     "data-rd-product-disabled": "false",
                   },
-                  "Replace session",
+                  h("span", { class: "rd-action-label" }, "Replace session"),
+                  h("span", { class: "rd-action-pending", hidden: "" }, "Replacing…"),
                 ),
               ),
             ),
@@ -4576,7 +5055,7 @@ export function RedesignIsland() {
             h(
               "p",
               { class: "n-devnote rd-devmodal-purpose" },
-              "Show adds a device card to this canvas for inspection. It does not change mapping. On the card, Use as mapping input chooses the one device whose emitted keys appear on the Input source keyboard.",
+              "Show adds a device card to this canvas for inspection. It does not change mapping. On the card, Use as input source chooses the one device whose emitted keys appear on the Input source keyboard.",
             ),
             h(
               "section",
@@ -4592,7 +5071,7 @@ export function RedesignIsland() {
                 h(
                   "p",
                   null,
-                  "Start listening, then press one key on the exact keyboard or encoder you want. A successful answer becomes the mapping input; nothing is captured, saved, or started.",
+                  "Start listening, then press one key on the exact keyboard or encoder you want. A successful answer becomes the input source; nothing is captured, saved, or started.",
                 ),
               ),
               h(
@@ -4606,7 +5085,7 @@ export function RedesignIsland() {
                 h(
                   "button",
                   { type: "submit", class: "rd-panel-action rd-identify-start" },
-                  "Identify and use as mapping input",
+                  "Identify and use as input source",
                 ),
               ),
               h(
@@ -4675,7 +5154,17 @@ export function RedesignIsland() {
                       // above — the compiler drops an element that shares a
                       // parent with a dynamic text, and the parity gate is
                       // what caught the chip existing only after hydration.
-                      h("span", { class: "rd-dev-stagedchip" }, "staged"),
+                      h("span", { class: "rd-dev-connectedchip" }, "Connected"),
+                      h("span", { class: "rd-dev-stagedchip" }, "Input source"),
+                      h(
+                        "span",
+                        {
+                          class: "rd-dev-capturechip",
+                          "data-state": () => deviceCaptureBadge(r).state,
+                          hidden: () => deviceCaptureBadge(r).label === "",
+                        },
+                        () => deviceCaptureBadge(r).label,
+                      ),
                       h("span", { class: "n-dev-meta" }, r.meta),
                       h("span", { class: "n-dev-meta rd-dev-identity" }, r.connection_label),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
@@ -4717,7 +5206,17 @@ export function RedesignIsland() {
                       // above — the compiler drops an element that shares a
                       // parent with a dynamic text, and the parity gate is
                       // what caught the chip existing only after hydration.
-                      h("span", { class: "rd-dev-stagedchip" }, "staged"),
+                      h("span", { class: "rd-dev-connectedchip" }, "Connected"),
+                      h("span", { class: "rd-dev-stagedchip" }, "Input source"),
+                      h(
+                        "span",
+                        {
+                          class: "rd-dev-capturechip",
+                          "data-state": () => deviceCaptureBadge(r).state,
+                          hidden: () => deviceCaptureBadge(r).label === "",
+                        },
+                        () => deviceCaptureBadge(r).label,
+                      ),
                       // An ENCODER's meta line follows the live session: the
                       // surface reads the chart over the wire at mount, and
                       // the roster's "chart not read yet" is stale the moment
@@ -4764,7 +5263,17 @@ export function RedesignIsland() {
                       // above — the compiler drops an element that shares a
                       // parent with a dynamic text, and the parity gate is
                       // what caught the chip existing only after hydration.
-                      h("span", { class: "rd-dev-stagedchip" }, "staged"),
+                      h("span", { class: "rd-dev-connectedchip" }, "Connected"),
+                      h("span", { class: "rd-dev-stagedchip" }, "Input source"),
+                      h(
+                        "span",
+                        {
+                          class: "rd-dev-capturechip",
+                          "data-state": () => deviceCaptureBadge(r).state,
+                          hidden: () => deviceCaptureBadge(r).label === "",
+                        },
+                        () => deviceCaptureBadge(r).label,
+                      ),
                       h("span", { class: "n-dev-meta" }, r.meta),
                       h("span", { class: "n-dev-meta rd-dev-identity" }, r.connection_label),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),

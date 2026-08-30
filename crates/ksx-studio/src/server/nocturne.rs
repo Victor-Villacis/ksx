@@ -59,8 +59,8 @@ pub(super) const N_EDIT_OK: &str = "Draft updated. Nothing has been saved or sta
 pub(super) const N_MOVE_AT_END: &str =
     "That controller is already at that end of the order. Nothing changed.";
 
-pub(super) const N_APPLY_OK: &str = "Changes applied to the running session in place — the pads \
-     stayed plugged. Nothing has been saved.";
+pub(super) const N_APPLY_OK: &str = "Play updated in place. Virtual controllers stayed connected, \
+     and the saved setup was not changed.";
 
 /// Success lines for the migrated saved-game and layout verbs. Named rather
 /// than written at the call site so they can sit in [`N_FLASH_ALLOWLIST`] —
@@ -138,17 +138,18 @@ pub(super) const N_DUP_FULL: &str =
     "error: Every controller slot is staged, so there is nothing free to duplicate into. \
      Remove one first.";
 
-pub(super) const N_SAVE_OK: &str = "Setup saved for later. Play has not started.";
+pub(super) const N_SAVE_OK: &str = "Setup saved. Play was not started or changed.";
 
 pub(super) const N_SAVE_ERROR: &str =
     "error: The setup could not be saved. Check the draft on this screen; nothing was written.";
 
-pub(super) const N_PLAY_OK: &str = "Play started. Use Stop to return the keyboard to normal.";
+pub(super) const N_PLAY_OK: &str =
+    "Play is running from this draft. The saved setup was not changed.";
 
 pub(super) const N_PLAY_ERROR: &str =
     "error: Play could not start. Check the draft on this screen; nothing was started.";
 
-pub(super) const N_STOP_OK: &str = "Play stopped. Keyboards type normally again.";
+pub(super) const N_STOP_OK: &str = "Play stopped. Virtual controllers were disconnected.";
 
 pub(super) const N_STOP_ERROR: &str =
     "error: Play could not be stopped. Try again, or use L-Ctrl five times.";
@@ -237,13 +238,14 @@ pub(super) const N_MACRO_BADNAME: &str =
 pub(super) const N_MACRO_DELETED: &str = "Macro removed from this draft — its trigger keys are \
      unbound with it. Nothing saved was touched.";
 
-pub(super) const N_ADOPT_OK: &str =
-    "Loaded into this draft — review it, then Play. Nothing has been saved or started.";
+pub(super) const N_ADOPT_OK: &str = "Saved setup loaded into this draft. Saved files and any \
+     running Play session were not changed.";
 
 pub(super) const N_ADOPT_BLOCKED: &str = "error: This draft already has content, and loading \
      never overwrites edits. Start over first, then load. Nothing was changed.";
 
-pub(super) const N_DISCARD_OK: &str = "Draft discarded. Saved files were not touched.";
+pub(super) const N_DISCARD_OK: &str =
+    "Draft discarded. Saved files and any running Play session were not changed.";
 
 // The sign-in task's five sentences, moved VERBATIM from `/start` — they were
 // written for exactly this transaction and the menu does not change what

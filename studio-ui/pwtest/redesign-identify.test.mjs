@@ -176,12 +176,12 @@ describe("redesign identify by key", () => {
         "true twin boards keep distinct connection labels beside the shared name",
       );
       const action = page.getByRole("button", {
-        name: "Identify and use as mapping input",
+        name: "Identify and use as input source",
         exact: true,
       });
       assert.match(
         (await page.locator("[data-rd-identify] .rd-identify-copy").textContent()) ?? "",
-        /successful answer becomes the mapping input.*nothing is captured, saved, or started/is,
+        /successful answer becomes the input source.*nothing is captured, saved, or started/is,
       );
       await action.click();
       const status = page.locator('[data-rd-identify-status][data-state="identified"]');
@@ -192,7 +192,7 @@ describe("redesign identify by key", () => {
       );
       assert.match(
         (await status.locator("[data-rd-identify-detail]").textContent()) ?? "",
-        /USB D209:0430 · connection 00.*exact connection.*mapping input/i,
+        /USB D209:0430 · connection 00.*exact connection.*input source/i,
       );
       assert.equal(
         await page.locator(`.rd-devmodal [data-selector="${IPAC}"][aria-current="true"]`).count(),
@@ -218,7 +218,7 @@ describe("redesign identify by key", () => {
       );
       await page.click('[data-nx="rd-devs-open"]');
       const action = page.getByRole("button", {
-        name: "Identify and use as mapping input",
+        name: "Identify and use as input source",
         exact: true,
       });
       await action.click();
@@ -252,7 +252,7 @@ describe("redesign identify by key", () => {
       });
       await page.click('[data-nx="rd-devs-open"]');
       await page.getByRole("button", {
-        name: "Identify and use as mapping input",
+        name: "Identify and use as input source",
         exact: true,
       }).click();
 
@@ -312,7 +312,7 @@ describe("redesign identify by key", () => {
 
       await page.click('[data-nx="rd-devs-open"]');
       await page.getByRole("button", {
-        name: "Identify and use as mapping input",
+        name: "Identify and use as input source",
         exact: true,
       }).click();
       await within(
@@ -382,7 +382,7 @@ describe("redesign identify by key", () => {
 
       await page.click('[data-nx="rd-devs-open"]');
       await page.getByRole("button", {
-        name: "Identify and use as mapping input",
+        name: "Identify and use as input source",
         exact: true,
       }).click();
       await within(
@@ -400,7 +400,7 @@ describe("redesign identify by key", () => {
       await status.waitFor({ timeout: 15_000 });
       assert.match(
         (await status.textContent()) ?? "",
-        /Keyboard answered.*mapping input changed.*Ultimarc I-PAC 4.*answered this attempt.*Logitech G915 TKL.*selected now/is,
+        /Keyboard answered.*input source changed.*Ultimarc I-PAC 4.*answered this attempt.*Logitech G915 TKL.*selected now/is,
       );
       assert.doesNotMatch((await status.textContent()) ?? "", /Identified Logitech/i);
       assert.equal(
@@ -437,7 +437,7 @@ describe("redesign identify by key", () => {
             && url.searchParams.get("flash") === "Keyboard identified and selected. Nothing has been captured, saved, or started."
         ),
         fallback.getByRole("button", {
-          name: "Identify and use as mapping input",
+        name: "Identify and use as input source",
           exact: true,
         }).click(),
       ]);
@@ -458,7 +458,7 @@ describe("redesign identify by key", () => {
       await page.emulateMedia({ reducedMotion: "reduce" });
       await page.click('[data-nx="rd-devs-open"]');
       const action = page.getByRole("button", {
-        name: "Identify and use as mapping input",
+        name: "Identify and use as input source",
         exact: true,
       });
       await action.click();
@@ -527,7 +527,7 @@ describe("redesign identify by key", () => {
     try {
       await page.click('[data-nx="rd-devs-open"]');
       await page.getByRole("button", {
-        name: "Identify and use as mapping input",
+        name: "Identify and use as input source",
         exact: true,
       }).click();
       await page.locator('[data-rd-identify-status][data-state="listening"]').waitFor();
@@ -546,7 +546,7 @@ describe("redesign identify by key", () => {
       );
       await page.click('[data-nx="rd-devs-open"]');
       const retry = page.getByRole("button", {
-        name: "Identify and use as mapping input",
+        name: "Identify and use as input source",
         exact: true,
       });
       await retry.click();

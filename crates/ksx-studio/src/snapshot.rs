@@ -447,6 +447,13 @@ fn staged_readiness_reason(staged: &ksx_api::StagedSetupView, verb: &str) -> Str
 /// a physical remedy instead of offering a POST that can only refuse.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RedesignHeldCaptureRow {
+    /// Stable island/list identity for this one machine row.  Recovery can
+    /// outlive the selector and keyboard interface that normally identify a
+    /// board, so the browser must not fall back to a display name (two
+    /// identical keyboards are ordinary) or collapse empty identities into
+    /// one row.
+    #[serde(default)]
+    pub key: String,
     pub name: String,
     pub transport: String,
     pub detail: String,
@@ -460,6 +467,11 @@ pub struct RedesignHeldCaptureRow {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RedesignCaptureState {
     pub mode: String,
+    /// Server-authored identity for compact recovery alerts.  This is either
+    /// the staged device's own label or a name derived from the held rows;
+    /// consumers must not join it against the separately refreshed catalog.
+    #[serde(default)]
+    pub device_label: String,
     pub heading: String,
     pub line: String,
     pub recovery_line: String,
@@ -468,6 +480,106 @@ pub struct RedesignCaptureState {
     pub can_prepare: bool,
     pub can_release: bool,
     pub held: Vec<RedesignHeldCaptureRow>,
+}
+
+/// Machine-stable list identity for a held board, without exposing a Windows
+/// device path in the DOM.  The ordinary release identity can be absent after
+/// a driver rebind, so walk the remaining evidence from exact physical or
+/// interface identifiers down to descriptive inventory facts.  Truly
+/// indistinguishable rows deliberately share this base; the composer adds a
+/// deterministic enumeration suffix rather than dropping either row.
+fn held_capture_key_base(board: &ksx_api::BoardRow) -> String {
+    let normalized = |value: &str| value.trim().to_ascii_lowercase();
+    let sorted_evidence = |values: Vec<String>| {
+        let mut values = values
+            .into_iter()
+            .map(|value| normalized(&value))
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        values.sort_unstable();
+        values.dedup();
+        values.join("\u{1f}")
+    };
+
+    let keyboard = board
+        .keyboard
+        .as_deref()
+        .map(&normalized)
+        .filter(|value| !value.is_empty());
+    let physical_boards = sorted_evidence(
+        board
+            .interfaces
+            .iter()
+            .filter_map(|row| row.board.clone())
+            .collect(),
+    );
+    let interface_instances = sorted_evidence(
+        board
+            .interfaces
+            .iter()
+            .map(|row| row.instance_id.clone())
+            .collect(),
+    );
+    let selector = board
+        .selector
+        .as_deref()
+        .map(&normalized)
+        .filter(|value| !value.is_empty());
+    let interface_selectors = sorted_evidence(
+        board
+            .interfaces
+            .iter()
+            .filter_map(|row| row.selector.clone())
+            .collect(),
+    );
+    let release_command = board
+        .release_command
+        .as_deref()
+        .map(&normalized)
+        .filter(|value| !value.is_empty());
+
+    let evidence = if let Some(keyboard) = keyboard {
+        format!("keyboard:{keyboard}")
+    } else if !physical_boards.is_empty() {
+        format!("physical-board:{physical_boards}")
+    } else if !interface_instances.is_empty() {
+        format!("interfaces:{interface_instances}")
+    } else if let Some(selector) = selector {
+        format!("selector:{selector}")
+    } else if !interface_selectors.is_empty() {
+        format!("interface-selectors:{interface_selectors}")
+    } else if let Some(release_command) = release_command {
+        format!("release:{release_command}")
+    } else {
+        // A last-resort base still includes all honest inventory facts.  It is
+        // intentionally allowed to collide for two indistinguishable boards;
+        // the enumeration suffix below is the only identity claim available.
+        let descriptors = sorted_evidence(
+            board
+                .interfaces
+                .iter()
+                .map(|row| {
+                    format!(
+                        "{}:{}:{}:{}:{}",
+                        row.transport,
+                        row.description,
+                        row.vendor_id,
+                        row.product_id,
+                        row.bcd_device
+                    )
+                })
+                .collect(),
+        );
+        format!(
+            "fallback:{}:{}:{}:{}",
+            normalized(&board.name),
+            normalized(&board.transport),
+            board.role.code(),
+            descriptors
+        )
+    };
+
+    format!("held-{}", selector_fingerprint(&evidence))
 }
 
 impl RedesignCaptureState {
@@ -481,20 +593,30 @@ impl RedesignCaptureState {
         let resolved = StartCaptureView::from_parts(staged, scan_view, scan.is_some());
         let base_mode = resolved.mode_word();
 
+        let mut held_key_counts = std::collections::BTreeMap::<String, usize>::new();
         let held = scan
             .into_iter()
             .flat_map(|view| view.boards.iter())
             .filter(|board| board.claimed)
-            .filter_map(|board| {
-                let selector = board.selector.as_deref()?.trim();
-                let instance = board.keyboard.as_deref()?.trim();
-                if selector.is_empty() || instance.is_empty() {
-                    return None;
-                }
+            .map(|board| {
+                // A partial inventory is still recovery evidence.  In
+                // particular, rebinding a keyboard to WinUSB can remove the
+                // HID identity we would normally use to release it.  Dropping
+                // that row turns "this keyboard is held" into "nothing to
+                // recover" at exactly the moment a person needs the warning.
+                // Keep the row, but never turn an incomplete or ambiguous
+                // identity into an actionable POST.
+                let selector = board.selector.as_deref().unwrap_or_default().trim();
+                let instance = board.keyboard.as_deref().unwrap_or_default().trim();
                 let selector_unique = scan_view
                     .boards
                     .iter()
-                    .filter(|candidate| candidate.selector.as_deref() == Some(selector))
+                    .filter(|candidate| {
+                        candidate
+                            .selector
+                            .as_deref()
+                            .is_some_and(|value| value.trim() == selector)
+                    })
                     .count()
                     == 1;
                 let instance_unique = scan_view
@@ -504,21 +626,53 @@ impl RedesignCaptureState {
                     .filter(|row| row.instance_id.eq_ignore_ascii_case(instance))
                     .count()
                     == 1;
-                let can_release = board.winusb_eligible && selector_unique && instance_unique;
-                Some(RedesignHeldCaptureRow {
+                let can_release = !selector.is_empty()
+                    && !instance.is_empty()
+                    && board.winusb_eligible
+                    && selector_unique
+                    && instance_unique;
+                let note = if selector.is_empty() && instance.is_empty() {
+                    "ksx can see that this device is held, but Windows did not provide a safe selector or keyboard-interface identity. Restore its HID keyboard driver in Device Manager, reconnect it, then rescan."
+                        .to_owned()
+                } else if selector.is_empty() {
+                    "ksx cannot derive a unique selector for this held device, so automatic release is disabled. Restore its HID keyboard driver in Device Manager, reconnect it, then rescan."
+                        .to_owned()
+                } else if instance.is_empty() {
+                    "Windows did not expose the exact held keyboard interface, so ksx will not guess. Restore this device's HID keyboard driver in Device Manager, reconnect it, then rescan."
+                        .to_owned()
+                } else if !board.winusb_eligible {
+                    "ksx cannot verify this row as safe for automatic WinUSB release. Restore the device's HID keyboard driver in Device Manager, then rescan."
+                        .to_owned()
+                } else if !selector_unique && !instance_unique {
+                    "Two attached devices share both recovery identities. Unplug the other matching device, rescan, then release the remaining keyboard."
+                        .to_owned()
+                } else if !selector_unique {
+                    "Two attached devices share this selector. Unplug the other matching device, rescan, then release the remaining keyboard."
+                        .to_owned()
+                } else if !instance_unique {
+                    "Two attached devices share this keyboard-interface identity. Unplug the other matching device, rescan, then release the remaining keyboard."
+                        .to_owned()
+                } else {
+                    String::new()
+                };
+                let key_base = held_capture_key_base(board);
+                let occurrence = held_key_counts.entry(key_base.clone()).or_default();
+                *occurrence += 1;
+                let key = if *occurrence == 1 {
+                    key_base
+                } else {
+                    format!("{key_base}-{}", *occurrence)
+                };
+                RedesignHeldCaptureRow {
+                    key,
                     name: board.name.clone(),
                     transport: board.transport_label.clone(),
                     detail: "Held by ksx · normal typing is unavailable until release".to_owned(),
                     selector: selector.to_owned(),
                     instance: instance.to_owned(),
                     can_release,
-                    note: if can_release {
-                        String::new()
-                    } else {
-                        "Two attached devices share this identity. Unplug one, rescan, then release the remaining keyboard."
-                            .to_owned()
-                    },
-                })
+                    note,
+                }
             })
             .collect::<Vec<_>>();
 
@@ -625,6 +779,9 @@ impl RedesignCaptureState {
         // Machine-keyed way back: a WinUSB keyboard can be stranded while
         // the daemon has no draft at all.  Promote one unambiguous held row
         // into the primary control while retaining every held row below it.
+        // If none is safe to post, still promote the recovery fact: silence
+        // would imply that choosing a new input is the only work left while a
+        // physical keyboard remains unusable.
         if mode == "none" {
             let mut releasable = held.iter().filter(|row| row.can_release);
             if let Some(row) = releasable.next() {
@@ -637,12 +794,49 @@ impl RedesignCaptureState {
                     can_release = true;
                     recovery_line = "This keyboard is held outside the current draft. Release is resolved from the live device tree."
                         .to_owned();
+                } else {
+                    mode = "held".to_owned();
+                    heading = "Keyboards held by ksx".to_owned();
+                    line = "More than one keyboard is held. Choose the exact recovery row below."
+                        .to_owned();
+                    recovery_line = "Each Release action is resolved independently from the current Windows device tree."
+                        .to_owned();
                 }
+            } else if !held.is_empty() {
+                mode = "held".to_owned();
+                heading = "Held input needs manual recovery".to_owned();
+                line = "ksx can see a held input, but cannot identify one exact interface safely enough to release it automatically."
+                    .to_owned();
+                recovery_line = "Follow the recovery note on each device below. ksx will not guess between incomplete identities."
+                    .to_owned();
             }
         }
 
+        let device_label = if let Some(device) = staged.device.as_ref() {
+            let label = device.label.trim();
+            if label.is_empty() {
+                "Selected input".to_owned()
+            } else {
+                label.to_owned()
+            }
+        } else if mode == "release-held" {
+            held.iter()
+                .find(|row| {
+                    row.selector == selector && row.instance.eq_ignore_ascii_case(&instance)
+                })
+                .map(|row| row.name.clone())
+                .unwrap_or_else(|| "Held keyboard".to_owned())
+        } else {
+            match held.as_slice() {
+                [] => String::new(),
+                [row] => row.name.clone(),
+                _ => "Multiple held keyboards".to_owned(),
+            }
+        };
+
         Self {
             mode,
+            device_label,
             heading,
             line,
             recovery_line,
@@ -676,6 +870,10 @@ impl RedesignCaptureState {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RedesignJourneyStep {
     pub key: String,
+    /// Stable destination/verb for a clickable journey row.  The browser must
+    /// never infer navigation from the customer-facing title or blocker copy.
+    #[serde(default)]
+    pub action: String,
     pub title: String,
     pub detail: String,
     pub badge: String,
@@ -711,6 +909,7 @@ impl RedesignJourney {
                 .map(|(key, title)| {
                     redesign_journey_step(
                         key,
+                        "retry",
                         title,
                         "Waiting for the background helper.",
                         "Unavailable",
@@ -721,7 +920,8 @@ impl RedesignJourney {
             };
         }
 
-        let input_done = staged.device.is_some() && capture.ready_for_commit();
+        let input_selected = staged.device.is_some();
+        let input_done = input_selected && capture.ready_for_commit();
         let controllers_done = !staged.slots.is_empty();
         // Every slot, not merely ANY slot.  The old rail's `any` made a
         // two-player setup look mapped while player two would plug dead.
@@ -732,13 +932,56 @@ impl RedesignJourney {
 
         let facts = [input_done, controllers_done, mapping_done, running];
         let next = facts.iter().position(|done| !done);
+        let input_label = staged
+            .device
+            .as_ref()
+            .map(|device| device.label.trim())
+            .filter(|label| !label.is_empty())
+            .unwrap_or("The selected input");
+        let recovery_without_input =
+            !input_selected && matches!(capture.mode.as_str(), "held" | "release-held");
+        let input_title = if input_done {
+            "Input ready"
+        } else if capture.mode == "release-held" {
+            "Release the held input"
+        } else if capture.mode == "held" {
+            "Recover the held input"
+        } else if !input_selected {
+            "Pick the input"
+        } else if capture.mode == "prepare" {
+            "Prepare the input"
+        } else {
+            "Resolve the input"
+        };
+        let input_done_detail =
+            format!("{input_label} is selected and its exact capture path is ready.");
+        let input_todo_detail = if recovery_without_input {
+            let state = capture.line.trim();
+            if state.is_empty() {
+                "A keyboard is still held by ksx and must be recovered before setup continues."
+                    .to_owned()
+            } else {
+                state.to_owned()
+            }
+        } else if !input_selected {
+            "Choose the keyboard or encoder this setup listens to.".to_owned()
+        } else {
+            let state = capture.line.trim();
+            if state.is_empty() {
+                format!(
+                    "{input_label} is selected, but its exact capture path still needs attention."
+                )
+            } else {
+                format!("{input_label} is selected. {state}")
+            }
+        };
         let mut rows = Vec::with_capacity(4);
         for (index, (key, title, done_detail, todo_detail)) in [
             (
                 "input",
-                "Pick the input",
-                "An exact keyboard or encoder and its capture path are ready.",
-                "Choose the keyboard or encoder this setup listens to, then resolve any preparation needed.",
+                input_title,
+                input_done_detail.as_str(),
+                input_todo_detail.as_str(),
             ),
             (
                 "controller",
@@ -762,10 +1005,23 @@ impl RedesignJourney {
         .into_iter()
         .enumerate()
         {
+            let action = match key {
+                "input" if capture.mode == "unavailable" => "retry",
+                "input" if (input_selected || recovery_without_input) && !input_done => "capture",
+                "input" => "devices",
+                "controller" => "controllers",
+                "mapping" => "mapping",
+                "play" => "play",
+                _ => "retry",
+            };
             let (badge, cls, detail) = if facts[index] {
                 ("Done", "done", done_detail)
             } else if Some(index) == next {
-                if key == "play" && !play.allowed {
+                if key == "input" && input_selected && capture.mode == "prepare" {
+                    ("Prepare", "now", todo_detail)
+                } else if key == "input" && (input_selected || recovery_without_input) {
+                    ("Action required", "blocked", todo_detail)
+                } else if key == "play" && !play.allowed {
                     ("Blocked", "blocked", todo_detail)
                 } else {
                     ("Now", "now", todo_detail)
@@ -773,33 +1029,53 @@ impl RedesignJourney {
             } else {
                 ("Next", "later", todo_detail)
             };
-            rows.push(redesign_journey_step(key, title, detail, badge, cls));
+            rows.push(redesign_journey_step(
+                key, action, title, detail, badge, cls,
+            ));
         }
         let line = if running {
-            "Playing now. Stop returns the captured input to its stopped-session behaviour."
-                .to_owned()
+            if facts.iter().all(|done| *done) {
+                "Playing now. Stop returns the captured input to its stopped-session behaviour."
+                    .to_owned()
+            } else {
+                "A session is playing, but the current draft still has unfinished setup work. Stop ends the running session; the draft remains available to finish."
+                    .to_owned()
+            }
         } else if let Some(row) = rows
             .iter()
-            .find(|row| row.badge == "Now" || row.badge == "Blocked")
+            .find(|row| row.badge != "Done" && row.badge != "Next")
         {
             format!("Next: {}", row.detail)
         } else {
             "The setup is ready to play.".to_owned()
         };
-        let compact = if running {
-            "4/4 · Playing"
+        // This is a completion COUNT, not the ordinal number of the first
+        // incomplete row.  Controllers and mappings can already exist when a
+        // device is changed or removed; calling that state "1/4" claimed the
+        // later work had vanished even while its rows correctly said Done.
+        let completed = facts.iter().filter(|done| **done).count();
+        let compact_state = if running && completed == facts.len() {
+            "Playing"
+        } else if running {
+            "Session playing · draft incomplete"
         } else if !input_done {
-            "1/4 · Pick input"
+            match capture.mode.as_str() {
+                "prepare" => "Preparation required",
+                "held" => "Recovery required",
+                "release-held" => "Release required",
+                _ if !input_selected => "Pick input",
+                _ => "Input needs attention",
+            }
         } else if !controllers_done {
-            "2/4 · Add controllers"
+            "Add controllers"
         } else if !mapping_done {
-            "3/4 · Map controls"
+            "Map controls"
         } else if play.allowed {
-            "3/4 · Ready to play"
+            "Ready to play"
         } else {
-            "3/4 · Play blocked"
-        }
-        .to_owned();
+            "Play blocked"
+        };
+        let compact = format!("{completed}/4 complete · {compact_state}");
         Self {
             compact,
             line,
@@ -810,6 +1086,7 @@ impl RedesignJourney {
 
 fn redesign_journey_step(
     key: &str,
+    action: &str,
     title: &str,
     detail: &str,
     badge: &str,
@@ -817,6 +1094,7 @@ fn redesign_journey_step(
 ) -> RedesignJourneyStep {
     RedesignJourneyStep {
         key: key.to_owned(),
+        action: action.to_owned(),
         title: title.to_owned(),
         detail: detail.to_owned(),
         badge: badge.to_owned(),
@@ -6514,6 +6792,347 @@ impl NocturneDerived {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redesign_journey_counts_finished_work_and_routes_the_real_input_action() {
+        let staged_slot = ksx_api::StagedSlotView {
+            number: 1,
+            bindings: 3,
+            ..ksx_api::StagedSlotView::default()
+        };
+        let later_work_without_input = ksx_api::StagedSetupView {
+            reachable: true,
+            slots: vec![staged_slot.clone()],
+            blocking: Some("split".to_owned()),
+            ..ksx_api::StagedSetupView::default()
+        };
+        let idle = crate::control::SessionView {
+            reachable: true,
+            ..crate::control::SessionView::default()
+        };
+        let blocked_play = RedesignActionState {
+            reason: "Finish setup before Play.".to_owned(),
+            ..RedesignActionState::default()
+        };
+
+        let without_input = RedesignJourney::of(
+            &later_work_without_input,
+            &idle,
+            &RedesignCaptureState::default(),
+            &blocked_play,
+        );
+        assert_eq!(without_input.compact, "2/4 complete · Pick input");
+        assert_eq!(without_input.rows[0].action, "devices");
+        assert_eq!(without_input.rows[0].badge, "Now");
+        assert_eq!(without_input.rows[1].badge, "Done");
+        assert_eq!(without_input.rows[2].badge, "Done");
+
+        let selected = ksx_api::StagedSetupView {
+            device: Some(ksx_api::StagedDeviceView {
+                label: "Ultimarc I-PAC 4".to_owned(),
+                selector: "usb:d209:0430:00".to_owned(),
+                backend: "winusb".to_owned(),
+                ..ksx_api::StagedDeviceView::default()
+            }),
+            slots: vec![staged_slot],
+            blocking: Some("split".to_owned()),
+            reachable: true,
+            ..ksx_api::StagedSetupView::default()
+        };
+        let preparation = RedesignCaptureState {
+            mode: "prepare".to_owned(),
+            line: "Prepare this input before Save or Play.".to_owned(),
+            ..RedesignCaptureState::default()
+        };
+        let journey = RedesignJourney::of(&selected, &idle, &preparation, &blocked_play);
+        assert_eq!(journey.compact, "2/4 complete · Preparation required");
+        assert_eq!(journey.rows[0].title, "Prepare the input");
+        assert_eq!(journey.rows[0].badge, "Prepare");
+        assert_eq!(journey.rows[0].action, "capture");
+        assert!(journey.rows[0].detail.contains("I-PAC 4 is selected"));
+        assert_eq!(journey.rows[1].action, "controllers");
+        assert_eq!(journey.rows[2].action, "mapping");
+        assert_eq!(journey.rows[3].action, "play");
+
+        let ready_capture = RedesignCaptureState {
+            mode: "ready".to_owned(),
+            ..RedesignCaptureState::default()
+        };
+        let allowed_play = RedesignActionState {
+            allowed: true,
+            reason: "Start these virtual controllers.".to_owned(),
+            ..RedesignActionState::default()
+        };
+        let ready = RedesignJourney::of(&selected, &idle, &ready_capture, &allowed_play);
+        assert_eq!(ready.compact, "3/4 complete · Ready to play");
+        assert_eq!(ready.rows[0].title, "Input ready");
+        assert_eq!(ready.rows[0].badge, "Done");
+        assert_eq!(ready.rows[0].action, "devices");
+
+        let capture_unavailable = RedesignCaptureState {
+            mode: "unavailable".to_owned(),
+            line: "The device inventory could not be read.".to_owned(),
+            ..RedesignCaptureState::default()
+        };
+        let retry = RedesignJourney::of(&selected, &idle, &capture_unavailable, &blocked_play);
+        assert_eq!(retry.rows[0].badge, "Action required");
+        assert_eq!(retry.rows[0].action, "retry");
+
+        let wire = serde_json::to_value(&journey).expect("journey serializes");
+        assert_eq!(
+            wire.pointer("/rows/0/action"),
+            Some(&serde_json::json!("capture"))
+        );
+        assert_eq!(
+            wire.pointer("/rows/1/action"),
+            Some(&serde_json::json!("controllers"))
+        );
+
+        let unavailable = RedesignJourney::of(
+            &ksx_api::StagedSetupView::default(),
+            &idle,
+            &RedesignCaptureState::default(),
+            &blocked_play,
+        );
+        assert!(unavailable.rows.iter().all(|row| row.action == "retry"));
+    }
+
+    #[test]
+    fn redesign_recovery_keeps_every_claimed_board_even_when_identity_is_incomplete() {
+        let held_board = |name: &str, selector: Option<&str>, keyboard: Option<&str>| {
+            let interface_id = keyboard.unwrap_or("USB\\VID_1111&PID_2222\\UNRESOLVED");
+            ksx_api::BoardRow {
+                name: name.to_owned(),
+                interfaces: vec![ksx_api::UsbRow {
+                    instance_id: interface_id.to_owned(),
+                    transport: "usb".to_owned(),
+                    state: "claimed".to_owned(),
+                    selector: selector.map(str::to_owned),
+                    winusb_eligible: true,
+                    can_type: false,
+                    ..ksx_api::UsbRow::default()
+                }],
+                keyboard: keyboard.map(str::to_owned),
+                claimed: true,
+                release_command: keyboard.map(|id| format!("ksx winusb release {id} --yes")),
+                ..ksx_api::BoardRow::default()
+            }
+        };
+        let no_selector = held_board(
+            "Held without selector",
+            None,
+            Some("USB\\VID_1111&PID_2222\\NO_SELECTOR"),
+        );
+        let no_keyboard = held_board(
+            "Held without keyboard identity",
+            Some("usb:1111:2222:01"),
+            None,
+        );
+        let exact = held_board(
+            "Exact held keyboard",
+            Some("usb:1111:2222:02"),
+            Some("USB\\VID_1111&PID_2222\\EXACT"),
+        );
+
+        let unreadable_identity_scan = ksx_api::DeviceScanView::read(
+            "fixture".to_owned(),
+            true,
+            true,
+            true,
+            vec![no_selector.clone(), no_keyboard.clone()],
+            Vec::new(),
+            Vec::new(),
+        );
+        let manual = RedesignCaptureState::of(
+            &ksx_api::StagedSetupView {
+                reachable: true,
+                ..ksx_api::StagedSetupView::default()
+            },
+            Some(&unreadable_identity_scan),
+            "",
+        );
+        assert_eq!(manual.mode, "held");
+        assert_eq!(manual.heading, "Held input needs manual recovery");
+        assert_eq!(manual.device_label, "Multiple held keyboards");
+        assert_eq!(manual.held.len(), 2);
+        assert!(manual.held.iter().all(|row| !row.can_release));
+        assert!(manual
+            .held
+            .iter()
+            .all(|row| row.note.contains("Device Manager") && row.note.contains("rescan")));
+
+        let mixed_scan = ksx_api::DeviceScanView::read(
+            "fixture".to_owned(),
+            true,
+            true,
+            true,
+            vec![no_selector, no_keyboard, exact],
+            Vec::new(),
+            Vec::new(),
+        );
+        let recovery = RedesignCaptureState::of(
+            &ksx_api::StagedSetupView {
+                reachable: true,
+                ..ksx_api::StagedSetupView::default()
+            },
+            Some(&mixed_scan),
+            "",
+        );
+        assert_eq!(recovery.held.len(), 3, "no claimed row may disappear");
+        assert_eq!(
+            recovery
+                .held
+                .iter()
+                .filter(|row| row.can_release)
+                .map(|row| row.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Exact held keyboard"]
+        );
+        assert_eq!(recovery.mode, "release-held");
+        assert_eq!(recovery.device_label, "Exact held keyboard");
+        assert_eq!(
+            serde_json::to_value(&recovery)
+                .expect("capture state serializes")
+                .pointer("/device_label"),
+            Some(&serde_json::json!("Exact held keyboard"))
+        );
+
+        let staged_exact = ksx_api::StagedSetupView {
+            reachable: true,
+            device: Some(ksx_api::StagedDeviceView {
+                label: "My cabinet encoder".to_owned(),
+                selector: "usb:1111:2222:02".to_owned(),
+                backend: "winusb".to_owned(),
+                ..ksx_api::StagedDeviceView::default()
+            }),
+            ..ksx_api::StagedSetupView::default()
+        };
+        let selected_capture = RedesignCaptureState::of(&staged_exact, Some(&mixed_scan), "");
+        assert_eq!(selected_capture.device_label, "My cabinet encoder");
+    }
+
+    #[test]
+    fn redesign_recovery_keys_keep_identical_incomplete_claimed_boards_distinct() {
+        let incomplete = ksx_api::BoardRow {
+            name: "Identical held keyboard".to_owned(),
+            interfaces: vec![ksx_api::UsbRow {
+                instance_id: String::new(),
+                description: "USB input device".to_owned(),
+                transport: "usb".to_owned(),
+                state: "claimed".to_owned(),
+                winusb_eligible: true,
+                can_type: false,
+                ..ksx_api::UsbRow::default()
+            }],
+            keyboard: None,
+            claimed: true,
+            ..ksx_api::BoardRow::default()
+        };
+        let scan = ksx_api::DeviceScanView::read(
+            "fixture".to_owned(),
+            true,
+            true,
+            true,
+            vec![incomplete.clone(), incomplete],
+            Vec::new(),
+            Vec::new(),
+        );
+        let staged = ksx_api::StagedSetupView {
+            reachable: true,
+            ..ksx_api::StagedSetupView::default()
+        };
+
+        let first = RedesignCaptureState::of(&staged, Some(&scan), "");
+        let second = RedesignCaptureState::of(&staged, Some(&scan), "");
+        let keys = first
+            .held
+            .iter()
+            .map(|row| row.key.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(keys.len(), 2);
+        assert!(!keys[0].is_empty());
+        assert_ne!(keys[0], keys[1]);
+        assert_eq!(keys[1], format!("{}-2", keys[0]));
+        assert_eq!(
+            first
+                .held
+                .iter()
+                .map(|row| row.key.as_str())
+                .collect::<Vec<_>>(),
+            second
+                .held
+                .iter()
+                .map(|row| row.key.as_str())
+                .collect::<Vec<_>>(),
+            "the same machine inventory must reproduce the same row keys"
+        );
+        assert_eq!(
+            serde_json::to_value(&first)
+                .expect("capture state serializes")
+                .pointer("/held/1/key"),
+            Some(&serde_json::json!(keys[1]))
+        );
+    }
+
+    #[test]
+    fn redesign_empty_draft_routes_releasable_held_input_to_recovery() {
+        let instance = "USB\\VID_1111&PID_2222\\HELD";
+        let held = ksx_api::BoardRow {
+            name: "Cabinet keyboard".to_owned(),
+            interfaces: vec![ksx_api::UsbRow {
+                instance_id: instance.to_owned(),
+                description: "Cabinet keyboard".to_owned(),
+                transport: "usb".to_owned(),
+                state: "claimed".to_owned(),
+                selector: Some("usb:1111:2222:00".to_owned()),
+                winusb_eligible: true,
+                can_type: false,
+                ..ksx_api::UsbRow::default()
+            }],
+            keyboard: Some(instance.to_owned()),
+            claimed: true,
+            release_command: Some(format!("ksx winusb release {instance} --yes")),
+            ..ksx_api::BoardRow::default()
+        };
+        let scan = ksx_api::DeviceScanView::read(
+            "fixture".to_owned(),
+            true,
+            true,
+            true,
+            vec![held],
+            Vec::new(),
+            Vec::new(),
+        );
+        let staged = ksx_api::StagedSetupView {
+            reachable: true,
+            ..ksx_api::StagedSetupView::default()
+        };
+        let capture = RedesignCaptureState::of(&staged, Some(&scan), "");
+        assert_eq!(capture.mode, "release-held");
+        assert!(capture.can_release);
+
+        let journey = RedesignJourney::of(
+            &staged,
+            &crate::control::SessionView {
+                reachable: true,
+                ..crate::control::SessionView::default()
+            },
+            &capture,
+            &RedesignActionState {
+                reason: "Release the held keyboard before Play.".to_owned(),
+                ..RedesignActionState::default()
+            },
+        );
+
+        assert_eq!(journey.compact, "0/4 complete · Release required");
+        assert_eq!(journey.rows[0].title, "Release the held input");
+        assert_eq!(journey.rows[0].action, "capture");
+        assert_eq!(journey.rows[0].badge, "Action required");
+        assert_eq!(journey.rows[0].cls, "rd-journey-step blocked");
+        assert!(journey.rows[0].detail.contains("cannot type normally"));
+        assert!(!journey.rows[0].detail.contains("Choose the keyboard"));
+    }
 
     #[test]
     fn connection_labels_preserve_the_instance_that_separates_twin_boards() {

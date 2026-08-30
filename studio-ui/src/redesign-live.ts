@@ -182,6 +182,21 @@ function eventMessage(event: Event): string {
   return "";
 }
 
+function shortLiveState(state: LiveState): string {
+  switch (state) {
+    case "active": return "Live";
+    case "degraded": return "Live warning";
+    case "waiting": return "Live ready";
+    case "stale": return "Stale";
+    case "offline": return "Offline";
+    case "unreadable": return "Unreadable";
+    case "inactive": return "Idle";
+    case "foreign": return "Other setup";
+    case "connecting": return "Connecting";
+    case "reconnecting": return "Reconnecting";
+  }
+}
+
 export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLiveFeedback {
   let source: RedesignLiveEventSource | null = null;
   let disposed = false;
@@ -268,7 +283,16 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
       scope.dataset.rdLiveState = next;
       const status = statusElement(scope);
       if (status) {
-        status.textContent = text;
+        const short = status.querySelector<HTMLElement>(".rd-live-short");
+        const detail = status.querySelector<HTMLElement>(".rd-live-detail");
+        if (short && detail) {
+          short.textContent = shortLiveState(next);
+          detail.textContent = text;
+        } else {
+          // Compatibility for small harnesses that intentionally provide the
+          // old one-node host while testing protocol behavior in isolation.
+          status.textContent = text;
+        }
         status.hidden = text.trim() === "";
       }
       scope.querySelector<HTMLElement>(".n-canvas")?.classList.toggle(
@@ -532,7 +556,7 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
       setState(
         "stale",
         structure && runtime
-          ? "Apply the current staged changes before using live feedback."
+          ? "Apply the current draft changes before using live feedback."
           : "Live feedback cannot verify which draft Play is using. Use Replace session to start the current draft.",
         changed,
       );

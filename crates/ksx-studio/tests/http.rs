@@ -4202,7 +4202,7 @@ fn the_redesign_identify_form_serves_its_explicit_consequence() {
         "the redesign has no no-JS identify form: {body}"
     );
     assert!(
-        body.contains("Identify and use as mapping input"),
+        body.contains("Identify and use as input source"),
         "the action does not disclose that a successful answer selects the input: {body}"
     );
     assert!(
@@ -4853,7 +4853,7 @@ fn loading_a_saved_game_fills_the_draft_and_starts_nothing() {
         "the redirect must come back HERE: {response}"
     );
     assert!(
-        response.contains("Nothing%20has%20been%20saved%20or%20started"),
+        response.contains("Saved%20setup%20loaded%20into%20this%20draft"),
         "{response}"
     );
 
@@ -4889,7 +4889,10 @@ fn stopping_play_returns_to_saved_games() {
             .contains("location: /nocturne?flash="),
         "{response}"
     );
-    assert!(response.contains("flash=Play%20stopped."), "{response}");
+    assert!(
+        response.contains("flash=Play%20stopped.%20Virtual%20controllers%20were%20disconnected."),
+        "{response}"
+    );
     assert!(!control.running.load(Ordering::SeqCst));
 }
 
@@ -6521,7 +6524,7 @@ fn the_redesign_operational_shell_serves_truth_and_runs_the_shared_lifecycle() {
         "{before}"
     );
     assert_eq!(
-        before["journey"]["compact"], "3/4 · Ready to play",
+        before["journey"]["compact"], "3/4 complete · Ready to play",
         "{before}"
     );
     assert_eq!(before["capture"]["mode"], "prepare-optional", "{before}");
@@ -6588,7 +6591,10 @@ fn the_redesign_operational_shell_serves_truth_and_runs_the_shared_lifecycle() {
             || saved.contains("Location: /redesign?flash="),
         "the shared verb must come home to redesign: {saved}"
     );
-    assert!(saved.contains("Setup%20saved%20for%20later"), "{saved}");
+    assert!(
+        saved.contains("Setup%20saved.%20Play%20was%20not%20started%20or%20changed."),
+        "{saved}"
+    );
     assert!(control.committed.load(Ordering::SeqCst));
 
     let stale_play = post_form(addr, "/redesign/play", "expected_revision=test-d1-stale");
@@ -6601,7 +6607,7 @@ fn the_redesign_operational_shell_serves_truth_and_runs_the_shared_lifecycle() {
     let played = post_form(addr, "/redesign/play", &lifecycle_body);
     assert!(played.starts_with("HTTP/1.1 303"), "{played}");
     assert!(
-        played.contains("/redesign?flash=Play%20started"),
+        played.contains("/redesign?flash=Play%20is%20running%20from%20this%20draft."),
         "{played}"
     );
     assert!(control.played.load(Ordering::SeqCst));
@@ -6637,11 +6643,37 @@ fn the_redesign_operational_shell_serves_truth_and_runs_the_shared_lifecycle() {
     assert_eq!(running["operations"]["stop"]["allowed"], true, "{running}");
     assert_eq!(running["operations"]["apply"]["visible"], true, "{running}");
     assert_eq!(running["operations"]["apply"]["allowed"], true, "{running}");
-    assert_eq!(running["journey"]["compact"], "4/4 · Playing", "{running}");
+    assert_eq!(
+        running["journey"]["compact"], "4/4 complete · Playing",
+        "{running}"
+    );
     let running_revision = running["operations"]["draft_revision"]
         .as_str()
         .expect("served running draft revision")
         .to_owned();
+
+    // Save is deliberately allowed while Play is running. Its feedback must
+    // describe that boundary without claiming this click did not start Play:
+    // it writes the setup and leaves the live session exactly as it was.
+    let active_before_save = control.active_stage_revision.lock().unwrap().clone();
+    let saved_while_playing = post_form(
+        addr,
+        "/redesign/save",
+        &format!("expected_revision={running_revision}"),
+    );
+    assert!(
+        saved_while_playing.contains("Setup%20saved.%20Play%20was%20not%20started%20or%20changed."),
+        "{saved_while_playing}"
+    );
+    assert!(
+        control.running.load(Ordering::SeqCst),
+        "Save must leave the running session alone"
+    );
+    assert_eq!(
+        *control.active_stage_revision.lock().unwrap(),
+        active_before_save,
+        "Save must not move the live session to a different draft revision"
+    );
 
     // Structured Apply preserves the stable code. No flash parsing is needed
     // before the client offers the expanded Replace session action.
@@ -6673,7 +6705,7 @@ fn the_redesign_operational_shell_serves_truth_and_runs_the_shared_lifecycle() {
     );
     let applied = post_form(addr, "/redesign/apply", &apply_body);
     assert!(
-        applied.contains("/redesign?flash=Changes%20applied"),
+        applied.contains("/redesign?flash=Play%20updated%20in%20place."),
         "{applied}"
     );
     assert!(
@@ -6697,7 +6729,9 @@ fn the_redesign_operational_shell_serves_truth_and_runs_the_shared_lifecycle() {
 
     let stopped = post_form(addr, "/redesign/stop", "");
     assert!(
-        stopped.contains("/redesign?flash=Play%20stopped."),
+        stopped.contains(
+            "/redesign?flash=Play%20stopped.%20Virtual%20controllers%20were%20disconnected."
+        ),
         "{stopped}"
     );
     assert!(!control.running.load(Ordering::SeqCst));
@@ -6721,13 +6755,92 @@ fn the_redesign_operational_shell_serves_truth_and_runs_the_shared_lifecycle() {
 
     let adopted = post_form(addr, "/redesign/adopt", "");
     assert!(
-        adopted.contains("/redesign?flash=Loaded%20into%20this%20draft"),
+        adopted.contains("/redesign?flash=Saved%20setup%20loaded%20into%20this%20draft"),
         "{adopted}"
     );
     assert!(!control.staged().empty);
     assert!(
         !control.running.load(Ordering::SeqCst),
         "Adopt is load-only"
+    );
+}
+
+/// Adopt and Discard edit only the draft even when a staged Play session is
+/// still live. Their completion copy must not imply that no session exists,
+/// and the handlers must leave both live authority and saved files alone.
+#[test]
+fn redesign_adopt_and_discard_leave_a_running_play_session_unchanged() {
+    let control = Arc::new(ScriptedControl::new(false));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+        ksx_api::StageEdit::SetBlocking {
+            blocking: "whole".into(),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    assert!(control.stage_play().ok, "fixture Play must start");
+    let live_revision = control.active_stage_revision.lock().unwrap().clone();
+    assert!(
+        control.stage_edit(&ksx_api::StageEdit::Discard).ok,
+        "fixture must clear only the draft before Adopt"
+    );
+    assert!(control.staged().empty);
+    assert!(control.running.load(Ordering::SeqCst));
+    let addr = start_server(control.clone());
+
+    let adopted = post_form(addr, "/redesign/adopt", "");
+    assert!(
+        adopted.contains(
+            "/redesign?flash=Saved%20setup%20loaded%20into%20this%20draft.%20Saved%20files%20and%20any%20running%20Play%20session%20were%20not%20changed."
+        ),
+        "{adopted}"
+    );
+    assert!(!control.staged().empty, "Adopt must populate the draft");
+    assert!(
+        control.running.load(Ordering::SeqCst),
+        "Adopt must not stop Play"
+    );
+    assert_eq!(
+        *control.active_stage_revision.lock().unwrap(),
+        live_revision,
+        "Adopt must not replace the running draft revision"
+    );
+    assert!(
+        !control.committed.load(Ordering::SeqCst),
+        "Adopt must not write saved files"
+    );
+
+    let discarded = post_form(addr, "/redesign/discard", "");
+    assert!(
+        discarded.contains(
+            "/redesign?flash=Draft%20discarded.%20Saved%20files%20and%20any%20running%20Play%20session%20were%20not%20changed."
+        ),
+        "{discarded}"
+    );
+    assert!(control.staged().empty, "Discard must clear the draft");
+    assert!(
+        control.running.load(Ordering::SeqCst),
+        "Discard must not stop Play"
+    );
+    assert_eq!(
+        *control.active_stage_revision.lock().unwrap(),
+        live_revision,
+        "Discard must not replace the running draft revision"
+    );
+    assert!(
+        !control.committed.load(Ordering::SeqCst),
+        "Discard must not write saved files"
     );
 }
 
@@ -11583,7 +11696,10 @@ fn nocturne_applies_the_dirty_draft_to_the_running_session() {
 
     // The hot path applies in place.
     let response = post_form(addr, "/nocturne/apply", "");
-    assert!(response.contains("Changes%20applied"), "{response}");
+    assert!(
+        response.contains("Play%20updated%20in%20place."),
+        "{response}"
+    );
 
     // A structural difference refuses with the sentence naming Play.
     control.dirty.store(true, Ordering::SeqCst);
@@ -11614,7 +11730,7 @@ fn nocturne_applies_the_dirty_draft_to_the_running_session() {
     assert!(
         hot["flash"]
             .as_str()
-            .is_some_and(|f| f.starts_with("Changes applied")),
+            .is_some_and(|f| f.starts_with("Play updated in place.")),
         "{hot}"
     );
     control.apply_needs_restart.store(true, Ordering::SeqCst);
@@ -11676,7 +11792,7 @@ fn nocturne_serves_the_migrated_configuration_menu_over_http() {
     // Adopt into an EMPTY draft loads and starts nothing.
     let adopted = post_form(addr, "/nocturne/adopt", "");
     assert!(
-        adopted.contains("Loaded%20into%20this%20draft"),
+        adopted.contains("Saved%20setup%20loaded%20into%20this%20draft"),
         "{adopted}"
     );
     assert!(!control.staged().slots.is_empty());
@@ -11694,7 +11810,10 @@ fn nocturne_serves_the_migrated_configuration_menu_over_http() {
     assert!(discarded.contains("Draft%20discarded"), "{discarded}");
     assert!(control.staged().empty);
     let game = post_form(addr, "/nocturne/adopt", "profile=Example+Game");
-    assert!(game.contains("Loaded%20into%20this%20draft"), "{game}");
+    assert!(
+        game.contains("Saved%20setup%20loaded%20into%20this%20draft"),
+        "{game}"
+    );
     assert_eq!(control.staged().slots[0].preset, "Example Game");
 
     // The sign-in twin: no consent, no write; with consent, the re-read's
@@ -11718,7 +11837,8 @@ fn nocturne_serves_the_migrated_configuration_menu_over_http() {
     );
     let via_workspace = post_form(addr, "/nocturne/adopt", "");
     assert!(
-        via_workspace.contains("location: /nocturne?flash=Loaded%20into%20this%20draft"),
+        via_workspace
+            .contains("location: /nocturne?flash=Saved%20setup%20loaded%20into%20this%20draft"),
         "{via_workspace}"
     );
 }

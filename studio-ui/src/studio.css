@@ -18336,6 +18336,96 @@ a.nm-link {
   content: "";
 }
 
+/* Machine recovery and transport freshness stay outside the collapsible
+   Setup panel. They preserve the canvas while keeping stranded hardware and
+   stale data impossible to mistake for a healthy workbench. */
+.rd-attention,
+.rd-health-alert:not([hidden]) {
+  position: relative;
+  z-index: 8;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--sp-3);
+  align-items: center;
+  flex: none;
+  width: 100%;
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid color-mix(in srgb, var(--n-warn) 46%, var(--n-line));
+  background:
+    linear-gradient(90deg, var(--warn-dim), transparent 54%),
+    color-mix(in srgb, var(--n-panel-2) 88%, transparent);
+}
+
+.rd-attention.none,
+.rd-attention-retry.none {
+  display: none;
+}
+
+.rd-attention-mark {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid color-mix(in srgb, var(--n-warn) 64%, var(--n-line));
+  border-radius: 50%;
+  background: var(--warn-dim);
+  color: var(--n-warn);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+}
+
+.rd-attention-copy,
+.rd-health-alert > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.rd-attention-kick {
+  color: var(--n-warn);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+.rd-attention h2,
+.rd-health-alert strong {
+  color: var(--n-text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-snug);
+}
+
+.rd-attention-line,
+.rd-attention-detail,
+.rd-health-alert p {
+  margin: 0;
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+  text-wrap: pretty;
+}
+
+.rd-attention-detail:empty {
+  display: none;
+}
+
+.rd-attention-actions {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+.rd-health-alert:not([hidden]) {
+  grid-template-columns: minmax(0, 1fr) auto;
+  border-color: color-mix(in srgb, var(--n-warn) 58%, var(--n-line));
+}
+
+.rd-health-alert strong {
+  color: var(--n-warn);
+}
+
 /* Four steps, four facts. The active step gets space; completed and later
    steps remain readable without turning this status rail into a wizard. */
 .rd-journey {
@@ -18356,6 +18446,26 @@ a.nm-link {
   border: 1px solid var(--n-line);
   border-radius: var(--r-lg);
   background: color-mix(in srgb, var(--n-panel-2) 74%, transparent);
+  width: 100%;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  appearance: none;
+  cursor: pointer;
+}
+
+.rd-journey-step:hover {
+  border-color: var(--n-accent-line);
+  background: color-mix(in srgb, var(--n-accent) 7%, var(--n-panel-2));
+}
+
+.rd-journey-step:focus-visible,
+.rd-capture-card:focus-visible,
+.rd-held-row:focus-visible,
+#rd-play-reason:focus-visible {
+  outline: 2px solid var(--n-accent);
+  outline-offset: 2px;
 }
 
 .rd-journey-step::after {
@@ -18485,6 +18595,63 @@ a.nm-link {
   text-wrap: pretty;
 }
 
+.rd-state-strip,
+.rd-devcard-states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  align-items: center;
+  margin: 0;
+}
+
+.rd-state-badge,
+.rd-device-state,
+.rd-dev-connectedchip,
+.rd-dev-capturechip {
+  width: fit-content;
+  padding: 2px 7px;
+  border: 1px solid var(--n-line-2);
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--n-panel-3) 64%, transparent);
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-snug);
+  white-space: nowrap;
+}
+
+:is(.rd-state-badge, .rd-device-state, .rd-dev-capturechip)[data-state="ready"],
+.rd-device-state[data-state="connected"] {
+  border-color: color-mix(in srgb, var(--n-ok) 44%, var(--n-line));
+  background: var(--ok-dim);
+  color: var(--n-ok);
+}
+
+:is(.rd-state-badge, .rd-device-state, .rd-dev-capturechip)[data-state="attention"] {
+  border-color: color-mix(in srgb, var(--n-warn) 54%, var(--n-line));
+  background: var(--warn-dim);
+  color: var(--n-warn);
+}
+
+.rd-state-badge[data-state="playing"] {
+  border-color: color-mix(in srgb, var(--n-ok) 54%, var(--n-line));
+  background: var(--ok-dim);
+  color: var(--n-ok);
+}
+
+.rd-state-device {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-state-device:empty {
+  display: none;
+}
+
 :is(.rd-escape-line, .rd-capture-recovery-line, .rd-action-reason):empty,
 .rd-held-note:empty {
   display: none;
@@ -18559,6 +18726,32 @@ a.nm-link {
 .rd-panel-action[data-rd-product-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.rd-action-pending[hidden],
+.rd-action-label[hidden],
+.rd-action-icon:has(~ .rd-action-pending:not([hidden])) {
+  display: none;
+}
+
+:is(.rd-runbtn, .rd-panel-action)[data-rd-pending] {
+  cursor: progress;
+}
+
+.rd-action-pending:not([hidden]) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.rd-action-pending:not([hidden])::before {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+  opacity: 0.72;
 }
 
 .rd-start-over {
@@ -18817,6 +19010,34 @@ a.nm-link {
   max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.rd-live-short {
+  display: none;
+}
+
+.rd-live-retry {
+  display: none;
+  min-height: 30px;
+  padding: 0 var(--sp-2);
+  border: 1px solid color-mix(in srgb, var(--n-warn) 48%, var(--n-line));
+  border-radius: var(--r-md);
+  background: var(--warn-dim);
+  color: var(--n-warn);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+}
+
+.rd:is([data-rd-live-state="offline"], [data-rd-live-state="unreadable"]) .rd-live-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rd-live-retry:focus-visible {
+  outline: 2px solid var(--n-accent);
+  outline-offset: 2px;
 }
 
 .rd-live-state:not([hidden])::before {
@@ -19179,12 +19400,30 @@ a.nm-link {
   .rd-restart-actions .rd-panel-action {
     width: 100%;
   }
+
+  .rd-attention,
+  .rd-health-alert:not([hidden]) {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding-right: var(--sp-3);
+    padding-left: var(--sp-3);
+  }
+
+  .rd-attention-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+
+  .rd-health-alert:not([hidden]) > .rd-panel-action {
+    grid-column: 2;
+    justify-self: start;
+  }
 }
 
 /* At compact desktop/tablet widths, primary workbench verbs use their short
    visual forms. The environment badge contracts to a colored safety beacon
-   while retaining its text and tooltip; live truth likewise contracts to its
-   witness dot. Full sentences remain available to assistive technology. */
+   while retaining its text and tooltip; live truth keeps a short named state
+   beside its witness dot. Full sentences remain available to assistive
+   technology. */
 @media (max-width: 1140px) {
   .rd .rd-top > .n-environment {
     display: block;
@@ -19240,13 +19479,32 @@ a.nm-link {
   }
 
   .rd-live-state:not([hidden]) {
-    width: 12px;
-    max-width: 12px;
-    color: transparent;
+    width: auto;
+    max-width: 96px;
+    overflow: visible;
+    color: var(--n-text-3);
+  }
+
+  .rd-live-short {
+    display: inline;
+    max-width: 76px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .rd-live-detail {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .rd-live-state:not([hidden])::before {
-    color: var(--n-text-3);
+    color: currentColor;
   }
 
   .rd[data-rd-live-state="active"] .rd-live-state::before,
@@ -19269,16 +19527,31 @@ a.nm-link {
 
 @media (max-width: 480px) {
   .rd-setup-sum {
-    max-width: 112px;
+    max-width: 90px;
+  }
+
+  .rd-adddev,
+  .rd-addctrl {
+    width: 32px;
+    min-width: 32px;
+  }
+
+  .rd-live-state:not([hidden]) {
+    max-width: 54px;
+    font-size: 9px;
+  }
+
+  .rd-live-short {
+    max-width: 44px;
   }
 
   /* Keep the product words in the DOM for names and speech, while the visual
      rail uses the unambiguous short verbs that fit beside setup at 390 px. */
   .rd-runbtn {
     position: relative;
-    width: 46px;
-    min-width: 46px;
-    max-width: 46px;
+    width: 42px;
+    min-width: 42px;
+    max-width: 42px;
     padding: 0;
     overflow: hidden;
     color: transparent;
@@ -19310,12 +19583,37 @@ a.nm-link {
     color: var(--n-warn);
     content: "Stop";
   }
+
+  .rd-runbtn[data-rd-pending]::after {
+    display: none;
+  }
+
+  .rd-runbtn[data-rd-pending] .rd-action-pending {
+    color: var(--n-text-2);
+    font-size: 9px;
+  }
+
+  .rd-attention,
+  .rd-health-alert:not([hidden]) {
+    grid-template-columns: 1fr;
+  }
+
+  .rd-attention-mark {
+    display: none;
+  }
+
+  .rd-attention-actions,
+  .rd-health-alert:not([hidden]) > .rd-panel-action {
+    grid-column: 1;
+  }
 }
 
 @media (pointer: coarse) {
   .rd-setup-sum,
   .rd-runbtn,
   .rd-panel-action,
+  .rd-live-retry,
+  .rd-journey-step,
   .rd-start-over > summary {
     min-height: 40px;
   }
@@ -19348,7 +19646,13 @@ a.nm-link {
   .rd-runbtn,
   .rd-panel-action,
   .rd-restart-dialog,
-  .rd-flash {
+  .rd-flash,
+  .rd-attention,
+  .rd-health-alert:not([hidden]),
+  .rd-state-badge,
+  .rd-device-state,
+  .rd-dev-connectedchip,
+  .rd-dev-capturechip {
     border-color: CanvasText;
     background: Canvas;
     box-shadow: none;
@@ -19699,6 +20003,10 @@ a.nm-link {
   font-size: var(--fs-xs);
   line-height: var(--lh-snug);
   color: var(--n-text-2);
+}
+
+.rd-devcard-states {
+  margin-top: 7px;
 }
 
 .rd-devcard-purpose {
@@ -22470,6 +22778,17 @@ button.rd-encoder-product-read-inline:disabled {
   font-weight: var(--fw-semibold);
   letter-spacing: var(--track-eyebrow);
   text-transform: uppercase;
+}
+
+.rd-dev-connectedchip,
+.rd-dev-capturechip {
+  display: inline-block;
+  margin: 3px var(--sp-1) 0 0;
+}
+
+.rd-dev-connectedchip[hidden],
+.rd-dev-capturechip[hidden] {
+  display: none;
 }
 
 .rd-devmodal button[aria-current="true"] .rd-dev-stagedchip {

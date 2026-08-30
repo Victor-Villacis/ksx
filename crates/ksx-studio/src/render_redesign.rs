@@ -284,6 +284,7 @@ fn board_choice_row(row: &NocturneChoiceRow) -> SlotValue {
 fn journey_row(row: &crate::snapshot::RedesignJourneyStep) -> SlotValue {
     SlotValue::object(vec![
         ("key".to_owned(), SlotValue::Text(row.key.clone())),
+        ("action".to_owned(), SlotValue::Text(row.action.clone())),
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
         ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
         ("badge".to_owned(), SlotValue::Text(row.badge.clone())),
@@ -293,6 +294,7 @@ fn journey_row(row: &crate::snapshot::RedesignJourneyStep) -> SlotValue {
 
 fn held_capture_row(row: &crate::snapshot::RedesignHeldCaptureRow) -> SlotValue {
     SlotValue::object(vec![
+        ("key".to_owned(), SlotValue::Text(row.key.clone())),
         ("name".to_owned(), SlotValue::Text(row.name.clone())),
         (
             "transport".to_owned(),
@@ -384,6 +386,20 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         "rdOpSavedDetail": payload.operations.saved_detail,
         "rdOpSessionLine": payload.operations.session.line,
         "rdOpSessionCls": format!("rd-session-state {}", payload.operations.session_cls),
+        "rdOpSessionBadge": if !payload.operations.session.reachable {
+            "Status unavailable"
+        } else if payload.operations.session.running {
+            "Playing"
+        } else {
+            "Stopped"
+        },
+        "rdOpSessionBadgeState": if !payload.operations.session.reachable {
+            "attention"
+        } else if payload.operations.session.running {
+            "playing"
+        } else {
+            "stopped"
+        },
         "rdOpEscapeLine": payload.operations.escape_line,
         "rdSaveLabel": payload.operations.save.label,
         "rdSaveDisabled": !payload.operations.save.allowed,
@@ -411,6 +427,7 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         "rdJourneyCompact": payload.journey.compact,
         "rdJourneyLine": payload.journey.line,
         "rdCaptureMode": payload.capture.mode,
+        "rdCaptureDeviceLabel": payload.capture.device_label,
         "rdCaptureHeading": payload.capture.heading,
         "rdCaptureLine": payload.capture.line,
         "rdCaptureRecoveryLine": payload.capture.recovery_line,

@@ -244,9 +244,9 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
     // session appear synchronized with this newer structural draft.
     await clickAction(page, "save");
     await page.waitForFunction(
-      () => document.querySelector(".rd-flash")?.textContent?.includes("saved for later"),
+      () => document.querySelector(".rd-flash")?.textContent?.includes("Setup saved"),
     );
-    assert.match(await page.locator(".rd-flash").textContent(), /saved for later/i);
+    assert.match(await page.locator(".rd-flash").textContent(), /Setup saved/i);
     assert.equal(await applyButtonIsReady(page), true);
 
     const savedSocd = await socdSelect.inputValue();
@@ -368,7 +368,7 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
     await restart.waitFor({ state: "visible" });
     await clickAction(page, "play-replace");
     await restart.waitFor({ state: "hidden" });
-    assert.match(await page.locator(".rd-flash").textContent(), /Play started/);
+    assert.match(await page.locator(".rd-flash").textContent(), /Play is running/);
     await page.waitForFunction(
       () => document.querySelector('[data-rd-form="apply"]')?.classList.contains("none"),
       null,

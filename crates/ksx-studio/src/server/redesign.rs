@@ -16,7 +16,7 @@ const RD_LIFECYCLE_CHANGED: &str =
     "error: This draft changed or could not be verified. Refresh the workbench before continuing; nothing was changed.";
 const RD_IDENTIFY_CANCELLED: &str = "Keyboard identification cancelled. Nothing changed.";
 const RD_IDENTIFY_ALREADY_ANSWERED: &str =
-    "error: That keyboard identification has already answered. Check the current mapping input before trying again.";
+    "error: That keyboard identification has already answered. Check the current input source before trying again.";
 const RD_IDENTIFY_BUSY: &str =
     "error: Another keyboard identification is already listening. Finish or cancel it there; nothing changed.";
 

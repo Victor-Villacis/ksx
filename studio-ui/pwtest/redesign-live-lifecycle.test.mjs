@@ -105,7 +105,8 @@ async function openBench() {
     const root = document.querySelector("[data-forma-island]");
     const read = () => ({
       state: root?.dataset.rdLiveState ?? "",
-      text: root?.querySelector("[data-rd-live-status]")?.textContent ?? "",
+      text: root?.querySelector("[data-rd-live-status] .rd-live-detail")?.textContent ?? "",
+      short: root?.querySelector("[data-rd-live-status] .rd-live-short")?.textContent ?? "",
     });
     window.ksxLiveHistory = [read()];
     let last = JSON.stringify(window.ksxLiveHistory[0]);
@@ -154,6 +155,7 @@ function assertInactive(entries) {
     assert.deepEqual(entry, {
       state: "inactive",
       text: "Live input starts after you press Play.",
+      short: "Idle",
     });
   }
 }
@@ -221,7 +223,7 @@ describe("redesign mutable live lifecycle", { concurrency: false }, () => {
     await clickAction(page, "stop");
     await page.waitForFunction(
       () => document.querySelector("[data-forma-island]")?.dataset.rdLiveState === "inactive" &&
-        document.querySelector("[data-rd-live-status]")?.textContent ===
+        document.querySelector("[data-rd-live-status] .rd-live-detail")?.textContent ===
           "Live input starts after you press Play.",
       null,
       { timeout: 20_000 },

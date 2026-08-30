@@ -211,6 +211,21 @@ async function assertLifecycleRail(page, width) {
     );
   }
 
+  const liveShort = page.locator(".rd-live-short");
+  if (width <= 1140) {
+    const liveBox = await liveShort.boundingBox();
+    assert.ok(liveBox && liveBox.width > 0 && liveBox.height > 0, `${width}px live state is dot-only`);
+    const liveVisual = await liveShort.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { color: style.color, fontSize: Number.parseFloat(style.fontSize), text: element.textContent };
+    });
+    assert.ok(liveVisual.text?.trim(), `${width}px live state has no short name`);
+    assert.ok(liveVisual.fontSize > 0, `${width}px live state text has zero font size`);
+    assert.notEqual(liveVisual.color, "rgba(0, 0, 0, 0)", `${width}px live state text is transparent`);
+  } else {
+    assert.equal(await liveShort.isVisible(), false, `${width}px duplicated the compact live label`);
+  }
+
   assert.equal(
     await page.locator(".rd-theme-rail-home .rd-themed").isVisible(),
     width > 680,

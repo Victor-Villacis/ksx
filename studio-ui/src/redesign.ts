@@ -346,8 +346,16 @@ function wireForms(root: HTMLElement): void {
   });
   root.addEventListener("click", (event) => {
     const target = event.target;
-    if (!(target instanceof Element) || !target.closest("[data-rd-identify-cancel]")) return;
-    void cancelIdentify(root);
+    if (!(target instanceof Element)) return;
+    const retry = target.closest<HTMLButtonElement>(
+      '[data-nx="rd-refresh-retry"], [data-rd-live-retry]',
+    );
+    if (retry) {
+      event.preventDefault();
+      void retryWorkbenchStatus(root, retry);
+      return;
+    }
+    if (target.closest("[data-rd-identify-cancel]")) void cancelIdentify(root);
   });
   window.addEventListener("keydown", guardIdentifyKey, true);
   window.addEventListener("keypress", guardIdentifyKey, true);
@@ -404,8 +412,48 @@ const MUTATION_SUBMIT_SELECTOR = [
     `[data-rd-form="${kind}"] button[type="submit"]`,
     `[data-rd-form="${kind}"] input[type="submit"]`,
   ])
-  .concat(["select.rd-ctrlplayer"])
+  .concat([
+    "select.rd-ctrlplayer",
+    '[data-nx="rd-refresh-retry"]',
+    "[data-rd-live-retry]",
+  ])
   .join(", ");
+
+async function retryWorkbenchStatus(
+  root: HTMLElement,
+  button: HTMLButtonElement,
+): Promise<void> {
+  if (
+    root.dataset.rdMutationPending === "true" ||
+    button.dataset.rdRetryPending === "true"
+  ) return;
+  const settled = button.textContent ?? "Retry";
+  button.dataset.rdRetryPending = "true";
+  button.setAttribute("aria-busy", "true");
+  button.disabled = true;
+  button.textContent = "Checking…";
+  rdAnnounce("Checking workbench status…");
+  try {
+    await refresh("foreground");
+    // EventSource owns reconnect cadence and `connect` refuses to create a
+    // duplicate source. This only ensures a browser that failed before the
+    // source was constructed gets another safe connection attempt.
+    liveFeedback?.connect();
+  } finally {
+    if (!button.isConnected) return;
+    delete button.dataset.rdRetryPending;
+    button.removeAttribute("aria-busy");
+    button.disabled = false;
+    button.textContent = settled;
+    const style = window.getComputedStyle(button);
+    const visible = button.getClientRects().length > 0 && style.visibility !== "hidden";
+    if (visible) {
+      button.focus({ preventScroll: true });
+    } else {
+      root.querySelector<HTMLElement>(".rd-setup-sum")?.focus({ preventScroll: true });
+    }
+  }
+}
 
 function beginMutation(root: HTMLElement): SubmitControl[] | null {
   if (pendingMutationRoots.has(root)) return null;
@@ -538,7 +586,7 @@ async function recoverUnconfirmedIdentify(
   setIdentifyUi(
     root,
     "resolving",
-    "Checking the current mapping input",
+    "Checking the current input source",
     "The listening response was interrupted. Confirming the server's current selection…",
   );
   try {
@@ -559,7 +607,7 @@ async function recoverUnconfirmedIdentify(
       root,
       "error",
       "Identification outcome unknown",
-      "Reload the workbench to confirm the current mapping input before trying again.",
+      "Reload the workbench to confirm the current input source before trying again.",
     );
     return false;
   }
@@ -571,7 +619,7 @@ async function recoverUnconfirmedIdentify(
     currentSelector && currentSelector !== previousSelector,
   );
   applyRedesignFlash(
-    "error: the keyboard-listening response was lost — review the current mapping input before retrying.",
+    "error: the keyboard-listening response was lost — review the current input source before retrying.",
   );
   setIdentifyUi(
     root,
@@ -581,7 +629,7 @@ async function recoverUnconfirmedIdentify(
       ? selectionChanged
         ? `The workbench now shows ${name}, but this interrupted request cannot prove what caused that change. Review its selected row or reload before trying again.`
         : `The workbench currently shows ${name}. Review its selected row or reload before trying again.`
-      : "Review the selected mapping-input row or reload before trying again.",
+      : "Review the selected input-source row or reload before trying again.",
   );
   return false;
 }
@@ -638,8 +686,8 @@ function showIdentifiedDevice(root: HTMLElement, selector: string): void {
     "identified",
     name ? `Identified ${name}` : "Keyboard identified",
     identity
-      ? `${identity}. This exact connection is now the mapping input.`
-      : "The exact connection that answered is now the mapping input.",
+      ? `${identity}. This exact connection is now the input source.`
+      : "The exact connection that answered is now the input source.",
   );
   if (row) {
     row.classList.add("rd-row-pulse");
@@ -749,7 +797,7 @@ async function submitIdentifyForm(
     root,
     "listening",
     "Listening for one key",
-    "Press one key on the exact keyboard or encoder to use as the mapping input. Esc cancels.",
+    "Press one key on the exact keyboard or encoder to use as the input source. Esc cancels.",
     true,
   );
   root.querySelector<HTMLElement>("[data-rd-identify-status]")?.focus({
@@ -793,13 +841,13 @@ async function submitIdentifyForm(
     );
     if (!(await refresh())) {
       applyRedesignFlash(
-        "error: the keyboard answered, but the workbench could not refresh — reload to confirm the mapping input.",
+        "error: the keyboard answered, but the workbench could not refresh — reload to confirm the input source.",
       );
       setIdentifyUi(
         root,
         "error",
         "Keyboard answered — refresh needed",
-        "Reload the workbench to confirm which exact connection became the mapping input.",
+        "Reload the workbench to confirm which exact connection became the input source.",
       );
       return;
     }
@@ -815,12 +863,12 @@ async function submitIdentifyForm(
         ?.querySelector<HTMLElement>(".n-dev-name")
         ?.textContent?.trim();
       applyRedesignFlash(
-        "error: the keyboard answered, but the mapping input changed before confirmation — review the current selection.",
+        "error: the keyboard answered, but the input source changed before confirmation — review the current selection.",
       );
       setIdentifyUi(
         root,
         "error",
-        "Keyboard answered — mapping input changed",
+        "Keyboard answered — input source changed",
         answeredSelector
           ? `${answeredName ?? "The exact connection"} answered this attempt. ${currentName ?? "Another connection"} is selected now; review the selected row before mapping.`
           : "The server did not disclose which exact connection answered. Reload and review the selected row before mapping.",
@@ -1131,6 +1179,29 @@ type LifecycleFormKind =
   | "capture-prepare"
   | "capture-release";
 
+function lifecycleSubmitButton(
+  form: HTMLFormElement,
+  submitter: HTMLElement | null,
+): HTMLButtonElement | null {
+  if (submitter instanceof HTMLButtonElement) return submitter;
+  return form.querySelector<HTMLButtonElement>('button[type="submit"]');
+}
+
+/** Swap real child nodes, not generated CSS copy, so the visible label and
+ * accessible name tell the same pending truth. Payload refreshes may replace
+ * the old button; a detached node is harmless and the served replacement is
+ * already back in its settled state. */
+function setLifecyclePending(button: HTMLButtonElement | null, pending: boolean): void {
+  if (!button) return;
+  const settled = button.querySelector<HTMLElement>(".rd-action-label");
+  const pendingLabel = button.querySelector<HTMLElement>(".rd-action-pending");
+  if (!settled || !pendingLabel) return;
+  settled.hidden = pending;
+  pendingLabel.hidden = !pending;
+  button.toggleAttribute("data-rd-pending", pending);
+  button.toggleAttribute("aria-busy", pending);
+}
+
 function lifecycleFocusTarget(root: HTMLElement, kind: LifecycleFormKind): HTMLElement | null {
   const visibleAction = (formKind: "play" | "stop") =>
     Array.from(
@@ -1166,6 +1237,8 @@ async function submitLifecycleForm(
     : "";
   const submits = beginMutation(root);
   if (!submits) return;
+  const pendingButton = lifecycleSubmitButton(form, submitter);
+  setLifecyclePending(pendingButton, true);
   let actionSucceeded = false;
   let refreshed = false;
   let restartMessage = "";
@@ -1251,6 +1324,7 @@ async function submitLifecycleForm(
     applyRedesignFlash("error: request failed — is ksx studio still running?");
   } finally {
     const restoreFocus = startedWithFocus && actionStillOwnsFocus(form, submitter);
+    setLifecyclePending(pendingButton, false);
     endMutation(root, submits);
     if (restartMessage) {
       openApplyRestartDialog(

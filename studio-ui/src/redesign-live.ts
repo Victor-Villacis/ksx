@@ -169,6 +169,7 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
   let disposed = false;
   let pagehideWired = false;
   let confirmed = false;
+  let transport: "idle" | "connecting" | "open" | "reconnecting" = "idle";
   let license: RedesignLiveSession | null = null;
   let inferredRuntimeRevision = "";
   let sessionIdentity = "no-session";
@@ -248,7 +249,10 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
     if (scope) {
       scope.dataset.rdLiveState = next;
       const status = statusElement(scope);
-      if (status) status.textContent = text;
+      if (status) {
+        status.textContent = text;
+        status.hidden = text.trim() === "";
+      }
       scope.querySelector<HTMLElement>(".n-canvas")?.classList.toggle(
         "live",
         next === "active" || next === "degraded",
@@ -343,12 +347,12 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
     if (!envelope?.frame || typeof envelope.frame.running !== "boolean") {
       throw new Error("unreadable live envelope");
     }
-    if (envelope.frame.running !== true) {
-      invalidate("inactive", "Live input is inactive.", true);
-      return;
-    }
     if (trimmed(envelope.unavailable)) {
       invalidate("offline", redesignLiveCustomerReason(envelope.unavailable), true);
+      return;
+    }
+    if (envelope.frame.running !== true) {
+      invalidate("inactive", "Live input is inactive.", true);
       return;
     }
     if (!licensed()) return;
@@ -519,6 +523,15 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
       );
       return;
     }
+    if (transport !== "open") {
+      resetLedger();
+      if (transport === "reconnecting") {
+        setState("reconnecting", "Reconnecting to live input…", changed);
+      } else {
+        setState("connecting", "Connecting to live input…", changed);
+      }
+      return;
+    }
     if (acceptedFingerprint === null || state !== "active" && state !== "degraded") {
       setState("waiting", "Live input is connected and waiting for activity.");
     }
@@ -535,7 +548,13 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
     ) return;
     inferredRuntimeRevision = revision;
     resetLedger();
-    setState("waiting", "Live input is connected and waiting for activity.");
+    if (transport === "open") {
+      setState("waiting", "Live input is connected and waiting for activity.");
+    } else if (transport === "reconnecting") {
+      setState("reconnecting", "Reconnecting to live input…");
+    } else {
+      setState("connecting", "Connecting to live input…");
+    }
   }
 
   function invalidateTargets(): void {
@@ -545,7 +564,11 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
 
   function connect(): void {
     if (disposed || source !== null) return;
-    setState("connecting", "Connecting to live input…");
+    // The structure payload is deliberately reconciled before the stream is
+    // opened on production pages. Do not let transport setup overwrite its
+    // stronger foreign/stale/offline/inactive conclusion.
+    transport = "connecting";
+    if (!confirmed || licensed()) setState("connecting", "Connecting to live input…");
     const makeSource = host.eventSource ?? ((url: string) => new EventSource(url));
     try {
       source = makeSource("/api/live");
@@ -555,14 +578,22 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
     }
     source.addEventListener("open", () => {
       if (disposed) return;
-      if (licensed()) setState("waiting", "Live input is connected and waiting for activity.");
-      else if (state === "connecting" || state === "reconnecting") {
+      transport = "open";
+      if (confirmed) {
+        if (licensed() && state !== "active" && state !== "degraded" && state !== "waiting") {
+          setState("waiting", "Live input is connected and waiting for activity.");
+        }
+      } else if (state === "connecting" || state === "reconnecting") {
         setState("inactive", "Live input is connected. Press Play when you are ready.");
       }
     });
     source.addEventListener("frame", (event) => {
       try {
         if (!(event instanceof MessageEvent) || typeof event.data !== "string") throw new Error();
+        // A message can only arrive over an open stream. Treat it as the same
+        // transport proof as `open` so test doubles and unusual EventSource
+        // implementations cannot leave a real frame labeled Connecting.
+        transport = "open";
         paint(JSON.parse(event.data) as RedesignLiveEnvelope);
       } catch {
         invalidate(
@@ -579,6 +610,7 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
     // layer a second timer/backoff over it; just revoke paint until the next
     // authoritative /api/redesign payload confirms the session again.
     source.addEventListener("error", () => {
+      transport = "reconnecting";
       // An explicit refusal already carries the useful customer action. SSE
       // closes after sending it, which also raises `error`; do not alternate
       // "offline" and "reconnecting" announcements on every retry cycle.
@@ -596,6 +628,7 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
     disposed = true;
     source?.close();
     source = null;
+    transport = "idle";
     if (pagehideWired) {
       window.removeEventListener("pagehide", dispose);
       pagehideWired = false;

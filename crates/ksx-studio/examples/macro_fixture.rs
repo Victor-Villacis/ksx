@@ -897,7 +897,10 @@ impl ControlSource for Store {
         }
         // KSX_FIXTURE_APPLY=restart scripts the structural-difference shape,
         // in a daemon-shaped sentence, so the quoting dialog is drivable.
-        if std::env::var("KSX_FIXTURE_APPLY").as_deref() == Ok("restart") {
+        if std::env::var("KSX_FIXTURE_APPLY").as_deref() == Ok("restart")
+            && ksx_api::StagedSetupView::of(&setup).slots.len()
+                != self.active_slots.load(Ordering::SeqCst)
+        {
             let refusal = ksx_api::Refusal::new(
                 "needs-restart",
                 "the draft adds controller P3 (Xbox 360), which the running session does not have — only a replaced session can plug it",
@@ -1160,6 +1163,7 @@ fn main() {
             saved_stage,
             autostart: std::sync::atomic::AtomicBool::new(false),
             panel_backup_created: std::sync::atomic::AtomicBool::new(false),
+            winusb_prepared: std::sync::atomic::AtomicBool::new(false),
         }),
         // A SCRIPTED live source: refuses in words while the fixture session
         // is idle (the state the button check renders when nothing runs), and
@@ -1180,12 +1184,10 @@ fn main() {
 // "every state this stage exists to render is unreachable in the browser".
 // Rust items cannot capture locals, so lifting them out is a pure move.
 
-// The fixture drives the MAPPER, so the machine provider is the trait's
-// own defaults: every method refuses in words and names the CLI verb that
-// works. /devices, /profiles, /setup and /pads under this fixture
-// therefore render their refusal states — /pads honestly says it cannot
-// read the bus rather than inventing one — which are real states of those
-// pages and worth being able to look at.
+// The fixture drives the MAPPER and the redesign's exact-device lifecycle.
+// Unrelated machine methods keep their refusing defaults, while prepare and
+// release mutate one in-memory flag so browser QA can prove the guarded
+// identity/consent/backend round trip without touching a Windows driver.
 struct NoMachine {
     scenario: FixtureScenario,
     saved_stage: Arc<Mutex<Option<ksx_core::stage::StagedSetup>>>,
@@ -1194,6 +1196,8 @@ struct NoMachine {
     /// The fixture exposes its synthetic restore point only after Studio
     /// explicitly requested a backup with the complete chart read.
     panel_backup_created: std::sync::atomic::AtomicBool,
+    /// Whether the exact fixture I-PAC is currently on KSX's WinUSB path.
+    winusb_prepared: std::sync::atomic::AtomicBool,
 }
 
 /// Same physical/UI order and sparse PAC256 normal-plane offsets as the
@@ -1858,6 +1862,40 @@ impl ksx_api::MachineSource for NoMachine {
             .store(spec.enable, std::sync::atomic::Ordering::SeqCst);
         self.autostart()
     }
+
+    /// The browser fixture has no real bus, but it does model the exact output
+    /// prerequisites its staged personas require. Healthy rows let Play drive
+    /// the complete lifecycle while preserving the production aggregate rules.
+    fn controller_outputs(
+        &self,
+        staged: &ksx_api::StagedSetupView,
+    ) -> Result<ksx_api::ControllerOutputsView, ksx_api::Refusal> {
+        let rows = ksx_api::ControllerOutputsView::requirements(staged)
+            .into_iter()
+            .map(|requirement| {
+                let backend = requirement.backend.clone();
+                match backend.as_str() {
+                    "vigem" => ksx_api::ControllerOutputView::vigem(
+                        requirement,
+                        ksx_api::vigem_output_codes::HEALTHY,
+                        Some("fixture-vigem".into()),
+                    ),
+                    "hidmaestro" => ksx_api::ControllerOutputView::hidmaestro(
+                        requirement,
+                        true,
+                        false,
+                        Some("fixture-hidmaestro".into()),
+                    ),
+                    other => ksx_api::ControllerOutputView::unreadable(
+                        requirement,
+                        format!("the fixture has no probe for {other}"),
+                    ),
+                }
+            })
+            .collect();
+        Ok(ksx_api::ControllerOutputsView::from_required(rows))
+    }
+
     /// Resolve the scripted learner's hit back to a board, completing the
     /// identify round-trip against this double.
     fn device_identify(
@@ -1889,10 +1927,11 @@ impl ksx_api::MachineSource for NoMachine {
     /// I-PAC (same selector, so the chosen row marks and the
     /// prepared-for-play control composes its Prepare state). Everything
     /// else keeps the trait's refusing defaults — /devices and /pads
-    /// still render their honest refusal states, and a prepare/release
-    /// POST against this fixture answers with the provider refusal
-    /// sentence rather than pretending Windows was asked.
+    /// still render their honest refusal states. Exact-device prepare/release
+    /// is the one stateful exception: it changes `claimed` in memory so the
+    /// real guarded HTTP workflow can be exercised without touching Windows.
     fn device_scan(&self) -> Result<ksx_api::DeviceScanView, ksx_api::Refusal> {
+        let ipac_claimed = self.winusb_prepared.load(Ordering::SeqCst);
         Ok(ksx_api::DeviceScanView {
             boards_summary: "2 keyboard-capable boards found; 1 more device has no keyboard \
                              interface."
@@ -1941,6 +1980,7 @@ impl ksx_api::MachineSource for NoMachine {
                          chart."
                             .into(),
                     terminal_count: Some(56),
+                    claimed: ipac_claimed,
                     ..Default::default()
                 },
                 ksx_api::BoardRow {
@@ -1989,6 +2029,68 @@ impl ksx_api::MachineSource for NoMachine {
                 },
             ],
             ..Default::default()
+        })
+    }
+
+    fn winusb_prepare(
+        &self,
+        spec: &ksx_api::WinusbPrepareSpec,
+    ) -> Result<ksx_api::WinusbMutationView, ksx_api::Refusal> {
+        const SELECTOR: &str = "usb:d209:0430:00";
+        const INSTANCE: &str = "HID\\VID_D209&PID_0430\\FIXTURE";
+        if spec.expected_selector != SELECTOR
+            || !spec.instance_id.eq_ignore_ascii_case(INSTANCE)
+            || !spec.confirm_spare_keyboard
+            || !spec.confirm_rebind
+            || !spec.confirm_machine_certificate
+        {
+            return Err(ksx_api::Refusal::new(
+                ksx_api::codes::REFUSED,
+                "the fixture refused an unsafe or stale WinUSB preparation",
+            ));
+        }
+        if self.winusb_prepared.swap(true, Ordering::SeqCst) {
+            return Err(ksx_api::Refusal::new(
+                "winusb-already-prepared",
+                "the fixture I-PAC is already prepared",
+            ));
+        }
+        Ok(ksx_api::WinusbMutationView {
+            instance_id: INSTANCE.into(),
+            hardware_id: r"HID\VID_D209&PID_0430".into(),
+            state: "prepared".into(),
+            message: "fixture prepared the exact I-PAC interface in memory".into(),
+            warning: None,
+        })
+    }
+
+    fn winusb_release(
+        &self,
+        spec: &ksx_api::WinusbReleaseSpec,
+    ) -> Result<ksx_api::WinusbMutationView, ksx_api::Refusal> {
+        const SELECTOR: &str = "usb:d209:0430:00";
+        const INSTANCE: &str = "HID\\VID_D209&PID_0430\\FIXTURE";
+        if spec.expected_selector != SELECTOR
+            || !spec.instance_id.eq_ignore_ascii_case(INSTANCE)
+            || !spec.confirm_release
+        {
+            return Err(ksx_api::Refusal::new(
+                ksx_api::codes::REFUSED,
+                "the fixture refused an unsafe or stale WinUSB release",
+            ));
+        }
+        if !self.winusb_prepared.swap(false, Ordering::SeqCst) {
+            return Err(ksx_api::Refusal::new(
+                "winusb-already-released",
+                "the fixture I-PAC is already released",
+            ));
+        }
+        Ok(ksx_api::WinusbMutationView {
+            instance_id: INSTANCE.into(),
+            hardware_id: r"HID\VID_D209&PID_0430".into(),
+            state: "released".into(),
+            message: "fixture released the exact I-PAC interface in memory".into(),
+            warning: None,
         })
     }
 

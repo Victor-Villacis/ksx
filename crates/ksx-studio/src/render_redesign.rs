@@ -203,6 +203,7 @@ pub(crate) fn payload(
 /// device picker's four tiers. The name convention is the compiler's, proven
 /// on `/nocturne` (`LIST_SLOT_THEMES` in render_nocturne.rs).
 const LIST_SLOT_THEME_ROWS: &str = "list:rdThemeRows:array";
+const LIST_SLOT_COMPACT_THEME_ROWS: &str = "list:rdCompactThemeRows:array";
 const LIST_SLOT_DEV_KB: &str = "list:rdDevKb:array";
 const LIST_SLOT_DEV_ENC: &str = "list:rdDevEnc:array";
 const LIST_SLOT_DEV_EXP: &str = "list:rdDevExp:array";
@@ -277,9 +278,14 @@ fn held_capture_row(row: &crate::snapshot::RedesignHeldCaptureRow) -> SlotValue 
             SlotValue::Text(row.transport.clone()),
         ),
         ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
+        (
+            "summary".to_owned(),
+            SlotValue::Text(format!("{} · {}", row.transport, row.detail)),
+        ),
         ("selector".to_owned(), SlotValue::Text(row.selector.clone())),
         ("instance".to_owned(), SlotValue::Text(row.instance.clone())),
         ("can_release".to_owned(), SlotValue::Bool(row.can_release)),
+        ("disabled".to_owned(), SlotValue::Bool(!row.can_release)),
         ("note".to_owned(), SlotValue::Text(row.note.clone())),
     ])
 }
@@ -395,19 +401,21 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
 }
 
 /// Populate every server-injected slot: the scalars, plus the theme-rows
-/// list. Further lists and shows join as the transplants arrive.
+/// lists. Theme deliberately has two responsive homes backed by distinct list
+/// signals—the FMIR list renderer consumes one array per mount—so both receive
+/// the same authoritative roster. Further lists and shows join as the
+/// transplants arrive.
 fn build_slots(module: &IrModule, payload: &RedesignPayload, flash: Option<&str>) -> SlotData {
     let scalars = scalar_slots(payload, flash).to_string();
     let mut slots = SlotData::from_json(&scalars, module)
         .unwrap_or_else(|_| SlotData::new_from_defaults(&module.slots));
-    if let Some(id) = named_slot_ids(module, LIST_SLOT_THEME_ROWS)
-        .into_iter()
-        .next()
-    {
-        slots.set(
-            id,
-            SlotValue::array(payload.theme_rows.iter().map(mode_row).collect()),
-        );
+    for name in [LIST_SLOT_THEME_ROWS, LIST_SLOT_COMPACT_THEME_ROWS] {
+        if let Some(id) = named_slot_ids(module, name).into_iter().next() {
+            slots.set(
+                id,
+                SlotValue::array(payload.theme_rows.iter().map(mode_row).collect()),
+            );
+        }
     }
     let dev = &payload.devices;
     for (name, value) in [
@@ -1270,6 +1278,7 @@ mod tests {
         }
         for signal in [
             "rdThemeRows",
+            "rdCompactThemeRows",
             "rdDevKb",
             "rdDevEnc",
             "rdDevExp",

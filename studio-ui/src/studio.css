@@ -17954,19 +17954,25 @@ a.nm-link {
    A native details, so the roster works with scripting off — which is why
    its summary is NOT an `.n-autobtn` (that class is scripting-only chrome,
    hidden until the wire stamps `.js`). */
-.rd-themed {
+:is(.rd-themed, .rd-themed-compact) {
   position: relative;
+}
+
+/* The compact copy lives inside Setup so the 390px lifecycle rail never has
+   to trade away Save/Apply/Stop for appearance preferences. */
+.rd-theme-compact-home {
+  display: none;
 }
 
 /* The Inspector is fixed at layer 35. Lift only the open disclosure above it
    so the resting topbar does not become an unnecessary stacking context. */
-.rd-themed[open] {
+:is(.rd-themed, .rd-themed-compact)[open] {
   /* The disclosure must remain above the Inspector while it is open, but
      below the modal layer. */
   z-index: 36;
 }
 
-.rd-theme-sum {
+:is(.rd-theme-sum, .rd-theme-compact-sum) {
   display: inline-block;
   padding: 5px 11px;
   border: 1px solid var(--n-line);
@@ -17980,17 +17986,17 @@ a.nm-link {
   user-select: none;
 }
 
-.rd-theme-sum::-webkit-details-marker {
+:is(.rd-theme-sum, .rd-theme-compact-sum)::-webkit-details-marker {
   display: none;
 }
 
-.rd-theme-sum:hover,
-.rd-themed[open] .rd-theme-sum {
+:is(.rd-theme-sum, .rd-theme-compact-sum):hover,
+:is(.rd-themed, .rd-themed-compact)[open] > :is(.rd-theme-sum, .rd-theme-compact-sum) {
   border-color: var(--n-accent-line);
   color: var(--n-accent-2);
 }
 
-.rd-thememenu {
+:is(.rd-thememenu, .rd-thememenu-compact) {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
@@ -18060,6 +18066,15 @@ a.nm-link {
   border-color: var(--n-accent-line);
   background: var(--n-accent-dim);
   color: var(--n-text);
+}
+
+.rd[data-rd-refresh-state="stale"] .rd-setup-sum {
+  border-color: color-mix(in srgb, var(--n-warn) 62%, var(--n-line));
+  box-shadow: inset 3px 0 var(--n-warn);
+}
+
+.rd[data-rd-refresh-state="stale"] .rd-setup-mark {
+  color: var(--n-warn);
 }
 
 .rd-setup-sum:active {
@@ -18494,6 +18509,11 @@ a.nm-link {
   color: var(--n-text-2);
 }
 
+.rd-panel-replace {
+  padding-top: var(--sp-1);
+  border-top: 1px solid var(--n-line);
+}
+
 .rd-capture-card[data-capture-mode="prepare"],
 .rd-capture-card[data-capture-mode="held"],
 .rd-capture-card[data-capture-mode="blocked"],
@@ -18831,17 +18851,21 @@ a.nm-link {
   }
 }
 
+/* The complete 1280 px rail fits exactly. Below that point, secondary view
+   chrome yields before a lifecycle verb can be pushed off-screen. */
+@media (width < 1280px) {
+  .rd-search,
+  .rd-back,
+  .rd [data-nx="rd-keys"] {
+    display: none;
+  }
+}
+
 @media (max-width: 900px) {
   .rd .rd-top {
     gap: var(--sp-1);
     padding-right: var(--sp-2);
     padding-left: var(--sp-2);
-  }
-
-  .rd-search,
-  .rd-back,
-  .rd [data-nx="rd-keys"] {
-    display: none;
   }
 
   .rd-setup-sum {
@@ -18871,19 +18895,34 @@ a.nm-link {
   }
 
   .rd-brand {
+    display: none;
     font-size: var(--fs-xs);
   }
 
-  .rd-top > .n-environment {
-    max-width: 82px;
-    padding-right: var(--sp-2);
-    padding-left: var(--sp-2);
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .rd-theme-rail-home {
+    display: none;
   }
 
-  .rd-themed {
-    display: none;
+  .rd-theme-compact-home {
+    display: block;
+    width: min(100%, 300px);
+  }
+
+  .rd-theme-compact-home .rd-themed-compact {
+    width: 100%;
+  }
+
+  .rd-theme-compact-sum {
+    display: inline-flex;
+    align-items: center;
+    min-height: 34px;
+  }
+
+  .rd-theme-compact-home .rd-thememenu-compact {
+    position: static;
+    width: 100%;
+    margin-top: var(--sp-2);
+    box-shadow: none;
   }
 
   .rd-setup-sum {
@@ -18892,42 +18931,6 @@ a.nm-link {
 
   .rd-setup-mark {
     display: none;
-  }
-
-  .rd-adddev,
-  .rd-addctrl {
-    position: relative;
-    width: 36px;
-    min-width: 36px;
-    height: 34px;
-    padding: 0;
-    overflow: hidden;
-    color: transparent;
-  }
-
-  .rd-adddev::after,
-  .rd-addctrl::after {
-    position: absolute;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    color: var(--n-text-2);
-    font-size: var(--fs-xs);
-    font-weight: var(--fw-semibold);
-  }
-
-  .rd-adddev::after {
-    content: "+D";
-  }
-
-  .rd-addctrl::after {
-    content: "+C";
-  }
-
-  .rd-runbtn {
-    min-width: 52px;
-    padding-right: var(--sp-2);
-    padding-left: var(--sp-2);
   }
 
   .rd-setup-panel {
@@ -18993,6 +18996,137 @@ a.nm-link {
 
   .rd-restart-actions .rd-panel-action {
     width: 100%;
+  }
+}
+
+/* At compact desktop/tablet widths, primary workbench verbs use their short
+   visual forms. The environment badge contracts to a colored safety beacon
+   while retaining its text and tooltip; live truth likewise contracts to its
+   witness dot. Full sentences remain available to assistive technology. */
+@media (max-width: 1140px) {
+  .rd .rd-top > .n-environment {
+    display: block;
+    flex: none;
+    width: 12px;
+    min-width: 12px;
+    max-width: 12px;
+    height: 12px;
+    min-height: 12px;
+    padding: 0;
+    overflow: hidden;
+    border-radius: 50%;
+    color: transparent;
+    font-size: 0;
+  }
+
+  .rd-setup-sum {
+    max-width: 144px;
+  }
+
+  .rd-adddev,
+  .rd-addctrl {
+    position: relative;
+    width: 36px;
+    min-width: 36px;
+    height: 34px;
+    padding: 0;
+    overflow: hidden;
+    color: transparent;
+  }
+
+  .rd-adddev::after,
+  .rd-addctrl::after {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--n-text-2);
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-semibold);
+  }
+
+  .rd-adddev::after {
+    content: "+D";
+  }
+
+  .rd-addctrl::after {
+    content: "+C";
+  }
+
+  .rd-run-actions {
+    gap: 2px;
+  }
+
+  .rd-live-state:not([hidden]) {
+    width: 12px;
+    max-width: 12px;
+    color: transparent;
+  }
+
+  .rd-live-state:not([hidden])::before {
+    color: var(--n-text-3);
+  }
+
+  .rd[data-rd-live-state="active"] .rd-live-state::before,
+  .rd[data-rd-live-state="degraded"] .rd-live-state::before {
+    color: var(--n-ok);
+  }
+
+  .rd[data-rd-live-state="stale"] .rd-live-state::before,
+  .rd[data-rd-live-state="offline"] .rd-live-state::before,
+  .rd[data-rd-live-state="unreadable"] .rd-live-state::before {
+    color: var(--n-warn);
+  }
+
+  .rd-runbtn {
+    min-width: 48px;
+    padding-right: var(--sp-1);
+    padding-left: var(--sp-1);
+  }
+}
+
+@media (max-width: 480px) {
+  .rd-setup-sum {
+    max-width: 112px;
+  }
+
+  /* Keep the product words in the DOM for names and speech, while the visual
+     rail uses the unambiguous short verbs that fit beside setup at 390 px. */
+  .rd-runbtn {
+    position: relative;
+    width: 46px;
+    min-width: 46px;
+    max-width: 46px;
+    padding: 0;
+    overflow: hidden;
+    color: transparent;
+  }
+
+  .rd-runbtn::after {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--n-text-2);
+  }
+
+  .rd-saveform .rd-runbtn::after {
+    content: "Save";
+  }
+
+  .rd-applyform .rd-runbtn::after {
+    color: var(--n-accent-2);
+    content: "Apply";
+  }
+
+  .rd-playform .rd-runbtn::after {
+    color: var(--n-accent-2);
+    content: "Play";
+  }
+
+  .rd-stopform .rd-runbtn::after {
+    color: var(--n-warn);
+    content: "Stop";
   }
 }
 
@@ -22531,7 +22665,7 @@ form.rd-undochip .n-undo-btn {
 }
 
 @media (pointer: coarse) {
-  .rd-theme-sum {
+  :is(.rd-theme-sum, .rd-theme-compact-sum) {
     min-height: 40px;
   }
 

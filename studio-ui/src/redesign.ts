@@ -12,17 +12,26 @@ import {
   rdAnnounce,
   RedesignIsland,
   redesignControlsFor,
+  redesignFormProductDisabled,
   redesignGhostHeld,
   redesignLearnSource,
+  redesignOperationalState,
   redesignPads,
   redesignSelectedSlot,
+  redesignSetLivePaths,
   redesignWire,
+  setRedesignRefreshHealth,
   setRedesignRefresh,
   unparkController,
   type RedesignPayload,
 } from "./RedesignIsland";
 import { mapperWire } from "./redesign-mapper";
 import { macWire } from "./redesign-macro-editor";
+import {
+  createRedesignLiveFeedback,
+  type RedesignLiveFeedback,
+  type RedesignLiveSession,
+} from "./redesign-live";
 
 void RedesignPage; // compile-time anchor only (see above)
 
@@ -54,6 +63,103 @@ interface ActiveRefresh {
 let refreshGeneration = 0;
 let activeRefresh: ActiveRefresh | null = null;
 let newestSettledRefresh = { generation: 0, result: false };
+let liveFeedback: RedesignLiveFeedback | null = null;
+let redesignRoot: HTMLElement | null = null;
+let refreshHealth: "online" | "stale" = "online";
+let discardConfirmationAuthority: string | null = null;
+let captureConfirmationAuthority: string | null = null;
+
+function applyAuthority(operations: RedesignPayload["operations"] | null | undefined): string {
+  if (!operations) return "";
+  return JSON.stringify([
+    operations.draft_revision ?? "",
+    operations.active_stage_revision ?? "",
+    operations.session?.origin ?? "",
+  ]);
+}
+
+/** A checked confirmation belongs to the authority that was visible when it
+ * was checked. A poll may replace hidden revision/device values in place, so
+ * clear consent before applying a payload for a different target. */
+function resetChangedConfirmations(payload: RedesignPayload): void {
+  const root = redesignRoot;
+  const nextDraft = payload.operations?.draft_revision ?? "";
+  if (root && discardConfirmationAuthority !== null && discardConfirmationAuthority !== nextDraft) {
+    const confirmation = root.querySelector<HTMLInputElement>('input[name="confirm_discard"]');
+    if (confirmation) confirmation.checked = false;
+    root.querySelector<HTMLElement>(".rd-start-over")?.removeAttribute("open");
+  }
+  discardConfirmationAuthority = nextDraft;
+
+  const capture = payload.capture;
+  const nextCapture = JSON.stringify([
+    capture?.mode ?? "none",
+    capture?.selector ?? "",
+    capture?.instance ?? "",
+    (capture?.held ?? []).map((row) => [row.selector, row.instance, row.can_release]),
+  ]);
+  if (root && captureConfirmationAuthority !== null && captureConfirmationAuthority !== nextCapture) {
+    root.querySelectorAll<HTMLInputElement>(
+      'input[name="confirm_spare_keyboard"], input[name="confirm_rebind"], ' +
+        'input[name="confirm_machine_certificate"], input[name="confirm_release"]',
+    ).forEach((confirmation) => {
+      confirmation.checked = false;
+    });
+  }
+  captureConfirmationAuthority = nextCapture;
+}
+
+function reportRefreshHealth(state: "online" | "stale", message = ""): void {
+  setRedesignRefreshHealth(state, message);
+  if (state === refreshHealth) return;
+  refreshHealth = state;
+  rdAnnounce(
+    state === "stale"
+      ? message || "Workbench updates are paused."
+      : "Workbench updates resumed.",
+  );
+}
+
+/** Apply one payload and immediately renew the separate live-paint license.
+ * Durable product state and 60 Hz decoration deliberately share only these
+ * revision/session facts. */
+function applyPayload(payload: RedesignPayload): void {
+  resetChangedConfirmations(payload);
+  applyRedesign(payload);
+  liveFeedback?.invalidateTargets();
+  const operations = payload.operations;
+  const session = operations?.session;
+  if (redesignRoot) {
+    const restart = applyRestartDialog(redesignRoot);
+    const restartAuthority = restart?.dataset.rdApplyAuthority ?? "";
+    const restartStillValid = Boolean(
+      session?.running &&
+      operations?.apply?.allowed === true &&
+      restartAuthority &&
+      restartAuthority === applyAuthority(operations),
+    );
+    if (restart && !restart.hidden && !restartStillValid) {
+      closeApplyRestartDialog(redesignRoot, false);
+      if (redesignRoot.dataset.rdMutationPending !== "true") {
+        redesignRoot.querySelector<HTMLElement>(".rd-setup-sum")?.focus({ preventScroll: true });
+      }
+      rdAnnounce("The draft or running session changed, so the replacement decision was closed.");
+    }
+  }
+  const liveSession: RedesignLiveSession | null = session
+    ? {
+        reachable: session.reachable,
+        running: session.running,
+        origin: session.origin,
+        profile: session.profile,
+        elapsed: session.active?.elapsed,
+        structureRevision: operations?.draft_revision,
+        runtimeRevision:
+          operations?.active_stage_revision || session.active?.stage_revision,
+      }
+    : null;
+  liveFeedback?.reconcileSession(liveSession);
+}
 
 function newerRefresh(generation: number): Promise<boolean> | null {
   const active = activeRefresh;
@@ -72,6 +178,7 @@ async function performRefresh(
   generation: number,
   controller: AbortController,
 ): Promise<boolean> {
+  const timeout = window.setTimeout(() => controller.abort(), 8000);
   try {
     // The selected controller and the open macro ride the URL (the
     // nocturne `?slot=&macro=` doors), so a refresh serves what the page
@@ -87,19 +194,35 @@ async function performRefresh(
       headers: { accept: "application/json" },
       signal: controller.signal,
     });
-    if (!res.ok) return successorRefreshResult(generation);
+    if (!res.ok) {
+      if (generation === refreshGeneration) {
+        reportRefreshHealth(
+          "stale",
+          "Workbench updates are paused. Retrying…",
+        );
+      }
+      return successorRefreshResult(generation);
+    }
     const payload = (await res.json()) as RedesignPayload;
     if (generation !== refreshGeneration) {
       return successorRefreshResult(generation);
     }
-    applyRedesign(payload);
+    applyPayload(payload);
+    reportRefreshHealth("online");
     return true;
   } catch {
     // A superseded caller follows the newer repaint instead of reporting a
     // false failure while that repaint is still in flight. A genuinely failed
     // latest request keeps the page's last truth.
+    if (generation === refreshGeneration) {
+      reportRefreshHealth(
+        "stale",
+        "Workbench updates are paused. Retrying…",
+      );
+    }
     return successorRefreshResult(generation);
   } finally {
+    window.clearTimeout(timeout);
     if (activeRefresh?.generation === generation) activeRefresh = null;
   }
 }
@@ -122,12 +245,12 @@ function refresh(kind: RefreshKind = "foreground"): Promise<boolean> {
   return promise;
 }
 
-/** Beginning a mutation retires a poll that may have sampled the pre-write
- *  draft. Advancing the generation is the backstop when the network stack has
- *  already completed the response and abort can no longer recall it. */
-function cancelBackgroundRefresh(): void {
+/** Beginning a mutation retires every read that may have sampled pre-write
+ * state. Advancing the generation is the backstop when the network stack has
+ * already completed the response and abort can no longer recall it. */
+function cancelActiveRefresh(): void {
   const active = activeRefresh;
-  if (!active || active.kind !== "poll") return;
+  if (!active) return;
   refreshGeneration += 1;
   activeRefresh = null;
   active.controller.abort();
@@ -171,13 +294,24 @@ function wireForms(root: HTMLElement): void {
       ? ev.submitter
       : null;
     if (form.matches('[data-rd-form="theme"]')) {
-      const menu = form.closest<HTMLElement>(".rd-themed");
+      const menu = form.closest<HTMLElement>("[data-rd-theme-menu]");
       if (!menu) return;
       ev.preventDefault();
       void submitThemeForm(form, menu, root, submitter);
     } else if (form.matches('[data-rd-form="device"]')) {
       ev.preventDefault();
       void submitDeviceForm(form, root, submitter);
+    } else if (
+      form.matches(
+        '[data-rd-form="save"], [data-rd-form="play"], ' +
+          '[data-rd-form="play-replace"], [data-rd-form="apply"], ' +
+          '[data-rd-form="stop"], [data-rd-form="adopt"], ' +
+          '[data-rd-form="discard"], [data-rd-form="capture-prepare"], ' +
+          '[data-rd-form="capture-release"]',
+      )
+    ) {
+      ev.preventDefault();
+      void submitLifecycleForm(form, root, submitter);
     } else if (
       form.matches(
         '[data-rd-form="controller-add"], [data-rd-form="controller-move"], ' +
@@ -199,6 +333,7 @@ function wireForms(root: HTMLElement): void {
       void submitControllerForm(form, root, submitter);
     }
   });
+  wireApplyRestartDialog(root);
 }
 
 /** Theme and Stage both repaint the complete served payload. Treat the whole
@@ -232,6 +367,15 @@ const MUTATION_SUBMIT_SELECTOR = [
   "macro-toggle",
   "macro-new",
   "macro-delete",
+  "save",
+  "play",
+  "play-replace",
+  "apply",
+  "stop",
+  "adopt",
+  "discard",
+  "capture-prepare",
+  "capture-release",
 ]
   .flatMap((kind) => [
     `[data-rd-form="${kind}"] button[type="submit"]`,
@@ -243,8 +387,9 @@ const MUTATION_SUBMIT_SELECTOR = [
 function beginMutation(root: HTMLElement): SubmitControl[] | null {
   if (pendingMutationRoots.has(root)) return null;
   pendingMutationRoots.add(root);
-  cancelBackgroundRefresh();
+  cancelActiveRefresh();
   root.dataset.rdMutationPending = "true";
+  root.setAttribute("aria-busy", "true");
   const controls = Array.from(
     root.querySelectorAll<SubmitControl>(MUTATION_SUBMIT_SELECTOR),
   );
@@ -256,12 +401,15 @@ function beginMutation(root: HTMLElement): SubmitControl[] | null {
 
 function endMutation(root: HTMLElement, controls: SubmitControl[]): void {
   delete root.dataset.rdMutationPending;
+  root.removeAttribute("aria-busy");
   // A device card can be added from the still-usable picker while the
   // request is in flight. Include those newly mounted controls as well as
   // the original snapshot so none remain stuck disabled after the lock.
   const currentControls = root.querySelectorAll<SubmitControl>(MUTATION_SUBMIT_SELECTOR);
   new Set<SubmitControl>([...controls, ...currentControls]).forEach((control) => {
-    control.disabled = control.dataset.rdProductDisabled === "true";
+    const form = control.closest<HTMLFormElement>("form[data-rd-form]");
+    const served = form ? redesignFormProductDisabled(form) : undefined;
+    control.disabled = served ?? control.dataset.rdProductDisabled === "true";
   });
   pendingMutationRoots.delete(root);
 }
@@ -283,7 +431,7 @@ async function submitThemeForm(
 ): Promise<void> {
   const submits = beginMutation(root);
   if (!submits) return;
-  const summary = menu.querySelector<HTMLElement>(".rd-theme-sum");
+  const summary = menu.querySelector<HTMLElement>("[data-rd-theme-summary]");
   let completed = false;
   try {
     const body = new URLSearchParams();
@@ -443,6 +591,251 @@ async function submitControllerForm(
   }
 }
 
+let applyDialogReturnFocus: HTMLElement | null = null;
+
+function applyRestartDialog(root: HTMLElement): HTMLElement | null {
+  return root.querySelector<HTMLElement>("[data-rd-apply-dialog]");
+}
+
+function dialogFocusable(dialog: HTMLElement): HTMLElement[] {
+  return Array.from(
+    dialog.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+        'textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((candidate) => !candidate.hidden && candidate.offsetParent !== null);
+}
+
+function closeApplyRestartDialog(root: HTMLElement, restore = true): void {
+  const backdrop = applyRestartDialog(root);
+  if (!backdrop || backdrop.hidden) return;
+  backdrop.hidden = true;
+  delete backdrop.dataset.rdApplyAuthority;
+  const revision = backdrop.querySelector<HTMLInputElement>("[data-rd-apply-revision]");
+  if (revision) revision.value = "";
+  const target = applyDialogReturnFocus;
+  applyDialogReturnFocus = null;
+  if (restore && target?.isConnected) target.focus({ preventScroll: true });
+}
+
+function openApplyRestartDialog(
+  root: HTMLElement,
+  message: string,
+  returnFocus: HTMLElement | null,
+  authority: string,
+  revision: string,
+): void {
+  const backdrop = applyRestartDialog(root);
+  if (!backdrop) return;
+  const copy = backdrop.querySelector<HTMLElement>("[data-rd-apply-message]");
+  if (copy) {
+    copy.textContent = message.trim() ||
+      "The running controller structure differs from this draft.";
+  }
+  applyDialogReturnFocus = returnFocus;
+  backdrop.dataset.rdApplyAuthority = authority;
+  const revisionField = backdrop.querySelector<HTMLInputElement>("[data-rd-apply-revision]");
+  if (revisionField) revisionField.value = revision;
+  backdrop.hidden = false;
+  backdrop.querySelector<HTMLElement>(".rd-restart-dialog")?.focus({ preventScroll: true });
+}
+
+/** Focus containment and restoration for Apply's client-only structural
+ * restart decision. The ordinary form path remains available without JS. */
+function wireApplyRestartDialog(root: HTMLElement): void {
+  root.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element) || !target.closest("[data-rd-apply-cancel]")) return;
+    closeApplyRestartDialog(root);
+  });
+  root.addEventListener("keydown", (event) => {
+    const dialog = applyRestartDialog(root);
+    if (!dialog || dialog.hidden || !dialog.contains(event.target as Node)) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeApplyRestartDialog(root);
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = dialogFocusable(dialog);
+    if (focusable.length === 0) {
+      event.preventDefault();
+      dialog.querySelector<HTMLElement>(".rd-restart-dialog")?.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (!focusable.includes(active as HTMLElement)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (event.shiftKey && active === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+}
+
+type LifecycleFormKind =
+  | "save"
+  | "play"
+  | "play-replace"
+  | "apply"
+  | "stop"
+  | "adopt"
+  | "discard"
+  | "capture-prepare"
+  | "capture-release";
+
+function lifecycleFocusTarget(root: HTMLElement, kind: LifecycleFormKind): HTMLElement | null {
+  const visibleAction = (formKind: "play" | "stop") =>
+    Array.from(
+      root.querySelectorAll<HTMLElement>(
+        `[data-rd-form="${formKind}"] button:not([disabled])`,
+      ),
+    ).find((button) => button.offsetParent !== null) ?? null;
+  if (kind === "play" || kind === "play-replace") {
+    return visibleAction("stop") ?? root.querySelector<HTMLElement>(".rd-setup-sum");
+  }
+  if (kind === "stop") {
+    return visibleAction("play") ?? root.querySelector<HTMLElement>(".rd-setup-sum");
+  }
+  return root.querySelector<HTMLElement>(".rd-setup-sum");
+}
+
+/** One lifecycle transaction owns the whole island. Apply is the single
+ * structured exception because a structural refusal must present the
+ * daemon's exact reason and an explicit Replace-session decision. */
+async function submitLifecycleForm(
+  form: HTMLFormElement,
+  root: HTMLElement,
+  submitter: HTMLElement | null,
+): Promise<void> {
+  const kind = form.dataset.rdForm as LifecycleFormKind | undefined;
+  if (!kind) return;
+  const activeAtStart = document.activeElement;
+  const startedWithFocus = activeAtStart === submitter || Boolean(activeAtStart && form.contains(activeAtStart));
+  const requestedRevision = form.querySelector<HTMLInputElement>('input[name="expected_revision"]')
+    ?.value.trim() ?? "";
+  const requestedApplyAuthority = kind === "apply"
+    ? applyAuthority(redesignOperationalState())
+    : "";
+  const submits = beginMutation(root);
+  if (!submits) return;
+  let actionSucceeded = false;
+  let refreshed = false;
+  let restartMessage = "";
+  try {
+    if (kind === "apply") {
+      const body = new URLSearchParams();
+      new FormData(form, submitter).forEach((value, key) => {
+        if (typeof value === "string") body.append(key, value);
+      });
+      const res = await fetch("/redesign/api/apply", {
+        method: "POST",
+        headers: { accept: "application/json" },
+        body,
+      });
+      if (!res.ok) throw new Error(`apply request failed with ${res.status}`);
+      const outcome = (await res.json()) as {
+        done: boolean;
+        code?: string;
+        message?: string;
+        flash?: string;
+      };
+      if (!outcome.done && outcome.code === "needs-restart") {
+        restartMessage = outcome.message ?? "";
+      } else {
+        applyRedesignFlash(outcome.flash ?? null);
+        actionSucceeded = outcome.done === true;
+      }
+    } else {
+      const body = new URLSearchParams();
+      new FormData(form, submitter).forEach((value, key) => {
+        if (typeof value === "string") body.append(key, value);
+      });
+      const res = await fetch(form.action, {
+        method: "POST",
+        body,
+        redirect: "follow",
+      });
+      if (!res.ok) throw new Error(`lifecycle request failed with ${res.status}`);
+      const outcome = new URL(res.url).searchParams.get("flash");
+      applyRedesignFlash(outcome);
+      actionSucceeded = Boolean(outcome && !outcome.startsWith("error"));
+    }
+
+    // A needs-restart refusal changes no state; refreshing it is still useful
+    // because another client may have advanced the draft during the request.
+    refreshed = await refresh();
+    if (!refreshed) {
+      applyRedesignFlash(
+        "error: the action completed, but the workbench could not refresh — reload to confirm.",
+      );
+      actionSucceeded = false;
+    } else if (
+      actionSucceeded &&
+      (kind === "apply" || kind === "play" || kind === "play-replace")
+    ) {
+      // Reconcile ran inside refresh; advance the conservative client latch
+      // only after the authoritative verb and payload both succeeded.
+      liveFeedback?.acceptCurrentRevision();
+    }
+    if (restartMessage) {
+      if (!refreshed) {
+        // The refresh failure above already carries the only truthful
+        // recovery. It proves no newer authority, so do not relabel it as an
+        // authority change—and never open a replacement decision from it.
+        restartMessage = "";
+      } else {
+        const current = redesignOperationalState();
+        const restartStillValid = Boolean(
+          requestedRevision &&
+          current?.draft_revision === requestedRevision &&
+          current.apply?.allowed === true &&
+          requestedApplyAuthority === applyAuthority(current),
+        );
+        if (!restartStillValid) {
+          restartMessage = "";
+          applyRedesignFlash(
+            "The draft or running session changed while Apply was checked. Review the latest setup before replacing Play.",
+          );
+        }
+      }
+    }
+  } catch {
+    applyRedesignFlash("error: request failed — is ksx studio still running?");
+  } finally {
+    const restoreFocus = startedWithFocus && actionStillOwnsFocus(form, submitter);
+    endMutation(root, submits);
+    if (restartMessage) {
+      openApplyRestartDialog(
+        root,
+        restartMessage,
+        submitter,
+        requestedApplyAuthority,
+        requestedRevision,
+      );
+      return;
+    }
+    if (kind === "play-replace" && actionSucceeded) {
+      closeApplyRestartDialog(root, false);
+    }
+    if (!restoreFocus) return;
+    const retryTarget = submitter?.isConnected && submitter.offsetParent !== null &&
+        !("disabled" in submitter && submitter.disabled === true)
+      ? submitter
+      : null;
+    const target = actionSucceeded
+      ? lifecycleFocusTarget(root, kind)
+      : retryTarget ?? lifecycleFocusTarget(root, kind);
+    target?.focus({ preventScroll: true });
+  }
+}
+
 /** Hydration must start the action signals from the already-sanitized SSR
  *  flash. It intentionally is not part of /api/redesign: polling is not an
  *  action and must not replay old feedback. */
@@ -462,8 +855,16 @@ function seedRenderedFlash(root: HTMLElement): void {
 // next frame — the served skeleton exists only after the island mounts.
 activateIslands({
   RedesignIsland: (el) => {
+    redesignRoot = el;
+    liveFeedback?.dispose();
+    liveFeedback = createRedesignLiveFeedback({
+      root: () => el,
+      selectedSlot: redesignSelectedSlot,
+      setPathLive: redesignSetLivePaths,
+      announce: rdAnnounce,
+    });
     const seed = embeddedPayload<RedesignPayload>();
-    if (seed) applyRedesign(seed);
+    if (seed) applyPayload(seed);
     seedRenderedFlash(el);
     // The island asks for another slot's panel through this (selection →
     // ?slot merge → refetch) without ever owning fetch.
@@ -490,6 +891,8 @@ activateIslands({
     wireForms(el);
     window.requestAnimationFrame(() => {
       initRedesignCanvas(el);
+      liveFeedback?.invalidateTargets();
+      liveFeedback?.connect();
     });
     // A no-JS POST landed us on ?flash=…: the server already painted the
     // line; strip the query so a manual reload does not replay feedback for

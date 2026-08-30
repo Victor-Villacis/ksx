@@ -43,7 +43,7 @@ beforeEach(async () => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setContent(`
     <main id="root">
-      <p data-rd-live-status></p>
+      <p data-rd-live-status hidden></p>
       <div class="n-canvas">
         <button id="key-g" data-key="G">G</button>
         <button id="key-j" data-key="J">J</button>
@@ -172,6 +172,7 @@ async function snapshot() {
     sourceCloseCount: window.ksxSources[0]?.closeCount ?? 0,
     state: document.querySelector("#root")?.dataset.rdLiveState ?? null,
     status: document.querySelector("[data-rd-live-status]")?.textContent ?? "",
+    statusHidden: document.querySelector("[data-rd-live-status]")?.hidden ?? true,
     stats: document.querySelector("[data-rd-live-stats]")?.textContent ?? "",
     statsHidden: document.querySelector("[data-rd-live-stats]")?.getAttribute("aria-hidden"),
     ticker: document.querySelector("[data-rd-live-ticker]")?.textContent ?? "",
@@ -188,6 +189,29 @@ async function snapshot() {
 }
 
 describe("redesign live feedback", { concurrency: false }, () => {
+  test("a matching session waits for proof that the live transport opened", async () => {
+    await page.evaluate((session) => {
+      // Production applies the structure payload before it opens EventSource.
+      window.ksxLive.reconcileSession(session);
+    }, matchingSession);
+    let view = await snapshot();
+    assert.equal(view.sources, 0);
+    assert.equal(view.state, "connecting");
+    assert.equal(view.status, "Connecting to live input…");
+    assert.doesNotMatch(view.status, /connected/i);
+
+    await page.evaluate(() => window.ksxLive.connect());
+    view = await snapshot();
+    assert.equal(view.sources, 1);
+    assert.equal(view.state, "connecting");
+    assert.doesNotMatch(view.status, /connected/i);
+
+    await emit("open");
+    view = await snapshot();
+    assert.equal(view.state, "waiting");
+    assert.equal(view.status, "Live input is connected and waiting for activity.");
+  });
+
   test("one EventSource paints only a matching staged session and all three visual layers", async () => {
     await page.evaluate(() => {
       window.ksxLive.connect();
@@ -228,6 +252,7 @@ describe("redesign live feedback", { concurrency: false }, () => {
     view = await snapshot();
     assert.equal(view.state, "active");
     assert.equal(view.status, "Live input is active.");
+    assert.equal(view.statusHidden, false);
     assert.equal(view.keyG, true);
     assert.equal(view.slot1A, true);
     assert.equal(view.slot2B, true);
@@ -252,6 +277,44 @@ describe("redesign live feedback", { concurrency: false }, () => {
     }));
     view = await snapshot();
     assert.equal(view.announcements.filter((line) => line === "Live input is active.").length, 1);
+  });
+
+  test("transport setup preserves a pre-reconciled authority decision", async () => {
+    await page.evaluate(() => {
+      window.ksxLive.reconcileSession({
+        reachable: true,
+        running: true,
+        origin: "config",
+        structureRevision: "stage-7",
+        runtimeRevision: "stage-7",
+      });
+      window.ksxLive.connect();
+    });
+    await emit("open");
+    let view = await snapshot();
+    assert.equal(view.state, "foreign");
+    assert.match(view.status, /different setup/i);
+
+    await page.evaluate((session) => window.ksxLive.reconcileSession(session), {
+      ...matchingSession,
+      runtimeRevision: "stage-6",
+    });
+    await emit("open");
+    view = await snapshot();
+    assert.equal(view.state, "stale");
+    assert.match(view.status, /Apply the current staged changes/i);
+
+    // LiveEnvelope's unavailable reason is authoritative even when its empty
+    // frame is also marked idle; transport failure must not be flattened to
+    // the ordinary stopped-session copy.
+    await page.evaluate((session) => window.ksxLive.reconcileSession(session), matchingSession);
+    await emit("frame", frame({
+      running: false,
+      unavailable: "control channel \\.\\pipe\\ksx-secret is unavailable",
+    }));
+    view = await snapshot();
+    assert.equal(view.state, "offline");
+    assert.equal(view.status, "Live input is offline. Reopen ksx and try again.");
   });
 
   test("a dropped transition clears stale keys and paths while retaining authoritative controller state", async () => {

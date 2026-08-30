@@ -267,6 +267,98 @@ export interface RedesignPayload {
    *  pin (empty = refuse to arm, the fail-closed rule). */
   learn_selector: string;
   learn_instance: string;
+  /** Draft, durable configuration, and running-session truth for the
+   * operational shell. Kept as one namespaced seam so the next Library
+   * payload can remain on-demand instead of bloating the canvas poll. */
+  operations?: RdOperationalState;
+  /** Exact input preparation and machine-keyed held-device recovery. */
+  capture?: RdCaptureState;
+  /** The required four-stop product journey: input -> controllers -> map ->
+   * Play. Advanced surface authoring is deliberately not a gate. */
+  journey?: RdJourneyState;
+}
+
+export interface RdActionState {
+  label: string;
+  allowed: boolean;
+  reason: string;
+  visible?: boolean;
+}
+
+export interface RdActiveSessionView {
+  elapsed: string;
+  input: string;
+  outputs: string;
+  escape_hatch: string;
+  stage_revision?: string;
+}
+
+export interface RdSessionView {
+  reachable: boolean;
+  running: boolean;
+  line: string;
+  profile?: string | null;
+  origin: "unknown" | "config" | "staged" | string;
+  active?: RdActiveSessionView | null;
+}
+
+export interface RdOperationalState {
+  draft_label: string;
+  draft_detail: string;
+  draft_dirty?: boolean;
+  draft_empty?: boolean;
+  draft_revision?: string;
+  active_stage_revision?: string;
+  saved_label: string;
+  saved_detail: string;
+  session: RdSessionView;
+  session_cls: string;
+  escape_line: string;
+  save: RdActionState;
+  play: RdActionState;
+  apply: RdActionState;
+  stop: RdActionState;
+  adopt: RdActionState;
+  discard: RdActionState;
+}
+
+export interface RdHeldCaptureRow {
+  name: string;
+  transport: string;
+  detail: string;
+  selector: string;
+  instance: string;
+  can_release: boolean;
+  note: string;
+  /** SSR/client presentation fields projected from the authoritative row. */
+  summary?: string;
+  disabled?: boolean;
+}
+
+export interface RdCaptureState {
+  mode: string;
+  heading: string;
+  line: string;
+  recovery_line: string;
+  selector: string;
+  instance: string;
+  can_prepare: boolean;
+  can_release: boolean;
+  held: RdHeldCaptureRow[];
+}
+
+export interface RdJourneyRow {
+  key: string;
+  title: string;
+  detail: string;
+  badge: string;
+  cls: string;
+}
+
+export interface RdJourneyState {
+  line: string;
+  compact?: string;
+  rows: RdJourneyRow[];
 }
 
 // ── SERVED signals — copiers, never derivers ────────────────────────────────
@@ -274,6 +366,7 @@ export interface RedesignPayload {
 const [rdEnvLabel, setRdEnvLabel] = createSignal("");
 const [rdEnvCls, setRdEnvCls] = createSignal("n-environment unknown");
 const [rdThemeRows, setRdThemeRows] = createSignal<RdRenderedChoiceRow[]>([]);
+const [rdCompactThemeRows, setRdCompactThemeRows] = createSignal<RdRenderedChoiceRow[]>([]);
 const [rdDevKb, setRdDevKb] = createSignal<RdDeviceRowView[]>([]);
 const [rdDevEnc, setRdDevEnc] = createSignal<RdDeviceRowView[]>([]);
 const [rdDevExp, setRdDevExp] = createSignal<RdDeviceRowView[]>([]);
@@ -309,6 +402,56 @@ const [rdSoloLbl, setRdSoloLbl] = createSignal("Only this player");
 // The staged input's capture behaviour (freeze / split / take nothing).
 const [rdCaptureRows, setRdCaptureRows] = createSignal<RdChoiceRowView[]>([]);
 const [rdCaptureNote, setRdCaptureNote] = createSignal("");
+// The operational shell is server-owned truth in three independent state
+// machines: draft/durable config, running session, and exact-device capture.
+// Keeping them separate avoids the legacy `dirty === needs Apply` mistake.
+const [rdOpDraftLabel, setRdOpDraftLabel] = createSignal("New draft");
+const [rdOpDraftDetail, setRdOpDraftDetail] = createSignal("");
+const [rdOpSavedLabel, setRdOpSavedLabel] = createSignal("Nothing saved yet");
+const [rdOpSavedDetail, setRdOpSavedDetail] = createSignal("");
+const [rdOpSessionLine, setRdOpSessionLine] = createSignal("Session status unavailable");
+const [rdOpSessionCls, setRdOpSessionCls] = createSignal("rd-session-state down");
+const [rdOpEscapeLine, setRdOpEscapeLine] = createSignal("");
+const [rdDraftDirty, setRdDraftDirty] = createSignal(false);
+const [rdDraftRevision, setRdDraftRevision] = createSignal("");
+const [rdDiscardConfirmCls, setRdDiscardConfirmCls] = createSignal("rd-danger-confirm none");
+
+const [rdSaveLabel, setRdSaveLabel] = createSignal("Save");
+const [rdSaveDisabled, setRdSaveDisabled] = createSignal(true);
+const [rdSaveReason, setRdSaveReason] = createSignal("Finish the setup before saving.");
+const [rdPlayLabel, setRdPlayLabel] = createSignal("Play");
+const [rdPlayDisabled, setRdPlayDisabled] = createSignal(true);
+const [rdPlayReason, setRdPlayReason] = createSignal("Finish the setup before Play.");
+const [rdPlayCls, setRdPlayCls] = createSignal("rd-runform");
+const [rdApplyLabel, setRdApplyLabel] = createSignal("Apply changes");
+const [rdApplyDisabled, setRdApplyDisabled] = createSignal(true);
+const [rdApplyReason, setRdApplyReason] = createSignal("Nothing is running.");
+const [rdApplyCls, setRdApplyCls] = createSignal("rd-runform none");
+const [rdStopLabel, setRdStopLabel] = createSignal("Stop");
+const [rdStopDisabled, setRdStopDisabled] = createSignal(true);
+const [rdStopReason, setRdStopReason] = createSignal("Nothing is running.");
+const [rdStopCls, setRdStopCls] = createSignal("rd-runform none");
+const [rdReplacePlayCls, setRdReplacePlayCls] = createSignal("rd-panel-replace none");
+const [rdAdoptLabel, setRdAdoptLabel] = createSignal("Load saved setup");
+const [rdAdoptDisabled, setRdAdoptDisabled] = createSignal(true);
+const [rdAdoptReason, setRdAdoptReason] = createSignal("There is no saved setup to load.");
+const [rdDiscardLabel, setRdDiscardLabel] = createSignal("Start over");
+const [rdDiscardDisabled, setRdDiscardDisabled] = createSignal(true);
+const [rdDiscardReason, setRdDiscardReason] = createSignal("This draft is already empty.");
+
+const [rdJourneyLine, setRdJourneyLine] = createSignal("Pick an input to begin.");
+const [rdJourneyCompact, setRdJourneyCompact] = createSignal("Setup · 0/4");
+const [rdJourneyRows, setRdJourneyRows] = createSignal<RdJourneyRow[]>([]);
+
+const [rdCaptureMode, setRdCaptureMode] = createSignal("none");
+const [rdCaptureHeading, setRdCaptureHeading] = createSignal("No input selected");
+const [rdCaptureLine, setRdCaptureLine] = createSignal("Pick the input this setup will listen to.");
+const [rdCaptureRecoveryLine, setRdCaptureRecoveryLine] = createSignal("");
+const [rdCaptureSelector, setRdCaptureSelector] = createSignal("");
+const [rdCaptureInstance, setRdCaptureInstance] = createSignal("");
+const [rdCapturePrepareCls, setRdCapturePrepareCls] = createSignal("rd-capture-prepare none");
+const [rdCaptureHeldCls, setRdCaptureHeldCls] = createSignal("rd-held-recovery none");
+const [rdCaptureHeld, setRdCaptureHeld] = createSignal<RdHeldCaptureRow[]>([]);
 const [rdCtrlAddNote, setRdCtrlAddNote] = createSignal("");
 const [rdCtrlCountsLine, setRdCtrlCountsLine] = createSignal("");
 const [rdCtrlAddPreset, setRdCtrlAddPreset] = createSignal("");
@@ -334,6 +477,45 @@ let rdCtrlMacrosNote = "";
 let rdCtrlMac: RdMacroEditorView | null = null;
 /** The staged input's verified identity — the mapper's source pin. */
 let rdLearnSource = { selector: "", instance: "" };
+/** Full operational facts for the live-feed license and entry-level action
+ * coordinator. Canvas markup consumes signals; protocol-sensitive clients
+ * read this immutable served object instead of parsing labels or classes. */
+let rdOperations: RdOperationalState | null = null;
+
+export function redesignOperationalState(): RdOperationalState | null {
+  return rdOperations;
+}
+
+/** Product availability after the page-wide mutation lock releases. Dynamic
+ * `data-*` mirrors cannot be emitted faithfully by Forma SSR, so the entry
+ * asks the same served state the buttons render from. `undefined` leaves
+ * older widget-specific dataset contracts in charge. */
+export function redesignFormProductDisabled(form: HTMLFormElement): boolean | undefined {
+  const kind = form.dataset.rdForm ?? "";
+  const action = kind === "play-replace" ? "play" : kind;
+  if (
+    action === "save" || action === "play" || action === "apply" ||
+    action === "stop" || action === "adopt" || action === "discard"
+  ) {
+    const state = rdOperations?.[action];
+    return state ? state.allowed !== true : true;
+  }
+  if (kind === "capture-prepare") {
+    return rdCapturePrepareCls().includes("none");
+  }
+  if (kind === "capture-release") {
+    const selector = (form.elements.namedItem("expected_selector") as HTMLInputElement | null)
+      ?.value ?? "";
+    const instance = (form.elements.namedItem("instance_id") as HTMLInputElement | null)
+      ?.value ?? "";
+    const row = rdCaptureHeld().find(
+      (candidate) => candidate.selector === selector &&
+        candidate.instance.toLowerCase() === instance.toLowerCase(),
+    );
+    return row ? !row.can_release : true;
+  }
+  return undefined;
+}
 export function redesignLearnSource(): { selector: string; instance: string } {
   return rdLearnSource;
 }
@@ -386,6 +568,18 @@ function syncMappingCords(): void {
   );
   const select = rdRoot?.querySelector<HTMLSelectElement>('[data-nx="rd-mapping-paths"]');
   if (select && select.value !== mode) select.value = mode;
+}
+
+/** Frame-rate live feedback reaches the mapping layer through one narrow
+ * imperative port. The lifecycle entry owns the EventSource; the island owns
+ * the graph, so neither module needs to know the other's implementation. */
+export function redesignSetLivePaths(
+  keysDown: ReadonlySet<string>,
+  keyHits: ReadonlySet<string>,
+  slotFunctionsDown: ReadonlyMap<number, ReadonlySet<string>>,
+  slotFunctionHits: ReadonlyMap<number, ReadonlySet<string>>,
+): void {
+  mappingFlowLayer?.setLive(keysDown, keyHits, slotFunctionsDown, slotFunctionHits);
 }
 
 function setMappingPathMode(mode: MappingPathMode): void {
@@ -445,6 +639,10 @@ let pendingLocateFns: string | null = null;
 /** A KEY the next Keys render should reveal — set by a click on a plate
  *  cell (the board is the Keys tab's own picture). */
 let pendingLocateKey: string | null = null;
+/** Inspector repaint memoization is client state, not document state. A
+ * WeakMap keeps it off the served container so hydration parity can continue
+ * asserting every attribute on that client-populated subtree. */
+const inspectorRenderFingerprints = new WeakMap<HTMLElement, string>();
 
 // ── The keyboard lens: mute chips, the solo shortcut, the finish ──────────
 // The crossings share 4460's store (a crossing belongs to the CONTROLLER,
@@ -580,11 +778,99 @@ export function applyRedesign(v: RedesignPayload): void {
   const deviceFocus = captureDeviceRowFocus();
   setRdEnvLabel(v.environment_label);
   setRdEnvCls(v.environment_cls);
+  const operations = v.operations;
+  rdOperations = operations ?? null;
+  setRdOpDraftLabel(operations?.draft_label ?? "New draft");
+  setRdOpDraftDetail(operations?.draft_detail ?? "Pick an input to begin.");
+  setRdOpSavedLabel(operations?.saved_label ?? "Nothing saved yet");
+  setRdOpSavedDetail(operations?.saved_detail ?? "Save writes this draft for later.");
+  setRdOpSessionLine(operations?.session?.line ?? "Session status unavailable");
+  setRdOpSessionCls(`rd-session-state ${operations?.session_cls || "down"}`);
+  setRdOpEscapeLine(operations?.escape_line ?? "");
+  const draftDirty = operations?.draft_dirty === true;
+  setRdDraftDirty(draftDirty);
+  setRdDraftRevision(operations?.draft_revision ?? "");
+  setRdDiscardConfirmCls(draftDirty ? "rd-danger-confirm" : "rd-danger-confirm none");
+
+  const save = operations?.save;
+  setRdSaveLabel(save?.label || "Save");
+  setRdSaveDisabled(save?.allowed !== true);
+  setRdSaveReason(save?.reason ?? "Finish the setup before saving.");
+  const play = operations?.play;
+  setRdPlayLabel(play?.label || "Play");
+  setRdPlayDisabled(play?.allowed !== true);
+  setRdPlayReason(play?.reason ?? "Finish the setup before Play.");
+  setRdPlayCls(play?.visible === false ? "rd-runform rd-playform none" : "rd-runform rd-playform");
+  const apply = operations?.apply;
+  setRdApplyLabel(apply?.label || "Apply changes");
+  setRdApplyDisabled(apply?.allowed !== true);
+  setRdApplyReason(apply?.reason ?? "Nothing is running.");
+  setRdApplyCls(
+    apply?.visible === true || apply?.allowed === true
+      ? "rd-runform rd-applyform"
+      : "rd-runform rd-applyform none",
+  );
+  const stop = operations?.stop;
+  setRdStopLabel(stop?.label || "Stop");
+  setRdStopDisabled(stop?.allowed !== true);
+  setRdStopReason(stop?.reason ?? "Nothing is running.");
+  setRdStopCls(
+    stop?.visible === true || operations?.session?.running === true
+      ? "rd-runform rd-stopform"
+      : "rd-runform rd-stopform none",
+  );
+  setRdReplacePlayCls(
+    operations?.session?.running === true
+      ? "rd-panel-replace"
+      : "rd-panel-replace none",
+  );
+  const adopt = operations?.adopt;
+  setRdAdoptLabel(adopt?.label || "Load saved setup");
+  setRdAdoptDisabled(adopt?.allowed !== true);
+  setRdAdoptReason(adopt?.reason ?? "There is no saved setup to load.");
+  const discard = operations?.discard;
+  setRdDiscardLabel(discard?.label || "Start over");
+  setRdDiscardDisabled(discard?.allowed !== true);
+  setRdDiscardReason(discard?.reason ?? "This draft is already empty.");
+
+  const journey = v.journey;
+  const journeyRows = journey?.rows ?? [];
+  setRdJourneyRows(journeyRows);
+  setRdJourneyLine(journey?.line ?? "Pick an input to begin.");
+  const journeyDone = journeyRows.filter((row) => row.badge === "Done").length;
+  const journeyNow = journeyRows.find((row) => row.badge === "Now" || row.badge === "Blocked");
+  setRdJourneyCompact(
+    journey?.compact ||
+      `${journeyDone}/4 · ${operations?.session?.running ? "Playing" : journeyNow?.title ?? "Setup"}`,
+  );
+
+  const capture = v.capture;
+  setRdCaptureMode(capture?.mode ?? "none");
+  setRdCaptureHeading(capture?.heading ?? "No input selected");
+  setRdCaptureLine(capture?.line ?? "Pick the input this setup will listen to.");
+  setRdCaptureRecoveryLine(capture?.recovery_line ?? "");
+  setRdCaptureSelector(capture?.selector ?? "");
+  setRdCaptureInstance(capture?.instance ?? "");
+  setRdCapturePrepareCls(
+    capture?.can_prepare === true ? "rd-capture-prepare" : "rd-capture-prepare none",
+  );
+  setRdCaptureHeld(
+    (capture?.held ?? []).map((row) => ({
+      ...row,
+      summary: `${row.transport} · ${row.detail}`,
+      disabled: !row.can_release,
+    })),
+  );
+  setRdCaptureHeldCls(
+    (capture?.held?.length ?? 0) > 0 ? "rd-held-recovery" : "rd-held-recovery none",
+  );
   const themeRows = v.theme_rows ?? [];
-  setRdThemeRows(themeRows.map((row) => ({
+  const renderedThemeRows = themeRows.map((row) => ({
     ...row,
     chosen: row.chosen ? "true" : "false",
-  })));
+  }));
+  setRdThemeRows(renderedThemeRows);
+  setRdCompactThemeRows(renderedThemeRows);
   // The ONE verb whose effect lives outside this island's tree (the
   // nocturne lesson, carried over with the rows). Every other form's outcome
   // is repainted from this payload, but the theme is an attribute on <html>
@@ -758,6 +1044,29 @@ export function applyRedesignFlash(flash: string | null): void {
   }
   setRdFlashLine(flash.replace(/^error: /, ""));
   setRdFlashCls(flash.startsWith("error") ? "n-flash rd-flash err" : "n-flash rd-flash ok");
+}
+
+/** Refresh health is transport state, not daemon product state. Keep the last
+ * authoritative payload visible during a short outage, but make its age
+ * explicit instead of presenting stale action availability as current. */
+export function setRedesignRefreshHealth(
+  state: "online" | "stale",
+  message = "",
+): void {
+  const root = rdRoot;
+  if (!root) return;
+  const status = root.querySelector<HTMLElement>(".rd-refresh-health");
+  if (!status) return;
+  root.dataset.rdRefreshState = state;
+  status.dataset.state = state;
+  status.textContent = message;
+  status.hidden = state === "online" || message.trim() === "";
+  const summary = root.querySelector<HTMLElement>(".rd-setup-sum");
+  if (summary) {
+    summary.title = state === "stale" && message.trim()
+      ? `${message} Open Setup for details.`
+      : "Setup progress, draft, session and input readiness";
+  }
 }
 
 // ── The canvas (lifted from NocturneIsland's canvas section) ────────────────
@@ -1257,11 +1566,20 @@ function restoreOverlayFocus(target: HTMLElement | null): void {
  *  When the disclosure itself owned focus, its summary is the durable return
  *  point — controls inside a closed details are no longer focusable. */
 function closeThemeMenu(restoreFocus = false): boolean {
-  const menu = rdRoot?.querySelector<HTMLDetailsElement>(".rd-themed[open]");
-  if (!menu) return false;
-  menu.open = false;
+  const menus = Array.from(
+    rdRoot?.querySelectorAll<HTMLDetailsElement>("[data-rd-theme-menu][open]") ?? [],
+  );
+  if (menus.length === 0) return false;
+  const active = document.activeElement;
+  const owner = active instanceof Element
+    ? active.closest<HTMLDetailsElement>("[data-rd-theme-menu][open]")
+    : null;
+  const returnMenu = owner ?? menus.find((menu) => menu.offsetParent !== null) ?? menus[0];
+  menus.forEach((menu) => {
+    menu.open = false;
+  });
   if (restoreFocus) {
-    menu.querySelector<HTMLElement>(".rd-theme-sum")?.focus({ preventScroll: true });
+    returnMenu.querySelector<HTMLElement>("[data-rd-theme-summary]")?.focus({ preventScroll: true });
   }
   return true;
 }
@@ -1628,7 +1946,7 @@ function renderInspector(): void {
       : null,
   ]);
   if (
-    body.dataset.renderFingerprint === renderFingerprint &&
+    inspectorRenderFingerprints.get(body) === renderFingerprint &&
     pendingLocateFns === null &&
     pendingLocateKey === null
   ) {
@@ -1760,7 +2078,7 @@ function renderInspector(): void {
     rows.push(title, kind, origin, verbs);
   }
   body.replaceChildren(...rows.filter((row): row is HTMLElement => Boolean(row)));
-  body.dataset.renderFingerprint = renderFingerprint;
+  inspectorRenderFingerprints.set(body, renderFingerprint);
   // Restore the reader's place: rows they had open stay open, and the
   // panel does not jump back to its top on every repaint.
   for (const row of Array.from(body.querySelectorAll<HTMLElement>("details.n-bind"))) {
@@ -2845,8 +3163,8 @@ export function redesignWire(root: HTMLElement): void {
     // The theme menu (a native details): an outside click puts it away —
     // the nocturne configuration menu's own convention. Closing after an
     // action belongs to the fetch-submit layer, not here.
-    const themeMenu = rdRoot?.querySelector<HTMLElement>(".rd-themed[open]");
-    if (themeMenu && !target?.closest(".rd-themed")) {
+    const themeMenu = rdRoot?.querySelector<HTMLElement>("[data-rd-theme-menu][open]");
+    if (themeMenu && !target?.closest("[data-rd-theme-menu]")) {
       closeThemeMenu();
     }
     // The board and While-playing pickers keep the same convention: a
@@ -3230,6 +3548,10 @@ export function redesignWire(root: HTMLElement): void {
     // gesture holds the page: a key in hand or an armed learn owns the
     // keyboard (nocturne's Ctrl+K-only-when-idle rule).
     if ((ev.metaKey || ev.ctrlKey) && (ev.key === "k" || ev.key === "f")) {
+      if (root.querySelector<HTMLElement>("[data-rd-apply-dialog]:not([hidden])")) {
+        ev.preventDefault();
+        return;
+      }
       if (mapperBusy()) return;
       ev.preventDefault();
       setPalette(!paletteOpen());
@@ -3351,10 +3673,137 @@ export function redesignWire(root: HTMLElement): void {
 
 // ── The island ──────────────────────────────────────────────────────────────
 
+/** The same native Theme disclosure has two responsive homes: the desktop
+ * rail and the compact Setup panel. Both render the server-owned rows and
+ * ordinary POST forms, so narrow screens do not trade product access for fit
+ * and the no-script path remains complete. Distinct presentation classes keep
+ * the long-standing desktop selectors singular; data-rd-theme-* is the shared
+ * behavior contract. */
+function redesignThemeDisclosure() {
+  return h(
+    "details",
+    { class: "rd-themed", "data-rd-theme-menu": "" },
+    h(
+      "summary",
+      {
+        class: "rd-theme-sum",
+        title: "How the Studio looks",
+        "aria-label": "Choose Studio theme",
+        "data-rd-theme-summary": "",
+      },
+      "◐ Theme",
+    ),
+    h(
+      "div",
+      { class: "rd-thememenu" },
+      h("div", { class: "n-kick-row" }, h("span", { class: "n-kick" }, "How the Studio looks")),
+      h(
+        "p",
+        { class: "n-devnote" },
+        "Pages follow the operating system's light or dark choice unless you pick one here.",
+      ),
+      createList(
+        () => rdThemeRows(),
+        (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
+        (r) =>
+          h(
+            "form",
+            {
+              class: "n-modeform",
+              method: "post",
+              action: "/redesign/theme",
+              "data-rd-form": "theme",
+            },
+            h("input", { type: "hidden", name: "theme", value: r.name }),
+            h(
+              "button",
+              {
+                type: "submit",
+                class: r.cls,
+                "aria-current": r.chosen,
+              },
+              h("span", { class: "n-radio-dot" }),
+              h(
+                "span",
+                { class: "n-radio-txt" },
+                h("span", { class: "n-radio-title" }, r.title),
+                h("span", { class: "n-radio-detail" }, r.detail),
+              ),
+            ),
+          ),
+      ),
+    ),
+  );
+}
+
+function redesignCompactThemeDisclosure() {
+  return h(
+    "details",
+    { class: "rd-themed-compact", "data-rd-theme-menu": "" },
+    h(
+      "summary",
+      {
+        class: "rd-theme-compact-sum",
+        title: "How the Studio looks",
+        "aria-label": "Choose Studio theme",
+        "data-rd-theme-summary": "",
+      },
+      "◐ Theme",
+    ),
+    h(
+      "div",
+      { class: "rd-thememenu-compact" },
+      h("div", { class: "n-kick-row" }, h("span", { class: "n-kick" }, "How the Studio looks")),
+      h(
+        "p",
+        { class: "n-devnote" },
+        "Pages follow the operating system's light or dark choice unless you pick one here.",
+      ),
+      createList(
+        () => rdCompactThemeRows(),
+        (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
+        (r) =>
+          h(
+            "form",
+            {
+              class: "n-modeform",
+              method: "post",
+              action: "/redesign/theme",
+              "data-rd-form": "theme",
+            },
+            h("input", { type: "hidden", name: "theme", value: r.name }),
+            h(
+              "button",
+              {
+                type: "submit",
+                class: r.cls,
+                "aria-current": r.chosen,
+              },
+              h("span", { class: "n-radio-dot" }),
+              h(
+                "span",
+                { class: "n-radio-txt" },
+                h("span", { class: "n-radio-title" }, r.title),
+                h("span", { class: "n-radio-detail" }, r.detail),
+              ),
+            ),
+          ),
+      ),
+    ),
+  );
+}
+
 export function RedesignIsland() {
   return h(
     "div",
-    { class: "nocturne rd" },
+    {
+      class: "nocturne rd",
+      // The stream is opened only after adoption, so its visual state cannot
+      // be server-painted. This narrow marker lets hydration parity ignore
+      // only the client-owned data-rd-live-state attribute while continuing
+      // to compare every durable lifecycle sentence and control.
+      "data-client-live-state": "",
+    },
     h(
       "main",
       { class: "n-main" },
@@ -3364,12 +3813,277 @@ export function RedesignIsland() {
         h(
           "div",
           { class: "n-meta rd-top" },
-          // The lane's identity, quiet: the product name and where you are.
+          // Product identity. The route remains /redesign during construction,
+          // but the surface is the workbench people will actually use — it
+          // should not make them reason about an internal migration name.
           h("span", { class: "rd-brand" }, "ksx Studio"),
-          h("span", { class: "rd-crumb" }, "Redesign"),
+          h("span", { class: "rd-crumb" }, "Workbench"),
           // Which machine answers this lane — the fixture badge, so the
           // redesign workbench can never be mistaken for the cabinet.
-          h("span", { class: () => rdEnvCls() }, () => rdEnvLabel()),
+          h("span", { class: () => rdEnvCls(), title: () => rdEnvLabel() }, () => rdEnvLabel()),
+          // The compact setup spine expands into the operational shell. A
+          // native details keeps every recovery and lifecycle form usable on
+          // the SSR/no-script path; JavaScript only adds in-place repaint and
+          // focus polish. Games, layouts and maintenance deliberately do not
+          // join this payload — the next Library block owns those reads.
+          h(
+            "details",
+            { class: "rd-setupd" },
+            h(
+              "summary",
+              { class: "rd-setup-sum", title: "Setup progress, draft, session and input readiness" },
+              h("span", { class: "rd-setup-mark", "aria-hidden": "true" }, "◆"),
+              h("span", { class: "rd-setup-compact" }, () => rdJourneyCompact()),
+              h("span", { class: "rd-setup-divider", "aria-hidden": "true" }, "·"),
+              h("span", { class: "rd-draft-label" }, () => rdOpDraftLabel()),
+              h("span", { class: "rd-caret", "aria-hidden": "true" }, "⌄"),
+            ),
+            h(
+              "div",
+              { class: "rd-setup-panel" },
+              h(
+                "div",
+                { class: "rd-setup-panel-head" },
+                h(
+                  "div",
+                  null,
+                  h("span", { class: "n-kick" }, "Setup"),
+                  h("p", { class: "rd-setup-line" }, () => rdJourneyLine()),
+                ),
+                h("span", { class: "rd-refresh-health", role: "status", hidden: "" }),
+                h(
+                  "div",
+                  { class: "rd-theme-compact-home" },
+                  redesignCompactThemeDisclosure(),
+                ),
+              ),
+              h(
+                "nav",
+                { class: "rd-journey", "aria-label": "Setup progress" },
+                createList(
+                  () => rdJourneyRows(),
+                  (row) => `${row.key}|${row.badge}|${row.cls}|${row.title}|${row.detail}`,
+                  (row) =>
+                    h(
+                      "div",
+                      { class: row.cls, "data-journey-step": row.key },
+                      h("span", { class: "rd-journey-badge" }, row.badge),
+                      h(
+                        "span",
+                        { class: "rd-journey-copy" },
+                        h("strong", null, row.title),
+                        h("span", null, row.detail),
+                      ),
+                    ),
+                ),
+              ),
+              h(
+                "div",
+                { class: "rd-setup-grid" },
+                h(
+                  "section",
+                  { class: "rd-setup-card rd-draft-card", "aria-labelledby": "rd-draft-head" },
+                  h("h2", { id: "rd-draft-head" }, "Draft and saved setup"),
+                  h("p", { class: "rd-card-lede" }, () => rdOpDraftDetail()),
+                  h(
+                    "div",
+                    { class: "rd-saved-row" },
+                    h("strong", null, () => rdOpSavedLabel()),
+                    h("span", null, () => rdOpSavedDetail()),
+                  ),
+                  h(
+                    "form",
+                    { method: "post", action: "/redesign/adopt", "data-rd-form": "adopt" },
+                    h(
+                      "button",
+                      {
+                        type: "submit",
+                        class: "rd-panel-action",
+                        disabled: () => rdAdoptDisabled(),
+                        "aria-describedby": "rd-adopt-reason",
+                      },
+                      () => rdAdoptLabel(),
+                    ),
+                  ),
+                  h("p", { id: "rd-adopt-reason", class: "rd-action-reason" }, () => rdAdoptReason()),
+                  h(
+                    "details",
+                    { class: "rd-start-over" },
+                    h("summary", null, "Start over…"),
+                    h("p", { id: "rd-discard-reason", class: "rd-action-reason" }, () => rdDiscardReason()),
+                    h(
+                      "form",
+                      { method: "post", action: "/redesign/discard", "data-rd-form": "discard" },
+                      h("input", {
+                        type: "hidden",
+                        name: "expected_revision",
+                        value: () => rdDraftRevision(),
+                      }),
+                      h(
+                        "label",
+                        { class: () => rdDiscardConfirmCls() },
+                        h("input", {
+                          type: "checkbox",
+                          name: "confirm_discard",
+                          value: "yes",
+                          required: () => rdDraftDirty(),
+                        }),
+                        "Discard unsaved edits",
+                      ),
+                      h(
+                        "button",
+                        {
+                          type: "submit",
+                          class: "rd-panel-action danger",
+                          disabled: () => rdDiscardDisabled(),
+                          "aria-describedby": "rd-discard-reason",
+                        },
+                        () => rdDiscardLabel(),
+                      ),
+                    ),
+                  ),
+                ),
+                h(
+                  "section",
+                  {
+                    class: () => rdOpSessionCls(),
+                    "aria-labelledby": "rd-session-head",
+                  },
+                  h("h2", { id: "rd-session-head" }, "Session"),
+                  h("p", { class: "rd-card-lede" }, () => rdOpSessionLine()),
+                  h("p", { class: "rd-escape-line" }, () => rdOpEscapeLine()),
+                  h("dl", { class: "rd-action-notes" },
+                    h("dt", null, "Save"),
+                    h("dd", { id: "rd-save-reason" }, () => rdSaveReason()),
+                    h("dt", null, "Play"),
+                    h("dd", { id: "rd-play-reason" }, () => rdPlayReason()),
+                    h("dt", null, "Apply"),
+                    h("dd", { id: "rd-apply-reason" }, () => rdApplyReason()),
+                    h("dt", null, "Stop"),
+                    h("dd", { id: "rd-stop-reason" }, () => rdStopReason()),
+                  ),
+                  h(
+                    "form",
+                    {
+                      class: () => rdReplacePlayCls(),
+                      method: "post",
+                      action: "/redesign/play",
+                      "data-rd-form": "play",
+                    },
+                    h("input", {
+                      type: "hidden",
+                      name: "expected_revision",
+                      value: () => rdDraftRevision(),
+                    }),
+                    h(
+                      "button",
+                      {
+                        type: "submit",
+                        class: "rd-panel-action",
+                        disabled: () => rdPlayDisabled(),
+                        "aria-describedby": "rd-play-reason",
+                      },
+                      "Replace session",
+                    ),
+                  ),
+                ),
+                h(
+                  "section",
+                  {
+                    class: "rd-setup-card rd-capture-card",
+                    id: "rd-capture-readiness",
+                    "data-capture-mode": () => rdCaptureMode(),
+                    "aria-labelledby": "rd-capture-head",
+                  },
+                  h("h2", { id: "rd-capture-head" }, () => rdCaptureHeading()),
+                  h("p", { class: "rd-card-lede" }, () => rdCaptureLine()),
+                  h("p", { class: "rd-capture-recovery-line" }, () => rdCaptureRecoveryLine()),
+                  h(
+                    "form",
+                    {
+                      class: () => rdCapturePrepareCls(),
+                      method: "post",
+                      action: "/redesign/capture/prepare",
+                      "data-rd-form": "capture-prepare",
+                    },
+                    h("input", { type: "hidden", name: "expected_selector", value: () => rdCaptureSelector() }),
+                    h("input", { type: "hidden", name: "instance_id", value: () => rdCaptureInstance() }),
+                    h(
+                      "label",
+                      { class: "rd-consent" },
+                      h("input", { type: "checkbox", name: "confirm_spare_keyboard", value: "yes", required: "" }),
+                      h("span", null, "I connected and tested a different keyboard that can still type."),
+                    ),
+                    h(
+                      "label",
+                      { class: "rd-consent" },
+                      h("input", { type: "checkbox", name: "confirm_rebind", value: "yes", required: "" }),
+                      h("span", null, "I understand this exact input stops ordinary typing until I release it here."),
+                    ),
+                    h(
+                      "label",
+                      { class: "rd-consent" },
+                      h("input", { type: "checkbox", name: "confirm_machine_certificate", value: "yes", required: "" }),
+                      h("span", null, "I allow ksx to install its machine-local signing certificate for this generated driver package."),
+                    ),
+                    h(
+                      "button",
+                      {
+                        type: "submit",
+                        class: "rd-panel-action primary",
+                        "data-rd-product-disabled": "false",
+                      },
+                      "Prepare this input",
+                    ),
+                    h("p", { class: "rd-action-reason" }, "Windows will ask for permission. ksx stays open and returns here afterward."),
+                  ),
+                  h(
+                    "div",
+                    { class: () => rdCaptureHeldCls() },
+                    h("h3", null, "Keyboards held by ksx"),
+                    h("p", { class: "rd-action-reason" }, "Release is resolved from the current Windows device tree, even when the draft is empty."),
+                    createList(
+                      () => rdCaptureHeld(),
+                      (row) => `${row.selector}|${row.instance}|${row.can_release}|${row.name}|${row.note}`,
+                      (row) =>
+                        h(
+                          "article",
+                          { class: "rd-held-row" },
+                          h(
+                            "div",
+                            null,
+                            h("strong", null, row.name),
+                            h("span", null, row.summary),
+                            h("span", { class: "rd-held-note" }, row.note),
+                          ),
+                          h(
+                            "form",
+                            { method: "post", action: "/redesign/capture/release", "data-rd-form": "capture-release" },
+                            h("input", { type: "hidden", name: "expected_selector", value: row.selector }),
+                            h("input", { type: "hidden", name: "instance_id", value: row.instance }),
+                            h(
+                              "label",
+                              { class: "rd-consent compact" },
+                              h("input", { type: "checkbox", name: "confirm_release", value: "yes", required: "" }),
+                              h("span", null, "Return this keyboard to ordinary typing"),
+                            ),
+                            h(
+                              "button",
+                              {
+                                type: "submit",
+                                class: "rd-panel-action",
+                                disabled: row.disabled,
+                              },
+                              "Release",
+                            ),
+                          ),
+                        ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
           // The workbench feed: open the device picker. Scripting-only
           // chrome (`.n-autobtn`), rightly — the canvas it feeds is too.
           h(
@@ -3418,10 +4132,108 @@ export function RedesignIsland() {
             "◇ Encoders",
           ),
           h("span", { class: "rd-spring" }),
-          // The action flash — the one place a verb's outcome lands. Served
-          // from the allowlisted ?flash= on a full load; the entry's
-          // fetch-submit layer applies the same copy without one.
-          h("span", { role: "status", class: () => rdFlashCls() }, () => rdFlashLine()),
+          // Operational actions stay visible and explain disabled states in
+          // the Setup disclosure. Play never implies Save; Apply never
+          // implies disk persistence; Stop remains a dedicated escape from
+          // the live session. This separation is the product contract.
+          h(
+            "div",
+            { class: "rd-run-actions", role: "group", "aria-label": "Lifecycle controls" },
+            h(
+              "span",
+              {
+                class: "rd-live-state",
+                "data-rd-live-status": "",
+                "data-live-chatter": "",
+                role: "status",
+              },
+            ),
+            h("span", {
+              class: "rd-live-stats",
+              "data-rd-live-stats": "",
+              "data-live-chatter": "",
+              "aria-hidden": "true",
+            }),
+            h("span", {
+              class: "rd-live-ticker",
+              "data-rd-live-ticker": "",
+              "data-live-chatter": "",
+              "aria-hidden": "true",
+            }),
+            h(
+              "form",
+              { class: "rd-runform rd-saveform", method: "post", action: "/redesign/save", "data-rd-form": "save" },
+              h("input", {
+                type: "hidden",
+                name: "expected_revision",
+                value: () => rdDraftRevision(),
+              }),
+              h(
+                "button",
+                {
+                  type: "submit",
+                  class: "rd-runbtn",
+                  disabled: () => rdSaveDisabled(),
+                  "aria-describedby": "rd-save-reason",
+                },
+                () => rdSaveLabel(),
+              ),
+            ),
+            h(
+              "form",
+              { class: () => rdApplyCls(), method: "post", action: "/redesign/apply", "data-rd-form": "apply" },
+              h("input", {
+                type: "hidden",
+                name: "expected_revision",
+                value: () => rdDraftRevision(),
+              }),
+              h(
+                "button",
+                {
+                  type: "submit",
+                  class: "rd-runbtn apply",
+                  disabled: () => rdApplyDisabled(),
+                  "aria-describedby": "rd-apply-reason",
+                },
+                () => rdApplyLabel(),
+              ),
+            ),
+            h(
+              "form",
+              { class: () => rdPlayCls(), method: "post", action: "/redesign/play", "data-rd-form": "play" },
+              h("input", {
+                type: "hidden",
+                name: "expected_revision",
+                value: () => rdDraftRevision(),
+              }),
+              h(
+                "button",
+                {
+                  type: "submit",
+                  class: "rd-runbtn primary",
+                  disabled: () => rdPlayDisabled(),
+                  "aria-describedby": "rd-play-reason",
+                },
+                h("span", { "aria-hidden": "true" }, "▷"),
+                () => rdPlayLabel(),
+              ),
+            ),
+            h(
+              "form",
+              { class: () => rdStopCls(), method: "post", action: "/redesign/stop", "data-rd-form": "stop" },
+              h(
+                "button",
+                {
+                  type: "submit",
+                  class: "rd-runbtn stop",
+                  disabled: () => rdStopDisabled(),
+                  "aria-describedby": "rd-stop-reason",
+                },
+                h("span", { "aria-hidden": "true" }, "■"),
+                () => rdStopLabel(),
+              ),
+            ),
+          ),
           // The short undo window after a ✕ removal — the nocturne chip's
           // contract verbatim: the SERVER holds the resurrection material
           // and serves this chip while the window lasts; the verb replays
@@ -3502,72 +4314,80 @@ export function RedesignIsland() {
             },
             "⌨",
           ),
-          // The Studio theme menu: the nocturne picker's rows, re-homed into
-          // the topbar as a NATIVE details — every row is a plain form POST,
-          // so the choice works with scripting off and the served facts
-          // paint on the SSR pass (which is why the summary is NOT an
-          // `.n-autobtn`: that class is scripting-only chrome). JS adds only
-          // outside-click dismissal and the fetch-submit upgrade; the fold
-          // closes itself after acting.
+          // The desktop home of the native Theme disclosure. Compact widths
+          // render the same forms inside Setup, where they remain reachable
+          // without competing with lifecycle verbs for rail width.
           h(
-            "details",
-            { class: "rd-themed" },
+            "div",
+            { class: "rd-theme-rail-home" },
+            redesignThemeDisclosure(),
+          ),
+          h("span", { role: "status", class: "n-live-sr", "data-live-chatter": "" }),
+        ),
+        // Action results need room to be read. The legacy topbar pill clipped
+        // the exact recovery sentence behind an ellipsis; this banner is a
+        // real row and disappears entirely when there is no action outcome.
+        h("div", { role: "status", class: () => rdFlashCls() }, () => rdFlashLine()),
+        // Apply can update bindings in place, but structural changes require
+        // replacing the running controller session. This dialog is a
+        // scripted enhancement of the ordinary Apply form: the no-script
+        // path receives the same fixed recovery sentence and never loses the
+        // verb. The daemon's exact difference is inserted into the lede.
+        h(
+          "div",
+          { class: "rd-restart-back", "data-rd-apply-dialog": "", hidden: "" },
+          h("div", { class: "rd-restart-scrim", "data-rd-apply-cancel": "" }),
+          h(
+            "section",
+            {
+              class: "rd-restart-dialog",
+              role: "dialog",
+              "aria-modal": "true",
+              "aria-labelledby": "rd-restart-title",
+              "aria-describedby": "rd-restart-message rd-restart-note",
+              tabindex: "-1",
+            },
+            h("span", { class: "n-kick" }, "Session restart needed"),
             h(
-              "summary",
-              { class: "rd-theme-sum", title: "How the Studio looks" },
-              "◐ Theme",
+              "h2",
+              { id: "rd-restart-title" },
+              "These changes cannot be applied while Play is running",
+            ),
+            h("p", { id: "rd-restart-message", "data-rd-apply-message": "" }),
+            h(
+              "p",
+              { id: "rd-restart-note", class: "rd-restart-note" },
+              "Replace session briefly unplugs and reconnects the virtual controllers. A game may notice that reconnect.",
             ),
             h(
               "div",
-              { class: "rd-thememenu" },
+              { class: "rd-restart-actions" },
               h(
-                "div",
-                { class: "n-kick-row" },
-                h("span", { class: "n-kick" }, "How the Studio looks"),
+                "button",
+                { type: "button", class: "rd-panel-action", "data-rd-apply-cancel": "" },
+                "Keep playing as-is",
               ),
               h(
-                "p",
-                { class: "n-devnote" },
-                "Pages follow the operating system's light or dark choice unless you pick one here.",
-              ),
-              createList(
-                () => rdThemeRows(),
-                (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
-                (r) =>
-                  h(
-                    "form",
-                    {
-                      class: "n-modeform",
-                      method: "post",
-                      action: "/redesign/theme",
-                      "data-rd-form": "theme",
-                    },
-                    h("input", { type: "hidden", name: "theme", value: r.name }),
-                    h(
-                      "button",
-                      // `aria-current` is the only part of "this is the one
-                      // you are on" a screen reader can reach: `.n-radio.on`
-                      // paints a dot and announces nothing at all. Explicit
-                      // string tokens avoid boolean-attribute serialization's
-                      // empty `aria-current` value for the selected row.
-                      {
-                        type: "submit",
-                        class: r.cls,
-                        "aria-current": r.chosen,
-                      },
-                      h("span", { class: "n-radio-dot" }),
-                      h(
-                        "span",
-                        { class: "n-radio-txt" },
-                        h("span", { class: "n-radio-title" }, r.title),
-                        h("span", { class: "n-radio-detail" }, r.detail),
-                      ),
-                    ),
-                  ),
+                "form",
+                { method: "post", action: "/redesign/play", "data-rd-form": "play-replace" },
+                h("input", {
+                  type: "hidden",
+                  name: "expected_revision",
+                  value: "",
+                  "data-rd-apply-revision": "",
+                }),
+                h(
+                  "button",
+                  {
+                    type: "submit",
+                    class: "rd-panel-action primary",
+                    "data-rd-product-disabled": "false",
+                  },
+                  "Replace session",
+                ),
               ),
             ),
           ),
-          h("span", { role: "status", class: "n-live-sr" }),
         ),
         // ── The device picker (the workbench feed): near-full-page modal ──
         // SERVED — shell, scan line, all four tiers, every row — and hidden

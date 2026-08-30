@@ -440,11 +440,13 @@ async function retryWorkbenchStatus(
     // source was constructed gets another safe connection attempt.
     liveFeedback?.connect();
   } finally {
+    const restoreFocus = actionStillOwnsFocus(button, button);
     if (!button.isConnected) return;
     delete button.dataset.rdRetryPending;
     button.removeAttribute("aria-busy");
     button.disabled = false;
     button.textContent = settled;
+    if (!restoreFocus) return;
     const style = window.getComputedStyle(button);
     const visible = button.getClientRects().length > 0 && style.visibility !== "hidden";
     if (visible) {
@@ -1199,7 +1201,8 @@ function setLifecyclePending(button: HTMLButtonElement | null, pending: boolean)
   settled.hidden = pending;
   pendingLabel.hidden = !pending;
   button.toggleAttribute("data-rd-pending", pending);
-  button.toggleAttribute("aria-busy", pending);
+  if (pending) button.setAttribute("aria-busy", "true");
+  else button.removeAttribute("aria-busy");
 }
 
 function lifecycleFocusTarget(root: HTMLElement, kind: LifecycleFormKind): HTMLElement | null {

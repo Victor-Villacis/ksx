@@ -18728,6 +18728,7 @@ a.nm-link {
   opacity: 0.5;
 }
 
+.rd-action-pending,
 .rd-action-pending[hidden],
 .rd-action-label[hidden],
 .rd-action-icon:has(~ .rd-action-pending:not([hidden])) {
@@ -18738,13 +18739,13 @@ a.nm-link {
   cursor: progress;
 }
 
-.rd-action-pending:not([hidden]) {
+:is(.rd-runbtn, .rd-panel-action)[data-rd-pending] .rd-action-pending:not([hidden]) {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
 }
 
-.rd-action-pending:not([hidden])::before {
+:is(.rd-runbtn, .rd-panel-action)[data-rd-pending] .rd-action-pending:not([hidden])::before {
   width: 6px;
   height: 6px;
   flex: none;
@@ -19525,7 +19526,7 @@ a.nm-link {
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 520px) {
   .rd-setup-sum {
     max-width: 90px;
   }
@@ -22823,6 +22824,37 @@ button.rd-encoder-product-read-inline:disabled {
 }
 
 @media (max-width: 1050px) {
+  /* The Add catalog is the active task at this breakpoint. Its bottom tray
+     must reserve space from the canvas, not compete with the full-width
+     recovery/transport banners in the same vertical flex flow. Compact Setup
+     truth remains available; the full recovery banner returns on close. */
+  .rd.is-add-panel-open .rd-attention {
+    display: none;
+  }
+
+  /* Refresh transport failure is different from setup recovery: this is the
+     only control that can renew the full workbench payload. Keep it as a
+     compact, fixed toast above the active tray so it neither consumes canvas
+     flow nor disappears during multi-add. */
+  .rd.is-add-panel-open .rd-health-alert:not([hidden]) {
+    position: fixed;
+    right: var(--sp-3);
+    bottom: calc(var(--rd-add-panel-height) + var(--sp-3));
+    left: var(--sp-3);
+    z-index: 31;
+    grid-template-columns: minmax(0, 1fr) auto;
+    width: auto;
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid color-mix(in srgb, var(--n-warn) 58%, var(--n-line));
+    border-radius: 12px;
+    box-shadow: 0 12px 32px color-mix(in srgb, var(--n-bg) 54%, transparent);
+  }
+
+  .rd.is-add-panel-open .rd-health-alert:not([hidden]) > .rd-panel-action {
+    grid-column: auto;
+    justify-self: end;
+  }
+
   .rd.is-add-panel-open .n-canvas {
     min-height: 120px;
     margin-left: 0;
@@ -22863,6 +22895,11 @@ button.rd-encoder-product-read-inline:disabled {
 }
 
 @media (min-width: 760px) and (max-width: 1050px) and (max-height: 560px) and (orientation: landscape) {
+  .rd.is-add-panel-open .rd-health-alert:not([hidden]) {
+    bottom: var(--sp-3);
+    left: calc(var(--rd-add-panel-width) + var(--sp-3));
+  }
+
   .rd.is-add-panel-open .n-canvas {
     margin-left: var(--rd-add-panel-width);
     margin-bottom: 0;

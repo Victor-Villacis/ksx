@@ -141,7 +141,7 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
       { timeout: 20_000 },
     );
     assert.match(await page.locator("[data-rd-live-stats]").textContent(), /^Live/);
-    assert.match(await page.locator(".rd-setup-compact").textContent(), /Playing/);
+    assert.match(await page.locator(".rd-setup-compact").textContent(), /playing/i);
 
     // Stop is always its own escape verb. The scripted live feed must lose
     // its paint as soon as the served session says idle.
@@ -216,7 +216,7 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
       null,
       { timeout: 20_000 },
     );
-    assert.match(await page.locator(".rd-flash").textContent(), /applied/i);
+    assert.match(await page.locator(".rd-flash").textContent(), /updated in place/i);
     assert.equal(
       (await page.locator(".rd-draft-label").textContent())?.trim(),
       dirtyBeforeApply,
@@ -344,15 +344,16 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
 
     // Both Tab directions wrap, proving the dialog is contained rather than
     // merely focused once.
+    const replaceDecision = restart.locator('[data-rd-form="play-replace"] button');
     await page.locator('button[data-rd-apply-cancel]').focus();
     await page.keyboard.press("Shift+Tab");
     assert.equal(
-      await page.locator('[data-rd-form="play-replace"] button').evaluate(
+      await replaceDecision.evaluate(
         (button) => document.activeElement === button,
       ),
       true,
     );
-    await page.locator('[data-rd-form="play-replace"] button').focus();
+    await replaceDecision.focus();
     await page.keyboard.press("Tab");
     assert.equal(
       await page.evaluate(() => document.activeElement?.hasAttribute("data-rd-apply-cancel")),
@@ -366,7 +367,7 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
     // the draft stays dirty while the active revision catches up.
     await applyButton.click();
     await restart.waitFor({ state: "visible" });
-    await clickAction(page, "play-replace");
+    await replaceDecision.click();
     await restart.waitFor({ state: "hidden" });
     assert.match(await page.locator(".rd-flash").textContent(), /Play is running/);
     await page.waitForFunction(

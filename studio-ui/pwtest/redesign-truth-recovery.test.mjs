@@ -102,11 +102,13 @@ async function setSetupOpen(page, open) {
 }
 
 async function makeDraftDirty(page) {
-  await setSetupOpen(page, false);
-  const card = page.locator('.forma-canvas-stage > [data-instance-id="ctrl-slot-1"]');
-  await card.locator(".rd-ctrlcard-name").click();
+  await setSetupOpen(page, true);
+  await page.locator('[data-journey-step="mapping"]').click();
   const form = page.locator('[data-rd-form="controller-socd"]');
   await form.waitFor({ state: "visible" });
+  const beforeRevision = await page.locator(
+    '[data-rd-form="save"] input[name="expected_revision"]',
+  ).inputValue();
   const select = form.locator('select[name="socd"]');
   const current = await select.inputValue();
   const next = await select.locator("option").evaluateAll(
@@ -116,9 +118,13 @@ async function makeDraftDirty(page) {
   assert.notEqual(next, "", "the fixture must offer another SOCD policy");
   await select.selectOption(next);
   await form.locator('button[type="submit"]').click();
-  await page.waitForFunction(
-    () => /edited|Unsaved/i.test(document.querySelector(".rd-draft-label")?.textContent ?? ""),
-  );
+  await page.waitForFunction((before) => {
+    const root = document.querySelector("[data-forma-island]");
+    const revision = document.querySelector(
+      '[data-rd-form="save"] input[name="expected_revision"]',
+    )?.value ?? "";
+    return root?.dataset.rdMutationPending !== "true" && revision !== before;
+  }, beforeRevision);
   const close = page.locator('.rd-inspector:not([hidden]) [data-nx="rd-insp-close"]');
   if (await close.count()) await close.click();
 }
@@ -145,6 +151,7 @@ async function delayedLifecycle(page, {
   formKind,
   pendingText,
   settledFlash,
+  settledFormKind = formKind,
 }) {
   const url = `${BASE}${requestPath}`;
   let releaseRoute;
@@ -175,9 +182,19 @@ async function delayedLifecycle(page, {
     );
     assert.equal(await button.getAttribute("aria-busy"), "true");
     assert.equal(
+      await button.locator(".rd-action-pending").isVisible(),
+      true,
+      "the named pending label is painted, not merely present in the DOM",
+    );
+    assert.equal(
       (await button.locator(".rd-action-pending:not([hidden])").textContent())?.trim(),
       pendingText,
       "the initiating action names the work that is pending",
+    );
+    assert.equal(
+      await page.getByRole("button", { name: pendingText, exact: true }).count(),
+      1,
+      "the visible pending copy is also the action's accessible name",
     );
     assert.equal(await button.locator(".rd-action-label:not([hidden])").count(), 0);
     await assertGlobalMutationLock(page);
@@ -198,11 +215,20 @@ async function delayedLifecycle(page, {
     { timeout: 20_000 },
   );
   assert.equal(requestCount, 1, "settling the transaction does not replay its POST");
+  assert.equal(await page.locator("button[data-rd-pending], button[aria-busy='true']").count(), 0);
   assert.equal(
-    await page.locator('.rd-action-pending:not([hidden])').count(),
+    await page.locator('.rd-action-pending:visible').count(),
     0,
     "no stale pending label survives the authoritative repaint",
   );
+  const settledButton = page.locator(
+    `[data-rd-form="${settledFormKind}"] button[type="submit"]:visible`,
+  ).first();
+  assert.equal(await settledButton.count(), 1, "the authoritative settled action is present");
+  assert.equal(await settledButton.getAttribute("data-rd-pending"), null);
+  assert.equal(await settledButton.getAttribute("aria-busy"), null);
+  assert.equal(await settledButton.locator(".rd-action-label").isVisible(), true);
+  assert.equal(await settledButton.locator(".rd-action-pending").isVisible(), false);
 }
 
 describe("redesign truth, recovery and pending feedback", { concurrency: false }, () => {
@@ -238,7 +264,7 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
     await page.locator(".rd-ctrlmodal-panel").waitFor({ state: "visible" });
     assert.equal(await page.locator(".rd-setupd").evaluate((element) => element.open), false);
     assert.equal(
-      await page.evaluate(() => document.activeElement?.classList.contains("rd-ctrlmodal-panel")),
+      await page.evaluate(() => document.activeElement?.closest(".rd-ctrlmodal-panel") !== null),
       true,
       "the Controllers journey step lands inside the tray",
     );
@@ -291,6 +317,7 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
       formKind: "capture-prepare",
       pendingText: "Preparing…",
       settledFlash: "Keyboard prepared",
+      settledFormKind: "save",
     });
     assert.equal(
       await page.evaluate(() => document.activeElement?.classList.contains("rd-setup-sum")),
@@ -322,6 +349,7 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
       formKind: "play",
       pendingText: "Starting…",
       settledFlash: "Play is running",
+      settledFormKind: "stop",
     });
     assert.equal(
       await page.evaluate(() => document.activeElement?.closest('[data-rd-form="stop"]') !== null),
@@ -334,6 +362,7 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
       formKind: "stop",
       pendingText: "Stopping…",
       settledFlash: "Play stopped",
+      settledFormKind: "play",
     });
     assert.equal(
       await page.evaluate(() => document.activeElement?.closest('[data-rd-form="play"]') !== null),
@@ -343,5 +372,98 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
 
     assert.deepEqual(page.ksxNoise, [], "the complete truth/recovery loop stays error-free");
     await page.close();
+  });
+
+  test("stale workbench recovery stays actionable beside the compact Add tray without stealing focus", async () => {
+    const page = await openBench();
+    await page.setViewportSize({ width: 420, height: 900 });
+    let mode = "fail";
+    let releaseRefresh;
+    let markRefreshSeen;
+    const refreshSeen = new Promise((resolve) => {
+      markRefreshSeen = resolve;
+    });
+    const refreshGate = new Promise((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const handler = async (route) => {
+      if (mode === "fail") {
+        await route.fulfill({ status: 503, contentType: "application/json", body: '{"ok":false}' });
+        return;
+      }
+      markRefreshSeen();
+      await refreshGate;
+      try {
+        const response = await route.fetch();
+        await route.fulfill({ response });
+      } catch {
+        await route.abort().catch(() => {});
+      }
+    };
+    await page.route("**/api/redesign?slot=1", handler);
+    try {
+      const health = page.locator("[data-rd-health-alert]");
+      await health.waitFor({ state: "visible", timeout: 8_000 });
+      assert.match(await health.textContent(), /Workbench updates are paused/i);
+      assert.ok(
+        page.ksxNoise.every((message) => /503 \(Service Unavailable\)/.test(message)),
+        "only the deliberately injected transport refusal reached the console",
+      );
+      page.ksxNoise.length = 0;
+      const retry = health.locator('[data-nx="rd-refresh-retry"]');
+      assert.equal(await health.getByRole("button", { name: "Retry now", exact: true }).count(), 1);
+      assert.equal(await retry.isVisible(), true);
+
+      mode = "gate";
+      await retry.click();
+      await refreshSeen;
+      await page.locator('[data-nx="rd-devs-open"]').click();
+      await page.locator(".rd-devmodal-panel").waitFor({ state: "visible" });
+      assert.equal(await retry.isVisible(), true, "the exact refresh action remains available during Add");
+      assert.equal(
+        await health.getByRole("button", { name: "Checking…", exact: true }).count(),
+        1,
+        "the visible compact recovery action names its pending work",
+      );
+      assert.equal(
+        await health.evaluate((element) => getComputedStyle(element).position),
+        "fixed",
+        "stale transport recovery floats without taking canvas height",
+      );
+      assert.equal(
+        await page.locator("[data-rd-attention]").evaluate((element) => getComputedStyle(element).display),
+        "none",
+        "the larger setup recovery banner yields to the active compact catalog",
+      );
+      const geometry = await page.evaluate(() => {
+        const alert = document.querySelector("[data-rd-health-alert]")?.getBoundingClientRect();
+        const panel = document.querySelector(".rd-devmodal-panel")?.getBoundingClientRect();
+        const canvas = document.querySelector(".n-canvas")?.getBoundingClientRect();
+        return alert && panel && canvas
+          ? { alertBottom: alert.bottom, panelTop: panel.top, canvasHeight: canvas.height }
+          : null;
+      });
+      assert.ok(geometry);
+      assert.ok(geometry.alertBottom <= geometry.panelTop, "the refresh toast stays above the tray");
+      assert.ok(geometry.canvasHeight >= 260, "the compact canvas reservation remains usable");
+
+      releaseRefresh();
+      await page.waitForFunction(
+        () => document.querySelector("[data-rd-health-alert]")?.hasAttribute("hidden") &&
+          document.querySelector("[data-forma-island]")?.getAttribute("aria-busy") !== "true",
+        null,
+        { timeout: 20_000 },
+      );
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.closest(".rd-devmodal-panel") !== null),
+        true,
+        "a settled retry leaves focus in the Add tray the user moved to",
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      releaseRefresh();
+      await page.unroute("**/api/redesign?slot=1", handler);
+      if (!page.isClosed()) await page.close();
+    }
   });
 });

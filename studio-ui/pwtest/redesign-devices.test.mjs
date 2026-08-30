@@ -1298,6 +1298,34 @@ describe("the device workbench", () => {
         IPAC_SLUG,
       );
 
+      // The engine's supported minimum manual scale is exactly 60%. F2 must
+      // cross the editing boundary even with floating-point multiplication,
+      // then restore real (not merely present) terminal controls.
+      for (let step = 0; step < 4; step += 1) {
+        await page.getByRole("button", { name: "Smaller", exact: true }).click();
+      }
+      assert.equal(await node.getAttribute("data-canvas-manual-scale"), "0.6");
+      await node.focus();
+      await node.press("F2");
+      await page.waitForFunction((id) => {
+        const item = document.querySelector(`[data-instance-id="${id}"]`);
+        const host = item?.querySelector(
+          '.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host',
+        );
+        return item?.getAttribute("data-encoder-editable") === "true" && host?.inert === false;
+      }, IPAC_SLUG);
+      assert.ok(
+        await page.evaluate((id) => {
+          const item = document.querySelector(`[data-instance-id="${id}"]`);
+          const viewport = document.querySelector(".forma-canvas-viewport");
+          return Number(item?.getAttribute("data-canvas-manual-scale")) *
+            Number(viewport?.style.getPropertyValue("--canvas-zoom")) > 0.9;
+        }, IPAC_SLUG),
+        "minimum-scale entry keeps a positive safety margin above the 44px boundary",
+      );
+      await page.getByRole("button", { name: "Reset size", exact: true }).click();
+      await page.locator('[data-nx="rd-z-100"]').evaluate((button) => button.click());
+
       const testHelp = node.locator(
         'details[data-rd-encoder-disclosure="test-help"]',
       );
@@ -2245,6 +2273,11 @@ describe("the device workbench", () => {
 
       const heldRefresh = gateNextChart();
       await revealCanvasItem(page, IPAC_SLUG);
+      // Minimap navigation frames the whole 960×900 board. Enter its editing
+      // controls explicitly so this lease test does not depend on the spare
+      // viewport height left by unrelated product chrome.
+      await primary.focus();
+      await primary.press("F2");
       await primary.getByRole("button", { name: "Refresh stored assignments" }).click();
       assert.deepEqual(await heldRefresh.seen, { selector: IPAC });
       await page.waitForFunction(
@@ -2254,6 +2287,8 @@ describe("the device workbench", () => {
         IPAC_SLUG,
       );
       await revealCanvasItem(page, IPAC_TWIN_SLUG);
+      await twin.focus();
+      await twin.press("F2");
       assert.equal(await twin.locator("[data-rd-encoder-read]").isDisabled(), true);
       assert.equal(await twin.locator('[data-rd-encoder-observe="start"]').isDisabled(), true);
       assert.equal(
@@ -3006,10 +3041,26 @@ describe("the device workbench", () => {
   test("Theme and Stage share one lock, including cards added while a request is pending", async () => {
     const page = await openBench();
     await page.click('[data-nx="rd-devs-open"]');
+    const ipacPickerRow = page.locator(`.rd-devmodal button[data-selector="${IPAC}"]`);
+    if ((await ipacPickerRow.getAttribute("aria-pressed")) !== "true") {
+      await ipacPickerRow.click();
+    }
     const g915PickerRow = page.locator(`.rd-devmodal button[data-selector="${G915}"]`);
-    if ((await g915PickerRow.getAttribute("aria-pressed")) === "true") {
+    if ((await g915PickerRow.getAttribute("aria-pressed")) !== "true") {
       await g915PickerRow.click();
     }
+    await page.keyboard.press("Escape");
+    const g915Card = page.locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`);
+    if ((await g915Card.getAttribute("data-staged")) !== "true") {
+      await revealCanvasItem(page, G915_SLUG);
+      await g915Card.locator(".rd-stagebtn").click();
+      await page.waitForFunction(
+        (id) => document.querySelector(`[data-instance-id="${id}"]`)?.getAttribute("data-staged") === "true",
+        G915_SLUG,
+      );
+    }
+    await page.click('[data-nx="rd-devs-open"]');
+    await g915PickerRow.click();
     await page.keyboard.press("Escape");
     assert.equal(
       await page.locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`).count(),
@@ -3025,9 +3076,15 @@ describe("the device workbench", () => {
       await route.continue();
     });
     try {
-      const requestStarted = page.waitForRequest(`${BASE}/redesign/device`);
       await revealCanvasItem(page, IPAC_SLUG);
-      await page.click(`.forma-canvas-stage [data-instance-id="${IPAC_SLUG}"] .rd-stagebtn`);
+      const ipacCard = page.locator(`.forma-canvas-stage [data-instance-id="${IPAC_SLUG}"]`);
+      assert.equal(await ipacCard.getAttribute("data-staged"), "false");
+      await ipacCard.focus();
+      await ipacCard.press("F2");
+      const ipacStage = ipacCard.locator(".rd-stagebtn");
+      assert.equal(await ipacStage.isVisible(), true);
+      const requestStarted = page.waitForRequest(`${BASE}/redesign/device`);
+      await ipacStage.click();
       await requestStarted;
       assert.equal(
         await page.locator('.rd-stageform button[type="submit"]:not(:disabled)').count(),
@@ -3152,12 +3209,15 @@ describe("the device workbench", () => {
   test("provider unknown is preserved, authoritative absence unmounts, and return restores geometry", async () => {
     const page = await openBench();
     const item = page.locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`);
-    const before = await item.evaluate((node) => ({
-      x: Number(node.dataset.canvasX),
-      y: Number(node.dataset.canvasY),
-      width: Number(node.dataset.canvasWidth),
-      height: Number(node.dataset.canvasHeight),
-    }));
+    if (await item.count() === 0) {
+      await page.click('[data-nx="rd-devs-open"]');
+      await page.locator(`.rd-devmodal button[data-selector="${G915}"]`).click();
+      await page.keyboard.press("Escape");
+    }
+    await page.waitForFunction((id) => {
+      const node = document.querySelector(`[data-instance-id="${id}"]`);
+      return node && Number(node.getAttribute("data-canvas-height")) >= node.scrollHeight;
+    }, G915_SLUG);
     let rosterMode = "staging-unreachable";
     await page.route(`${BASE}/api/redesign`, async (route) => {
       const response = await route.fetch();
@@ -3222,6 +3282,12 @@ describe("the device workbench", () => {
       );
       assert.equal(await item.count(), 1, "a refused scan is unknown, not an empty machine");
       assert.match(await item.locator(".rd-devcard-meta").textContent(), /Status unavailable/);
+      const beforeRemoval = await item.evaluate((node) => ({
+        x: Number(node.dataset.canvasX),
+        y: Number(node.dataset.canvasY),
+        width: Number(node.dataset.canvasWidth),
+        height: Number(node.dataset.canvasHeight),
+      }));
 
       rosterMode = "absent";
       await page.click(".rd-themed > summary");
@@ -3257,7 +3323,7 @@ describe("the device workbench", () => {
           width: Number(node.dataset.canvasWidth),
           height: Number(node.dataset.canvasHeight),
         })),
-        before,
+        beforeRemoval,
         "the returning board reclaims the exact saved geometry",
       );
     } finally {

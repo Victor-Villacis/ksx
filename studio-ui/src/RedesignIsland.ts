@@ -1523,6 +1523,22 @@ const TIER_COPY: Record<string, string> = {
 // on the fixed 960px product item. Below it the board remains a useful
 // silhouette, but its controls are inert rather than undersized targets.
 const ENCODER_MIN_EFFECTIVE_EDIT_SCALE = 0.9;
+const ENCODER_EDIT_SCALE_SAFETY = 0.001;
+
+/** Camera zoom that preserves the encoder's 44px terminal targets after the
+ * item's own manual scale is applied. Fresh Add and keyboard entry share this
+ * exact calculation so neither path can expose an automatic read without its
+ * recovery controls. */
+function encoderEditingZoom(manualScale: number): number {
+  const itemScale = Number.isFinite(manualScale) && manualScale > 0 ? manualScale : 1;
+  return Math.min(
+    3,
+    Math.max(
+      0.94,
+      (ENCODER_MIN_EFFECTIVE_EDIT_SCALE + ENCODER_EDIT_SCALE_SAFETY) / itemScale,
+    ),
+  );
+}
 
 function canvasZoomFromViewport(
   viewport: HTMLElement | null = rdRoot?.querySelector<HTMLElement>(".forma-canvas-viewport") ?? null,
@@ -2627,10 +2643,19 @@ function mountDeviceWidget(
     );
     if (encoderSurface) {
       const viewport = (rdRoot ?? document).querySelector<HTMLElement>(".forma-canvas-viewport");
-      syncEncoderEditingAccess(
-        viewport?.dataset.canvasZoomTier ?? "editing",
-        canvasZoomFromViewport(viewport),
-      );
+      if (focusOnMount) {
+        // A visible Add starts one automatic read-only assignment request.
+        // Frame its exact board at an honest editing scale so a failed request
+        // can never strand Retry inside the semantic-zoom inert silhouette.
+        const requiredZoom = encoderEditingZoom(canvas.getItemState(item).manualScale);
+        canvas.centerItem(item, { minimumZoom: requiredZoom });
+        syncEncoderEditingAccess("editing", requiredZoom);
+      } else {
+        syncEncoderEditingAccess(
+          viewport?.dataset.canvasZoomTier ?? "editing",
+          canvasZoomFromViewport(viewport),
+        );
+      }
     }
   } catch (error) {
     disposeEncoderWorkbenchItem(item);
@@ -3205,10 +3230,7 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
           const state = nCanvas?.getItemState(item);
           const manualScale = state?.manualScale ?? 1;
           const zoom = canvasZoomFromViewport(viewport);
-          const requiredZoom = Math.min(
-            3,
-            Math.max(0.94, ENCODER_MIN_EFFECTIVE_EDIT_SCALE / manualScale),
-          );
+          const requiredZoom = encoderEditingZoom(manualScale);
           if (viewport.dataset.canvasZoomTier !== "editing" ||
               zoom * manualScale < ENCODER_MIN_EFFECTIVE_EDIT_SCALE) {
             nCanvas?.setZoomTo(requiredZoom, "before opening encoder controls");

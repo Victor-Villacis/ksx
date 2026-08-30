@@ -35,11 +35,13 @@ const WORKBENCH_TOOLS: readonly WorkbenchToolLink[] = [
  * modes or requiring JavaScript just to reach them.
  */
 export function redesignToolsDisclosure(compact = false) {
-  const suffix = compact ? " compact" : "";
   return h(
     "details",
     {
-      class: `rd-utilityd${suffix}`,
+      // Keep the compact variant visible in the server-rendered document.
+      // Forma treats template-literal attributes as opaque, while a bound
+      // attribute is part of both its SSR and hydration paths.
+      class: () => (compact ? "rd-utilityd compact" : "rd-utilityd"),
       "data-rd-tools-menu": "",
     },
     h(

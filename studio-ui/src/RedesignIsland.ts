@@ -4576,7 +4576,11 @@ export function RedesignIsland() {
                       // what caught the chip existing only after hydration.
                       h("span", { class: "rd-dev-stagedchip" }, "staged"),
                       h("span", { class: "n-dev-meta" }, r.meta),
-                      h("span", { class: "n-dev-meta rd-dev-identity" }, deviceConnectionLabel(r.selector)),
+                      h(
+                        "span",
+                        { class: "n-dev-meta rd-dev-identity" },
+                        () => deviceConnectionLabel(r.selector),
+                      ),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
                     ),
                     h("span", { class: "n-dev-dot" }),
@@ -4623,7 +4627,11 @@ export function RedesignIsland() {
                       // it starts — connection chatter, by the parity
                       // contract, so hydration may reword it.
                       h("span", { class: "n-dev-meta", "data-live-chatter": "" }, r.meta),
-                      h("span", { class: "n-dev-meta rd-dev-identity" }, deviceConnectionLabel(r.selector)),
+                      h(
+                        "span",
+                        { class: "n-dev-meta rd-dev-identity" },
+                        () => deviceConnectionLabel(r.selector),
+                      ),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
                     ),
                     h("span", { class: "n-dev-dot" }),
@@ -4665,7 +4673,11 @@ export function RedesignIsland() {
                       // what caught the chip existing only after hydration.
                       h("span", { class: "rd-dev-stagedchip" }, "staged"),
                       h("span", { class: "n-dev-meta" }, r.meta),
-                      h("span", { class: "n-dev-meta rd-dev-identity" }, deviceConnectionLabel(r.selector)),
+                      h(
+                        "span",
+                        { class: "n-dev-meta rd-dev-identity" },
+                        () => deviceConnectionLabel(r.selector),
+                      ),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
                     ),
                     h("span", { class: "n-dev-dot" }),

@@ -4145,24 +4145,25 @@ fn a_rebound_host_cannot_read_the_device_list() {
     );
 }
 
-/// Device selection lives in the customer flow, and the destination contains
-/// the real picker FORM rather than merely borrowing its label.
+/// Direct device selection lives in the legacy product and machine picker,
+/// and each destination contains the real picker FORM rather than merely
+/// borrowing its label.
 ///
 /// RENAMED 2026-08-26 from `every_page_links_to_the_device_picker`, which
 /// overclaimed: it checked two of the live pages, and neither by following a
-/// link. The picker now lives in the two product surfaces and `/devices` —
-/// `/nocturne` and `/redesign` carry their own forms while `/devices` IS the picker — so the
-/// honest claim is about those three pages. Whether the OTHER pages can reach
-/// the flow is a nav question, and it is pinned where nav belongs:
+/// link. `/nocturne` carries the legacy direct-pick forms and `/devices` IS
+/// the machine picker. Redesign deliberately separates canvas membership from
+/// mapping-input selection; its native path is the Identify form pinned by
+/// the next test. Whether the OTHER pages can reach the flow is a nav question,
+/// and it is pinned where nav belongs:
 /// `render.rs::no_page_links_into_a_deleted_surface` asserts every tool page
 /// carries the workflow link to `/redesign`.
 #[test]
-fn the_picker_form_is_served_on_both_products_and_devices() {
+fn direct_picker_forms_are_served_on_nocturne_and_devices() {
     let addr = start_server(Arc::new(ScriptedControl::new(true)));
 
     for (page, action) in [
         ("/nocturne", r#"action="/nocturne/device""#),
-        ("/redesign", r#"action="/redesign/device""#),
         ("/devices", r#"action="/devices/pick""#),
     ] {
         let body = body_of(&get(addr, page)).to_owned();

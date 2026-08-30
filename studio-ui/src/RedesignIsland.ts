@@ -919,6 +919,7 @@ interface CanvasPrefs {
 
 let canvasPrefs: CanvasPrefs = { widgets: {} };
 let nCanvas: WidgetCanvas | null = null;
+let encoderAttentionObserver: MutationObserver | null = null;
 let rdRoot: HTMLElement | null = null;
 let encoderLabReturnCamera: { panX: number; panY: number; zoom: number } | null = null;
 let refreshEncoderProfileLab: ((devices: readonly EncoderProfileLabDevice[]) => void) | null = null;
@@ -1115,9 +1116,54 @@ const TIER_COPY: Record<string, string> = {
   structure: "Structure — type, ports, one-line summary",
   editing: "Editing — full detail and controls",
 };
-function applyZoomTier(tier: string): void {
+// The terminal's 54-unit SVG hit box clears 44 CSS px at this effective scale
+// on the fixed 960px product item. Below it the board remains a useful
+// silhouette, but its controls are inert rather than undersized targets.
+const ENCODER_MIN_EFFECTIVE_EDIT_SCALE = 0.9;
+
+function canvasZoomFromViewport(
+  viewport: HTMLElement | null = rdRoot?.querySelector<HTMLElement>(".forma-canvas-viewport") ?? null,
+): number {
+  const value = Number(viewport?.style.getPropertyValue("--canvas-zoom"));
+  return Number.isFinite(value) && value > 0 ? value : 1;
+}
+
+/** Product encoders paint a useful board silhouette at every camera tier, but
+ * their 56 native terminal controls are only honest targets at editing size.
+ * `inert` keeps the visible schematic out of pointer and keyboard routing;
+ * the item stamp also lets CSS collapse the supporting command chrome. */
+function syncEncoderEditingAccess(
+  tier: string,
+  zoom = canvasZoomFromViewport(),
+): void {
+  const root = rdRoot;
+  if (!root) return;
+  for (const item of root.querySelectorAll<HTMLElement>(".rd-encoder-device-node")) {
+    const manualScale = Number(item.dataset.canvasManualScale);
+    const attentionScale = Number(item.dataset.attentionScale);
+    // The engine's attention scale is already manual × automatic distance
+    // scale. Falling back to the manual value covers the mount frame before
+    // the visibility pass stamps its first attention result.
+    const renderedItemScale = Number.isFinite(attentionScale) && attentionScale > 0
+      ? attentionScale
+      : Number.isFinite(manualScale) && manualScale > 0 ? manualScale : 1;
+    const effectiveScale = zoom * renderedItemScale;
+    const editable = tier === "editing" && effectiveScale >= ENCODER_MIN_EFFECTIVE_EDIT_SCALE;
+    item.dataset.encoderEditable = editable ? "true" : "false";
+    const host = item.querySelector<HTMLElement>(
+      '.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host',
+    );
+    if (!host) continue;
+    host.inert = !editable;
+    if (editable) host.removeAttribute("aria-hidden");
+    else host.setAttribute("aria-hidden", "true");
+  }
+}
+
+function applyZoomTier(tier: string, zoom = canvasZoomFromViewport()): void {
   const el = rdRoot?.querySelector<HTMLElement>(".rd-tier");
   if (el) el.textContent = TIER_COPY[tier] ?? tier;
+  syncEncoderEditingAccess(tier, zoom);
 }
 
 // ── Chrome state the engine reports back ────────────────────────────────────
@@ -2113,6 +2159,13 @@ function mountDeviceWidget(
       savedGeometry ?? allocateFreshCanvasGeometry(home),
       { focus: focusOnMount },
     );
+    if (encoderSurface) {
+      const viewport = (rdRoot ?? document).querySelector<HTMLElement>(".forma-canvas-viewport");
+      syncEncoderEditingAccess(
+        viewport?.dataset.canvasZoomTier ?? "editing",
+        canvasZoomFromViewport(viewport),
+      );
+    }
   } catch (error) {
     disposeEncoderWorkbenchItem(item);
     throw error;
@@ -2595,16 +2648,40 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
       navigationModel: "design-tool",
       zoomRange: { min: 0.08, max: 3 },
       onToolModeChange: syncToolRail,
-      onZoomChange: (_zoom, tier) => applyZoomTier(tier),
+      onZoomChange: (zoom, tier) => applyZoomTier(tier, zoom),
       onCameraHistoryChange: syncBackView,
       onSelectionChange: syncInspectorToSelection,
-      onActiveItemStateChange: () => renderInspector(),
+      onActiveItemStateChange: () => {
+        renderInspector();
+        syncEncoderEditingAccess(
+          viewport.dataset.canvasZoomTier ?? "editing",
+          canvasZoomFromViewport(viewport),
+        );
+      },
       // Native controls inside client-authored widgets are not Forma runtime
       // components. Enter on the move handle / Ctrl+Enter on the item still
       // needs a deterministic way into them.
       onOpenActiveControls: (item) => {
+        const isEncoder = item.classList.contains("rd-encoder-device-node");
+        if (isEncoder) {
+          const state = nCanvas?.getItemState(item);
+          const manualScale = state?.manualScale ?? 1;
+          const zoom = canvasZoomFromViewport(viewport);
+          const requiredZoom = Math.min(
+            3,
+            Math.max(0.94, ENCODER_MIN_EFFECTIVE_EDIT_SCALE / manualScale),
+          );
+          if (viewport.dataset.canvasZoomTier !== "editing" ||
+              zoom * manualScale < ENCODER_MIN_EFFECTIVE_EDIT_SCALE) {
+            nCanvas?.setZoomTo(requiredZoom, "before opening encoder controls");
+            // The camera render is scheduled. Release this exact product host
+            // now so the synchronous F2 contract can focus its roving entry;
+            // the render callback will restamp the authoritative tier.
+            syncEncoderEditingAccess("editing", requiredZoom);
+          }
+        }
         const runtime = item.querySelector<HTMLElement>("[data-forma-runtime-host]");
-        const control = item.classList.contains("rd-encoder-device-node")
+        const control = isEncoder
           ? runtime?.querySelector<HTMLElement>('[data-terminal-id][tabindex="0"]') ??
             runtime?.querySelector<HTMLElement>(
               "button:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href]",
@@ -2616,7 +2693,7 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
         // Semantic overview intentionally hides editing chrome. F2 is an
         // explicit request to enter it, so cross the editing threshold before
         // focusing rather than claiming success on a display:none control.
-        if (control.getClientRects().length === 0) {
+        if (!isEncoder && control.getClientRects().length === 0) {
           nCanvas?.setZoomTo(0.94, "before opening widget controls");
         }
         control.focus({ preventScroll: true });
@@ -2631,6 +2708,22 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
       },
     },
   );
+  encoderAttentionObserver?.disconnect();
+  encoderAttentionObserver = new MutationObserver((records) => {
+    if (!records.some((record) =>
+      record.target instanceof HTMLElement &&
+      record.target.classList.contains("rd-encoder-device-node")
+    )) return;
+    syncEncoderEditingAccess(
+      viewport.dataset.canvasZoomTier ?? "editing",
+      canvasZoomFromViewport(viewport),
+    );
+  });
+  encoderAttentionObserver.observe(stage, {
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["data-attention-scale", "data-canvas-manual-scale"],
+  });
   setCanvasMap(canvasPrefs.mapHidden === true);
   // The served keyboard widget: mountItem on the CONNECTED article adopts
   // it with its remembered spot (nocturne's own mechanism), the plate on

@@ -1,10 +1,10 @@
 # Encoder canvas approval gate
 
-Status: **candidate — awaiting human visual review**
+Status: **candidate — automated representation simulation complete; awaiting human visual review**
 
-Candidate branch: `codex/redesign/encoder-visual-lab`
+Candidate branch: `codex/redesign/encoder-board-refinement`
 
-Contract date: 2026-08-28
+Contract date: 2026-08-29
 
 This gate answers one question: is the encoder canvas truthful and usable enough
 that higher-fidelity board artwork can replace its schematic body without
@@ -147,14 +147,54 @@ Approve the information architecture only when all of these are true:
 | Profile | Topology drawing | Configuration read | Current decision |
 | --- | --- | --- | --- |
 | Ultimarc I-PAC4, firmware 1.56, `D209:0430`, PAC256 v1 | 56-terminal measured roster | Hardware-proven | Candidate for full admission |
-| Other I-PAC2/I-PAC4 releases, Mini-PAC, J-PAC, Ultimate I/O | Vendor-reference topology where registered | Not admitted without a verified fixture or hardware run | Topology/reference only |
-| Brooks, Arduino/Raspberry Pi projects, Xin-Mo, Zero Delay, and other HID encoders | Family/profile only when evidence is unambiguous | Not admitted | Reference or unknown fallback |
+| I-PAC2 | 32 physical screw terminals plus distinct optical and PACLink interfaces | Not admitted without a verified fixture or hardware run | Manufacturer-reference topology |
+| Ultimate I/O | 48 physical harness channels; 96 LED outputs and six shared optical-capable inputs stay auxiliary | Not admitted | Manufacturer-reference topology |
+| Mini-PAC 32 / Mini-PAC FOUR | 32 / 56 physical harness channels | Not admitted | Requires variant confirmation unless future backend facts narrow the family |
+| J-PAC family | 27 always-present logical cabinet controls plus four variant-only controls and a board-level JAMMA edge | Not admitted | Family-safe logical reference |
+| Brook UFB Fusion | 18 logical controls; physical connector count deliberately not asserted | Not admitted | Manual legacy reference only |
+| GP2040-CE | 18 logical controls; remappable, board-specific GPIO deliberately not asserted | Not admitted | Manual firmware reference only |
+| Legacy I-PAC and U-HID | No registered visual topology | Not admitted | Known-family generic fallback |
 | Unknown keyboard-compatible encoder | User-declared labels only | Never inferred from key presses | Unknown fallback |
 
 A new profile needs an exact identity rule, authoritative terminal evidence, a
 complete ordered roster fixture, contradiction tests, and—before enabling chart
 read—a protocol fixture or a recorded hardware run for the exact admitted
-release. Recognition alone must expose unsupported protocol capabilities.
+release. Recognition alone must not expose unsupported protocol capabilities.
+
+## Automated representation simulation
+
+`studio-ui/pwtest/redesign-devices.test.mjs` mounts every registered case through
+the real product renderer: I-PAC4 (56), I-PAC2 (32), Ultimate I/O (48), both
+Mini-PAC variants (32/56), J-PAC (31 visible, 27 always present), Brook (18),
+GP2040-CE (18), and the unknown fallback (zero asserted terminals). The test is
+an acceptance matrix rather than a generated echo of the registry, so a new or
+changed profile fails until its expected capacity, evidence, grouping, identity
+scope, connector grammar, and reachability are reviewed.
+
+For every known drawing the browser simulation checks complete and unique row
+IDs, group counts, physical-versus-logical identity, variant-only rows, one
+roving keyboard entry, disjoint >=44px targets, target-centre ownership, board
+bounds, processor clearance, connector-specific glyphs, interface-body/label
+clearance, local SVG-definition resolution, and the absence of a
+configuration-read action on unprofiled hardware. It also mounts two unresolved
+Mini-PAC widgets together to prove that variant radio groups and focus cannot
+cross between boards.
+
+The visual grammar is evidence-sensitive:
+
+- screw profiles draw screw heads;
+- harness profiles draw keyed channel sockets and profile-specific abstract
+  harness bodies, never screws or invented board-level pin counts;
+- I-PAC2 keeps separate optical and PACLink bodies outside the 32 switch targets,
+  and Ultimate I/O marks only the six documented switch/optical dual-role
+  channels;
+- J-PAC shows logical family routes plus a separate JAMMA-edge motif;
+- Brook and GP2040-CE show logical controls, not invented PCB pins;
+- unknown devices show only declared labels and observed host signals.
+
+This follows the WAI-ARIA composite-widget practice of one tab-sequence entry
+with managed directional focus and WCAG 2.2 target/contrast guidance. Passing
+the simulation does not replace the human review scenarios below.
 
 ## Human review scenarios
 

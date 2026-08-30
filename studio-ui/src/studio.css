@@ -19289,7 +19289,7 @@ a.nm-link {
 }
 
 .rd-encoder-device-shell > .rd-devcard .rd-stagebtn {
-  min-height: 34px;
+  min-height: 44px;
 }
 
 [data-forma-canvas]
@@ -19297,7 +19297,7 @@ a.nm-link {
   .rd-encoder-profile[data-forma-runtime-host][data-presentation="product"] {
   box-sizing: border-box;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: var(--sp-2);
   flex: 1 1 auto;
   width: 100%;
@@ -19316,10 +19316,7 @@ a.nm-link {
 }
 
 .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-head {
-  align-items: center;
-  gap: var(--sp-3);
-  min-width: 0;
-  padding: 0 var(--sp-1);
+  display: none;
 }
 
 .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-heading-copy {
@@ -19328,7 +19325,7 @@ a.nm-link {
 
 .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-title {
   margin-top: 2px;
-  font-size: var(--fs-md);
+  font-size: var(--fs-sm);
 }
 
 .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-subtitle {
@@ -19385,7 +19382,7 @@ a.nm-link {
   flex-wrap: wrap;
   gap: var(--sp-1);
   align-items: center;
-  min-height: 24px;
+  min-height: 22px;
 }
 
 .rd-encoder-product-pill {
@@ -19463,13 +19460,7 @@ a.nm-link {
 }
 
 .rd-encoder-product-figure figcaption {
-  position: relative;
-  z-index: 1;
-  padding: var(--sp-1) var(--sp-3) var(--sp-2);
-  color: var(--n-text-3);
-  font-size: var(--fs-micro);
-  line-height: var(--lh-snug);
-  text-align: center;
+  display: none;
 }
 
 .rd-encoder-product-svg {
@@ -19615,6 +19606,43 @@ a.nm-link {
   stroke-width: 1;
 }
 
+.rd-encoder-product-interface-label {
+  fill: color-mix(in srgb, var(--n-text-3) 82%, var(--n-accent-2));
+  font: var(--fw-semibold) 9px / 1 var(--mono);
+  letter-spacing: 1.4px;
+}
+
+.rd-encoder-product-interface-harness {
+  fill: color-mix(in srgb, var(--n-bg) 80%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--n-accent) 46%, var(--n-line-2));
+  stroke-width: 1.5;
+}
+
+.rd-encoder-product-interface-edge {
+  fill: color-mix(in srgb, var(--rd-encoder-copper) 74%, var(--n-warn));
+  stroke: color-mix(in srgb, var(--n-warn) 76%, var(--n-text-2));
+  stroke-width: 1.2;
+}
+
+.rd-encoder-product-interface-edge-pad {
+  fill: none;
+  stroke: color-mix(in srgb, var(--n-bg) 64%, black);
+  stroke-width: 1;
+}
+
+.rd-encoder-product-interface-node {
+  fill: color-mix(in srgb, var(--n-accent) 14%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--n-accent) 66%, var(--n-line-2));
+  stroke-width: 1.4;
+}
+
+.rd-encoder-product-interface.is-terminal-board > rect,
+.rd-encoder-product-interface.is-terminal-board > circle {
+  fill: color-mix(in srgb, var(--n-bg) 76%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--rd-encoder-copper) 42%, var(--n-line));
+  stroke-width: 1;
+}
+
 .rd-encoder-product-led {
   fill: var(--n-ok);
   stroke: color-mix(in srgb, var(--n-ok) 64%, white);
@@ -19692,6 +19720,57 @@ a.nm-link {
   stroke: color-mix(in srgb, var(--n-bg) 74%, black);
   stroke-linecap: round;
   stroke-width: 1.4;
+}
+
+.rd-encoder-product-terminal-socket {
+  fill: color-mix(in srgb, var(--n-bg) 72%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--rd-encoder-terminal-accent) 66%, var(--n-line-2));
+  stroke-width: 1.2;
+}
+
+.rd-encoder-product-terminal-pins,
+.rd-encoder-product-terminal-key {
+  fill: none;
+  stroke: color-mix(in srgb, var(--rd-encoder-copper) 74%, var(--n-text-2));
+  stroke-linecap: round;
+  stroke-width: 1.2;
+}
+
+.rd-encoder-product-terminal-key {
+  stroke: color-mix(in srgb, var(--n-accent) 76%, var(--n-text-2));
+  stroke-width: 2;
+}
+
+.rd-encoder-product-terminal-edge {
+  fill: color-mix(in srgb, var(--rd-encoder-copper) 74%, var(--n-warn));
+  stroke: color-mix(in srgb, var(--n-warn) 74%, var(--n-line-2));
+  stroke-width: 1.2;
+}
+
+.rd-encoder-product-terminal-edge-divider {
+  fill: none;
+  stroke: color-mix(in srgb, var(--n-bg) 68%, black);
+  stroke-width: 1;
+}
+
+.rd-encoder-product-terminal-logical-node {
+  fill: color-mix(in srgb, var(--n-accent) 13%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--rd-encoder-terminal-accent) 62%, var(--n-accent-line));
+  stroke-width: 1.4;
+}
+
+.rd-encoder-product-terminal-logical-route {
+  fill: none;
+  stroke: color-mix(in srgb, var(--rd-encoder-terminal-accent) 80%, var(--n-text));
+  stroke-linecap: round;
+  stroke-width: 1.3;
+}
+
+.rd-encoder-product-terminal-optical {
+  fill: var(--n-warn);
+  stroke: color-mix(in srgb, var(--n-warn) 68%, white);
+  stroke-width: 1;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--n-warn) 58%, transparent));
 }
 
 .rd-encoder-product-terminal-label {
@@ -19811,12 +19890,19 @@ a.nm-link {
 
 .rd-encoder-product-inspector {
   box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(150px, .7fr) minmax(300px, 1.35fr) minmax(190px, .8fr);
+  grid-template-areas:
+    "eyebrow emissions live"
+    "heading emissions live";
+  gap: var(--sp-1) var(--sp-3);
+  align-items: center;
   min-width: 0;
-  max-height: 374px;
-  padding: var(--sp-3);
-  overflow: auto;
+  max-height: none;
+  padding: var(--sp-2) var(--sp-3);
+  overflow: visible;
   border: 1px solid color-mix(in srgb, var(--n-accent) 28%, var(--n-line));
-  border-radius: var(--r-xl);
+  border-radius: var(--r-lg);
   background:
     linear-gradient(150deg, color-mix(in srgb, var(--n-accent) 10%, transparent), transparent 45%),
     var(--n-panel-2);
@@ -19837,6 +19923,7 @@ a.nm-link {
 }
 
 .rd-encoder-product-inspector-eyebrow {
+  grid-area: eyebrow;
   color: var(--n-accent-2);
   font-size: var(--fs-micro);
   font-weight: var(--fw-semibold);
@@ -19845,12 +19932,13 @@ a.nm-link {
 }
 
 .rd-encoder-product-inspector-heading {
+  grid-area: heading;
   display: flex;
   gap: var(--sp-2);
   align-items: baseline;
   justify-content: space-between;
   min-width: 0;
-  margin-top: var(--sp-1);
+  margin-top: 0;
 }
 
 .rd-encoder-product-inspector-heading h3,
@@ -19873,18 +19961,28 @@ a.nm-link {
 }
 
 .rd-encoder-product-emissions {
+  grid-area: emissions;
   display: grid;
-  gap: var(--sp-2);
-  margin-top: var(--sp-3) !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-1);
+  margin-top: 0 !important;
 }
 
 .rd-encoder-product-emissions > div {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  gap: var(--sp-2);
-  align-items: center;
-  padding-bottom: var(--sp-2);
-  border-bottom: 1px solid var(--n-line);
+  grid-template-columns: 1fr;
+  gap: 3px;
+  align-content: center;
+  min-width: 0;
+  min-height: 52px;
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 2px solid color-mix(in srgb, var(--n-accent) 34%, var(--n-line));
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: color-mix(in srgb, var(--n-bg) 42%, transparent);
+}
+
+.rd-encoder-product-emissions > div:only-child {
+  grid-column: 1 / -1;
 }
 
 .rd-encoder-product-emissions dt {
@@ -19933,11 +20031,11 @@ a.nm-link {
 
 .rd-encoder-product-read-inline {
   display: inline-flex;
-  min-height: 44px;
+  min-height: 30px;
   max-width: 100%;
   align-items: center;
   justify-content: center;
-  padding: 7px 12px;
+  padding: 4px 9px 5px;
   border: 1px solid color-mix(in srgb, var(--n-accent) 64%, var(--n-line-2));
   border-radius: var(--r-md);
   background: color-mix(in srgb, var(--n-accent) 16%, var(--n-panel-3));
@@ -19975,10 +20073,11 @@ button.rd-encoder-product-read-inline:disabled {
 }
 
 .rd-encoder-product-live {
+  grid-area: live;
   display: flex;
   gap: var(--sp-2);
   align-items: center;
-  margin-top: var(--sp-3);
+  margin-top: 0;
   padding: var(--sp-2);
   border: 1px solid var(--n-line);
   border-radius: var(--r-md);
@@ -20017,6 +20116,7 @@ button.rd-encoder-product-read-inline:disabled {
 }
 
 .rd-encoder-product-shared {
+  grid-column: 1 / -1;
   margin-top: var(--sp-2) !important;
   padding: var(--sp-2);
   border-left: 2px solid var(--n-warn);
@@ -20027,43 +20127,100 @@ button.rd-encoder-product-read-inline:disabled {
   line-height: var(--lh-snug);
 }
 
-.rd-encoder-product-next {
-  margin-top: var(--sp-3) !important;
-  color: var(--n-text-3);
-  font-size: var(--fs-micro);
-  line-height: var(--lh-snug);
-}
-
 .rd-encoder-product-inspector.is-unknown > p:not(.rd-encoder-product-inspector-eyebrow) {
+  grid-column: 2;
+  grid-row: 1 / 3;
   margin-top: var(--sp-2);
   color: var(--n-text-2);
   font-size: var(--fs-xs);
   line-height: var(--lh-snug);
 }
 
+.rd-encoder-product-inspector.is-unknown > h3 {
+  grid-area: heading;
+}
+
 .rd-encoder-product-signal-chips {
+  grid-column: 3;
+  grid-row: 1 / 3;
   display: flex;
   flex-wrap: wrap;
   gap: var(--sp-1);
-  margin-top: var(--sp-3);
+  margin-top: 0;
 }
 
 .rd-encoder-product-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--sp-2);
+  gap: 0;
   min-width: 0;
+  overflow: clip;
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--n-panel-2) 82%, transparent);
+  box-shadow: inset 0 1px color-mix(in srgb, var(--n-text) 4%, transparent);
 }
 
 .rd-encoder-profile[data-presentation="product"]
   .rd-encoder-product-actions > :is(.rd-encoder-profile-read, .rd-encoder-profile-observe) {
-  grid-template-columns: 1fr;
-  gap: var(--sp-2);
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-1);
   align-content: start;
   min-width: 0;
   padding: var(--sp-2) var(--sp-3);
-  border-radius: var(--r-lg);
-  background: color-mix(in srgb, var(--n-panel-2) 84%, transparent);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.rd-encoder-profile[data-presentation="product"]
+  .rd-encoder-product-actions > .rd-encoder-profile-observe {
+  border-left: 1px solid var(--n-line);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-command-help {
+  margin-top: 2px;
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-command-help > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  width: max-content;
+  max-width: 100%;
+  color: var(--n-text-3);
+  cursor: pointer;
+  line-height: var(--lh-snug);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-command-help > summary:hover,
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-command-help > summary:focus-visible {
+  color: var(--n-accent-2);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-command-help > summary:focus-visible {
+  border-radius: var(--r-sm);
+  outline: 2px solid var(--n-accent);
+  outline-offset: 2px;
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-command-help > p {
+  margin-top: var(--sp-1);
+  padding-left: var(--sp-2);
+  border-left: 2px solid var(--n-line-2);
+}
+
+.rd-encoder-profile[data-presentation="product"] .rd-encoder-command-blocked {
+  grid-column: 1 / -1;
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 2px solid var(--n-warn);
+  background: var(--warn-dim);
+  color: color-mix(in srgb, var(--n-warn) 78%, var(--n-text));
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
 }
 
 .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-read-controls {
@@ -20081,7 +20238,7 @@ button.rd-encoder-product-read-inline:disabled {
 
 .rd-encoder-profile[data-presentation="product"]
   :is(.rd-encoder-profile-read, .rd-encoder-profile-observe) button {
-  min-height: 34px;
+  min-height: 44px;
 }
 
 .rd-encoder-profile[data-presentation="product"]
@@ -20108,7 +20265,7 @@ button.rd-encoder-product-read-inline:disabled {
 
 .rd-encoder-product-details > summary,
 .rd-encoder-product-technical > summary {
-  min-height: 38px;
+  min-height: 44px;
   padding: var(--sp-2) var(--sp-3);
   color: var(--n-text-2);
   font-size: var(--fs-xs);
@@ -20202,6 +20359,9 @@ button.rd-encoder-product-read-inline:disabled {
 }
 
 .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-foot {
+  display: flex;
+  align-items: center;
+  min-height: 20px;
   padding: 0 var(--sp-1);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -20267,6 +20427,51 @@ button.rd-encoder-product-read-inline:disabled {
   display: none;
 }
 
+/* A transformed 960px board only meets its 44px terminal-target contract near
+   editing scale. Keep the full schematic as the structure/overview landmark,
+   but remove tiny native controls and verbose command chrome from routing and
+   layout until the host stamps this exact item as editable. */
+.rd-encoder-device-node[data-encoder-editable="false"]
+  :is(.rd-stageform, .rd-encoder-profile-foot),
+.rd-encoder-device-node[data-encoder-editable="false"]
+  .rd-encoder-profile[data-presentation="product"]
+  :is(
+    .rd-encoder-profile-subtitle,
+    .rd-encoder-profile-safety,
+    .rd-encoder-product-status,
+    .rd-encoder-product-inspector,
+    .rd-encoder-product-actions,
+    .rd-encoder-product-details,
+    .rd-encoder-profile-candidates,
+    .rd-encoder-profile-manual,
+    .rd-encoder-product-figure figcaption
+  ) {
+  display: none;
+}
+
+.rd-encoder-device-node[data-encoder-editable="false"]
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host {
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.rd-encoder-device-node[data-encoder-editable="false"]
+  .rd-encoder-profile[data-presentation="product"] :is(
+    .rd-encoder-profile-host,
+    .rd-encoder-product-dynamic,
+    .rd-encoder-product-work,
+    .rd-encoder-product-figure
+  ) {
+  height: 100%;
+  min-height: 0;
+}
+
+.rd-encoder-device-node[data-encoder-editable="false"]
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-product-svg {
+  height: 100%;
+  max-height: none;
+}
+
 @container rd-encoder-workbench (width < 780px) {
   .rd-encoder-device-shell > .rd-devcard {
     grid-template-columns: max-content minmax(0, 1fr);
@@ -20282,7 +20487,29 @@ button.rd-encoder-product-read-inline:disabled {
   }
 
   .rd-encoder-product-inspector {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "eyebrow"
+      "heading"
+      "emissions"
+      "live";
     max-height: none;
+  }
+
+  .rd-encoder-product-emissions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rd-encoder-product-inspector.is-unknown > p:not(.rd-encoder-product-inspector-eyebrow),
+  .rd-encoder-product-signal-chips {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .rd-encoder-profile[data-presentation="product"]
+    .rd-encoder-product-actions > .rd-encoder-profile-observe {
+    border-top: 1px solid var(--n-line);
+    border-left: 0;
   }
 
   .rd-encoder-product-device-facts {
@@ -20325,6 +20552,7 @@ button.rd-encoder-product-read-inline:disabled {
   .rd-encoder-device-shell > .rd-devcard .rd-stagebtn,
   .rd-encoder-profile[data-presentation="product"]
     :is(.rd-encoder-profile-read, .rd-encoder-profile-observe) button,
+  .rd-encoder-profile[data-presentation="product"] .rd-encoder-command-help > summary,
   .rd-encoder-profile[data-presentation="product"] .rd-encoder-product-details > summary,
   .rd-encoder-profile[data-presentation="product"] .rd-encoder-product-technical > summary {
     min-height: 44px;
@@ -20363,10 +20591,15 @@ button.rd-encoder-product-read-inline:disabled {
   .rd-encoder-product-mount circle,
   .rd-encoder-product-chip rect,
   .rd-encoder-product-components :is(rect, circle),
+  .rd-encoder-product-interface :is(rect, circle),
   .rd-encoder-product-declared rect,
   .rd-encoder-product-signal rect,
   .rd-encoder-product-terminal-body,
-  .rd-encoder-product-terminal-screw {
+  .rd-encoder-product-terminal-screw,
+  .rd-encoder-product-terminal-socket,
+  .rd-encoder-product-terminal-edge,
+  .rd-encoder-product-terminal-logical-node,
+  .rd-encoder-product-terminal-optical {
     fill: Canvas;
     stroke: CanvasText;
     filter: none;
@@ -20374,6 +20607,11 @@ button.rd-encoder-product-read-inline:disabled {
 
   .rd-encoder-product-svg text,
   .rd-encoder-product-terminal-slot,
+  .rd-encoder-product-terminal-pins,
+  .rd-encoder-product-terminal-key,
+  .rd-encoder-product-terminal-edge-divider,
+  .rd-encoder-product-terminal-logical-route,
+  .rd-encoder-product-interface-edge-pad,
   .rd-encoder-product-traces path {
     fill: CanvasText;
     stroke: CanvasText;

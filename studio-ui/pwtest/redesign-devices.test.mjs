@@ -2462,14 +2462,22 @@ describe("the device workbench", () => {
     }
   });
 
-  test("the picker serves every tier; picking two boards benches two widgets", async () => {
+  test("the Add tray keeps the workbench live while picking several boards", async () => {
     const page = await openBench();
     const opener = page.locator('[data-nx="rd-devs-open"]');
     await opener.click();
     assert.equal(
       await page.locator(".rd-devmodal[hidden]").count(),
       0,
-      "the modal opens",
+      "the tray opens",
+    );
+    assert.equal(await opener.getAttribute("aria-expanded"), "true");
+    assert.equal(await opener.getAttribute("aria-controls"), "rd-device-picker");
+    assert.equal(await page.locator("#rd-device-picker").evaluate((node) => node.tagName), "ASIDE");
+    assert.equal(
+      await page.locator("#rd-device-picker").getAttribute("aria-modal"),
+      null,
+      "the persistent tray is a non-modal region",
     );
     assert.equal(
       await page.evaluate(() =>
@@ -2478,26 +2486,34 @@ describe("the device workbench", () => {
       true,
       "the picker lands on its first reliable control",
     );
-    // The modal owns keyboard focus in both directions.
-    const modalControls = page.locator(".rd-devmodal-panel button:not([disabled])");
-    await modalControls.last().focus();
+    const geometry = await page.evaluate(() => {
+      const panel = document.querySelector(".rd-devmodal-panel")?.getBoundingClientRect();
+      const canvas = document.querySelector(".n-canvas")?.getBoundingClientRect();
+      return panel && canvas
+        ? { panelRight: panel.right, canvasLeft: canvas.left, canvasWidth: canvas.width }
+        : null;
+    });
+    assert.ok(geometry, "the tray and canvas are measurable");
+    assert.ok(geometry.panelRight <= geometry.canvasLeft);
+    assert.ok(
+      geometry.canvasLeft - geometry.panelRight <= 24,
+      "the canvas is physically laid out beside the tray with only its normal gutter",
+    );
+    assert.ok(geometry.canvasWidth > geometry.panelRight, "most of the workbench remains visible");
+
+    // A catalog region is not a focus trap: keyboard navigation continues
+    // naturally into the visible canvas after its final control.
+    const trayControls = page.locator(".rd-devmodal-panel button:not([disabled])");
+    await trayControls.last().focus();
     await page.keyboard.press("Tab");
     assert.equal(
       await page.evaluate(() =>
-        document.activeElement?.matches('.rd-devmodal button[data-nx="rd-devs-close"]')
+        !document.querySelector(".rd-devmodal-panel")?.contains(document.activeElement)
       ),
       true,
-      "Tab wraps from the last control to the first",
+      "Tab leaves the tray for the workbench instead of wrapping",
     );
-    await page.keyboard.press("Shift+Tab");
-    assert.equal(
-      await page.evaluate(() => document.activeElement === document.querySelectorAll(
-        ".rd-devmodal-panel button:not([disabled])",
-      ).item(document.querySelectorAll(".rd-devmodal-panel button:not([disabled])").length - 1)),
-      true,
-      "Shift+Tab wraps from the first control to the last",
-    );
-    // Ctrl+K transfers ownership instead of stacking two modal surfaces. Its
+    // Ctrl+K transfers ownership instead of stacking two surfaces. Its
     // Escape return lands on the original Devices opener.
     await page.keyboard.press("Control+k");
     assert.equal(await page.locator(".rd-devmodal[hidden]").count(), 1, "palette closes Devices");
@@ -2549,14 +2565,14 @@ describe("the device workbench", () => {
       0,
       "no button hides in the unavailable tier",
     );
-    // Pick BOTH the keyboard and the encoder. The modal stays open — the
+    // Pick BOTH the keyboard and the encoder. The tray stays open — the
     // multi-add is the point.
     await page.click(`.rd-devmodal button[data-selector="${G915}"]`);
     await page.click(`.rd-devmodal button[data-selector="${IPAC}"]`);
     assert.equal(
       await page.locator(".rd-devmodal[hidden]").count(),
       0,
-      "the modal stays open for more picks",
+      "the tray stays open for more picks",
     );
     for (const slug of [G915_SLUG, IPAC_SLUG]) {
       await page.waitForFunction(
@@ -2567,6 +2583,24 @@ describe("the device workbench", () => {
         { timeout: 10_000 },
       );
     }
+    assert.equal(
+      await page.locator(".rd-inspector[hidden]").count(),
+      1,
+      "selection confirms the add on-canvas without opening a second side panel",
+    );
+    // Pad-art activation opens the Inspector directly rather than through the
+    // selection callback. It still yields to the active composition tray.
+    await page.locator(
+      '.forma-canvas-stage [data-instance-id^="ctrl-slot-"] .rd-ctrlcard-artwrap [data-fn]',
+    ).first().evaluate((control) => control.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    })));
+    assert.equal(
+      await page.locator(".rd-inspector[hidden]").count(),
+      1,
+      "direct canvas actions cannot reopen the Inspector beside the Add tray",
+    );
     // The widgets carry the RAW selector, and the rows now say so.
     assert.equal(
       await page
@@ -2594,12 +2628,122 @@ describe("the device workbench", () => {
       1,
       "Escape closes the picker first",
     );
+    assert.equal(await opener.getAttribute("aria-expanded"), "false");
+    assert.equal(
+      await page.locator(".rd-inspector:not([hidden])").count(),
+      1,
+      "closing composition resumes the deferred inspection of the selected addition",
+    );
     assert.equal(
       await page.evaluate(() => document.activeElement?.matches('[data-nx="rd-devs-open"]')),
       true,
       "closing the picker restores its opener",
     );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("the shared tray slot switches catalogs and returns to the initiating opener", async () => {
+    const page = await openBench();
+    const devices = page.locator('[data-nx="rd-devs-open"]');
+    const controllers = page.locator('[data-nx="rd-ctrls-open"]');
+    await devices.click();
+    await controllers.click();
+    assert.equal(await page.locator(".rd-devmodal[hidden]").count(), 1);
+    assert.equal(await page.locator(".rd-ctrlmodal[hidden]").count(), 0);
+    assert.equal(await devices.getAttribute("aria-expanded"), "false");
+    assert.equal(await controllers.getAttribute("aria-expanded"), "true");
+    assert.equal(
+      await page.locator(".rd.is-add-panel-open").count(),
+      1,
+      "a catalog switch keeps one reserved canvas lane",
+    );
+    await page.click('.rd-ctrlmodal-head button[data-nx="rd-ctrls-close"]');
+    assert.equal(await controllers.getAttribute("aria-expanded"), "false");
+    assert.equal(
+      await page.locator(".rd-inspector[hidden]").count(),
+      1,
+      "opening and closing catalogs alone does not invent inspection intent",
+    );
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.matches('[data-nx="rd-ctrls-open"]')),
+      true,
+      "Done returns to Controllers, not the stale Devices opener",
+    );
+    assert.deepEqual(page.ksxNoise, []);
+    await page.close();
+  });
+
+  test("a narrow viewport reserves a live canvas above the bottom Add tray", async () => {
+    const page = await openBench();
+    await page.setViewportSize({ width: 420, height: 900 });
+    await page.click('[data-nx="rd-devs-open"]');
+    const geometry = await page.evaluate(() => {
+      const panel = document.querySelector(".rd-devmodal-panel")?.getBoundingClientRect();
+      const canvas = document.querySelector(".n-canvas")?.getBoundingClientRect();
+      return panel && canvas
+        ? {
+          panelTop: panel.top,
+          panelWidth: panel.width,
+          canvasBottom: canvas.bottom,
+          canvasHeight: canvas.height,
+          scrollWidth: document.documentElement.scrollWidth,
+          viewportWidth: window.innerWidth,
+        }
+        : null;
+    });
+    assert.ok(geometry);
+    assert.ok(geometry.canvasBottom <= geometry.panelTop);
+    assert.ok(
+      geometry.panelTop - geometry.canvasBottom <= 24,
+      "the bottom tray follows the resized canvas after its normal gutter",
+    );
+    assert.ok(geometry.canvasHeight >= 260, "the workbench remains materially visible");
+    assert.equal(Math.round(geometry.panelWidth), geometry.viewportWidth);
+    assert.ok(
+      geometry.scrollWidth <= geometry.viewportWidth,
+      "the responsive tray creates no horizontal page overflow",
+    );
+    await page.keyboard.press("Escape");
+    assert.deepEqual(page.ksxNoise, []);
+    await page.close();
+  });
+
+  test("a phone-width landscape keeps the Add tray below a usable canvas", async () => {
+    const page = await openBench();
+    await page.setViewportSize({ width: 568, height: 320 });
+    await page.click('[data-nx="rd-devs-open"]');
+    const geometry = await page.evaluate(() => {
+      const panel = document.querySelector(".rd-devmodal-panel")?.getBoundingClientRect();
+      const canvas = document.querySelector(".n-canvas")?.getBoundingClientRect();
+      return panel && canvas
+        ? {
+          panelTop: panel.top,
+          panelWidth: panel.width,
+          canvasBottom: canvas.bottom,
+          canvasHeight: canvas.height,
+          scrollWidth: document.documentElement.scrollWidth,
+          viewportWidth: window.innerWidth,
+        }
+        : null;
+    });
+    assert.ok(geometry);
+    assert.ok(
+      geometry.canvasBottom <= geometry.panelTop,
+      "phone landscape keeps the catalog below, rather than squeezing beside, the canvas",
+    );
+    assert.ok(
+      geometry.panelTop - geometry.canvasBottom <= 24,
+      "the compact tray follows the live canvas after its normal gutter",
+    );
+    assert.ok(geometry.canvasHeight >= 80, "the short viewport retains a usable workbench");
+    assert.equal(Math.round(geometry.panelWidth), geometry.viewportWidth);
+    assert.ok(
+      geometry.scrollWidth <= geometry.viewportWidth,
+      "the landscape tray creates no horizontal page overflow",
+    );
+    await page.keyboard.press("Escape");
+    assert.deepEqual(page.ksxNoise, []);
     await page.close();
   });
 
@@ -2914,7 +3058,7 @@ describe("the device workbench", () => {
         IPAC_SLUG,
         { timeout: 10_000 },
       );
-      assert.equal(await page.locator(".rd-devmodal[hidden]").count(), 0, "the modal stays open");
+      assert.equal(await page.locator(".rd-devmodal[hidden]").count(), 0, "the Add tray stays open");
       assert.equal(
         await g915PickerRow.evaluate((button) => button === document.activeElement),
         true,
@@ -4588,12 +4732,23 @@ describe("the device workbench", () => {
       "the removed non-primary no longer occupies the selection set",
     );
     assert.equal(
+      await page.locator(".rd-inspector[hidden]").count(),
+      1,
+      "the Add tray keeps the Inspector from competing with composition",
+    );
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(
+      (name) => document.querySelector(".rd-insp-name")?.textContent === name,
+      ipacName,
+    );
+    assert.equal(
       await page.locator(".rd-insp-name").textContent(),
       ipacName,
       "the Inspector repaints from multi-select to the surviving board",
     );
 
     // Keep the suite's shared arrangement intact for any later regression.
+    await page.click('[data-nx="rd-devs-open"]');
     await page.click(`.rd-devmodal button[data-selector="${G915}"]`);
     await page.keyboard.press("Escape");
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");

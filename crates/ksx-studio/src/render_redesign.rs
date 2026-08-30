@@ -855,7 +855,10 @@ mod tests {
             html.contains(r#"data-nx="rd-ctrls-open""#),
             "the topbar button is served"
         );
-        assert!(html.contains("rd-ctrlmodal"), "the modal shell is served");
+        assert!(
+            html.contains("rd-ctrlmodal"),
+            "the controller Add tray is served"
+        );
         assert!(
             html.contains("0 of 16 slots staged · 0 of 4 Xbox (XInput)"),
             "the served counts line is painted"
@@ -1070,7 +1073,10 @@ mod tests {
             html.contains(r#"data-nx="rd-devs-open""#),
             "the topbar button is served"
         );
-        assert!(html.contains("rd-devmodal"), "the modal shell is served");
+        assert!(
+            html.contains("rd-devmodal"),
+            "the device Add tray is served"
+        );
         for head in [
             "Keyboards · 1",
             "Panel encoders · 1",

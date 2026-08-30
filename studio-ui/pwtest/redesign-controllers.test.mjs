@@ -211,10 +211,29 @@ describe("the controller workbench", () => {
     await page.close();
   });
 
-  test("the picker serves the roster with served ceilings; adding stages the next slot in place", async () => {
+  test("the Add tray serves the roster while the next slot appears on the live canvas", async () => {
     const page = await openBench();
-    await page.click('[data-nx="rd-ctrls-open"]');
-    assert.equal(await page.locator(".rd-ctrlmodal[hidden]").count(), 0, "the modal opens");
+    const opener = page.locator('[data-nx="rd-ctrls-open"]');
+    await opener.click();
+    assert.equal(await page.locator(".rd-ctrlmodal[hidden]").count(), 0, "the tray opens");
+    assert.equal(await opener.getAttribute("aria-expanded"), "true");
+    assert.equal(await opener.getAttribute("aria-controls"), "rd-controller-picker");
+    assert.equal(
+      await page.locator("#rd-controller-picker").getAttribute("aria-modal"),
+      null,
+      "the controller catalog does not make the visible canvas inert",
+    );
+    const geometry = await page.evaluate(() => {
+      const panel = document.querySelector(".rd-ctrlmodal-panel")?.getBoundingClientRect();
+      const canvas = document.querySelector(".n-canvas")?.getBoundingClientRect();
+      return panel && canvas ? { panelRight: panel.right, canvasLeft: canvas.left } : null;
+    });
+    assert.ok(geometry);
+    assert.ok(geometry.panelRight <= geometry.canvasLeft);
+    assert.ok(
+      geometry.canvasLeft - geometry.panelRight <= 24,
+      "the controller catalog and canvas occupy separate space with only the normal gutter",
+    );
     assert.equal(
       await page.evaluate(() =>
         document.activeElement?.matches('.rd-ctrlmodal button[data-nx="rd-ctrls-close"]')
@@ -241,7 +260,7 @@ describe("the controller workbench", () => {
     assert.equal(
       await page.locator(".rd-ctrlmodal[hidden]").count(),
       0,
-      "the picker stays open — staging several in one visit is the point",
+      "the tray stays open — staging several in one visit is the point",
     );
     await page.waitForFunction(
       () => document.querySelector(".rd-ctrl-counts")?.textContent?.includes("3 of 16"),
@@ -255,14 +274,52 @@ describe("the controller workbench", () => {
       null,
       { timeout: 10_000 },
     );
+    await xbox.first().locator("button").click();
+    await page.waitForFunction(
+      (sel) => document.querySelector(sel)?.dataset.canvasX !== undefined,
+      cardSel(4),
+      { timeout: 10_000 },
+    );
+    await page.waitForFunction(
+      () => document.querySelector(".rd-ctrl-counts")?.textContent?.includes("4 of 16"),
+      null,
+      { timeout: 10_000 },
+    );
+    assert.match(
+      (await page.locator(".rd-ctrl-counts").textContent()) ?? "",
+      /4 of 16 slots staged · 3 of 4 Xbox \(XInput\)/,
+      "a second click after the repaint retains the persona and defaults",
+    );
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.closest("form")?.dataset.persona),
+      "xbox360",
+      "rapid multi-add restores focus to the same durable persona row",
+    );
     await page.keyboard.press("Escape");
     assert.equal(await page.locator(".rd-ctrlmodal[hidden]").count(), 1);
+    assert.equal(await opener.getAttribute("aria-expanded"), "false");
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.matches('[data-nx="rd-ctrls-open"]')),
+      true,
+      "Escape returns to the catalog opener",
+    );
+    // Restore the suite's three-slot starting point through the real card
+    // verb; later reorder coverage intentionally begins with slots 1–3.
+    await revealCanvasItem(page, "ctrl-slot-4");
+    await page.click(`${cardSel(4)} form[data-rd-form="controller-remove"] button`);
+    await page.waitForFunction(
+      (sel) => !document.querySelector(sel),
+      cardSel(4),
+      { timeout: 10_000 },
+    );
+    await revealCanvasItem(page, "ctrl-slot-3");
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();
   });
 
   test("direct assignment reorders; No player parks and compacts; re-slotting bumps down", async () => {
     const page = await openBench();
+    await revealCanvasItem(page, "ctrl-slot-3");
     await page.waitForFunction(
       (sel) => document.querySelector(sel)?.dataset.canvasX !== undefined,
       cardSel(3),
@@ -347,6 +404,7 @@ describe("the controller workbench", () => {
     assert.equal(await nameAt(3), "Player 2");
 
     // ✕ deletes outright: the space fills up by arrival order.
+    await revealCanvasItem(page, "ctrl-slot-1");
     await page.click(`${cardSel(1)} form[data-rd-form="controller-remove"] button`);
     await page.waitForFunction(
       () =>

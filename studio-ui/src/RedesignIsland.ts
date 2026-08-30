@@ -2133,6 +2133,17 @@ function renderInspector(): void {
 }
 
 function setInspector(open: boolean): void {
+  // The Add tray is a composition surface, so every Inspector-open path —
+  // selection changes, focus mode, key location, and pad-art activation —
+  // yields while it owns the workbench edge. The add-session bookkeeping
+  // separately remembers whether the Inspector was open before composition
+  // and whether a selection or direct widget action requested inspection
+  // during it. Nothing covers the live canvas while adding; Done resumes the
+  // established add → inspect handoff only when there was real intent.
+  if (open && (devModalIsOpen() || ctrlModalIsOpen())) {
+    addPanelDeferredInspector = true;
+    return;
+  }
   const panel = inspectorEl();
   const canvas = nCanvas;
   if (!panel || !canvas) return;
@@ -2155,6 +2166,8 @@ function syncInspectorToSelection(items: HTMLElement[]): void {
     setInspector(false);
     return;
   }
+  // Composition gating lives in setInspector so direct widget actions obey
+  // the same rule as ordinary selection changes.
   // Dismissal belongs to the selection that was on screen when X was
   // pressed. A later selection is a new editing intent and reopens the
   // inspector — otherwise its body silently updates while the panel stays
@@ -2823,7 +2836,12 @@ function syncDeviceRows(): void {
   }
 }
 
-// ── The device picker modal ─────────────────────────────────────────────────
+// ── The persistent Add tray ─────────────────────────────────────────────────
+// Devices and controllers have deliberately different truth models, but they
+// share one visual slot beside the workbench. Only one tray can be open. It
+// is a labelled, non-modal region: the canvas physically resizes around it,
+// so Tab and pointer input may continue into the workbench while several
+// items are added in one pass.
 
 function devModalEl(): HTMLElement | null {
   return rdRoot?.querySelector<HTMLElement>(".rd-devmodal") ?? null;
@@ -2835,7 +2853,47 @@ function devModalIsOpen(): boolean {
 }
 
 let devModalReturnFocus: HTMLElement | null = null;
-function setDevModal(open: boolean): void {
+let addPanelSessionOpen = false;
+let addPanelRestoreInspector = false;
+let addPanelDeferredInspector = false;
+
+interface AddPanelTransition {
+  switching?: boolean;
+  restoreFocus?: boolean;
+}
+
+function syncAddPanelChrome(): void {
+  const root = rdRoot;
+  if (!root) return;
+  const devOpen = devModalIsOpen();
+  const ctrlOpen = ctrlModalIsOpen();
+  root.classList.toggle("is-add-panel-open", devOpen || ctrlOpen);
+  root.querySelector<HTMLElement>('[data-nx="rd-devs-open"]')
+    ?.setAttribute("aria-expanded", String(devOpen));
+  root.querySelector<HTMLElement>('[data-nx="rd-ctrls-open"]')
+    ?.setAttribute("aria-expanded", String(ctrlOpen));
+}
+
+function beginAddPanelSession(): void {
+  if (addPanelSessionOpen) return;
+  addPanelSessionOpen = true;
+  const inspector = inspectorEl();
+  addPanelRestoreInspector = Boolean(inspector && !inspector.hidden);
+  addPanelDeferredInspector = false;
+  if (addPanelRestoreInspector) setInspector(false);
+}
+
+function finishAddPanelSession(): void {
+  if (!addPanelSessionOpen || devModalIsOpen() || ctrlModalIsOpen()) return;
+  addPanelSessionOpen = false;
+  const resumeInspector = addPanelRestoreInspector || addPanelDeferredInspector;
+  addPanelRestoreInspector = false;
+  addPanelDeferredInspector = false;
+  const active = nCanvas?.activeItem();
+  if (active && resumeInspector) setInspector(true);
+}
+
+function setDevModal(open: boolean, transition: AddPanelTransition = {}): void {
   const el = devModalEl();
   if (!el || el.hidden === !open) return;
   // An identify transaction owns the modal until its exact learner
@@ -2846,16 +2904,21 @@ function setDevModal(open: boolean): void {
     return;
   }
   if (open) {
-    // Opening paths close peers; closing paths only restore focus. Keeping
-    // that direction one-way prevents modal hand-offs from recursing.
-    if (ctrlModalIsOpen()) setCtrlModal(false);
+    // Capture the initiating control BEFORE a peer closes. Its close path
+    // otherwise focuses the stale opener and makes a Devices → Controllers
+    // switch return to the wrong button.
+    const returnFocus = activeControl();
+    if (ctrlModalIsOpen()) setCtrlModal(false, { switching: true, restoreFocus: false });
+    if (ctrlModalIsOpen()) return;
     if (sheetOpen()) setSheet(false);
     if (paletteOpen()) setPalette(false);
     closeThemeMenu(true);
     setZoomMenu(false);
-    devModalReturnFocus = activeControl();
+    beginAddPanelSession();
+    devModalReturnFocus = returnFocus;
     syncDeviceRows();
     el.hidden = false;
+    syncAddPanelChrome();
     el.querySelector<HTMLButtonElement>(
       '.rd-devmodal-head button[data-nx="rd-devs-close"]',
     )?.focus({ preventScroll: true });
@@ -2863,11 +2926,15 @@ function setDevModal(open: boolean): void {
     el.hidden = true;
     const target = devModalReturnFocus;
     devModalReturnFocus = null;
-    restoreOverlayFocus(target);
+    syncAddPanelChrome();
+    if (!transition.switching) {
+      finishAddPanelSession();
+      if (transition.restoreFocus !== false) restoreOverlayFocus(target);
+    }
   }
 }
 
-// ── The controller picker modal — the device picker's twin, one per truth ──
+// ── The controller catalog — the device tray's twin, one per truth ─────────
 
 function ctrlModalEl(): HTMLElement | null {
   return rdRoot?.querySelector<HTMLElement>(".rd-ctrlmodal") ?? null;
@@ -2879,17 +2946,23 @@ function ctrlModalIsOpen(): boolean {
 }
 
 let ctrlModalReturnFocus: HTMLElement | null = null;
-function setCtrlModal(open: boolean): void {
+function setCtrlModal(open: boolean, transition: AddPanelTransition = {}): void {
   const el = ctrlModalEl();
   if (!el || el.hidden === !open) return;
   if (open) {
-    if (devModalIsOpen()) setDevModal(false);
+    const returnFocus = activeControl();
+    if (devModalIsOpen()) setDevModal(false, { switching: true, restoreFocus: false });
+    // Identify owns the device tray until it answers or is cancelled. Its
+    // guarded close can refuse this switch, in which case never stack trays.
+    if (devModalIsOpen()) return;
     if (sheetOpen()) setSheet(false);
     if (paletteOpen()) setPalette(false);
     closeThemeMenu(true);
     setZoomMenu(false);
-    ctrlModalReturnFocus = activeControl();
+    beginAddPanelSession();
+    ctrlModalReturnFocus = returnFocus;
     el.hidden = false;
+    syncAddPanelChrome();
     el.querySelector<HTMLButtonElement>(
       '.rd-ctrlmodal-head button[data-nx="rd-ctrls-close"]',
     )?.focus({ preventScroll: true });
@@ -2897,7 +2970,11 @@ function setCtrlModal(open: boolean): void {
     el.hidden = true;
     const target = ctrlModalReturnFocus;
     ctrlModalReturnFocus = null;
-    restoreOverlayFocus(target);
+    syncAddPanelChrome();
+    if (!transition.switching) {
+      finishAddPanelSession();
+      if (transition.restoreFocus !== false) restoreOverlayFocus(target);
+    }
   }
 }
 
@@ -3147,6 +3224,7 @@ export function redesignWire(root: HTMLElement): void {
   // The wire's own "JavaScript is live" marker: scripting-only chrome (the
   // camera buttons) reveals off it, and the parity gate normalizes it.
   root.classList.add("js");
+  syncAddPanelChrome();
   // The shared finish stores (padFinishes): a DS4 color or premium finish
   // chosen on /nocturne is the same controller's finish here.
   loadDs4Variants();
@@ -3427,7 +3505,7 @@ export function redesignWire(root: HTMLElement): void {
       toggleEncoderProfileLab();
       return;
     } else if (hit === "rd-devs-open") {
-      setDevModal(true);
+      setDevModal(!devModalIsOpen());
       return;
     } else if (hit === "rd-devs-close") {
       setDevModal(false);
@@ -3438,7 +3516,7 @@ export function redesignWire(root: HTMLElement): void {
       if (selector) toggleBenchDevice(selector);
       return;
     } else if (hit === "rd-ctrls-open") {
-      setCtrlModal(true);
+      setCtrlModal(!ctrlModalIsOpen());
       return;
     } else if (hit === "rd-ctrls-close") {
       setCtrlModal(false);
@@ -3509,10 +3587,6 @@ export function redesignWire(root: HTMLElement): void {
   root.querySelector<HTMLElement>(".rd-palette-card")
     ?.addEventListener("keydown", trapDialogTab);
   root.querySelector<HTMLElement>(".rd-sheet-card")
-    ?.addEventListener("keydown", trapDialogTab);
-  root.querySelector<HTMLElement>(".rd-devmodal-panel")
-    ?.addEventListener("keydown", trapDialogTab);
-  root.querySelector<HTMLElement>(".rd-ctrlmodal-panel")
     ?.addEventListener("keydown", trapDialogTab);
 
   const zoomTrigger = zoomMenuTrigger();
@@ -4121,6 +4195,8 @@ export function RedesignIsland() {
               type: "button",
               class: "n-autobtn rd-adddev",
               "data-nx": "rd-devs-open",
+              "aria-controls": "rd-device-picker",
+              "aria-expanded": "false",
               title: "Add devices to the workbench",
             },
             "＋ Devices",
@@ -4134,6 +4210,8 @@ export function RedesignIsland() {
               type: "button",
               class: "n-autobtn rd-addctrl",
               "data-nx": "rd-ctrls-open",
+              "aria-controls": "rd-controller-picker",
+              "aria-expanded": "false",
               title: "Stage virtual controllers on the workbench",
             },
             "＋ Controllers",
@@ -4453,7 +4531,7 @@ export function RedesignIsland() {
             ),
           ),
         ),
-        // ── The device picker (the workbench feed): near-full-page modal ──
+        // ── The device catalog: a persistent Add tray beside the canvas ──
         // SERVED — shell, scan line, all four tiers, every row — and hidden
         // until opened. Membership decoration (aria-pressed, the `.on`
         // marking, the verb word) is client state painted by syncDeviceRows.
@@ -4462,33 +4540,36 @@ export function RedesignIsland() {
         // verb in this surface; its label says that an answer becomes the
         // mapping input before the user starts listening.
         h(
-          "div",
+          "aside",
           {
             class: "rd-devmodal",
+            id: "rd-device-picker",
             hidden: "",
-            role: "dialog",
-            "aria-modal": "true",
-            "aria-label": "Devices on this machine",
+            "aria-labelledby": "rd-device-picker-title",
           },
-          h("div", { class: "rd-devmodal-back", "data-nx": "rd-devs-close" }),
           h(
             "div",
             { class: "rd-devmodal-panel", tabindex: "-1" },
             h(
               "div",
               { class: "rd-devmodal-head" },
-              h("span", { class: "n-kick" }, "Devices on this machine"),
+              h(
+                "div",
+                { class: "rd-addpane-heading" },
+                h("span", { class: "n-kick" }, "Add to canvas"),
+                h("h2", { id: "rd-device-picker-title" }, "Devices"),
+              ),
               h("span", { class: "rd-spring" }),
               h(
                 "button",
                 {
                   type: "button",
-                  class: "n-mapclose",
+                  class: "rd-addpane-done",
                   "data-nx": "rd-devs-close",
                   "aria-label": "Close the device picker",
                   title: "Close (Esc)",
                 },
-                "×",
+                "Done",
               ),
             ),
             h("p", { class: "n-devnote" }, () => rdDevScanLine()),
@@ -4717,7 +4798,7 @@ export function RedesignIsland() {
             ),
           ),
         ),
-        // ── The controller picker: stage virtual controllers ──────────────
+        // ── The controller catalog: stage virtual controllers ─────────────
         // SERVED — shell, lede, counts, every persona row — hidden until
         // opened. Rows the daemon cannot offer stay listed (`n-dev off`,
         // reason in the note): a menu that silently drops choices teaches a
@@ -4727,33 +4808,36 @@ export function RedesignIsland() {
         // roster disallows is refused with a sentence, so the row's disabled
         // look is presentation, never the guard.
         h(
-          "div",
+          "aside",
           {
             class: "rd-ctrlmodal",
+            id: "rd-controller-picker",
             hidden: "",
-            role: "dialog",
-            "aria-modal": "true",
-            "aria-label": "Stage virtual controllers",
+            "aria-labelledby": "rd-controller-picker-title",
           },
-          h("div", { class: "rd-ctrlmodal-back", "data-nx": "rd-ctrls-close" }),
           h(
             "div",
             { class: "rd-ctrlmodal-panel", tabindex: "-1" },
             h(
               "div",
               { class: "rd-ctrlmodal-head" },
-              h("span", { class: "n-kick" }, "Virtual controllers"),
+              h(
+                "div",
+                { class: "rd-addpane-heading" },
+                h("span", { class: "n-kick" }, "Add to canvas"),
+                h("h2", { id: "rd-controller-picker-title" }, "Virtual controllers"),
+              ),
               h("span", { class: "rd-spring" }),
               h(
                 "button",
                 {
                   type: "button",
-                  class: "n-mapclose",
+                  class: "rd-addpane-done",
                   "data-nx": "rd-ctrls-close",
                   "aria-label": "Close the controller picker",
                   title: "Close (Esc)",
                 },
-                "×",
+                "Done",
               ),
             ),
             h("p", { class: "n-devnote" }, () => rdCtrlAddNote()),
@@ -4773,6 +4857,9 @@ export function RedesignIsland() {
                     action: "/redesign/controller",
                     "data-rd-form": "controller-add",
                     "data-usable": r.usable,
+                    "data-persona": r.name,
+                    "data-preset": () => rdCtrlAddPreset(),
+                    "data-layout": () => rdCtrlAddLayout(),
                   },
                   h("input", { type: "hidden", name: "persona", value: r.name }),
                   h("input", { type: "hidden", name: "preset", value: () => rdCtrlAddPreset() }),

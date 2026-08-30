@@ -978,6 +978,16 @@ async function submitControllerForm(
     ? (form.elements.namedItem("ghost") as HTMLInputElement | null)?.value ?? ""
     : "";
   try {
+    // Forma may reconcile a list row without carrying an <input>'s value
+    // property across the repaint. The form's durable row metadata is the
+    // submission source of truth, so a second rapid Add can never post blank
+    // persona/default fields after the first Add refreshed the catalog.
+    if (form.matches('[data-rd-form="controller-add"]')) {
+      for (const name of ["persona", "preset", "layout"] as const) {
+        const input = form.elements.namedItem(name) as HTMLInputElement | null;
+        if (input) input.value = form.dataset[name] ?? input.value;
+      }
+    }
     const body = new URLSearchParams();
     new FormData(form, submitter).forEach((value, key) => {
       if (typeof value === "string") body.append(key, value);

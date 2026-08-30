@@ -465,6 +465,7 @@ mod tests {
                 line: "running (2 slots)".into(),
                 profile: Some("Example Launcher".into()),
                 origin: ksx_api::SessionOrigin::Config,
+                active_stage_revision: None,
                 active: None,
             },
         )

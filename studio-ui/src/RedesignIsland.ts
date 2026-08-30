@@ -13,12 +13,46 @@ import { DualSensePremiumArt } from "./dualSensePremiumArt";
 import { loadControllerFinishes, loadDs4Variants } from "./padFinishes";
 import { PadPaintServers } from "./padPaintServers";
 import {
+  MappingFlowLayer,
+  mappingPathModeIsValid,
+  type MappingFlowPad,
+  type MappingPathMode,
+} from "./mappingFlow";
+import {
+  armAssign,
+  assignHeld,
+  cancelAssign,
+  cancelLearn,
+  chainWanted,
+  conflictCancel,
+  conflictForce,
+  mapperBusy,
+  mapperEscape,
+  mapperOnSlotChange,
+  mapperReconcile,
+  mapperRemark,
+  resolveAssignWithControl,
+  resolveLearnWithKey,
+  skipAutoMapStep,
+  startAutoMap,
+  startLearn,
+} from "./redesign-mapper";
+import {
   renderControllerPanel,
   takePendingJumpFns,
   type InspectorTab,
   type RdKeyPanelView,
+  type RdMacroRowView,
   type RdPanelView,
 } from "./redesign-controller-inspector";
+import {
+  applyRdMacPayload,
+  rdMacChange,
+  rdMacClick,
+  rdMacClose,
+  rdMacOpen,
+  type RdMacView,
+} from "./redesign-macro-editor";
 import {
   syncControllerWidgets,
   type ParkedController,
@@ -152,10 +186,23 @@ export interface RdControllers {
   /** The panel's other reading — the Keys tab, the same `KeyPanel`
    *  /nocturne's By-key view serves. */
   keys: RdKeyPanelView;
+  /** The selected slot's macro lifecycle rows — `compose_macro_rows` on
+   *  the wire, this page's own edit doors. */
+  macros_head: string;
+  macro_rows: RdMacroRowView[];
+  macros_note: string;
+  /** The macro STEP EDITOR's whole projection when ?macro= names one —
+   *  `NocturneMacroEditor` on the wire (closed otherwise). */
+  mac: RdMacroEditorView;
   /** The short server-held undo window after a ✕ removal. */
   undo_cls: string;
   undo_label: string;
 }
+
+/** One macro lifecycle row — `NocturneMacroRow` on the wire. */
+/** The macro step editor's served projection — `NocturneMacroEditor` on
+ *  the wire, consumed whole by the redesign-macro-editor module. */
+export type RdMacroEditorView = RdMacView;
 
 /** One plate cell — `NocturneKeyCell` on the wire (snapshot.rs). */
 export interface RdKeyCellView {
@@ -165,6 +212,9 @@ export interface RdKeyCellView {
   short: string;
   title: string;
   aria: string;
+  disabled: boolean;
+  tab: string;
+  aria_hidden: string;
   style: string;
 }
 
@@ -213,6 +263,102 @@ export interface RedesignPayload {
    *  wire (freeze / split / take nothing, the current answer marked). */
   capture_rows: RdChoiceRowView[];
   capture_note: string;
+  /** The staged input's verified Windows identity — the mapper's source
+   *  pin (empty = refuse to arm, the fail-closed rule). */
+  learn_selector: string;
+  learn_instance: string;
+  /** Draft, durable configuration, and running-session truth for the
+   * operational shell. Kept as one namespaced seam so the next Library
+   * payload can remain on-demand instead of bloating the canvas poll. */
+  operations?: RdOperationalState;
+  /** Exact input preparation and machine-keyed held-device recovery. */
+  capture?: RdCaptureState;
+  /** The required four-stop product journey: input -> controllers -> map ->
+   * Play. Advanced surface authoring is deliberately not a gate. */
+  journey?: RdJourneyState;
+}
+
+export interface RdActionState {
+  label: string;
+  allowed: boolean;
+  reason: string;
+  visible?: boolean;
+}
+
+export interface RdActiveSessionView {
+  elapsed: string;
+  input: string;
+  outputs: string;
+  escape_hatch: string;
+  stage_revision?: string;
+}
+
+export interface RdSessionView {
+  reachable: boolean;
+  running: boolean;
+  line: string;
+  profile?: string | null;
+  origin: "unknown" | "config" | "staged" | string;
+  active?: RdActiveSessionView | null;
+}
+
+export interface RdOperationalState {
+  draft_label: string;
+  draft_detail: string;
+  draft_dirty?: boolean;
+  draft_empty?: boolean;
+  draft_revision?: string;
+  active_stage_revision?: string;
+  saved_label: string;
+  saved_detail: string;
+  session: RdSessionView;
+  session_cls: string;
+  escape_line: string;
+  save: RdActionState;
+  play: RdActionState;
+  apply: RdActionState;
+  stop: RdActionState;
+  adopt: RdActionState;
+  discard: RdActionState;
+}
+
+export interface RdHeldCaptureRow {
+  name: string;
+  transport: string;
+  detail: string;
+  selector: string;
+  instance: string;
+  can_release: boolean;
+  note: string;
+  /** SSR/client presentation fields projected from the authoritative row. */
+  summary?: string;
+  disabled?: boolean;
+}
+
+export interface RdCaptureState {
+  mode: string;
+  heading: string;
+  line: string;
+  recovery_line: string;
+  selector: string;
+  instance: string;
+  can_prepare: boolean;
+  can_release: boolean;
+  held: RdHeldCaptureRow[];
+}
+
+export interface RdJourneyRow {
+  key: string;
+  title: string;
+  detail: string;
+  badge: string;
+  cls: string;
+}
+
+export interface RdJourneyState {
+  line: string;
+  compact?: string;
+  rows: RdJourneyRow[];
 }
 
 // ── SERVED signals — copiers, never derivers ────────────────────────────────
@@ -220,6 +366,7 @@ export interface RedesignPayload {
 const [rdEnvLabel, setRdEnvLabel] = createSignal("");
 const [rdEnvCls, setRdEnvCls] = createSignal("n-environment unknown");
 const [rdThemeRows, setRdThemeRows] = createSignal<RdRenderedChoiceRow[]>([]);
+const [rdCompactThemeRows, setRdCompactThemeRows] = createSignal<RdRenderedChoiceRow[]>([]);
 const [rdDevKb, setRdDevKb] = createSignal<RdDeviceRowView[]>([]);
 const [rdDevEnc, setRdDevEnc] = createSignal<RdDeviceRowView[]>([]);
 const [rdDevExp, setRdDevExp] = createSignal<RdDeviceRowView[]>([]);
@@ -243,12 +390,10 @@ const [rdKbRow5, setRdKbRow5] = createSignal<RdKeyCellView[]>([]);
 const [rdKbRow6, setRdKbRow6] = createSignal<RdKeyCellView[]>([]);
 const [rdKbTray, setRdKbTray] = createSignal<RdKeyCellView[]>([]);
 const [rdKbLegend, setRdKbLegend] = createSignal<RdLegendRowView[]>([]);
-const [rdBoardRows, setRdBoardRows] = createSignal<RdChoiceRowView[]>([]);
 const [rdKbTitle, setRdKbTitle] = createSignal("");
 const [rdKbCls, setRdKbCls] = createSignal("n-kb");
 const [rdBoardCaseStyle, setRdBoardCaseStyle] = createSignal("");
 const [rdBoardOrigin, setRdBoardOrigin] = createSignal("");
-const [rdBoardLine, setRdBoardLine] = createSignal("");
 const [rdKbTrayHead, setRdKbTrayHead] = createSignal("");
 const [rdKbTrayCls, setRdKbTrayCls] = createSignal("n-kbtray none");
 const [rdKbNote, setRdKbNote] = createSignal("");
@@ -257,6 +402,56 @@ const [rdSoloLbl, setRdSoloLbl] = createSignal("Only this player");
 // The staged input's capture behaviour (freeze / split / take nothing).
 const [rdCaptureRows, setRdCaptureRows] = createSignal<RdChoiceRowView[]>([]);
 const [rdCaptureNote, setRdCaptureNote] = createSignal("");
+// The operational shell is server-owned truth in three independent state
+// machines: draft/durable config, running session, and exact-device capture.
+// Keeping them separate avoids the legacy `dirty === needs Apply` mistake.
+const [rdOpDraftLabel, setRdOpDraftLabel] = createSignal("New draft");
+const [rdOpDraftDetail, setRdOpDraftDetail] = createSignal("");
+const [rdOpSavedLabel, setRdOpSavedLabel] = createSignal("Nothing saved yet");
+const [rdOpSavedDetail, setRdOpSavedDetail] = createSignal("");
+const [rdOpSessionLine, setRdOpSessionLine] = createSignal("Session status unavailable");
+const [rdOpSessionCls, setRdOpSessionCls] = createSignal("rd-session-state down");
+const [rdOpEscapeLine, setRdOpEscapeLine] = createSignal("");
+const [rdDraftDirty, setRdDraftDirty] = createSignal(false);
+const [rdDraftRevision, setRdDraftRevision] = createSignal("");
+const [rdDiscardConfirmCls, setRdDiscardConfirmCls] = createSignal("rd-danger-confirm none");
+
+const [rdSaveLabel, setRdSaveLabel] = createSignal("Save");
+const [rdSaveDisabled, setRdSaveDisabled] = createSignal(true);
+const [rdSaveReason, setRdSaveReason] = createSignal("Finish the setup before saving.");
+const [rdPlayLabel, setRdPlayLabel] = createSignal("Play");
+const [rdPlayDisabled, setRdPlayDisabled] = createSignal(true);
+const [rdPlayReason, setRdPlayReason] = createSignal("Finish the setup before Play.");
+const [rdPlayCls, setRdPlayCls] = createSignal("rd-runform");
+const [rdApplyLabel, setRdApplyLabel] = createSignal("Apply changes");
+const [rdApplyDisabled, setRdApplyDisabled] = createSignal(true);
+const [rdApplyReason, setRdApplyReason] = createSignal("Nothing is running.");
+const [rdApplyCls, setRdApplyCls] = createSignal("rd-runform none");
+const [rdStopLabel, setRdStopLabel] = createSignal("Stop");
+const [rdStopDisabled, setRdStopDisabled] = createSignal(true);
+const [rdStopReason, setRdStopReason] = createSignal("Nothing is running.");
+const [rdStopCls, setRdStopCls] = createSignal("rd-runform none");
+const [rdReplacePlayCls, setRdReplacePlayCls] = createSignal("rd-panel-replace none");
+const [rdAdoptLabel, setRdAdoptLabel] = createSignal("Load saved setup");
+const [rdAdoptDisabled, setRdAdoptDisabled] = createSignal(true);
+const [rdAdoptReason, setRdAdoptReason] = createSignal("There is no saved setup to load.");
+const [rdDiscardLabel, setRdDiscardLabel] = createSignal("Start over");
+const [rdDiscardDisabled, setRdDiscardDisabled] = createSignal(true);
+const [rdDiscardReason, setRdDiscardReason] = createSignal("This draft is already empty.");
+
+const [rdJourneyLine, setRdJourneyLine] = createSignal("Pick an input to begin.");
+const [rdJourneyCompact, setRdJourneyCompact] = createSignal("Setup · 0/4");
+const [rdJourneyRows, setRdJourneyRows] = createSignal<RdJourneyRow[]>([]);
+
+const [rdCaptureMode, setRdCaptureMode] = createSignal("none");
+const [rdCaptureHeading, setRdCaptureHeading] = createSignal("No input selected");
+const [rdCaptureLine, setRdCaptureLine] = createSignal("Pick the input this setup will listen to.");
+const [rdCaptureRecoveryLine, setRdCaptureRecoveryLine] = createSignal("");
+const [rdCaptureSelector, setRdCaptureSelector] = createSignal("");
+const [rdCaptureInstance, setRdCaptureInstance] = createSignal("");
+const [rdCapturePrepareCls, setRdCapturePrepareCls] = createSignal("rd-capture-prepare none");
+const [rdCaptureHeldCls, setRdCaptureHeldCls] = createSignal("rd-held-recovery none");
+const [rdCaptureHeld, setRdCaptureHeld] = createSignal<RdHeldCaptureRow[]>([]);
 const [rdCtrlAddNote, setRdCtrlAddNote] = createSignal("");
 const [rdCtrlCountsLine, setRdCtrlCountsLine] = createSignal("");
 const [rdCtrlAddPreset, setRdCtrlAddPreset] = createSignal("");
@@ -275,6 +470,151 @@ let rdCtrlPads: RdPadView[] = [];
 let rdCtrlPanel: RdPanelView | null = null;
 /** The Keys tab's served rows — plain data for the same reason. */
 let rdCtrlKeys: RdKeyPanelView | null = null;
+/** The selected slot's macro section + the step editor's projection. */
+let rdCtrlMacrosHead = "Macros";
+let rdCtrlMacroRows: RdMacroRowView[] = [];
+let rdCtrlMacrosNote = "";
+let rdCtrlMac: RdMacroEditorView | null = null;
+/** The staged input's verified identity — the mapper's source pin. */
+let rdLearnSource = { selector: "", instance: "" };
+/** Full operational facts for the live-feed license and entry-level action
+ * coordinator. Canvas markup consumes signals; protocol-sensitive clients
+ * read this immutable served object instead of parsing labels or classes. */
+let rdOperations: RdOperationalState | null = null;
+
+export function redesignOperationalState(): RdOperationalState | null {
+  return rdOperations;
+}
+
+/** Product availability after the page-wide mutation lock releases. Dynamic
+ * `data-*` mirrors cannot be emitted faithfully by Forma SSR, so the entry
+ * asks the same served state the buttons render from. `undefined` leaves
+ * older widget-specific dataset contracts in charge. */
+export function redesignFormProductDisabled(form: HTMLFormElement): boolean | undefined {
+  const kind = form.dataset.rdForm ?? "";
+  const action = kind === "play-replace" ? "play" : kind;
+  if (
+    action === "save" || action === "play" || action === "apply" ||
+    action === "stop" || action === "adopt" || action === "discard"
+  ) {
+    const state = rdOperations?.[action];
+    return state ? state.allowed !== true : true;
+  }
+  if (kind === "capture-prepare") {
+    return rdCapturePrepareCls().includes("none");
+  }
+  if (kind === "capture-release") {
+    const selector = (form.elements.namedItem("expected_selector") as HTMLInputElement | null)
+      ?.value ?? "";
+    const instance = (form.elements.namedItem("instance_id") as HTMLInputElement | null)
+      ?.value ?? "";
+    const row = rdCaptureHeld().find(
+      (candidate) => candidate.selector === selector &&
+        candidate.instance.toLowerCase() === instance.toLowerCase(),
+    );
+    return row ? !row.can_release : true;
+  }
+  return undefined;
+}
+export function redesignLearnSource(): { selector: string; instance: string } {
+  return rdLearnSource;
+}
+/** The mapper's ports onto the served truth (always the CURRENT arrays —
+ *  re-read after every refresh, never captured). */
+export function redesignPads(): RdPadView[] {
+  return rdCtrlPads;
+}
+export function redesignSelectedSlot(): string {
+  return rdCtrlPanel?.slot_val ?? "";
+}
+export function redesignControlsFor(
+  slot: string,
+): { function: string; label: string; keys: string[] }[] {
+  const pad = rdCtrlPads.find((candidate) => String(candidate.slot) === slot);
+  return (pad?.controls ?? []).map((control) => ({
+    function: control.function,
+    label: control.label,
+    keys: control.keys,
+  }));
+}
+
+// ── The mapping cords: key → (macro) → control, drawn in world space ─────
+// The SAME MappingFlowLayer /nocturne mounts (one engine, one geometry
+// contract); this page provides its four layers, the Paths control, and
+// the processor-offset store in its own canvasPrefs.
+let mappingFlowLayer: MappingFlowLayer | null = null;
+
+function processorOffsetFor(id: string): { x: number; y: number } | undefined {
+  return canvasPrefs.processorOffsets?.[id];
+}
+
+function commitProcessorOffset(id: string, offset: { x: number; y: number } | null): boolean {
+  const offsets = { ...(canvasPrefs.processorOffsets ?? {}) };
+  if (offset) offsets[id] = offset;
+  else delete offsets[id];
+  canvasPrefs = { ...canvasPrefs, processorOffsets: offsets };
+  return saveCanvasPrefs();
+}
+
+/** Re-derive the cord graph from the served pads (mode + selected slot are
+ *  page state). Cheap: the layer fingerprints and skips no-op sets. */
+function syncMappingCords(): void {
+  const mode = canvasPrefs.mappingPaths ?? "off";
+  const selectedSlot = Number(rdCtrlPanel?.slot_val || "0");
+  mappingFlowLayer?.setGraph(
+    (rdCtrlPads as unknown as MappingFlowPad[]) ?? [],
+    mode,
+    selectedSlot,
+  );
+  const select = rdRoot?.querySelector<HTMLSelectElement>('[data-nx="rd-mapping-paths"]');
+  if (select && select.value !== mode) select.value = mode;
+}
+
+/** Frame-rate live feedback reaches the mapping layer through one narrow
+ * imperative port. The lifecycle entry owns the EventSource; the island owns
+ * the graph, so neither module needs to know the other's implementation. */
+export function redesignSetLivePaths(
+  keysDown: ReadonlySet<string>,
+  keyHits: ReadonlySet<string>,
+  slotFunctionsDown: ReadonlyMap<number, ReadonlySet<string>>,
+  slotFunctionHits: ReadonlyMap<number, ReadonlySet<string>>,
+): void {
+  mappingFlowLayer?.setLive(keysDown, keyHits, slotFunctionsDown, slotFunctionHits);
+}
+
+function setMappingPathMode(mode: MappingPathMode): void {
+  if (!mappingPathModeIsValid(mode)) return;
+  canvasPrefs = { ...canvasPrefs, mappingPaths: mode };
+  saveCanvasPrefs();
+  syncMappingCords();
+}
+
+/** The cords' count line — the layer's layout summary, painted onto the
+ *  Paths control's output (nocturne's paintMappingFlowCount, trimmed to
+ *  this page's chrome). */
+function paintMappingCordCount(summary: import("./mappingFlow").MappingFlowLayoutSummary): void {
+  const out = rdRoot?.querySelector<HTMLElement>(".rd-pathcount");
+  if (!out) return;
+  const mode = canvasPrefs.mappingPaths ?? "off";
+  if (mode === "off" || summary.total === 0) {
+    out.textContent = "";
+    out.title = "Mapping paths are off";
+    return;
+  }
+  const unresolved = summary.unresolved > 0 ? ` · ${summary.unresolved} off-screen` : "";
+  out.textContent = `${summary.total}`;
+  out.title = `${summary.total} mapping path${summary.total === 1 ? "" : "s"} drawn${unresolved}`;
+}
+
+/** The step editor follows the served `mac` projection. This slice only
+ *  guards the door (the editor itself is the next migration): a served
+ *  OPEN mac with no dialog on this page yet closes itself back through the
+ *  URL rather than pretending. */
+function syncMacroDialog(): void {
+  // The editor module owns the dialog: the served projection goes to it
+  // whole, and THE DRAFT WINS over a background poll (its own dirty guard).
+  if (rdCtrlMac) applyRdMacPayload(rdCtrlMac);
+}
 /** Which reading the inspector shows (4460's Controls|Keys pair), kept per
  *  browser like the nocturne UI store. */
 const RD_UI_STORE = "ksx-redesign-ui";
@@ -299,6 +639,10 @@ let pendingLocateFns: string | null = null;
 /** A KEY the next Keys render should reveal — set by a click on a plate
  *  cell (the board is the Keys tab's own picture). */
 let pendingLocateKey: string | null = null;
+/** Inspector repaint memoization is client state, not document state. A
+ * WeakMap keeps it off the served container so hydration parity can continue
+ * asserting every attribute on that client-populated subtree. */
+const inspectorRenderFingerprints = new WeakMap<HTMLElement, string>();
 
 // ── The keyboard lens: mute chips, the solo shortcut, the finish ──────────
 // The crossings share 4460's store (a crossing belongs to the CONTROLLER,
@@ -434,11 +778,99 @@ export function applyRedesign(v: RedesignPayload): void {
   const deviceFocus = captureDeviceRowFocus();
   setRdEnvLabel(v.environment_label);
   setRdEnvCls(v.environment_cls);
+  const operations = v.operations;
+  rdOperations = operations ?? null;
+  setRdOpDraftLabel(operations?.draft_label ?? "New draft");
+  setRdOpDraftDetail(operations?.draft_detail ?? "Pick an input to begin.");
+  setRdOpSavedLabel(operations?.saved_label ?? "Nothing saved yet");
+  setRdOpSavedDetail(operations?.saved_detail ?? "Save writes this draft for later.");
+  setRdOpSessionLine(operations?.session?.line ?? "Session status unavailable");
+  setRdOpSessionCls(`rd-session-state ${operations?.session_cls || "down"}`);
+  setRdOpEscapeLine(operations?.escape_line ?? "");
+  const draftDirty = operations?.draft_dirty === true;
+  setRdDraftDirty(draftDirty);
+  setRdDraftRevision(operations?.draft_revision ?? "");
+  setRdDiscardConfirmCls(draftDirty ? "rd-danger-confirm" : "rd-danger-confirm none");
+
+  const save = operations?.save;
+  setRdSaveLabel(save?.label || "Save");
+  setRdSaveDisabled(save?.allowed !== true);
+  setRdSaveReason(save?.reason ?? "Finish the setup before saving.");
+  const play = operations?.play;
+  setRdPlayLabel(play?.label || "Play");
+  setRdPlayDisabled(play?.allowed !== true);
+  setRdPlayReason(play?.reason ?? "Finish the setup before Play.");
+  setRdPlayCls(play?.visible === false ? "rd-runform rd-playform none" : "rd-runform rd-playform");
+  const apply = operations?.apply;
+  setRdApplyLabel(apply?.label || "Apply changes");
+  setRdApplyDisabled(apply?.allowed !== true);
+  setRdApplyReason(apply?.reason ?? "Nothing is running.");
+  setRdApplyCls(
+    apply?.visible === true || apply?.allowed === true
+      ? "rd-runform rd-applyform"
+      : "rd-runform rd-applyform none",
+  );
+  const stop = operations?.stop;
+  setRdStopLabel(stop?.label || "Stop");
+  setRdStopDisabled(stop?.allowed !== true);
+  setRdStopReason(stop?.reason ?? "Nothing is running.");
+  setRdStopCls(
+    stop?.visible === true || operations?.session?.running === true
+      ? "rd-runform rd-stopform"
+      : "rd-runform rd-stopform none",
+  );
+  setRdReplacePlayCls(
+    operations?.session?.running === true
+      ? "rd-panel-replace"
+      : "rd-panel-replace none",
+  );
+  const adopt = operations?.adopt;
+  setRdAdoptLabel(adopt?.label || "Load saved setup");
+  setRdAdoptDisabled(adopt?.allowed !== true);
+  setRdAdoptReason(adopt?.reason ?? "There is no saved setup to load.");
+  const discard = operations?.discard;
+  setRdDiscardLabel(discard?.label || "Start over");
+  setRdDiscardDisabled(discard?.allowed !== true);
+  setRdDiscardReason(discard?.reason ?? "This draft is already empty.");
+
+  const journey = v.journey;
+  const journeyRows = journey?.rows ?? [];
+  setRdJourneyRows(journeyRows);
+  setRdJourneyLine(journey?.line ?? "Pick an input to begin.");
+  const journeyDone = journeyRows.filter((row) => row.badge === "Done").length;
+  const journeyNow = journeyRows.find((row) => row.badge === "Now" || row.badge === "Blocked");
+  setRdJourneyCompact(
+    journey?.compact ||
+      `${journeyDone}/4 · ${operations?.session?.running ? "Playing" : journeyNow?.title ?? "Setup"}`,
+  );
+
+  const capture = v.capture;
+  setRdCaptureMode(capture?.mode ?? "none");
+  setRdCaptureHeading(capture?.heading ?? "No input selected");
+  setRdCaptureLine(capture?.line ?? "Pick the input this setup will listen to.");
+  setRdCaptureRecoveryLine(capture?.recovery_line ?? "");
+  setRdCaptureSelector(capture?.selector ?? "");
+  setRdCaptureInstance(capture?.instance ?? "");
+  setRdCapturePrepareCls(
+    capture?.can_prepare === true ? "rd-capture-prepare" : "rd-capture-prepare none",
+  );
+  setRdCaptureHeld(
+    (capture?.held ?? []).map((row) => ({
+      ...row,
+      summary: `${row.transport} · ${row.detail}`,
+      disabled: !row.can_release,
+    })),
+  );
+  setRdCaptureHeldCls(
+    (capture?.held?.length ?? 0) > 0 ? "rd-held-recovery" : "rd-held-recovery none",
+  );
   const themeRows = v.theme_rows ?? [];
-  setRdThemeRows(themeRows.map((row) => ({
+  const renderedThemeRows = themeRows.map((row) => ({
     ...row,
     chosen: row.chosen ? "true" : "false",
-  })));
+  }));
+  setRdThemeRows(renderedThemeRows);
+  setRdCompactThemeRows(renderedThemeRows);
   // The ONE verb whose effect lives outside this island's tree (the
   // nocturne lesson, carried over with the rows). Every other form's outcome
   // is repainted from this payload, but the theme is an attribute on <html>
@@ -462,6 +894,10 @@ export function applyRedesign(v: RedesignPayload): void {
   rdStagingReachable = d?.staging_reachable === true;
   rdStagingLine = d?.staging_line ?? "";
   setRdDevKb(d?.keyboards ?? []);
+  // The encoder rows drop the transient `chart not read yet` phrase the
+  // moment the page owns the live read (the encoder surface starts it at
+  // mount) — the modal meta span is marked data-live-chatter for exactly
+  // this: its TEXT follows the session, by the parity contract.
   setRdDevEnc((d?.encoders ?? []).map((row) => ({
     ...row,
     meta: deviceCardMeta(row),
@@ -489,6 +925,14 @@ export function applyRedesign(v: RedesignPayload): void {
   rdCtrlPads = c?.pads ?? [];
   rdCtrlPanel = c?.panel ?? null;
   rdCtrlKeys = c?.keys ?? null;
+  rdCtrlMacrosHead = c?.macros_head || "Macros";
+  rdCtrlMacroRows = c?.macro_rows ?? [];
+  rdCtrlMacrosNote = c?.macros_note ?? "";
+  rdCtrlMac = c?.mac ?? null;
+  rdLearnSource = {
+    selector: v.learn_selector ?? "",
+    instance: v.learn_instance ?? "",
+  };
   const board = v.board;
   if (board) {
     setRdKbRow1(board.kb_row1 ?? []);
@@ -499,12 +943,10 @@ export function applyRedesign(v: RedesignPayload): void {
     setRdKbRow6(board.kb_row6 ?? []);
     setRdKbTray(board.kb_tray ?? []);
     setRdKbLegend(board.legend ?? []);
-    setRdBoardRows(board.board_rows ?? []);
     setRdKbTitle(board.kb_title ?? "");
     setRdKbCls(board.kb_cls || "n-kb");
     setRdBoardCaseStyle(board.board_case_style ?? "");
     setRdBoardOrigin(board.board_origin ?? "");
-    setRdBoardLine(board.board_line ?? "");
     setRdKbTrayHead(board.kb_tray_head ?? "");
     setRdKbTrayCls(board.kb_tray_cls || "n-kbtray none");
     setRdKbNote(board.kb_note ?? "");
@@ -528,6 +970,15 @@ export function applyRedesign(v: RedesignPayload): void {
   // new selection): an open inspector repaints from the fresh truth.
   const panel = inspectorEl();
   if (panel && !panel.hidden) renderInspector();
+  // The mapper's payload pass, AFTER the panel rebuilt: retire any armed
+  // gesture the fresh truth invalidated, then re-apply the interaction
+  // marks the rebuild wiped (nocturne's applyNocturne order).
+  mapperReconcile();
+  // The cords re-derive from the fresh pads (mode/slot unchanged).
+  syncMappingCords();
+  // The step editor follows ?macro= — a served `mac` opens/repaints it,
+  // its absence closes it (the one-macro-one-controller invariant).
+  syncMacroDialog();
   restoreDeviceRowFocus(deviceFocus);
 }
 
@@ -593,6 +1044,29 @@ export function applyRedesignFlash(flash: string | null): void {
   }
   setRdFlashLine(flash.replace(/^error: /, ""));
   setRdFlashCls(flash.startsWith("error") ? "n-flash rd-flash err" : "n-flash rd-flash ok");
+}
+
+/** Refresh health is transport state, not daemon product state. Keep the last
+ * authoritative payload visible during a short outage, but make its age
+ * explicit instead of presenting stale action availability as current. */
+export function setRedesignRefreshHealth(
+  state: "online" | "stale",
+  message = "",
+): void {
+  const root = rdRoot;
+  if (!root) return;
+  const status = root.querySelector<HTMLElement>(".rd-refresh-health");
+  if (!status) return;
+  root.dataset.rdRefreshState = state;
+  status.dataset.state = state;
+  status.textContent = message;
+  status.hidden = state === "online" || message.trim() === "";
+  const summary = root.querySelector<HTMLElement>(".rd-setup-sum");
+  if (summary) {
+    summary.title = state === "stale" && message.trim()
+      ? `${message} Open Setup for details.`
+      : "Setup progress, draft, session and input readiness";
+  }
 }
 
 // ── The canvas (lifted from NocturneIsland's canvas section) ────────────────
@@ -744,10 +1218,17 @@ interface CanvasPrefs {
    *  wait on the canvas to be re-slotted. Display facts only: the slot
    *  itself left the daemon when it was parked. */
   parked?: ParkedController[];
+  /** The mapping cords' visibility: off / selected player / all players
+   *  (nocturne's own Paths modes, remembered like the camera). */
+  mappingPaths?: MappingPathMode;
+  /** Manual processor displacements, keyed by processor id — the cords'
+   *  macro nodes remember where a hand put them. */
+  processorOffsets?: Record<string, { x: number; y: number }>;
 }
 
 let canvasPrefs: CanvasPrefs = { widgets: {} };
 let nCanvas: WidgetCanvas | null = null;
+let encoderAttentionObserver: MutationObserver | null = null;
 let rdRoot: HTMLElement | null = null;
 let encoderLabReturnCamera: { panX: number; panY: number; zoom: number } | null = null;
 let refreshEncoderProfileLab: ((devices: readonly EncoderProfileLabDevice[]) => void) | null = null;
@@ -835,6 +1316,20 @@ function loadCanvasPrefs(): void {
         )
           ? { panX: cam.panX, panY: cam.panY, zoom: Math.min(3, Math.max(0.08, cam.zoom)) }
           : undefined,
+      // The mapping chrome's own durable state — every field a prefs writer
+      // rebuilds MUST be re-listed here or it silently dies on reload.
+      mappingPaths: mappingPathModeIsValid(saved.mappingPaths) ? saved.mappingPaths : undefined,
+      processorOffsets:
+        typeof saved.processorOffsets === "object" && saved.processorOffsets !== null
+          ? Object.fromEntries(
+              Object.entries(saved.processorOffsets as Record<string, { x: number; y: number }>)
+                .filter(
+                  ([, o]) =>
+                    typeof o === "object" && o !== null &&
+                    Number.isFinite(o.x) && Number.isFinite(o.y),
+                ),
+            )
+          : undefined,
     };
   } catch {
     // A blocked or corrupt store reads as the defaults.
@@ -880,6 +1375,11 @@ function persistCanvas(): void {
     mapHidden: canvasPrefs.mapHidden,
     bench: canvasPrefs.bench,
     parked: canvasPrefs.parked,
+    // ⚠️ A REBUILD MUST CARRY EVERY DURABLE FIELD: dropping one here let a
+    // camera nudge silently reset the Paths mode (the cords vanished and
+    // the select snapped to Off on the next repaint).
+    mappingPaths: canvasPrefs.mappingPaths,
+    processorOffsets: canvasPrefs.processorOffsets,
   };
   saveCanvasPrefs();
 }
@@ -925,9 +1425,54 @@ const TIER_COPY: Record<string, string> = {
   structure: "Structure — type, ports, one-line summary",
   editing: "Editing — full detail and controls",
 };
-function applyZoomTier(tier: string): void {
+// The terminal's 54-unit SVG hit box clears 44 CSS px at this effective scale
+// on the fixed 960px product item. Below it the board remains a useful
+// silhouette, but its controls are inert rather than undersized targets.
+const ENCODER_MIN_EFFECTIVE_EDIT_SCALE = 0.9;
+
+function canvasZoomFromViewport(
+  viewport: HTMLElement | null = rdRoot?.querySelector<HTMLElement>(".forma-canvas-viewport") ?? null,
+): number {
+  const value = Number(viewport?.style.getPropertyValue("--canvas-zoom"));
+  return Number.isFinite(value) && value > 0 ? value : 1;
+}
+
+/** Product encoders paint a useful board silhouette at every camera tier, but
+ * their 56 native terminal controls are only honest targets at editing size.
+ * `inert` keeps the visible schematic out of pointer and keyboard routing;
+ * the item stamp also lets CSS collapse the supporting command chrome. */
+function syncEncoderEditingAccess(
+  tier: string,
+  zoom = canvasZoomFromViewport(),
+): void {
+  const root = rdRoot;
+  if (!root) return;
+  for (const item of root.querySelectorAll<HTMLElement>(".rd-encoder-device-node")) {
+    const manualScale = Number(item.dataset.canvasManualScale);
+    const attentionScale = Number(item.dataset.attentionScale);
+    // The engine's attention scale is already manual × automatic distance
+    // scale. Falling back to the manual value covers the mount frame before
+    // the visibility pass stamps its first attention result.
+    const renderedItemScale = Number.isFinite(attentionScale) && attentionScale > 0
+      ? attentionScale
+      : Number.isFinite(manualScale) && manualScale > 0 ? manualScale : 1;
+    const effectiveScale = zoom * renderedItemScale;
+    const editable = tier === "editing" && effectiveScale >= ENCODER_MIN_EFFECTIVE_EDIT_SCALE;
+    item.dataset.encoderEditable = editable ? "true" : "false";
+    const host = item.querySelector<HTMLElement>(
+      '.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host',
+    );
+    if (!host) continue;
+    host.inert = !editable;
+    if (editable) host.removeAttribute("aria-hidden");
+    else host.setAttribute("aria-hidden", "true");
+  }
+}
+
+function applyZoomTier(tier: string, zoom = canvasZoomFromViewport()): void {
   const el = rdRoot?.querySelector<HTMLElement>(".rd-tier");
   if (el) el.textContent = TIER_COPY[tier] ?? tier;
+  syncEncoderEditingAccess(tier, zoom);
 }
 
 // ── Chrome state the engine reports back ────────────────────────────────────
@@ -1021,11 +1566,20 @@ function restoreOverlayFocus(target: HTMLElement | null): void {
  *  When the disclosure itself owned focus, its summary is the durable return
  *  point — controls inside a closed details are no longer focusable. */
 function closeThemeMenu(restoreFocus = false): boolean {
-  const menu = rdRoot?.querySelector<HTMLDetailsElement>(".rd-themed[open]");
-  if (!menu) return false;
-  menu.open = false;
+  const menus = Array.from(
+    rdRoot?.querySelectorAll<HTMLDetailsElement>("[data-rd-theme-menu][open]") ?? [],
+  );
+  if (menus.length === 0) return false;
+  const active = document.activeElement;
+  const owner = active instanceof Element
+    ? active.closest<HTMLDetailsElement>("[data-rd-theme-menu][open]")
+    : null;
+  const returnMenu = owner ?? menus.find((menu) => menu.offsetParent !== null) ?? menus[0];
+  menus.forEach((menu) => {
+    menu.open = false;
+  });
   if (restoreFocus) {
-    menu.querySelector<HTMLElement>(".rd-theme-sum")?.focus({ preventScroll: true });
+    returnMenu.querySelector<HTMLElement>("[data-rd-theme-summary]")?.focus({ preventScroll: true });
   }
   return true;
 }
@@ -1332,12 +1886,73 @@ function mergeSlotIntoUrl(slot: string): boolean {
   return true;
 }
 
+function inspectorFocusBookmark(body: HTMLElement): string | null {
+  const active = document.activeElement;
+  if (!(active instanceof Element) || !body.contains(active)) return null;
+  if (active.id) return `#${CSS.escape(active.id)}`;
+  if (active.matches("details.n-clearall > summary")) return "details.n-clearall > summary";
+  if (active.matches("details.n-clearall button")) return "details.n-clearall button";
+  if (active.matches("select.n-socd-sel")) return "select.n-socd-sel";
+  if (active.matches("button.n-socd-set")) return "button.n-socd-set";
+  if (active.matches(".rd-insp-vseg .vc")) return ".rd-insp-vseg .vc";
+  if (active.matches(".rd-insp-vseg .vk")) return ".rd-insp-vseg .vk";
+
+  const owner = active.closest<HTMLElement>("[data-fn], [data-key]");
+  if (owner) {
+    const attr = owner.dataset.fn !== undefined ? "data-fn" : "data-key";
+    const value = owner.dataset.fn ?? owner.dataset.key ?? "";
+    const ownerSelector = `[${attr}="${CSS.escape(value)}"]`;
+    if (active.matches("summary")) return `${ownerSelector} > summary`;
+    const nx = active.closest<HTMLElement>("[data-nx]")?.dataset.nx;
+    if (nx) return `${ownerSelector} [data-nx="${CSS.escape(nx)}"]`;
+    if (active.matches("a[href]")) {
+      const href = active.getAttribute("href");
+      if (href) return `${ownerSelector} a[href="${CSS.escape(href)}"]`;
+    }
+  }
+  const nx = active.closest<HTMLElement>("[data-nx]")?.dataset.nx;
+  return nx ? `[data-nx="${CSS.escape(nx)}"]` : null;
+}
+
+function restoreInspectorFocus(body: HTMLElement, selector: string | null): void {
+  if (!selector) return;
+  body.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
+}
+
 /** Repaint the inspector's body from the live selection. Called on every
  *  selection or item-state change while open. */
 function renderInspector(): void {
   const canvas = nCanvas;
   const body = inspectorEl()?.querySelector<HTMLElement>(".rd-insp-body");
   if (!canvas || !body) return;
+  const selected = canvas.selectedItems();
+  const focusBookmark = inspectorFocusBookmark(body);
+  // A background payload often changes nothing this inspector can show.
+  // Keep the existing controls alive in that case: replacing an identical
+  // tree would collapse consequence disclosures, reset an unsubmitted select
+  // choice, and throw keyboard focus back to the page every two seconds.
+  const controllerSelected = selected.some((item) =>
+    /^ctrl-slot-\d+$/.test(item.dataset.instanceId ?? "")
+  );
+  const renderFingerprint = JSON.stringify([
+    inspTab,
+    selected.map((item) => [
+      item.dataset.instanceId ?? "",
+      item.dataset.widgetName ?? "",
+      canvas.getItemState(item),
+    ]),
+    controllerSelected
+      ? [rdCtrlPanel, rdCtrlKeys, rdCtrlMacrosHead, rdCtrlMacroRows, rdCtrlMacrosNote]
+      : null,
+  ]);
+  if (
+    inspectorRenderFingerprints.get(body) === renderFingerprint &&
+    pendingLocateFns === null &&
+    pendingLocateKey === null
+  ) {
+    mapperRemark();
+    return;
+  }
   // A repaint must not lose the reader's place: every camera nudge and
   // item-state change lands here, and a full rebuild would collapse the
   // row someone just opened (or the one a pad-art click just located).
@@ -1346,8 +1961,10 @@ function renderInspector(): void {
       (row) => row.dataset.fn ?? "",
     ),
   );
+  const clearAllWasOpen = Boolean(
+    body.querySelector<HTMLDetailsElement>("details.n-clearall[open]"),
+  );
   const keptScroll = body.scrollTop;
-  const selected = canvas.selectedItems();
   const rows: (HTMLElement | null)[] = [];
   if (selected.length === 1) {
     const item = selected[0];
@@ -1401,8 +2018,22 @@ function renderInspector(): void {
     const ctrlSlot = /^ctrl-slot-(\d+)$/.exec(item.dataset.instanceId ?? "")?.[1];
     if (ctrlSlot) {
       const moved = mergeSlotIntoUrl(ctrlSlot);
+      if (moved) {
+        // A seat change ends any armed mapping gesture (the pane speaks
+        // for one controller at a time) and re-scopes the cords.
+        mapperOnSlotChange();
+        syncMappingCords();
+      }
       if (rdCtrlPanel && rdCtrlKeys && rdCtrlPanel.slot_val === ctrlSlot) {
-        rows.push(...renderControllerPanel(rdCtrlPanel, rdCtrlKeys, inspTab, setInspTab));
+        rows.push(
+          ...renderControllerPanel(
+            rdCtrlPanel,
+            rdCtrlKeys,
+            { head: rdCtrlMacrosHead, rows: rdCtrlMacroRows, note: rdCtrlMacrosNote },
+            inspTab,
+            setInspTab,
+          ),
+        );
       } else {
         const wait = document.createElement("p");
         wait.className = "rd-insp-kind";
@@ -1447,12 +2078,18 @@ function renderInspector(): void {
     rows.push(title, kind, origin, verbs);
   }
   body.replaceChildren(...rows.filter((row): row is HTMLElement => Boolean(row)));
+  inspectorRenderFingerprints.set(body, renderFingerprint);
   // Restore the reader's place: rows they had open stay open, and the
   // panel does not jump back to its top on every repaint.
   for (const row of Array.from(body.querySelectorAll<HTMLElement>("details.n-bind"))) {
     if (openFns.has(row.dataset.fn ?? "")) (row as HTMLDetailsElement).open = true;
   }
+  if (clearAllWasOpen) {
+    const clearAll = body.querySelector<HTMLDetailsElement>("details.n-clearall");
+    if (clearAll) clearAll.open = true;
+  }
   body.scrollTop = keptScroll;
+  restoreInspectorFocus(body, focusBookmark);
   // The locate pass: a click on a pad-art zone (the 4460 pointer
   // enhancement) or a Keys-row jump named a control — open its row in the
   // freshly painted Controls view. A jump's target wins (it just switched
@@ -1468,6 +2105,7 @@ function renderInspector(): void {
   }
   // A plate-cell click named a KEY: reveal its row (bound) or its free
   // chip in the freshly painted Keys view.
+  mapperRemark();
   if (pendingLocateKey && inspTab === "keys") {
     const wanted = pendingLocateKey;
     const row =
@@ -1675,8 +2313,16 @@ const DEVICE_ROLE_BADGE: Record<string, string> = {
   keyboard: "Keyboard",
 };
 const STAGED_DEVICE_TITLE =
-  "This board is the background helper's staged choice. Staging it again changes nothing — " +
+  "This board is the background helper's mapping input. Choosing it again changes nothing — " +
   "a keyboard prepared for play keeps its preparation.";
+const DEVICE_CARD_MIN_HEIGHT = 220;
+const DEVICE_CARD_ROW_STRIDE = DEVICE_CARD_MIN_HEIGHT + CANVAS_FRESH_PLACEMENT_GAP;
+
+function deviceCardPurpose(row: RdDeviceRowView): string {
+  return row.aria_current === "true"
+    ? "This is the mapping input. Its emitted keys appear on the Input source keyboard."
+    : "This card is on the canvas for inspection. Use it as the mapping input when you want its emitted keys on the Input source keyboard.";
+}
 
 function deviceCardMeta(row: RdDeviceRowView): string {
   if (row.role !== "panel-encoder") return row.meta;
@@ -1708,8 +2354,11 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   // flash speaks, and the refresh moves the marking wherever it now belongs.
   const staged = document.createElement("p");
   staged.className = "rd-devcard-staged";
-  staged.textContent = "Staged — the board ksx splits";
+  staged.textContent = "Mapping input — shown on Input source";
   staged.title = STAGED_DEVICE_TITLE;
+  const purpose = document.createElement("p");
+  purpose.className = "rd-devcard-purpose";
+  purpose.textContent = deviceCardPurpose(row);
   const form = document.createElement("form");
   form.className = "rd-stageform";
   form.method = "post";
@@ -1729,12 +2378,12 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   const submit = document.createElement("button");
   submit.type = "submit";
   submit.className = "rd-stagebtn";
-  submit.textContent = "Stage this board";
+  submit.textContent = "Use as mapping input";
   submit.title =
-    "Make this the board ksx splits — replaces the daemon's current choice. " +
+    "Make this the board ksx reads for mapping — replaces the daemon's current choice. " +
     "Nothing is saved or started, and a board already prepared keeps its preparation.";
   form.append(submit);
-  body.append(badge, name, meta, staged, form);
+  body.append(badge, name, meta, purpose, staged, form);
   return body;
 }
 
@@ -1790,7 +2439,10 @@ function mountDeviceWidget(
     content.append(deviceCardContent(row), encoderSurface.content);
   }
   const preferredWidth = encoderSurface ? 960 : 300;
-  const minHeight = encoderSurface ? 900 : 150;
+  // Match the canvas engine's effective minimum exactly. Supplying a smaller
+  // candidate makes collision allocation reason about geometry it will later
+  // clamp, which can leave fresh rows closer than the engine's 40 px gap.
+  const minHeight = encoderSurface ? 900 : DEVICE_CARD_MIN_HEIGHT;
   const item = createCanvasItem({
     instanceId: slug,
     displayName: row.name,
@@ -1809,7 +2461,10 @@ function mountDeviceWidget(
   }
   const home: CanvasItemGeometry = {
     x: 140 + (index % 3) * 340,
-    y: 160 + Math.floor(index / 3) * 200,
+    y: 160 + Math.floor(index / 3) * Math.max(
+      DEVICE_CARD_ROW_STRIDE,
+      minHeight + CANVAS_FRESH_PLACEMENT_GAP,
+    ),
     width: preferredWidth,
     height: minHeight,
     z: 3 + index,
@@ -1822,6 +2477,13 @@ function mountDeviceWidget(
       savedGeometry ?? allocateFreshCanvasGeometry(home),
       { focus: focusOnMount },
     );
+    if (encoderSurface) {
+      const viewport = (rdRoot ?? document).querySelector<HTMLElement>(".forma-canvas-viewport");
+      syncEncoderEditingAccess(
+        viewport?.dataset.canvasZoomTier ?? "editing",
+        canvasZoomFromViewport(viewport),
+      );
+    }
   } catch (error) {
     disposeEncoderWorkbenchItem(item);
     throw error;
@@ -1906,9 +2568,17 @@ function syncEncoderProfileLabButton(): void {
     : "Inspect connected and reference encoder profiles on the canvas";
 }
 
-function announceEncoderProfileLab(message: string): void {
+/** The page's ONE assistive announce channel (`.n-live-sr`, role=status).
+ *  Every announcer goes through here — encoder lab, mapper, cords — so two
+ *  tenants cannot clobber each other through different queries; last write
+ *  wins, which is a live region's own contract. */
+export function rdAnnounce(message: string): void {
   const status = rdRoot?.querySelector<HTMLElement>(".n-live-sr");
   if (status) status.textContent = message;
+}
+
+function announceEncoderProfileLab(message: string): void {
+  rdAnnounce(message);
 }
 
 function removeEncoderProfileLab(): void {
@@ -2055,6 +2725,7 @@ function syncBenchCards(): void {
     const row = deviceRowFor(item.dataset.selector ?? "");
     const status = item.querySelector<HTMLElement>(".rd-devcard-staged");
     const meta = item.querySelector<HTMLElement>(".rd-devcard-meta");
+    const purpose = item.querySelector<HTMLElement>(".rd-devcard-purpose");
     const stageButton = item.querySelector<HTMLButtonElement>(".rd-stagebtn");
     const actionAvailable = rdDeviceScanAuthoritative && rdStagingReachable && Boolean(row);
     item.dataset.scanAuthoritative = rdDeviceScanAuthoritative ? "true" : "false";
@@ -2087,7 +2758,7 @@ function syncBenchCards(): void {
         status.title = rdStagingLine || "Staging unavailable";
       }
     } else if (status) {
-      status.textContent = "Staged — the board ksx splits";
+      status.textContent = "Mapping input — shown on Input source";
       status.title = STAGED_DEVICE_TITLE;
     }
     item.dataset.widgetName = row.name;
@@ -2097,6 +2768,7 @@ function syncBenchCards(): void {
       DEVICE_ROLE_BADGE[row.role] ?? "Experimental";
     item.querySelector<HTMLElement>(".rd-devcard-name")!.textContent = row.name;
     if (meta) meta.textContent = deviceCardMeta(row);
+    if (purpose) purpose.textContent = deviceCardPurpose(row);
     item.querySelector<HTMLElement>(".widget-drag-handle")?.setAttribute(
       "aria-label",
       `Move ${row.name}`,
@@ -2138,7 +2810,7 @@ function syncDeviceRows(): void {
     if (row && meta) meta.textContent = deviceCardMeta(row);
     const word = btn.querySelector<HTMLElement>(".rd-dev-word");
     if (word) {
-      word.textContent = on ? "On the workbench — press to remove" : "Add to workbench";
+      word.textContent = on ? "On canvas — press to remove" : "Show on canvas";
     }
   }
 }
@@ -2294,16 +2966,40 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
       navigationModel: "design-tool",
       zoomRange: { min: 0.08, max: 3 },
       onToolModeChange: syncToolRail,
-      onZoomChange: (_zoom, tier) => applyZoomTier(tier),
+      onZoomChange: (zoom, tier) => applyZoomTier(tier, zoom),
       onCameraHistoryChange: syncBackView,
       onSelectionChange: syncInspectorToSelection,
-      onActiveItemStateChange: () => renderInspector(),
+      onActiveItemStateChange: () => {
+        renderInspector();
+        syncEncoderEditingAccess(
+          viewport.dataset.canvasZoomTier ?? "editing",
+          canvasZoomFromViewport(viewport),
+        );
+      },
       // Native controls inside client-authored widgets are not Forma runtime
       // components. Enter on the move handle / Ctrl+Enter on the item still
       // needs a deterministic way into them.
       onOpenActiveControls: (item) => {
+        const isEncoder = item.classList.contains("rd-encoder-device-node");
+        if (isEncoder) {
+          const state = nCanvas?.getItemState(item);
+          const manualScale = state?.manualScale ?? 1;
+          const zoom = canvasZoomFromViewport(viewport);
+          const requiredZoom = Math.min(
+            3,
+            Math.max(0.94, ENCODER_MIN_EFFECTIVE_EDIT_SCALE / manualScale),
+          );
+          if (viewport.dataset.canvasZoomTier !== "editing" ||
+              zoom * manualScale < ENCODER_MIN_EFFECTIVE_EDIT_SCALE) {
+            nCanvas?.setZoomTo(requiredZoom, "before opening encoder controls");
+            // The camera render is scheduled. Release this exact product host
+            // now so the synchronous F2 contract can focus its roving entry;
+            // the render callback will restamp the authoritative tier.
+            syncEncoderEditingAccess("editing", requiredZoom);
+          }
+        }
         const runtime = item.querySelector<HTMLElement>("[data-forma-runtime-host]");
-        const control = item.classList.contains("rd-encoder-device-node")
+        const control = isEncoder
           ? runtime?.querySelector<HTMLElement>('[data-terminal-id][tabindex="0"]') ??
             runtime?.querySelector<HTMLElement>(
               "button:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href]",
@@ -2315,7 +3011,7 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
         // Semantic overview intentionally hides editing chrome. F2 is an
         // explicit request to enter it, so cross the editing threshold before
         // focusing rather than claiming success on a display:none control.
-        if (control.getClientRects().length === 0) {
+        if (!isEncoder && control.getClientRects().length === 0) {
           nCanvas?.setZoomTo(0.94, "before opening widget controls");
         }
         control.focus({ preventScroll: true });
@@ -2330,6 +3026,22 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
       },
     },
   );
+  encoderAttentionObserver?.disconnect();
+  encoderAttentionObserver = new MutationObserver((records) => {
+    if (!records.some((record) =>
+      record.target instanceof HTMLElement &&
+      record.target.classList.contains("rd-encoder-device-node")
+    )) return;
+    syncEncoderEditingAccess(
+      viewport.dataset.canvasZoomTier ?? "editing",
+      canvasZoomFromViewport(viewport),
+    );
+  });
+  encoderAttentionObserver.observe(stage, {
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["data-attention-scale", "data-canvas-manual-scale"],
+  });
   setCanvasMap(canvasPrefs.mapHidden === true);
   // The served keyboard widget: mountItem on the CONNECTED article adopts
   // it with its remembered spot (nocturne's own mechanism), the plate on
@@ -2350,6 +3062,34 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
   restoreBench();
   syncCtrlBench();
   syncEncoderProfileLabButton();
+  // The mapping cords: the SAME layer engine /nocturne mounts, over this
+  // page's stage. It observes the stage's style mutations itself (camera +
+  // widget geometry), so card drags and zooms repaint the cords with no
+  // further call sites.
+  const flowLines = surface.querySelector<SVGSVGElement>("#n-mapping-paths");
+  const flowPorts = surface.querySelector<SVGSVGElement>("#n-mapping-ports");
+  const flowNodes = surface.querySelector<HTMLElement>("#n-mapping-processors");
+  const flowTrace = scope.querySelector<HTMLOutputElement>("#rd-mapping-trace");
+  if (flowLines && flowPorts && flowNodes) {
+    mappingFlowLayer?.dispose();
+    mappingFlowLayer = new MappingFlowLayer(
+      scope,
+      viewport,
+      stage,
+      flowLines,
+      flowPorts,
+      flowNodes,
+      {
+        onLayout: paintMappingCordCount,
+        getProcessorOffset: processorOffsetFor,
+        onProcessorOffsetCommit: (processorId, offset) =>
+          commitProcessorOffset(processorId, offset),
+        announce: rdAnnounce,
+        traceOutput: flowTrace,
+      },
+    );
+    syncMappingCords();
+  }
   syncMapCount();
   syncToolRail(nCanvas.toolMode());
   wireSpotlight(stage, viewport);
@@ -2380,7 +3120,10 @@ function typingIntoSomething(event: KeyboardEvent): boolean {
 function canvasOwnsKeyboardFocus(): boolean {
   const canvas = rdRoot?.querySelector<HTMLElement>(".n-canvas");
   const active = document.activeElement;
-  return Boolean(canvas && active instanceof HTMLElement && canvas.contains(active));
+  // Interactive controller regions are SVG elements, not HTMLElements. They
+  // still belong to the canvas keyboard context, so keep canvas-level Escape
+  // and shortcut handling available while one of those regions owns focus.
+  return Boolean(canvas && active instanceof Element && canvas.contains(active));
 }
 
 export function redesignWire(root: HTMLElement): void {
@@ -2392,6 +3135,20 @@ export function redesignWire(root: HTMLElement): void {
   // chosen on /nocturne is the same controller's finish here.
   loadDs4Variants();
   loadControllerFinishes();
+  // The Paths scope select (a change, not a click).
+  root.addEventListener("change", (ev) => {
+    // A macro duration or auto-fire rate commits when the author leaves the
+    // box or presses Enter — the editor module owns the act.
+    if (rdMacChange(ev.target as HTMLElement | null)) return;
+    const select = ev.target;
+    if (
+      select instanceof HTMLSelectElement &&
+      select.dataset.nx === "rd-mapping-paths" &&
+      mappingPathModeIsValid(select.value)
+    ) {
+      setMappingPathMode(select.value);
+    }
+  });
   root.addEventListener("click", (ev) => {
     const target = ev.target as HTMLElement | null;
     const hit = target?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
@@ -2406,8 +3163,8 @@ export function redesignWire(root: HTMLElement): void {
     // The theme menu (a native details): an outside click puts it away —
     // the nocturne configuration menu's own convention. Closing after an
     // action belongs to the fetch-submit layer, not here.
-    const themeMenu = rdRoot?.querySelector<HTMLElement>(".rd-themed[open]");
-    if (themeMenu && !target?.closest(".rd-themed")) {
+    const themeMenu = rdRoot?.querySelector<HTMLElement>("[data-rd-theme-menu][open]");
+    if (themeMenu && !target?.closest("[data-rd-theme-menu]")) {
       closeThemeMenu();
     }
     // The board and While-playing pickers keep the same convention: a
@@ -2418,11 +3175,41 @@ export function redesignWire(root: HTMLElement): void {
     )) {
       if (target && !pick.contains(target)) pick.removeAttribute("open");
     }
+    // THE MACRO EDITOR's own controls (cells, motions, policies, acts) —
+    // checked before the [data-nx] switch because they live inside the
+    // dialog's dlg-noop shield and carry data-mac* instead.
+    if (rdMacClick(target)) {
+      ev.preventDefault();
+      return;
+    }
+    // Edit steps… (and any same-page ?macro= door): enhanced into a URL
+    // swap + refetch so the canvas keeps its camera — SSR still serves the
+    // dialog open on a cold load of the same href.
+    const macroDoor = target?.closest<HTMLAnchorElement>('a[href^="/redesign?"]');
+    if (macroDoor) {
+      const href = macroDoor.getAttribute("href") ?? "";
+      if (new URL(href, window.location.origin).searchParams.has("macro")) {
+        ev.preventDefault();
+        window.history.replaceState(null, "", href);
+        void redesignRefreshFn();
+        return;
+      }
+    }
+    if (hit === "mac-close") {
+      ev.preventDefault();
+      rdMacClose();
+      return;
+    }
     // Plate cell → Keys row: the board is the Keys tab's own picture, so
     // clicking a key reveals that key's row (a bound cap) or its free chip.
+    // While a LEARN is armed the plate is the other way to answer it:
+    // clicking a key resolves the capture exactly like pressing it.
     const cell = target?.closest<HTMLElement>(
       '[data-instance-id="keyboard"] .n-kb [data-key], [data-instance-id="keyboard"] .n-kbtray-row [data-key]',
     );
+    if (cell && resolveLearnWithKey(cell.getAttribute("data-key") ?? "", ev.shiftKey)) {
+      return;
+    }
     if (cell) {
       pendingLocateKey = cell.getAttribute("data-key") ?? "";
       if (inspTab !== "keys") {
@@ -2452,17 +3239,45 @@ export function redesignWire(root: HTMLElement): void {
     // Pad art → binding row: every control on a card's silhouette carries
     // its mapper function(s) in data-fn (the 4460 pointer enhancement).
     // The click already selected the card through the engine; opening the
-    // inspector and locating the row is this page's half.
+    // inspector and locating the row is this page's half. With a KEY IN
+    // HAND, the pad IS the picker: the clicked control takes the key.
     const zone = target?.closest<Element>(".rd-ctrlcard-artwrap [data-fn]");
+    // Pointer activation selected the containing card on pointerdown. A
+    // keyboard or assistive-technology click has no pointerdown, so make the
+    // same selection explicitly before the inspector reads it. `detail === 0`
+    // is the click contract for non-pointer activation; keeping this guard is
+    // what preserves the canvas engine's Shift/Ctrl/Cmd pointer multi-select.
+    if (zone && ev.detail === 0) {
+      const card = zone.closest<HTMLElement>(
+        '.widget-instance[data-instance-id^="ctrl-slot-"]',
+      );
+      const canvas = nCanvas;
+      if (card && canvas && canvas.activeItem() !== card) canvas.setActive(card);
+    }
+    if (zone && assignHeld()) {
+      const fnName = (zone.getAttribute("data-fn") ?? "").split(/\s+/)[0] ?? "";
+      const padSlot =
+        zone.closest<HTMLElement>("[data-pad-slot]")?.getAttribute("data-pad-slot") ??
+        rdCtrlPanel?.slot_val ??
+        "";
+      const pad = rdCtrlPads.find((candidate) => String(candidate.slot) === padSlot);
+      // Canonical spelling and readable label from the SERVED pad tables —
+      // the row DOM is never an implicit data store (nocturne's rule).
+      const control = (pad?.controls ?? []).find(
+        (candidate) => candidate.function.toLowerCase() === fnName.toLowerCase(),
+      );
+      const canonical = control?.function ?? fnName;
+      const label = control?.label || pad?.fn_names?.[fnName] || fnName;
+      if (fnName && padSlot &&
+          resolveAssignWithControl(padSlot, canonical, label, ev.shiftKey)) {
+        return;
+      }
+    }
     if (zone) {
       pendingLocateFns = zone.getAttribute("data-fn") ?? "";
       if (inspTab !== "controls") {
         inspTab = "controls";
-        try {
-          window.localStorage.setItem(RD_UI_STORE, JSON.stringify({ inspTab }));
-        } catch {
-          // chrome only
-        }
+        saveKbUi();
       }
       setInspector(true);
       renderInspector();
@@ -2470,6 +3285,81 @@ export function redesignWire(root: HTMLElement): void {
     }
     if (!hit) return;
     const closeMenuAfter = Boolean(target?.closest(".rd-menu"));
+    if (hit === "dlg-noop") {
+      // A click inside an open dialog panel: stays open.
+      return;
+    }
+    if (hit === "rd-conf-force") {
+      conflictForce();
+      return;
+    }
+    if (hit === "rd-conf-cancel") {
+      conflictCancel();
+      return;
+    }
+    if (hit === "rd-learn-cancel") {
+      if (assignHeld()) cancelAssign();
+      else void cancelLearn();
+      return;
+    }
+    if (hit === "rd-learn-skip") {
+      skipAutoMapStep();
+      return;
+    }
+    if (hit === "rd-automap") {
+      startAutoMap();
+      return;
+    }
+    if (hit === "chip-learn" || hit === "chip-add" || hit === "chip-remove") {
+      // The row's own facts travel on its element, never re-derived here —
+      // and the chip click must not also toggle the fold it sits in.
+      ev.preventDefault();
+      const holder = target?.closest<HTMLElement>("[data-fn]");
+      const fnName = holder?.dataset.fn ?? "";
+      const slot = holder?.dataset.slot ?? rdCtrlPanel?.slot_val ?? "";
+      const label =
+        holder?.querySelector(".n-bind-label")?.textContent?.trim() ||
+        holder?.querySelector(".n-krow-chip")?.textContent?.trim() ||
+        fnName;
+      if (fnName && slot) {
+        void startLearn({
+          fn: fnName,
+          label,
+          slot,
+          mode: hit.endsWith("add") ? "add" : hit.endsWith("remove") ? "remove" : "replace",
+        });
+      }
+      return;
+    }
+    if (hit === "ctl-assign") {
+      // A FREE control chip: click, then press a key (or click one on the
+      // plate) — a replace-mode learn on an unbound control.
+      const chip = target?.closest<HTMLElement>("[data-fn]");
+      const fnName = chip?.dataset.fn ?? "";
+      const slot = rdCtrlPanel?.slot_val ?? "";
+      if (fnName && slot) {
+        void startLearn({
+          fn: fnName,
+          label: chip?.textContent?.trim() || fnName,
+          slot,
+          mode: "replace",
+        });
+      }
+      return;
+    }
+    if (hit === "key-assign" || hit === "key-remove") {
+      // A Keys-tab row's +/−: take the key in hand, then click a control on
+      // the pad (the assign twin; remove takes the key OFF the clicked one).
+      const key = target?.closest<HTMLElement>("[data-key]")?.getAttribute("data-key") ?? "";
+      if (key) armAssign(key, hit === "key-remove" ? "remove" : "add");
+      return;
+    }
+    if (hit === "rd-akey") {
+      // A FREE key chip in the Keys tab: the key goes in hand, replace-mode.
+      const key = target?.closest<HTMLElement>("[data-key]")?.getAttribute("data-key") ?? "";
+      if (key) armAssign(key, "replace");
+      return;
+    }
     if (hit === "canvas-fit") {
       nCanvas?.fitAll();
     } else if (hit === "kb-theme") {
@@ -2654,8 +3544,15 @@ export function redesignWire(root: HTMLElement): void {
 
   window.addEventListener("keydown", (ev) => {
     // Ctrl/Cmd+K / F open the palette from ANYWHERE, a text field included —
-    // the one binding checked before the typing guard.
+    // the one binding checked before the typing guard. NOT while a mapping
+    // gesture holds the page: a key in hand or an armed learn owns the
+    // keyboard (nocturne's Ctrl+K-only-when-idle rule).
     if ((ev.metaKey || ev.ctrlKey) && (ev.key === "k" || ev.key === "f")) {
+      if (root.querySelector<HTMLElement>("[data-rd-apply-dialog]:not([hidden])")) {
+        ev.preventDefault();
+        return;
+      }
+      if (mapperBusy()) return;
       ev.preventDefault();
       setPalette(!paletteOpen());
       return;
@@ -2673,6 +3570,22 @@ export function redesignWire(root: HTMLElement): void {
       return;
     }
     if (ev.key === "Escape") {
+      // The MAPPER's rung sits at the top of the ladder: an open conflict
+      // dialog, a key in hand, or an armed learn consumes Escape before any
+      // chrome closes (the learn's own capture guard never sees Escape —
+      // this is its one deterministic exit).
+      if (mapperEscape()) {
+        ev.preventDefault();
+        return;
+      }
+      // The macro editor's rung: below the mapper's gestures, above every
+      // chrome disclosure — its own close (with the unsaved-work warning)
+      // is the honest thing Escape can do while the roll is open.
+      if (rdMacOpen()) {
+        ev.preventDefault();
+        rdMacClose();
+        return;
+      }
       // The escape ladder (design handoff §2), one rung per press: theme
       // menu → device picker → sheet → palette → camera menu → focus mode →
       // back view → clear selection. A closed disclosure returns focus to
@@ -2698,6 +3611,11 @@ export function redesignWire(root: HTMLElement): void {
       return;
     }
     if (typingIntoSomething(ev)) return;
+    // While a key is in hand (BY-KEY assign) or the conflict dialog is up,
+    // the single-key canvas shortcuts suspend — pressing F with a key held
+    // must not enter focus mode (the learn's capture guard swallows its own
+    // keys; assign deliberately arms no guard, so THIS is its guard).
+    if (mapperBusy()) return;
     // Unmodified design-tool shortcuts belong to the canvas. Keep them from
     // firing while focus is in the title bar or Inspector; Cmd/Ctrl+K and the
     // Escape ladder above remain intentionally global.
@@ -2755,10 +3673,137 @@ export function redesignWire(root: HTMLElement): void {
 
 // ── The island ──────────────────────────────────────────────────────────────
 
+/** The same native Theme disclosure has two responsive homes: the desktop
+ * rail and the compact Setup panel. Both render the server-owned rows and
+ * ordinary POST forms, so narrow screens do not trade product access for fit
+ * and the no-script path remains complete. Distinct presentation classes keep
+ * the long-standing desktop selectors singular; data-rd-theme-* is the shared
+ * behavior contract. */
+function redesignThemeDisclosure() {
+  return h(
+    "details",
+    { class: "rd-themed", "data-rd-theme-menu": "" },
+    h(
+      "summary",
+      {
+        class: "rd-theme-sum",
+        title: "How the Studio looks",
+        "aria-label": "Choose Studio theme",
+        "data-rd-theme-summary": "",
+      },
+      "◐ Theme",
+    ),
+    h(
+      "div",
+      { class: "rd-thememenu" },
+      h("div", { class: "n-kick-row" }, h("span", { class: "n-kick" }, "How the Studio looks")),
+      h(
+        "p",
+        { class: "n-devnote" },
+        "Pages follow the operating system's light or dark choice unless you pick one here.",
+      ),
+      createList(
+        () => rdThemeRows(),
+        (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
+        (r) =>
+          h(
+            "form",
+            {
+              class: "n-modeform",
+              method: "post",
+              action: "/redesign/theme",
+              "data-rd-form": "theme",
+            },
+            h("input", { type: "hidden", name: "theme", value: r.name }),
+            h(
+              "button",
+              {
+                type: "submit",
+                class: r.cls,
+                "aria-current": r.chosen,
+              },
+              h("span", { class: "n-radio-dot" }),
+              h(
+                "span",
+                { class: "n-radio-txt" },
+                h("span", { class: "n-radio-title" }, r.title),
+                h("span", { class: "n-radio-detail" }, r.detail),
+              ),
+            ),
+          ),
+      ),
+    ),
+  );
+}
+
+function redesignCompactThemeDisclosure() {
+  return h(
+    "details",
+    { class: "rd-themed-compact", "data-rd-theme-menu": "" },
+    h(
+      "summary",
+      {
+        class: "rd-theme-compact-sum",
+        title: "How the Studio looks",
+        "aria-label": "Choose Studio theme",
+        "data-rd-theme-summary": "",
+      },
+      "◐ Theme",
+    ),
+    h(
+      "div",
+      { class: "rd-thememenu-compact" },
+      h("div", { class: "n-kick-row" }, h("span", { class: "n-kick" }, "How the Studio looks")),
+      h(
+        "p",
+        { class: "n-devnote" },
+        "Pages follow the operating system's light or dark choice unless you pick one here.",
+      ),
+      createList(
+        () => rdCompactThemeRows(),
+        (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
+        (r) =>
+          h(
+            "form",
+            {
+              class: "n-modeform",
+              method: "post",
+              action: "/redesign/theme",
+              "data-rd-form": "theme",
+            },
+            h("input", { type: "hidden", name: "theme", value: r.name }),
+            h(
+              "button",
+              {
+                type: "submit",
+                class: r.cls,
+                "aria-current": r.chosen,
+              },
+              h("span", { class: "n-radio-dot" }),
+              h(
+                "span",
+                { class: "n-radio-txt" },
+                h("span", { class: "n-radio-title" }, r.title),
+                h("span", { class: "n-radio-detail" }, r.detail),
+              ),
+            ),
+          ),
+      ),
+    ),
+  );
+}
+
 export function RedesignIsland() {
   return h(
     "div",
-    { class: "nocturne rd" },
+    {
+      class: "nocturne rd",
+      // The stream is opened only after adoption, so its visual state cannot
+      // be server-painted. This narrow marker lets hydration parity ignore
+      // only the client-owned data-rd-live-state attribute while continuing
+      // to compare every durable lifecycle sentence and control.
+      "data-client-live-state": "",
+    },
     h(
       "main",
       { class: "n-main" },
@@ -2768,12 +3813,277 @@ export function RedesignIsland() {
         h(
           "div",
           { class: "n-meta rd-top" },
-          // The lane's identity, quiet: the product name and where you are.
+          // Product identity. The route remains /redesign during construction,
+          // but the surface is the workbench people will actually use — it
+          // should not make them reason about an internal migration name.
           h("span", { class: "rd-brand" }, "ksx Studio"),
-          h("span", { class: "rd-crumb" }, "Redesign"),
+          h("span", { class: "rd-crumb" }, "Workbench"),
           // Which machine answers this lane — the fixture badge, so the
           // redesign workbench can never be mistaken for the cabinet.
-          h("span", { class: () => rdEnvCls() }, () => rdEnvLabel()),
+          h("span", { class: () => rdEnvCls(), title: () => rdEnvLabel() }, () => rdEnvLabel()),
+          // The compact setup spine expands into the operational shell. A
+          // native details keeps every recovery and lifecycle form usable on
+          // the SSR/no-script path; JavaScript only adds in-place repaint and
+          // focus polish. Games, layouts and maintenance deliberately do not
+          // join this payload — the next Library block owns those reads.
+          h(
+            "details",
+            { class: "rd-setupd" },
+            h(
+              "summary",
+              { class: "rd-setup-sum", title: "Setup progress, draft, session and input readiness" },
+              h("span", { class: "rd-setup-mark", "aria-hidden": "true" }, "◆"),
+              h("span", { class: "rd-setup-compact" }, () => rdJourneyCompact()),
+              h("span", { class: "rd-setup-divider", "aria-hidden": "true" }, "·"),
+              h("span", { class: "rd-draft-label" }, () => rdOpDraftLabel()),
+              h("span", { class: "rd-caret", "aria-hidden": "true" }, "⌄"),
+            ),
+            h(
+              "div",
+              { class: "rd-setup-panel" },
+              h(
+                "div",
+                { class: "rd-setup-panel-head" },
+                h(
+                  "div",
+                  null,
+                  h("span", { class: "n-kick" }, "Setup"),
+                  h("p", { class: "rd-setup-line" }, () => rdJourneyLine()),
+                ),
+                h("span", { class: "rd-refresh-health", role: "status", hidden: "" }),
+                h(
+                  "div",
+                  { class: "rd-theme-compact-home" },
+                  redesignCompactThemeDisclosure(),
+                ),
+              ),
+              h(
+                "nav",
+                { class: "rd-journey", "aria-label": "Setup progress" },
+                createList(
+                  () => rdJourneyRows(),
+                  (row) => `${row.key}|${row.badge}|${row.cls}|${row.title}|${row.detail}`,
+                  (row) =>
+                    h(
+                      "div",
+                      { class: row.cls, "data-journey-step": row.key },
+                      h("span", { class: "rd-journey-badge" }, row.badge),
+                      h(
+                        "span",
+                        { class: "rd-journey-copy" },
+                        h("strong", null, row.title),
+                        h("span", null, row.detail),
+                      ),
+                    ),
+                ),
+              ),
+              h(
+                "div",
+                { class: "rd-setup-grid" },
+                h(
+                  "section",
+                  { class: "rd-setup-card rd-draft-card", "aria-labelledby": "rd-draft-head" },
+                  h("h2", { id: "rd-draft-head" }, "Draft and saved setup"),
+                  h("p", { class: "rd-card-lede" }, () => rdOpDraftDetail()),
+                  h(
+                    "div",
+                    { class: "rd-saved-row" },
+                    h("strong", null, () => rdOpSavedLabel()),
+                    h("span", null, () => rdOpSavedDetail()),
+                  ),
+                  h(
+                    "form",
+                    { method: "post", action: "/redesign/adopt", "data-rd-form": "adopt" },
+                    h(
+                      "button",
+                      {
+                        type: "submit",
+                        class: "rd-panel-action",
+                        disabled: () => rdAdoptDisabled(),
+                        "aria-describedby": "rd-adopt-reason",
+                      },
+                      () => rdAdoptLabel(),
+                    ),
+                  ),
+                  h("p", { id: "rd-adopt-reason", class: "rd-action-reason" }, () => rdAdoptReason()),
+                  h(
+                    "details",
+                    { class: "rd-start-over" },
+                    h("summary", null, "Start over…"),
+                    h("p", { id: "rd-discard-reason", class: "rd-action-reason" }, () => rdDiscardReason()),
+                    h(
+                      "form",
+                      { method: "post", action: "/redesign/discard", "data-rd-form": "discard" },
+                      h("input", {
+                        type: "hidden",
+                        name: "expected_revision",
+                        value: () => rdDraftRevision(),
+                      }),
+                      h(
+                        "label",
+                        { class: () => rdDiscardConfirmCls() },
+                        h("input", {
+                          type: "checkbox",
+                          name: "confirm_discard",
+                          value: "yes",
+                          required: () => rdDraftDirty(),
+                        }),
+                        "Discard unsaved edits",
+                      ),
+                      h(
+                        "button",
+                        {
+                          type: "submit",
+                          class: "rd-panel-action danger",
+                          disabled: () => rdDiscardDisabled(),
+                          "aria-describedby": "rd-discard-reason",
+                        },
+                        () => rdDiscardLabel(),
+                      ),
+                    ),
+                  ),
+                ),
+                h(
+                  "section",
+                  {
+                    class: () => rdOpSessionCls(),
+                    "aria-labelledby": "rd-session-head",
+                  },
+                  h("h2", { id: "rd-session-head" }, "Session"),
+                  h("p", { class: "rd-card-lede" }, () => rdOpSessionLine()),
+                  h("p", { class: "rd-escape-line" }, () => rdOpEscapeLine()),
+                  h("dl", { class: "rd-action-notes" },
+                    h("dt", null, "Save"),
+                    h("dd", { id: "rd-save-reason" }, () => rdSaveReason()),
+                    h("dt", null, "Play"),
+                    h("dd", { id: "rd-play-reason" }, () => rdPlayReason()),
+                    h("dt", null, "Apply"),
+                    h("dd", { id: "rd-apply-reason" }, () => rdApplyReason()),
+                    h("dt", null, "Stop"),
+                    h("dd", { id: "rd-stop-reason" }, () => rdStopReason()),
+                  ),
+                  h(
+                    "form",
+                    {
+                      class: () => rdReplacePlayCls(),
+                      method: "post",
+                      action: "/redesign/play",
+                      "data-rd-form": "play",
+                    },
+                    h("input", {
+                      type: "hidden",
+                      name: "expected_revision",
+                      value: () => rdDraftRevision(),
+                    }),
+                    h(
+                      "button",
+                      {
+                        type: "submit",
+                        class: "rd-panel-action",
+                        disabled: () => rdPlayDisabled(),
+                        "aria-describedby": "rd-play-reason",
+                      },
+                      "Replace session",
+                    ),
+                  ),
+                ),
+                h(
+                  "section",
+                  {
+                    class: "rd-setup-card rd-capture-card",
+                    id: "rd-capture-readiness",
+                    "data-capture-mode": () => rdCaptureMode(),
+                    "aria-labelledby": "rd-capture-head",
+                  },
+                  h("h2", { id: "rd-capture-head" }, () => rdCaptureHeading()),
+                  h("p", { class: "rd-card-lede" }, () => rdCaptureLine()),
+                  h("p", { class: "rd-capture-recovery-line" }, () => rdCaptureRecoveryLine()),
+                  h(
+                    "form",
+                    {
+                      class: () => rdCapturePrepareCls(),
+                      method: "post",
+                      action: "/redesign/capture/prepare",
+                      "data-rd-form": "capture-prepare",
+                    },
+                    h("input", { type: "hidden", name: "expected_selector", value: () => rdCaptureSelector() }),
+                    h("input", { type: "hidden", name: "instance_id", value: () => rdCaptureInstance() }),
+                    h(
+                      "label",
+                      { class: "rd-consent" },
+                      h("input", { type: "checkbox", name: "confirm_spare_keyboard", value: "yes", required: "" }),
+                      h("span", null, "I connected and tested a different keyboard that can still type."),
+                    ),
+                    h(
+                      "label",
+                      { class: "rd-consent" },
+                      h("input", { type: "checkbox", name: "confirm_rebind", value: "yes", required: "" }),
+                      h("span", null, "I understand this exact input stops ordinary typing until I release it here."),
+                    ),
+                    h(
+                      "label",
+                      { class: "rd-consent" },
+                      h("input", { type: "checkbox", name: "confirm_machine_certificate", value: "yes", required: "" }),
+                      h("span", null, "I allow ksx to install its machine-local signing certificate for this generated driver package."),
+                    ),
+                    h(
+                      "button",
+                      {
+                        type: "submit",
+                        class: "rd-panel-action primary",
+                        "data-rd-product-disabled": "false",
+                      },
+                      "Prepare this input",
+                    ),
+                    h("p", { class: "rd-action-reason" }, "Windows will ask for permission. ksx stays open and returns here afterward."),
+                  ),
+                  h(
+                    "div",
+                    { class: () => rdCaptureHeldCls() },
+                    h("h3", null, "Keyboards held by ksx"),
+                    h("p", { class: "rd-action-reason" }, "Release is resolved from the current Windows device tree, even when the draft is empty."),
+                    createList(
+                      () => rdCaptureHeld(),
+                      (row) => `${row.selector}|${row.instance}|${row.can_release}|${row.name}|${row.note}`,
+                      (row) =>
+                        h(
+                          "article",
+                          { class: "rd-held-row" },
+                          h(
+                            "div",
+                            null,
+                            h("strong", null, row.name),
+                            h("span", null, row.summary),
+                            h("span", { class: "rd-held-note" }, row.note),
+                          ),
+                          h(
+                            "form",
+                            { method: "post", action: "/redesign/capture/release", "data-rd-form": "capture-release" },
+                            h("input", { type: "hidden", name: "expected_selector", value: row.selector }),
+                            h("input", { type: "hidden", name: "instance_id", value: row.instance }),
+                            h(
+                              "label",
+                              { class: "rd-consent compact" },
+                              h("input", { type: "checkbox", name: "confirm_release", value: "yes", required: "" }),
+                              h("span", null, "Return this keyboard to ordinary typing"),
+                            ),
+                            h(
+                              "button",
+                              {
+                                type: "submit",
+                                class: "rd-panel-action",
+                                disabled: row.disabled,
+                              },
+                              "Release",
+                            ),
+                          ),
+                        ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
           // The workbench feed: open the device picker. Scripting-only
           // chrome (`.n-autobtn`), rightly — the canvas it feeds is too.
           h(
@@ -2813,15 +4123,117 @@ export function RedesignIsland() {
               "aria-hidden": "true",
               tabindex: "-1",
               hidden: "",
-              title: "Internal encoder research harness",
+              // The NOT-SHOWN state's words — first paint's truth. The sync
+              // fn rewrites this title at every toggle, and hydration runs
+              // it once, so the served bytes must say what that first run
+              // says or the parity gate reads the rewrite as drift.
+              title: "Inspect connected and reference encoder profiles on the canvas",
             },
             "◇ Encoders",
           ),
           h("span", { class: "rd-spring" }),
-          // The action flash — the one place a verb's outcome lands. Served
-          // from the allowlisted ?flash= on a full load; the entry's
-          // fetch-submit layer applies the same copy without one.
-          h("span", { role: "status", class: () => rdFlashCls() }, () => rdFlashLine()),
+          // Operational actions stay visible and explain disabled states in
+          // the Setup disclosure. Play never implies Save; Apply never
+          // implies disk persistence; Stop remains a dedicated escape from
+          // the live session. This separation is the product contract.
+          h(
+            "div",
+            { class: "rd-run-actions", role: "group", "aria-label": "Lifecycle controls" },
+            h(
+              "span",
+              {
+                class: "rd-live-state",
+                "data-rd-live-status": "",
+                "data-live-chatter": "",
+                role: "status",
+              },
+            ),
+            h("span", {
+              class: "rd-live-stats",
+              "data-rd-live-stats": "",
+              "data-live-chatter": "",
+              "aria-hidden": "true",
+            }),
+            h("span", {
+              class: "rd-live-ticker",
+              "data-rd-live-ticker": "",
+              "data-live-chatter": "",
+              "aria-hidden": "true",
+            }),
+            h(
+              "form",
+              { class: "rd-runform rd-saveform", method: "post", action: "/redesign/save", "data-rd-form": "save" },
+              h("input", {
+                type: "hidden",
+                name: "expected_revision",
+                value: () => rdDraftRevision(),
+              }),
+              h(
+                "button",
+                {
+                  type: "submit",
+                  class: "rd-runbtn",
+                  disabled: () => rdSaveDisabled(),
+                  "aria-describedby": "rd-save-reason",
+                },
+                () => rdSaveLabel(),
+              ),
+            ),
+            h(
+              "form",
+              { class: () => rdApplyCls(), method: "post", action: "/redesign/apply", "data-rd-form": "apply" },
+              h("input", {
+                type: "hidden",
+                name: "expected_revision",
+                value: () => rdDraftRevision(),
+              }),
+              h(
+                "button",
+                {
+                  type: "submit",
+                  class: "rd-runbtn apply",
+                  disabled: () => rdApplyDisabled(),
+                  "aria-describedby": "rd-apply-reason",
+                },
+                () => rdApplyLabel(),
+              ),
+            ),
+            h(
+              "form",
+              { class: () => rdPlayCls(), method: "post", action: "/redesign/play", "data-rd-form": "play" },
+              h("input", {
+                type: "hidden",
+                name: "expected_revision",
+                value: () => rdDraftRevision(),
+              }),
+              h(
+                "button",
+                {
+                  type: "submit",
+                  class: "rd-runbtn primary",
+                  disabled: () => rdPlayDisabled(),
+                  "aria-describedby": "rd-play-reason",
+                },
+                h("span", { "aria-hidden": "true" }, "▷"),
+                () => rdPlayLabel(),
+              ),
+            ),
+            h(
+              "form",
+              { class: () => rdStopCls(), method: "post", action: "/redesign/stop", "data-rd-form": "stop" },
+              h(
+                "button",
+                {
+                  type: "submit",
+                  class: "rd-runbtn stop",
+                  disabled: () => rdStopDisabled(),
+                  "aria-describedby": "rd-stop-reason",
+                },
+                h("span", { "aria-hidden": "true" }, "■"),
+                () => rdStopLabel(),
+              ),
+            ),
+          ),
           // The short undo window after a ✕ removal — the nocturne chip's
           // contract verbatim: the SERVER holds the resurrection material
           // and serves this chip while the window lasts; the verb replays
@@ -2837,6 +4249,35 @@ export function RedesignIsland() {
             },
             h("span", { class: "n-undo-lab" }, () => rdUndoLabel()),
             h("button", { class: "n-undo-btn", type: "submit" }, "Undo"),
+          ),
+          // The mapper's capture toast — SSR'd hidden; the mapper module
+          // writes it imperatively on user action only (interaction state,
+          // never payload truth — nocturne's learnbar contract).
+          h(
+            "div",
+            { role: "status", class: "rd-learnbar n-learnbar none" },
+            h(
+              "span",
+              { class: "n-learn-txt" },
+              h("span", { class: "n-learn-line rd-learn-line" }),
+              h("span", { class: "n-learn-sub rd-learn-sub" }),
+            ),
+            h(
+              "label",
+              { class: "n-chain rd-chain", hidden: "" },
+              h("input", { type: "checkbox", class: "n-chain-box rd-chain-box" }),
+              "Bind several",
+            ),
+            h(
+              "button",
+              { type: "button", "data-nx": "rd-learn-skip", class: "n-bbtn sm", hidden: "" },
+              "Skip",
+            ),
+            h(
+              "button",
+              { type: "button", class: "n-bbtn sm", "data-nx": "rd-learn-cancel" },
+              "Cancel",
+            ),
           ),
           // Back view: appears the moment the camera history is non-empty;
           // its title carries the top entry's label.
@@ -2873,72 +4314,80 @@ export function RedesignIsland() {
             },
             "⌨",
           ),
-          // The Studio theme menu: the nocturne picker's rows, re-homed into
-          // the topbar as a NATIVE details — every row is a plain form POST,
-          // so the choice works with scripting off and the served facts
-          // paint on the SSR pass (which is why the summary is NOT an
-          // `.n-autobtn`: that class is scripting-only chrome). JS adds only
-          // outside-click dismissal and the fetch-submit upgrade; the fold
-          // closes itself after acting.
+          // The desktop home of the native Theme disclosure. Compact widths
+          // render the same forms inside Setup, where they remain reachable
+          // without competing with lifecycle verbs for rail width.
           h(
-            "details",
-            { class: "rd-themed" },
+            "div",
+            { class: "rd-theme-rail-home" },
+            redesignThemeDisclosure(),
+          ),
+          h("span", { role: "status", class: "n-live-sr", "data-live-chatter": "" }),
+        ),
+        // Action results need room to be read. The legacy topbar pill clipped
+        // the exact recovery sentence behind an ellipsis; this banner is a
+        // real row and disappears entirely when there is no action outcome.
+        h("div", { role: "status", class: () => rdFlashCls() }, () => rdFlashLine()),
+        // Apply can update bindings in place, but structural changes require
+        // replacing the running controller session. This dialog is a
+        // scripted enhancement of the ordinary Apply form: the no-script
+        // path receives the same fixed recovery sentence and never loses the
+        // verb. The daemon's exact difference is inserted into the lede.
+        h(
+          "div",
+          { class: "rd-restart-back", "data-rd-apply-dialog": "", hidden: "" },
+          h("div", { class: "rd-restart-scrim", "data-rd-apply-cancel": "" }),
+          h(
+            "section",
+            {
+              class: "rd-restart-dialog",
+              role: "dialog",
+              "aria-modal": "true",
+              "aria-labelledby": "rd-restart-title",
+              "aria-describedby": "rd-restart-message rd-restart-note",
+              tabindex: "-1",
+            },
+            h("span", { class: "n-kick" }, "Session restart needed"),
             h(
-              "summary",
-              { class: "rd-theme-sum", title: "How the Studio looks" },
-              "◐ Theme",
+              "h2",
+              { id: "rd-restart-title" },
+              "These changes cannot be applied while Play is running",
+            ),
+            h("p", { id: "rd-restart-message", "data-rd-apply-message": "" }),
+            h(
+              "p",
+              { id: "rd-restart-note", class: "rd-restart-note" },
+              "Replace session briefly unplugs and reconnects the virtual controllers. A game may notice that reconnect.",
             ),
             h(
               "div",
-              { class: "rd-thememenu" },
+              { class: "rd-restart-actions" },
               h(
-                "div",
-                { class: "n-kick-row" },
-                h("span", { class: "n-kick" }, "How the Studio looks"),
+                "button",
+                { type: "button", class: "rd-panel-action", "data-rd-apply-cancel": "" },
+                "Keep playing as-is",
               ),
               h(
-                "p",
-                { class: "n-devnote" },
-                "Pages follow the operating system's light or dark choice unless you pick one here.",
-              ),
-              createList(
-                () => rdThemeRows(),
-                (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
-                (r) =>
-                  h(
-                    "form",
-                    {
-                      class: "n-modeform",
-                      method: "post",
-                      action: "/redesign/theme",
-                      "data-rd-form": "theme",
-                    },
-                    h("input", { type: "hidden", name: "theme", value: r.name }),
-                    h(
-                      "button",
-                      // `aria-current` is the only part of "this is the one
-                      // you are on" a screen reader can reach: `.n-radio.on`
-                      // paints a dot and announces nothing at all. Explicit
-                      // string tokens avoid boolean-attribute serialization's
-                      // empty `aria-current` value for the selected row.
-                      {
-                        type: "submit",
-                        class: r.cls,
-                        "aria-current": r.chosen,
-                      },
-                      h("span", { class: "n-radio-dot" }),
-                      h(
-                        "span",
-                        { class: "n-radio-txt" },
-                        h("span", { class: "n-radio-title" }, r.title),
-                        h("span", { class: "n-radio-detail" }, r.detail),
-                      ),
-                    ),
-                  ),
+                "form",
+                { method: "post", action: "/redesign/play", "data-rd-form": "play-replace" },
+                h("input", {
+                  type: "hidden",
+                  name: "expected_revision",
+                  value: "",
+                  "data-rd-apply-revision": "",
+                }),
+                h(
+                  "button",
+                  {
+                    type: "submit",
+                    class: "rd-panel-action primary",
+                    "data-rd-product-disabled": "false",
+                  },
+                  "Replace session",
+                ),
               ),
             ),
           ),
-          h("span", { role: "status", class: "n-live-sr" }),
         ),
         // ── The device picker (the workbench feed): near-full-page modal ──
         // SERVED — shell, scan line, all four tiers, every row — and hidden
@@ -2978,6 +4427,11 @@ export function RedesignIsland() {
             ),
             h("p", { class: "n-devnote" }, () => rdDevScanLine()),
             h(
+              "p",
+              { class: "n-devnote rd-devmodal-purpose" },
+              "Show adds a device card to this canvas for inspection. It does not change mapping. On the card, Use as mapping input chooses the one device whose emitted keys appear on the Input source keyboard.",
+            ),
+            h(
               "div",
               { class: () => rdDevKbFoldCls() },
               h("h3", { class: "rd-devhead" }, () => rdDevKbHead()),
@@ -3012,7 +4466,7 @@ export function RedesignIsland() {
                       // what caught the chip existing only after hydration.
                       h("span", { class: "rd-dev-stagedchip" }, "staged"),
                       h("span", { class: "n-dev-meta" }, r.meta),
-                      h("span", { class: "n-dev-meta rd-dev-word" }, "Add to workbench"),
+                      h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
                     ),
                     h("span", { class: "n-dev-dot" }),
                   ),
@@ -3052,8 +4506,13 @@ export function RedesignIsland() {
                       // parent with a dynamic text, and the parity gate is
                       // what caught the chip existing only after hydration.
                       h("span", { class: "rd-dev-stagedchip" }, "staged"),
-                      h("span", { class: "n-dev-meta" }, r.meta),
-                      h("span", { class: "n-dev-meta rd-dev-word" }, "Add to workbench"),
+                      // An ENCODER's meta line follows the live session: the
+                      // surface reads the chart over the wire at mount, and
+                      // the roster's "chart not read yet" is stale the moment
+                      // it starts — connection chatter, by the parity
+                      // contract, so hydration may reword it.
+                      h("span", { class: "n-dev-meta", "data-live-chatter": "" }, r.meta),
+                      h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
                     ),
                     h("span", { class: "n-dev-dot" }),
                   ),
@@ -3094,7 +4553,7 @@ export function RedesignIsland() {
                       // what caught the chip existing only after hydration.
                       h("span", { class: "rd-dev-stagedchip" }, "staged"),
                       h("span", { class: "n-dev-meta" }, r.meta),
-                      h("span", { class: "n-dev-meta rd-dev-word" }, "Add to workbench"),
+                      h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
                     ),
                     h("span", { class: "n-dev-dot" }),
                   ),
@@ -3200,6 +4659,58 @@ export function RedesignIsland() {
                 ),
             ),
           ),
+        ),
+        // The key-conflict consequence dialog — the learned key already
+        // works somewhere else. "Use here too" is a deliberate fan-out that
+        // takes nothing away; Cancel changes nothing. SSR'd hidden; the
+        // mapper fills title/lines and toggles it (capture-time state).
+        h(
+          "div",
+          { class: "rd-confdlg nd-back none", "data-nx": "rd-conf-cancel" },
+          h(
+            "div",
+            {
+              class: "nd",
+              "data-nx": "dlg-noop",
+              role: "dialog",
+              "aria-modal": "true",
+              tabindex: "-1",
+              "aria-label": "Key conflict",
+            },
+            h("div", { class: "nd-kick" }, "Key conflict"),
+            h("div", { class: "nd-title" }),
+            h("div", { class: "nd-lede" }),
+            h(
+              "div",
+              { class: "nd-actions" },
+              h(
+                "button",
+                { class: "nd-btn", type: "button", "data-nx": "rd-conf-cancel" },
+                "Cancel",
+              ),
+              h(
+                "button",
+                { class: "nd-btn primary", type: "button", "data-nx": "rd-conf-force" },
+                "Use here too",
+              ),
+            ),
+          ),
+        ),
+        // The macro STEP editor's holder — the redesign-macro-editor module
+        // paints the whole roll into it from the served view; the `.none`
+        // modifier (never the hidden attribute — `.nd-back`'s display:grid
+        // outranks it) is the one off switch, and `back_cls` is served.
+        h(
+          "div",
+          { class: "rd-macdlg nd-back none", "data-nx": "mac-close" },
+          h("div", {
+            class: "nd nd-mac",
+            "data-nx": "dlg-noop",
+            role: "dialog",
+            "aria-modal": "true",
+            tabindex: "-1",
+            "aria-label": "Macro steps",
+          }),
         ),
         h(
           "section",
@@ -3362,6 +4873,14 @@ export function RedesignIsland() {
                   h(
                     "div",
                     { class: "n-kbhead" },
+                    // The mapper's mirror cue: a control is waiting for a
+                    // key. Client-toggled interaction state, like 4460's.
+                    h(
+                      "div",
+                      { "aria-hidden": "true", class: "rd-keycue n-key-cue none" },
+                      h("span", { class: "n-cue-dot" }),
+                      h("span", { class: "rd-keycue-text" }),
+                    ),
                     h("span", { class: "n-kick" }, () => rdKbTitle()),
                     // Which color speaks for which controller; each chip
                     // mutes that player's color on the keys.
@@ -3400,44 +4919,10 @@ export function RedesignIsland() {
                       ),
                     ),
                     h("div", { class: "n-spring" }),
-                    // The board picker — which picture the plate draws; a
-                    // real form per row through the re-homed board verb.
-                    h(
-                      "details",
-                      { class: "rd-boardpick" },
-                      h("summary", { class: "n-autobtn rd-boardpick-sum" }, "Board"),
-                      h(
-                        "div",
-                        { class: "rd-boardpick-pop" },
-                        h("p", { class: "n-devnote" }, () => rdBoardLine()),
-                        createList(
-                          () => rdBoardRows(),
-                          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls,
-                          (r) =>
-                            h(
-                              "form",
-                              {
-                                class: "n-modeform",
-                                method: "post",
-                                action: "/redesign/board",
-                                "data-rd-form": "board",
-                              },
-                              h("input", { type: "hidden", name: "board", value: r.name }),
-                              h(
-                                "button",
-                                { type: "submit", class: r.cls },
-                                h("span", { class: "n-radio-dot" }),
-                                h(
-                                  "span",
-                                  { class: "n-radio-txt" },
-                                  h("span", { class: "n-radio-title" }, r.title),
-                                  h("span", { class: "n-radio-detail" }, r.detail),
-                                ),
-                              ),
-                            ),
-                        ),
-                      ),
-                    ),
+                    // NO board picker here, deliberately (Victor, 2026-08-29):
+                    // a keyboard looks like a keyboard on this page. Choosing
+                    // a different picture (a saved panel, a drawn board) is a
+                    // 4460 affair until an "advanced" home earns its place.
                     // While playing: how this input's keys behave during a
                     // session — freeze (drive pads only), split (mapped
                     // keys drive, the rest still type), or take nothing.
@@ -3578,11 +5063,21 @@ export function RedesignIsland() {
                         { class: "n-kbrow" },
                         createList(
                           () => rdKbRow1(),
-                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.tab + "|" + r.aria_hidden + "|" + r.style,
                           (r) =>
                             h(
-                              "div",
-                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              "button",
+                              {
+                                type: "button",
+                                disabled: r.disabled,
+                                tabindex: r.tab,
+                                "aria-hidden": r.aria_hidden,
+                                "data-key": r.key,
+                                title: r.title,
+                                "aria-label": r.aria,
+                                class: r.cls,
+                                style: r.style,
+                              },
                               h("span", { class: "n-key-cap" }, r.cap),
                               h("span", { class: "n-key-short" }, r.short),
                             ),
@@ -3593,11 +5088,21 @@ export function RedesignIsland() {
                         { class: "n-kbrow" },
                         createList(
                           () => rdKbRow2(),
-                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.tab + "|" + r.aria_hidden + "|" + r.style,
                           (r) =>
                             h(
-                              "div",
-                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              "button",
+                              {
+                                type: "button",
+                                disabled: r.disabled,
+                                tabindex: r.tab,
+                                "aria-hidden": r.aria_hidden,
+                                "data-key": r.key,
+                                title: r.title,
+                                "aria-label": r.aria,
+                                class: r.cls,
+                                style: r.style,
+                              },
                               h("span", { class: "n-key-cap" }, r.cap),
                               h("span", { class: "n-key-short" }, r.short),
                             ),
@@ -3608,11 +5113,21 @@ export function RedesignIsland() {
                         { class: "n-kbrow" },
                         createList(
                           () => rdKbRow3(),
-                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.tab + "|" + r.aria_hidden + "|" + r.style,
                           (r) =>
                             h(
-                              "div",
-                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              "button",
+                              {
+                                type: "button",
+                                disabled: r.disabled,
+                                tabindex: r.tab,
+                                "aria-hidden": r.aria_hidden,
+                                "data-key": r.key,
+                                title: r.title,
+                                "aria-label": r.aria,
+                                class: r.cls,
+                                style: r.style,
+                              },
                               h("span", { class: "n-key-cap" }, r.cap),
                               h("span", { class: "n-key-short" }, r.short),
                             ),
@@ -3623,11 +5138,21 @@ export function RedesignIsland() {
                         { class: "n-kbrow" },
                         createList(
                           () => rdKbRow4(),
-                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.tab + "|" + r.aria_hidden + "|" + r.style,
                           (r) =>
                             h(
-                              "div",
-                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              "button",
+                              {
+                                type: "button",
+                                disabled: r.disabled,
+                                tabindex: r.tab,
+                                "aria-hidden": r.aria_hidden,
+                                "data-key": r.key,
+                                title: r.title,
+                                "aria-label": r.aria,
+                                class: r.cls,
+                                style: r.style,
+                              },
                               h("span", { class: "n-key-cap" }, r.cap),
                               h("span", { class: "n-key-short" }, r.short),
                             ),
@@ -3638,11 +5163,21 @@ export function RedesignIsland() {
                         { class: "n-kbrow" },
                         createList(
                           () => rdKbRow5(),
-                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.tab + "|" + r.aria_hidden + "|" + r.style,
                           (r) =>
                             h(
-                              "div",
-                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              "button",
+                              {
+                                type: "button",
+                                disabled: r.disabled,
+                                tabindex: r.tab,
+                                "aria-hidden": r.aria_hidden,
+                                "data-key": r.key,
+                                title: r.title,
+                                "aria-label": r.aria,
+                                class: r.cls,
+                                style: r.style,
+                              },
                               h("span", { class: "n-key-cap" }, r.cap),
                               h("span", { class: "n-key-short" }, r.short),
                             ),
@@ -3653,11 +5188,21 @@ export function RedesignIsland() {
                         { class: "n-kbrow" },
                         createList(
                           () => rdKbRow6(),
-                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                          (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.tab + "|" + r.aria_hidden + "|" + r.style,
                           (r) =>
                             h(
-                              "div",
-                              { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                              "button",
+                              {
+                                type: "button",
+                                disabled: r.disabled,
+                                tabindex: r.tab,
+                                "aria-hidden": r.aria_hidden,
+                                "data-key": r.key,
+                                title: r.title,
+                                "aria-label": r.aria,
+                                class: r.cls,
+                                style: r.style,
+                              },
                               h("span", { class: "n-key-cap" }, r.cap),
                               h("span", { class: "n-key-short" }, r.short),
                             ),
@@ -3675,11 +5220,21 @@ export function RedesignIsland() {
                       { class: "n-kbtray-row" },
                       createList(
                         () => rdKbTray(),
-                        (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.style,
+                        (r) => r.key + "|" + r.cap + "|" + r.cls + "|" + r.short + "|" + r.title + "|" + r.aria + "|" + r.tab + "|" + r.aria_hidden + "|" + r.style,
                         (r) =>
                           h(
-                            "div",
-                            { "data-key": r.key, title: r.title, role: "img", "aria-label": r.aria, class: r.cls, style: r.style },
+                            "button",
+                            {
+                              type: "button",
+                              disabled: r.disabled,
+                              tabindex: r.tab,
+                              "aria-hidden": r.aria_hidden,
+                              "data-key": r.key,
+                              title: r.title,
+                              "aria-label": r.aria,
+                              class: r.cls,
+                              style: r.style,
+                            },
                             h("span", { class: "n-key-cap" }, r.cap),
                             h("span", { class: "n-key-short" }, r.short),
                           ),
@@ -3690,6 +5245,74 @@ export function RedesignIsland() {
                 ),
               ),
             ),
+            // ── THE MAPPING CORDS' LAYERS (nocturne's, attribute-for- ─────
+            // attribute): world-coordinate siblings of the stage — edges are
+            // canvas chrome, not list items. Lines and small ports sit above
+            // the art so every path visibly leaves its real keycap/control;
+            // the processor nodes are HTML so a macro chain has a real,
+            // focusable card. All client-filled, all pointer-transparent
+            // until filled.
+            h("svg", {
+              id: "n-mapping-paths",
+              class: "n-flow-layer n-flow-lines",
+              "data-flow-layer": "lines",
+              "data-flow-mode": "off",
+              "data-flow-count": "0",
+              "data-flow-unresolved": "0",
+              "data-flow-direct": "0",
+              "data-flow-macro-connections": "0",
+              "data-flow-resolved-direct": "0",
+              "data-flow-resolved-macro-connections": "0",
+              "data-flow-processors": "0",
+              "data-flow-processor-overflow": "0",
+              "data-flow-mapping-unavailable": "0",
+              "data-flow-macro-unavailable": "0",
+              "data-client-subtree": "",
+              "data-client-canvas": "",
+              "aria-hidden": "true",
+              focusable: "false",
+              hidden: "",
+            }),
+            h("svg", {
+              id: "n-mapping-ports",
+              class: "n-flow-layer n-flow-ports",
+              "data-flow-layer": "ports",
+              "data-flow-mode": "off",
+              "data-flow-count": "0",
+              "data-flow-unresolved": "0",
+              "data-flow-direct": "0",
+              "data-flow-macro-connections": "0",
+              "data-flow-resolved-direct": "0",
+              "data-flow-resolved-macro-connections": "0",
+              "data-flow-processors": "0",
+              "data-flow-processor-overflow": "0",
+              "data-flow-mapping-unavailable": "0",
+              "data-flow-macro-unavailable": "0",
+              "data-client-subtree": "",
+              "data-client-canvas": "",
+              "aria-hidden": "true",
+              focusable: "false",
+              hidden: "",
+            }),
+            h("div", {
+              id: "n-mapping-processors",
+              class: "n-flow-node-layer",
+              "data-flow-layer": "processors",
+              "data-flow-mode": "off",
+              "data-flow-count": "0",
+              "data-flow-unresolved": "0",
+              "data-flow-direct": "0",
+              "data-flow-macro-connections": "0",
+              "data-flow-resolved-direct": "0",
+              "data-flow-resolved-macro-connections": "0",
+              "data-flow-processors": "0",
+              "data-flow-processor-overflow": "0",
+              "data-flow-mapping-unavailable": "0",
+              "data-flow-macro-unavailable": "0",
+              "data-client-subtree": "",
+              "data-client-canvas": "",
+              hidden: "",
+            }),
             // The map in the corner: a button per widget (click to jump) and
             // a pale rectangle for the camera (drag inside to pan). Both are
             // filled by the engine — the ITEMS box is client-populated by
@@ -3802,7 +5425,9 @@ export function RedesignIsland() {
                 "Fit",
               ),
               // The collapsed map's stand-in. Served hidden — the map
-              // starts shown; setCanvasMap swaps the two.
+              // starts shown; setCanvasMap swaps the two. It must sit
+              // DIRECTLY beside Fit (the corner's control stays in the
+              // corner cluster) — the Paths control joins the pill AFTER it.
               h(
                 "button",
                 {
@@ -3814,6 +5439,43 @@ export function RedesignIsland() {
                   hidden: "",
                 },
                 "▦",
+              ),
+              // The mapping cords' scope — Off / Selected / All (nocturne's
+              // Paths control, living in the canvas cluster it acts on).
+              h(
+                "div",
+                {
+                  class: "n-pathctl rd-pathctl",
+                  title:
+                    "Show physical keys, processing steps, and the virtual controller controls they reach",
+                },
+                h("label", { class: "n-pathctl-label", for: "rd-mapping-path-scope" }, "Paths"),
+                h(
+                  "select",
+                  {
+                    id: "rd-mapping-path-scope",
+                    class: "n-pathsel",
+                    "data-nx": "rd-mapping-paths",
+                    "aria-controls": "n-mapping-paths n-mapping-ports n-mapping-processors",
+                  },
+                  h("option", { value: "off" }, "Off"),
+                  h("option", { value: "selected" }, "Selected player"),
+                  h("option", { value: "all" }, "All players"),
+                ),
+                h("output", {
+                  class: "n-pathcount rd-pathcount",
+                  title: "Mapping paths are off",
+                  "aria-hidden": "true",
+                  "data-live-chatter": "",
+                }),
+                h("output", {
+                  id: "rd-mapping-trace",
+                  class: "n-mapping-trace",
+                  title: "",
+                  "data-live-chatter": "",
+                  "data-client-canvas": "",
+                  hidden: "",
+                }),
               ),
               // ── The camera menu, opening upward ───────────────────────
               h(

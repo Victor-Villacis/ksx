@@ -300,10 +300,16 @@ impl NocturneMacroEditor {
     /// Nothing open: the dialog's markup still exists, wearing its closed
     /// class, so opening it is a class flip rather than a build.
     pub fn closed() -> Self {
+        Self::closed_on("/nocturne")
+    }
+
+    /// `closed`, parameterized on the page whose ✕ the dialog would wear —
+    /// the editor serves /nocturne and /redesign from this one composition.
+    pub fn closed_on(page: &str) -> Self {
         Self {
             back_cls: "nd-back none".to_owned(),
             grid_cls: "n-macroll empty".to_owned(),
-            close_href: "/nocturne".to_owned(),
+            close_href: page.to_owned(),
             map_href: String::new(),
             turbo_cls: "n-macrate none".to_owned(),
             ..Default::default()
@@ -317,6 +323,7 @@ impl NocturneMacroEditor {
         slot: Option<&MapperSlot>,
         number: u8,
         q: Option<&str>,
+        page: &str,
     ) -> Self {
         let columns = macro_columns(persona);
         let zones = zones_for(persona);
@@ -593,11 +600,11 @@ impl NocturneMacroEditor {
             },
             close_href: match q {
                 Some(q) if !q.is_empty() => {
-                    format!("/nocturne?slot={number}&q={}", crate::server::urlencode(q))
+                    format!("{page}?slot={number}&q={}", crate::server::urlencode(q))
                 }
-                _ => format!("/nocturne?slot={number}"),
+                _ => format!("{page}?slot={number}"),
             },
-            map_href: format!("/nocturne?slot={number}&macro={}", mac.name),
+            map_href: format!("{page}?slot={number}&macro={}", mac.name),
             cols,
             groups,
             rows,

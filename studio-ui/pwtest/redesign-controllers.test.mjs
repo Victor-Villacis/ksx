@@ -311,6 +311,11 @@ describe("the controller workbench", () => {
       /bindings kept/,
       "the ghost says the studio holds its resurrection material",
     );
+    assert.equal(
+      await page.locator(`${ghost} [data-fn], ${ghost} [data-rd-pad-action]`).count(),
+      0,
+      "a parked drawing cannot route mapping gestures to a live player",
+    );
 
     // Re-slot the ghost to Player 1: staged fresh at the top, the others
     // bump down again, the ghost retires. The wait targets the POST-MOVE
@@ -388,6 +393,34 @@ describe("the controller workbench", () => {
     await page.close();
   });
 
+  test("the server-rendered keyboard keeps real keys interactive and spacer geometry inert", async () => {
+    const ssrContext = await browser.newContext({
+      viewport: { width: 1600, height: 1000 },
+      colorScheme: "dark",
+      javaScriptEnabled: false,
+    });
+    try {
+      const page = await ssrContext.newPage();
+      await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      const real = page.locator(
+        '[data-instance-id="keyboard"] button.n-key:not(.ghost)[data-key]:not([data-key=""])',
+      );
+      const spacers = page.locator(
+        '[data-instance-id="keyboard"] button.n-key.ghost[data-key=""]',
+      );
+      assert.ok((await real.count()) > 0, "SSR serves native buttons for physical keys");
+      assert.ok((await spacers.count()) > 0, "SSR keeps authored spacer geometry");
+      assert.equal(await real.first().isDisabled(), false);
+      assert.equal(await real.first().getAttribute("tabindex"), "0");
+      assert.equal(await real.first().getAttribute("aria-hidden"), "false");
+      assert.equal(await spacers.first().isDisabled(), true);
+      assert.equal(await spacers.first().getAttribute("tabindex"), "-1");
+      assert.equal(await spacers.first().getAttribute("aria-hidden"), "true");
+    } finally {
+      await ssrContext.close();
+    }
+  });
+
   test("the keyboard stands on the canvas: served plate, finish, lens, and the key→Keys door", async () => {
     const page = await openBench();
     const flashKb = (want) =>
@@ -457,29 +490,35 @@ describe("the controller workbench", () => {
       key,
       { timeout: 20_000 },
     );
-    // The board picker offers the served roster and the write ROUND-TRIPS:
-    // the fixture remembers the choice like the real store (the in-memory
-    // board cell), so the row comes back marked — never a dead control.
-    await page.click(".rd-boardpick:not(.rd-capture) .rd-boardpick-sum");
-    assert.ok(
-      (await page.locator(".rd-boardpick:not(.rd-capture) .rd-boardpick-pop form").count()) >= 2,
-      "the roster serves follow-hardware and the standard board",
+    assert.equal(
+      await bound.first().evaluate((cell) => cell.tagName),
+      "BUTTON",
+      "every clickable plate key is a native keyboard control",
     );
-    await page
-      .locator('.rd-boardpick:not(.rd-capture) form input[value="qwerty-104"]')
-      .locator("..")
-      .locator("button")
-      .click();
-    await flashKb("Board updated.");
-    await page.waitForFunction(
-      () =>
-        document
-          .querySelector('.rd-boardpick:not(.rd-capture) form input[value="qwerty-104"]')
-          ?.closest("form")
-          ?.querySelector("button")
-          ?.className.includes("on"),
-      null,
-      { timeout: 20_000 },
+    const ghostKeys = page.locator(
+      '[data-instance-id="keyboard"] button.n-key.ghost[data-key=""]',
+    );
+    assert.ok((await ghostKeys.count()) > 0, "the served plate includes spacer cells");
+    assert.equal(await ghostKeys.first().isDisabled(), true);
+    assert.equal(await ghostKeys.first().getAttribute("tabindex"), "-1");
+    assert.equal(await ghostKeys.first().getAttribute("aria-hidden"), "true");
+    if ((await bound.count()) > 1) {
+      const keyboardCell = bound.nth(1);
+      const keyboardKey = await keyboardCell.getAttribute("data-key");
+      await keyboardCell.focus();
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(
+        (wanted) => document.querySelector(".rd-row-pulse")?.getAttribute("data-key") === wanted,
+        keyboardKey,
+        { timeout: 20_000 },
+      );
+    }
+    // NO board picker on this page (Victor's rule: a keyboard looks like a
+    // keyboard — the plate is always the standard board picture here).
+    assert.equal(
+      await page.locator(".rd-boardpick:not(.rd-capture)").count(),
+      0,
+      "the Board menu stays removed",
     );
     // While playing — the staged input's capture behaviour (freeze / split
     // / take nothing), the 4460 device-section picker re-homed onto the
@@ -506,6 +545,115 @@ describe("the controller workbench", () => {
       null,
       { timeout: 20_000 },
     );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("controller art is keyboard-operable and changing inspector tabs preserves keyboard UI state", async () => {
+    const page = await openBench();
+    await page.waitForFunction(
+      (sel) => document.querySelector(sel)?.dataset.canvasX !== undefined,
+      cardSel(1),
+      { timeout: 20_000 },
+    );
+
+    // Put real preferences into the shared UI store through their own
+    // controls, then add an unrelated sentinel. The pad-art door used to
+    // replace this whole object with {inspTab}.
+    await page.evaluate(() => {
+      document
+        .querySelector('[data-nx="kb-theme"][data-keyboard-theme="retro-terminal"]')
+        ?.click();
+      document.querySelector('[data-nx="kb-colors"]')?.click();
+      const saved = JSON.parse(localStorage.getItem("ksx-redesign-ui") ?? "{}");
+      saved.reviewSentinel = "keep";
+      localStorage.setItem("ksx-redesign-ui", JSON.stringify(saved));
+    });
+
+    await revealCanvasItem(page, "ctrl-slot-1");
+    const zone = page.locator(`${cardSel(1)} [data-rd-pad-action]`).first();
+    const fn = await zone.getAttribute("data-fn");
+    const art = page.locator(`${cardSel(1)} svg.rd-ctrlcard-art`);
+    assert.equal(await art.getAttribute("aria-hidden"), null);
+    assert.equal(await art.getAttribute("focusable"), null);
+    assert.equal(await art.getAttribute("role"), "group");
+    assert.ok((await art.getAttribute("aria-label"))?.trim());
+    assert.equal(await zone.getAttribute("role"), "button");
+    assert.equal(await zone.getAttribute("tabindex"), "0");
+    assert.match((await zone.getAttribute("aria-label")) ?? "", /controller control$/);
+
+    // Non-pointer activation must perform the selection work that a real
+    // pointerdown normally performs. Start from the Input source so this test
+    // cannot pass merely because the controller was already selected.
+    await revealCanvasItem(page, "keyboard");
+    assert.equal(
+      await page
+        .locator('.forma-canvas-stage > [data-instance-id="keyboard"]')
+        .getAttribute("aria-current"),
+      "true",
+    );
+    assert.equal((await page.locator(".rd-insp-name").textContent())?.trim(), "Input source");
+    await zone.focus();
+    // An unchanged background repaint must not replace the focused SVG node.
+    await page.waitForTimeout(2300);
+    assert.equal(
+      await zone.evaluate((control) => control === document.activeElement),
+      true,
+      "the two-second payload tick preserves focused controller art",
+    );
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(
+      ({ card, fnName }) =>
+        document.querySelector(card)?.getAttribute("aria-current") === "true" &&
+        document.querySelector(".rd-insp-name")?.textContent?.includes("Player 1") &&
+        document.querySelector(".rd-insp-vseg .vc")?.getAttribute("aria-pressed") === "true" &&
+        document.querySelector(".rd-row-pulse")?.getAttribute("data-fn")?.toLowerCase() ===
+          fnName?.toLowerCase(),
+      { card: cardSel(1), fnName: fn },
+      { timeout: 20_000 },
+    );
+    assert.equal(
+      await zone.evaluate((control) => control === document.activeElement),
+      true,
+      "selecting the card and opening Controls preserves the activated SVG control's focus",
+    );
+    await zone.evaluate((control) => {
+      control.addEventListener("click", (event) => {
+        window.__ksxPadKeyboardShift = event.shiftKey;
+      }, { capture: true, once: true });
+    });
+    await page.keyboard.press("Shift+Enter");
+    assert.equal(
+      await page.evaluate(() => window.__ksxPadKeyboardShift),
+      true,
+      "keyboard activation preserves the modifier contract of Shift+click",
+    );
+    await page.waitForFunction(
+      (fnName) => {
+        const pulse = document.querySelector(".rd-row-pulse");
+        return pulse?.getAttribute("data-fn")?.toLowerCase() === fnName?.toLowerCase();
+      },
+      fn,
+      { timeout: 20_000 },
+    );
+    const stored = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("ksx-redesign-ui") ?? "{}")
+    );
+    assert.equal(stored.kbTheme, "retro-terminal");
+    assert.equal(stored.kbSolo, true);
+    assert.equal(stored.reviewSentinel, "keep");
+    assert.equal(stored.inspTab, "controls");
+
+    // Leave the persistent browser context in its baseline finish/lens.
+    await page.evaluate(() => {
+      document
+        .querySelector('[data-nx="kb-theme"][data-keyboard-theme="carbon-forge"]')
+        ?.click();
+      document.querySelector('[data-nx="kb-colors"]')?.click();
+      const saved = JSON.parse(localStorage.getItem("ksx-redesign-ui") ?? "{}");
+      delete saved.reviewSentinel;
+      localStorage.setItem("ksx-redesign-ui", JSON.stringify(saved));
+    });
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();
   });
@@ -557,6 +705,56 @@ describe("the controller workbench", () => {
       (await page.locator(".rd-insp-body .n-socd-lab").textContent())?.trim(),
       "Opposites — P1",
     );
+    const servedSocd = await page.evaluate(async () =>
+      (await (await fetch("/api/redesign?slot=1")).json()).controllers.panel.socd_current
+    );
+    assert.equal(
+      await page.getByLabel("Opposites — P1").inputValue(),
+      servedSocd,
+      "the editor starts on the effective served policy instead of the roster's first option",
+    );
+    assert.equal(
+      await page.getByLabel("Opposites — P1").count(),
+      1,
+      "the visible SOCD label names its select",
+    );
+
+    // The destructive bulk action is a consequence disclosure, not a submit
+    // parked beside Map all. Opening and closing it changes nothing.
+    let clearAllPosts = 0;
+    page.on("request", (request) => {
+      if (
+        request.method() === "POST" &&
+        new URL(request.url()).pathname === "/redesign/bind/clear-all"
+      ) clearAllPosts += 1;
+    });
+    const clearAllDisclosure = page.locator(".rd-insp-ctrlverbs details.n-clearall");
+    assert.equal(await clearAllDisclosure.evaluate((details) => details.open), false);
+    await clearAllDisclosure.locator("summary").click();
+    assert.match(
+      (await clearAllDisclosure.locator(".n-foot").textContent()) ?? "",
+      /direct key binding.*macro trigger.*steps remain/s,
+    );
+    assert.equal(
+      (await clearAllDisclosure.locator('button[type="submit"]').textContent())?.trim(),
+      "Unbind every key",
+    );
+    await clearAllDisclosure.locator("summary").focus();
+    await page.waitForTimeout(2300);
+    assert.equal(
+      await clearAllDisclosure.evaluate((details) => details.open),
+      true,
+      "an unchanged payload does not collapse the consequence disclosure",
+    );
+    assert.equal(
+      await clearAllDisclosure.locator("summary").evaluate((summary) =>
+        summary === document.activeElement
+      ),
+      true,
+      "the disclosure keeps keyboard focus across the poll",
+    );
+    assert.equal(clearAllPosts, 0, "reading the consequence cannot submit it");
+    await clearAllDisclosure.locator("summary").click();
     const boundRows = page.locator(".rd-insp-body details.n-bind.on");
     assert.ok((await boundRows.count()) > 0, "the layout bound rows to edit");
     const fn = await boundRows.first().getAttribute("data-fn");
@@ -611,9 +809,24 @@ describe("the controller workbench", () => {
     // The opposite-directions editor writes through the served roster.
     const socdValue = await page
       .locator(".rd-insp-body .n-socd-sel option")
-      .last()
-      .getAttribute("value");
+      .evaluateAll((options, current) =>
+        options.map((option) => option.value).find((value) => value !== current) ?? current,
+      servedSocd);
     await page.selectOption(".rd-insp-body .n-socd-sel", socdValue);
+    await page.locator(".rd-insp-body .n-socd-sel").focus();
+    await page.waitForTimeout(2300);
+    assert.equal(
+      await page.locator(".rd-insp-body .n-socd-sel").inputValue(),
+      socdValue,
+      "an unchanged payload does not reset an unsubmitted policy choice",
+    );
+    assert.equal(
+      await page.locator(".rd-insp-body .n-socd-sel").evaluate((select) =>
+        select === document.activeElement
+      ),
+      true,
+      "the SOCD select keeps focus across the poll",
+    );
     await page.locator(".rd-insp-body .n-socd-set").click();
     await flashIs("Draft updated.");
 
@@ -625,6 +838,18 @@ describe("the controller workbench", () => {
       () => document.querySelectorAll(".rd-insp-krows .n-krow").length > 0,
       null,
       { timeout: 20_000 },
+    );
+    const friendlyControl = page.locator('.rd-insp-body [data-key="LeftControl"]').first();
+    assert.equal(await friendlyControl.getAttribute("data-key"), "LeftControl");
+    assert.match(
+      (await friendlyControl.textContent()) ?? "",
+      /Ctrl/,
+      "human-facing chips use the keyboard cap vocabulary",
+    );
+    assert.doesNotMatch(
+      (await page.locator(".rd-insp-body").textContent()) ?? "",
+      /OpenBracketBrace|SingleDoubleQuote|ForwardSlashQuestionMark/,
+      "backend key identifiers do not leak into visible copy",
     );
     const keyCount = await page.locator(".rd-insp-krows .n-krow").count();
     const victim = await page
@@ -685,6 +910,530 @@ describe("the controller workbench", () => {
       null,
       { timeout: 20_000 },
     );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+});
+
+describe("the mapper on the workbench", () => {
+  // The fixture daemon's learner INSTANT-HITS the key G (macro_fixture's
+  // scripted gesture), so a cross-slot G planted by this setup guarantees
+  // every learned hit raises the conflict QUESTION — the protocol's whole
+  // point. State is built through the same doors the page uses, so these
+  // tests hold whatever the earlier suites left behind.
+  const api = async () => (await fetch(`${BASE}/api/redesign`)).json();
+  const apiBind = async (slot, fn, key, revision, force) => {
+    const res = await fetch(`${BASE}/redesign/api/bind`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        slot: Number(slot),
+        expected_target_revision: revision,
+        function: fn,
+        key,
+        mode: null,
+        force,
+      }),
+    });
+    return res.json();
+  };
+  let s1;
+  let s2;
+
+  before(async () => {
+    let payload = await api();
+    if (payload.controllers.pads.length < 2) {
+      await fetch(`${BASE}/redesign/controller`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "persona=xbox360&preset=Mapper+P2&layout=keyboard-2p",
+        redirect: "manual",
+      });
+      payload = await api();
+    }
+    const pads = payload.controllers.pads;
+    assert.ok(pads.length >= 2, "two seats for the cross-slot question");
+    s1 = String(pads[0].slot);
+    s2 = String(pads[1].slot);
+    // Known ground: A on seat one wears H, and G lives on the OTHER seat —
+    // the learner's scripted G is then always a cross-slot question here.
+    assert.equal((await apiBind(s1, "A", "H", pads[0].target_revision, true)).ok, true);
+    const again = (await api()).controllers.pads;
+    assert.equal((await apiBind(s2, "B", "G", again[1].target_revision, true)).ok, true);
+  });
+
+  async function openPanel(page, slot) {
+    await page.waitForFunction(
+      (sel) => document.querySelector(sel)?.dataset.canvasX !== undefined,
+      cardSel(slot),
+      { timeout: 20_000 },
+    );
+    await revealCanvasItem(page, `ctrl-slot-${slot}`);
+    await page.click(`${cardSel(slot)} .rd-ctrlcard-slot`);
+    await page.waitForFunction(
+      () => Boolean(document.querySelector(".rd-insp-vseg .vc")),
+      null,
+      { timeout: 20_000 },
+    );
+    if ((await page.locator(".rd-insp-vseg .vc").getAttribute("aria-pressed")) !== "true") {
+      await page.click(".rd-insp-vseg .vc");
+    }
+    await page.waitForFunction(
+      () => document.querySelectorAll(".rd-insp-body .n-bindg-head").length === 6,
+      null,
+      { timeout: 20_000 },
+    );
+  }
+
+  const dialogShown = (page) =>
+    page.waitForFunction(
+      () => getComputedStyle(document.querySelector(".rd-confdlg")).display !== "none",
+      null,
+      { timeout: 20_000 },
+    );
+  const dialogGone = (page) =>
+    page.waitForFunction(
+      () => getComputedStyle(document.querySelector(".rd-confdlg")).display === "none",
+      null,
+      { timeout: 20_000 },
+    );
+
+  test("learn: the chip arms, the hit raises the cross-slot question, Esc declines, Use-here-too shares", async () => {
+    const page = await openBench();
+    await openPanel(page, s1);
+    const chipSel = '.rd-insp-body details.n-bind[data-fn="A"] [data-nx="chip-learn"]';
+    const before = (await page.locator(chipSel).textContent())?.trim();
+
+    // ONE click arms; the scripted hit lands in ~33ms and the question opens
+    // instead of a silent cross-slot grab (fail-closed, nocturne's rule).
+    await page.locator(chipSel).click();
+    await dialogShown(page);
+    assert.match(
+      (await page.locator(".rd-confdlg .nd-title").textContent()) ?? "",
+      /Give G to A too\?/,
+    );
+    assert.match(
+      (await page.locator(".rd-confdlg .nd-lede").textContent()) ?? "",
+      /already controls/,
+      "the lede names what the key drives today",
+    );
+
+    // Esc declines: the dialog closes and NOTHING was written.
+    await page.keyboard.press("Escape");
+    await dialogGone(page);
+    assert.equal((await page.locator(chipSel).textContent())?.trim(), before, "declined = unchanged");
+
+    // Ask again and confirm: sharing binds here while the other seat keeps
+    // its key, and the flash is the row's own sentence.
+    await page.locator(chipSel).click();
+    await dialogShown(page);
+    await page.click('.rd-confdlg [data-nx="rd-conf-force"]');
+    await page.waitForFunction(
+      (sel) => document.querySelector(sel)?.textContent?.trim() === "G",
+      chipSel,
+      { timeout: 20_000 },
+    );
+    assert.match(
+      (await page.locator(".rd-flash").textContent()) ?? "",
+      /A is now G/,
+    );
+    const other = (await api()).controllers.pads.find((p) => String(p.slot) === s2);
+    assert.ok(
+      other.controls.find((c) => c.function === "B").keys.includes("G"),
+      "the other seat KEPT its key — share, never steal",
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("clicking the control being recorded cancels the gesture (the PadForge toggle)", async () => {
+    const page = await openBench();
+    await openPanel(page, s1);
+    // Two clicks inside ONE task: the second lands while the first's arm is
+    // still in flight — the toggle branch must retire it silently, and the
+    // superseded daemon answer must die without a dialog.
+    await page.evaluate(() => {
+      const chip = document.querySelector(
+        '.rd-insp-body details.n-bind[data-fn="A"] [data-nx="chip-learn"]',
+      );
+      const click = () =>
+        chip.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      click();
+      click();
+    });
+    await page.waitForTimeout(600);
+    const state = await page.evaluate(() => ({
+      banner: getComputedStyle(document.querySelector(".rd-learnbar")).display,
+      dialog: getComputedStyle(document.querySelector(".rd-confdlg")).display,
+    }));
+    assert.deepEqual(state, { banner: "none", dialog: "none" });
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("assign: a free key goes in hand and the pad art is the picker", async () => {
+    const page = await openBench();
+    await openPanel(page, s1);
+    await page.click(".rd-insp-vseg .vk");
+    await page.waitForFunction(
+      () => document.querySelectorAll(".rd-insp-krows .n-krow").length > 0,
+      null,
+      { timeout: 20_000 },
+    );
+    const key = await page.evaluate(() =>
+      [...document.querySelectorAll('.rd-insp-body [data-nx="rd-akey"]')]
+        .map((n) => n.getAttribute("data-key"))
+        .find((k) => /^[A-Z]$/.test(k ?? "")),
+    );
+    assert.ok(key, "a free letter key to take in hand");
+    await page.locator(`.rd-insp-body [data-nx="rd-akey"][data-key="${key}"]`).click();
+    await page.waitForFunction(
+      () => document.querySelector(".rd-learnbar")?.classList.contains("listen"),
+      null,
+      { timeout: 20_000 },
+    );
+    assert.match(
+      (await page.locator(".rd-learn-line").textContent()) ?? "",
+      new RegExp(`Click a control on the pad — ${key} replaces its binding`),
+    );
+    // A REAL pointer click on the silhouette's X face button resolves it.
+    await page.locator(`${cardSel(Number(s1))} svg [data-fn="x"]`).first().click();
+    await page.waitForFunction(
+      () => !document.querySelector(".rd-learnbar")?.classList.contains("listen"),
+      null,
+      { timeout: 20_000 },
+    );
+    await page.waitForFunction(
+      (want) => document.querySelector(".rd-flash")?.textContent?.includes(want),
+      `X is now ${key}.`,
+      { timeout: 20_000 },
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("the cords: Paths scopes the flow layer and prices what it drew", async () => {
+    const page = await openBench();
+    await page.waitForFunction(
+      (sel) => document.querySelector(sel)?.dataset.canvasX !== undefined,
+      cardSel(Number(s1)),
+      { timeout: 20_000 },
+    );
+    // Off is the resting truth: the layers hold no drawing.
+    assert.equal(
+      await page.evaluate(() => document.querySelectorAll("#n-mapping-paths path").length),
+      0,
+    );
+    await page.selectOption('[data-nx="rd-mapping-paths"]', "all");
+    await page.waitForFunction(
+      () => document.querySelectorAll("#n-mapping-paths path").length > 0,
+      null,
+      { timeout: 20_000 },
+    );
+    await page.waitForFunction(
+      () => /^\d+$/.test(document.querySelector(".rd-pathcount")?.textContent?.trim() ?? ""),
+      null,
+      { timeout: 20_000 },
+    );
+    const drawn = await page.evaluate(() => ({
+      paths: document.querySelectorAll("#n-mapping-paths path").length,
+      count: Number(document.querySelector(".rd-pathcount")?.textContent),
+    }));
+    assert.ok(drawn.count > 0, "the counter prices the cords");
+    assert.ok(drawn.paths >= drawn.count, "every priced cord is drawn");
+    await page.selectOption('[data-nx="rd-mapping-paths"]', "off");
+    await page.waitForFunction(
+      () => document.querySelectorAll("#n-mapping-paths path").length === 0,
+      null,
+      { timeout: 20_000 },
+    );
+    // The chosen mode is DURABLE: a camera persist rebuilds the prefs
+    // struct and a reload reads it back — each writer once dropped the
+    // mapping fields, so a camera nudge silently snapped the select to Off
+    // and the cords vanished on the next repaint.
+    await page.selectOption('[data-nx="rd-mapping-paths"]', "all");
+    await page.waitForFunction(
+      () => document.querySelectorAll("#n-mapping-paths path").length > 0,
+      null,
+      { timeout: 20_000 },
+    );
+    await page.click('button.n-autobtn[data-nx="canvas-fit"]:not(.rd-menu-row)');
+    await page.waitForFunction(
+      () => !document.querySelector(".is-camera-animating"),
+      null,
+      { timeout: 20_000 },
+    );
+    await page.waitForTimeout(500);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+      null,
+      { timeout: 20_000 },
+    );
+    await page.waitForFunction(
+      () =>
+        document.querySelector('[data-nx="rd-mapping-paths"]')?.value === "all" &&
+        document.querySelectorAll("#n-mapping-paths path").length > 0,
+      null,
+      { timeout: 20_000 },
+    );
+    // Leave the canvas the way this test found it.
+    await page.selectOption('[data-nx="rd-mapping-paths"]', "off");
+    await page.waitForFunction(
+      () => document.querySelectorAll("#n-mapping-paths path").length === 0,
+      null,
+      { timeout: 20_000 },
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("auto-map walks the unbound controls; confirm binds, decline skips, the run reports", async () => {
+    // Known walk: exactly the two right-stick horizontals are unbound. The
+    // earlier suites leave arbitrary holes, so this dresses every OTHER
+    // control (same-slot key sharing is allowed — H all round) and clears
+    // the two the walk should visit.
+    for (const fn of ["rx.min", "rx.max"]) {
+      await fetch(`${BASE}/redesign/bind/clear`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: `slot=${s1}&function=${encodeURIComponent(fn)}`,
+        redirect: "manual",
+      });
+    }
+    for (;;) {
+      const pad = (await api()).controllers.pads.find((p) => String(p.slot) === s1);
+      const hole = pad.controls.find(
+        (c) => c.keys.length === 0 && c.function !== "rx.min" && c.function !== "rx.max",
+      );
+      if (!hole) break;
+      assert.equal(
+        (await apiBind(s1, hole.function, "H", pad.target_revision, true)).ok,
+        true,
+        `dressing ${hole.function}`,
+      );
+    }
+    const fresh = (await api()).controllers.pads.find((p) => String(p.slot) === s1);
+    const unbound = fresh.controls.filter((c) => c.keys.length === 0).map((c) => c.function);
+    assert.deepEqual(unbound, ["rx.min", "rx.max"], "the walk's steps are known ground");
+
+    const page = await openBench();
+    await openPanel(page, s1);
+    await page.click('[data-nx="rd-automap"]');
+    // Step 1 instant-hits G → the cross-slot question. Confirm: it binds.
+    await dialogShown(page);
+    assert.match(
+      (await page.locator(".rd-confdlg .nd-title").textContent()) ?? "",
+      /Give G to RS ←/,
+    );
+    await page.click('.rd-confdlg [data-nx="rd-conf-force"]');
+    // Step 2's question. DECLINE: the walk skips it and moves on — and with
+    // no steps left, the run reports exactly what it bound.
+    await dialogShown(page);
+    assert.match(
+      (await page.locator(".rd-confdlg .nd-title").textContent()) ?? "",
+      /Give G to RS →/,
+    );
+    await page.click('.rd-confdlg [data-nx="rd-conf-cancel"]');
+    await dialogGone(page);
+    await page.waitForFunction(
+      () =>
+        document.querySelector(".rd-flash")?.textContent?.includes(
+          "Auto-map finished — 1 control bound.",
+        ),
+      null,
+      { timeout: 20_000 },
+    );
+    const end = (await api()).controllers.pads.find((p) => String(p.slot) === s1);
+    assert.deepEqual(
+      end.controls.find((c) => c.function === "rx.min").keys,
+      ["G"],
+      "the confirmed step wears the shared key",
+    );
+    assert.deepEqual(
+      end.controls.find((c) => c.function === "rx.max").keys,
+      [],
+      "the declined step stays unbound",
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  // ── Macros: the lifecycle rows, the step editor, and the trigger's learn ──
+
+  test("the macro lifecycle verbs are real forms on this page's doors", async () => {
+    const page = await openBench();
+    await openPanel(page, s1);
+    await page.waitForFunction(
+      () => Boolean(document.querySelector(".rd-insp-body .n-macrosec")),
+      null,
+      { timeout: 20_000 },
+    );
+
+    // New macro… through the section's own form.
+    await page.evaluate(() => {
+      document.querySelector(".n-macrosec .n-macnew")?.setAttribute("open", "");
+    });
+    await page.fill(".n-macrosec .n-macnewin", "probe-combo");
+    await page.click('.n-macrosec [data-rd-form="macro-new"] button[type="submit"]');
+    await page.waitForFunction(
+      () =>
+        Boolean(
+          document.querySelector('.n-macrosec details[data-fn="macro.probe-combo"]'),
+        ),
+      null,
+      { timeout: 20_000 },
+    );
+    assert.match(
+      (await page.locator(".rd-flash").textContent()) ?? "",
+      /Macro created with one empty step/,
+    );
+
+    // Disable — the toggle twin: the row says so and keeps its steps.
+    const row = '.n-macrosec details[data-fn="macro.probe-combo"]';
+    await page.evaluate((sel) => document.querySelector(sel)?.setAttribute("open", ""), row);
+    const toggleLabel = (await page
+      .locator(`${row} [data-rd-form="macro-toggle"] button`)
+      .textContent())?.trim();
+    await page.click(`${row} [data-rd-form="macro-toggle"] button`);
+    await page.waitForFunction(
+      (args) =>
+        document
+          .querySelector(`${args.row} [data-rd-form="macro-toggle"] button`)
+          ?.textContent?.trim() !== args.was,
+      { row, was: toggleLabel },
+      { timeout: 20_000 },
+    );
+
+    // Delete… asks in place, then removes the row.
+    await page.evaluate((sel) => {
+      const details = document.querySelector(sel);
+      details?.setAttribute("open", "");
+      details?.querySelector(".n-bdel")?.setAttribute("open", "");
+    }, row);
+    await page.click(`${row} [data-rd-form="macro-delete"] button`);
+    await page.waitForFunction(
+      () => !document.querySelector('.n-macrosec details[data-fn="macro.probe-combo"]'),
+      null,
+      { timeout: 20_000 },
+    );
+    assert.match(
+      (await page.locator(".rd-flash").textContent()) ?? "",
+      /Macro removed from this draft/,
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("the step editor: acts are the server's answer, the draft wins, Save writes", async () => {
+    // A macro of known shape, through the same verb the CLI uses.
+    const seeded = await (
+      await fetch(`${BASE}/api/macro/save`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          target: "stage",
+          slot: Number(s1),
+          preset: (await api()).controllers.pads.find((p) => String(p.slot) === s1).preset,
+          name: "probe-roll",
+          steps: [{ hold: ["A"], ms: 50 }],
+        }),
+      })
+    ).json();
+    assert.equal(seeded.ok, true, JSON.stringify(seeded));
+
+    const page = await openBench();
+    await openPanel(page, s1);
+    await page.waitForFunction(
+      () => Boolean(document.querySelector('.n-macrosec details[data-fn="macro.probe-roll"]')),
+      null,
+      { timeout: 20_000 },
+    );
+
+    // Edit steps… is the ?macro= door, ENHANCED: the URL merges, the served
+    // dialog paints, and the canvas never reloads.
+    const row = '.n-macrosec details[data-fn="macro.probe-roll"]';
+    await page.evaluate((sel) => document.querySelector(sel)?.setAttribute("open", ""), row);
+    await page.locator(`${row} a.n-bbtn-link`).click();
+    await page.waitForFunction(
+      () =>
+        !document.querySelector(".rd-macdlg")?.classList.contains("none") &&
+        document.querySelectorAll(".rd-macdlg [data-maccell]").length > 0,
+      null,
+      { timeout: 20_000 },
+    );
+    assert.equal(
+      (await page.locator(".rd-macdlg .nd-title").textContent())?.trim(),
+      "probe-roll",
+    );
+    assert.ok(
+      (await page.evaluate(() => window.location.search)).includes("macro=probe-roll"),
+      "the dialog's open state IS the URL",
+    );
+
+    // ONE act: the diagonal pick writes the PAIR, and the server says so.
+    await page.click('.rd-macdlg [data-maccell="0|diag:dpad:dr"]');
+    await page.waitForFunction(
+      () => document.querySelector(".rd-macdlg .n-macdirty")?.textContent === "Unsaved changes",
+      null,
+      { timeout: 20_000 },
+    );
+    assert.match(
+      (await page.locator(".rd-macdlg .n-macsay-line").textContent()) ?? "",
+      /dpad\.down \+ dpad\.right/,
+      "the act's teaching names both halves",
+    );
+
+    // Escape warns about unsaved work FIRST; the work survives.
+    await page.keyboard.press("Escape");
+    assert.match(
+      (await page.locator(".rd-macdlg .n-macsay-line").textContent()) ?? "",
+      /unsaved changes/,
+    );
+
+    // Save writes the WHOLE table; the staged truth carries the pair.
+    await page.click('.rd-macdlg [data-macact="save"]');
+    await page.waitForFunction(
+      () => (document.querySelector(".rd-macdlg .n-macsay-line")?.textContent ?? "").includes("Saved"),
+      null,
+      { timeout: 20_000 },
+    );
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(
+      () => document.querySelector(".rd-macdlg")?.classList.contains("none"),
+      null,
+      { timeout: 20_000 },
+    );
+    const truth = await (
+      await fetch(`${BASE}/api/redesign?slot=${s1}&macro=probe-roll`)
+    ).json();
+    assert.deepEqual(
+      truth.controllers.mac.table.steps[0].hold,
+      ["A", "dpad.down", "dpad.right"],
+      "the saved table holds what the roll showed",
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("a macro trigger key binds through the SAME learn flow as any control", async () => {
+    const page = await openBench();
+    await openPanel(page, s1);
+    await page.waitForFunction(
+      () => Boolean(document.querySelector('.n-macrosec details[data-fn^="macro."] [data-nx="chip-learn"]')),
+      null,
+      { timeout: 20_000 },
+    );
+    await page.locator('.n-macrosec details[data-fn^="macro."] [data-nx="chip-learn"]').first().click();
+    // The scripted hit is G, and G lives on the other seat — the SAME
+    // cross-slot question any control's learn raises.
+    await dialogShown(page);
+    assert.match(
+      (await page.locator(".rd-confdlg .nd-title").textContent()) ?? "",
+      /Give G to /,
+    );
+    await page.keyboard.press("Escape");
+    await dialogGone(page);
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();
   });

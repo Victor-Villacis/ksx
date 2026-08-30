@@ -198,6 +198,10 @@ struct ScriptedControl {
     /// assertion that matters is that it is still `false` after a Play the
     /// stage refuses.
     played: AtomicBool,
+    /// Whether the session factory currently points at the staged setup, and
+    /// the exact whole-draft token proven live by successful Play/Apply.
+    session_staged: AtomicBool,
+    active_stage_revision: Mutex<Option<String>>,
     committed: AtomicBool,
     learning: AtomicBool,
     learn_generation: AtomicUsize,
@@ -245,6 +249,8 @@ impl ScriptedControl {
             resumes: AtomicUsize::new(0),
             staged: Mutex::new(ksx_core::stage::StagedSetup::new()),
             played: AtomicBool::new(false),
+            session_staged: AtomicBool::new(false),
+            active_stage_revision: Mutex::new(None),
             committed: AtomicBool::new(false),
             learning: AtomicBool::new(false),
             learn_generation: AtomicUsize::new(0),
@@ -291,8 +297,16 @@ impl ScriptedControl {
         self.invalid_mapping_authoring.store(true, Ordering::SeqCst);
     }
 
+    fn whole_stage_revision(&self) -> String {
+        format!(
+            "test-d1-{:016x}",
+            self.stage_revision.load(Ordering::SeqCst)
+        )
+    }
+
     fn stamp_target_revisions(&self, view: &mut ksx_api::StagedSetupView) {
         let revision = self.stage_revision.load(Ordering::SeqCst);
+        view.revision = self.whole_stage_revision();
         for slot in &mut view.slots {
             let content = ksx_api::staged_slot_revision(slot);
             slot.target_revision = format!("test-d1-{revision:016x}-{content}");
@@ -382,7 +396,12 @@ impl ControlSource for ScriptedControl {
                 running: true,
                 line: "running — 4 pad(s)".into(),
                 profile: Some("Example Game".into()),
-                origin: ksx_api::SessionOrigin::Config,
+                origin: if self.session_staged.load(Ordering::SeqCst) {
+                    ksx_api::SessionOrigin::Staged
+                } else {
+                    ksx_api::SessionOrigin::Config
+                },
+                active_stage_revision: self.active_stage_revision.lock().unwrap().clone(),
                 active: None,
             }
         } else {
@@ -392,6 +411,7 @@ impl ControlSource for ScriptedControl {
                 line: "idle".into(),
                 profile: None,
                 origin: ksx_api::SessionOrigin::Unknown,
+                active_stage_revision: None,
                 active: None,
             }
         }
@@ -402,6 +422,8 @@ impl ControlSource for ScriptedControl {
         if self.refuse_start {
             Err(no_channel("no ksx daemon control channel at the pipe"))
         } else {
+            self.session_staged.store(false, Ordering::SeqCst);
+            *self.active_stage_revision.lock().unwrap() = None;
             self.running.store(true, Ordering::SeqCst);
             Ok("running (4 slot(s))".into())
         }
@@ -412,6 +434,7 @@ impl ControlSource for ScriptedControl {
             return Err(no_channel(NO_CHANNEL));
         }
         self.running.store(false, Ordering::SeqCst);
+        *self.active_stage_revision.lock().unwrap() = None;
         Ok("stopped".into())
     }
 
@@ -608,7 +631,8 @@ impl ControlSource for ScriptedControl {
 
     /// Apply-in-place, in the daemon's three shapes: refused when nothing
     /// runs, refused `needs-restart` when scripted to differ structurally,
-    /// ok otherwise (and the dirty stamp settles).
+    /// ok otherwise. Apply synchronizes the running session only: it never
+    /// writes config.toml, so saved-file dirty state must remain unchanged.
     fn stage_apply(&self) -> ksx_api::StageOutcome {
         if self.no_daemon {
             return ksx_api::StageOutcome::unavailable(NO_CHANNEL);
@@ -624,7 +648,8 @@ impl ControlSource for ScriptedControl {
                 ksx_api::Refusal::new("needs-restart", "the draft changed the session's structure");
             return ksx_api::StageOutcome::refused(&setup, &refusal);
         }
-        self.dirty.store(false, Ordering::SeqCst);
+        self.session_staged.store(true, Ordering::SeqCst);
+        *self.active_stage_revision.lock().unwrap() = Some(self.whole_stage_revision());
         ksx_api::StageOutcome::ok(&setup, "applied in place")
     }
 
@@ -741,6 +766,8 @@ impl ControlSource for ScriptedControl {
         match setup.commit() {
             Ok(_) => {
                 self.played.store(true, Ordering::SeqCst);
+                self.session_staged.store(true, Ordering::SeqCst);
+                *self.active_stage_revision.lock().unwrap() = Some(self.whole_stage_revision());
                 self.running.store(true, Ordering::SeqCst);
                 let mut ok = ksx_api::StageOutcome::ok(&setup, "the staged setup is playing");
                 ok.playing = true;
@@ -4876,8 +4903,22 @@ fn the_profiles_write_routes_refuse_a_cross_site_post() {
         ("/redesign/bind/turbo", "slot=1&function=a&turbo_hz=10"),
         ("/redesign/bind/toggle", "slot=1&function=a&mode=toggle"),
         ("/redesign/key/clear", "number=1&key=G"),
-        ("/redesign/board", "board=qwerty"),
         ("/redesign/blocking", "blocking=whole"),
+        ("/redesign/save", ""),
+        ("/redesign/play", ""),
+        ("/redesign/stop", ""),
+        ("/redesign/apply", ""),
+        ("/redesign/api/apply", ""),
+        ("/redesign/adopt", ""),
+        ("/redesign/discard", ""),
+        (
+            "/redesign/capture/prepare",
+            "expected_selector=x&instance_id=y&confirm_spare_keyboard=yes&confirm_rebind=yes&confirm_machine_certificate=yes",
+        ),
+        (
+            "/redesign/capture/release",
+            "expected_selector=x&instance_id=y&confirm_release=yes",
+        ),
     ] {
         let response = http(
             addr,
@@ -5836,19 +5877,6 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
         "the picker roster serves at least follow-hardware and qwerty: {api}"
     );
 
-    // The board verb validates the id SHAPE before any write, and answers
-    // THIS page's redirect with nocturne's own sentences.
-    let response = post_form(addr, "/redesign/board", "board=gibberish");
-    assert!(
-        response.contains("/redesign?flash=error%3A%20That%20is%20not%20a%20board"),
-        "{response}"
-    );
-    let response = post_form(addr, "/redesign/board", "");
-    assert!(
-        response.contains("flash=the%20form%20did%20not%20say%20which%20board"),
-        "{response}"
-    );
-
     // The capture behaviour: one staged edit through the shared core, the
     // answer read back from the daemon, and the payload's rows re-marked.
     let response = post_form(addr, "/redesign/blocking", "blocking=whole");
@@ -5867,6 +5895,749 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
         .filter_map(|row| row["name"].as_str())
         .collect();
     assert_eq!(chosen, ["whole"], "{api}");
+}
+
+/// The mapping wire on the redesign page. The payload serves the SOURCE PIN —
+/// the staged input's verified Windows identity, straight from the shared
+/// `StartCaptureView` resolution — plus the macro table on the same panel, and
+/// the aliased JSON verbs (`/redesign/api/bind`, `/redesign/api/macro/edit`)
+/// are the SAME handlers `/nocturne` mounts: one implementation, two doors.
+#[test]
+fn the_redesign_mapping_wire_serves_the_pin_and_the_aliased_verbs() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let saved: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        "{\"target\":\"stage\",\"slot\":1,\"preset\":\"Player 1\",\"name\":\"combo\",\
+         \"steps\":[{\"hold\":[\"A\"],\"ms\":50}]}",
+    )))
+    .expect("macro save");
+    assert_eq!(saved["ok"], true, "{saved}");
+
+    // The pin rides the payload verbatim — the browser never re-derives an
+    // identity the capture resolution already decided.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("payload");
+    assert_eq!(api["learn_selector"], "usb:d209:0430:00", "{api}");
+    assert_eq!(api["learn_instance"], IPAC_KB, "{api}");
+
+    // The macro table is composed on the same panel the inspector reads:
+    // rows for the slot, and per-pad availability for the flow layer.
+    let rows = api["controllers"]["macro_rows"]
+        .as_array()
+        .expect("macro rows");
+    assert!(!rows.is_empty(), "{api}");
+    assert!(
+        rows[0]["edit_href"]
+            .as_str()
+            .is_some_and(|href| href.starts_with("/redesign?")),
+        "the edit door stays on THIS page: {api}"
+    );
+
+    // The bind alias is the shared handler: a real staged write, target
+    // revision checked, the stage mutated — nothing /nocturne would not do.
+    let staged = control.staged();
+    let slot = staged.slots.first().expect("one staged slot").clone();
+    let mapper = ksx_api::staged_mapper_slot(&slot, "(none)").expect("mapper");
+    let function = mapper
+        .bindings
+        .iter()
+        .find(|(_, keys)| !keys.is_empty())
+        .map(|(f, _)| f.clone())
+        .expect("the layout bound at least one control");
+    let bound: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/redesign/api/bind",
+        &nocturne_bind_body(&control, 1, &function, "P", None, false),
+    )))
+    .expect("bind outcome");
+    assert_eq!(bound["ok"], true, "{bound}");
+
+    // …and a STALE revision is refused on this door exactly as on nocturne's
+    // (the target pin is the server's law, not the page's).
+    let stale: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/redesign/api/bind",
+        &nocturne_bind_body_with_revision(1, "not-the-revision", &function, "O", None, false),
+    )))
+    .expect("stale outcome");
+    assert_eq!(stale["ok"], false, "{stale}");
+
+    // The macro edit alias: composing the editor through ?macro= (the row's
+    // own door) and applying ONE act through the aliased handler answers with
+    // the same composed view nocturne would paint.
+    let name = rows[0]["name"].as_str().expect("macro name").to_owned();
+    let opened: serde_json::Value = serde_json::from_str(body_of(&get(
+        addr,
+        &format!("/api/redesign?slot=1&macro={name}"),
+    )))
+    .expect("payload with editor");
+    let draft = opened["controllers"]["mac"]["table"].clone();
+    assert!(
+        !draft.is_null(),
+        "the ?macro= door composes the editor: {opened}"
+    );
+    let edited: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/redesign/api/macro/edit",
+        &format!("{{\"slot\":1,\"act\":\"cell|0|diag:dpad:dr\",\"draft\":{draft}}}"),
+    )))
+    .expect("edit");
+    assert_eq!(edited["ok"], true, "{edited}");
+    assert_eq!(
+        edited["draft"]["steps"][0]["hold"],
+        serde_json::json!(["A", "dpad.down", "dpad.right"]),
+        "the diagonal pick JOINS the step's existing hold: {edited}"
+    );
+    // …and the recomposed roll wears THIS page's doors, not /nocturne's.
+    assert!(
+        edited["view"]["close_href"]
+            .as_str()
+            .is_some_and(|href| href.starts_with("/redesign")),
+        "{edited}"
+    );
+
+    // The lifecycle form twins ride THIS page's redirect with nocturne's own
+    // sentences (the shared verb cores, proven per verb).
+    let response = post_form(addr, "/redesign/macro/new", "slot=1&name=combo2");
+    assert!(
+        response.contains("/redesign?")
+            && response.contains("Macro%20created%20with%20one%20empty%20step"),
+        "{response}"
+    );
+    let response = post_form(
+        addr,
+        "/redesign/macro/toggle",
+        "slot=1&name=combo2&enable=false",
+    );
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("/redesign?"), "{response}");
+    let response = post_form(addr, "/redesign/macro/delete", "slot=1&name=combo2");
+    assert!(
+        response.contains("/redesign?")
+            && response.contains("Macro%20removed%20from%20this%20draft"),
+        "{response}"
+    );
+    let staged = control.staged();
+    let slot = staged.slots.first().expect("still staged").clone();
+    assert!(
+        ksx_api::staged_macro_snapshot(&slot)
+            .macros
+            .iter()
+            .all(|m| m.name != "combo2"),
+        "the deleted macro is gone from the stage"
+    );
+}
+
+/// The cutover-critical lifecycle is one operational contract and the same
+/// daemon verbs `/nocturne` already proved: state is served before the click,
+/// every form comes home to `/redesign`, Apply keeps its structured
+/// needs-restart answer, and a full Play/Apply/Stop/Discard/Adopt loop changes
+/// the authoritative providers rather than browser state.
+#[test]
+fn the_redesign_operational_shell_serves_truth_and_runs_the_shared_lifecycle() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    // Ordinary Windows-input state: the exact I-PAC is present and can type.
+    machine.winusb_claimed.store(false, Ordering::SeqCst);
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+        ksx_api::StageEdit::SetBlocking {
+            blocking: "whole".into(),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    control.dirty.store(true, Ordering::SeqCst);
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+
+    let before: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("payload");
+    assert_eq!(before["operations"]["draft_dirty"], true, "{before}");
+    assert_eq!(before["operations"]["draft_empty"], false, "{before}");
+    assert!(
+        before["operations"]["draft_revision"]
+            .as_str()
+            .is_some_and(|revision| !revision.is_empty()),
+        "the daemon-owned draft generation must travel intact: {before}"
+    );
+    assert_eq!(
+        before["operations"]["active_stage_revision"], "",
+        "there is no active session, so the page must not invent a synchronized revision"
+    );
+    assert_eq!(
+        before["operations"]["saved_label"], "Saved configuration",
+        "{before}"
+    );
+    assert_eq!(
+        before["operations"]["session"]["reachable"], true,
+        "{before}"
+    );
+    assert_eq!(
+        before["operations"]["session"]["running"], false,
+        "{before}"
+    );
+    assert_eq!(before["operations"]["save"]["allowed"], true, "{before}");
+    assert_eq!(before["operations"]["play"]["allowed"], true, "{before}");
+    assert_eq!(before["operations"]["apply"]["allowed"], false, "{before}");
+    assert!(
+        before["operations"]["apply"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Nothing is running"),
+        "{before}"
+    );
+    assert_eq!(
+        before["journey"]["compact"], "3/4 · Ready to play",
+        "{before}"
+    );
+    assert_eq!(before["capture"]["mode"], "prepare-optional", "{before}");
+
+    // Output support is Play's stricter gate only. A missing output must not
+    // make a complete draft look unsaveable.
+    machine.output_mode.store(1, Ordering::SeqCst);
+    let output_blocked: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("blocked output");
+    assert_eq!(
+        output_blocked["operations"]["save"]["allowed"], true,
+        "{output_blocked}"
+    );
+    assert_eq!(
+        output_blocked["operations"]["play"]["allowed"], false,
+        "{output_blocked}"
+    );
+    assert!(
+        output_blocked["operations"]["play"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("output"),
+        "{output_blocked}"
+    );
+    machine.output_mode.store(0, Ordering::SeqCst);
+
+    // Older/uncertain staged sessions fail closed: dirty is not proof that
+    // the running session contains an earlier revision.
+    control.running.store(true, Ordering::SeqCst);
+    control.session_staged.store(true, Ordering::SeqCst);
+    *control.active_stage_revision.lock().unwrap() = None;
+    let uncertain: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("uncertain session");
+    assert_eq!(
+        uncertain["operations"]["apply"]["allowed"], false,
+        "{uncertain}"
+    );
+    assert!(
+        uncertain["operations"]["apply"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("cannot prove"),
+        "{uncertain}"
+    );
+    control.running.store(false, Ordering::SeqCst);
+    control.session_staged.store(false, Ordering::SeqCst);
+
+    let initial_revision = before["operations"]["draft_revision"]
+        .as_str()
+        .expect("served initial draft revision")
+        .to_owned();
+    let stale_save = post_form(addr, "/redesign/save", "expected_revision=test-d1-stale");
+    assert!(
+        stale_save.contains("/redesign?flash=error%3A%20This%20draft%20changed"),
+        "{stale_save}"
+    );
+    assert!(!control.committed.load(Ordering::SeqCst));
+
+    let lifecycle_body = format!("expected_revision={initial_revision}");
+    let saved = post_form(addr, "/redesign/save", &lifecycle_body);
+    assert!(saved.starts_with("HTTP/1.1 303"), "{saved}");
+    assert!(
+        saved.contains("location: /redesign?flash=")
+            || saved.contains("Location: /redesign?flash="),
+        "the shared verb must come home to redesign: {saved}"
+    );
+    assert!(saved.contains("Setup%20saved%20for%20later"), "{saved}");
+    assert!(control.committed.load(Ordering::SeqCst));
+
+    let stale_play = post_form(addr, "/redesign/play", "expected_revision=test-d1-stale");
+    assert!(
+        stale_play.contains("/redesign?flash=error%3A%20This%20draft%20changed"),
+        "{stale_play}"
+    );
+    assert!(!control.played.load(Ordering::SeqCst));
+
+    let played = post_form(addr, "/redesign/play", &lifecycle_body);
+    assert!(played.starts_with("HTTP/1.1 303"), "{played}");
+    assert!(
+        played.contains("/redesign?flash=Play%20started"),
+        "{played}"
+    );
+    assert!(control.played.load(Ordering::SeqCst));
+    assert!(control.running.load(Ordering::SeqCst));
+
+    // One post-Play draft edit advances the whole-draft token. Dirty alone
+    // is not Apply authority; this exact revision difference is.
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::SetBlocking {
+                blocking: "bound-keys".into(),
+            })
+            .ok
+    );
+    control.dirty.store(true, Ordering::SeqCst);
+
+    let running: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("running payload");
+    assert_eq!(
+        running["operations"]["session"]["running"], true,
+        "{running}"
+    );
+    assert_ne!(
+        running["operations"]["draft_revision"], running["operations"]["active_stage_revision"],
+        "Apply must be licensed by an authoritative revision difference: {running}"
+    );
+    assert_eq!(
+        running["operations"]["play"]["label"], "Restart Play",
+        "{running}"
+    );
+    assert_eq!(running["operations"]["play"]["visible"], false, "{running}");
+    assert_eq!(running["operations"]["stop"]["visible"], true, "{running}");
+    assert_eq!(running["operations"]["stop"]["allowed"], true, "{running}");
+    assert_eq!(running["operations"]["apply"]["visible"], true, "{running}");
+    assert_eq!(running["operations"]["apply"]["allowed"], true, "{running}");
+    assert_eq!(running["journey"]["compact"], "4/4 · Playing", "{running}");
+    let running_revision = running["operations"]["draft_revision"]
+        .as_str()
+        .expect("served running draft revision")
+        .to_owned();
+
+    // Structured Apply preserves the stable code. No flash parsing is needed
+    // before the client offers the expanded Replace session action.
+    control.apply_needs_restart.store(true, Ordering::SeqCst);
+    let stale_apply: serde_json::Value = serde_json::from_str(body_of(&post_form(
+        addr,
+        "/redesign/api/apply",
+        "expected_revision=test-d1-stale",
+    )))
+    .expect("stale structured apply");
+    assert_eq!(stale_apply["done"], false, "{stale_apply}");
+    assert_eq!(stale_apply["code"], "stale-draft", "{stale_apply}");
+
+    let apply_body = format!("expected_revision={running_revision}");
+    let restart: serde_json::Value = serde_json::from_str(body_of(&post_form(
+        addr,
+        "/redesign/api/apply",
+        &apply_body,
+    )))
+    .expect("structured apply");
+    assert_eq!(restart["done"], false, "{restart}");
+    assert_eq!(restart["code"], "needs-restart", "{restart}");
+
+    control.apply_needs_restart.store(false, Ordering::SeqCst);
+    let stale_form_apply = post_form(addr, "/redesign/apply", "expected_revision=test-d1-stale");
+    assert!(
+        stale_form_apply.contains("/redesign?flash=error%3A%20This%20draft%20changed"),
+        "{stale_form_apply}"
+    );
+    let applied = post_form(addr, "/redesign/apply", &apply_body);
+    assert!(
+        applied.contains("/redesign?flash=Changes%20applied"),
+        "{applied}"
+    );
+    assert!(
+        control.dirty.load(Ordering::SeqCst),
+        "Apply updates the live session but never saves the draft"
+    );
+    let synced: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("synced payload");
+    assert_eq!(
+        synced["operations"]["draft_revision"], synced["operations"]["active_stage_revision"],
+        "{synced}"
+    );
+    assert_eq!(
+        synced["operations"]["apply"]["allowed"], false,
+        "an exact live match needs no Apply: {synced}"
+    );
+    assert_eq!(
+        synced["operations"]["apply"]["visible"], false,
+        "Apply visibility is authoritative live divergence, never saved-file dirty state: {synced}"
+    );
+
+    let stopped = post_form(addr, "/redesign/stop", "");
+    assert!(
+        stopped.contains("/redesign?flash=Play%20stopped."),
+        "{stopped}"
+    );
+    assert!(!control.running.load(Ordering::SeqCst));
+
+    let discard_revision = synced["operations"]["draft_revision"]
+        .as_str()
+        .expect("served whole-draft revision");
+    let discarded = post_form(
+        addr,
+        "/redesign/discard",
+        &format!("confirm_discard=yes&expected_revision={discard_revision}"),
+    );
+    assert!(
+        discarded.contains("/redesign?flash=Draft%20discarded"),
+        "{discarded}"
+    );
+    assert!(control.staged().empty);
+    let empty: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("empty payload");
+    assert_eq!(empty["operations"]["adopt"]["allowed"], true, "{empty}");
+
+    let adopted = post_form(addr, "/redesign/adopt", "");
+    assert!(
+        adopted.contains("/redesign?flash=Loaded%20into%20this%20draft"),
+        "{adopted}"
+    );
+    assert!(!control.staged().empty);
+    assert!(
+        !control.running.load(Ordering::SeqCst),
+        "Adopt is load-only"
+    );
+}
+
+/// A held WinUSB keyboard has a way back even with no staged setup. Both
+/// release and prepare aliases retain the legacy core's exact-instance,
+/// consent and post-mutation stage guards while returning to this surface.
+#[test]
+fn the_redesign_capture_shell_recovers_held_devices_and_preserves_exact_identity() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+
+    let held: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("held payload");
+    assert_eq!(held["capture"]["mode"], "release-held", "{held}");
+    assert_eq!(held["capture"]["can_release"], true, "{held}");
+    assert_eq!(held["capture"]["selector"], "usb:d209:0430:00", "{held}");
+    assert_eq!(held["capture"]["instance"], IPAC_KB, "{held}");
+    let held_rows = held["capture"]["held"].as_array().expect("held rows");
+    assert_eq!(held_rows.len(), 1, "{held}");
+    assert_eq!(held_rows[0]["can_release"], true, "{held}");
+
+    let released = post_form(addr, "/redesign/capture/release", RELEASE_IPAC_FORM);
+    assert!(released.starts_with("HTTP/1.1 303"), "{released}");
+    assert!(
+        released.contains("/redesign?flash=Keyboard%20released"),
+        "{released}"
+    );
+    assert_eq!(machine.released_with.lock().unwrap().len(), 1);
+    assert!(!machine.winusb_claimed.load(Ordering::SeqCst));
+
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".into(),
+                alias: "panel".into(),
+                label: "I-PAC".into(),
+            })
+            .ok
+    );
+    let ready: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("ready payload");
+    assert_eq!(ready["capture"]["mode"], "prepare-optional", "{ready}");
+    assert_eq!(ready["capture"]["can_prepare"], true, "{ready}");
+
+    let prepared = post_form(addr, "/redesign/capture/prepare", PREPARE_IPAC_FORM);
+    assert!(prepared.starts_with("HTTP/1.1 303"), "{prepared}");
+    assert!(
+        prepared.contains("/redesign?flash=Keyboard%20prepared"),
+        "{prepared}"
+    );
+    assert_eq!(machine.prepared_with.lock().unwrap().len(), 1);
+    assert_eq!(
+        control
+            .staged()
+            .device
+            .as_ref()
+            .map(|device| device.backend.as_str()),
+        Some("winusb"),
+        "only an authoritative exact prepared result changes the stage backend"
+    );
+    let prepared_state: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("prepared payload");
+    assert_eq!(
+        prepared_state["capture"]["mode"], "release",
+        "{prepared_state}"
+    );
+
+    // A stale interface cannot be retargeted by the browser, and the
+    // privileged provider is not called a second time.
+    let stale = post_form(
+        addr,
+        "/redesign/capture/release",
+        "expected_selector=usb%3Ad209%3A0430%3A00&instance_id=STALE&confirm_release=yes",
+    );
+    assert!(
+        stale.contains("/redesign?flash=error%3A%20The%20selected%20keyboard%20changed"),
+        "{stale}"
+    );
+    assert_eq!(machine.released_with.lock().unwrap().len(), 1);
+
+    *machine.release_state.lock().unwrap() = Some("recovery-required".to_owned());
+    let recovery = post_form(addr, "/redesign/capture/release", RELEASE_IPAC_FORM);
+    assert!(
+        recovery.contains("/redesign?flash=error%3A%20Windows%20could%20not%20finish%20releasing"),
+        "the safe recovery sentence must come home to this page: {recovery}"
+    );
+    assert_eq!(machine.released_with.lock().unwrap().len(), 2);
+    for internal in ["generated.inf", "--repair", "helper"] {
+        assert!(!recovery.contains(internal), "{internal}: {recovery}");
+    }
+}
+
+/// The redesign's fail-closed exact-input promise is mutation authority, not
+/// decoration on a disabled button. A refused or incomplete live scan cannot
+/// be bypassed with a direct Save/Play POST, while the shared domain cores
+/// remain the only writers once capture is proven.
+#[test]
+fn the_redesign_save_and_play_refuse_unverified_capture_at_the_server_door() {
+    for (case, machine) in [
+        ("refused scan", ScriptedMachine::refusing()),
+        ("incomplete scan", ScriptedMachine::blind()),
+    ] {
+        let control = Arc::new(ScriptedControl::new(false));
+        for edit in [
+            ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".into(),
+                alias: "panel".into(),
+                label: "I-PAC".into(),
+            },
+            ksx_api::StageEdit::AddSlot {
+                number: None,
+                persona: "xbox360".into(),
+                preset: "Player 1".into(),
+                layout: Some("arcade-6button".into()),
+            },
+            ksx_api::StageEdit::SetBlocking {
+                blocking: "whole".into(),
+            },
+        ] {
+            assert!(control.stage_edit(&edit).ok, "{case}");
+        }
+        let addr = start_server_with_machine(control.clone(), Arc::new(machine));
+        let payload: serde_json::Value =
+            serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("payload");
+        assert_eq!(
+            payload["operations"]["save"]["allowed"], false,
+            "{case}: {payload}"
+        );
+        assert_eq!(
+            payload["operations"]["play"]["allowed"], false,
+            "{case}: {payload}"
+        );
+        let revision = payload["operations"]["draft_revision"]
+            .as_str()
+            .expect("served revision");
+        let body = format!("expected_revision={revision}");
+
+        let save = post_form(addr, "/redesign/save", &body);
+        assert!(
+            save.contains("/redesign?flash=error%3A%20This%20setup%20is%20not%20ready"),
+            "{case}: {save}"
+        );
+        assert!(
+            !control.committed.load(Ordering::SeqCst),
+            "{case}: Save reached the writer"
+        );
+
+        let play = post_form(addr, "/redesign/play", &body);
+        assert!(
+            play.contains("/redesign?flash=error%3A%20This%20setup%20is%20not%20ready"),
+            "{case}: {play}"
+        );
+        assert!(
+            !control.played.load(Ordering::SeqCst),
+            "{case}: Play reached the session writer"
+        );
+    }
+}
+
+/// Independent failures stay independent: a readable config/device inventory
+/// cannot make a dead staging/session channel look empty or idle, and every
+/// disabled lifecycle action carries a customer-facing reason.
+#[test]
+fn the_redesign_operational_payload_fails_closed_when_the_daemon_is_down() {
+    let addr = start_server(Arc::new(ScriptedControl::dead()));
+    let value: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("payload");
+    assert_eq!(
+        value["operations"]["draft_label"], "Draft unavailable",
+        "{value}"
+    );
+    assert_eq!(
+        value["operations"]["session"]["reachable"], false,
+        "{value}"
+    );
+    assert_eq!(
+        value["journey"]["compact"], "Progress unavailable",
+        "{value}"
+    );
+    for action in ["save", "play", "apply", "stop", "adopt", "discard"] {
+        assert_eq!(
+            value["operations"][action]["allowed"], false,
+            "{action}: {value}"
+        );
+        assert!(
+            value["operations"][action]["reason"]
+                .as_str()
+                .is_some_and(|reason| !reason.trim().is_empty()),
+            "{action}: {value}"
+        );
+    }
+    let save = post_form(addr, "/redesign/save", "");
+    assert!(save.starts_with("HTTP/1.1 303"), "{save}");
+    assert!(save.contains("/redesign?flash=error%3A"), "{save}");
+    for raw in ["daemon", "pipe", "control%20channel"] {
+        assert!(!save.contains(raw), "raw provider text {raw:?}: {save}");
+    }
+}
+
+/// Progress cannot turn green because one player is mapped while another
+/// would plug dead. This is the redesign correction to the legacy rail's
+/// `any(slot has bindings)` test.
+#[test]
+fn the_redesign_progress_requires_live_bindings_on_every_controller() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.winusb_claimed.store(false, Ordering::SeqCst);
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "playstation".into(),
+            preset: "Player 2".into(),
+            layout: None,
+        },
+        ksx_api::StageEdit::SetBlocking {
+            blocking: "whole".into(),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let staged = control.staged();
+    assert!(staged.slots[0].bindings > 0);
+    assert_eq!(staged.slots[1].bindings, 0);
+    let addr = start_server_with_machine(control, machine);
+    let value: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("payload");
+    let mapping = value["journey"]["rows"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["key"] == "mapping"))
+        .expect("mapping step");
+    assert_eq!(mapping["badge"], "Now", "{value}");
+    assert_eq!(value["operations"]["save"]["allowed"], false, "{value}");
+    assert_eq!(value["operations"]["play"]["allowed"], false, "{value}");
+}
+
+/// Required checkboxes are progressive enhancement, not authority. A direct
+/// POST cannot discard a dirty redesign draft without the served consent;
+/// clean drafts retain the deliberate one-click Start-over path.
+#[test]
+fn the_redesign_discard_route_guards_dirty_work_server_side() {
+    let control = Arc::new(ScriptedControl::new(false));
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".into(),
+                alias: "panel".into(),
+                label: "I-PAC".into(),
+            })
+            .ok
+    );
+    control.dirty.store(true, Ordering::SeqCst);
+    let addr = start_server(control.clone());
+
+    let refused = post_form(addr, "/redesign/discard", "");
+    assert!(
+        refused.contains("/redesign?flash=error%3A%20Confirm%20Start%20over"),
+        "{refused}"
+    );
+    assert!(!control.staged().empty, "missing consent changed the draft");
+
+    let revision = control.staged().revision;
+    let missing_revision = post_form(addr, "/redesign/discard", "confirm_discard=yes");
+    assert!(
+        missing_revision.contains("/redesign?flash=error%3A%20This%20draft%20changed"),
+        "{missing_revision}"
+    );
+    assert!(
+        !control.staged().empty,
+        "a generic confirmation discarded a draft it did not identify"
+    );
+
+    let stale = post_form(
+        addr,
+        "/redesign/discard",
+        "confirm_discard=yes&expected_revision=test-d1-stale",
+    );
+    assert!(
+        stale.contains("/redesign?flash=error%3A%20This%20draft%20changed"),
+        "{stale}"
+    );
+    assert!(
+        !control.staged().empty,
+        "a stale confirmation changed the draft"
+    );
+
+    let confirmed = post_form(
+        addr,
+        "/redesign/discard",
+        &format!("confirm_discard=yes&expected_revision={revision}"),
+    );
+    assert!(
+        confirmed.contains("/redesign?flash=Draft%20discarded"),
+        "{confirmed}"
+    );
+    assert!(control.staged().empty);
+
+    // Clean content remains one click, as the expanded setup panel promises.
+    assert!(control.stage_adopt(None).ok);
+    control.dirty.store(false, Ordering::SeqCst);
+    let clean = post_form(addr, "/redesign/discard", "");
+    assert!(
+        clean.contains("/redesign?flash=Draft%20discarded"),
+        "{clean}"
+    );
+    assert!(control.staged().empty);
 }
 
 /// With no daemon, the config half of the page keeps working and the two verbs

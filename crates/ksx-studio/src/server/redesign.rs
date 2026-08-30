@@ -8,6 +8,13 @@
 
 use super::*;
 
+const RD_DISCARD_CONFIRM: &str =
+    "error: Confirm Start over before discarding unsaved changes. Nothing was changed.";
+const RD_DISCARD_CHANGED: &str =
+    "error: This draft changed since Start over was opened. Review it and confirm again; nothing was changed.";
+const RD_LIFECYCLE_CHANGED: &str =
+    "error: This draft changed or could not be verified. Refresh the workbench before continuing; nothing was changed.";
+
 #[derive(Deserialize)]
 pub(super) struct RedesignQuery {
     flash: Option<String>,
@@ -15,6 +22,11 @@ pub(super) struct RedesignQuery {
     /// explicit `?slot=` wins, otherwise the first staged controller speaks
     /// for the inspector panel.
     slot: Option<u8>,
+    /// The macro the step editor opens on (the nocturne door: ?slot&macro).
+    #[serde(rename = "macro")]
+    macro_selected: Option<String>,
+    /// The bind-pane filter, resolved server-side like nocturne.
+    q: Option<String>,
 }
 
 /// The sentences this page may be asked to repeat after a redirect, resolved
@@ -22,7 +34,7 @@ pub(super) struct RedesignQuery {
 /// verb's sentences ARE nocturne's constants: one wording, two pages, so the
 /// copy cannot drift between the surfaces (the cutover's "provider text"
 /// lesson, applied in advance).
-const RD_FLASH_ALLOWLIST: [&str; 28] = [
+const RD_FLASH_ALLOWLIST: &[&str] = &[
     N_THEME_OK,
     N_THEME_UNKNOWN,
     N_DEVICE_OK,
@@ -47,10 +59,55 @@ const RD_FLASH_ALLOWLIST: [&str; 28] = [
     N_TOGGLE_UNBOUND_ERROR,
     N_KEY_CLEAR_OK,
     N_KEY_CLEAR_NONE,
-    N_BOARD_OK,
-    N_BOARD_UNKNOWN,
-    N_BOARD_MISSING,
     N_BLOCKING_OK,
+    N_MACRO_OK,
+    N_MACRO_NEW,
+    N_MACRO_NAME,
+    N_MACRO_TAKEN,
+    N_MACRO_BADNAME,
+    N_MACRO_DELETED,
+    // The operational shell aliases. These remain nocturne's ONE set of
+    // customer sentences; only the redirect home changes.
+    N_SAVE_OK,
+    N_SAVE_ERROR,
+    N_SAVE_BLOCKING,
+    N_SAVE_NO_BINDINGS,
+    N_SAVE_NO_DEVICE,
+    N_SAVE_NO_SLOTS,
+    N_SAVE_CAPTURE,
+    N_PLAY_OK,
+    N_PLAY_ERROR,
+    N_PLAY_BLOCKING,
+    N_PLAY_NO_BINDINGS,
+    N_PLAY_NO_DEVICE,
+    N_PLAY_NO_SLOTS,
+    N_PLAY_CAPTURE,
+    N_PLAY_OUTPUT_BLOCKED,
+    N_PLAY_OUTPUT_UNKNOWN,
+    N_STOP_OK,
+    N_STOP_ERROR,
+    N_APPLY_OK,
+    N_APPLY_RESTART,
+    N_APPLY_ERROR,
+    N_ADOPT_OK,
+    N_ADOPT_BLOCKED,
+    N_DISCARD_OK,
+    N_CAPTURE_PREPARED_OK,
+    N_CAPTURE_RELEASED_OK,
+    N_CAPTURE_PREPARE_CONSENT,
+    N_CAPTURE_RELEASE_CONSENT,
+    N_CAPTURE_TARGET_CHANGED,
+    N_CAPTURE_ALREADY_PREPARED,
+    N_CAPTURE_ALREADY_RELEASED,
+    N_CAPTURE_PREPARE_ERROR,
+    N_CAPTURE_RELEASE_ERROR,
+    N_CAPTURE_PREPARE_RECOVERY,
+    N_CAPTURE_RELEASE_RECOVERY,
+    N_CAPTURE_PREPARED_STAGE_CHANGED,
+    N_CAPTURE_RELEASED_STAGE_CHANGED,
+    RD_DISCARD_CONFIRM,
+    RD_DISCARD_CHANGED,
+    RD_LIFECYCLE_CHANGED,
 ];
 
 pub(super) fn redesign_flash_from_query(flash: Option<&str>) -> Option<String> {
@@ -60,7 +117,8 @@ pub(super) fn redesign_flash_from_query(flash: Option<&str>) -> Option<String> {
     }
     Some(
         RD_FLASH_ALLOWLIST
-            .into_iter()
+            .iter()
+            .copied()
             .find(|safe| *safe == flash)
             .unwrap_or(N_UNKNOWN_FLASH_ERROR)
             .to_owned(),
@@ -78,40 +136,61 @@ fn redesign_redirect(flash: &str) -> Response {
 pub(super) async fn collect_redesign(
     state: &Arc<AppState>,
     selected_slot: Option<u8>,
+    macro_selected: Option<String>,
+    q: Option<String>,
 ) -> RedesignPayload {
     let redesign_state = Arc::clone(state);
+    let environment = state.source.environment();
+    let fallback_environment = environment.clone();
     tokio::task::spawn_blocking(move || {
-        let setup = redesign_state
+        let (setup, setup_error) = match redesign_state
             .machine_cache
             .setup_state(&*redesign_state.machine)
-            .ok();
-        // The device scan, for the workbench picker. Deliberately UNCACHED,
-        // for the reason `/devices` gives — a board unplugged ten minutes ago
-        // must stop being offered — and affordable here because this page has
-        // no interval poller: the read runs on a page render and after a
-        // verb, not every two seconds. The refusal keeps its remedy (the
-        // `/devices` composition): it is going onto a page, and "run `ksx
-        // devices`" is the whole value of the message.
+        {
+            Ok(setup) => (Some(setup), String::new()),
+            Err(_) => (None, N_READ_SETUP_ERROR.to_owned()),
+        };
+        // The device scan, through the MACHINE CACHE now that this page
+        // polls (the mapper migration brought nocturne's 2 s tick): a USB
+        // tree enumeration per tick is work the machine did not ask for.
+        // The cache is TTL-bounded and invalidated by every mutating
+        // request, so nothing the studio itself changed is ever stale; an
+        // unplugged board leaves the roster at the TTL, exactly like
+        // /nocturne's. The refusal keeps its remedy (the `/devices`
+        // composition): it is going onto a page, and "run `ksx devices`"
+        // is the whole value of the message.
         let scan = redesign_state
-            .machine
-            .device_scan()
-            .map_err(|refusal| match &refusal.remedy {
-                Some(remedy) => format!("{} — {remedy}", refusal.message),
-                None => refusal.message.clone(),
-            });
+            .machine_cache
+            .device_scan(&*redesign_state.machine)
+            // The provider refusal remains diagnostic. This sentence is
+            // customer copy in the device picker and capture recovery card.
+            .map_err(|_| N_READ_SCAN_ERROR.to_owned());
         // The staged device — the daemon's answer to "which board does ksx
         // split", marked onto the picker rows and the bench cards.
         let staged = redesign_state.control.staged();
+        let session = redesign_state.control.session();
+        // Play has a stricter gate than Save. Ask the machine about exactly
+        // the output stacks this draft requires; a refused read defaults to
+        // UNKNOWN and therefore cannot license Play.
+        let outputs = redesign_state
+            .machine
+            .controller_outputs(&staged)
+            .unwrap_or_default();
         // The undo chip label off this page's OWN stash (the shared helper
         // also sweeps an expired stash).
         let undo_label = undo_chip_label(&redesign_state.redesign_undo);
         let mut payload = crate::render_redesign::payload(
-            &redesign_state.source.environment(),
+            &environment,
             setup,
+            &setup_error,
             scan,
             &staged,
+            &session,
+            &outputs,
             selected_slot,
             undo_label.as_deref(),
+            macro_selected.as_deref(),
+            q.as_deref(),
         );
         // Which parked ghosts the studio still HOLDS (authoring included),
         // so a ghost card can say "bindings kept" vs "staged fresh" before
@@ -127,7 +206,48 @@ pub(super) async fn collect_redesign(
         payload
     })
     .await
-    .unwrap_or_default()
+    .unwrap_or_else(|_| {
+        let staged = ksx_api::StagedSetupView::unreachable("the redesign collection panicked");
+        let session = SessionView::unreachable("the redesign collection panicked");
+        crate::render_redesign::payload(
+            &fallback_environment,
+            None,
+            N_READ_SETUP_ERROR,
+            Err(N_READ_SCAN_ERROR.to_owned()),
+            &staged,
+            &session,
+            &ksx_api::ControllerOutputsView::default(),
+            None,
+            None,
+            None,
+            None,
+        )
+    })
+}
+
+/// Re-home one shared nocturne form core without copying its protocol or
+/// failure mapping. The shared handler performs the mutation and returns its
+/// allowlisted 303; this adapter changes only the page prefix in `Location`.
+/// JSON handlers need no adapter because they carry no page location.
+fn redesign_rehome(mut response: Response) -> Response {
+    let target = response
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    if let Some(target) = target {
+        let rehomed = if let Some(query) = target.strip_prefix("/nocturne?") {
+            format!("/redesign?{query}")
+        } else if target == "/nocturne" {
+            "/redesign".to_owned()
+        } else {
+            target
+        };
+        if let Ok(value) = HeaderValue::from_str(&rehomed) {
+            response.headers_mut().insert(header::LOCATION, value);
+        }
+    }
+    response
 }
 
 /// The root stamp for one already-collected payload. System is represented by
@@ -151,7 +271,7 @@ pub(super) async fn redesign_page(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RedesignQuery>,
 ) -> Response {
-    let payload = collect_redesign(&state, query.slot).await;
+    let payload = collect_redesign(&state, query.slot, query.macro_selected, query.q).await;
     let flash = redesign_flash_from_query(query.flash.as_deref());
     let out = crate::render::with_theme(
         render_redesign(&state.redesign_page.get(), &payload, flash.as_deref()),
@@ -181,12 +301,208 @@ pub(super) async fn api_redesign(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RedesignQuery>,
 ) -> Response {
-    let payload = collect_redesign(&state, query.slot).await;
+    let payload = collect_redesign(&state, query.slot, query.macro_selected, query.q).await;
     (
         [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
         axum::Json(payload),
     )
         .into_response()
+}
+
+// ── Operational-shell aliases ─────────────────────────────────────────────
+//
+// These deliberately call nocturne's complete handlers after redesign's
+// served-revision and fail-closed-capture preflights. Save/Play's stable
+// refusal-code mapping, Play's output preflight, Apply's structured
+// needs-restart answer, and WinUSB's exact-device + consent transaction
+// therefore remain one implementation.
+
+#[derive(Deserialize)]
+pub(super) struct RedesignRevisionForm {
+    #[serde(default)]
+    expected_revision: Option<String>,
+}
+
+async fn redesign_revision_matches(state: &Arc<AppState>, expected: Option<&str>) -> bool {
+    let expected = expected
+        .map(str::trim)
+        .filter(|revision| !revision.is_empty())
+        .map(str::to_owned);
+    let inspect = Arc::clone(state);
+    tokio::task::spawn_blocking(move || {
+        let staged = inspect.control.staged();
+        staged.reachable
+            && !staged.revision.trim().is_empty()
+            && expected.as_deref() == Some(staged.revision.trim())
+    })
+    .await
+    .unwrap_or(false)
+}
+
+pub(super) async fn redesign_form_save(
+    state: State<Arc<AppState>>,
+    form: RedesignForm<RedesignRevisionForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    if !redesign_revision_matches(&state.0, form.expected_revision.as_deref()).await {
+        return redesign_redirect(RD_LIFECYCLE_CHANGED);
+    }
+    if !redesign_capture_ready(&state.0).await {
+        return redesign_redirect(N_SAVE_CAPTURE);
+    }
+    redesign_rehome(nocturne_form_save(state).await)
+}
+
+pub(super) async fn redesign_form_play(
+    state: State<Arc<AppState>>,
+    form: RedesignForm<RedesignRevisionForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    if !redesign_revision_matches(&state.0, form.expected_revision.as_deref()).await {
+        return redesign_redirect(RD_LIFECYCLE_CHANGED);
+    }
+    if !redesign_capture_ready(&state.0).await {
+        return redesign_redirect(N_PLAY_CAPTURE);
+    }
+    redesign_rehome(nocturne_form_play(state).await)
+}
+
+/// The redesign promises that unresolved exact-device state is fail-closed,
+/// including a refused or incomplete live scan. Keep that promise at the
+/// mutation door as well as in the served button. A no-device draft falls
+/// through so the shared stage core retains its more specific domain refusal.
+async fn redesign_capture_ready(state: &Arc<AppState>) -> bool {
+    let inspect = Arc::clone(state);
+    tokio::task::spawn_blocking(move || {
+        let staged = inspect.control.staged();
+        if !staged.reachable || staged.device.is_none() {
+            return true;
+        }
+        let Ok(scan) = inspect.machine.device_scan() else {
+            return false;
+        };
+        crate::snapshot::RedesignCaptureState::of(&staged, Some(&scan), "").ready_for_commit()
+    })
+    .await
+    .unwrap_or(false)
+}
+
+pub(super) async fn redesign_form_stop(state: State<Arc<AppState>>) -> Response {
+    redesign_rehome(nocturne_form_stop(state).await)
+}
+
+pub(super) async fn redesign_form_apply(
+    state: State<Arc<AppState>>,
+    form: RedesignForm<RedesignRevisionForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    if !redesign_revision_matches(&state.0, form.expected_revision.as_deref()).await {
+        return redesign_redirect(RD_LIFECYCLE_CHANGED);
+    }
+    redesign_rehome(nocturne_form_apply(state).await)
+}
+
+pub(super) async fn redesign_api_apply(
+    state: State<Arc<AppState>>,
+    form: RedesignForm<RedesignRevisionForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return axum::Json(serde_json::json!({
+            "done": false,
+            "code": "bad-request",
+            "flash": N_FORM_UNREADABLE,
+        }))
+        .into_response();
+    };
+    if !redesign_revision_matches(&state.0, form.expected_revision.as_deref()).await {
+        return axum::Json(serde_json::json!({
+            "done": false,
+            "code": "stale-draft",
+            "flash": RD_LIFECYCLE_CHANGED,
+        }))
+        .into_response();
+    }
+    nocturne_api_apply(state).await
+}
+
+pub(super) async fn redesign_form_adopt(
+    state: State<Arc<AppState>>,
+    form: RedesignForm<NocturneAdoptForm>,
+) -> Response {
+    let Ok(form) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    redesign_rehome(nocturne_form_adopt(state, form).await)
+}
+
+#[derive(Deserialize)]
+pub(super) struct RedesignDiscardForm {
+    #[serde(default)]
+    confirm_discard: Option<String>,
+    /// Whole-draft concurrency token served with the confirmation. It is
+    /// required only for a dirty draft; a clean Start over stays one-click.
+    #[serde(default)]
+    expected_revision: Option<String>,
+}
+
+pub(super) async fn redesign_form_discard(
+    state: State<Arc<AppState>>,
+    form: RedesignForm<RedesignDiscardForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let inspect = Arc::clone(&state.0);
+    let staged = tokio::task::spawn_blocking(move || {
+        let staged = inspect.control.staged();
+        (
+            staged.reachable && staged.dirty,
+            staged.revision.trim().to_owned(),
+        )
+    })
+    .await
+    .unwrap_or((true, String::new()));
+    let (dirty, current_revision) = staged;
+    if dirty && !checked(form.confirm_discard.as_deref()) {
+        return redesign_redirect(RD_DISCARD_CONFIRM);
+    }
+    if dirty
+        && form
+            .expected_revision
+            .as_deref()
+            .map(str::trim)
+            .filter(|revision| !revision.is_empty())
+            != Some(current_revision.as_str())
+    {
+        return redesign_redirect(RD_DISCARD_CHANGED);
+    }
+    redesign_rehome(nocturne_form_discard(state).await)
+}
+
+pub(super) async fn redesign_form_capture_prepare(
+    state: State<Arc<AppState>>,
+    form: RedesignForm<NocturneCapturePrepareForm>,
+) -> Response {
+    let Ok(form) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    redesign_rehome(nocturne_form_capture_prepare(state, form).await)
+}
+
+pub(super) async fn redesign_form_capture_release(
+    state: State<Arc<AppState>>,
+    form: RedesignForm<NocturneCaptureReleaseForm>,
+) -> Response {
+    let Ok(form) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    redesign_rehome(nocturne_form_capture_release(state, form).await)
 }
 
 #[derive(Deserialize)]
@@ -775,21 +1091,79 @@ pub(super) async fn redesign_form_blocking(
     redesign_redirect(blocking_write_flash(&state, form.blocking).await)
 }
 
+// NO /redesign/board verb, deliberately (Victor, 2026-08-29): the plate
+// always draws the standard keyboard on this page — a keyboard looks like a
+// keyboard. Alternate pictures (saved panels, drawn boards) stay a 4460
+// affair until an "advanced" home earns its place here.
+
 #[derive(Deserialize)]
-pub(super) struct RedesignBoardForm {
-    board: Option<String>,
+pub(super) struct RedesignMacroForm {
+    slot: u8,
+    name: String,
+    #[serde(default)]
+    enable: Option<String>,
 }
 
-/// POST /redesign/board — which board the keyboard widget draws, one config
-/// write through the shared core (the nocturne picker's verb, re-homed).
-pub(super) async fn redesign_form_board(
+/// POST /redesign/macro/toggle — disable (or re-enable) one macro on the
+/// staged slot, through the shared macro-write core.
+pub(super) async fn redesign_form_macro_toggle(
     State(state): State<Arc<AppState>>,
-    form: RedesignForm<RedesignBoardForm>,
+    form: RedesignForm<RedesignMacroForm>,
 ) -> Response {
     let Ok(Form(form)) = form else {
         return redesign_redirect(N_FORM_UNREADABLE);
     };
-    redesign_redirect(board_write_flash(&state, form.board).await)
+    let enable = checked(form.enable.as_deref());
+    redesign_redirect(
+        macro_write_flash(
+            state,
+            form.slot,
+            crate::control::MacroWrite {
+                name: form.name,
+                enabled: Some(enable),
+                ..crate::control::MacroWrite::default()
+            },
+            N_MACRO_OK,
+        )
+        .await,
+    )
+}
+
+/// POST /redesign/macro/new — author one empty-stepped table in THIS draft
+/// (validation, taken-check and the smallest acceptable table all in the
+/// shared core), so the editor can open on it.
+pub(super) async fn redesign_form_macro_new(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignMacroForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    redesign_redirect(macro_new_flash(state, form.slot, &form.name).await)
+}
+
+/// POST /redesign/macro/delete — remove one macro table (and the trigger
+/// rows that would otherwise dangle) from THIS draft.
+pub(super) async fn redesign_form_macro_delete(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignMacroForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    redesign_redirect(
+        macro_write_flash(
+            state,
+            form.slot,
+            crate::control::MacroWrite {
+                name: form.name,
+                delete: true,
+                ..crate::control::MacroWrite::default()
+            },
+            N_MACRO_DELETED,
+        )
+        .await,
+    )
 }
 
 #[derive(Deserialize)]
@@ -899,11 +1273,56 @@ mod tests {
             // the Keys tab's row ✕
             N_KEY_CLEAR_OK,
             N_KEY_CLEAR_NONE,
-            // the keyboard widget's board + capture pickers
-            N_BOARD_OK,
-            N_BOARD_UNKNOWN,
-            N_BOARD_MISSING,
+            // the keyboard widget: the While-playing picker
             N_BLOCKING_OK,
+            // the inspector macro section
+            N_MACRO_OK,
+            N_MACRO_NEW,
+            N_MACRO_NAME,
+            N_MACRO_TAKEN,
+            N_MACRO_BADNAME,
+            N_MACRO_DELETED,
+            // the operational shell and exact-device recovery aliases
+            N_SAVE_OK,
+            N_SAVE_ERROR,
+            N_SAVE_BLOCKING,
+            N_SAVE_NO_BINDINGS,
+            N_SAVE_NO_DEVICE,
+            N_SAVE_NO_SLOTS,
+            N_SAVE_CAPTURE,
+            N_PLAY_OK,
+            N_PLAY_ERROR,
+            N_PLAY_BLOCKING,
+            N_PLAY_NO_BINDINGS,
+            N_PLAY_NO_DEVICE,
+            N_PLAY_NO_SLOTS,
+            N_PLAY_CAPTURE,
+            N_PLAY_OUTPUT_BLOCKED,
+            N_PLAY_OUTPUT_UNKNOWN,
+            N_STOP_OK,
+            N_STOP_ERROR,
+            N_APPLY_OK,
+            N_APPLY_RESTART,
+            N_APPLY_ERROR,
+            N_ADOPT_OK,
+            N_ADOPT_BLOCKED,
+            N_DISCARD_OK,
+            N_CAPTURE_PREPARED_OK,
+            N_CAPTURE_RELEASED_OK,
+            N_CAPTURE_PREPARE_CONSENT,
+            N_CAPTURE_RELEASE_CONSENT,
+            N_CAPTURE_TARGET_CHANGED,
+            N_CAPTURE_ALREADY_PREPARED,
+            N_CAPTURE_ALREADY_RELEASED,
+            N_CAPTURE_PREPARE_ERROR,
+            N_CAPTURE_RELEASE_ERROR,
+            N_CAPTURE_PREPARE_RECOVERY,
+            N_CAPTURE_RELEASE_RECOVERY,
+            N_CAPTURE_PREPARED_STAGE_CHANGED,
+            N_CAPTURE_RELEASED_STAGE_CHANGED,
+            RD_DISCARD_CONFIRM,
+            RD_DISCARD_CHANGED,
+            RD_LIFECYCLE_CHANGED,
         ] {
             assert_eq!(
                 redesign_flash_from_query(Some(sentence)).as_deref(),

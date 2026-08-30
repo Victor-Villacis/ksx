@@ -106,6 +106,7 @@ impl ControlSource for DemoControl {
             line: format!("running — {DEMO_PROFILE} — 4 pad(s)"),
             profile: Some(DEMO_PROFILE.into()),
             origin: ksx_api::SessionOrigin::Config,
+            active_stage_revision: None,
             active: None,
         }
     }

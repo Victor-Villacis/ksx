@@ -280,7 +280,8 @@ describe("the redesign theme menu", () => {
       viewport: { width: 390, height: 844 },
       hasTouch: true,
     });
-    const box = await page.locator(".rd-theme-sum").boundingBox();
+    await page.locator(".rd-setup-sum").click();
+    const box = await page.locator(".rd-theme-compact-sum").boundingBox();
     assert.ok(box && box.height >= 40, `Theme target is ${box?.height ?? 0}px tall`);
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();

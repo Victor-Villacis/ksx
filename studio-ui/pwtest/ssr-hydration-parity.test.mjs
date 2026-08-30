@@ -116,12 +116,18 @@ const SNAPSHOT = `(() => {
   //    fails. Durable state goes through separate announcers and show pairs,
   //    which stay fully asserted.
   clone.querySelectorAll("[data-live-chatter]").forEach((el) => { el.textContent = ""; });
-  // 3c. RETIRED (was CLIENT FIT, data-client-fit: the old stage's
+  // 3c. CLIENT LIVE STATE, by contract. The browser owns the EventSource and
+  //    stamps one styling attribute after adoption. The marker is rendered by
+  //    both sides; only that named attribute is exempt, so durable session
+  //    state and all live copy remain subject to exact parity.
+  if (clone.hasAttribute("data-client-live-state")) clone.removeAttribute("data-rd-live-state");
+  clone.querySelectorAll("[data-client-live-state]").forEach((el) => el.removeAttribute("data-rd-live-state"));
+  // 3d. RETIRED (was CLIENT FIT, data-client-fit: the old stage's
   //    zoom-to-fit style exemption). The canvas replaced fit-scaling with
   //    real camera geometry — nothing emits the marker any more, and a
   //    normalization no node can trigger is a hole waiting for a tenant.
-  //    3d is the successor. Letters stay stable; do not reuse 3c.
-  // 3d. CLIENT CANVAS, by contract. A node marked data-client-canvas is
+  //    3e is the successor. Letters stay stable; do not reuse 3d.
+  // 3e. CLIENT CANVAS, by contract. A node marked data-client-canvas is
   //    managed by the workspace canvas engine after adoption (the vendored
   //    genui runtime): camera and widget geometry ride its STYLE attribute,
   //    and the engine annotates its own state through five data- namespaces

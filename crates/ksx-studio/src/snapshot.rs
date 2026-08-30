@@ -80,6 +80,748 @@ pub struct RedesignPayload {
     pub capture_rows: Vec<NocturneChoiceRow>,
     #[serde(default)]
     pub capture_note: String,
+    /// The staged input's verified Windows identity, for pinning a mapping
+    /// gesture to the exact device the user saw — the same
+    /// [`StartCaptureView`] pair `/nocturne`'s learn flow pins
+    /// (`cap_selector`/`cap_instance`). Empty when nothing is staged or the
+    /// scan refused: the learn flow refuses to arm rather than listen
+    /// against an unverified source.
+    #[serde(default)]
+    pub learn_selector: String,
+    #[serde(default)]
+    pub learn_instance: String,
+    /// The operational shell: draft-vs-saved provenance, the full daemon
+    /// session answer, and every lifecycle action with its current
+    /// availability AND reason.  Keeping disabled actions in this contract
+    /// lets the redesign explain what is missing instead of reshuffling or
+    /// leaving an inert button on a failed read.
+    #[serde(default)]
+    pub operations: RedesignOperationalState,
+    /// Exact-device preparation/release, including machine-keyed recovery
+    /// rows for keyboards Windows says ksx is holding even when the draft is
+    /// empty.  Browser values are stale-action guards; the POST handlers
+    /// still re-resolve both identities from the current machine scan.
+    #[serde(default)]
+    pub capture: RedesignCaptureState,
+    /// The compact four-stop setup spine.  This deliberately leaves the
+    /// deferred panel builder out: pick input -> add controllers -> map ->
+    /// play is the cutover-critical journey.
+    #[serde(default)]
+    pub journey: RedesignJourney,
+}
+
+/// One lifecycle verb as the redesign presents it.
+///
+/// `reason` is never empty: when the action is available it says what the
+/// click does; when unavailable it says which authoritative read or
+/// prerequisite prevents it.  This is intentionally richer than a `can_*`
+/// bit so a dead daemon cannot look like a disabled mystery control.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignActionState {
+    pub label: String,
+    /// Whether the compact action dock should place this verb.  Expanded
+    /// setup may still explain a hidden action through [`Self::reason`].
+    pub visible: bool,
+    pub allowed: bool,
+    pub reason: String,
+}
+
+impl RedesignActionState {
+    fn new(
+        label: impl Into<String>,
+        visible: bool,
+        allowed: bool,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            visible,
+            allowed,
+            reason: reason.into(),
+        }
+    }
+}
+
+/// Draft, durable configuration, and running-session truth for the redesign
+/// action rail.  The complete [`crate::control::SessionView`] travels here so
+/// active origin/profile/elapsed facts are not flattened into a decorative
+/// "Running" chip and lost to the next block.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignOperationalState {
+    pub draft_label: String,
+    pub draft_detail: String,
+    pub draft_dirty: bool,
+    pub draft_empty: bool,
+    pub saved_label: String,
+    pub saved_detail: String,
+    pub session: crate::control::SessionView,
+    pub session_cls: String,
+    /// Daemon-owned whole-draft incarnation + mutation generation. Empty only
+    /// when the daemon/older protocol cannot serve it; never recovered from a
+    /// row token or synthesized by the page.
+    pub draft_revision: String,
+    /// Daemon-captured revision of the draft that actually started/applied
+    /// the active staged session. Empty means synchronization is not proven
+    /// (idle, config-origin, unreachable, or an older daemon), never a match.
+    pub active_stage_revision: String,
+    pub escape_line: String,
+    pub save: RedesignActionState,
+    pub play: RedesignActionState,
+    pub apply: RedesignActionState,
+    pub stop: RedesignActionState,
+    pub adopt: RedesignActionState,
+    pub discard: RedesignActionState,
+}
+
+impl RedesignOperationalState {
+    pub(crate) fn of(
+        staged: &ksx_api::StagedSetupView,
+        setup: Option<&ksx_api::SetupView>,
+        setup_error: &str,
+        session: &crate::control::SessionView,
+        outputs: &ksx_api::ControllerOutputsView,
+        capture: &RedesignCaptureState,
+    ) -> Self {
+        let draft_label = if !staged.reachable {
+            "Draft unavailable"
+        } else if staged.empty {
+            "New draft"
+        } else if staged.origin == "config" && staged.dirty {
+            "Saved setup · edited"
+        } else if staged.origin == "config" {
+            "Saved setup"
+        } else if staged.origin.starts_with("profile:") && staged.dirty {
+            "Loaded setup · edited"
+        } else if staged.origin.starts_with("profile:") {
+            "Loaded setup"
+        } else {
+            "Unsaved draft"
+        }
+        .to_owned();
+        let draft_detail = if !staged.reachable {
+            "The ksx background helper is not answering. Editing and lifecycle actions are unavailable until it returns."
+                .to_owned()
+        } else if staged.empty {
+            "Nothing is staged yet. Pick an input and add a controller to begin.".to_owned()
+        } else {
+            let controllers = match staged.slots.len() {
+                0 => "no controllers".to_owned(),
+                1 => "1 controller".to_owned(),
+                n => format!("{n} controllers"),
+            };
+            let input = staged
+                .device
+                .as_ref()
+                .map(|device| device.label.as_str())
+                .unwrap_or("no input");
+            if staged.dirty {
+                format!("{input} · {controllers} · changes have not been saved")
+            } else {
+                format!("{input} · {controllers} · no uncommitted edits")
+            }
+        };
+
+        let (saved_label, saved_detail, saved_exists) = match setup {
+            Some(setup) if setup.config_exists => {
+                let count = setup
+                    .slots
+                    .iter()
+                    .filter(|slot| slot.source == "config.toml")
+                    .count();
+                let controllers = match count {
+                    0 => "no controllers".to_owned(),
+                    1 => "1 controller".to_owned(),
+                    n => format!("{n} controllers"),
+                };
+                (
+                    "Saved configuration".to_owned(),
+                    format!("Stored on this machine · {controllers}"),
+                    true,
+                )
+            }
+            Some(_) => (
+                "Nothing saved yet".to_owned(),
+                "Save writes the current draft as this machine's configuration.".to_owned(),
+                false,
+            ),
+            None => (
+                "Saved configuration unavailable".to_owned(),
+                if setup_error.trim().is_empty() {
+                    "The saved configuration could not be read. Reopen ksx and try again."
+                        .to_owned()
+                } else {
+                    setup_error.to_owned()
+                },
+                false,
+            ),
+        };
+
+        let stage_ready = staged.reachable && staged.ready && capture.ready_for_commit();
+        let needs_save = staged.dirty || staged.origin != "config" || !saved_exists;
+        let save_allowed = stage_ready && needs_save;
+        let save_reason = if !staged.reachable {
+            "The draft cannot be read while the background helper is unavailable.".to_owned()
+        } else if !capture.ready_for_commit() && staged.device.is_some() {
+            capture.commit_blocker()
+        } else if !staged.ready {
+            staged_readiness_reason(staged, "save")
+        } else if !needs_save {
+            "This draft already matches the saved configuration.".to_owned()
+        } else {
+            "Writes this draft as the machine's saved configuration. Play does not start."
+                .to_owned()
+        };
+
+        // Play is deliberately still offered while a session runs.  Apply
+        // can discover a structural difference only when it is tried, and
+        // its prescribed recovery is Play; hiding Play in that state was the
+        // legacy shell's contradictory dead end.
+        let output_ready = outputs.can_play;
+        let play_allowed = stage_ready && session.reachable && output_ready;
+        let play_label = if session.running {
+            "Restart Play"
+        } else {
+            "Play"
+        };
+        let play_reason = if !staged.reachable {
+            "The draft cannot be read while the background helper is unavailable.".to_owned()
+        } else if !session.reachable {
+            "The running-session state cannot be reached. Reopen ksx before starting controllers."
+                .to_owned()
+        } else if !capture.ready_for_commit() && staged.device.is_some() {
+            capture.commit_blocker()
+        } else if !staged.ready {
+            staged_readiness_reason(staged, "play")
+        } else if outputs.blocked {
+            "A required controller output is not working on this machine. The draft can still be saved."
+                .to_owned()
+        } else if !output_ready {
+            "Controller output support could not be verified. Reopen ksx and try again; the draft can still be saved."
+                .to_owned()
+        } else if session.running {
+            "Stops and replaces the running session with this complete draft; virtual controllers may reconnect."
+                .to_owned()
+        } else {
+            "Starts the virtual controllers from this draft without writing the saved configuration."
+                .to_owned()
+        };
+
+        let draft_revision = staged.revision.trim();
+        let active_stage_revision = session
+            .active_stage_revision
+            .as_deref()
+            .map(str::trim)
+            .filter(|revision| !revision.is_empty());
+        // Dirty is a saved-file fact, not a live-session synchronization
+        // fact. Apply is licensed only when the daemon proves a staged-origin
+        // session is running and names a different whole-draft revision.
+        let apply_allowed = staged.reachable
+            && session.reachable
+            && session.running
+            && session.origin == ksx_api::SessionOrigin::Staged
+            && !draft_revision.is_empty()
+            && active_stage_revision.is_some()
+            && active_stage_revision != Some(draft_revision);
+        let apply_reason = if !staged.reachable {
+            "The draft cannot be read while the background helper is unavailable.".to_owned()
+        } else if !session.reachable {
+            "The running-session state cannot be reached.".to_owned()
+        } else if !session.running {
+            "Nothing is running. Use Play when the draft is ready.".to_owned()
+        } else if session.origin != ksx_api::SessionOrigin::Staged {
+            "The running session did not start from this staged draft. Use Replace session to replace it safely."
+                .to_owned()
+        } else if draft_revision.is_empty() || active_stage_revision.is_none() {
+            "ksx cannot prove which draft revision the running session contains. Use Replace session instead of applying uncertain changes."
+                .to_owned()
+        } else if active_stage_revision == Some(draft_revision) {
+            "The running session already contains this exact draft revision.".to_owned()
+        } else {
+            "Applies binding-only changes without reconnecting controllers. If structure changed, Replace session replaces it safely."
+                .to_owned()
+        };
+
+        let stop_allowed = session.reachable && session.running;
+        let stop_reason = if !session.reachable {
+            "The running-session state cannot be reached. The emergency key gesture still remains available."
+                .to_owned()
+        } else if !session.running {
+            "No Play session is running.".to_owned()
+        } else {
+            "Ends Play and returns captured keyboards to their normal stopped-session behaviour."
+                .to_owned()
+        };
+
+        let adopt_allowed = staged.reachable && staged.empty && saved_exists;
+        let adopt_reason = if !staged.reachable {
+            "The draft cannot be reached, so loading cannot be verified.".to_owned()
+        } else if setup.is_none() {
+            "The saved configuration could not be read.".to_owned()
+        } else if !saved_exists {
+            "There is no saved configuration to load yet.".to_owned()
+        } else if !staged.empty {
+            "Start over first. Loading never overwrites a draft that already has content."
+                .to_owned()
+        } else {
+            "Loads the saved configuration into this draft for review. It does not start Play."
+                .to_owned()
+        };
+
+        let discard_allowed = staged.reachable && !staged.empty;
+        let discard_reason = if !staged.reachable {
+            "The draft cannot be reached, so it cannot be cleared safely.".to_owned()
+        } else if staged.empty {
+            "This draft is already empty.".to_owned()
+        } else if staged.dirty {
+            "Clears this unsaved draft from memory. Saved files and any running session are not changed."
+                .to_owned()
+        } else {
+            "Clears this draft from memory. Saved files and any running session are not changed."
+                .to_owned()
+        };
+
+        Self {
+            draft_label,
+            draft_detail,
+            draft_dirty: staged.reachable && staged.dirty,
+            draft_empty: staged.reachable && staged.empty,
+            saved_label,
+            saved_detail,
+            session: session.clone(),
+            session_cls: if !session.reachable {
+                "down"
+            } else if session.running {
+                "running"
+            } else {
+                "idle"
+            }
+            .to_owned(),
+            draft_revision: staged.revision.clone(),
+            active_stage_revision: session.active_stage_revision.clone().unwrap_or_default(),
+            escape_line: staged.escape_hatch.clone(),
+            save: RedesignActionState::new("Save", true, save_allowed, save_reason),
+            // Compact dock swaps Play for Stop while running. The expanded
+            // panel retains this action + reason, including the structural
+            // restart path when Apply refuses.
+            play: RedesignActionState::new(play_label, !session.running, play_allowed, play_reason),
+            apply: RedesignActionState::new(
+                "Apply changes",
+                apply_allowed,
+                apply_allowed,
+                apply_reason,
+            ),
+            stop: RedesignActionState::new("Stop", session.running, stop_allowed, stop_reason),
+            adopt: RedesignActionState::new("Load saved setup", true, adopt_allowed, adopt_reason),
+            discard: RedesignActionState::new("Start over", true, discard_allowed, discard_reason),
+        }
+    }
+}
+
+fn staged_readiness_reason(staged: &ksx_api::StagedSetupView, verb: &str) -> String {
+    let consequence = if verb == "save" {
+        "Nothing will be written."
+    } else {
+        "Nothing will be started."
+    };
+    if staged.device.is_none() {
+        return format!("Pick an input before {verb}. {consequence}");
+    }
+    if staged.slots.is_empty() {
+        return format!("Add a controller before {verb}. {consequence}");
+    }
+    if staged.slots.iter().any(|slot| slot.bindings == 0) {
+        return format!(
+            "Every controller needs at least one mapped key before {verb}. {consequence}"
+        );
+    }
+    if staged.blocking.is_none() {
+        return format!(
+            "Choose what happens to keyboard input while playing before {verb}. {consequence}"
+        );
+    }
+    format!("Finish the setup steps before {verb}. {consequence}")
+}
+
+/// One exact held keyboard that may be released even when the draft is
+/// empty.  Ambiguous identities remain visible with `can_release=false` and
+/// a physical remedy instead of offering a POST that can only refuse.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignHeldCaptureRow {
+    pub name: String,
+    pub transport: String,
+    pub detail: String,
+    pub selector: String,
+    pub instance: String,
+    pub can_release: bool,
+    pub note: String,
+}
+
+/// Exact-device preparation and recovery state for the redesign shell.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignCaptureState {
+    pub mode: String,
+    pub heading: String,
+    pub line: String,
+    pub recovery_line: String,
+    pub selector: String,
+    pub instance: String,
+    pub can_prepare: bool,
+    pub can_release: bool,
+    pub held: Vec<RedesignHeldCaptureRow>,
+}
+
+impl RedesignCaptureState {
+    pub(crate) fn of(
+        staged: &ksx_api::StagedSetupView,
+        scan: Option<&ksx_api::DeviceScanView>,
+        scan_error: &str,
+    ) -> Self {
+        let empty_scan = ksx_api::DeviceScanView::default();
+        let scan_view = scan.unwrap_or(&empty_scan);
+        let resolved = StartCaptureView::from_parts(staged, scan_view, scan.is_some());
+        let base_mode = resolved.mode_word();
+
+        let held = scan
+            .into_iter()
+            .flat_map(|view| view.boards.iter())
+            .filter(|board| board.claimed)
+            .filter_map(|board| {
+                let selector = board.selector.as_deref()?.trim();
+                let instance = board.keyboard.as_deref()?.trim();
+                if selector.is_empty() || instance.is_empty() {
+                    return None;
+                }
+                let selector_unique = scan_view
+                    .boards
+                    .iter()
+                    .filter(|candidate| candidate.selector.as_deref() == Some(selector))
+                    .count()
+                    == 1;
+                let instance_unique = scan_view
+                    .boards
+                    .iter()
+                    .flat_map(|candidate| candidate.interfaces.iter())
+                    .filter(|row| row.instance_id.eq_ignore_ascii_case(instance))
+                    .count()
+                    == 1;
+                let can_release = board.winusb_eligible && selector_unique && instance_unique;
+                Some(RedesignHeldCaptureRow {
+                    name: board.name.clone(),
+                    transport: board.transport_label.clone(),
+                    detail: "Held by ksx · normal typing is unavailable until release".to_owned(),
+                    selector: selector.to_owned(),
+                    instance: instance.to_owned(),
+                    can_release,
+                    note: if can_release {
+                        String::new()
+                    } else {
+                        "Two attached devices share this identity. Unplug one, rescan, then release the remaining keyboard."
+                            .to_owned()
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let exact_held = held.iter().find(|row| {
+            row.selector == resolved.expected_selector
+                && row.instance.eq_ignore_ascii_case(&resolved.instance_id)
+        });
+        let (mut mode, mut heading, mut line, mut recovery_line, mut selector, mut instance, can_prepare, mut can_release) =
+            match base_mode {
+                "ready" => (
+                    "ready".to_owned(),
+                    "Ready for input".to_owned(),
+                    "This input is on the Windows keyboard path and ready for ksx.".to_owned(),
+                    String::new(),
+                    resolved.expected_selector,
+                    resolved.instance_id,
+                    false,
+                    false,
+                ),
+                "prepare-optional" => (
+                    "prepare-optional".to_owned(),
+                    "Ready · direct capture available".to_owned(),
+                    "Windows input works now. Direct WinUSB capture is available but optional."
+                        .to_owned(),
+                    String::new(),
+                    resolved.expected_selector,
+                    resolved.instance_id,
+                    true,
+                    false,
+                ),
+                "prepare" => (
+                    "prepare".to_owned(),
+                    "Preparation required".to_owned(),
+                    "Prepare this input before Save or Play so the draft and Windows use the same capture path."
+                        .to_owned(),
+                    "Keep a second keyboard available while Windows changes this device's driver."
+                        .to_owned(),
+                    resolved.expected_selector,
+                    resolved.instance_id,
+                    true,
+                    false,
+                ),
+                "release" => (
+                    "release".to_owned(),
+                    "Prepared for direct capture".to_owned(),
+                    "This input is ready for ksx. Release returns it to normal Windows typing."
+                        .to_owned(),
+                    String::new(),
+                    resolved.expected_selector,
+                    resolved.instance_id,
+                    false,
+                    true,
+                ),
+                "held" => (
+                    "held".to_owned(),
+                    "Capture state needs recovery".to_owned(),
+                    "Windows says ksx holds this input, but the draft expects ordinary keyboard input."
+                        .to_owned(),
+                    "Release it, then continue with the ordinary input path or prepare it again deliberately."
+                        .to_owned(),
+                    resolved.expected_selector,
+                    resolved.instance_id,
+                    false,
+                    exact_held.is_some_and(|row| row.can_release),
+                ),
+                "blocked" if scan.is_none() => (
+                    "unavailable".to_owned(),
+                    "Capture status unavailable".to_owned(),
+                    "ksx could not verify how this exact input is connected.".to_owned(),
+                    if scan_error.trim().is_empty() {
+                        "Rescan devices or reopen ksx before Save or Play.".to_owned()
+                    } else {
+                        scan_error.to_owned()
+                    },
+                    resolved.expected_selector,
+                    resolved.instance_id,
+                    false,
+                    false,
+                ),
+                "blocked" => (
+                    "blocked".to_owned(),
+                    "Capture path not verified".to_owned(),
+                    "ksx cannot match the staged input to one exact keyboard interface."
+                        .to_owned(),
+                    "Reconnect or rescan the input. ksx will not guess between devices."
+                        .to_owned(),
+                    resolved.expected_selector,
+                    resolved.instance_id,
+                    false,
+                    false,
+                ),
+                _ => (
+                    "none".to_owned(),
+                    "No input selected".to_owned(),
+                    "Pick the keyboard or encoder this setup will listen to.".to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    false,
+                    false,
+                ),
+            };
+
+        // Machine-keyed way back: a WinUSB keyboard can be stranded while
+        // the daemon has no draft at all.  Promote one unambiguous held row
+        // into the primary control while retaining every held row below it.
+        if mode == "none" {
+            let mut releasable = held.iter().filter(|row| row.can_release);
+            if let Some(row) = releasable.next() {
+                if releasable.next().is_none() {
+                    mode = "release-held".to_owned();
+                    heading = "Keyboard held by ksx".to_owned();
+                    line = format!("{} cannot type normally until it is released.", row.name);
+                    selector = row.selector.clone();
+                    instance = row.instance.clone();
+                    can_release = true;
+                    recovery_line = "This keyboard is held outside the current draft. Release is resolved from the live device tree."
+                        .to_owned();
+                }
+            }
+        }
+
+        Self {
+            mode,
+            heading,
+            line,
+            recovery_line,
+            selector,
+            instance,
+            can_prepare,
+            can_release,
+            held,
+        }
+    }
+
+    pub(crate) fn ready_for_commit(&self) -> bool {
+        matches!(self.mode.as_str(), "ready" | "prepare-optional" | "release")
+    }
+
+    fn commit_blocker(&self) -> String {
+        match self.mode.as_str() {
+            "prepare" => "Prepare the selected input before Save or Play.".to_owned(),
+            "held" => "Release the held input so Windows and the draft agree before Save or Play."
+                .to_owned(),
+            "unavailable" => {
+                "The exact capture path could not be verified. Rescan or reopen ksx before Save or Play."
+                    .to_owned()
+            }
+            _ => "The selected input is not ready for capture. Reconnect or rescan it before Save or Play."
+                .to_owned(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignJourneyStep {
+    pub key: String,
+    pub title: String,
+    pub detail: String,
+    pub badge: String,
+    pub cls: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignJourney {
+    pub compact: String,
+    pub line: String,
+    pub rows: Vec<RedesignJourneyStep>,
+}
+
+impl RedesignJourney {
+    pub(crate) fn of(
+        staged: &ksx_api::StagedSetupView,
+        session: &crate::control::SessionView,
+        capture: &RedesignCaptureState,
+        play: &RedesignActionState,
+    ) -> Self {
+        if !staged.reachable {
+            return Self {
+                compact: "Progress unavailable".to_owned(),
+                line: "Setup progress is unavailable until the ksx background helper returns."
+                    .to_owned(),
+                rows: [
+                    ("input", "Pick the input"),
+                    ("controller", "Add controllers"),
+                    ("mapping", "Map the controls"),
+                    ("play", "Play"),
+                ]
+                .into_iter()
+                .map(|(key, title)| {
+                    redesign_journey_step(
+                        key,
+                        title,
+                        "Waiting for the background helper.",
+                        "Unavailable",
+                        "blocked",
+                    )
+                })
+                .collect(),
+            };
+        }
+
+        let input_done = staged.device.is_some() && capture.ready_for_commit();
+        let controllers_done = !staged.slots.is_empty();
+        // Every slot, not merely ANY slot.  The old rail's `any` made a
+        // two-player setup look mapped while player two would plug dead.
+        let mapping_done = controllers_done
+            && staged.slots.iter().all(|slot| slot.bindings > 0)
+            && staged.blocking.is_some();
+        let running = session.reachable && session.running;
+
+        let facts = [input_done, controllers_done, mapping_done, running];
+        let next = facts.iter().position(|done| !done);
+        let mut rows = Vec::with_capacity(4);
+        for (index, (key, title, done_detail, todo_detail)) in [
+            (
+                "input",
+                "Pick the input",
+                "An exact keyboard or encoder and its capture path are ready.",
+                "Choose the keyboard or encoder this setup listens to, then resolve any preparation needed.",
+            ),
+            (
+                "controller",
+                "Add controllers",
+                "At least one virtual controller is staged.",
+                "Add the virtual controllers this input will drive.",
+            ),
+            (
+                "mapping",
+                "Map the controls",
+                "Every staged controller has live bindings and input behaviour is chosen.",
+                "Give every controller at least one live key binding and choose what happens to keyboard input.",
+            ),
+            (
+                "play",
+                "Play",
+                "The virtual controllers are running.",
+                play.reason.as_str(),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (badge, cls, detail) = if facts[index] {
+                ("Done", "done", done_detail)
+            } else if Some(index) == next {
+                if key == "play" && !play.allowed {
+                    ("Blocked", "blocked", todo_detail)
+                } else {
+                    ("Now", "now", todo_detail)
+                }
+            } else {
+                ("Next", "later", todo_detail)
+            };
+            rows.push(redesign_journey_step(key, title, detail, badge, cls));
+        }
+        let line = if running {
+            "Playing now. Stop returns the captured input to its stopped-session behaviour."
+                .to_owned()
+        } else if let Some(row) = rows
+            .iter()
+            .find(|row| row.badge == "Now" || row.badge == "Blocked")
+        {
+            format!("Next: {}", row.detail)
+        } else {
+            "The setup is ready to play.".to_owned()
+        };
+        let compact = if running {
+            "4/4 · Playing"
+        } else if !input_done {
+            "1/4 · Pick input"
+        } else if !controllers_done {
+            "2/4 · Add controllers"
+        } else if !mapping_done {
+            "3/4 · Map controls"
+        } else if play.allowed {
+            "3/4 · Ready to play"
+        } else {
+            "3/4 · Play blocked"
+        }
+        .to_owned();
+        Self {
+            compact,
+            line,
+            rows,
+        }
+    }
+}
+
+fn redesign_journey_step(
+    key: &str,
+    title: &str,
+    detail: &str,
+    badge: &str,
+    cls: &str,
+) -> RedesignJourneyStep {
+    RedesignJourneyStep {
+        key: key.to_owned(),
+        title: title.to_owned(),
+        detail: detail.to_owned(),
+        badge: badge.to_owned(),
+        cls: format!("rd-journey-step {cls}"),
+    }
 }
 
 /// One staged controller on the workbench — a card per slot, straight off
@@ -172,6 +914,21 @@ pub struct RedesignControllers {
     /// has no board picker yet — the keyboard migration brings it).
     #[serde(default)]
     pub keys: KeyPanel,
+    /// The selected slot's macro lifecycle rows — the SAME
+    /// [`compose_macro_rows`] serving `/nocturne`'s pane, with this page's
+    /// own edit door.
+    #[serde(default)]
+    pub macros_head: String,
+    #[serde(default)]
+    pub macro_rows: Vec<NocturneMacroRow>,
+    #[serde(default)]
+    pub macros_note: String,
+    /// The macro STEP EDITOR's whole projection, when `?macro=` names one
+    /// on the selected slot — [`crate::macro_editor::NocturneMacroEditor`],
+    /// closed otherwise (the nocturne rule: an unknown name leaves the
+    /// dialog closed rather than inventing a macro).
+    #[serde(default)]
+    pub mac: crate::macro_editor::NocturneMacroEditor,
     /// The short server-held undo window after a removal (the nocturne
     /// chip's contract: no browser state, a reload keeps the offer).
     #[serde(default)]
@@ -185,13 +942,47 @@ impl RedesignControllers {
         staged: &ksx_api::StagedSetupView,
         selected_slot: Option<u8>,
         undo_label: Option<&str>,
+        macro_selected: Option<&str>,
+        q: Option<&str>,
     ) -> Self {
         // The nocturne selection rule verbatim: an explicit `?slot=` wins,
         // otherwise the first staged controller speaks for the pane.
         let selected = selected_slot
             .and_then(|number| staged.slots.iter().find(|slot| slot.number == number))
             .or_else(|| staged.slots.first());
-        let panel = compose_controller_panel(staged, selected, None);
+        let panel = compose_controller_panel(staged, selected, q);
+        // The macro lifecycle rows + the step editor, exactly nocturne's
+        // composition: the editor opens only on a name `?macro=` carries AND
+        // the selected slot actually has.
+        let (macros_head, macro_rows, macros_note) = compose_macro_rows(selected, "/redesign");
+        let keyboard_name = staged
+            .device
+            .as_ref()
+            .map(|device| device.label.as_str())
+            .unwrap_or("(none)");
+        let mac = match (selected, macro_selected) {
+            (Some(slot), Some(name)) if !name.is_empty() => {
+                let snap = ksx_api::staged_macro_snapshot(slot);
+                let mapper = ksx_api::staged_mapper_slot(slot, keyboard_name).ok();
+                snap.macros
+                    .iter()
+                    .find(|m| m.name == name)
+                    .map(|m| {
+                        crate::macro_editor::NocturneMacroEditor::compose(
+                            m,
+                            &slot.persona,
+                            mapper.as_ref(),
+                            slot.number,
+                            q,
+                            "/redesign",
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        crate::macro_editor::NocturneMacroEditor::closed_on("/redesign")
+                    })
+            }
+            _ => crate::macro_editor::NocturneMacroEditor::closed_on("/redesign"),
+        };
         // The Keys tab over the STANDARD board (no saved choice, no panel
         // stores, no encoder staged): the same fallback nocturne draws when
         // nothing is chosen. The board picker arrives with the keyboard
@@ -201,7 +992,7 @@ impl RedesignControllers {
             selected,
             &crate::board::Board::resolve("", &[], &[], false),
         );
-        let pads = compose_pad_views(staged);
+        let pads = compose_pad_views(staged, "/redesign");
         let (undo_cls, undo_label) = match undo_label {
             Some(label) => ("rd-undochip".to_owned(), label.to_owned()),
             None => ("rd-undochip none".to_owned(), String::new()),
@@ -282,6 +1073,10 @@ impl RedesignControllers {
             pads,
             panel,
             keys,
+            macros_head,
+            macro_rows,
+            macros_note,
+            mac,
             undo_cls,
             undo_label,
         }
@@ -2263,6 +3058,11 @@ pub struct NocturneCtlChip {
 /// drives, the relation read from the keyboard's side.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NocturneKeyRow {
+    /// The board-authored cap text ("Ctrl", "↑", "1"), kept separate from
+    /// [`Self::key`] so a surface can speak like the physical keyboard without
+    /// ever posting presentation text back to the mapper.
+    #[serde(default)]
+    pub key_label: String,
     pub key: String,
     /// The controls this key drives, in readable zone labels ("A · RB").
     pub targets: String,
@@ -2460,6 +3260,12 @@ pub struct NocturneKeyCell {
     /// The assistive name (`role="img"` + `aria-label`): the same sentence
     /// on a bound cap, the bare cap otherwise — never empty.
     pub aria: String,
+    /// Spacer cells share the plate's geometry grammar but are not controls.
+    /// Serve their interaction state explicitly so SSR and hydration agree:
+    /// an empty ghost must never become an unnamed keyboard Tab stop.
+    pub disabled: bool,
+    pub tab: String,
+    pub aria_hidden: String,
     /// **Where this control sits on the board**, as an inline `style`.
     ///
     /// Percentages of the board's own bounds — `left`, `top`, `width`,
@@ -3177,6 +3983,11 @@ pub struct ControllerPanel {
     pub socd_cls: String,
     pub socd_num: String,
     pub socd_lab: String,
+    /// The selected slot's canonical SOCD name. The option roster is not
+    /// ordered by current value, so browsers must not mistake its first row
+    /// for the saved policy.
+    #[serde(default)]
+    pub socd_current: String,
     pub socd_edit_opts: Vec<NocturneOptionRow>,
 }
 
@@ -3203,6 +4014,19 @@ pub(crate) fn compose_controller_panel(
     let socd_lab = if socd_editable {
         selected
             .map(|slot| format!("Opposites — P{}", slot.number))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let socd_current = if socd_editable {
+        selected
+            .map(|slot| {
+                if slot.socd.is_empty() {
+                    "off".to_owned()
+                } else {
+                    slot.socd.clone()
+                }
+            })
             .unwrap_or_default()
     } else {
         String::new()
@@ -3445,6 +4269,7 @@ pub(crate) fn compose_controller_panel(
         socd_cls,
         socd_num,
         socd_lab,
+        socd_current,
         socd_edit_opts,
     }
 }
@@ -3453,7 +4278,10 @@ pub(crate) fn compose_controller_panel(
 /// (the ONE server-side art decision), preset identity, the fn→keys callout
 /// table and the authoring/macro projections. Composed once for every page
 /// that mounts pad widgets (`/nocturne` and `/redesign`).
-pub(crate) fn compose_pad_views(staged: &ksx_api::StagedSetupView) -> Vec<NocturnePadView> {
+pub(crate) fn compose_pad_views(
+    staged: &ksx_api::StagedSetupView,
+    page: &str,
+) -> Vec<NocturnePadView> {
     let keyboard_name = staged
         .device
         .as_ref()
@@ -3512,7 +4340,7 @@ pub(crate) fn compose_pad_views(staged: &ksx_api::StagedSetupView) -> Vec<Noctur
                     meta: nocturne_macro_meta(mac),
                     disabled: mac.disabled,
                     edit_href: format!(
-                        "/nocturne?slot={}&macro={}",
+                        "{page}?slot={}&macro={}",
                         slot.number,
                         crate::render_map::urlencode_value(&mac.name)
                     ),
@@ -3626,9 +4454,31 @@ pub(crate) fn compose_key_panel(
                 .unwrap_or_else(|| f.to_owned())
         }
     };
+    // A key's identity and its printed cap are deliberately different facts
+    // (`board.rs`). Keep the canonical name on the row for every mapper verb,
+    // but serve the cap alongside it for the inspector's human-facing chips.
+    // First physical occurrence wins on boards that intentionally repeat one
+    // emitted key across several cells.
+    let mut key_labels: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for cell in &board.cells {
+        if !cell.ghost && !cell.key.is_empty() && !cell.cap.is_empty() {
+            key_labels
+                .entry(cell.key.as_str())
+                .or_insert(cell.cap.as_str());
+        }
+    }
+    let key_label = |key: &str| -> String {
+        key_labels
+            .get(key)
+            .copied()
+            .filter(|label| !label.is_empty())
+            .unwrap_or(key)
+            .to_owned()
+    };
     let key_rows: Vec<NocturneKeyRow> = key_fns
         .iter()
         .map(|(key, fns)| NocturneKeyRow {
+            key_label: key_label(key),
             key: (*key).to_owned(),
             targets: fns
                 .iter()
@@ -3682,6 +4532,7 @@ pub(crate) fn compose_key_panel(
                 continue;
             }
             let chip = NocturneKeyRow {
+                key_label: key_label(&cell.key),
                 key: cell.key.clone(),
                 targets: String::new(),
                 fns: String::new(),
@@ -4011,6 +4862,17 @@ pub(crate) fn compose_board_panel(
             short,
             title,
             aria,
+            disabled: cell.ghost || cell.key.is_empty(),
+            tab: if cell.ghost || cell.key.is_empty() {
+                "-1".to_owned()
+            } else {
+                "0".to_owned()
+            },
+            aria_hidden: if cell.ghost || cell.key.is_empty() {
+                "true".to_owned()
+            } else {
+                "false".to_owned()
+            },
             style: format!(
                 "left:{:.4}%;top:{:.4}%;width:{:.4}%;height:{:.4}%",
                 pct(cell.x, board_w),
@@ -4072,6 +4934,9 @@ pub(crate) fn compose_board_panel(
                 short: crate::keyboard_layout::short_for(persona, fns[0]),
                 aria: title.clone(),
                 title,
+                disabled: false,
+                tab: "0".to_owned(),
+                aria_hidden: "false".to_owned(),
                 // The TRAY is not on the plate. These are keys bound off
                 // whatever board is drawn, so they have no place on it —
                 // they stay a flowed strip, and an empty style is what
@@ -4224,6 +5089,89 @@ pub(crate) fn compose_capture_rows(
         Vec::new()
     };
     (rows, note)
+}
+
+/// The selected slot's macros as lifecycle rows — trigger chip, meta,
+/// enable/disable, delete, and the edit door into the step editor on the
+/// CONSUMING page (`page` = "/nocturne" or "/redesign"). Composed once for
+/// both inspectors.
+pub(crate) fn compose_macro_rows(
+    selected: Option<&ksx_api::StagedSlotView>,
+    page: &str,
+) -> (String, Vec<NocturneMacroRow>, String) {
+    match selected {
+        None => ("Macros".to_owned(), Vec::new(), String::new()),
+        Some(slot) => {
+            let snap = ksx_api::staged_macro_snapshot(slot);
+            if !snap.available {
+                ("Macros".to_owned(), Vec::new(), snap.reason.clone())
+            } else {
+                let rows: Vec<NocturneMacroRow> = snap
+                    .macros
+                    .iter()
+                    .map(|mac| {
+                        let triggered = !mac.triggers.is_empty();
+                        NocturneMacroRow {
+                            name: mac.name.clone(),
+                            fn_name: format!("macro.{}", mac.name),
+                            chip: if triggered {
+                                mac.triggers.join(" · ")
+                            } else {
+                                "No trigger key".to_owned()
+                            },
+                            chip_title: if triggered {
+                                format!(
+                                    "Started by {} — click, then press a new trigger key",
+                                    mac.triggers.join(" or ")
+                                )
+                            } else {
+                                "No trigger key — click, then press a key".to_owned()
+                            },
+                            add_cls: if triggered {
+                                "n-addchip".to_owned()
+                            } else {
+                                "n-addchip none".to_owned()
+                            },
+                            chip_cls: if triggered {
+                                "n-keychip".to_owned()
+                            } else {
+                                "n-keychip ghost".to_owned()
+                            },
+                            meta: nocturne_macro_meta(mac),
+                            cls: if triggered && !mac.disabled {
+                                "n-bind on".to_owned()
+                            } else {
+                                "n-bind".to_owned()
+                            },
+                            slot: slot.number.to_string(),
+                            edit_href: format!(
+                                "{page}?slot={}&macro={}",
+                                slot.number,
+                                crate::render_map::urlencode_value(&mac.name)
+                            ),
+                            toggle_label: if mac.disabled {
+                                "Enable".to_owned()
+                            } else {
+                                "Disable".to_owned()
+                            },
+                            toggle_value: if mac.disabled {
+                                "yes".to_owned()
+                            } else {
+                                String::new()
+                            },
+                        }
+                    })
+                    .collect();
+                let head = format!("Macros · {}", rows.len());
+                let note = if rows.is_empty() {
+                    "No macros in this layout yet — author them in the Controls editor.".to_owned()
+                } else {
+                    String::new()
+                };
+                (head, rows, note)
+            }
+        }
+    }
 }
 
 /// A human-scannable order independent of the art tables' drawing order.
@@ -5000,6 +5948,7 @@ impl NocturneDerived {
             socd_cls,
             socd_num,
             socd_lab,
+            socd_current: _,
             socd_edit_opts,
         } = compose_controller_panel(staged, selected, p.q.as_deref());
         let (undo_cls, undo_label) = match p.undo_label.as_ref() {
@@ -5052,7 +6001,7 @@ impl NocturneDerived {
         // list it could not see, which is a replace.
         // The multi-pad grid's data: every staged controller, its family,
         // its callout chips and its readable control names.
-        let pads = compose_pad_views(staged);
+        let pads = compose_pad_views(staged, "/nocturne");
         // The BOARD, not the authored table. One source for the drawn
         // cells, the tray's "off this board" test, and the available-key
         // rosters below — three readers that used to walk `ROWS`
@@ -5163,6 +6112,7 @@ impl NocturneDerived {
                             mapper.as_ref(),
                             slot.number,
                             p.q.as_deref(),
+                            "/nocturne",
                         )
                     })
                     .unwrap_or_else(crate::macro_editor::NocturneMacroEditor::closed)
@@ -5307,80 +6257,10 @@ impl NocturneDerived {
         // ── The selected slot's macros: lifecycle rows off the SAME staged
         // authoring the mapper reads. Step editing stays on Controls until
         // its own pass, and the rows say so with a link, not a pretence.
-        let (macros_head, macro_rows, macros_note) = match selected {
-            None => ("Macros".to_owned(), Vec::new(), String::new()),
-            Some(slot) => {
-                let snap = ksx_api::staged_macro_snapshot(slot);
-                if !snap.available {
-                    ("Macros".to_owned(), Vec::new(), snap.reason.clone())
-                } else {
-                    let rows: Vec<NocturneMacroRow> = snap
-                        .macros
-                        .iter()
-                        .map(|mac| {
-                            let triggered = !mac.triggers.is_empty();
-                            NocturneMacroRow {
-                                name: mac.name.clone(),
-                                fn_name: format!("macro.{}", mac.name),
-                                chip: if triggered {
-                                    mac.triggers.join(" · ")
-                                } else {
-                                    "No trigger key".to_owned()
-                                },
-                                chip_title: if triggered {
-                                    format!(
-                                        "Started by {} — click, then press a new trigger key",
-                                        mac.triggers.join(" or ")
-                                    )
-                                } else {
-                                    "No trigger key — click, then press a key".to_owned()
-                                },
-                                add_cls: if triggered {
-                                    "n-addchip".to_owned()
-                                } else {
-                                    "n-addchip none".to_owned()
-                                },
-                                chip_cls: if triggered {
-                                    "n-keychip".to_owned()
-                                } else {
-                                    "n-keychip ghost".to_owned()
-                                },
-                                meta: nocturne_macro_meta(mac),
-                                cls: if triggered && !mac.disabled {
-                                    "n-bind on".to_owned()
-                                } else {
-                                    "n-bind".to_owned()
-                                },
-                                slot: slot.number.to_string(),
-                                edit_href: format!(
-                                    "/nocturne?slot={}&macro={}",
-                                    slot.number,
-                                    crate::render_map::urlencode_value(&mac.name)
-                                ),
-                                toggle_label: if mac.disabled {
-                                    "Enable".to_owned()
-                                } else {
-                                    "Disable".to_owned()
-                                },
-                                toggle_value: if mac.disabled {
-                                    "yes".to_owned()
-                                } else {
-                                    String::new()
-                                },
-                            }
-                        })
-                        .collect();
-                    let head = format!("Macros · {}", rows.len());
-                    let note = if rows.is_empty() {
-                        "No macros in this layout yet — author them in the Controls editor."
-                            .to_owned()
-                    } else {
-                        String::new()
-                    };
-                    (head, rows, note)
-                }
-            }
-        };
+        // The selected slot's macro lifecycle rows, off the ONE shared
+        // composer — `/redesign`'s inspector serves the same rows, with
+        // its own page in the edit door.
+        let (macros_head, macro_rows, macros_note) = compose_macro_rows(selected, "/nocturne");
 
         Self {
             // The board picker. Marked the way the theme picker is — the
@@ -5578,6 +6458,76 @@ impl NocturneDerived {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The controller inspector needs two facts browsers previously guessed:
+    /// which SOCD row is current, and what each canonical key prints on the
+    /// selected board. Keep both on the wire while retaining the mapper value.
+    #[test]
+    fn controller_inspector_serves_current_socd_and_board_key_labels() {
+        let mut setup = ksx_core::stage::StagedSetup::new();
+        for edit in [
+            ksx_api::StageEdit::ChooseDevice {
+                selector: "usb:d209:0430:00".to_owned(),
+                alias: "panel".to_owned(),
+                label: "Ultimarc I-PAC 4".to_owned(),
+            },
+            ksx_api::StageEdit::AddSlot {
+                number: None,
+                persona: "xbox360".to_owned(),
+                preset: "Inspector P1".to_owned(),
+                layout: Some("keyboard-2p".to_owned()),
+            },
+            ksx_api::StageEdit::SetSocd {
+                number: 1,
+                socd: "last-input".to_owned(),
+            },
+        ] {
+            setup = edit
+                .apply(&setup)
+                .unwrap_or_else(|refusal| panic!("fixture edit refused: {}", refusal.message));
+        }
+
+        let staged = ksx_api::StagedSetupView::of(&setup);
+        let selected = staged.slots.first().expect("one staged controller");
+        let panel = compose_controller_panel(&staged, Some(selected), None);
+        assert_eq!(panel.socd_current, "last-input");
+        assert!(
+            panel
+                .socd_edit_opts
+                .iter()
+                .any(|option| option.value == panel.socd_current),
+            "the explicit current value must resolve to the served roster"
+        );
+        let mut legacy = staged.clone();
+        legacy.slots[0].socd.clear();
+        assert_eq!(
+            compose_controller_panel(&legacy, legacy.slots.first(), None).socd_current,
+            "off",
+            "an older omitted SOCD field means the engine's effective default"
+        );
+
+        let board = crate::board::Board::resolve("", &[], &[], false);
+        let keys = compose_key_panel(&staged, Some(selected), &board);
+        let row_for = |canonical: &str| {
+            keys.key_rows
+                .iter()
+                .chain(keys.avail_main.iter())
+                .chain(keys.avail_nav.iter())
+                .chain(keys.avail_num.iter())
+                .find(|row| row.key == canonical)
+                .unwrap_or_else(|| panic!("standard board did not serve {canonical}"))
+        };
+
+        let up = row_for("Up");
+        assert_eq!(up.key_label, "↑");
+        assert_eq!(up.key, "Up", "display text must never replace identity");
+        let control = row_for("LeftControl");
+        assert_eq!(control.key_label, "Ctrl");
+        assert_eq!(control.key, "LeftControl");
+        let tilde = row_for("Tilde");
+        assert_eq!(tilde.key_label, "`");
+        assert_eq!(tilde.key, "Tilde");
+    }
 
     /// **Every persona ksx ships has a presentation, and no two share a row.**
     ///

@@ -139,7 +139,12 @@ pub enum DaemonCommand {
     /// not be a second session path with its own bugs. The override lasts until
     /// the next [`Self::Reload`] or [`Self::Start`], both of which go back to
     /// what is on disk.
-    PlayStaged(Box<ksx_core::CommitSpec>),
+    PlayStaged {
+        spec: Box<ksx_core::CommitSpec>,
+        /// Opaque whole-draft token captured under the same lock as `spec`.
+        /// The control loop publishes it only after this exact spec starts.
+        revision: String,
+    },
     /// **Apply a STAGED setup's bindings to the running session in place** —
     /// the staging counterpart of [`Self::ApplyBindings`], with one deliberate
     /// difference: where a structural change makes `ApplyBindings` bounce the
@@ -153,7 +158,13 @@ pub enum DaemonCommand {
     /// factory is repointed at the applied spec ([`point_at_staged`]), so a
     /// later pause + resume brings back the draft that is actually playing.
     /// The verdict lands in [`DaemonState::apply`], like every apply.
-    ApplyStaged(Box<ksx_core::CommitSpec>),
+    ApplyStaged {
+        spec: Box<ksx_core::CommitSpec>,
+        /// Opaque whole-draft token captured under the same lock as `spec`.
+        /// A successful hot apply moves the live-session token to this value;
+        /// every refusal leaves the previous value untouched.
+        revision: String,
+    },
     /// Print the current state (headless mode's `status`).
     Status,
     /// Stop everything and exit the process.
@@ -405,6 +416,14 @@ impl Default for StageMeta {
 }
 
 impl StageMeta {
+    /// Whole-draft identity served to surfaces and carried into a staged
+    /// session command. Unlike a slot target token it deliberately contains
+    /// no row content: incarnation + mutation generation is the authority for
+    /// whether the complete in-memory proposal is unchanged.
+    pub(crate) fn revision_token(&self) -> String {
+        format!("d1-{}-{:016x}", self.incarnation, self.revision)
+    }
+
     /// Move the draft's concurrency generation while its state lock is held.
     /// On the theoretical wrap boundary, rotate the incarnation instead of
     /// ever reissuing an earlier token.
@@ -474,6 +493,11 @@ pub struct DaemonState {
     /// Written beside every `SessionFactory::set_staged` call and nowhere else
     /// ([`point_at_staged`]), so the two cannot drift.
     pub origin: ksx_api::SessionOrigin,
+    /// The exact whole-draft revision the live staged session is known to
+    /// contain. `None` is deliberately overloaded only toward safety: idle,
+    /// a config-origin session, a failed transition, or an older/unknown
+    /// start can never be mistaken for synchronized staged state.
+    pub active_stage_revision: Option<String>,
 }
 
 impl DaemonState {
@@ -864,7 +888,7 @@ pub fn control_loop_with(
             // set of ways to leave a dead panel behind. The ONE difference is
             // where the plan comes from: `set_staged` points the factory at a
             // setup that exists only in memory.
-            Ok(DaemonCommand::PlayStaged(spec)) => {
+            Ok(DaemonCommand::PlayStaged { spec, revision }) => {
                 if !point_at_staged(factory, &state, Some(*spec)) {
                     // Never silent: a factory that cannot run a staged setup
                     // would otherwise start whatever is on disk while the
@@ -894,7 +918,11 @@ pub fn control_loop_with(
                 panel.arm_escapes();
                 panel.set_emulating(true);
                 session = start(factory, &state, out);
-                if session.is_none() {
+                if session.is_some() {
+                    if let Ok(mut s) = state.lock() {
+                        s.active_stage_revision = Some(revision);
+                    }
+                } else {
                     panel.set_emulating(false);
                     // The override does not outlive a start that never
                     // started: a later tray Start must mean the config on
@@ -939,9 +967,10 @@ pub fn control_loop_with(
             // refused, never a bounce — an unsaved draft does not get to tear
             // a session down (that is `PlayStaged`, behind the surface's own
             // confirmation).
-            Ok(DaemonCommand::ApplyStaged(spec)) => {
+            Ok(DaemonCommand::ApplyStaged { spec, revision }) => {
                 apply_generation += 1;
-                let report = apply_staged(apply_generation, &session, factory, &state, *spec);
+                let report =
+                    apply_staged(apply_generation, &session, factory, &state, *spec, revision);
                 let _ = writeln!(out, "{}", report.message);
                 if let Ok(mut s) = state.lock() {
                     s.apply = Some(report);
@@ -1190,6 +1219,7 @@ fn apply_staged(
     factory: &mut dyn SessionFactory,
     state: &SharedState,
     spec: ksx_core::CommitSpec,
+    revision: String,
 ) -> ApplyReport {
     let report = |ok: bool, hot: bool, message: String| ApplyReport {
         generation,
@@ -1223,7 +1253,7 @@ fn apply_staged(
             );
         }
     };
-    apply_staged_plan(generation, session, factory, state, spec, &plan)
+    apply_staged_plan(generation, session, factory, state, spec, revision, &plan)
 }
 
 /// [`apply_staged`] after resolution — split so a test can hand it a plan
@@ -1234,6 +1264,7 @@ fn apply_staged_plan(
     factory: &mut dyn SessionFactory,
     state: &SharedState,
     spec: ksx_core::CommitSpec,
+    revision: String,
     plan: &crate::run::plan::RunPlan,
 ) -> ApplyReport {
     let report = |ok: bool, hot: bool, message: String| ApplyReport {
@@ -1266,6 +1297,9 @@ fn apply_staged_plan(
                 // a pause followed by resume puts back the applied draft (as
                 // it stands then), never the setup the session started as.
                 point_at_staged(factory, state, Some(spec));
+                if let Ok(mut s) = state.lock() {
+                    s.active_stage_revision = Some(revision);
+                }
                 report(
                     true,
                     true,
@@ -1458,6 +1492,7 @@ fn reap(mut live: LiveSession, state: &SharedState, out: &mut dyn Write) {
                     RunState::Stopped
                 };
                 s.active = None;
+                s.active_stage_revision = None;
             }
         }
         Ok(Err(err)) => {
@@ -1483,6 +1518,9 @@ fn reap(mut live: LiveSession, state: &SharedState, out: &mut dyn Write) {
 
 fn set_run(state: &SharedState, run: RunState) {
     if let Ok(mut s) = state.lock() {
+        if !matches!(run, RunState::Running { .. }) {
+            s.active_stage_revision = None;
+        }
         s.run = run;
         s.active = None;
     }
@@ -1574,7 +1612,8 @@ fn point_at_staged(
     state: &SharedState,
     spec: Option<ksx_core::CommitSpec>,
 ) -> bool {
-    let origin = if spec.is_some() {
+    let staged = spec.is_some();
+    let origin = if staged {
         ksx_api::SessionOrigin::Staged
     } else {
         ksx_api::SessionOrigin::Config
@@ -1589,6 +1628,9 @@ fn point_at_staged(
         } else {
             ksx_api::SessionOrigin::Config
         };
+        if !took || !staged {
+            s.active_stage_revision = None;
+        }
     }
     took
 }
@@ -2481,7 +2523,10 @@ mod tests {
             &mut factory,
             &[
                 DaemonCommand::Start { game: None },
-                DaemonCommand::PlayStaged(Box::new(spec.clone())),
+                DaemonCommand::PlayStaged {
+                    spec: Box::new(spec.clone()),
+                    revision: "draft-replace".to_owned(),
+                },
                 DaemonCommand::Quit,
             ],
         );
@@ -2494,6 +2539,64 @@ mod tests {
         assert_eq!(*factory.staged.lock().unwrap(), Some(spec));
         assert!(text.contains("replacing the running session"), "{text}");
         assert!(!text.contains("already running"), "{text}");
+    }
+
+    #[test]
+    fn staged_revision_proof_tracks_play_stop_and_a_later_config_start() {
+        let mut factory = FakeFactory::default();
+        let state: SharedState = Arc::new(Mutex::new(DaemonState::default()));
+        let observed = state.clone();
+        let (tx, rx) = unbounded();
+        let driver = std::thread::spawn(move || {
+            let wait_for = |label: &str, predicate: &dyn Fn(&DaemonState) -> bool| {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                loop {
+                    let snapshot = observed.lock().unwrap().clone();
+                    if predicate(&snapshot) {
+                        return snapshot;
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "timed out waiting for {label}: {snapshot:?}"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            };
+
+            tx.send(DaemonCommand::PlayStaged {
+                spec: Box::new(a_staged_setup()),
+                revision: "draft-played".to_owned(),
+            })
+            .unwrap();
+            let running = wait_for("staged Play", &|snapshot| {
+                matches!(snapshot.run, RunState::Running { .. })
+                    && snapshot.active_stage_revision.as_deref() == Some("draft-played")
+            });
+            assert_eq!(running.origin, ksx_api::SessionOrigin::Staged);
+
+            tx.send(DaemonCommand::Stop).unwrap();
+            let stopped = wait_for("Stop", &|snapshot| {
+                matches!(snapshot.run, RunState::Stopped)
+            });
+            assert_eq!(stopped.active_stage_revision, None);
+            assert_eq!(
+                stopped.origin,
+                ksx_api::SessionOrigin::Staged,
+                "Stop retains resume origin but never live synchronization proof"
+            );
+
+            tx.send(DaemonCommand::Start { game: None }).unwrap();
+            let config = wait_for("config Start", &|snapshot| {
+                matches!(snapshot.run, RunState::Running { .. })
+                    && snapshot.origin == ksx_api::SessionOrigin::Config
+            });
+            assert_eq!(config.active_stage_revision, None);
+            tx.send(DaemonCommand::Quit).unwrap();
+        });
+
+        let mut out = Vec::new();
+        control_loop_with(rx, state, &mut factory, &mut NoPanel, &NoUi, &mut out);
+        driver.join().unwrap();
     }
 
     // -- what the daemon started, so a resume can put it back --------------
@@ -2607,7 +2710,15 @@ mod tests {
         let mut factory = FakeFactory::default();
         let state: SharedState = Arc::new(Mutex::new(DaemonState::default()));
 
-        let report = apply_staged_plan(7, &session, &mut factory, &state, a_staged_setup(), &plan);
+        let report = apply_staged_plan(
+            7,
+            &session,
+            &mut factory,
+            &state,
+            a_staged_setup(),
+            "draft-hot".to_owned(),
+            &plan,
+        );
         assert!(report.ok, "{}", report.message);
         assert!(report.hot);
         assert!(!report.restarted && !report.needs_restart);
@@ -2632,6 +2743,11 @@ mod tests {
             ksx_api::SessionOrigin::Staged,
             "a pause + resume must put back the APPLIED draft"
         );
+        assert_eq!(
+            state.lock().unwrap().active_stage_revision.as_deref(),
+            Some("draft-hot"),
+            "the session sync token moves only after the hot swap succeeds"
+        );
     }
 
     /// **A structural difference refuses and never bounces.** `ApplyBindings`
@@ -2654,7 +2770,18 @@ mod tests {
         let mut factory = FakeFactory::default();
         let state: SharedState = Arc::new(Mutex::new(DaemonState::default()));
 
-        let report = apply_staged_plan(3, &session, &mut factory, &state, a_staged_setup(), &plan);
+        {
+            state.lock().unwrap().active_stage_revision = Some("still-live".to_owned());
+        }
+        let report = apply_staged_plan(
+            3,
+            &session,
+            &mut factory,
+            &state,
+            a_staged_setup(),
+            "refused-draft".to_owned(),
+            &plan,
+        );
         assert!(!report.ok);
         assert!(report.needs_restart, "the pipe's `needs-restart` source");
         assert!(!report.hot && !report.restarted);
@@ -2682,6 +2809,11 @@ mod tests {
             state.lock().unwrap().origin,
             ksx_api::SessionOrigin::Unknown
         );
+        assert_eq!(
+            state.lock().unwrap().active_stage_revision.as_deref(),
+            Some("still-live"),
+            "a refusal must not license the draft that never reached the engine"
+        );
     }
 
     /// **Nothing running, nothing to apply into.** Unlike `ApplyBindings`'s
@@ -2692,7 +2824,14 @@ mod tests {
     fn applying_with_no_session_is_refused_in_words() {
         let mut factory = FakeFactory::default();
         let state: SharedState = Arc::new(Mutex::new(DaemonState::default()));
-        let report = apply_staged(1, &None, &mut factory, &state, a_staged_setup());
+        let report = apply_staged(
+            1,
+            &None,
+            &mut factory,
+            &state,
+            a_staged_setup(),
+            "not-running".to_owned(),
+        );
         assert!(!report.ok);
         assert!(!report.needs_restart);
         assert_eq!(
@@ -2720,7 +2859,10 @@ mod tests {
         let (staged, _) = drive(
             &mut factory,
             &[
-                DaemonCommand::PlayStaged(Box::new(a_staged_setup())),
+                DaemonCommand::PlayStaged {
+                    spec: Box::new(a_staged_setup()),
+                    revision: "played-draft".to_owned(),
+                },
                 DaemonCommand::Stop,
                 DaemonCommand::Quit,
             ],
@@ -2743,7 +2885,10 @@ mod tests {
         let (config, _) = drive(
             &mut factory,
             &[
-                DaemonCommand::PlayStaged(Box::new(a_staged_setup())),
+                DaemonCommand::PlayStaged {
+                    spec: Box::new(a_staged_setup()),
+                    revision: "played-draft".to_owned(),
+                },
                 DaemonCommand::Stop,
                 DaemonCommand::Start { game: None },
                 DaemonCommand::Quit,
@@ -2774,7 +2919,10 @@ mod tests {
         let (state, text) = drive(
             &mut factory,
             &[
-                DaemonCommand::PlayStaged(Box::new(a_staged_setup())),
+                DaemonCommand::PlayStaged {
+                    spec: Box::new(a_staged_setup()),
+                    revision: "refused-draft".to_owned(),
+                },
                 DaemonCommand::Quit,
             ],
         );
@@ -3123,6 +3271,7 @@ mod tests {
             staged: Default::default(),
             stage_meta: Default::default(),
             origin: Default::default(),
+            active_stage_revision: None,
         };
         let tip = state.tooltip();
         assert!(tip.contains("running, 4 pad(s)"), "{tip}");
@@ -3143,6 +3292,7 @@ mod tests {
             staged: Default::default(),
             stage_meta: Default::default(),
             origin: Default::default(),
+            active_stage_revision: None,
         };
         assert!(long.tooltip().encode_utf16().count() <= 127);
         assert!(long.tooltip().ends_with('…'));
@@ -3173,6 +3323,7 @@ mod tests {
             staged: Default::default(),
             stage_meta: Default::default(),
             origin: Default::default(),
+            active_stage_revision: None,
         };
         let tip = state.tooltip();
         assert!(tip.contains("running, 4 pad(s)"), "{tip}");
@@ -3229,6 +3380,7 @@ mod tests {
             staged: Default::default(),
             stage_meta: Default::default(),
             origin: Default::default(),
+            active_stage_revision: None,
         };
         assert!(state.tooltip().contains("REBOOT REQUIRED"), "{state:?}");
     }
@@ -3254,6 +3406,7 @@ mod tests {
             staged: Default::default(),
             stage_meta: Default::default(),
             origin: Default::default(),
+            active_stage_revision: None,
         };
         let tip = state.tooltip();
         assert!(tip.contains("watchdog TRIPPED"), "{tip}");
@@ -3279,6 +3432,7 @@ mod tests {
             staged: Default::default(),
             stage_meta: Default::default(),
             origin: Default::default(),
+            active_stage_revision: None,
         };
         assert!(!state.tooltip().contains("[!]"), "{}", state.tooltip());
     }
@@ -3604,10 +3758,10 @@ mod tests {
                     // UNSAVED setup only means something to a surface that is
                     // holding one, and the tray holds nothing. It reaches the
                     // control loop over the pipe (`stage-play`).
-                    DaemonCommand::PlayStaged(_) => "start",
+                    DaemonCommand::PlayStaged { .. } => "start",
                     // Same rule as both above: the draft's hot apply is a
                     // surface act, pipe-only (`stage-apply`).
-                    DaemonCommand::ApplyStaged(_) => "reload",
+                    DaemonCommand::ApplyStaged { .. } => "reload",
                 }),
                 "{command:?} is in the tray menu but not reachable headlessly"
             );

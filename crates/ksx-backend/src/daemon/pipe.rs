@@ -414,6 +414,10 @@ fn status_json(state: &SharedState, profiles: &ProfilesFn) -> serde_json::Value 
         // indistinguishable from outside — and `resume` is the verb that acts
         // on it.
         "origin": snap.origin.as_str(),
+        // Proof, not an inference: only a successful staged Play/Apply writes
+        // this exact whole-draft token. Absence fails closed for config,
+        // idle, failed, and older sessions.
+        "active_stage_revision": snap.active_stage_revision,
         "active": active,
         "tooltip": snap.tooltip(),
         "profiles": rows,
@@ -1254,6 +1258,7 @@ fn stamp_stage_meta(
 ) -> ksx_api::StageOutcome {
     outcome.setup.dirty = meta.dirty;
     outcome.setup.origin = meta.origin.clone();
+    outcome.setup.revision = meta.revision_token();
     stamp_stage_target_revisions(&mut outcome.setup, meta);
     outcome
 }
@@ -1625,6 +1630,9 @@ struct StagedStart {
     /// could not be READ at all — which is not the same as an empty setup
     /// (docs/SURFACES.md §1b) and is dressed differently.
     setup: Option<ksx_core::StagedSetup>,
+    /// Visit metadata captured atomically with `setup`. `None` only when the
+    /// state itself could not be read.
+    meta: Option<super::StageMeta>,
     outcome: Result<String, ksx_api::Refusal>,
 }
 
@@ -1643,15 +1651,19 @@ struct StagedStart {
 /// started, and re-sending that would put back the setup as it was before they
 /// walked over to change it.
 fn play_staged(deps: &PipeDeps, settle: Duration) -> StagedStart {
-    let refused = |setup: &ksx_core::StagedSetup, refusal: ksx_api::Refusal| StagedStart {
+    let refused = |setup: &ksx_core::StagedSetup,
+                   meta: &super::StageMeta,
+                   refusal: ksx_api::Refusal| StagedStart {
         setup: Some(setup.clone()),
+        meta: Some(meta.clone()),
         outcome: Err(refusal),
     };
 
-    let (spec, staged) = {
+    let (spec, staged, meta) = {
         let Ok(s) = deps.state.lock() else {
             return StagedStart {
                 setup: None,
+                meta: None,
                 outcome: Err(ksx_api::Refusal::new(
                     ksx_api::codes::PIPE_ERROR,
                     "the daemon's state lock is poisoned, so the staged setup could not be \
@@ -1660,10 +1672,11 @@ fn play_staged(deps: &PipeDeps, settle: Duration) -> StagedStart {
             };
         };
         match s.staged.commit() {
-            Ok(spec) => (spec, s.staged.clone()),
+            Ok(spec) => (spec, s.staged.clone(), s.stage_meta.clone()),
             Err(refusal) => {
                 return refused(
                     &s.staged,
+                    &s.stage_meta,
                     ksx_api::Refusal::from_wire(Some(refusal.code()), refusal.to_string()),
                 )
             }
@@ -1671,7 +1684,7 @@ fn play_staged(deps: &PipeDeps, settle: Duration) -> StagedStart {
     };
 
     if let Err(refusal) = (deps.stage_capture_preflight)(&spec) {
-        return refused(&staged, refusal);
+        return refused(&staged, &meta, refusal);
     }
 
     // Build the plan HERE, before anything is enqueued: a setup that cannot
@@ -1685,6 +1698,7 @@ fn play_staged(deps: &PipeDeps, settle: Duration) -> StagedStart {
     if let Err(err) = crate::stage::plan(&spec) {
         return refused(
             &staged,
+            &meta,
             ksx_api::Refusal::new(ksx_api::codes::REFUSED, err.to_string()),
         );
     }
@@ -1695,11 +1709,15 @@ fn play_staged(deps: &PipeDeps, settle: Duration) -> StagedStart {
     let baseline = snapshot(&deps.state).run;
     if deps
         .tx
-        .send(DaemonCommand::PlayStaged(Box::new(spec)))
+        .send(DaemonCommand::PlayStaged {
+            spec: Box::new(spec),
+            revision: meta.revision_token(),
+        })
         .is_err()
     {
         return refused(
             &staged,
+            &meta,
             ksx_api::Refusal::new(ksx_api::codes::REFUSED, "the daemon is shutting down"),
         );
     }
@@ -1707,6 +1725,7 @@ fn play_staged(deps: &PipeDeps, settle: Duration) -> StagedStart {
     if started["ok"] == serde_json::Value::Bool(true) {
         StagedStart {
             setup: Some(staged),
+            meta: Some(meta),
             outcome: Ok(started["message"]
                 .as_str()
                 .unwrap_or("the staged setup is playing")
@@ -1715,6 +1734,7 @@ fn play_staged(deps: &PipeDeps, settle: Duration) -> StagedStart {
     } else {
         refused(
             &staged,
+            &meta,
             ksx_api::Refusal::new(
                 ksx_api::codes::REFUSED,
                 started["error"]
@@ -1727,19 +1747,22 @@ fn play_staged(deps: &PipeDeps, settle: Duration) -> StagedStart {
 
 /// `{"verb":"stage-play"}` — moment 7's Play button, as a staging answer.
 fn handle_stage_play(deps: &PipeDeps, settle: Duration) -> serde_json::Value {
-    let started = play_staged(deps, settle);
-    let Some(setup) = started.setup else {
+    let StagedStart {
+        setup,
+        meta,
+        outcome: started,
+    } = play_staged(deps, settle);
+    let Some(setup) = setup else {
         // The setup could not be read. "I could not read this" is not "you
         // staged nothing" (docs/SURFACES.md §1b), and `unavailable` is the
         // shape that says the first one.
         return stage_json(&ksx_api::StageOutcome::unavailable(
             started
-                .outcome
                 .err()
                 .map_or_else(String::new, |refusal| refusal.message),
         ));
     };
-    let mut outcome = match started.outcome {
+    let mut outcome = match started {
         Ok(message) => {
             let mut ok = ksx_api::StageOutcome::ok(&setup, message);
             ok.playing = true;
@@ -1751,7 +1774,10 @@ fn handle_stage_play(deps: &PipeDeps, settle: Duration) -> serde_json::Value {
     // about the disk this verb did not make.
     outcome.saved = None;
     outcome.backup = None;
-    stage_json(&outcome)
+    match meta {
+        Some(meta) => stage_json(&stamp_stage_meta(outcome, &meta)),
+        None => stage_json(&outcome),
+    }
 }
 
 /// `{"verb":"stage-apply"}` — the draft's BINDINGS into the running session in
@@ -1825,7 +1851,10 @@ fn handle_stage_apply(deps: &PipeDeps, settle: Duration) -> serde_json::Value {
         .map_or(0, |report| report.generation);
     if deps
         .tx
-        .send(DaemonCommand::ApplyStaged(Box::new(spec)))
+        .send(DaemonCommand::ApplyStaged {
+            spec: Box::new(spec),
+            revision: meta.revision_token(),
+        })
         .is_err()
     {
         return refused(ksx_api::Refusal::new(
@@ -3224,6 +3253,8 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         {
             let mut snapshot = state.lock().unwrap();
             snapshot.game = Some("Example Game".into());
+            snapshot.origin = ksx_api::SessionOrigin::Staged;
+            snapshot.active_stage_revision = Some("d1-session-0001".into());
             snapshot.active = Some(super::super::ActiveSession {
                 started: Instant::now() - Duration::from_secs(2),
                 facts: super::super::ActiveSessionFacts {
@@ -3246,6 +3277,8 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         assert_eq!(v["run"], "running");
         assert_eq!(v["slots"], 4);
         assert_eq!(v["game"], "Example Game");
+        assert_eq!(v["origin"], "staged");
+        assert_eq!(v["active_stage_revision"], "d1-session-0001");
         assert_eq!(v["profiles"][1]["title"], "Metal Slug");
         assert!(v["active"]["elapsed_ms"].as_u64().unwrap() >= 2_000);
         assert_eq!(v["active"]["keyboards"], 2);
@@ -3760,6 +3793,11 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             .expect("served target revision")
             .to_owned();
         assert!(first.starts_with("d1-"), "{served}");
+        let draft_first = served["setup"]["revision"]
+            .as_str()
+            .expect("served whole-draft revision")
+            .to_owned();
+        assert!(draft_first.starts_with("d1-"), "{served}");
 
         let bound = handle_request(
             &serde_json::json!({
@@ -3781,6 +3819,10 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             .expect("post-bind target revision")
             .to_owned();
         assert_ne!(second, first, "a chain needs a fresh post-write token");
+        assert_ne!(
+            served["setup"]["revision"], draft_first,
+            "every successful mutation must move the whole-draft token"
+        );
         let chained = handle_request(
             &serde_json::json!({
                 "verb": "stage-bind",
@@ -4083,9 +4125,14 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         // ...and the staged setup is still staged, so a user can go on editing.
         assert_eq!(played["setup"]["slots"][0]["persona"], "playstation");
 
-        let DaemonCommand::PlayStaged(spec) = worker.join().unwrap() else {
+        let DaemonCommand::PlayStaged { spec, revision } = worker.join().unwrap() else {
             panic!("stage-play must enqueue PlayStaged, not Start");
         };
+        assert_eq!(
+            revision,
+            played["setup"]["revision"].as_str().unwrap(),
+            "the command and response must name the same atomically captured draft"
+        );
         assert_eq!(spec.slots.len(), 1);
         assert_eq!(spec.slots[0].spec.persona, ksx_core::Persona::PlayStation);
         assert_eq!(
@@ -4139,10 +4186,15 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         assert_eq!(applied["setup"]["empty"], false);
         assert_eq!(applied["setup"]["dirty"], true, "{applied}");
 
-        let DaemonCommand::ApplyStaged(spec) = loop_thread.join().unwrap() else {
+        let DaemonCommand::ApplyStaged { spec, revision } = loop_thread.join().unwrap() else {
             panic!("stage-apply must enqueue ApplyStaged, not ApplyBindings or a start");
         };
         assert_eq!(spec.slots.len(), 1);
+        assert_eq!(
+            revision,
+            applied["setup"]["revision"].as_str().unwrap(),
+            "Apply must carry the exact draft token it reports"
+        );
     }
 
     /// The structural refusal carries the stable `needs-restart` code, the
@@ -4186,7 +4238,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         );
         assert!(matches!(
             loop_thread.join().unwrap(),
-            DaemonCommand::ApplyStaged(_)
+            DaemonCommand::ApplyStaged { .. }
         ));
     }
 
@@ -4700,7 +4752,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         assert_eq!(replaced["ok"], true, "{replaced}");
         assert_eq!(replaced["playing"], true, "{replaced}");
         assert!(
-            matches!(worker.join().unwrap(), DaemonCommand::PlayStaged(_)),
+            matches!(worker.join().unwrap(), DaemonCommand::PlayStaged { .. }),
             "a running session must be replaced by one staged-play command"
         );
     }

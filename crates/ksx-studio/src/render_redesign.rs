@@ -15,8 +15,9 @@ use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::render_nocturne::{device_row, mode_row, named_slot_ids, other_row};
 use crate::snapshot::{
-    compose_board_panel, theme_rows, NocturneChoiceRow, RedesignControllers, RedesignDeviceRows,
-    RedesignPayload, RedesignPersonaRow, SetupSnapshot,
+    compose_board_panel, theme_rows, NocturneChoiceRow, RedesignCaptureState, RedesignControllers,
+    RedesignDeviceRows, RedesignJourney, RedesignOperationalState, RedesignPayload,
+    RedesignPersonaRow, SetupSnapshot, StartCaptureView,
 };
 
 /// The island table this page compiles to: exactly one island — the whole
@@ -47,15 +48,18 @@ const STAGING_UNAVAILABLE: &str = "Staging unavailable — the ksx background he
 pub(crate) fn payload(
     environment: &ksx_api::RuntimeEnvironmentView,
     setup: Option<ksx_api::SetupView>,
+    setup_error: &str,
     scan: Result<ksx_api::DeviceScanView, String>,
     staged: &ksx_api::StagedSetupView,
+    session: &crate::control::SessionView,
+    outputs: &ksx_api::ControllerOutputsView,
     selected_slot: Option<u8>,
     undo_label: Option<&str>,
+    macro_selected: Option<&str>,
+    q: Option<&str>,
 ) -> RedesignPayload {
-    // Facts borrowed BEFORE the payload construction consumes their owners:
-    // the saved board choice (setup is consumed by the theme rows) and the
-    // scan's boards (for the keyboard title's transport word).
-    let setup_board = setup.as_ref().map(|s| s.board.clone());
+    // Borrowed BEFORE the payload construction consumes its owner: the
+    // scan boards, for the keyboard title's transport word.
     let scan_boards: &[ksx_api::BoardRow] = match &scan {
         Ok(scan) => scan.boards.as_slice(),
         Err(_) => &[],
@@ -85,6 +89,27 @@ pub(crate) fn payload(
     });
     let (capture_rows, capture_note) =
         crate::snapshot::compose_capture_rows(staged, encoder_staged);
+    let (scan_read, scan_error) = match &scan {
+        Ok(scan) => (Some(scan), ""),
+        Err(error) => (None, error.as_str()),
+    };
+    let capture = RedesignCaptureState::of(staged, scan_read, scan_error);
+    let operations = RedesignOperationalState::of(
+        staged,
+        setup.as_ref(),
+        setup_error,
+        session,
+        outputs,
+        &capture,
+    );
+    let journey = RedesignJourney::of(staged, session, &capture, &operations.play);
+    // The staged input's verified identity, off the SAME capture composition
+    // nocturne pins its learn flow to (selector + Windows instance path).
+    // Refused scan → empty pair → the mapper refuses to arm, like 4460.
+    let learn_cap = match &scan {
+        Ok(scan_view) => StartCaptureView::from_parts(staged, scan_view, true),
+        Err(_) => StartCaptureView::from_parts(staged, &ksx_api::DeviceScanView::default(), false),
+    };
     devices.staging_reachable = staged.reachable;
     devices.staging_line = if staged.reachable {
         String::new()
@@ -134,19 +159,17 @@ pub(crate) fn payload(
         .collect(),
         // The staged controllers and the persona picker, off the SAME staged
         // view the device marking reads — one truth per render.
-        controllers: RedesignControllers::of(staged, selected_slot, undo_label),
+        controllers: RedesignControllers::of(staged, selected_slot, undo_label, macro_selected, q),
         // The keyboard widget, off the ONE shared board composer. The board
-        // choice honours the saved config; the panel/drawn stores are not
-        // collected on this page yet (they arrive with the panel migration),
-        // so their rosters are empty and their errors silent — the standard
-        // keyboard and any `panel:`/`board:` choice degrade exactly like
-        // nocturne with empty stores.
+        // picture is ALWAYS the standard keyboard on this page (Victor,
+        // 2026-08-29): a keyboard looks like a keyboard, and a saved panel
+        // choice in config.toml must not morph it here. Alternate pictures
+        // stay a 4460 affair until an "advanced" home earns its place.
         board: {
             let selected = selected_slot
                 .and_then(|number| staged.slots.iter().find(|slot| slot.number == number))
                 .or_else(|| staged.slots.first());
-            let chosen_board = setup_board.as_deref().unwrap_or_default();
-            let resolved = crate::board::Board::resolve(chosen_board, &[], &[], encoder_staged);
+            let resolved = crate::board::Board::resolve("", &[], &[], false);
             let transport = staged.device.as_ref().and_then(|d| {
                 scan_boards
                     .iter()
@@ -157,7 +180,7 @@ pub(crate) fn payload(
                 staged,
                 selected,
                 &resolved,
-                chosen_board,
+                "",
                 &[],
                 &[],
                 encoder_staged,
@@ -168,6 +191,11 @@ pub(crate) fn payload(
         },
         capture_rows,
         capture_note,
+        learn_selector: learn_cap.expected_selector,
+        learn_instance: learn_cap.instance_id,
+        operations,
+        capture,
+        journey,
     }
 }
 
@@ -175,6 +203,7 @@ pub(crate) fn payload(
 /// device picker's four tiers. The name convention is the compiler's, proven
 /// on `/nocturne` (`LIST_SLOT_THEMES` in render_nocturne.rs).
 const LIST_SLOT_THEME_ROWS: &str = "list:rdThemeRows:array";
+const LIST_SLOT_COMPACT_THEME_ROWS: &str = "list:rdCompactThemeRows:array";
 const LIST_SLOT_DEV_KB: &str = "list:rdDevKb:array";
 const LIST_SLOT_DEV_ENC: &str = "list:rdDevEnc:array";
 const LIST_SLOT_DEV_EXP: &str = "list:rdDevExp:array";
@@ -190,8 +219,9 @@ const LIST_SLOT_KB_ROW5: &str = "list:rdKbRow5:array";
 const LIST_SLOT_KB_ROW6: &str = "list:rdKbRow6:array";
 const LIST_SLOT_KB_TRAY: &str = "list:rdKbTray:array";
 const LIST_SLOT_KB_LEGEND: &str = "list:rdKbLegend:array";
-const LIST_SLOT_BOARD_ROWS: &str = "list:rdBoardRows:array";
 const LIST_SLOT_CAPTURE_ROWS: &str = "list:rdCaptureRows:array";
+const LIST_SLOT_JOURNEY_ROWS: &str = "list:rdJourneyRows:array";
+const LIST_SLOT_CAPTURE_HELD: &str = "list:rdCaptureHeld:array";
 
 /// One plate cell, every field spelled once (the nocturne row's shape).
 fn kb_cell(row: &crate::snapshot::NocturneKeyCell) -> SlotValue {
@@ -202,6 +232,12 @@ fn kb_cell(row: &crate::snapshot::NocturneKeyCell) -> SlotValue {
         ("short".to_owned(), SlotValue::Text(row.short.clone())),
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
         ("aria".to_owned(), SlotValue::Text(row.aria.clone())),
+        ("disabled".to_owned(), SlotValue::Bool(row.disabled)),
+        ("tab".to_owned(), SlotValue::Text(row.tab.clone())),
+        (
+            "aria_hidden".to_owned(),
+            SlotValue::Text(row.aria_hidden.clone()),
+        ),
         ("style".to_owned(), SlotValue::Text(row.style.clone())),
     ])
 }
@@ -221,6 +257,36 @@ fn board_choice_row(row: &NocturneChoiceRow) -> SlotValue {
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
         ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+    ])
+}
+
+fn journey_row(row: &crate::snapshot::RedesignJourneyStep) -> SlotValue {
+    SlotValue::object(vec![
+        ("key".to_owned(), SlotValue::Text(row.key.clone())),
+        ("title".to_owned(), SlotValue::Text(row.title.clone())),
+        ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
+        ("badge".to_owned(), SlotValue::Text(row.badge.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+    ])
+}
+
+fn held_capture_row(row: &crate::snapshot::RedesignHeldCaptureRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("name".to_owned(), SlotValue::Text(row.name.clone())),
+        (
+            "transport".to_owned(),
+            SlotValue::Text(row.transport.clone()),
+        ),
+        ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
+        (
+            "summary".to_owned(),
+            SlotValue::Text(format!("{} · {}", row.transport, row.detail)),
+        ),
+        ("selector".to_owned(), SlotValue::Text(row.selector.clone())),
+        ("instance".to_owned(), SlotValue::Text(row.instance.clone())),
+        ("can_release".to_owned(), SlotValue::Bool(row.can_release)),
+        ("disabled".to_owned(), SlotValue::Bool(!row.can_release)),
+        ("note".to_owned(), SlotValue::Text(row.note.clone())),
     ])
 }
 
@@ -281,30 +347,75 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         "rdKbCls": payload.board.kb_cls,
         "rdBoardCaseStyle": payload.board.board_case_style,
         "rdBoardOrigin": payload.board.board_origin,
-        "rdBoardLine": payload.board.board_line,
         "rdKbTrayHead": payload.board.kb_tray_head,
         "rdKbTrayCls": payload.board.kb_tray_cls,
         "rdKbNote": payload.board.kb_note,
         "rdKbMoreCls": payload.board.kb_more_cls,
         "rdSoloLbl": payload.board.solo_label,
         "rdCaptureNote": payload.capture_note,
+        // The operational shell. Availability booleans are explicit served
+        // facts; labels and reasons are their no-mystery disabled state.
+        "rdOpDraftLabel": payload.operations.draft_label,
+        "rdOpDraftDetail": payload.operations.draft_detail,
+        "rdDraftDirty": payload.operations.draft_dirty,
+        "rdDraftRevision": payload.operations.draft_revision,
+        "rdOpSavedLabel": payload.operations.saved_label,
+        "rdOpSavedDetail": payload.operations.saved_detail,
+        "rdOpSessionLine": payload.operations.session.line,
+        "rdOpSessionCls": format!("rd-session-state {}", payload.operations.session_cls),
+        "rdOpEscapeLine": payload.operations.escape_line,
+        "rdSaveLabel": payload.operations.save.label,
+        "rdSaveDisabled": !payload.operations.save.allowed,
+        "rdSaveReason": payload.operations.save.reason,
+        "rdPlayLabel": payload.operations.play.label,
+        "rdPlayDisabled": !payload.operations.play.allowed,
+        "rdPlayReason": payload.operations.play.reason,
+        "rdPlayCls": if payload.operations.play.visible { "rd-runform rd-playform" } else { "rd-runform rd-playform none" },
+        "rdReplacePlayCls": if payload.operations.session.running { "rd-panel-replace" } else { "rd-panel-replace none" },
+        "rdApplyLabel": payload.operations.apply.label,
+        "rdApplyDisabled": !payload.operations.apply.allowed,
+        "rdApplyReason": payload.operations.apply.reason,
+        "rdApplyCls": if payload.operations.apply.visible { "rd-runform rd-applyform" } else { "rd-runform rd-applyform none" },
+        "rdStopLabel": payload.operations.stop.label,
+        "rdStopDisabled": !payload.operations.stop.allowed,
+        "rdStopReason": payload.operations.stop.reason,
+        "rdStopCls": if payload.operations.stop.visible { "rd-runform rd-stopform" } else { "rd-runform rd-stopform none" },
+        "rdAdoptLabel": payload.operations.adopt.label,
+        "rdAdoptDisabled": !payload.operations.adopt.allowed,
+        "rdAdoptReason": payload.operations.adopt.reason,
+        "rdDiscardLabel": payload.operations.discard.label,
+        "rdDiscardDisabled": !payload.operations.discard.allowed,
+        "rdDiscardReason": payload.operations.discard.reason,
+        "rdDiscardConfirmCls": if payload.operations.draft_dirty { "rd-danger-confirm" } else { "rd-danger-confirm none" },
+        "rdJourneyCompact": payload.journey.compact,
+        "rdJourneyLine": payload.journey.line,
+        "rdCaptureMode": payload.capture.mode,
+        "rdCaptureHeading": payload.capture.heading,
+        "rdCaptureLine": payload.capture.line,
+        "rdCaptureRecoveryLine": payload.capture.recovery_line,
+        "rdCaptureSelector": payload.capture.selector,
+        "rdCaptureInstance": payload.capture.instance,
+        "rdCapturePrepareCls": if payload.capture.can_prepare { "rd-capture-prepare" } else { "rd-capture-prepare none" },
+        "rdCaptureHeldCls": if payload.capture.held.is_empty() { "rd-held-recovery none" } else { "rd-held-recovery" },
     })
 }
 
 /// Populate every server-injected slot: the scalars, plus the theme-rows
-/// list. Further lists and shows join as the transplants arrive.
+/// lists. Theme deliberately has two responsive homes backed by distinct list
+/// signals—the FMIR list renderer consumes one array per mount—so both receive
+/// the same authoritative roster. Further lists and shows join as the
+/// transplants arrive.
 fn build_slots(module: &IrModule, payload: &RedesignPayload, flash: Option<&str>) -> SlotData {
     let scalars = scalar_slots(payload, flash).to_string();
     let mut slots = SlotData::from_json(&scalars, module)
         .unwrap_or_else(|_| SlotData::new_from_defaults(&module.slots));
-    if let Some(id) = named_slot_ids(module, LIST_SLOT_THEME_ROWS)
-        .into_iter()
-        .next()
-    {
-        slots.set(
-            id,
-            SlotValue::array(payload.theme_rows.iter().map(mode_row).collect()),
-        );
+    for name in [LIST_SLOT_THEME_ROWS, LIST_SLOT_COMPACT_THEME_ROWS] {
+        if let Some(id) = named_slot_ids(module, name).into_iter().next() {
+            slots.set(
+                id,
+                SlotValue::array(payload.theme_rows.iter().map(mode_row).collect()),
+            );
+        }
     }
     let dev = &payload.devices;
     for (name, value) in [
@@ -380,12 +491,16 @@ fn build_slots(module: &IrModule, payload: &RedesignPayload, flash: Option<&str>
             SlotValue::array(board.legend.iter().map(kb_legend_row).collect()),
         ),
         (
-            LIST_SLOT_BOARD_ROWS,
-            SlotValue::array(board.board_rows.iter().map(board_choice_row).collect()),
-        ),
-        (
             LIST_SLOT_CAPTURE_ROWS,
             SlotValue::array(payload.capture_rows.iter().map(board_choice_row).collect()),
+        ),
+        (
+            LIST_SLOT_JOURNEY_ROWS,
+            SlotValue::array(payload.journey.rows.iter().map(journey_row).collect()),
+        ),
+        (
+            LIST_SLOT_CAPTURE_HELD,
+            SlotValue::array(payload.capture.held.iter().map(held_capture_row).collect()),
         ),
     ] {
         if let Some(id) = named_slot_ids(module, name).into_iter().next() {
@@ -493,11 +608,20 @@ mod tests {
             },
             // A readable config with no stamp: System is the one marked row.
             Some(ksx_api::SetupView::default()),
+            "",
             Ok(fixture_scan()),
             // Nothing staged, authoritatively: every device row serves
             // aria_current "false" and the workbench mounts no cards — but
             // the picker still offers the roster over served ceilings.
             &fixture_staged(Vec::new()),
+            &crate::control::SessionView {
+                reachable: true,
+                line: "idle".into(),
+                ..Default::default()
+            },
+            &ksx_api::ControllerOutputsView::from_required(Vec::new()),
+            None,
+            None,
             None,
             None,
         )
@@ -578,11 +702,11 @@ mod tests {
             fixture_slot(1, "xbox360", true, "Player 1"),
             fixture_slot(2, "playstation", false, "Player 2"),
         ]);
-        let defaulted = RedesignControllers::of(&staged, None, None);
+        let defaulted = RedesignControllers::of(&staged, None, None, None, None);
         assert_eq!(defaulted.panel.slot_val, "1", "no ?slot → the first slot");
         assert_eq!(defaulted.panel.pad_badge, "P1");
         assert_eq!(defaulted.panel.pad_badge_cls, "n-pbadge np1");
-        let chosen = RedesignControllers::of(&staged, Some(2), None);
+        let chosen = RedesignControllers::of(&staged, Some(2), None, None, None);
         assert_eq!(chosen.panel.slot_val, "2", "an explicit ?slot wins");
         assert!(
             chosen.panel.pad_sub.contains("\"Player 2\" preset"),
@@ -602,7 +726,7 @@ mod tests {
         let (quiet_cls, quiet_label) = (&chosen.undo_cls, &chosen.undo_label);
         assert_eq!(quiet_cls, "rd-undochip none");
         assert!(quiet_label.is_empty());
-        let chip = RedesignControllers::of(&staged, Some(2), Some("P9 (X) removed"));
+        let chip = RedesignControllers::of(&staged, Some(2), Some("P9 (X) removed"), None, None);
         assert_eq!(chip.undo_cls, "rd-undochip");
         assert_eq!(chip.undo_label, "P9 (X) removed");
     }
@@ -619,7 +743,7 @@ mod tests {
             fixture_slot(2, "playstation", false, "Player 2"),
             fixture_slot(3, "xbox360", true, "Player 3"),
         ]);
-        let view = RedesignControllers::of(&staged, None, None);
+        let view = RedesignControllers::of(&staged, None, None, None, None);
         assert_eq!(view.cards.len(), 3);
         assert_eq!(
             view.cards
@@ -666,6 +790,8 @@ mod tests {
                 &fixture_staged(vec![fixture_slot(1, persona, false, "P")]),
                 None,
                 None,
+                None,
+                None,
             );
             assert_eq!(one.cards[0].family, family, "{persona}");
             assert_eq!(one.cards[0].art, art, "{persona}");
@@ -677,7 +803,7 @@ mod tests {
                 .map(|n| fixture_slot(n, "playstation", false, "P"))
                 .collect(),
         );
-        let full_view = RedesignControllers::of(&full, None, None);
+        let full_view = RedesignControllers::of(&full, None, None, None, None);
         assert_eq!(full_view.add_preset, "");
         assert!(
             full_view
@@ -691,7 +817,7 @@ mod tests {
         let mut dead = fixture_staged(Vec::new());
         dead.reachable = false;
         dead.error = Some("the daemon pipe is closed".into());
-        let dead_view = RedesignControllers::of(&dead, None, None);
+        let dead_view = RedesignControllers::of(&dead, None, None, None, None);
         assert!(dead_view.cards.is_empty());
         assert!(dead_view.personas.iter().all(|p| p.usable == "false"));
         assert_eq!(dead_view.add_note, "the daemon pipe is closed");
@@ -724,6 +850,77 @@ mod tests {
             html.contains(r#"name="layout""#) && html.contains(r#"name="persona""#),
             "the add form posts persona and the served layout"
         );
+    }
+
+    /// Keyboard geometry contains real controls and inert spacer cells in the
+    /// same served list. Their interaction state must cross BOTH seams: the
+    /// Rust list-slot object and the SSR attributes Forma paints from it. A
+    /// hydration-only promotion makes the scripted page look correct while a
+    /// no-JS reader receives a board made entirely of disabled buttons.
+    #[test]
+    fn the_served_keyboard_distinguishes_keys_from_spacers_before_hydration() {
+        let payload = fixture_payload();
+        let cells: Vec<&crate::snapshot::NocturneKeyCell> = [
+            &payload.board.kb_row1,
+            &payload.board.kb_row2,
+            &payload.board.kb_row3,
+            &payload.board.kb_row4,
+            &payload.board.kb_row5,
+            &payload.board.kb_row6,
+        ]
+        .into_iter()
+        .flat_map(|row| row.iter())
+        .collect();
+        let real = cells
+            .iter()
+            .copied()
+            .find(|cell| cell.key == "A")
+            .expect("the standard board's A key");
+        assert!(!real.disabled);
+        assert_eq!(real.tab, "0");
+        assert_eq!(real.aria_hidden, "false");
+        let spacer = cells
+            .iter()
+            .copied()
+            .find(|cell| cell.key.is_empty() && cell.cls.split_whitespace().any(|c| c == "ghost"))
+            .expect("the standard board's spacer geometry");
+        assert!(spacer.disabled);
+        assert_eq!(spacer.tab, "-1");
+        assert_eq!(spacer.aria_hidden, "true");
+
+        let page = EmbeddedPage::load("/redesign").unwrap();
+        let html = render_redesign(&page, &payload, None).html;
+        let button_tags: Vec<&str> = html
+            .match_indices("<button")
+            .filter_map(|(start, _)| {
+                let tail = &html[start..];
+                tail.find('>').map(|end| &tail[..=end])
+            })
+            .collect();
+        let real_tag = button_tags
+            .iter()
+            .copied()
+            .find(|tag| tag.contains(r#"class="n-key"#) && tag.contains(r#"data-key="A""#))
+            .expect("SSR A key button");
+        assert!(!real_tag.split_whitespace().any(|part| part == "disabled"));
+        assert!(real_tag.contains(r#"tabindex="0""#), "{real_tag}");
+        assert!(real_tag.contains(r#"aria-hidden="false""#), "{real_tag}");
+
+        let spacer_tag = button_tags
+            .iter()
+            .copied()
+            .find(|tag| {
+                tag.contains(r#"class="n-key"#)
+                    && tag.contains(" ghost")
+                    && tag.contains(r#"data-key="""#)
+            })
+            .expect("SSR spacer button");
+        assert!(
+            spacer_tag.split_whitespace().any(|part| part == "disabled"),
+            "{spacer_tag}"
+        );
+        assert!(spacer_tag.contains(r#"tabindex="-1""#), "{spacer_tag}");
+        assert!(spacer_tag.contains(r#"aria-hidden="true""#), "{spacer_tag}");
     }
 
     /// The tier rules are the nocturne roster's, and this pins them here: an
@@ -810,8 +1007,13 @@ mod tests {
                 generation: "test".into(),
             },
             Some(ksx_api::SetupView::default()),
+            "",
             Ok(fixture_scan()),
             &staged,
+            &crate::control::SessionView::unreachable("test"),
+            &ksx_api::ControllerOutputsView::default(),
+            None,
+            None,
             None,
             None,
         );
@@ -975,6 +1177,8 @@ mod tests {
             LIST_SLOT_DEV_EXP,
             LIST_SLOT_DEV_OTHER,
             LIST_SLOT_CTRL_PERSONAS,
+            LIST_SLOT_JOURNEY_ROWS,
+            LIST_SLOT_CAPTURE_HELD,
         ] {
             assert!(
                 names.contains(&list),
@@ -1060,7 +1264,6 @@ mod tests {
             "rdKbCls",
             "rdBoardCaseStyle",
             "rdBoardOrigin",
-            "rdBoardLine",
             "rdKbTrayHead",
             "rdKbTrayCls",
             "rdKbNote",
@@ -1075,6 +1278,7 @@ mod tests {
         }
         for signal in [
             "rdThemeRows",
+            "rdCompactThemeRows",
             "rdDevKb",
             "rdDevEnc",
             "rdDevExp",
@@ -1088,7 +1292,6 @@ mod tests {
             "rdKbRow6",
             "rdKbTray",
             "rdKbLegend",
-            "rdBoardRows",
             "rdCaptureRows",
         ] {
             assert!(

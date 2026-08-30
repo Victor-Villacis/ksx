@@ -836,6 +836,7 @@ mod tests {
                 line: "idle — daemon reachable".into(),
                 profile: None,
                 origin: ksx_api::SessionOrigin::Unknown,
+                active_stage_revision: None,
                 active: None,
             },
             unavailable: String::new(),

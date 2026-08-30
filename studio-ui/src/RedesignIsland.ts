@@ -42,8 +42,17 @@ import {
   takePendingJumpFns,
   type InspectorTab,
   type RdKeyPanelView,
+  type RdMacroRowView,
   type RdPanelView,
 } from "./redesign-controller-inspector";
+import {
+  applyRdMacPayload,
+  rdMacChange,
+  rdMacClick,
+  rdMacClose,
+  rdMacOpen,
+  type RdMacView,
+} from "./redesign-macro-editor";
 import {
   syncControllerWidgets,
   type ParkedController,
@@ -191,25 +200,9 @@ export interface RdControllers {
 }
 
 /** One macro lifecycle row — `NocturneMacroRow` on the wire. */
-export interface RdMacroRowView {
-  name: string;
-  fn_name: string;
-  chip: string;
-  chip_title: string;
-  add_cls: string;
-  chip_cls: string;
-  meta: string;
-  cls: string;
-  slot: string;
-  edit_href: string;
-  toggle_label: string;
-  toggle_value: string;
-}
-
 /** The macro step editor's served projection — `NocturneMacroEditor` on
- *  the wire. Typed loosely until the step-editor migration consumes it:
- *  `back_cls` (open/closed) is the only field this slice reads. */
-export type RdMacroEditorView = { back_cls: string } & Record<string, unknown>;
+ *  the wire, consumed whole by the redesign-macro-editor module. */
+export type RdMacroEditorView = RdMacView;
 
 /** One plate cell — `NocturneKeyCell` on the wire (snapshot.rs). */
 export interface RdKeyCellView {
@@ -421,16 +414,9 @@ function paintMappingCordCount(summary: import("./mappingFlow").MappingFlowLayou
  *  OPEN mac with no dialog on this page yet closes itself back through the
  *  URL rather than pretending. */
 function syncMacroDialog(): void {
-  const open = rdCtrlMac ? !rdCtrlMac.back_cls.includes("none") : false;
-  if (open) {
-    // No editor mounted yet — drop the ?macro= param so the page does not
-    // hold a door open onto nothing.
-    const url = new URL(window.location.href);
-    if (url.searchParams.has("macro")) {
-      url.searchParams.delete("macro");
-      window.history.replaceState(null, "", `${url.pathname}?${url.searchParams.toString()}`);
-    }
-  }
+  // The editor module owns the dialog: the served projection goes to it
+  // whole, and THE DRAFT WINS over a background poll (its own dirty guard).
+  if (rdCtrlMac) applyRdMacPayload(rdCtrlMac);
 }
 /** Which reading the inspector shows (4460's Controls|Keys pair), kept per
  *  browser like the nocturne UI store. */
@@ -1017,6 +1003,20 @@ function loadCanvasPrefs(): void {
         )
           ? { panX: cam.panX, panY: cam.panY, zoom: Math.min(3, Math.max(0.08, cam.zoom)) }
           : undefined,
+      // The mapping chrome's own durable state — every field a prefs writer
+      // rebuilds MUST be re-listed here or it silently dies on reload.
+      mappingPaths: mappingPathModeIsValid(saved.mappingPaths) ? saved.mappingPaths : undefined,
+      processorOffsets:
+        typeof saved.processorOffsets === "object" && saved.processorOffsets !== null
+          ? Object.fromEntries(
+              Object.entries(saved.processorOffsets as Record<string, { x: number; y: number }>)
+                .filter(
+                  ([, o]) =>
+                    typeof o === "object" && o !== null &&
+                    Number.isFinite(o.x) && Number.isFinite(o.y),
+                ),
+            )
+          : undefined,
     };
   } catch {
     // A blocked or corrupt store reads as the defaults.
@@ -1062,6 +1062,11 @@ function persistCanvas(): void {
     mapHidden: canvasPrefs.mapHidden,
     bench: canvasPrefs.bench,
     parked: canvasPrefs.parked,
+    // ⚠️ A REBUILD MUST CARRY EVERY DURABLE FIELD: dropping one here let a
+    // camera nudge silently reset the Paths mode (the cords vanished and
+    // the select snapped to Off on the next repaint).
+    mappingPaths: canvasPrefs.mappingPaths,
+    processorOffsets: canvasPrefs.processorOffsets,
   };
   saveCanvasPrefs();
 }
@@ -1590,7 +1595,15 @@ function renderInspector(): void {
         syncMappingCords();
       }
       if (rdCtrlPanel && rdCtrlKeys && rdCtrlPanel.slot_val === ctrlSlot) {
-        rows.push(...renderControllerPanel(rdCtrlPanel, rdCtrlKeys, inspTab, setInspTab));
+        rows.push(
+          ...renderControllerPanel(
+            rdCtrlPanel,
+            rdCtrlKeys,
+            { head: rdCtrlMacrosHead, rows: rdCtrlMacroRows, note: rdCtrlMacrosNote },
+            inspTab,
+            setInspTab,
+          ),
+        );
       } else {
         const wait = document.createElement("p");
         wait.className = "rd-insp-kind";
@@ -2619,6 +2632,9 @@ export function redesignWire(root: HTMLElement): void {
   loadControllerFinishes();
   // The Paths scope select (a change, not a click).
   root.addEventListener("change", (ev) => {
+    // A macro duration or auto-fire rate commits when the author leaves the
+    // box or presses Enter — the editor module owns the act.
+    if (rdMacChange(ev.target as HTMLElement | null)) return;
     const select = ev.target;
     if (
       select instanceof HTMLSelectElement &&
@@ -2653,6 +2669,31 @@ export function redesignWire(root: HTMLElement): void {
       rdRoot?.querySelectorAll<HTMLElement>(".rd-boardpick[open]") ?? [],
     )) {
       if (target && !pick.contains(target)) pick.removeAttribute("open");
+    }
+    // THE MACRO EDITOR's own controls (cells, motions, policies, acts) —
+    // checked before the [data-nx] switch because they live inside the
+    // dialog's dlg-noop shield and carry data-mac* instead.
+    if (rdMacClick(target)) {
+      ev.preventDefault();
+      return;
+    }
+    // Edit steps… (and any same-page ?macro= door): enhanced into a URL
+    // swap + refetch so the canvas keeps its camera — SSR still serves the
+    // dialog open on a cold load of the same href.
+    const macroDoor = target?.closest<HTMLAnchorElement>('a[href^="/redesign?"]');
+    if (macroDoor) {
+      const href = macroDoor.getAttribute("href") ?? "";
+      if (new URL(href, window.location.origin).searchParams.has("macro")) {
+        ev.preventDefault();
+        window.history.replaceState(null, "", href);
+        void redesignRefreshFn();
+        return;
+      }
+    }
+    if (hit === "mac-close") {
+      ev.preventDefault();
+      rdMacClose();
+      return;
     }
     // Plate cell → Keys row: the board is the Keys tab's own picture, so
     // clicking a key reveals that key's row (a bound cap) or its free chip.
@@ -3018,6 +3059,14 @@ export function redesignWire(root: HTMLElement): void {
       // this is its one deterministic exit).
       if (mapperEscape()) {
         ev.preventDefault();
+        return;
+      }
+      // The macro editor's rung: below the mapper's gestures, above every
+      // chrome disclosure — its own close (with the unsaved-work warning)
+      // is the honest thing Escape can do while the roll is open.
+      if (rdMacOpen()) {
+        ev.preventDefault();
+        rdMacClose();
         return;
       }
       // The escape ladder (design handoff §2), one rung per press: theme
@@ -3625,6 +3674,22 @@ export function RedesignIsland() {
               ),
             ),
           ),
+        ),
+        // The macro STEP editor's holder — the redesign-macro-editor module
+        // paints the whole roll into it from the served view; the `.none`
+        // modifier (never the hidden attribute — `.nd-back`'s display:grid
+        // outranks it) is the one off switch, and `back_cls` is served.
+        h(
+          "div",
+          { class: "rd-macdlg nd-back none", "data-nx": "mac-close" },
+          h("div", {
+            class: "nd nd-mac",
+            "data-nx": "dlg-noop",
+            role: "dialog",
+            "aria-modal": "true",
+            tabindex: "-1",
+            "aria-label": "Macro steps",
+          }),
         ),
         h(
           "section",
@@ -4268,6 +4333,22 @@ export function RedesignIsland() {
                 },
                 "Fit",
               ),
+              // The collapsed map's stand-in. Served hidden — the map
+              // starts shown; setCanvasMap swaps the two. It must sit
+              // DIRECTLY beside Fit (the corner's control stays in the
+              // corner cluster) — the Paths control joins the pill AFTER it.
+              h(
+                "button",
+                {
+                  type: "button",
+                  class: "n-autobtn n-zbtn rd-mapshow",
+                  "data-nx": "canvas-map",
+                  "aria-label": "Show the canvas map",
+                  title: "Show the canvas map (M)",
+                  hidden: "",
+                },
+                "▦",
+              ),
               // The mapping cords' scope — Off / Selected / All (nocturne's
               // Paths control, living in the canvas cluster it acts on).
               h(
@@ -4304,20 +4385,6 @@ export function RedesignIsland() {
                   "data-client-canvas": "",
                   hidden: "",
                 }),
-              ),
-              // The collapsed map's stand-in. Served hidden — the map
-              // starts shown; setCanvasMap swaps the two.
-              h(
-                "button",
-                {
-                  type: "button",
-                  class: "n-autobtn n-zbtn rd-mapshow",
-                  "data-nx": "canvas-map",
-                  "aria-label": "Show the canvas map",
-                  title: "Show the canvas map (M)",
-                  hidden: "",
-                },
-                "▦",
               ),
               // ── The camera menu, opening upward ───────────────────────
               h(

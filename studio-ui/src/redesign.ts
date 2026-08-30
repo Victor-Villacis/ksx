@@ -22,6 +22,7 @@ import {
   type RedesignPayload,
 } from "./RedesignIsland";
 import { mapperWire } from "./redesign-mapper";
+import { macWire } from "./redesign-macro-editor";
 
 void RedesignPage; // compile-time anchor only (see above)
 
@@ -115,7 +116,9 @@ function wireForms(root: HTMLElement): void {
           '[data-rd-form="controller-duplicate"], [data-rd-form="controller-undo"], ' +
           '[data-rd-form="bind-clear"], [data-rd-form="bind-clear-all"], ' +
           '[data-rd-form="key-clear"], [data-rd-form="blocking"], ' +
-          '[data-rd-form="bind-turbo"], [data-rd-form="bind-toggle"]',
+          '[data-rd-form="bind-turbo"], [data-rd-form="bind-toggle"], ' +
+          '[data-rd-form="macro-toggle"], [data-rd-form="macro-new"], ' +
+          '[data-rd-form="macro-delete"]',
       )
     ) {
       // Park and assign are ONE server transaction each (stash + remove +
@@ -156,6 +159,9 @@ const MUTATION_SUBMIT_SELECTOR = [
   "blocking",
   "bind-turbo",
   "bind-toggle",
+  "macro-toggle",
+  "macro-new",
+  "macro-delete",
 ]
   .flatMap((kind) => [
     `[data-rd-form="${kind}"] button[type="submit"]`,
@@ -406,6 +412,8 @@ activateIslands({
       beginMutation: () => beginMutation(el),
       endMutation: (token) => endMutation(el, token as never),
     });
+    // The macro step editor (its dialog, draft, and save) — same ports.
+    macWire({ root: () => el, refresh });
     startBackgroundPoll();
     redesignWire(el);
     wireForms(el);

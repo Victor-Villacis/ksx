@@ -905,6 +905,43 @@ describe("the mapper on the workbench", () => {
       null,
       { timeout: 20_000 },
     );
+    // The chosen mode is DURABLE: a camera persist rebuilds the prefs
+    // struct and a reload reads it back — each writer once dropped the
+    // mapping fields, so a camera nudge silently snapped the select to Off
+    // and the cords vanished on the next repaint.
+    await page.selectOption('[data-nx="rd-mapping-paths"]', "all");
+    await page.waitForFunction(
+      () => document.querySelectorAll("#n-mapping-paths path").length > 0,
+      null,
+      { timeout: 20_000 },
+    );
+    await page.click('button.n-autobtn[data-nx="canvas-fit"]:not(.rd-menu-row)');
+    await page.waitForFunction(
+      () => !document.querySelector(".is-camera-animating"),
+      null,
+      { timeout: 20_000 },
+    );
+    await page.waitForTimeout(500);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+      null,
+      { timeout: 20_000 },
+    );
+    await page.waitForFunction(
+      () =>
+        document.querySelector('[data-nx="rd-mapping-paths"]')?.value === "all" &&
+        document.querySelectorAll("#n-mapping-paths path").length > 0,
+      null,
+      { timeout: 20_000 },
+    );
+    // Leave the canvas the way this test found it.
+    await page.selectOption('[data-nx="rd-mapping-paths"]', "off");
+    await page.waitForFunction(
+      () => document.querySelectorAll("#n-mapping-paths path").length === 0,
+      null,
+      { timeout: 20_000 },
+    );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();
   });
@@ -976,6 +1013,185 @@ describe("the mapper on the workbench", () => {
       [],
       "the declined step stays unbound",
     );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  // ── Macros: the lifecycle rows, the step editor, and the trigger's learn ──
+
+  test("the macro lifecycle verbs are real forms on this page's doors", async () => {
+    const page = await openBench();
+    await openPanel(page, s1);
+    await page.waitForFunction(
+      () => Boolean(document.querySelector(".rd-insp-body .n-macrosec")),
+      null,
+      { timeout: 20_000 },
+    );
+
+    // New macro… through the section's own form.
+    await page.evaluate(() => {
+      document.querySelector(".n-macrosec .n-macnew")?.setAttribute("open", "");
+    });
+    await page.fill(".n-macrosec .n-macnewin", "probe-combo");
+    await page.click('.n-macrosec [data-rd-form="macro-new"] button[type="submit"]');
+    await page.waitForFunction(
+      () =>
+        Boolean(
+          document.querySelector('.n-macrosec details[data-fn="macro.probe-combo"]'),
+        ),
+      null,
+      { timeout: 20_000 },
+    );
+    assert.match(
+      (await page.locator(".rd-flash").textContent()) ?? "",
+      /Macro created with one empty step/,
+    );
+
+    // Disable — the toggle twin: the row says so and keeps its steps.
+    const row = '.n-macrosec details[data-fn="macro.probe-combo"]';
+    await page.evaluate((sel) => document.querySelector(sel)?.setAttribute("open", ""), row);
+    const toggleLabel = (await page
+      .locator(`${row} [data-rd-form="macro-toggle"] button`)
+      .textContent())?.trim();
+    await page.click(`${row} [data-rd-form="macro-toggle"] button`);
+    await page.waitForFunction(
+      (args) =>
+        document
+          .querySelector(`${args.row} [data-rd-form="macro-toggle"] button`)
+          ?.textContent?.trim() !== args.was,
+      { row, was: toggleLabel },
+      { timeout: 20_000 },
+    );
+
+    // Delete… asks in place, then removes the row.
+    await page.evaluate((sel) => {
+      const details = document.querySelector(sel);
+      details?.setAttribute("open", "");
+      details?.querySelector(".n-bdel")?.setAttribute("open", "");
+    }, row);
+    await page.click(`${row} [data-rd-form="macro-delete"] button`);
+    await page.waitForFunction(
+      () => !document.querySelector('.n-macrosec details[data-fn="macro.probe-combo"]'),
+      null,
+      { timeout: 20_000 },
+    );
+    assert.match(
+      (await page.locator(".rd-flash").textContent()) ?? "",
+      /Macro removed from this draft/,
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("the step editor: acts are the server's answer, the draft wins, Save writes", async () => {
+    // A macro of known shape, through the same verb the CLI uses.
+    const seeded = await (
+      await fetch(`${BASE}/api/macro/save`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          target: "stage",
+          slot: Number(s1),
+          preset: (await api()).controllers.pads.find((p) => String(p.slot) === s1).preset,
+          name: "probe-roll",
+          steps: [{ hold: ["A"], ms: 50 }],
+        }),
+      })
+    ).json();
+    assert.equal(seeded.ok, true, JSON.stringify(seeded));
+
+    const page = await openBench();
+    await openPanel(page, s1);
+    await page.waitForFunction(
+      () => Boolean(document.querySelector('.n-macrosec details[data-fn="macro.probe-roll"]')),
+      null,
+      { timeout: 20_000 },
+    );
+
+    // Edit steps… is the ?macro= door, ENHANCED: the URL merges, the served
+    // dialog paints, and the canvas never reloads.
+    const row = '.n-macrosec details[data-fn="macro.probe-roll"]';
+    await page.evaluate((sel) => document.querySelector(sel)?.setAttribute("open", ""), row);
+    await page.locator(`${row} a.n-bbtn-link`).click();
+    await page.waitForFunction(
+      () =>
+        !document.querySelector(".rd-macdlg")?.classList.contains("none") &&
+        document.querySelectorAll(".rd-macdlg [data-maccell]").length > 0,
+      null,
+      { timeout: 20_000 },
+    );
+    assert.equal(
+      (await page.locator(".rd-macdlg .nd-title").textContent())?.trim(),
+      "probe-roll",
+    );
+    assert.ok(
+      (await page.evaluate(() => window.location.search)).includes("macro=probe-roll"),
+      "the dialog's open state IS the URL",
+    );
+
+    // ONE act: the diagonal pick writes the PAIR, and the server says so.
+    await page.click('.rd-macdlg [data-maccell="0|diag:dpad:dr"]');
+    await page.waitForFunction(
+      () => document.querySelector(".rd-macdlg .n-macdirty")?.textContent === "Unsaved changes",
+      null,
+      { timeout: 20_000 },
+    );
+    assert.match(
+      (await page.locator(".rd-macdlg .n-macsay-line").textContent()) ?? "",
+      /dpad\.down \+ dpad\.right/,
+      "the act's teaching names both halves",
+    );
+
+    // Escape warns about unsaved work FIRST; the work survives.
+    await page.keyboard.press("Escape");
+    assert.match(
+      (await page.locator(".rd-macdlg .n-macsay-line").textContent()) ?? "",
+      /unsaved changes/,
+    );
+
+    // Save writes the WHOLE table; the staged truth carries the pair.
+    await page.click('.rd-macdlg [data-macact="save"]');
+    await page.waitForFunction(
+      () => (document.querySelector(".rd-macdlg .n-macsay-line")?.textContent ?? "").includes("Saved"),
+      null,
+      { timeout: 20_000 },
+    );
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(
+      () => document.querySelector(".rd-macdlg")?.classList.contains("none"),
+      null,
+      { timeout: 20_000 },
+    );
+    const truth = await (
+      await fetch(`${BASE}/api/redesign?slot=${s1}&macro=probe-roll`)
+    ).json();
+    assert.deepEqual(
+      truth.controllers.mac.table.steps[0].hold,
+      ["A", "dpad.down", "dpad.right"],
+      "the saved table holds what the roll showed",
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("a macro trigger key binds through the SAME learn flow as any control", async () => {
+    const page = await openBench();
+    await openPanel(page, s1);
+    await page.waitForFunction(
+      () => Boolean(document.querySelector('.n-macrosec details[data-fn^="macro."] [data-nx="chip-learn"]')),
+      null,
+      { timeout: 20_000 },
+    );
+    await page.locator('.n-macrosec details[data-fn^="macro."] [data-nx="chip-learn"]').first().click();
+    // The scripted hit is G, and G lives on the other seat — the SAME
+    // cross-slot question any control's learn raises.
+    await dialogShown(page);
+    assert.match(
+      (await page.locator(".rd-confdlg .nd-title").textContent()) ?? "",
+      /Give G to /,
+    );
+    await page.keyboard.press("Escape");
+    await dialogGone(page);
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();
   });

@@ -5966,6 +5966,31 @@ fn the_redesign_mapping_wire_serves_the_pin_and_the_aliased_verbs() {
             .is_some_and(|href| href.starts_with("/redesign")),
         "{edited}"
     );
+
+    // The lifecycle form twins ride THIS page's redirect with nocturne's own
+    // sentences (the shared verb cores, proven per verb).
+    let response = post_form(addr, "/redesign/macro/new", "slot=1&name=combo2");
+    assert!(
+        response.contains("/redesign?") && response.contains("Macro%20created%20with%20one%20empty%20step"),
+        "{response}"
+    );
+    let response = post_form(addr, "/redesign/macro/toggle", "slot=1&name=combo2&enable=false");
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(response.contains("/redesign?"), "{response}");
+    let response = post_form(addr, "/redesign/macro/delete", "slot=1&name=combo2");
+    assert!(
+        response.contains("/redesign?") && response.contains("Macro%20removed%20from%20this%20draft"),
+        "{response}"
+    );
+    let staged = control.staged();
+    let slot = staged.slots.first().expect("still staged").clone();
+    assert!(
+        ksx_api::staged_macro_snapshot(&slot)
+            .macros
+            .iter()
+            .all(|m| m.name != "combo2"),
+        "the deleted macro is gone from the stage"
+    );
 }
 
 /// With no daemon, the config half of the page keeps working and the two verbs

@@ -415,9 +415,139 @@ function renderKeysView(keys: RdKeyPanelView, onJump: (fns: string) => void): HT
 /** The whole controller panel, as inspector rows: the meta strip and slot
  *  verbs always, then the active tab's reading — Controls (six bind groups)
  *  or Keys (the by-key rows). The tab pair is 4460's `.n-vseg`. */
+/** One staged macro's lifecycle row (served — compose_macro_rows). */
+export interface RdMacroRowView {
+  name: string;
+  fn_name: string;
+  chip: string;
+  chip_title: string;
+  add_cls: string;
+  chip_cls: string;
+  meta: string;
+  cls: string;
+  slot: string;
+  edit_href: string;
+  toggle_label: string;
+  toggle_value: string;
+}
+
+/** The macro half of the panel: head count, rows, and the honest note. */
+export interface RdMacroSection {
+  head: string;
+  rows: RdMacroRowView[];
+  note: string;
+}
+
+/** Macros under the six groups — nocturne's own section, markup kept: the
+ *  trigger chips rebind through the SAME learn flow as any control (the
+ *  rows carry data-fn="macro.<name>"), enable/disable and delete are real
+ *  form twins on this page's verbs, and Edit steps… is the ?macro= door. */
+function renderMacroSection(slotVal: string, mac: RdMacroSection): HTMLElement {
+  const sec = el("div", "n-macrosec");
+  const head = el("div", "n-group-head");
+  head.append(el("span", "n-kick", mac.head));
+  sec.append(head);
+  for (const r of mac.rows) {
+    const row = document.createElement("details");
+    row.className = r.cls;
+    row.dataset.fn = r.fn_name;
+    row.dataset.slot = r.slot;
+    const sum = document.createElement("summary");
+    sum.className = "n-bind-sum";
+    const txt = el("span", "n-bind-txt");
+    txt.append(el("span", "n-bind-label", r.name), el("span", "n-bind-note", r.meta));
+    const add = liveChip(r.add_cls, "", "Add another trigger key", "chip-add");
+    add.setAttribute("aria-label", "Add another trigger key");
+    add.append(svgIcon(ICON_PLUS));
+    sum.append(
+      el("span", "n-bind-dot"),
+      txt,
+      el("span", "n-bind-verb", "started by"),
+      liveChip(r.chip_cls, r.chip, r.chip_title, "chip-learn"),
+      add,
+    );
+    const body = el("div", "n-bedit");
+    const lifeRow = el("div", "n-bedit-row");
+    const toggle = inlineForm("/redesign/macro/toggle", "macro-toggle", [
+      ["slot", r.slot],
+      ["name", r.name],
+      ["enable", r.toggle_value],
+    ]);
+    const toggleBtn = el("button", "n-bpill", r.toggle_label);
+    toggleBtn.type = "submit";
+    toggleBtn.title = "A disabled macro keeps every step and never starts";
+    toggle.append(toggleBtn);
+    lifeRow.append(toggle);
+    const editRow = el("div", "n-bedit-row");
+    const edit = document.createElement("a");
+    edit.className = "n-bbtn n-bbtn-link";
+    edit.href = r.edit_href;
+    edit.textContent = "Edit steps…";
+    const del = document.createElement("details");
+    del.className = "n-bdel";
+    const delSum = document.createElement("summary");
+    delSum.className = "n-bbtn ghost";
+    delSum.textContent = "Delete…";
+    const delBody = el("div", "n-bdel-body");
+    delBody.append(
+      el(
+        "span",
+        "n-bedit-lab",
+        "Removes the steps and unbinds its trigger keys — in this draft only.",
+      ),
+    );
+    const delForm = inlineForm("/redesign/macro/delete", "macro-delete", [
+      ["slot", r.slot],
+      ["name", r.name],
+    ]);
+    const delBtn = el("button", "n-bbtn danger", "Delete this macro");
+    delBtn.type = "submit";
+    delForm.append(delBtn);
+    delBody.append(delForm);
+    del.append(delSum, delBody);
+    editRow.append(edit, del);
+    body.append(lifeRow, editRow);
+    row.append(sum, body);
+    sec.append(row);
+  }
+  const macnew = document.createElement("details");
+  macnew.className = "n-macnew";
+  const newSum = document.createElement("summary");
+  newSum.textContent = "New macro…";
+  const newForm = document.createElement("form");
+  newForm.className = "n-macnewform";
+  newForm.method = "post";
+  newForm.action = "/redesign/macro/new";
+  newForm.dataset.rdForm = "macro-new";
+  newForm.append(hidden("slot", slotVal));
+  const nameBox = document.createElement("input");
+  nameBox.className = "n-macnewin";
+  nameBox.type = "text";
+  nameBox.name = "name";
+  nameBox.required = true;
+  nameBox.maxLength = 40;
+  nameBox.placeholder = "hadouken";
+  nameBox.setAttribute("aria-label", "What to call the macro");
+  const createBtn = el("button", "n-bbtn", "Create");
+  createBtn.type = "submit";
+  newForm.append(nameBox, createBtn);
+  macnew.append(
+    newSum,
+    newForm,
+    el(
+      "span",
+      "n-macnewnote",
+      "It starts with one empty step. The name becomes the table’s, and ‘macro.’ plus it is the control a key can drive.",
+    ),
+  );
+  sec.append(macnew, el("p", "n-devnote", mac.note));
+  return sec;
+}
+
 export function renderControllerPanel(
   panel: RdPanelView,
   keys: RdKeyPanelView,
+  mac: RdMacroSection,
   tab: InspectorTab,
   onTab: (next: InspectorTab) => void,
 ): HTMLElement[] {
@@ -554,6 +684,8 @@ export function renderControllerPanel(
     ),
   );
   rows.push(groups);
+
+  rows.push(renderMacroSection(panel.slot_val, mac));
 
   if (panel.bind_foot) rows.push(el("p", "n-foot", panel.bind_foot));
   return rows;

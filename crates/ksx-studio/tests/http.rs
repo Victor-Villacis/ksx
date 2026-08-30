@@ -5855,6 +5855,119 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
     assert_eq!(chosen, ["whole"], "{api}");
 }
 
+/// The mapping wire on the redesign page. The payload serves the SOURCE PIN —
+/// the staged input's verified Windows identity, straight from the shared
+/// `StartCaptureView` resolution — plus the macro table on the same panel, and
+/// the aliased JSON verbs (`/redesign/api/bind`, `/redesign/api/macro/edit`)
+/// are the SAME handlers `/nocturne` mounts: one implementation, two doors.
+#[test]
+fn the_redesign_mapping_wire_serves_the_pin_and_the_aliased_verbs() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Player 1".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok);
+    }
+    let saved: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        "{\"target\":\"stage\",\"slot\":1,\"preset\":\"Player 1\",\"name\":\"combo\",\
+         \"steps\":[{\"hold\":[\"A\"],\"ms\":50}]}",
+    )))
+    .expect("macro save");
+    assert_eq!(saved["ok"], true, "{saved}");
+
+    // The pin rides the payload verbatim — the browser never re-derives an
+    // identity the capture resolution already decided.
+    let api: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("payload");
+    assert_eq!(api["learn_selector"], "usb:d209:0430:00", "{api}");
+    assert_eq!(api["learn_instance"], IPAC_KB, "{api}");
+
+    // The macro table is composed on the same panel the inspector reads:
+    // rows for the slot, and per-pad availability for the flow layer.
+    let rows = api["controllers"]["macro_rows"]
+        .as_array()
+        .expect("macro rows");
+    assert!(!rows.is_empty(), "{api}");
+    assert!(rows[0]["edit_href"]
+        .as_str()
+        .is_some_and(|href| href.starts_with("/redesign?")),
+        "the edit door stays on THIS page: {api}"
+    );
+
+    // The bind alias is the shared handler: a real staged write, target
+    // revision checked, the stage mutated — nothing /nocturne would not do.
+    let staged = control.staged();
+    let slot = staged.slots.first().expect("one staged slot").clone();
+    let mapper = ksx_api::staged_mapper_slot(&slot, "(none)").expect("mapper");
+    let function = mapper
+        .bindings
+        .iter()
+        .find(|(_, keys)| !keys.is_empty())
+        .map(|(f, _)| f.clone())
+        .expect("the layout bound at least one control");
+    let bound: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/redesign/api/bind",
+        &nocturne_bind_body(&control, 1, &function, "P", None, false),
+    )))
+    .expect("bind outcome");
+    assert_eq!(bound["ok"], true, "{bound}");
+
+    // …and a STALE revision is refused on this door exactly as on nocturne's
+    // (the target pin is the server's law, not the page's).
+    let stale: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/redesign/api/bind",
+        &nocturne_bind_body_with_revision(1, "not-the-revision", &function, "O", None, false),
+    )))
+    .expect("stale outcome");
+    assert_eq!(stale["ok"], false, "{stale}");
+
+    // The macro edit alias: composing the editor through ?macro= (the row's
+    // own door) and applying ONE act through the aliased handler answers with
+    // the same composed view nocturne would paint.
+    let name = rows[0]["name"].as_str().expect("macro name").to_owned();
+    let opened: serde_json::Value = serde_json::from_str(body_of(&get(
+        addr,
+        &format!("/api/redesign?slot=1&macro={name}"),
+    )))
+    .expect("payload with editor");
+    let draft = opened["controllers"]["mac"]["table"].clone();
+    assert!(!draft.is_null(), "the ?macro= door composes the editor: {opened}");
+    let edited: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/redesign/api/macro/edit",
+        &format!("{{\"slot\":1,\"act\":\"cell|0|diag:dpad:dr\",\"draft\":{draft}}}"),
+    )))
+    .expect("edit");
+    assert_eq!(edited["ok"], true, "{edited}");
+    assert_eq!(
+        edited["draft"]["steps"][0]["hold"],
+        serde_json::json!(["A", "dpad.down", "dpad.right"]),
+        "the diagonal pick JOINS the step's existing hold: {edited}"
+    );
+    // …and the recomposed roll wears THIS page's doors, not /nocturne's.
+    assert!(
+        edited["view"]["close_href"]
+            .as_str()
+            .is_some_and(|href| href.starts_with("/redesign")),
+        "{edited}"
+    );
+}
+
 /// With no daemon, the config half of the page keeps working and the two verbs
 /// stay live — Import and Export are the config store, not the pipe. The steps
 /// that DO need a daemon say so instead of offering a dead button.

@@ -672,3 +672,311 @@ describe("the controller workbench", () => {
     await page.close();
   });
 });
+
+describe("the mapper on the workbench", () => {
+  // The fixture daemon's learner INSTANT-HITS the key G (macro_fixture's
+  // scripted gesture), so a cross-slot G planted by this setup guarantees
+  // every learned hit raises the conflict QUESTION — the protocol's whole
+  // point. State is built through the same doors the page uses, so these
+  // tests hold whatever the earlier suites left behind.
+  const api = async () => (await fetch(`${BASE}/api/redesign`)).json();
+  const apiBind = async (slot, fn, key, revision, force) => {
+    const res = await fetch(`${BASE}/redesign/api/bind`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        slot: Number(slot),
+        expected_target_revision: revision,
+        function: fn,
+        key,
+        mode: null,
+        force,
+      }),
+    });
+    return res.json();
+  };
+  let s1;
+  let s2;
+
+  before(async () => {
+    let payload = await api();
+    if (payload.controllers.pads.length < 2) {
+      await fetch(`${BASE}/redesign/controller`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "persona=xbox360&preset=Mapper+P2&layout=keyboard-2p",
+        redirect: "manual",
+      });
+      payload = await api();
+    }
+    const pads = payload.controllers.pads;
+    assert.ok(pads.length >= 2, "two seats for the cross-slot question");
+    s1 = String(pads[0].slot);
+    s2 = String(pads[1].slot);
+    // Known ground: A on seat one wears H, and G lives on the OTHER seat —
+    // the learner's scripted G is then always a cross-slot question here.
+    assert.equal((await apiBind(s1, "A", "H", pads[0].target_revision, true)).ok, true);
+    const again = (await api()).controllers.pads;
+    assert.equal((await apiBind(s2, "B", "G", again[1].target_revision, true)).ok, true);
+  });
+
+  async function openPanel(page, slot) {
+    await page.waitForFunction(
+      (sel) => document.querySelector(sel)?.dataset.canvasX !== undefined,
+      cardSel(slot),
+      { timeout: 20_000 },
+    );
+    await revealCanvasItem(page, `ctrl-slot-${slot}`);
+    await page.click(`${cardSel(slot)} .rd-ctrlcard-slot`);
+    await page.waitForFunction(
+      () => Boolean(document.querySelector(".rd-insp-vseg .vc")),
+      null,
+      { timeout: 20_000 },
+    );
+    if ((await page.locator(".rd-insp-vseg .vc").getAttribute("aria-pressed")) !== "true") {
+      await page.click(".rd-insp-vseg .vc");
+    }
+    await page.waitForFunction(
+      () => document.querySelectorAll(".rd-insp-body .n-bindg-head").length === 6,
+      null,
+      { timeout: 20_000 },
+    );
+  }
+
+  const dialogShown = (page) =>
+    page.waitForFunction(
+      () => getComputedStyle(document.querySelector(".rd-confdlg")).display !== "none",
+      null,
+      { timeout: 20_000 },
+    );
+  const dialogGone = (page) =>
+    page.waitForFunction(
+      () => getComputedStyle(document.querySelector(".rd-confdlg")).display === "none",
+      null,
+      { timeout: 20_000 },
+    );
+
+  test("learn: the chip arms, the hit raises the cross-slot question, Esc declines, Use-here-too shares", async () => {
+    const page = await openBench();
+    await openPanel(page, s1);
+    const chipSel = '.rd-insp-body details.n-bind[data-fn="A"] [data-nx="chip-learn"]';
+    const before = (await page.locator(chipSel).textContent())?.trim();
+
+    // ONE click arms; the scripted hit lands in ~33ms and the question opens
+    // instead of a silent cross-slot grab (fail-closed, nocturne's rule).
+    await page.locator(chipSel).click();
+    await dialogShown(page);
+    assert.match(
+      (await page.locator(".rd-confdlg .nd-title").textContent()) ?? "",
+      /Give G to A too\?/,
+    );
+    assert.match(
+      (await page.locator(".rd-confdlg .nd-lede").textContent()) ?? "",
+      /already controls/,
+      "the lede names what the key drives today",
+    );
+
+    // Esc declines: the dialog closes and NOTHING was written.
+    await page.keyboard.press("Escape");
+    await dialogGone(page);
+    assert.equal((await page.locator(chipSel).textContent())?.trim(), before, "declined = unchanged");
+
+    // Ask again and confirm: sharing binds here while the other seat keeps
+    // its key, and the flash is the row's own sentence.
+    await page.locator(chipSel).click();
+    await dialogShown(page);
+    await page.click('.rd-confdlg [data-nx="rd-conf-force"]');
+    await page.waitForFunction(
+      (sel) => document.querySelector(sel)?.textContent?.trim() === "G",
+      chipSel,
+      { timeout: 20_000 },
+    );
+    assert.match(
+      (await page.locator(".rd-flash").textContent()) ?? "",
+      /A is now G/,
+    );
+    const other = (await api()).controllers.pads.find((p) => String(p.slot) === s2);
+    assert.ok(
+      other.controls.find((c) => c.function === "B").keys.includes("G"),
+      "the other seat KEPT its key — share, never steal",
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("clicking the control being recorded cancels the gesture (the PadForge toggle)", async () => {
+    const page = await openBench();
+    await openPanel(page, s1);
+    // Two clicks inside ONE task: the second lands while the first's arm is
+    // still in flight — the toggle branch must retire it silently, and the
+    // superseded daemon answer must die without a dialog.
+    await page.evaluate(() => {
+      const chip = document.querySelector(
+        '.rd-insp-body details.n-bind[data-fn="A"] [data-nx="chip-learn"]',
+      );
+      const click = () =>
+        chip.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      click();
+      click();
+    });
+    await page.waitForTimeout(600);
+    const state = await page.evaluate(() => ({
+      banner: getComputedStyle(document.querySelector(".rd-learnbar")).display,
+      dialog: getComputedStyle(document.querySelector(".rd-confdlg")).display,
+    }));
+    assert.deepEqual(state, { banner: "none", dialog: "none" });
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("assign: a free key goes in hand and the pad art is the picker", async () => {
+    const page = await openBench();
+    await openPanel(page, s1);
+    await page.click(".rd-insp-vseg .vk");
+    await page.waitForFunction(
+      () => document.querySelectorAll(".rd-insp-krows .n-krow").length > 0,
+      null,
+      { timeout: 20_000 },
+    );
+    const key = await page.evaluate(() =>
+      [...document.querySelectorAll('.rd-insp-body [data-nx="rd-akey"]')]
+        .map((n) => n.getAttribute("data-key"))
+        .find((k) => /^[A-Z]$/.test(k ?? "")),
+    );
+    assert.ok(key, "a free letter key to take in hand");
+    await page.locator(`.rd-insp-body [data-nx="rd-akey"][data-key="${key}"]`).click();
+    await page.waitForFunction(
+      () => document.querySelector(".rd-learnbar")?.classList.contains("listen"),
+      null,
+      { timeout: 20_000 },
+    );
+    assert.match(
+      (await page.locator(".rd-learn-line").textContent()) ?? "",
+      new RegExp(`Click a control on the pad — ${key} replaces its binding`),
+    );
+    // A REAL pointer click on the silhouette's X face button resolves it.
+    await page.locator(`${cardSel(Number(s1))} svg [data-fn="x"]`).first().click();
+    await page.waitForFunction(
+      () => !document.querySelector(".rd-learnbar")?.classList.contains("listen"),
+      null,
+      { timeout: 20_000 },
+    );
+    await page.waitForFunction(
+      (want) => document.querySelector(".rd-flash")?.textContent?.includes(want),
+      `X is now ${key}.`,
+      { timeout: 20_000 },
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("the cords: Paths scopes the flow layer and prices what it drew", async () => {
+    const page = await openBench();
+    await page.waitForFunction(
+      (sel) => document.querySelector(sel)?.dataset.canvasX !== undefined,
+      cardSel(Number(s1)),
+      { timeout: 20_000 },
+    );
+    // Off is the resting truth: the layers hold no drawing.
+    assert.equal(
+      await page.evaluate(() => document.querySelectorAll("#n-mapping-paths path").length),
+      0,
+    );
+    await page.selectOption('[data-nx="rd-mapping-paths"]', "all");
+    await page.waitForFunction(
+      () => document.querySelectorAll("#n-mapping-paths path").length > 0,
+      null,
+      { timeout: 20_000 },
+    );
+    await page.waitForFunction(
+      () => /^\d+$/.test(document.querySelector(".rd-pathcount")?.textContent?.trim() ?? ""),
+      null,
+      { timeout: 20_000 },
+    );
+    const drawn = await page.evaluate(() => ({
+      paths: document.querySelectorAll("#n-mapping-paths path").length,
+      count: Number(document.querySelector(".rd-pathcount")?.textContent),
+    }));
+    assert.ok(drawn.count > 0, "the counter prices the cords");
+    assert.ok(drawn.paths >= drawn.count, "every priced cord is drawn");
+    await page.selectOption('[data-nx="rd-mapping-paths"]', "off");
+    await page.waitForFunction(
+      () => document.querySelectorAll("#n-mapping-paths path").length === 0,
+      null,
+      { timeout: 20_000 },
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("auto-map walks the unbound controls; confirm binds, decline skips, the run reports", async () => {
+    // Known walk: exactly the two right-stick horizontals are unbound. The
+    // earlier suites leave arbitrary holes, so this dresses every OTHER
+    // control (same-slot key sharing is allowed — H all round) and clears
+    // the two the walk should visit.
+    for (const fn of ["rx.min", "rx.max"]) {
+      await fetch(`${BASE}/redesign/bind/clear`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: `slot=${s1}&function=${encodeURIComponent(fn)}`,
+        redirect: "manual",
+      });
+    }
+    for (;;) {
+      const pad = (await api()).controllers.pads.find((p) => String(p.slot) === s1);
+      const hole = pad.controls.find(
+        (c) => c.keys.length === 0 && c.function !== "rx.min" && c.function !== "rx.max",
+      );
+      if (!hole) break;
+      assert.equal(
+        (await apiBind(s1, hole.function, "H", pad.target_revision, true)).ok,
+        true,
+        `dressing ${hole.function}`,
+      );
+    }
+    const fresh = (await api()).controllers.pads.find((p) => String(p.slot) === s1);
+    const unbound = fresh.controls.filter((c) => c.keys.length === 0).map((c) => c.function);
+    assert.deepEqual(unbound, ["rx.min", "rx.max"], "the walk's steps are known ground");
+
+    const page = await openBench();
+    await openPanel(page, s1);
+    await page.click('[data-nx="rd-automap"]');
+    // Step 1 instant-hits G → the cross-slot question. Confirm: it binds.
+    await dialogShown(page);
+    assert.match(
+      (await page.locator(".rd-confdlg .nd-title").textContent()) ?? "",
+      /Give G to RS ←/,
+    );
+    await page.click('.rd-confdlg [data-nx="rd-conf-force"]');
+    // Step 2's question. DECLINE: the walk skips it and moves on — and with
+    // no steps left, the run reports exactly what it bound.
+    await dialogShown(page);
+    assert.match(
+      (await page.locator(".rd-confdlg .nd-title").textContent()) ?? "",
+      /Give G to RS →/,
+    );
+    await page.click('.rd-confdlg [data-nx="rd-conf-cancel"]');
+    await dialogGone(page);
+    await page.waitForFunction(
+      () =>
+        document.querySelector(".rd-flash")?.textContent?.includes(
+          "Auto-map finished — 1 control bound.",
+        ),
+      null,
+      { timeout: 20_000 },
+    );
+    const end = (await api()).controllers.pads.find((p) => String(p.slot) === s1);
+    assert.deepEqual(
+      end.controls.find((c) => c.function === "rx.min").keys,
+      ["G"],
+      "the confirmed step wears the shared key",
+    );
+    assert.deepEqual(
+      end.controls.find((c) => c.function === "rx.max").keys,
+      [],
+      "the declined step stays unbound",
+    );
+    assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+});

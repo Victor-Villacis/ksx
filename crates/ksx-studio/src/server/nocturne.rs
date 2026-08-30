@@ -2551,8 +2551,25 @@ struct NocturneMacroEditOutcome {
 }
 
 pub(super) async fn nocturne_api_macro_edit(
+    state: State<Arc<AppState>>,
+    body: axum::Json<NocturneMacroEditBody>,
+) -> Response {
+    macro_edit_on(state, body, "/nocturne").await
+}
+
+/// The SAME edit core mounted on the redesign door — only the hrefs the
+/// composed view wears (✕, "map a trigger") differ, and they are the page's.
+pub(super) async fn redesign_api_macro_edit(
+    state: State<Arc<AppState>>,
+    body: axum::Json<NocturneMacroEditBody>,
+) -> Response {
+    macro_edit_on(state, body, "/redesign").await
+}
+
+async fn macro_edit_on(
     State(state): State<Arc<AppState>>,
     axum::Json(body): axum::Json<NocturneMacroEditBody>,
+    page: &'static str,
 ) -> Response {
     let outcome = tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
@@ -2580,6 +2597,7 @@ pub(super) async fn nocturne_api_macro_edit(
             mapper.as_ref(),
             body.slot,
             None,
+            page,
         );
         NocturneMacroEditOutcome {
             ok,
@@ -3301,7 +3319,18 @@ async fn nocturne_macro_write(
     write: crate::control::MacroWrite,
     ok_flash: &'static str,
 ) -> Response {
-    let flash = tokio::task::spawn_blocking(move || {
+    nocturne_redirect(macro_write_flash(state, slot, write, ok_flash).await)
+}
+
+/// One staged macro write with the slot's preset resolved server-side,
+/// folded to a flash — shared with `/redesign`'s macro verbs.
+pub(super) async fn macro_write_flash(
+    state: Arc<AppState>,
+    slot: u8,
+    write: crate::control::MacroWrite,
+    ok_flash: &'static str,
+) -> &'static str {
+    tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
         let Some(found) = staged.slots.iter().find(|s| s.number == slot) else {
             return N_EDIT_ERROR;
@@ -3321,8 +3350,67 @@ async fn nocturne_macro_write(
         }
     })
     .await
-    .unwrap_or(N_EDIT_ERROR);
-    nocturne_redirect(flash)
+    .unwrap_or(N_EDIT_ERROR)
+}
+
+/// The "New macro" composition — name validation (a TOML key AND a URL
+/// half), the case-insensitive taken check, then one empty-stepped table
+/// this draft's editor can open on. Shared with `/redesign`.
+pub(super) async fn macro_new_flash(
+    state: Arc<AppState>,
+    slot: u8,
+    raw_name: &str,
+) -> &'static str {
+    let name = raw_name.trim().to_owned();
+    if name.is_empty() {
+        return N_MACRO_NAME;
+    }
+    if name.len() > 64
+        || !name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric())
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+    {
+        return N_MACRO_BADNAME;
+    }
+    let taken = {
+        let state = Arc::clone(&state);
+        let want = name.clone();
+        tokio::task::spawn_blocking(move || {
+            let staged = state.control.staged();
+            let Some(found) = staged.slots.iter().find(|s| s.number == slot) else {
+                return false;
+            };
+            ksx_api::staged_macro_snapshot(found)
+                .macros
+                .iter()
+                .any(|m| m.name.eq_ignore_ascii_case(&want))
+        })
+        .await
+        .unwrap_or(false)
+    };
+    if taken {
+        return N_MACRO_TAKEN;
+    }
+    macro_write_flash(
+        state,
+        slot,
+        crate::control::MacroWrite {
+            name,
+            steps: vec![ksx_api::MacroStepView {
+                hold: Vec::new(),
+                ms: Some(50),
+                frames: None,
+                allow_short: false,
+            }],
+            ..crate::control::MacroWrite::default()
+        },
+        N_MACRO_NEW,
+    )
+    .await
 }
 
 /// POST /nocturne/macro/toggle — disable (or re-enable) one macro. The table
@@ -3360,65 +3448,7 @@ pub(super) async fn nocturne_form_macro_new(
     let Ok(Form(form)) = form else {
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
-    let name = form.name.trim().to_owned();
-    if name.is_empty() {
-        return nocturne_redirect(N_MACRO_NAME);
-    }
-    // THE NAME BECOMES TWO THINGS: a TOML table key, and the `macro=` half of
-    // this row's own edit link. A name carrying `&`, `#`, a space or a
-    // separator produced a link that silently opened nothing, so it is
-    // refused here rather than minted and then found broken.
-    if name.len() > 64
-        || !name
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphanumeric())
-        || !name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
-    {
-        return nocturne_redirect(N_MACRO_BADNAME);
-    }
-    // NEW MEANS NEW. `stage_macro` resolves a name case-insensitively and
-    // writes over what it finds, so "New macro" on an existing name silently
-    // replaced a whole authored table — steps, policies, enabled flag — with
-    // one empty step, and said "Macro created".
-    let taken = {
-        let state = Arc::clone(&state);
-        let slot = form.slot;
-        let want = name.clone();
-        tokio::task::spawn_blocking(move || {
-            let staged = state.control.staged();
-            let Some(found) = staged.slots.iter().find(|s| s.number == slot) else {
-                return false;
-            };
-            ksx_api::staged_macro_snapshot(found)
-                .macros
-                .iter()
-                .any(|m| m.name.eq_ignore_ascii_case(&want))
-        })
-        .await
-        .unwrap_or(false)
-    };
-    if taken {
-        return nocturne_redirect(N_MACRO_TAKEN);
-    }
-    nocturne_macro_write(
-        state,
-        form.slot,
-        crate::control::MacroWrite {
-            name,
-            steps: vec![ksx_api::MacroStepView {
-                hold: Vec::new(),
-                ms: Some(50),
-                frames: None,
-                allow_short: false,
-            }],
-            ..crate::control::MacroWrite::default()
-        },
-        N_MACRO_NEW,
-    )
-    .await
+    nocturne_redirect(macro_new_flash(state, form.slot, &form.name).await)
 }
 
 /// POST /nocturne/macro/delete — remove one macro table (and the trigger

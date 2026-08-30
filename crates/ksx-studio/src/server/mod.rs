@@ -534,6 +534,14 @@ pub fn serve(
             .route("/redesign/bind/toggle", post(redesign_form_bind_toggle))
             .route("/redesign/key/clear", post(redesign_form_key_clear))
             .route("/redesign/blocking", post(redesign_form_blocking))
+            // The mapper's JSON verbs, ALIASED — the same page-agnostic
+            // handlers /nocturne mounts (body names the slot; nothing in
+            // them reads the path), so the two pages cannot drift.
+            .route("/redesign/api/bind", post(nocturne_api_bind))
+            .route("/redesign/macro/toggle", post(redesign_form_macro_toggle))
+            .route("/redesign/macro/new", post(redesign_form_macro_new))
+            .route("/redesign/macro/delete", post(redesign_form_macro_delete))
+            .route("/redesign/api/macro/edit", post(redesign_api_macro_edit))
             // ── THE LIVE FEED ─────────────────────────────────────────────
             // One route, and it is the keystone the button check stands on:
             // the daemon's input fan-out as Server-Sent Events. Read-only and

@@ -8,9 +8,8 @@
 // pattern), so these sections are DOM builders, not island markup. Every
 // mutating control is a REAL form posting this page's re-homed verb; the
 // entry's typed fetch-submit layer upgrades them exactly like the card
-// verbs. The learn flow (click a chip, press a key) needs the keyboard
-// migration and is honestly disabled until it arrives — Clear, Hold/Toggle
-// and Turbo are plain form twins and work today.
+// verbs; the learn/assign chips are LIVE buttons the island's dispatch
+// arms through the shared mapper (redesign-mapper.ts).
 
 /** One bind row — `NocturneBindRow` on the wire (snapshot.rs). */
 export interface RdBindRowView {
@@ -115,9 +114,15 @@ export interface RdKeyPanelView {
  *  by key (hand side). Same facts, opposite subject (the 4460 tab pair). */
 export type InspectorTab = "controls" | "keys";
 
-/** Why a learn-flow control is inert on this page, said on hover. */
-const LEARN_PENDING_TITLE =
-  "Key mapping arrives with the keyboard migration — Clear, Hold/Toggle and Turbo work now.";
+/** A LIVE chip: a real button wearing the mapper's data-nx verb — the
+ *  island's dispatch arms the learn/assign flow from it. */
+function liveChip(cls: string, label: string, title: string, nx: string): HTMLButtonElement {
+  const button = el("button", cls, label);
+  button.type = "button";
+  button.dataset.nx = nx;
+  button.title = title;
+  return button;
+}
 
 /** A Keys-tab jump's target functions, consumed by the next Controls
  *  render (the island's locate pass). */
@@ -188,13 +193,7 @@ function inlineForm(action: string, kind: string, fields: [string, string][]): H
   return form;
 }
 
-function inertChip(cls: string, label: string, title: string): HTMLButtonElement {
-  const button = el("button", cls, label);
-  button.type = "button";
-  button.disabled = true;
-  button.title = title;
-  return button;
-}
+
 
 /** One bind row — nocturne's `details.n-bind` shape, class-for-class. */
 function bindRow(r: RdBindRowView): HTMLElement {
@@ -207,11 +206,16 @@ function bindRow(r: RdBindRowView): HTMLElement {
   sum.className = "n-bind-sum";
   const txt = el("span", "n-bind-txt");
   txt.append(el("span", "n-bind-label", r.label), el("span", "n-bind-note", r.note));
-  const chip = inertChip(r.chip_cls, r.chip, r.chip_title + " — " + LEARN_PENDING_TITLE);
-  const add = inertChip(r.add_cls, "", LEARN_PENDING_TITLE);
+  const chip = liveChip(r.chip_cls, r.chip, r.chip_title, "chip-learn");
+  const add = liveChip(r.add_cls, "", "Add another key to this control", "chip-add");
   add.setAttribute("aria-label", "Add another key to this control");
   add.append(svgIcon(ICON_PLUS));
-  const minus = inertChip(r.minus_cls, "", LEARN_PENDING_TITLE);
+  const minus = liveChip(
+    r.minus_cls,
+    "",
+    "Remove one key from this control — press it when asked",
+    "chip-remove",
+  );
   minus.setAttribute("aria-label", "Remove one key from this control");
   minus.append(svgIcon(ICON_MINUS));
   const clear = inlineForm("/redesign/bind/clear", "bind-clear", [
@@ -313,7 +317,12 @@ function bindGroup(
   for (const row of rows) section.append(bindRow(row));
   const strip = el("div", "n-ctlstrip");
   for (const chip of chips) {
-    const free = inertChip(chip.cls, chip.label, "Free — " + LEARN_PENDING_TITLE);
+    const free = liveChip(
+      chip.cls,
+      chip.label,
+      "Free — click, then press a key (or click one on the plate)",
+      "ctl-assign",
+    );
     free.dataset.fn = chip.function;
     strip.append(free);
   }
@@ -334,10 +343,20 @@ function keyRow(r: RdKeyRowView, onJump: (fns: string) => void): HTMLElement {
   jump.type = "button";
   jump.title = "Open these controls in the Controls view";
   jump.addEventListener("click", () => onJump(r.fns));
-  const add = inertChip("n-addchip", "", LEARN_PENDING_TITLE);
+  const add = liveChip(
+    "n-addchip",
+    "",
+    "Assign this key to another control — then click that control on the pad",
+    "key-assign",
+  );
   add.setAttribute("aria-label", "Assign this key to another control");
   add.append(svgIcon(ICON_PLUS));
-  const minus = inertChip("n-minus", "", LEARN_PENDING_TITLE);
+  const minus = liveChip(
+    "n-minus",
+    "",
+    "Remove this key from one control — click that control on the pad",
+    "key-remove",
+  );
   minus.setAttribute("aria-label", "Remove this key from one control");
   minus.append(svgIcon(ICON_MINUS));
   const clear = inlineForm("/redesign/key/clear", "key-clear", [
@@ -360,7 +379,12 @@ function availSection(head: string, cls: string, chips: RdKeyRowView[]): HTMLEle
   bar.append(el("span", "n-bindg-lab", head));
   const grid = el("div", "n-akey-grid");
   for (const chip of chips) {
-    const free = inertChip("n-akey", chip.key, "Free — " + LEARN_PENDING_TITLE);
+    const free = liveChip(
+      "n-akey",
+      chip.key,
+      "Free — click to take this key in hand, then click a control on the pad",
+      "rd-akey",
+    );
     free.dataset.key = chip.key;
     grid.append(free);
   }
@@ -444,12 +468,17 @@ export function renderControllerPanel(
   const clearAll = inlineForm("/redesign/bind/clear-all", "bind-clear-all", [
     ["number", panel.slot_val],
   ]);
+  const mapAll = el("button", "n-autobtn", "Map all…");
+  mapAll.type = "button";
+  mapAll.dataset.nx = "rd-automap";
+  mapAll.title =
+    "Walk every UNBOUND control in turn — press a key for each. Esc skips one; Cancel stops the run.";
   const clearAllBtn = el("button", "n-autobtn danger", "Unbind all");
   clearAllBtn.type = "submit";
   clearAllBtn.title =
     "Every key unbound on this controller — its macros lose their triggers but keep their steps";
   clearAll.append(clearAllBtn);
-  verbs.append(dup, clearAll);
+  verbs.append(dup, mapAll, clearAll);
   rows.push(verbs);
 
   // The pane's two READINGS of one relation: by control (game side) and by

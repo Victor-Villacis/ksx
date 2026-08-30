@@ -13,6 +13,31 @@ import { DualSensePremiumArt } from "./dualSensePremiumArt";
 import { loadControllerFinishes, loadDs4Variants } from "./padFinishes";
 import { PadPaintServers } from "./padPaintServers";
 import {
+  MappingFlowLayer,
+  mappingPathModeIsValid,
+  type MappingFlowPad,
+  type MappingPathMode,
+} from "./mappingFlow";
+import {
+  armAssign,
+  assignHeld,
+  cancelAssign,
+  cancelLearn,
+  chainWanted,
+  conflictCancel,
+  conflictForce,
+  mapperBusy,
+  mapperEscape,
+  mapperOnSlotChange,
+  mapperReconcile,
+  mapperRemark,
+  resolveAssignWithControl,
+  resolveLearnWithKey,
+  skipAutoMapStep,
+  startAutoMap,
+  startLearn,
+} from "./redesign-mapper";
+import {
   renderControllerPanel,
   takePendingJumpFns,
   type InspectorTab,
@@ -152,10 +177,39 @@ export interface RdControllers {
   /** The panel's other reading — the Keys tab, the same `KeyPanel`
    *  /nocturne's By-key view serves. */
   keys: RdKeyPanelView;
+  /** The selected slot's macro lifecycle rows — `compose_macro_rows` on
+   *  the wire, this page's own edit doors. */
+  macros_head: string;
+  macro_rows: RdMacroRowView[];
+  macros_note: string;
+  /** The macro STEP EDITOR's whole projection when ?macro= names one —
+   *  `NocturneMacroEditor` on the wire (closed otherwise). */
+  mac: RdMacroEditorView;
   /** The short server-held undo window after a ✕ removal. */
   undo_cls: string;
   undo_label: string;
 }
+
+/** One macro lifecycle row — `NocturneMacroRow` on the wire. */
+export interface RdMacroRowView {
+  name: string;
+  fn_name: string;
+  chip: string;
+  chip_title: string;
+  add_cls: string;
+  chip_cls: string;
+  meta: string;
+  cls: string;
+  slot: string;
+  edit_href: string;
+  toggle_label: string;
+  toggle_value: string;
+}
+
+/** The macro step editor's served projection — `NocturneMacroEditor` on
+ *  the wire. Typed loosely until the step-editor migration consumes it:
+ *  `back_cls` (open/closed) is the only field this slice reads. */
+export type RdMacroEditorView = { back_cls: string } & Record<string, unknown>;
 
 /** One plate cell — `NocturneKeyCell` on the wire (snapshot.rs). */
 export interface RdKeyCellView {
@@ -213,6 +267,10 @@ export interface RedesignPayload {
    *  wire (freeze / split / take nothing, the current answer marked). */
   capture_rows: RdChoiceRowView[];
   capture_note: string;
+  /** The staged input's verified Windows identity — the mapper's source
+   *  pin (empty = refuse to arm, the fail-closed rule). */
+  learn_selector: string;
+  learn_instance: string;
 }
 
 // ── SERVED signals — copiers, never derivers ────────────────────────────────
@@ -273,6 +331,107 @@ let rdCtrlPads: RdPadView[] = [];
 let rdCtrlPanel: RdPanelView | null = null;
 /** The Keys tab's served rows — plain data for the same reason. */
 let rdCtrlKeys: RdKeyPanelView | null = null;
+/** The selected slot's macro section + the step editor's projection. */
+let rdCtrlMacrosHead = "Macros";
+let rdCtrlMacroRows: RdMacroRowView[] = [];
+let rdCtrlMacrosNote = "";
+let rdCtrlMac: RdMacroEditorView | null = null;
+/** The staged input's verified identity — the mapper's source pin. */
+let rdLearnSource = { selector: "", instance: "" };
+export function redesignLearnSource(): { selector: string; instance: string } {
+  return rdLearnSource;
+}
+/** The mapper's ports onto the served truth (always the CURRENT arrays —
+ *  re-read after every refresh, never captured). */
+export function redesignPads(): RdPadView[] {
+  return rdCtrlPads;
+}
+export function redesignSelectedSlot(): string {
+  return rdCtrlPanel?.slot_val ?? "";
+}
+export function redesignControlsFor(
+  slot: string,
+): { function: string; label: string; keys: string[] }[] {
+  const pad = rdCtrlPads.find((candidate) => String(candidate.slot) === slot);
+  return (pad?.controls ?? []).map((control) => ({
+    function: control.function,
+    label: control.label,
+    keys: control.keys,
+  }));
+}
+
+// ── The mapping cords: key → (macro) → control, drawn in world space ─────
+// The SAME MappingFlowLayer /nocturne mounts (one engine, one geometry
+// contract); this page provides its four layers, the Paths control, and
+// the processor-offset store in its own canvasPrefs.
+let mappingFlowLayer: MappingFlowLayer | null = null;
+
+function processorOffsetFor(id: string): { x: number; y: number } | undefined {
+  return canvasPrefs.processorOffsets?.[id];
+}
+
+function commitProcessorOffset(id: string, offset: { x: number; y: number } | null): boolean {
+  const offsets = { ...(canvasPrefs.processorOffsets ?? {}) };
+  if (offset) offsets[id] = offset;
+  else delete offsets[id];
+  canvasPrefs = { ...canvasPrefs, processorOffsets: offsets };
+  return saveCanvasPrefs();
+}
+
+/** Re-derive the cord graph from the served pads (mode + selected slot are
+ *  page state). Cheap: the layer fingerprints and skips no-op sets. */
+function syncMappingCords(): void {
+  const mode = canvasPrefs.mappingPaths ?? "off";
+  const selectedSlot = Number(rdCtrlPanel?.slot_val || "0");
+  mappingFlowLayer?.setGraph(
+    (rdCtrlPads as unknown as MappingFlowPad[]) ?? [],
+    mode,
+    selectedSlot,
+  );
+  const select = rdRoot?.querySelector<HTMLSelectElement>('[data-nx="rd-mapping-paths"]');
+  if (select && select.value !== mode) select.value = mode;
+}
+
+function setMappingPathMode(mode: MappingPathMode): void {
+  if (!mappingPathModeIsValid(mode)) return;
+  canvasPrefs = { ...canvasPrefs, mappingPaths: mode };
+  saveCanvasPrefs();
+  syncMappingCords();
+}
+
+/** The cords' count line — the layer's layout summary, painted onto the
+ *  Paths control's output (nocturne's paintMappingFlowCount, trimmed to
+ *  this page's chrome). */
+function paintMappingCordCount(summary: import("./mappingFlow").MappingFlowLayoutSummary): void {
+  const out = rdRoot?.querySelector<HTMLElement>(".rd-pathcount");
+  if (!out) return;
+  const mode = canvasPrefs.mappingPaths ?? "off";
+  if (mode === "off" || summary.total === 0) {
+    out.textContent = "";
+    out.title = "Mapping paths are off";
+    return;
+  }
+  const unresolved = summary.unresolved > 0 ? ` · ${summary.unresolved} off-screen` : "";
+  out.textContent = `${summary.total}`;
+  out.title = `${summary.total} mapping path${summary.total === 1 ? "" : "s"} drawn${unresolved}`;
+}
+
+/** The step editor follows the served `mac` projection. This slice only
+ *  guards the door (the editor itself is the next migration): a served
+ *  OPEN mac with no dialog on this page yet closes itself back through the
+ *  URL rather than pretending. */
+function syncMacroDialog(): void {
+  const open = rdCtrlMac ? !rdCtrlMac.back_cls.includes("none") : false;
+  if (open) {
+    // No editor mounted yet — drop the ?macro= param so the page does not
+    // hold a door open onto nothing.
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("macro")) {
+      url.searchParams.delete("macro");
+      window.history.replaceState(null, "", `${url.pathname}?${url.searchParams.toString()}`);
+    }
+  }
+}
 /** Which reading the inspector shows (4460's Controls|Keys pair), kept per
  *  browser like the nocturne UI store. */
 const RD_UI_STORE = "ksx-redesign-ui";
@@ -491,6 +650,14 @@ export function applyRedesign(v: RedesignPayload): void {
   rdCtrlPads = c?.pads ?? [];
   rdCtrlPanel = c?.panel ?? null;
   rdCtrlKeys = c?.keys ?? null;
+  rdCtrlMacrosHead = c?.macros_head || "Macros";
+  rdCtrlMacroRows = c?.macro_rows ?? [];
+  rdCtrlMacrosNote = c?.macros_note ?? "";
+  rdCtrlMac = c?.mac ?? null;
+  rdLearnSource = {
+    selector: v.learn_selector ?? "",
+    instance: v.learn_instance ?? "",
+  };
   const board = v.board;
   if (board) {
     setRdKbRow1(board.kb_row1 ?? []);
@@ -528,6 +695,15 @@ export function applyRedesign(v: RedesignPayload): void {
   // new selection): an open inspector repaints from the fresh truth.
   const panel = inspectorEl();
   if (panel && !panel.hidden) renderInspector();
+  // The mapper's payload pass, AFTER the panel rebuilt: retire any armed
+  // gesture the fresh truth invalidated, then re-apply the interaction
+  // marks the rebuild wiped (nocturne's applyNocturne order).
+  mapperReconcile();
+  // The cords re-derive from the fresh pads (mode/slot unchanged).
+  syncMappingCords();
+  // The step editor follows ?macro= — a served `mac` opens/repaints it,
+  // its absence closes it (the one-macro-one-controller invariant).
+  syncMacroDialog();
   restoreDeviceRowFocus(deviceFocus);
 }
 
@@ -744,6 +920,12 @@ interface CanvasPrefs {
    *  wait on the canvas to be re-slotted. Display facts only: the slot
    *  itself left the daemon when it was parked. */
   parked?: ParkedController[];
+  /** The mapping cords' visibility: off / selected player / all players
+   *  (nocturne's own Paths modes, remembered like the camera). */
+  mappingPaths?: MappingPathMode;
+  /** Manual processor displacements, keyed by processor id — the cords'
+   *  macro nodes remember where a hand put them. */
+  processorOffsets?: Record<string, { x: number; y: number }>;
 }
 
 let canvasPrefs: CanvasPrefs = { widgets: {} };
@@ -1401,6 +1583,12 @@ function renderInspector(): void {
     const ctrlSlot = /^ctrl-slot-(\d+)$/.exec(item.dataset.instanceId ?? "")?.[1];
     if (ctrlSlot) {
       const moved = mergeSlotIntoUrl(ctrlSlot);
+      if (moved) {
+        // A seat change ends any armed mapping gesture (the pane speaks
+        // for one controller at a time) and re-scopes the cords.
+        mapperOnSlotChange();
+        syncMappingCords();
+      }
       if (rdCtrlPanel && rdCtrlKeys && rdCtrlPanel.slot_val === ctrlSlot) {
         rows.push(...renderControllerPanel(rdCtrlPanel, rdCtrlKeys, inspTab, setInspTab));
       } else {
@@ -1468,6 +1656,7 @@ function renderInspector(): void {
   }
   // A plate-cell click named a KEY: reveal its row (bound) or its free
   // chip in the freshly painted Keys view.
+  mapperRemark();
   if (pendingLocateKey && inspTab === "keys") {
     const wanted = pendingLocateKey;
     const row =
@@ -1906,9 +2095,17 @@ function syncEncoderProfileLabButton(): void {
     : "Inspect connected and reference encoder profiles on the canvas";
 }
 
-function announceEncoderProfileLab(message: string): void {
+/** The page's ONE assistive announce channel (`.n-live-sr`, role=status).
+ *  Every announcer goes through here — encoder lab, mapper, cords — so two
+ *  tenants cannot clobber each other through different queries; last write
+ *  wins, which is a live region's own contract. */
+export function rdAnnounce(message: string): void {
   const status = rdRoot?.querySelector<HTMLElement>(".n-live-sr");
   if (status) status.textContent = message;
+}
+
+function announceEncoderProfileLab(message: string): void {
+  rdAnnounce(message);
 }
 
 function removeEncoderProfileLab(): void {
@@ -2350,6 +2547,34 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
   restoreBench();
   syncCtrlBench();
   syncEncoderProfileLabButton();
+  // The mapping cords: the SAME layer engine /nocturne mounts, over this
+  // page's stage. It observes the stage's style mutations itself (camera +
+  // widget geometry), so card drags and zooms repaint the cords with no
+  // further call sites.
+  const flowLines = surface.querySelector<SVGSVGElement>("#n-mapping-paths");
+  const flowPorts = surface.querySelector<SVGSVGElement>("#n-mapping-ports");
+  const flowNodes = surface.querySelector<HTMLElement>("#n-mapping-processors");
+  const flowTrace = scope.querySelector<HTMLOutputElement>("#rd-mapping-trace");
+  if (flowLines && flowPorts && flowNodes) {
+    mappingFlowLayer?.dispose();
+    mappingFlowLayer = new MappingFlowLayer(
+      scope,
+      viewport,
+      stage,
+      flowLines,
+      flowPorts,
+      flowNodes,
+      {
+        onLayout: paintMappingCordCount,
+        getProcessorOffset: processorOffsetFor,
+        onProcessorOffsetCommit: (processorId, offset) =>
+          commitProcessorOffset(processorId, offset),
+        announce: rdAnnounce,
+        traceOutput: flowTrace,
+      },
+    );
+    syncMappingCords();
+  }
   syncMapCount();
   syncToolRail(nCanvas.toolMode());
   wireSpotlight(stage, viewport);
@@ -2392,6 +2617,17 @@ export function redesignWire(root: HTMLElement): void {
   // chosen on /nocturne is the same controller's finish here.
   loadDs4Variants();
   loadControllerFinishes();
+  // The Paths scope select (a change, not a click).
+  root.addEventListener("change", (ev) => {
+    const select = ev.target;
+    if (
+      select instanceof HTMLSelectElement &&
+      select.dataset.nx === "rd-mapping-paths" &&
+      mappingPathModeIsValid(select.value)
+    ) {
+      setMappingPathMode(select.value);
+    }
+  });
   root.addEventListener("click", (ev) => {
     const target = ev.target as HTMLElement | null;
     const hit = target?.closest<HTMLElement>("[data-nx]")?.dataset.nx;
@@ -2420,9 +2656,14 @@ export function redesignWire(root: HTMLElement): void {
     }
     // Plate cell → Keys row: the board is the Keys tab's own picture, so
     // clicking a key reveals that key's row (a bound cap) or its free chip.
+    // While a LEARN is armed the plate is the other way to answer it:
+    // clicking a key resolves the capture exactly like pressing it.
     const cell = target?.closest<HTMLElement>(
       '[data-instance-id="keyboard"] .n-kb [data-key], [data-instance-id="keyboard"] .n-kbtray-row [data-key]',
     );
+    if (cell && resolveLearnWithKey(cell.getAttribute("data-key") ?? "", ev.shiftKey)) {
+      return;
+    }
     if (cell) {
       pendingLocateKey = cell.getAttribute("data-key") ?? "";
       if (inspTab !== "keys") {
@@ -2452,8 +2693,28 @@ export function redesignWire(root: HTMLElement): void {
     // Pad art → binding row: every control on a card's silhouette carries
     // its mapper function(s) in data-fn (the 4460 pointer enhancement).
     // The click already selected the card through the engine; opening the
-    // inspector and locating the row is this page's half.
+    // inspector and locating the row is this page's half. With a KEY IN
+    // HAND, the pad IS the picker: the clicked control takes the key.
     const zone = target?.closest<Element>(".rd-ctrlcard-artwrap [data-fn]");
+    if (zone && assignHeld()) {
+      const fnName = (zone.getAttribute("data-fn") ?? "").split(/\s+/)[0] ?? "";
+      const padSlot =
+        zone.closest<HTMLElement>("[data-pad-slot]")?.getAttribute("data-pad-slot") ??
+        rdCtrlPanel?.slot_val ??
+        "";
+      const pad = rdCtrlPads.find((candidate) => String(candidate.slot) === padSlot);
+      // Canonical spelling and readable label from the SERVED pad tables —
+      // the row DOM is never an implicit data store (nocturne's rule).
+      const control = (pad?.controls ?? []).find(
+        (candidate) => candidate.function.toLowerCase() === fnName.toLowerCase(),
+      );
+      const canonical = control?.function ?? fnName;
+      const label = control?.label || pad?.fn_names?.[fnName] || fnName;
+      if (fnName && padSlot &&
+          resolveAssignWithControl(padSlot, canonical, label, ev.shiftKey)) {
+        return;
+      }
+    }
     if (zone) {
       pendingLocateFns = zone.getAttribute("data-fn") ?? "";
       if (inspTab !== "controls") {
@@ -2470,6 +2731,81 @@ export function redesignWire(root: HTMLElement): void {
     }
     if (!hit) return;
     const closeMenuAfter = Boolean(target?.closest(".rd-menu"));
+    if (hit === "dlg-noop") {
+      // A click inside an open dialog panel: stays open.
+      return;
+    }
+    if (hit === "rd-conf-force") {
+      conflictForce();
+      return;
+    }
+    if (hit === "rd-conf-cancel") {
+      conflictCancel();
+      return;
+    }
+    if (hit === "rd-learn-cancel") {
+      if (assignHeld()) cancelAssign();
+      else void cancelLearn();
+      return;
+    }
+    if (hit === "rd-learn-skip") {
+      skipAutoMapStep();
+      return;
+    }
+    if (hit === "rd-automap") {
+      startAutoMap();
+      return;
+    }
+    if (hit === "chip-learn" || hit === "chip-add" || hit === "chip-remove") {
+      // The row's own facts travel on its element, never re-derived here —
+      // and the chip click must not also toggle the fold it sits in.
+      ev.preventDefault();
+      const holder = target?.closest<HTMLElement>("[data-fn]");
+      const fnName = holder?.dataset.fn ?? "";
+      const slot = holder?.dataset.slot ?? rdCtrlPanel?.slot_val ?? "";
+      const label =
+        holder?.querySelector(".n-bind-label")?.textContent?.trim() ||
+        holder?.querySelector(".n-krow-chip")?.textContent?.trim() ||
+        fnName;
+      if (fnName && slot) {
+        void startLearn({
+          fn: fnName,
+          label,
+          slot,
+          mode: hit.endsWith("add") ? "add" : hit.endsWith("remove") ? "remove" : "replace",
+        });
+      }
+      return;
+    }
+    if (hit === "ctl-assign") {
+      // A FREE control chip: click, then press a key (or click one on the
+      // plate) — a replace-mode learn on an unbound control.
+      const chip = target?.closest<HTMLElement>("[data-fn]");
+      const fnName = chip?.dataset.fn ?? "";
+      const slot = rdCtrlPanel?.slot_val ?? "";
+      if (fnName && slot) {
+        void startLearn({
+          fn: fnName,
+          label: chip?.textContent?.trim() || fnName,
+          slot,
+          mode: "replace",
+        });
+      }
+      return;
+    }
+    if (hit === "key-assign" || hit === "key-remove") {
+      // A Keys-tab row's +/−: take the key in hand, then click a control on
+      // the pad (the assign twin; remove takes the key OFF the clicked one).
+      const key = target?.closest<HTMLElement>("[data-key]")?.getAttribute("data-key") ?? "";
+      if (key) armAssign(key, hit === "key-remove" ? "remove" : "add");
+      return;
+    }
+    if (hit === "rd-akey") {
+      // A FREE key chip in the Keys tab: the key goes in hand, replace-mode.
+      const key = target?.closest<HTMLElement>("[data-key]")?.getAttribute("data-key") ?? "";
+      if (key) armAssign(key, "replace");
+      return;
+    }
     if (hit === "canvas-fit") {
       nCanvas?.fitAll();
     } else if (hit === "kb-theme") {
@@ -2654,8 +2990,11 @@ export function redesignWire(root: HTMLElement): void {
 
   window.addEventListener("keydown", (ev) => {
     // Ctrl/Cmd+K / F open the palette from ANYWHERE, a text field included —
-    // the one binding checked before the typing guard.
+    // the one binding checked before the typing guard. NOT while a mapping
+    // gesture holds the page: a key in hand or an armed learn owns the
+    // keyboard (nocturne's Ctrl+K-only-when-idle rule).
     if ((ev.metaKey || ev.ctrlKey) && (ev.key === "k" || ev.key === "f")) {
+      if (mapperBusy()) return;
       ev.preventDefault();
       setPalette(!paletteOpen());
       return;
@@ -2673,6 +3012,14 @@ export function redesignWire(root: HTMLElement): void {
       return;
     }
     if (ev.key === "Escape") {
+      // The MAPPER's rung sits at the top of the ladder: an open conflict
+      // dialog, a key in hand, or an armed learn consumes Escape before any
+      // chrome closes (the learn's own capture guard never sees Escape —
+      // this is its one deterministic exit).
+      if (mapperEscape()) {
+        ev.preventDefault();
+        return;
+      }
       // The escape ladder (design handoff §2), one rung per press: theme
       // menu → device picker → sheet → palette → camera menu → focus mode →
       // back view → clear selection. A closed disclosure returns focus to
@@ -2698,6 +3045,11 @@ export function redesignWire(root: HTMLElement): void {
       return;
     }
     if (typingIntoSomething(ev)) return;
+    // While a key is in hand (BY-KEY assign) or the conflict dialog is up,
+    // the single-key canvas shortcuts suspend — pressing F with a key held
+    // must not enter focus mode (the learn's capture guard swallows its own
+    // keys; assign deliberately arms no guard, so THIS is its guard).
+    if (mapperBusy()) return;
     // Unmodified design-tool shortcuts belong to the canvas. Keep them from
     // firing while focus is in the title bar or Inspector; Cmd/Ctrl+K and the
     // Escape ladder above remain intentionally global.
@@ -2841,6 +3193,35 @@ export function RedesignIsland() {
             },
             h("span", { class: "n-undo-lab" }, () => rdUndoLabel()),
             h("button", { class: "n-undo-btn", type: "submit" }, "Undo"),
+          ),
+          // The mapper's capture toast — SSR'd hidden; the mapper module
+          // writes it imperatively on user action only (interaction state,
+          // never payload truth — nocturne's learnbar contract).
+          h(
+            "div",
+            { role: "status", class: "rd-learnbar n-learnbar none" },
+            h(
+              "span",
+              { class: "n-learn-txt" },
+              h("span", { class: "n-learn-line rd-learn-line" }),
+              h("span", { class: "n-learn-sub rd-learn-sub" }),
+            ),
+            h(
+              "label",
+              { class: "n-chain rd-chain", hidden: "" },
+              h("input", { type: "checkbox", class: "n-chain-box rd-chain-box" }),
+              "Bind several",
+            ),
+            h(
+              "button",
+              { type: "button", "data-nx": "rd-learn-skip", class: "n-bbtn sm", hidden: "" },
+              "Skip",
+            ),
+            h(
+              "button",
+              { type: "button", class: "n-bbtn sm", "data-nx": "rd-learn-cancel" },
+              "Cancel",
+            ),
           ),
           // Back view: appears the moment the camera history is non-empty;
           // its title carries the top entry's label.
@@ -3210,6 +3591,41 @@ export function RedesignIsland() {
             ),
           ),
         ),
+        // The key-conflict consequence dialog — the learned key already
+        // works somewhere else. "Use here too" is a deliberate fan-out that
+        // takes nothing away; Cancel changes nothing. SSR'd hidden; the
+        // mapper fills title/lines and toggles it (capture-time state).
+        h(
+          "div",
+          { class: "rd-confdlg nd-back none", "data-nx": "rd-conf-cancel" },
+          h(
+            "div",
+            {
+              class: "nd",
+              "data-nx": "dlg-noop",
+              role: "dialog",
+              tabindex: "-1",
+              "aria-label": "Key conflict",
+            },
+            h("div", { class: "nd-kick" }, "Key conflict"),
+            h("div", { class: "nd-title" }),
+            h("div", { class: "nd-lede" }),
+            h(
+              "div",
+              { class: "nd-actions" },
+              h(
+                "button",
+                { class: "nd-btn", type: "button", "data-nx": "rd-conf-cancel" },
+                "Cancel",
+              ),
+              h(
+                "button",
+                { class: "nd-btn primary", type: "button", "data-nx": "rd-conf-force" },
+                "Use here too",
+              ),
+            ),
+          ),
+        ),
         h(
           "section",
           { class: "forma-canvas n-canvas", "data-forma-canvas": "", "data-client-canvas": "" },
@@ -3371,6 +3787,14 @@ export function RedesignIsland() {
                   h(
                     "div",
                     { class: "n-kbhead" },
+                    // The mapper's mirror cue: a control is waiting for a
+                    // key. Client-toggled interaction state, like 4460's.
+                    h(
+                      "div",
+                      { "aria-hidden": "true", class: "rd-keycue n-key-cue none" },
+                      h("span", { class: "n-cue-dot" }),
+                      h("span", { class: "rd-keycue-text" }),
+                    ),
                     h("span", { class: "n-kick" }, () => rdKbTitle()),
                     // Which color speaks for which controller; each chip
                     // mutes that player's color on the keys.
@@ -3665,6 +4089,74 @@ export function RedesignIsland() {
                 ),
               ),
             ),
+            // ── THE MAPPING CORDS' LAYERS (nocturne's, attribute-for- ─────
+            // attribute): world-coordinate siblings of the stage — edges are
+            // canvas chrome, not list items. Lines and small ports sit above
+            // the art so every path visibly leaves its real keycap/control;
+            // the processor nodes are HTML so a macro chain has a real,
+            // focusable card. All client-filled, all pointer-transparent
+            // until filled.
+            h("svg", {
+              id: "n-mapping-paths",
+              class: "n-flow-layer n-flow-lines",
+              "data-flow-layer": "lines",
+              "data-flow-mode": "off",
+              "data-flow-count": "0",
+              "data-flow-unresolved": "0",
+              "data-flow-direct": "0",
+              "data-flow-macro-connections": "0",
+              "data-flow-resolved-direct": "0",
+              "data-flow-resolved-macro-connections": "0",
+              "data-flow-processors": "0",
+              "data-flow-processor-overflow": "0",
+              "data-flow-mapping-unavailable": "0",
+              "data-flow-macro-unavailable": "0",
+              "data-client-subtree": "",
+              "data-client-canvas": "",
+              "aria-hidden": "true",
+              focusable: "false",
+              hidden: "",
+            }),
+            h("svg", {
+              id: "n-mapping-ports",
+              class: "n-flow-layer n-flow-ports",
+              "data-flow-layer": "ports",
+              "data-flow-mode": "off",
+              "data-flow-count": "0",
+              "data-flow-unresolved": "0",
+              "data-flow-direct": "0",
+              "data-flow-macro-connections": "0",
+              "data-flow-resolved-direct": "0",
+              "data-flow-resolved-macro-connections": "0",
+              "data-flow-processors": "0",
+              "data-flow-processor-overflow": "0",
+              "data-flow-mapping-unavailable": "0",
+              "data-flow-macro-unavailable": "0",
+              "data-client-subtree": "",
+              "data-client-canvas": "",
+              "aria-hidden": "true",
+              focusable: "false",
+              hidden: "",
+            }),
+            h("div", {
+              id: "n-mapping-processors",
+              class: "n-flow-node-layer",
+              "data-flow-layer": "processors",
+              "data-flow-mode": "off",
+              "data-flow-count": "0",
+              "data-flow-unresolved": "0",
+              "data-flow-direct": "0",
+              "data-flow-macro-connections": "0",
+              "data-flow-resolved-direct": "0",
+              "data-flow-resolved-macro-connections": "0",
+              "data-flow-processors": "0",
+              "data-flow-processor-overflow": "0",
+              "data-flow-mapping-unavailable": "0",
+              "data-flow-macro-unavailable": "0",
+              "data-client-subtree": "",
+              "data-client-canvas": "",
+              hidden: "",
+            }),
             // The map in the corner: a button per widget (click to jump) and
             // a pale rectangle for the camera (drag inside to pan). Both are
             // filled by the engine — the ITEMS box is client-populated by
@@ -3775,6 +4267,43 @@ export function RedesignIsland() {
                   class: "n-autobtn",
                 },
                 "Fit",
+              ),
+              // The mapping cords' scope — Off / Selected / All (nocturne's
+              // Paths control, living in the canvas cluster it acts on).
+              h(
+                "div",
+                {
+                  class: "n-pathctl rd-pathctl",
+                  title:
+                    "Show physical keys, processing steps, and the virtual controller controls they reach",
+                },
+                h("label", { class: "n-pathctl-label", for: "rd-mapping-path-scope" }, "Paths"),
+                h(
+                  "select",
+                  {
+                    id: "rd-mapping-path-scope",
+                    class: "n-pathsel",
+                    "data-nx": "rd-mapping-paths",
+                    "aria-controls": "n-mapping-paths n-mapping-ports n-mapping-processors",
+                  },
+                  h("option", { value: "off" }, "Off"),
+                  h("option", { value: "selected" }, "Selected player"),
+                  h("option", { value: "all" }, "All players"),
+                ),
+                h("output", {
+                  class: "n-pathcount rd-pathcount",
+                  title: "Mapping paths are off",
+                  "aria-hidden": "true",
+                  "data-live-chatter": "",
+                }),
+                h("output", {
+                  id: "rd-mapping-trace",
+                  class: "n-mapping-trace",
+                  title: "",
+                  "data-live-chatter": "",
+                  "data-client-canvas": "",
+                  hidden: "",
+                }),
               ),
               // The collapsed map's stand-in. Served hidden — the map
               // starts shown; setCanvasMap swaps the two.

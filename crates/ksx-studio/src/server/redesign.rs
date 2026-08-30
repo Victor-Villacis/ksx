@@ -15,6 +15,11 @@ pub(super) struct RedesignQuery {
     /// explicit `?slot=` wins, otherwise the first staged controller speaks
     /// for the inspector panel.
     slot: Option<u8>,
+    /// The macro the step editor opens on (the nocturne door: ?slot&macro).
+    #[serde(rename = "macro")]
+    macro_selected: Option<String>,
+    /// The bind-pane filter, resolved server-side like nocturne.
+    q: Option<String>,
 }
 
 /// The sentences this page may be asked to repeat after a redirect, resolved
@@ -22,7 +27,7 @@ pub(super) struct RedesignQuery {
 /// verb's sentences ARE nocturne's constants: one wording, two pages, so the
 /// copy cannot drift between the surfaces (the cutover's "provider text"
 /// lesson, applied in advance).
-const RD_FLASH_ALLOWLIST: [&str; 25] = [
+const RD_FLASH_ALLOWLIST: [&str; 31] = [
     N_THEME_OK,
     N_THEME_UNKNOWN,
     N_DEVICE_OK,
@@ -48,6 +53,12 @@ const RD_FLASH_ALLOWLIST: [&str; 25] = [
     N_KEY_CLEAR_OK,
     N_KEY_CLEAR_NONE,
     N_BLOCKING_OK,
+    N_MACRO_OK,
+    N_MACRO_NEW,
+    N_MACRO_NAME,
+    N_MACRO_TAKEN,
+    N_MACRO_BADNAME,
+    N_MACRO_DELETED,
 ];
 
 pub(super) fn redesign_flash_from_query(flash: Option<&str>) -> Option<String> {
@@ -75,6 +86,8 @@ fn redesign_redirect(flash: &str) -> Response {
 pub(super) async fn collect_redesign(
     state: &Arc<AppState>,
     selected_slot: Option<u8>,
+    macro_selected: Option<String>,
+    q: Option<String>,
 ) -> RedesignPayload {
     let redesign_state = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
@@ -82,16 +95,18 @@ pub(super) async fn collect_redesign(
             .machine_cache
             .setup_state(&*redesign_state.machine)
             .ok();
-        // The device scan, for the workbench picker. Deliberately UNCACHED,
-        // for the reason `/devices` gives — a board unplugged ten minutes ago
-        // must stop being offered — and affordable here because this page has
-        // no interval poller: the read runs on a page render and after a
-        // verb, not every two seconds. The refusal keeps its remedy (the
-        // `/devices` composition): it is going onto a page, and "run `ksx
-        // devices`" is the whole value of the message.
+        // The device scan, through the MACHINE CACHE now that this page
+        // polls (the mapper migration brought nocturne's 2 s tick): a USB
+        // tree enumeration per tick is work the machine did not ask for.
+        // The cache is TTL-bounded and invalidated by every mutating
+        // request, so nothing the studio itself changed is ever stale; an
+        // unplugged board leaves the roster at the TTL, exactly like
+        // /nocturne's. The refusal keeps its remedy (the `/devices`
+        // composition): it is going onto a page, and "run `ksx devices`"
+        // is the whole value of the message.
         let scan = redesign_state
-            .machine
-            .device_scan()
+            .machine_cache
+            .device_scan(&*redesign_state.machine)
             .map_err(|refusal| match &refusal.remedy {
                 Some(remedy) => format!("{} — {remedy}", refusal.message),
                 None => refusal.message.clone(),
@@ -109,6 +124,8 @@ pub(super) async fn collect_redesign(
             &staged,
             selected_slot,
             undo_label.as_deref(),
+            macro_selected.as_deref(),
+            q.as_deref(),
         );
         // Which parked ghosts the studio still HOLDS (authoring included),
         // so a ghost card can say "bindings kept" vs "staged fresh" before
@@ -148,7 +165,7 @@ pub(super) async fn redesign_page(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RedesignQuery>,
 ) -> Response {
-    let payload = collect_redesign(&state, query.slot).await;
+    let payload = collect_redesign(&state, query.slot, query.macro_selected, query.q).await;
     let flash = redesign_flash_from_query(query.flash.as_deref());
     let out = crate::render::with_theme(
         render_redesign(&state.redesign_page.get(), &payload, flash.as_deref()),
@@ -178,7 +195,7 @@ pub(super) async fn api_redesign(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RedesignQuery>,
 ) -> Response {
-    let payload = collect_redesign(&state, query.slot).await;
+    let payload = collect_redesign(&state, query.slot, query.macro_selected, query.q).await;
     (
         [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
         axum::Json(payload),
@@ -778,6 +795,76 @@ pub(super) async fn redesign_form_blocking(
 // affair until an "advanced" home earns its place here.
 
 #[derive(Deserialize)]
+pub(super) struct RedesignMacroForm {
+    slot: u8,
+    name: String,
+    #[serde(default)]
+    enable: Option<String>,
+}
+
+/// POST /redesign/macro/toggle — disable (or re-enable) one macro on the
+/// staged slot, through the shared macro-write core.
+pub(super) async fn redesign_form_macro_toggle(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignMacroForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let enable = checked(form.enable.as_deref());
+    redesign_redirect(
+        macro_write_flash(
+            state,
+            form.slot,
+            crate::control::MacroWrite {
+                name: form.name,
+                enabled: Some(enable),
+                ..crate::control::MacroWrite::default()
+            },
+            N_MACRO_OK,
+        )
+        .await,
+    )
+}
+
+/// POST /redesign/macro/new — author one empty-stepped table in THIS draft
+/// (validation, taken-check and the smallest acceptable table all in the
+/// shared core), so the editor can open on it.
+pub(super) async fn redesign_form_macro_new(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignMacroForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    redesign_redirect(macro_new_flash(state, form.slot, &form.name).await)
+}
+
+/// POST /redesign/macro/delete — remove one macro table (and the trigger
+/// rows that would otherwise dangle) from THIS draft.
+pub(super) async fn redesign_form_macro_delete(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignMacroForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    redesign_redirect(
+        macro_write_flash(
+            state,
+            form.slot,
+            crate::control::MacroWrite {
+                name: form.name,
+                delete: true,
+                ..crate::control::MacroWrite::default()
+            },
+            N_MACRO_DELETED,
+        )
+        .await,
+    )
+}
+
+#[derive(Deserialize)]
 pub(super) struct RedesignKeyClearForm {
     number: u8,
     key: String,
@@ -886,6 +973,13 @@ mod tests {
             N_KEY_CLEAR_NONE,
             // the keyboard widget: the While-playing picker
             N_BLOCKING_OK,
+            // the inspector macro section
+            N_MACRO_OK,
+            N_MACRO_NEW,
+            N_MACRO_NAME,
+            N_MACRO_TAKEN,
+            N_MACRO_BADNAME,
+            N_MACRO_DELETED,
         ] {
             assert_eq!(
                 redesign_flash_from_query(Some(sentence)).as_deref(),

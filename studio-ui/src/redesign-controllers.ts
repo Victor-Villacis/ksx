@@ -38,12 +38,43 @@ export interface RdPadView {
   family: string;
   preset: string;
   title: string;
+  /** Opaque staged-controller revision served with this exact row — the
+   *  mapper's target pin. Returned unchanged with a bind; never
+   *  reconstructed from the visible preset/persona. */
+  target_revision?: string;
   /** Canonical fn → its key chip ("G · H"), for the clone's callouts. */
   fn_keys: Record<string, string>;
+  /** Canonical fn → the persona's readable label ("LS ↑", "△") — the
+   *  toast's vocabulary for arming ANY pad's control. */
+  fn_names: Record<string, string>;
+  /** Every controller control in one stable authoring order, exact key
+   *  vectors included — the auto-map walk's queue and the cords' graph. */
+  controls?: {
+    function: string;
+    label: string;
+    group: string;
+    order: number;
+    keys: string[];
+    toggle: boolean;
+    turbo_hz: number | null;
+  }[];
+  /** Timed processors owned by this preset — the cords draw these as real
+   *  key → macro → control chains. */
+  macros?: {
+    name: string;
+    triggers: string[];
+    outputs: string[];
+    timeline: string[];
+    meta: string;
+    disabled: boolean;
+    edit_href: string;
+  }[];
   /** `false` means the provider could not project this slot's mapper table
    *  — an empty `fn_keys` is otherwise the valid fact "nothing is bound". */
   mapping_available: boolean;
   mapping_reason: string;
+  macro_available?: boolean;
+  macro_reason?: string;
 }
 
 /** One staged controller — `RedesignControllerCard` on the wire
@@ -557,6 +588,11 @@ function mountCard(
   });
   item.dataset.clientWidget = "";
   item.classList.add("rd-ctrl-node");
+  // The cords resolve pads via `.n-widget-pad [data-pad-slot]` (the
+  // nocturne vocabulary) — the card item wears the class so ONE resolver
+  // serves both pages. Ghosts deliberately do not: a parked slot has no
+  // cords.
+  if (!extraClass) item.classList.add("n-widget-pad");
   if (extraClass) item.classList.add(extraClass);
   const home: CardGeometry = {
     x: 140 + (index % 3) * 480,

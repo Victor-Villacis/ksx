@@ -80,6 +80,16 @@ pub struct RedesignPayload {
     pub capture_rows: Vec<NocturneChoiceRow>,
     #[serde(default)]
     pub capture_note: String,
+    /// The staged input's verified Windows identity, for pinning a mapping
+    /// gesture to the exact device the user saw — the same
+    /// [`StartCaptureView`] pair `/nocturne`'s learn flow pins
+    /// (`cap_selector`/`cap_instance`). Empty when nothing is staged or the
+    /// scan refused: the learn flow refuses to arm rather than listen
+    /// against an unverified source.
+    #[serde(default)]
+    pub learn_selector: String,
+    #[serde(default)]
+    pub learn_instance: String,
 }
 
 /// One staged controller on the workbench — a card per slot, straight off
@@ -172,6 +182,21 @@ pub struct RedesignControllers {
     /// has no board picker yet — the keyboard migration brings it).
     #[serde(default)]
     pub keys: KeyPanel,
+    /// The selected slot's macro lifecycle rows — the SAME
+    /// [`compose_macro_rows`] serving `/nocturne`'s pane, with this page's
+    /// own edit door.
+    #[serde(default)]
+    pub macros_head: String,
+    #[serde(default)]
+    pub macro_rows: Vec<NocturneMacroRow>,
+    #[serde(default)]
+    pub macros_note: String,
+    /// The macro STEP EDITOR's whole projection, when `?macro=` names one
+    /// on the selected slot — [`crate::macro_editor::NocturneMacroEditor`],
+    /// closed otherwise (the nocturne rule: an unknown name leaves the
+    /// dialog closed rather than inventing a macro).
+    #[serde(default)]
+    pub mac: crate::macro_editor::NocturneMacroEditor,
     /// The short server-held undo window after a removal (the nocturne
     /// chip's contract: no browser state, a reload keeps the offer).
     #[serde(default)]
@@ -185,13 +210,46 @@ impl RedesignControllers {
         staged: &ksx_api::StagedSetupView,
         selected_slot: Option<u8>,
         undo_label: Option<&str>,
+        macro_selected: Option<&str>,
+        q: Option<&str>,
     ) -> Self {
         // The nocturne selection rule verbatim: an explicit `?slot=` wins,
         // otherwise the first staged controller speaks for the pane.
         let selected = selected_slot
             .and_then(|number| staged.slots.iter().find(|slot| slot.number == number))
             .or_else(|| staged.slots.first());
-        let panel = compose_controller_panel(staged, selected, None);
+        let panel = compose_controller_panel(staged, selected, q);
+        // The macro lifecycle rows + the step editor, exactly nocturne's
+        // composition: the editor opens only on a name `?macro=` carries AND
+        // the selected slot actually has.
+        let (macros_head, macro_rows, macros_note) =
+            compose_macro_rows(selected, "/redesign");
+        let keyboard_name = staged
+            .device
+            .as_ref()
+            .map(|device| device.label.as_str())
+            .unwrap_or("(none)");
+        let mac = match (selected, macro_selected) {
+            (Some(slot), Some(name)) if !name.is_empty() => {
+                let snap = ksx_api::staged_macro_snapshot(slot);
+                let mapper = ksx_api::staged_mapper_slot(slot, keyboard_name).ok();
+                snap.macros
+                    .iter()
+                    .find(|m| m.name == name)
+                    .map(|m| {
+                        crate::macro_editor::NocturneMacroEditor::compose(
+                            m,
+                            &slot.persona,
+                            mapper.as_ref(),
+                            slot.number,
+                            q,
+                            "/redesign",
+                        )
+                    })
+                    .unwrap_or_else(|| crate::macro_editor::NocturneMacroEditor::closed_on("/redesign"))
+            }
+            _ => crate::macro_editor::NocturneMacroEditor::closed_on("/redesign"),
+        };
         // The Keys tab over the STANDARD board (no saved choice, no panel
         // stores, no encoder staged): the same fallback nocturne draws when
         // nothing is chosen. The board picker arrives with the keyboard
@@ -201,7 +259,7 @@ impl RedesignControllers {
             selected,
             &crate::board::Board::resolve("", &[], &[], false),
         );
-        let pads = compose_pad_views(staged);
+        let pads = compose_pad_views(staged, "/redesign");
         let (undo_cls, undo_label) = match undo_label {
             Some(label) => ("rd-undochip".to_owned(), label.to_owned()),
             None => ("rd-undochip none".to_owned(), String::new()),
@@ -282,6 +340,10 @@ impl RedesignControllers {
             pads,
             panel,
             keys,
+            macros_head,
+            macro_rows,
+            macros_note,
+            mac,
             undo_cls,
             undo_label,
         }
@@ -3453,7 +3515,10 @@ pub(crate) fn compose_controller_panel(
 /// (the ONE server-side art decision), preset identity, the fn→keys callout
 /// table and the authoring/macro projections. Composed once for every page
 /// that mounts pad widgets (`/nocturne` and `/redesign`).
-pub(crate) fn compose_pad_views(staged: &ksx_api::StagedSetupView) -> Vec<NocturnePadView> {
+pub(crate) fn compose_pad_views(
+    staged: &ksx_api::StagedSetupView,
+    page: &str,
+) -> Vec<NocturnePadView> {
     let keyboard_name = staged
         .device
         .as_ref()
@@ -3512,7 +3577,7 @@ pub(crate) fn compose_pad_views(staged: &ksx_api::StagedSetupView) -> Vec<Noctur
                     meta: nocturne_macro_meta(mac),
                     disabled: mac.disabled,
                     edit_href: format!(
-                        "/nocturne?slot={}&macro={}",
+                        "{page}?slot={}&macro={}",
                         slot.number,
                         crate::render_map::urlencode_value(&mac.name)
                     ),
@@ -4224,6 +4289,90 @@ pub(crate) fn compose_capture_rows(
         Vec::new()
     };
     (rows, note)
+}
+
+/// The selected slot's macros as lifecycle rows — trigger chip, meta,
+/// enable/disable, delete, and the edit door into the step editor on the
+/// CONSUMING page (`page` = "/nocturne" or "/redesign"). Composed once for
+/// both inspectors.
+pub(crate) fn compose_macro_rows(
+    selected: Option<&ksx_api::StagedSlotView>,
+    page: &str,
+) -> (String, Vec<NocturneMacroRow>, String) {
+    match selected {
+        None => ("Macros".to_owned(), Vec::new(), String::new()),
+        Some(slot) => {
+            let snap = ksx_api::staged_macro_snapshot(slot);
+            if !snap.available {
+                ("Macros".to_owned(), Vec::new(), snap.reason.clone())
+            } else {
+                let rows: Vec<NocturneMacroRow> = snap
+                    .macros
+                    .iter()
+                    .map(|mac| {
+                        let triggered = !mac.triggers.is_empty();
+                        NocturneMacroRow {
+                            name: mac.name.clone(),
+                            fn_name: format!("macro.{}", mac.name),
+                            chip: if triggered {
+                                mac.triggers.join(" · ")
+                            } else {
+                                "No trigger key".to_owned()
+                            },
+                            chip_title: if triggered {
+                                format!(
+                                    "Started by {} — click, then press a new trigger key",
+                                    mac.triggers.join(" or ")
+                                )
+                            } else {
+                                "No trigger key — click, then press a key".to_owned()
+                            },
+                            add_cls: if triggered {
+                                "n-addchip".to_owned()
+                            } else {
+                                "n-addchip none".to_owned()
+                            },
+                            chip_cls: if triggered {
+                                "n-keychip".to_owned()
+                            } else {
+                                "n-keychip ghost".to_owned()
+                            },
+                            meta: nocturne_macro_meta(mac),
+                            cls: if triggered && !mac.disabled {
+                                "n-bind on".to_owned()
+                            } else {
+                                "n-bind".to_owned()
+                            },
+                            slot: slot.number.to_string(),
+                            edit_href: format!(
+                                "{page}?slot={}&macro={}",
+                                slot.number,
+                                crate::render_map::urlencode_value(&mac.name)
+                            ),
+                            toggle_label: if mac.disabled {
+                                "Enable".to_owned()
+                            } else {
+                                "Disable".to_owned()
+                            },
+                            toggle_value: if mac.disabled {
+                                "yes".to_owned()
+                            } else {
+                                String::new()
+                            },
+                        }
+                    })
+                    .collect();
+                let head = format!("Macros · {}", rows.len());
+                let note = if rows.is_empty() {
+                    "No macros in this layout yet — author them in the Controls editor."
+                        .to_owned()
+                } else {
+                    String::new()
+                };
+                (head, rows, note)
+            }
+        }
+    }
 }
 
 /// A human-scannable order independent of the art tables' drawing order.
@@ -5052,7 +5201,7 @@ impl NocturneDerived {
         // list it could not see, which is a replace.
         // The multi-pad grid's data: every staged controller, its family,
         // its callout chips and its readable control names.
-        let pads = compose_pad_views(staged);
+        let pads = compose_pad_views(staged, "/nocturne");
         // The BOARD, not the authored table. One source for the drawn
         // cells, the tray's "off this board" test, and the available-key
         // rosters below — three readers that used to walk `ROWS`
@@ -5163,6 +5312,7 @@ impl NocturneDerived {
                             mapper.as_ref(),
                             slot.number,
                             p.q.as_deref(),
+                            "/nocturne",
                         )
                     })
                     .unwrap_or_else(crate::macro_editor::NocturneMacroEditor::closed)
@@ -5307,80 +5457,11 @@ impl NocturneDerived {
         // ── The selected slot's macros: lifecycle rows off the SAME staged
         // authoring the mapper reads. Step editing stays on Controls until
         // its own pass, and the rows say so with a link, not a pretence.
-        let (macros_head, macro_rows, macros_note) = match selected {
-            None => ("Macros".to_owned(), Vec::new(), String::new()),
-            Some(slot) => {
-                let snap = ksx_api::staged_macro_snapshot(slot);
-                if !snap.available {
-                    ("Macros".to_owned(), Vec::new(), snap.reason.clone())
-                } else {
-                    let rows: Vec<NocturneMacroRow> = snap
-                        .macros
-                        .iter()
-                        .map(|mac| {
-                            let triggered = !mac.triggers.is_empty();
-                            NocturneMacroRow {
-                                name: mac.name.clone(),
-                                fn_name: format!("macro.{}", mac.name),
-                                chip: if triggered {
-                                    mac.triggers.join(" · ")
-                                } else {
-                                    "No trigger key".to_owned()
-                                },
-                                chip_title: if triggered {
-                                    format!(
-                                        "Started by {} — click, then press a new trigger key",
-                                        mac.triggers.join(" or ")
-                                    )
-                                } else {
-                                    "No trigger key — click, then press a key".to_owned()
-                                },
-                                add_cls: if triggered {
-                                    "n-addchip".to_owned()
-                                } else {
-                                    "n-addchip none".to_owned()
-                                },
-                                chip_cls: if triggered {
-                                    "n-keychip".to_owned()
-                                } else {
-                                    "n-keychip ghost".to_owned()
-                                },
-                                meta: nocturne_macro_meta(mac),
-                                cls: if triggered && !mac.disabled {
-                                    "n-bind on".to_owned()
-                                } else {
-                                    "n-bind".to_owned()
-                                },
-                                slot: slot.number.to_string(),
-                                edit_href: format!(
-                                    "/nocturne?slot={}&macro={}",
-                                    slot.number,
-                                    crate::render_map::urlencode_value(&mac.name)
-                                ),
-                                toggle_label: if mac.disabled {
-                                    "Enable".to_owned()
-                                } else {
-                                    "Disable".to_owned()
-                                },
-                                toggle_value: if mac.disabled {
-                                    "yes".to_owned()
-                                } else {
-                                    String::new()
-                                },
-                            }
-                        })
-                        .collect();
-                    let head = format!("Macros · {}", rows.len());
-                    let note = if rows.is_empty() {
-                        "No macros in this layout yet — author them in the Controls editor."
-                            .to_owned()
-                    } else {
-                        String::new()
-                    };
-                    (head, rows, note)
-                }
-            }
-        };
+        // The selected slot's macro lifecycle rows, off the ONE shared
+        // composer — `/redesign`'s inspector serves the same rows, with
+        // its own page in the edit door.
+        let (macros_head, macro_rows, macros_note) =
+            compose_macro_rows(selected, "/nocturne");
 
         Self {
             // The board picker. Marked the way the theme picker is — the

@@ -15,6 +15,7 @@ use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::render_nocturne::{device_row, mode_row, named_slot_ids, other_row};
 use crate::snapshot::{
+    StartCaptureView,
     compose_board_panel, theme_rows, NocturneChoiceRow, RedesignControllers, RedesignDeviceRows,
     RedesignPayload, RedesignPersonaRow, SetupSnapshot,
 };
@@ -51,6 +52,8 @@ pub(crate) fn payload(
     staged: &ksx_api::StagedSetupView,
     selected_slot: Option<u8>,
     undo_label: Option<&str>,
+    macro_selected: Option<&str>,
+    q: Option<&str>,
 ) -> RedesignPayload {
     // Borrowed BEFORE the payload construction consumes its owner: the
     // scan boards, for the keyboard title's transport word.
@@ -83,6 +86,17 @@ pub(crate) fn payload(
     });
     let (capture_rows, capture_note) =
         crate::snapshot::compose_capture_rows(staged, encoder_staged);
+    // The staged input's verified identity, off the SAME capture composition
+    // nocturne pins its learn flow to (selector + Windows instance path).
+    // Refused scan → empty pair → the mapper refuses to arm, like 4460.
+    let learn_cap = match &scan {
+        Ok(scan_view) => StartCaptureView::from_parts(staged, scan_view, true),
+        Err(_) => StartCaptureView::from_parts(
+            staged,
+            &ksx_api::DeviceScanView::default(),
+            false,
+        ),
+    };
     devices.staging_reachable = staged.reachable;
     devices.staging_line = if staged.reachable {
         String::new()
@@ -132,7 +146,7 @@ pub(crate) fn payload(
         .collect(),
         // The staged controllers and the persona picker, off the SAME staged
         // view the device marking reads — one truth per render.
-        controllers: RedesignControllers::of(staged, selected_slot, undo_label),
+        controllers: RedesignControllers::of(staged, selected_slot, undo_label, macro_selected, q),
         // The keyboard widget, off the ONE shared board composer. The board
         // picture is ALWAYS the standard keyboard on this page (Victor,
         // 2026-08-29): a keyboard looks like a keyboard, and a saved panel
@@ -164,6 +178,8 @@ pub(crate) fn payload(
         },
         capture_rows,
         capture_note,
+        learn_selector: learn_cap.expected_selector,
+        learn_instance: learn_cap.instance_id,
     }
 }
 
@@ -490,6 +506,8 @@ mod tests {
             &fixture_staged(Vec::new()),
             None,
             None,
+            None,
+            None,
         )
     }
 
@@ -568,11 +586,11 @@ mod tests {
             fixture_slot(1, "xbox360", true, "Player 1"),
             fixture_slot(2, "playstation", false, "Player 2"),
         ]);
-        let defaulted = RedesignControllers::of(&staged, None, None);
+        let defaulted = RedesignControllers::of(&staged, None, None, None, None);
         assert_eq!(defaulted.panel.slot_val, "1", "no ?slot → the first slot");
         assert_eq!(defaulted.panel.pad_badge, "P1");
         assert_eq!(defaulted.panel.pad_badge_cls, "n-pbadge np1");
-        let chosen = RedesignControllers::of(&staged, Some(2), None);
+        let chosen = RedesignControllers::of(&staged, Some(2), None, None, None);
         assert_eq!(chosen.panel.slot_val, "2", "an explicit ?slot wins");
         assert!(
             chosen.panel.pad_sub.contains("\"Player 2\" preset"),
@@ -592,7 +610,7 @@ mod tests {
         let (quiet_cls, quiet_label) = (&chosen.undo_cls, &chosen.undo_label);
         assert_eq!(quiet_cls, "rd-undochip none");
         assert!(quiet_label.is_empty());
-        let chip = RedesignControllers::of(&staged, Some(2), Some("P9 (X) removed"));
+        let chip = RedesignControllers::of(&staged, Some(2), Some("P9 (X) removed"), None, None);
         assert_eq!(chip.undo_cls, "rd-undochip");
         assert_eq!(chip.undo_label, "P9 (X) removed");
     }
@@ -609,7 +627,7 @@ mod tests {
             fixture_slot(2, "playstation", false, "Player 2"),
             fixture_slot(3, "xbox360", true, "Player 3"),
         ]);
-        let view = RedesignControllers::of(&staged, None, None);
+        let view = RedesignControllers::of(&staged, None, None, None, None);
         assert_eq!(view.cards.len(), 3);
         assert_eq!(
             view.cards
@@ -656,6 +674,8 @@ mod tests {
                 &fixture_staged(vec![fixture_slot(1, persona, false, "P")]),
                 None,
                 None,
+                None,
+                None,
             );
             assert_eq!(one.cards[0].family, family, "{persona}");
             assert_eq!(one.cards[0].art, art, "{persona}");
@@ -667,7 +687,7 @@ mod tests {
                 .map(|n| fixture_slot(n, "playstation", false, "P"))
                 .collect(),
         );
-        let full_view = RedesignControllers::of(&full, None, None);
+        let full_view = RedesignControllers::of(&full, None, None, None, None);
         assert_eq!(full_view.add_preset, "");
         assert!(
             full_view
@@ -681,7 +701,7 @@ mod tests {
         let mut dead = fixture_staged(Vec::new());
         dead.reachable = false;
         dead.error = Some("the daemon pipe is closed".into());
-        let dead_view = RedesignControllers::of(&dead, None, None);
+        let dead_view = RedesignControllers::of(&dead, None, None, None, None);
         assert!(dead_view.cards.is_empty());
         assert!(dead_view.personas.iter().all(|p| p.usable == "false"));
         assert_eq!(dead_view.add_note, "the daemon pipe is closed");
@@ -802,6 +822,8 @@ mod tests {
             Some(ksx_api::SetupView::default()),
             Ok(fixture_scan()),
             &staged,
+            None,
+            None,
             None,
             None,
         );

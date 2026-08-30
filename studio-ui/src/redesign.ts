@@ -9,13 +9,19 @@ import {
   applyRedesign,
   applyRedesignFlash,
   initRedesignCanvas,
+  rdAnnounce,
   RedesignIsland,
+  redesignControlsFor,
   redesignGhostHeld,
+  redesignLearnSource,
+  redesignPads,
+  redesignSelectedSlot,
   redesignWire,
   setRedesignRefresh,
   unparkController,
   type RedesignPayload,
 } from "./RedesignIsland";
+import { mapperWire } from "./redesign-mapper";
 
 void RedesignPage; // compile-time anchor only (see above)
 
@@ -38,11 +44,19 @@ function embeddedPayload<T>(): T | null {
  *  enough until a transplant brings live data. */
 async function refresh(): Promise<boolean> {
   try {
-    // The selected controller rides the URL (the nocturne `?slot=` door),
-    // so a refresh serves the panel the canvas selection is looking at.
-    const slot = new URLSearchParams(window.location.search).get("slot");
-    const url = slot ? `/api/redesign?slot=${encodeURIComponent(slot)}` : "/api/redesign";
-    const res = await fetch(url, { headers: { accept: "application/json" } });
+    // The selected controller and the open macro ride the URL (the
+    // nocturne `?slot=&macro=` doors), so a refresh serves what the page
+    // is looking at.
+    const current = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams();
+    for (const name of ["slot", "macro", "q"]) {
+      const value = current.get(name);
+      if (value) params.set(name, value);
+    }
+    const query = params.toString();
+    const res = await fetch(query ? `/api/redesign?${query}` : "/api/redesign", {
+      headers: { accept: "application/json" },
+    });
     if (!res.ok) return false;
     applyRedesign((await res.json()) as RedesignPayload);
     return true;
@@ -50,6 +64,28 @@ async function refresh(): Promise<boolean> {
     // The flash already said what failed; the page keeps its last truth.
     return false;
   }
+}
+
+/** The background tick nocturne keeps (its 2 s poll): between verb-driven
+ *  refreshes, another tab's edits still reach this page — armed mapping
+ *  gestures retire when their authority goes stale, cords repaint, counts
+ *  follow. Paused while the tab is hidden; the visibility return refreshes
+ *  once immediately. */
+function startBackgroundPoll(): void {
+  let inFlight = false;
+  const tick = async () => {
+    if (document.visibilityState !== "visible" || inFlight) return;
+    inFlight = true;
+    try {
+      await refresh();
+    } finally {
+      inFlight = false;
+    }
+  };
+  window.setInterval(() => void tick(), 2000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void tick();
+  });
 }
 
 /** Fetch-enhance only explicitly typed redesign forms. Future widgets must
@@ -355,6 +391,22 @@ activateIslands({
     // The island asks for another slot's panel through this (selection →
     // ?slot merge → refetch) without ever owning fetch.
     setRedesignRefresh(refresh);
+    // The mapper (learn/assign/bind) — page truths as ports, the entry's
+    // mutation gate shared so a bind commit can never interleave with an
+    // in-flight form verb.
+    mapperWire({
+      root: () => el,
+      flash: applyRedesignFlash,
+      refresh,
+      announce: rdAnnounce,
+      learnSource: redesignLearnSource,
+      pads: redesignPads,
+      selectedSlot: redesignSelectedSlot,
+      controlsFor: redesignControlsFor,
+      beginMutation: () => beginMutation(el),
+      endMutation: (token) => endMutation(el, token as never),
+    });
+    startBackgroundPoll();
     redesignWire(el);
     wireForms(el);
     window.requestAnimationFrame(() => {

@@ -140,6 +140,15 @@ fn redesign_redirect(flash: &str) -> Response {
     Redirect::to(&format!("/redesign?flash={}", urlencode(flash))).into_response()
 }
 
+fn redesign_identify_redirect(flash: &str, selector: Option<&str>) -> Response {
+    let mut location = format!("/redesign?flash={}", urlencode(flash));
+    if let Some(selector) = selector.filter(|selector| !selector.trim().is_empty()) {
+        location.push_str("&identified_selector=");
+        location.push_str(&urlencode(selector));
+    }
+    Redirect::to(&location).into_response()
+}
+
 /// One fresh [`RedesignPayload`]: the machine provenance and the theme
 /// roster, on a blocking worker like every other collector read. The page
 /// derives its `<html data-theme>` stamp from the chosen row in this payload,
@@ -654,14 +663,15 @@ pub(super) async fn redesign_form_identify(
             attempt: attempt.clone(),
         });
     }
-    let flash = match identify_and_stage_for_redesign(state, attempt).await {
-        StartIdentifyResult::Selected => N_IDENTIFY_OK,
-        StartIdentifyResult::TimedOut => N_IDENTIFY_TIMEOUT,
-        StartIdentifyResult::Failed => N_IDENTIFY_ERROR,
-        StartIdentifyResult::Busy => RD_IDENTIFY_BUSY,
-        StartIdentifyResult::Cancelled => RD_IDENTIFY_CANCELLED,
-    };
-    redesign_redirect(flash)
+    match identify_and_stage_for_redesign(state, attempt).await {
+        StartIdentifyResult::Selected(selector) => {
+            redesign_identify_redirect(N_IDENTIFY_OK, Some(&selector))
+        }
+        StartIdentifyResult::TimedOut => redesign_identify_redirect(N_IDENTIFY_TIMEOUT, None),
+        StartIdentifyResult::Failed => redesign_identify_redirect(N_IDENTIFY_ERROR, None),
+        StartIdentifyResult::Busy => redesign_identify_redirect(RD_IDENTIFY_BUSY, None),
+        StartIdentifyResult::Cancelled => redesign_identify_redirect(RD_IDENTIFY_CANCELLED, None),
+    }
 }
 
 /// Cancel only the listener generation opened by the redesign identify

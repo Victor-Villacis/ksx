@@ -953,7 +953,7 @@ pub(super) async fn nocturne_form_device(
 /// staged choice, via the shared [`identify_and_stage`] transaction.
 pub(super) async fn nocturne_form_identify(State(state): State<Arc<AppState>>) -> Response {
     let flash = match identify_and_stage(state).await {
-        StartIdentifyResult::Selected => N_IDENTIFY_OK,
+        StartIdentifyResult::Selected(_) => N_IDENTIFY_OK,
         StartIdentifyResult::TimedOut => N_IDENTIFY_TIMEOUT,
         StartIdentifyResult::Failed
         | StartIdentifyResult::Busy
@@ -3933,6 +3933,22 @@ async fn identify_and_stage_inner(
             }
             match learn.state.as_str() {
                 "hit" => {
+                    // The enhanced workbench promises Escape as its one
+                    // keyboard cancellation door. Raw Input observes the
+                    // physical press independently of the DOM event, so the
+                    // server must reserve the same canonical key too: an
+                    // HTTP cancel that loses the race to this hit must never
+                    // turn Escape into a staged device. Legacy identify keeps
+                    // its historical any-key behaviour.
+                    if track_redesign
+                        && learn
+                            .key
+                            .as_deref()
+                            .is_some_and(|key| key.eq_ignore_ascii_case("Escape"))
+                    {
+                        let _ = state.control.learn_cancel_generation(Some(generation));
+                        return finish(StartIdentifyResult::Cancelled);
+                    }
                     // Selection wins only after atomically retiring the
                     // cancellable generation. A concurrent Cancel that takes
                     // it first makes the next poll `cancelled`; a Cancel that
@@ -3976,15 +3992,16 @@ async fn identify_and_stage_inner(
                     // re-choose destroys. Either way the ANSWER is the same:
                     // a keyboard answered and it is the staged one, which is
                     // precisely what `N_IDENTIFY_OK` says.
+                    let selector = identified.selector;
                     return finish(
                         match choose_device_preserving_preparation(
                             &state,
-                            identified.selector,
+                            selector.clone(),
                             identified.alias,
                             identified.label,
                         ) {
                             DeviceChoice::Chosen | DeviceChoice::Unchanged => {
-                                StartIdentifyResult::Selected
+                                StartIdentifyResult::Selected(selector)
                             }
                             DeviceChoice::Refused => StartIdentifyResult::Failed,
                         },
@@ -4059,9 +4076,12 @@ enum IdentifyTracking {
     Redesign(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum StartIdentifyResult {
-    Selected,
+    /// The canonical selector staged by this exact learner hit. The redesign
+    /// returns it with the success redirect so a later authority refresh can
+    /// never attribute another tab's selected row to this attempt.
+    Selected(String),
     TimedOut,
     Failed,
     Busy,

@@ -226,10 +226,10 @@ struct ScriptedControl {
     /// fail, so persona labels and the two availability channels are tested
     /// independently.
     invalid_mapping_authoring: AtomicBool,
-    /// Optional one-shot daemon learner hit. Ordinary mapper fixtures leave
-    /// this empty and continue reporting `listening`; the Identify route test
-    /// supplies the exact interface path a real daemon panel tap returns.
-    identify_hit: Mutex<Option<String>>,
+    /// Optional one-shot daemon learner hit: exact interface path plus the
+    /// canonical key name the real observer returns. Ordinary mapper fixtures
+    /// leave this empty and continue reporting `listening`.
+    identify_hit: Mutex<Option<(String, String)>>,
     bound_with: std::sync::Mutex<Option<BindRequest>>,
     restored_with: std::sync::Mutex<Option<(String, String)>>,
     cleared: std::sync::Mutex<Option<String>>,
@@ -284,7 +284,11 @@ impl ScriptedControl {
     }
 
     fn with_identify_hit(self, device: impl Into<String>) -> Self {
-        *self.identify_hit.lock().unwrap() = Some(device.into());
+        self.with_identify_key_hit(device, "A")
+    }
+
+    fn with_identify_key_hit(self, device: impl Into<String>, key: impl Into<String>) -> Self {
+        *self.identify_hit.lock().unwrap() = Some((device.into(), key.into()));
         self
     }
 
@@ -474,7 +478,7 @@ impl ControlSource for ScriptedControl {
 
     fn learn_poll(&self) -> LearnView {
         if self.learning.load(Ordering::SeqCst) {
-            if let Some(device) = self.identify_hit.lock().unwrap().take() {
+            if let Some((device, key)) = self.identify_hit.lock().unwrap().take() {
                 self.learning.store(false, Ordering::SeqCst);
                 return LearnView {
                     ok: true,
@@ -482,7 +486,7 @@ impl ControlSource for ScriptedControl {
                     generation: Some(self.learn_generation.load(Ordering::SeqCst) as u64),
                     remaining_ms: None,
                     device: Some(device),
-                    key: Some("A".into()),
+                    key: Some(key),
                     error: None,
                 };
             }
@@ -5557,6 +5561,10 @@ fn the_redesign_identify_verb_selects_the_exact_machine_board() {
         response.contains("/redesign?flash=Keyboard%20identified"),
         "{response}"
     );
+    assert!(
+        response.contains("identified_selector=usb%3Ad209%3A0430%3A00"),
+        "the response must bind this attempt to its canonical selector: {response}"
+    );
     let selected = control
         .staged()
         .device
@@ -5568,6 +5576,44 @@ fn the_redesign_identify_verb_selects_the_exact_machine_board() {
         machine.identified_from.lock().unwrap().as_slice(),
         [IPAC_KB],
         "only the daemon-observed Windows instance reaches the resolver"
+    );
+}
+
+/// Escape reaches Raw Input as well as the browser. Even if that physical hit
+/// beats the cancel POST, the redesign transaction must settle as cancelled
+/// before machine resolution and leave the prior mapping input untouched.
+#[test]
+fn redesign_identify_treats_an_escape_hit_as_cancellation_not_a_device() {
+    let control = Arc::new(ScriptedControl::new(false).with_identify_key_hit(IPAC_KB, "Escape"));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
+    post_form(
+        addr,
+        "/redesign/device",
+        "selector=usb%3A046d%3Ac545%3A00&alias=g915&label=Logitech+G915",
+    );
+
+    let response = post_form(
+        addr,
+        "/redesign/device/identify",
+        "attempt=esc00000000000000000000000000000",
+    );
+    assert!(
+        response.contains("Keyboard%20identification%20cancelled"),
+        "{response}"
+    );
+    assert_eq!(
+        control
+            .staged()
+            .device
+            .map(|device| device.selector)
+            .as_deref(),
+        Some("usb:046d:c545:00"),
+        "Escape must preserve the prior mapping input"
+    );
+    assert!(
+        machine.identified_from.lock().unwrap().is_empty(),
+        "Escape must never reach exact-device resolution"
     );
 }
 
@@ -9238,7 +9284,7 @@ fn nocturne_learner_resolves_hid_child_and_usb_mi00_to_one_canonical_selector() 
     let addr = start_server_with_machine(Arc::clone(&control), machine_source);
 
     for observed in [IPAC_RAW_HID, IPAC_KB] {
-        *control.identify_hit.lock().unwrap() = Some(observed.to_owned());
+        *control.identify_hit.lock().unwrap() = Some((observed.to_owned(), "A".to_owned()));
         let started: serde_json::Value =
             serde_json::from_str(body_of(&post_json(addr, "/api/learn/start", "{}"))).unwrap();
         assert_eq!(started["state"], "listening", "{started}");
@@ -9250,7 +9296,7 @@ fn nocturne_learner_resolves_hid_child_and_usb_mi00_to_one_canonical_selector() 
         assert_eq!(polled["selector"], "usb:d209:0430:00", "{polled}");
     }
 
-    *control.identify_hit.lock().unwrap() = Some(DESK_RAW_HID.to_owned());
+    *control.identify_hit.lock().unwrap() = Some((DESK_RAW_HID.to_owned(), "A".to_owned()));
     let _: serde_json::Value =
         serde_json::from_str(body_of(&post_json(addr, "/api/learn/start", "{}"))).unwrap();
     let unresolved: serde_json::Value =

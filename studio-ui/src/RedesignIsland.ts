@@ -4358,6 +4358,36 @@ export function RedesignIsland() {
           ),
           h("span", { role: "status", class: "n-live-sr", "data-live-chatter": "" }),
         ),
+        // Identify is also a native transaction. The modal is intentionally
+        // scripting-only, so this compact server form is its no-script door:
+        // the same next-key listen, the same explicit staging consequence,
+        // and the same POST → 303 result without pretending the canvas works.
+        h(
+          "section",
+          {
+            class: "rd-identify-card rd-identify-native",
+            "aria-labelledby": "rd-identify-native-title",
+          },
+          h(
+            "div",
+            { class: "rd-identify-copy" },
+            h("h2", { id: "rd-identify-native-title" }, "Identify a mapping input"),
+            h(
+              "p",
+              null,
+              "Press the action, then press one key on the exact keyboard or encoder to use. A successful answer selects that connection; nothing is captured, saved, or started.",
+            ),
+          ),
+          h(
+            "form",
+            { method: "post", action: "/redesign/device/identify" },
+            h(
+              "button",
+              { type: "submit", class: "rd-panel-action rd-identify-start" },
+              "Identify and use as mapping input",
+            ),
+          ),
+        ),
         // Action results need room to be read. The legacy topbar pill clipped
         // the exact recovery sentence behind an ellipsis; this banner is a
         // real row and disappears entirely when there is no action outcome.

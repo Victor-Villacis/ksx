@@ -45,12 +45,10 @@ export interface RedesignLiveEnvelope {
 
 /** The structure payload's authority over live paint. `structureRevision`
  * should fingerprint the staged controllers/mappings that the canvas drew.
- * When the backend can disclose the revision the active session actually
- * started from, `runtimeRevision` makes correlation exact. Otherwise the
- * client latches the structure revision at the stopped -> running boundary;
- * a later staged edit revokes paint until a successful Apply (or a successful
- * Restart Play that replaces an already-running session) explicitly calls
- * `acceptCurrentRevision`. */
+ * When the backend discloses the revision the active session actually
+ * started from, `runtimeRevision` makes correlation exact. If it is absent,
+ * paint stays fail-closed until a successful Play, Apply, or Replace session
+ * explicitly calls `acceptCurrentRevision` after its refreshed payload. */
 export interface RedesignLiveSession {
   reachable: boolean;
   running: boolean;
@@ -191,7 +189,7 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
   let confirmed = false;
   let transport: "idle" | "connecting" | "open" | "reconnecting" = "idle";
   let license: RedesignLiveSession | null = null;
-  let inferredRuntimeRevision = "";
+  let acceptedRuntimeRevision = "";
   let sessionIdentity = "no-session";
   let acceptedFingerprint: string | null = null;
   let state: LiveState | null = null;
@@ -218,7 +216,7 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
       trimmed(session.profile),
       trimmed(session.sessionId),
       trimmed(session.structureRevision),
-      trimmed(session.runtimeRevision) || inferredRuntimeRevision,
+      trimmed(session.runtimeRevision) || acceptedRuntimeRevision,
     ]);
   }
 
@@ -235,10 +233,10 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
 
   function revisionsAgree(session: RedesignLiveSession): boolean {
     const structure = trimmed(session.structureRevision);
-    const runtime = trimmed(session.runtimeRevision) || inferredRuntimeRevision;
-    // No revision claim is the legacy SessionView contract. It is still
-    // origin-gated, and every session fingerprint transition resets paint.
-    if (!structure && !runtime) return true;
+    const runtime = trimmed(session.runtimeRevision) || acceptedRuntimeRevision;
+    // Live paint is authoritative only when the served draft and the
+    // running session have an exact shared revision. An older daemon that
+    // omits either side cannot prove that relationship, so fail closed.
     return Boolean(structure && runtime && structure === runtime);
   }
 
@@ -496,24 +494,12 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
     const before = fingerprint(license);
     const nextIdentity = identity(next);
     if (nextIdentity !== sessionIdentity) {
-      inferredRuntimeRevision = "";
+      acceptedRuntimeRevision = "";
       sessionIdentity = nextIdentity;
     }
     const disclosedRuntime = trimmed(next?.runtimeRevision);
-    const stagedRevision = trimmed(next?.structureRevision);
     if (disclosedRuntime) {
-      inferredRuntimeRevision = disclosedRuntime;
-    } else if (
-      next?.reachable &&
-      next.running &&
-      trimmed(next.origin).toLowerCase() === "staged" &&
-      stagedRevision &&
-      !inferredRuntimeRevision
-    ) {
-      // Best available boundary on the current protocol: the first served
-      // running/staged payload is the setup Play started from. Keep that
-      // revision pinned while subsequent staged edits arrive.
-      inferredRuntimeRevision = stagedRevision;
+      acceptedRuntimeRevision = disclosedRuntime;
     }
     license = next;
     const changed = fingerprint(next) !== before;
@@ -541,9 +527,13 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
     }
     if (!revisionsAgree(next)) {
       resetLedger();
+      const structure = trimmed(next.structureRevision);
+      const runtime = trimmed(next.runtimeRevision) || acceptedRuntimeRevision;
       setState(
         "stale",
-        "Apply the current staged changes before using live feedback.",
+        structure && runtime
+          ? "Apply the current staged changes before using live feedback."
+          : "Live feedback cannot verify which draft Play is using. Use Replace session to start the current draft.",
         changed,
       );
       return;
@@ -571,7 +561,7 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
       !license.running ||
       trimmed(license.origin).toLowerCase() !== "staged"
     ) return;
-    inferredRuntimeRevision = revision;
+    acceptedRuntimeRevision = revision;
     resetLedger();
     if (transport === "open") {
       setState("waiting", "Live input is connected and waiting for activity.");

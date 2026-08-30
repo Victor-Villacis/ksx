@@ -353,7 +353,7 @@ describe("redesign live feedback", { concurrency: false }, () => {
     );
   });
 
-  test("the running revision stays latched across staged edits until Apply is confirmed", async () => {
+  test("an undisclosed running revision fails closed until a lifecycle action confirms it", async () => {
     const first = {
       ...matchingSession,
       structureRevision: "stage-1",
@@ -367,13 +367,27 @@ describe("redesign live feedback", { concurrency: false }, () => {
       slots: [{ slot: 1, down: ["a"], hit: ["a"] }],
       keys: [["G", true]],
     }));
-    assert.equal((await snapshot()).keyG, true);
+    let view = await snapshot();
+    assert.equal(view.state, "stale");
+    assert.equal(view.keyG, false, "a reload cannot infer which draft Play is using");
+    assert.match(view.status, /cannot verify which draft Play is using.*Replace session/i);
+
+    // The lifecycle shell calls this only after Play/Replace session
+    // succeeded and the refreshed payload disclosed stage-1 as current.
+    await page.evaluate(() => window.ksxLive.acceptCurrentRevision());
+    await emit("frame", frame({
+      slots: [{ slot: 1, down: ["a"], hit: ["a"] }],
+      keys: [["G", true]],
+    }));
+    view = await snapshot();
+    assert.equal(view.state, "active");
+    assert.equal(view.keyG, true);
 
     await page.evaluate((session) => window.ksxLive.reconcileSession(session), {
       ...first,
       structureRevision: "stage-2",
     });
-    let view = await snapshot();
+    view = await snapshot();
     assert.equal(view.state, "stale");
     assert.equal(view.keyG, false);
     await emit("frame", frame({

@@ -220,6 +220,10 @@ pub(crate) fn device_row(row: &NocturneDeviceRow) -> SlotValue {
         ("name".to_owned(), SlotValue::Text(row.name.clone())),
         ("meta".to_owned(), SlotValue::Text(row.meta.clone())),
         ("role".to_owned(), SlotValue::Text(row.role.clone())),
+        (
+            "connection_label".to_owned(),
+            SlotValue::Text(row.connection_label.clone()),
+        ),
         ("selector".to_owned(), SlotValue::Text(row.selector.clone())),
         ("alias".to_owned(), SlotValue::Text(row.alias.clone())),
         ("label".to_owned(), SlotValue::Text(row.label.clone())),
@@ -784,6 +788,24 @@ mod tests {
 
     fn page() -> EmbeddedPage {
         EmbeddedPage::load("/nocturne").expect("embedded /nocturne page must load")
+    }
+
+    #[test]
+    fn device_row_carries_connection_identity_into_server_list_slots() {
+        let row = NocturneDeviceRow {
+            connection_label: "USB D209:0430 · connection 01".to_owned(),
+            ..Default::default()
+        };
+        let SlotValue::Object(fields) = device_row(&row) else {
+            panic!("device rows must be slot objects");
+        };
+        assert!(fields.iter().any(|(name, value)| {
+            name == "connection_label"
+                && matches!(
+                    value,
+                    SlotValue::Text(text) if text == "USB D209:0430 · connection 01"
+                )
+        }));
     }
 
     fn keyboard_payload() -> NocturnePayload {

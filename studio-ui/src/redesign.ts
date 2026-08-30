@@ -75,6 +75,7 @@ let identifyRequestController: AbortController | null = null;
 let identifyRequestAttempt: string | null = null;
 let identifyCancellationAccepted = false;
 let identifyCancellationTask: Promise<boolean> | null = null;
+let identifyLifecycleWired = false;
 
 function applyAuthority(operations: RedesignPayload["operations"] | null | undefined): string {
   if (!operations) return "";
@@ -350,6 +351,10 @@ function wireForms(root: HTMLElement): void {
   });
   window.addEventListener("keydown", guardIdentifyKey, true);
   window.addEventListener("keypress", guardIdentifyKey, true);
+  if (!identifyLifecycleWired) {
+    identifyLifecycleWired = true;
+    window.addEventListener("pagehide", abandonIdentifyOnPageHide);
+  }
   wireApplyRestartDialog(root);
 }
 
@@ -441,7 +446,14 @@ function actionStillOwnsFocus(owner: HTMLElement, submitter: HTMLElement | null)
   return active === null || active === document.body || active === submitter || owner.contains(active);
 }
 
-type IdentifyUiState = "idle" | "listening" | "cancelling" | "identified" | "cancelled" | "error";
+type IdentifyUiState =
+  | "idle"
+  | "listening"
+  | "cancelling"
+  | "resolving"
+  | "identified"
+  | "cancelled"
+  | "error";
 
 function identifySurface(root: HTMLElement): HTMLElement | null {
   return root.querySelector<HTMLElement>("[data-rd-identify]");
@@ -487,6 +499,93 @@ function identifyIsPending(root: HTMLElement): boolean {
   return root.querySelector<HTMLElement>(".rd-devmodal")?.dataset.rdIdentifyPending === "true";
 }
 
+function selectedIdentifyRow(root: HTMLElement): HTMLElement | null {
+  return root.querySelector<HTMLElement>(
+    '.rd-devmodal [data-nx="rd-dev-toggle"][aria-current="true"]',
+  );
+}
+
+function selectedIdentifySelector(root: HTMLElement): string {
+  return selectedIdentifyRow(root)?.dataset.selector?.trim() ?? "";
+}
+
+function identifyRowForSelector(root: HTMLElement, selector: string): HTMLElement | null {
+  return Array.from(
+    root.querySelectorAll<HTMLElement>('.rd-devmodal [data-nx="rd-dev-toggle"]'),
+  ).find((row) => row.dataset.selector === selector) ?? null;
+}
+
+/** A returned start response means Raw Input no longer owns the next key.
+ * Retire that exact browser attempt before any authority refresh so a slow
+ * repaint cannot expose a Cancel button for work the server already settled. */
+function settleIdentifyListener(root: HTMLElement, controller: AbortController): void {
+  if (identifyRequestController === controller) {
+    identifyRequestController = null;
+    identifyRequestAttempt = null;
+  }
+  setIdentifyModalPending(root, false);
+}
+
+/** A transport can disappear after the daemon commits the selection. Cancel
+ * the nonce if it is still live, then read current authority before writing
+ * any outcome copy. Even a successful refresh cannot prove which request
+ * caused an unchanged row, so that case remains explicitly unconfirmed. */
+async function recoverUnconfirmedIdentify(
+  root: HTMLElement,
+  attempt: string,
+  previousSelector: string,
+): Promise<boolean> {
+  setIdentifyUi(
+    root,
+    "resolving",
+    "Checking the current mapping input",
+    "The listening response was interrupted. Confirming the server's current selection…",
+  );
+  try {
+    await fetch("/redesign/device/identify/cancel", {
+      method: "POST",
+      body: new URLSearchParams({ attempt }),
+      redirect: "follow",
+    });
+  } catch {
+    // The foreground authority read below remains the customer-safe boundary.
+  }
+
+  if (!(await refresh())) {
+    applyRedesignFlash(
+      "error: the keyboard-listening outcome could not be confirmed — reload before trying again.",
+    );
+    setIdentifyUi(
+      root,
+      "error",
+      "Identification outcome unknown",
+      "Reload the workbench to confirm the current mapping input before trying again.",
+    );
+    return false;
+  }
+
+  const row = selectedIdentifyRow(root);
+  const name = row?.querySelector<HTMLElement>(".n-dev-name")?.textContent?.trim();
+  const currentSelector = selectedIdentifySelector(root);
+  const selectionChanged = Boolean(
+    currentSelector && currentSelector !== previousSelector,
+  );
+  applyRedesignFlash(
+    "error: the keyboard-listening response was lost — review the current mapping input before retrying.",
+  );
+  setIdentifyUi(
+    root,
+    "error",
+    "Could not confirm the identification outcome",
+    name
+      ? selectionChanged
+        ? `The workbench now shows ${name}, but this interrupted request cannot prove what caused that change. Review its selected row or reload before trying again.`
+        : `The workbench currently shows ${name}. Review its selected row or reload before trying again.`
+      : "Review the selected mapping-input row or reload before trying again.",
+  );
+  return false;
+}
+
 /** The physical key reaches the daemon independently of the browser event.
  * Prevent browser scrolling, focused-button activation and canvas shortcuts;
  * Escape is the one authored cancellation door. */
@@ -498,16 +597,40 @@ function guardIdentifyKey(event: KeyboardEvent): void {
   if (event.key === "Escape" && event.type === "keydown") void cancelIdentify(root);
 }
 
+/** A long-lived identify POST outlives its document unless the exact attempt
+ * is cancelled explicitly. Queue the cancellation through the browser's
+ * navigation-safe channel before aborting the page-owned fetch; the nonce
+ * makes duplicate or delayed delivery harmless to another tab's listener. */
+function abandonIdentifyOnPageHide(): void {
+  const controller = identifyRequestController;
+  const attempt = identifyRequestAttempt;
+  if (!controller || !attempt) return;
+  const body = new URLSearchParams({ attempt });
+  const queued = navigator.sendBeacon("/redesign/device/identify/cancel", body);
+  if (!queued) {
+    void fetch("/redesign/device/identify/cancel", {
+      method: "POST",
+      body,
+      redirect: "manual",
+      keepalive: true,
+    }).catch(() => undefined);
+  }
+  // If this document is restored from the back-forward cache, its pending
+  // request must not repaint as a generic network failure.
+  identifyCancellationAccepted = true;
+  identifyRequestController = null;
+  identifyRequestAttempt = null;
+  controller.abort();
+}
+
 function identifyErrorCopy(flash: string | null): string {
   return (flash ?? "No keyboard answered. Nothing changed.")
     .replace(/^error:\s*/i, "")
     .trim();
 }
 
-function showIdentifiedDevice(root: HTMLElement): void {
-  const row = root.querySelector<HTMLElement>(
-    '.rd-devmodal [data-nx="rd-dev-toggle"][aria-current="true"]',
-  );
+function showIdentifiedDevice(root: HTMLElement, selector: string): void {
+  const row = identifyRowForSelector(root, selector);
   const name = row?.querySelector<HTMLElement>(".n-dev-name")?.textContent?.trim() ?? "";
   const identity = row?.querySelector<HTMLElement>(".rd-dev-identity")?.textContent?.trim() ?? "";
   setIdentifyUi(
@@ -620,6 +743,7 @@ async function submitIdentifyForm(
   identifyRequestAttempt = attempt;
   identifyCancellationAccepted = false;
   let identified = false;
+  const previousSelector = selectedIdentifySelector(root);
   setIdentifyModalPending(root, true);
   setIdentifyUi(
     root,
@@ -628,7 +752,7 @@ async function submitIdentifyForm(
     "Press one key on the exact keyboard or encoder to use as the mapping input. Esc cancels.",
     true,
   );
-  root.querySelector<HTMLButtonElement>("[data-rd-identify-cancel]")?.focus({
+  root.querySelector<HTMLElement>("[data-rd-identify-status]")?.focus({
     preventScroll: true,
   });
   try {
@@ -639,7 +763,10 @@ async function submitIdentifyForm(
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`identify request failed with ${response.status}`);
-    const outcome = new URL(response.url).searchParams.get("flash");
+    const resultUrl = new URL(response.url);
+    const outcome = resultUrl.searchParams.get("flash");
+    const answeredSelector = resultUrl.searchParams.get("identified_selector")?.trim() ?? "";
+    settleIdentifyListener(root, controller);
     if (outcome !== IDENTIFY_OK_FLASH) {
       const cancelling = identifyCancellationTask;
       if (cancelling && await cancelling) return;
@@ -658,6 +785,12 @@ async function submitIdentifyForm(
       return;
     }
     applyRedesignFlash(outcome);
+    setIdentifyUi(
+      root,
+      "resolving",
+      "Keyboard answered",
+      "Confirming the exact connection now selected by the workbench…",
+    );
     if (!(await refresh())) {
       applyRedesignFlash(
         "error: the keyboard answered, but the workbench could not refresh — reload to confirm the mapping input.",
@@ -670,19 +803,38 @@ async function submitIdentifyForm(
       );
       return;
     }
+    const currentSelector = selectedIdentifySelector(root);
+    if (!answeredSelector || currentSelector !== answeredSelector) {
+      const answeredRow = answeredSelector
+        ? identifyRowForSelector(root, answeredSelector)
+        : null;
+      const answeredName = answeredRow
+        ?.querySelector<HTMLElement>(".n-dev-name")
+        ?.textContent?.trim();
+      const currentName = selectedIdentifyRow(root)
+        ?.querySelector<HTMLElement>(".n-dev-name")
+        ?.textContent?.trim();
+      applyRedesignFlash(
+        "error: the keyboard answered, but the mapping input changed before confirmation — review the current selection.",
+      );
+      setIdentifyUi(
+        root,
+        "error",
+        "Keyboard answered — mapping input changed",
+        answeredSelector
+          ? `${answeredName ?? "The exact connection"} answered this attempt. ${currentName ?? "Another connection"} is selected now; review the selected row before mapping.`
+          : "The server did not disclose which exact connection answered. Reload and review the selected row before mapping.",
+      );
+      return;
+    }
     identified = true;
-    showIdentifiedDevice(root);
+    showIdentifiedDevice(root, answeredSelector);
   } catch {
     if (controller.signal.aborted && identifyCancellationAccepted) return;
     const cancelling = identifyCancellationTask;
     if (cancelling && await cancelling) return;
-    applyRedesignFlash("error: request failed — is ksx studio still running?");
-    setIdentifyUi(
-      root,
-      "error",
-      "Identification unavailable",
-      "ksx studio did not answer. Nothing changed; try again after it reconnects.",
-    );
+    settleIdentifyListener(root, controller);
+    identified = await recoverUnconfirmedIdentify(root, attempt, previousSelector);
   } finally {
     if (identifyRequestController === controller) {
       identifyRequestController = null;

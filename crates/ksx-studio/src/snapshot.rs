@@ -5521,8 +5521,29 @@ fn device_connection_label(selector: &str) -> String {
         .find(|component| !component.is_empty());
     tail.map_or_else(
         || "Exact connection available after identification".to_owned(),
-        |component| format!("Connection {component}"),
+        |component| format!("Connection {component} · {}", selector_fingerprint(trimmed)),
     )
+}
+
+/// Compact, stable identity derived from every UTF-8 byte in a selector.
+///
+/// The readable connection tail helps people distinguish ports at a glance;
+/// this suffix keeps selectors with the same tail (including punctuation-only
+/// differences) from collapsing to the same label.
+fn selector_fingerprint(selector: &str) -> String {
+    let mut fingerprint = 0xcbf29ce484222325_u64;
+    for byte in selector.as_bytes() {
+        fingerprint ^= u64::from(*byte);
+        fingerprint = fingerprint.wrapping_mul(0x100000001b3);
+    }
+
+    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut encoded = [b'0'; 13];
+    for digit in encoded.iter_mut().rev() {
+        *digit = DIGITS[(fingerprint % 36) as usize];
+        fingerprint /= 36;
+    }
+    encoded.into_iter().map(char::from).collect()
 }
 
 impl NocturneDerived {
@@ -6502,12 +6523,18 @@ mod tests {
         );
         assert_eq!(
             device_connection_label(r"HID\VID_D209&PID_0430\7&1A2B3C&0&0000"),
-            "Connection 7&1A2B3C&0&0000"
+            "Connection 7&1A2B3C&0&0000 · 1ket05ls5b0gh"
         );
         assert_eq!(
             device_connection_label("  "),
             "Exact connection available after identification"
         );
+
+        let slash = device_connection_label("opaque:panel/a");
+        let colon = device_connection_label("opaque:panel:a");
+        assert_eq!(slash, "Connection a · 1mcg2plvqib6i");
+        assert_eq!(colon, "Connection a · 1mfabgg5dy7k3");
+        assert_ne!(slash, colon);
     }
 
     /// The controller inspector needs two facts browsers previously guessed:

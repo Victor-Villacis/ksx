@@ -147,9 +147,9 @@ struct AppState {
     /// the redesign identify-by-key transaction. Both parts are load-bearing:
     /// the generation qualifies the daemon cancel, while the browser nonce
     /// prevents a delayed Cancel from an older tab taking a newer tab's
-    /// generation. The identify worker removes this lease before resolving a
-    /// hit, making "cancelled" and "selected" mutually exclusive outcomes at
-    /// one server-owned boundary.
+    /// generation. The identify worker changes the lease to `Resolving` after
+    /// a non-Escape hit wins, making "cancelled" and "selected" mutually
+    /// exclusive outcomes at one server-owned boundary.
     redesign_identify: std::sync::Mutex<RedesignIdentifyRegistry>,
     /// Supplies an opaque owner for a no-JS identify submit. Enhanced clients
     /// provide their own nonce; the static form cannot, and must still never

@@ -287,9 +287,11 @@ try {
     // fallback signal shelf, semantic route index, and shared simultaneous-
     // input diagnostic live in Nocturne's one island. Exact-generation recovery
     // for lost Start/Poll/Cancel responses and fail-closed environment/reseed
-    // provenance add the final bounded slice; keep a narrow 282,500-byte ceiling
-    // so that safety cost remains deliberate rather than an open-ended bump.
-    budgetThreshold: 282_500,
+    // provenance add the final bounded slice. Redesign's persistent exact-device
+    // recovery, actionable progress, named live/transport health and real pending
+    // labels add one audited 4,000-byte allowance; keep the resulting 286,500-byte
+    // ceiling narrow so that safety cost remains deliberate, not open-ended.
+    budgetThreshold: 286_500,
     ssr: true,
     ssrEntryPoints: {
       nocturne: "src/nocturne.ts",

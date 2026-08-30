@@ -132,6 +132,9 @@ export interface RdDeviceRowView {
   protocol_profile?: string | null;
   profile_state: string;
   terminal_count?: number | null;
+  capture_badge: string;
+  capture_state: string;
+  capture_cls: string;
 }
 
 /** A device the picker shows but cannot offer — no keyboard interface, or
@@ -357,6 +360,14 @@ export interface RdCaptureState {
   can_prepare: boolean;
   can_release: boolean;
   held: RdHeldCaptureRow[];
+  state_label: string;
+  state_tone: string;
+  attention_cls: string;
+  attention_title: string;
+  attention_line: string;
+  attention_detail: string;
+  attention_review_label: string;
+  attention_retry_cls: string;
 }
 
 export interface RdJourneyRow {
@@ -461,6 +472,14 @@ const [rdJourneyRows, setRdJourneyRows] = createSignal<RdJourneyRow[]>([]);
 
 const [rdCaptureMode, setRdCaptureMode] = createSignal("none");
 const [rdCaptureDeviceLabel, setRdCaptureDeviceLabel] = createSignal("");
+const [rdCaptureStateLabel, setRdCaptureStateLabel] = createSignal("No input");
+const [rdCaptureStateTone, setRdCaptureStateTone] = createSignal("stopped");
+const [rdCaptureAttentionCls, setRdCaptureAttentionCls] = createSignal("rd-attention none");
+const [rdCaptureAttentionTitle, setRdCaptureAttentionTitle] = createSignal("");
+const [rdCaptureAttentionLine, setRdCaptureAttentionLine] = createSignal("");
+const [rdCaptureAttentionDetail, setRdCaptureAttentionDetail] = createSignal("");
+const [rdCaptureAttentionReviewLabel, setRdCaptureAttentionReviewLabel] = createSignal("Review recovery");
+const [rdCaptureAttentionRetryCls, setRdCaptureAttentionRetryCls] = createSignal("rd-panel-action rd-attention-retry none");
 const [rdCaptureHeading, setRdCaptureHeading] = createSignal("No input selected");
 const [rdCaptureLine, setRdCaptureLine] = createSignal("Pick the input this setup will listen to.");
 const [rdCaptureRecoveryLine, setRdCaptureRecoveryLine] = createSignal("");
@@ -878,6 +897,16 @@ export function applyRedesign(v: RedesignPayload): void {
   const capture = v.capture;
   setRdCaptureMode(capture?.mode ?? "none");
   setRdCaptureDeviceLabel(capture?.device_label ?? "");
+  setRdCaptureStateLabel(capture?.state_label ?? "No input");
+  setRdCaptureStateTone(capture?.state_tone ?? "stopped");
+  setRdCaptureAttentionCls(capture?.attention_cls ?? "rd-attention none");
+  setRdCaptureAttentionTitle(capture?.attention_title ?? "");
+  setRdCaptureAttentionLine(capture?.attention_line ?? "");
+  setRdCaptureAttentionDetail(capture?.attention_detail ?? "");
+  setRdCaptureAttentionReviewLabel(capture?.attention_review_label ?? "Review recovery");
+  setRdCaptureAttentionRetryCls(
+    capture?.attention_retry_cls ?? "rd-panel-action rd-attention-retry none",
+  );
   setRdCaptureHeading(capture?.heading ?? "No input selected");
   setRdCaptureLine(capture?.line ?? "Pick the input this setup will listen to.");
   setRdCaptureRecoveryLine(capture?.recovery_line ?? "");
@@ -1131,85 +1160,6 @@ function captureIdentityMatches(row: RdHeldCaptureRow): boolean {
  * machine to the selected input's healthy mode. */
 function additionalHeldCaptureRows(): RdHeldCaptureRow[] {
   return rdCaptureHeld().filter((row) => !captureIdentityMatches(row));
-}
-
-function captureAttentionVisible(): boolean {
-  return RD_CAPTURE_ATTENTION_MODES.has(rdCaptureMode()) || additionalHeldCaptureRows().length > 0;
-}
-
-function captureAttentionCls(): string {
-  return captureAttentionVisible() ? "rd-attention" : "rd-attention none";
-}
-
-function captureAttentionDevice(): string {
-  if (RD_CAPTURE_ATTENTION_MODES.has(rdCaptureMode())) {
-    return rdCaptureDeviceLabel() || "Selected input";
-  }
-  const extra = additionalHeldCaptureRows();
-  if (extra.length === 1) return extra[0].name;
-  return `${extra.length} held keyboards`;
-}
-
-function captureAttentionHeading(): string {
-  if (RD_CAPTURE_ATTENTION_MODES.has(rdCaptureMode())) return rdCaptureHeading();
-  return additionalHeldCaptureRows().length === 1
-    ? "Another keyboard needs recovery"
-    : "Other keyboards need recovery";
-}
-
-function captureAttentionLine(): string {
-  if (RD_CAPTURE_ATTENTION_MODES.has(rdCaptureMode())) return rdCaptureLine();
-  const extra = additionalHeldCaptureRows();
-  return extra.length === 1
-    ? `${extra[0].name} is held by ksx and cannot type normally until it is recovered.`
-    : `${extra.length} keyboards are held by ksx and need individual recovery.`;
-}
-
-function captureAttentionDetail(): string {
-  if (RD_CAPTURE_ATTENTION_MODES.has(rdCaptureMode())) return rdCaptureRecoveryLine();
-  const extra = additionalHeldCaptureRows();
-  return extra.length === 1 && extra[0].note
-    ? extra[0].note
-    : "Review each exact device before returning it to ordinary typing.";
-}
-
-function captureAttentionReviewLabel(): string {
-  if (rdCaptureMode() === "prepare") return "Review preparation";
-  const rows = RD_CAPTURE_ATTENTION_MODES.has(rdCaptureMode())
-    ? rdCaptureHeld()
-    : additionalHeldCaptureRows();
-  if (rows.length === 1 && rows[0].can_release) return "Review release";
-  return "Review recovery";
-}
-
-function captureAttentionRetryCls(): string {
-  return rdCaptureMode() === "blocked" || rdCaptureMode() === "unavailable"
-    ? "rd-panel-action rd-attention-retry"
-    : "rd-panel-action rd-attention-retry none";
-}
-
-function captureStateLabel(): string {
-  switch (rdCaptureMode()) {
-    case "prepare":
-      return "Preparation required";
-    case "release":
-      return "Prepared";
-    case "ready":
-    case "prepare-optional":
-      return "Ready";
-    case "none":
-      return "No input";
-    default:
-      return "Action required";
-  }
-}
-
-function captureStateTone(): string {
-  return ["release", "ready", "prepare-optional"].includes(rdCaptureMode())
-    ? "ready"
-    : rdCaptureMode() === "none"
-      ? "stopped"
-      : "attention";
 }
 
 // ── The canvas (lifted from NocturneIsland's canvas section) ────────────────
@@ -2495,18 +2445,6 @@ interface RdDeviceStateBadge {
   state: "connected" | "canvas" | "source" | "ready" | "attention";
 }
 
-function deviceCaptureBadge(row: RdDeviceRowView): { label: string; state: "ready" | "attention" } {
-  if (row.aria_current !== "true") return { label: "", state: "ready" };
-  const mode = rdCaptureMode();
-  if (mode === "prepare") return { label: "Preparation required", state: "attention" };
-  if (mode === "release") return { label: "Prepared", state: "ready" };
-  if (mode === "ready" || mode === "prepare-optional") return { label: "Ready", state: "ready" };
-  if (["held", "blocked", "unavailable", "release-held"].includes(mode)) {
-    return { label: "Needs attention", state: "attention" };
-  }
-  return { label: "", state: "ready" };
-}
-
 /** One vocabulary for device state everywhere it appears. A board can hold
  * several independent facts at once (connected + on canvas + input source),
  * so these are badges rather than one lossy status sentence. */
@@ -2517,12 +2455,11 @@ function deviceStateBadges(row: RdDeviceRowView): RdDeviceStateBadge[] {
   if (row.aria_current !== "true") return badges;
 
   badges.push({ label: "Input source", state: "source" });
-  const captureMatches = Boolean(
-    rdCaptureSelector().trim() && rdCaptureSelector().trim() === row.selector.trim(),
-  );
-  if (captureMatches) {
-    const capture = deviceCaptureBadge(row);
-    if (capture.label) badges.push(capture);
+  if (row.capture_badge) {
+    badges.push({
+      label: row.capture_badge,
+      state: row.capture_state === "attention" ? "attention" : "ready",
+    });
   }
   return badges;
 }
@@ -4311,7 +4248,7 @@ export function RedesignIsland() {
                         "data-nx": "rd-journey-action",
                         "data-journey-step": row.key,
                         "data-journey-action": row.action,
-                        "aria-current": row.badge === "Done" || row.badge === "Next"
+                        "aria-current": () => row.badge === "Done" || row.badge === "Next"
                           ? "false"
                           : "step",
                       },
@@ -4467,9 +4404,9 @@ export function RedesignIsland() {
                       "span",
                       {
                         class: "rd-state-badge",
-                        "data-state": () => captureStateTone(),
+                        "data-state": () => rdCaptureStateTone(),
                       },
-                      () => captureStateLabel(),
+                      () => rdCaptureStateLabel(),
                     ),
                     h("span", { class: "rd-state-device" }, () => rdCaptureDeviceLabel()),
                   ),
@@ -4547,7 +4484,7 @@ export function RedesignIsland() {
                             h("input", { type: "hidden", name: "instance_id", value: row.instance }),
                             h(
                               "label",
-                              { class: row.disabled ? "rd-consent compact disabled" : "rd-consent compact" },
+                              { class: () => row.disabled ? "rd-consent compact disabled" : "rd-consent compact" },
                               h("input", {
                                 type: "checkbox",
                                 name: "confirm_release",
@@ -4849,7 +4786,7 @@ export function RedesignIsland() {
         h(
           "section",
           {
-            class: () => captureAttentionCls(),
+            class: () => rdCaptureAttentionCls(),
             "data-rd-attention": "",
             role: "region",
             "aria-labelledby": "rd-attention-title",
@@ -4862,10 +4799,10 @@ export function RedesignIsland() {
             h(
               "h2",
               { id: "rd-attention-title" },
-              () => `${captureAttentionDevice()} · ${captureAttentionHeading()}`,
+              () => rdCaptureAttentionTitle(),
             ),
-            h("p", { class: "rd-attention-line" }, () => captureAttentionLine()),
-            h("p", { class: "rd-attention-detail" }, () => captureAttentionDetail()),
+            h("p", { class: "rd-attention-line" }, () => rdCaptureAttentionLine()),
+            h("p", { class: "rd-attention-detail" }, () => rdCaptureAttentionDetail()),
           ),
           h(
             "div",
@@ -4877,13 +4814,13 @@ export function RedesignIsland() {
                 class: "rd-panel-action primary",
                 "data-nx": "rd-review-recovery",
               },
-              () => captureAttentionReviewLabel(),
+              () => rdCaptureAttentionReviewLabel(),
             ),
             h(
               "button",
               {
                 type: "button",
-                class: () => captureAttentionRetryCls(),
+                class: () => rdCaptureAttentionRetryCls(),
                 "data-nx": "rd-refresh-retry",
               },
               "Check again",
@@ -5159,11 +5096,10 @@ export function RedesignIsland() {
                       h(
                         "span",
                         {
-                          class: "rd-dev-capturechip",
-                          "data-state": () => deviceCaptureBadge(r).state,
-                          hidden: () => deviceCaptureBadge(r).label === "",
+                          class: r.capture_cls,
+                          "data-state": r.capture_state,
                         },
-                        () => deviceCaptureBadge(r).label,
+                        r.capture_badge,
                       ),
                       h("span", { class: "n-dev-meta" }, r.meta),
                       h("span", { class: "n-dev-meta rd-dev-identity" }, r.connection_label),
@@ -5211,11 +5147,10 @@ export function RedesignIsland() {
                       h(
                         "span",
                         {
-                          class: "rd-dev-capturechip",
-                          "data-state": () => deviceCaptureBadge(r).state,
-                          hidden: () => deviceCaptureBadge(r).label === "",
+                          class: r.capture_cls,
+                          "data-state": r.capture_state,
                         },
-                        () => deviceCaptureBadge(r).label,
+                        r.capture_badge,
                       ),
                       // An ENCODER's meta line follows the live session: the
                       // surface reads the chart over the wire at mount, and
@@ -5268,11 +5203,10 @@ export function RedesignIsland() {
                       h(
                         "span",
                         {
-                          class: "rd-dev-capturechip",
-                          "data-state": () => deviceCaptureBadge(r).state,
-                          hidden: () => deviceCaptureBadge(r).label === "",
+                          class: r.capture_cls,
+                          "data-state": r.capture_state,
                         },
-                        () => deviceCaptureBadge(r).label,
+                        r.capture_badge,
                       ),
                       h("span", { class: "n-dev-meta" }, r.meta),
                       h("span", { class: "n-dev-meta rd-dev-identity" }, r.connection_label),

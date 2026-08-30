@@ -22787,7 +22787,8 @@ button.rd-encoder-product-read-inline:disabled {
 }
 
 .rd-dev-connectedchip[hidden],
-.rd-dev-capturechip[hidden] {
+.rd-dev-capturechip[hidden],
+.rd-dev-capturechip.none {
   display: none;
 }
 

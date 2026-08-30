@@ -115,6 +115,30 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
         Err(error) => (None, error.as_str()),
     };
     let capture = RedesignCaptureState::of(staged, scan_read, scan_error);
+    let capture_badge = match capture.mode.as_str() {
+        "prepare" => Some(("Preparation required", "attention")),
+        "release" => Some(("Prepared", "ready")),
+        "ready" | "prepare-optional" => Some(("Ready", "ready")),
+        "held" | "blocked" | "unavailable" | "release-held" => {
+            Some(("Needs attention", "attention"))
+        }
+        _ => None,
+    };
+    for row in devices
+        .keyboards
+        .iter_mut()
+        .chain(devices.encoders.iter_mut())
+        .chain(devices.experimental.iter_mut())
+    {
+        row.capture_cls = "rd-dev-capturechip none".to_owned();
+        if row.aria_current == "true" {
+            if let Some((label, state)) = capture_badge {
+                row.capture_badge = label.to_owned();
+                row.capture_state = state.to_owned();
+                row.capture_cls = "rd-dev-capturechip".to_owned();
+            }
+        }
+    }
     let operations = RedesignOperationalState::of(
         staged,
         setup.as_ref(),
@@ -428,6 +452,14 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         "rdJourneyLine": payload.journey.line,
         "rdCaptureMode": payload.capture.mode,
         "rdCaptureDeviceLabel": payload.capture.device_label,
+        "rdCaptureStateLabel": payload.capture.state_label,
+        "rdCaptureStateTone": payload.capture.state_tone,
+        "rdCaptureAttentionCls": payload.capture.attention_cls,
+        "rdCaptureAttentionTitle": payload.capture.attention_title,
+        "rdCaptureAttentionLine": payload.capture.attention_line,
+        "rdCaptureAttentionDetail": payload.capture.attention_detail,
+        "rdCaptureAttentionReviewLabel": payload.capture.attention_review_label,
+        "rdCaptureAttentionRetryCls": payload.capture.attention_retry_cls,
         "rdCaptureHeading": payload.capture.heading,
         "rdCaptureLine": payload.capture.line,
         "rdCaptureRecoveryLine": payload.capture.recovery_line,

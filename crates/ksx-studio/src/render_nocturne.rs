@@ -236,6 +236,18 @@ pub(crate) fn device_row(row: &NocturneDeviceRow) -> SlotValue {
             "chartReadable".to_owned(),
             SlotValue::Text(row.chart_readable.clone()),
         ),
+        (
+            "capture_badge".to_owned(),
+            SlotValue::Text(row.capture_badge.clone()),
+        ),
+        (
+            "capture_state".to_owned(),
+            SlotValue::Text(row.capture_state.clone()),
+        ),
+        (
+            "capture_cls".to_owned(),
+            SlotValue::Text(row.capture_cls.clone()),
+        ),
     ])
 }
 

@@ -480,6 +480,26 @@ pub struct RedesignCaptureState {
     pub can_prepare: bool,
     pub can_release: bool,
     pub held: Vec<RedesignHeldCaptureRow>,
+    /// Fully composed presentation for the persistent recovery rail and the
+    /// compact state chip. These remain server-owned so SSR and a later API
+    /// repaint never disagree about whether recovery is visible or what it
+    /// calls the exact device.
+    #[serde(default)]
+    pub state_label: String,
+    #[serde(default)]
+    pub state_tone: String,
+    #[serde(default)]
+    pub attention_cls: String,
+    #[serde(default)]
+    pub attention_title: String,
+    #[serde(default)]
+    pub attention_line: String,
+    #[serde(default)]
+    pub attention_detail: String,
+    #[serde(default)]
+    pub attention_review_label: String,
+    #[serde(default)]
+    pub attention_retry_cls: String,
 }
 
 /// Machine-stable list identity for a held board, without exposing a Windows
@@ -834,6 +854,98 @@ impl RedesignCaptureState {
             }
         };
 
+        let (state_label, state_tone) = match mode.as_str() {
+            "prepare" => ("Preparation required", "attention"),
+            "release" => ("Prepared", "ready"),
+            "ready" | "prepare-optional" => ("Ready", "ready"),
+            "none" => ("No input", "stopped"),
+            _ => ("Action required", "attention"),
+        };
+        let is_attention_mode = matches!(
+            mode.as_str(),
+            "prepare" | "held" | "blocked" | "unavailable" | "release-held"
+        );
+        let additional_held = held
+            .iter()
+            .filter(|row| {
+                row.selector.is_empty()
+                    || row.instance.is_empty()
+                    || row.selector != selector
+                    || !row.instance.eq_ignore_ascii_case(&instance)
+            })
+            .collect::<Vec<_>>();
+        let attention_visible = is_attention_mode || !additional_held.is_empty();
+        let attention_rows = if is_attention_mode {
+            held.iter().collect::<Vec<_>>()
+        } else {
+            additional_held.clone()
+        };
+        let attention_device = if is_attention_mode {
+            if device_label.is_empty() {
+                "Selected input".to_owned()
+            } else {
+                device_label.clone()
+            }
+        } else if let [row] = additional_held.as_slice() {
+            row.name.clone()
+        } else {
+            format!("{} held keyboards", additional_held.len())
+        };
+        let attention_heading = if is_attention_mode {
+            heading.clone()
+        } else if additional_held.len() == 1 {
+            "Another keyboard needs recovery".to_owned()
+        } else {
+            "Other keyboards need recovery".to_owned()
+        };
+        let attention_line = if is_attention_mode {
+            line.clone()
+        } else if let [row] = additional_held.as_slice() {
+            format!(
+                "{} is held by ksx and cannot type normally until it is recovered.",
+                row.name
+            )
+        } else {
+            format!(
+                "{} keyboards are held by ksx and need individual recovery.",
+                additional_held.len()
+            )
+        };
+        let mut attention_detail = if is_attention_mode {
+            recovery_line.clone()
+        } else if let [row] = additional_held.as_slice() {
+            if row.note.is_empty() {
+                "Review this exact device before returning it to ordinary typing.".to_owned()
+            } else {
+                row.note.clone()
+            }
+        } else {
+            "Review each exact device before returning it to ordinary typing.".to_owned()
+        };
+        if is_attention_mode && !additional_held.is_empty() {
+            let other = match additional_held.len() {
+                1 => "One other keyboard also needs recovery in Setup.".to_owned(),
+                count => format!("{count} other keyboards also need recovery in Setup."),
+            };
+            if attention_detail.is_empty() {
+                attention_detail = other;
+            } else {
+                attention_detail = format!("{attention_detail} {other}");
+            }
+        }
+        let attention_review_label = if mode == "prepare" {
+            "Review preparation"
+        } else if attention_rows.len() == 1 && attention_rows[0].can_release {
+            "Review release"
+        } else {
+            "Review recovery"
+        };
+        let attention_retry_cls = if matches!(mode.as_str(), "blocked" | "unavailable") {
+            "rd-panel-action rd-attention-retry"
+        } else {
+            "rd-panel-action rd-attention-retry none"
+        };
+
         Self {
             mode,
             device_label,
@@ -845,6 +957,19 @@ impl RedesignCaptureState {
             can_prepare,
             can_release,
             held,
+            state_label: state_label.to_owned(),
+            state_tone: state_tone.to_owned(),
+            attention_cls: if attention_visible {
+                "rd-attention"
+            } else {
+                "rd-attention none"
+            }
+            .to_owned(),
+            attention_title: format!("{attention_device} · {attention_heading}"),
+            attention_line,
+            attention_detail,
+            attention_review_label: attention_review_label.to_owned(),
+            attention_retry_cls: attention_retry_cls.to_owned(),
         }
     }
 
@@ -1498,6 +1623,9 @@ impl RedesignDeviceRows {
                     selector,
                     alias: b.alias_hint.clone(),
                     label: b.name.clone(),
+                    capture_badge: String::new(),
+                    capture_state: String::new(),
+                    capture_cls: String::new(),
                 };
                 if b.role == ksx_api::BoardRole::PanelEncoder {
                     encoders.push(row);
@@ -3162,6 +3290,16 @@ pub struct NocturneDeviceRow {
     /// about the family's physical screw count.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_count: Option<usize>,
+    /// Redesign-only, server-composed capture badge fields. The shared device
+    /// row keeps them empty on legacy routes; `/redesign` decorates every row
+    /// after capture truth is composed so SSR and API refreshes share one
+    /// literal presentation.
+    #[serde(default)]
+    pub capture_badge: String,
+    #[serde(default)]
+    pub capture_state: String,
+    #[serde(default)]
+    pub capture_cls: String,
 }
 
 /// One board that cannot be picked, and why — kept visible, never hidden:
@@ -5947,6 +6085,9 @@ impl NocturneDerived {
                     selector,
                     alias: b.alias_hint.clone(),
                     label: b.name.clone(),
+                    capture_badge: String::new(),
+                    capture_state: String::new(),
+                    capture_cls: String::new(),
                 };
                 if b.role == ksx_api::BoardRole::PanelEncoder {
                     dev_encoders.push(row);

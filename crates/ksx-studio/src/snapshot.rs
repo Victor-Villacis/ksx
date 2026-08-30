@@ -1003,6 +1003,10 @@ pub struct RedesignJourneyStep {
     pub detail: String,
     pub badge: String,
     pub cls: String,
+    /// Literal ARIA state for the list renderer; list-row ternaries cannot be
+    /// evaluated safely by Forma's server compiler.
+    #[serde(default)]
+    pub aria_current: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1224,6 +1228,12 @@ fn redesign_journey_step(
         detail: detail.to_owned(),
         badge: badge.to_owned(),
         cls: format!("rd-journey-step {cls}"),
+        aria_current: if matches!(badge, "Done" | "Next") {
+            "false"
+        } else {
+            "step"
+        }
+        .to_owned(),
     }
 }
 

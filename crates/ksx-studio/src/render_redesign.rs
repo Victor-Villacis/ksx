@@ -313,6 +313,10 @@ fn journey_row(row: &crate::snapshot::RedesignJourneyStep) -> SlotValue {
         ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
         ("badge".to_owned(), SlotValue::Text(row.badge.clone())),
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        (
+            "aria_current".to_owned(),
+            SlotValue::Text(row.aria_current.clone()),
+        ),
     ])
 }
 

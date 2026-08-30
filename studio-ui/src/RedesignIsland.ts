@@ -378,6 +378,7 @@ export interface RdJourneyRow {
   detail: string;
   badge: string;
   cls: string;
+  aria_current: string;
 }
 
 export interface RdJourneyState {
@@ -4248,9 +4249,7 @@ export function RedesignIsland() {
                         "data-nx": "rd-journey-action",
                         "data-journey-step": row.key,
                         "data-journey-action": row.action,
-                        "aria-current": () => row.badge === "Done" || row.badge === "Next"
-                          ? "false"
-                          : "step",
+                        "aria-current": row.aria_current,
                       },
                       h("span", { class: "rd-journey-badge" }, row.badge),
                       h(
@@ -4484,7 +4483,7 @@ export function RedesignIsland() {
                             h("input", { type: "hidden", name: "instance_id", value: row.instance }),
                             h(
                               "label",
-                              { class: () => row.disabled ? "rd-consent compact disabled" : "rd-consent compact" },
+                              { class: "rd-consent compact" },
                               h("input", {
                                 type: "checkbox",
                                 name: "confirm_release",

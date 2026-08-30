@@ -511,6 +511,14 @@ pub fn serve(
             // tests/http.rs proves both, once, like every new verb.
             .route("/redesign/theme", post(redesign_form_theme))
             .route("/redesign/device", post(redesign_form_device))
+            .route(
+                "/redesign/capture/prepare",
+                post(redesign_form_capture_prepare),
+            )
+            .route(
+                "/redesign/capture/release",
+                post(redesign_form_capture_release),
+            )
             .route("/redesign/controller", post(redesign_form_ctrl_add))
             .route(
                 "/redesign/controller/remove",
@@ -542,6 +550,17 @@ pub fn serve(
             .route("/redesign/macro/new", post(redesign_form_macro_new))
             .route("/redesign/macro/delete", post(redesign_form_macro_delete))
             .route("/redesign/api/macro/edit", post(redesign_api_macro_edit))
+            // Final operational-shell block. Form doors preserve the no-JS
+            // 303 contract and land back here; `/api/apply` is the existing
+            // structured answer, behind the same revision guard, so a
+            // needs-restart client never parses copy.
+            .route("/redesign/save", post(redesign_form_save))
+            .route("/redesign/play", post(redesign_form_play))
+            .route("/redesign/stop", post(redesign_form_stop))
+            .route("/redesign/apply", post(redesign_form_apply))
+            .route("/redesign/api/apply", post(redesign_api_apply))
+            .route("/redesign/adopt", post(redesign_form_adopt))
+            .route("/redesign/discard", post(redesign_form_discard))
             // ── THE LIVE FEED ─────────────────────────────────────────────
             // One route, and it is the keystone the button check stands on:
             // the daemon's input fan-out as Server-Sent Events. Read-only and

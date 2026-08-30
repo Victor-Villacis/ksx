@@ -15,8 +15,9 @@ use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::render_nocturne::{device_row, mode_row, named_slot_ids, other_row};
 use crate::snapshot::{
-    compose_board_panel, theme_rows, NocturneChoiceRow, RedesignControllers, RedesignDeviceRows,
-    RedesignPayload, RedesignPersonaRow, SetupSnapshot, StartCaptureView,
+    compose_board_panel, theme_rows, NocturneChoiceRow, RedesignCaptureState, RedesignControllers,
+    RedesignDeviceRows, RedesignJourney, RedesignOperationalState, RedesignPayload,
+    RedesignPersonaRow, SetupSnapshot, StartCaptureView,
 };
 
 /// The island table this page compiles to: exactly one island — the whole
@@ -47,8 +48,11 @@ const STAGING_UNAVAILABLE: &str = "Staging unavailable — the ksx background he
 pub(crate) fn payload(
     environment: &ksx_api::RuntimeEnvironmentView,
     setup: Option<ksx_api::SetupView>,
+    setup_error: &str,
     scan: Result<ksx_api::DeviceScanView, String>,
     staged: &ksx_api::StagedSetupView,
+    session: &crate::control::SessionView,
+    outputs: &ksx_api::ControllerOutputsView,
     selected_slot: Option<u8>,
     undo_label: Option<&str>,
     macro_selected: Option<&str>,
@@ -85,6 +89,20 @@ pub(crate) fn payload(
     });
     let (capture_rows, capture_note) =
         crate::snapshot::compose_capture_rows(staged, encoder_staged);
+    let (scan_read, scan_error) = match &scan {
+        Ok(scan) => (Some(scan), ""),
+        Err(error) => (None, error.as_str()),
+    };
+    let capture = RedesignCaptureState::of(staged, scan_read, scan_error);
+    let operations = RedesignOperationalState::of(
+        staged,
+        setup.as_ref(),
+        setup_error,
+        session,
+        outputs,
+        &capture,
+    );
+    let journey = RedesignJourney::of(staged, session, &capture, &operations.play);
     // The staged input's verified identity, off the SAME capture composition
     // nocturne pins its learn flow to (selector + Windows instance path).
     // Refused scan → empty pair → the mapper refuses to arm, like 4460.
@@ -175,6 +193,9 @@ pub(crate) fn payload(
         capture_note,
         learn_selector: learn_cap.expected_selector,
         learn_instance: learn_cap.instance_id,
+        operations,
+        capture,
+        journey,
     }
 }
 
@@ -198,6 +219,8 @@ const LIST_SLOT_KB_ROW6: &str = "list:rdKbRow6:array";
 const LIST_SLOT_KB_TRAY: &str = "list:rdKbTray:array";
 const LIST_SLOT_KB_LEGEND: &str = "list:rdKbLegend:array";
 const LIST_SLOT_CAPTURE_ROWS: &str = "list:rdCaptureRows:array";
+const LIST_SLOT_JOURNEY_ROWS: &str = "list:rdJourneyRows:array";
+const LIST_SLOT_CAPTURE_HELD: &str = "list:rdCaptureHeld:array";
 
 /// One plate cell, every field spelled once (the nocturne row's shape).
 fn kb_cell(row: &crate::snapshot::NocturneKeyCell) -> SlotValue {
@@ -233,6 +256,31 @@ fn board_choice_row(row: &NocturneChoiceRow) -> SlotValue {
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
         ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+    ])
+}
+
+fn journey_row(row: &crate::snapshot::RedesignJourneyStep) -> SlotValue {
+    SlotValue::object(vec![
+        ("key".to_owned(), SlotValue::Text(row.key.clone())),
+        ("title".to_owned(), SlotValue::Text(row.title.clone())),
+        ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
+        ("badge".to_owned(), SlotValue::Text(row.badge.clone())),
+        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+    ])
+}
+
+fn held_capture_row(row: &crate::snapshot::RedesignHeldCaptureRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("name".to_owned(), SlotValue::Text(row.name.clone())),
+        (
+            "transport".to_owned(),
+            SlotValue::Text(row.transport.clone()),
+        ),
+        ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
+        ("selector".to_owned(), SlotValue::Text(row.selector.clone())),
+        ("instance".to_owned(), SlotValue::Text(row.instance.clone())),
+        ("can_release".to_owned(), SlotValue::Bool(row.can_release)),
+        ("note".to_owned(), SlotValue::Text(row.note.clone())),
     ])
 }
 
@@ -299,6 +347,50 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         "rdKbMoreCls": payload.board.kb_more_cls,
         "rdSoloLbl": payload.board.solo_label,
         "rdCaptureNote": payload.capture_note,
+        // The operational shell. Availability booleans are explicit served
+        // facts; labels and reasons are their no-mystery disabled state.
+        "rdOpDraftLabel": payload.operations.draft_label,
+        "rdOpDraftDetail": payload.operations.draft_detail,
+        "rdDraftDirty": payload.operations.draft_dirty,
+        "rdDraftRevision": payload.operations.draft_revision,
+        "rdOpSavedLabel": payload.operations.saved_label,
+        "rdOpSavedDetail": payload.operations.saved_detail,
+        "rdOpSessionLine": payload.operations.session.line,
+        "rdOpSessionCls": format!("rd-session-state {}", payload.operations.session_cls),
+        "rdOpEscapeLine": payload.operations.escape_line,
+        "rdSaveLabel": payload.operations.save.label,
+        "rdSaveDisabled": !payload.operations.save.allowed,
+        "rdSaveReason": payload.operations.save.reason,
+        "rdPlayLabel": payload.operations.play.label,
+        "rdPlayDisabled": !payload.operations.play.allowed,
+        "rdPlayReason": payload.operations.play.reason,
+        "rdPlayCls": if payload.operations.play.visible { "rd-runform rd-playform" } else { "rd-runform rd-playform none" },
+        "rdReplacePlayCls": if payload.operations.session.running { "rd-panel-replace" } else { "rd-panel-replace none" },
+        "rdApplyLabel": payload.operations.apply.label,
+        "rdApplyDisabled": !payload.operations.apply.allowed,
+        "rdApplyReason": payload.operations.apply.reason,
+        "rdApplyCls": if payload.operations.apply.visible { "rd-runform rd-applyform" } else { "rd-runform rd-applyform none" },
+        "rdStopLabel": payload.operations.stop.label,
+        "rdStopDisabled": !payload.operations.stop.allowed,
+        "rdStopReason": payload.operations.stop.reason,
+        "rdStopCls": if payload.operations.stop.visible { "rd-runform rd-stopform" } else { "rd-runform rd-stopform none" },
+        "rdAdoptLabel": payload.operations.adopt.label,
+        "rdAdoptDisabled": !payload.operations.adopt.allowed,
+        "rdAdoptReason": payload.operations.adopt.reason,
+        "rdDiscardLabel": payload.operations.discard.label,
+        "rdDiscardDisabled": !payload.operations.discard.allowed,
+        "rdDiscardReason": payload.operations.discard.reason,
+        "rdDiscardConfirmCls": if payload.operations.draft_dirty { "rd-danger-confirm" } else { "rd-danger-confirm none" },
+        "rdJourneyCompact": payload.journey.compact,
+        "rdJourneyLine": payload.journey.line,
+        "rdCaptureMode": payload.capture.mode,
+        "rdCaptureHeading": payload.capture.heading,
+        "rdCaptureLine": payload.capture.line,
+        "rdCaptureRecoveryLine": payload.capture.recovery_line,
+        "rdCaptureSelector": payload.capture.selector,
+        "rdCaptureInstance": payload.capture.instance,
+        "rdCapturePrepareCls": if payload.capture.can_prepare { "rd-capture-prepare" } else { "rd-capture-prepare none" },
+        "rdCaptureHeldCls": if payload.capture.held.is_empty() { "rd-held-recovery none" } else { "rd-held-recovery" },
     })
 }
 
@@ -393,6 +485,14 @@ fn build_slots(module: &IrModule, payload: &RedesignPayload, flash: Option<&str>
         (
             LIST_SLOT_CAPTURE_ROWS,
             SlotValue::array(payload.capture_rows.iter().map(board_choice_row).collect()),
+        ),
+        (
+            LIST_SLOT_JOURNEY_ROWS,
+            SlotValue::array(payload.journey.rows.iter().map(journey_row).collect()),
+        ),
+        (
+            LIST_SLOT_CAPTURE_HELD,
+            SlotValue::array(payload.capture.held.iter().map(held_capture_row).collect()),
         ),
     ] {
         if let Some(id) = named_slot_ids(module, name).into_iter().next() {
@@ -500,11 +600,18 @@ mod tests {
             },
             // A readable config with no stamp: System is the one marked row.
             Some(ksx_api::SetupView::default()),
+            "",
             Ok(fixture_scan()),
             // Nothing staged, authoritatively: every device row serves
             // aria_current "false" and the workbench mounts no cards — but
             // the picker still offers the roster over served ceilings.
             &fixture_staged(Vec::new()),
+            &crate::control::SessionView {
+                reachable: true,
+                line: "idle".into(),
+                ..Default::default()
+            },
+            &ksx_api::ControllerOutputsView::from_required(Vec::new()),
             None,
             None,
             None,
@@ -892,8 +999,11 @@ mod tests {
                 generation: "test".into(),
             },
             Some(ksx_api::SetupView::default()),
+            "",
             Ok(fixture_scan()),
             &staged,
+            &crate::control::SessionView::unreachable("test"),
+            &ksx_api::ControllerOutputsView::default(),
             None,
             None,
             None,
@@ -1059,6 +1169,8 @@ mod tests {
             LIST_SLOT_DEV_EXP,
             LIST_SLOT_DEV_OTHER,
             LIST_SLOT_CTRL_PERSONAS,
+            LIST_SLOT_JOURNEY_ROWS,
+            LIST_SLOT_CAPTURE_HELD,
         ] {
             assert!(
                 names.contains(&list),

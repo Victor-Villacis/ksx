@@ -90,6 +90,738 @@ pub struct RedesignPayload {
     pub learn_selector: String,
     #[serde(default)]
     pub learn_instance: String,
+    /// The operational shell: draft-vs-saved provenance, the full daemon
+    /// session answer, and every lifecycle action with its current
+    /// availability AND reason.  Keeping disabled actions in this contract
+    /// lets the redesign explain what is missing instead of reshuffling or
+    /// leaving an inert button on a failed read.
+    #[serde(default)]
+    pub operations: RedesignOperationalState,
+    /// Exact-device preparation/release, including machine-keyed recovery
+    /// rows for keyboards Windows says ksx is holding even when the draft is
+    /// empty.  Browser values are stale-action guards; the POST handlers
+    /// still re-resolve both identities from the current machine scan.
+    #[serde(default)]
+    pub capture: RedesignCaptureState,
+    /// The compact four-stop setup spine.  This deliberately leaves the
+    /// deferred panel builder out: pick input -> add controllers -> map ->
+    /// play is the cutover-critical journey.
+    #[serde(default)]
+    pub journey: RedesignJourney,
+}
+
+/// One lifecycle verb as the redesign presents it.
+///
+/// `reason` is never empty: when the action is available it says what the
+/// click does; when unavailable it says which authoritative read or
+/// prerequisite prevents it.  This is intentionally richer than a `can_*`
+/// bit so a dead daemon cannot look like a disabled mystery control.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignActionState {
+    pub label: String,
+    /// Whether the compact action dock should place this verb.  Expanded
+    /// setup may still explain a hidden action through [`Self::reason`].
+    pub visible: bool,
+    pub allowed: bool,
+    pub reason: String,
+}
+
+impl RedesignActionState {
+    fn new(
+        label: impl Into<String>,
+        visible: bool,
+        allowed: bool,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            visible,
+            allowed,
+            reason: reason.into(),
+        }
+    }
+}
+
+/// Draft, durable configuration, and running-session truth for the redesign
+/// action rail.  The complete [`crate::control::SessionView`] travels here so
+/// active origin/profile/elapsed facts are not flattened into a decorative
+/// "Running" chip and lost to the next block.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignOperationalState {
+    pub draft_label: String,
+    pub draft_detail: String,
+    pub draft_dirty: bool,
+    pub draft_empty: bool,
+    pub saved_label: String,
+    pub saved_detail: String,
+    pub session: crate::control::SessionView,
+    pub session_cls: String,
+    /// Daemon-owned whole-draft incarnation + mutation generation. Empty only
+    /// when the daemon/older protocol cannot serve it; never recovered from a
+    /// row token or synthesized by the page.
+    pub draft_revision: String,
+    /// Daemon-captured revision of the draft that actually started/applied
+    /// the active staged session. Empty means synchronization is not proven
+    /// (idle, config-origin, unreachable, or an older daemon), never a match.
+    pub active_stage_revision: String,
+    pub escape_line: String,
+    pub save: RedesignActionState,
+    pub play: RedesignActionState,
+    pub apply: RedesignActionState,
+    pub stop: RedesignActionState,
+    pub adopt: RedesignActionState,
+    pub discard: RedesignActionState,
+}
+
+impl RedesignOperationalState {
+    pub(crate) fn of(
+        staged: &ksx_api::StagedSetupView,
+        setup: Option<&ksx_api::SetupView>,
+        setup_error: &str,
+        session: &crate::control::SessionView,
+        outputs: &ksx_api::ControllerOutputsView,
+        capture: &RedesignCaptureState,
+    ) -> Self {
+        let draft_label = if !staged.reachable {
+            "Draft unavailable"
+        } else if staged.empty {
+            "New draft"
+        } else if staged.origin == "config" && staged.dirty {
+            "Saved setup · edited"
+        } else if staged.origin == "config" {
+            "Saved setup"
+        } else if staged.origin.starts_with("profile:") && staged.dirty {
+            "Loaded setup · edited"
+        } else if staged.origin.starts_with("profile:") {
+            "Loaded setup"
+        } else {
+            "Unsaved draft"
+        }
+        .to_owned();
+        let draft_detail = if !staged.reachable {
+            "The ksx background helper is not answering. Editing and lifecycle actions are unavailable until it returns."
+                .to_owned()
+        } else if staged.empty {
+            "Nothing is staged yet. Pick an input and add a controller to begin.".to_owned()
+        } else {
+            let controllers = match staged.slots.len() {
+                0 => "no controllers".to_owned(),
+                1 => "1 controller".to_owned(),
+                n => format!("{n} controllers"),
+            };
+            let input = staged
+                .device
+                .as_ref()
+                .map(|device| device.label.as_str())
+                .unwrap_or("no input");
+            if staged.dirty {
+                format!("{input} · {controllers} · changes have not been saved")
+            } else {
+                format!("{input} · {controllers} · no uncommitted edits")
+            }
+        };
+
+        let (saved_label, saved_detail, saved_exists) = match setup {
+            Some(setup) if setup.config_exists => {
+                let count = setup
+                    .slots
+                    .iter()
+                    .filter(|slot| slot.source == "config.toml")
+                    .count();
+                let controllers = match count {
+                    0 => "no controllers".to_owned(),
+                    1 => "1 controller".to_owned(),
+                    n => format!("{n} controllers"),
+                };
+                (
+                    "Saved configuration".to_owned(),
+                    format!("Stored on this machine · {controllers}"),
+                    true,
+                )
+            }
+            Some(_) => (
+                "Nothing saved yet".to_owned(),
+                "Save writes the current draft as this machine's configuration.".to_owned(),
+                false,
+            ),
+            None => (
+                "Saved configuration unavailable".to_owned(),
+                if setup_error.trim().is_empty() {
+                    "The saved configuration could not be read. Reopen ksx and try again."
+                        .to_owned()
+                } else {
+                    setup_error.to_owned()
+                },
+                false,
+            ),
+        };
+
+        let stage_ready = staged.reachable && staged.ready && capture.ready_for_commit();
+        let needs_save = staged.dirty || staged.origin != "config" || !saved_exists;
+        let save_allowed = stage_ready && needs_save;
+        let save_reason = if !staged.reachable {
+            "The draft cannot be read while the background helper is unavailable.".to_owned()
+        } else if !capture.ready_for_commit() && staged.device.is_some() {
+            capture.commit_blocker()
+        } else if !staged.ready {
+            staged_readiness_reason(staged, "save")
+        } else if !needs_save {
+            "This draft already matches the saved configuration.".to_owned()
+        } else {
+            "Writes this draft as the machine's saved configuration. Play does not start."
+                .to_owned()
+        };
+
+        // Play is deliberately still offered while a session runs.  Apply
+        // can discover a structural difference only when it is tried, and
+        // its prescribed recovery is Play; hiding Play in that state was the
+        // legacy shell's contradictory dead end.
+        let output_ready = outputs.can_play;
+        let play_allowed = stage_ready && session.reachable && output_ready;
+        let play_label = if session.running {
+            "Restart Play"
+        } else {
+            "Play"
+        };
+        let play_reason = if !staged.reachable {
+            "The draft cannot be read while the background helper is unavailable.".to_owned()
+        } else if !session.reachable {
+            "The running-session state cannot be reached. Reopen ksx before starting controllers."
+                .to_owned()
+        } else if !capture.ready_for_commit() && staged.device.is_some() {
+            capture.commit_blocker()
+        } else if !staged.ready {
+            staged_readiness_reason(staged, "play")
+        } else if outputs.blocked {
+            "A required controller output is not working on this machine. The draft can still be saved."
+                .to_owned()
+        } else if !output_ready {
+            "Controller output support could not be verified. Reopen ksx and try again; the draft can still be saved."
+                .to_owned()
+        } else if session.running {
+            "Stops and replaces the running session with this complete draft; virtual controllers may reconnect."
+                .to_owned()
+        } else {
+            "Starts the virtual controllers from this draft without writing the saved configuration."
+                .to_owned()
+        };
+
+        let draft_revision = staged.revision.trim();
+        let active_stage_revision = session
+            .active_stage_revision
+            .as_deref()
+            .map(str::trim)
+            .filter(|revision| !revision.is_empty());
+        // Dirty is a saved-file fact, not a live-session synchronization
+        // fact. Apply is licensed only when the daemon proves a staged-origin
+        // session is running and names a different whole-draft revision.
+        let apply_allowed = staged.reachable
+            && session.reachable
+            && session.running
+            && session.origin == ksx_api::SessionOrigin::Staged
+            && !draft_revision.is_empty()
+            && active_stage_revision.is_some()
+            && active_stage_revision != Some(draft_revision);
+        let apply_reason = if !staged.reachable {
+            "The draft cannot be read while the background helper is unavailable.".to_owned()
+        } else if !session.reachable {
+            "The running-session state cannot be reached.".to_owned()
+        } else if !session.running {
+            "Nothing is running. Use Play when the draft is ready.".to_owned()
+        } else if session.origin != ksx_api::SessionOrigin::Staged {
+            "The running session did not start from this staged draft. Use Replace session to replace it safely."
+                .to_owned()
+        } else if draft_revision.is_empty() || active_stage_revision.is_none() {
+            "ksx cannot prove which draft revision the running session contains. Use Replace session instead of applying uncertain changes."
+                .to_owned()
+        } else if active_stage_revision == Some(draft_revision) {
+            "The running session already contains this exact draft revision.".to_owned()
+        } else {
+            "Applies binding-only changes without reconnecting controllers. If structure changed, Replace session replaces it safely."
+                .to_owned()
+        };
+
+        let stop_allowed = session.reachable && session.running;
+        let stop_reason = if !session.reachable {
+            "The running-session state cannot be reached. The emergency key gesture still remains available."
+                .to_owned()
+        } else if !session.running {
+            "No Play session is running.".to_owned()
+        } else {
+            "Ends Play and returns captured keyboards to their normal stopped-session behaviour."
+                .to_owned()
+        };
+
+        let adopt_allowed = staged.reachable && staged.empty && saved_exists;
+        let adopt_reason = if !staged.reachable {
+            "The draft cannot be reached, so loading cannot be verified.".to_owned()
+        } else if setup.is_none() {
+            "The saved configuration could not be read.".to_owned()
+        } else if !saved_exists {
+            "There is no saved configuration to load yet.".to_owned()
+        } else if !staged.empty {
+            "Start over first. Loading never overwrites a draft that already has content."
+                .to_owned()
+        } else {
+            "Loads the saved configuration into this draft for review. It does not start Play."
+                .to_owned()
+        };
+
+        let discard_allowed = staged.reachable && !staged.empty;
+        let discard_reason = if !staged.reachable {
+            "The draft cannot be reached, so it cannot be cleared safely.".to_owned()
+        } else if staged.empty {
+            "This draft is already empty.".to_owned()
+        } else if staged.dirty {
+            "Clears this unsaved draft from memory. Saved files and any running session are not changed."
+                .to_owned()
+        } else {
+            "Clears this draft from memory. Saved files and any running session are not changed."
+                .to_owned()
+        };
+
+        Self {
+            draft_label,
+            draft_detail,
+            draft_dirty: staged.reachable && staged.dirty,
+            draft_empty: staged.reachable && staged.empty,
+            saved_label,
+            saved_detail,
+            session: session.clone(),
+            session_cls: if !session.reachable {
+                "down"
+            } else if session.running {
+                "running"
+            } else {
+                "idle"
+            }
+            .to_owned(),
+            draft_revision: staged.revision.clone(),
+            active_stage_revision: session.active_stage_revision.clone().unwrap_or_default(),
+            escape_line: staged.escape_hatch.clone(),
+            save: RedesignActionState::new("Save", true, save_allowed, save_reason),
+            // Compact dock swaps Play for Stop while running. The expanded
+            // panel retains this action + reason, including the structural
+            // restart path when Apply refuses.
+            play: RedesignActionState::new(play_label, !session.running, play_allowed, play_reason),
+            apply: RedesignActionState::new(
+                "Apply changes",
+                apply_allowed,
+                apply_allowed,
+                apply_reason,
+            ),
+            stop: RedesignActionState::new("Stop", session.running, stop_allowed, stop_reason),
+            adopt: RedesignActionState::new("Load saved setup", true, adopt_allowed, adopt_reason),
+            discard: RedesignActionState::new("Start over", true, discard_allowed, discard_reason),
+        }
+    }
+}
+
+fn staged_readiness_reason(staged: &ksx_api::StagedSetupView, verb: &str) -> String {
+    let consequence = if verb == "save" {
+        "Nothing will be written."
+    } else {
+        "Nothing will be started."
+    };
+    if staged.device.is_none() {
+        return format!("Pick an input before {verb}. {consequence}");
+    }
+    if staged.slots.is_empty() {
+        return format!("Add a controller before {verb}. {consequence}");
+    }
+    if staged.slots.iter().any(|slot| slot.bindings == 0) {
+        return format!(
+            "Every controller needs at least one mapped key before {verb}. {consequence}"
+        );
+    }
+    if staged.blocking.is_none() {
+        return format!(
+            "Choose what happens to keyboard input while playing before {verb}. {consequence}"
+        );
+    }
+    format!("Finish the setup steps before {verb}. {consequence}")
+}
+
+/// One exact held keyboard that may be released even when the draft is
+/// empty.  Ambiguous identities remain visible with `can_release=false` and
+/// a physical remedy instead of offering a POST that can only refuse.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignHeldCaptureRow {
+    pub name: String,
+    pub transport: String,
+    pub detail: String,
+    pub selector: String,
+    pub instance: String,
+    pub can_release: bool,
+    pub note: String,
+}
+
+/// Exact-device preparation and recovery state for the redesign shell.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignCaptureState {
+    pub mode: String,
+    pub heading: String,
+    pub line: String,
+    pub recovery_line: String,
+    pub selector: String,
+    pub instance: String,
+    pub can_prepare: bool,
+    pub can_release: bool,
+    pub held: Vec<RedesignHeldCaptureRow>,
+}
+
+impl RedesignCaptureState {
+    pub(crate) fn of(
+        staged: &ksx_api::StagedSetupView,
+        scan: Option<&ksx_api::DeviceScanView>,
+        scan_error: &str,
+    ) -> Self {
+        let empty_scan = ksx_api::DeviceScanView::default();
+        let scan_view = scan.unwrap_or(&empty_scan);
+        let resolved = StartCaptureView::from_parts(staged, scan_view, scan.is_some());
+        let base_mode = resolved.mode_word();
+
+        let held = scan
+            .into_iter()
+            .flat_map(|view| view.boards.iter())
+            .filter(|board| board.claimed)
+            .filter_map(|board| {
+                let selector = board.selector.as_deref()?.trim();
+                let instance = board.keyboard.as_deref()?.trim();
+                if selector.is_empty() || instance.is_empty() {
+                    return None;
+                }
+                let selector_unique = scan_view
+                    .boards
+                    .iter()
+                    .filter(|candidate| candidate.selector.as_deref() == Some(selector))
+                    .count()
+                    == 1;
+                let instance_unique = scan_view
+                    .boards
+                    .iter()
+                    .flat_map(|candidate| candidate.interfaces.iter())
+                    .filter(|row| row.instance_id.eq_ignore_ascii_case(instance))
+                    .count()
+                    == 1;
+                let can_release = board.winusb_eligible && selector_unique && instance_unique;
+                Some(RedesignHeldCaptureRow {
+                    name: board.name.clone(),
+                    transport: board.transport_label.clone(),
+                    detail: "Held by ksx · normal typing is unavailable until release".to_owned(),
+                    selector: selector.to_owned(),
+                    instance: instance.to_owned(),
+                    can_release,
+                    note: if can_release {
+                        String::new()
+                    } else {
+                        "Two attached devices share this identity. Unplug one, rescan, then release the remaining keyboard."
+                            .to_owned()
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let exact_held = held.iter().find(|row| {
+            row.selector == resolved.expected_selector
+                && row.instance.eq_ignore_ascii_case(&resolved.instance_id)
+        });
+        let (mut mode, mut heading, mut line, mut recovery_line, mut selector, mut instance, can_prepare, mut can_release) =
+            match base_mode {
+                "ready" => (
+                    "ready".to_owned(),
+                    "Ready for input".to_owned(),
+                    "This input is on the Windows keyboard path and ready for ksx.".to_owned(),
+                    String::new(),
+                    resolved.expected_selector,
+                    resolved.instance_id,
+                    false,
+                    false,
+                ),
+                "prepare-optional" => (
+                    "prepare-optional".to_owned(),
+                    "Ready · direct capture available".to_owned(),
+                    "Windows input works now. Direct WinUSB capture is available but optional."
+                        .to_owned(),
+                    String::new(),
+                    resolved.expected_selector,
+                    resolved.instance_id,
+                    true,
+                    false,
+                ),
+                "prepare" => (
+                    "prepare".to_owned(),
+                    "Preparation required".to_owned(),
+                    "Prepare this input before Save or Play so the draft and Windows use the same capture path."
+                        .to_owned(),
+                    "Keep a second keyboard available while Windows changes this device's driver."
+                        .to_owned(),
+                    resolved.expected_selector,
+                    resolved.instance_id,
+                    true,
+                    false,
+                ),
+                "release" => (
+                    "release".to_owned(),
+                    "Prepared for direct capture".to_owned(),
+                    "This input is ready for ksx. Release returns it to normal Windows typing."
+                        .to_owned(),
+                    String::new(),
+                    resolved.expected_selector,
+                    resolved.instance_id,
+                    false,
+                    true,
+                ),
+                "held" => (
+                    "held".to_owned(),
+                    "Capture state needs recovery".to_owned(),
+                    "Windows says ksx holds this input, but the draft expects ordinary keyboard input."
+                        .to_owned(),
+                    "Release it, then continue with the ordinary input path or prepare it again deliberately."
+                        .to_owned(),
+                    resolved.expected_selector,
+                    resolved.instance_id,
+                    false,
+                    exact_held.is_some_and(|row| row.can_release),
+                ),
+                "blocked" if scan.is_none() => (
+                    "unavailable".to_owned(),
+                    "Capture status unavailable".to_owned(),
+                    "ksx could not verify how this exact input is connected.".to_owned(),
+                    if scan_error.trim().is_empty() {
+                        "Rescan devices or reopen ksx before Save or Play.".to_owned()
+                    } else {
+                        scan_error.to_owned()
+                    },
+                    resolved.expected_selector,
+                    resolved.instance_id,
+                    false,
+                    false,
+                ),
+                "blocked" => (
+                    "blocked".to_owned(),
+                    "Capture path not verified".to_owned(),
+                    "ksx cannot match the staged input to one exact keyboard interface."
+                        .to_owned(),
+                    "Reconnect or rescan the input. ksx will not guess between devices."
+                        .to_owned(),
+                    resolved.expected_selector,
+                    resolved.instance_id,
+                    false,
+                    false,
+                ),
+                _ => (
+                    "none".to_owned(),
+                    "No input selected".to_owned(),
+                    "Pick the keyboard or encoder this setup will listen to.".to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    false,
+                    false,
+                ),
+            };
+
+        // Machine-keyed way back: a WinUSB keyboard can be stranded while
+        // the daemon has no draft at all.  Promote one unambiguous held row
+        // into the primary control while retaining every held row below it.
+        if mode == "none" {
+            let mut releasable = held.iter().filter(|row| row.can_release);
+            if let Some(row) = releasable.next() {
+                if releasable.next().is_none() {
+                    mode = "release-held".to_owned();
+                    heading = "Keyboard held by ksx".to_owned();
+                    line = format!("{} cannot type normally until it is released.", row.name);
+                    selector = row.selector.clone();
+                    instance = row.instance.clone();
+                    can_release = true;
+                    recovery_line = "This keyboard is held outside the current draft. Release is resolved from the live device tree."
+                        .to_owned();
+                }
+            }
+        }
+
+        Self {
+            mode,
+            heading,
+            line,
+            recovery_line,
+            selector,
+            instance,
+            can_prepare,
+            can_release,
+            held,
+        }
+    }
+
+    pub(crate) fn ready_for_commit(&self) -> bool {
+        matches!(self.mode.as_str(), "ready" | "prepare-optional" | "release")
+    }
+
+    fn commit_blocker(&self) -> String {
+        match self.mode.as_str() {
+            "prepare" => "Prepare the selected input before Save or Play.".to_owned(),
+            "held" => "Release the held input so Windows and the draft agree before Save or Play."
+                .to_owned(),
+            "unavailable" => {
+                "The exact capture path could not be verified. Rescan or reopen ksx before Save or Play."
+                    .to_owned()
+            }
+            _ => "The selected input is not ready for capture. Reconnect or rescan it before Save or Play."
+                .to_owned(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignJourneyStep {
+    pub key: String,
+    pub title: String,
+    pub detail: String,
+    pub badge: String,
+    pub cls: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignJourney {
+    pub compact: String,
+    pub line: String,
+    pub rows: Vec<RedesignJourneyStep>,
+}
+
+impl RedesignJourney {
+    pub(crate) fn of(
+        staged: &ksx_api::StagedSetupView,
+        session: &crate::control::SessionView,
+        capture: &RedesignCaptureState,
+        play: &RedesignActionState,
+    ) -> Self {
+        if !staged.reachable {
+            return Self {
+                compact: "Progress unavailable".to_owned(),
+                line: "Setup progress is unavailable until the ksx background helper returns."
+                    .to_owned(),
+                rows: [
+                    ("input", "Pick the input"),
+                    ("controller", "Add controllers"),
+                    ("mapping", "Map the controls"),
+                    ("play", "Play"),
+                ]
+                .into_iter()
+                .map(|(key, title)| {
+                    redesign_journey_step(
+                        key,
+                        title,
+                        "Waiting for the background helper.",
+                        "Unavailable",
+                        "blocked",
+                    )
+                })
+                .collect(),
+            };
+        }
+
+        let input_done = staged.device.is_some() && capture.ready_for_commit();
+        let controllers_done = !staged.slots.is_empty();
+        // Every slot, not merely ANY slot.  The old rail's `any` made a
+        // two-player setup look mapped while player two would plug dead.
+        let mapping_done = controllers_done
+            && staged.slots.iter().all(|slot| slot.bindings > 0)
+            && staged.blocking.is_some();
+        let running = session.reachable && session.running;
+
+        let facts = [input_done, controllers_done, mapping_done, running];
+        let next = facts.iter().position(|done| !done);
+        let mut rows = Vec::with_capacity(4);
+        for (index, (key, title, done_detail, todo_detail)) in [
+            (
+                "input",
+                "Pick the input",
+                "An exact keyboard or encoder and its capture path are ready.",
+                "Choose the keyboard or encoder this setup listens to, then resolve any preparation needed.",
+            ),
+            (
+                "controller",
+                "Add controllers",
+                "At least one virtual controller is staged.",
+                "Add the virtual controllers this input will drive.",
+            ),
+            (
+                "mapping",
+                "Map the controls",
+                "Every staged controller has live bindings and input behaviour is chosen.",
+                "Give every controller at least one live key binding and choose what happens to keyboard input.",
+            ),
+            (
+                "play",
+                "Play",
+                "The virtual controllers are running.",
+                play.reason.as_str(),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (badge, cls, detail) = if facts[index] {
+                ("Done", "done", done_detail)
+            } else if Some(index) == next {
+                if key == "play" && !play.allowed {
+                    ("Blocked", "blocked", todo_detail)
+                } else {
+                    ("Now", "now", todo_detail)
+                }
+            } else {
+                ("Next", "later", todo_detail)
+            };
+            rows.push(redesign_journey_step(key, title, detail, badge, cls));
+        }
+        let line = if running {
+            "Playing now. Stop returns the captured input to its stopped-session behaviour."
+                .to_owned()
+        } else if let Some(row) = rows
+            .iter()
+            .find(|row| row.badge == "Now" || row.badge == "Blocked")
+        {
+            format!("Next: {}", row.detail)
+        } else {
+            "The setup is ready to play.".to_owned()
+        };
+        let compact = if running {
+            "4/4 · Playing"
+        } else if !input_done {
+            "1/4 · Pick input"
+        } else if !controllers_done {
+            "2/4 · Add controllers"
+        } else if !mapping_done {
+            "3/4 · Map controls"
+        } else if play.allowed {
+            "3/4 · Ready to play"
+        } else {
+            "3/4 · Play blocked"
+        }
+        .to_owned();
+        Self {
+            compact,
+            line,
+            rows,
+        }
+    }
+}
+
+fn redesign_journey_step(
+    key: &str,
+    title: &str,
+    detail: &str,
+    badge: &str,
+    cls: &str,
+) -> RedesignJourneyStep {
+    RedesignJourneyStep {
+        key: key.to_owned(),
+        title: title.to_owned(),
+        detail: detail.to_owned(),
+        badge: badge.to_owned(),
+        cls: format!("rd-journey-step {cls}"),
+    }
 }
 
 /// One staged controller on the workbench — a card per slot, straight off

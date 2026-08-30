@@ -843,6 +843,7 @@ mod tests {
                 line: "idle".to_owned(),
                 profile: None,
                 origin: ksx_api::SessionOrigin::Unknown,
+                active_stage_revision: None,
                 active: None,
             },
             unavailable: String::new(),

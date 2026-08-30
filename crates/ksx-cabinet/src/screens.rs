@@ -1487,6 +1487,7 @@ mod tests {
                 line: "running".into(),
                 profile: session_profile.map(str::to_owned),
                 origin: ksx_api::SessionOrigin::Config,
+                active_stage_revision: None,
                 active: None,
             },
             mapper: MapperSnapshot {

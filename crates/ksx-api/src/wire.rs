@@ -831,6 +831,11 @@ pub struct StatusResponse {
     /// resume puts an unsaved setup back or replaces it.
     #[serde(default)]
     pub origin: Option<String>,
+    /// The exact whole-draft revision currently running, but only when the
+    /// daemon can prove that a staged Play or staged Apply succeeded for that
+    /// revision. `None` is also what older daemons send and must fail closed.
+    #[serde(default)]
+    pub active_stage_revision: Option<String>,
     /// Details bound to the runner that actually started. `None` from older
     /// daemons and whenever no session is live; surfaces must not reconstruct
     /// these from a config file that may have changed after Play began.

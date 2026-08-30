@@ -484,6 +484,18 @@ pub struct StagedSetupView {
     /// from one saved game. Daemon-written, like [`Self::dirty`].
     #[serde(default)]
     pub origin: String,
+    /// Opaque identity of the whole in-memory draft incarnation and mutation
+    /// generation. The daemon stamps it atomically with [`Self::dirty`] and
+    /// [`Self::origin`]; [`Self::of`] leaves it empty because a bare
+    /// [`StagedSetup`] has no visit identity.
+    ///
+    /// This is deliberately separate from each slot's `target_revision`.
+    /// Those tokens protect one row from a stale write, while this token says
+    /// whether a running staged session was built from the exact draft the
+    /// user is looking at now. Older daemons omit it, which callers must treat
+    /// as "not proven in sync", never as a match.
+    #[serde(default)]
+    pub revision: String,
     /// [`ESCAPE_HATCH_LINE`], served so it cannot be paraphrased on the way to
     /// a screen. §3 requires it beside the question, not buried.
     pub escape_hatch: String,
@@ -577,6 +589,7 @@ impl StagedSetupView {
             // honestly claims nothing about it.
             dirty: false,
             origin: String::new(),
+            revision: String::new(),
         }
     }
 }

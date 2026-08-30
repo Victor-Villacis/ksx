@@ -1162,6 +1162,12 @@ pub struct SessionView {
     /// what Resume will put back instead of guessing.
     #[serde(default)]
     pub origin: SessionOrigin,
+    /// Opaque whole-draft revision that the running staged session is known
+    /// to contain. `None` means idle, config-origin, unreachable, an older
+    /// daemon, or simply that synchronization cannot be proven. Surfaces must
+    /// never infer a match from absence.
+    #[serde(default)]
+    pub active_stage_revision: Option<String>,
     /// Facts captured from the runner that actually started, never inferred
     /// from the mutable config currently on disk.
     #[serde(default)]
@@ -1179,6 +1185,7 @@ impl SessionView {
             // Nothing answered, so nothing is known about what ran. `Unknown`
             // is the whole point of the variant.
             origin: SessionOrigin::Unknown,
+            active_stage_revision: None,
             active: None,
         }
     }
@@ -1254,6 +1261,7 @@ impl From<crate::wire::StatusResponse> for SessionView {
             // A daemon that does not send the field said nothing, and
             // `parse` turns "nothing" into `Unknown` rather than into a guess.
             origin: SessionOrigin::parse(status.origin.as_deref().unwrap_or_default()),
+            active_stage_revision: status.active_stage_revision,
             active,
         }
     }
@@ -1409,11 +1417,17 @@ mod tests {
         assert!(running.reachable && running.running);
         assert_eq!(running.line, "running — Example Game — 4 pad(s)");
         assert_eq!(running.profile.as_deref(), Some("Example Game"));
+        assert_eq!(
+            running.active_stage_revision, None,
+            "an older or config-origin answer must not be treated as synchronized"
+        );
 
         let active = SessionView::from(crate::wire::StatusResponse {
             ok: true,
             run: "running".into(),
             slots: Some(2),
+            origin: Some("staged".into()),
+            active_stage_revision: Some("d1-session-0001".into()),
             active: Some(crate::wire::ActiveSessionResponse {
                 elapsed_ms: 127_000,
                 keyboards: 1,
@@ -1426,6 +1440,10 @@ mod tests {
             ..Default::default()
         });
         let facts = active.active.expect("the live runner facts are carried");
+        assert_eq!(
+            active.active_stage_revision.as_deref(),
+            Some("d1-session-0001")
+        );
         assert_eq!(facts.elapsed, "2m 07s");
         assert!(
             facts.input.contains("1 selected keyboard"),

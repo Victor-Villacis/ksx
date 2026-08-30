@@ -243,9 +243,19 @@ struct Store {
     /// Kept apart from the editable draft so adding a controller while a
     /// session runs does not rewrite what the live-session sentence claims.
     active_slots: Arc<AtomicUsize>,
+    /// Whole-draft generation, independent of the persisted dirty bit. Every
+    /// successful content mutation moves it; Save does not. This mirrors the
+    /// daemon's StageMeta revision contract closely enough for browser QA to
+    /// distinguish "unsaved" from "not what the session is running".
+    stage_revision: Arc<AtomicUsize>,
+    /// Proof of the exact draft revision in the scripted live session. It is
+    /// written only by successful Play/Apply and cleared by Stop/config Start.
+    active_stage_revision: Arc<Mutex<Option<String>>>,
+    /// What the scripted running (or last) session was built from.
+    session_origin: Arc<Mutex<ksx_api::SessionOrigin>>,
     /// Set by any HTTP-driven staging edit (the seed does not count), the
-    /// way the daemon's StageMeta stamps `dirty` — so the Apply button's
-    /// running+dirty visibility is drivable on this double.
+    /// way the daemon's StageMeta stamps `dirty`. This is disk divergence
+    /// only; Apply visibility is driven by the separate session revision.
     dirty: Arc<AtomicBool>,
     /// `config`, `profile:<title>`, or empty for a new draft — the same origin
     /// metadata the production daemon stamps around Save/Load/Start over.
@@ -264,15 +274,24 @@ impl Store {
     fn with_generation(scenario: FixtureScenario, generation: impl Into<String>) -> Self {
         let seeded = (scenario == FixtureScenario::Seeded).then(seeded_stage);
         let first_run = scenario.starts_without_ksx_config();
+        let generation = generation.into();
+        let session_on =
+            !first_run && std::env::var("KSX_FIXTURE_SESSION").as_deref() == Ok("running");
+        let initial_revision = format!("d1-fixture-{generation}-0000000000000000");
         Self {
             scenario,
-            fixture_generation: Arc::from(generation.into()),
+            fixture_generation: Arc::from(generation),
             dirty: Arc::new(AtomicBool::new(false)),
             origin: Arc::new(Mutex::new(String::new())),
-            session_on: Arc::new(AtomicBool::new(
-                !first_run && std::env::var("KSX_FIXTURE_SESSION").as_deref() == Ok("running"),
-            )),
+            session_on: Arc::new(AtomicBool::new(session_on)),
             active_slots: Arc::new(AtomicUsize::new(if first_run { 0 } else { 2 })),
+            stage_revision: Arc::new(AtomicUsize::new(0)),
+            active_stage_revision: Arc::new(Mutex::new(session_on.then_some(initial_revision))),
+            session_origin: Arc::new(Mutex::new(if session_on {
+                ksx_api::SessionOrigin::Staged
+            } else {
+                ksx_api::SessionOrigin::Unknown
+            })),
             macros: Arc::new(Mutex::new(match scenario {
                 FixtureScenario::Seeded => seed_macros(),
                 FixtureScenario::FirstRun
@@ -288,7 +307,20 @@ impl Store {
     fn stamp_stage(&self, mut outcome: ksx_api::StageOutcome) -> ksx_api::StageOutcome {
         outcome.setup.dirty = self.dirty.load(Ordering::SeqCst);
         outcome.setup.origin = self.origin.lock().unwrap().clone();
+        outcome.setup.revision = self.draft_revision();
         outcome
+    }
+
+    fn draft_revision(&self) -> String {
+        format!(
+            "d1-fixture-{}-{:016x}",
+            self.fixture_generation,
+            self.stage_revision.load(Ordering::SeqCst)
+        )
+    }
+
+    fn move_draft_revision(&self) {
+        self.stage_revision.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -637,7 +669,12 @@ impl StatusSource for Store {
 /// pillRunning/canStop/rowsPlain/sessionRunning/readOnly, and `down` flips the
 /// whole no-daemon surface. Those are the only states where a first paint
 /// could visibly disagree with what the client renders a moment later.
-fn fixture_session(running: bool, active_slots: usize) -> SessionView {
+fn fixture_session(
+    running: bool,
+    active_slots: usize,
+    origin: ksx_api::SessionOrigin,
+    active_stage_revision: Option<String>,
+) -> SessionView {
     // `KSX_FIXTURE_SESSION=down` stays a boot-wide override (the dead-pipe
     // state has no verbs to flip it with).
     if std::env::var("KSX_FIXTURE_SESSION").as_deref() == Ok("down") {
@@ -653,7 +690,8 @@ fn fixture_session(running: bool, active_slots: usize) -> SessionView {
             running: true,
             line: format!("running — Fixture — {active_slots} pad(s)"),
             profile: None,
-            origin: ksx_api::SessionOrigin::Staged,
+            origin,
+            active_stage_revision,
             active: Some(ksx_api::ActiveSessionView {
                 elapsed: "2m 07s".into(),
                 input: "one keyboard captured (fixture)".into(),
@@ -666,7 +704,8 @@ fn fixture_session(running: bool, active_slots: usize) -> SessionView {
             running: false,
             line: "idle".into(),
             profile: None,
-            origin: ksx_api::SessionOrigin::Unknown,
+            origin,
+            active_stage_revision: None,
             active: None,
         },
     }
@@ -680,6 +719,7 @@ impl ControlSource for Store {
         match edit.apply(&setup) {
             Ok(next) => {
                 *setup = next;
+                self.move_draft_revision();
                 match edit {
                     ksx_api::StageEdit::Discard => {
                         self.dirty.store(false, Ordering::SeqCst);
@@ -780,6 +820,8 @@ impl ControlSource for Store {
         fixture_session(
             self.session_on.load(Ordering::SeqCst),
             self.active_slots.load(Ordering::SeqCst),
+            *self.session_origin.lock().unwrap(),
+            self.active_stage_revision.lock().unwrap().clone(),
         )
     }
 
@@ -815,6 +857,7 @@ impl ControlSource for Store {
         let mut view = ksx_api::StagedSetupView::of(&self.stage.lock().unwrap());
         view.dirty = self.dirty.load(Ordering::SeqCst);
         view.origin = self.origin.lock().unwrap().clone();
+        view.revision = self.draft_revision();
         view
     }
 
@@ -830,6 +873,8 @@ impl ControlSource for Store {
                     ksx_api::StagedSetupView::of(&setup).slots.len(),
                     Ordering::SeqCst,
                 );
+                *self.active_stage_revision.lock().unwrap() = Some(self.draft_revision());
+                *self.session_origin.lock().unwrap() = ksx_api::SessionOrigin::Staged;
                 self.session_on.store(true, Ordering::SeqCst);
                 self.stamp_stage(ksx_api::StageOutcome::ok(&setup, "started"))
             }
@@ -841,7 +886,8 @@ impl ControlSource for Store {
     }
 
     /// Apply-in-place, the daemon's shape: refused when nothing runs; ok
-    /// (and the dirty bit settles) when the fixture session is running.
+    /// when the fixture session is running. Applying is deliberately not
+    /// saving: dirty remains disk divergence while the session revision moves.
     fn stage_apply(&self) -> ksx_api::StageOutcome {
         let setup = self.stage.lock().unwrap();
         if !self.session_on.load(Ordering::SeqCst) {
@@ -858,7 +904,8 @@ impl ControlSource for Store {
             );
             return self.stamp_stage(ksx_api::StageOutcome::refused(&setup, &refusal));
         }
-        self.dirty.store(false, Ordering::SeqCst);
+        *self.active_stage_revision.lock().unwrap() = Some(self.draft_revision());
+        *self.session_origin.lock().unwrap() = ksx_api::SessionOrigin::Staged;
         self.stamp_stage(ksx_api::StageOutcome::ok(&setup, "applied in place"))
     }
 
@@ -892,6 +939,7 @@ impl ControlSource for Store {
         // what an earlier test saved into the in-memory draft.
         if self.scenario == FixtureScenario::Seeded {
             *setup = seeded_stage();
+            self.move_draft_revision();
             self.dirty.store(false, Ordering::SeqCst);
             *self.origin.lock().unwrap() =
                 profile.map_or_else(|| "config".to_owned(), |title| format!("profile:{title}"));
@@ -912,6 +960,7 @@ impl ControlSource for Store {
             return self.stamp_stage(ksx_api::StageOutcome::refused(&setup, &refusal));
         };
         *setup = saved;
+        self.move_draft_revision();
         self.dirty.store(false, Ordering::SeqCst);
         *self.origin.lock().unwrap() = "config".into();
         self.stamp_stage(ksx_api::StageOutcome::ok(&setup, "adopted"))
@@ -931,6 +980,8 @@ impl ControlSource for Store {
             ));
         };
         self.active_slots.store(saved_slots, Ordering::SeqCst);
+        *self.active_stage_revision.lock().unwrap() = None;
+        *self.session_origin.lock().unwrap() = ksx_api::SessionOrigin::Config;
         self.session_on.store(true, Ordering::SeqCst);
         Ok(if self.scenario == FixtureScenario::Seeded {
             "running (1 slot(s))".into()
@@ -941,6 +992,7 @@ impl ControlSource for Store {
 
     fn stop(&self) -> Result<String, ksx_api::Refusal> {
         self.session_on.store(false, Ordering::SeqCst);
+        *self.active_stage_revision.lock().unwrap() = None;
         Ok("stopped".into())
     }
 
@@ -951,6 +1003,9 @@ impl ControlSource for Store {
                 "this first-run fixture has no saved configuration to reload",
             ));
         }
+        *self.active_stage_revision.lock().unwrap() = None;
+        *self.session_origin.lock().unwrap() = ksx_api::SessionOrigin::Config;
+        self.session_on.store(true, Ordering::SeqCst);
         Ok("running (1 slot(s))".into())
     }
 
@@ -2424,6 +2479,57 @@ mod tests {
         let session = ControlSource::session(&store);
         assert_eq!(session.line, "running — Fixture — 1 pad(s)");
         assert_eq!(session.active.unwrap().outputs, "1 virtual pad (fixture)");
+    }
+
+    #[test]
+    fn fixture_session_sync_follows_play_apply_stop_and_config_start() {
+        let store = Store::new(FixtureScenario::Seeded);
+        let played = ControlSource::stage_play(&store);
+        assert!(played.ok);
+        let played_revision = played.setup.revision.clone();
+        let session = ControlSource::session(&store);
+        assert_eq!(session.origin, ksx_api::SessionOrigin::Staged);
+        assert_eq!(
+            session.active_stage_revision.as_deref(),
+            Some(played_revision.as_str())
+        );
+
+        let changed = ControlSource::stage_edit(
+            &store,
+            &ksx_api::StageEdit::SetSocd {
+                number: 1,
+                socd: "last-input".into(),
+            },
+        );
+        assert!(changed.ok);
+        assert!(changed.setup.dirty);
+        assert_ne!(changed.setup.revision, played_revision);
+        assert_eq!(
+            ControlSource::session(&store)
+                .active_stage_revision
+                .as_deref(),
+            Some(played_revision.as_str()),
+            "editing the draft cannot retroactively license its live paths"
+        );
+
+        let applied = ControlSource::stage_apply(&store);
+        assert!(applied.ok);
+        assert!(
+            applied.setup.dirty,
+            "Apply synchronizes the session but does not save the draft"
+        );
+        assert_eq!(
+            ControlSource::session(&store).active_stage_revision,
+            Some(applied.setup.revision)
+        );
+
+        ControlSource::stop(&store).unwrap();
+        assert_eq!(ControlSource::session(&store).active_stage_revision, None);
+
+        ControlSource::start(&store, None).unwrap();
+        let config = ControlSource::session(&store);
+        assert_eq!(config.origin, ksx_api::SessionOrigin::Config);
+        assert_eq!(config.active_stage_revision, None);
     }
 
     /// **The messy fixture actually reaches the states it exists to reach.**

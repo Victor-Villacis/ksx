@@ -969,6 +969,10 @@ mod tests {
         );
         assert_eq!(devices.encoders[0].profile_state, "profiled");
         assert_eq!(devices.encoders[0].terminal_count, Some(56));
+        assert_eq!(
+            devices.encoders[0].connection_label,
+            "USB D209:0430 · connection 00"
+        );
         assert!(
             devices.encoders[0].meta.contains("chart not read yet"),
             "an unread chart must not be called ready: {}",
@@ -1086,6 +1090,10 @@ mod tests {
         assert!(
             html.contains(r#"data-selector="usb:d209:0430:00""#),
             "rows carry the RAW selector"
+        );
+        assert!(
+            html.contains("USB D209:0430 · connection 00"),
+            "same-name boards need their exact connection in the server-rendered picker"
         );
     }
 

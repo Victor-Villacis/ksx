@@ -1216,6 +1216,7 @@ impl RedesignDeviceRows {
                     profile_state: b.profile_state.clone(),
                     terminal_count: b.terminal_count,
                     role: b.role.code().to_owned(),
+                    connection_label: device_connection_label(&selector),
                     selector,
                     alias: b.alias_hint.clone(),
                     label: b.name.clone(),
@@ -2828,6 +2829,12 @@ pub struct NocturneDeviceRow {
     /// [`ksx_api::BoardRole`]. The island uses this value for presentation; it
     /// never identifies an encoder by matching the display name.
     pub role: String,
+    /// Short, stable presentation identity for boards whose product names
+    /// match. The full selector remains the transaction identity; this keeps
+    /// its final instance component visible without asking the browser to
+    /// derive served copy (and is therefore present in SSR HTML).
+    #[serde(default)]
+    pub connection_label: String,
     pub selector: String,
     pub alias: String,
     pub label: String,
@@ -5491,6 +5498,33 @@ fn identity_meta(board: &ksx_api::BoardRow) -> String {
     out
 }
 
+fn device_connection_label(selector: &str) -> String {
+    let trimmed = selector.trim();
+    let usb: Vec<_> = trimmed.splitn(4, ':').collect();
+    if usb.len() == 4
+        && usb[0].eq_ignore_ascii_case("usb")
+        && usb[1].len() == 4
+        && usb[2].len() == 4
+        && usb[1].chars().all(|c| c.is_ascii_hexdigit())
+        && usb[2].chars().all(|c| c.is_ascii_hexdigit())
+        && !usb[3].is_empty()
+    {
+        return format!(
+            "USB {}:{} · connection {}",
+            usb[1].to_ascii_uppercase(),
+            usb[2].to_ascii_uppercase(),
+            usb[3].to_ascii_uppercase()
+        );
+    }
+    let tail = trimmed
+        .rsplit(['\\', '/', ':'])
+        .find(|component| !component.is_empty());
+    tail.map_or_else(
+        || "Exact connection available after identification".to_owned(),
+        |component| format!("Connection {component}"),
+    )
+}
+
 impl NocturneDerived {
     fn of(p: &NocturnePayload) -> Self {
         let staged = &p.staged;
@@ -5610,6 +5644,7 @@ impl NocturneDerived {
                     profile_state: b.profile_state.clone(),
                     terminal_count: b.terminal_count,
                     role: b.role.code().to_owned(),
+                    connection_label: device_connection_label(&selector),
                     selector,
                     alias: b.alias_hint.clone(),
                     label: b.name.clone(),
@@ -6458,6 +6493,22 @@ impl NocturneDerived {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connection_labels_preserve_the_instance_that_separates_twin_boards() {
+        assert_eq!(
+            device_connection_label("usb:d209:0430:00"),
+            "USB D209:0430 · connection 00"
+        );
+        assert_eq!(
+            device_connection_label(r"HID\VID_D209&PID_0430\7&1A2B3C&0&0000"),
+            "Connection 7&1A2B3C&0&0000"
+        );
+        assert_eq!(
+            device_connection_label("  "),
+            "Exact connection available after identification"
+        );
+    }
 
     /// The controller inspector needs two facts browsers previously guessed:
     /// which SOCD row is current, and what each canonical key prints on the

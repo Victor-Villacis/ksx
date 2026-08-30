@@ -34,14 +34,57 @@ const WORKBENCH_TOOLS: readonly WorkbenchToolLink[] = [
  * disclosure gives them one supported home without turning them into canvas
  * modes or requiring JavaScript just to reach them.
  */
-export function redesignToolsDisclosure(compact = false) {
+export function redesignToolsDisclosure() {
   return h(
     "details",
     {
-      // Keep the compact variant visible in the server-rendered document.
-      // Forma treats template-literal attributes as opaque, while a bound
-      // attribute is part of both its SSR and hydration paths.
-      class: () => (compact ? "rd-utilityd compact" : "rd-utilityd"),
+      class: "rd-utilityd",
+      "data-rd-tools-menu": "",
+    },
+    h(
+      "summary",
+      {
+        class: "rd-utility-sum",
+        title: "Open verification and maintenance tools",
+        "aria-label": "Open Studio tools",
+      },
+      h("span", { class: "rd-utility-icon", "aria-hidden": "true" }, "•••"),
+      h("span", { class: "rd-utility-label" }, "Tools"),
+    ),
+    h(
+      "nav",
+      { class: "rd-utility-menu", "aria-label": "Studio tools" },
+      h(
+        "p",
+        { class: "rd-utility-intro" },
+        "Focused checks and machine recovery. Use Back to return to this workbench.",
+      ),
+      ...WORKBENCH_TOOLS.map((tool) =>
+        h(
+          "a",
+          { class: "rd-utility-link", href: tool.href },
+          h("span", { class: "rd-utility-link-icon", "aria-hidden": "true" }, tool.icon),
+          h(
+            "span",
+            { class: "rd-utility-link-copy" },
+            h("strong", null, tool.title),
+            h("span", null, tool.detail),
+          ),
+          h("span", { class: "rd-utility-arrow", "aria-hidden": "true" }, "↗"),
+        ),
+      ),
+    ),
+  );
+}
+
+/** The compact copy is intentionally a separate literal template. Forma's
+ * SSR compiler cannot prove a component argument is constant, and omitting
+ * this class until hydration would leave the no-script breakpoint broken. */
+export function redesignCompactToolsDisclosure() {
+  return h(
+    "details",
+    {
+      class: "rd-utilityd compact",
       "data-rd-tools-menu": "",
     },
     h(

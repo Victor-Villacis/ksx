@@ -55,6 +55,7 @@ import {
 } from "./redesign-macro-editor";
 import {
   closeRedesignToolsDisclosure,
+  redesignCompactToolsDisclosure,
   redesignToolsDisclosure,
   wireRedesignToolsDisclosures,
 } from "./redesign-tools-menu";
@@ -120,6 +121,8 @@ export interface RdDeviceRowView {
   meta: string;
   role: string;
   selector: string;
+  /** Server-authored short identity for disambiguating same-name boards. */
+  connection_label: string;
   alias: string;
   label: string;
   aria_current: string;
@@ -2313,19 +2316,6 @@ function deviceRowFor(selector: string): RdDeviceRowView | undefined {
   return [...rdDevKb(), ...rdDevEnc(), ...rdDevExp()].find((r) => r.selector === selector);
 }
 
-/** A short, stable connection label for two boards that report the same
- * product name. The raw selector remains the identity carried to the server;
- * this is presentation only and deliberately retains its final instance
- * component instead of collapsing twins to VID/PID. */
-function deviceConnectionLabel(selector: string): string {
-  const usb = /^usb:([0-9a-f]{4}):([0-9a-f]{4}):(.+)$/i.exec(selector.trim());
-  if (usb) {
-    return `USB ${usb[1].toUpperCase()}:${usb[2].toUpperCase()} · connection ${usb[3].toUpperCase()}`;
-  }
-  const tail = selector.trim().split(/[\\/:]/).filter(Boolean).at(-1);
-  return tail ? `Connection ${tail}` : "Exact connection available after identification";
-}
-
 const DEVICE_ROLE_BADGE: Record<string, string> = {
   "panel-encoder": "Panel encoder",
   keyboard: "Keyboard",
@@ -3894,7 +3884,7 @@ export function RedesignIsland() {
               h(
                 "div",
                 { class: "rd-utility-compact-home" },
-                redesignToolsDisclosure(true),
+                redesignCompactToolsDisclosure(),
               ),
               h(
                 "nav",
@@ -4576,11 +4566,7 @@ export function RedesignIsland() {
                       // what caught the chip existing only after hydration.
                       h("span", { class: "rd-dev-stagedchip" }, "staged"),
                       h("span", { class: "n-dev-meta" }, r.meta),
-                      h(
-                        "span",
-                        { class: "n-dev-meta rd-dev-identity" },
-                        () => deviceConnectionLabel(r.selector),
-                      ),
+                      h("span", { class: "n-dev-meta rd-dev-identity" }, r.connection_label),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
                     ),
                     h("span", { class: "n-dev-dot" }),
@@ -4627,11 +4613,7 @@ export function RedesignIsland() {
                       // it starts — connection chatter, by the parity
                       // contract, so hydration may reword it.
                       h("span", { class: "n-dev-meta", "data-live-chatter": "" }, r.meta),
-                      h(
-                        "span",
-                        { class: "n-dev-meta rd-dev-identity" },
-                        () => deviceConnectionLabel(r.selector),
-                      ),
+                      h("span", { class: "n-dev-meta rd-dev-identity" }, r.connection_label),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
                     ),
                     h("span", { class: "n-dev-dot" }),
@@ -4673,11 +4655,7 @@ export function RedesignIsland() {
                       // what caught the chip existing only after hydration.
                       h("span", { class: "rd-dev-stagedchip" }, "staged"),
                       h("span", { class: "n-dev-meta" }, r.meta),
-                      h(
-                        "span",
-                        { class: "n-dev-meta rd-dev-identity" },
-                        () => deviceConnectionLabel(r.selector),
-                      ),
+                      h("span", { class: "n-dev-meta rd-dev-identity" }, r.connection_label),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
                     ),
                     h("span", { class: "n-dev-dot" }),

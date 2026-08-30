@@ -1321,6 +1321,7 @@ function terminalRoster(
 ): HTMLDetailsElement {
   const details = html(document_, "details", "rd-encoder-profile-roster");
   details.dataset.profileId = profile.id;
+  if (presentation === "product") details.dataset.rdEncoderDisclosure = "terminal-roster";
   if (chart) details.dataset.chartLoaded = "true";
   const summary = html(document_, "summary");
   summary.textContent = presentation === "product"
@@ -1496,13 +1497,24 @@ function chartReadPanel(
         ? "KSX cannot read stored assignments from this model yet. You can still test the signals it sends."
         : "This exact release has no admitted KSX chart reader. Its sourced topology remains visible, but no stored emissions are guessed."
       : "Connect an exact backend-supported board to read stored emissions. Catalog profiles never authorize a hardware protocol.";
-  copy.append(heading, description);
+  if (presentation === "product") {
+    const help = html(document_, "details", "rd-encoder-command-help");
+    help.dataset.rdEncoderDisclosure = "read-help";
+    const helpSummary = html(document_, "summary");
+    helpSummary.textContent = "How board reads work";
+    help.append(helpSummary, description);
+    copy.append(heading, help);
+  } else copy.append(heading, description);
 
   const controls = html(document_, "div", "rd-encoder-profile-read-controls");
   if (canRead) {
     const button = html(document_, "button");
     button.type = "button";
     button.dataset.rdEncoderRead = "";
+    // Product mode has one read command. It carries both stable focus hooks so
+    // a retry triggered from the old inspector contract returns to this exact
+    // command without rendering a second competing CTA.
+    if (presentation === "product") button.dataset.rdEncoderInspectorRead = "";
     button.disabled = !hardwareAvailable || state.kind === "loading" || observationBlock !== null;
     button.textContent = !hardwareAvailable
       ? hardwareUnavailableLabel
@@ -1516,7 +1528,7 @@ function chartReadPanel(
       : state.kind === "loading"
       ? "Reading…"
       : state.kind === "error"
-        ? presentation === "product" ? "Retry stored assignments" : "Read again"
+        ? presentation === "product" ? "Retry stored-assignment read" : "Read again"
       : state.kind === "loaded"
         ? presentation === "product" ? "Refresh stored assignments" : "Read again"
         : presentation === "product" ? "Read stored assignments" : "Read configured emissions";
@@ -1571,6 +1583,11 @@ function chartReadPanel(
       : "No configuration read is available for this selection.";
   }
   controls.append(status);
+  if (!hardwareAvailable && presentation === "product" && hardwareUnavailableReason) {
+    const blocked = html(document_, "p", "rd-encoder-command-blocked");
+    blocked.textContent = hardwareUnavailableReason;
+    controls.append(blocked);
+  }
   panel.append(copy, controls);
   return panel;
 }
@@ -1768,7 +1785,14 @@ function signalObservationPanel(
       ? "Listen for 30 seconds and press the wired controls. This shows the keys reaching Windows; controller mapping comes next."
       : "Listen to this exact device for 30 seconds. Signals are device-scoped evidence—not terminals, wiring, capacity, or a KSX mapping. Tab stays inside Capture/Done; Ctrl/Cmd+Enter activates Done; Esc leaves Capture without stopping. Windows and system shortcuts can still escape."
     : "Choose a connected encoder to observe what reaches Windows. Reference profiles cannot emit live evidence.";
-  copy.append(heading, description);
+  if (presentation === "product") {
+    const help = html(document_, "details", "rd-encoder-command-help");
+    help.dataset.rdEncoderDisclosure = "test-help";
+    const helpSummary = html(document_, "summary");
+    helpSummary.textContent = "How button testing works";
+    help.append(helpSummary, description);
+    copy.append(heading, help);
+  } else copy.append(heading, description);
   panel.append(copy);
 
   const controls = html(document_, "div", "rd-encoder-profile-observe-controls");
@@ -1854,6 +1878,11 @@ function signalObservationPanel(
   status.dataset.rdEncoderObservationStatus = "";
   paintSignalObservationStatus(document_, status, selection, state, presentation);
   controls.append(status);
+  if (!hardwareAvailable && presentation === "product" && hardwareUnavailableReason) {
+    const blocked = html(document_, "p", "rd-encoder-command-blocked");
+    blocked.textContent = hardwareUnavailableReason;
+    controls.append(blocked);
+  }
   panel.append(controls);
   return panel;
 }
@@ -2027,13 +2056,10 @@ function productTerminalInspector(
   chartState: ChartReadState,
   selectedTerminalId: string | undefined,
   observationState: SignalObservationState,
-  onReadChart: () => void,
-  chartAvailable: boolean,
-  chartUnavailableReason: string,
-  chartUnavailableLabel: string,
 ): HTMLElement {
   const inspector = html(document_, "aside", "rd-encoder-product-inspector");
   inspector.dataset.rdEncoderTerminalInspector = "";
+  inspector.dataset.layout = "strip";
   const profile = result.profile;
   const terminal = profile.topology.terminals.find((value) => value.id === selectedTerminalId) ??
     profile.topology.terminals[0];
@@ -2099,31 +2125,15 @@ function productTerminalInspector(
     const term = html(document_, "dt");
     term.textContent = "Stored assignment";
     const definition = html(document_, "dd");
-    if (chartState.kind === "loading") {
-      const loading = html(document_, "span", "rd-encoder-product-read-inline is-loading");
-      loading.setAttribute("role", "status");
-      loading.textContent = "Reading from encoder…";
-      definition.append(loading);
-    } else {
-      const read = html(document_, "button", "rd-encoder-product-read-inline");
-      read.type = "button";
-      read.dataset.rdEncoderInspectorRead = "";
-      read.disabled = !chartAvailable;
-      read.textContent = !chartAvailable
-        ? chartUnavailableLabel
-        : chartState.kind === "error" ? "Retry stored-assignment read" : "Read stored assignments";
-      if (!chartAvailable && chartUnavailableReason) {
-        read.title = chartUnavailableReason;
-        read.setAttribute("aria-label", `${chartUnavailableLabel}. ${chartUnavailableReason}`);
-      }
-      read.addEventListener("click", onReadChart);
-      definition.append(read);
-      if (!chartAvailable && chartUnavailableReason) {
-        const reason = html(document_, "span", "rd-encoder-product-read-reason");
-        reason.textContent = chartUnavailableReason;
-        definition.append(reason);
-      }
-    }
+    const state = html(document_, "span", "rd-encoder-product-read-inline");
+    state.setAttribute("role", "status");
+    state.classList.toggle("is-loading", chartState.kind === "loading");
+    state.textContent = chartState.kind === "loading"
+      ? "Reading…"
+      : chartState.kind === "error"
+        ? "Read needs attention"
+        : "Not read yet";
+    definition.append(state);
     row.append(term, definition);
     emissions.append(row);
   }
@@ -2157,9 +2167,6 @@ function productTerminalInspector(
     } else inspector.append(eyebrow, headingRow, emissions, live);
   } else inspector.append(eyebrow, headingRow, emissions, live);
 
-  const next = html(document_, "p", "rd-encoder-product-next");
-  next.textContent = "Controller assignment will attach here in the next workbench block.";
-  inspector.append(next);
   return inspector;
 }
 
@@ -2170,6 +2177,7 @@ function productUnknownInspector(
 ): HTMLElement {
   const inspector = html(document_, "aside", "rd-encoder-product-inspector is-unknown");
   inspector.dataset.rdEncoderTerminalInspector = "";
+  inspector.dataset.layout = "strip";
   const eyebrow = html(document_, "p", "rd-encoder-product-inspector-eyebrow");
   eyebrow.textContent = "Generic setup";
   const heading = html(document_, "h3");
@@ -2202,6 +2210,7 @@ function productDeviceDetails(
   connectionConfirmed: boolean,
 ): HTMLDetailsElement {
   const details = html(document_, "details", "rd-encoder-product-details");
+  details.dataset.rdEncoderDisclosure = "device-details";
   const summary = html(document_, "summary");
   summary.textContent = "Device details";
   const body = html(document_, "div", "rd-encoder-product-details-body");
@@ -2232,6 +2241,7 @@ function productDeviceDetails(
   body.append(facts);
 
   const technical = html(document_, "details", "rd-encoder-product-technical");
+  technical.dataset.rdEncoderDisclosure = "technical-evidence";
   const technicalSummary = html(document_, "summary");
   technicalSummary.textContent = "Technical evidence";
   const technicalFacts = html(document_, "dl", "rd-encoder-profile-facts");
@@ -2321,8 +2331,6 @@ function productDynamicContent(
     observationState.kind === "stopping" || observationState.kind === "unknown" ||
     observationState.kind === "foreign-live";
   const chartHardwareAvailable = connectionConfirmed && chartHardwareBlock === null;
-  const inspectorChartAvailable = chartHardwareAvailable && !observationBusy &&
-    chartState.kind !== "loading";
   const observationAvailable = connectionConfirmed && observationHardwareBlock === null;
   const hardwareBlockCopy = (lease: EncoderHardwareActionLease | null): string => {
     if (!connectionConfirmed) {
@@ -2338,9 +2346,6 @@ function productDynamicContent(
       ? "Another encoder is reading its stored assignments. Finish that read before starting this action."
       : "A button test is active for another encoder. Finish it before starting this action.";
   };
-  const chartUnavailableReason = observationBusy
-    ? "Finish the active button test before reading stored assignments."
-    : hardwareBlockCopy(chartHardwareBlock);
   const chartUnavailableLabel = !connectionConfirmed
     ? "Wait for device"
     : observationBusy
@@ -2354,22 +2359,23 @@ function productDynamicContent(
           : "Wait to read";
 
   const status = html(document_, "div", "rd-encoder-product-status");
-  appendProductPill(
-    document_, status,
-    connectionConfirmed ? "Connected" : "Connection unconfirmed",
-    connectionConfirmed ? "connected" : "attention",
-  );
-  appendProductPill(document_, status, known ? "Recognized" :
-    result.resolution === "ambiguous-family" ? "Confirm model" : "Generic setup",
-  known ? "recognized" : "attention");
+  status.dataset.layout = "summary";
+  if (!connectionConfirmed) {
+    appendProductPill(document_, status, "Connection unconfirmed", "attention");
+  }
   appendProductPill(document_, status, known
-    ? productTopologyLabel(result.profile)
-    : "Capacity unknown", known ? "ready" : "attention");
-  appendProductPill(document_, status, chart
-    ? "Stored assignments loaded"
+    ? `Recognized · ${productTopologyLabel(result.profile)}`
+    : result.resolution === "ambiguous-family"
+      ? "Confirm model · capacity unknown"
+      : "Generic setup · capacity unknown",
+  known ? "recognized" : "attention");
+  const assignmentState = chart
+    ? "stored assignments loaded"
     : chartState.kind === "loading" ? "Reading stored assignments"
     : chartState.kind === "error" ? "Stored-assignment read needs attention"
-    : result.protocol.chartRead === "supported" ? "Stored assignments ready" : "Test emitted keys",
+    : result.protocol.chartRead === "supported" ? "stored assignments ready" : "test emitted keys";
+  appendProductPill(document_, status,
+    connectionConfirmed ? `Connected · ${assignmentState}` : assignmentState,
   chart ? "recognized" : chartState.kind === "error" ? "attention" : "ready");
   region.append(status);
 
@@ -2390,23 +2396,23 @@ function productDynamicContent(
   caption.textContent = known
     ? result.profile.topology.capacity.kind === "exact"
       ? chart
-        ? "Select a terminal to inspect its stored output. Lit terminals match reachable keys seen in the current button test."
-        : "Select any terminal now, then read the board to show the stored assignment for every input."
-      : "This profile shows documented logical or variant controls, not a claimed physical terminal count. Select one to inspect what KSX actually knows."
-    : "The generic board grows only from labels you provide and signals heard from this exact device.";
+        ? "Select a terminal to inspect its stored key. Lit terminals match keys heard during Button Test."
+        : "Select a terminal, then read stored assignments to reveal its output."
+      : "Select a documented control to inspect exactly what KSX knows."
+    : "Declared controls and keys heard from this exact device remain separate facts.";
   figure.append(caption);
   work.append(
     figure,
     known
       ? productTerminalInspector(
-        document_, result, chartState, selected, observationState, onReadChart,
-        inspectorChartAvailable, chartUnavailableReason, chartUnavailableLabel,
+        document_, result, chartState, selected, observationState,
       )
       : productUnknownInspector(document_, signals, observationsAreLive),
   );
   region.append(work);
 
   const actions = html(document_, "div", "rd-encoder-product-actions");
+  actions.dataset.layout = "dock";
   actions.append(
     chartReadPanel(document_, result, selection, chartState,
       observationBusy ? observationState.kind : null, onReadChart, "product",
@@ -2559,7 +2565,7 @@ function createProfileLabContent(
   const headingCopy = html(document_, "div", "rd-encoder-profile-heading-copy");
   const eyebrow = html(document_, "p", "rd-encoder-profile-eyebrow");
   eyebrow.textContent = presentation === "product"
-    ? "Panel encoder"
+    ? "Terminal workbench"
     : "Encoder profile lab · research-backed preview";
   const title = html(document_, "h2", "rd-encoder-profile-title");
   const subtitle = html(document_, "p", "rd-encoder-profile-subtitle");
@@ -2621,19 +2627,17 @@ function createProfileLabContent(
     });
   };
   const paintHeader = (result: EncoderDetectionResult): void => {
-    const chartLoaded = chartState.kind === "loaded";
-    const deviceMeta = productDeviceMeta(current.device, chartLoaded);
     title.textContent = presentation === "product"
-      ? current.device?.name ?? (result.profile.id === "unknown-hid"
-        ? result.identity.familyLabel ?? result.profile.model
-        : `${result.profile.manufacturer} ${result.profile.model}`)
+      ? result.profile.id === "unknown-hid"
+        ? "Generic encoder workspace"
+        : `${result.profile.shortLabel} terminal map`
       : result.profile.id === "unknown-hid"
         ? current.device?.name ?? result.identity.familyLabel ?? result.profile.model
         : `${result.profile.manufacturer} ${result.profile.model}`;
     subtitle.textContent = presentation === "product"
       ? result.profile.id === "unknown-hid"
-        ? `${deviceMeta || "USB input device"} · build a truthful control surface from this device’s signals`
-        : `${result.profile.manufacturer} ${result.profile.model} · ${productTopologyLabel(result.profile)}${deviceMeta ? ` · ${deviceMeta}` : ""}`
+        ? "Declare printed controls and test keys without inventing terminal wiring."
+        : `${productTopologyLabel(result.profile)} · stored outputs and live signals stay separate until mapping`
       : result.resolution === "ambiguous-family" ||
           result.resolution === "known-family" || result.resolution === "identity-conflict"
         ? result.warnings[0] ?? result.profile.summary
@@ -2750,6 +2754,12 @@ function createProfileLabContent(
     else select.focus({ preventScroll: true });
   };
   function repaint(): void {
+    const openProductDisclosures = presentation === "product"
+      ? new Set<string>(Array.from(
+        dynamicHost.querySelectorAll<HTMLDetailsElement>("details[open][data-rd-encoder-disclosure]"),
+      ).map((details) => details.dataset.rdEncoderDisclosure)
+        .filter((value): value is string => Boolean(value)))
+      : new Set<string>();
     const activeManualInput = document_.activeElement instanceof HTMLTextAreaElement &&
         document_.activeElement.matches("[data-rd-encoder-manual-labels]")
       ? document_.activeElement
@@ -2776,7 +2786,7 @@ function createProfileLabContent(
       (terminal) => terminal.id === selectedTerminalId,
     );
     if (!selectedStillExists) selectedTerminalId = result.profile.topology.terminals[0]?.id;
-    dynamicHost.replaceChildren(presentation === "product"
+    const nextDynamicContent = presentation === "product"
       ? productDynamicContent(
         document_, result, current, declaredLabels, declaredLabelsDraft, chartState, observationState,
         selectedTerminalId,
@@ -2806,7 +2816,15 @@ function createProfileLabContent(
         () => { void startCurrentObservation(); },
         () => { void stopCurrentObservation(); },
         escapeObservationCapture,
-      ));
+      );
+    dynamicHost.replaceChildren(nextDynamicContent);
+    if (openProductDisclosures.size > 0) {
+      for (const details of dynamicHost.querySelectorAll<HTMLDetailsElement>(
+        "details[data-rd-encoder-disclosure]",
+      )) {
+        if (openProductDisclosures.has(details.dataset.rdEncoderDisclosure)) details.open = true;
+      }
+    }
     if (manualSelection) {
       const replacement = dynamicHost.querySelector<HTMLTextAreaElement>(
         "[data-rd-encoder-manual-labels]",
@@ -3438,8 +3456,9 @@ function createProfileLabContent(
   });
   const footer = html(document_, "footer", "rd-encoder-profile-foot");
   footer.textContent = presentation === "product"
-    ? "This block reads and tests the encoder. Mapping its emitted keys to a virtual controller is the next canvas block."
+    ? "Reads and tests this encoder. Controller mapping is the next canvas block."
     : "Read-only inspection. KSX control assignment comes later; this surface stops at terminal identity, stored configuration, and device-scoped host signals.";
+  if (presentation === "product") footer.classList.add("rd-encoder-product-next");
   if (presentation === "product") content.append(header, dynamicHost, footer, liveStatus);
   else content.append(header, toolbar, dynamicHost, footer, liveStatus);
   let disposed = false;

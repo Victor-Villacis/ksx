@@ -519,6 +519,7 @@ describe("the device workbench", () => {
     const productContext = await browser.newContext({
       viewport: { width: 1600, height: 1000 },
       colorScheme: "dark",
+      hasTouch: true,
     });
     const page = await productContext.newPage();
     const noise = [];
@@ -653,6 +654,56 @@ describe("the device workbench", () => {
         ),
         IPAC_SLUG,
       );
+      const productSurface = node.locator('.rd-encoder-profile[data-presentation="product"]');
+      const board = productSurface.locator(
+        '.rd-encoder-product-svg[data-capacity="56"][data-interactive="true"]',
+      );
+      assert.equal(await board.count(), 1, "the known-device surface keeps one complete interactive board");
+      assert.equal(
+        await node.locator('[data-rd-encoder-terminal-inspector]').getAttribute("data-layout"),
+        "strip",
+        "terminal context is one compact horizontal strip beneath the board",
+      );
+      const actionDock = node.locator('.rd-encoder-product-actions[data-layout="dock"]');
+      assert.equal(await actionDock.count(), 1, "stored reads and button tests share one cohesive action dock");
+      assert.equal(
+        await page.evaluate(() => matchMedia("(pointer: coarse)").matches),
+        true,
+        "this product audit exercises the coarse-pointer target rules",
+      );
+      assert.deepEqual(
+        await actionDock.locator(".rd-encoder-command-help > summary").evaluateAll((summaries) =>
+          summaries.map((summary) => Number.parseFloat(getComputedStyle(summary).minHeight) >= 44)
+        ),
+        [true, true],
+        "both optional-guidance disclosures keep 44px coarse-pointer targets",
+      );
+      assert.equal(
+        await actionDock.locator('[data-rd-encoder-read][data-rd-encoder-inspector-read]').count(),
+        1,
+        "one action owns both the dock and inspector stored-assignment contracts",
+      );
+      assert.equal(
+        await node.locator('[data-rd-encoder-read], [data-rd-encoder-inspector-read]').count(),
+        1,
+        "the streamlined surface never duplicates its stored-assignment action",
+      );
+      const nextNotice = node.locator(".rd-encoder-product-next");
+      assert.equal(
+        await nextNotice.count(),
+        1,
+        "the future controller-assignment handoff appears once",
+      );
+      assert.ok(
+        await node.locator(".rd-encoder-product-status > .rd-encoder-product-pill").count() <= 2,
+        "the healthy connected state needs at most two status pills",
+      );
+      const details = node.locator(".rd-encoder-product-details");
+      const technical = details.locator(".rd-encoder-product-technical");
+      const roster = technical.locator(".rd-encoder-profile-roster");
+      assert.equal(await details.getAttribute("open"), null, "device facts are closed by default");
+      assert.equal(await technical.getAttribute("open"), null, "technical evidence is closed by default");
+      assert.equal(await roster.getAttribute("open"), null, "the complete terminal roster is closed by default");
       assert.equal(
         hardwareCalls.filter((call) => /\/api\/panel\/chart/.test(call.url)).length,
         1,
@@ -694,6 +745,11 @@ describe("the device workbench", () => {
         await page.locator(".forma-canvas-viewport").getAttribute("data-canvas-zoom-tier"),
         "editing",
         "rendered target QA runs at the canvas's editing-distance 100% zoom",
+      );
+      assert.equal(await nextNotice.isVisible(), true, "the one handoff notice remains visible while editing");
+      assert.ok(
+        await nextNotice.evaluate((element) => element.getBoundingClientRect().height) >= 16,
+        "the product grid reserves a real footer row for the handoff notice",
       );
       const hitAudit = await node.locator(".rd-encoder-product-terminal-hit").evaluateAll(
         (targets) => {
@@ -761,7 +817,36 @@ describe("the device workbench", () => {
       await page.waitForFunction(
         () => document.activeElement?.getAttribute("data-terminal-id") === "1down",
       );
+      const priorAttention = await node.evaluate((item) => ({
+        scale: item.getAttribute("data-attention-scale"),
+        cssScale: item.style.getPropertyValue("--widget-attention-scale"),
+      }));
+      await node.evaluate((item) => {
+        item.dataset.attentionScale = "0.8";
+        item.style.setProperty("--widget-attention-scale", "0.8");
+      });
+      await page.waitForFunction((id) => {
+        const item = document.querySelector(`[data-instance-id="${id}"]`);
+        const host = item?.querySelector('.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host');
+        return item?.getAttribute("data-encoder-editable") === "false" && host?.inert === true;
+      }, IPAC_SLUG);
+      await node.evaluate((item, previous) => {
+        if (previous.scale === null) delete item.dataset.attentionScale;
+        else item.dataset.attentionScale = previous.scale;
+        if (previous.cssScale) item.style.setProperty("--widget-attention-scale", previous.cssScale);
+        else item.style.removeProperty("--widget-attention-scale");
+      }, priorAttention);
+      await page.waitForFunction(
+        (id) => document.querySelector(`[data-instance-id="${id}"]`)
+          ?.getAttribute("data-encoder-editable") === "true",
+        IPAC_SLUG,
+      );
 
+      const testHelp = node.locator(
+        'details[data-rd-encoder-disclosure="test-help"]',
+      );
+      await testHelp.locator(":scope > summary").click();
+      assert.equal(await testHelp.getAttribute("open"), "", "optional guidance opens on demand");
       const start = node.getByRole("button", { name: "Start button test" });
       await start.click();
       await page.waitForFunction(
@@ -769,6 +854,11 @@ describe("the device workbench", () => {
           `[data-instance-id="${id}"] [data-rd-encoder-observation][data-state="listening"]`,
         ),
         IPAC_SLUG,
+      );
+      assert.equal(
+        await node.locator('details[data-rd-encoder-disclosure="test-help"]').getAttribute("open"),
+        "",
+        "a live-state repaint preserves the user-opened guidance disclosure",
       );
       const sink = node.locator("[data-rd-encoder-observation-sink]");
       await page.waitForFunction(
@@ -817,11 +907,125 @@ describe("the device workbench", () => {
         IPAC_SLUG,
       );
 
-      const details = node.locator(".rd-encoder-product-details");
-      assert.equal(await details.getAttribute("open"), null, "technical facts are closed by default");
       await details.locator(":scope > summary").click();
-      assert.match(await details.textContent(), /technical evidence/i);
-      assert.match(await details.textContent(), new RegExp(IPAC, "i"));
+      assert.deepEqual(
+        await details.locator("[data-device-fact]").evaluateAll((rows) =>
+          rows.map((row) => row.getAttribute("data-device-fact"))
+        ),
+        ["device", "connection", "detected-model", "inputs", "assignments"],
+        "the compact disclosure preserves every user-facing device fact",
+      );
+      assert.equal(
+        await details.locator("[data-device-fact]").evaluateAll((rows) =>
+          rows.every((row) => row.getClientRects().length > 0)
+        ),
+        true,
+        "opening Device details makes every device fact reachable",
+      );
+      assert.equal(await technical.getAttribute("open"), null, "technical evidence remains nested and closed");
+      await technical.locator(":scope > summary").click();
+      const selectorFact = technical.locator(".rd-encoder-profile-fact").filter({
+        hasText: "Exact selector",
+      });
+      assert.equal(await selectorFact.count(), 1);
+      assert.equal(await selectorFact.isVisible(), true, "the exact backend selector is reachable on demand");
+      assert.match(await selectorFact.textContent(), new RegExp(IPAC, "i"));
+      assert.equal(
+        await roster.locator(":scope > summary").isVisible(),
+        true,
+        "the complete terminal roster is reachable inside Technical evidence",
+      );
+      await roster.locator(":scope > summary").click();
+      assert.equal(await roster.locator("[data-rd-encoder-chart-row]").count(), 56);
+      assert.equal(
+        await roster.locator("[data-rd-encoder-chart-row]").first().isVisible(),
+        true,
+        "expanding the roster reveals the measured terminal assignments",
+      );
+      await page.evaluate(() => window.dispatchEvent(new Event("pageshow")));
+      await page.waitForFunction((id) => {
+        const item = document.querySelector(`[data-instance-id="${id}"]`);
+        return ["device-details", "technical-evidence", "terminal-roster"].every((key) =>
+          item?.querySelector(`details[data-rd-encoder-disclosure="${key}"]`)?.open
+        );
+      }, IPAC_SLUG);
+      assert.ok(
+        await nextNotice.evaluate((element) => element.getBoundingClientRect().height) >= 16,
+        "expanded evidence stays in the scrolling host and never collapses the fixed handoff footer",
+      );
+
+      const canvasViewport = page.locator(".forma-canvas-viewport");
+      for (const targetTier of ["structure", "overview"]) {
+        const preset = targetTier === "structure" ? "rd-z-75" : "rd-z-25";
+        await page.locator(`[data-nx="${preset}"]`).evaluate((button) => button.click());
+        await page.waitForFunction(
+          (tier) => document.querySelector(".forma-canvas-viewport")
+            ?.getAttribute("data-canvas-zoom-tier") === tier &&
+            !document.querySelector(".is-camera-animating"),
+          targetTier,
+        );
+        assert.equal(
+          await canvasViewport.getAttribute("data-canvas-zoom-tier"),
+          targetTier,
+          `the camera reaches the ${targetTier} semantic tier`,
+        );
+        await node.focus();
+        const interactionAudit = await productSurface.evaluate((surface) => {
+          const selector = [
+            "button:not(:disabled)",
+            "input:not(:disabled)",
+            "textarea:not(:disabled)",
+            "select:not(:disabled)",
+            "a[href]",
+            "summary",
+            "[data-terminal-id][tabindex]",
+          ].join(", ");
+          const controls = Array.from(surface.querySelectorAll(selector));
+          const item = surface.closest("[data-instance-id]");
+          const label = (control) =>
+            control.getAttribute("data-terminal-id") ??
+            control.getAttribute("data-rd-encoder-observe") ??
+            control.textContent?.trim().slice(0, 48) ??
+            control.tagName;
+          const pointerHits = [];
+          let pointerProbes = 0;
+          for (const control of controls) {
+            const box = control.getBoundingClientRect();
+            const centerX = box.left + box.width / 2;
+            const centerY = box.top + box.height / 2;
+            if (box.width <= 0 || box.height <= 0 || centerX < 0 || centerY < 0 ||
+                centerX >= window.innerWidth || centerY >= window.innerHeight) continue;
+            pointerProbes += 1;
+            const hit = document.elementFromPoint(centerX, centerY)?.closest(selector);
+            if (hit && surface.contains(hit)) pointerHits.push(label(hit));
+          }
+          const focusHits = [];
+          for (const control of controls) {
+            item?.focus({ preventScroll: true });
+            control.focus?.({ preventScroll: true });
+            if (document.activeElement === control) focusHits.push(label(control));
+          }
+          item?.focus({ preventScroll: true });
+          return {
+            controlCount: controls.length,
+            pointerProbes,
+            pointerHits: [...new Set(pointerHits)],
+            focusHits,
+          };
+        });
+        assert.ok(interactionAudit.controlCount > 0, `${targetTier} still contains encoder semantics`);
+        assert.ok(interactionAudit.pointerProbes > 0, `${targetTier} probes visible encoder geometry`);
+        assert.deepEqual(
+          interactionAudit.pointerHits,
+          [],
+          `${targetTier} encoder controls are not pointer targets`,
+        );
+        assert.deepEqual(
+          interactionAudit.focusHits,
+          [],
+          `${targetTier} encoder controls cannot retain keyboard focus`,
+        );
+      }
       assert.deepEqual(noise, [], "the product encoder stays error-free");
     } finally {
       await productContext.close();
@@ -1038,6 +1242,12 @@ describe("the device workbench", () => {
       await page.click(`.rd-devmodal button[data-selector="${IPAC}"]`);
       await page.keyboard.press("Escape");
       const node = page.locator(`.rd-encoder-device-node[data-instance-id="${IPAC_SLUG}"]`);
+      await node.focus();
+      await node.press("F2");
+      await page.waitForFunction(
+        () => document.querySelector(".forma-canvas-viewport")
+          ?.getAttribute("data-canvas-zoom-tier") === "editing",
+      );
       assert.equal(await node.locator("[data-terminal-id]").count(), 0);
       assert.match(await node.textContent(), /generic setup/i);
       assert.match(await node.textContent(), /capacity unknown/i);
@@ -1587,6 +1797,7 @@ describe("the device workbench", () => {
         ),
         IPAC_SLUG,
       );
+      await revealCanvasItem(page, IPAC_TWIN_SLUG);
       assert.equal(await twin.locator("[data-rd-encoder-read]").isDisabled(), true);
       assert.equal(await twin.locator('[data-rd-encoder-observe="start"]').isDisabled(), true);
       assert.equal(

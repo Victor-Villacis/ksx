@@ -33,7 +33,7 @@ const encoderContractBundle = await bundle({
   stdin: {
     contents: [
       'export { detectEncoderVisualProfile, validateEncoderDetectionRules } from "../src/encoderDetection.ts";',
-      'export { getEncoderVisualProfile, validateEncoderVisualRegistry } from "../src/encoderVisualRegistry.ts";',
+      'export { getEncoderVisualProfile, listEncoderVisualProfiles, validateEncoderVisualRegistry } from "../src/encoderVisualRegistry.ts";',
       'export { encoderEmissionLabel, encoderEmissionShortLabel, validateEncoderChart } from "../src/encoderChartRead.ts";',
       'export { parseEncoderObservationView } from "../src/encoderSignalObservation.ts";',
     ].join("\n"),
@@ -51,6 +51,7 @@ const {
   encoderEmissionLabel,
   encoderEmissionShortLabel,
   getEncoderVisualProfile,
+  listEncoderVisualProfiles,
   parseEncoderObservationView,
   validateEncoderChart,
   validateEncoderDetectionRules,
@@ -58,6 +59,92 @@ const {
 } = await import(
   `data:text/javascript;base64,${Buffer.from(encoderContractBundle.outputFiles[0].text).toString("base64")}`
 );
+const encoderProductSimulationBundle = await bundle({
+  stdin: {
+    contents: 'export { createEncoderWorkbenchSurface } from "../src/encoderConceptArt.ts";',
+    resolveDir: path.join(repoRoot, "studio-ui", "pwtest"),
+    sourcefile: "encoder-product-simulation-entry.ts",
+  },
+  bundle: true,
+  format: "iife",
+  globalName: "KsxEncoderProductSimulation",
+  platform: "browser",
+  target: "es2022",
+  write: false,
+});
+const encoderProductSimulationSource = encoderProductSimulationBundle.outputFiles[0].text;
+
+const ENCODER_RENDER_CASES = [
+  {
+    id: "ultimarc-ipac4", capacity: "56", groupCounts: [14, 14, 14, 14],
+    physical: 56, logical: 0, connection: "screw", variant: 0,
+    visualKind: "terminal-board", confidence: "measured", grammar: "screw-terminals",
+    reach: "automatic", backendFamilyId: "ultimarc-ipac4", reportedCount: 56,
+    harnessInterfaces: [], auxiliaryInterfaces: [], interfaceGeometries: [],
+  },
+  {
+    id: "ultimarc-ipac2", capacity: "32", groupCounts: [16, 16],
+    physical: 32, logical: 0, connection: "screw", variant: 0,
+    visualKind: "terminal-board", confidence: "manufacturer-published", grammar: "screw-terminals",
+    reach: "automatic", backendFamilyId: "ultimarc-ipac2", reportedCount: 32,
+    harnessInterfaces: ["optical-header", "paclink-header"],
+    auxiliaryInterfaces: ["optical-header", "paclink-header"],
+    interfaceGeometries: ["optical-header", "paclink-header"],
+  },
+  {
+    id: "ultimarc-ultimate-io", capacity: "48", groupCounts: [16, 16, 8, 8],
+    physical: 48, logical: 0, connection: "harness", variant: 0,
+    visualKind: "harness-board", confidence: "manufacturer-published", grammar: "keyed-harness",
+    reach: "automatic", backendFamilyId: "ultimarc-ipac-ultimate-io", reportedCount: 48,
+    harnessInterfaces: ["main-input-harness", "expansion-input-harness"],
+    auxiliaryInterfaces: [], interfaceGeometries: ["main-input-harness", "expansion-input-harness"],
+  },
+  {
+    id: "ultimarc-minipac-32", capacity: "32", groupCounts: [16, 16],
+    physical: 32, logical: 0, connection: "harness", variant: 0,
+    visualKind: "harness-board", confidence: "manufacturer-published", grammar: "keyed-harness",
+    reach: "variant-confirmation", backendFamilyId: "ultimarc-minipac", reportedCount: 32,
+    harnessInterfaces: ["switch-harness"], auxiliaryInterfaces: [],
+    interfaceGeometries: ["switch-harness"],
+  },
+  {
+    id: "ultimarc-minipac-four", capacity: "56", groupCounts: [14, 14, 14, 14],
+    physical: 56, logical: 0, connection: "harness", variant: 0,
+    visualKind: "harness-board", confidence: "manufacturer-published", grammar: "keyed-harness",
+    reach: "variant-confirmation", backendFamilyId: "ultimarc-minipac", reportedCount: 56,
+    harnessInterfaces: ["switch-harness-a", "switch-harness-b"], auxiliaryInterfaces: [],
+    interfaceGeometries: ["switch-harness-a", "switch-harness-b"],
+  },
+  {
+    id: "ultimarc-jpac", capacity: "27 / 31", groupCounts: [14, 14, 3],
+    physical: 0, logical: 31, connection: "logical", variant: 4,
+    visualKind: "jamma-board", confidence: "manufacturer-published", grammar: "jamma-logical-routes",
+    reach: "automatic", backendFamilyId: "ultimarc-jpac", reportedCount: 27,
+    harnessInterfaces: [], auxiliaryInterfaces: [], interfaceGeometries: ["jamma-edge"],
+  },
+  {
+    id: "brook-ufb-fusion", capacity: "18", groupCounts: [4, 8, 6],
+    physical: 0, logical: 18, connection: "logical", variant: 0,
+    visualKind: "fight-board", confidence: "logical-only", grammar: "logical-fight-controls",
+    reach: "reference-only", backendFamilyId: null, reportedCount: null,
+    harnessInterfaces: [], auxiliaryInterfaces: [], interfaceGeometries: [],
+  },
+  {
+    id: "gp2040-ce-reference", capacity: "18", groupCounts: [4, 8, 6],
+    physical: 0, logical: 18, connection: "logical", variant: 0,
+    visualKind: "firmware-reference", confidence: "official-project-reference",
+    grammar: "remappable-logical-controls", reach: "reference-only",
+    backendFamilyId: null, reportedCount: null,
+    harnessInterfaces: [], auxiliaryInterfaces: [], interfaceGeometries: [],
+  },
+  {
+    id: "unknown-hid", capacity: "unknown", groupCounts: [],
+    physical: 0, logical: 0, connection: null, variant: 0,
+    visualKind: "generic-hid", confidence: "unknown", grammar: "observed-signals-only",
+    reach: "fallback", backendFamilyId: null, reportedCount: null,
+    harnessInterfaces: [], auxiliaryInterfaces: [], interfaceGeometries: [],
+  },
+];
 const targetDir = process.env.CARGO_TARGET_DIR
   ? path.resolve(process.env.CARGO_TARGET_DIR)
   : path.join(repoRoot, "target");
@@ -194,6 +281,78 @@ async function toggleEncoderResearchHarness(page) {
 }
 
 describe("the device workbench", () => {
+  test("the complete encoder registry simulates every admitted visual without inventing topology", () => {
+    const profiles = listEncoderVisualProfiles();
+    assert.deepEqual(
+      [...profiles.map((profile) => profile.id), getEncoderVisualProfile("unknown-hid").id],
+      ENCODER_RENDER_CASES.map((entry) => entry.id),
+      "the simulation matrix must fail when a dynamic board is added without an acceptance case",
+    );
+    const capacityLabel = (capacity) => {
+      if (capacity.kind === "exact") return String(capacity.inputCount);
+      if (capacity.kind === "discrete") return capacity.inputCounts.join(" / ");
+      if (capacity.kind === "range") {
+        return `${capacity.minimumInputCount}–${capacity.maximumInputCount}`;
+      }
+      if (capacity.kind === "logical") return String(capacity.controlCount);
+      return "unknown";
+    };
+    for (const expected of ENCODER_RENDER_CASES) {
+      const profile = getEncoderVisualProfile(expected.id);
+      const terminals = profile.topology.terminals;
+      assert.equal(capacityLabel(profile.topology.capacity), expected.capacity, `${expected.id} capacity`);
+      assert.equal(profile.visualKind, expected.visualKind, `${expected.id} board grammar`);
+      assert.equal(profile.topology.confidence, expected.confidence, `${expected.id} evidence`);
+      assert.deepEqual(
+        profile.layout.groupOrder.map((groupId) =>
+          terminals.filter((terminal) => terminal.groupId === groupId).length
+        ),
+        expected.groupCounts,
+        `${expected.id} complete group shape`,
+      );
+      assert.equal(
+        terminals.filter((terminal) => terminal.identityScope === "physical-terminal").length,
+        expected.physical,
+        `${expected.id} physical rows`,
+      );
+      assert.equal(
+        terminals.filter((terminal) => terminal.identityScope === "logical-control").length,
+        expected.logical,
+        `${expected.id} logical rows`,
+      );
+      assert.equal(
+        terminals.filter((terminal) => terminal.presence === "variant-only").length,
+        expected.variant,
+        `${expected.id} variant-only rows`,
+      );
+      assert.deepEqual(
+        [...new Set(terminals.map((terminal) => terminal.connection))],
+        expected.connection ? [expected.connection] : [],
+        `${expected.id} connection vocabulary`,
+      );
+      assert.equal(new Set(terminals.map((terminal) => terminal.id)).size, terminals.length,
+        `${expected.id} ids are unique`);
+      if (expected.reach === "automatic") {
+        assert.ok(profile.backendFamilyIds.includes(expected.backendFamilyId));
+        assert.notEqual(profile.manualSelection, "required-for-variant");
+      } else if (expected.reach === "variant-confirmation") {
+        assert.equal(profile.manualSelection, "required-for-variant");
+      } else if (expected.reach === "reference-only") {
+        assert.deepEqual(profile.backendFamilyIds, []);
+      } else {
+        assert.equal(profile.manualSelection, "fallback-only");
+      }
+    }
+    assert.deepEqual(
+      getEncoderVisualProfile("ultimarc-ultimate-io").topology.auxiliaryCounts,
+      [
+        { id: "led-output", label: "LED output channels", count: 96, sharesInputCapacity: false },
+        { id: "optical-input", label: "Optical-capable inputs", count: 6, sharesInputCapacity: true },
+      ],
+      "Ultimate I/O auxiliary capabilities never become extra switch targets",
+    );
+  });
+
   test("the complete raw selector owns a collision-resistant canvas identity", () => {
     const punctuationTwinA = "opaque:panel/a";
     const punctuationTwinB = "opaque:panel:a";
@@ -515,6 +674,279 @@ describe("the device workbench", () => {
     );
   });
 
+  test("every dynamic product board renders its truthful connector grammar without collisions", async () => {
+    const page = await openBench();
+    await page.addScriptTag({ content: encoderProductSimulationSource });
+    for (const expected of ENCODER_RENDER_CASES) {
+      const audit = await page.evaluate(async (entry) => {
+        const root = document.createElement("div");
+        root.dataset.formaCanvas = "";
+        Object.assign(root.style, {
+          position: "fixed", inset: "0 auto auto 0", width: "960px", height: "900px",
+          zIndex: "2147483646", overflow: "hidden", background: "var(--n-bg)",
+        });
+        const item = document.createElement("article");
+        item.className = "widget-instance rd-encoder-device-node";
+        Object.assign(item.style, { width: "960px", height: "900px" });
+        item.style.setProperty("--widget-min-height", "900px");
+        const shell = document.createElement("div");
+        shell.className = "rd-encoder-device-shell";
+        const backend = entry.id === "unknown-hid"
+          ? { role: "panel-encoder", profileState: "unrecognised", capabilities: { canReadChart: false } }
+          : {
+            role: "panel-encoder",
+            visualProfileId: entry.id,
+            ...(entry.backendFamilyId ? { familyId: entry.backendFamilyId } : {}),
+            profileState: "unprofiled-release",
+            ...(entry.reportedCount === null ? {} : { profileTerminalCount: entry.reportedCount }),
+            capabilities: { canReadChart: false },
+          };
+        const surface = window.KsxEncoderProductSimulation.createEncoderWorkbenchSurface(
+          document,
+          {
+            selector: `simulation:${entry.id}`,
+            name: `Simulation ${entry.id}`,
+            meta: "Deterministic product-render simulation",
+            backend,
+          },
+        );
+        shell.append(surface.content);
+        item.append(shell);
+        root.append(item);
+        document.body.append(root);
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+        const svg = root.querySelector(".rd-encoder-product-svg");
+        const terminals = [...root.querySelectorAll("[data-terminal-id]")];
+        const groups = [...root.querySelectorAll(".rd-encoder-product-group")];
+        const board = root.querySelector(".rd-encoder-product-board");
+        const chip = root.querySelector(".rd-encoder-product-chip > rect");
+        const boardBox = board?.getBoundingClientRect();
+        const chipBox = chip?.getBoundingClientRect();
+        const rects = terminals.map((terminal) => {
+          const target = terminal.querySelector(".rd-encoder-product-terminal-hit");
+          const box = target?.getBoundingClientRect();
+          const center = box
+            ? document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+              ?.closest("[data-terminal-id]")
+            : null;
+          return {
+            id: terminal.getAttribute("data-terminal-id"),
+            left: box?.left ?? 0, right: box?.right ?? 0,
+            top: box?.top ?? 0, bottom: box?.bottom ?? 0,
+            width: box?.width ?? 0, height: box?.height ?? 0,
+            center: center?.getAttribute("data-terminal-id") ?? null,
+          };
+        });
+        const intersects = (left, right, inset = 0.25) =>
+          left.left < right.right - inset && left.right > right.left + inset &&
+          left.top < right.bottom - inset && left.bottom > right.top + inset;
+        const overlaps = [];
+        for (let left = 0; left < rects.length; left += 1) {
+          for (let right = left + 1; right < rects.length; right += 1) {
+            if (intersects(rects[left], rects[right])) {
+              overlaps.push(`${rects[left].id}:${rects[right].id}`);
+            }
+          }
+        }
+        const chipConflicts = chipBox
+          ? rects.filter((rect) => intersects(rect, chipBox)).map((rect) => rect.id)
+          : [];
+        const interfaceGeometries = [...root.querySelectorAll("[data-interface-geometry]")].map((element) => {
+          const box = element.getBoundingClientRect();
+          return {
+            id: element.getAttribute("data-interface-geometry"),
+            left: box.left, right: box.right, top: box.top, bottom: box.bottom,
+          };
+        });
+        const groupLabels = [...root.querySelectorAll(".rd-encoder-product-group-label")].map((element) => {
+          const box = element.getBoundingClientRect();
+          return {
+            id: element.closest("[data-terminal-group]")?.getAttribute("data-terminal-group") ?? "unknown",
+            left: box.left, right: box.right, top: box.top, bottom: box.bottom,
+          };
+        });
+        const interfaceChipConflicts = chipBox
+          ? interfaceGeometries.filter((geometry) => intersects(geometry, chipBox)).map((geometry) => geometry.id)
+          : [];
+        const interfaceLabelConflicts = groupLabels.flatMap((label) =>
+          interfaceGeometries.filter((geometry) => intersects(label, geometry))
+            .map((geometry) => `${label.id}:${geometry.id}`)
+        );
+        const groupLabelChipConflicts = chipBox
+          ? groupLabels.filter((label) => intersects(label, chipBox)).map((label) => label.id)
+          : [];
+        const groupLabelTerminalConflicts = groupLabels.flatMap((label) =>
+          rects.filter((rect) => intersects(label, rect))
+            .map((rect) => `${label.id}:${rect.id}`)
+        );
+        const outOfBoard = boardBox
+          ? rects.filter((rect) => rect.left < boardBox.left - 0.5 || rect.right > boardBox.right + 0.5 ||
+              rect.top < boardBox.top - 0.5 || rect.bottom > boardBox.bottom + 0.5)
+            .map((rect) => rect.id)
+          : [];
+        const urlReferences = [...svg.querySelectorAll("[fill^='url(#']")].map((element) => {
+          const id = /^url\(#(.+)\)$/.exec(element.getAttribute("fill") ?? "")?.[1] ?? "";
+          return { id, resolves: Boolean(svg.querySelector(`[id="${CSS.escape(id)}"]`)) };
+        });
+        const result = {
+          profileId: svg?.getAttribute("data-profile-id"),
+          capacity: svg?.getAttribute("data-capacity"),
+          confidence: svg?.getAttribute("data-capacity-source"),
+          visualKind: svg?.getAttribute("data-visual-kind"),
+          grammar: svg?.getAttribute("data-interface-grammar"),
+          boardKind: board?.classList.contains(`is-${entry.visualKind}`) ?? false,
+          terminalCount: terminals.length,
+          uniqueIds: new Set(terminals.map((terminal) => terminal.getAttribute("data-terminal-id"))).size,
+          groupCounts: groups.map((group) => group.querySelectorAll("[data-terminal-id]").length),
+          physical: terminals.filter((terminal) =>
+            terminal.getAttribute("data-identity-scope") === "physical-terminal").length,
+          logical: terminals.filter((terminal) =>
+            terminal.getAttribute("data-identity-scope") === "logical-control").length,
+          variant: terminals.filter((terminal) => terminal.getAttribute("data-presence") === "variant-only").length,
+          screwFaces: root.querySelectorAll(".rd-encoder-product-terminal-screw").length,
+          harnessFaces: root.querySelectorAll(".rd-encoder-product-terminal-socket").length,
+          logicalFaces: root.querySelectorAll(".rd-encoder-product-terminal-logical-node").length,
+          jammaFaces: root.querySelectorAll(".rd-encoder-product-terminal-edge").length,
+          opticalMarkers: root.querySelectorAll(".rd-encoder-product-terminal-optical").length,
+          harnessInterfaces: [...root.querySelectorAll("[data-harness-interface]")]
+            .map((element) => element.getAttribute("data-harness-interface")),
+          auxiliaryInterfaces: [...root.querySelectorAll("[data-auxiliary-interface]")]
+            .map((element) => element.getAttribute("data-auxiliary-interface")),
+          interfaceGeometries: interfaceGeometries.map((geometry) => geometry.id),
+          motifCount: root.querySelectorAll("[data-interface-motif]").length,
+          roving: root.querySelectorAll('[data-terminal-id][tabindex="0"]').length,
+          readActions: root.querySelectorAll("[data-rd-encoder-read]").length,
+          buttonTests: root.querySelectorAll('[data-rd-encoder-observe="start"]').length,
+          minimumWidth: rects.length ? Math.min(...rects.map((rect) => rect.width)) : null,
+          minimumHeight: rects.length ? Math.min(...rects.map((rect) => rect.height)) : null,
+          wrongCenters: rects.filter((rect) => rect.center !== rect.id)
+            .map((rect) => `${rect.id}->${rect.center ?? "none"}`),
+          overlaps,
+          chipConflicts,
+          interfaceChipConflicts,
+          interfaceLabelConflicts,
+          groupLabelChipConflicts,
+          groupLabelTerminalConflicts,
+          outOfBoard,
+          brokenUrlReferences: urlReferences.filter((reference) => !reference.resolves),
+          svgDefinitionIds: [...svg.querySelectorAll("defs [id]")].map((node) => node.id),
+        };
+        surface.dispose();
+        root.remove();
+        return result;
+      }, expected);
+
+      const terminalCount = expected.physical + expected.logical;
+      assert.equal(audit.profileId, expected.id, `${expected.id} selects the requested visual`);
+      assert.equal(audit.capacity, expected.capacity, `${expected.id} rendered capacity`);
+      assert.equal(audit.confidence, expected.confidence, `${expected.id} rendered provenance`);
+      assert.equal(audit.visualKind, expected.visualKind, `${expected.id} visual kind`);
+      assert.equal(audit.grammar, expected.grammar, `${expected.id} interface grammar`);
+      assert.equal(audit.boardKind, true, `${expected.id} board class`);
+      assert.equal(audit.terminalCount, terminalCount, `${expected.id} complete row count`);
+      assert.equal(audit.uniqueIds, terminalCount, `${expected.id} unique row identities`);
+      assert.deepEqual(audit.groupCounts, expected.groupCounts, `${expected.id} group geometry`);
+      assert.equal(audit.physical, expected.physical, `${expected.id} physical identity count`);
+      assert.equal(audit.logical, expected.logical, `${expected.id} logical identity count`);
+      assert.equal(audit.variant, expected.variant, `${expected.id} variant identity count`);
+      assert.equal(audit.screwFaces, expected.connection === "screw" ? terminalCount : 0,
+        `${expected.id} never borrows screw imagery for another connector`);
+      assert.equal(audit.harnessFaces, expected.connection === "harness" ? terminalCount : 0,
+        `${expected.id} harness channels use keyed sockets`);
+      assert.equal(audit.logicalFaces, expected.connection === "logical" ? terminalCount : 0,
+        `${expected.id} logical rows remain abstract controls`);
+      assert.equal(audit.jammaFaces, expected.connection === "jamma-edge" ? terminalCount : 0);
+      assert.equal(audit.opticalMarkers, expected.id === "ultimarc-ultimate-io" ? 6 : 0,
+        `${expected.id} marks only published dual-role optical channels`);
+      assert.deepEqual(audit.harnessInterfaces, expected.harnessInterfaces,
+        `${expected.id} draws only published connector bodies without invented pin counts`);
+      assert.deepEqual(audit.auxiliaryInterfaces, expected.auxiliaryInterfaces,
+        `${expected.id} keeps distinct non-input interfaces outside the terminal count`);
+      assert.deepEqual(audit.interfaceGeometries, expected.interfaceGeometries,
+        `${expected.id} exposes every interface geometry to collision simulation`);
+      assert.equal(audit.motifCount, expected.id === "unknown-hid" ? 0 : 1,
+        `${expected.id} has one board-level interface motif`);
+      assert.equal(audit.roving, terminalCount > 0 ? 1 : 0, `${expected.id} roving entry`);
+      assert.equal(audit.readActions, 0, `${expected.id} unprofiled simulation never offers chart read`);
+      assert.equal(audit.buttonTests, 1, `${expected.id} keeps exact-device button testing`);
+      if (terminalCount > 0) {
+        assert.ok(audit.minimumWidth >= 44, `${expected.id} ${audit.minimumWidth}px target width`);
+        assert.ok(audit.minimumHeight >= 44, `${expected.id} ${audit.minimumHeight}px target height`);
+      }
+      assert.deepEqual(audit.wrongCenters, [], `${expected.id} owns every target centre`);
+      assert.deepEqual(audit.overlaps, [], `${expected.id} has disjoint targets`);
+      assert.deepEqual(audit.chipConflicts, [], `${expected.id} terminals clear the processor`);
+      assert.deepEqual(audit.interfaceChipConflicts, [], `${expected.id} interface bodies clear the processor`);
+      assert.deepEqual(audit.interfaceLabelConflicts, [], `${expected.id} labels clear interface bodies`);
+      assert.deepEqual(audit.groupLabelChipConflicts, [], `${expected.id} group labels clear the processor`);
+      assert.deepEqual(audit.groupLabelTerminalConflicts, [], `${expected.id} group labels clear terminal targets`);
+      assert.deepEqual(audit.outOfBoard, [], `${expected.id} targets stay on the board`);
+      assert.deepEqual(audit.brokenUrlReferences, [], `${expected.id} local SVG definitions resolve`);
+      assert.equal(new Set(audit.svgDefinitionIds).size, audit.svgDefinitionIds.length,
+        `${expected.id} definition ids are unique within the SVG`);
+    }
+
+    const radioAudit = await page.evaluate(async () => {
+      const root = document.createElement("div");
+      root.dataset.formaCanvas = "";
+      root.style.position = "fixed";
+      root.style.inset = "0";
+      root.style.zIndex = "2147483646";
+      const surfaces = ["a", "b"].map((suffix) =>
+        window.KsxEncoderProductSimulation.createEncoderWorkbenchSurface(document, {
+          selector: `simulation:minipac:${suffix}`,
+          name: `Unresolved Mini-PAC ${suffix.toUpperCase()}`,
+          backend: {
+            role: "panel-encoder", familyId: "ultimarc-minipac",
+            profileState: "unprofiled-release", capabilities: { canReadChart: false },
+          },
+        })
+      );
+      surfaces.forEach((surface, index) => {
+        const item = document.createElement("article");
+        item.className = "widget-instance rd-encoder-device-node";
+        item.style.width = "960px";
+        item.style.height = "900px";
+        item.style.position = "absolute";
+        item.style.left = `${index * 980}px`;
+        const shell = document.createElement("div");
+        shell.className = "rd-encoder-device-shell";
+        shell.append(surface.content);
+        item.append(shell);
+        root.append(item);
+      });
+      document.body.append(root);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const fieldsets = [...root.querySelectorAll(".rd-encoder-profile-candidates")];
+      const names = fieldsets.map((fieldset) => fieldset.querySelector("input")?.getAttribute("name"));
+      fieldsets[0]?.querySelector("input")?.click();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const result = {
+        names,
+        firstProfile: root.querySelectorAll(".rd-encoder-profile")[0]?.getAttribute("data-profile-id"),
+        secondProfile: root.querySelectorAll(".rd-encoder-profile")[1]?.getAttribute("data-profile-id"),
+        firstStatus: root.querySelectorAll(".rd-encoder-product-status")[0]?.textContent ?? "",
+        secondChecked: root.querySelectorAll(".rd-encoder-profile-candidates")[0]
+          ?.querySelectorAll("input:checked").length ?? 0,
+      };
+      surfaces.forEach((surface) => surface.dispose());
+      root.remove();
+      return result;
+    });
+    assert.equal(new Set(radioAudit.names).size, 2, "each Mini-PAC widget owns its radio group");
+    assert.equal(radioAudit.firstProfile, "ultimarc-minipac-32");
+    assert.match(radioAudit.firstStatus, /user confirmed/i);
+    assert.doesNotMatch(radioAudit.firstStatus, /recognized/i,
+      "manual variant confirmation is never relabeled as backend recognition");
+    assert.equal(radioAudit.secondProfile, "unknown-hid",
+      "confirming one board never changes its unresolved twin");
+    assert.equal(radioAudit.secondChecked, 0,
+      "the unresolved twin retains no cross-widget native selection");
+    assert.deepEqual(page.ksxNoise, [], "the complete product simulation remains error-free");
+    await page.close();
+  });
+
   test("adding a detected encoder creates the product terminal workbench", async () => {
     const productContext = await browser.newContext({
       viewport: { width: 1600, height: 1000 },
@@ -822,14 +1254,38 @@ describe("the device workbench", () => {
         cssScale: item.style.getPropertyValue("--widget-attention-scale"),
       }));
       await node.evaluate((item) => {
-        item.dataset.attentionScale = "0.8";
-        item.style.setProperty("--widget-attention-scale", "0.8");
+        item.dataset.attentionScale = "0.89";
+        item.style.setProperty("--widget-attention-scale", "0.89");
       });
       await page.waitForFunction((id) => {
         const item = document.querySelector(`[data-instance-id="${id}"]`);
         const host = item?.querySelector('.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host');
         return item?.getAttribute("data-encoder-editable") === "false" && host?.inert === true;
       }, IPAC_SLUG);
+      assert.equal(
+        await node.locator('.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host')
+          .getAttribute("aria-hidden"),
+        "true",
+        "a sub-boundary schematic is visible but unavailable to pointer and keyboard routing",
+      );
+      await node.evaluate((item) => {
+        item.dataset.attentionScale = "0.9";
+        item.style.setProperty("--widget-attention-scale", "0.9");
+      });
+      await page.waitForFunction((id) => {
+        const item = document.querySelector(`[data-instance-id="${id}"]`);
+        const host = item?.querySelector('.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host');
+        return item?.getAttribute("data-encoder-editable") === "true" && host?.inert === false;
+      }, IPAC_SLUG);
+      assert.ok(
+        await node.locator(".rd-encoder-product-terminal-hit").evaluateAll((targets) =>
+          Math.min(...targets.flatMap((target) => {
+            const box = target.getBoundingClientRect();
+            return [box.width, box.height];
+          }))
+        ) >= 44,
+        "the exact editing boundary admits controls only after every target clears 44px",
+      );
       await node.evaluate((item, previous) => {
         if (previous.scale === null) delete item.dataset.attentionScale;
         else item.dataset.attentionScale = previous.scale;

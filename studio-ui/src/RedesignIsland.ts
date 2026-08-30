@@ -926,6 +926,9 @@ const TIER_COPY: Record<string, string> = {
   structure: "Structure — type, ports, one-line summary",
   editing: "Editing — full detail and controls",
 };
+// The terminal's 54-unit SVG hit box clears 44 CSS px at this effective scale
+// on the fixed 960px product item. Below it the board remains a useful
+// silhouette, but its controls are inert rather than undersized targets.
 const ENCODER_MIN_EFFECTIVE_EDIT_SCALE = 0.9;
 
 function canvasZoomFromViewport(

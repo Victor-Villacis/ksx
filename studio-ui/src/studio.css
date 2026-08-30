@@ -19594,6 +19594,43 @@ a.nm-link {
   stroke-width: 1;
 }
 
+.rd-encoder-product-interface-label {
+  fill: color-mix(in srgb, var(--n-text-3) 82%, var(--n-accent-2));
+  font: var(--fw-semibold) 9px / 1 var(--mono);
+  letter-spacing: 1.4px;
+}
+
+.rd-encoder-product-interface-harness {
+  fill: color-mix(in srgb, var(--n-bg) 80%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--n-accent) 46%, var(--n-line-2));
+  stroke-width: 1.5;
+}
+
+.rd-encoder-product-interface-edge {
+  fill: color-mix(in srgb, var(--rd-encoder-copper) 74%, var(--n-warn));
+  stroke: color-mix(in srgb, var(--n-warn) 76%, var(--n-text-2));
+  stroke-width: 1.2;
+}
+
+.rd-encoder-product-interface-edge-pad {
+  fill: none;
+  stroke: color-mix(in srgb, var(--n-bg) 64%, black);
+  stroke-width: 1;
+}
+
+.rd-encoder-product-interface-node {
+  fill: color-mix(in srgb, var(--n-accent) 14%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--n-accent) 66%, var(--n-line-2));
+  stroke-width: 1.4;
+}
+
+.rd-encoder-product-interface.is-terminal-board > rect,
+.rd-encoder-product-interface.is-terminal-board > circle {
+  fill: color-mix(in srgb, var(--n-bg) 76%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--rd-encoder-copper) 42%, var(--n-line));
+  stroke-width: 1;
+}
+
 .rd-encoder-product-led {
   fill: var(--n-ok);
   stroke: color-mix(in srgb, var(--n-ok) 64%, white);
@@ -19671,6 +19708,57 @@ a.nm-link {
   stroke: color-mix(in srgb, var(--n-bg) 74%, black);
   stroke-linecap: round;
   stroke-width: 1.4;
+}
+
+.rd-encoder-product-terminal-socket {
+  fill: color-mix(in srgb, var(--n-bg) 72%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--rd-encoder-terminal-accent) 66%, var(--n-line-2));
+  stroke-width: 1.2;
+}
+
+.rd-encoder-product-terminal-pins,
+.rd-encoder-product-terminal-key {
+  fill: none;
+  stroke: color-mix(in srgb, var(--rd-encoder-copper) 74%, var(--n-text-2));
+  stroke-linecap: round;
+  stroke-width: 1.2;
+}
+
+.rd-encoder-product-terminal-key {
+  stroke: color-mix(in srgb, var(--n-accent) 76%, var(--n-text-2));
+  stroke-width: 2;
+}
+
+.rd-encoder-product-terminal-edge {
+  fill: color-mix(in srgb, var(--rd-encoder-copper) 74%, var(--n-warn));
+  stroke: color-mix(in srgb, var(--n-warn) 74%, var(--n-line-2));
+  stroke-width: 1.2;
+}
+
+.rd-encoder-product-terminal-edge-divider {
+  fill: none;
+  stroke: color-mix(in srgb, var(--n-bg) 68%, black);
+  stroke-width: 1;
+}
+
+.rd-encoder-product-terminal-logical-node {
+  fill: color-mix(in srgb, var(--n-accent) 13%, var(--n-panel-3));
+  stroke: color-mix(in srgb, var(--rd-encoder-terminal-accent) 62%, var(--n-accent-line));
+  stroke-width: 1.4;
+}
+
+.rd-encoder-product-terminal-logical-route {
+  fill: none;
+  stroke: color-mix(in srgb, var(--rd-encoder-terminal-accent) 80%, var(--n-text));
+  stroke-linecap: round;
+  stroke-width: 1.3;
+}
+
+.rd-encoder-product-terminal-optical {
+  fill: var(--n-warn);
+  stroke: color-mix(in srgb, var(--n-warn) 68%, white);
+  stroke-width: 1;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--n-warn) 58%, transparent));
 }
 
 .rd-encoder-product-terminal-label {
@@ -20491,10 +20579,15 @@ button.rd-encoder-product-read-inline:disabled {
   .rd-encoder-product-mount circle,
   .rd-encoder-product-chip rect,
   .rd-encoder-product-components :is(rect, circle),
+  .rd-encoder-product-interface :is(rect, circle),
   .rd-encoder-product-declared rect,
   .rd-encoder-product-signal rect,
   .rd-encoder-product-terminal-body,
-  .rd-encoder-product-terminal-screw {
+  .rd-encoder-product-terminal-screw,
+  .rd-encoder-product-terminal-socket,
+  .rd-encoder-product-terminal-edge,
+  .rd-encoder-product-terminal-logical-node,
+  .rd-encoder-product-terminal-optical {
     fill: Canvas;
     stroke: CanvasText;
     filter: none;
@@ -20502,6 +20595,11 @@ button.rd-encoder-product-read-inline:disabled {
 
   .rd-encoder-product-svg text,
   .rd-encoder-product-terminal-slot,
+  .rd-encoder-product-terminal-pins,
+  .rd-encoder-product-terminal-key,
+  .rd-encoder-product-terminal-edge-divider,
+  .rd-encoder-product-terminal-logical-route,
+  .rd-encoder-product-interface-edge-pad,
   .rd-encoder-product-traces path {
     fill: CanvasText;
     stroke: CanvasText;

@@ -47,6 +47,7 @@ export function disposeEncoderProfileLabCanvasItem(item: HTMLElement): void {
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 let encoderSvgSequence = 0;
+let encoderSurfaceSequence = 0;
 const CATALOG_PREFIX = "catalog:";
 const CONNECTED_PREFIX = "connected:";
 const AMBIGUOUS_SAMPLE = "sample:ambiguous-minipac";
@@ -557,12 +558,19 @@ function productTerminalAriaBase(
     ? "Logical control; physical terminal not asserted."
     : terminal.presence === "variant-only"
       ? "Available only on some documented variants."
-      : "Physical profile terminal.";
+      : terminal.connection === "harness"
+        ? "Physical harness channel."
+        : terminal.connection === "jamma-edge"
+          ? "Physical JAMMA edge contact."
+          : "Physical screw terminal.";
   const emission = configuredEmission
     ? `${configuredKeyKnown ? "Configured key" : "Stored output"} ${configuredEmission}.`
     : "Stored assignment not read yet.";
   const shared = sharedKeyCount > 1 ? ` Shared by ${sharedKeyCount} profile rows.` : "";
-  return `${terminal.label}. ${identity} ${emission}${shared} Controller assignment not set.`;
+  const capability = terminal.capabilities.includes("optical-axis")
+    ? " This channel can be reassigned to an optical axis, so it may be unavailable as a switch."
+    : "";
+  return `${terminal.label}. ${identity}${capability} ${emission}${shared} Controller assignment not set.`;
 }
 
 function chartShiftedAssignmentsReachable(chart: EncoderChartSnapshot | null): boolean {
@@ -625,6 +633,209 @@ function productTerminalGroups(profile: EncoderVisualProfile): Array<{
       edge: index < half ? "top" : "bottom",
     };
   });
+}
+
+interface ProductTerminalGroupLayout {
+  columns: number;
+  rows: number;
+  pitch: number;
+  rowPitch: number;
+  width: number;
+  hitWidth: number;
+  hitHeight: number;
+  firstRowY: number;
+}
+
+function productTerminalGroupLayout(
+  group: ReturnType<typeof productTerminalGroups>[number],
+): ProductTerminalGroupLayout {
+  const count = Math.max(1, group.terminals.length);
+  // Dense boards need more than one row. Keeping a genuine gap between the
+  // hit rectangles prevents a neighbouring SVG sibling from stealing pointer
+  // input, while the full-width product figure renders them at >=44 CSS px.
+  const maximumColumns = Math.max(1, Math.floor(group.width / 56));
+  const columns = Math.max(1, Math.min(maximumColumns, Math.ceil(count / 2)));
+  const rows = Math.max(1, Math.ceil(count / columns));
+  const pitch = group.width / columns;
+  const rowPitch = 56;
+  return {
+    columns,
+    rows,
+    pitch,
+    rowPitch,
+    width: Math.max(24, Math.min(38, pitch - 12)),
+    hitWidth: Math.min(54, pitch - 2),
+    hitHeight: 54,
+    firstRowY: group.edge === "bottom" ? group.y - (rows - 1) * rowPitch : group.y,
+  };
+}
+
+function productInterfaceGrammar(profile: EncoderVisualProfile): string {
+  switch (profile.visualKind) {
+    case "terminal-board": return "screw-terminals";
+    case "harness-board": return "keyed-harness";
+    case "jamma-board": return "jamma-logical-routes";
+    case "fight-board": return "logical-fight-controls";
+    case "firmware-reference": return "remappable-logical-controls";
+    case "generic-hid": return "observed-signals-only";
+  }
+}
+
+function appendProductTerminalFace(
+  document_: Document,
+  terminalNode: SVGGElement,
+  terminal: EncoderVisualTerminal,
+  width: number,
+): void {
+  const center = width / 2;
+  if (terminal.connection === "screw") {
+    terminalNode.append(
+      svgElement(document_, "circle", {
+        cx: center, cy: 12, r: 6.5, class: "rd-encoder-product-terminal-screw",
+      }),
+      svgElement(document_, "path", {
+        d: `M ${center - 4} 12 H ${center + 4}`,
+        class: "rd-encoder-product-terminal-slot",
+      }),
+    );
+    return;
+  }
+  if (terminal.connection === "harness") {
+    terminalNode.append(
+      svgElement(document_, "rect", {
+        x: center - 9, y: 5, width: 18, height: 15, rx: 3,
+        class: "rd-encoder-product-terminal-socket",
+      }),
+      svgElement(document_, "path", {
+        d: `M ${center - 4} 9 V 16 M ${center + 4} 9 V 16`,
+        class: "rd-encoder-product-terminal-pins",
+      }),
+      svgElement(document_, "path", {
+        d: `M ${center - 3} 5 H ${center + 3}`,
+        class: "rd-encoder-product-terminal-key",
+      }),
+    );
+    return;
+  }
+  if (terminal.connection === "jamma-edge") {
+    terminalNode.append(
+      svgElement(document_, "rect", {
+        x: center - 9, y: 4, width: 18, height: 17, rx: 2,
+        class: "rd-encoder-product-terminal-edge",
+      }),
+      svgElement(document_, "path", {
+        d: `M ${center} 5 V 20`,
+        class: "rd-encoder-product-terminal-edge-divider",
+      }),
+    );
+    return;
+  }
+  terminalNode.append(
+    svgElement(document_, "circle", {
+      cx: center, cy: 12, r: 8,
+      class: "rd-encoder-product-terminal-logical-node",
+    }),
+    svgElement(document_, "path", {
+      d: `M ${center - 4} 12 H ${center + 4} M ${center} 8 V 16`,
+      class: "rd-encoder-product-terminal-logical-route",
+    }),
+  );
+}
+
+function appendProductInterfaceMotif(
+  document_: Document,
+  svg: SVGSVGElement,
+  profile: EncoderVisualProfile,
+  centerY: number,
+): void {
+  const grammar = productInterfaceGrammar(profile);
+  const motif = svgElement(document_, "g", {
+    class: `rd-encoder-product-interface is-${profile.visualKind}`,
+    "data-interface-motif": grammar,
+    "aria-hidden": "true",
+  });
+  const appendAbstractHarness = (
+    x: number,
+    width: number,
+    label: string,
+    interfaceId: string,
+    auxiliary = false,
+  ): void => {
+    const connector = svgElement(document_, "g", {
+      "data-harness-interface": interfaceId,
+      ...(auxiliary ? { "data-auxiliary-interface": interfaceId } : {}),
+    });
+    connector.append(
+      svgElement(document_, "rect", {
+        x, y: centerY - 18, width, height: 36, rx: 8,
+        class: "rd-encoder-product-interface-harness",
+        "data-interface-geometry": interfaceId,
+      }),
+      svgText(document_, label, x + width / 2, centerY + 4,
+        "rd-encoder-product-interface-label", "middle"),
+    );
+    motif.append(connector);
+  };
+  if (profile.id === "ultimarc-ipac2") {
+    for (const x of [144, 218, 292, 366]) {
+      motif.append(
+        svgElement(document_, "rect", { x, y: centerY - 8, width: 38, height: 13, rx: 4 }),
+        svgElement(document_, "circle", { cx: x + 12, cy: centerY + 28, r: 7 }),
+        svgElement(document_, "circle", { cx: x + 30, cy: centerY + 28, r: 7 }),
+      );
+    }
+    // The manufacturer documents these as separate interfaces. Their exact
+    // connector geometry is not part of KSX's measured evidence, so the board
+    // uses labelled abstract bodies instead of inventing a shared pinout.
+    appendAbstractHarness(594, 128, "OPTICAL", "optical-header", true);
+    appendAbstractHarness(738, 116, "PACLINK", "paclink-header", true);
+  } else if (profile.visualKind === "harness-board") {
+    // Connector bodies mirror only the published board-level interface
+    // families. They intentionally omit pin counts because those have not been
+    // admitted from a measured fixture in KSX.
+    if (profile.id === "ultimarc-ultimate-io") {
+      appendAbstractHarness(125, 280, "32-INPUT MAIN", "main-input-harness");
+      appendAbstractHarness(595, 250, "16-INPUT EXPANSION", "expansion-input-harness");
+    } else if (profile.id === "ultimarc-minipac-32") {
+      appendAbstractHarness(130, 275, "32-WAY SWITCH HARNESS", "switch-harness");
+    } else if (profile.id === "ultimarc-minipac-four") {
+      appendAbstractHarness(125, 280, "SWITCH HARNESS A", "switch-harness-a");
+      appendAbstractHarness(595, 250, "SWITCH HARNESS B", "switch-harness-b");
+    }
+  } else if (profile.visualKind === "jamma-board") {
+    motif.append(
+      svgElement(document_, "rect", {
+        x: 238, y: 448, width: 524, height: 10, rx: 2,
+        class: "rd-encoder-product-interface-edge",
+        "data-interface-geometry": "jamma-edge",
+      }),
+    );
+    for (let pad = 0; pad < 28; pad += 1) {
+      const x = 247 + pad * 18.7;
+      motif.append(svgElement(document_, "path", {
+        d: `M ${x} 450 V 456`, class: "rd-encoder-product-interface-edge-pad",
+      }));
+    }
+  } else if (profile.visualKind === "fight-board" || profile.visualKind === "firmware-reference") {
+    const label = profile.visualKind === "firmware-reference" ? "REMAPPABLE GPIO" : "LOGICAL CONTROL MAP";
+    const motifY = centerY + 25;
+    motif.append(svgText(document_, label, 305, motifY + 5,
+      "rd-encoder-product-interface-label", "middle"));
+    for (const x of [168, 206, 244, 756, 794, 832]) {
+      motif.append(svgElement(document_, "circle", {
+        cx: x, cy: motifY, r: 7, class: "rd-encoder-product-interface-node",
+      }));
+    }
+  } else {
+    for (const x of [144, 218, 292, 366, 596, 670, 744, 818]) {
+      motif.append(
+        svgElement(document_, "rect", { x, y: centerY - 8, width: 38, height: 13, rx: 4 }),
+        svgElement(document_, "circle", { cx: x + 12, cy: centerY + 28, r: 7 }),
+        svgElement(document_, "circle", { cx: x + 30, cy: centerY + 28, r: 7 }),
+      );
+    }
+  }
+  svg.append(motif);
 }
 
 function appendProductBoardDefs(document_: Document, svg: SVGSVGElement): {
@@ -691,8 +902,24 @@ function renderProductProfileSvg(
   svg.dataset.capacitySource = profile.topology.confidence;
   svg.dataset.resolution = result.resolution;
   svg.dataset.interactive = "true";
+  svg.dataset.visualKind = profile.visualKind;
+  svg.dataset.interfaceGrammar = productInterfaceGrammar(profile);
   svg.setAttribute("role", "group");
   const gradients = appendProductBoardDefs(document_, svg);
+  const terminalGroups = productTerminalGroups(profile);
+  const topRows = Math.max(0, ...terminalGroups
+    .filter((group) => group.edge === "top")
+    .map((group) => productTerminalGroupLayout(group).rows));
+  const bottomRows = Math.max(0, ...terminalGroups
+    .filter((group) => group.edge === "bottom")
+    .map((group) => productTerminalGroupLayout(group).rows));
+  const denseTop = topRows > 2;
+  const denseBottom = bottomRows > 2;
+  const chipY = denseTop ? 238 : denseBottom ? 184 : 202;
+  const chipHeight = denseTop || denseBottom ? 96 : 116;
+  const interfaceY = chipY + chipHeight / 2;
+  svg.dataset.maximumTopRows = String(topRows);
+  svg.dataset.maximumBottomRows = String(bottomRows);
 
   svg.append(
     svgElement(document_, "rect", {
@@ -741,68 +968,58 @@ function renderProductProfileSvg(
 
   const chip = svgElement(document_, "g", { class: "rd-encoder-product-chip" });
   chip.append(
-    svgElement(document_, "rect", { x: 425, y: 202, width: 150, height: 116, rx: 18 }),
-    svgText(document_, profile.shortLabel.toUpperCase(), 500, 239, "rd-encoder-product-chip-name", "middle"),
-    svgText(document_, topologyValue(profile), 500, 279, "rd-encoder-product-chip-count", "middle"),
-    svgText(document_, topologyUnit(profile).toUpperCase(), 500, 300, "rd-encoder-product-chip-unit", "middle"),
+    svgElement(document_, "rect", { x: 425, y: chipY, width: 150, height: chipHeight, rx: 18 }),
+    svgText(document_, profile.shortLabel.toUpperCase(), 500, chipY + 34,
+      "rd-encoder-product-chip-name", "middle"),
+    svgText(document_, topologyValue(profile), 500, chipY + 73,
+      "rd-encoder-product-chip-count", "middle"),
+    svgText(document_, topologyUnit(profile).toUpperCase(), 500, chipY + 94,
+      "rd-encoder-product-chip-unit", "middle"),
   );
   svg.append(chip);
 
+  const silkY = denseTop ? 266 : denseBottom ? 174 : 230;
   const silk = svgElement(document_, "g", { class: "rd-encoder-product-silkscreen" });
   silk.append(
-    svgText(document_, "KSX · INTERACTIVE ENCODER", 122, 230, "rd-encoder-product-brand"),
-    svgText(document_, profile.manufacturer.toUpperCase(), 122, 253, "rd-encoder-product-maker"),
-    svgText(document_, chart ? "CHART READ" : "CHART NOT READ", 878, 230, "rd-encoder-product-read-state", "end"),
-    svgText(document_, productTopologySilkscreen(profile), 878, 253, "rd-encoder-product-maker", "end"),
+    svgText(document_, "KSX · INTERACTIVE ENCODER", 122, silkY, "rd-encoder-product-brand"),
+    svgText(document_, profile.manufacturer.toUpperCase(), 122, silkY + 23, "rd-encoder-product-maker"),
+    svgText(document_, chart ? "CHART READ" : "CHART NOT READ", 878, silkY,
+      "rd-encoder-product-read-state", "end"),
+    svgText(document_, productTopologySilkscreen(profile), 878, silkY + 23,
+      "rd-encoder-product-maker", "end"),
   );
   svg.append(silk);
-
-  const components = svgElement(document_, "g", { class: "rd-encoder-product-components" });
-  for (let index = 0; index < 9; index += 1) {
-    const x = 144 + index * 78;
-    components.append(
-      svgElement(document_, "rect", { x, y: 282, width: 38, height: 13, rx: 4 }),
-      svgElement(document_, "circle", { cx: x + 12, cy: 318, r: 7 }),
-      svgElement(document_, "circle", { cx: x + 30, cy: 318, r: 7 }),
-    );
-  }
-  components.append(
-    svgElement(document_, "circle", { cx: 882, cy: 292, r: 8, class: "rd-encoder-product-led" }),
-    svgText(document_, "STATUS", 882, 316, "rd-encoder-product-led-label", "middle"),
+  appendProductInterfaceMotif(document_, svg, profile, interfaceY);
+  const status = svgElement(document_, "g", { class: "rd-encoder-product-components" });
+  status.append(
+    svgElement(document_, "circle", {
+      cx: 900, cy: interfaceY, r: 8, class: "rd-encoder-product-led",
+    }),
+    svgText(document_, "STATUS", 900, interfaceY + 24,
+      "rd-encoder-product-led-label", "middle"),
   );
-  svg.append(components);
+  svg.append(status);
 
-  const orderedTerminals = productTerminalGroups(profile).flatMap((group) => group.terminals);
+  const orderedTerminals = terminalGroups.flatMap((group) => group.terminals);
   const activeTerminalId = interaction.selectedTerminalId &&
       orderedTerminals.some((terminal) => terminal.id === interaction.selectedTerminalId)
     ? interaction.selectedTerminalId
     : orderedTerminals[0]?.id;
-  for (const group of productTerminalGroups(profile)) {
+  for (const group of terminalGroups) {
     const groupNode = svgElement(document_, "g", {
       class: `rd-encoder-product-group is-${group.edge}`,
       "data-terminal-group": group.id,
     });
-    const labelY = group.edge === "top" ? group.y - 12 : group.y + 68;
+    const layout = productTerminalGroupLayout(group);
+    const labelY = group.edge === "top"
+      ? group.y - 12
+      : profile.visualKind === "jamma-board"
+        ? layout.firstRowY - 4
+        : group.y + 68;
     groupNode.append(svgText(
       document_, groupLabel(group.id).toUpperCase(), group.x + group.width / 2, labelY,
       "rd-encoder-product-group-label", "middle",
     ));
-    const count = Math.max(1, group.terminals.length);
-    // Dense boards need more than one row. Keeping a genuine gap between the
-    // 50×52 hit rectangles prevents a neighbouring SVG sibling from stealing
-    // pointer input, while the full-width product figure renders them at the
-    // 44 CSS-pixel target size used by the workbench.
-    const maximumColumns = Math.max(1, Math.floor(group.width / 56));
-    const columns = Math.max(1, Math.min(maximumColumns, Math.ceil(count / 2)));
-    const rows = Math.max(1, Math.ceil(count / columns));
-    const pitch = group.width / columns;
-    const rowPitch = 56;
-    const width = Math.max(24, Math.min(38, pitch - 12));
-    const hitWidth = Math.min(52, pitch - 4);
-    const hitHeight = 52;
-    const firstRowY = group.edge === "bottom"
-      ? group.y - (rows - 1) * rowPitch
-      : group.y;
     group.terminals.forEach((terminal, index) => {
       const configured = chartByTerminal.get(terminal.id);
       const normalKey = configured?.normal.key?.trim() ?? "";
@@ -817,16 +1034,18 @@ function renderProductProfileSvg(
       const sharedKeyCount = Math.max(0, ...[normalKey, shiftedKey]
         .filter(Boolean)
         .map((key) => configuredKeyCounts.get(key) ?? 0));
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      const x = group.x + column * pitch + (pitch - width) / 2;
-      const y = firstRowY + row * rowPitch;
+      const column = index % layout.columns;
+      const row = Math.floor(index / layout.columns);
+      const x = group.x + column * layout.pitch + (layout.pitch - layout.width) / 2;
+      const y = layout.firstRowY + row * layout.rowPitch;
       const configuredEmission = configured ? encoderEmissionLabel(configured.normal) : null;
       const ariaBase = productTerminalAriaBase(
         terminal, configuredEmission, Boolean(configured?.normal.key?.trim()), sharedKeyCount,
       );
       const terminalNode = svgElement(document_, "g", {
         class: `rd-encoder-product-terminal player-${terminal.player ?? 0}` +
+          ` is-connection-${terminal.connection}` +
+          (terminal.capabilities.includes("optical-axis") ? " is-optical-capable" : "") +
           (terminal.presence === "variant-only" ? " is-variant" : "") +
           (terminal.identityScope === "logical-control" ? " is-logical" : "") +
           (configured ? " has-configured-emission" : "") +
@@ -848,6 +1067,7 @@ function renderProductProfileSvg(
         "data-terminal-row": row,
         "data-identity-scope": terminal.identityScope,
         "data-connection": terminal.connection,
+        "data-capabilities": terminal.capabilities.join(" "),
         "data-presence": terminal.presence,
         ...(configured ? {
           "data-configured-emission": encoderEmissionLabel(configured.normal),
@@ -896,19 +1116,27 @@ function renderProductProfileSvg(
       terminalNode.append(
         title,
         svgElement(document_, "rect", {
-          x: (width - hitWidth) / 2, y: 0, width: hitWidth, height: hitHeight, rx: 8,
+          x: (layout.width - layout.hitWidth) / 2, y: 0,
+          width: layout.hitWidth, height: layout.hitHeight, rx: 8,
           class: "rd-encoder-product-terminal-hit",
         }),
-        svgElement(document_, "rect", { width, height: 48, rx: 6, class: "rd-encoder-product-terminal-body" }),
-        svgElement(document_, "circle", { cx: width / 2, cy: 12, r: 6.5, class: "rd-encoder-product-terminal-screw" }),
-        svgElement(document_, "path", {
-          d: `M ${width / 2 - 4} 12 H ${width / 2 + 4}`,
-          class: "rd-encoder-product-terminal-slot",
+        svgElement(document_, "rect", {
+          width: layout.width, height: 48, rx: 6,
+          class: "rd-encoder-product-terminal-body",
         }),
-        svgText(document_, terminalShortLabel(terminal), width / 2, 29,
+      );
+      appendProductTerminalFace(document_, terminalNode, terminal, layout.width);
+      if (terminal.capabilities.includes("optical-axis")) {
+        terminalNode.append(svgElement(document_, "circle", {
+          cx: layout.width - 4, cy: 5, r: 2.5,
+          class: "rd-encoder-product-terminal-optical",
+        }));
+      }
+      terminalNode.append(
+        svgText(document_, terminalShortLabel(terminal), layout.width / 2, 29,
           "rd-encoder-product-terminal-label", "middle"),
-        svgText(document_, configured ? encoderEmissionShortLabel(configured.normal) : "—", width / 2, 42,
-          "rd-encoder-product-terminal-emission", "middle"),
+        svgText(document_, configured ? encoderEmissionShortLabel(configured.normal) : "—",
+          layout.width / 2, 42, "rd-encoder-product-terminal-emission", "middle"),
       );
       groupNode.append(terminalNode);
     });
@@ -935,7 +1163,10 @@ function renderProductUnknownSvg(
   svg.setAttribute("viewBox", "0 0 1000 520");
   svg.classList.add("rd-encoder-product-svg", "is-unknown");
   svg.dataset.capacity = "unknown";
+  svg.dataset.capacitySource = profile.topology.confidence;
   svg.dataset.resolution = result.resolution;
+  svg.dataset.visualKind = profile.visualKind;
+  svg.dataset.interfaceGrammar = productInterfaceGrammar(profile);
   svg.dataset.observedCount = String(observations.length);
   svg.dataset.declaredCount = String(declaredLabels.length);
   svg.dataset.hiddenDeclaredCount = String(Math.max(0, declaredLabels.length - 16));
@@ -1284,6 +1515,7 @@ function appendFact(
 function candidateConfirmation(
   document_: Document,
   result: EncoderDetectionResult,
+  radioGroupName: string,
   onConfirm: (profileId: EncoderVisualProfileId) => void,
 ): HTMLFieldSetElement | null {
   if (result.resolution !== "ambiguous-family" || result.candidates.length === 0) return null;
@@ -1298,7 +1530,7 @@ function candidateConfirmation(
     label.dataset.profileCandidate = profileId;
     const radio = html(document_, "input");
     radio.type = "radio";
-    radio.name = "rd-encoder-profile-candidate";
+    radio.name = radioGroupName;
     radio.value = profileId;
     radio.addEventListener("change", () => onConfirm(profileId));
     const copy = html(document_, "span");
@@ -1902,6 +2134,7 @@ function dynamicProfileContent(
   onStartObservation: () => void,
   onStopObservation: () => void,
   onEscapeObservationCapture: () => void,
+  candidateRadioGroupName: string,
 ): HTMLElement {
   const region = html(document_, "div", "rd-encoder-profile-dynamic");
   region.dataset.rdEncoderEvidence = "";
@@ -1932,7 +2165,7 @@ function dynamicProfileContent(
       : signals.length > 0 ? "illustrative signal sample" : "observed host signals",
     observationsAreLive ? "observed" : "unknown",
   );
-  const candidate = candidateConfirmation(document_, result, onConfirm);
+  const candidate = candidateConfirmation(document_, result, candidateRadioGroupName, onConfirm);
   const chart = chartState.kind === "loaded" ? chartState.snapshot : null;
   const observationBusy = observationState.kind === "reconciling" ||
     observationState.kind === "starting" || observationState.kind === "listening" ||
@@ -2310,6 +2543,7 @@ function productDynamicContent(
   chartHardwareBlock: EncoderHardwareActionLease | null,
   observationHardwareBlock: EncoderHardwareActionLease | null,
   hardwareActionOwner: symbol,
+  candidateRadioGroupName: string,
 ): HTMLElement {
   const region = html(document_, "div", "rd-encoder-product-dynamic");
   region.dataset.rdEncoderEvidence = "";
@@ -2363,12 +2597,15 @@ function productDynamicContent(
   if (!connectionConfirmed) {
     appendProductPill(document_, status, "Connection unconfirmed", "attention");
   }
+  const identitySummary = result.resolution === "manual"
+    ? `User confirmed · ${productTopologyLabel(result.profile)}`
+    : `Recognized · ${productTopologyLabel(result.profile)}`;
   appendProductPill(document_, status, known
-    ? `Recognized · ${productTopologyLabel(result.profile)}`
+    ? identitySummary
     : result.resolution === "ambiguous-family"
       ? "Confirm model · capacity unknown"
       : "Generic setup · capacity unknown",
-  known ? "recognized" : "attention");
+  known ? result.resolution === "manual" ? "ready" : "recognized" : "attention");
   const assignmentState = chart
     ? "stored assignments loaded"
     : chartState.kind === "loading" ? "Reading stored assignments"
@@ -2379,7 +2616,7 @@ function productDynamicContent(
   chart ? "recognized" : chartState.kind === "error" ? "attention" : "ready");
   region.append(status);
 
-  const candidate = candidateConfirmation(document_, result, onConfirm);
+  const candidate = candidateConfirmation(document_, result, candidateRadioGroupName, onConfirm);
   if (candidate) region.append(candidate);
 
   const work = html(document_, "div", "rd-encoder-product-work");
@@ -2484,6 +2721,7 @@ function createProfileLabContent(
   readStoredAssignmentsOnMount = false,
 ): ProfileLabContentController {
   const presentation = options.presentation ?? "research";
+  const candidateRadioGroupName = `rd-encoder-profile-candidate-${++encoderSurfaceSequence}`;
   const makeSelections = (devices: readonly EncoderProfileLabDevice[] = []): LabSelection[] => {
     const built = buildSelections(devices);
     return presentation === "product"
@@ -2806,6 +3044,7 @@ function createProfileLabContent(
         chartHardwareBlock,
         observationHardwareBlock,
         hardwareActionOwner,
+        candidateRadioGroupName,
       )
       : dynamicProfileContent(
         document_, result, current, declaredLabels, declaredLabelsDraft, chartState, observationState,
@@ -2816,6 +3055,7 @@ function createProfileLabContent(
         () => { void startCurrentObservation(); },
         () => { void stopCurrentObservation(); },
         escapeObservationCapture,
+        candidateRadioGroupName,
       );
     dynamicHost.replaceChildren(nextDynamicContent);
     if (openProductDisclosures.size > 0) {

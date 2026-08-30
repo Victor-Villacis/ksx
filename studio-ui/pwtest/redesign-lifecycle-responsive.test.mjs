@@ -336,6 +336,13 @@ describe("the responsive redesign lifecycle rail", { concurrency: false }, () =>
       const inspector = page.locator(".rd-inspector");
       const close = inspector.locator('[data-nx="rd-insp-close"]');
       await close.waitFor({ state: "visible" });
+      // Playwright's visible state is true on animation frame zero even
+      // though the drawer is still translated one viewport to the right.
+      // Test the settled hit target: the contract here is stacking above the
+      // rail, not whether the entrance animation has elapsed.
+      await page.waitForFunction(
+        () => document.querySelector(".rd-inspector")?.getAnimations().length === 0,
+      );
 
       const hitTarget = await close.evaluate((button) => {
         const rect = button.getBoundingClientRect();

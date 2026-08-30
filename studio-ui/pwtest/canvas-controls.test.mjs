@@ -3726,6 +3726,18 @@ describe("the canvas navigation controls", () => {
         viewport: { width: 1600, height: 1000 },
         colorScheme: "dark",
       });
+      await page.addInitScript(() => {
+        const NativeEventSource = window.EventSource;
+        window.__ksxLiveUnavailableEvents = 0;
+        window.EventSource = class AuditedEventSource extends NativeEventSource {
+          constructor(url, options) {
+            super(url, options);
+            this.addEventListener("unavailable", () => {
+              window.__ksxLiveUnavailableEvents += 1;
+            });
+          }
+        };
+      });
       const noise = [];
       page.on("pageerror", (error) => noise.push("pageerror: " + (error.stack ?? error)));
       page.on("console", (message) => {
@@ -3812,9 +3824,7 @@ describe("the canvas navigation controls", () => {
             dropped: /frames dropped/.test(
               document.querySelector(".n-livestats")?.textContent ?? "",
             ),
-            inactive: /inactive/i.test(
-              document.querySelector(".n-live-sr")?.textContent ?? "",
-            ),
+            sessionUnavailable: (window.__ksxLiveUnavailableEvents ?? 0) > 0,
             macroLive:
               document.querySelectorAll(
                 '#n-mapping-paths [data-flow-kind^="macro-"].is-live',
@@ -3855,15 +3865,69 @@ describe("the canvas navigation controls", () => {
         null,
         { timeout: 10_000 },
       );
+
+      // Exercise the real lifecycle boundary. The fixture no longer invents
+      // an in-band `running: false` frame: Stop ends the stream with the same
+      // no-session refusal production uses, and Play opens a new stream. Hold
+      // structure truth so that new frames cannot license themselves.
+      const stoppedResponse = await fetch(liveBase + "/redesign/stop", {
+        method: "POST",
+        redirect: "manual",
+      });
+      assert.equal(stoppedResponse.status, 303, "the real Stop boundary did not redirect");
+      assert.match(
+        stoppedResponse.headers.get("location") ?? "",
+        /flash=Play%20stopped\./,
+        "the real Stop boundary returned an error redirect",
+      );
       await page.waitForFunction(
-        () => window.__ksxLiveFlowSamples?.some((sample) => sample.inactive),
+        () => window.__ksxLiveFlowSamples?.some((sample) => sample.sessionUnavailable),
         null,
         { timeout: 10_000 },
       );
-      await page.waitForTimeout(700);
+      // The running seed predates capture preflight state. After Stop, use
+      // the real exact-device/consent transaction to put both the draft and
+      // the fixture machine on the same path before starting it again.
+      const preparedResponse = await fetch(liveBase + "/redesign/capture/prepare", {
+        method: "POST",
+        body: new URLSearchParams({
+          expected_selector: "usb:d209:0430:00",
+          instance_id: "HID\\VID_D209&PID_0430\\FIXTURE",
+          confirm_spare_keyboard: "yes",
+          confirm_rebind: "yes",
+          confirm_machine_certificate: "yes",
+        }),
+        redirect: "manual",
+      });
+      assert.equal(preparedResponse.status, 303, "the exact-device prepare did not redirect");
+      assert.match(
+        preparedResponse.headers.get("location") ?? "",
+        /flash=Keyboard%20prepared\./,
+        "the exact-device prepare returned an error redirect",
+      );
+      const lifecycle = await fetch(liveBase + "/api/redesign").then((response) =>
+        response.json()
+      );
+      const draftRevision = lifecycle.operations?.draft_revision ?? "";
+      assert.ok(draftRevision, "the stopped fixture disclosed its current draft revision");
+      const playedResponse = await fetch(liveBase + "/redesign/play", {
+        method: "POST",
+        body: new URLSearchParams({ expected_revision: draftRevision }),
+        redirect: "manual",
+      });
+      assert.equal(playedResponse.status, 303, "the real Play boundary did not redirect");
+      assert.match(
+        playedResponse.headers.get("location") ?? "",
+        /flash=Play%20started/,
+        "the real Play boundary returned an error redirect",
+      );
+      // SSE retries after two seconds and the first new frame follows 400 ms
+      // later. Give that unconfirmed stream time to speak before asserting
+      // that it still cannot repaint the old session's routes.
+      await page.waitForTimeout(3_000);
       const boundaryAudit = await page.evaluate(() => {
         const samples = window.__ksxLiveFlowSamples ?? [];
-        const stopped = samples.findIndex((sample) => sample.inactive);
+        const stopped = samples.findIndex((sample) => sample.sessionUnavailable);
         return {
           stopped,
           litBeforeStructure: samples
@@ -3881,7 +3945,7 @@ describe("the canvas navigation controls", () => {
       await page.waitForFunction(
         () => {
           const samples = window.__ksxLiveFlowSamples ?? [];
-          const stopped = samples.findIndex((sample) => sample.inactive);
+          const stopped = samples.findIndex((sample) => sample.sessionUnavailable);
           return stopped >= 0 && samples.slice(stopped + 1).some((sample) => sample.gA && sample.gB);
         },
         null,

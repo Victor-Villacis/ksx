@@ -64,6 +64,13 @@ async function within(promise, timeoutMs, message) {
   }
 }
 
+function assertNoUnexpectedNoise(page, allowed) {
+  const unexpected = page.ksxNoise.filter((line) =>
+    !allowed.some((pattern) => pattern.test(line))
+  );
+  assert.deepEqual(unexpected, []);
+}
+
 async function openRedesign(base) {
   const page = await browser.newPage({
     viewport: { width: 1440, height: 900 },
@@ -145,6 +152,7 @@ describe("redesign identify by key", () => {
             payload.devices[tier].push({
               ...row,
               selector: "usb:d209:0430:01",
+              connection_label: "USB D209:0430 · connection 01",
               aria_current: "false",
             });
           }
@@ -162,7 +170,7 @@ describe("redesign identify by key", () => {
         2,
         "the product name alone is genuinely ambiguous",
       );
-      assert.equal(
+      assert.deepEqual(
         await page.locator(".rd-dev-identity", { hasText: "USB D209:0430" }).allTextContents(),
         ["USB D209:0430 · connection 00", "USB D209:0430 · connection 01"],
         "true twin boards keep distinct connection labels beside the shared name",
@@ -172,7 +180,7 @@ describe("redesign identify by key", () => {
         exact: true,
       });
       assert.match(
-        (await page.locator(".rd-identify-copy").textContent()) ?? "",
+        (await page.locator("[data-rd-identify] .rd-identify-copy").textContent()) ?? "",
         /successful answer becomes the mapping input.*nothing is captured, saved, or started/is,
       );
       await action.click();
@@ -223,7 +231,11 @@ describe("redesign identify by key", () => {
       assert.doesNotMatch((await status.textContent()) ?? "", /nothing changed/i);
       assert.equal(await page.locator(".rd-devmodal[hidden]").count(), 0);
       assert.equal(await action.evaluate((button) => button === document.activeElement), true);
-      assert.deepEqual(page.ksxNoise, []);
+      // Chromium reports an intentionally-authored failed fetch in the
+      // console even though the product catches it and performs recovery.
+      assertNoUnexpectedNoise(page, [
+        /^console: Failed to load resource:.*status of 503\b/i,
+      ]);
     } finally {
       await page.close();
     }
@@ -256,7 +268,11 @@ describe("redesign identify by key", () => {
       );
       assert.doesNotMatch((await status.textContent()) ?? "", /nothing changed/i);
       assert.doesNotMatch((await status.textContent()) ?? "", /Identified Ultimarc/i);
-      assert.deepEqual(page.ksxNoise, []);
+      // Aborting the routed response is the test's transport-loss mechanism;
+      // Chromium's network diagnostic is expected, application errors are not.
+      assertNoUnexpectedNoise(page, [
+        /^console: Failed to load resource:.*ERR_CONNECTION_CLOSED\b/i,
+      ]);
     } finally {
       await page.close();
     }
@@ -314,7 +330,7 @@ describe("redesign identify by key", () => {
         "the browser still claimed ownership of the next physical key",
       );
       assert.equal(
-        await page.getByRole("button", { name: "Cancel", exact: true }).isHidden(),
+        await page.locator("[data-rd-identify-cancel]").isHidden(),
         true,
         "Cancel remained offered after the answer committed",
       );
@@ -516,12 +532,11 @@ describe("redesign identify by key", () => {
       }).click();
       await page.locator('[data-rd-identify-status][data-state="listening"]').waitFor();
 
-      const cleanup = page.waitForResponse((response) =>
-        response.request().method() === "POST"
-          && response.url() === `${HOLD_BASE}/redesign/device/identify/cancel`
-      );
+      // A pagehide beacon can be owned by the service worker/navigation after
+      // this Page has detached, so Playwright is not guaranteed a Page-level
+      // response event. Assert the product consequence instead: the server
+      // must release the exact lease before the next attempt can remain live.
       await page.goto(`${HOLD_BASE}/check`, { waitUntil: "domcontentloaded" });
-      assert.equal((await cleanup).status(), 303, "pagehide did not deliver exact cancellation");
 
       await page.goto(`${HOLD_BASE}/redesign`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(

@@ -19342,8 +19342,11 @@ a.nm-link {
     color: GrayText;
   }
 
-  .rd-utility-sum:focus-visible,
-  .rd-utility-link:focus-visible {
+  /* Forced-colors users must retain the system focus witness even when a
+     pointer action preceded programmatic focus. `:focus-visible` follows
+     input-modality heuristics and can therefore disappear in that case. */
+  .rd-utility-sum:focus,
+  .rd-utility-link:focus {
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }
@@ -19563,6 +19566,13 @@ a.nm-link {
 
 .rd-identify-cancel {
   min-width: 76px;
+}
+
+/* `.rd-panel-action` authors its own display mode, so the browser's weak
+   presentational `[hidden]` default is not enough here. Cancellation exists
+   only while Raw Input still owns the next key. */
+.rd-identify-cancel[hidden] {
+  display: none;
 }
 
 /* The picker itself is a scripted canvas surface. Keep one compact native

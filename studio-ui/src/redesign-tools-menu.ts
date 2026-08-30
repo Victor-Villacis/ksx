@@ -171,9 +171,21 @@ export function wireRedesignToolsDisclosures(root: HTMLElement): void {
     true,
   );
   const compact = window.matchMedia("(max-width: 680px)");
-  compact.addEventListener("change", () => {
+  compact.addEventListener("change", (event) => {
     const active = document.activeElement;
     const ownedFocus = active instanceof Element && Boolean(active.closest("[data-rd-tools-menu]"));
-    closeRedesignToolsDisclosure(root, ownedFocus);
+    closeRedesignToolsDisclosure(root);
+    if (!ownedFocus) return;
+
+    // A media-query change is already observing the destination layout, but
+    // `getClientRects()` can still report the outgoing copy for this event's
+    // first style read. Choosing by the authoritative breakpoint prevents
+    // focus from remaining on a disclosure that is about to become hidden.
+    const target = event.matches
+      ? root.querySelector<HTMLElement>(".rd-setupd > .rd-setup-sum")
+      : root.querySelector<HTMLElement>(
+        ".rd-utility-rail-home [data-rd-tools-menu] > .rd-utility-sum",
+      );
+    target?.focus({ preventScroll: true });
   });
 }

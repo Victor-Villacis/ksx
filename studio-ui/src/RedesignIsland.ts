@@ -54,6 +54,11 @@ import {
   type RdMacView,
 } from "./redesign-macro-editor";
 import {
+  closeRedesignToolsDisclosure,
+  redesignToolsDisclosure,
+  wireRedesignToolsDisclosures,
+} from "./redesign-tools-menu";
+import {
   syncControllerWidgets,
   type ParkedController,
   type RdControllerCardView,
@@ -2308,6 +2313,19 @@ function deviceRowFor(selector: string): RdDeviceRowView | undefined {
   return [...rdDevKb(), ...rdDevEnc(), ...rdDevExp()].find((r) => r.selector === selector);
 }
 
+/** A short, stable connection label for two boards that report the same
+ * product name. The raw selector remains the identity carried to the server;
+ * this is presentation only and deliberately retains its final instance
+ * component instead of collapsing twins to VID/PID. */
+function deviceConnectionLabel(selector: string): string {
+  const usb = /^usb:([0-9a-f]{4}):([0-9a-f]{4}):(.+)$/i.exec(selector.trim());
+  if (usb) {
+    return `USB ${usb[1].toUpperCase()}:${usb[2].toUpperCase()} · connection ${usb[3].toUpperCase()}`;
+  }
+  const tail = selector.trim().split(/[\\/:]/).filter(Boolean).at(-1);
+  return tail ? `Connection ${tail}` : "Exact connection available after identification";
+}
+
 const DEVICE_ROLE_BADGE: Record<string, string> = {
   "panel-encoder": "Panel encoder",
   keyboard: "Keyboard",
@@ -2830,6 +2848,13 @@ let devModalReturnFocus: HTMLElement | null = null;
 function setDevModal(open: boolean): void {
   const el = devModalEl();
   if (!el || el.hidden === !open) return;
+  // An identify transaction owns the modal until its exact learner
+  // generation answers or is cancelled. Closing the surface while its POST
+  // can still stage a board would make a later selection look spontaneous.
+  if (!open && el.dataset.rdIdentifyPending === "true") {
+    el.querySelector<HTMLElement>("[data-rd-identify-cancel]")?.focus({ preventScroll: true });
+    return;
+  }
   if (open) {
     // Opening paths close peers; closing paths only restore focus. Keeping
     // that direction one-way prevents modal hand-offs from recursing.
@@ -3128,6 +3153,7 @@ function canvasOwnsKeyboardFocus(): boolean {
 
 export function redesignWire(root: HTMLElement): void {
   rdRoot = root;
+  wireRedesignToolsDisclosures(root);
   // The wire's own "JavaScript is live" marker: scripting-only chrome (the
   // camera buttons) reveals off it, and the parity gate normalizes it.
   root.classList.add("js");
@@ -3166,6 +3192,10 @@ export function redesignWire(root: HTMLElement): void {
     const themeMenu = rdRoot?.querySelector<HTMLElement>("[data-rd-theme-menu][open]");
     if (themeMenu && !target?.closest("[data-rd-theme-menu]")) {
       closeThemeMenu();
+    }
+    const toolsMenu = rdRoot?.querySelector<HTMLElement>("[data-rd-tools-menu][open]");
+    if (toolsMenu && !target?.closest("[data-rd-tools-menu]")) {
+      closeRedesignToolsDisclosure(root);
     }
     // The board and While-playing pickers keep the same convention: a
     // click outside a popover puts it away (each one for itself, so
@@ -3594,6 +3624,10 @@ export function redesignWire(root: HTMLElement): void {
         ev.preventDefault();
         return;
       }
+      if (closeRedesignToolsDisclosure(root, true)) {
+        ev.preventDefault();
+        return;
+      }
       if (ctrlModalIsOpen()) setCtrlModal(false);
       else if (devModalIsOpen()) setDevModal(false);
       else if (sheetOpen()) setSheet(false);
@@ -3856,6 +3890,11 @@ export function RedesignIsland() {
                   { class: "rd-theme-compact-home" },
                   redesignCompactThemeDisclosure(),
                 ),
+              ),
+              h(
+                "div",
+                { class: "rd-utility-compact-home" },
+                redesignToolsDisclosure(true),
               ),
               h(
                 "nav",
@@ -4322,6 +4361,11 @@ export function RedesignIsland() {
             { class: "rd-theme-rail-home" },
             redesignThemeDisclosure(),
           ),
+          h(
+            "div",
+            { class: "rd-utility-rail-home" },
+            redesignToolsDisclosure(),
+          ),
           h("span", { role: "status", class: "n-live-sr", "data-live-chatter": "" }),
         ),
         // Action results need room to be read. The legacy topbar pill clipped
@@ -4393,8 +4437,10 @@ export function RedesignIsland() {
         // SERVED — shell, scan line, all four tiers, every row — and hidden
         // until opened. Membership decoration (aria-pressed, the `.on`
         // marking, the verb word) is client state painted by syncDeviceRows.
-        // No verb posts from here: adding to the workbench arranges the
-        // browser; it changes no config and stages nothing.
+        // Device rows do not post: adding to the workbench arranges the
+        // browser and stages nothing. Identify is the one explicit server
+        // verb in this surface; its label says that an answer becomes the
+        // mapping input before the user starts listening.
         h(
           "div",
           {
@@ -4432,6 +4478,70 @@ export function RedesignIsland() {
               "Show adds a device card to this canvas for inspection. It does not change mapping. On the card, Use as mapping input chooses the one device whose emitted keys appear on the Input source keyboard.",
             ),
             h(
+              "section",
+              {
+                class: "rd-identify-card",
+                "data-rd-identify": "",
+                "aria-labelledby": "rd-identify-title",
+              },
+              h(
+                "div",
+                { class: "rd-identify-copy" },
+                h("h3", { id: "rd-identify-title" }, "Not sure which keyboard is which?"),
+                h(
+                  "p",
+                  null,
+                  "Start listening, then press one key on the exact keyboard or encoder you want. A successful answer becomes the mapping input; nothing is captured, saved, or started.",
+                ),
+              ),
+              h(
+                "form",
+                {
+                  method: "post",
+                  action: "/redesign/device/identify",
+                  "data-rd-form": "identify",
+                },
+                h("input", { type: "hidden", name: "attempt", value: "" }),
+                h(
+                  "button",
+                  { type: "submit", class: "rd-panel-action rd-identify-start" },
+                  "Identify and use as mapping input",
+                ),
+              ),
+              h(
+                "div",
+                {
+                  class: "rd-identify-status",
+                  "data-rd-identify-status": "",
+                  "data-state": "idle",
+                  role: "status",
+                  "aria-live": "polite",
+                  tabindex: "-1",
+                },
+                h("span", { class: "rd-identify-pulse", "aria-hidden": "true" }),
+                h(
+                  "span",
+                  { class: "rd-identify-answer" },
+                  h("strong", { "data-rd-identify-label": "" }, "Ready to identify"),
+                  h(
+                    "span",
+                    { "data-rd-identify-detail": "" },
+                    "No device changes until you start listening.",
+                  ),
+                ),
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    class: "rd-panel-action rd-identify-cancel",
+                    "data-rd-identify-cancel": "",
+                    hidden: "",
+                  },
+                  "Cancel",
+                ),
+              ),
+            ),
+            h(
               "div",
               { class: () => rdDevKbFoldCls() },
               h("h3", { class: "rd-devhead" }, () => rdDevKbHead()),
@@ -4466,6 +4576,7 @@ export function RedesignIsland() {
                       // what caught the chip existing only after hydration.
                       h("span", { class: "rd-dev-stagedchip" }, "staged"),
                       h("span", { class: "n-dev-meta" }, r.meta),
+                      h("span", { class: "n-dev-meta rd-dev-identity" }, deviceConnectionLabel(r.selector)),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
                     ),
                     h("span", { class: "n-dev-dot" }),
@@ -4512,6 +4623,7 @@ export function RedesignIsland() {
                       // it starts — connection chatter, by the parity
                       // contract, so hydration may reword it.
                       h("span", { class: "n-dev-meta", "data-live-chatter": "" }, r.meta),
+                      h("span", { class: "n-dev-meta rd-dev-identity" }, deviceConnectionLabel(r.selector)),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
                     ),
                     h("span", { class: "n-dev-dot" }),
@@ -4553,6 +4665,7 @@ export function RedesignIsland() {
                       // what caught the chip existing only after hydration.
                       h("span", { class: "rd-dev-stagedchip" }, "staged"),
                       h("span", { class: "n-dev-meta" }, r.meta),
+                      h("span", { class: "n-dev-meta rd-dev-identity" }, deviceConnectionLabel(r.selector)),
                       h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
                     ),
                     h("span", { class: "n-dev-dot" }),

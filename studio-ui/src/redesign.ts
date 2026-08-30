@@ -68,6 +68,13 @@ let redesignRoot: HTMLElement | null = null;
 let refreshHealth: "online" | "stale" = "online";
 let discardConfirmationAuthority: string | null = null;
 let captureConfirmationAuthority: string | null = null;
+const IDENTIFY_OK_FLASH =
+  "Keyboard identified and selected. Nothing has been captured, saved, or started.";
+const IDENTIFY_CANCELLED_FLASH = "Keyboard identification cancelled. Nothing changed.";
+let identifyRequestController: AbortController | null = null;
+let identifyRequestAttempt: string | null = null;
+let identifyCancellationAccepted = false;
+let identifyCancellationTask: Promise<boolean> | null = null;
 
 function applyAuthority(operations: RedesignPayload["operations"] | null | undefined): string {
   if (!operations) return "";
@@ -301,6 +308,9 @@ function wireForms(root: HTMLElement): void {
     } else if (form.matches('[data-rd-form="device"]')) {
       ev.preventDefault();
       void submitDeviceForm(form, root, submitter);
+    } else if (form.matches('[data-rd-form="identify"]')) {
+      ev.preventDefault();
+      void submitIdentifyForm(form, root, submitter);
     } else if (
       form.matches(
         '[data-rd-form="save"], [data-rd-form="play"], ' +
@@ -333,6 +343,13 @@ function wireForms(root: HTMLElement): void {
       void submitControllerForm(form, root, submitter);
     }
   });
+  root.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element) || !target.closest("[data-rd-identify-cancel]")) return;
+    void cancelIdentify(root);
+  });
+  window.addEventListener("keydown", guardIdentifyKey, true);
+  window.addEventListener("keypress", guardIdentifyKey, true);
   wireApplyRestartDialog(root);
 }
 
@@ -350,6 +367,7 @@ type SubmitControl = HTMLButtonElement | HTMLInputElement | HTMLSelectElement;
 const MUTATION_SUBMIT_SELECTOR = [
   "theme",
   "device",
+  "identify",
   "controller-add",
   "controller-move",
   "controller-remove",
@@ -421,6 +439,267 @@ function endMutation(root: HTMLElement, controls: SubmitControl[]): void {
 function actionStillOwnsFocus(owner: HTMLElement, submitter: HTMLElement | null): boolean {
   const active = document.activeElement;
   return active === null || active === document.body || active === submitter || owner.contains(active);
+}
+
+type IdentifyUiState = "idle" | "listening" | "cancelling" | "identified" | "cancelled" | "error";
+
+function identifySurface(root: HTMLElement): HTMLElement | null {
+  return root.querySelector<HTMLElement>("[data-rd-identify]");
+}
+
+function setIdentifyUi(
+  root: HTMLElement,
+  state: IdentifyUiState,
+  label: string,
+  detail: string,
+  cancelVisible = false,
+): void {
+  const surface = identifySurface(root);
+  const status = surface?.querySelector<HTMLElement>("[data-rd-identify-status]");
+  const heading = surface?.querySelector<HTMLElement>("[data-rd-identify-label]");
+  const copy = surface?.querySelector<HTMLElement>("[data-rd-identify-detail]");
+  const cancel = surface?.querySelector<HTMLButtonElement>("[data-rd-identify-cancel]");
+  if (!status || !heading || !copy || !cancel) return;
+  status.dataset.state = state;
+  heading.textContent = label;
+  copy.textContent = detail;
+  cancel.hidden = !cancelVisible;
+  cancel.disabled = state === "cancelling";
+}
+
+/** While the daemon is listening, the next key belongs to identification.
+ * Disable every other picker verb and keep the modal mounted; otherwise Space
+ * can toggle a focused row and a backdrop click can hide a transaction that
+ * may still stage a board. */
+function setIdentifyModalPending(root: HTMLElement, pending: boolean): void {
+  const modal = root.querySelector<HTMLElement>(".rd-devmodal");
+  if (!modal) return;
+  if (pending) modal.dataset.rdIdentifyPending = "true";
+  else delete modal.dataset.rdIdentifyPending;
+  modal.querySelectorAll<HTMLButtonElement>(
+    '[data-nx="rd-dev-toggle"], [data-nx="rd-devs-close"]',
+  ).forEach((button) => {
+    button.disabled = pending;
+  });
+}
+
+function identifyIsPending(root: HTMLElement): boolean {
+  return root.querySelector<HTMLElement>(".rd-devmodal")?.dataset.rdIdentifyPending === "true";
+}
+
+/** The physical key reaches the daemon independently of the browser event.
+ * Prevent browser scrolling, focused-button activation and canvas shortcuts;
+ * Escape is the one authored cancellation door. */
+function guardIdentifyKey(event: KeyboardEvent): void {
+  const root = redesignRoot;
+  if (!root || !identifyIsPending(root)) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (event.key === "Escape" && event.type === "keydown") void cancelIdentify(root);
+}
+
+function identifyErrorCopy(flash: string | null): string {
+  return (flash ?? "No keyboard answered. Nothing changed.")
+    .replace(/^error:\s*/i, "")
+    .trim();
+}
+
+function showIdentifiedDevice(root: HTMLElement): void {
+  const row = root.querySelector<HTMLElement>(
+    '.rd-devmodal [data-nx="rd-dev-toggle"][aria-current="true"]',
+  );
+  const name = row?.querySelector<HTMLElement>(".n-dev-name")?.textContent?.trim() ?? "";
+  const identity = row?.querySelector<HTMLElement>(".rd-dev-identity")?.textContent?.trim() ?? "";
+  setIdentifyUi(
+    root,
+    "identified",
+    name ? `Identified ${name}` : "Keyboard identified",
+    identity
+      ? `${identity}. This exact connection is now the mapping input.`
+      : "The exact connection that answered is now the mapping input.",
+  );
+  if (row) {
+    row.classList.add("rd-row-pulse");
+    window.setTimeout(() => row.classList.remove("rd-row-pulse"), 1400);
+  }
+}
+
+async function performIdentifyCancellation(root: HTMLElement): Promise<boolean> {
+  const controller = identifyRequestController;
+  const attempt = identifyRequestAttempt;
+  if (!controller || !attempt || !identifyIsPending(root)) return false;
+  setIdentifyUi(
+    root,
+    "cancelling",
+    "Cancelling identification",
+    "Stopping only this keyboard-listening attempt…",
+    true,
+  );
+  try {
+    const response = await fetch("/redesign/device/identify/cancel", {
+      method: "POST",
+      body: new URLSearchParams({ attempt }),
+      redirect: "follow",
+    });
+    if (!response.ok) throw new Error(`identify cancellation failed with ${response.status}`);
+    // The original response may have won while this request was in flight.
+    // It owns the already-painted outcome; a late cancellation response must
+    // not roll a settled success back to "listening".
+    if (
+      identifyRequestController !== controller ||
+      identifyRequestAttempt !== attempt ||
+      !identifyIsPending(root)
+    ) return false;
+    const outcome = new URL(response.url).searchParams.get("flash");
+    applyRedesignFlash(outcome);
+    if (outcome === IDENTIFY_CANCELLED_FLASH) {
+      identifyCancellationAccepted = true;
+      setIdentifyUi(
+        root,
+        "cancelled",
+        "Identification cancelled",
+        "Nothing changed. You can start again whenever you are ready.",
+      );
+      controller.abort();
+      return true;
+    }
+    // The server retired the generation before resolving a hit, so this is
+    // not a cancellation failure: the original answer now owns the outcome.
+    setIdentifyUi(
+      root,
+      "listening",
+      "A keyboard already answered",
+      "Finishing the exact-device check…",
+    );
+    return false;
+  } catch {
+    if (identifyCancellationAccepted) return true;
+    applyRedesignFlash(
+      "error: cancellation could not reach ksx studio. Identification is still listening.",
+    );
+    setIdentifyUi(
+      root,
+      "listening",
+      "Still listening for one key",
+      "Cancellation could not reach ksx. Press one key, or try Cancel again.",
+      true,
+    );
+    root.querySelector<HTMLButtonElement>("[data-rd-identify-cancel]")?.focus({
+      preventScroll: true,
+    });
+    return false;
+  }
+}
+
+async function cancelIdentify(root: HTMLElement): Promise<void> {
+  if (identifyCancellationTask) {
+    await identifyCancellationTask;
+    return;
+  }
+  const task = performIdentifyCancellation(root);
+  identifyCancellationTask = task;
+  try {
+    await task;
+  } finally {
+    if (identifyCancellationTask === task) identifyCancellationTask = null;
+  }
+}
+
+async function submitIdentifyForm(
+  form: HTMLFormElement,
+  root: HTMLElement,
+  submitter: HTMLElement | null,
+): Promise<void> {
+  const submits = beginMutation(root);
+  if (!submits) return;
+  const owner = identifySurface(root) ?? form;
+  const controller = new AbortController();
+  const words = crypto.getRandomValues(new Uint32Array(4));
+  const attempt = Array.from(words, (word) => word.toString(16).padStart(8, "0")).join("");
+  identifyRequestController = controller;
+  identifyRequestAttempt = attempt;
+  identifyCancellationAccepted = false;
+  let identified = false;
+  setIdentifyModalPending(root, true);
+  setIdentifyUi(
+    root,
+    "listening",
+    "Listening for one key",
+    "Press one key on the exact keyboard or encoder to use as the mapping input. Esc cancels.",
+    true,
+  );
+  root.querySelector<HTMLButtonElement>("[data-rd-identify-cancel]")?.focus({
+    preventScroll: true,
+  });
+  try {
+    const response = await fetch(form.action, {
+      method: "POST",
+      body: new URLSearchParams({ attempt }),
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`identify request failed with ${response.status}`);
+    const outcome = new URL(response.url).searchParams.get("flash");
+    if (outcome !== IDENTIFY_OK_FLASH) {
+      const cancelling = identifyCancellationTask;
+      if (cancelling && await cancelling) return;
+      if (outcome === IDENTIFY_CANCELLED_FLASH) {
+        applyRedesignFlash(outcome);
+        setIdentifyUi(
+          root,
+          "cancelled",
+          "Identification cancelled",
+          "Nothing changed. You can start again whenever you are ready.",
+        );
+        return;
+      }
+      applyRedesignFlash(outcome);
+      setIdentifyUi(root, "error", "No keyboard selected", identifyErrorCopy(outcome));
+      return;
+    }
+    applyRedesignFlash(outcome);
+    if (!(await refresh())) {
+      applyRedesignFlash(
+        "error: the keyboard answered, but the workbench could not refresh — reload to confirm the mapping input.",
+      );
+      setIdentifyUi(
+        root,
+        "error",
+        "Keyboard answered — refresh needed",
+        "Reload the workbench to confirm which exact connection became the mapping input.",
+      );
+      return;
+    }
+    identified = true;
+    showIdentifiedDevice(root);
+  } catch {
+    if (controller.signal.aborted && identifyCancellationAccepted) return;
+    const cancelling = identifyCancellationTask;
+    if (cancelling && await cancelling) return;
+    applyRedesignFlash("error: request failed — is ksx studio still running?");
+    setIdentifyUi(
+      root,
+      "error",
+      "Identification unavailable",
+      "ksx studio did not answer. Nothing changed; try again after it reconnects.",
+    );
+  } finally {
+    if (identifyRequestController === controller) {
+      identifyRequestController = null;
+      identifyRequestAttempt = null;
+    }
+    setIdentifyModalPending(root, false);
+    const restoreFocus = actionStillOwnsFocus(owner, submitter);
+    endMutation(root, submits);
+    if (!restoreFocus) return;
+    if (identified) {
+      root.querySelector<HTMLElement>("[data-rd-identify-status]")?.focus({
+        preventScroll: true,
+      });
+    } else {
+      form.querySelector<HTMLElement>('button[type="submit"]')?.focus({ preventScroll: true });
+    }
+  }
 }
 
 async function submitThemeForm(

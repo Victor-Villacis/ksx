@@ -101,7 +101,7 @@ fn empty_state(mapper: &ksx_api::MapperSnapshot) -> Option<CheckEmptyState> {
             heading: "Mappings could not be checked",
             line: "Reopen ksx, then set up a controller and check its buttons. \
                    Nothing was changed.",
-            href: "/nocturne",
+            href: "/redesign",
             action: "Open ksx Studio",
         });
     }
@@ -109,7 +109,7 @@ fn empty_state(mapper: &ksx_api::MapperSnapshot) -> Option<CheckEmptyState> {
         return Some(CheckEmptyState {
             heading: "No controller is ready to test",
             line: "Add a controller in ksx Studio, then come back to test its buttons.",
-            href: "/nocturne",
+            href: "/redesign",
             action: "Open ksx Studio",
         });
     }
@@ -118,7 +118,7 @@ fn empty_state(mapper: &ksx_api::MapperSnapshot) -> Option<CheckEmptyState> {
             heading: "No controls are ready to test",
             line: "Open ksx Studio and choose a ready-made layout or add button keys, \
                    then come back here.",
-            href: "/nocturne",
+            href: "/redesign",
             action: "Open ksx Studio",
         });
     }
@@ -201,7 +201,7 @@ fn scalar_slots(payload: &CheckPayload) -> serde_json::Value {
         "sourceLine": "Press a keyboard or panel key and watch every controller action it drives.",
         "emptyHeading": empty.map_or("", |state| state.heading),
         "emptyLine": empty.map_or("", |state| state.line),
-        "emptyHref": empty.map_or("/nocturne", |state| state.href),
+        "emptyHref": empty.map_or("/redesign", |state| state.href),
         "emptyAction": empty.map_or("Open ksx Studio", |state| state.action),
         "feedHint": payload.feed_hint,
         "sessionLine": if payload.session.running {
@@ -287,7 +287,7 @@ fn empty_player_values(payload: &CheckPayload) -> SlotValue {
                     ),
                     (
                         "href".to_owned(),
-                        SlotValue::Text(format!("/nocturne?slot={}", slot.number)),
+                        SlotValue::Text(format!("/redesign?slot={}", slot.number)),
                     ),
                     (
                         "action".to_owned(),
@@ -569,7 +569,7 @@ mod tests {
             "{unavailable_html}"
         );
         assert!(
-            unavailable_html.contains(r#"href="/nocturne""#)
+            unavailable_html.contains(r#"href="/redesign""#)
                 && unavailable_html.contains("Open ksx Studio"),
             "{unavailable_html}"
         );
@@ -598,7 +598,7 @@ mod tests {
             "{zero_html}"
         );
         assert!(
-            zero_html.contains(r#"href="/nocturne""#) && zero_html.contains("Open ksx Studio"),
+            zero_html.contains(r#"href="/redesign""#) && zero_html.contains("Open ksx Studio"),
             "{zero_html}"
         );
 
@@ -647,7 +647,7 @@ mod tests {
         assert!(html.contains(r#"data-slot="1""#), "{html}");
         assert!(html.contains("Player 2 has no controls yet"), "{html}");
         assert!(
-            html.contains(r#"href="/nocturne?slot=2""#) && html.contains("Open ksx Studio"),
+            html.contains(r#"href="/redesign?slot=2""#) && html.contains("Open ksx Studio"),
             "{html}"
         );
         assert!(
@@ -744,8 +744,8 @@ mod tests {
     // DELETED 2026-08-26: the per-page nav test (DUPLICATE — three byte-identical
     // copies across render_check.rs, render_devices.rs and render_pads.rs).
     // Replaced by `render.rs::no_page_links_into_a_deleted_surface`, which runs
-    // the same dead-link blocklist and rail assertions over ALL FOUR pages —
-    // including /nocturne, which had no blocklist at all despite absorbing every
+    // the same dead-link blocklist and rail assertions over every live page —
+    // including both product surfaces, which previously had no shared navigation guard
     // deleted surface.
 
     /// **The two-attribute contract, both sides.**

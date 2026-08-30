@@ -89,7 +89,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { chromium } from "playwright";
-import { stopFixtureProcess } from "./fixture-process.mjs";
+import { cargoExecutable, stopFixtureProcess } from "./fixture-process.mjs";
 
 /** OUR port, never the 4460 a real `ksx studio` sits on — and never a port
  *  another checkout's fixture might already be sitting on either (the `before`
@@ -156,9 +156,9 @@ before(async () => {
   // kill its child on Windows), and an orphan holding 4474 is then what the
   // NEXT run silently tests against.
   const built = spawnSync(
-    "cargo",
+    cargoExecutable,
     ["build", "--quiet", "-p", "ksx-studio", "--example", "macro_fixture"],
-    { cwd: repoRoot, stdio: "inherit", shell: process.platform === "win32" },
+    { cwd: repoRoot, stdio: "inherit" },
   );
   assert.equal(built.status, 0, "could not build the ksx-studio macro fixture");
   const exe = path.join(

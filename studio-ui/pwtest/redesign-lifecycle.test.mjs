@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { chromium } from "playwright";
-import { stopFixtureProcess } from "./fixture-process.mjs";
+import { cargoExecutable, stopFixtureProcess } from "./fixture-process.mjs";
 
 const PORT = Number(process.env.KSX_PWTEST_REDESIGN_LIFECYCLE_PORT ?? 4544);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -43,9 +43,9 @@ before(async () => {
   assert.equal(squatter, false, `something is already listening on ${BASE}`);
 
   const built = spawnSync(
-    "cargo",
+    cargoExecutable,
     ["build", "--quiet", "-p", "ksx-studio", "--example", "macro_fixture"],
-    { cwd: repoRoot, stdio: "inherit", shell: process.platform === "win32" },
+    { cwd: repoRoot, stdio: "inherit" },
   );
   assert.equal(built.status, 0, "could not build the redesign lifecycle fixture");
   const fixtureExe = path.join(

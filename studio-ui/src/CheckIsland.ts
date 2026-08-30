@@ -159,7 +159,7 @@ const [generatedAt, setGeneratedAt] = createSignal("");
 const [sourceLine, setSourceLine] = createSignal("");
 const [emptyHeading, setEmptyHeading] = createSignal("");
 const [emptyLine, setEmptyLine] = createSignal("");
-const [emptyHref, setEmptyHref] = createSignal("/nocturne");
+const [emptyHref, setEmptyHref] = createSignal("/redesign");
 const [emptyAction, setEmptyAction] = createSignal("Open ksx Studio");
 const [feedHint, setFeedHint] = createSignal("");
 const [sessionLine, setSessionLine] = createSignal("");
@@ -208,7 +208,7 @@ function emptyState(mapper: MapperSnapshot): EmptyState | null {
       heading: "Mappings could not be checked",
       line:
         "Reopen ksx, then set up a controller and check its buttons. Nothing was changed.",
-      href: "/nocturne",
+      href: "/redesign",
       action: "Open ksx Studio",
     };
   }
@@ -216,7 +216,7 @@ function emptyState(mapper: MapperSnapshot): EmptyState | null {
     return {
       heading: "No controller is ready to test",
       line: "Add a controller in ksx Studio, then come back to test its buttons.",
-      href: "/nocturne",
+      href: "/redesign",
       action: "Open ksx Studio",
     };
   }
@@ -225,7 +225,7 @@ function emptyState(mapper: MapperSnapshot): EmptyState | null {
       heading: "No controls are ready to test",
       line:
         "Open ksx Studio and choose a ready-made layout or add button keys, then come back here.",
-      href: "/nocturne",
+      href: "/redesign",
       action: "Open ksx Studio",
     };
   }
@@ -293,7 +293,7 @@ export function applyCheck(p: CheckPayload): void {
   const empty = emptyState(p.mapper);
   setEmptyHeading(empty?.heading ?? "");
   setEmptyLine(empty?.line ?? "");
-  setEmptyHref(empty?.href ?? "/nocturne");
+  setEmptyHref(empty?.href ?? "/redesign");
   setEmptyAction(empty?.action ?? "Open ksx Studio");
 
   const rows: ControlChip[] = [];
@@ -303,7 +303,7 @@ export function applyCheck(p: CheckPayload): void {
       missing.push({
         player: `Player ${slot.number} has no controls yet`,
         line: "Open ksx Studio and choose a ready-made layout or add button keys for this player.",
-        href: `/nocturne?slot=${slot.number}`,
+        href: `/redesign?slot=${slot.number}`,
         action: "Open ksx Studio",
       });
     }
@@ -369,7 +369,7 @@ export function CheckIsland() {
         // One page now owns the whole set-up-and-play workflow, so the four
         // numbered steps that pointed at /start, /map and / collapse into the
         // single link that actually goes somewhere.
-        h("a", { class: "navlink workflow-link", href: "/nocturne" }, "Set up & play"),
+        h("a", { class: "navlink workflow-link", href: "/redesign" }, "Set up & play"),
       ),
       h(
         "details",
@@ -381,7 +381,7 @@ export function CheckIsland() {
           h("a", { href: "/check", "aria-current": "page" }, h("span", null, "Test inputs"), h("small", null, "Live controller feedback")),
           h("a", { href: "/devices" }, h("span", null, "Hardware"), h("small", null, "Devices and recovery")),
           h("a", { href: "/pads" }, h("span", null, "Virtual controllers"), h("small", null, "Inspect and test pads")),
-          h("a", { href: "/nocturne" }, h("span", null, "Set up & play"), h("small", null, "Keyboard, controllers, games and configuration")),
+          h("a", { href: "/redesign" }, h("span", null, "Set up & play"), h("small", null, "Devices, controllers and mappings")),
         ),
       ),
     ),
@@ -398,7 +398,7 @@ export function CheckIsland() {
           h("p", { class: "sub" }, () => sourceLine()),
           h("p", { class: "product-hidden" }, () => generatedAt()),
         ),
-        h("a", { class: "btn", href: "/nocturne" }, "Edit mapping"),
+        h("a", { class: "btn", href: "/redesign" }, "Edit mapping"),
       ),
 
     // **The no-JS truth, first and unmissable.** This whole page is a live

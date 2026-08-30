@@ -456,6 +456,9 @@ impl ControlSource for ScriptedControl {
     }
 
     fn learn_start(&self) -> LearnView {
+        if self.no_daemon {
+            return LearnView::unavailable(NO_CHANNEL);
+        }
         self.learning.store(true, Ordering::SeqCst);
         let generation = self.learn_generation.fetch_add(1, Ordering::SeqCst) + 1;
         LearnView {
@@ -948,6 +951,10 @@ struct ScriptedMachine {
     /// They never cross the HTTP response; this proves the route did not ask
     /// the machine provider to open a competing observer.
     identified_from: Mutex<Vec<String>>,
+    /// Hold exact-device resolution after the learner hit, so cancellation at
+    /// the hit-wins boundary can be asserted deterministically.
+    identify_hold: AtomicBool,
+    identify_entered: AtomicBool,
     /// Refuse the read — the "this surface cannot enumerate devices" path.
     refuse: bool,
     /// The scan ANSWERS but the USB enumeration inside it failed: empty lists
@@ -1024,6 +1031,8 @@ impl Default for ScriptedMachine {
             picked: Mutex::new(Vec::new()),
             removed: Mutex::new(Vec::new()),
             identified_from: Mutex::new(Vec::new()),
+            identify_hold: AtomicBool::new(false),
+            identify_entered: AtomicBool::new(false),
             refuse: false,
             blind: false,
             created_profile: Mutex::new(None),
@@ -1774,6 +1783,10 @@ impl ksx_api::MachineSource for ScriptedMachine {
         &self,
         observed_instance: &str,
     ) -> Result<ksx_api::DeviceIdentifyView, Refusal> {
+        self.identify_entered.store(true, Ordering::SeqCst);
+        while self.identify_hold.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
         self.identified_from
             .lock()
             .unwrap()
@@ -4132,19 +4145,20 @@ fn a_rebound_host_cannot_read_the_device_list() {
 /// the real picker FORM rather than merely borrowing its label.
 ///
 /// RENAMED 2026-08-26 from `every_page_links_to_the_device_picker`, which
-/// overclaimed: it checked two of the four pages, and neither by following a
-/// link. The picker lives in exactly two places now and neither is `/start` —
-/// `/nocturne` carries the form itself and `/devices` IS the picker — so the
-/// honest claim is about those two pages. Whether the OTHER pages can reach
+/// overclaimed: it checked two of the live pages, and neither by following a
+/// link. The picker now lives in the two product surfaces and `/devices` —
+/// `/nocturne` and `/redesign` carry their own forms while `/devices` IS the picker — so the
+/// honest claim is about those three pages. Whether the OTHER pages can reach
 /// the flow is a nav question, and it is pinned where nav belongs:
 /// `render.rs::no_page_links_into_a_deleted_surface` asserts every tool page
-/// carries the workflow link to `/nocturne`.
+/// carries the workflow link to `/redesign`.
 #[test]
-fn the_picker_form_is_served_on_nocturne_and_devices() {
+fn the_picker_form_is_served_on_both_products_and_devices() {
     let addr = start_server(Arc::new(ScriptedControl::new(true)));
 
     for (page, action) in [
         ("/nocturne", r#"action="/nocturne/device""#),
+        ("/redesign", r#"action="/redesign/device""#),
         ("/devices", r#"action="/devices/pick""#),
     ] {
         let body = body_of(&get(addr, page)).to_owned();
@@ -4167,6 +4181,29 @@ fn the_picker_form_is_served_on_nocturne_and_devices() {
              submit: {tag}"
         );
     }
+}
+
+/// Identify is a real no-JS form, and its label states the staging
+/// consequence before the listen begins. "Identify" alone would sound like a
+/// passive flashlight while the shared transaction deliberately selects the
+/// board that answers.
+#[test]
+fn the_redesign_identify_form_serves_its_explicit_consequence() {
+    let addr = start_server(Arc::new(ScriptedControl::new(true)));
+    let response = get(addr, "/redesign");
+    let body = body_of(&response);
+    assert!(
+        body.contains(r#"action="/redesign/device/identify""#),
+        "the redesign has no no-JS identify form: {body}"
+    );
+    assert!(
+        body.contains("Identify and use as mapping input"),
+        "the action does not disclose that a successful answer selects the input: {body}"
+    );
+    assert!(
+        body.contains("nothing is captured, saved, or started"),
+        "the safety boundary is not stated beside the action: {body}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -4884,6 +4921,8 @@ fn the_profiles_write_routes_refuse_a_cross_site_post() {
             "/redesign/device",
             "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=I-PAC",
         ),
+        ("/redesign/device/identify", ""),
+        ("/redesign/device/identify/cancel", ""),
         (
             "/redesign/controller",
             "persona=xbox360&preset=Player+1&layout=keyboard-2p",
@@ -5496,6 +5535,327 @@ fn the_redesign_device_verb_stages_through_the_preserving_guard() {
         "re-staging the staged board must answer with the preserved-preparation \
          sentence, got: {again}"
     );
+}
+
+/// Identify remains the proven one-shot transaction: the daemon observes the
+/// key source, the machine resolves that exact instance, and only then does
+/// the shared preparation-preserving chooser stage it. The redesign adds no
+/// browser-supplied identity and redirects its answer back to its own surface.
+#[test]
+fn the_redesign_identify_verb_selects_the_exact_machine_board() {
+    let control = Arc::new(ScriptedControl::new(false).with_identify_hit(IPAC_KB));
+    let machine = Arc::new(ScriptedMachine::default());
+    let addr = start_server_with_machine(Arc::clone(&control), machine.clone());
+
+    let response = post_form(
+        addr,
+        "/redesign/device/identify",
+        "attempt=0123456789abcdef0123456789abcdef",
+    );
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    assert!(
+        response.contains("/redesign?flash=Keyboard%20identified"),
+        "{response}"
+    );
+    let selected = control
+        .staged()
+        .device
+        .expect("the exact keyboard that answered must become the mapping input");
+    assert_eq!(selected.selector, "usb:d209:0430:00");
+    assert_eq!(selected.alias, "panel");
+    assert_eq!(selected.label, "Ultimarc I-PAC 4X");
+    assert_eq!(
+        machine.identified_from.lock().unwrap().as_slice(),
+        [IPAC_KB],
+        "only the daemon-observed Windows instance reaches the resolver"
+    );
+}
+
+/// Cancellation is generation-qualified and outcome-atomic. Once this route
+/// says "cancelled", the held identify POST cannot later stage a board; and a
+/// cancellation with no owned generation cannot stop some unrelated learner.
+#[test]
+fn redesign_identify_cancel_stops_only_its_pending_generation() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    post_form(
+        addr,
+        "/redesign/device",
+        "selector=usb%3A046d%3Ac545%3A00&alias=g915&label=Logitech+G915",
+    );
+
+    let identify = std::thread::spawn(move || {
+        post_form(
+            addr,
+            "/redesign/device/identify",
+            "attempt=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !control.learning.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the identify transaction never opened its learner"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    let competing = post_form(
+        addr,
+        "/redesign/device/identify",
+        "attempt=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+    assert!(
+        competing.contains("Another%20keyboard%20identification%20is%20already%20listening"),
+        "a second tab must not replace the generation owned by the first: {competing}"
+    );
+
+    let cancelled = post_form(
+        addr,
+        "/redesign/device/identify/cancel",
+        "attempt=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    assert!(cancelled.starts_with("HTTP/1.1 303"), "{cancelled}");
+    assert!(
+        cancelled.contains("Keyboard%20identification%20cancelled"),
+        "{cancelled}"
+    );
+    let identify = identify.join().expect("identify request joins");
+    assert!(identify.contains("flash=error"), "{identify}");
+    assert_eq!(
+        control
+            .staged()
+            .device
+            .map(|device| device.selector)
+            .as_deref(),
+        Some("usb:046d:c545:00"),
+        "a cancelled identify must leave the prior mapping input untouched"
+    );
+
+    let late = post_form(
+        addr,
+        "/redesign/device/identify/cancel",
+        "attempt=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    assert!(
+        late.contains("Keyboard%20identification%20cancelled"),
+        "a repeated cancel for the same nonce should be idempotent: {late}"
+    );
+}
+
+/// A browser cancellation owns its nonce as well as the daemon generation.
+/// A delayed request from completed tab A must not take tab B's newer lease,
+/// even though B is the transaction currently stored by the server.
+#[test]
+fn redesign_identify_stale_cancel_cannot_stop_a_newer_browser_attempt() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+
+    let first = std::thread::spawn(move || {
+        post_form(
+            addr,
+            "/redesign/device/identify",
+            "attempt=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+    });
+    let first_deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !control.learning.load(Ordering::SeqCst) {
+        assert!(std::time::Instant::now() < first_deadline);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let first_cancel = post_form(
+        addr,
+        "/redesign/device/identify/cancel",
+        "attempt=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    assert!(first_cancel.contains("Keyboard%20identification%20cancelled"));
+    let _ = first.join().expect("first identify request joins");
+
+    let second = std::thread::spawn(move || {
+        post_form(
+            addr,
+            "/redesign/device/identify",
+            "attempt=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        )
+    });
+    let second_deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !control.learning.load(Ordering::SeqCst) {
+        assert!(std::time::Instant::now() < second_deadline);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    let stale = post_form(
+        addr,
+        "/redesign/device/identify/cancel",
+        "attempt=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    assert!(
+        stale.contains("Keyboard%20identification%20cancelled"),
+        "the old tab's own cancel remains idempotent: {stale}"
+    );
+    assert!(
+        control.learning.load(Ordering::SeqCst),
+        "tab A's delayed cancel stopped tab B's listener"
+    );
+
+    let second_cancel = post_form(
+        addr,
+        "/redesign/device/identify/cancel",
+        "attempt=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+    assert!(second_cancel.contains("Keyboard%20identification%20cancelled"));
+    let _ = second.join().expect("second identify request joins");
+}
+
+/// Cancel can overtake the long-lived start request on a fast Escape. The
+/// server records that nonce before a learner exists; when the matching start
+/// arrives it consumes the tombstone without touching the shared daemon.
+#[test]
+fn redesign_identify_cancel_before_start_never_opens_a_listener() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    let cancelled = post_form(
+        addr,
+        "/redesign/device/identify/cancel",
+        "attempt=cccccccccccccccccccccccccccccccc",
+    );
+    assert!(
+        cancelled.contains("Keyboard%20identification%20cancelled"),
+        "{cancelled}"
+    );
+
+    let start = post_form(
+        addr,
+        "/redesign/device/identify",
+        "attempt=cccccccccccccccccccccccccccccccc",
+    );
+    assert!(
+        start.contains("Keyboard%20identification%20cancelled"),
+        "{start}"
+    );
+    assert_eq!(
+        control.learn_generation.load(Ordering::SeqCst),
+        0,
+        "cancel-before-start still opened the daemon learner"
+    );
+    assert!(!control.learning.load(Ordering::SeqCst));
+}
+
+/// Pre-start cancellation belongs to every browser nonce, not merely the most
+/// recent one. Two tabs can press Escape before either Start request reaches
+/// the server; both delayed starts must settle cancelled without a learner.
+#[test]
+fn redesign_identify_preserves_multiple_pre_start_cancellations() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    let attempts = [
+        "11111111111111111111111111111111",
+        "22222222222222222222222222222222",
+    ];
+    for attempt in attempts {
+        let cancelled = post_form(
+            addr,
+            "/redesign/device/identify/cancel",
+            &format!("attempt={attempt}"),
+        );
+        assert!(
+            cancelled.contains("Keyboard%20identification%20cancelled"),
+            "{cancelled}"
+        );
+    }
+    for attempt in attempts {
+        let start = post_form(
+            addr,
+            "/redesign/device/identify",
+            &format!("attempt={attempt}"),
+        );
+        assert!(
+            start.contains("Keyboard%20identification%20cancelled"),
+            "{start}"
+        );
+    }
+    assert_eq!(
+        control.learn_generation.load(Ordering::SeqCst),
+        0,
+        "one cancelled tab opened a hidden learner after another tab cancelled"
+    );
+}
+
+/// Once a learner hit crosses into exact-device resolution, selection owns
+/// the outcome. A late Cancel must say the answer already landed; it cannot
+/// promise "nothing changed" while the worker still stages that device.
+#[test]
+fn redesign_identify_hit_wins_before_late_cancel_reports_outcome() {
+    let control = Arc::new(ScriptedControl::new(false).with_identify_hit(IPAC_KB));
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.identify_hold.store(true, Ordering::SeqCst);
+    let machine_source: Arc<dyn ksx_api::MachineSource> = machine.clone();
+    let addr = start_server_with_machine(Arc::clone(&control), machine_source);
+
+    let identify = std::thread::spawn(move || {
+        post_form(
+            addr,
+            "/redesign/device/identify",
+            "attempt=ffffffffffffffffffffffffffffffff",
+        )
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !machine.identify_entered.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "identify never entered exact-device resolution"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    let late = post_form(
+        addr,
+        "/redesign/device/identify/cancel",
+        "attempt=ffffffffffffffffffffffffffffffff",
+    );
+    assert!(late.contains("already%20answered"), "{late}");
+    assert!(
+        !late.contains("Keyboard%20identification%20cancelled"),
+        "late Cancel falsely promised that nothing would change: {late}"
+    );
+
+    machine.identify_hold.store(false, Ordering::SeqCst);
+    let identified = identify.join().expect("identify request joins");
+    assert!(identified.contains("Keyboard%20identified"), "{identified}");
+    assert_eq!(
+        control
+            .staged()
+            .device
+            .map(|device| device.selector)
+            .as_deref(),
+        Some("usb:d209:0430:00")
+    );
+}
+
+/// A daemon refusal before generation assignment is a settled failed attempt,
+/// not a permanent Pending reservation. A retry must reach the control source
+/// again instead of being refused as Busy forever.
+#[test]
+fn redesign_identify_unavailable_start_releases_pending_for_retry() {
+    let control = Arc::new(ScriptedControl::dead());
+    let addr = start_server(Arc::clone(&control));
+
+    for attempt in [
+        "dddddddddddddddddddddddddddddddd",
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    ] {
+        let response = post_form(
+            addr,
+            "/redesign/device/identify",
+            &format!("attempt={attempt}"),
+        );
+        assert!(response.contains("flash=error"), "{response}");
+        assert!(
+            !response.contains("already%20listening"),
+            "a failed start leaked Pending into the next attempt: {response}"
+        );
+    }
+    assert_eq!(control.learn_generation.load(Ordering::SeqCst), 0);
 }
 
 /// The workbench's controller verbs round-trip: add stages the next slot and
@@ -7148,7 +7508,7 @@ fn the_check_distinguishes_unavailable_empty_and_zero_control_rosters_over_http(
     );
     let zero = rendered_body(&get(zero, "/check"));
     assert!(zero.contains("No controls are ready to test"), "{zero}");
-    assert!(zero.contains(r#"href="/nocturne""#), "{zero}");
+    assert!(zero.contains(r#"href="/redesign""#), "{zero}");
 
     assert_ne!(unavailable, empty);
     assert_ne!(empty, zero);
@@ -7205,7 +7565,7 @@ fn the_check_keeps_canonical_live_keys_but_shows_controller_labels_over_http() {
     assert!(body.contains("D-pad ↑"), "{body}");
     assert!(!body.contains(">dpad.up<"), "{body}");
     assert!(body.contains("Player 2 has no controls yet"), "{body}");
-    assert!(body.contains(r#"href="/nocturne?slot=2""#), "{body}");
+    assert!(body.contains(r#"href="/redesign?slot=2""#), "{body}");
 }
 
 /// A rebound host must not be able to read this cabinet's binding table.

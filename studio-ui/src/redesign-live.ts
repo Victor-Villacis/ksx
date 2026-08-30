@@ -113,6 +113,13 @@ type LiveState =
   | "reconnecting"
   | "unreadable";
 
+type LiveRefusalState = Extract<LiveState, "inactive" | "offline">;
+
+interface CustomerLiveRefusal {
+  state: LiveRefusalState;
+  text: string;
+}
+
 interface FunctionTarget {
   element: HTMLElement;
   functions: string[];
@@ -137,19 +144,32 @@ function finiteCounter(value: unknown): number {
     : 0;
 }
 
+const LIVE_INACTIVE_COPY = "Live input starts after you press Play.";
+const LIVE_OFFLINE_COPY = "Live input is offline. Reopen ksx and try again.";
+
 /** Refusals originate below the presentation boundary and can contain pipe
- * names, paths, or commands. Convert them to a stable customer action before
- * anything reaches visible status or the assistive live region. */
-export function redesignLiveCustomerReason(reason: string | null | undefined): string {
+ * names, paths, or commands. Convert them to one coherent customer state and
+ * action before anything reaches visible status or the assistive live region.
+ * A healthy daemon with no running session is inactive, never offline. */
+function customerLiveRefusal(reason: string | null | undefined): CustomerLiveRefusal {
   const lower = trimmed(reason).toLowerCase();
-  if (!lower) return "Live input is temporarily unavailable.";
+  if (!lower) {
+    return { state: "offline", text: "Live input is temporarily unavailable." };
+  }
   if (lower.includes("daemon") || lower.includes("control channel") || lower.includes("pipe")) {
-    return "Live input is offline. Reopen ksx and try again.";
+    return { state: "offline", text: LIVE_OFFLINE_COPY };
   }
   if (lower.includes("no session") || lower.includes("not running") || lower.includes("nothing is running")) {
-    return "Live input starts after you press Play.";
+    return { state: "inactive", text: LIVE_INACTIVE_COPY };
   }
-  return "Live input is temporarily unavailable. Reopen ksx and try again.";
+  return {
+    state: "offline",
+    text: "Live input is temporarily unavailable. Reopen ksx and try again.",
+  };
+}
+
+export function redesignLiveCustomerReason(reason: string | null | undefined): string {
+  return customerLiveRefusal(reason).text;
 }
 
 function eventMessage(event: Event): string {
@@ -311,6 +331,11 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
     setState(next, text, announce);
   }
 
+  function invalidateRefusal(reason: string | null | undefined): void {
+    const refusal = customerLiveRefusal(reason);
+    invalidate(refusal.state, refusal.text, true);
+  }
+
   function ensureTargets(scope: HTMLElement): void {
     if (keyTargets === null) {
       keyTargets = Array.from(scope.querySelectorAll<HTMLElement>("[data-key]"));
@@ -348,11 +373,11 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
       throw new Error("unreadable live envelope");
     }
     if (trimmed(envelope.unavailable)) {
-      invalidate("offline", redesignLiveCustomerReason(envelope.unavailable), true);
+      invalidateRefusal(envelope.unavailable);
       return;
     }
     if (envelope.frame.running !== true) {
-      invalidate("inactive", "Live input is inactive.", true);
+      invalidate("inactive", LIVE_INACTIVE_COPY, true);
       return;
     }
     if (!licensed()) return;
@@ -497,12 +522,12 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
 
     if (!next?.reachable) {
       resetLedger();
-      setState("offline", "Live input is offline. Reopen ksx and try again.", changed);
+      setState("offline", LIVE_OFFLINE_COPY, changed);
       return;
     }
     if (!next.running) {
       resetLedger();
-      setState("inactive", "Live input starts after you press Play.", changed);
+      setState("inactive", LIVE_INACTIVE_COPY, changed);
       return;
     }
     if (trimmed(next.origin).toLowerCase() !== "staged") {
@@ -604,7 +629,7 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
       }
     });
     source.addEventListener("unavailable", (event) => {
-      invalidate("offline", redesignLiveCustomerReason(eventMessage(event)), true);
+      invalidateRefusal(eventMessage(event));
     });
     // EventSource already reconnects with the server's retry cadence. Never
     // layer a second timer/backoff over it; just revoke paint until the next
@@ -614,7 +639,10 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
       // An explicit refusal already carries the useful customer action. SSE
       // closes after sending it, which also raises `error`; do not alternate
       // "offline" and "reconnecting" announcements on every retry cycle.
-      if (state === "offline" || state === "unreadable" || state === "stale") return;
+      if (
+        state === "inactive" || state === "offline" ||
+        state === "unreadable" || state === "stale"
+      ) return;
       invalidate("reconnecting", "Reconnecting to live input…", true);
     });
     if (!pagehideWired) {

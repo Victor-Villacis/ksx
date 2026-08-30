@@ -1045,11 +1045,15 @@ impl ControlSource for Store {
     }
 }
 
-/// The live fan-out's double. Open refuses while the fixture is "idle";
-/// running, each stream loops the same four-beat choreography at a gentle
-/// rate (the real feed is consumer-coalesced ~60 Hz; a demo does not need
-/// to be).
-struct ScriptedLive;
+/// The live fan-out's double. `KSX_FIXTURE_LIVE=1` enables the scripted
+/// transport, while the SAME mutable session bit that drives `/api/redesign`
+/// decides whether a stream may open or keep producing frames. The boot
+/// `KSX_FIXTURE_SESSION` value is only a seed; Play and Stop remain the
+/// authority after launch.
+struct ScriptedLive {
+    enabled: bool,
+    session_on: Arc<AtomicBool>,
+}
 
 impl ksx_api::LiveSource for ScriptedLive {
     fn open(&self) -> Result<Box<dyn ksx_api::LiveStream>, ksx_api::Refusal> {
@@ -1057,25 +1061,39 @@ impl ksx_api::LiveSource for ScriptedLive {
         // the parity gate captures the running session's first paint, and a
         // frame arriving inside that capture window is a legitimate
         // post-load dynamic the gate would (rightly) flag as a flash.
-        let opted_in = std::env::var("KSX_FIXTURE_LIVE").as_deref() == Ok("1")
-            && std::env::var("KSX_FIXTURE_SESSION").as_deref() == Ok("running");
-        if !opted_in {
+        if !self.enabled {
             return Err(ksx_api::Refusal::not_here(
-                "the live echo — nothing is running on this fixture",
-                "restart the fixture with KSX_FIXTURE_SESSION=running and KSX_FIXTURE_LIVE=1",
+                "the scripted live echo is disabled on this fixture",
+                "restart the fixture with KSX_FIXTURE_LIVE=1",
             ));
         }
-        Ok(Box::new(ScriptedLiveStream { step: 0 }))
+        if !self.session_on.load(Ordering::SeqCst) {
+            return Err(ksx_api::Refusal::new(
+                "no-session",
+                "nothing is running on this fixture; press Play to start live input",
+            ));
+        }
+        Ok(Box::new(ScriptedLiveStream {
+            session_on: Arc::clone(&self.session_on),
+            step: 0,
+        }))
     }
 }
 
 struct ScriptedLiveStream {
+    session_on: Arc<AtomicBool>,
     step: usize,
 }
 
 impl ksx_api::LiveStream for ScriptedLiveStream {
     fn next_frame(&mut self) -> Result<ksx_api::LiveEnvelope, ksx_api::Refusal> {
         std::thread::sleep(std::time::Duration::from_millis(400));
+        if !self.session_on.load(Ordering::SeqCst) {
+            return Err(ksx_api::Refusal::new(
+                "no-session",
+                "nothing is running on this fixture; press Play to start live input",
+            ));
+        }
         let phase = self.step % 6;
         self.step += 1;
         // The seeded preset's own vocabulary: W holds the stick up (ly.max),
@@ -1099,9 +1117,10 @@ impl ksx_api::LiveStream for ScriptedLiveStream {
             ),
             4 => (vec![], vec![], vec![]),
             _ => (
-                // The frame immediately after the authoritative stop tries
-                // to drive G again. A client must keep it dark until a fresh
-                // structure payload licenses the new running session.
+                // Restart the choreography with the shared-key route. A real
+                // Stop is represented by `session_on` and ends this stream;
+                // an in-band false frame here would fabricate a second,
+                // contradictory lifecycle authority.
                 vec!["a", "b"],
                 vec!["a", "b"],
                 vec![("G", true)],
@@ -1109,7 +1128,7 @@ impl ksx_api::LiveStream for ScriptedLiveStream {
         };
         Ok(ksx_api::LiveEnvelope {
             frame: ksx_api::LiveFrame {
-                running: phase != 4,
+                running: true,
                 slots: vec![ksx_api::SlotLive {
                     slot: 1,
                     down: down.iter().map(|s| s.to_string()).collect(),
@@ -1148,6 +1167,10 @@ fn main() {
         scenario,
         generation.unwrap_or_else(default_fixture_generation),
     );
+    let scripted_live = ScriptedLive {
+        enabled: std::env::var("KSX_FIXTURE_LIVE").as_deref() == Ok("1"),
+        session_on: Arc::clone(&store.session_on),
+    };
     println!(
         "macro fixture ({}) on http://{bind}/nocturne",
         scenario.label()
@@ -1167,10 +1190,11 @@ fn main() {
         }),
         // A SCRIPTED live source: refuses in words while the fixture session
         // is idle (the state the button check renders when nothing runs), and
-        // under KSX_FIXTURE_SESSION=running loops a small choreography — a
-        // held stick, a shared-key tap, a turbo'd trigger — so the live echo
-        // can be driven end to end against this double.
-        std::sync::Arc::new(ScriptedLive),
+        // while the mutable fixture session is running loops a small
+        // choreography — a held stick, a shared-key tap, a turbo'd trigger —
+        // so an idle → Play → Stop drive exercises the same session truth on
+        // both the structure and live endpoints.
+        std::sync::Arc::new(scripted_live),
     ) {
         eprintln!("fixture failed: {err}");
         std::process::exit(1);
@@ -2632,6 +2656,34 @@ mod tests {
         let config = ControlSource::session(&store);
         assert_eq!(config.origin, ksx_api::SessionOrigin::Config);
         assert_eq!(config.active_stage_revision, None);
+    }
+
+    #[test]
+    fn scripted_live_follows_the_mutable_session_instead_of_the_boot_environment() {
+        let session_on = Arc::new(AtomicBool::new(false));
+        let source = ScriptedLive {
+            enabled: true,
+            session_on: Arc::clone(&session_on),
+        };
+
+        let idle = match ksx_api::LiveSource::open(&source) {
+            Ok(_) => panic!("an idle fixture must not open a live stream"),
+            Err(refusal) => refusal,
+        };
+        assert_eq!(idle.code, "no-session");
+        assert!(idle.message.contains("press Play"));
+
+        session_on.store(true, Ordering::SeqCst);
+        let mut stream = match ksx_api::LiveSource::open(&source) {
+            Ok(stream) => stream,
+            Err(refusal) => panic!("Play should open live input: {refusal}"),
+        };
+        assert!(stream.next_frame().unwrap().frame.running);
+
+        session_on.store(false, Ordering::SeqCst);
+        let stopped = stream.next_frame().unwrap_err();
+        assert_eq!(stopped.code, "no-session");
+        assert!(stopped.message.contains("press Play"));
     }
 
     /// **The messy fixture actually reaches the states it exists to reach.**

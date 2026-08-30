@@ -17964,6 +17964,133 @@ a.nm-link {
   display: none;
 }
 
+.rd-utility-compact-home {
+  display: none;
+}
+
+/* Operational tools are recovery surfaces, not canvas modes. Keep them in a
+   small native disclosure so they remain reachable with scripting disabled
+   and do not compete with the lifecycle buttons for primary emphasis. */
+.rd-utilityd {
+  position: relative;
+  flex: none;
+}
+
+.rd-utilityd[open] {
+  z-index: 36;
+}
+
+.rd-utility-sum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  min-height: 34px;
+  padding: 5px 11px;
+  border: 1px solid var(--n-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--n-text-2);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.rd-utility-sum::-webkit-details-marker {
+  display: none;
+}
+
+.rd-utility-sum:hover,
+.rd-utility-sum:focus-visible,
+.rd-utilityd[open] > .rd-utility-sum {
+  border-color: var(--n-accent-line);
+  color: var(--n-accent-2);
+}
+
+.rd-utility-icon {
+  color: var(--n-text-3);
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.rd-utility-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 12;
+  width: min(340px, calc(100vw - 24px));
+  padding: var(--sp-2);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--n-panel) 97%, transparent);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.4);
+}
+
+.rd-utility-intro {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-2) var(--sp-3);
+  color: var(--n-text-3);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+.rd-utility-link {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border-radius: var(--r-md);
+  color: var(--n-text);
+  text-decoration: none;
+}
+
+.rd-utility-link:hover {
+  background: var(--n-accent-tint);
+}
+
+.rd-utility-link:focus-visible {
+  background: var(--n-accent-tint);
+  outline: 2px solid var(--n-accent);
+  outline-offset: 2px;
+}
+
+.rd-utility-link-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-sm);
+  background: var(--n-panel-2);
+  color: var(--n-accent-2);
+  font-weight: 700;
+}
+
+.rd-utility-link-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rd-utility-link-copy strong {
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+
+.rd-utility-link-copy > span {
+  color: var(--n-text-3);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+}
+
+.rd-utility-arrow {
+  color: var(--n-text-3);
+  font-size: var(--fs-xs);
+}
+
 /* The Inspector is fixed at layer 35. Lift only the open disclosure above it
    so the resting topbar does not become an unnecessary stacking context. */
 :is(.rd-themed, .rd-themed-compact)[open] {
@@ -18886,6 +19013,21 @@ a.nm-link {
   .rd-capture-card {
     grid-column: 1 / -1;
   }
+
+  .rd-utility-rail-home .rd-utility-sum {
+    width: 34px;
+    padding-right: 0;
+    padding-left: 0;
+  }
+
+  .rd-utility-rail-home .rd-utility-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
 }
 
 @media (max-width: 680px) {
@@ -18906,6 +19048,29 @@ a.nm-link {
   .rd-theme-compact-home {
     display: block;
     width: min(100%, 300px);
+  }
+
+  .rd-utility-rail-home {
+    display: none;
+  }
+
+  .rd-utility-compact-home {
+    display: block;
+  }
+
+  .rd-utility-compact-home .rd-utilityd {
+    width: 100%;
+  }
+
+  .rd-utility-compact-home .rd-utility-sum {
+    width: 100%;
+  }
+
+  .rd-utility-compact-home .rd-utility-menu {
+    position: static;
+    width: 100%;
+    margin-top: var(--sp-2);
+    box-shadow: none;
   }
 
   .rd-theme-compact-home .rd-themed-compact {
@@ -19138,6 +19303,10 @@ a.nm-link {
     min-height: 40px;
   }
 
+  .rd-utility-sum {
+    min-height: 44px;
+  }
+
   .rd-consent {
     min-height: 36px;
   }
@@ -19171,6 +19340,12 @@ a.nm-link {
 
   :is(.rd-runbtn, .rd-panel-action):disabled {
     color: GrayText;
+  }
+
+  .rd-utility-sum:focus-visible,
+  .rd-utility-link:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
   }
 }
 
@@ -19252,6 +19427,157 @@ a.nm-link {
 .rd-devmodal .rd-dev-word {
   display: block;
   color: var(--n-accent-2);
+}
+
+.rd-devmodal .rd-dev-identity {
+  color: var(--n-text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.015em;
+  overflow-wrap: anywhere;
+}
+
+/* Identify-by-key is an explicit stage verb, not another canvas-membership
+   toggle. Keep its consequence and its answer together above the roster so
+   identical product names can be resolved without reading a global toast. */
+.rd-identify-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px 18px;
+  align-items: center;
+  margin: 14px 0 4px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--n-accent-line) 72%, var(--n-line));
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, var(--n-accent-tint), transparent 64%),
+    var(--n-panel-2);
+}
+
+.rd-identify-copy h3,
+.rd-identify-copy p {
+  margin: 0;
+}
+
+.rd-identify-copy h3 {
+  color: var(--n-text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-identify-copy p {
+  max-width: 72ch;
+  margin-top: 4px;
+  color: var(--n-text-3);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.rd-identify-status {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 42px;
+  padding: 9px 10px;
+  border: 1px solid var(--n-line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--n-bg) 52%, transparent);
+  outline: none;
+}
+
+.rd-identify-status:focus-visible {
+  border-color: var(--n-accent-line);
+  box-shadow: 0 0 0 2px var(--n-accent-tint);
+}
+
+.rd-identify-pulse {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--n-text-3);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--n-text-3) 12%, transparent);
+}
+
+.rd-identify-answer {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rd-identify-answer strong {
+  color: var(--n-text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+}
+
+.rd-identify-answer > span {
+  color: var(--n-text-3);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+}
+
+.rd-identify-status[data-state="listening"] .rd-identify-pulse,
+.rd-identify-status[data-state="cancelling"] .rd-identify-pulse {
+  background: var(--n-accent-2);
+  box-shadow: 0 0 0 4px var(--n-accent-tint);
+  animation: rd-identify-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes rd-identify-pulse {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: scale(0.86);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rd-identify-status[data-state="listening"] .rd-identify-pulse,
+  .rd-identify-status[data-state="cancelling"] .rd-identify-pulse {
+    animation: none;
+  }
+}
+
+.rd-identify-status[data-state="identified"] {
+  border-color: var(--n-accent-line);
+}
+
+.rd-identify-status[data-state="identified"] .rd-identify-pulse {
+  background: var(--n-accent-2);
+}
+
+.rd-identify-status[data-state="error"] {
+  border-color: color-mix(in srgb, var(--n-danger) 55%, var(--n-line));
+}
+
+.rd-identify-status[data-state="error"] .rd-identify-pulse {
+  background: var(--n-danger);
+}
+
+.rd-identify-cancel {
+  min-width: 76px;
+}
+
+@media (max-width: 680px) {
+  .rd-identify-card {
+    grid-template-columns: 1fr;
+  }
+
+  .rd-identify-card > form,
+  .rd-identify-start {
+    width: 100%;
+  }
+
+  .rd-identify-status {
+    grid-column: 1;
+  }
 }
 
 .rd-devmodal .n-dev.off .n-dev-txt {
@@ -22501,7 +22827,7 @@ form.rd-undochip .n-undo-btn {
 
 .rd-inspector {
   position: fixed;
-  top: 44px;
+  top: 52px;
   right: 0;
   bottom: 0;
   z-index: 35;
@@ -22691,9 +23017,12 @@ form.rd-undochip .n-undo-btn {
   }
 
   /* On a narrow viewport the Inspector is a real drawer. Covering the title
-     bar avoids the old 44px offset slicing through a wrapped 76–110px bar. */
+     bar avoids the old offset slicing through it. The drawer also owns the
+     higher stacking layer: otherwise `.rd-top` intercepts the close button's
+     pointer target even though the Inspector is what the user can see. */
   .rd-inspector {
     top: 0;
+    z-index: 38;
     width: 100vw;
   }
 

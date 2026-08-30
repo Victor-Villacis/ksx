@@ -18,7 +18,7 @@ import path from "node:path";
 
 import { build as bundle } from "esbuild";
 import { chromium } from "playwright";
-import { stopFixtureProcess } from "./fixture-process.mjs";
+import { cargoExecutable, stopFixtureProcess } from "./fixture-process.mjs";
 import {
   claimSavedDeviceGeometryKey,
   deviceInstanceId,
@@ -185,9 +185,9 @@ before(async () => {
   assert.equal(squatter, false, `something is already listening on ${BASE} — stop it first`);
 
   const built = spawnSync(
-    "cargo",
+    cargoExecutable,
     ["build", "--quiet", "-p", "ksx-studio", "--example", "macro_fixture"],
-    { cwd: repoRoot, stdio: "inherit", shell: process.platform === "win32" },
+    { cwd: repoRoot, stdio: "inherit" },
   );
   assert.equal(built.status, 0, "could not build the ksx-studio devices fixture");
   const fixtureExe = path.join(

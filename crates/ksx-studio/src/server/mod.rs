@@ -143,12 +143,78 @@ struct AppState {
     /// the two pages' chips cannot consume each other's resurrection
     /// material.
     redesign_undo: std::sync::Mutex<Option<nocturne::NocturneUndoStash>>,
+    /// The browser attempt and exact learner generation currently owned by
+    /// the redesign identify-by-key transaction. Both parts are load-bearing:
+    /// the generation qualifies the daemon cancel, while the browser nonce
+    /// prevents a delayed Cancel from an older tab taking a newer tab's
+    /// generation. The identify worker removes this lease before resolving a
+    /// hit, making "cancelled" and "selected" mutually exclusive outcomes at
+    /// one server-owned boundary.
+    redesign_identify: std::sync::Mutex<RedesignIdentifyRegistry>,
+    /// Supplies an opaque owner for a no-JS identify submit. Enhanced clients
+    /// provide their own nonce; the static form cannot, and must still never
+    /// share a cancellable identity with a later request.
+    redesign_identify_sequence: std::sync::atomic::AtomicU64,
     /// The machine-read cache: the poller asks every 2 s, but a USB tree
     /// enumeration and three TOML parses per poll is work the machine did
     /// not ask for. TTL-bounded, invalidated by every mutating request and
     /// by Rescan's `fresh=1` — so nothing the studio itself changed can
     /// ever be served stale.
     machine_cache: MachineCache,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RedesignIdentifyLease {
+    /// The HTTP start verb has reserved this browser attempt, before the
+    /// blocking daemon call can be scheduled.
+    Pending { attempt: String },
+    /// The daemon learner has returned the exact generation this attempt owns.
+    Active { attempt: String, generation: u64 },
+    /// A hit has won the cancellation boundary and is being resolved/staged.
+    /// Keeping this terminal owner visible prevents a late Cancel from being
+    /// reported as "nothing changed" while the blocking worker can still
+    /// commit the exact device.
+    Resolving { attempt: String, generation: u64 },
+    /// Cancel reached a Pending reservation while its blocking worker was
+    /// about to open the daemon learner. The worker consumes this marker and
+    /// exact-cancels any generation that appeared in the meantime.
+    Cancelled { attempt: String },
+}
+
+#[derive(Debug, Default)]
+struct RedesignIdentifyRegistry {
+    lease: Option<RedesignIdentifyLease>,
+    /// Cancel HTTP can overtake Start for more than one tab. Preserve each
+    /// nonce independently; a single tombstone lets cancel B overwrite cancel
+    /// A and allows A's delayed start to open invisibly. This queue is bounded
+    /// because same-origin callers can abandon requests forever.
+    pre_cancelled: std::collections::VecDeque<String>,
+}
+
+impl RedesignIdentifyRegistry {
+    const PRE_CANCELLED_LIMIT: usize = 64;
+
+    fn remember_pre_cancelled(&mut self, attempt: String) {
+        if let Some(index) = self
+            .pre_cancelled
+            .iter()
+            .position(|saved| saved == &attempt)
+        {
+            self.pre_cancelled.remove(index);
+        }
+        self.pre_cancelled.push_back(attempt);
+        while self.pre_cancelled.len() > Self::PRE_CANCELLED_LIMIT {
+            self.pre_cancelled.pop_front();
+        }
+    }
+
+    fn take_pre_cancelled(&mut self, attempt: &str) -> bool {
+        let Some(index) = self.pre_cancelled.iter().position(|saved| saved == attempt) else {
+            return false;
+        };
+        self.pre_cancelled.remove(index);
+        true
+    }
 }
 
 /// A TTL cache over the FOUR machine reads the 2-second poll repeats
@@ -350,6 +416,8 @@ pub fn serve(
         nocturne_undo: std::sync::Mutex::new(None),
         redesign_parked: std::sync::Mutex::new(Vec::new()),
         redesign_undo: std::sync::Mutex::new(None),
+        redesign_identify: std::sync::Mutex::new(RedesignIdentifyRegistry::default()),
+        redesign_identify_sequence: std::sync::atomic::AtomicU64::new(1),
         machine_cache: MachineCache::new(),
     });
 
@@ -511,6 +579,11 @@ pub fn serve(
             // tests/http.rs proves both, once, like every new verb.
             .route("/redesign/theme", post(redesign_form_theme))
             .route("/redesign/device", post(redesign_form_device))
+            .route("/redesign/device/identify", post(redesign_form_identify))
+            .route(
+                "/redesign/device/identify/cancel",
+                post(redesign_form_identify_cancel),
+            )
             .route(
                 "/redesign/capture/prepare",
                 post(redesign_form_capture_prepare),

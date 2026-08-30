@@ -10138,6 +10138,23 @@ export function NocturneIsland() {
             ),
           ),
           h("div", { class: "nm-div" }),
+          h("div", { class: "nm-kick" }, "Tools"),
+          h(
+            "a",
+            { class: "nm-item nm-link", href: "/check" },
+            "Input check — verify live bindings",
+          ),
+          h(
+            "a",
+            { class: "nm-item nm-link", href: "/pads" },
+            "Virtual pads — inspect and recover outputs",
+          ),
+          h(
+            "a",
+            { class: "nm-item nm-link", href: "/devices" },
+            "Device maintenance — saved devices and certificates",
+          ),
+          h("div", { class: "nm-div" }),
           // The sign-in task, off the SAME derivation /start's card uses.
           h(
             "details",

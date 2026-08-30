@@ -43,7 +43,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { chromium } from "playwright";
-import { stopFixtureProcess } from "./fixture-process.mjs";
+import { cargoExecutable, stopFixtureProcess } from "./fixture-process.mjs";
 
 /** OUR port: never 4460 (a real `ksx studio`), and never another suite's. */
 const PORT = Number(process.env.KSX_PWTEST_IDENTIFY_PORT ?? 4481);
@@ -89,9 +89,9 @@ before(async () => {
   assert.equal(squatter, false, `something is already listening on ${BASE} — stop it first`);
 
   const built = spawnSync(
-    "cargo",
+    cargoExecutable,
     ["build", "--quiet", "-p", "ksx-studio", "--example", "macro_fixture"],
-    { cwd: repoRoot, stdio: "inherit", shell: process.platform === "win32" },
+    { cwd: repoRoot, stdio: "inherit" },
   );
   assert.equal(built.status, 0, "could not build the ksx-studio identify fixture");
   const fixtureExe = path.join(

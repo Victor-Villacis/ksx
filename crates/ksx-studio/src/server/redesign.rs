@@ -14,6 +14,11 @@ const RD_DISCARD_CHANGED: &str =
     "error: This draft changed since Start over was opened. Review it and confirm again; nothing was changed.";
 const RD_LIFECYCLE_CHANGED: &str =
     "error: This draft changed or could not be verified. Refresh the workbench before continuing; nothing was changed.";
+const RD_IDENTIFY_CANCELLED: &str = "Keyboard identification cancelled. Nothing changed.";
+const RD_IDENTIFY_ALREADY_ANSWERED: &str =
+    "error: That keyboard identification has already answered. Check the current mapping input before trying again.";
+const RD_IDENTIFY_BUSY: &str =
+    "error: Another keyboard identification is already listening. Finish or cancel it there; nothing changed.";
 
 #[derive(Deserialize)]
 pub(super) struct RedesignQuery {
@@ -39,6 +44,12 @@ const RD_FLASH_ALLOWLIST: &[&str] = &[
     N_THEME_UNKNOWN,
     N_DEVICE_OK,
     N_DEVICE_ALREADY_OK,
+    N_IDENTIFY_OK,
+    N_IDENTIFY_TIMEOUT,
+    N_IDENTIFY_ERROR,
+    RD_IDENTIFY_CANCELLED,
+    RD_IDENTIFY_ALREADY_ANSWERED,
+    RD_IDENTIFY_BUSY,
     N_FORM_UNREADABLE,
     N_EDIT_OK,
     N_EDIT_ERROR,
@@ -179,19 +190,19 @@ pub(super) async fn collect_redesign(
         // The undo chip label off this page's OWN stash (the shared helper
         // also sweeps an expired stash).
         let undo_label = undo_chip_label(&redesign_state.redesign_undo);
-        let mut payload = crate::render_redesign::payload(
-            &environment,
+        let mut payload = crate::render_redesign::payload(crate::render_redesign::PayloadInput {
+            environment: &environment,
             setup,
-            &setup_error,
+            setup_error: &setup_error,
             scan,
-            &staged,
-            &session,
-            &outputs,
+            staged: &staged,
+            session: &session,
+            outputs: &outputs,
             selected_slot,
-            undo_label.as_deref(),
-            macro_selected.as_deref(),
-            q.as_deref(),
-        );
+            undo_label: undo_label.as_deref(),
+            macro_selected: macro_selected.as_deref(),
+            q: q.as_deref(),
+        });
         // Which parked ghosts the studio still HOLDS (authoring included),
         // so a ghost card can say "bindings kept" vs "staged fresh" before
         // the press. Studio state, not a daemon read — set here like the
@@ -209,19 +220,19 @@ pub(super) async fn collect_redesign(
     .unwrap_or_else(|_| {
         let staged = ksx_api::StagedSetupView::unreachable("the redesign collection panicked");
         let session = SessionView::unreachable("the redesign collection panicked");
-        crate::render_redesign::payload(
-            &fallback_environment,
-            None,
-            N_READ_SETUP_ERROR,
-            Err(N_READ_SCAN_ERROR.to_owned()),
-            &staged,
-            &session,
-            &ksx_api::ControllerOutputsView::default(),
-            None,
-            None,
-            None,
-            None,
-        )
+        crate::render_redesign::payload(crate::render_redesign::PayloadInput {
+            environment: &fallback_environment,
+            setup: None,
+            setup_error: N_READ_SETUP_ERROR,
+            scan: Err(N_READ_SCAN_ERROR.to_owned()),
+            staged: &staged,
+            session: &session,
+            outputs: &ksx_api::ControllerOutputsView::default(),
+            selected_slot: None,
+            undo_label: None,
+            macro_selected: None,
+            q: None,
+        })
     })
 }
 
@@ -588,6 +599,130 @@ pub(super) async fn redesign_form_device(
         DeviceChoice::Chosen => N_DEVICE_OK,
         DeviceChoice::Refused => N_EDIT_ERROR,
     })
+}
+
+/// POST /redesign/device/identify — the legacy transaction, with a redesign
+/// redirect and an exact-generation cancellation handle. The action's label
+/// says that a successful answer becomes the mapping input; there is no
+/// identify-only preview that could stage a device without consent.
+#[derive(Deserialize)]
+pub(super) struct RedesignIdentifyForm {
+    #[serde(default)]
+    attempt: String,
+}
+
+fn redesign_identify_attempt(attempt: String) -> Result<Option<String>, ()> {
+    let attempt = attempt.trim();
+    if attempt.is_empty() {
+        return Ok(None);
+    }
+    if attempt.len() > 128
+        || !attempt
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(());
+    }
+    Ok(Some(attempt.to_owned()))
+}
+
+pub(super) async fn redesign_form_identify(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignIdentifyForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let Ok(attempt) = redesign_identify_attempt(form.attempt) else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let attempt = attempt.unwrap_or_else(|| {
+        let sequence = state
+            .redesign_identify_sequence
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("server-attempt-{sequence}")
+    });
+    {
+        let mut registry = state.redesign_identify.lock().unwrap();
+        if registry.take_pre_cancelled(&attempt) {
+            return redesign_redirect(RD_IDENTIFY_CANCELLED);
+        }
+        if registry.lease.is_some() {
+            return redesign_redirect(RD_IDENTIFY_BUSY);
+        }
+        registry.lease = Some(super::RedesignIdentifyLease::Pending {
+            attempt: attempt.clone(),
+        });
+    }
+    let flash = match identify_and_stage_for_redesign(state, attempt).await {
+        StartIdentifyResult::Selected => N_IDENTIFY_OK,
+        StartIdentifyResult::TimedOut => N_IDENTIFY_TIMEOUT,
+        StartIdentifyResult::Failed => N_IDENTIFY_ERROR,
+        StartIdentifyResult::Busy => RD_IDENTIFY_BUSY,
+        StartIdentifyResult::Cancelled => RD_IDENTIFY_CANCELLED,
+    };
+    redesign_redirect(flash)
+}
+
+/// Cancel only the listener generation opened by the redesign identify
+/// transaction. Taking it from the registry is the outcome boundary: the
+/// identify worker cannot stage after this returns the cancellation sentence.
+pub(super) async fn redesign_form_identify_cancel(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignIdentifyForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(RD_IDENTIFY_ALREADY_ANSWERED);
+    };
+    let Ok(Some(attempt)) = redesign_identify_attempt(form.attempt) else {
+        return redesign_redirect(RD_IDENTIFY_ALREADY_ANSWERED);
+    };
+    let generation = {
+        let mut registry = state.redesign_identify.lock().unwrap();
+        match registry.lease.as_ref() {
+            Some(super::RedesignIdentifyLease::Pending { attempt: owner }) if owner == &attempt => {
+                registry.lease = Some(super::RedesignIdentifyLease::Cancelled { attempt });
+                return redesign_redirect(RD_IDENTIFY_CANCELLED);
+            }
+            Some(super::RedesignIdentifyLease::Active {
+                attempt: owner,
+                generation,
+            }) if owner == &attempt => {
+                let generation = *generation;
+                registry.lease = None;
+                Some(generation)
+            }
+            Some(super::RedesignIdentifyLease::Cancelled { attempt: owner })
+                if owner == &attempt =>
+            {
+                return redesign_redirect(RD_IDENTIFY_CANCELLED);
+            }
+            Some(super::RedesignIdentifyLease::Resolving { attempt: owner, .. })
+                if owner == &attempt =>
+            {
+                return redesign_redirect(RD_IDENTIFY_ALREADY_ANSWERED);
+            }
+            Some(_) | None => {
+                // This nonce is not the active lease. It may be a stale tab,
+                // or its Cancel may have overtaken Start; remembering it is
+                // harmless to the current generation and makes the latter
+                // ordering deterministic for every tab, not only the latest.
+                registry.remember_pre_cancelled(attempt);
+                return redesign_redirect(RD_IDENTIFY_CANCELLED);
+            }
+        }
+    };
+    let Some(generation) = generation else {
+        return redesign_redirect(RD_IDENTIFY_ALREADY_ANSWERED);
+    };
+    // Taking Active above is the outcome boundary: the worker will refuse to
+    // stage even if the daemon reports a simultaneous hit or the best-effort
+    // pipe cancel itself fails. Only Resolving means the hit already won.
+    let _ = tokio::task::spawn_blocking(move || {
+        state.control.learn_cancel_generation(Some(generation))
+    })
+    .await;
+    redesign_redirect(RD_IDENTIFY_CANCELLED)
 }
 
 // ── The controller verbs: the rack's add / reorder / remove, re-homed ───────

@@ -695,7 +695,8 @@ mod tests {
     /// `render_pads.rs` had `the_nav_reaches_the_other_screens`. They differed
     /// only in which page they rendered. Both names also overclaimed: there
     /// are no sibling pages any more, only one workflow link plus this
-    /// blocklist.
+    /// blocklist. The redesign joined this shared guard when it became the
+    /// destination of the tool pages.
     ///
     /// Folding them closes a real gap rather than just saving runtime.
     /// `/nocturne` had NO dead-link blocklist at all — the one page that
@@ -717,7 +718,7 @@ mod tests {
             r#"href="/workspace"#,
         ];
 
-        let pages: [(&str, String); 4] = [
+        let pages: [(&str, String); 5] = [
             (
                 "/nocturne",
                 crate::render_nocturne::render_nocturne(
@@ -752,6 +753,15 @@ mod tests {
                 )
                 .html,
             ),
+            (
+                "/redesign",
+                crate::render_redesign::render_redesign(
+                    &EmbeddedPage::load("/redesign").unwrap(),
+                    &crate::snapshot::RedesignPayload::default(),
+                    None,
+                )
+                .html,
+            ),
         ];
 
         for (route, html) in &pages {
@@ -763,18 +773,35 @@ mod tests {
             }
         }
 
-        // The three tool pages carry the rail: one link to the page that owns
-        // the workflow, and their own entry marked as current. `/nocturne` IS
-        // the workflow, so it links to itself from nothing.
-        for (route, html) in pages.iter().filter(|(r, _)| *r != "/nocturne") {
+        // The three focused tool pages carry the rail: one link to the current
+        // workbench, and their own entry marked as current.
+        for (route, html) in pages
+            .iter()
+            .filter(|(r, _)| matches!(*r, "/check" | "/pads" | "/devices"))
+        {
             assert!(
-                html.contains(r#"<a class="navlink workflow-link" href="/nocturne">"#),
+                html.contains(r#"<a class="navlink workflow-link" href="/redesign">"#),
                 "{route} cannot reach the product page"
             );
             assert!(
                 html.contains(&format!(r#"<a href="{route}" aria-current="page">"#)),
                 "{route} does not mark itself as the current page"
             );
+        }
+
+        // Both product shells expose every focused recovery tool. This stays
+        // true until Nocturne is retired; a route existing in the router is
+        // not enough if a person cannot discover it from the product.
+        for (route, html) in pages
+            .iter()
+            .filter(|(r, _)| matches!(*r, "/nocturne" | "/redesign"))
+        {
+            for tool in ["/check", "/pads", "/devices"] {
+                assert!(
+                    html.contains(&format!(r#"href="{tool}""#)),
+                    "{route} cannot reach the operational tool {tool}"
+                );
+            }
         }
     }
 

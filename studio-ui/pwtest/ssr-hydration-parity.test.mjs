@@ -29,7 +29,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { chromium } from "playwright";
-import { stopFixtureProcess } from "./fixture-process.mjs";
+import { cargoExecutable, stopFixtureProcess } from "./fixture-process.mjs";
 
 /** Our own range — never 4460 (a real `ksx studio`) or 4478 (the macro
  *  suite). The files still run serially because they share one
@@ -301,9 +301,9 @@ before(async () => {
     );
   }
   const built = spawnSync(
-    "cargo",
+    cargoExecutable,
     ["build", "--quiet", "-p", "ksx-studio", "--example", "macro_fixture"],
-    { cwd: repoRoot, stdio: "inherit", shell: process.platform === "win32" },
+    { cwd: repoRoot, stdio: "inherit" },
   );
   assert.equal(built.status, 0, "could not build the ksx-studio macro fixture");
   browser = await chromium.launch();

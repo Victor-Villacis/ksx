@@ -40,24 +40,45 @@ const ANONYMOUS_SLOTS: [&str; 0] = [];
 const STAGING_UNAVAILABLE: &str = "Staging unavailable — the ksx background helper is not \
     answering. Staging status can't be confirmed; close and reopen ksx to check.";
 
+/// Every already-collected truth needed to compose the redesign payload.
+///
+/// Keeping this seam named matters: setup, scan, staging and session are
+/// separate authorities, while the final four fields are only view state.
+/// A positional argument list made those boundaries easy to swap and grew a
+/// new parameter every time the workbench gained a block.
+pub(crate) struct PayloadInput<'a> {
+    pub(crate) environment: &'a ksx_api::RuntimeEnvironmentView,
+    pub(crate) setup: Option<ksx_api::SetupView>,
+    pub(crate) setup_error: &'a str,
+    pub(crate) scan: Result<ksx_api::DeviceScanView, String>,
+    pub(crate) staged: &'a ksx_api::StagedSetupView,
+    pub(crate) session: &'a crate::control::SessionView,
+    pub(crate) outputs: &'a ksx_api::ControllerOutputsView,
+    pub(crate) selected_slot: Option<u8>,
+    pub(crate) undo_label: Option<&'a str>,
+    pub(crate) macro_selected: Option<&'a str>,
+    pub(crate) q: Option<&'a str>,
+}
+
 /// Compose the payload from the environment the source reports — the same
 /// wording rule the nocturne derived block uses, copied so the two chips can
 /// never disagree about what a fixture looks like. `setup` is the same
 /// `machine_cache.setup_state` read `page_theme` stamps the page from, so the
 /// menu's marked row and the `<html data-theme>` stamp derive from one truth.
-pub(crate) fn payload(
-    environment: &ksx_api::RuntimeEnvironmentView,
-    setup: Option<ksx_api::SetupView>,
-    setup_error: &str,
-    scan: Result<ksx_api::DeviceScanView, String>,
-    staged: &ksx_api::StagedSetupView,
-    session: &crate::control::SessionView,
-    outputs: &ksx_api::ControllerOutputsView,
-    selected_slot: Option<u8>,
-    undo_label: Option<&str>,
-    macro_selected: Option<&str>,
-    q: Option<&str>,
-) -> RedesignPayload {
+pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
+    let PayloadInput {
+        environment,
+        setup,
+        setup_error,
+        scan,
+        staged,
+        session,
+        outputs,
+        selected_slot,
+        undo_label,
+        macro_selected,
+        q,
+    } = input;
     // Borrowed BEFORE the payload construction consumes its owner: the
     // scan boards, for the keyboard title's transport word.
     let scan_boards: &[ksx_api::BoardRow] = match &scan {
@@ -598,8 +619,8 @@ mod tests {
     }
 
     fn fixture_payload() -> RedesignPayload {
-        payload(
-            &ksx_api::RuntimeEnvironmentView {
+        payload(PayloadInput {
+            environment: &ksx_api::RuntimeEnvironmentView {
                 fixture: true,
                 id: "seeded-demo".into(),
                 label: "Fixture · Seeded demo".into(),
@@ -607,24 +628,24 @@ mod tests {
                 generation: "test".into(),
             },
             // A readable config with no stamp: System is the one marked row.
-            Some(ksx_api::SetupView::default()),
-            "",
-            Ok(fixture_scan()),
+            setup: Some(ksx_api::SetupView::default()),
+            setup_error: "",
+            scan: Ok(fixture_scan()),
             // Nothing staged, authoritatively: every device row serves
             // aria_current "false" and the workbench mounts no cards — but
             // the picker still offers the roster over served ceilings.
-            &fixture_staged(Vec::new()),
-            &crate::control::SessionView {
+            staged: &fixture_staged(Vec::new()),
+            session: &crate::control::SessionView {
                 reachable: true,
                 line: "idle".into(),
                 ..Default::default()
             },
-            &ksx_api::ControllerOutputsView::from_required(Vec::new()),
-            None,
-            None,
-            None,
-            None,
-        )
+            outputs: &ksx_api::ControllerOutputsView::from_required(Vec::new()),
+            selected_slot: None,
+            undo_label: None,
+            macro_selected: None,
+            q: None,
+        })
     }
 
     /// A staged view with real ceilings, the two-persona roster, and the
@@ -998,25 +1019,25 @@ mod tests {
     fn unreachable_staging_is_disabled_with_authored_copy_not_a_raw_diagnostic() {
         let raw = "named pipe \\.\\pipe\\ksx-control refused with os error 231";
         let staged = ksx_api::StagedSetupView::unreachable(raw);
-        let payload = payload(
-            &ksx_api::RuntimeEnvironmentView {
+        let payload = payload(PayloadInput {
+            environment: &ksx_api::RuntimeEnvironmentView {
                 fixture: true,
                 id: "seeded-demo".into(),
                 label: "Fixture · Seeded demo".into(),
                 detail: "Synthetic data for the redesign lane.".into(),
                 generation: "test".into(),
             },
-            Some(ksx_api::SetupView::default()),
-            "",
-            Ok(fixture_scan()),
-            &staged,
-            &crate::control::SessionView::unreachable("test"),
-            &ksx_api::ControllerOutputsView::default(),
-            None,
-            None,
-            None,
-            None,
-        );
+            setup: Some(ksx_api::SetupView::default()),
+            setup_error: "",
+            scan: Ok(fixture_scan()),
+            staged: &staged,
+            session: &crate::control::SessionView::unreachable("test"),
+            outputs: &ksx_api::ControllerOutputsView::default(),
+            selected_slot: None,
+            undo_label: None,
+            macro_selected: None,
+            q: None,
+        });
         assert!(!payload.devices.staging_reachable);
         assert!(payload.devices.staging_line.contains("background helper"));
         assert!(payload.devices.scan_line.contains("Staging unavailable"));
@@ -1077,7 +1098,8 @@ mod tests {
         );
     }
 
-    /// **The theme menu offers every theme, and every row is PAINTED.** The
+    /// **Both responsive theme homes offer every theme, and every row is
+    /// PAINTED.** The
     /// nocturne picker's own regression, applied here the day the rows were
     /// transplanted: between "the verb round-trips" and "the action string
     /// appears" once sat a picker whose unchosen rows a stale `pill-none`
@@ -1086,55 +1108,80 @@ mod tests {
     /// vocabulary asserted here is the surviving one — `n-radio`, never
     /// `pill` — and exactly one row may claim to be current.
     #[test]
-    fn redesign_paints_every_theme_row_not_only_the_current_one() {
+    fn redesign_paints_every_theme_row_in_both_responsive_homes() {
         let page = EmbeddedPage::load("/redesign").unwrap();
         let html = render_redesign(&page, &fixture_payload(), None).html;
-        // Isolate each theme form's own bytes so an assertion about "a theme
-        // row" cannot be satisfied by markup elsewhere on the page.
-        let forms: Vec<&str> = html
-            .match_indices(r#"action="/redesign/theme""#)
-            .map(|(start, _)| {
-                let rest = &html[start..];
-                let end = rest.find("</form>").expect("a theme form to close");
-                &rest[..end]
-            })
-            .collect();
-        // System + every theme in the generated roster. Composed in
-        // `snapshot::theme_rows`, so shipping a theme adds a row here for
-        // free — and adds it to this count.
+
+        fn disclosure<'a>(html: &'a str, class: &str) -> &'a str {
+            let marker = format!(r#"class="{class}""#);
+            let start = html
+                .find(&marker)
+                .unwrap_or_else(|| panic!("missing {class} theme disclosure"));
+            let rest = &html[start..];
+            let end = rest
+                .find("</details>")
+                .unwrap_or_else(|| panic!("{class} theme disclosure never closes"));
+            &rest[..end]
+        }
+
+        fn theme_forms(fragment: &str) -> Vec<&str> {
+            // Isolate each theme form's own bytes so an assertion about "a
+            // theme row" cannot be satisfied by markup elsewhere.
+            fragment
+                .match_indices(r#"action="/redesign/theme""#)
+                .map(|(start, _)| {
+                    let rest = &fragment[start..];
+                    let end = rest.find("</form>").expect("a theme form to close");
+                    &rest[..end]
+                })
+                .collect()
+        }
+
+        // System + every theme in the generated roster. The desktop rail and
+        // compact Setup panel are separate no-script homes; responsive CSS
+        // exposes exactly one, but each must be independently complete.
         let expected = 1 + crate::theme_tokens::THEMES.len();
-        assert_eq!(
-            forms.len(),
-            expected,
-            "the theme menu serves {} forms, not the {expected} the roster has",
-            forms.len(),
-        );
-        for want in
-            std::iter::once("system").chain(crate::theme_tokens::THEMES.iter().map(|t| t.id))
-        {
-            let hidden = format!(r#"name="theme" value="{want}""#);
-            assert!(
-                forms.iter().any(|form| form.contains(&hidden)),
-                "no theme form posts {want:?}",
+        for (home, class) in [
+            ("desktop rail", "rd-themed"),
+            ("compact Setup panel", "rd-themed-compact"),
+        ] {
+            let forms = theme_forms(disclosure(&html, class));
+            assert_eq!(
+                forms.len(),
+                expected,
+                "the {home} serves {} theme forms, not the {expected} the roster has",
+                forms.len(),
+            );
+            for want in
+                std::iter::once("system").chain(crate::theme_tokens::THEMES.iter().map(|t| t.id))
+            {
+                let hidden = format!(r#"name="theme" value="{want}""#);
+                assert!(
+                    forms.iter().any(|form| form.contains(&hidden)),
+                    "the {home} has no theme form that posts {want:?}",
+                );
+            }
+            for form in &forms {
+                assert!(
+                    !form.contains("pill"),
+                    "a {home} theme row's submit button carries a `pill` class; that \
+                     vocabulary hides rows (see snapshot.rs theme_rows): {form}",
+                );
+                assert!(
+                    form.contains("n-radio"),
+                    "a {home} theme row's submit button is not an `n-radio`; only \
+                     `.n-modeform button.n-radio` is laid out at all: {form}",
+                );
+            }
+            let marked = forms
+                .iter()
+                .filter(|form| form.contains("n-radio on"))
+                .count();
+            assert_eq!(
+                marked, 1,
+                "{marked} theme rows claim to be current in the {home}",
             );
         }
-        for form in &forms {
-            assert!(
-                !form.contains("pill"),
-                "a theme row's submit button carries a `pill` class; that \
-                 vocabulary hides rows (see snapshot.rs theme_rows): {form}",
-            );
-            assert!(
-                form.contains("n-radio"),
-                "a theme row's submit button is not an `n-radio`; only \
-                 `.n-modeform button.n-radio` is laid out at all: {form}",
-            );
-        }
-        let marked = forms
-            .iter()
-            .filter(|form| form.contains("n-radio on"))
-            .count();
-        assert_eq!(marked, 1, "{marked} theme rows claim to be the current one");
         // Every theme speaks its own sentence — Dark and Matrix share a
         // scheme, so a derived sentence once made two rows word-identical.
         for meta in crate::theme_tokens::THEMES {

@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { chromium } from "playwright";
-import { stopFixtureProcess } from "./fixture-process.mjs";
+import { cargoExecutable, stopFixtureProcess } from "./fixture-process.mjs";
 
 const PORT = Number(process.env.KSX_PWTEST_REDESIGN_LIFECYCLE_RESPONSIVE_PORT ?? 4545);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -44,9 +44,9 @@ before(async () => {
   assert.equal(squatter, false, `something is already listening on ${BASE}`);
 
   const built = spawnSync(
-    "cargo",
+    cargoExecutable,
     ["build", "--quiet", "-p", "ksx-studio", "--example", "macro_fixture"],
-    { cwd: repoRoot, stdio: "inherit", shell: process.platform === "win32" },
+    { cwd: repoRoot, stdio: "inherit" },
   );
   assert.equal(built.status, 0, "could not build the responsive lifecycle fixture");
   const fixtureExe = path.join(
@@ -114,6 +114,27 @@ async function openRunningDirtyBench() {
     () => /edited|Unsaved/i.test(document.querySelector(".rd-draft-label")?.textContent ?? ""),
   );
   await page.locator('[data-nx="rd-insp-close"]').click();
+  return page;
+}
+
+async function openSurface(
+  pathname,
+  viewport = { width: 1280, height: 900 },
+  pageOptions = {},
+) {
+  const page = await browser.newPage({ ...pageOptions, viewport });
+  const noise = [];
+  page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") noise.push(`console: ${message.text()}`);
+  });
+  page.ksxNoise = noise;
+  await page.goto(`${BASE}${pathname}`, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(
+    () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+    null,
+    { timeout: 20_000 },
+  );
   return page;
 }
 
@@ -299,6 +320,187 @@ describe("the responsive redesign lifecycle rail", { concurrency: false }, () =>
         await assertCompactThemeKeyboard(page, width);
       }
       assert.deepEqual(page.ksxNoise, [], "compact Theme must stay error-free");
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("the phone Inspector drawer owns its visible close button above the lifecycle rail", async () => {
+    const page = await openRunningDirtyBench();
+    try {
+      await page.setViewportSize({ width: 390, height: 900 });
+      await page.waitForFunction(() => document.documentElement.clientWidth === 390);
+
+      const card = page.locator('.forma-canvas-stage > [data-instance-id="ctrl-slot-1"]');
+      await card.locator(".rd-ctrlcard-name").click();
+      const inspector = page.locator(".rd-inspector");
+      const close = inspector.locator('[data-nx="rd-insp-close"]');
+      await close.waitFor({ state: "visible" });
+
+      const hitTarget = await close.evaluate((button) => {
+        const rect = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          rect.left + rect.width / 2,
+          rect.top + rect.height / 2,
+        );
+        return hit === button || button.contains(hit);
+      });
+      assert.equal(
+        hitTarget,
+        true,
+        "the visible Inspector close target is covered by another responsive layer",
+      );
+
+      await close.click();
+      await page.waitForFunction(() => document.querySelector(".rd-inspector")?.hidden === true);
+      assert.equal(await inspector.isHidden(), true, "the phone Inspector did not close");
+      assert.deepEqual(page.ksxNoise, [], "the phone Inspector must stay error-free");
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("Tools stays keyboard-reachable without crowding the phone lifecycle rail", async () => {
+    for (const width of [390, 681, 1280]) {
+      const page = await openSurface("/redesign?slot=1", { width, height: 900 });
+      try {
+        let tools;
+        if (width <= 680) {
+          const setup = page.locator(".rd-setupd");
+          await setup.locator(":scope > .rd-setup-sum").focus();
+          await page.keyboard.press("Enter");
+          await page.waitForFunction(() => document.querySelector(".rd-setupd")?.hasAttribute("open"));
+          tools = page.locator(".rd-utility-compact-home [data-rd-tools-menu]");
+        } else {
+          tools = page.locator(".rd-utility-rail-home [data-rd-tools-menu]");
+        }
+
+        const summary = tools.locator(":scope > .rd-utility-sum");
+        assert.equal(await tools.isVisible(), true, `Tools is hidden at ${width}px`);
+        assert.equal(await summary.getAttribute("aria-label"), "Open Studio tools");
+        await summary.focus();
+        await page.keyboard.press("Enter");
+        await page.waitForFunction(
+          ({ compact }) => document.querySelector(
+            compact
+              ? ".rd-utility-compact-home [data-rd-tools-menu]"
+              : ".rd-utility-rail-home [data-rd-tools-menu]",
+          )?.hasAttribute("open"),
+          { compact: width <= 680 },
+        );
+
+        assert.deepEqual(
+          await tools.locator(".rd-utility-link").evaluateAll((links) =>
+            links.map((link) => link.getAttribute("href"))),
+          ["/check", "/pads", "/devices"],
+          `${width}px Tools menu lost an operational route`,
+        );
+        await page.keyboard.press("Escape");
+        assert.equal(await tools.getAttribute("open"), null, `Escape did not close Tools at ${width}px`);
+        assert.equal(
+          await summary.evaluate((element) => document.activeElement === element),
+          true,
+          `Escape did not restore Tools focus at ${width}px`,
+        );
+        assert.deepEqual(page.ksxNoise, [], `Tools produced browser errors at ${width}px`);
+      } finally {
+        await page.close();
+      }
+    }
+  });
+
+  test("Tools keeps one disclosure state while crossing the compact breakpoint", async () => {
+    const page = await openSurface("/redesign?slot=1", { width: 681, height: 900 });
+    try {
+      const rail = page.locator(".rd-utility-rail-home [data-rd-tools-menu]");
+      const railSummary = rail.locator(":scope > .rd-utility-sum");
+      await railSummary.focus();
+      await page.keyboard.press("Enter");
+      assert.notEqual(await rail.getAttribute("open"), null);
+
+      await page.setViewportSize({ width: 680, height: 900 });
+      await page.waitForFunction(
+        () => document.querySelectorAll("[data-rd-tools-menu][open]").length === 0,
+      );
+      const setupSummary = page.locator(".rd-setupd > .rd-setup-sum");
+      assert.equal(
+        await setupSummary.evaluate((element) => document.activeElement === element),
+        true,
+        "the hidden desktop Tools summary retained focus after compacting",
+      );
+
+      await page.keyboard.press("Enter");
+      const compact = page.locator(".rd-utility-compact-home [data-rd-tools-menu]");
+      const compactSummary = compact.locator(":scope > .rd-utility-sum");
+      await compactSummary.focus();
+      await page.keyboard.press("Enter");
+      assert.notEqual(await compact.getAttribute("open"), null);
+      assert.equal(
+        await page.locator("[data-rd-tools-menu][open]").count(),
+        1,
+        "responsive Tools peers diverged",
+      );
+
+      await page.setViewportSize({ width: 681, height: 900 });
+      await page.waitForFunction(
+        () => document.querySelectorAll("[data-rd-tools-menu][open]").length === 0,
+      );
+      assert.equal(
+        await railSummary.evaluate((element) => document.activeElement === element),
+        true,
+        "the hidden compact Tools summary retained focus after widening",
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("Tools keeps a touch-size target and forced-colors focus ring", async () => {
+    const page = await openSurface(
+      "/redesign?slot=1",
+      { width: 390, height: 900 },
+      { hasTouch: true },
+    );
+    try {
+      await page.locator(".rd-setupd > .rd-setup-sum").click();
+      const tools = page.locator(".rd-utility-compact-home [data-rd-tools-menu]");
+      const summary = tools.locator(":scope > .rd-utility-sum");
+      const box = await summary.boundingBox();
+      assert.ok(box && box.height >= 44, `coarse-pointer Tools target is ${box?.height}px`);
+
+      await page.emulateMedia({ forcedColors: "active" });
+      await summary.focus();
+      assert.equal(
+        await summary.evaluate((element) => getComputedStyle(element).outlineStyle),
+        "solid",
+      );
+      await page.keyboard.press("Enter");
+      const firstLink = tools.locator(".rd-utility-link").first();
+      await firstLink.focus();
+      assert.equal(
+        await firstLink.evaluate((element) => getComputedStyle(element).outlineStyle),
+        "solid",
+        "forced-colors removed the Tools link focus indicator",
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("Nocturne's native configuration menu exposes the same recovery routes", async () => {
+    const page = await openSurface("/nocturne");
+    try {
+      const menu = page.locator(".n-chipd");
+      await menu.locator(":scope > summary").click();
+      assert.deepEqual(
+        await menu.locator('a[href="/check"], a[href="/pads"], a[href="/devices"]').evaluateAll(
+          (links) => links.map((link) => link.getAttribute("href")),
+        ),
+        ["/check", "/pads", "/devices"],
+      );
+      assert.deepEqual(page.ksxNoise, [], "Nocturne Tools links produced browser errors");
     } finally {
       await page.close();
     }

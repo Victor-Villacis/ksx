@@ -78,9 +78,19 @@ Copy-Item $Built $CopiedExe
 
 $Out = Join-Path $LogDir "redesign-$Port-$Stamp.out.log"
 $Err = Join-Path $LogDir "redesign-$Port-$Stamp.err.log"
-$Process = Start-Process -FilePath $CopiedExe -ArgumentList @("$Port") `
-    -WorkingDirectory $RepoRoot -WindowStyle Hidden -PassThru `
-    -RedirectStandardOutput $Out -RedirectStandardError $Err
+# The fixture's live transport is opt-in so unrelated tests can exercise the
+# offline state. A canonical redesign lane is an interactive product preview:
+# Play must therefore open /api/live and Stop must close it. Set the opt-in
+# only while creating this child, then restore the caller's process exactly.
+$PreviousFixtureLive = [Environment]::GetEnvironmentVariable("KSX_FIXTURE_LIVE", "Process")
+try {
+    $env:KSX_FIXTURE_LIVE = "1"
+    $Process = Start-Process -FilePath $CopiedExe -ArgumentList @("$Port") `
+        -WorkingDirectory $RepoRoot -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput $Out -RedirectStandardError $Err
+} finally {
+    [Environment]::SetEnvironmentVariable("KSX_FIXTURE_LIVE", $PreviousFixtureLive, "Process")
+}
 
 $Deadline = [DateTime]::UtcNow.AddSeconds(30)
 $Ready = $false

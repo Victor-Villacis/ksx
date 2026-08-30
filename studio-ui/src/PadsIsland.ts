@@ -333,7 +333,7 @@ export function PadsIsland() {
         // One page now owns the whole set-up-and-play workflow, so the four
         // numbered steps that pointed at /start, /map and / collapse into the
         // single link that actually goes somewhere.
-        h("a", { class: "navlink workflow-link", href: "/nocturne" }, "Set up & play"),
+        h("a", { class: "navlink workflow-link", href: "/redesign" }, "Set up & play"),
       ),
       h(
         "details",
@@ -343,7 +343,7 @@ export function PadsIsland() {
           h("a", { href: "/check" }, h("span", null, "Test inputs"), h("small", null, "Live controller feedback")),
           h("a", { href: "/devices" }, h("span", null, "Hardware"), h("small", null, "Devices and recovery")),
           h("a", { href: "/pads", "aria-current": "page" }, h("span", null, "Virtual controllers"), h("small", null, "Inspect and test pads")),
-          h("a", { href: "/nocturne" }, h("span", null, "Set up & play"), h("small", null, "Keyboard, controllers, games and configuration")),
+          h("a", { href: "/redesign" }, h("span", null, "Set up & play"), h("small", null, "Devices, controllers and mappings")),
         ),
       ),
       createShow(
@@ -370,7 +370,7 @@ export function PadsIsland() {
           h("h1", { id: "pads-title" }, "Virtual controllers"),
           h("p", { class: "workflow-lede" }, "Inspect what is connected, prove the XInput ceiling, and safely remove only stale KSX pads."),
         ),
-        h("a", { class: "btn btn-primary", href: "/nocturne" }, "Create a controller"),
+        h("a", { class: "btn btn-primary", href: "/redesign" }, "Create a controller"),
       ),
       // ── The read failed. An empty pad list would read as "your bus is
       // clean", which is the one thing it must never say by accident. ──────

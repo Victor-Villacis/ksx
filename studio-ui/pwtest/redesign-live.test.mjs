@@ -482,4 +482,36 @@ describe("redesign live feedback", { concurrency: false }, () => {
     assert.equal(view.canvasLive, false);
     assert.deepEqual(view.pathCalls.at(-1).keysDown, []);
   });
+
+  test("a no-session refusal stays inactive through EventSource retry while daemon failure stays offline", async () => {
+    await page.evaluate(() => {
+      window.ksxLive.reconcileSession({
+        reachable: true,
+        running: false,
+        origin: "unknown",
+      });
+      window.ksxLive.connect();
+    });
+    await emit("unavailable", {
+      message: "nothing is running; press Play to start live input",
+    });
+    let view = await snapshot();
+    assert.equal(view.state, "inactive");
+    assert.equal(view.status, "Live input starts after you press Play.");
+
+    // Browsers raise `error` after a server-sent refusal closes the response.
+    // That transport epilogue must not relabel an ordinary stopped session as
+    // reconnecting or alternate the customer copy on every retry.
+    await emit("error");
+    view = await snapshot();
+    assert.equal(view.state, "inactive");
+    assert.equal(view.status, "Live input starts after you press Play.");
+
+    await emit("unavailable", {
+      message: "no daemon control channel is available",
+    });
+    view = await snapshot();
+    assert.equal(view.state, "offline");
+    assert.equal(view.status, "Live input is offline. Reopen ksx and try again.");
+  });
 });

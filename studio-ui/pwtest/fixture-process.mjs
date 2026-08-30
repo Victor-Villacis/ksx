@@ -6,6 +6,8 @@
  * point leaves the next serial test free to race the still-running process.
  * Both waits are bounded so a broken fixture cannot hang an Actions runner.
  */
+export const cargoExecutable = process.platform === "win32" ? "cargo.exe" : "cargo";
+
 export async function stopFixtureProcess(child, label, timeoutMs = 10_000) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
 

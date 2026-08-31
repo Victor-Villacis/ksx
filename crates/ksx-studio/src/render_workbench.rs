@@ -1,8 +1,8 @@
 //! Route-neutral slot adapters shared by the setup presentations.
 //!
-//! These values are part of the staged-workbench seam, not `/nocturne`'s
-//! renderer. Keeping them here prevents `/redesign` from importing a legacy
-//! page module merely to serialize the same device and choice rows.
+//! These values are part of the staged-workbench seam rather than a page
+//! renderer. Keeping them here lets `/redesign` serialize shared device and
+//! choice rows without coupling route and domain composition.
 
 use forma_ir::parser::IrModule;
 use forma_ir::slot::SlotValue;

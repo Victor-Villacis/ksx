@@ -78,16 +78,12 @@ import {
 } from "./encoderConceptArt";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// /redesign — the transplant rebuild's blank workbench.
+// /redesign — the sole product workbench after hard cutover.
 //
-// The whole viewport is the pan/zoom canvas (the same vendored engine
-// /nocturne's center uses), plus the minimap and the camera verbs, and
-// deliberately nothing else: pieces of the existing product arrive here one
-// by one, copied — never rewritten — from the living page, and are re-homed
-// as encapsulated widgets. Every block below is lifted from NocturneIsland
-// with only the product widgets trimmed away; the source line ranges are in
-// the redesign lane's recon notes, and the copies keep their original
-// comments because those carry the measured knowledge.
+// The whole viewport is the pan/zoom canvas, plus its minimap, camera verbs,
+// attached hardware, virtual controllers, inspector, mapping and lifecycle
+// controls. These blocks were extracted from the retired Nocturne island into
+// focused modules while preserving the measured interaction contracts.
 //
 // The root keeps the `nocturne` class ON PURPOSE: all pages share one hashed
 // stylesheet, so reusing the class names (`nocturne`, `n-main`, `n-center`,
@@ -264,8 +260,15 @@ export interface RdBoardPanel {
 /** The payload the server embeds and /api/redesign serves — seeded into the
  *  signals by the entry BEFORE the island returns (ledger #5). */
 export interface RedesignPayload {
+  /** Stable source identity. Fixture generation is used only to expire
+   * redesign-owned browser chrome after a synthetic reseed. */
+  environment_id: string;
+  environment_generation: string;
+  environment_fixture: boolean;
   environment_label: string;
   environment_cls: string;
+  /** The Studio build serving this document, for support screenshots. */
+  studio_version: string;
   theme_rows: RdChoiceRowView[];
   devices: RdDeviceRows;
   controllers: RdControllers;
@@ -391,6 +394,7 @@ export interface RdJourneyState {
 
 const [rdEnvLabel, setRdEnvLabel] = createSignal("");
 const [rdEnvCls, setRdEnvCls] = createSignal("n-environment unknown");
+const [rdStudioVersion, setRdStudioVersion] = createSignal("");
 const [rdThemeRows, setRdThemeRows] = createSignal<RdRenderedChoiceRow[]>([]);
 const [rdCompactThemeRows, setRdCompactThemeRows] = createSignal<RdRenderedChoiceRow[]>([]);
 const [rdDevKb, setRdDevKb] = createSignal<RdDeviceRowView[]>([]);
@@ -581,8 +585,8 @@ export function redesignControlsFor(
 }
 
 // ── The mapping cords: key → (macro) → control, drawn in world space ─────
-// The SAME MappingFlowLayer /nocturne mounts (one engine, one geometry
-// contract); this page provides its four layers, the Paths control, and
+// One MappingFlowLayer owns the product geometry contract; this page provides
+// its four layers, the Paths control, and
 // the processor-offset store in its own canvasPrefs.
 let mappingFlowLayer: MappingFlowLayer | null = null;
 
@@ -660,6 +664,61 @@ function syncMacroDialog(): void {
 /** Which reading the inspector shows (4460's Controls|Keys pair), kept per
  *  browser like the nocturne UI store. */
 const RD_UI_STORE = "ksx-redesign-ui";
+const RD_CONTROLLER_COLOR_STORE = "ksx-redesign-controller-colors1";
+const RD_STATE_PROVENANCE_STORE = "ksx-redesign-state-provenance1";
+interface RdStateProvenance {
+  environmentId: string;
+  generation: string;
+  fixture: boolean;
+}
+type RdStateProvenanceIndex = Record<string, RdStateProvenance>;
+let activeEnvironment: RdStateProvenance | null = null;
+let redesignPersistenceSuspended = false;
+
+function readRedesignStateProvenance(): RdStateProvenanceIndex {
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(RD_STATE_PROVENANCE_STORE) ?? "{}",
+    ) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, value]) => {
+        const row = value as Partial<RdStateProvenance> | null;
+        return typeof row === "object" && row !== null &&
+          typeof row.environmentId === "string" &&
+          typeof row.generation === "string" && typeof row.fixture === "boolean";
+      }),
+    ) as RdStateProvenanceIndex;
+  } catch {
+    return {};
+  }
+}
+
+/** Decide before a write. A fixture may persist state it created, but it may
+ * never mutate an existing unmarked store or one owned by a real machine;
+ * those changes stay in this document's in-memory preferences only. */
+function redesignStorePersistenceAllowed(store: string): boolean {
+  if (redesignPersistenceSuspended) return false;
+  const environment = activeEnvironment;
+  if (!environment || !environment.fixture) return true;
+  const provenance = readRedesignStateProvenance();
+  const previous = provenance[store];
+  return previous?.fixture === true ||
+    (previous === undefined && window.localStorage.getItem(store) === null);
+}
+
+/** Stamp only after the store write succeeded. */
+function markRedesignStore(store: string): void {
+  const environment = activeEnvironment;
+  if (!environment) return;
+  try {
+    const provenance = readRedesignStateProvenance();
+    provenance[store] = environment;
+    window.localStorage.setItem(RD_STATE_PROVENANCE_STORE, JSON.stringify(provenance));
+  } catch {
+    // Storage-blocked state cannot become stale across a browser restart.
+  }
+}
+
 let inspTab: InspectorTab = "controls";
 try {
   const saved = JSON.parse(window.localStorage.getItem(RD_UI_STORE) ?? "{}") as {
@@ -700,13 +759,16 @@ try {
 }
 function saveKbStrips(): void {
   try {
+    if (!redesignStorePersistenceAllowed(KB_STRIPS_STORE)) return;
     window.localStorage.setItem(KB_STRIPS_STORE, JSON.stringify([...kbHiddenStrips]));
+    markRedesignStore(KB_STRIPS_STORE);
   } catch {
     // A crossing is chrome; blocked storage only makes it temporary.
   }
 }
 let kbSolo = false;
 let kbTheme = "carbon-forge";
+let controllerColors: Record<string, number> = {};
 try {
   const saved = JSON.parse(window.localStorage.getItem(RD_UI_STORE) ?? "{}") as {
     kbSolo?: boolean;
@@ -714,11 +776,34 @@ try {
   };
   kbSolo = saved.kbSolo === true;
   if (typeof saved.kbTheme === "string" && saved.kbTheme) kbTheme = saved.kbTheme;
+  const colors = JSON.parse(
+    window.localStorage.getItem(RD_CONTROLLER_COLOR_STORE) ?? "{}",
+  ) as Record<string, unknown>;
+  controllerColors = Object.fromEntries(
+    Object.entries(colors).filter(
+      ([preset, color]) => preset.trim() !== "" && Number.isInteger(color) &&
+        Number(color) >= 1 && Number(color) <= 16,
+    ),
+  ) as Record<string, number>;
 } catch {
   // defaults hold
 }
+
+function saveControllerColors(): void {
+  try {
+    if (!redesignStorePersistenceAllowed(RD_CONTROLLER_COLOR_STORE)) return;
+    window.localStorage.setItem(
+      RD_CONTROLLER_COLOR_STORE,
+      JSON.stringify(controllerColors),
+    );
+    markRedesignStore(RD_CONTROLLER_COLOR_STORE);
+  } catch {
+    // A presentation preference may remain session-only when storage is blocked.
+  }
+}
 function saveKbUi(): void {
   try {
+    if (!redesignStorePersistenceAllowed(RD_UI_STORE)) return;
     const saved = JSON.parse(window.localStorage.getItem(RD_UI_STORE) ?? "{}") as Record<
       string,
       unknown
@@ -727,12 +812,181 @@ function saveKbUi(): void {
     saved.kbTheme = kbTheme;
     saved.inspTab = inspTab;
     window.localStorage.setItem(RD_UI_STORE, JSON.stringify(saved));
+    markRedesignStore(RD_UI_STORE);
   } catch {
     // chrome only
   }
 }
 function presetOfSlotRd(slot: number): string | undefined {
   return rdCtrlCards.find((card) => card.number === String(slot))?.preset;
+}
+
+/** The finish system's established twin-preset identity rule, kept local so
+ * colors and finishes make the same best-possible choice from the served
+ * data: first occurrence is p:preset, later twins are #2/#3 in slot order. */
+function controllerColorStoreKeys(
+  cards: readonly RdControllerCardView[],
+): Map<string, string> {
+  const seen = new Map<string, number>();
+  const keys = new Map<string, string>();
+  for (const card of [...cards].sort(
+    (left, right) => Number(left.number) - Number(right.number),
+  )) {
+    const occurrence = (seen.get(card.preset) ?? 0) + 1;
+    seen.set(card.preset, occurrence);
+    keys.set(
+      card.number,
+      `p:${card.preset}${occurrence > 1 ? `#${occurrence}` : ""}`,
+    );
+  }
+  return keys;
+}
+
+function controllerColorStoreKey(slot: number): string | undefined {
+  return controllerColorStoreKeys(rdCtrlCards).get(String(slot));
+}
+
+const CONTROLLER_COLOR_NAMES = [
+  "N64 red",
+  "Hedgehog blue",
+  "Xbox green",
+  "Puck yellow",
+  "Hunter orange",
+  "GameCube indigo",
+  "CRT grey",
+  "Famicom maroon",
+  "Arcade pink",
+  "Atari wood",
+  "Rival purple",
+  "Dino lime",
+  "Space navy",
+  "Void blue",
+  "Ice white",
+  "Phazon teal",
+] as const;
+
+/** Resolve controller identity colors in served seat order. Saved identity
+ * follows the preset through a reorder; a duplicated/corrupt collision gives
+ * the earlier live seat priority and deterministically repairs the other.
+ * With at most 16 staged seats, every live controller remains distinct. */
+function resolvedControllerColors(): Map<string, number> {
+  const resolved = new Map<string, number>();
+  const claimed = new Set<number>();
+  const ordered = [...rdCtrlCards].sort(
+    (left, right) => Number(left.number) - Number(right.number),
+  );
+  const storeKeys = controllerColorStoreKeys(ordered);
+  const unresolved: { card: RdControllerCardView; key: string }[] = [];
+  let changed = false;
+
+  for (const card of ordered) {
+    const key = storeKeys.get(card.number) ?? `p:${card.preset}`;
+    const saved = controllerColors[key];
+    if (Number.isInteger(saved) && saved >= 1 && saved <= 16 && !claimed.has(saved)) {
+      resolved.set(key, saved);
+      claimed.add(saved);
+    } else {
+      unresolved.push({ card, key });
+    }
+  }
+  for (const { card, key } of unresolved) {
+    const seat = Math.max(1, Number(card.number) || 1);
+    const preferred = ((seat - 1) % CONTROLLER_COLOR_NAMES.length) + 1;
+    let color = preferred;
+    for (let offset = 0; offset < CONTROLLER_COLOR_NAMES.length; offset += 1) {
+      const candidate = ((preferred - 1 + offset) % CONTROLLER_COLOR_NAMES.length) + 1;
+      if (!claimed.has(candidate)) {
+        color = candidate;
+        break;
+      }
+    }
+    resolved.set(key, color);
+    claimed.add(color);
+    if (controllerColors[key] !== color) {
+      controllerColors[key] = color;
+      changed = true;
+    }
+  }
+  if (changed) saveControllerColors();
+  return resolved;
+}
+
+/** Paint the seat-indexed CSS variables from preset-indexed identity. The
+ * controller art, its badge and the keyboard ownership wash all consume the
+ * same `--pcsN` family, so one choice changes every representation together. */
+function applyControllerIdentityColors(): void {
+  const root = rdRoot;
+  if (!root) return;
+  const resolved = resolvedControllerColors();
+  for (let slot = 1; slot <= CONTROLLER_COLOR_NAMES.length; slot += 1) {
+    root.style.removeProperty(`--pcs${slot}`);
+    root.style.removeProperty(`--pcs${slot}-ink`);
+    root.style.removeProperty(`--pcs${slot}-key`);
+  }
+  for (const card of rdCtrlCards) {
+    const slot = Number(card.number);
+    const key = controllerColorStoreKey(slot);
+    const color = key ? resolved.get(key) : undefined;
+    if (!Number.isInteger(slot) || slot < 1 || slot > 16 || color === undefined) continue;
+    root.style.setProperty(`--pcs${slot}`, `var(--pal${color})`);
+    root.style.setProperty(`--pcs${slot}-ink`, `var(--pal${color}-ink)`);
+    root.style.setProperty(`--pcs${slot}-key`, `var(--pal${color}-key)`);
+  }
+}
+
+function controllerIdentityColorEditor(slot: number): HTMLElement {
+  const section = document.createElement("section");
+  section.className = "rd-controller-color";
+  section.setAttribute("aria-labelledby", `rd-controller-color-title-${slot}`);
+  const heading = document.createElement("div");
+  heading.className = "rd-controller-color-head";
+  const copy = document.createElement("div");
+  const title = document.createElement("h3");
+  title.id = `rd-controller-color-title-${slot}`;
+  title.textContent = "Identity color";
+  const note = document.createElement("p");
+  note.textContent = "Follows this controller if its player seat changes.";
+  copy.append(title, note);
+  const grid = document.createElement("div");
+  grid.className = "rd-controller-color-grid";
+  grid.setAttribute("role", "group");
+  grid.setAttribute("aria-label", `Choose Player ${slot} identity color`);
+  const identity = controllerColorStoreKey(slot) ?? "";
+  const resolved = resolvedControllerColors();
+  const selected = resolved.get(identity) ?? slot;
+  const owners = new Map<number, RdControllerCardView>();
+  for (const card of rdCtrlCards) {
+    const key = controllerColorStoreKey(Number(card.number));
+    const color = key ? resolved.get(key) : undefined;
+    if (color !== undefined) owners.set(color, card);
+  }
+  for (let color = 1; color <= CONTROLLER_COLOR_NAMES.length; color += 1) {
+    const owner = owners.get(color);
+    const ownerIdentity = owner ? controllerColorStoreKey(Number(owner.number)) : undefined;
+    const usedElsewhere = owner !== undefined && ownerIdentity !== identity;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `rd-controller-swatch${color === selected ? " selected" : ""}${usedElsewhere ? " used" : ""}`;
+    button.dataset.nx = "rd-controller-color";
+    button.dataset.slot = String(slot);
+    button.dataset.color = String(color);
+    button.style.setProperty("--rd-controller-swatch", `var(--pal${color})`);
+    button.setAttribute("aria-pressed", String(color === selected));
+    if (usedElsewhere) button.setAttribute("aria-disabled", "true");
+    const ownerText = usedElsewhere ? `, used by Player ${owner.number}` : "";
+    button.setAttribute(
+      "aria-label",
+      `${CONTROLLER_COLOR_NAMES[color - 1]}${color === selected ? ", selected" : ""}${ownerText}`,
+    );
+    button.title = `${CONTROLLER_COLOR_NAMES[color - 1]}${ownerText}`;
+    const dot = document.createElement("span");
+    dot.setAttribute("aria-hidden", "true");
+    button.append(dot);
+    grid.append(button);
+  }
+  heading.append(copy);
+  section.append(heading, grid);
+  return section;
 }
 
 /** Paint the mute/solo lens and the finish. The nocturne CSS drives the
@@ -817,9 +1071,11 @@ const [rdFlashLine, setRdFlashLine] = createSignal("");
 const [rdFlashCls, setRdFlashCls] = createSignal("n-flash rd-flash none");
 
 export function applyRedesign(v: RedesignPayload): void {
+  if (reconcileRedesignEnvironment(v)) return;
   const deviceFocus = captureDeviceRowFocus();
   setRdEnvLabel(v.environment_label);
   setRdEnvCls(v.environment_cls);
+  setRdStudioVersion(v.studio_version || "unknown");
   const operations = v.operations;
   rdOperations = operations ?? null;
   setRdOpDraftLabel(operations?.draft_label ?? "New draft");
@@ -1024,6 +1280,7 @@ export function applyRedesign(v: RedesignPayload): void {
   setRdCaptureRows(v.capture_rows ?? []);
   setRdCaptureNote(v.capture_note ?? "");
   // The mute/solo lens and the finish repaint follow every served update.
+  applyControllerIdentityColors();
   syncKbLens();
   setRdUndoCls(c?.undo_cls || "rd-undochip none");
   setRdUndoLabel(c?.undo_label ?? "");
@@ -1169,7 +1426,7 @@ function additionalHeldCaptureRows(): RdHeldCaptureRow[] {
   return rdCaptureHeld().filter((row) => !captureIdentityMatches(row));
 }
 
-// ── The canvas (lifted from NocturneIsland's canvas section) ────────────────
+// ── The canvas (extracted from the retired Nocturne implementation) ────────
 
 /** The lane's OWN store key — sharing /nocturne's would inherit and corrupt
  *  its camera and widget geometry. */
@@ -1335,6 +1592,87 @@ let refreshEncoderProfileLab: ((devices: readonly EncoderProfileLabDevice[]) => 
 let disposeEncoderProfileLab: (() => void) | null = null;
 const encoderWorkbenchSurfaces = new WeakMap<HTMLElement, EncoderWorkbenchSurface>();
 
+const REDESIGN_BROWSER_STORES = [
+  RD_UI_STORE,
+  CANVAS_STORE,
+  RD_CONTROLLER_COLOR_STORE,
+  // Migration-compatible key: the preference predates the redesign name,
+  // but this surface now owns every write and its provenance boundary.
+  KB_STRIPS_STORE,
+] as const;
+
+function fixtureOwnerIsStale(
+  owner: RdStateProvenance,
+  current: RdStateProvenance,
+): boolean {
+  if (!owner.fixture) return false;
+  // Fixture-authored arrangement must not leak onto a cabinet either. This
+  // remains safe because real-authored stores are stamped fixture:false and
+  // can never satisfy this branch.
+  if (!current.fixture) return true;
+  if (
+    owner.environmentId.trim() !== "" && current.environmentId.trim() !== "" &&
+    owner.environmentId !== current.environmentId
+  ) return true;
+  return current.generation.trim() !== "" && owner.generation !== current.generation;
+}
+
+function resetRedesignBrowserMemory(stores: ReadonlySet<string>): void {
+  if (stores.has(RD_UI_STORE)) {
+    inspTab = "controls";
+    kbSolo = false;
+    kbTheme = "carbon-forge";
+  }
+  if (stores.has(RD_CONTROLLER_COLOR_STORE)) controllerColors = {};
+  if (stores.has(KB_STRIPS_STORE)) kbHiddenStrips = new Set();
+  if (stores.has(CANVAS_STORE)) canvasPrefs = { widgets: {} };
+}
+
+/** Reconcile fixture identity before any payload can repaint or persist.
+ *
+ * Each redesign store carries its own last-writer provenance. Only a store
+ * proven to have been written by an older fixture is removed; unmarked and
+ * real-machine values are retained. A live fixture reseed reloads after the
+ * surgical clear so already-mounted engine state cannot write the old canvas
+ * back during pagehide. */
+function reconcileRedesignEnvironment(payload: RedesignPayload): boolean {
+  const current: RdStateProvenance = {
+    environmentId: payload.environment_id?.trim() || "unknown-environment",
+    generation: payload.environment_generation?.trim() || "",
+    fixture: payload.environment_fixture === true,
+  };
+  const resetStores = new Set<string>();
+  try {
+    const provenance = readRedesignStateProvenance();
+    for (const store of REDESIGN_BROWSER_STORES) {
+      const owner = provenance[store];
+      if (!owner || !fixtureOwnerIsStale(owner, current)) continue;
+      window.localStorage.removeItem(store);
+      delete provenance[store];
+      resetStores.add(store);
+    }
+    window.localStorage.setItem(RD_STATE_PROVENANCE_STORE, JSON.stringify(provenance));
+  } catch {
+    // The active-environment comparison below still protects this document's
+    // in-memory fixture state when persistence is unavailable.
+  }
+
+  const liveFixtureChanged = Boolean(
+    activeEnvironment && fixtureOwnerIsStale(activeEnvironment, current),
+  );
+  activeEnvironment = current;
+  if (resetStores.size > 0) resetRedesignBrowserMemory(resetStores);
+  if ((resetStores.size > 0 || liveFixtureChanged) && rdRoot?.isConnected) {
+    // Pagehide normally commits the canvas. Suppress that one commit or the
+    // old mounted geometry could recreate the just-removed fixture store
+    // under the new generation immediately before navigation.
+    redesignPersistenceSuspended = true;
+    window.location.reload();
+    return true;
+  }
+  return false;
+}
+
 interface DeviceRowFocus {
   element: HTMLElement;
   selector: string;
@@ -1438,7 +1776,9 @@ function loadCanvasPrefs(): void {
 
 function writeCanvasPrefs(next: CanvasPrefs): boolean {
   try {
+    if (!redesignStorePersistenceAllowed(CANVAS_STORE)) return false;
     window.localStorage.setItem(CANVAS_STORE, JSON.stringify(next));
+    markRedesignStore(CANVAS_STORE);
     return true;
   } catch {
     // The arrangement simply will not survive this session.
@@ -1482,6 +1822,80 @@ function persistCanvas(): void {
     processorOffsets: canvasPrefs.processorOffsets,
   };
   saveCanvasPrefs();
+}
+
+/** Restore a readable semantic workbench in one deterministic pass: the
+ * physical input first, attached devices next, then virtual controllers in
+ * player order. It changes arrangement only — never draft membership or
+ * mapping — and uses the canvas engine's public placement boundary so map,
+ * visibility and persistence all receive the same update as a hand move. */
+function tidyCanvas(): void {
+  const canvas = nCanvas;
+  const root = rdRoot;
+  if (!canvas || !root) return;
+  const items = Array.from(
+    root.querySelectorAll<HTMLElement>(
+      ".forma-canvas-stage > [data-instance-id][data-canvas-x]",
+    ),
+  ).filter((item) => !isEncoderProfileLabInstanceId(item.dataset.instanceId ?? ""));
+  if (items.length === 0) {
+    rdAnnounce("There are no workbench items to tidy.");
+    return;
+  }
+  if (canvas.isFocusModeActive()) canvas.exitFocusMode();
+  for (const item of items) canvas.resetItemScale(item);
+
+  const byName = (left: HTMLElement, right: HTMLElement) =>
+    (left.dataset.widgetName ?? left.dataset.instanceId ?? "").localeCompare(
+      right.dataset.widgetName ?? right.dataset.instanceId ?? "",
+    );
+  const keyboard = items.filter((item) => item.dataset.instanceId === "keyboard");
+  const devices = items.filter((item) => item.classList.contains("rd-dev-node")).sort(byName);
+  const controllers = items
+    .filter((item) => /^ctrl-slot-\d+$/.test(item.dataset.instanceId ?? ""))
+    .sort((left, right) => {
+      const leftSlot = Number(left.dataset.instanceId?.replace("ctrl-slot-", ""));
+      const rightSlot = Number(right.dataset.instanceId?.replace("ctrl-slot-", ""));
+      return leftSlot - rightSlot;
+    });
+  const parked = items
+    .filter((item) => (item.dataset.instanceId ?? "").startsWith("ctrl-parked-"))
+    .sort(byName);
+  const known = new Set([...keyboard, ...devices, ...controllers, ...parked]);
+  const other = items.filter((item) => !known.has(item)).sort(byName);
+
+  const originX = 140;
+  let y = 140;
+  const gapX = 48;
+  const gapY = 64;
+  const keyboardWidth = keyboard[0] ? canvas.getItemState(keyboard[0]).width : 0;
+  const shelfWidth = Math.max(1240, keyboardWidth);
+  const placeShelf = (shelf: HTMLElement[]) => {
+    if (shelf.length === 0) return;
+    let x = originX;
+    let rowHeight = 0;
+    for (const item of shelf) {
+      const state = canvas.getItemState(item);
+      if (x > originX && x + state.width > originX + shelfWidth) {
+        x = originX;
+        y += rowHeight + gapY;
+        rowHeight = 0;
+      }
+      canvas.placeItem(item, x, y);
+      x += state.width + gapX;
+      rowHeight = Math.max(rowHeight, state.height);
+    }
+    y += rowHeight + gapY;
+  };
+  placeShelf(keyboard);
+  placeShelf(devices);
+  placeShelf(controllers);
+  placeShelf(parked);
+  placeShelf(other);
+  persistCanvas();
+  canvas.fitAll();
+  renderInspector();
+  rdAnnounce(`Tidied ${items.length} workbench item${items.length === 1 ? "" : "s"}.`);
 }
 
 /** Show or hide the map, and swap in the small corner button that brings it
@@ -1738,6 +2152,7 @@ const PALETTE_RESULT_LIMIT = 10;
 function paletteCommands(): PaletteCommand[] {
   return [
     { name: "Fit workflow", hint: "frame every widget on the canvas", key: "1", run: () => nCanvas?.fitAll() },
+    { name: "Tidy workbench", hint: "arrange input, devices and players in order", key: "", run: tidyCanvas },
     { name: "Fit selection", hint: "frame the selected widgets", key: "2", run: () => nCanvas?.fitSelection() },
     { name: "Zoom 100%", hint: "true size, keeps the centre point", key: "0", run: () => nCanvas?.resetZoom() },
     { name: "Center selection", hint: "pan without changing zoom", key: "C", run: () => nCanvas?.centerSelection() },
@@ -1982,11 +2397,18 @@ function inspectorButton(label: string, nx: string, title: string): HTMLElement 
   return button;
 }
 
+export interface RedesignRefreshOptions {
+  fresh?: boolean;
+}
+
 /** The entry's payload refetcher — registered at activation (setNocturnePoll's
  *  pattern) so the island can ask for another slot's panel without owning
- *  fetch. */
-let redesignRefreshFn: () => Promise<boolean> = async () => false;
-export function setRedesignRefresh(fn: () => Promise<boolean>): void {
+ *  fetch. `fresh` is reserved for an explicit user Rescan; ordinary polls
+ *  continue to benefit from the shared machine-read cache. */
+let redesignRefreshFn: (options?: RedesignRefreshOptions) => Promise<boolean> = async () => false;
+export function setRedesignRefresh(
+  fn: (options?: RedesignRefreshOptions) => Promise<boolean>,
+): void {
   redesignRefreshFn = fn;
 }
 
@@ -2000,6 +2422,140 @@ function mergeSlotIntoUrl(slot: string): boolean {
   url.searchParams.set("slot", slot);
   window.history.replaceState(null, "", `${url.pathname}?${url.searchParams.toString()}`);
   return true;
+}
+
+let bindingFilterTimer = 0;
+
+function currentBindingQuery(): string {
+  return new URLSearchParams(window.location.search).get("q")?.trim() ?? "";
+}
+
+/** Keep slot/macro and every future query door intact. The one-shot flash is
+ * deliberately retired when the user starts a new navigation intent. */
+function mergeBindingQueryIntoUrl(query: string): boolean {
+  const url = new URL(window.location.href);
+  const next = query.trim();
+  if (next) url.searchParams.set("q", next);
+  else url.searchParams.delete("q");
+  url.searchParams.delete("flash");
+  const href = `${url.pathname}${url.searchParams.size ? `?${url.searchParams.toString()}` : ""}`;
+  if (`${window.location.pathname}${window.location.search}` === href) return false;
+  window.history.replaceState(null, "", href);
+  return true;
+}
+
+/** Immediate twin of snapshot.rs' server-side q sweep: a control matches
+ * its own visible label or its group's label; empty groups collapse whole.
+ * The debounced payload refresh then makes that same result authoritative. */
+function applyBindingFilter(body: HTMLElement, query: string): void {
+  const needle = query.trim().toLocaleLowerCase();
+  let visible = 0;
+  let total = 0;
+  for (const group of Array.from(
+    body.querySelectorAll<HTMLElement>(".n-bindgroups > section.n-bindg"),
+  )) {
+    const groupLabel = group.querySelector(".n-bindg-lab")?.textContent?.trim() ?? "";
+    const groupMatches = groupLabel.toLocaleLowerCase().includes(needle);
+    let groupVisible = 0;
+    const candidates = Array.from(
+      group.querySelectorAll<HTMLElement>("details.n-bind, .n-ctlstrip > [data-fn]"),
+    );
+    for (const candidate of candidates) {
+      total += 1;
+      const label = candidate.matches("details.n-bind")
+        ? candidate.querySelector(".n-bind-label")?.textContent?.trim() ?? ""
+        : candidate.textContent?.trim() ?? "";
+      const matches = !needle || groupMatches || label.toLocaleLowerCase().includes(needle);
+      candidate.classList.toggle("hide", !matches);
+      if (matches) {
+        visible += 1;
+        groupVisible += 1;
+      }
+    }
+    group.classList.toggle("empty", candidates.length > 0 && groupVisible === 0);
+  }
+  const output = body.querySelector<HTMLOutputElement>(".rd-binding-filter-count");
+  if (output) {
+    output.value = needle
+      ? `${visible} of ${total} controls`
+      : `${total} control${total === 1 ? "" : "s"}`;
+    output.textContent = output.value;
+  }
+  const reset = body.querySelector<HTMLButtonElement>(".rd-binding-filter-reset");
+  if (reset) reset.disabled = !needle;
+}
+
+function bindingFilter(slot: string): HTMLElement {
+  const form = document.createElement("form");
+  form.className = "rd-binding-filter";
+  form.method = "get";
+  form.action = "/redesign";
+  form.setAttribute("role", "search");
+  const label = document.createElement("label");
+  label.htmlFor = `rd-binding-filter-${slot}`;
+  label.textContent = "Find a control";
+  const row = document.createElement("div");
+  row.className = "rd-binding-filter-row";
+  const input = document.createElement("input");
+  input.id = `rd-binding-filter-${slot}`;
+  input.className = "rd-binding-filter-input";
+  input.type = "search";
+  input.name = "q";
+  input.autocomplete = "off";
+  input.placeholder = "Buttons, sticks, system…";
+  input.value = currentBindingQuery();
+  const reset = document.createElement("button");
+  reset.type = "button";
+  reset.className = "rd-binding-filter-reset";
+  reset.textContent = "Reset";
+  const output = document.createElement("output");
+  output.className = "rd-binding-filter-count";
+  output.setAttribute("aria-live", "polite");
+  row.append(input, reset);
+  form.append(label, row, output);
+
+  const commit = (immediate: boolean) => {
+    const body = form.closest<HTMLElement>(".rd-insp-body");
+    const query = input.value.trim();
+    if (body) applyBindingFilter(body, query);
+    mergeBindingQueryIntoUrl(query);
+    window.clearTimeout(bindingFilterTimer);
+    if (immediate) void redesignRefreshFn();
+    else bindingFilterTimer = window.setTimeout(() => void redesignRefreshFn(), 280);
+  };
+  input.addEventListener("input", () => commit(false));
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    commit(true);
+  });
+  reset.addEventListener("click", () => {
+    input.value = "";
+    commit(true);
+    input.focus({ preventScroll: true });
+  });
+  window.requestAnimationFrame(() => {
+    const body = form.closest<HTMLElement>(".rd-insp-body");
+    if (body) applyBindingFilter(body, input.value);
+  });
+  return form;
+}
+
+async function rescanDevices(button: HTMLButtonElement): Promise<void> {
+  if (button.disabled) return;
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  button.textContent = "Rescanning…";
+  rdAnnounce("Rescanning connected devices.");
+  const refreshed = await redesignRefreshFn({ fresh: true });
+  button.disabled = false;
+  button.removeAttribute("aria-busy");
+  button.textContent = "Rescan";
+  if (button.isConnected) button.focus({ preventScroll: true });
+  rdAnnounce(
+    refreshed
+      ? "Connected devices refreshed."
+      : "Device rescan could not finish. The last known list is still shown.",
+  );
 }
 
 function inspectorFocusBookmark(body: HTMLElement): string | null {
@@ -2052,6 +2608,8 @@ function renderInspector(): void {
   );
   const renderFingerprint = JSON.stringify([
     inspTab,
+    currentBindingQuery(),
+    Object.entries(controllerColors).sort(([left], [right]) => left.localeCompare(right)),
     selected.map((item) => [
       item.dataset.instanceId ?? "",
       item.dataset.widgetName ?? "",
@@ -2141,15 +2699,17 @@ function renderInspector(): void {
         syncMappingCords();
       }
       if (rdCtrlPanel && rdCtrlKeys && rdCtrlPanel.slot_val === ctrlSlot) {
-        rows.push(
-          ...renderControllerPanel(
-            rdCtrlPanel,
-            rdCtrlKeys,
-            { head: rdCtrlMacrosHead, rows: rdCtrlMacroRows, note: rdCtrlMacrosNote },
-            inspTab,
-            setInspTab,
-          ),
+        const panelRows = renderControllerPanel(
+          rdCtrlPanel,
+          rdCtrlKeys,
+          { head: rdCtrlMacrosHead, rows: rdCtrlMacroRows, note: rdCtrlMacrosNote },
+          inspTab,
+          setInspTab,
         );
+        const controllerTools = [controllerIdentityColorEditor(Number(ctrlSlot))];
+        if (inspTab === "controls") controllerTools.push(bindingFilter(ctrlSlot));
+        panelRows.splice(1, 0, ...controllerTools);
+        rows.push(...panelRows);
       } else {
         const wait = document.createElement("p");
         wait.className = "rd-insp-kind";
@@ -3310,8 +3870,8 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
   restoreBench();
   syncCtrlBench();
   syncEncoderProfileLabButton();
-  // The mapping cords: the SAME layer engine /nocturne mounts, over this
-  // page's stage. It observes the stage's style mutations itself (camera +
+  // The mapping cords: the one layer engine over this page's stage. It
+  // observes the stage's style mutations itself (camera +
   // widget geometry), so card drags and zooms repaint the cords with no
   // further call sites.
   const flowLines = surface.querySelector<SVGSVGElement>("#n-mapping-paths");
@@ -3516,8 +4076,8 @@ export function redesignWire(root: HTMLElement): void {
   // camera buttons) reveals off it, and the parity gate normalizes it.
   root.classList.add("js");
   syncAddPanelChrome();
-  // The shared finish stores (padFinishes): a DS4 color or premium finish
-  // chosen on /nocturne is the same controller's finish here.
+  // The migration-compatible finish stores preserve every DS4 color or
+  // premium finish chosen before the hard cutover.
   loadDs4Variants();
   loadControllerFinishes();
   // The Paths scope select (a change, not a click).
@@ -3760,8 +4320,31 @@ export function redesignWire(root: HTMLElement): void {
       if (key) armAssign(key, "replace");
       return;
     }
+    if (hit === "rd-controller-color") {
+      const button = target?.closest<HTMLButtonElement>('[data-nx="rd-controller-color"]');
+      const slot = Number(button?.dataset.slot ?? "");
+      const color = Number(button?.dataset.color ?? "");
+      if (!button || !Number.isInteger(slot) || !Number.isInteger(color)) return;
+      if (button.getAttribute("aria-disabled") === "true") {
+        rdAnnounce(button.title || "That identity color is already in use.");
+        return;
+      }
+      const identity = controllerColorStoreKey(slot);
+      if (!identity || color < 1 || color > CONTROLLER_COLOR_NAMES.length) return;
+      controllerColors[identity] = color;
+      saveControllerColors();
+      applyControllerIdentityColors();
+      const body = inspectorEl()?.querySelector<HTMLElement>(".rd-insp-body");
+      if (body) inspectorRenderFingerprints.delete(body);
+      renderInspector();
+      syncKbLens();
+      rdAnnounce(`Player ${slot} now uses ${CONTROLLER_COLOR_NAMES[color - 1]}.`);
+      return;
+    }
     if (hit === "canvas-fit") {
       nCanvas?.fitAll();
+    } else if (hit === "canvas-tidy") {
+      tidyCanvas();
     } else if (hit === "kb-theme") {
       const theme = target?.closest<HTMLElement>("[data-keyboard-theme]")
         ?.dataset.keyboardTheme ?? "";
@@ -3808,6 +4391,10 @@ export function redesignWire(root: HTMLElement): void {
       return;
     } else if (hit === "rd-devs-open") {
       setDevModal(!devModalIsOpen());
+      return;
+    } else if (hit === "rd-rescan") {
+      const button = target?.closest<HTMLButtonElement>('[data-nx="rd-rescan"]');
+      if (button) void rescanDevices(button);
       return;
     } else if (hit === "rd-devs-close") {
       setDevModal(false);
@@ -4252,6 +4839,16 @@ export function RedesignIsland() {
                 ),
                 h("span", { class: "rd-refresh-health", role: "status", hidden: "" }),
                 h(
+                  "span",
+                  {
+                    class: "rd-buildmeta",
+                    title: "Studio build version — include this in a support report",
+                    "aria-label": "Studio build version",
+                  },
+                  "v",
+                  () => rdStudioVersion(),
+                ),
+                h(
                   "div",
                   { class: "rd-theme-compact-home" },
                   redesignCompactThemeDisclosure(),
@@ -4387,6 +4984,20 @@ export function RedesignIsland() {
                     h("dd", { id: "rd-apply-reason" }, () => rdApplyReason()),
                     h("dt", null, "Stop"),
                     h("dd", { id: "rd-stop-reason" }, () => rdStopReason()),
+                  ),
+                  h(
+                    "p",
+                    { class: "rd-gamebar-help" },
+                    h(
+                      "span",
+                      null,
+                      "If a controller shortcut opens Xbox Game Bar or capture overlays interfere, check its Windows setting. ",
+                    ),
+                    h(
+                      "a",
+                      { href: "ms-settings:gaming-gamebar" },
+                      "Open Game Bar settings",
+                    ),
                   ),
                   h(
                     "form",
@@ -5007,6 +5618,17 @@ export function RedesignIsland() {
                 "button",
                 {
                   type: "button",
+                  class: "rd-addpane-rescan",
+                  "data-nx": "rd-rescan",
+                  "aria-label": "Rescan connected devices",
+                  title: "Read connected devices again",
+                },
+                "Rescan",
+              ),
+              h(
+                "button",
+                {
+                  type: "button",
                   class: "rd-addpane-done",
                   "data-nx": "rd-devs-close",
                   "aria-label": "Close the device picker",
@@ -5395,6 +6017,7 @@ export function RedesignIsland() {
           "div",
           { class: () => rdMacHolderCls(), "data-nx": "mac-close" },
           h("div", {
+            id: "n-macro-dialog",
             class: "nd nd-mac",
             "data-nx": "dlg-noop",
             // Forma cannot emit dynamic innerHTML during SSR. The redesign
@@ -5417,8 +6040,8 @@ export function RedesignIsland() {
           // rule: gradient url() into a display:none subtree is refused by
           // non-Chromium engines, and the visible clones resolve here).
           h(PadPaintServers, null),
-          // The hidden pad masters the controller cards CLONE — the same
-          // five shared drawings /nocturne mounts (one component per
+          // The hidden pad masters the controller cards CLONE — the product's
+          // five shared drawings (one component per
           // family; `.n-padmasters` is display:none, clone templates only).
           // Static classes on purpose: this page has no no-JS pad display,
           // so no visibility signals ride the wraps.
@@ -6057,7 +6680,7 @@ export function RedesignIsland() {
                 "data-client-canvas": "",
               }),
             ),
-            // ── The zoom cluster (design handoff §7): [−][%⌃][+] | [Fit][▦]
+            // ── The zoom cluster: [−][%⌃][+] | [Fit][▦]
             // The camera's verbs, scripting-only — wheel, Space-drag and the
             // arrow keys carry the same moves for anyone who would rather
             // not aim at a button. The percentage opens the camera menu; the
@@ -6216,6 +6839,11 @@ export function RedesignIsland() {
                   { type: "button", class: "rd-menu-row", role: "menuitem", tabindex: "-1", "data-nx": "canvas-fit" },
                   h("span", {}, "Fit workflow"),
                   h("kbd", { class: "rd-kbd" }, "1"),
+                ),
+                h(
+                  "button",
+                  { type: "button", class: "rd-menu-row", role: "menuitem", tabindex: "-1", "data-nx": "canvas-tidy" },
+                  h("span", {}, "Tidy workbench"),
                 ),
                 h(
                   "button",

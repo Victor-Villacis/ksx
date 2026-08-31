@@ -235,7 +235,7 @@ installed Interception DLL or drivers.
 
 
 --------------------------------------------------------------------------
-10. Nocturne premium controller trio (CC0 1.0 Universal)
+10. Redesign premium controller trio (CC0 1.0 Universal)
 --------------------------------------------------------------------------
 
     Dedicator: Funky Designs UK
@@ -310,8 +310,8 @@ installed Interception DLL or drivers.
              studio-ui/scripts/compile-funky-xbox-series.mjs
              studio-ui/src/xboxSeriesPremiumGeometry.ts
              studio-ui/src/xboxSeriesPremiumArt.ts
-             studio-ui/src/NocturneIsland.ts (document-wide paint servers,
-                                              finish controls and inline masters)
+             studio-ui/src/RedesignIsland.ts (document-wide paint servers,
+                                               finish controls and inline masters)
 
     Final deterministic importer/generated-file SHA-256 pins:
       studio-ui/scripts/compile-funky-dualsense.mjs
@@ -423,8 +423,8 @@ installed Interception DLL or drivers.
               studio-ui/scripts/compile-funky-ds4.mjs (deterministic importer)
               studio-ui/src/ds4PremiumGeometry.ts (generated inline geometry,
                                                    exact hooks and ten tones)
-              studio-ui/src/NocturneIsland.ts (shared paint servers, L2/R2,
-                                               color controls and callouts)
+              studio-ui/src/RedesignIsland.ts (shared paint servers, L2/R2,
+                                                color controls and callouts)
     Modifications: the canonical Jet Black geometry is expressed as
                    compiler-visible inline h() nodes with source IDs and
                    metadata removed. Nine export-only/invisible shapes are

@@ -432,8 +432,8 @@ export function CheckIsland() {
       h("h2", null, "Live input"),
       // CONNECTION CHATTER (`data-live-chatter`): the stream is opened by
       // the browser, so this line's value is client-owned by nature — the
-      // parity suite exempts exactly these marked nodes. See MapIsland's
-      // map-live-status note.
+      // parity suite exempts exactly these marked nodes; durable roster and
+      // session text remain under the ordinary SSR/hydration comparison.
       h("p", { class: "dvalue", "data-live-chatter": "" }, () => feedLine()),
       h("p", { class: "sub" }, () => sessionLine()),
       h("p", { class: "sub" }, () => feedHint()),

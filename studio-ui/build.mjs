@@ -7,9 +7,10 @@
 // spawned via execFileSync without shell:true, ENOENT — was fixed in 0.1.9,
 // so a `tailwind: true` cssEntry would now work if ever wanted.)
 //
-// FIVE routes — "/redesign" (the current product core), "/nocturne" (deferred
-// Settings/Library), and "/check", "/pads", "/devices" (focused tools) — plus the vendored
-// controller art copied (cleaned) from art/ into the embed.
+// FOUR routes — "/redesign" (the product) and "/check", "/pads", "/devices"
+// (focused tools) — plus the vendored controller art copied (cleaned) from
+// art/ into the embed. `/nocturne` left the asset graph at the hard cutover;
+// the server keeps only a compatibility redirect for old bookmarks.
 //
 // Adding a route is THREE edits in this file and none of them is optional:
 // `entryPoints`, `routes` and `ssrEntryPoints`. Miss any one and
@@ -264,7 +265,6 @@ writeFileSync(normalizedCss, authoredCss, "utf8");
 try {
   await build({
     entryPoints: [
-      { entry: "src/nocturne.ts", outfile: "nocturne.js" },
       { entry: "src/check.ts", outfile: "check.js" },
       { entry: "src/pads.ts", outfile: "pads.js" },
       { entry: "src/devices.ts", outfile: "devices.js" },
@@ -272,29 +272,22 @@ try {
     ],
     cssEntries: [{ input: [tokensCssTmp, canvasCssTmp, normalizedCss], outfile: "studio.css" }],
     routes: {
-      "/nocturne": { js: ["nocturne"], css: ["studio"] },
       "/check": { js: ["check"], css: ["studio"] },
       "/pads": { js: ["pads"], css: ["studio"] },
       "/devices": { js: ["devices"], css: ["studio"] },
       "/redesign": { js: ["redesign"], css: ["studio"] },
     },
     outputDir,
-    // The mapping-flow lens, contextual Inspector, Keyboard Arranger, physical
-    // Control Surface Builder, complete 56-terminal encoder editor, portable
-    // hardware-layout profiles, supervised backup/program/verify/restore,
-    // blank-encoder entry, movable macro processors, multi-family discovery,
-    // chart-derived panels, visible control → terminal → key handoffs, the
-    // fallback signal shelf, semantic route index, and shared simultaneous-
-    // input diagnostic live in Nocturne's one island. Exact-generation recovery
-    // for lost Start/Poll/Cancel responses and fail-closed environment/reseed
-    // provenance add the final bounded slice. Redesign's persistent exact-device
-    // recovery, actionable progress, named live/transport health and real pending
-    // labels add one audited 4,000-byte allowance; keep the resulting 286,500-byte
-    // ceiling narrow so that safety cost remains deliberate, not open-ended.
-    budgetThreshold: 286_500,
+    // Redesign's workbench, mapping-flow lens, contextual Inspector, device
+    // drawer, encoder presentation, persistent exact-device recovery,
+    // actionable progress, named live/transport health, fixture-safe state,
+    // search, identity colors, Tidy and Rescan make it the largest surviving
+    // entry. The hard-cutover build measures 288,582 Brotli bytes; keep only
+    // 1,418 bytes of headroom so this deliberate 1.2% increase cannot turn
+    // into an open-ended budget.
+    budgetThreshold: 290_000,
     ssr: true,
     ssrEntryPoints: {
-      nocturne: "src/nocturne.ts",
       check: "src/check.ts",
       pads: "src/pads.ts",
       devices: "src/devices.ts",

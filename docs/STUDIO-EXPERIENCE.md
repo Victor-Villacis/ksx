@@ -22,13 +22,13 @@ source must be validated before it is described as release-proven.
 > mechanism have been rewritten rather than re-pointed — a boundary that no
 > longer exists cannot still be doing the work the old text credited it with.
 >
-> **Current core cutover — 2026-08-30.** `/redesign` is now the launcher-owned
+> **Current hard cutover — 2026-08-30.** `/redesign` is the launcher-owned
 > product workbench for device choice, controllers, mapping and the staged/live
 > lifecycle. `/check`, `/pads` and `/devices` are discoverable from its Tools
-> menu. Passages below that are explicitly labelled **Nocturne-only** remain
-> implementation evidence for deferred games, layouts, import/export and
-> autostart until those capabilities receive their redesigned Settings/Library
-> surface; they are not the current core navigation contract.
+> menu. Those are the four live Studio pages. `/nocturne` has no product UI,
+> API, or write routes; a retired GET bookmark may redirect to `/redesign`.
+> Deferred Settings/Library and Advanced setup capabilities are scoped in
+> [DEFERRED-SURFACES.md](DEFERRED-SURFACES.md), not left on a legacy page.
 
 The existing product contracts remain authoritative for safety and backend
 behavior: [FIRST-RUN.md](FIRST-RUN.md), [SURFACES.md](SURFACES.md),
@@ -148,11 +148,9 @@ way back to the product (`CheckIsland.ts`, `PadsIsland.ts` and
 | Virtual pads / Virtual controllers | /pads | Inspect ViGEm pads, spawn bounded test pads, and prune stale pads with explicit confirmation. |
 | Set up & play | /redesign | The current core product: devices, controllers, mapping and staged/live lifecycle. |
 
-Two entries left this table on 2026-08-25 and neither became a tool. Their
-current implementations are **Nocturne-only and deferred**: **Game library**
-(`/profiles` historically) became Nocturne's **Saved games** section, while
-**Import & recovery** (`/setup` historically) became its Export/Import pair.
-Neither legacy implementation is a return destination from the current core.
+Two entries left this table on 2026-08-25 and neither became a tool. **Game
+library** and **Import & recovery** are now deferred with no Studio UI. Their
+Nocturne implementations are retired historical evidence, not destinations.
 When rebuilt, both belong in the redesigned Settings/Library surface because
 they operate on saved configuration rather than acting as diagnostic tools.
 
@@ -174,11 +172,11 @@ keys, Save, Adopt/Discard, Apply, Play and Stop all present their exact draft or
 session consequence there. **Save** is still the only core action that writes
 the draft for later; Play does not imply Save.
 
-The other contract has not been folded into that core. Nocturne's
-saved-game create/edit/delete rows, configuration Export/Import and sign-in
-autostart task are **Nocturne-only implementation evidence for the deferred
-Settings/Library block**. They are not part of `/redesign`'s primary rail or
-Tools menu. When that block is rebuilt, configuration-level writes belong
+The other contract has not been folded into that core. Saved-game
+create/edit/delete/switch, configuration Export/Import and sign-in autostart
+retain their backend/data/CLI contracts where implemented but have no Studio
+UI. They are not part of `/redesign`'s primary rail or Tools menu. When that
+block is rebuilt, configuration-level writes belong
 inside Settings/Library with their own explicit consequences. A loose saved-
 configuration write among the staging panes remains the same defect the old
 page boundary warned about.
@@ -285,16 +283,18 @@ The ready check presents two equally explicit decisions:
 Both sit in the top bar with the saved/unsaved line between them, alongside
 **⟳ Apply** (offered only while a session runs and the draft is dirty) and
 **⏹ Stop**. If another session is active, replacing it is stated before Play.
-Guide/Home is meant to link to the relevant Windows Game Bar setting rather than
-changing it — that link has never been built (`FIRST-RUN.md` §7). Starting over
-discards only the stage, behind **Start over…** → **Discard this draft** in the
-Configuration menu.
+Guide/Home links to the relevant Windows Game Bar setting rather than changing
+it. `/redesign` exposes the direct `ms-settings:gaming-gamebar` remedy
+(`FIRST-RUN.md` §7). Discarding
+starts over only the staged draft; it does not delete saved configuration. The
+workbench exposes that as the explicit **Discard** recovery act beside
+**Adopt**, not as a hidden Settings/Library operation.
 
 The everyday operator surface for saved setups used to be its own route (`/`).
 Its current core replacement is `/redesign`: gameplay state at cabinet
 distance, Play or Stop, capture/output facts and virtual-pad inventory are
 readings on that workbench. Saved games and configuration-level system actions
-remain Nocturne-only until the redesigned Settings/Library block exists; they
+have no Studio UI until the redesigned Settings/Library block exists; they
 must not be described as current core features. The cabinet-distance argument
 for a dedicated operator screen did not go away with the route, and it is the
 strongest open objection to the single-page design — a person standing at a
@@ -313,7 +313,7 @@ a first-run visitor must meet, and in what sequence — and because the shipped
 three-pane layout has to satisfy it on a narrow screen, where the panes stack.
 
 ~~~text
-┌ ksx Studio ─ Set up & play ─ Tools ─ [▣ Configuration] [Save] [▷ Play] [⏹ Stop]┐
+┌ ksx Studio ─ Set up & play ─ Tools ─────────── [Save] [▷ Play] [⏹ Stop]┐
 │ Turn your keyboard into a controller                                        │
 │ [Nothing changes when you browse] [Hardware changes ask first] [Exact setup] │
 ├ Recovery: keyboards KSX is holding, when any exist                           ┤
@@ -329,7 +329,7 @@ three-pane layout has to satisfy it on a narrow screen, where the panes stack.
 ├ Output readiness warning, only when true                                     ┤
 ├ Stage 4 · Ready check (the top bar, which is sticky)                          ┤
 │ [Save]  saved/unsaved line                       [⟳ Apply] [▷ Play] [⏹ Stop] │
-└ Configuration menu: saved games · export/import · autostart · Start over…     ┘
+└ Recovery actions: Adopt saved setup · Discard this draft                      ┘
 ~~~
 
 Two differences from the pre-cutover drawing are decisions, not drift. The
@@ -375,7 +375,11 @@ only by scrolling past everything you have not finished.
 Controller precedes inspector in DOM order, so the narrow layout and assistive
 technology retain the same reading sequence as the desktop composition.
 
-### Play
+### Historical Play route (deleted)
+
+This wireframe records the former dedicated operator page. It is not a fifth
+live page: current session controls/readiness are integrated into `/redesign`,
+and saved profiles/autostart await Settings/Library.
 
 ~~~text
 ┌ shell: [1] [2] [3] [4 Play] · Tools · running/idle/no daemon ┐
@@ -570,7 +574,7 @@ scrolling or clicking a pane, not navigating, so any row whose remedy used to be
 | Map | Cross-player duplicate | conflict dialog naming the other use | Explicitly use here too or cancel; never remove the other binding. |
 | Map | Write accepted | fresh state plus success toast | Undo only when exact recovery is available. |
 | Map | Write refused | error toast naming what did not change | Retry after remedy; no optimistic local mutation. |
-| Play | Idle and startable | ready line beside the top bar, saved games in the Configuration menu | Play. |
+| Play | Idle and startable | ready line beside the top bar | Play. |
 | Play | Running | duration/capture/output/emergency facts | Stop, or Apply an edited draft in place. |
 | Tools | Destructive action armed | consequence-specific confirmation | Confirm exact action or cancel; no generic “Are you sure?” detached from scope. |
 
@@ -743,9 +747,9 @@ dedicated remote flow exist.
 
 The Studio browser job is configured for the pinned Windows 2022 runner, Node
 24.19.0 LTS, Playwright 1.62.1, and pinned Chromium. Its visual smoke source
-builds the Studio fixture and captures five current path variants in three
+builds the Studio fixture and captures five variants of the four live pages in three
 contexts: `/redesign`, `/redesign?slot=1&macro=hadouken`, `/check`, `/pads` and
-`/devices`. Nocturne is not part of this core screenshot gate; its
+`/devices`. No retired Nocturne fixture is part of this screenshot gate;
 Settings/Library capabilities remain explicitly deferred:
 
 | Context | Viewport | Theme/input |
@@ -807,15 +811,14 @@ The three rows this table used to open with — `/start`, `/map` and `/` — are
 single `/redesign` core now, and its required states are the union of theirs.
 That is a real increase in what one fixture has to express, and it is the
 argument for named fixtures rather than against them: the states did not merge
-when the pages did. Nocturne's deferred Settings/Library states stay in their
-own explicitly legacy fixture family until that block is redesigned.
+when the pages did. Deferred Settings/Library states get fixtures only when
+that new surface is designed; the deleted legacy UI is not a test oracle.
 
 | Route | Required states |
 | --- | --- |
 | /redesign | clean empty stage; identified/chosen keyboard; output blocked; capture prepare; capture release; unreadable capture; complete ready stage; session replacement warning; no controller; no daemon/read-only; Play active; live inactive; different setup; matching live input; learn listening; existing binding; cross-player conflict; multi-select bar; macros open; system prerequisite attention |
 | /check | live inactive; live fan-out; read unavailable; zero-control roster |
 | Tool routes | readable empty; populated; refused read; destructive confirmation where applicable |
-| /nocturne (legacy evidence only) | saved-games list empty and populated; game/layout maintenance; configuration import/export; autostart/sign-in-task states. These do not count as current core approval. |
 
 Use dark desktop for every state fixture and light mobile for every layout- or
 dialog-distinct state. Use coarse cabinet for gameplay, Test, Mapping, and

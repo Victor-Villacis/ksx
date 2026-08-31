@@ -14,9 +14,10 @@ across its three panes rather than by navigating. (Until 2026-08-25 they were
 `/start#keyboard`, `/start#controller`, `/map` and `/`; that is where the
 anchors in older notes come from.) Test inputs, hardware recovery and ViGEm pad
 diagnostics stay one deliberate Tools action away. The game library,
-layout management, import/export and autostart remain explicitly deferred on
-the legacy `/nocturne` Settings/Library implementation; they are not a second
-core workbench. Every current route is viewed on a desk monitor *and* on an arcade
+layout management, import/export and autostart remain explicitly deferred with
+no Studio UI. Advanced panel/keyboard arrangement is deferred separately; see
+`DEFERRED-SURFACES.md`. `/nocturne` is a retired bookmark redirect, not a
+second workbench. Every current route is viewed on a desk monitor *and* on an arcade
 cabinet panel from across a room, in a light and a dark theme, with and without
 JavaScript. Everything below is chosen against those constraints at once.
 
@@ -609,7 +610,11 @@ This app is read from six feet away on an arcade panel. What that changes:
 
 The system above is what things look like. This is where they go.
 
-### Play — three tiers, and they look like three tiers
+### Historical Play page — three tiers, and they looked like three tiers
+
+This hierarchy records the deleted operator page and does not describe a fifth
+live route. Current session readiness and controls live in `/redesign`; saved
+profiles and autostart have no Studio UI until Settings/Library is rebuilt.
 
 1. **Primary — Session.** A hero bar: the state at 38 px on the left, the one
    action (Start / Stop + Reload) on the right.

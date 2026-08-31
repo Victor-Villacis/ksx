@@ -511,20 +511,13 @@ describe("the responsive redesign lifecycle rail", { concurrency: false }, () =>
     }
   });
 
-  test("Nocturne's native configuration menu exposes the same recovery routes", async () => {
-    const page = await openSurface("/nocturne");
-    try {
-      const menu = page.locator(".n-chipd");
-      await menu.locator(":scope > summary").click();
-      assert.deepEqual(
-        await menu.locator('a[href="/check"], a[href="/pads"], a[href="/devices"]').evaluateAll(
-          (links) => links.map((link) => link.getAttribute("href")),
-        ),
-        ["/check", "/pads", "/devices"],
-      );
-      assert.deepEqual(page.ksxNoise, [], "Nocturne Tools links produced browser errors");
-    } finally {
-      await page.close();
-    }
+  test("the retired product bookmark keeps safe context and exposes no legacy API", async () => {
+    const bookmark = await fetch(`${BASE}/nocturne?slot=1&flash=hostile`, {
+      redirect: "manual",
+    });
+    assert.equal(bookmark.status, 308);
+    assert.equal(bookmark.headers.get("location"), "/redesign?slot=1");
+    assert.equal((await fetch(`${BASE}/api/nocturne`)).status, 404);
+    assert.equal((await fetch(`${BASE}/nocturne/save`, { method: "POST" })).status, 404);
   });
 });

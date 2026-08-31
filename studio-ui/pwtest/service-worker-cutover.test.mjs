@@ -1,9 +1,8 @@
-// Browser contract for the same-origin /nocturne -> /redesign cutover.
+// Browser contract for the hard /redesign product cutover.
 //
-// Each product route first gets a clean browser context so one route cannot
-// hide a missing registration on the other. A third context then proves the
-// actual transition properties: shared localStorage, asset-only caching, and
-// a healthy worker update followed by a controlled reload.
+// The surviving product installs one root worker that caches immutable assets
+// only. Retired Nocturne URLs remain network decisions through worker updates:
+// the bookmark redirects, while its API, downloads and writes stay absent.
 
 import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -150,57 +149,32 @@ function assertAssetOnly(entries) {
 }
 
 describe("service-worker cutover contract", { concurrency: false }, () => {
-  for (const route of ["/redesign", "/nocturne"]) {
-    test(`${route} independently installs the root asset worker`, async () => {
-      const context = await browser.newContext({ serviceWorkers: "allow" });
-      try {
-        const { page, pageErrors } = await openProduct(context, route);
-        assertRootWorker(await activeWorker(page), route);
-        assertAssetOnly(await cacheInventory(page));
-        assert.deepEqual(pageErrors, []);
-      } finally {
-        await context.close();
-      }
-    });
-  }
-
-  test("same-origin cutover preserves local state and survives worker update and reload", async () => {
+  test("redesign installs the root asset worker", async () => {
     const context = await browser.newContext({ serviceWorkers: "allow" });
-    const { page, pageErrors } = await openProduct(context, "/nocturne");
     try {
-      assertRootWorker(await activeWorker(page), "/nocturne");
+      const { page, pageErrors } = await openProduct(context, "/redesign");
+      assertRootWorker(await activeWorker(page), "/redesign");
+      assertAssetOnly(await cacheInventory(page));
+      assert.deepEqual(pageErrors, []);
+    } finally {
+      await context.close();
+    }
+  });
 
-      const legacyValue = JSON.stringify({ owner: "nocturne", revision: 1 });
-      await page.evaluate((value) => {
-        localStorage.setItem("ksx-sw-cutover-legacy-state", value);
-      }, legacyValue);
+  test("retired routes stay network-only through worker update and reload", async () => {
+    const bookmark = await fetch(`${BASE}/nocturne?slot=1&flash=hostile`, {
+      redirect: "manual",
+    });
+    assert.equal(bookmark.status, 308);
+    assert.equal(bookmark.headers.get("location"), "/redesign?slot=1");
+    assert.equal((await fetch(`${BASE}/api/nocturne`)).status, 404);
+    assert.equal((await fetch(`${BASE}/nocturne/export.json`)).status, 404);
+    assert.equal((await fetch(`${BASE}/nocturne/save`, { method: "POST" })).status, 404);
 
-      let response = await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
-      assert.equal(response?.status(), 200);
-      await waitForIsland(page);
-      assert.equal(
-        await page.evaluate(() => localStorage.getItem("ksx-sw-cutover-legacy-state")),
-        legacyValue,
-        "the redesign route stranded local state written by the legacy route",
-      );
-
-      const redesignValue = JSON.stringify({ owner: "redesign", revision: 2 });
-      await page.evaluate((value) => {
-        localStorage.setItem("ksx-sw-cutover-redesign-state", value);
-      }, redesignValue);
-
-      response = await page.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
-      assert.equal(response?.status(), 200);
-      await waitForIsland(page);
-      assert.equal(
-        await page.evaluate(() => localStorage.getItem("ksx-sw-cutover-legacy-state")),
-        legacyValue,
-      );
-      assert.equal(
-        await page.evaluate(() => localStorage.getItem("ksx-sw-cutover-redesign-state")),
-        redesignValue,
-        "the legacy route could not see state written by the redesign route",
-      );
+    const context = await browser.newContext({ serviceWorkers: "allow" });
+    const { page, pageErrors } = await openProduct(context, "/redesign");
+    try {
+      assertRootWorker(await activeWorker(page), "/redesign");
 
       // Exercise every URL class that must remain network-only. The worker's
       // fetch gate must still leave them out of CacheStorage afterwards.
@@ -210,6 +184,7 @@ describe("service-worker cutover contract", { concurrency: false }, () => {
           fetch("/nocturne"),
           fetch("/api/redesign"),
           fetch("/api/nocturne"),
+          fetch("/nocturne/export.json"),
         ]);
       });
       assertAssetOnly(await cacheInventory(page));
@@ -225,7 +200,7 @@ describe("service-worker cutover contract", { concurrency: false }, () => {
       });
       assertRootWorker(updated, "worker update");
 
-      response = await page.reload({ waitUntil: "domcontentloaded" });
+      const response = await page.reload({ waitUntil: "domcontentloaded" });
       assert.equal(response?.status(), 200, "a controlled product reload failed");
       await waitForIsland(page);
       await page.waitForFunction(
@@ -234,14 +209,6 @@ describe("service-worker cutover contract", { concurrency: false }, () => {
         { timeout: 20_000 },
       );
       assertRootWorker(await activeWorker(page), "controlled reload");
-      assert.equal(
-        await page.evaluate(() => localStorage.getItem("ksx-sw-cutover-legacy-state")),
-        legacyValue,
-      );
-      assert.equal(
-        await page.evaluate(() => localStorage.getItem("ksx-sw-cutover-redesign-state")),
-        redesignValue,
-      );
       assertAssetOnly(await cacheInventory(page));
       assert.deepEqual(pageErrors, []);
     } finally {

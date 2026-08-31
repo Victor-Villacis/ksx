@@ -1,4 +1,4 @@
-//! Editing a macro draft — the verbs behind every control in the /nocturne
+//! Editing a macro draft — the verbs behind every control in the redesign
 //! step editor, applied to a whole `[macros.<name>]` table in memory.
 //!
 //! **Where the draft lives.** Nowhere on the server. The browser holds the

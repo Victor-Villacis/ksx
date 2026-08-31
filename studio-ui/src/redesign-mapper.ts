@@ -5,8 +5,8 @@
 //
 // The PROTOCOL is 4460's, verbatim in every invariant that matters — the
 // server is the shared implementation (`/api/learn*` and the aliased
-// `/redesign/api/bind` are the same handlers /nocturne calls), and this
-// module keeps nocturne's fail-closed discipline around it:
+// `/redesign/api/bind` reach the same backend writer), and this module keeps
+// the proven fail-closed discipline around it:
 //  - two generations (browser supersede counter + the daemon's exact
 //    learner generation) — a late completion dies silently;
 //  - the SOURCE PIN: a gesture is pinned to the staged input's verified

@@ -22,7 +22,7 @@
 //!   express an arcade panel, whose controls sit where the plywood put them.
 //! - The row hints are what the page renders from TODAY. Six real things are
 //!   keyed to the six `.n-kbrow` elements — arrow-key roving focus
-//!   (`NocturneIsland.ts`), the per-row keycap sculpt (`studio.css`
+//!   (`RedesignIsland.ts`), the per-row keycap sculpt (`studio.css`
 //!   `nth-child(1..6)`), the closed set of `u*` width classes, the Arranger's
 //!   regex that reads `unit` back out of the class string, the hand-fitted
 //!   980px board width, and the `sp` margin constants derived from row 1's
@@ -587,8 +587,8 @@ pub(crate) const AUTO_ID: &str = "auto";
 /// not rendered as a dead row: a submit button that refuses to do anything is
 /// the greyed-out-step antipattern, and this one would post the empty id, which
 /// already means something else. What is missing is said in the sentence under
-/// the picker instead — `NocturneDerived::board_line`, which can tell "none
-/// saved yet" apart from "the store would not answer".
+/// the picker instead — `BoardPanel::board_line` can tell "none saved yet"
+/// apart from "the store would not answer".
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct BoardChoice {
     pub(crate) id: String,

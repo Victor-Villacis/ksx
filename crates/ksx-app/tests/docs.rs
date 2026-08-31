@@ -218,6 +218,7 @@ fn every_section_number_the_code_cites_still_exists_in_device_identity() {
 const GOVERNING: &[&str] = &[
     "ARCHITECTURE.md",
     "CONTROL-SURFACE.md",
+    "DEFERRED-SURFACES.md",
     "DEVICE-IDENTITY.md",
     "ENHANCEMENTS.md",
     "INPUT-TRANSFORMS.md",

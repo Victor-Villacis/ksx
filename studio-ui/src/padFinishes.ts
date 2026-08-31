@@ -20,11 +20,12 @@ import {
 } from "./xboxSeriesPremiumGeometry";
 
 // ── Controller finishes — the browser-kept paint choice per controller ─────
-// Moved verbatim from NocturneIsland so `/nocturne` and `/redesign` share ONE
-// implementation AND one localStorage store: a finish chosen on either page
-// is the same controller's finish on the other. The daemon owns nothing
-// here — a finish is presentation chrome keyed to the controller's preset
-// identity (`padStoreKeys`' rule).
+// Extracted from the retired Nocturne island so the redesign owns one focused
+// implementation. The historical localStorage keys remain intentionally: a
+// hard cutover must preserve a controller's chosen finish instead of silently
+// resetting presentation state. The daemon owns nothing here — a finish is
+// presentation chrome keyed to the controller's preset identity
+// (`padStoreKeys`' rule).
 
 const DS4_VARIANT_STORE = "ksx-nocturne-ds4-variants1";
 const DS4_VARIANT_SLUGS = new Set<string>(DS4_PREMIUM_VARIANTS.map((variant) => variant.slug));

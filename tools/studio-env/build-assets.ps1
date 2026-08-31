@@ -210,7 +210,12 @@ try {
     # cannot bless a stale zones.json against newer Rust tables.
     Push-Location $RepoRoot
     $LocationPushed = $true
-    & cargo test --locked -p ksx-studio write_generated_zone_tokens_json -- --ignored
+    # `--lib` is load-bearing on a clean or interrupted asset graph: Studio's
+    # integration tests include generated controller art by path, while this
+    # handoff runs before Node has restored that art. The producer itself is a
+    # library unit test, so compiling unrelated integration targets creates a
+    # circular "generated assets required to generate assets" failure.
+    & cargo test --locked -p ksx-studio --lib write_generated_zone_tokens_json -- --ignored
     if ($LASTEXITCODE -ne 0) {
         throw "Rust zone-token handoff failed with exit code $LASTEXITCODE."
     }

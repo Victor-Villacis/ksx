@@ -3,8 +3,8 @@ import { h } from "@getforma/core";
 /** Complete inline Xbox 360 master — the CC0 Open Clip Art gamepad
  * (Grumbel, public domain) recolored to the carbon palette, with the
  * app-owned trigger/bumper pills, exact mapper hooks and key callouts.
- * Extracted verbatim from NocturneIsland so both islands clone ONE
- * drawing (the premium-art module convention). */
+ * Extracted from the retired Nocturne island so the redesign clones one
+ * authoritative drawing (the premium-art module convention). */
 export function X360PadArt() {
   return (
             h(

@@ -1,9 +1,9 @@
-// The macro STEP EDITOR on the redesign workbench — nocturne's dialog,
-// transplanted: rows are steps, columns are this pad's controls, a cell is
+// The macro STEP EDITOR on the redesign workbench: rows are steps, columns are
+// this pad's controls, a cell is
 // held or not (docs/INPUT-TRANSFORMS.md §6.2). The BROWSER holds the
 // `[macros.<name>]` table it is editing; every verb is the server's. An act
 // posts the whole table and one word to the page-aliased edit core
-// (`/redesign/api/macro/edit` — the SAME handler /nocturne mounts), and the
+// (`/redesign/api/macro/edit` — the same authoritative edit core), and the
 // answer is the new table plus the roll that draws it — so the diagonal
 // lens, the sampling floor and every sentence come from the one place that
 // already paints them on the server. Save writes through `/api/macro/save`,

@@ -18,18 +18,18 @@ divergences in `widget-canvas.ts` — see below):
   `runtime-adapter.ts`, `canvas-capacity.ts`, `index.ts`
 - `contracts.ts`, `persistence/session-store.ts` — the types beside it
 - `../genui-canvas.css` — upstream `styles/canvas.css`, also byte-identical;
-  the Nocturne skin lives in `studio.css` §9 ("THE CANVAS"), which
+  the product skin lives in `studio.css` §9 ("THE CANVAS"), which
   concatenates AFTER this sheet on purpose so its overrides win by order
 
 Deliberately left behind: `src/forma/` (the Forma artifact host —
-`/nocturne`'s widgets are plain DOM content and need no `@getforma/core`
+`/redesign`'s widgets are plain DOM content and need no `@getforma/core`
 linkage), the Rust crate (catalog/plan/semantic routing — a planner concern
 this integration does not have), and every test/build file.
 
 Local divergences from upstream — every one carries a `// ksx:` comment in
 `widget-canvas.ts` and should be offered back upstream at the next sync
-(all four came out of the 2026-08-21 adversarial review of the /nocturne
-integration; none is ksx-specific policy, all are engine correctness):
+(the first four came out of the 2026-08-21 adversarial review of the original
+canvas integration; none is ksx-specific policy, all are engine correctness):
 
 1. **Preferred-width ceiling 720 → 1600** (`#normalizedPlacement`): the old
    clamp silently discarded any `data-canvas-preferred-width` above 720px —
@@ -86,8 +86,8 @@ upstreaming) the `// ksx:` blocks — grep for `ksx:` after copying. As of
 `93c3871` (2026-08-21) upstream's `src/canvas` and `styles/` are unchanged
 since `c91d34c`, so the vendored copy is current apart from these five.
 Everything else ksx needs differently is done outside these files: skin and
-no-JS rules in `studio.css`, wiring in `NocturneIsland.ts`
-(`initNocturneCanvas` adopts a server-rendered skeleton instead of calling
-`createCanvasSurface`, and feeds the navigator DETACHED nodes to keep the
-minimap out of the DOM), persistence in the island's `ksx-nocturne-canvas`
-localStorage store.
+no-JS rules in `studio.css`, wiring in `RedesignIsland.ts`
+(`initRedesignCanvas` adopts a server-rendered skeleton instead of calling
+`createCanvasSurface`, and feeds the navigator detached nodes to keep the
+minimap out of the DOM), and persistence in the island's
+`ksx-redesign-canvas` localStorage store.

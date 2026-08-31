@@ -4,7 +4,7 @@ For whoever takes this over. It says what ksx is, how it is built, what is
 finished, what is not, and — most usefully — **which beliefs about this codebase
 turned out to be false**, because several of them cost a day each to discover.
 
-Updated 2026-08-26 for the current standalone **KSX release candidate**. Software
+Updated 2026-08-30 for the current standalone **KSX release candidate**. Software
 gates and a packaged build are evidence about the tree, not a release or a
 physical cabinet acceptance result; the supervised checks in `docs/GATES.md`
 remain open until someone records them on the target hardware.
@@ -96,9 +96,11 @@ source, not another Rust package.
   product does not require either CLI face (`docs/FIRST-RUN.md`).
 - **Studio** (browser) — the workbench: `/redesign` carries the current core
   device, controller, mapping, Save/Apply/Play/Stop and recovery flow. Its Tools
-  menu makes `/check`, `/pads` and `/devices` discoverable. Saved games,
-  layouts, import/export and autostart still depend on the deferred legacy
-  implementation while their Settings/Library replacement is designed. Better
+  menu makes `/check`, `/pads` and `/devices` discoverable. Those are the four
+  live Studio pages. Saved games, layout-library management, import/export,
+  autostart and advanced panel-building tools have no Studio UI after the hard
+  cutover; their preserved contracts and future scope are listed in
+  `docs/DEFERRED-SURFACES.md`. Better
   than immediate-mode GUI at a 25-binding preset, which is why the mapper lives here.
 - **egui cabinet panel** — the appliance. At a cabinet there is no mouse and no
   keyboard; the arcade panel *is* the input, and no browser UI can be driven by
@@ -116,8 +118,9 @@ is written or plugged, prepares one exact supported USB keyboard through a
 three-consent UAC flow when clean-machine capture requires it, asks
 split-or-freeze in the user's own words, and can Play without saving. Studio
 includes a separately confirmed Release action, compact setup progress,
-controls and button check; the deferred `/nocturne` surface still carries saved
-games until its Settings/Library replacement exists. The backend also supports recorded-session replay, a unified
+controls and button check. `/nocturne` no longer carries a product surface; an
+old GET bookmark redirects to `/redesign`, while its API and write routes are
+absent. The backend also supports recorded-session replay, a unified
 USB+Bluetooth device list, and multiple controller personas.
 
 **Current KSX candidate:** every customer shortcut and the
@@ -146,18 +149,17 @@ controller for chords, turbo and macros — `?slot=N` picks which one. (It was
 `/map?target=stage&slot=N` until the cutover; with one page there is only ever
 the stage, so the `target` parameter went with the second subject it named.) Refused edits leave
 the stage unchanged; accepted edits touch no disk. Save and Play remain
-separate, including Play-before-Save. The deferred `/nocturne` Configuration
-menu carries Studio's saved games rather than a `/profiles` screen; they create,
-update, delete and switch; creation inherits the working base device
-assignments, updates preserve them, and deletion keeps controller layouts. The
-"unless explicitly refreshed" half of that sentence is a backend capability with
-no face at the moment: `UpdateProfile::rebase_devices` and the form field that
-carries it both survive, but the edit form renders no checkbox for it, so it can
-never be asked for (`GATES.md` Phase 4 step 4 is blocked on exactly this). Pasted executable paths normalize one
+separate, including Play-before-Save. Saved-game create, update, delete and
+switch remain typed backend/data contracts but have no Studio face after the
+hard cutover. Creation inherits the working base device assignments, updates
+preserve them, and deletion keeps controller layouts. The "unless explicitly
+refreshed" half of that sentence is a backend capability with
+no face at the moment: `UpdateProfile::rebase_devices` survives, but the retired
+browser form does not. The archived Phase 4 step 4 in `GATES.md` records the
+acceptance behavior the future Settings/Library control must restore. Pasted executable paths normalize one
 matching quote pair. Guide copy names both default keys, the Windows Game Bar
-controller prerequisite and, per `FIRST-RUN.md` §7, is meant to offer a direct
-`ms-settings:gaming-gamebar` link — **which has never shipped**; nothing in
-`crates/ksx-studio` or `studio-ui` mentions Game Bar or `ms-settings` at all.
+controller prerequisite and, per `FIRST-RUN.md` §7, offers the direct
+`ms-settings:gaming-gamebar` link. Renderer and browser tests pin that target;
 ksx does not silently change the per-user Windows setting.
 
 **Studio theming (TK0–TK3, 2026-08-20):** the whole palette lives in ONE
@@ -210,8 +212,8 @@ landing page broke a second time when the 2026-08-25 cutover deleted `/start`
 while `studio_launch.rs` still asked for it — `ksx open` put a chrome-less
 window with no address bar on a 404, and a test in that file pinned the wrong
 value, which is why nothing went red. `ad520b4` fixed that historical incident
-by pointing both spellings at `/nocturne`; the current core-product cutover
-advances both to `/redesign`, and the test pins that exact target.
+by pointing both spellings at `/nocturne`; the hard cutover pins both to
+`/redesign`, and the test pins that exact target.
 
 > That paragraph stood here for a day describing a bug the **same commit** had
 > already fixed, because the audit prose and the repair landed together and the

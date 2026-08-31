@@ -62,8 +62,8 @@ The product path for a new user begins in Studio:
   mistake. The launcher's own target named the deleted `/start` for a day after
   that cutover, which made this bullet false and the first customer window a
   404; `ad520b4` corrected `studio_launch.rs` to `/nocturne` and pinned it with
-  a test. The current core cutover keeps that repaired launch authority but
-  advances its destination to `/redesign`.)
+  a test. The hard cutover keeps that repaired launch authority but pins its
+  destination to `/redesign`.)
 - An empty configuration starts an idle background service with no capture,
   virtual controllers, or session. Setup can therefore hold a fresh in-memory
   draft instead of deadlocking on the absence of a saved controller.
@@ -77,14 +77,16 @@ The product path for a new user begins in Studio:
   unchanged.
 - Save and Play are separate. Play can use the draft without writing it; Save
   does not start a session.
-- Saved Games still supports create, switch, edit, optional device rebase and
-  delete through the deferred legacy implementation. It will move into the
-  redesigned Settings/Library surface in a later block.
+- Saved-game create, switch, edit, optional device rebase and delete remain
+  valid backend/data contracts, but have no Studio UI after the hard cutover.
+  They belong to the deferred redesigned Settings/Library surface; the exact
+  boundary is [DEFERRED-SURFACES.md](DEFERRED-SURFACES.md).
 - [`QUICKSTART.md`](QUICKSTART.md) documents the current core customer journey
   with no terminal or file editing and names the Settings/Library deferral
   explicitly. Developer commands remain documented in README.
 
-What remains is physical proof, not a missing customer workflow: Gate 4 must run
+What remains for the four-page core is physical proof, not a missing core
+customer workflow: Gate 4 must run
 the exact installer on a clean standard-user machine, and T2/T4 still need the
 second physical keyboards/encoders the current lab does not own. Interception is
 not bundled because of its licence; ViGEmBus remains the default installer

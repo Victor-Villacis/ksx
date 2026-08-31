@@ -25,11 +25,13 @@ The release notes publish the installer SHA-256 so the download can be checked.
 ## 2. Choose the keyboard or arcade panel
 
 ksx opens directly to **Set up & play** — one page that holds everything below —
-and scans the machine as it loads. The **Input hardware** list is on the left.
+and scans the machine as it loads. Open **Devices** to work with attached input
+hardware without hiding the canvas.
 
-1. Find the keyboard or arcade encoder by its ordinary device name under
-   **Keyboards**. Encoders appear above it in their own group.
-2. Click its row. The row *is* the choice; there is no separate confirm button.
+1. Find the keyboard or arcade encoder by its ordinary device name. Encoders
+   appear in their own group.
+2. Choose **Show** to add its inspection card to the workbench, then choose
+   **Use as input source** on that card. Showing a card does not select it.
 3. Not sure which board is which? Choose **Identify by key** and press a key on
    it. **Rescan** re-reads the machine if you just plugged something in.
 4. If the device does not identify itself as a keyboard, open **Not keyboards —
@@ -125,7 +127,7 @@ Ctrl+Alt+Del to end Play.
 These are separate actions, and they live in the bar across the top of the page
 with a line beside them saying whether what is on screen has been saved:
 
-- **Save** keeps the keyboard, controllers, layouts, and split/freeze choice for
+- **Save** keeps the keyboard, controllers, mappings, and split/freeze choice for
   later. It does not start Play.
 - **▷ Play** uses exactly what is on the screen without saving it first.
 - **⏹ Stop** ends Play. **⟳ Apply** appears only while Play is running and you
@@ -137,15 +139,18 @@ up.
 
 Guide/Home opens Xbox Game Bar only when Game Bar is available and Windows'
 **Allow your controller to open Game Bar** setting is enabled. ksx never
-changes that Windows setting silently — and it does not yet offer a shortcut to
-it either, so open **Settings ▸ Gaming ▸ Game Bar** yourself for now.
+changes that Windows setting silently. Use **Open Game Bar settings** in the
+session card to open the relevant Windows page, then make the choice there.
 
 ## Saved games and libraries
 
 Saved games, reusable layout libraries, import/export, and autostart are not in
 the current `/redesign` workbench yet. They are being rebuilt as a separate
-Settings/Library surface. The launcher does not send new users to the legacy
-Configuration menu, and this quickstart does not require that legacy route.
+Settings/Library surface. Advanced panel building and arrangement tools are
+deferred separately. There is no legacy Configuration page after the hard
+cutover; old `/nocturne` GET bookmarks redirect to `/redesign`, and its former
+forms and APIs do not exist. See [DEFERRED-SURFACES.md](DEFERRED-SURFACES.md)
+for the exact scope and the CLI/backend contracts that remain available.
 
 ## If ksx says the background service is unavailable
 

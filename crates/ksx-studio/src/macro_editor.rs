@@ -1,13 +1,13 @@
-//! The Nocturne macro editor's served data — the piano roll, its policies and
-//! its motion writer, composed once in Rust for the /nocturne dialog.
+//! The redesign macro editor's served data — the piano roll, its policies and
+//! its motion writer, composed once in Rust for the workbench dialog.
 //!
 //! **Why this is not a second implementation.** Everything subtle here is
 //! borrowed from [`crate::render_map`]: the 37-column ring
 //! ([`macro_columns`](crate::render_map::macro_columns)), the diagonal lens
 //! ([`step_cell_states`](crate::render_map::step_cell_states)), the sampling
 //! floor and every duration word. This module only *dresses* those answers in
-//! the Nocturne class vocabulary. When `/map` goes at M5 the derivations move
-//! with the surviving module and nothing about the macro model changes.
+//! the established workbench class vocabulary. Nothing about the macro model
+//! is reimplemented here.
 //!
 //! **What is new here, and why.** `/map` draws all 37 columns and leaves you
 //! to find the lit ones. The band header now carries a COUNT of the holds
@@ -129,7 +129,7 @@ pub struct NocturneMacMotion {
     pub title: String,
 }
 
-/// Everything the /nocturne macro dialog paints.
+/// Everything the redesign macro dialog paints.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NocturneMacroEditor {
     /// Is a macro open? Drives the dialog's own class, never a `createShow` —
@@ -298,13 +298,8 @@ fn band_label(band: &str) -> &'static str {
 
 impl NocturneMacroEditor {
     /// Nothing open: the dialog's markup still exists, wearing its closed
-    /// class, so opening it is a class flip rather than a build.
-    pub fn closed() -> Self {
-        Self::closed_on("/nocturne")
-    }
-
-    /// `closed`, parameterized on the page whose ✕ the dialog would wear —
-    /// the editor serves /nocturne and /redesign from this one composition.
+    /// class, so opening it is a class flip rather than a build. The page
+    /// parameter owns the close destination.
     pub fn closed_on(page: &str) -> Self {
         Self {
             back_cls: "nd-back none".to_owned(),

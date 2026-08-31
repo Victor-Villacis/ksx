@@ -1,7 +1,8 @@
-//! The mapper page's render seam (`/map`): embedded FMIR + per-request
-//! [`MapPayload`] → HTML. Same architecture as `render.rs` (SSR slots for
-//! first paint, the identical payload as island props for hydration — dogfood
-//! ledger #5), same compiler constraints, its own slot layout.
+//! Shared controller-zone and macro-domain presentation rules.
+//!
+//! The standalone `/map` page was retired at the redesign hard cutover, but
+//! the product snapshot and macro editor still need one authoritative set of
+//! persona labels, hit-zone geometry, duration rules and diagonal folding.
 //!
 //! # The zone model
 //!
@@ -831,8 +832,8 @@ pub(crate) fn hold_cls(hold: &[String]) -> &'static str {
 /// Every column's state for ONE step, in column order, with the "written, but
 /// not at full deflection" flag beside it.
 ///
-/// THE DIAGONAL LENS LIVES HERE, once. `/map` and `/nocturne` draw different
-/// grids out of the same answer, because the rule that folds `ly.min + lx.max`
+/// THE DIAGONAL LENS LIVES HERE, once. The redesign editor draws its grid from
+/// this answer, because the rule that folds `ly.min + lx.max`
 /// into a single `↘` — and still ticks the two cardinals underneath it — is the
 /// one piece of this editor that must never have two versions to disagree.
 pub(crate) fn step_cell_states(

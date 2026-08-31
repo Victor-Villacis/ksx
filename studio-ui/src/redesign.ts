@@ -185,6 +185,7 @@ async function successorRefreshResult(generation: number): Promise<boolean> {
 async function performRefresh(
   generation: number,
   controller: AbortController,
+  fresh: boolean,
 ): Promise<boolean> {
   const timeout = window.setTimeout(() => controller.abort(), 8000);
   try {
@@ -197,6 +198,7 @@ async function performRefresh(
       const value = current.get(name);
       if (value) params.set(name, value);
     }
+    if (fresh) params.set("fresh", "1");
     const query = params.toString();
     const res = await fetch(query ? `/api/redesign?${query}` : "/api/redesign", {
       headers: { accept: "application/json" },
@@ -235,7 +237,7 @@ async function performRefresh(
   }
 }
 
-function refresh(kind: RefreshKind = "foreground"): Promise<boolean> {
+function refresh(kind: RefreshKind = "foreground", fresh = false): Promise<boolean> {
   // A tick is opportunistic. It never aborts or queues behind a user-driven
   // repaint; the next two-second tick will carry the same external truth.
   if (kind === "poll" && activeRefresh !== null) return Promise.resolve(false);
@@ -243,7 +245,7 @@ function refresh(kind: RefreshKind = "foreground"): Promise<boolean> {
   const generation = ++refreshGeneration;
   activeRefresh?.controller.abort();
   const controller = new AbortController();
-  const promise = performRefresh(generation, controller).then((result) => {
+  const promise = performRefresh(generation, controller, fresh).then((result) => {
     if (generation > newestSettledRefresh.generation) {
       newestSettledRefresh = { generation, result };
     }
@@ -1386,7 +1388,7 @@ activateIslands({
     seedRenderedFlash(el);
     // The island asks for another slot's panel through this (selection →
     // ?slot merge → refetch) without ever owning fetch.
-    setRedesignRefresh(refresh);
+    setRedesignRefresh((options) => refresh("foreground", options?.fresh === true));
     // The mapper (learn/assign/bind) — page truths as ports, the entry's
     // mutation gate shared so a bind commit can never interleave with an
     // in-flight form verb.

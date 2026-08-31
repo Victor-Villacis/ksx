@@ -306,6 +306,20 @@ for (const config of CONTEXTS) {
                 width: rect.width,
               };
             });
+            const overflowers = [...document.body.querySelectorAll("*")]
+              .filter((element) => !element.closest(".forma-canvas-stage"))
+              .map((element) => {
+                const rect = element.getBoundingClientRect();
+                return {
+                  tag: element.tagName,
+                  cls: String(element.className ?? "").slice(0, 100),
+                  left: Math.round(rect.left * 10) / 10,
+                  right: Math.round(rect.right * 10) / 10,
+                  width: Math.round(rect.width * 10) / 10,
+                };
+              })
+              .filter((box) => box.width > 0 && (box.left < -1 || box.right > viewportWidth + 1))
+              .slice(0, 12);
             // A canvas can die silently: every other assertion
             // here passes with an unadopted keyboard sitting at auto layout.
             // Adoption's one observable is the engine's geometry write.
@@ -341,6 +355,7 @@ for (const config of CONTEXTS) {
               coarse: matchMedia("(pointer: coarse)").matches,
               light: matchMedia("(prefers-color-scheme: light)").matches,
               containers,
+              overflowers,
               canvasAdoption,
               canvasEngineAlive,
               escaped: containers.filter(
@@ -353,7 +368,8 @@ for (const config of CONTEXTS) {
           assert.ok(
             layout.documentWidth <= layout.viewportWidth + 1,
             `${route.path} globally overflows ${config.name}: ` +
-              `${layout.documentWidth}px document in ${layout.viewportWidth}px viewport`,
+              `${layout.documentWidth}px document in ${layout.viewportWidth}px viewport; ` +
+              `escaped ${JSON.stringify(layout.overflowers)}`,
           );
           assert.ok(layout.containers.length > 0, `${route.path} exposed no responsive root`);
           if (layout.canvasAdoption) {
@@ -1501,8 +1517,8 @@ describe("the plate lays out", () => {
   test("no two caps on the board overlap", async () => {
     const page = await context.newPage();
     try {
-      const response = await page.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
-      assert.ok(response?.ok(), `/nocturne returned HTTP ${response?.status() ?? "none"}`);
+      const response = await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      assert.ok(response?.ok(), `/redesign returned HTTP ${response?.status() ?? "none"}`);
       await page.waitForFunction(
         () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
         null,
@@ -1566,7 +1582,7 @@ describe("the plate lays out", () => {
   test("the board fits inside its card", async () => {
     const page = await context.newPage();
     try {
-      await page.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(
         () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
         null,
@@ -1576,7 +1592,7 @@ describe("the plate lays out", () => {
         const plate = document.querySelector(".n-kbcase");
         if (!plate) return null;
         const p = plate.getBoundingClientRect();
-        const card = plate.closest(".n-widget-kb") ?? plate.parentElement;
+        const card = plate.closest(".rd-w-kb") ?? plate.parentElement;
         const c = card.getBoundingClientRect();
         return { plateW: p.width, plateH: p.height, cardW: c.width };
       });
@@ -1600,10 +1616,10 @@ describe("the plate lays out", () => {
 // ── The picker changes the page it lives on, WITHOUT a reload ───────────────
 //
 // The regression this pins: with scripting on, every POST form is
-// fetch-enhanced (nocturne.ts wireForms) and the redirect's page is
+// fetch-enhanced and the redirect's page is
 // discarded — but the theme's whole effect is an attribute on <html>,
 // OUTSIDE the island's render tree, so choosing a theme changed nothing a
-// user could see until a manual refresh. applyNocturne now converges the
+// user could see until a manual refresh. The redesign poll converges the
 // stamp from the payload's own theme rows; this test walks the journey in
 // one living document. It also needed the fixture to ACCEPT the write:
 // set_theme's trait default refuses, which made the picker an
@@ -1627,7 +1643,7 @@ describe("live theme switch", () => {
   test("choosing Light restamps <html> in place, and System removes the stamp", async () => {
     const page = await context.newPage();
     try {
-      await page.goto(`${BASE}/nocturne`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(
         () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
         null,
@@ -1640,7 +1656,10 @@ describe("live theme switch", () => {
         window.__sameDocument = true;
       });
 
-      await page.click('form[action="/nocturne/theme"]:has(input[value="light"]) button');
+      await page.locator(".rd-themed > summary").click();
+      await page.locator(
+        '.rd-themed form[action="/redesign/theme"]:has(input[value="light"]) button',
+      ).click();
       await page.waitForFunction(
         () => document.documentElement.dataset.theme === "light",
         null,
@@ -1655,14 +1674,17 @@ describe("live theme switch", () => {
       // the light ground the stamped-theme suite pins.
       const light = THEMES.find((theme) => theme.id === "light");
       await page.waitForFunction(
-        (bg) => getComputedStyle(document.querySelector(".nocturne")).backgroundColor === bg,
+        (bg) => getComputedStyle(document.querySelector(".rd")).backgroundColor === bg,
         hexToRgb(light.bg),
         { timeout: 15_000 },
       );
 
       // System is the ABSENCE of a stamp — the media guard needs the
       // attribute GONE, not set to a word nothing styles.
-      await page.click('form[action="/nocturne/theme"]:has(input[value="system"]) button');
+      await page.locator(".rd-themed > summary").click();
+      await page.locator(
+        '.rd-themed form[action="/redesign/theme"]:has(input[value="system"]) button',
+      ).click();
       await page.waitForFunction(
         () => document.documentElement.dataset.theme === undefined,
         null,

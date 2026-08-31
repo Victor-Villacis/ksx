@@ -82,8 +82,8 @@ states this runbook and an elevated shell were the only exit, which
 > `/start`, a page the cutover deleted, so the desktop icon, the Start-menu entry
 > and the tray's *Open ksx* all landed on a 404 in a window with no address bar
 > and nowhere to type a correction — the app was not a recovery route at all,
-> because you could not reach it. `ad520b4` restored `/nocturne`; the current
-> core cutover now opens `/redesign`, with tests pinning both places it is
+> because you could not reach it. `ad520b4` restored `/nocturne`; the hard
+> cutover now opens `/redesign`, with tests pinning both places it is
 > spelled. If your shortcut still opens a blank
 > or "not found" window, you are on a build older than that commit and §2b is
 > your route.

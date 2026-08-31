@@ -7,7 +7,7 @@
 //! this is the backend they drive it against: the same `ksx_studio::serve` the
 //! app uses, wired to a preset that never changes underfoot.
 //!
-//! Saves are kept in memory and served back by the next `/api/nocturne` poll, which
+//! Saves are kept in memory and served back by the next `/api/redesign` poll, which
 //! is what makes "the unit survives save and reload" testable at all.
 //!
 //! Loopback only, and the port is an argument so it can never collide with the
@@ -1172,7 +1172,7 @@ fn main() {
         session_on: Arc::clone(&store.session_on),
     };
     println!(
-        "macro fixture ({}) on http://{bind}/nocturne",
+        "macro fixture ({}) on http://{bind}/redesign",
         scenario.label()
     );
 
@@ -1653,7 +1653,7 @@ fn fixture_panel_chart(scenario: FixtureScenario, backup: bool) -> ksx_api::Pane
     // nothing here can outlive the overlay table it claims to describe.
     //
     // These go into `notes` as well as `summary` on purpose: the Studio
-    // route (`nocturne_api_panel_chart`) serves only `board_name`,
+    // chart route serves only `board_name`,
     // `image_sha256`, `terminals` and `notes`, so a count that lived in
     // `summary` alone would reach the browser not at all. `summary` is
     // still filled honestly — the CLI read renders it — but the numbers a
@@ -1946,7 +1946,7 @@ impl ksx_api::MachineSource for NoMachine {
         }
     }
 
-    /// The one machine read the migrated /nocturne keyboard pane renders:
+    /// The one machine read the redesign keyboard workbench renders:
     /// a small believable inventory, aligned with the fixture's staged
     /// I-PAC (same selector, so the chosen row marks and the
     /// prepared-for-play control composes its Prepare state). Everything
@@ -1995,7 +1995,7 @@ impl ksx_api::MachineSource for NoMachine {
                     family_id: Some("ultimarc-ipac4".into()),
                     // The BARE version, as device_scan serves it: the studio
                     // renderer prepends the word "firmware" itself, so prose
-                    // here rendered "firmware firmware 1.56" on /nocturne.
+                    // here rendered "firmware firmware 1.56" in redesign.
                     firmware_label: Some("1.56".into()),
                     protocol_profile: Some("ipac4-pac256-v1".into()),
                     profile_state: "profiled".into(),

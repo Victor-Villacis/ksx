@@ -63,6 +63,10 @@
 //! A profile CRUD row now names the still-planned CLI verbs explicitly, so the
 //! guard no longer hides their absence inside configuration verbs that happen
 //! to exist.
+//!
+//! Studio capabilities intentionally absent after the hard cutover are scoped
+//! in `docs/DEFERRED-SURFACES.md`. Their backend and CLI anchors remain here;
+//! an absent Studio cell must not be "satisfied" by restoring a legacy route.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -362,10 +366,10 @@ fn subcommands(help: &str) -> Vec<String> {
 /// stopping earlier would drop every route declared after whatever `.layer()`
 /// happened to come first and report each one as a missing face.
 ///
-/// That is not hypothetical. `/nocturne/import` carries its own 8 MB
-/// `DefaultBodyLimit` partway down the chain; cutting at the first `.layer()`
-/// would hide the routes registered below it. The guard is the application
-/// boundary, while a per-route body layer is only one route's input policy.
+/// That was not hypothetical: the retired `/nocturne/import` route carried its
+/// own 8 MB `DefaultBodyLimit` partway down the chain. The route is gone after
+/// the hard cutover, but the guard remains the application boundary rather
+/// than relying on whichever per-route layer happens to appear first.
 fn studio_routes() -> &'static BTreeSet<String> {
     static ROUTES: LazyLock<BTreeSet<String>> = LazyLock::new(|| {
         const SERVER: &str = "crates/ksx-studio/src/server/mod.rs";
@@ -398,7 +402,7 @@ fn studio_routes() -> &'static BTreeSet<String> {
         // finding BOTH, it is reading the wrong span again, not observing a
         // smaller router.
         assert!(
-            out.len() >= 30 && out.contains("/nocturne") && out.contains("/check"),
+            out.len() >= 30 && out.contains("/redesign") && out.contains("/check"),
             "the route scan found {} paths ({out:?}), which means it read the wrong \
              span of {SERVER}",
             out.len()
@@ -406,6 +410,62 @@ fn studio_routes() -> &'static BTreeSet<String> {
         out
     });
     &ROUTES
+}
+
+/// The hard cutover keeps one harmless bookmark redirect, not a second product.
+///
+/// `docs/DEFERRED-SURFACES.md` is explicit that deferred capabilities retain
+/// their backend/data/CLI contracts where implemented but have no Studio UI.
+/// Pin the mechanical boundary here: four FMIR pages, no legacy route family,
+/// and the bounded simultaneous-signal API still available for a future
+/// Advanced setup caller.
+#[test]
+fn studio_hard_cutover_has_four_pages_and_no_legacy_surface() {
+    let server = read_repo("crates/ksx-studio/src/server/mod.rs");
+    let pages: BTreeSet<&str> = server
+        .match_indices("LivePage::load(\"")
+        .filter_map(|(at, _)| {
+            let rest = &server[at + "LivePage::load(\"".len()..];
+            let end = rest.find('\"')?;
+            Some(&rest[..end])
+        })
+        .collect();
+    assert_eq!(
+        pages,
+        BTreeSet::from(["/check", "/devices", "/pads", "/redesign"]),
+        "Studio's live-page graph must stay the four-page cutover product"
+    );
+
+    let routes = studio_routes();
+    let legacy: Vec<&str> = routes
+        .iter()
+        .filter(|route| route.contains("nocturne"))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        legacy,
+        ["/nocturne"],
+        "only the GET bookmark path may retain the retired Nocturne name"
+    );
+    assert_eq!(
+        server.matches(".route(\"/nocturne\"").count(),
+        1,
+        "the retired bookmark must have exactly one route declaration"
+    );
+    assert!(
+        server.contains(".route(\"/nocturne\", get(retired_nocturne_bookmark))"),
+        "the compatibility path must remain an explicit GET-only redirect"
+    );
+    for route in [
+        "/api/input-test",
+        "/api/input-test/start",
+        "/api/input-test/cancel",
+    ] {
+        assert!(
+            routes.contains(route),
+            "the deferred simultaneous-signal UI must not delete its bounded API contract: {route}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -702,11 +762,10 @@ const ANCHORS: &[Anchors] = &[
         // Deliberately absent from the 10-foot surface: this is a timed,
         // close-range setup diagnostic, not an operating control.
         egui: &["Screen::InputTest"],
-        studio: &[
-            "/api/input-test",
-            "/api/input-test/start",
-            "/api/input-test/cancel",
-        ],
+        // The bounded API contract is deliberately preserved, but an API is
+        // not the deferred Advanced setup UI. This is the obvious future page
+        // name and is asserted absent while the matrix says planned.
+        studio: &["/advanced/input-test"],
     },
     Anchors {
         capability: "Edit configuration",
@@ -714,9 +773,9 @@ const ANCHORS: &[Anchors] = &[
         // `Ask::Assign` IS the "slot→preset only" cell: the Presets screen
         // builds one, and `assign_destination` decides which file it lands in.
         egui: &["Ask::Assign"],
-        // Save is core workbench behavior. Import remains on the explicitly
-        // deferred Settings/Library implementation until that surface lands.
-        studio: &["/redesign/save", "/nocturne/import"],
+        // Save is core workbench behavior. Whole-root import has no Studio
+        // endpoint until the redesigned Settings/Library surface lands.
+        studio: &["/redesign/save"],
     },
     Anchors {
         capability: "Create / update / delete profiles",
@@ -870,10 +929,9 @@ const ANCHORS: &[Anchors] = &[
         ],
         egui: &["Screen::Session", "Ask::Start", "Ask::Stop"],
         // Play and Stop belong to the launcher-owned redesign workbench. Saved
-        // profile switching remains part of the explicitly deferred legacy
-        // Settings/Library surface; redesign's Adopt loads only the saved base
-        // setup and must not be advertised as a profile switch.
-        studio: &["/redesign/play", "/redesign/stop", "/nocturne/adopt"],
+        // profile switching has no Studio face; redesign's Adopt loads only
+        // the saved base setup and must not be advertised as a profile switch.
+        studio: &["/redesign/play", "/redesign/stop"],
     },
     Anchors {
         capability: "Identify an arcade encoder (family, release, whether its chart can be read)",
@@ -1515,8 +1573,8 @@ const CONFIG_SURFACES: &[ConfigSurface] = &[
     ConfigSurface {
         field: "macros",
         row: None,
-        why: "NO FACE for the SWITCH. The macro EDITOR ships (`/nocturne`'s \
-              macro tabs write `[macros.<name>]` into a preset — the `/map` \
+        why: "NO FACE for the SWITCH. The macro EDITOR ships in `/redesign` \
+              (its macro tabs write `[macros.<name>]` into a preset — the `/map` \
               page they were on until 2026-08-25 is gone, the editor is not); \
               what has no control is this per-slot on/off, so a cabinet can \
               carry macros it cannot turn off without an editor.",

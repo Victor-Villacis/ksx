@@ -816,16 +816,16 @@ fn disabled_controls_are_a_pinned_exemption() {
     // exist ONLY in studio.css — no `.ts`, `.rs`, compiled `.js` or compiled
     // `.ir` in this tree emits any of them. They were `/map`'s read-only
     // mapper, and `/map` was deleted in the 2026-08-25 cutover.
-    // `tests/http.rs::a_dead_daemon_is_loud_on_the_product_page` records the
-    // same finding from the other side: "`z-dead`, `l-dead` ... are that
-    // page's DOM vocabulary — `/nocturne` has panes, `n-flash` and `n-dev`".
+    // The current redesign fail-closed HTTP coverage records the same finding
+    // from the other side: unavailable state must remain legible rather than
+    // being painted as an empty or live-looking workbench.
     //
     // The DESIGN QUESTION it raised outlives the pin, so it is kept here:
     // dimming REFERENCE TEXT (a bindings legend the user reads) is not the
     // same exemption as dimming an INACTIVE COMPONENT (a Start button they
     // cannot press), and WCAG 1.4.3 grants only the latter. If a read-only
-    // state returns to /nocturne as PacBench's verbs come back, dim the
-    // affordance and leave the information at full strength.
+    // state returns to a future editor, dim the affordance and leave the
+    // information at full strength.
 }
 
 /// The anti-flash `<style>` used to be a hand copy of `--bg`/`--text` in two

@@ -710,12 +710,10 @@ template and Studio tests pin the two default Guide keys — P1 `LeftWindows` an
 P2 Numpad `*` — in `crates/ksx-api/src/stage.rs` and
 `crates/ksx-core/src/templates.rs`.
 
-They do **not** pin a Game Bar Settings link, because there is not one. A grep
-for `gamebar` / `ms-settings` across `crates/`, `studio-ui/src`,
-`studio-ui/pwtest` and `packaging/` returns four prose comments and no control,
-no URL and no test. Phase 5 step 1 below says the same thing and is the
-authority; this paragraph used to claim the coverage that step says is missing,
-which is the exact shape of error this section exists to prevent.
+The renderer and browser tests pin the `/redesign` link to
+`ms-settings:gaming-gamebar`. That proves the safe, non-mutating remedy is
+present; it cannot prove Windows opened Settings or that the user enabled the
+controller preference. Phase 5 performs that physical check.
 
 Those tests cannot prove that UAC returned to the original user, no console
 flashed, the machine-local certificate/package worked on this Windows machine,
@@ -744,8 +742,8 @@ substitute for this physical run.
 - Plug in two known, visibly distinguishable, supported USB keyboards with
   **different hardware models** and call them **Keyboard A** and **Keyboard B**
   in the run log. Test each in Notepad before opening KSX. Keyboard B must have
-  a numpad: Phase 4 uses the pair to prove an explicit profile-device refresh
-  changed slot device values, and Phase 5 uses B's Numpad `*` Guide binding.
+  a numpad: Phase 4R uses the pair to prove exact-device replacement and Phase
+  5 uses B's Numpad `*` Guide binding.
   Have a known game that reads XInput and Windows' Game Controllers panel
   available. Xbox Game Bar must be installed and allowed by policy for this
   user; its controller setting starts disabled so the on-screen prerequisite
@@ -800,8 +798,8 @@ does not pass this release gate.
    page it could land on by mistake — there is one product page. That cutover
    did briefly leave `ksx open` requesting the deleted `/start`, which put the
    customer's first window on a 404 with no way to type a different address;
-   fixed in `ad520b4` on 2026-08-26 by restoring `/nocturne`. The current core
-   cutover advances `crates/ksx-backend/src/studio_launch.rs` to `/redesign` in
+   fixed in `ad520b4` on 2026-08-26 by restoring `/nocturne`. The hard cutover
+   pins `crates/ksx-backend/src/studio_launch.rs` to `/redesign` in
    both the URL builder and the `--app=` argument, with a test pinning it.
    Confirm the address in the window title/history
    anyway — every phase below starts from this window, and this is the second
@@ -867,24 +865,26 @@ worked with one UAC/no console and the spare intact; staged editing and Play
 were memory-only; the staged mapper was the behavior that ran; and the first
 explicit Save survives a complete stop/relaunch with identical output.
 
-## Phase 4 — saved-game create, switch, edit, refresh and delete in Studio
+## ARCHIVED Phase 4 — retired saved-game Studio regression (do not run)
 
-> **Deferred Settings/Library regression; not a core `/redesign` cutover
-> phase.** Every step below targets the legacy `/nocturne` Configuration menu.
-> The launcher does not expose that menu, and release readiness for the core
-> workbench must not imply that it does. Run this phase only when maintaining
-> the deferred legacy implementation, or replace it when the redesigned
-> Settings/Library surface lands.
+> **NON-RUNNABLE HISTORICAL EVIDENCE.** Every step below targets the deleted
+> `/nocturne` Configuration UI. The hard cutover leaves no page, API, download,
+> or write route capable of running it. It is excluded from Gate 4 PASS and is
+> retained only to seed a new Settings/Library acceptance phase when that
+> surface is designed (`DEFERRED-SURFACES.md`). Do not navigate to these URLs,
+> substitute CLI steps, or record a pass against this phase.
 >
-> **Step 4 cannot currently be performed and this phase cannot pass.** The
-> explicit device-refresh choice has no control on `/nocturne`. The backend
-> capability is intact — `UpdateProfile::rebase_devices` still exists and
-> `nocturne_form_game_update` still reads a `rebase_devices` form field — but
-> the edit form renders Name, Program to launch, Arguments, Players and
-> Controller layout and nothing else, so the field always arrives at its
-> default and the refresh can never be asked for. Restore the checkbox (and its
-> label) in Studio before scheduling this phase; do not "pass" it by skipping
-> the step, because step 4 is the only one of the five that proves the refresh
+> Even before retirement, step 4 could not be performed and this phase could
+> not pass. The
+> explicit device-refresh choice had no control on `/nocturne`. The backend
+> capability is intact — `UpdateProfile::rebase_devices` still exists. The
+> retired `nocturne_form_game_update` handler read a `rebase_devices` form
+> field, but its edit form rendered Name, Program to launch, Arguments, Players and
+> Controller layout and nothing else, so the field always arrived at its
+> default and the refresh could never be asked for. A future Settings/Library
+> acceptance phase must expose that checkbox and its
+> label before it is scheduled; do not "pass" the replacement by skipping the
+> step, because step 4 is the only one of the five that proves the refresh
 > semantics rather than the preservation ones.
 
 1. Navigate explicitly to `/nocturne`. Open the Configuration menu (the **▣**
@@ -898,7 +898,7 @@ explicit Save survives a complete stop/relaunch with identical output.
    controller layout through **Edit &lt;title&gt;…** → **Save changes**. Reopen the
    editor and start it again; the existing Keyboard A selectors must have been
    preserved.
-3. Stop the session. On the deferred `/nocturne` settings surface, confirm **Release selected keyboard**,
+3. Stop the session. On the then-existing `/nocturne` settings surface, confirm **Release selected keyboard**,
    approve UAC and prove Keyboard A is HidUsb/typing with its package and exact
    certificate/key artifacts absent. Then use the Configuration menu's **Start
    over…** → **Discard this draft**, select Keyboard
@@ -926,23 +926,44 @@ explicit Save survives a complete stop/relaunch with identical output.
    the selected controller layout remain. Refresh the page and restart ksx once
    to prove the result was not only browser state.
 
-**PASS Phase 4:** create → switch/play → edit → explicit device refresh → delete
+**Historical PASS condition (archived; cannot be recorded):** create →
+switch/play → edit → explicit device refresh → delete
 is complete in Studio, with no config-file editing or CLI remedy. The two
 exports prove creation/preservation/refresh semantics rather than asking the
 normal saved-game row to expose device-selector jargon.
 
+## Phase 4R — core exact-device release and replacement on `/redesign`
+
+This is the runnable four-page-product replacement for the hardware portion of
+the archived phase. It does not create, edit, switch, or export a saved game.
+
+1. With Play stopped, use `/redesign`'s separately confirmed **Release selected
+   keyboard** action for Keyboard A. Approve UAC and require a fresh survey to
+   prove A is back on HidUsb and typing, with the receipt's exact package,
+   certificate and key artifacts absent.
+2. Keep A connected as the tested spare. Select Keyboard B from the visible
+   device drawer and complete all three Prepare confirmations. Approve UAC;
+   B stops ordinary typing, A remains usable, and the page must identify the
+   exact selected instance rather than inheriting A's state.
+3. Keep the same two controller personas, mapping, macro and split/freeze
+   answer established in Phase 3. If replacing the input clears any of those
+   unrelated staged choices, stop: the workbench lost user work during a
+   device-only repair. Click **Save** and restart the customer launcher once.
+4. Require `/redesign` to recover the exact prepared-B Release action and the
+   same saved controller behavior after restart. A must remain ordinary typing
+   throughout.
+
+**PASS Phase 4R:** A was released completely, B was prepared exactly, the spare
+remained usable, a device-only replacement preserved the rest of the staged
+setup, and restart recovered the correct board and escape action.
+
 ## Phase 5 — real pad output and the Game Bar prerequisite
 
-1. Return to `/nocturne` and use the on-page control that opens
+1. Return to `/redesign` and use the on-page control that opens
    `ms-settings:gaming-gamebar` directly. Confirm ksx did not silently change
    the preference, then enable **Allow your controller to open Game Bar** for
-   this user. **Blocked:** no such control exists on any page — a grep for
-   `gamebar` / `ms-settings` across `crates/ksx-studio` and `studio-ui` finds
-   nothing, and `StartDerived::guide_line` is a field with no writer.
-   `FIRST-RUN.md` §7 requires the remedy; it has never shipped. Until it does,
-   enable the setting by hand and record the step as UNPROVEN rather than PASS,
-   because "the user reached this setting without being told what to do next by
-   us" is the thing this step measures.
+   this user. The renderer and browser gates pin the exact link; this step still
+   requires observing the Windows Settings app on the release machine.
 2. Play the saved two-controller setup on Keyboard B. Confirm both virtual
    controllers move in Game Controllers and the known XInput game, not only in
    ksx's own reading of its pads.
@@ -990,7 +1011,9 @@ at all on a cancel is a failure.
 
 ## GATE 4 PASS criteria
 
-Every phase above passes against one recorded installer SHA and version. There
+Every runnable phase above (1, 2, 3, 4R, 5 and 6) passes against one recorded
+installer SHA and version. Archived Phase 4 is deliberately excluded until a
+new Settings/Library surface receives its own runnable acceptance contract. There
 is no partial pass for “source tests were green,” “the installer compiled,” “one
 pad appeared,” or “the Game Bar mapping exists.” Any failure stays in the run
 log with the last known clean state; fix it, produce a new CI artifact with a
@@ -1017,7 +1040,7 @@ new hash, and restart this gate from Phase 1.
 - Keyboard A Release cleanup / Keyboard B Prepare repeat:
 - Staged binding + macro / before-Play disk comparison / Play result:
 - Save + full restart parity:
-- Profile create/switch/edit/rebase/delete + before/after export result:
+- Archived saved-game Phase 4: NOT RUN (deferred Settings/Library):
 - Real game + Player 1 Left Windows Guide + Player 2 Numpad `*` Guide:
 - Stop/typethrough result:
 - Active-binding uninstall / HidUsb / package+certificate+key+receipt absence / unrelated-state result:

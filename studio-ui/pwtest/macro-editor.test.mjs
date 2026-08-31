@@ -14,15 +14,13 @@
 // describe; `macroSetUnit` found nothing to set, and the sync after the poll
 // wrote "ms" back over the author's choice just as the pointer arrived.
 //
-// ── THE 2026-08-25 CUTOVER, and what it did to this file ───────────────────
+// ── THE REDESIGN CUTOVER ──────────────────────────────────────────────────────
 //
-// This suite was written against `/map`, which no longer exists — `/nocturne`
-// is the whole product now and `/map` answers 404. The macro editor did not
-// go with it: it MOVED, from a `<details>` card on the mapper into a dialog on
-// `/nocturne` opened by the URL itself (`?slot=1&macro=<name>`), with every
-// class renamed to an `n-` prefix. The behaviour under test is the same code
-// path, so nearly every test here is a port, not a rewrite. Three things did
-// genuinely change shape, and each one cost a test or an assertion:
+// The editor is now a client-owned modal on `/redesign`, opened by the URL
+// itself (`?slot=1&macro=<name>`). Redesign deliberately retains the stable
+// `n-mac*` control vocabulary, so these tests exercise the current product
+// rather than preserving a retired route. Three historical behavior changes
+// still explain the assertions below:
 //
 //  1. PER-STEP SELECTION IS GONE. There is no `sel|N` verb and no "step 1 of
 //     3 — 140 ms" line; the duration boxes live on the rows, so there is
@@ -53,7 +51,7 @@
 // `macro_fixture.rs`'s `seed_macros()` — `piano` (a step authored in `ms` and
 // a step authored in `frames`) and `written-by-hand` (five hand-authored
 // holds) — reached the page through `StatusSource::macros()`. NOTHING in
-// ksx-studio calls `macros()` any more; `/nocturne` reads its macros from the
+// ksx-studio calls `macros()` any more; `/redesign` reads its macros from the
 // STAGED SETUP, which the fixture seeds with exactly one three-step macro,
 // `hadouken`:
 //
@@ -67,8 +65,8 @@
 // step authored in `frames`, a PARTIAL deflection (`ly.-16384 + lx.max`), a
 // contradictory hold, or the hat+stick double-binding. Three of those four are
 // reachable through the grid and are asserted where they are built; the partial
-// deflection is not reachable through any door this fixture opens (`/nocturne/
-// import` goes through `config_import`, which the fixture does not implement),
+// deflection is not reachable through any door this fixture opens (the
+// deferred Settings/Library import flow is not part of this core fixture),
 // so the assertion that an INEXACT diagonal is labelled `approx` rather than
 // rewritten has NO SUBJECT HERE and has been removed rather than faked. It
 // wants either `seed_macros()`'s rows moved into the staged setup or a Rust
@@ -97,7 +95,7 @@ import { cargoExecutable, stopFixtureProcess } from "./fixture-process.mjs";
  *  reason). */
 const PORT = Number(process.env.KSX_PWTEST_PORT ?? 4478);
 const BASE = `http://127.0.0.1:${PORT}`;
-/** nocturne.ts's POLL_MS is 2000; anything above it has crossed at least one
+/** redesign.ts's POLL_MS is 2000; anything above it has crossed at least one
  *  poll. The poll is what re-seeds a CLEAN draft from the staged setup, which
  *  is the thing several tests here exist to survive. */
 const PAST_ONE_POLL = 2600;
@@ -106,7 +104,7 @@ const PAST_ONE_POLL = 2600;
  *  opened BY URL now — there is no card to expand and no tab to click — so the
  *  vehicle is a query string rather than a gesture. */
 const MACRO = "hadouken";
-const EDITOR_URL = `${BASE}/nocturne?slot=1&macro=${MACRO}`;
+const EDITOR_URL = `${BASE}/redesign?slot=1&macro=${MACRO}`;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -126,12 +124,8 @@ async function waitForServer(deadlineMs = 120_000) {
   const until = Date.now() + deadlineMs;
   for (;;) {
     try {
-      // `/api/nocturne`, not `/api/map`: the mapper's API was deleted in the
-      // cutover, so a probe on it answers 404 forever. `r.ok` never becomes
-      // true, the loop spins to its deadline, and the failure text says
-      // "never answered" — naming the symptom and hiding the cause, which is
-      // exactly how this suite spent months reporting 21 cancelled tests.
-      const res = await fetch(`${BASE}/api/nocturne`);
+      // Probe the authoritative redesign document, not a retired route.
+      const res = await fetch(`${BASE}/api/redesign`);
       if (res.ok) return;
     } catch {
       // not up yet
@@ -145,7 +139,7 @@ before(async () => {
   // Refuse to test against somebody else's server. A stale fixture — or a real
   // `ksx studio` — answering here would make every assertion below a story
   // about the wrong build.
-  const squatter = await fetch(`${BASE}/api/nocturne`).then(
+  const squatter = await fetch(`${BASE}/api/redesign`).then(
     () => true,
     () => false,
   );
@@ -188,16 +182,34 @@ after(async () => {
 /** A page with the macro editor OPEN. The dialog is served in the markup and
  *  opened by the `?macro=` in the URL, so there is nothing to click first —
  *  but the ISLAND still has to be live before any of this is real, and on
- *  `/nocturne` the "JavaScript is live" marker is on `.nocturne` itself. */
+ *  the Forma island's active marker is the authority for live JavaScript. */
 async function openEditor(url = EDITOR_URL) {
   const page = await browser.newPage({ viewport: { width: 1600, height: 1200 } });
   await page.goto(url, { waitUntil: "domcontentloaded" });
-  await page.waitForFunction(() => document.querySelector(".nocturne")?.classList.contains("js"), null, {
-    timeout: 20_000,
-  });
+  await page.waitForFunction(
+    () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+    null,
+    { timeout: 20_000 },
+  );
   // The duration editor is ON THE ROWS — one box per step — so a row's own box
   // is what says the editor is live rather than a panel under the grid.
   await page.waitForSelector(".n-macbar .n-macdur", { state: "visible" });
+  return page;
+}
+
+async function openWorkbench() {
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1200 } });
+  await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(
+    () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+    null,
+    { timeout: 20_000 },
+  );
+  await page.waitForFunction(
+    () => Boolean(document.querySelector(".forma-canvas-stage")?.style.transform),
+    null,
+    { timeout: 20_000 },
+  );
   return page;
 }
 
@@ -266,7 +278,7 @@ const saveBtn = (page) => page.locator('[data-macact="save"]');
  *  the round trip that commits it.
  *
  *  A duration is committed on `change` — i.e. on blur or Enter — and the act
- *  is a POST to `/nocturne/api/macro/edit`. Waiting for the draft to actually
+ *  is a POST to `/redesign/api/macro/edit`. Waiting for the draft to actually
  *  carry the number is not politeness: `macSave()` and `macAct()` share one
  *  `macBusy` latch, so a Save pressed while the duration act is still in
  *  flight is DROPPED. That is a real defect, and it has its own test below
@@ -424,7 +436,7 @@ describe("the macro editor's duration controls", () => {
 
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.waitForFunction(() =>
-        document.querySelector(".nocturne")?.classList.contains("js"),
+        document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
       );
       await page.waitForSelector(".n-macbar .n-macdur", { state: "visible" });
       // NOTHING is clicked before reading it back: the unit is a fact about
@@ -610,7 +622,11 @@ describe("diagonals are a lens over the stored pair", () => {
         `nothing named what was written: ${JSON.stringify(after.say)}`,
       );
       assert.match(after.say, /because that is what a diagonal is in the file/);
-      assert.equal(after.sayClass, "n-macsay", "a plain report was coloured as a fault");
+      assert.equal(
+        after.sayClass,
+        "n-macsay n-macsay-line",
+        "a plain report was coloured as a fault",
+      );
 
       // UNticking it removes exactly the two — and says which two, from the
       // hold as written.
@@ -976,7 +992,7 @@ describe("diagonals are a lens over the stored pair", () => {
   });
 
   test("the grid is three rings, and the SSR paint already says so", async () => {
-    // The mirror: NocturneIsland.ts re-derives every list on each poll, so the
+    // The mirror: redesign-macro-editor.ts re-derives every list on each poll, so the
     // hydrated grid and the server's first paint have to agree column for
     // column — the same rule the zone tables live under.
     const ssr = await fetch(EDITOR_URL).then((r) => r.text());
@@ -1134,7 +1150,9 @@ describe("a step shorter than the sampling floor", () => {
       // assertion below is on the half that protects the author.
       await cellAt(page, "2|B").click();
       await page.waitForFunction(
-        () => (document.querySelector(".n-macsay")?.className ?? "") === "n-macsay none",
+        () =>
+          (document.querySelector(".n-macsay")?.className ?? "") ===
+          "n-macsay n-macsay-line none",
       );
       const rearmed = await editorState(page);
       assert.match(rearmed.dirty, /Unsaved/, "an edit after the question wrote the macro");
@@ -1155,7 +1173,11 @@ describe("a step shorter than the sampling floor", () => {
       );
       const saved = await editorState(page);
       assert.equal(saved.say, `Saved “${MACRO}”.`);
-      assert.equal(saved.sayClass, "n-macsay", "a successful save was coloured as a fault");
+      assert.equal(
+        saved.sayClass,
+        "n-macsay n-macsay-line",
+        "a successful save was coloured as a fault",
+      );
       assert.equal(saved.saveLabel, "Save this macro", "the question outlived the answer");
       assert.equal(saved.dirty, "");
       // The short step is still short — the save never rewrote it.
@@ -1166,26 +1188,11 @@ describe("a step shorter than the sampling floor", () => {
   });
 
   test("Save is not swallowed by the duration edit that preceded it", async () => {
-    // ⚠️ A LIVE DEFECT, pinned here rather than worked around.
-    //
-    // A duration commits on `change`, which for a pointer user fires on the
-    // MOUSEDOWN THAT PRESSES SAVE — the box blurs, `macAct("dur|…")` starts,
-    // and `macBusy` goes true. The `click` that follows a few milliseconds
-    // later reaches `macSave()`, which opens with `if (!macDraft || macBusy)
-    // return;` and drops the press ON THE FLOOR: no write, no question, no
-    // sentence on `.n-macsay`, and the macro still reads "Unsaved changes".
-    // Measured on the fixture: the first press produces exactly one request,
-    // `POST /nocturne/api/macro/edit`, and none to `/api/macro/save`.
-    //
-    // Type a duration, reach for Save, nothing happens — the single most
-    // ordinary gesture in this editor. The guard is there to stop two ACTS
-    // overlapping; a Save is not an act, and dropping it silently is the one
-    // outcome a busy latch must never produce. The fix belongs in
-    // `NocturneIsland.ts` (`macSave` should wait for the in-flight act instead
-    // of returning), not here.
-    //
-    // The contract asserted is only that THE PRESS IS HEARD: after it, the
-    // editor has either written the macro or said why it will not.
+    // Historical regression: clicking Save directly from a duration field
+    // blurred the input, started its edit request, then let the busy latch
+    // silently discard the Save click. The redesign serializes that gesture.
+    // The contract here is intentionally user-facing: the press is heard, so
+    // the editor either writes the macro or says why it will not.
     const page = await openEditor();
     try {
       const box = durBox(page, 1);
@@ -1195,7 +1202,9 @@ describe("a step shorter than the sampling floor", () => {
       // what a person does and what every other test here deliberately avoids.
       await saveBtn(page).click();
       await page.waitForFunction(
-        () => (document.querySelector(".n-macsay")?.className ?? "") !== "n-macsay none",
+        () =>
+          (document.querySelector(".n-macsay")?.className ?? "") !==
+          "n-macsay n-macsay-line none",
         null,
         { timeout: 10_000 },
       );
@@ -1355,6 +1364,90 @@ describe("motion labels speak diagonals, not pairs", () => {
         /spells the pair it stores beside its name/,
         `it did not point at the row ledger: ${JSON.stringify(after.say)}`,
       );
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe("the canvas macro processor", () => {
+  test("it opens the exact editor and its accessible placement survives a reload", async () => {
+    const page = await openWorkbench();
+    const shell =
+      '#n-mapping-processors .n-flow-processor-shell[data-flow-macro-id*="hadouken"]';
+    const anchor = `${shell} > a.n-flow-processor`;
+    const nudgeToggle = `${shell} > .n-flow-processor-nudge-toggle`;
+    const nudges = `${shell} > .n-flow-processor-nudges`;
+    const automatic = `${shell} > .n-flow-processor-auto`;
+    const storageKey = "ksx-redesign-canvas";
+    try {
+      await page.selectOption('[data-nx="rd-mapping-paths"]', "selected");
+      await page.locator(anchor).waitFor({ state: "visible" });
+      const processorId = await page.locator(anchor).getAttribute("data-flow-macro-id");
+      assert.ok(processorId, "the processor has no stable persistence identity");
+      assert.equal(await page.locator(anchor).getAttribute("aria-haspopup"), "dialog");
+      const dialogId = await page.locator(anchor).getAttribute("aria-controls");
+      assert.equal(dialogId, "n-macro-dialog");
+      assert.equal(
+        await page.locator(`#${dialogId}`).count(),
+        1,
+        "the processor's aria-controls target must exist",
+      );
+      assert.match(
+        await page.locator(anchor).getAttribute("href"),
+        /^\/redesign\?slot=\d+&macro=hadouken$/,
+      );
+
+      await page.locator(anchor).click();
+      await page.waitForURL(/\/redesign\?slot=\d+&macro=hadouken$/);
+      await page.locator("#n-macro-dialog").waitFor({ state: "visible" });
+      await page.waitForFunction(
+        () => document.querySelector("#n-macro-dialog")?.contains(document.activeElement),
+      );
+      assert.equal((await page.locator(".n-macdirty").textContent())?.trim(), "");
+
+      await page.locator(".n-macx").click();
+      await page.waitForFunction(
+        () =>
+          document.querySelector("#n-macro-dialog")?.closest(".nd-back")?.classList.contains("none") &&
+          document.activeElement?.matches("a.n-flow-processor"),
+      );
+
+      await page.locator(nudgeToggle).click();
+      assert.equal(await page.locator(nudgeToggle).getAttribute("aria-expanded"), "true");
+      const right = page.locator(`${nudges} [data-flow-nudge-direction="right"]`);
+      await right.click();
+      await page.waitForFunction(
+        ({ shell, storageKey, processorId }) => {
+          const saved = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
+          const offset = saved.processorOffsets?.[processorId];
+          return document.querySelector(shell)?.getAttribute("data-flow-placement") === "manual" &&
+            Number.isFinite(offset?.x) && Number.isFinite(offset?.y);
+        },
+        { shell, storageKey, processorId },
+      );
+      assert.equal(await page.locator(automatic).isVisible(), true);
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        ({ shell, storageKey, processorId }) => {
+          const saved = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
+          return document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active" &&
+            document.querySelector(shell)?.getAttribute("data-flow-placement") === "manual" &&
+            Number.isFinite(saved.processorOffsets?.[processorId]?.x);
+        },
+        { shell, storageKey, processorId },
+        { timeout: 20_000 },
+      );
+
+      await page.locator(automatic).click();
+      await page.waitForFunction(
+        ({ storageKey, processorId }) =>
+          JSON.parse(localStorage.getItem(storageKey) ?? "{}").processorOffsets?.[processorId] ===
+          undefined,
+        { storageKey, processorId },
+      );
+      assert.equal(await page.locator(shell).getAttribute("data-flow-placement"), "auto");
     } finally {
       await page.close();
     }

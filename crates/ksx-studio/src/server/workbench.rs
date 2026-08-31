@@ -1,15 +1,15 @@
 //! Route-neutral application layer for the setup workbench.
 //!
-//! `/nocturne` and `/redesign` are presentations.  The staged setup, exact
-//! capture transaction, learner, encoder read, mapping writes and lifecycle
-//! actions are product capabilities and must not live inside either page
-//! module.  Keeping them here lets either presentation disappear without
-//! deleting the operations the other one still needs.
+//! `/redesign` is a presentation. The staged setup, exact capture transaction,
+//! learner, encoder read, mapping writes and lifecycle actions are product
+//! capabilities and must not live inside the page module. Keeping them here
+//! also let the legacy presentation disappear without deleting the product
+//! operations.
 
 use super::*;
 
-// Customer copy shared by the two setup presentations. Provider diagnostics
-// remain in typed outcomes/logs and never become redirect query text.
+// Customer copy for the setup presentation. Provider diagnostics remain in
+// typed outcomes/logs and never become redirect query text.
 pub(super) const N_THEME_OK: &str = "Studio theme updated.";
 pub(super) const N_THEME_UNKNOWN: &str = "error: That is not a theme this build ships. Pick one \
      from the list in this menu; nothing was changed.";
@@ -1606,13 +1606,6 @@ async fn macro_edit_on(
     }
 }
 
-pub(super) async fn workbench_api_macro_edit_nocturne(
-    state: State<Arc<AppState>>,
-    body: axum::Json<WorkbenchMacroEditBody>,
-) -> Response {
-    macro_edit_on(state, body, "/nocturne").await
-}
-
 pub(super) async fn workbench_api_macro_edit_redesign(
     state: State<Arc<AppState>>,
     body: axum::Json<WorkbenchMacroEditBody>,
@@ -1627,67 +1620,6 @@ pub(super) enum StartIdentifyResult {
     Failed,
     Busy,
     Cancelled,
-}
-
-/// One legacy identify transaction without presentation state. The daemon's
-/// generation is still the authority: resolve the exact Raw Input instance,
-/// preserve any preparation when reselecting it, and never stage a browser-
-/// supplied device identity.
-pub(super) async fn identify_and_stage(state: Arc<AppState>) -> StartIdentifyResult {
-    tokio::task::spawn_blocking(move || {
-        let mut learn = state.control.learn_start();
-        let Some(generation) = learn.generation else {
-            return StartIdentifyResult::Failed;
-        };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(11);
-        loop {
-            if !learn.ok || learn.generation != Some(generation) {
-                return StartIdentifyResult::Failed;
-            }
-            match learn.state.as_str() {
-                "hit" => {
-                    let Some(observed_instance) = learn
-                        .device
-                        .as_deref()
-                        .filter(|instance| !instance.trim().is_empty())
-                    else {
-                        return StartIdentifyResult::Failed;
-                    };
-                    let identified = match state.machine.device_identify(observed_instance) {
-                        Ok(identified) => identified,
-                        Err(_) => return StartIdentifyResult::Failed,
-                    };
-                    let selector = identified.selector;
-                    return match choose_device_preserving_preparation(
-                        &state,
-                        selector.clone(),
-                        identified.alias,
-                        identified.label,
-                    ) {
-                        DeviceChoice::Chosen | DeviceChoice::Unchanged => {
-                            StartIdentifyResult::Selected(selector)
-                        }
-                        DeviceChoice::Refused => StartIdentifyResult::Failed,
-                    };
-                }
-                "listening" => {
-                    if std::time::Instant::now() >= deadline {
-                        let _ = state.control.learn_cancel_generation(Some(generation));
-                        return StartIdentifyResult::TimedOut;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    learn = state.control.learn_poll();
-                }
-                "timeout" => return StartIdentifyResult::TimedOut,
-                "idle" | "cancelled" | "failed" | "unavailable" | "unknown" => {
-                    return StartIdentifyResult::Failed;
-                }
-                _ => return StartIdentifyResult::Failed,
-            }
-        }
-    })
-    .await
-    .unwrap_or(StartIdentifyResult::Failed)
 }
 
 /// One cancellable identify transaction for the redesign. The browser nonce

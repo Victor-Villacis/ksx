@@ -81,7 +81,7 @@ recorded in [`GATES.md`](GATES.md) against the exact candidate artifact count.
 | M17 | planned | Feedback both ways: widened `Feedback`, host emission, the E8 sink bus | a game's rumble lights a cabinet button |
 | M18 | planned | Catalog breadth + arcade: paddles, arcade stick, dance pad, guitars, wheels, `ksx export mame-ctrlr` | each new persona spawns and passes a joy.cpl press-check |
 | M19 | planned | Key output: a binding can produce keystrokes (E3) | one panel button types a sequence into Notepad **and** into MAME |
-| M10b | 🔨 continuing | Studio as the UI | `/redesign` is the core set-up-and-play workbench; its Tools menu exposes `/check`, `/pads` and `/devices`. Games, layouts, import/export and autostart remain a later Settings/Library block rather than part of this cutover. |
+| M10b | ✅ core hard cutover complete | Studio as the UI | `/redesign` is the set-up-and-play workbench; its Tools menu exposes `/check`, `/pads` and `/devices`, making four live Studio pages. `/nocturne` has no UI/API/write surface beyond a GET bookmark redirect. Settings/Library and Advanced setup are deliberately deferred in `DEFERRED-SURFACES.md`, with existing backend/data/CLI contracts preserved. |
 
 ### What "cabinet gate pending" means, and where it is written down
 

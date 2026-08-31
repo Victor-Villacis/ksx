@@ -1,4 +1,4 @@
-//! The standard board `/nocturne` draws, keyed to the canonical vocabulary.
+//! The standard board `/redesign` draws, keyed to the canonical vocabulary.
 //!
 //! One authored table: each visual cell of the 104-key grid carries its
 //! display cap and the exact [`ksx_core::Key`] spelling the mapper's binding

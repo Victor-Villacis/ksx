@@ -170,6 +170,9 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
     }
     let controllers = RedesignControllers::of(staged, selected_slot, undo_label, macro_selected, q);
     RedesignPayload {
+        environment_id: environment.id.clone(),
+        environment_generation: environment.generation.clone(),
+        environment_fixture: environment.fixture,
         environment_label: environment.label.clone(),
         environment_cls: if environment.fixture {
             "n-environment fixture"
@@ -179,14 +182,14 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
             "n-environment unknown"
         }
         .to_owned(),
+        studio_version: env!("CARGO_PKG_VERSION").to_owned(),
         // The picker's truth. `Err` carries the refusal's sentence (with its
         // remedy — the `/devices` composition), so a refused read renders as
         // one line over an empty picker, never as an empty machine.
         devices,
-        // The composition `/nocturne` performs (snapshot.rs), copied verbatim:
-        // the ONE shared `theme_rows` composer, re-dressed as choice rows, so
-        // the redesign menu and the nocturne picker can never mark different
-        // rows for the same config.
+        // The ONE shared `theme_rows` composer, re-dressed as choice rows, so
+        // the compact and expanded menus cannot mark different rows for the
+        // same config.
         theme_rows: theme_rows(&SetupSnapshot {
             available: setup.is_some(),
             source: String::new(),
@@ -246,8 +249,8 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
 }
 
 /// The served lists this page renders: the topbar theme menu's rows and the
-/// device picker's four tiers. The name convention is the compiler's, proven
-/// on `/nocturne` (`LIST_SLOT_THEMES` in render_nocturne.rs).
+/// device picker's four tiers. The names are the compiler's stable list-slot
+/// convention and are asserted against the embedded IR below.
 const LIST_SLOT_THEME_ROWS: &str = "list:rdThemeRows:array";
 const LIST_SLOT_COMPACT_THEME_ROWS: &str = "list:rdCompactThemeRows:array";
 const LIST_SLOT_DEV_KB: &str = "list:rdDevKb:array";
@@ -367,6 +370,7 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
     serde_json::json!({
         "rdEnvLabel": payload.environment_label,
         "rdEnvCls": payload.environment_cls,
+        "rdStudioVersion": payload.studio_version,
         "rdFlashLine": flash.map(|f| f.trim_start_matches("error: ")).unwrap_or(""),
         "rdFlashCls": match flash {
             None => "n-flash rd-flash none",
@@ -1290,6 +1294,59 @@ mod tests {
         assert!(
             html.contains("USB D209:0430 · connection 00"),
             "same-name boards need their exact connection in the server-rendered picker"
+        );
+    }
+
+    #[test]
+    fn the_cutover_utilities_are_visible_and_keep_their_narrow_contracts() {
+        let page = EmbeddedPage::load("/redesign").unwrap();
+        let payload = fixture_payload();
+        let html = render_redesign(&page, &payload, None).html;
+
+        assert_eq!(payload.environment_id, "seeded-demo");
+        assert_eq!(payload.environment_generation, "test");
+        assert!(payload.environment_fixture);
+        assert_eq!(payload.studio_version, env!("CARGO_PKG_VERSION"));
+        assert!(
+            html.contains("rd-buildmeta"),
+            "support version is available from Setup"
+        );
+        assert!(
+            html.contains(r#"href="ms-settings:gaming-gamebar""#),
+            "the session recovery offers the safe Windows Game Bar settings door"
+        );
+        assert!(
+            html.contains(r#"data-nx="rd-rescan""#),
+            "the served device picker exposes Rescan"
+        );
+        assert!(
+            html.contains(r#"data-nx="canvas-tidy""#),
+            "the served camera cluster exposes Tidy"
+        );
+        assert!(
+            html.contains(r#"id="n-macro-dialog""#),
+            "macro processors' aria-controls target must exist in redesign"
+        );
+
+        // Inspector search and identity color are client-populated because
+        // the Inspector body is the page's declared client subtree. Pin the
+        // stable interaction names and storage ownership at the source seam.
+        for contract in [
+            "rd-binding-filter-input",
+            "rd-controller-color",
+            "ksx-redesign-controller-colors1",
+            "ksx-redesign-state-provenance1",
+            "ksx-nocturne-strips2",
+            "fixtureOwnerIsStale",
+        ] {
+            assert!(
+                REDESIGN_ISLAND_TS.contains(contract),
+                "missing redesign client contract {contract:?}"
+            );
+        }
+        assert!(
+            REDESIGN_TS.contains(r#"params.set("fresh", "1")"#),
+            "Rescan must request a fresh server read instead of repainting cached data"
         );
     }
 

@@ -14,9 +14,10 @@ fresh-user acceptance in §7 remains the release gate.
 > **The CLI is a development surface and is not the product.** Existing
 > `ksx <verb>` contracts stay complete and documented, and new backend
 > capabilities should get a CLI driver. The current matrix is honest about two
-> debts: `ksx stage` and `ksx games new|update|delete` remain planned while their
-> typed backend contracts and Studio faces exist (`docs/SURFACES.md` §3c and
-> §10). The installer advertises neither, and no step below may require them. If
+> debts: `ksx stage` and `ksx games new|update|delete` remain planned. Their
+> typed backend contracts exist, while the redesigned Settings/Library faces
+> are explicitly deferred (`docs/SURFACES.md` §3c and §10). The installer
+> advertises neither, and no step below may require them. If
 > a step in this file can only be done from a shell, that product step is
 > unfinished.
 
@@ -280,24 +281,20 @@ selection; all three preparation confirmations; UAC under the separate admin;
 machine-local public-certificate and no-private-key postconditions; the selected
 keyboard stopping while the tested spare keeps typing; staged
 multi-key/turbo/macro editing; Play before Save; Save and restart parity;
-profile create/update/delete/switch without TOML or CLI; Release restoring the
-exact keyboard; uninstall removing every KSX-owned package/certificate/key/
-receipt only after absence proof; and a real virtual controller moving in a
-game. Until that is true, every green test suite in this repo is measuring
-something narrower than the product.
+Release restoring the exact keyboard; uninstall removing every KSX-owned
+package/certificate/key/receipt only after absence proof; and a real virtual
+controller moving in a game. Deferred Settings/Library and Advanced setup
+journeys are outside this four-page acceptance run and are governed by
+`DEFERRED-SURFACES.md`. Until the runnable gate is complete, every green test
+suite in this repo is measuring something narrower than the product.
 
 The Guide clause has an OS prerequisite and a physical acceptance gate. The
 first-run screen must name the Windows setting above and offer
 `ms-settings:gaming-gamebar` as the direct remedy; ksx must not silently change
-that per-user preference. **That remedy is currently unimplemented**: a grep for
-`gamebar` / `ms-settings` over `crates/ksx-studio` and `studio-ui` finds nothing,
-so the link the older drafts of this file and `GATES.md` described as a button
-does not exist on any page. The payload field that was to hold moment 7's one
-fact about the pad, `StartDerived::guide_line`, survives as a declaration with
-no writer and no reader — its whole workspace footprint is the line that defines
-it. This is a spec requirement that has not shipped, not a page that moved. Unit tests can prove that the default layout maps
-Player 1's Left Windows key and Player 2's Numpad `*` key to Guide, but they
-cannot prove that Windows displayed Game Bar. Moment 7 remains unverified until
-a fresh Windows user with Game Bar enabled turns on that controller setting,
-presses each default Guide key after Play, and observes Game Bar open from the
-virtual pad without using a terminal or another keyboard.
+that per-user preference. `/redesign` now provides that direct link, and both a
+renderer assertion and a browser test pin its exact target. Those tests also
+prove only the browser contract: they cannot prove Windows displayed Settings
+or Game Bar. Moment 7 remains physically unverified until a fresh Windows user
+turns on that controller setting, presses each default Guide key after Play,
+and observes Game Bar open from the virtual pad without using a terminal or
+another keyboard.

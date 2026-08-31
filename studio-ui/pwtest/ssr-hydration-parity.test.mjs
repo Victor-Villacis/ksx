@@ -3,7 +3,7 @@
 // WHY THIS EXISTS. ksx Studio emits the same data twice — slots for the
 // server-rendered paint, the `__ksx-payload` block for the client — and the
 // two are produced by two different derivations in two different languages:
-// `render_nocturne.rs`/`render.rs` on the server, `NocturneIsland.ts` on the
+// `render_redesign.rs`/`render.rs` on the server, `RedesignIsland.ts` on the
 // client (and the same pairing again for `/check`, `/pads` and `/devices`).
 // Nothing in either toolchain checks that they agree. When they disagree the
 // page paints one thing and replaces it milliseconds later: a flash, in
@@ -69,11 +69,8 @@ const exe = path.join(
   process.platform === "win32" ? "macro_fixture.exe" : "macro_fixture",
 );
 
-/** Every server-rendered route, plus the current workbench's open macro view.
- *  `/nocturne` remains for deferred Settings/Library SSR; the open-editor
- *  parity contract belongs to the launcher-owned `/redesign` core. */
+/** Every server-rendered route, plus the workbench's open macro view. */
 const ROUTES = [
-  "/nocturne",
   "/redesign?slot=1&macro=hadouken",
   "/check",
   "/pads",
@@ -317,7 +314,7 @@ before(async () => {
   // how the bind failure below became invisible in the first place.
   for (const session of SESSIONS) {
     const url = baseFor(session);
-    const squatter = await fetch(`${url}/api/nocturne`).then(
+    const squatter = await fetch(`${url}/api/health`).then(
       () => true,
       () => false,
     );
@@ -362,7 +359,7 @@ for (const session of SESSIONS) {
 
       const until = Date.now() + 60_000;
       for (;;) {
-        const up = await fetch(`${base}/api/nocturne`).then(
+        const up = await fetch(`${base}/api/health`).then(
           (r) => r.ok,
           () => false,
         );

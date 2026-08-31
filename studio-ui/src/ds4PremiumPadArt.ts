@@ -8,8 +8,8 @@ import {
 /** Hybrid DualShock 4 (ViGEm PlayStation) master. Funky Designs' CC0
  * geometry supplies the real product detail; our MIT/app semantic layer
  * supplies L2/R2, exact mapper hooks and key callouts. All layers share
- * this one SVG and coordinate box. Extracted verbatim from
- * NocturneIsland so both islands clone ONE drawing. */
+ * this one SVG and coordinate box. Extracted from the retired Nocturne
+ * island so the redesign clones one authoritative drawing. */
 export function Ds4PremiumPadArt() {
   return (
             h(

@@ -95,7 +95,7 @@ export interface WidgetCanvasOptions {
    * panning to space/middle/right-drag and two-finger scroll, pans on plain
    * wheel, and zooms on ctrl/cmd+wheel (which is also how a trackpad pinch
    * arrives). Opt-in so the two canvases can differ without forking the
-   * engine — /nocturne stays "map" and its whole suite stays byte-true. */
+   * engine — callers opt into the newer design-tool camera explicitly. */
   navigationModel?: "map" | "design-tool";
   /** ksx: camera zoom limits; the design-tool lane runs 0.08–3. */
   zoomRange?: { min: number; max: number };
@@ -610,7 +610,7 @@ export class WidgetCanvas {
         }
 
         // ksx: divergence from upstream c91d34c (review-caught). An
-        // adapter-less item (plain `content` widgets — /nocturne's adopted
+        // adapter-less item (plain `content` widgets — redesign's adopted
         // keyboard) has NO runtime host, so upstream's adapter-owned height
         // source never fires and the recorded height stays the mount-time
         // guess forever — which mis-frames fitAll and, worse, "parks" a
@@ -1443,8 +1443,8 @@ export class WidgetCanvas {
       this.#fitWorldRect(bounds, 68, 1.1);
       return;
     }
-    // The map model keeps the shipped math exactly — /nocturne's suite pins
-    // these numbers.
+    // The map model keeps the original shipped math exactly; regression tests
+    // pin these numbers.
     const viewport = this.#viewport.getBoundingClientRect();
     const padded = {
       x: bounds.x - 60,

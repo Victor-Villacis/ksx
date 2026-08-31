@@ -286,10 +286,10 @@ pub(crate) struct EmbeddedPage {
 impl EmbeddedPage {
     /// Load the embedded page for one manifest route.
     ///
-    /// The manifest holds exactly five: the current `"/redesign"` workbench,
-    /// retained `"/nocturne"`, and the tool pages `"/check"`, `"/pads"` and
-    /// `"/devices"`. The old examples here were `"/"` and `"/map"`, both of
-    /// which would now panic on the `expect` at every call site.
+    /// The manifest holds exactly four: the `"/redesign"` workbench and the
+    /// tool pages `"/check"`, `"/pads"` and `"/devices"`. The old examples
+    /// here were `"/"`, `"/map"` and `"/nocturne"`, all of which would now
+    /// panic on the `expect` at every call site.
     pub(crate) fn load(route: &str) -> Result<Self, StudioError> {
         let manifest_json = Assets::get("manifest.json")
             .ok_or_else(|| StudioError::Asset("manifest.json missing from embed".into()))?;
@@ -331,19 +331,19 @@ impl EmbeddedPage {
 /// A page that notices when the asset build has moved underneath it.
 ///
 /// **The bug this exists to remove.** `EmbeddedPage::load` resolves the
-/// manifest to a SPECIFIC hashed filename — `nocturne.8734f6b3.js` — and the
+/// manifest to a SPECIFIC hashed filename — `redesign.8734f6b3.js` — and the
 /// four pages were loaded once into `AppState` and held for the life of the
 /// process. In a debug build `rust_embed` reads asset BYTES from disk per
 /// request, so the files stay live; the NAMES did not. Rebuilding assets under
 /// a running Studio therefore left the page emitting URLs that no longer
-/// existed, and `/nocturne` served a document whose script and stylesheet both
+/// existed, and the product served a document whose script and stylesheet both
 /// 404'd — with nothing in any log to say why. It cost a real debugging
 /// session, and the documented workaround was "restart the lane", which is a
 /// note telling you to live with it rather than a fix.
 ///
 /// So: in a debug build every render re-reads `manifest.json` (already a disk
 /// read there, already cheap) and reloads only when its bytes actually change.
-/// The expensive half — `IrModule::parse` over ~500 KB for `/nocturne` — is
+/// The expensive half — `IrModule::parse` over the product IR — is
 /// paid ONLY on a real rebuild, never per request.
 ///
 /// In release this compiles to a clone of an `Arc`. `manifest.json` is baked
@@ -666,7 +666,7 @@ fn payload_block<T: serde::Serialize>(payload: &T) -> String {
 mod tests {
     use super::*;
 
-    /// **The embed ships exactly the five live routes, and every one of them
+    /// **The embed ships exactly the four live routes, and every one of them
     /// parses.**
     ///
     /// REPLACES 2026-08-26 three copies of `embedded_page_loads_and_ir_is_fmir_v2`
@@ -698,19 +698,14 @@ mod tests {
     /// blocklist. The redesign joined this shared guard when it became the
     /// destination of the tool pages.
     ///
-    /// Folding them closes a real gap rather than just saving runtime.
-    /// `/nocturne` had NO dead-link blocklist at all — the one page that
-    /// absorbed all five deleted surfaces, and therefore has by far the most
-    /// links and by far the most chances to keep pointing at one of them, was
-    /// the only page nothing checked. It is clean today; it was simply
-    /// unguarded.
-    ///
-    /// The dead set is the 2026-08-25 cutover: `/`, `/map`, `/start`,
-    /// `/setup`, `/profiles` and `/workspace` all 404 now.
+    /// The retired set is the 2026-08-25 consolidation plus the hard product
+    /// cutover: none may return as an embedded page, including `/nocturne`,
+    /// whose GET compatibility is a server redirect rather than an FMIR route.
     #[test]
     fn no_page_links_into_a_deleted_surface() {
-        const DEAD: [&str; 6] = [
+        const DEAD: [&str; 7] = [
             r#"href="/""#,
+            r#"href="/nocturne""#,
             r#"href="/start"#,
             r#"href="/map"#,
             r#"href="/setup"#,
@@ -718,16 +713,7 @@ mod tests {
             r#"href="/workspace"#,
         ];
 
-        let pages: [(&str, String); 5] = [
-            (
-                "/nocturne",
-                crate::render_nocturne::render_nocturne(
-                    &EmbeddedPage::load("/nocturne").unwrap(),
-                    &crate::snapshot::NocturnePayload::default(),
-                    None,
-                )
-                .html,
-            ),
+        let pages: [(&str, String); 4] = [
             (
                 "/check",
                 crate::render_check::render_check(
@@ -789,13 +775,9 @@ mod tests {
             );
         }
 
-        // Both product shells expose every focused recovery tool. This stays
-        // true until Nocturne is retired; a route existing in the router is
-        // not enough if a person cannot discover it from the product.
-        for (route, html) in pages
-            .iter()
-            .filter(|(r, _)| matches!(*r, "/nocturne" | "/redesign"))
-        {
+        // The product exposes every focused recovery tool. A route existing
+        // in the router is not enough if a person cannot discover it.
+        for (route, html) in pages.iter().filter(|(r, _)| *r == "/redesign") {
             for tool in ["/check", "/pads", "/devices"] {
                 assert!(
                     html.contains(&format!(r#"href="{tool}""#)),
@@ -807,8 +789,16 @@ mod tests {
 
     #[test]
     fn the_embed_ships_exactly_the_live_routes() {
-        const LIVE: [&str; 5] = ["/nocturne", "/check", "/pads", "/devices", "/redesign"];
-        const DELETED: [&str; 6] = ["/", "/map", "/start", "/setup", "/profiles", "/workspace"];
+        const LIVE: [&str; 4] = ["/check", "/pads", "/devices", "/redesign"];
+        const DELETED: [&str; 7] = [
+            "/",
+            "/nocturne",
+            "/map",
+            "/start",
+            "/setup",
+            "/profiles",
+            "/workspace",
+        ];
 
         let raw = Assets::get("manifest.json").expect("manifest.json is embedded");
         let manifest: serde_json::Value =

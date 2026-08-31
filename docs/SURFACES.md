@@ -12,11 +12,13 @@ week — the matrix had four cells describing capabilities that do not exist, an
 §1's supporting anecdote was false in both halves. Every correction below names
 the code it was checked against.
 
-> **Current route boundary.** `/redesign` is now the launcher-owned core
-> workbench for devices, controllers, mapping and session lifecycle. Detailed
-> `/nocturne` references below remain intentionally accurate for deferred
-> games/layouts/import-export/autostart handlers and for the historical design
-> evidence that led here; they are not the customer landing route.
+> **Current route boundary.** `/redesign` is the launcher-owned product
+> workbench for devices, controllers, mapping and session lifecycle. The other
+> live pages are the focused tools `/check`, `/pads` and `/devices`.
+> `/nocturne` has no product UI, API, or write surface after the hard cutover;
+> an old GET bookmark may redirect to `/redesign`. Historical references below
+> remain dated evidence. Capabilities deliberately left without a Studio face
+> are scoped in [DEFERRED-SURFACES.md](DEFERRED-SURFACES.md).
 
 > This file is **cited from source**, like every other design doc here. That is
 > not decoration: at its first audit `SURFACES.md` had zero references anywhere
@@ -51,8 +53,8 @@ teaches people to ignore the rule rather than to fix the code.
 - **The largest one: the Control Surface document has no backend at all.** Every
   other entry in this list is a *duplicated* rule — a value the backend owns that
   a surface re-states. This one is a whole document class the backend has never
-  heard of. `studio-ui/src/controlSurface.ts` (1,343 lines) defines
-  `ControlSurfaceState`, `/nocturne`'s drawn picture of a physical panel: control
+  heard of. The retired `studio-ui/src/controlSurface.ts` defined
+  `ControlSurfaceState`, the deleted Nocturne page's drawn picture of a physical panel: control
   geometry, `panelLayout`, the `design → teach → route` stage, per-control
   `channels` tying a drawn control to the host signal the real hardware emits,
   and — the part that makes this a state problem rather than a styling one —
@@ -188,9 +190,10 @@ Interception).
 The rule: **an `Err` from a provider gets a typed field on the payload, never a
 `Default::default()` view.** Substituting a default is what turns a refusal into
 a count of zero, and a count of zero into a confident wrong sentence. The shape
-survives the cutover: `NocturneDerived` carries `stage_error`, `scan_error` and
-`presets_error` as three separate strings, one per read, because the page has to
-be able to say *which* provider refused. Note the second-order bug the old
+survives the cutover in `RedesignPayload`, whose separate error fields let the
+page say *which* provider refused. The historical `NocturneDerived` carried
+`stage_error`, `scan_error` and `presets_error` for the same reason. Note the
+second-order bug the old
 Profiles page had, which is what the rule was written against: a defaulted
 `PresetsView` set `noPresetsYet`, whose copy points at a template form fed by
 *the same read that just failed* — a closed loop with a wrong sentence on it.
@@ -225,17 +228,17 @@ surface does a human perform this task on*, and that is answered by the matrix.
 | First run: stage a setup, save or play | partial (`ksx stage` view/adopt/reorder/socd/apply; save and play stay surface acts) | — | **primary** |
 | Author presets / key mappings | owns | — | **primary** |
 | Edit configuration | owns | slot→preset only | **primary** |
-| Rename / delete a controller layout | owns | — | **primary** (deferred Settings/Library; `/nocturne`) |
-| Create / update / delete profiles | planned | view | **primary** (deferred Settings/Library; `/nocturne`) |
+| Rename / delete a controller layout | owns | — | planned (deferred Settings/Library; no Studio UI) |
+| Create / update / delete profiles | planned | view | planned (deferred Settings/Library; no Studio UI) |
 | Device pick / remove | owns | planned | **primary** |
-| Measure simultaneous keyboard / encoder host signals | owns (`ksx input-test start`, `poll`, `cancel`) | — | **primary** (keyboard workbench / Control Surface Builder) |
+| Measure simultaneous keyboard / encoder host signals | owns (`ksx input-test start`, `poll`, `cancel`) | — | planned (deferred Advanced setup UI; API contract preserved) |
 | WinUSB claim / release | owns (advanced) | planned | **primary** (installed `/redesign`; explicit UAC) |
 | "Press a button, see it light" | input only (`ksx monitor`) | **primary** | view (§8) |
 | Is it working: pads, drivers | owns | **primary** | view |
 | Spawn test pads / prune the bus | owns | — | **primary** |
-| Start / stop / switch profile | owns | **primary** | convenience (`/redesign` starts/stops; saved-profile switching remains deferred `/nocturne`) |
+| Start / stop / switch profile | owns | **primary** | convenience (`/redesign` starts/stops; saved-profile switching is deferred with no Studio UI) |
 | Record / replay a session | owns | planned (§3b) | planned (§3b) |
-| Start ksx at sign-in | owns (all options) | planned | **primary** (deferred Settings/Library; `/nocturne`, one tick box) |
+| Start ksx at sign-in | owns (all options) | planned | planned (deferred Settings/Library; no Studio UI) |
 | Split or freeze, after saving | — | — | **primary** (`/redesign`) |
 | Studio theme | — | never (the 10-foot surface is dark-only by design) | **primary** (`/redesign`) |
 | What opposite directions do (SOCD) | owns (`slot assign --socd`) | — | **primary** (`/redesign`) |
@@ -293,7 +296,7 @@ and harder to notice, a face that SHIPPED while the cell still said `planned`:
   Studio face has since shipped and the plan is the surface. *Re-pointed for
   the current cutover:* `/redesign/save` writes the whole staged configuration
   to disk in one act. Whole-root import is a deferred Settings/Library action
-  and remains at `/nocturne/import`. **primary**, which is where the bullet
+  with no Studio endpoint after the hard cutover. **primary**, which is where the bullet
   above already said it belonged.
 
   Recorded rather than quietly re-pointed, because something was **lost** in the
@@ -305,12 +308,12 @@ and harder to notice, a face that SHIPPED while the cell still said `planned`:
   browser button and a CLI verb were literally the same backend call did. §1's
   rule cuts both ways here: the cell is still honest, and the verb is now a
   backend verb with one fewer face than it had.
-- **Profile management — Studio.** Saved games are created, updated and deleted
-  through typed `MachineSource` verbs and switched through the existing control
-  verb. *Re-pointed 2026-08-25:* those four faces were `/profiles*` and are now
-  `/nocturne/game`, `/nocturne/game/update`, `/nocturne/game/delete` and
-  `/nocturne/adopt` — the deferred Settings/Library implementation. The CLI CRUD
-  half is explicitly planned rather than hidden inside a broader "owns" claim;
+- **Profile management — Studio.** Saved games retain typed `MachineSource`
+  create/update/delete contracts and the existing control verb needed to
+  switch. Their 2026-08-25 `/nocturne/*` faces were removed at the hard cutover;
+  the future Settings/Library surface is deliberately **planned**, not implied
+  to exist. The CLI CRUD half is explicitly planned rather than hidden inside
+  a broader "owns" claim;
   the cabinet list remains a view and its operating switch belongs to the
   start/stop row below.
 - **Device pick / remove — Studio.** Was "planned (#22)"; #22 shipped
@@ -480,8 +483,7 @@ picker contains only implemented personas whose canonical backend is `vigem`.
 DualSense is deliberately absent there because its HIDMaestro endpoint and
 one-instance capacity are proved through the product page's own set-up-and-play
 path, not through a page whose inventory and prune verb both describe the ViGEm
-child bus. Neither `/redesign` nor `/nocturne` can install ViGEmBus or
-HIDMaestro: those
+child bus. No Studio page can install ViGEmBus or HIDMaestro: those
 belong to the installer's explicit controller-driver checkboxes. It may only
 report the output backends required by the currently staged supported personas.
 A surface may own one narrowly designed elevated transaction without becoming
@@ -530,10 +532,9 @@ product page and three tool pages**: `/redesign` is the product — the whole
 set-up-and-play workflow — and `/check` (button check), `/pads` (the virtual-pad
 bus and its two verbs) and `/devices` (the device inventory) are the tools. The
 product's Tools menu links those three operational pages; each tool page carries
-an explicit **Set up & play** link back to `/redesign`. `/nocturne` remains
-mounted only for the Settings/Library capabilities explicitly deferred from
-this cutover: saved games, controller-layout management, import/export and
-autostart. It is not the launcher destination or a second core workbench.
+an explicit **Set up & play** link back to `/redesign`. `/nocturne` has no live
+page, API, or write routes. Its GET-only retired-bookmark redirect is not a
+surface and is not an entry point for any deferred capability.
 
 ### The two-page split was reversed, and that is worth more than a rename
 
@@ -565,8 +566,8 @@ What the current `/redesign` workbench does instead of a page boundary:
 - **Adopt and Discard are explicit recovery acts**, not implicit side effects:
   `/redesign/adopt` loads the saved base setup into the draft and
   `/redesign/discard` clears the draft. Saved games and whole-root
-  import/export remain deferred Settings/Library actions on `/nocturne`; they
-  are not represented as if they already exist in the redesign core.
+  import/export remain deferred Settings/Library actions with no Studio UI;
+  they are not represented as if they already exist in the redesign core.
 - **Play still starts the draft without saving it**, which is the whole reason
   the staging contract exists: a person exploring has not decided anything yet
   and must not be punished for it.
@@ -585,13 +586,13 @@ pointed at. Every staged controller is therefore reachable in the full
 button/chord/turbo/macro authoring UI without leaving the page — §3c's "no second
 mapper" claim is now literally true rather than merely architecturally true.
 
-On the deferred `/nocturne` Settings/Library implementation, saved games keep
-the customer-facing create/update/delete/switch behaviour whole: new games
-inherit matching saved base devices and controller behaviour;
-updates preserve game-specific devices by default (or explicitly refresh
-keyboard/mouse selectors); the selected layout applies to every resulting
-player; delete removes exactly one game and keeps layouts. Update/delete use
-backups and stale-write guards in the backend.
+The saved-game backend/data contract remains whole even though it has no Studio
+face after the cutover: new games inherit matching saved base devices and
+controller behaviour; updates preserve game-specific devices by default (or
+explicitly refresh keyboard/mouse selectors); the selected layout applies to
+every resulting player; delete removes exactly one game and keeps layouts.
+Update/delete use backups and stale-write guards in the backend. The future UI
+is scoped, rather than implied, in `DEFERRED-SURFACES.md`.
 
 `/check` is the one page that performs no verb at all, and the one fed by a
 channel that is not the control pipe: `GET /api/live` is Server-Sent Events
@@ -600,29 +601,27 @@ the panel light a control in a browser at display rate. It is still a VIEW —
 it writes nothing, and it decides nothing, because its whole control roster is
 `MapperSlot::bindings`' key set arriving from the backend (§1).
 
-Four current product/tool pages, plus the deferred Settings/Library
-implementation, expose dozens of routes — about forty inside the guard layer
-alone. The rest are the `/api/*` reads, the mutating form endpoints, the service
+Four current product/tool pages expose dozens of routes inside the guard layer.
+The rest are the `/api/*` reads, the mutating form endpoints, the service
 worker, the asset handler and three icons. The distinction is not pedantry — it is the
 whole reason the CSRF guard is one layer over the router rather than a check per
 handler, because "the mapper alone grew eight form endpoints in three
 milestones" and the failure mode being prevented is forgetting one. Collapsing
-five pages into one did not reduce that count; it moved the endpoints under one
+historical pages into one did not reduce that count; it moved the endpoints under one
 prefix, which makes forgetting one easier to spot and no less fatal.
 
-For the **whole config root**, the deferred `/nocturne` Settings/Library surface
-has exactly two verbs: Export
-downloads it as one JSON document (`GET /nocturne/export.json`), and Import
-pastes one back (`POST /nocturne/import`, a dry run unless the write box is
-ticked — `ksx config import`'s consent shape, unchanged). Neither takes a path:
+For the **whole config root**, the preserved contract composes Export as one
+JSON document and Import as a dry run unless the caller gives explicit write
+consent — `ksx config import`'s shape, unchanged. Neither takes a path:
 `MachineSource::config_export|config_import` are in-memory on purpose, because a
 person who asked a page for their configuration should not be handed a directory
 to go and find.
 
-`/nocturne/import` carries its own explicit 8 MB `DefaultBodyLimit`, matching
-the refusal copy and the old whole-cabinet import contract. The limit is
-attached to that exact route rather than the router globally, so unrelated
-forms retain their smaller default exposure.
+The retired `/nocturne/import` route carried an explicit 8 MB
+`DefaultBodyLimit`, matching its refusal copy and whole-cabinet import contract.
+That is sizing and safety evidence for the redesigned Settings/Library surface,
+not a live endpoint. The hard cutover removes the route rather than weakening
+the router globally.
 
 The mapper is good enough to stop treating as supplemental tooling. Authoring a
 25-binding preset is a pointer-and-keyboard task and the browser is simply
@@ -645,7 +644,7 @@ The empty-config daemon owns the control pipe/tray while doing no emulation
 work, which is what makes first-run staging reachable.
 
 > ✅ **The original 404 regression was repaired in `ad520b4`, 2026-08-26; the
-> current core cutover advances that same authority to `/redesign`.**
+> hard cutover pins that same authority to `/redesign`.**
 > `ksx-backend/src/studio_launch.rs` returns `http://127.0.0.1:4460/redesign`,
 > and the `--app=` argument the Chromium launcher builds carries the same
 > address; both are pinned by tests in that file. So the installer shortcut, the
@@ -797,14 +796,15 @@ Five journeys carry nearly all the product's surface area:
    without Save. Its whole draft is one `ksx_core::StagedSetup` in the idle
    daemon/control host. The final Guide instruction is conditional on Windows'
    controller-to-Game-Bar setting; `FIRST-RUN.md` §7 requires it to offer
-   `ms-settings:gaming-gamebar` as the direct remedy, and **that link has never
-   shipped on any page** — a spec debt, not a casualty of the cutover.
+   `ms-settings:gaming-gamebar` as the direct remedy. That exact non-mutating
+   link now ships on `/redesign`; physical Windows behavior remains a Gate 4
+   check rather than a claim inferred from browser tests.
 
    **The repair journey is the same page entered from a different place.**
    Someone who already has a base configuration loads it into the draft with
    `/redesign/adopt`, then edits exactly as a first-run visitor does. Loading a
-   saved game's controllers remains a deferred Settings/Library act on
-   `/nocturne`. Because
+   saved game's controllers remains a deferred Settings/Library act with no
+   Studio UI. Because
    there is no multi-step pending wizard transaction, an abandoned run leaves
    the last complete config valid — that property came from the staging
    contract, not from the page count, so it survived the merge intact.
@@ -818,13 +818,12 @@ Five journeys carry nearly all the product's surface area:
    and not a shrug.
 4. **Start a session** — the everyday path, and the one that must never need a
    keyboard.
-5. **Manage saved games** — create, repair, rename or delete a game and switch
-   to it entirely in Studio, from the **Saved games** section of `/nocturne`'s
-   Configuration menu. Program paths are edited in the per-game disclosure; no
-   TOML or CLI is part of the customer flow. One capability is currently
-   missing a face rather than missing: `UpdateProfile::rebase_devices` — "point
-   this game's slots at the devices I have since saved" — has a handler and a
-   form field and no checkbox, so it cannot be asked for.
+5. **Manage saved games — deferred.** Create, repair, rename or delete a game,
+   switch to it, and explicitly choose whether to rebase its devices. The typed
+   backend/data contracts remain, but no Studio page or form claims this journey
+   after the hard cutover. Its redesigned Settings/Library scope is recorded in
+   `DEFERRED-SURFACES.md`; until then the CLI and configuration contracts are the
+   only available operational paths where implemented.
 
 Each should name the surface it happens on. Where a flow crosses surfaces, that
 crossing is a design smell worth a second look.
@@ -888,10 +887,10 @@ crossing is a design smell worth a second look.
   operational inventory/pick/remove tool and is discoverable from the Tools
   menu (§5).
 - **`ksx games new|update|delete` — the CLI half of saved-game CRUD, owed.**
-  `/nocturne`'s Configuration menu calls typed `MachineSource` verbs over pure
-  plan/apply pairs in `ksx-backend::profile_edit` (`/nocturne/game`,
-  `/nocturne/game/update`, `/nocturne/game/delete`); the CLI row is now honestly
-  `planned` instead of hiding that absence inside configuration verbs. A future
+  Typed `MachineSource` verbs and pure plan/apply pairs remain in
+  `ksx-backend::profile_edit`, but their retired `/nocturne/game*` forms are no
+  longer Studio faces. The CLI row is honestly `planned` instead of hiding that
+  absence inside configuration verbs. A future
   CLI is a thin driver over these same planners, not new profile logic.
 - **Cabinet slot list scrolling — DONE, and not the way this entry said.** It
   read "still broken above four slots ... what is missing is any

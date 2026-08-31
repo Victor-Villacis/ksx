@@ -1,11 +1,11 @@
 # Vendored controller art
 
-The standalone pad drawings ksx Studio renders in status-page tiles and the
-`/map` mapper come from
+The standalone pad drawings ksx Studio renders in the `/pads` tool and the
+redesigned controller picker come from
 **[Gamepad-Asset-Pack](https://github.com/AL2009man/Gamepad-Asset-Pack) by
 AL2009man — MIT license** (verified upstream 2026-08-05; see
-`docs/research/padforge-code-audit.md` §0). Nocturne's interactive controller
-widgets use separate inline hybrid drawings documented below. Per the MIT
+`docs/research/padforge-code-audit.md` §0). The redesign's interactive
+controller widgets use separate inline hybrid drawings documented below. Per the MIT
 pack's credit request, the pages that use its art carry the visible footer:
 
 > controller art: Gamepad-Asset-Pack (MIT) by AL2009man
@@ -16,14 +16,14 @@ pack's credit request, the pages that use its art carry the visible footer:
 |---|---|---|
 | `src-xboxseries.svg` | `VSCView Xbox Wireless Controller.svg` (Xbox One/Series shape) | `/_assets/pad-xbox.svg` |
 | `src-ds4.svg` | `VSCView DualShock 4 Controller.svg` | `/_assets/pad-ds4.svg` |
-| `src-dualshock-tools-ds4.svg` + four external `DualShock4_*_small.svg` files | **NOT Gamepad-Asset-Pack** — hybrid dualshock-tools MIT and Funky Designs UK CC0 sources; see below | generated inline `/nocturne` derivative only |
-| external `PS5_controller_small.svg` | Funky Designs UK CC0; see the trio record below | `dualSensePremiumGeometry.ts` + inline `/nocturne` master |
-| external `Switch_Pro_Controller_detail_small.svg` | Funky Designs UK CC0; see the trio record below | `switchProPremiumGeometry.ts` + inline `/nocturne` master |
-| external `SeriesX_Controller_*_small.svg` files | Funky Designs UK CC0; see the trio record below | `xboxSeriesPremiumGeometry.ts` + `xboxSeriesPremiumArt.ts` inline `/nocturne` master |
+| `src-dualshock-tools-ds4.svg` + four external `DualShock4_*_small.svg` files | **NOT Gamepad-Asset-Pack** — hybrid dualshock-tools MIT and Funky Designs UK CC0 sources; see below | generated inline `/redesign` derivative only |
+| external `PS5_controller_small.svg` | Funky Designs UK CC0; see the trio record below | `dualSensePremiumGeometry.ts` + inline `/redesign` master |
+| external `Switch_Pro_Controller_detail_small.svg` | Funky Designs UK CC0; see the trio record below | `switchProPremiumGeometry.ts` + inline `/redesign` master |
+| external `SeriesX_Controller_*_small.svg` files | Funky Designs UK CC0; see the trio record below | `xboxSeriesPremiumGeometry.ts` + `xboxSeriesPremiumArt.ts` inline `/redesign` master |
 
-## Nocturne DualShock 4 — dualshock-tools MIT + Funky Designs UK CC0
+## Redesign DualShock 4 — dualshock-tools MIT + Funky Designs UK CC0
 
-The semantic Nocturne DualShock 4 reference is
+The semantic redesign DualShock 4 reference is
 [`assets/dualshock-controller.svg`](https://github.com/dualshock-tools/dualshock-tools.github.io/blob/53e4ba84c7784ffb1aa6c4df79b01384dfd843ec/assets/dualshock-controller.svg)
 from `dualshock-tools/dualshock-tools.github.io`, pinned at revision
 `53e4ba84c7784ffb1aa6c4df79b01384dfd843ec`. The vendored file is
@@ -81,7 +81,7 @@ node studio-ui/scripts/compile-funky-ds4.mjs `
   <Magma-Red-small.svg> <Midnight-Blue-small.svg>
 ```
 
-`/nocturne` renders the detailed art at the exact `640 / 3800` scale,
+`/redesign` renders the detailed art at the exact `640 / 3800` scale,
 `matrix(0.1684210526 0 0 0.1684210526 0 105)`, inside the established
 `-28 -18 696 550` viewBox. Twenty-three whole-control hook shapes repeat that
 same transform; app-authored L2/R2 complete the mapper's 25 controls. Art,
@@ -94,10 +94,10 @@ vector geometry. No `img`, filter, mask, private `defs` or dimming filter is
 part of a clone.
 
 The four ZIPs remain in the owner's Downloads folder; only the generated
-inline derivative is compiled into Studio. This is Nocturne-only, so it is
+inline derivative is compiled into Studio. This is workbench-only, so it is
 intentionally not added to `build.mjs`'s standalone `ART` list.
 
-## Nocturne premium trio — Funky Designs UK CC0
+## Redesign premium trio — Funky Designs UK CC0
 
 The same reviewed dedication used by the DualShock 4 names three additional
 works: artwork depicting the **PS5 DualSense, Xbox Series X Controller and
@@ -119,7 +119,7 @@ and viewBox `0 0 3801 2521`.
 
 `scripts/compile-funky-dualsense.mjs` requires that exact hash, viewBox and
 89-shape structure, then emits `src/dualSensePremiumGeometry.ts`. The source
-coordinates enter the `70 216 940 640` Nocturne master through
+coordinates enter the `70 216 940 640` workbench master through
 `matrix(0.2421052632 0 0 0.2421052632 80 234)`. The generated module contains
 the licensed body, semantic paint roles, explicit offset vector depth and the
 25-control hook vocabulary; `src/dualSensePremiumArt.ts` supplies the complete
@@ -217,7 +217,7 @@ Each compiler fails closed on source hash/shape/viewBox drift, strips source
 IDs and editor metadata, assigns explicit semantic classes, and emits no
 raster or external resource. Body, app-authored offset-shadow geometry,
 transparent whole-control hooks and labels are sibling groups inside the same
-SVG coordinate system. No Nocturne clone contains an `img`, filter, mask,
+SVG coordinate system. No redesign clone contains an `img`, filter, mask,
 private `defs`, `foreignObject` or product-photo pixel. Document-wide `nxg-*`
 paint servers and per-family CSS variables provide the material finish without
 duplicating IDs into every widget.
@@ -254,7 +254,7 @@ Community-named file carried author or license metadata, and those bytes were
 **not covered by the Funky Designs CC0 dedication**. The source, its generated
 `crates/ksx-studio/assets/pad-ps5.svg`, and the corresponding `build.mjs`
 generator have all been removed. They are no longer built, embedded or shipped;
-the licensed premium inline DualSense documented above is the only Nocturne
+the licensed premium inline DualSense documented above is the only redesign
 DualSense source chain.
 
 `build.mjs` copies each source it serves into `crates/ksx-studio/assets/` at build
@@ -267,7 +267,7 @@ maps them to the app's colors — its four token values templated from
 **emitted** SVGs, not build.mjs, are what `crates/ksx-studio/tests/contrast.rs`
 pins. The two Gamepad-Asset-Pack sources and the dualshock-tools source stay
 byte-identical to their respective upstream revisions for provenance. The
-premium Nocturne modules have their own hash-pinned Funky Designs CC0 source
+premium redesign modules have their own hash-pinned Funky Designs CC0 source
 chain and are intentionally outside `build.mjs`'s standalone `ART` list. The
 unlicensed legacy DualSense input and output described above are absent from
 the source tree and build pipeline.
@@ -288,12 +288,12 @@ imply endorsement.
 
 ## Hit zones
 
-Per-control elements in the standalone Gamepad-Asset-Pack status/map SVGs are
+Per-control elements in the standalone Gamepad-Asset-Pack SVGs are
 NOT addressable (generic
 `path2288`-style ids, one layer — inspected 2026-08-05), so the mapper draws
-its own overlay of positioned hit-zone buttons instead. The zone tables live
-in `../src/MapIsland.ts` and `crates/ksx-studio/src/render_map.rs`
-(mirrored; the Rust side is test-pinned). They were **authored from the
+its own overlay of positioned hit-zone buttons instead. The test-pinned source
+tables live in `crates/ksx-studio/src/render_map.rs`; the asset build emits the
+browser handoff at `../src/zones.gen.ts`. They were **authored from the
 art's real geometry**, extracted with:
 
 ```

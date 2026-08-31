@@ -456,8 +456,13 @@ workbench. Its Tools menu makes `/check` (test inputs), `/pads` (virtual
 controllers) and `/devices` (hardware) directly discoverable. Live input
 feedback, controller-aware readiness, conflict-safe binding and a responsive
 light/dark interface hold across all four. Saved games, layout-library work,
-import/export and autostart are deliberately outside this core cutover while
-their redesigned Settings/Library surface is planned. The release retains
+import/export and autostart are deliberately outside the hard-cutover scope while
+their redesigned Settings/Library surface is planned. Advanced panel building,
+board presentation, keyboard arrangement and the simultaneous-signal test UI
+are deferred as well. `/nocturne` has no product UI or write/API surface; an
+old GET bookmark only redirects to `/redesign`. The complete scope and the
+backend/CLI contracts preserved for later are recorded in
+[`docs/DEFERRED-SURFACES.md`](docs/DEFERRED-SURFACES.md). The release retains
 recovery, packaging, and one installed USB DualSense through the bounded
 HIDMaestro backend. The supervised cabinet and controller checks in
 [`docs/GATES.md`](docs/GATES.md) remain the authority for physical hardware

@@ -2,9 +2,9 @@ import { h } from "@getforma/core";
 
 /** The paint servers every pad silhouette draws with: one zero-size SVG
  * whose defs resolve document-wide, so CSS can fill shells, wells, sticks
- * and buttons with real gradients instead of flats. Extracted verbatim
- * from NocturneIsland so every page that mounts the shared masters mounts
- * ONE set of paint servers beside them. Keep it OUTSIDE any display:none
+ * and buttons with real gradients instead of flats. Extracted from the
+ * retired Nocturne island so the redesign mounts one set of paint servers
+ * beside its shared masters. Keep it OUTSIDE any display:none
  * subtree: non-Chromium engines refuse gradient url() references into
  * hidden subtrees, and the visible clones resolve against THESE defs. */
 export function PadPaintServers() {

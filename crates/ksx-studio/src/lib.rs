@@ -1,13 +1,12 @@
-//! ksx-studio — the optional Forma-powered local application: the current
-//! redesign workbench, one deferred Settings/Library surface, and three tools
-//! that diagnose the machine around them.
+//! ksx-studio — the optional Forma-powered local application: one redesign
+//! workbench and three focused tools that diagnose the machine around it.
 //!
-//! **Five routes serve a page.** `/redesign` is the current product core:
+//! **Four routes serve a page.** `/redesign` is the product:
 //! first run, staged controllers, mapping, macros and the Save / Apply / Play /
-//! Stop lifecycle. `/nocturne` is retained only for the deferred
-//! Settings/Library work (saved games, layouts, import/export and autostart).
-//! `/check`, `/pads` and `/devices` are focused tools, each discoverable from
-//! the redesign Tools menu.
+//! Stop lifecycle. `/check`, `/pads` and `/devices` are focused tools, each
+//! discoverable from the redesign Tools menu. The retired `/nocturne` GET is
+//! only a permanent bookmark redirect; its UI, API, downloads and writes are
+//! gone. Deferred work is recorded in `docs/DEFERRED-SURFACES.md`.
 //!
 //! This header described eight routes until 2026-08-25, and five of those eight
 //! are now **404**: `/`, `/start`, `/map`, `/setup` and `/profiles` were deleted
@@ -31,16 +30,12 @@
 //! page). Client bundles load under Forma's strict nonce'd CSP
 //! (`connect-src 'self'` covers live data, `form-action 'self'` the forms).
 //!
-//! **Deferred Settings/Library still lives in Nocturne.** The two verbs a
-//! person performs on a whole configuration are **Export**
-//! (`GET /nocturne/export.json`, the whole root as one JSON document, a
-//! download rather than a page) and **Import** (`POST /nocturne/import`, dry
-//! run unless the write box is ticked, under an 8 MB body limit that has to be
-//! re-stated on the route because it does not travel with the verb). Neither
-//! takes a filesystem path: `ksx_api::MachineSource::{config_export,
-//! config_import}` work in memory, so no screen has to put a directory in front
-//! of someone who asked for their configuration. Both moved here from `/setup`;
-//! the routes changed, the reasoning did not.
+//! **Deferred is not hidden.** Saved games, reusable layout-library management,
+//! whole-root import/export, autostart and advanced physical-board authoring
+//! have no Studio surface in this cutover. Their backend/data contracts remain
+//! intact for the redesigned Settings/Library and Advanced setup blocks; the
+//! canonical scope and acceptance requirements live in
+//! `docs/DEFERRED-SURFACES.md`.
 //!
 //! First run now belongs to `/redesign`. The checklist is still decided by the BACKEND
 //! (`ksx-backend::onboard::plan_steps`, pure and total over three counts) and
@@ -125,7 +120,6 @@ mod render;
 mod render_check;
 mod render_devices;
 mod render_map;
-mod render_nocturne;
 mod render_pads;
 mod render_redesign;
 mod render_workbench;

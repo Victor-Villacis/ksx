@@ -17,10 +17,12 @@
 //!    (M9-DECISION §4 item 7), so the window still opens, read-only, behind
 //!    its own "No daemon" banner. Refusing to open at all would delete the
 //!    recovery path.
-//! 2. **Make sure Studio is serving.** Probe the port, start `ksx studio` if
-//!    nothing answers, and **wait for it** before handing anyone a URL. This
-//!    is the `ERR_CONNECTION_REFUSED` half, and it is the property this file
-//!    had before the rest of M9 existed.
+//! 2. **Make sure Studio is serving.** Probe Studio's stable `/api/health`
+//!    contract, start `ksx studio` if a live-machine provider does not answer,
+//!    and **wait for it** before handing anyone a URL. A TCP listener, a 404,
+//!    and a fixture wearing Studio's port are not Studio readiness. This is
+//!    the `ERR_CONNECTION_REFUSED` half, and it is the property this file had
+//!    before the rest of M9 existed.
 //! 3. **Resolve a browser through `App Paths`, never `ShellExecute` on a
 //!    URL** (§4 item 2). `ksx_platform::app_paths` asks the registry where
 //!    `msedge.exe` — then `chrome.exe` — actually is. A default-browser
@@ -69,6 +71,151 @@ pub fn url() -> String {
     // place so the CLI, installer-created shortcut and standalone launcher all
     // open the same route without changing Studio's established port.
     format!("http://127.0.0.1:{PORT}/redesign")
+}
+
+/// The small response shape the launcher accepts from Studio's stable health
+/// endpoint.
+///
+/// This deliberately lives here instead of depending on a product page
+/// payload. The endpoint is the operational boundary shared by launchers and
+/// lane tooling; `/redesign` is only the page opened after that boundary has
+/// proved who owns the listener.
+#[cfg(any(windows, test))]
+#[derive(serde::Deserialize)]
+struct LauncherHealth {
+    environment: LauncherEnvironment,
+    staged: LauncherStaged,
+    setup: Option<LauncherSetup>,
+    setup_error: String,
+}
+
+#[cfg(any(windows, test))]
+#[derive(serde::Deserialize)]
+struct LauncherEnvironment {
+    id: String,
+    label: String,
+    detail: String,
+    fixture: bool,
+    #[serde(default)]
+    generation: String,
+}
+
+#[cfg(any(windows, test))]
+#[derive(serde::Deserialize)]
+struct LauncherStaged {
+    reachable: bool,
+    error: Option<String>,
+}
+
+#[cfg(any(windows, test))]
+#[derive(serde::Deserialize)]
+struct LauncherSetup {
+    config_root: String,
+}
+
+/// Does `address` serve the live-machine KSX health contract within `timeout`?
+///
+/// This is intentionally a tiny HTTP/1.1 client made from `std`: launcher
+/// readiness must not pull an async runtime or general-purpose HTTP client
+/// into the backend. Every socket operation is bounded, the response is
+/// capped, and only loopback addresses are admitted by the caller.
+#[cfg(any(windows, test))]
+fn studio_health_at(address: std::net::SocketAddr, timeout: std::time::Duration) -> bool {
+    use std::io::{Read, Write as _};
+
+    const MAX_HEALTH_RESPONSE_BYTES: u64 = 64 * 1024;
+
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&address, timeout) else {
+        return false;
+    };
+    let socket_timeout = Some(timeout);
+    if stream.set_read_timeout(socket_timeout).is_err()
+        || stream.set_write_timeout(socket_timeout).is_err()
+    {
+        return false;
+    }
+
+    let request = format!(
+        "GET /api/health HTTP/1.1\r\nHost: {address}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+
+    let mut response = Vec::new();
+    if stream
+        .take(MAX_HEALTH_RESPONSE_BYTES + 1)
+        .read_to_end(&mut response)
+        .is_err()
+        || response.len() as u64 > MAX_HEALTH_RESPONSE_BYTES
+    {
+        return false;
+    }
+    let Ok(response) = std::str::from_utf8(&response) else {
+        return false;
+    };
+    let Some((head, body)) = response.split_once("\r\n\r\n") else {
+        return false;
+    };
+    let mut lines = head.split("\r\n");
+    let Some(status) = lines.next() else {
+        return false;
+    };
+    let mut status_parts = status.split_whitespace();
+    if !status_parts
+        .next()
+        .is_some_and(|version| matches!(version, "HTTP/1.0" | "HTTP/1.1"))
+        || status_parts.next() != Some("200")
+    {
+        return false;
+    }
+
+    let headers = lines
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name.trim(), value.trim()))
+        .collect::<Vec<_>>();
+    let header = |wanted: &str| {
+        headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
+            .map(|(_, value)| *value)
+    };
+    if !header("content-type").is_some_and(|value| {
+        value
+            .split(';')
+            .next()
+            .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("application/json"))
+    }) || !header("cache-control").is_some_and(|value| {
+        value
+            .split(',')
+            .any(|directive| directive.trim().eq_ignore_ascii_case("no-store"))
+    }) {
+        return false;
+    }
+
+    let Ok(health) = serde_json::from_str::<LauncherHealth>(body) else {
+        return false;
+    };
+    let environment_is_live = health.environment.id == "live-machine"
+        && !health.environment.fixture
+        && health.environment.generation.is_empty()
+        && !health.environment.label.trim().is_empty()
+        && !health.environment.detail.trim().is_empty();
+    let staged_is_coherent = if health.staged.reachable {
+        health.staged.error.is_none()
+    } else {
+        health
+            .staged
+            .error
+            .as_deref()
+            .is_some_and(|error| !error.trim().is_empty())
+    };
+    let setup_is_coherent = match health.setup {
+        Some(setup) => !setup.config_root.trim().is_empty() && health.setup_error.is_empty(),
+        None => !health.setup_error.trim().is_empty(),
+    };
+
+    environment_is_live && staged_is_coherent && setup_is_coherent
 }
 
 // ---------------------------------------------------------------------------
@@ -232,7 +379,7 @@ const NOT_WINDOWS: &str = "`ksx open` is Windows-only: it resolves a browser thr
 mod live {
     use super::*;
 
-    use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+    use std::net::{Ipv4Addr, SocketAddr};
     use std::time::{Duration, Instant};
 
     /// How long to wait for a freshly started Studio to answer.
@@ -364,7 +511,7 @@ mod live {
         Ok(())
     }
 
-    /// Bring Studio up, and wait — bounded — for its port.
+    /// Bring Studio up, and wait — bounded — for its health contract.
     ///
     /// **"It must never be possible to reach `ERR_CONNECTION_REFUSED` by
     /// clicking a ksx shortcut"** (M9-DECISION §4 item 1). A launcher that
@@ -379,8 +526,9 @@ mod live {
         while !studio_answering() {
             if Instant::now() >= deadline {
                 return Err(format!(
-                    "started `ksx studio` but nothing answered 127.0.0.1:{PORT} within {}s — \
-                     run `ksx studio` in a console to see why",
+                    "started `ksx studio` but no live-machine KSX health response answered \
+                     http://127.0.0.1:{PORT}/api/health within {}s — run `ksx studio` in a \
+                     console to see why (another process may own the port)",
                     READY_TIMEOUT.as_secs()
                 ));
             }
@@ -389,16 +537,17 @@ mod live {
         Ok(())
     }
 
-    /// Is something serving Studio's port right now?
+    /// Is the live-machine Studio provider serving its stable health contract?
     ///
-    /// A TCP connect, not an HTTP request: neither the daemon nor this verb
-    /// links an HTTP client and neither is about to grow one for a liveness
-    /// probe. A listener on loopback that accepts is Studio for this purpose —
-    /// and if it is not, the browser shows whatever it is, which is a truthful
-    /// outcome rather than a refused connection.
+    /// A TCP accept is not readiness: it can be an unrelated process, a stale
+    /// fixture, or Studio before the router is ready. The launcher accepts
+    /// only HTTP 200 from `/api/health` with the live-machine provenance and
+    /// coherent stable fields. `staged.reachable == false` is still healthy
+    /// enough to open because the read-only daemon recovery path is part of
+    /// the product contract.
     fn studio_answering() -> bool {
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, PORT));
-        TcpStream::connect_timeout(&address, CONNECT_TIMEOUT).is_ok()
+        studio_health_at(address, CONNECT_TIMEOUT)
     }
 
     /// Is a daemon answering the control pipe?
@@ -514,6 +663,118 @@ mod tests {
 
     fn profile() -> PathBuf {
         profile_dir(Path::new(r"C:\Users\TestUser\AppData\Local"))
+    }
+
+    /// Serve exactly one deterministic HTTP response and run the real
+    /// launcher probe against it. The listener is ephemeral and loopback-only;
+    /// no test depends on whichever process owns the product port.
+    fn probe_response(response: impl Into<Vec<u8>>, timeout: std::time::Duration) -> bool {
+        use std::io::{Read as _, Write as _};
+
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let response = response.into();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+                .unwrap();
+            let mut request = [0_u8; 1024];
+            let read = stream.read(&mut request).unwrap();
+            let request = std::str::from_utf8(&request[..read]).unwrap();
+            assert!(
+                request.starts_with("GET /api/health HTTP/1.1\r\n"),
+                "{request}"
+            );
+            let _ = stream.write_all(&response);
+        });
+        let ready = studio_health_at(address, timeout);
+        server.join().unwrap();
+        ready
+    }
+
+    fn http_response(status: &str, content_type: &str, cache_control: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nCache-Control: {cache_control}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn live_health_body() -> &'static str {
+        r#"{"environment":{"id":"live-machine","label":"LIVE MACHINE · REAL HARDWARE","detail":"Live providers read this computer's devices.","fixture":false,"generation":""},"staged":{"reachable":false,"error":"No daemon answered."},"setup":null,"setup_error":"Configuration could not be read. Reopen ksx and try again."}"#
+    }
+
+    #[test]
+    fn studio_readiness_accepts_the_live_health_contract_even_without_a_daemon() {
+        let response = http_response(
+            "200 OK",
+            "application/json; charset=utf-8",
+            "private, no-store",
+            live_health_body(),
+        );
+        assert!(probe_response(response, std::time::Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn studio_readiness_rejects_a_random_listener_and_a_fixture() {
+        assert!(!probe_response(
+            b"SSH-2.0-not-studio\r\n".to_vec(),
+            std::time::Duration::from_secs(1)
+        ));
+
+        let fixture = live_health_body()
+            .replacen(r#""id":"live-machine","#, r#""id":"fixture-seeded","#, 1)
+            .replacen(r#""fixture":false"#, r#""fixture":true"#, 1);
+        let response = http_response("200 OK", "application/json", "no-store", &fixture);
+        assert!(!probe_response(response, std::time::Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn studio_readiness_rejects_404_and_malformed_health_responses() {
+        let not_found = http_response("404 Not Found", "application/json", "no-store", "{}");
+        assert!(!probe_response(
+            not_found,
+            std::time::Duration::from_secs(1)
+        ));
+
+        let malformed = http_response("200 OK", "application/json", "no-store", "{not-json");
+        assert!(!probe_response(
+            malformed,
+            std::time::Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn studio_readiness_is_bounded_and_rejects_connection_failure() {
+        use std::io::Read as _;
+
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        });
+        let started = std::time::Instant::now();
+        assert!(!studio_health_at(
+            address,
+            std::time::Duration::from_millis(20)
+        ));
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(400),
+            "the response timeout was not enforced: {:?}",
+            started.elapsed()
+        );
+        server.join().unwrap();
+
+        let unused = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let unused_address = unused.local_addr().unwrap();
+        drop(unused);
+        assert!(!studio_health_at(
+            unused_address,
+            std::time::Duration::from_millis(50)
+        ));
     }
 
     /// **The M9 launcher bug, as an assertion.** Before this pass the tray

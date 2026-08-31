@@ -53,6 +53,20 @@ pub(super) struct RedesignQuery {
     macro_selected: Option<String>,
     /// The bind-pane filter, resolved server-side like nocturne.
     q: Option<String>,
+    /// Explicit cache bust for the user-facing Rescan action. Kept as a
+    /// string so the stable `fresh=1` URL contract stays shared with the
+    /// diagnostic surfaces instead of depending on serde's bool spelling.
+    fresh: Option<String>,
+}
+
+fn redesign_fresh_requested(fresh: Option<&str>) -> bool {
+    fresh.is_some_and(|value| value.trim() == "1")
+}
+
+fn invalidate_redesign_cache_for_fresh(state: &AppState, fresh: Option<&str>) {
+    if redesign_fresh_requested(fresh) {
+        state.machine_cache.invalidate();
+    }
 }
 
 /// The sentences this page may be asked to repeat after a redirect, resolved
@@ -287,6 +301,7 @@ pub(super) async fn redesign_page(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RedesignQuery>,
 ) -> Response {
+    invalidate_redesign_cache_for_fresh(&state, query.fresh.as_deref());
     let payload = collect_redesign(&state, query.slot, query.macro_selected, query.q).await;
     let flash = redesign_flash_from_query(query.flash.as_deref());
     let out = crate::render::with_theme(
@@ -317,6 +332,7 @@ pub(super) async fn api_redesign(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RedesignQuery>,
 ) -> Response {
+    invalidate_redesign_cache_for_fresh(&state, query.fresh.as_deref());
     let payload = collect_redesign(&state, query.slot, query.macro_selected, query.q).await;
     (
         [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
@@ -1503,5 +1519,14 @@ mod tests {
             None,
             "an unreadable setup makes no root-theme claim"
         );
+    }
+
+    #[test]
+    fn only_the_explicit_rescan_token_busts_machine_reads() {
+        assert!(redesign_fresh_requested(Some("1")));
+        assert!(redesign_fresh_requested(Some(" 1 ")));
+        for value in [None, Some(""), Some("0"), Some("true"), Some("01")] {
+            assert!(!redesign_fresh_requested(value), "{value:?}");
+        }
     }
 }

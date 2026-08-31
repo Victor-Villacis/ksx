@@ -155,28 +155,25 @@ gone and nothing has replaced it. Whether it needs to be re-cut along some other
 seam — by verb family, say — is an open question, and the honest answer today is
 that nobody has decided.
 
-**Current cutover update (2026-08-30).** That open seam is now explicit:
-`server/workbench.rs` owns the route-neutral device, capture, controller,
-mapping and lifecycle operations used by both pages; `server/redesign.rs` owns
-the launcher-facing core route; and `server/nocturne.rs` retains only the
-deferred Settings/Library implementation plus thin calls into the shared
-workbench layer. The core no longer imports Nocturne handlers.
+**Current hard-cutover update (2026-08-30).** That open seam was resolved:
+`server/workbench.rs` owns route-neutral device, capture, controller, mapping
+and lifecycle operations, while `server/redesign.rs` owns the only product
+route. The Nocturne server/island implementation and its asset entry left the
+live graph; only a GET bookmark redirect remains. Settings/Library and Advanced
+setup are deferred in `DEFERRED-SURFACES.md`, not retained as a second page.
 
 At the time of the snapshot, `server/session.rs` was four lines: a module doc comment reading *"The session
 JSON verbs: start, stop and resume"* over an empty file. Those verbs are on
 `/redesign` now (`play`, `stop`) except `resume`, which has no Studio caller at
 all (`SURFACES.md` §3, the Resume row in `CONTROL-SURFACE.md`).
 
-**The `render_*.rs` mirror no longer holds either, and it is the more
-interesting half.** `render_map.rs` is still 1,782 lines and `render_check.rs`,
-`render_pads.rs` and `render_devices.rs` are 1,001 / 1,094 / 1,732 — but there
-is no `server/map.rs` for `render_map.rs` to mirror. The renderers outlived the
-page modules because a renderer is about a VIEW and a server module was about a
-URL, and only the URLs were merged. `render_nocturne.rs` (1,359) is the new
-product page's renderer and sits beside `render_map.rs` rather than replacing
-it: the mapper's server-side rendering is still its own file, still cited by
-`crates/ksx-app/tests/docs.rs`, and still the thing that makes the no-JS mapper
-work.
+**The renderer ownership changed at hard cutover too.**
+`render_redesign.rs` is now the sole product-page seam. `render_map.rs` remains
+because its controller-zone geometry, persona labels and macro-domain helpers
+are shared by the redesign snapshot and editor; it no longer owns a `/map`
+page. `render_check.rs`, `render_pads.rs` and `render_devices.rs` still own the
+three operational tool views. Tests pin those shared contracts directly, so
+the retired Nocturne renderer is not needed as a compatibility layer.
 
 **Orphaned WinUSB certificates now have a narrow cleaner.** The read-only
 machine view classifies KSX certificates against the signer reported by every

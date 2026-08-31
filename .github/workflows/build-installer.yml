@@ -225,8 +225,11 @@ jobs:
             throw "forbidden HIDMaestro runtime payload: $($forbidden.FullName -join ', ')"
           }
 
-          $host = Join-Path $release 'ksx-hidmaestro-host.exe'
-          $bytes = [IO.File]::ReadAllBytes($host)
+          # `$Host` is PowerShell's read-only host object (variable names are
+          # case-insensitive). Keep the candidate path unambiguously named so
+          # this boundary runs under both Windows PowerShell and pwsh.
+          $runtimeHostPath = Join-Path $release 'ksx-hidmaestro-host.exe'
+          $bytes = [IO.File]::ReadAllBytes($runtimeHostPath)
           $asciiView = [Text.Encoding]::Latin1.GetString($bytes)
           $utf16View = [Text.Encoding]::Unicode.GetString($bytes)
           $tokens = @(

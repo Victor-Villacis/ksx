@@ -1709,6 +1709,15 @@ fn hidmaestro_runtime_and_installer_bootstrap_are_installed_only_and_built_first
     }
 
     let build = workflow("build-installer.yml");
+    assert!(
+        build.contains("$runtimeHostPath = Join-Path $release 'ksx-hidmaestro-host.exe'")
+            && build.contains("[IO.File]::ReadAllBytes($runtimeHostPath)"),
+        "the runtime distribution boundary must not assign PowerShell's read-only `$Host` variable"
+    );
+    assert!(
+        !build.to_ascii_lowercase().contains("$host ="),
+        "PowerShell variable names are case-insensitive; assigning `$host` fails before the artifact boundary runs"
+    );
     let host = build
         .find("Build pinned production HIDMaestro host")
         .unwrap();

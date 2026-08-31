@@ -818,10 +818,16 @@ async function submitIdentifyForm(
     const resultUrl = new URL(response.url);
     const outcome = resultUrl.searchParams.get("flash");
     const answeredSelector = resultUrl.searchParams.get("identified_selector")?.trim() ?? "";
-    settleIdentifyListener(root, controller);
     if (outcome !== IDENTIFY_OK_FLASH) {
+      // Cancellation owns the authoritative outcome for this exact nonce.
+      // The held start request is allowed to observe the server-side stop and
+      // return its generic failure before the cancel response reaches this
+      // browser. Keep the attempt live until that in-flight arbitration has
+      // answered; retiring it here would make the later, exact "cancelled"
+      // response fail performIdentifyCancellation's ownership check.
       const cancelling = identifyCancellationTask;
       if (cancelling && await cancelling) return;
+      settleIdentifyListener(root, controller);
       if (outcome === IDENTIFY_CANCELLED_FLASH) {
         applyRedesignFlash(outcome);
         setIdentifyUi(
@@ -836,6 +842,7 @@ async function submitIdentifyForm(
       setIdentifyUi(root, "error", "No keyboard selected", identifyErrorCopy(outcome));
       return;
     }
+    settleIdentifyListener(root, controller);
     applyRedesignFlash(outcome);
     setIdentifyUi(
       root,

@@ -521,6 +521,81 @@ describe("redesign identify by key", () => {
     }
   });
 
+  test("the exact cancel result wins when the held start response returns first", async () => {
+    await stage(HOLD_BASE, G915, "g915", "Logitech G915 TKL");
+    const page = await openRedesign(HOLD_BASE);
+    let releaseCancellation;
+    const cancellationGate = new Promise((resolve) => {
+      releaseCancellation = resolve;
+    });
+    try {
+      // Mark when the application has actually received the held start
+      // response. A network response event alone fires before the awaiting
+      // submit handler resumes and would not prove this ordering.
+      await page.evaluate(() => {
+        const nativeFetch = window.fetch.bind(window);
+        window.fetch = async (...args) => {
+          const response = await nativeFetch(...args);
+          const input = args[0];
+          const href = input instanceof Request ? input.url : String(input);
+          if (new URL(href, location.href).pathname === "/redesign/device/identify") {
+            document.documentElement.dataset.testIdentifyResponse = "delivered";
+          }
+          return response;
+        };
+      });
+      await page.route(`${HOLD_BASE}/redesign/device/identify/cancel`, async (route) => {
+        const response = await route.fetch({ maxRedirects: 0 });
+        assert.equal(response.status(), 303, "the exact cancellation did not settle");
+        await cancellationGate;
+        await route.fulfill({ response });
+      });
+
+      await page.click('[data-nx="rd-devs-open"]');
+      const action = page.getByRole("button", {
+        name: "Identify and use as input source",
+        exact: true,
+      });
+      await action.click();
+      await page.locator('[data-rd-identify-status][data-state="listening"]').waitFor();
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(
+        () => document.documentElement.dataset.testIdentifyResponse === "delivered",
+        null,
+        { timeout: 15_000 },
+      );
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+      assert.equal(
+        await page.locator(".rd-devmodal").getAttribute("data-rd-identify-pending"),
+        "true",
+        "the start response retired the nonce before its exact cancellation settled",
+      );
+      const cancellationDelivered = page.waitForResponse((response) =>
+        response.url().includes("/redesign?flash=Keyboard%20identification%20cancelled")
+      );
+      releaseCancellation();
+      await within(
+        cancellationDelivered,
+        15_000,
+        "the released cancellation response did not reach the browser",
+      );
+
+      const cancelled = page.locator('[data-rd-identify-status][data-state="cancelled"]');
+      await cancelled.waitFor({ timeout: 15_000 });
+      assert.match((await cancelled.textContent()) ?? "", /cancelled.*Nothing changed/is);
+      assert.equal(await action.evaluate((button) => button === document.activeElement), true);
+      const payload = await fetch(`${HOLD_BASE}/api/redesign`).then((response) => response.json());
+      const current = [...payload.devices.keyboards, ...payload.devices.encoders]
+        .find((row) => row.aria_current === "true");
+      assert.equal(current?.selector, G915, "cancel must preserve the prior mapping input");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      releaseCancellation?.();
+      await page.unrouteAll({ behavior: "wait" });
+      await page.close();
+    }
+  });
+
   test("leaving the page cancels its exact listener before another attempt starts", async () => {
     await stage(HOLD_BASE, G915, "g915", "Logitech G915 TKL");
     const page = await openRedesign(HOLD_BASE);

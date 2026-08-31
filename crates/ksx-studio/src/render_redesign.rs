@@ -12,7 +12,7 @@ use forma_ir::parser::IrModule;
 use forma_ir::slot::{SlotData, SlotValue};
 use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 
-use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
+use crate::render::{body_prefix_no_refresh, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::render_workbench::{device_row, mode_row, named_slot_ids, other_row};
 use crate::snapshot::{
     compose_board_panel, theme_rows, NocturneChoiceRow, RedesignCaptureState, RedesignControllers,
@@ -601,7 +601,13 @@ pub(crate) fn render_redesign(
     flash: Option<&str>,
 ) -> PageOutput {
     let slots = build_slots(&page.module, payload, flash);
-    let prefix = body_prefix(payload, "/redesign");
+    // This page holds native disclosures, confirmation checkboxes and
+    // selection/search context. A timer-driven document reload is destructive
+    // here: it can erase an in-progress exact-device confirmation before the
+    // user submits it. Scripted clients already have the bounded poller, and
+    // native form submissions return an authoritative render, so the no-JS
+    // workbench waits for the user's next navigation intent.
+    let prefix = body_prefix_no_refresh(payload);
     let macro_ssr_html = crate::render_workbench::macro_dialog_ssr_html(&payload.controllers.mac);
     let rendered = render_page(&PageConfig {
         title: "ksx Studio — redesign",
@@ -845,6 +851,21 @@ mod tests {
             preset: preset.into(),
             ..Default::default()
         }
+    }
+
+    /// `/redesign` is an interactive document even without scripting: native
+    /// details hold setup state and exact-device forms hold required consent.
+    /// A five-second document timer destroys both, so this page deliberately
+    /// carries only the payload prefix and waits for an explicit navigation.
+    #[test]
+    fn the_native_workbench_never_reloads_itself() {
+        let page = EmbeddedPage::load("/redesign").unwrap();
+        let html = render_redesign(&page, &fixture_payload(), None).html;
+        assert!(html.contains("<script id=\"__ksx-payload\""), "{html}");
+        assert!(
+            !html.contains("http-equiv=\"refresh\"") && !html.contains("url=/redesign"),
+            "native workbench state must survive beyond the old five-second timer: {html}"
+        );
     }
 
     /// The inspector payload rides the ONE shared controller-panel and pad

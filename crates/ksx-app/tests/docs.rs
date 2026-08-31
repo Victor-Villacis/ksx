@@ -506,6 +506,27 @@ fn managed_real_qa_is_an_idle_identity_checked_process_pair() {
         "pipe identity must come from the connected handle"
     );
     assert!(
+        probe.contains("ProcessQueryLimitedInformation | Synchronize")
+            && probe.contains("ProcessTerminate | ProcessQueryLimitedInformation | Synchronize")
+            && probe.contains("StaleIdentityAsMissing")
+            && probe.contains("Test-KsxProcessNameProvesStaleIdentity")
+            && probe.contains("NativeErrorCode -eq 5")
+            && teardown.contains("-StaleIdentityAsMissing")
+            && start.contains("-StaleIdentityAsMissing"),
+        "receipt recovery must inspect identity before requesting termination and tolerate only proven-stale generations"
+    );
+    let try_open_start = probe
+        .find("public static ExactProcess TryOpen")
+        .expect("runtime probe must expose exact-process inspection");
+    let terminate_start = probe[try_open_start..]
+        .find("public void Terminate")
+        .map(|offset| try_open_start + offset)
+        .expect("runtime probe must expose lazy exact-process termination");
+    assert!(
+        !probe[try_open_start..terminate_start].contains("ProcessTerminate"),
+        "initial identity inspection must not request process-termination authority"
+    );
+    assert!(
         probe.matches("TokenImpersonationLevel.Anonymous").count() >= 2
             && probe.matches("HandleInheritability.None").count() >= 2,
         "identity and quit probes must use anonymous, non-inheritable pipe handles"

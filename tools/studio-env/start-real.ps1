@@ -200,7 +200,8 @@ function Assert-RealDaemonSafeForReplacement {
                 $ExactRecordedDaemon = Open-KsxExactProcess `
                     -ProcessId ([int]$RecordedDaemon.process_id) `
                     -ExpectedExecutable ([string]$RecordedDaemon.executable) `
-                    -ExpectedCreationTimeUtc $RecordedDaemon.creation_time_utc
+                    -ExpectedCreationTimeUtc $RecordedDaemon.creation_time_utc `
+                    -StaleIdentityAsMissing
             } catch {
                 throw "Refusing real-hardware replacement during ${Phase}: the recorded daemon identity is ambiguous. $($_.Exception.Message)"
             }

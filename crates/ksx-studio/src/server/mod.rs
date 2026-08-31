@@ -594,6 +594,15 @@ pub fn serve(
             .route("/favicon.ico", get(favicon_ico))
             .route("/favicon.svg", get(favicon_svg))
             .route("/apple-touch-icon.png", get(apple_touch_icon))
+            // Native form targets intentionally name only their verb. Carry
+            // the selected slot, macro and binding filter through the 303 at
+            // one response seam, recovered from an exact same-origin
+            // `/redesign` referrer. The middleware can only append encoded
+            // fields to a server-authored relative `/redesign` Location; it
+            // never accepts a return destination from the browser.
+            .layer(axum::middleware::from_fn(
+                preserve_redesign_redirect_context,
+            ))
             // ONE layer over every route, not a check per handler. The routes
             // above arrived in three separate milestones and the mapper alone
             // contributed eight form endpoints; a guard you have to remember to

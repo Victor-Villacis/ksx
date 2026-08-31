@@ -207,7 +207,8 @@ foreach ($Target in $Targets) {
             $ExactProcess = Open-KsxExactProcess `
                 -ProcessId $ManagedProcessId `
                 -ExpectedExecutable $ExpectedExe `
-                -ExpectedCreationTimeUtc $ExpectedCreation
+                -ExpectedCreationTimeUtc $ExpectedCreation `
+                -StaleIdentityAsMissing
             if ($ExactProcess) {
                 $OpenedProcessHandles += $ExactProcess
             }

@@ -175,6 +175,88 @@ fn redesign_redirect(flash: &str) -> Response {
     Redirect::to(&format!("/redesign?flash={}", urlencode(flash))).into_response()
 }
 
+/// The native fallback submits to a verb URL, so the browser's current
+/// workbench query is not part of the form target. Recover only the three
+/// durable navigation fields from a same-origin `/redesign` referrer. The
+/// redirect destination itself remains server-owned and fixed below; this is
+/// context preservation, never a browser-supplied return URL.
+fn redesign_return_context(request: &axum::extract::Request) -> Option<String> {
+    if request.method() != axum::http::Method::POST
+        || !request.uri().path().starts_with("/redesign/")
+    {
+        return None;
+    }
+
+    let host = request.headers().get(header::HOST)?.to_str().ok()?.trim();
+    let referer: axum::http::Uri = request
+        .headers()
+        .get(header::REFERER)?
+        .to_str()
+        .ok()?
+        .parse()
+        .ok()?;
+    if referer.scheme_str() != Some("http")
+        || referer
+            .authority()
+            .is_none_or(|authority| !authority.as_str().eq_ignore_ascii_case(host))
+        || referer.path() != "/redesign"
+    {
+        return None;
+    }
+
+    let Query(query) = Query::<RedesignQuery>::try_from_uri(&referer).ok()?;
+    let mut context = Vec::new();
+    if let Some(slot) = query
+        .slot
+        .filter(|slot| (1..=ksx_api::MAX_SLOTS).contains(slot))
+    {
+        context.push(format!("slot={slot}"));
+    }
+    for (name, value) in [("macro", query.macro_selected), ("q", query.q)] {
+        if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+            context.push(format!("{name}={}", urlencode(&value)));
+        }
+    }
+    (!context.is_empty()).then(|| context.join("&"))
+}
+
+/// Add the validated native-page context only to our own 303 back to the
+/// workbench. API responses, refusals, external redirects and future routes
+/// are left byte-for-byte alone.
+pub(super) async fn preserve_redesign_redirect_context(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let context = redesign_return_context(&request);
+    let mut response = next.run(request).await;
+    let Some(context) = context else {
+        return response;
+    };
+    if response.status() != StatusCode::SEE_OTHER {
+        return response;
+    }
+    let Some(current) = response
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return response;
+    };
+    let Ok(target) = current.parse::<axum::http::Uri>() else {
+        return response;
+    };
+    if target.scheme().is_some() || target.authority().is_some() || target.path() != "/redesign" {
+        return response;
+    }
+
+    let separator = if target.query().is_some() { '&' } else { '?' };
+    let location = format!("{current}{separator}{context}");
+    if let Ok(location) = HeaderValue::from_str(&location) {
+        response.headers_mut().insert(header::LOCATION, location);
+    }
+    response
+}
+
 fn redesign_identify_redirect(flash: &str, selector: Option<&str>) -> Response {
     let mut location = format!("/redesign?flash={}", urlencode(flash));
     if let Some(selector) = selector.filter(|selector| !selector.trim().is_empty()) {
@@ -1527,6 +1609,78 @@ mod tests {
         assert!(redesign_fresh_requested(Some(" 1 ")));
         for value in [None, Some(""), Some("0"), Some("true"), Some("01")] {
             assert!(!redesign_fresh_requested(value), "{value:?}");
+        }
+    }
+
+    fn native_request(
+        method: axum::http::Method,
+        host: &str,
+        referer: &str,
+    ) -> axum::extract::Request {
+        axum::extract::Request::builder()
+            .method(method)
+            .uri("/redesign/stop")
+            .header(header::HOST, host)
+            .header(header::REFERER, referer)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    #[test]
+    fn native_return_context_is_same_origin_allowlisted_and_reencoded() {
+        let request = native_request(
+            axum::http::Method::POST,
+            "127.0.0.1:4460",
+            "http://127.0.0.1:4460/redesign?slot=2&macro=dash+loop&q=face%20buttons\
+             &flash=hostile&fresh=1&identified_selector=private",
+        );
+        assert_eq!(
+            redesign_return_context(&request).as_deref(),
+            Some("slot=2&macro=dash%20loop&q=face%20buttons"),
+            "only durable navigation state crosses the native POST"
+        );
+
+        let encoded_attack = native_request(
+            axum::http::Method::POST,
+            "127.0.0.1:4460",
+            "http://127.0.0.1:4460/redesign?slot=99&macro=%0D%0ALocation%3A%20https%3A%2F%2Fevil.example&q=%20",
+        );
+        assert_eq!(
+            redesign_return_context(&encoded_attack).as_deref(),
+            Some("macro=%0D%0ALocation%3A%20https%3A%2F%2Fevil.example"),
+            "an invalid slot and blank search are dropped, while a macro name is encoded data"
+        );
+    }
+
+    #[test]
+    fn native_return_context_rejects_every_non_workbench_referrer() {
+        for (method, host, referer) in [
+            (
+                axum::http::Method::GET,
+                "127.0.0.1:4460",
+                "http://127.0.0.1:4460/redesign?slot=2",
+            ),
+            (
+                axum::http::Method::POST,
+                "127.0.0.1:4460",
+                "http://evil.example/redesign?slot=2",
+            ),
+            (
+                axum::http::Method::POST,
+                "127.0.0.1:4460",
+                "https://127.0.0.1:4460/redesign?slot=2",
+            ),
+            (
+                axum::http::Method::POST,
+                "127.0.0.1:4460",
+                "http://127.0.0.1:4460/devices?slot=2",
+            ),
+        ] {
+            assert_eq!(
+                redesign_return_context(&native_request(method, host, referer)),
+                None,
+                "must reject {referer}"
+            );
         }
     }
 }

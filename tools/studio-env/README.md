@@ -1,7 +1,8 @@
 # `tools/studio-env` — the lane scripts
 
-Written 2026-08-26. Nine scripts: five you run, three that are libraries, and
-one that builds the front end. This file says which is which, because the
+Written 2026-08-26. Ten scripts: five you run, three that are libraries, one
+that builds the front end, and one CI-only safety contract. This file says
+which is which, because the
 directory previously said nothing and `Get-Help` returned only a `param` block.
 
 The contracts live elsewhere and this file does not restate them:
@@ -27,6 +28,10 @@ checkout.
 libraries. They are not entry points and take no arguments; their file headers
 explain what they guard, and the header in `status.ps1`'s environment table is
 worth reading before adding a lane.
+
+`test-runtime-probe.ps1` is a deterministic CI contract for exact-process
+identity and termination. It uses only disposable child processes and known
+Windows system identities; it never targets a Studio lane.
 
 ## Start, iterate, stop
 

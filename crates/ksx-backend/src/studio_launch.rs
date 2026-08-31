@@ -123,33 +123,61 @@ struct LauncherSetup {
 fn studio_health_at(address: std::net::SocketAddr, timeout: std::time::Duration) -> bool {
     use std::io::{Read, Write as _};
 
-    const MAX_HEALTH_RESPONSE_BYTES: u64 = 64 * 1024;
+    const MAX_HEALTH_RESPONSE_BYTES: usize = 64 * 1024;
 
-    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&address, timeout) else {
+    let started = std::time::Instant::now();
+    let remaining = || {
+        timeout
+            .checked_sub(started.elapsed())
+            .filter(|remaining| !remaining.is_zero())
+    };
+
+    let Some(connect_timeout) = remaining() else {
         return false;
     };
-    let socket_timeout = Some(timeout);
-    if stream.set_read_timeout(socket_timeout).is_err()
-        || stream.set_write_timeout(socket_timeout).is_err()
-    {
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&address, connect_timeout) else {
         return false;
-    }
+    };
 
     let request = format!(
         "GET /api/health HTTP/1.1\r\nHost: {address}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
     );
-    if stream.write_all(request.as_bytes()).is_err() {
-        return false;
+    let mut request = request.as_bytes();
+    while !request.is_empty() {
+        let Some(write_timeout) = remaining() else {
+            return false;
+        };
+        if stream.set_write_timeout(Some(write_timeout)).is_err() {
+            return false;
+        }
+        match stream.write(request) {
+            Ok(0) | Err(_) => return false,
+            Ok(written) => request = &request[written..],
+        }
     }
 
     let mut response = Vec::new();
-    if stream
-        .take(MAX_HEALTH_RESPONSE_BYTES + 1)
-        .read_to_end(&mut response)
-        .is_err()
-        || response.len() as u64 > MAX_HEALTH_RESPONSE_BYTES
-    {
-        return false;
+    let mut chunk = [0_u8; 4096];
+    loop {
+        let Some(read_timeout) = remaining() else {
+            return false;
+        };
+        if stream.set_read_timeout(Some(read_timeout)).is_err() {
+            return false;
+        }
+
+        let bytes_left = MAX_HEALTH_RESPONSE_BYTES + 1 - response.len();
+        let chunk_len = chunk.len().min(bytes_left);
+        match stream.read(&mut chunk[..chunk_len]) {
+            Ok(0) => break,
+            Ok(read) => {
+                response.extend_from_slice(&chunk[..read]);
+                if response.len() > MAX_HEALTH_RESPONSE_BYTES {
+                    return false;
+                }
+            }
+            Err(_) => return false,
+        }
     }
     let Ok(response) = std::str::from_utf8(&response) else {
         return false;
@@ -775,6 +803,43 @@ mod tests {
             unused_address,
             std::time::Duration::from_millis(50)
         ));
+    }
+
+    #[test]
+    fn studio_readiness_has_one_deadline_even_when_the_peer_drips_bytes() {
+        use std::io::{Read as _, Write as _};
+
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+
+            // Stay active well past the probe's budget while ensuring every
+            // individual read receives data before that budget expires. A
+            // per-read timeout therefore takes roughly 800 ms; an absolute
+            // deadline returns near the requested 80 ms.
+            for _ in 0..80 {
+                if stream.write_all(b"H").is_err() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        });
+
+        let started = std::time::Instant::now();
+        assert!(!studio_health_at(
+            address,
+            std::time::Duration::from_millis(80)
+        ));
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "a slow-drip peer extended the total readiness deadline: {elapsed:?}"
+        );
+
+        server.join().unwrap();
     }
 
     /// **The M9 launcher bug, as an assertion.** Before this pass the tray

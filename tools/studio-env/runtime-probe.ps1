@@ -133,9 +133,10 @@ namespace KsxStudioEnvironment
 
     // PowerShell's Stop-Process -Id reopens a process by its numeric ID. If the
     // recorded process exits and Windows reuses that ID between validation and
-    // termination, the replacement could be killed. This object opens one OS
-    // process handle, captures identity from that handle, and retains it for
-    // every later wait/terminate operation.
+    // termination, the replacement could be killed. This object retains one
+    // query/synchronize handle for identity and waits. Termination opens a
+    // second, privileged handle only when needed, then matches its image and
+    // creation time to the retained handle before using it.
     public sealed class ExactProcess : IDisposable
     {
         private const uint ProcessTerminate = 0x0001;
@@ -200,8 +201,13 @@ namespace KsxStudioEnvironment
 
         public static ExactProcess TryOpen(uint processId)
         {
+            // Establish identity before requesting destructive authority. A
+            // stale receipt can point at a PID Windows has since assigned to
+            // an unrelated (and possibly non-terminable) process. Requiring
+            // PROCESS_TERMINATE here made that ordinary stale state look
+            // ambiguous before its image and creation time could be checked.
             SafeProcessHandle process = OpenProcess(
-                ProcessTerminate | ProcessQueryLimitedInformation | Synchronize,
+                ProcessQueryLimitedInformation | Synchronize,
                 false,
                 processId);
             if (process == null || process.IsInvalid)
@@ -289,13 +295,81 @@ namespace KsxStudioEnvironment
             {
                 return;
             }
-            if (!TerminateProcess(process, exitCode))
+
+            // Open a second handle with termination rights only after the
+            // query-only handle has been matched to the receipt. Validate the
+            // second handle against that first handle before using it, so PID
+            // reuse between the two opens can never target the replacement.
+            SafeProcessHandle terminatingProcess = OpenProcess(
+                ProcessTerminate | ProcessQueryLimitedInformation | Synchronize,
+                false,
+                ProcessId);
+            if (terminatingProcess == null || terminatingProcess.IsInvalid)
             {
                 int error = Marshal.GetLastWin32Error();
-                if (!HasExited)
+                if (terminatingProcess != null)
                 {
-                    throw new Win32Exception(error, "The exact managed process could not be terminated.");
+                    terminatingProcess.Dispose();
                 }
+                if (error == ErrorInvalidParameter && HasExited)
+                {
+                    return;
+                }
+                throw new Win32Exception(error, "Termination access to the exact managed process could not be opened.");
+            }
+
+            try
+            {
+                var path = new StringBuilder(32768);
+                uint pathLength = (uint)path.Capacity;
+                if (!QueryFullProcessImageName(terminatingProcess, 0, path, ref pathLength))
+                {
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "The termination handle image could not be identified.");
+                }
+
+                System.Runtime.InteropServices.ComTypes.FILETIME creation;
+                System.Runtime.InteropServices.ComTypes.FILETIME exit;
+                System.Runtime.InteropServices.ComTypes.FILETIME kernel;
+                System.Runtime.InteropServices.ComTypes.FILETIME user;
+                if (!GetProcessTimes(terminatingProcess, out creation, out exit, out kernel, out user))
+                {
+                    throw new Win32Exception(
+                        Marshal.GetLastWin32Error(),
+                        "The termination handle creation time could not be identified.");
+                }
+                long creationFileTime =
+                    ((long)(uint)creation.dwHighDateTime << 32) |
+                    (uint)creation.dwLowDateTime;
+                DateTime terminationCreationTimeUtc = DateTime.FromFileTimeUtc(creationFileTime);
+                if (!String.Equals(path.ToString(), ImagePath, StringComparison.OrdinalIgnoreCase) ||
+                    terminationCreationTimeUtc != CreationTimeUtc)
+                {
+                    if (HasExited)
+                    {
+                        return;
+                    }
+                    throw new InvalidOperationException(
+                        "The process ID changed generations before termination access was acquired.");
+                }
+
+                if (HasExited)
+                {
+                    return;
+                }
+                if (!TerminateProcess(terminatingProcess, exitCode))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    if (!HasExited)
+                    {
+                        throw new Win32Exception(error, "The exact managed process could not be terminated.");
+                    }
+                }
+            }
+            finally
+            {
+                terminatingProcess.Dispose();
             }
         }
 
@@ -320,6 +394,32 @@ namespace KsxStudioEnvironment
 "@
 }
 
+function Test-KsxProcessNameProvesStaleIdentity {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][int]$ProcessId,
+        [Parameter(Mandatory = $true)][string]$ExpectedExecutable
+    )
+
+    # Protected Windows processes can deny even a query/synchronize handle.
+    # The system process snapshot still exposes their non-path image name. A
+    # different base name proves this cannot be our timestamped managed image;
+    # a matching/unknown name remains ambiguous and must never be cleared.
+    try {
+        $ObservedProcess = Get-Process -Id $ProcessId -ErrorAction Stop
+    } catch [Microsoft.PowerShell.Commands.ProcessCommandException] {
+        # Failure to inspect the process name is not proof that the receipt is
+        # stale. Keep the receipt and fail closed rather than risk treating an
+        # exact-but-protected managed process as unrelated.
+        return $false
+    }
+    $ExpectedName = [System.IO.Path]::GetFileNameWithoutExtension($ExpectedExecutable)
+    $ObservedName = [string]$ObservedProcess.ProcessName
+    return -not [string]::IsNullOrWhiteSpace($ExpectedName) -and
+        -not [string]::IsNullOrWhiteSpace($ObservedName) -and
+        -not $ObservedName.Equals($ExpectedName, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 function Open-KsxExactProcess {
     [CmdletBinding()]
     param(
@@ -330,10 +430,27 @@ function Open-KsxExactProcess {
         [string]$ExpectedExecutable,
 
         [AllowNull()]
-        [object]$ExpectedCreationTimeUtc = $null
+        [object]$ExpectedCreationTimeUtc = $null,
+
+        [switch]$StaleIdentityAsMissing
     )
 
-    $ExactProcess = [KsxStudioEnvironment.ExactProcess]::TryOpen([uint32]$ProcessId)
+    try {
+        $ExactProcess = [KsxStudioEnvironment.ExactProcess]::TryOpen([uint32]$ProcessId)
+    } catch {
+        $Cause = $_.Exception
+        while ($Cause.InnerException) { $Cause = $Cause.InnerException }
+        $AccessDenied = $Cause -is [System.ComponentModel.Win32Exception] -and
+            [int]$Cause.NativeErrorCode -eq 5
+        if ($StaleIdentityAsMissing -and $AccessDenied -and
+            (Test-KsxProcessNameProvesStaleIdentity `
+                -ProcessId $ProcessId `
+                -ExpectedExecutable $ExpectedExecutable)) {
+            Write-Verbose "Recorded PID $ProcessId denied identity access but exposes an unrelated process name; treating the receipt generation as stale."
+            return $null
+        }
+        throw
+    }
     if (-not $ExactProcess) {
         return $null
     }
@@ -341,6 +458,11 @@ function Open-KsxExactProcess {
         $ActualExe = [System.IO.Path]::GetFullPath([string]$ExactProcess.ImagePath)
         $ExpectedExe = [System.IO.Path]::GetFullPath($ExpectedExecutable)
         if (-not $ActualExe.Equals($ExpectedExe, [System.StringComparison]::OrdinalIgnoreCase)) {
+            if ($StaleIdentityAsMissing) {
+                Write-Verbose "Recorded PID $ProcessId now owns '$ActualExe', not '$ExpectedExe'; treating the receipt generation as stale."
+                $ExactProcess.Dispose()
+                return $null
+            }
             throw "PID $ProcessId no longer owns the expected executable."
         }
         if ($null -ne $ExpectedCreationTimeUtc -and
@@ -363,6 +485,11 @@ function Open-KsxExactProcess {
                 ($ExactProcess.CreationTimeUtc - $ExpectedCreation).Ticks
             )
             if ($CreationDeltaTicks -gt 9) {
+                if ($StaleIdentityAsMissing) {
+                    Write-Verbose "Recorded PID $ProcessId has a different creation time; treating the receipt generation as stale."
+                    $ExactProcess.Dispose()
+                    return $null
+                }
                 throw "PID $ProcessId was reused after its identity was recorded (expected $($ExpectedCreation.ToString('o')), actual $($ExactProcess.CreationTimeUtc.ToString('o')), delta $CreationDeltaTicks ticks)."
             }
         }

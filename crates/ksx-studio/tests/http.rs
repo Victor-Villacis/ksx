@@ -3305,6 +3305,90 @@ fn nocturne_is_only_a_sanitized_bookmark_redirect() {
     assert!(!control.played.load(Ordering::SeqCst));
 }
 
+/// Plain HTML forms post to their verb URL, so a native browser's selected
+/// controller, macro and binding filter can return only through the Referer.
+/// Exercise the real middleware/guard/handler stack: exact same-origin
+/// workbench context survives, transient/private fields do not, and neither a
+/// foreign origin nor an encoded header payload can choose the destination.
+#[test]
+fn redesign_native_posts_preserve_only_validated_workbench_context() {
+    let addr = start_server(Arc::new(ScriptedControl::new(true)));
+    let post = |referer: &str| {
+        http(
+            addr,
+            &format!(
+                "POST /redesign/stop HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+                 Origin: http://127.0.0.1:{port}\r\nReferer: {referer}\r\n\
+                 Connection: close\r\nContent-Type: application/x-www-form-urlencoded\r\n\
+                 Content-Length: 0\r\n\r\n",
+                port = addr.port(),
+            ),
+        )
+    };
+    let location = |response: &str| {
+        response
+            .lines()
+            .find_map(|line| {
+                line.split_once(':').and_then(|(name, value)| {
+                    name.eq_ignore_ascii_case("location")
+                        .then(|| value.trim().to_owned())
+                })
+            })
+            .unwrap_or_else(|| panic!("response has no Location: {response}"))
+    };
+
+    let own = post(&format!(
+        "http://127.0.0.1:{}/redesign?slot=2&macro=dash+loop&q=face%20buttons&flash=hostile&fresh=1&identified_selector=private",
+        addr.port()
+    ));
+    assert!(own.starts_with("HTTP/1.1 303"), "{own}");
+    let own_location = location(&own);
+    assert!(
+        own_location.starts_with("/redesign?flash="),
+        "{own_location}"
+    );
+    assert!(
+        own_location.ends_with("&slot=2&macro=dash%20loop&q=face%20buttons"),
+        "{own_location}"
+    );
+    for private in ["hostile", "fresh=", "identified_selector"] {
+        assert!(!own_location.contains(private), "{own_location}");
+    }
+
+    let foreign = post("http://evil.example/redesign?slot=3&macro=stolen&q=stolen");
+    assert!(foreign.starts_with("HTTP/1.1 303"), "{foreign}");
+    let foreign_location = location(&foreign);
+    assert!(
+        foreign_location.starts_with("/redesign?flash="),
+        "{foreign_location}"
+    );
+    assert!(!foreign_location.contains("slot="), "{foreign_location}");
+    assert!(!foreign_location.contains("stolen"), "{foreign_location}");
+
+    let encoded = post(&format!(
+        "http://127.0.0.1:{}/redesign?slot=99&macro=%0D%0ALocation%3A%20https%3A%2F%2Fevil.example&q=%20",
+        addr.port()
+    ));
+    let encoded_location = location(&encoded);
+    assert_eq!(
+        encoded
+            .lines()
+            .filter(|line| line.to_ascii_lowercase().starts_with("location:"))
+            .count(),
+        1,
+        "encoded data must not mint a second header: {encoded}"
+    );
+    assert!(
+        encoded_location.starts_with("/redesign?flash="),
+        "{encoded_location}"
+    );
+    assert!(!encoded_location.contains("slot=99"), "{encoded_location}");
+    assert!(
+        encoded_location.ends_with("&macro=%0D%0ALocation%3A%20https%3A%2F%2Fevil.example"),
+        "{encoded_location}"
+    );
+}
+
 #[test]
 fn simultaneous_input_http_routes_share_one_typed_generation_stamped_contract() {
     let control = Arc::new(ScriptedControl::new(false));

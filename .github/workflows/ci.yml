@@ -352,6 +352,9 @@ jobs:
               throw "$($file.Name) has Windows PowerShell 5.1 parse errors: $($errors -join '; ')"
             }
           }
+      - name: Prove exact-process PID-reuse recovery
+        shell: powershell
+        run: tools/studio-env/test-runtime-probe.ps1
       - name: Prove PowerShell 5.1 and 7 hash the same build graph
         shell: powershell
         run: |

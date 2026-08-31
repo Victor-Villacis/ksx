@@ -360,13 +360,40 @@ describe("the redesign theme menu", () => {
     await again.close();
   });
 
+  test("scripting off: native setup state and query survive beyond the old refresh timer", async () => {
+    const page = await browser.newPage({
+      viewport: { width: 1600, height: 1000 },
+      colorScheme: "light",
+      javaScriptEnabled: false,
+    });
+    const route = "/redesign?slot=1&q=face%20buttons";
+    await page.goto(`${BASE}${route}`, { waitUntil: "domcontentloaded" });
+    await page.click(".rd-setupd > summary");
+    const consent = page.locator(
+      'form[action="/redesign/capture/prepare"] input[name="confirm_spare_keyboard"]',
+    );
+    await consent.check();
+
+    // The removed fallback timer fired at five seconds and navigated to bare
+    // /redesign, collapsing Setup and clearing every confirmation. Wait past
+    // that boundary so all three assertions prove the real browser behavior.
+    await page.waitForTimeout(5_500);
+    assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, route);
+    assert.equal(await page.locator(".rd-setupd[open]").count(), 1, "Setup stays open");
+    assert.equal(await consent.isChecked(), true, "required consent stays checked");
+    await page.close();
+  });
+
   test("scripting off: the native details + plain form POST still change the theme", async () => {
     const page = await browser.newPage({
       viewport: { width: 1600, height: 1000 },
       colorScheme: "light",
       javaScriptEnabled: false,
     });
-    await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+    await page.goto(
+      `${BASE}/redesign?slot=2&macro=missing-preview&q=face%20buttons`,
+      { waitUntil: "domcontentloaded" },
+    );
     // The summary is real chrome without scripting (deliberately NOT an
     // `.n-autobtn`, which the stylesheet hides until the wire stamps `.js`).
     await page.click(".rd-themed > summary");
@@ -376,10 +403,12 @@ describe("the redesign theme menu", () => {
     ]);
     // The baseline round trip: POST + 303 back to THIS page, outcome in the
     // query, the redirect's own render already stamped.
-    assert.ok(
-      page.url().startsWith(`${BASE}/redesign?flash=`),
-      `the 303 must land back on /redesign, got ${page.url()}`,
-    );
+    const landed = new URL(page.url());
+    assert.equal(landed.pathname, "/redesign", `the 303 target is fixed: ${page.url()}`);
+    assert.ok(landed.searchParams.has("flash"), `the outcome is present: ${page.url()}`);
+    assert.equal(landed.searchParams.get("slot"), "2", "selected controller survives");
+    assert.equal(landed.searchParams.get("macro"), "missing-preview", "macro door survives");
+    assert.equal(landed.searchParams.get("q"), "face buttons", "binding filter survives");
     assert.equal(
       await page.evaluate(() => document.documentElement.dataset.theme),
       "dark",

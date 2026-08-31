@@ -67,7 +67,7 @@ recorded in [`GATES.md`](GATES.md) against the exact candidate artifact count.
 | M5 | 🔨 code done, cabinet gate pending | Game launching, autostart, tray daemon, install-drivers, frontend integration | cold boot → daemon → frontend → game → clean exit — **GATE 1 and GATE 3 phase 2: NOT RUN** |
 | M6 | 🔨 code done, cabinet gate pending | Installed WinUSB preparation/release: exact-device UAC helper/provider, journaled rollback/uninstall, capture backend and keystroke re-injection | prepare/release round trip, then the same session with Interception uninstalled and a 14-day soak — **GATE 2 and GATE 3 phase 3: NOT RUN** |
 | M6.5 | ✅ done | DS4 spike: a second ViGEm target type | measured in `research/m6.5-ds4-findings.md` — six DS4 targets enumerated alongside four X360 with the XInput count unmoved, which is how players 5+ exist |
-| M7 | ✅ done | UI: controller editing without a text editor | met by Studio's mapper — its own page `/map` when this was written, a region of `/nocturne` since the 2026-08-25 cutover — plus full staged first-run reuse and the live button check (`/check`), not by the egui surface the original entry assumed. Remaining work is polish and physical acceptance, not a missing editor |
+| M7 | ✅ done | UI: controller editing without a text editor | met by Studio's mapper — its own page `/map` when this was written, then a region of `/nocturne` after the 2026-08-25 cutover, now the controller inspector and macro editor in the current `/redesign` workbench — plus full staged first-run reuse and the live button check (`/check`), not by the egui surface the original entry assumed. Remaining work is polish and physical acceptance, not a missing editor |
 | M8 | 🔨 DualSense implementation complete; hardware acceptance pending | HIDMaestro rich-profile Windows backend | Actions proved the deterministic runtime candidate (1465/1465 artifact checks). The product now builds a fixed NativeAOT host, authenticates it over a one-use pipe, maps `PadState`, drains feedback, owns one exact device lifecycle, and packages an explicit v1.6.1 driver installer. Switch Pro/Xbox Series stay gated. Clean-machine hardware/API/force-kill acceptance remains in `docs/HIDMAESTRO.md`. |
 | M8.1 | planned | VIIPER complementary virtual-USB/network/Linux lane | Separate-process prototype creates a virtual keyboard and controller locally and across Windows/Linux; licensing, USB/IP installation, authentication, feedback, reconnect and clean uninstall are acceptance work. It does not replace HIDMaestro or ViGEmBus |
 | M9 | ✅ done, **re-decided** | "ksx is a real Windows application" | Was an egui config UI; cancelled 2026-08-06 because Studio had already shipped the mapper E7 wanted a native UI for (`docs/M9-DECISION.md`). Delivered instead: an owned icon, an installer, a tray "Open ksx", and `ksx open` — daemon up, wait for the port, then a chrome-less window |
@@ -81,7 +81,7 @@ recorded in [`GATES.md`](GATES.md) against the exact candidate artifact count.
 | M17 | planned | Feedback both ways: widened `Feedback`, host emission, the E8 sink bus | a game's rumble lights a cabinet button |
 | M18 | planned | Catalog breadth + arcade: paddles, arcade stick, dance pad, guitars, wheels, `ksx export mame-ctrlr` | each new persona spawns and passes a joy.cpl press-check |
 | M19 | planned | Key output: a binding can produce keystrokes (E3) | one panel button types a sequence into Notepad **and** into MAME |
-| M10b | 🔨 continuing | Studio as the UI | one product page and three tool pages: `/nocturne` is the whole set-up-and-play workflow; `/check`, `/pads` and `/devices` are the tools. Every shell carries one **Set up & play** link plus a **Tools** menu. The numbered Setup → Controls → Test rail was retired with the five pages it spanned (2026-08-25) — there is one destination now, so a rail of steps pointing at it would be four links to the same place |
+| M10b | 🔨 continuing | Studio as the UI | `/redesign` is the core set-up-and-play workbench; its Tools menu exposes `/check`, `/pads` and `/devices`. Games, layouts, import/export and autostart remain a later Settings/Library block rather than part of this cutover. |
 
 ### What "cabinet gate pending" means, and where it is written down
 
@@ -205,7 +205,7 @@ in-box `winusb.sys`. Two properties become structural rather than enforced:
   refuses twins that are present together (`USE-CASES.md` T4).
 
 **The installed lifecycle.** `ksx winusb status` remains a read-only advanced
-survey. The customer mutation path is Studio `/nocturne` → typed
+survey. The customer mutation path is Studio `/redesign` → typed
 `MachineSource::winusb_prepare`/`winusb_release` → fixed installed elevated
 helper. The browser supplies only the exact selector/instance it was served and
 the named confirmations; it never supplies a backend, executable, DLL or raw

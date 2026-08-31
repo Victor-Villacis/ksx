@@ -1,20 +1,30 @@
-//! `/nocturne` — the Nocturne front end, the product surface.
+//! `/nocturne` — the legacy product surface retained for the settings and
+//! library blocks that have not yet been redesigned.
 //!
-//! Grown one migration pass at a time through 2026-08-17, each MOVING (never
-//! copying) a section's backend here while the old page keeps rendering its
-//! frames and its buttons land their answers on `/nocturne`: the keyboard
-//! section from `/start` (device pick, identify-by-key, split-or-freeze,
-//! the WinUSB capture transactions with every guard), the rack and session
-//! verbs from `/workspace`, the learner's JSON trio and the macro editor
-//! verb from `/map` (same routes — one daemon-owned surface per verb for
-//! every door), the configuration menu (adopt grown a per-game field, Start
-//! over, the sign-in task), the staged bind verb with its turbo/toggle
-//! twins, and the macro lifecycle twins. The live input echo rides
-//! `/api/live` client-side.
-//!
-//! What deliberately remains elsewhere: macro STEP editing (the Controls
-//! grid, linked from each macro row until its own pass).
+//! Shared device selection, identify-by-key, capture, controller mapping,
+//! learner, macro, and session lifecycle behavior lives in [`super::workbench`].
+//! This module owns Nocturne's route adapters plus the deferred games, layouts,
+//! import/export, autostart, and custom-board operations. Keeping that boundary
+//! explicit lets `/redesign` evolve without depending on legacy handlers.
 
+use super::workbench::{
+    self as wb, checked, StartIdentifyResult, N_ADD_LAYOUT_ERROR, N_ADOPT_BLOCKED, N_ADOPT_OK,
+    N_APPLY_ERROR, N_APPLY_OK, N_APPLY_RESTART, N_BLOCKING_OK, N_CAPTURE_ALREADY_PREPARED,
+    N_CAPTURE_ALREADY_RELEASED, N_CAPTURE_PREPARED_OK, N_CAPTURE_PREPARED_STAGE_CHANGED,
+    N_CAPTURE_PREPARE_CONSENT, N_CAPTURE_PREPARE_ERROR, N_CAPTURE_PREPARE_RECOVERY,
+    N_CAPTURE_RELEASED_OK, N_CAPTURE_RELEASED_STAGE_CHANGED, N_CAPTURE_RELEASE_CONSENT,
+    N_CAPTURE_RELEASE_ERROR, N_CAPTURE_RELEASE_RECOVERY, N_CAPTURE_TARGET_CHANGED, N_CLEAR_ALL_OK,
+    N_DEVICE_ALREADY_OK, N_DEVICE_OK, N_DISCARD_OK, N_DUP_FULL, N_DUP_OK, N_EDIT_ERROR, N_EDIT_OK,
+    N_FORM_UNREADABLE, N_IDENTIFY_ERROR, N_IDENTIFY_OK, N_IDENTIFY_TIMEOUT, N_KEY_CLEAR_NONE,
+    N_KEY_CLEAR_OK, N_MACRO_BADNAME, N_MACRO_DELETED, N_MACRO_NAME, N_MACRO_NEW, N_MACRO_OK,
+    N_MACRO_TAKEN, N_MOVE_AT_END, N_PLAY_BLOCKING, N_PLAY_CAPTURE, N_PLAY_ERROR,
+    N_PLAY_NO_BINDINGS, N_PLAY_NO_DEVICE, N_PLAY_NO_SLOTS, N_PLAY_OK, N_PLAY_OUTPUT_BLOCKED,
+    N_PLAY_OUTPUT_UNKNOWN, N_READ_SCAN_ERROR, N_READ_SETUP_ERROR, N_SAVE_BLOCKING, N_SAVE_CAPTURE,
+    N_SAVE_ERROR, N_SAVE_NO_BINDINGS, N_SAVE_NO_DEVICE, N_SAVE_NO_SLOTS, N_SAVE_OK, N_STOP_ERROR,
+    N_STOP_OK, N_THEME_OK, N_THEME_UNKNOWN, N_TOGGLE_OK, N_TOGGLE_OLD_DAEMON,
+    N_TOGGLE_UNBOUND_ERROR, N_TURBO_INPUT_ERROR, N_TURBO_OK, N_TURBO_UNBOUND_ERROR, N_UNDO_FULL,
+    N_UNDO_GONE, N_UNDO_OK, N_UNKNOWN_FLASH_ERROR,
+};
 use super::*;
 
 use crate::render_nocturne::render_nocturne;
@@ -27,24 +37,6 @@ use crate::snapshot::NocturnePayload;
 // sentences moved verbatim from `/start` — they were written for exactly
 // these transactions and renaming the page does not change what happened.
 
-pub(super) const N_DEVICE_OK: &str = "Keyboard selected. Nothing has been saved or started.";
-
-/// The answer to choosing the board that is already chosen. **Not a refusal**
-/// — nothing went wrong and nothing needs a remedy; the page is in the state
-/// the press asked for. It says "still" rather than "already" because the
-/// second half is the part that matters: `choose_device_preserving_
-/// preparation` skipped the write precisely so a WinUSB preparation would
-/// survive the press, and a sentence that only said "already selected" would
-/// leave the user unable to tell that from a write that happened to be
-/// idempotent.
-pub(super) const N_DEVICE_ALREADY_OK: &str =
-    "That keyboard is still the selected one. Nothing changed — any preparation it \
-     already has was kept.";
-
-pub(super) const N_BLOCKING_OK: &str =
-    "Capture behaviour updated. Nothing has been saved or started.";
-
-pub(super) const N_THEME_OK: &str = "Studio theme updated.";
 pub(super) const N_BOARD_OK: &str = "Board updated.";
 pub(super) const N_BOARD_MISSING: &str = "the form did not say which board — pick one on the page";
 /// Shown when the board store itself refuses — the folder is unreadable, a
@@ -53,14 +45,6 @@ pub(super) const N_BOARD_MISSING: &str = "the form did not say which board — p
 /// detail, and this string is announced through an aria-live region.
 pub(super) const N_BOARD_STORE_ERROR: &str =
     "The board could not be published — ksx could not use its boards folder.";
-
-pub(super) const N_EDIT_OK: &str = "Draft updated. Nothing has been saved or started.";
-
-pub(super) const N_MOVE_AT_END: &str =
-    "That controller is already at that end of the order. Nothing changed.";
-
-pub(super) const N_APPLY_OK: &str = "Play updated in place. Virtual controllers stayed connected, \
-     and the saved setup was not changed.";
 
 /// Success lines for the migrated saved-game and layout verbs. Named rather
 /// than written at the call site so they can sit in [`N_FLASH_ALLOWLIST`] —
@@ -94,8 +78,6 @@ pub(super) const N_LAYOUT_RENAME_ERROR: &str = "error: Controller layout could n
 pub(super) const N_LAYOUT_DELETE_ERROR: &str = "error: Controller layout could not be deleted. \
      Controllers still using it must be pointed at another layout first; nothing was changed.";
 
-pub(super) const N_THEME_UNKNOWN: &str = "error: That is not a theme this build ships. Pick one \
-     from the list in this menu; nothing was changed.";
 pub(super) const N_BOARD_UNKNOWN: &str = "error: That is not a board this build can draw. Pick \
      one from the list; nothing was changed.";
 
@@ -105,147 +87,6 @@ pub(super) const N_GAME_DELETE_UNCONFIRMED: &str =
     "error: Tick the confirmation box to remove a saved game. Nothing was changed.";
 pub(super) const N_LAYOUT_DELETE_UNCONFIRMED: &str =
     "error: Tick the confirmation box to delete a layout. Nothing was changed.";
-
-pub(super) const N_APPLY_RESTART: &str = "error: The draft changed more than bindings, so the \
-     running session cannot take it in place. Press Play to replace the session; nothing was \
-     changed.";
-
-pub(super) const N_APPLY_ERROR: &str = "error: The changes could not be applied. The running \
-     session was not changed; reopen ksx and try again.";
-
-pub(super) const N_CLEAR_ALL_OK: &str = "Every key unbound on this controller — its macros \
-     kept their steps. Nothing has been saved.";
-
-pub(super) const N_KEY_CLEAR_OK: &str = "That key is free again — everything it drove on this \
-     controller is unbound (macro steps are kept). Nothing has been saved.";
-
-pub(super) const N_KEY_CLEAR_NONE: &str =
-    "error: That key was not driving anything on this controller. Nothing changed.";
-
-pub(super) const N_UNDO_OK: &str =
-    "Controller restored with its bindings. Nothing has been saved or started.";
-
-pub(super) const N_UNDO_GONE: &str = "error: That removal can no longer be undone — the short      undo window has passed. Nothing was changed.";
-
-pub(super) const N_UNDO_FULL: &str = "error: Every controller slot is staged again, so the      removed controller has nowhere to return. Nothing was changed.";
-
-pub(super) const N_ADD_LAYOUT_ERROR: &str = "error: That starting layout has no key block for this player number, so the controller was not added. Try another layout or Empty; nothing was changed.";
-
-pub(super) const N_DUP_OK: &str =
-    "Controller duplicated — same layout, same rules, next free slot. Nothing has been saved.";
-
-pub(super) const N_DUP_FULL: &str =
-    "error: Every controller slot is staged, so there is nothing free to duplicate into. \
-     Remove one first.";
-
-pub(super) const N_SAVE_OK: &str = "Setup saved. Play was not started or changed.";
-
-pub(super) const N_SAVE_ERROR: &str =
-    "error: The setup could not be saved. Check the draft on this screen; nothing was written.";
-
-pub(super) const N_PLAY_OK: &str =
-    "Play is running from this draft. The saved setup was not changed.";
-
-pub(super) const N_PLAY_ERROR: &str =
-    "error: Play could not start. Check the draft on this screen; nothing was started.";
-
-pub(super) const N_STOP_OK: &str = "Play stopped. Virtual controllers were disconnected.";
-
-pub(super) const N_STOP_ERROR: &str =
-    "error: Play could not be stopped. Try again, or use L-Ctrl five times.";
-
-pub(super) const N_EDIT_ERROR: &str =
-    "error: The change could not be made. Reopen ksx and try again; nothing was changed.";
-
-pub(super) const N_IDENTIFY_OK: &str =
-    "Keyboard identified and selected. Nothing has been captured, saved, or started.";
-
-pub(super) const N_IDENTIFY_TIMEOUT: &str =
-    "error: No keyboard answered in time. Nothing changed; try Identify again and press one key.";
-
-pub(super) const N_IDENTIFY_ERROR: &str = "error: That key press could not be matched to one \
-     selectable keyboard. Nothing changed; try again.";
-
-pub(super) const N_CAPTURE_PREPARED_OK: &str =
-    "Keyboard prepared. Windows verified this exact keyboard and ksx is ready to use it.";
-
-pub(super) const N_CAPTURE_RELEASED_OK: &str =
-    "Keyboard released. It can type normally again; prepare it again before Play if needed.";
-
-pub(super) const N_CAPTURE_PREPARE_CONSENT: &str =
-    "error: Confirm all three keyboard safety checks before continuing. Nothing was changed.";
-
-pub(super) const N_CAPTURE_RELEASE_CONSENT: &str =
-    "error: Confirm that you want to release this keyboard. Nothing was changed.";
-
-pub(super) const N_CAPTURE_TARGET_CHANGED: &str = "error: The selected keyboard changed or could \
-     not be verified. Nothing was changed; Rescan and choose it again.";
-
-pub(super) const N_CAPTURE_ALREADY_PREPARED: &str = "This keyboard is already prepared. Nothing \
-     was changed — use Release if you want it to type normally again.";
-
-pub(super) const N_CAPTURE_ALREADY_RELEASED: &str = "This keyboard is already a normal keyboard. \
-     Nothing was changed — use Prepare if you want ksx to take it.";
-
-pub(super) const N_CAPTURE_PREPARE_ERROR: &str = "error: Windows could not prepare this \
-     keyboard. Nothing was changed; keep the spare keyboard connected and try again.";
-
-pub(super) const N_CAPTURE_RELEASE_ERROR: &str = "error: Windows could not release this \
-     keyboard. Nothing was changed; keep the spare keyboard connected and try again.";
-
-pub(super) const N_CAPTURE_PREPARE_RECOVERY: &str = "error: Windows could not finish preparing \
-     this keyboard and it may need recovery. Keep the spare keyboard connected, reopen ksx, and \
-     use Release if it is offered. Nothing else was changed.";
-
-pub(super) const N_CAPTURE_RELEASE_RECOVERY: &str = "error: Windows could not finish releasing \
-     this keyboard and it may need recovery. Keep the spare keyboard connected and reopen ksx \
-     before trying again. Nothing else was changed.";
-
-pub(super) const N_CAPTURE_PREPARED_STAGE_CHANGED: &str = "error: Windows prepared the keyboard, \
-     but the selection changed while permission was open. Choose the keyboard again to finish.";
-
-pub(super) const N_CAPTURE_RELEASED_STAGE_CHANGED: &str = "error: Windows released the keyboard, \
-     but the selection changed while permission was open. Choose the keyboard again before Play.";
-
-pub(super) const N_TURBO_OK: &str = "Auto-fire updated — the row shows the rate that will \
-     actually be delivered. Nothing has been saved or started.";
-
-pub(super) const N_TURBO_INPUT_ERROR: &str = "error: Type a number of presses a second into the \
-     turbo box (0 turns auto-fire off). Nothing was changed.";
-
-pub(super) const N_TURBO_UNBOUND_ERROR: &str = "error: That control has no keys, so there is \
-     nothing to auto-fire. Bind a key first; nothing was changed.";
-
-pub(super) const N_TOGGLE_OLD_DAEMON: &str = "error: This ksx daemon predates press-behaviour \
-     rules, so Hold/Toggle cannot take. Update ksx; nothing was changed.";
-
-pub(super) const N_TOGGLE_OK: &str = "Press behaviour updated. Nothing has been saved or started.";
-
-pub(super) const N_TOGGLE_UNBOUND_ERROR: &str = "error: That control has no keys, so there is \
-     nothing to hold. Bind a key first; nothing was changed.";
-
-pub(super) const N_MACRO_OK: &str = "Macro updated. Nothing has been saved or started.";
-pub(super) const N_MACRO_NEW: &str = "Macro created with one empty step — open it and write the sequence. Nothing has been saved or started.";
-pub(super) const N_MACRO_NAME: &str =
-    "error: a macro needs a name — the table is called after it, so it cannot be blank.";
-pub(super) const N_MACRO_TAKEN: &str =
-    "error: this layout already has a macro by that name. Open it to edit its steps, or pick \
-     another name.";
-pub(super) const N_MACRO_BADNAME: &str =
-    "error: a macro name may use letters, digits, dot, dash and underscore only — it becomes a \
-     table name and part of a link.";
-
-pub(super) const N_MACRO_DELETED: &str = "Macro removed from this draft — its trigger keys are \
-     unbound with it. Nothing saved was touched.";
-
-pub(super) const N_ADOPT_OK: &str = "Saved setup loaded into this draft. Saved files and any \
-     running Play session were not changed.";
-
-pub(super) const N_ADOPT_BLOCKED: &str = "error: This draft already has content, and loading \
-     never overwrites edits. Start over first, then load. Nothing was changed.";
-
-pub(super) const N_DISCARD_OK: &str =
-    "Draft discarded. Saved files and any running Play session were not changed.";
 
 // The sign-in task's five sentences, moved VERBATIM from `/start` — they were
 // written for exactly this transaction and the menu does not change what
@@ -271,9 +112,6 @@ pub(super) const N_AUTOSTART_ERROR: &str =
 
 pub(super) const N_AUTOSTART_DEV_RUNTIME: &str = "error: This development build cannot change the installed sign-in task. Nothing was changed; install the complete candidate to test startup behavior.";
 
-pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
-    "error: That request could not be finished. Reopen ksx and try again.";
-
 /// "How many players" arrives as TEXT so an empty box can be answered in
 /// words rather than by the extractor. Two things the migrated version lost:
 /// the `error:` marker (`applyFlash` picks the red side on that alone, so a
@@ -283,16 +121,6 @@ pub(super) const N_UNKNOWN_FLASH_ERROR: &str =
 /// actually wrong with the form in front of it).
 pub(super) const N_GAME_SLOTS_ERROR: &str =
     "error: How many players must be a whole number. Nothing was changed.";
-
-/// A body this page could not read AT ALL — a hidden `number` field served
-/// empty because no slot is selected, a truncated post, the wrong content
-/// type. Every form here answers through the flash, and axum's own 422
-/// carries no `Location`: the island reads its outcome out of the redirect's
-/// `?flash=`, so a 422 renders as nothing whatsoever and the user is left
-/// pressing a button that appears to do nothing. That is the failure this
-/// whole screen replaced, and it must not come back through the extractor.
-pub(super) const N_FORM_UNREADABLE: &str = "error: That request could not be read. Reopen this \
-     screen and try again; nothing was changed.";
 
 // ── Save and Play refuse in THIS page's words ──────────────────────────────
 //
@@ -308,59 +136,6 @@ pub(super) const N_FORM_UNREADABLE: &str = "error: That request could not be rea
 // separate copy for every code deliberately: the promise at the end differs
 // ("nothing was written" / "nothing was started"), and a shared line would
 // have to drop the half that says what did not happen.
-
-pub(super) const N_SAVE_BLOCKING: &str = "error: This setup is not ready to save — the keyboard \
-     question on this screen has not been answered yet. Nothing was written.";
-pub(super) const N_PLAY_BLOCKING: &str = "error: This setup is not ready to play — the keyboard \
-     question on this screen has not been answered yet. Nothing was started.";
-
-pub(super) const N_SAVE_NO_BINDINGS: &str = "error: This setup is not ready to save — one \
-     controller has no keys mapped to it. Give it a starting layout, or bind a control on this \
-     screen; nothing was written.";
-pub(super) const N_PLAY_NO_BINDINGS: &str = "error: This setup is not ready to play — one \
-     controller has no keys mapped to it, so its pad would do nothing. Give it a starting \
-     layout, or bind a control on this screen; nothing was started.";
-
-pub(super) const N_SAVE_NO_DEVICE: &str = "error: This setup is not ready to save — no keyboard \
-     has been chosen yet. Pick one on this screen; nothing was written.";
-pub(super) const N_PLAY_NO_DEVICE: &str = "error: This setup is not ready to play — no keyboard \
-     has been chosen yet, so there is nothing for the controllers to listen to. Pick one on this \
-     screen; nothing was started.";
-
-pub(super) const N_SAVE_NO_SLOTS: &str = "error: This setup is not ready to save — no controller \
-     has been added yet. Add one on this screen; nothing was written.";
-pub(super) const N_PLAY_NO_SLOTS: &str = "error: This setup is not ready to play — no controller \
-     has been added yet. Add one on this screen; nothing was started.";
-
-/// The capture disagreement, said by the two writing verbs.
-///
-/// The staged keyboard and the MACHINE disagree about who is holding it: the
-/// draft names the ordinary Windows path over a board Windows has already
-/// bound to `winusb.sys`, or names the built-in path over a board that is not
-/// prepared. Either way the pads would plug and nothing would reach them.
-/// This gate used to live in `SetupFlags::can_save`/`can_play` on the deleted
-/// `/start` page; it is repeated in the HANDLERS so a hand-authored POST
-/// cannot walk past a button the page did not offer.
-pub(super) const N_SAVE_CAPTURE: &str = "error: This setup is not ready to save — the chosen \
-     keyboard is not prepared the way this draft says it is. Use the keyboard card on this \
-     screen to prepare or release it; nothing was written.";
-pub(super) const N_PLAY_CAPTURE: &str = "error: This setup is not ready to play — the chosen \
-     keyboard is not prepared the way this draft says it is. Use the keyboard card on this \
-     screen to prepare or release it; nothing was started.";
-
-/// **Play has the stricter gate; Save deliberately does not.** Committing the
-/// staged files is safe and useful on a machine whose controller driver is
-/// missing or could not be read — Play is what would plug a pad that
-/// materializes nothing, so the readiness of the required OUTPUT backends is
-/// consulted here and only here. Both sentences say the setup is still ready
-/// to save, because it is: the missing half is the machine's, not the draft's.
-pub(super) const N_PLAY_OUTPUT_BLOCKED: &str = "error: Play cannot start — a controller this \
-     setup needs has no working output on this machine, so its pad would plug and stay dead. \
-     The setup is still ready to save; install the missing controller support, then Play. \
-     Nothing was started.";
-pub(super) const N_PLAY_OUTPUT_UNKNOWN: &str = "error: Play cannot start — ksx could not check \
-     the controller outputs this setup needs, and it will not plug a pad it cannot vouch for. \
-     The setup is still ready to save; reopen ksx and try again. Nothing was started.";
 
 pub(super) const N_FLASH_ALLOWLIST: [&str; 95] = [
     // Save and Play's own refusals. They are composed from a stable daemon
@@ -516,10 +291,6 @@ fn nocturne_redirect(flash: &str) -> Response {
 // null beside a non-empty `*_error`, which is how a machine tells a refused
 // read from an empty one.
 
-pub(super) const N_READ_SCAN_ERROR: &str =
-    "The device list could not be read. Reopen ksx and try again.";
-pub(super) const N_READ_SETUP_ERROR: &str =
-    "Configuration could not be read. Reopen ksx and try again.";
 pub(super) const N_READ_GAMES_ERROR: &str =
     "Saved games could not be read. Reopen ksx and try again.";
 pub(super) const N_READ_AUTOSTART_ERROR: &str =
@@ -613,7 +384,7 @@ pub(super) async fn collect_nocturne(
         // The undo chip: composed from the SERVER-held stash while its
         // window is open (the shared helper also sweeps an expired stash so
         // a late click cannot find it either).
-        let undo_label = undo_chip_label(&state.nocturne_undo);
+        let undo_label = wb::undo_chip_label(&state.nocturne_undo);
         let payload = NocturnePayload {
             environment,
             staged,
@@ -857,76 +628,6 @@ pub(super) struct NocturneDeviceForm {
 
 /// POST /nocturne/device (and /start/device) — replaces any earlier choice,
 /// freely. One staged value in the daemon and nothing else.
-/// What [`choose_device_preserving_preparation`] did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum DeviceChoice {
-    /// This board is already the staged one; nothing was written.
-    Unchanged,
-    /// The stage now holds this board.
-    Chosen,
-    /// The daemon refused the edit.
-    Refused,
-}
-
-/// Choose the input device — but never RE-choose the one already staged.
-///
-/// **The reason is a silent data loss, not tidiness.**
-/// `StageEdit::ChooseDevice` builds a whole `StagedDevice` and hands it to
-/// `StagedSetup::choose_device`, which REPLACES the previous one wholesale
-/// (`ksx-core/src/stage.rs`: "Replaces any earlier choice — freely, because
-/// nothing was written"). The stage is a pure value and knows nothing about
-/// drivers, so the device it builds always carries
-/// `StageCaptureBackend::Interception` (`ksx-api/src/stage.rs`). That is the
-/// right default for a board nobody has prepared, and it is destructive for
-/// one somebody has: prepare a keyboard for WinUSB through a UAC prompt, then
-/// choose that same board again, and the staged backend silently drops back to
-/// `interception` while Windows still holds it on the built-in path. The two
-/// then disagree, `StartCaptureMode` reads `Held`, and both Save and Play
-/// refuse — with the way out being the held-keyboard list rather than the row
-/// that was pressed.
-///
-/// Re-choosing arrives by two ordinary doors, neither of them a mistake the
-/// user could see coming:
-///  - the device row itself. It is not disabled and carries no selected state
-///    beyond a class, so after a Rescan or a poll it is the obvious "make sure
-///    it is still selected" gesture.
-///  - Identify by key, pressed on the board that is already staged — which is
-///    exactly what someone does to confirm they picked the right one.
-///
-/// So the guard lives here, at the one place both doors pass through, rather
-/// than in either caller. It is a READ then a compare: if the selector the
-/// caller is asking for is already the staged device's, nothing is written and
-/// the preparation survives. The comparison is on the SELECTOR alone —
-/// `[[device]] id` is the identity a saved config refers to; alias and label
-/// are naming, and re-choosing to rename is not a thing any surface offers.
-/// Shared with `server/redesign.rs` (the workbench's Stage-this-board verb):
-/// both doors to staging pass through the ONE preparation-preserving guard.
-pub(super) fn choose_device_preserving_preparation(
-    state: &AppState,
-    selector: String,
-    alias: String,
-    label: String,
-) -> DeviceChoice {
-    if state.control.staged().device.is_some_and(|staged| {
-        !staged.selector.trim().is_empty() && staged.selector.trim() == selector.trim()
-    }) {
-        return DeviceChoice::Unchanged;
-    }
-    if state
-        .control
-        .stage_edit(&ksx_api::StageEdit::ChooseDevice {
-            selector,
-            alias,
-            label,
-        })
-        .ok
-    {
-        DeviceChoice::Chosen
-    } else {
-        DeviceChoice::Refused
-    }
-}
-
 pub(super) async fn nocturne_form_device(
     State(state): State<Arc<AppState>>,
     form: NocturneForm<NocturneDeviceForm>,
@@ -935,18 +636,18 @@ pub(super) async fn nocturne_form_device(
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
     let outcome = tokio::task::spawn_blocking(move || {
-        choose_device_preserving_preparation(&state, form.selector, form.alias, form.label)
+        wb::choose_device_preserving_preparation(&state, form.selector, form.alias, form.label)
     })
     .await
-    .unwrap_or(DeviceChoice::Refused);
+    .unwrap_or(wb::DeviceChoice::Refused);
     nocturne_redirect(match outcome {
         // Not a refusal: the user asked for a state the page is already in,
         // and it is in it. Saying so is the honest answer, and it is the one
         // the no-JS reader needs — with scripting off this sentence is the
         // ONLY evidence that the press did anything at all.
-        DeviceChoice::Unchanged => N_DEVICE_ALREADY_OK,
-        DeviceChoice::Chosen => N_DEVICE_OK,
-        DeviceChoice::Refused => N_EDIT_ERROR,
+        wb::DeviceChoice::Unchanged => N_DEVICE_ALREADY_OK,
+        wb::DeviceChoice::Chosen => N_DEVICE_OK,
+        wb::DeviceChoice::Refused => N_EDIT_ERROR,
     })
 }
 
@@ -954,7 +655,7 @@ pub(super) async fn nocturne_form_device(
 /// daemon-owned listen, one machine-inventory resolution, one reversible
 /// staged choice, via the shared [`identify_and_stage`] transaction.
 pub(super) async fn nocturne_form_identify(State(state): State<Arc<AppState>>) -> Response {
-    let flash = match identify_and_stage(state).await {
+    let flash = match wb::identify_and_stage(state).await {
         StartIdentifyResult::Selected(_) => N_IDENTIFY_OK,
         StartIdentifyResult::TimedOut => N_IDENTIFY_TIMEOUT,
         StartIdentifyResult::Failed
@@ -971,91 +672,10 @@ pub(super) struct NocturneBlockingForm {
     blocking: String,
 }
 
-pub(super) fn map_target(value: Option<&str>) -> &'static str {
-    if value == Some("stage") {
-        "stage"
-    } else {
-        "saved"
-    }
-}
-
 // ── Outlived their pages ───────────────────────────────────────────────────
 //
-// These were written for /map and /setup and are still used after those pages
-// were deleted: the consumer-vocabulary helpers dress this page's flashes, and
-// the import/export shapes are the configuration menu's. Re-homed rather than
-// duplicated, so there is still one spelling of each.
-
-pub(super) fn consumerize_bind(mut outcome: BindOutcome) -> BindOutcome {
-    if !outcome.ok {
-        outcome.error = Some(consumer_map_detail(
-            outcome.error.as_deref().unwrap_or(""),
-            "That control could not be changed. Nothing changed.",
-        ));
-    }
-    outcome
-}
-
-pub(super) fn consumerize_macro(
-    mut outcome: crate::control::MacroOutcome,
-) -> crate::control::MacroOutcome {
-    if !outcome.ok {
-        outcome.error = Some(consumer_map_detail(
-            outcome.error.as_deref().unwrap_or(""),
-            "The macro could not be changed. Nothing changed.",
-        ));
-    }
-    outcome.problems = outcome
-        .problems
-        .into_iter()
-        .map(|problem| consumer_map_detail(&problem, "One step or setting is not valid."))
-        .collect();
-    outcome.warnings = outcome
-        .warnings
-        .into_iter()
-        .map(|warning| {
-            consumer_map_detail(&warning, "One very short step may be missed by the game.")
-        })
-        .collect();
-    outcome
-}
-
-pub(super) fn macro_for_target(
-    control: &dyn ControlSource,
-    target: Option<&str>,
-    slot: Option<u8>,
-    write: &crate::control::MacroWrite,
-) -> crate::control::MacroOutcome {
-    if map_target(target) != "stage" {
-        return control.save_macro(write);
-    }
-
-    let Some(number) = slot else {
-        return crate::control::MacroOutcome {
-            ok: false,
-            error: Some("a staged macro write needs an exact controller slot".to_owned()),
-            code: Some(ksx_api::codes::BAD_SLOT.to_owned()),
-            ..crate::control::MacroOutcome::default()
-        };
-    };
-    control.stage_macro(&ksx_api::StagedMacroRequest {
-        number,
-        write: write.clone(),
-    })
-}
-
-/// Presentation boundary for Controls. Backend diagnostics remain available
-/// to logs and typed codes; the primary workflow never reflects command lines,
-/// storage addresses, or internal nouns into a flash/toast.
-pub(super) fn consumer_map_detail(raw: &str, fallback: &str) -> String {
-    // Provider text is diagnostic input, not customer copy. The Map surface
-    // gets structured conflicts/chords through their typed fields and uses an
-    // action-specific authored fallback for every scalar outcome. An
-    // allow-by-absence blacklist would inevitably leak a novel HID address,
-    // registry key, parser detail or storage path.
-    let _ = raw;
-    fallback.to_owned()
-}
+// These import/export shapes outlived /map and /setup and remain the legacy
+// configuration menu's. Mapping operations now live in `server::workbench`.
 
 /// Comma-separated form words → the `what` list the api verbs take. Empty means
 /// "whatever the document carries" / "the whole root", which is what both verbs
@@ -1543,422 +1163,28 @@ pub(super) async fn nocturne_form_blocking(
     let Ok(Form(form)) = form else {
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
-    nocturne_redirect(blocking_write_flash(&state, form.blocking).await)
+    nocturne_redirect(wb::blocking_write_flash(&state, form.blocking).await)
 }
 
-/// The capture-behaviour write, shared with `/redesign`: one staged edit in
-/// the daemon (freeze / split / take nothing), nothing saved or started.
-pub(super) async fn blocking_write_flash(state: &Arc<AppState>, blocking: String) -> &'static str {
-    let state = Arc::clone(state);
-    let ok = tokio::task::spawn_blocking(move || {
-        state
-            .control
-            .stage_edit(&ksx_api::StageEdit::SetBlocking { blocking })
-            .ok
-    })
-    .await
-    .unwrap_or(false);
-    if ok {
-        N_BLOCKING_OK
-    } else {
-        N_EDIT_ERROR
-    }
-}
+// ── WinUSB prepare/release ────────────────────────────────────────────────
 
-// ── WinUSB prepare/release (moved from /start, with every guard intact) ─────
-
-#[derive(Deserialize)]
-pub(super) struct NocturneCapturePrepareForm {
-    /// Both identifiers are served hidden values and both are treated only as
-    /// stale-action guards. The current stage + inventory are authoritative.
-    #[serde(default)]
-    expected_selector: String,
-    #[serde(default)]
-    instance_id: String,
-    #[serde(default)]
-    confirm_spare_keyboard: Option<String>,
-    #[serde(default)]
-    confirm_rebind: Option<String>,
-    #[serde(default)]
-    confirm_machine_certificate: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub(super) struct NocturneCaptureReleaseForm {
-    #[serde(default)]
-    expected_selector: String,
-    #[serde(default)]
-    instance_id: String,
-    #[serde(default)]
-    confirm_release: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CaptureMutation {
-    Prepare,
-    Release,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CaptureResult {
-    Prepared,
-    Released,
-    ConsentMissing,
-    TargetChanged,
-    MutationFailed,
-    /// The keyboard is already in the state that was asked for. Not a
-    /// failure: the machine is fine, the request was simply redundant, and
-    /// the useful answer names the state and the action that follows from it.
-    AlreadyInState,
-    RecoveryRequired,
-    StageChanged,
-}
-
-/// Which refusals mean "already in that state". Matched on the stable code,
-/// never on the sentence: refusal text is written for an operator and can
-/// name paths and commands, so it is used to SELECT a safe answer and is
-/// never reflected to the browser.
-pub(super) fn already_in_state(refusal: &ksx_api::Refusal) -> bool {
-    matches!(
-        refusal.code.as_str(),
-        "winusb-already-prepared" | "winusb-already-released"
-    )
-}
-
-fn capture_redirect(action: CaptureMutation, result: CaptureResult) -> Response {
-    let flash = match (action, result) {
-        (CaptureMutation::Prepare, CaptureResult::Prepared) => N_CAPTURE_PREPARED_OK,
-        (CaptureMutation::Release, CaptureResult::Released) => N_CAPTURE_RELEASED_OK,
-        (CaptureMutation::Prepare, CaptureResult::ConsentMissing) => N_CAPTURE_PREPARE_CONSENT,
-        (CaptureMutation::Release, CaptureResult::ConsentMissing) => N_CAPTURE_RELEASE_CONSENT,
-        (_, CaptureResult::TargetChanged) => N_CAPTURE_TARGET_CHANGED,
-        (CaptureMutation::Prepare, CaptureResult::AlreadyInState) => N_CAPTURE_ALREADY_PREPARED,
-        (CaptureMutation::Release, CaptureResult::AlreadyInState) => N_CAPTURE_ALREADY_RELEASED,
-        (CaptureMutation::Prepare, CaptureResult::MutationFailed) => N_CAPTURE_PREPARE_ERROR,
-        (CaptureMutation::Release, CaptureResult::MutationFailed) => N_CAPTURE_RELEASE_ERROR,
-        (CaptureMutation::Prepare, CaptureResult::RecoveryRequired) => N_CAPTURE_PREPARE_RECOVERY,
-        (CaptureMutation::Release, CaptureResult::RecoveryRequired) => N_CAPTURE_RELEASE_RECOVERY,
-        (CaptureMutation::Prepare, CaptureResult::StageChanged) => N_CAPTURE_PREPARED_STAGE_CHANGED,
-        (CaptureMutation::Release, CaptureResult::StageChanged) => N_CAPTURE_RELEASED_STAGE_CHANGED,
-        // A success variant paired with the wrong action is an internal bug,
-        // never a provider sentence suitable for a customer redirect.
-        _ => N_UNKNOWN_FLASH_ERROR,
-    };
-    nocturne_redirect(flash)
-}
-
-/// Resolve the exact interface a capture mutation names, again, on the
-/// server. The browser's hidden values are stale-action guards, not
-/// authority. Prepare stays gated on the staged selection; Release resolves
-/// purely by identity against the live scan — the full reasoning moved with
-/// this function from `/start` (2026-08-11 QA defect: gating the undo on the
-/// stage stranded held keyboards on a fresh visit).
-pub(super) fn capture_target(
-    state: &AppState,
-    action: CaptureMutation,
-    expected_selector: &str,
-    instance_id: &str,
-) -> Result<(String, String), CaptureResult> {
-    if action == CaptureMutation::Prepare {
-        let staged = state.control.staged();
-        let device = staged
-            .device
-            .as_ref()
-            .filter(|device| staged.reachable && device.selector == expected_selector)
-            .ok_or(CaptureResult::TargetChanged)?;
-        if device.backend != "interception" && device.backend != "winusb" {
-            return Err(CaptureResult::TargetChanged);
-        }
-    }
-    if expected_selector.trim().is_empty() || instance_id.trim().is_empty() {
-        return Err(CaptureResult::TargetChanged);
-    }
-
-    let scan = state
-        .machine
-        .device_scan()
-        .map_err(|_| CaptureResult::TargetChanged)?;
-    let mut matches = scan
-        .boards
-        .iter()
-        .filter(|board| board.selector.as_deref() == Some(expected_selector));
-    let board = matches.next().ok_or(CaptureResult::TargetChanged)?;
-    if matches.next().is_some() || !board.winusb_eligible {
-        return Err(CaptureResult::TargetChanged);
-    }
-    let current_instance = board
-        .keyboard
-        .as_ref()
-        .filter(|current| current.eq_ignore_ascii_case(instance_id))
-        .ok_or(CaptureResult::TargetChanged)?;
-    if scan
-        .boards
-        .iter()
-        .flat_map(|candidate| candidate.interfaces.iter())
-        .filter(|row| row.instance_id.eq_ignore_ascii_case(current_instance))
-        .count()
-        != 1
-    {
-        return Err(CaptureResult::TargetChanged);
-    }
-    if action == CaptureMutation::Release && !board.claimed {
-        return Err(CaptureResult::TargetChanged);
-    }
-    Ok((
-        board.selector.clone().ok_or(CaptureResult::TargetChanged)?,
-        current_instance.clone(),
-    ))
-}
-
-pub(super) fn checked(value: Option<&str>) -> bool {
-    value == Some("yes")
-}
-
-/// POST /nocturne/capture/prepare (and /start/capture/prepare) — one exact
-/// keyboard, through the installed MachineSource helper. Studio never starts
-/// a process, parses helper output, or accepts a backend name from the
-/// browser. Only an authoritative `prepared` result for the submitted exact
-/// instance licenses the guarded in-memory backend transition.
 pub(super) async fn nocturne_form_capture_prepare(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneCapturePrepareForm>,
+    Form(form): Form<wb::CapturePrepareForm>,
 ) -> Response {
-    if !checked(form.confirm_spare_keyboard.as_deref())
-        || !checked(form.confirm_rebind.as_deref())
-        || !checked(form.confirm_machine_certificate.as_deref())
-    {
-        return capture_redirect(CaptureMutation::Prepare, CaptureResult::ConsentMissing);
-    }
-    let outcome = tokio::task::spawn_blocking(move || {
-        let (expected_selector, instance_id) = capture_target(
-            &state,
-            CaptureMutation::Prepare,
-            &form.expected_selector,
-            &form.instance_id,
-        )?;
-        let spec = ksx_api::WinusbPrepareSpec {
-            expected_selector: expected_selector.clone(),
-            instance_id: instance_id.clone(),
-            confirm_spare_keyboard: true,
-            confirm_rebind: true,
-            confirm_machine_certificate: true,
-        };
-        let mutation = state.machine.winusb_prepare(&spec).map_err(|refusal| {
-            if already_in_state(&refusal) {
-                CaptureResult::AlreadyInState
-            } else {
-                CaptureResult::MutationFailed
-            }
-        })?;
-        if mutation.state == "recovery-required"
-            && mutation.instance_id.eq_ignore_ascii_case(&instance_id)
-        {
-            return Err(CaptureResult::RecoveryRequired);
-        }
-        if mutation.state != "prepared" || !mutation.instance_id.eq_ignore_ascii_case(&instance_id)
-        {
-            return Err(CaptureResult::MutationFailed);
-        }
-        let staged = state
-            .control
-            .stage_edit(&ksx_api::StageEdit::SetDeviceBackend {
-                expected_selector,
-                backend: "winusb".to_owned(),
-            });
-        if !staged.ok {
-            return Err(CaptureResult::StageChanged);
-        }
-        Ok(CaptureResult::Prepared)
-    })
-    .await
-    .unwrap_or(Err(CaptureResult::MutationFailed));
-    capture_redirect(
-        CaptureMutation::Prepare,
-        outcome.unwrap_or_else(|failure| failure),
-    )
+    let result = wb::capture_prepare(state, form).await;
+    nocturne_redirect(wb::capture_flash(wb::CaptureMutation::Prepare, result))
 }
 
-/// POST /nocturne/capture/release (and /start/capture/release) — the inverse
-/// transition, with the same exact identity and stale-stage guards. A raw
-/// helper/provider message never crosses this presentation boundary.
 pub(super) async fn nocturne_form_capture_release(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneCaptureReleaseForm>,
+    Form(form): Form<wb::CaptureReleaseForm>,
 ) -> Response {
-    if !checked(form.confirm_release.as_deref()) {
-        return capture_redirect(CaptureMutation::Release, CaptureResult::ConsentMissing);
-    }
-    let outcome = tokio::task::spawn_blocking(move || {
-        let (expected_selector, instance_id) = capture_target(
-            &state,
-            CaptureMutation::Release,
-            &form.expected_selector,
-            &form.instance_id,
-        )?;
-        let spec = ksx_api::WinusbReleaseSpec {
-            expected_selector: expected_selector.clone(),
-            instance_id: instance_id.clone(),
-            confirm_release: true,
-        };
-        let mutation = state.machine.winusb_release(&spec).map_err(|refusal| {
-            if already_in_state(&refusal) {
-                CaptureResult::AlreadyInState
-            } else {
-                CaptureResult::MutationFailed
-            }
-        })?;
-        if mutation.state == "recovery-required"
-            && mutation.instance_id.eq_ignore_ascii_case(&instance_id)
-        {
-            return Err(CaptureResult::RecoveryRequired);
-        }
-        if mutation.state != "released" || !mutation.instance_id.eq_ignore_ascii_case(&instance_id)
-        {
-            return Err(CaptureResult::MutationFailed);
-        }
-        // **Only the STAGED board's backend follows the release.** A held
-        // keyboard that is not this visit's selection has no staged backend
-        // to correct, and posting one would refuse — turning a release that
-        // actually happened into an error flash (`SURFACES.md` §1b with the
-        // two halves swapped).
-        if state
-            .control
-            .staged()
-            .device
-            .as_ref()
-            .is_some_and(|device| device.selector == expected_selector)
-        {
-            let staged = state
-                .control
-                .stage_edit(&ksx_api::StageEdit::SetDeviceBackend {
-                    expected_selector,
-                    backend: "interception".to_owned(),
-                });
-            if !staged.ok {
-                return Err(CaptureResult::StageChanged);
-            }
-        }
-        Ok(CaptureResult::Released)
-    })
-    .await
-    .unwrap_or(Err(CaptureResult::MutationFailed));
-    capture_redirect(
-        CaptureMutation::Release,
-        outcome.unwrap_or_else(|failure| failure),
-    )
+    let result = wb::capture_release(state, form).await;
+    nocturne_redirect(wb::capture_flash(wb::CaptureMutation::Release, result))
 }
 
 // ── The rack (moved from /workspace) and the session verbs ─────────────────
-
-/// Everything needed to put a removed controller back: held in
-/// `AppState.nocturne_undo` for [`NOCTURNE_UNDO_WINDOW`], SERVER-side —
-/// the design's 6-second undo chip, without ever handing the browser an
-/// authoring table it could edit.
-pub(super) struct NocturneUndoStash {
-    /// The removed slot's whole served view — this crate deliberately knows
-    /// nothing about the preset vocabulary at runtime (`ksx-config` is
-    /// test-only here), so the stash speaks `ksx_api` types wholesale.
-    pub slot: ksx_api::StagedSlotView,
-    pub at: std::time::Instant,
-}
-
-pub(super) const NOCTURNE_UNDO_WINDOW: std::time::Duration = std::time::Duration::from_secs(6);
-
-/// The slot's resurrection material, read BEFORE a removal — an older daemon
-/// serves no authoring table, and then nothing is stashed and no chip makes
-/// a promise the server cannot keep. Shared with `/redesign`'s remove verb.
-pub(super) fn stash_removed_slot(
-    staged: &ksx_api::StagedSetupView,
-    number: u8,
-) -> Option<NocturneUndoStash> {
-    staged
-        .slots
-        .iter()
-        .find(|slot| slot.number == number && slot.authoring.is_some())
-        .map(|slot| NocturneUndoStash {
-            slot: slot.clone(),
-            at: std::time::Instant::now(),
-        })
-}
-
-/// The undo chip's label while a stash's window is open — and the expiry
-/// sweep: an expired stash is dropped HERE so a late click cannot find it
-/// either. One wording for every page that offers the chip.
-pub(super) fn undo_chip_label(
-    held: &std::sync::Mutex<Option<NocturneUndoStash>>,
-) -> Option<String> {
-    let mut held = held.lock().unwrap();
-    if held
-        .as_ref()
-        .is_some_and(|stash| stash.at.elapsed() > NOCTURNE_UNDO_WINDOW)
-    {
-        *held = None;
-    }
-    held.as_ref().map(|stash| {
-        format!(
-            "P{} ({}) removed — its bindings are held for a moment",
-            stash.slot.number, stash.slot.persona_label
-        )
-    })
-}
-
-/// Put the last removed controller back from one page's SERVER-held stash:
-/// add + set-bindings + set-socd (the duplicate's composition), at its own
-/// number when that is still free. One shot: the stash is consumed whatever
-/// happens next. Shared with `/redesign`, each page passing its OWN stash.
-pub(super) fn undo_removal_flash(
-    state: &AppState,
-    held: &std::sync::Mutex<Option<NocturneUndoStash>>,
-) -> &'static str {
-    let Some(stash) = held.lock().unwrap().take() else {
-        return N_UNDO_GONE;
-    };
-    if stash.at.elapsed() > NOCTURNE_UNDO_WINDOW {
-        return N_UNDO_GONE;
-    }
-    let Some(authoring) = stash.slot.authoring else {
-        return N_UNDO_GONE;
-    };
-    let staged = state.control.staged();
-    let number = if staged
-        .slots
-        .iter()
-        .any(|slot| slot.number == stash.slot.number)
-    {
-        match staged.next_slot {
-            Some(next) => next,
-            None => return N_UNDO_FULL,
-        }
-    } else {
-        stash.slot.number
-    };
-    let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
-        number: Some(number),
-        persona: stash.slot.persona,
-        preset: stash.slot.preset,
-        layout: None,
-    });
-    if !added.ok {
-        return N_EDIT_ERROR;
-    }
-    let bound = state.control.stage_edit(&ksx_api::StageEdit::SetBindings {
-        number,
-        preset: Box::new(authoring),
-    });
-    if !bound.ok {
-        let _ = state
-            .control
-            .stage_edit(&ksx_api::StageEdit::RemoveSlot { number });
-        return N_EDIT_ERROR;
-    }
-    if !stash.slot.socd.is_empty() && stash.slot.socd != "off" {
-        let _ = state.control.stage_edit(&ksx_api::StageEdit::SetSocd {
-            number,
-            socd: stash.slot.socd,
-        });
-    }
-    N_UNDO_OK
-}
 
 /// Run one staging edit off the async workers and 303 back with this page's
 /// sentence. One value in the daemon and nothing else — no file, no driver,
@@ -2064,7 +1290,7 @@ pub(super) async fn nocturne_form_remove(
     };
     let flash = tokio::task::spawn_blocking(move || {
         let staged = state.control.staged();
-        let stash = stash_removed_slot(&staged, form.number);
+        let stash = wb::stash_removed_slot(&staged, form.number);
         let removed = state.control.stage_edit(&ksx_api::StageEdit::RemoveSlot {
             number: form.number,
         });
@@ -2086,7 +1312,7 @@ pub(super) async fn nocturne_form_remove(
 /// One shot: the stash is consumed whatever happens next.
 pub(super) async fn nocturne_form_undo(State(state): State<Arc<AppState>>) -> Response {
     let flash =
-        tokio::task::spawn_blocking(move || undo_removal_flash(&state, &state.nocturne_undo))
+        tokio::task::spawn_blocking(move || wb::undo_removal_flash(&state, &state.nocturne_undo))
             .await
             .unwrap_or(N_EDIT_ERROR);
     nocturne_redirect(flash)
@@ -2152,19 +1378,7 @@ pub(super) async fn nocturne_form_socd(
 /// written. A structural difference refuses (`needs-restart`) and the
 /// sentence names Play as the verb that replaces the session.
 pub(super) async fn nocturne_form_apply(State(state): State<Arc<AppState>>) -> Response {
-    let flash = tokio::task::spawn_blocking(move || {
-        let outcome = state.control.stage_apply();
-        if outcome.ok {
-            N_APPLY_OK
-        } else if outcome.code.as_deref() == Some("needs-restart") {
-            N_APPLY_RESTART
-        } else {
-            N_APPLY_ERROR
-        }
-    })
-    .await
-    .unwrap_or(N_APPLY_ERROR);
-    nocturne_redirect(flash)
+    nocturne_redirect(wb::stage_apply_flash(state).await)
 }
 
 /// POST /nocturne/api/apply — the scripted twin of `/nocturne/apply`: the
@@ -2173,24 +1387,7 @@ pub(super) async fn nocturne_form_apply(State(state): State<Arc<AppState>>) -> R
 /// the flash allowlist only reflects fixed sentences, which is why the
 /// no-JS door keeps its generic one.
 pub(super) async fn nocturne_api_apply(State(state): State<Arc<AppState>>) -> Response {
-    let outcome = tokio::task::spawn_blocking(move || state.control.stage_apply())
-        .await
-        .ok();
-    let json = match outcome {
-        Some(outcome) if outcome.ok => serde_json::json!({
-            "done": true,
-            "flash": N_APPLY_OK,
-        }),
-        Some(outcome) if outcome.code.as_deref() == Some("needs-restart") => serde_json::json!({
-            "done": false,
-            "code": "needs-restart",
-            // The daemon's sentence naming the difference, verbatim.
-            "message": outcome.error.unwrap_or_default(),
-            "flash": N_APPLY_RESTART,
-        }),
-        _ => serde_json::json!({ "done": false, "flash": N_APPLY_ERROR }),
-    };
-    axum::Json(json).into_response()
+    wb::stage_apply_json(state).await
 }
 
 /// POST /nocturne/bind/clear-all — unbind EVERY key of one slot's draft in
@@ -2204,33 +1401,10 @@ pub(super) async fn nocturne_form_clear_all(
     let Ok(Form(form)) = form else {
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
-    let flash = tokio::task::spawn_blocking(move || clear_all_flash(&state, form.number))
+    let flash = tokio::task::spawn_blocking(move || wb::clear_all_flash(&state, form.number))
         .await
         .unwrap_or(N_EDIT_ERROR);
     nocturne_redirect(flash)
-}
-
-/// Unbind EVERY key of one slot's draft in a single write (macro trigger
-/// keys are bindings, so they unbind too; the macros keep their steps). One
-/// SetBindings, so a refusal changes nothing. Shared with `/redesign`.
-pub(super) fn clear_all_flash(state: &AppState, number: u8) -> &'static str {
-    let staged = state.control.staged();
-    let Some(slot) = staged.slots.iter().find(|slot| slot.number == number) else {
-        return N_EDIT_ERROR;
-    };
-    let Some(mut authoring) = slot.authoring.clone() else {
-        return N_EDIT_ERROR;
-    };
-    authoring.bindings.clear();
-    let cleared = state.control.stage_edit(&ksx_api::StageEdit::SetBindings {
-        number,
-        preset: Box::new(authoring),
-    });
-    if cleared.ok {
-        N_CLEAR_ALL_OK
-    } else {
-        N_EDIT_ERROR
-    }
 }
 
 #[derive(Deserialize)]
@@ -2251,90 +1425,11 @@ pub(super) async fn nocturne_form_key_clear(
     let Ok(Form(form)) = form else {
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
-    let flash = tokio::task::spawn_blocking(move || key_clear_flash(&state, form.number, form.key))
-        .await
-        .unwrap_or(N_EDIT_ERROR);
+    let flash =
+        tokio::task::spawn_blocking(move || wb::key_clear_flash(&state, form.number, form.key))
+            .await
+            .unwrap_or(N_EDIT_ERROR);
     nocturne_redirect(flash)
-}
-
-/// Take ONE key away from everything it drives on one slot's draft. The
-/// list of touched functions comes from the same staged mapper inversion
-/// the By-key rows render — never from anything a browser sent. Shared
-/// with `/redesign`'s Keys tab.
-pub(super) fn key_clear_flash(state: &AppState, number: u8, key: String) -> &'static str {
-    let staged = state.control.staged();
-    let Some(slot) = staged.slots.iter().find(|s| s.number == number) else {
-        return N_EDIT_ERROR;
-    };
-    let key = key.trim().to_owned();
-    if key.is_empty() {
-        return N_EDIT_ERROR;
-    }
-    let keyboard = staged
-        .device
-        .as_ref()
-        .map(|device| device.label.as_str())
-        .unwrap_or("(none)");
-    let Ok(mapper) = ksx_api::staged_mapper_slot(slot, keyboard) else {
-        return N_EDIT_ERROR;
-    };
-    let without = |keys: &[String]| -> Vec<String> {
-        keys.iter()
-            .filter(|k| !k.eq_ignore_ascii_case(&key))
-            .cloned()
-            .collect()
-    };
-    let mut driven: Vec<(String, Vec<String>)> = mapper
-        .bindings
-        .iter()
-        .filter(|(_, keys)| keys.iter().any(|k| k.eq_ignore_ascii_case(&key)))
-        .map(|(function, keys)| (function.clone(), without(keys)))
-        .collect();
-    // ⚠️ AND THE MACROS THIS KEY STARTS. A trigger is not in
-    // `MapperSlot.bindings` — that table is built from the preset's CONTROL
-    // entries — so the ✕ answered "nothing to clear" on a key whose own row
-    // says it drives a macro. The board shows triggers now; every per-key
-    // affordance has to act on them.
-    driven.extend(
-        ksx_api::staged_macro_snapshot(slot)
-            .macros
-            .into_iter()
-            .filter(|m| m.triggers.iter().any(|k| k.eq_ignore_ascii_case(&key)))
-            .map(|m| (format!("macro.{}", m.name), without(&m.triggers))),
-    );
-    if driven.is_empty() {
-        return N_KEY_CLEAR_NONE;
-    }
-    for (function, rest) in driven {
-        let keys = if rest.is_empty() {
-            vec!["none".to_owned()]
-        } else {
-            rest
-        };
-        let outcome = state.control.stage_bind(&ksx_api::StagedBindRequest {
-            number: slot.number,
-            expected_device: staged
-                .device
-                .as_ref()
-                .map(|device| device.selector.clone())
-                .unwrap_or_default(),
-            // This action intentionally performs several serial edits
-            // from one snapshot. Each edit still carries the exact input
-            // selector; the API route below adds the stronger per-target
-            // revision around its slow hardware proof.
-            expected_target_revision: String::new(),
-            preset: slot.preset.clone(),
-            function,
-            keys,
-            force: true,
-            turbo_hz: None,
-            toggle: None,
-        });
-        if !outcome.ok {
-            return N_EDIT_ERROR;
-        }
-    }
-    N_KEY_CLEAR_OK
 }
 
 /// POST /nocturne/controller/duplicate (and /workspace/controller/duplicate)
@@ -2348,293 +1443,10 @@ pub(super) async fn nocturne_form_duplicate(
     let Ok(Form(form)) = form else {
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
-    let flash = tokio::task::spawn_blocking(move || duplicate_slot_flash(&state, form.number))
+    let flash = tokio::task::spawn_blocking(move || wb::duplicate_slot_flash(&state, form.number))
         .await
         .unwrap_or(N_EDIT_ERROR);
     nocturne_redirect(flash)
-}
-
-/// The duplicate composition (add + set-bindings + set-socd, fresh slot
-/// removed again if the middle step refuses), shared with `/redesign`.
-pub(super) fn duplicate_slot_flash(state: &AppState, number: u8) -> &'static str {
-    let staged = state.control.staged();
-    let Some(source) = staged.slots.iter().find(|slot| slot.number == number) else {
-        return N_EDIT_ERROR;
-    };
-    let (Some(new_number), Some(new_preset)) = (staged.next_slot, staged.next_preset.clone())
-    else {
-        return N_DUP_FULL;
-    };
-    let Some(mut authoring) = source.authoring.clone() else {
-        // An older daemon serves no authoring table; there is nothing
-        // honest to copy from.
-        return N_EDIT_ERROR;
-    };
-    let persona = source.persona.clone();
-    let socd = source.socd.clone();
-
-    let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
-        number: Some(new_number),
-        persona,
-        preset: new_preset.clone(),
-        layout: None,
-    });
-    if !added.ok {
-        return N_EDIT_ERROR;
-    }
-    // The copy keeps everything except the NAME, which must be the served
-    // fresh one — a save writes one preset file per slot, and two slots
-    // pointing at one file would alias their edits forever after.
-    authoring.name = new_preset;
-    let bound = state.control.stage_edit(&ksx_api::StageEdit::SetBindings {
-        number: new_number,
-        preset: Box::new(authoring),
-    });
-    if !bound.ok {
-        let _ = state
-            .control
-            .stage_edit(&ksx_api::StageEdit::RemoveSlot { number: new_number });
-        return N_EDIT_ERROR;
-    }
-    if !socd.is_empty() && socd != "off" {
-        let _ = state.control.stage_edit(&ksx_api::StageEdit::SetSocd {
-            number: new_number,
-            socd,
-        });
-    }
-    N_DUP_OK
-}
-
-// ── The learner (moved from /map 2026-08-17, rebind-editor migration) ──────
-// One daemon-owned listening surface for every door: /map's island, the
-// identify-by-key transaction, and this page's rebind flow all speak to the
-// same generation-stamped learner, so no two of them can mistake each
-// other's key press for their own.
-
-/// Studio's learner answer adds the canonical selector resolved from the raw
-/// input device path. Raw Input normally reports a HID child while the staged
-/// setup and device picker name its USB MI_00 parent, so comparing `device`
-/// directly to the selected interface rejects the correct physical keyboard.
-///
-/// Keep the daemon-owned view flattened for wire compatibility. `selector` is
-/// additive and deliberately nullable: an unresolved HID child is not proof
-/// that a press came from the selected input.
-#[derive(serde::Serialize)]
-struct NocturneLearnApiView {
-    #[serde(flatten)]
-    learn: crate::control::LearnView,
-    selector: Option<String>,
-}
-
-fn resolved_learn_view(
-    machine: &dyn ksx_api::MachineSource,
-    learn: crate::control::LearnView,
-) -> NocturneLearnApiView {
-    let selector = (learn.state == "hit")
-        .then_some(learn.device.as_deref())
-        .flatten()
-        .filter(|device| !device.trim().is_empty())
-        .and_then(|device| machine.device_identify(device).ok())
-        .map(|identified| identified.selector)
-        .filter(|selector| !selector.trim().is_empty());
-    NocturneLearnApiView { learn, selector }
-}
-
-async fn learn_json(state: Arc<AppState>, start: bool) -> Response {
-    let value = tokio::task::spawn_blocking(move || {
-        let learn = if start {
-            state.control.learn_start()
-        } else {
-            state.control.learn_poll()
-        };
-        resolved_learn_view(state.machine.as_ref(), learn)
-    })
-    .await;
-    match value {
-        Ok(value) => (
-            [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
-            axum::Json(value),
-        )
-            .into_response(),
-        Err(_) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            "the learner call panicked",
-        )
-            .into_response(),
-    }
-}
-
-pub(super) async fn api_learn_poll(State(state): State<Arc<AppState>>) -> Response {
-    learn_json(state, false).await
-}
-
-pub(super) async fn api_learn_start(State(state): State<Arc<AppState>>) -> Response {
-    learn_json(state, true).await
-}
-
-#[derive(Deserialize)]
-pub(super) struct LearnCancelBody {
-    generation: u64,
-}
-
-pub(super) async fn api_learn_cancel(
-    State(state): State<Arc<AppState>>,
-    axum::Json(body): axum::Json<LearnCancelBody>,
-) -> Response {
-    control_json(state, move |control| {
-        control.learn_cancel_generation(Some(body.generation))
-    })
-    .await
-}
-
-// ── Shared simultaneous-input diagnostic ─────────────────────────────────
-// One daemon-owned observation works for both ordinary keyboards and
-// keyboard-mode encoders. These handlers add no device logic: the canonical
-// selector is re-resolved and filtered by the daemon immediately before it
-// listens, and the returned held/seen/peak sets are backend facts.
-
-pub(super) async fn api_input_test_poll(State(state): State<Arc<AppState>>) -> Response {
-    control_json(state, |control| control.input_test_poll()).await
-}
-
-pub(super) async fn api_input_test_start(
-    State(state): State<Arc<AppState>>,
-    axum::Json(spec): axum::Json<ksx_api::InputTestSpec>,
-) -> Response {
-    control_json(state, move |control| control.input_test_start(&spec)).await
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct InputTestCancelBody {
-    generation: u64,
-}
-
-pub(super) async fn api_input_test_cancel(
-    State(state): State<Arc<AppState>>,
-    axum::Json(body): axum::Json<InputTestCancelBody>,
-) -> Response {
-    control_json(state, move |control| {
-        control.input_test_cancel_generation(Some(body.generation))
-    })
-    .await
-}
-
-// ── The staged bind verb (JSON) — what a learned key writes ────────────────
-
-/// POST /nocturne/api/bind. The body names a SLOT NUMBER and ONE KEY; the
-/// server resolves the preset identity and the control's current key list
-/// from the staged setup it just read, so a hand-made POST can only address a
-/// slot this draft actually has and no browser is ever trusted with a key
-/// list it made up (the `/map` form twins' rule, kept).
-///
-/// `mode: "add"` joins the control's list (MAME-style OR-chain, a deliberate
-/// fan-out — force is implied, exactly like /map's Add); anything else
-/// replaces it. A cross-slot duplicate on replace comes back as the typed
-/// `conflicts` rows for the consequence dialog; resubmitting with
-/// `force: true` is the dialog's "Use here too".
-/// POST /nocturne/api/macro/edit. The BROWSER holds the draft: it posts the
-/// whole `[macros.<name>]` table it is editing plus ONE act, and gets the new
-/// table and the recomposed roll back. Nothing half-edited is ever kept on
-/// this side, so a reload, a poll or a second tab cannot find one.
-#[derive(Deserialize)]
-pub(super) struct NocturneMacroEditBody {
-    slot: u8,
-    act: String,
-    draft: ksx_api::MacroView,
-}
-
-#[derive(serde::Serialize)]
-struct NocturneMacroEditOutcome {
-    ok: bool,
-    /// What to say about the act — the diagonal reports, the motion's
-    /// teaching, the last-step clear. Empty when the cell is its own report.
-    said: String,
-    draft: ksx_api::MacroView,
-    view: crate::macro_editor::NocturneMacroEditor,
-}
-
-pub(super) async fn nocturne_api_macro_edit(
-    state: State<Arc<AppState>>,
-    body: axum::Json<NocturneMacroEditBody>,
-) -> Response {
-    macro_edit_on(state, body, "/nocturne").await
-}
-
-/// The SAME edit core mounted on the redesign door — only the hrefs the
-/// composed view wears (✕, "map a trigger") differ, and they are the page's.
-pub(super) async fn redesign_api_macro_edit(
-    state: State<Arc<AppState>>,
-    body: axum::Json<NocturneMacroEditBody>,
-) -> Response {
-    macro_edit_on(state, body, "/redesign").await
-}
-
-async fn macro_edit_on(
-    State(state): State<Arc<AppState>>,
-    axum::Json(body): axum::Json<NocturneMacroEditBody>,
-    page: &'static str,
-) -> Response {
-    let outcome = tokio::task::spawn_blocking(move || {
-        let staged = state.control.staged();
-        let slot = staged.slots.iter().find(|s| s.number == body.slot);
-        let persona = slot.map_or("xbox360", |s| s.persona.as_str());
-        let keyboard = staged
-            .device
-            .as_ref()
-            .map(|d| d.alias.as_str())
-            .unwrap_or("");
-        let mapper = slot.and_then(|s| ksx_api::staged_mapper_slot(s, keyboard).ok());
-        let mut draft = body.draft;
-        // A REFUSAL IS NOT A QUIET SUCCESS. `apply` answers three ways, and
-        // the middle one used to be lost: a rejected act came back `ok: true`
-        // with an empty sentence and an unchanged draft, so the browser marked
-        // the macro dirty over a change that never happened and the number in
-        // the box disagreed with the number that would be saved.
-        let (ok, said) = match crate::macro_draft::apply(&mut draft, &body.act, mapper.as_ref()) {
-            Ok(said) => (true, said.unwrap_or_default()),
-            Err(why) => (false, why),
-        };
-        let view = crate::macro_editor::NocturneMacroEditor::compose(
-            &draft,
-            persona,
-            mapper.as_ref(),
-            body.slot,
-            None,
-            page,
-        );
-        NocturneMacroEditOutcome {
-            ok,
-            said,
-            draft,
-            view,
-        }
-    })
-    .await;
-    match outcome {
-        Ok(outcome) => axum::Json(serde_json::json!(outcome)).into_response(),
-        Err(_) => axum::Json(serde_json::json!({
-            "ok": false,
-            "said": "the macro edit panicked — nothing was changed",
-        }))
-        .into_response(),
-    }
-}
-
-#[derive(Deserialize)]
-pub(super) struct NocturneBindBody {
-    slot: u8,
-    /// Opaque revision from the exact controller row the browser acted on.
-    /// The server never derives this at POST arrival: doing so would bless a
-    /// stale tab's request for whichever controller now occupies the seat.
-    #[serde(default)]
-    expected_target_revision: String,
-    function: String,
-    key: String,
-    #[serde(default)]
-    mode: Option<String>,
-    #[serde(default)]
-    force: bool,
 }
 
 /// What the Builder posts to publish the panel it has drawn.
@@ -2749,353 +1561,6 @@ pub(super) async fn nocturne_api_board_save(
     axum::Json(outcome).into_response()
 }
 
-/// Shown when a chart read refuses for any reason that is not about the user's
-/// own request. Authored here because the store and the transport refuse with
-/// text that embeds an absolute config path and raw io detail — see
-/// `nocturne_api_panel_chart`.
-pub(super) const N_PANEL_CHART_ERROR: &str =
-    "That board's chart could not be read. Nothing on the board was changed.";
-
-/// The daemon may have already reported Button Test as cancelled or timed
-/// out while its Raw Input window, panel tap, or temporary claim is still
-/// closing. The chart route fences that release before opening the board's
-/// configuration collection; this is the authored browser-safe refusal when
-/// the observer is still listening or outlives the bounded handoff.
-const N_PANEL_CHART_OBSERVER_BUSY: &str =
-    "Button Test is still listening or releasing this device. The encoder was not read.";
-const N_PANEL_CHART_OBSERVER_REMEDY: &str =
-    "Stop Button Test, wait for it to close, then read the encoder again.";
-
-/// The chart route's answer when the selector matched no board, or more than
-/// one.
-///
-/// Authored here rather than forwarded: the backend's own sentence for both
-/// cases names every connected board by raw device instance path. JSON-only, so
-/// it is deliberately NOT on `N_FLASH_ALLOWLIST` — that list is consumed only
-/// when resolving `?flash=` on a 303, where an entry would be both unreachable
-/// and reflectable from a query string.
-const N_PANEL_CHART_SELECTOR: &str =
-    "ksx could not match that board. It may have been unplugged, or more than one board now \
-     matches.";
-
-const N_PANEL_CHART_SELECTOR_REMEDY: &str = "Refresh the device list and pick the board again.";
-
-/// What the page may ask for. **Deliberately not `ksx_api::PanelChartSpec`.**
-///
-/// That type carries `backup: bool`, and `facade::chart` answers `backup: true`
-/// by writing a file, verifying it, and reconciling this board's
-/// write-qualification journal. Deserializing it straight off the wire — which
-/// the neighbouring `api_input_test_start` does with its own spec — would let a
-/// field nobody typed turn a read into a durable write. `deny_unknown_fields`
-/// so a client cannot send one and be quietly ignored either.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct NocturnePanelChartBody {
-    selector: String,
-}
-
-#[derive(Default, serde::Serialize)]
-pub(super) struct NocturnePanelChartOutcome {
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    board_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    image_sha256: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    terminals: Option<Vec<ksx_api::PanelTerminalRow>>,
-    /// The board-level shift sentence. Composed by the backend and forwarded
-    /// whole: a page that derives it from 56 `shift_state` values is deriving
-    /// a board fact from per-row data, which is how a column comes to be
-    /// rendered as though every terminal had its own shift setting.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    shift: Option<ksx_api::PanelShiftSummary>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    notes: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    remedy: Option<String>,
-}
-
-/// POST /api/panel/chart — read what every terminal on one board is programmed
-/// to emit.
-///
-/// **A POST that reads, and the reason is in the router's own rule.**
-/// `server/mod.rs` says reads do not wear POST because the guard polices by
-/// method. This one does anyway: it takes the machine-wide programming lease
-/// and opens the board's configuration collection exclusively, so it is a
-/// hardware transaction with a real cost and a real exclusion, and it must not
-/// be reachable by a link, a prefetch or a page load. It is not idempotent in
-/// the way a GET promises.
-///
-/// **The refusal filter is an ALLOWLIST, and that is not a stylistic choice.**
-/// `facade::chart` reaches the recovery store on every call, and several of its
-/// refusals format `path.display()` into the message — `RECOVERY_REQUIRED` in
-/// three places, and `BackupError`'s own `Display` is `"{path}: {source}"` under
-/// `REFUSED`. A denylist that suppressed only the lease refusal would announce
-/// the user's absolute config path through an aria-live region.
-///
-/// **`BAD_REQUEST` does not pass through either, and the reason is worth
-/// stating.** It reads like "a sentence about what the user asked for", and it
-/// is not: `panel::view`'s unknown-selector and multi-match refusals format
-/// `BoardGroup::board_id` — a raw `USB\VID_…\7&…` device instance path — for
-/// EVERY connected board into the message, and echo the caller's own selector
-/// beside them. A stale selector is the ordinary race this route lives in (the
-/// roster renders, the user presses, the board is gone), so that is not an
-/// exotic path: it is the common one. Both of its cases get one authored
-/// sentence, and the backend remedy is dropped rather than filtered, because a
-/// `contains('\\')` test is a denylist and would pass `(os error 5)` or a POSIX
-/// path unchanged.
-///
-/// So: `PANEL_INTERFACE_BUSY` is authored copy naming the tool to close and
-/// passes through; everything else becomes one authored sentence.
-///
-/// The response carries no `programming_state`, no `programming_detail`, no
-/// `qualification_*`, no `recommended_terminals` and no `key_options`. Those are
-/// the WRITE vocabulary — a page handed "Lossless backup, exact write, full
-/// readback, verification, and restore are available" will eventually render it,
-/// and this build cannot do any of that.
-pub(super) async fn nocturne_api_panel_chart(
-    State(state): State<Arc<AppState>>,
-    axum::Json(body): axum::Json<NocturnePanelChartBody>,
-) -> Response {
-    let outcome = tokio::task::spawn_blocking(move || {
-        // Cancel is terminal to the Button Test caller before the worker has
-        // necessarily destroyed its Raw Input window/panel tap/temporary
-        // claim. Ask the daemon-owned service to absorb that short tail (or
-        // refuse, bounded) before this process opens the board's exclusive
-        // configuration collection. Polling the public phase is insufficient:
-        // `cancelled` deliberately arrives before observer teardown finishes.
-        if let Err(refusal) = state.control.input_test_release_fence() {
-            return if refusal.code == "observer-busy" {
-                NocturnePanelChartOutcome {
-                    ok: false,
-                    error: Some(N_PANEL_CHART_OBSERVER_BUSY.to_owned()),
-                    remedy: Some(N_PANEL_CHART_OBSERVER_REMEDY.to_owned()),
-                    ..Default::default()
-                }
-            } else {
-                NocturnePanelChartOutcome {
-                    ok: false,
-                    error: Some(N_PANEL_CHART_ERROR.to_owned()),
-                    ..Default::default()
-                }
-            };
-        }
-        // The browser's selector reaches `device` verbatim. I-PAC instance
-        // paths are serial-anchored, so canonicalising the string here would
-        // pick a different board than the row the user pressed.
-        let spec = ksx_api::PanelChartSpec {
-            device: Some(body.selector),
-            backup: false,
-        };
-        match state.machine.panel_chart(&spec) {
-            Ok(view) => NocturnePanelChartOutcome {
-                ok: true,
-                board_name: Some(view.board_name),
-                image_sha256: Some(view.image_sha256),
-                shift: Some(view.shift),
-                terminals: Some(view.terminals),
-                notes: Some(view.notes),
-                ..Default::default()
-            },
-            Err(refusal) if refusal.code == ksx_api::codes::PANEL_INTERFACE_BUSY => {
-                NocturnePanelChartOutcome {
-                    ok: false,
-                    error: Some(refusal.message),
-                    remedy: refusal.remedy,
-                    ..Default::default()
-                }
-            }
-            Err(refusal) if refusal.code == ksx_api::codes::BAD_REQUEST => {
-                NocturnePanelChartOutcome {
-                    ok: false,
-                    error: Some(N_PANEL_CHART_SELECTOR.to_owned()),
-                    remedy: Some(N_PANEL_CHART_SELECTOR_REMEDY.to_owned()),
-                    ..Default::default()
-                }
-            }
-            Err(_) => NocturnePanelChartOutcome {
-                ok: false,
-                error: Some(N_PANEL_CHART_ERROR.to_owned()),
-                remedy: None,
-                ..Default::default()
-            },
-        }
-    })
-    .await
-    .unwrap_or_else(|_| NocturnePanelChartOutcome {
-        ok: false,
-        error: Some(N_PANEL_CHART_ERROR.to_owned()),
-        ..Default::default()
-    });
-
-    // **Never cached.** A chart is true for the request that produced it and
-    // nothing watches the board between requests — WinIPAC can rewrite it at
-    // any moment. A re-served copy is a stale answer wearing a fresh one's
-    // clothes.
-    (
-        [(axum::http::header::CACHE_CONTROL, "no-store")],
-        axum::Json(outcome),
-    )
-        .into_response()
-}
-pub(super) async fn nocturne_api_bind(
-    State(state): State<Arc<AppState>>,
-    axum::Json(body): axum::Json<NocturneBindBody>,
-) -> Response {
-    let outcome = tokio::task::spawn_blocking(move || {
-        let staged = state.control.staged();
-        let Some(slot) = staged.slots.iter().find(|s| s.number == body.slot) else {
-            return BindOutcome {
-                ok: false,
-                error: Some(format!(
-                    "Player {} is no longer in this unsaved setup. Nothing changed.",
-                    body.slot
-                )),
-                code: Some(ksx_api::codes::BAD_SLOT.to_owned()),
-                ..BindOutcome::default()
-            };
-        };
-        let expected_target_revision = body.expected_target_revision.trim().to_owned();
-        if expected_target_revision.is_empty()
-            || expected_target_revision != slot.target_revision
-        {
-            return BindOutcome {
-                ok: false,
-                error: Some(format!(
-                    "Player {} changed since this mapping action was opened. Nothing changed. Refresh the canvas and try again.",
-                    body.slot
-                )),
-                code: Some(ksx_api::codes::BAD_SLOT.to_owned()),
-                ..BindOutcome::default()
-            };
-        }
-        let key = body.key.trim();
-        if key.is_empty() {
-            return BindOutcome {
-                ok: false,
-                error: Some("No key was captured. Nothing changed.".to_owned()),
-                code: Some(ksx_api::codes::BAD_REQUEST.to_owned()),
-                ..BindOutcome::default()
-            };
-        }
-        let expected_device = staged
-            .device
-            .as_ref()
-            .map(|device| device.selector.clone())
-            .unwrap_or_default();
-        let (keys, force) = if body.mode.as_deref() == Some("add") {
-            let current = nocturne_current_keys(&staged, slot, &body.function);
-            if current.iter().any(|k| k.eq_ignore_ascii_case(key)) {
-                return BindOutcome {
-                    ok: false,
-                    error: Some(format!("That control already has {key} — nothing to add.")),
-                    code: Some(ksx_api::codes::BAD_REQUEST.to_owned()),
-                    ..BindOutcome::default()
-                };
-            }
-            let mut next = current;
-            next.push(key.to_owned());
-            (next, true)
-        } else if body.mode.as_deref() == Some("remove") {
-            // Take ONE key off this control's list; the rest stay.
-            // Shrinking a key list consents to nothing new, so it forces.
-            let current = nocturne_current_keys(&staged, slot, &body.function);
-            if !current.iter().any(|k| k.eq_ignore_ascii_case(key)) {
-                return BindOutcome {
-                    ok: false,
-                    error: Some(format!(
-                        "That control is not driven by {key} — nothing to remove."
-                    )),
-                    code: Some(ksx_api::codes::BAD_REQUEST.to_owned()),
-                    ..BindOutcome::default()
-                };
-            }
-            let rest: Vec<String> = current
-                .into_iter()
-                .filter(|k| !k.eq_ignore_ascii_case(key))
-                .collect();
-            let keys = if rest.is_empty() {
-                vec!["none".to_owned()]
-            } else {
-                rest
-            };
-            (keys, true)
-        } else {
-            (vec![key.to_owned()], body.force)
-        };
-        // Only the PROVIDER's outcome crosses the presentation boundary
-        // through `consumerize_bind`; the guards above are this module's own
-        // authored customer copy and pass through untouched.
-        consumerize_bind(state.control.stage_bind(&ksx_api::StagedBindRequest {
-            number: slot.number,
-            expected_device,
-            expected_target_revision,
-            preset: slot.preset.clone(),
-            function: body.function,
-            keys,
-            force,
-            turbo_hz: None,
-            toggle: None,
-        }))
-    })
-    .await
-    .unwrap_or_else(|_| BindOutcome {
-        ok: false,
-        error: Some("That control could not be changed. Nothing changed.".to_owned()),
-        code: Some(ksx_api::codes::REFUSED.to_owned()),
-        ..BindOutcome::default()
-    });
-    (
-        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
-        axum::Json(outcome),
-    )
-        .into_response()
-}
-
-/// The control's current key list, read from the same staged mapper table
-/// the page's rows render — never from anything a browser sent.
-fn nocturne_current_keys(
-    staged: &ksx_api::StagedSetupView,
-    slot: &ksx_api::StagedSlotView,
-    function: &str,
-) -> Vec<String> {
-    // ⚠️ A MACRO TRIGGER IS NOT IN `MapperSlot.bindings`. That table is built
-    // from the preset's CONTROL entries; a trigger lives in the macro table.
-    // Reading the control table for `macro.<name>` returned NOTHING, so
-    // "add another trigger key" appended to an empty list — which is a
-    // replace, and lost the key that was already there.
-    if let Some(name) = function.strip_prefix("macro.") {
-        return ksx_api::staged_macro_snapshot(slot)
-            .macros
-            .into_iter()
-            .find(|m| m.name.eq_ignore_ascii_case(name))
-            .map(|m| m.triggers)
-            .unwrap_or_default();
-    }
-    let keyboard = staged
-        .device
-        .as_ref()
-        .map(|device| device.label.as_str())
-        .unwrap_or("(none)");
-    ksx_api::staged_mapper_slot(slot, keyboard)
-        .ok()
-        .and_then(|mapper| {
-            // Case-bridged: the mapper spells face buttons UPPERCASE while
-            // the stage art's tokens are lowercase — a lookup must match
-            // the function whichever spelling the caller learned it from.
-            mapper.bindings.get(function).cloned().or_else(|| {
-                mapper
-                    .bindings
-                    .iter()
-                    .find(|(name, _)| name.eq_ignore_ascii_case(function))
-                    .map(|(_, keys)| keys.clone())
-            })
-        })
-        .unwrap_or_default()
-}
-
 // ── The row editor's form twins: auto-fire and press behaviour ─────────────
 
 #[derive(Deserialize)]
@@ -3118,59 +1583,11 @@ pub(super) async fn nocturne_form_bind_turbo(
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
     let flash = tokio::task::spawn_blocking(move || {
-        bind_turbo_flash(&state, form.slot, form.function, form.turbo_hz.as_deref())
+        wb::bind_turbo_flash(&state, form.slot, form.function, form.turbo_hz.as_deref())
     })
     .await
     .unwrap_or(N_EDIT_ERROR);
     nocturne_redirect(flash)
-}
-
-/// Set (or clear, with `0`) a control's auto-fire rate — validation and all,
-/// so the two pages cannot disagree about a refusal. Shared with `/redesign`.
-pub(super) fn bind_turbo_flash(
-    state: &AppState,
-    slot: u8,
-    function: String,
-    turbo_hz: Option<&str>,
-) -> &'static str {
-    let raw = turbo_hz.map(str::trim).unwrap_or("");
-    let Ok(hz) = raw.parse::<u32>() else {
-        return N_TURBO_INPUT_ERROR;
-    };
-    let staged = state.control.staged();
-    let Some(row) = staged.slots.iter().find(|s| s.number == slot) else {
-        return N_EDIT_ERROR;
-    };
-    let current = nocturne_current_keys(&staged, row, &function);
-    if current.is_empty() {
-        // An unbound control has no rate to set OR clear; saying
-        // "updated" would claim a write that never happened.
-        return N_TURBO_UNBOUND_ERROR;
-    }
-    let outcome = state.control.stage_bind(&ksx_api::StagedBindRequest {
-        number: row.number,
-        expected_device: staged
-            .device
-            .as_ref()
-            .map(|device| device.selector.clone())
-            .unwrap_or_default(),
-        expected_target_revision: row.target_revision.clone(),
-        preset: row.preset.clone(),
-        function,
-        keys: current,
-        // The key list is exactly what the control already holds, so no
-        // NEW fan-out is being consented to — without this, a key that
-        // was deliberately shared across players would re-trip the
-        // conflict refusal on every rate edit.
-        force: true,
-        turbo_hz: Some(hz),
-        toggle: None,
-    });
-    if outcome.ok {
-        N_TURBO_OK
-    } else {
-        N_EDIT_ERROR
-    }
 }
 
 #[derive(Deserialize)]
@@ -3192,113 +1609,14 @@ pub(super) async fn nocturne_form_bind_toggle(
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
     let flash = tokio::task::spawn_blocking(move || {
-        bind_toggle_flash(&state, form.slot, form.function, &form.mode)
+        wb::bind_toggle_flash(&state, form.slot, form.function, &form.mode)
     })
     .await
     .unwrap_or(N_EDIT_ERROR);
     nocturne_redirect(flash)
 }
 
-/// The Hold|Toggle pill pair's write — `mode` is `hold` or `toggle`,
-/// anything else refuses; the latch is the only thing that changes. Shared
-/// with `/redesign`.
-pub(super) fn bind_toggle_flash(
-    state: &AppState,
-    slot: u8,
-    function: String,
-    mode: &str,
-) -> &'static str {
-    let latch = match mode {
-        "toggle" => true,
-        "hold" => false,
-        _ => return N_EDIT_ERROR,
-    };
-    let staged = state.control.staged();
-    let Some(row) = staged.slots.iter().find(|s| s.number == slot) else {
-        return N_EDIT_ERROR;
-    };
-    let current = nocturne_current_keys(&staged, row, &function);
-    if current.is_empty() {
-        return N_TOGGLE_UNBOUND_ERROR;
-    }
-    let slot_number = row.number;
-    let function_name = function.clone();
-    let outcome = state.control.stage_bind(&ksx_api::StagedBindRequest {
-        number: row.number,
-        expected_device: staged
-            .device
-            .as_ref()
-            .map(|device| device.selector.clone())
-            .unwrap_or_default(),
-        expected_target_revision: row.target_revision.clone(),
-        preset: row.preset.clone(),
-        function,
-        keys: current,
-        // Unchanged key list — re-affirmed, not newly shared (see the
-        // turbo twin's note).
-        force: true,
-        turbo_hz: None,
-        toggle: Some(latch),
-    });
-    if !outcome.ok {
-        return N_EDIT_ERROR;
-    }
-    // An OLDER daemon ignores the toggle field it does not know and
-    // still answers ok — read the draft back before claiming success.
-    let took = state
-        .control
-        .staged()
-        .slots
-        .iter()
-        .find(|s| s.number == slot_number)
-        .and_then(|s| ksx_api::staged_mapper_slot(s, "").ok())
-        .map(|m| m.toggle.contains(&function_name))
-        .unwrap_or(false);
-    if took == latch {
-        N_TOGGLE_OK
-    } else {
-        N_TOGGLE_OLD_DAEMON
-    }
-}
-
 // ── The macro machinery (moved from /map 2026-08-17, macro migration) ──────
-
-/// POST /api/macro/save — write (or delete) one whole `[macros.<name>]`
-/// table. Moved here with the macro-lifecycle migration; the target
-/// resolution and the presentation boundary stay in map.rs beside their bind
-/// twins, and this handler is the one door both pages' editors go through.
-///
-/// `reload` is forced on, exactly like the restore route: the daemon only
-/// applies to a session that is actually RUNNING, and a macro body is a
-/// binding change — the session hot-swaps it with the pads left plugged.
-pub(super) async fn api_macro_save(
-    State(state): State<Arc<AppState>>,
-    axum::Json(request): axum::Json<TargetedMacroWrite>,
-) -> Response {
-    let write = crate::control::MacroWrite {
-        reload: true,
-        ..request.write
-    };
-    control_json(state, move |control| {
-        consumerize_macro(macro_for_target(
-            control,
-            request.target.as_deref(),
-            request.slot,
-            &write,
-        ))
-    })
-    .await
-}
-
-#[derive(Deserialize)]
-pub(super) struct TargetedMacroWrite {
-    #[serde(flatten)]
-    write: crate::control::MacroWrite,
-    #[serde(default)]
-    target: Option<String>,
-    #[serde(default)]
-    slot: Option<u8>,
-}
 
 /// The lifecycle twins' form: the slot number and the table name — the two
 /// identities a staged macro write needs. The server resolves the preset.
@@ -3323,98 +1641,7 @@ async fn nocturne_macro_write(
     write: crate::control::MacroWrite,
     ok_flash: &'static str,
 ) -> Response {
-    nocturne_redirect(macro_write_flash(state, slot, write, ok_flash).await)
-}
-
-/// One staged macro write with the slot's preset resolved server-side,
-/// folded to a flash — shared with `/redesign`'s macro verbs.
-pub(super) async fn macro_write_flash(
-    state: Arc<AppState>,
-    slot: u8,
-    write: crate::control::MacroWrite,
-    ok_flash: &'static str,
-) -> &'static str {
-    tokio::task::spawn_blocking(move || {
-        let staged = state.control.staged();
-        let Some(found) = staged.slots.iter().find(|s| s.number == slot) else {
-            return N_EDIT_ERROR;
-        };
-        let write = crate::control::MacroWrite {
-            preset: found.preset.clone(),
-            ..write
-        };
-        let outcome = state.control.stage_macro(&ksx_api::StagedMacroRequest {
-            number: slot,
-            write,
-        });
-        if outcome.ok {
-            ok_flash
-        } else {
-            N_EDIT_ERROR
-        }
-    })
-    .await
-    .unwrap_or(N_EDIT_ERROR)
-}
-
-/// The "New macro" composition — name validation (a TOML key AND a URL
-/// half), the case-insensitive taken check, then one empty-stepped table
-/// this draft's editor can open on. Shared with `/redesign`.
-pub(super) async fn macro_new_flash(
-    state: Arc<AppState>,
-    slot: u8,
-    raw_name: &str,
-) -> &'static str {
-    let name = raw_name.trim().to_owned();
-    if name.is_empty() {
-        return N_MACRO_NAME;
-    }
-    if name.len() > 64
-        || !name
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphanumeric())
-        || !name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
-    {
-        return N_MACRO_BADNAME;
-    }
-    let taken = {
-        let state = Arc::clone(&state);
-        let want = name.clone();
-        tokio::task::spawn_blocking(move || {
-            let staged = state.control.staged();
-            let Some(found) = staged.slots.iter().find(|s| s.number == slot) else {
-                return false;
-            };
-            ksx_api::staged_macro_snapshot(found)
-                .macros
-                .iter()
-                .any(|m| m.name.eq_ignore_ascii_case(&want))
-        })
-        .await
-        .unwrap_or(false)
-    };
-    if taken {
-        return N_MACRO_TAKEN;
-    }
-    macro_write_flash(
-        state,
-        slot,
-        crate::control::MacroWrite {
-            name,
-            steps: vec![ksx_api::MacroStepView {
-                hold: Vec::new(),
-                ms: Some(50),
-                frames: None,
-                allow_short: false,
-            }],
-            ..crate::control::MacroWrite::default()
-        },
-        N_MACRO_NEW,
-    )
-    .await
+    nocturne_redirect(wb::macro_write_flash(state, slot, write, ok_flash).await)
 }
 
 /// POST /nocturne/macro/toggle — disable (or re-enable) one macro. The table
@@ -3452,7 +1679,7 @@ pub(super) async fn nocturne_form_macro_new(
     let Ok(Form(form)) = form else {
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
-    nocturne_redirect(macro_new_flash(state, form.slot, &form.name).await)
+    nocturne_redirect(wb::macro_new_flash(state, form.slot, &form.name).await)
 }
 
 /// POST /nocturne/macro/delete — remove one macro table (and the trigger
@@ -3496,42 +1723,10 @@ pub(super) async fn nocturne_form_bind_clear(
         return nocturne_redirect(N_FORM_UNREADABLE);
     };
     let flash =
-        tokio::task::spawn_blocking(move || bind_clear_flash(&state, form.slot, form.function))
+        tokio::task::spawn_blocking(move || wb::bind_clear_flash(&state, form.slot, form.function))
             .await
             .unwrap_or(N_EDIT_ERROR);
     nocturne_redirect(flash)
-}
-
-/// One control back to unbound (`keys: ["none"]` through the daemon's own
-/// staged-bind verb). Shared with `/redesign`.
-pub(super) fn bind_clear_flash(state: &AppState, slot: u8, function: String) -> &'static str {
-    let staged = state.control.staged();
-    let Some(row) = staged.slots.iter().find(|s| s.number == slot) else {
-        return N_EDIT_ERROR;
-    };
-    let ok = state
-        .control
-        .stage_bind(&ksx_api::StagedBindRequest {
-            number: slot,
-            expected_device: staged
-                .device
-                .as_ref()
-                .map(|device| device.selector.clone())
-                .unwrap_or_default(),
-            expected_target_revision: row.target_revision.clone(),
-            preset: row.preset.clone(),
-            function,
-            keys: vec!["none".to_owned()],
-            force: false,
-            turbo_hz: None,
-            toggle: None,
-        })
-        .ok;
-    if ok {
-        N_EDIT_OK
-    } else {
-        N_EDIT_ERROR
-    }
 }
 
 /// POST /nocturne/save — the ONE writing verb: stage-commit.
@@ -3551,60 +1746,7 @@ pub(super) async fn nocturne_form_save(State(state): State<Arc<AppState>>) -> Re
     if disagrees {
         return nocturne_redirect(N_SAVE_CAPTURE);
     }
-    let outcome = tokio::task::spawn_blocking(move || state.control.stage_commit()).await;
-    nocturne_redirect(stage_flash(outcome, StageVerb::Save))
-}
-
-/// Which of the two writing verbs a refusal belongs to.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum StageVerb {
-    Save,
-    Play,
-}
-
-/// One [`ksx_api::StageOutcome`] as the sentence this page flashes.
-///
-/// **The CODE decides, never the daemon's sentence.** A `StageRefusal` is
-/// written for an operator: it names `slot 1`, `Persona::backend()`,
-/// `ksx_core::MAX_SLOTS` and file paths, and carrying it verbatim put all of
-/// that under a button on the product page. It also cost us the thing the
-/// carrying was supposed to preserve — a runtime-composed sentence cannot be
-/// on [`N_FLASH_ALLOWLIST`], so with scripting off every one of these refusals
-/// degraded to the generic "could not be finished" anyway. Selecting one of
-/// this page's own sentences off the stable code keeps the specific reason on
-/// BOTH doors and leaks nothing (`verb_flash`'s rule, applied to the stage).
-///
-/// The success line is this page's too: `stage_commit` answers "saved to
-/// config.toml" and `stage_play` "the staged setup is playing", which are the
-/// daemon's nouns and are likewise unreflectable.
-fn stage_flash(
-    outcome: Result<ksx_api::StageOutcome, tokio::task::JoinError>,
-    verb: StageVerb,
-) -> &'static str {
-    let Ok(outcome) = outcome else {
-        return match verb {
-            StageVerb::Save => N_SAVE_ERROR,
-            StageVerb::Play => N_PLAY_ERROR,
-        };
-    };
-    if outcome.ok {
-        return match verb {
-            StageVerb::Save => N_SAVE_OK,
-            StageVerb::Play => N_PLAY_OK,
-        };
-    }
-    match (verb, outcome.code.as_deref().unwrap_or_default()) {
-        (StageVerb::Save, "blocking-unanswered") => N_SAVE_BLOCKING,
-        (StageVerb::Play, "blocking-unanswered") => N_PLAY_BLOCKING,
-        (StageVerb::Save, "no-bindings") => N_SAVE_NO_BINDINGS,
-        (StageVerb::Play, "no-bindings") => N_PLAY_NO_BINDINGS,
-        (StageVerb::Save, "no-device") => N_SAVE_NO_DEVICE,
-        (StageVerb::Play, "no-device") => N_PLAY_NO_DEVICE,
-        (StageVerb::Save, "no-slots") => N_SAVE_NO_SLOTS,
-        (StageVerb::Play, "no-slots") => N_PLAY_NO_SLOTS,
-        (StageVerb::Save, _) => N_SAVE_ERROR,
-        (StageVerb::Play, _) => N_PLAY_ERROR,
-    }
+    nocturne_redirect(wb::stage_save(state).await)
 }
 
 /// **The capture gate, repeated in the handlers.**
@@ -3648,42 +1790,21 @@ fn capture_disagrees(state: &AppState) -> bool {
 /// disagreement (a cheap re-read), the required controller OUTPUTS (Play's
 /// own gate — see [`N_PLAY_OUTPUT_BLOCKED`]), and then the domain's.
 pub(super) async fn nocturne_form_play(State(state): State<Arc<AppState>>) -> Response {
-    let gate = {
+    let disagrees = {
         let state = Arc::clone(&state);
-        tokio::task::spawn_blocking(move || {
-            if capture_disagrees(&state) {
-                return Some(N_PLAY_CAPTURE);
-            }
-            // A machine that cannot answer at all is `unknown`, which is
-            // exactly the state that must not plug a pad it cannot vouch for.
-            let outputs = state
-                .machine
-                .controller_outputs(&state.control.staged())
-                .unwrap_or_default();
-            if outputs.blocked {
-                Some(N_PLAY_OUTPUT_BLOCKED)
-            } else if outputs.unknown {
-                Some(N_PLAY_OUTPUT_UNKNOWN)
-            } else {
-                None
-            }
-        })
-        .await
-        .unwrap_or(Some(N_PLAY_ERROR))
+        tokio::task::spawn_blocking(move || capture_disagrees(&state))
+            .await
+            .unwrap_or(false)
     };
-    if let Some(refusal) = gate {
-        return nocturne_redirect(refusal);
+    if disagrees {
+        return nocturne_redirect(N_PLAY_CAPTURE);
     }
-    let outcome = tokio::task::spawn_blocking(move || state.control.stage_play()).await;
-    nocturne_redirect(stage_flash(outcome, StageVerb::Play))
+    nocturne_redirect(wb::stage_play(state).await)
 }
 
 /// POST /nocturne/stop — end the session; keyboards type normally again.
 pub(super) async fn nocturne_form_stop(State(state): State<Arc<AppState>>) -> Response {
-    let ok = tokio::task::spawn_blocking(move || state.control.stop().is_ok())
-        .await
-        .unwrap_or(false);
-    nocturne_redirect(if ok { N_STOP_OK } else { N_STOP_ERROR })
+    nocturne_redirect(wb::stage_stop(state).await)
 }
 
 // ── The configuration menu's verbs (moved from /workspace and /start) ──────
@@ -3694,47 +1815,18 @@ pub(super) async fn nocturne_form_stop(State(state): State<Arc<AppState>>) -> Re
 /// (adoption never overwrites edits) and that refusal is the feature: the
 /// flash names Start over as the deliberate first step. LOAD only — Play is
 /// its own decision, never welded onto this one.
-#[derive(Deserialize)]
-pub(super) struct NocturneAdoptForm {
-    /// A games.toml profile title, or absent for the saved config.toml.
-    /// Trimmed-empty means absent: a form with a blank field is a legal
-    /// thing for a browser to send.
-    #[serde(default)]
-    profile: Option<String>,
-}
-
 pub(super) async fn nocturne_form_adopt(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<NocturneAdoptForm>,
+    Form(form): Form<wb::AdoptForm>,
 ) -> Response {
-    let profile = form
-        .profile
-        .as_deref()
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-        .map(str::to_owned);
-    let outcome =
-        tokio::task::spawn_blocking(move || state.control.stage_adopt(profile.as_deref()))
-            .await
-            .ok();
-    let flash = match outcome {
-        Some(outcome) if outcome.ok => N_ADOPT_OK,
-        Some(outcome) if outcome.code.as_deref() == Some("stage-not-empty") => N_ADOPT_BLOCKED,
-        _ => N_EDIT_ERROR,
-    };
-    nocturne_redirect(flash)
+    nocturne_redirect(wb::stage_adopt(state, form.profile).await)
 }
 
 /// POST /nocturne/discard (and /start/discard) — "Start over". FIRST-RUN §2
 /// requires that it always works; the menu's fold carries the dirty-aware
 /// warning BEFORE this verb is reachable, and saved files are never touched.
 pub(super) async fn nocturne_form_discard(State(state): State<Arc<AppState>>) -> Response {
-    let ok = tokio::task::spawn_blocking(move || {
-        state.control.stage_edit(&ksx_api::StageEdit::Discard).ok
-    })
-    .await
-    .unwrap_or(false);
-    nocturne_redirect(if ok { N_DISCARD_OK } else { N_EDIT_ERROR })
+    nocturne_redirect(wb::stage_discard(state).await)
 }
 
 /// What POST /nocturne/autostart carries. `enable` is the DIRECTION, served
@@ -3782,312 +1874,6 @@ pub(super) async fn nocturne_form_autostart(
     .await
     .unwrap_or(N_AUTOSTART_ERROR);
     nocturne_redirect(flash)
-}
-
-// ── Identify (moved from /start; the one transaction, shared by every door) ─
-
-/// The identify transaction itself, shared by `/nocturne`, `/start` and
-/// `/workspace`: one daemon-owned listen, one machine-inventory resolution,
-/// one reversible staged choice. The caller only decides where the flash
-/// goes. Moved here with the rest of the keyboard backend.
-pub(super) async fn identify_and_stage(state: Arc<AppState>) -> StartIdentifyResult {
-    identify_and_stage_inner(state, IdentifyTracking::Legacy).await
-}
-
-/// The redesign owns a cancellable presentation of the same transaction.
-/// Tracking changes no device semantics: the same daemon learner, machine
-/// resolver and preparation-preserving stage guard still decide the answer.
-/// It only exposes the exact generation to the redesign's cancel door.
-pub(super) async fn identify_and_stage_for_redesign(
-    state: Arc<AppState>,
-    attempt: String,
-) -> StartIdentifyResult {
-    identify_and_stage_inner(state, IdentifyTracking::Redesign(attempt)).await
-}
-
-async fn identify_and_stage_inner(
-    state: Arc<AppState>,
-    tracking: IdentifyTracking,
-) -> StartIdentifyResult {
-    let cleanup_attempt = match &tracking {
-        IdentifyTracking::Legacy => None,
-        IdentifyTracking::Redesign(attempt) => Some(attempt.clone()),
-    };
-    let worker_state = Arc::clone(&state);
-    let result = tokio::task::spawn_blocking(move || {
-        // Serialize redesign identify attempts before opening the shared
-        // learner. Without this reservation, a second tab could replace the
-        // registry generation and the first tab's Cancel would target the
-        // second tab's listener. The HTTP handler has already installed
-        // Pending; inspect it briefly here, then drop the mutex before the
-        // possibly slow pipe call so a sick daemon cannot occupy a Tokio
-        // worker merely because Cancel needs the same registry.
-        let requested_attempt = match tracking {
-            IdentifyTracking::Legacy => None,
-            IdentifyTracking::Redesign(attempt) => {
-                let mut registry = state.redesign_identify.lock().unwrap();
-                match registry.lease.as_ref() {
-                    Some(super::RedesignIdentifyLease::Pending { attempt: owner })
-                        if owner == &attempt => {}
-                    Some(super::RedesignIdentifyLease::Cancelled { attempt: owner })
-                        if owner == &attempt =>
-                    {
-                        registry.lease = None;
-                        return StartIdentifyResult::Cancelled;
-                    }
-                    Some(_) => return StartIdentifyResult::Busy,
-                    None => return StartIdentifyResult::Failed,
-                }
-                drop(registry);
-                Some(attempt)
-            }
-        };
-        let mut learn = state.control.learn_start();
-        let Some(generation) = learn.generation else {
-            let cancelled = requested_attempt.as_ref().is_some_and(|attempt| {
-                let mut registry = state.redesign_identify.lock().unwrap();
-                let cancelled = matches!(
-                    registry.lease.as_ref(),
-                    Some(super::RedesignIdentifyLease::Cancelled { attempt: owner })
-                        if owner == attempt
-                );
-                if matches!(
-                    registry.lease.as_ref(),
-                    Some(super::RedesignIdentifyLease::Pending { attempt: owner })
-                        if owner == attempt
-                ) || cancelled
-                {
-                    registry.lease = None;
-                }
-                cancelled
-            });
-            return if cancelled {
-                StartIdentifyResult::Cancelled
-            } else {
-                StartIdentifyResult::Failed
-            };
-        };
-        let track_redesign = requested_attempt.is_some();
-        let attempt = requested_attempt.unwrap_or_default();
-        if track_redesign {
-            enum Transition {
-                Active,
-                Cancelled,
-                Lost,
-            }
-            let transition = {
-                let mut registry = state.redesign_identify.lock().unwrap();
-                match registry.lease.as_ref() {
-                    Some(super::RedesignIdentifyLease::Pending { attempt: owner })
-                        if owner == &attempt =>
-                    {
-                        registry.lease = Some(super::RedesignIdentifyLease::Active {
-                            attempt: attempt.clone(),
-                            generation,
-                        });
-                        Transition::Active
-                    }
-                    Some(super::RedesignIdentifyLease::Cancelled { attempt: owner })
-                        if owner == &attempt =>
-                    {
-                        registry.lease = None;
-                        Transition::Cancelled
-                    }
-                    _ => Transition::Lost,
-                }
-            };
-            if !matches!(transition, Transition::Active) {
-                // learn_start won the race after cancellation. Retire the
-                // exact generation immediately; it must never become an
-                // orphaned mapper listener or influence a later ordinary learn.
-                let _ = state.control.learn_cancel_generation(Some(generation));
-                return if matches!(transition, Transition::Cancelled) {
-                    StartIdentifyResult::Cancelled
-                } else {
-                    StartIdentifyResult::Failed
-                };
-            }
-        }
-        let finish = |outcome| {
-            if track_redesign {
-                let mut registry = state.redesign_identify.lock().unwrap();
-                if registry.lease.as_ref().is_some_and(|lease| {
-                    matches!(
-                        lease,
-                        super::RedesignIdentifyLease::Active {
-                            attempt: owner,
-                            generation: owner_generation,
-                        } | super::RedesignIdentifyLease::Resolving {
-                            attempt: owner,
-                            generation: owner_generation,
-                        } if owner == &attempt && *owner_generation == generation
-                    )
-                }) {
-                    registry.lease = None;
-                }
-            }
-            outcome
-        };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(11);
-        loop {
-            if !learn.ok || learn.generation != Some(generation) {
-                return finish(StartIdentifyResult::Failed);
-            }
-            match learn.state.as_str() {
-                "hit" => {
-                    // The enhanced workbench promises Escape as its one
-                    // keyboard cancellation door. Raw Input observes the
-                    // physical press independently of the DOM event, so the
-                    // server must reserve the same canonical key too: an
-                    // HTTP cancel that loses the race to this hit must never
-                    // turn Escape into a staged device. Legacy identify keeps
-                    // its historical any-key behaviour.
-                    if track_redesign
-                        && learn
-                            .key
-                            .as_deref()
-                            .is_some_and(|key| key.eq_ignore_ascii_case("Escape"))
-                    {
-                        let _ = state.control.learn_cancel_generation(Some(generation));
-                        return finish(StartIdentifyResult::Cancelled);
-                    }
-                    // Selection wins only after atomically retiring the
-                    // cancellable generation. A concurrent Cancel that takes
-                    // it first makes the next poll `cancelled`; a Cancel that
-                    // arrives after this boundary truthfully reports that the
-                    // answer already landed and cannot claim "nothing changed".
-                    if track_redesign {
-                        let mut registry = state.redesign_identify.lock().unwrap();
-                        if !registry.lease.as_ref().is_some_and(|lease| {
-                            matches!(
-                                lease,
-                                super::RedesignIdentifyLease::Active {
-                                    attempt: owner,
-                                    generation: owner_generation,
-                                } if owner == &attempt && *owner_generation == generation
-                            )
-                        }) {
-                            return StartIdentifyResult::Failed;
-                        }
-                        registry.lease = Some(super::RedesignIdentifyLease::Resolving {
-                            attempt: attempt.clone(),
-                            generation,
-                        });
-                    }
-                    let Some(observed_instance) = learn
-                        .device
-                        .as_deref()
-                        .filter(|instance| !instance.trim().is_empty())
-                    else {
-                        return finish(StartIdentifyResult::Failed);
-                    };
-                    let identified = match state.machine.device_identify(observed_instance) {
-                        Ok(identified) => identified,
-                        Err(_) => return finish(StartIdentifyResult::Failed),
-                    };
-                    // Identifying the board that is ALREADY staged is not a
-                    // no-op the user is doing by accident — it is the natural
-                    // way to confirm the right keyboard is selected. Going
-                    // through the shared guard means that confirmation cannot
-                    // cost them a WinUSB preparation; see
-                    // `choose_device_preserving_preparation` for what a
-                    // re-choose destroys. Either way the ANSWER is the same:
-                    // a keyboard answered and it is the staged one, which is
-                    // precisely what `N_IDENTIFY_OK` says.
-                    let selector = identified.selector;
-                    return finish(
-                        match choose_device_preserving_preparation(
-                            &state,
-                            selector.clone(),
-                            identified.alias,
-                            identified.label,
-                        ) {
-                            DeviceChoice::Chosen | DeviceChoice::Unchanged => {
-                                StartIdentifyResult::Selected(selector)
-                            }
-                            DeviceChoice::Refused => StartIdentifyResult::Failed,
-                        },
-                    );
-                }
-                "listening" => {
-                    if std::time::Instant::now() >= deadline {
-                        let _ = state.control.learn_cancel_generation(Some(generation));
-                        return finish(StartIdentifyResult::TimedOut);
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    learn = state.control.learn_poll();
-                }
-                "timeout" => return finish(StartIdentifyResult::TimedOut),
-                "idle" | "cancelled" | "failed" | "unavailable" | "unknown" => {
-                    return finish(StartIdentifyResult::Failed);
-                }
-                _ => return finish(StartIdentifyResult::Failed),
-            }
-        }
-    })
-    .await;
-    match result {
-        Ok(outcome) => outcome,
-        Err(_) => {
-            // A failed blocking task must not strand Pending forever. If it
-            // made it as far as Active, take and cancel that exact generation.
-            let generation = cleanup_attempt.as_ref().and_then(|attempt| {
-                let mut registry = worker_state.redesign_identify.lock().unwrap();
-                let generation = match registry.lease.as_ref() {
-                    Some(super::RedesignIdentifyLease::Active {
-                        attempt: owner,
-                        generation,
-                    })
-                    | Some(super::RedesignIdentifyLease::Resolving {
-                        attempt: owner,
-                        generation,
-                    }) if owner == attempt => Some(*generation),
-                    _ => None,
-                };
-                let owned = match registry.lease.as_ref() {
-                    Some(super::RedesignIdentifyLease::Pending { attempt: owner }) => {
-                        owner == attempt
-                    }
-                    Some(super::RedesignIdentifyLease::Active { attempt: owner, .. })
-                    | Some(super::RedesignIdentifyLease::Resolving { attempt: owner, .. })
-                    | Some(super::RedesignIdentifyLease::Cancelled { attempt: owner }) => {
-                        owner == attempt
-                    }
-                    _ => false,
-                };
-                if owned {
-                    registry.lease = None;
-                }
-                generation
-            });
-            if let Some(generation) = generation {
-                let _ = tokio::task::spawn_blocking(move || {
-                    worker_state
-                        .control
-                        .learn_cancel_generation(Some(generation))
-                })
-                .await;
-            }
-            StartIdentifyResult::Failed
-        }
-    }
-}
-
-enum IdentifyTracking {
-    Legacy,
-    Redesign(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum StartIdentifyResult {
-    /// The canonical selector staged by this exact learner hit. The redesign
-    /// returns it with the success redirect so a later authority refresh can
-    /// never attribute another tab's selected row to this attempt.
-    Selected(String),
-    TimedOut,
-    Failed,
-    Busy,
-    Cancelled,
 }
 
 #[cfg(test)]

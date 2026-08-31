@@ -493,6 +493,11 @@ const [rdCtrlAddNote, setRdCtrlAddNote] = createSignal("");
 const [rdCtrlCountsLine, setRdCtrlCountsLine] = createSignal("");
 const [rdCtrlAddPreset, setRdCtrlAddPreset] = createSignal("");
 const [rdCtrlAddLayout, setRdCtrlAddLayout] = createSignal("");
+// The macro editor remains client-managed after adoption, but an open ?macro=
+// URL must paint the SAME dialog before hydration. The renderer inserts the
+// escaped children into the marked empty host; this island serves its class,
+// and the editor module adopts the tree before owning later draft repaints.
+const [rdMacHolderCls, setRdMacHolderCls] = createSignal("rd-macdlg nd-back none");
 /** The served card list, held for the canvas reconciler — cards are canvas
  *  widgets, not a template list, so this is plain data, not a signal. */
 let rdCtrlCards: RdControllerCardView[] = [];
@@ -991,6 +996,7 @@ export function applyRedesign(v: RedesignPayload): void {
   rdCtrlMacroRows = c?.macro_rows ?? [];
   rdCtrlMacrosNote = c?.macros_note ?? "";
   rdCtrlMac = c?.mac ?? null;
+  setRdMacHolderCls(`rd-macdlg ${c?.mac?.back_cls || "nd-back none"}`);
   rdLearnSource = {
     selector: v.learn_selector ?? "",
     instance: v.learn_instance ?? "",
@@ -5380,20 +5386,27 @@ export function RedesignIsland() {
             ),
           ),
         ),
-        // The macro STEP editor's holder — the redesign-macro-editor module
-        // paints the whole roll into it from the served view; the `.none`
-        // modifier (never the hidden attribute — `.nd-back`'s display:grid
-        // outranks it) is the one off switch, and `back_cls` is served.
+        // The macro STEP editor's holder. An open cold URL receives escaped
+        // server markup so its first paint and hydrated representation agree;
+        // redesign-macro-editor adopts that tree, then owns draft repaints.
+        // `.none` (never hidden — `.nd-back`'s display:grid outranks it) is the
+        // one off switch, and `back_cls` remains served.
         h(
           "div",
-          { class: "rd-macdlg nd-back none", "data-nx": "mac-close" },
+          { class: () => rdMacHolderCls(), "data-nx": "mac-close" },
           h("div", {
             class: "nd nd-mac",
             "data-nx": "dlg-noop",
+            // Forma cannot emit dynamic innerHTML during SSR. The redesign
+            // renderer fills this exact host from the same escaped payload
+            // before the response leaves the server; the marker keeps that
+            // narrowly-scoped post-render seam testable.
+            "data-rd-mac-host": "",
             role: "dialog",
             "aria-modal": "true",
             tabindex: "-1",
-            "aria-label": "Macro steps",
+            "aria-labelledby": "rd-mac-title",
+            "aria-describedby": "rd-mac-description",
           }),
         ),
         h(

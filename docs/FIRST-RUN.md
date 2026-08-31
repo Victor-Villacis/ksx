@@ -29,7 +29,7 @@ Numbered because the rest of this file and the code refer to them.
    and a desktop icon exists whether or not they accept.
 3. **Start it.** The console-free `ksx-launcher.exe` starts the installed
    `ksx.exe open`, the tray icon appears, and Studio opens directly at
-   `/nocturne` in its own app window. An idle control host is running, but no
+   `/redesign` in its own app window. An idle control host is running, but no
    emulation session exists: nothing is captured and no pads exist. The tray's
    operate-only cabinet window and saved-setup Start action remain gray until
    first-run Save gives them a runnable setup.
@@ -59,7 +59,7 @@ plus the blocking choice. It lives in the daemon for the length of the visit.
 `StagedSlotView::authoring` is optional for wire compatibility, but every live
 slot served by the current daemon supplies it.
 
-`/nocturne?slot=N` reuses the ordinary visual mapper for buttons, multiple keys,
+`/redesign?slot=N` reuses the ordinary visual mapper for buttons, multiple keys,
 turbo and macros — the same mapper, on the same page, with `slot` choosing which
 staged controller it is pointed at. (It was `/map?target=stage&slot=N` until
 2026-08-25; `target` existed to say whether the mapper meant the saved preset or
@@ -175,9 +175,9 @@ Two things must be said on that screen, not buried:
 
 Clean, because it genuinely is: no config, no emulation session, no capture and
 no pads. A plain idle daemon/control host must stay alive even when the default
-configuration has no slots; otherwise `/nocturne` could not stage the first one.
+configuration has no slots; otherwise `/redesign` could not stage the first one.
 An explicitly requested empty game profile or a broken configuration still
-refuses. `ksx open` waits for this host and Studio, then opens `/nocturne` (with the
+refuses. `ksx open` waits for this host and Studio, then opens `/redesign` (with the
 existing bounded browser fallback if the preferred Chromium app window cannot
 be opened).
 
@@ -248,7 +248,7 @@ Each of these has already happened once in this project's history.
   truth is "I could not enumerate" (`SURFACES.md` §1b).
 - A user is asked to type or paste a device path. Ever.
 - A customer shortcut flashes a console window.
-- An empty default configuration kills the control host before `/nocturne` can
+- An empty default configuration kills the control host before `/redesign` can
   stage the first controller.
 - A fresh empty configuration offers an active cabinet window or saved-setup
   Start action in the tray; both stay gray until Save, while Open ksx remains
@@ -275,7 +275,7 @@ The acceptance run uses the exact CI-built installer and a fresh standard
 Windows user. It records the installer SHA/version and verifies: the default
 ViGEmBus checkbox and outcome; the installed WinUSB helper/provider/recovery
 tree; one customer shortcut; the unelevated original user and correct browser
-profile; no console flash; empty-config idle bootstrap to `/nocturne`; exact USB
+profile; no console flash; empty-config idle bootstrap to `/redesign`; exact USB
 selection; all three preparation confirmations; UAC under the separate admin;
 machine-local public-certificate and no-private-key postconditions; the selected
 keyboard stopping while the tested spare keeps typing; staged

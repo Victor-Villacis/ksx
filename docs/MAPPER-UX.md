@@ -113,8 +113,8 @@ The replacement has four parts:
    destination control, because those settings apply to that control's
    combined incoming keys. Plain hold stays a direct cord.
 4. **A nonpersistent Connections table remains the accessible/no-script
-   escape hatch.** Native forms and consequence text survive there (and in
-   `/nocturne`'s Connections table, which is where they live now that the
+    escape hatch.** Native forms and consequence text survive there (and in
+    `/redesign`'s Connections table, which is where they live now that the
    mapper has no page of its own); they no longer reserve a quarter of the
    main canvas.
 
@@ -237,13 +237,13 @@ family as its two parents would defeat the lens.
 key inventory, multi-key editing, conflict handling, recovery actions, macros,
 persona-aware vocabulary, and direct live echo are in Studio. The mapper and
 `/check` consume the same read-only SSE feed — that was `/map` and `/check`
-until 2026-08-25, and it is the mapper region of `/nocturne` and `/check` now.
+until 2026-08-25, and it is the mapper region of `/redesign` and `/check` now.
 The claim is unchanged: one feed, two readers, neither of them a writer. The mapper paints it only when
 the running session origin matches the saved config or staged draft currently
 on screen; matching player numbers alone are not enough. The remaining
 interaction polish is passive press-to-select.
 
-**Build B — product first run shipped.** `/nocturne` holds a complete setup in
+**Build B — product first run shipped.** `/redesign` holds a complete setup in
 the idle daemon, and `?slot=N` points this same mapper at it. The point of this
 paragraph — that first run reuses the ordinary mapper instead of growing a
 second one — got stronger on 2026-08-25, not weaker: it used to be the same
@@ -327,7 +327,7 @@ the capabilities that stack only for us, ranked by leverage:
    → the assistant drives `ksx map`/the wizard and the page shows the
    result live. The mapper UI and the AI share one control surface by
    construction — no other tool in the field can say that.
-3. **QR-code handoff.** The cab screen shows a QR — on `/nocturne`, since the
+3. **QR-code handoff.** The cab screen shows a QR — on `/redesign`, since the
    status page this was written against no longer exists — and the phone
    scans it and lands in the mapper. When LAN mode ships (pairing token,
    E7), the QR carries the pairing — the 2026 answer to "type this IP on

@@ -9,10 +9,9 @@
 // already paints them on the server. Save writes through `/api/macro/save`,
 // the verb the CLI uses.
 //
-// The one page-shaped difference: nocturne's dialog is SSR markup dressed by
-// signals; this canvas page paints the dialog from the served view on the
-// client (the same served fields, one composition on the server — the markup
-// mirror is attribute-for-attribute nocturne's). A repaint is skipped when
+// The one page-shaped difference: the canvas page receives escaped SSR markup
+// for a cold open URL and adopts it once; after that this module paints the
+// dialog from the same served view with safe DOM APIs. A repaint is skipped when
 // the view is unchanged so the 2 s background poll can never steal the caret
 // from a duration box, and THE DRAFT WINS over the payload: a poll must
 // never wipe an edit nobody has saved yet.
@@ -230,9 +229,10 @@ export function macWire(h: MacHost): void {
     macWiredRoot?.addEventListener("focusin", captureMacroOpener, true);
   }
   // The embedded payload is applied before the island gives this module its
-  // host. A cold ?macro= URL must therefore paint once the holder is known,
-  // even though the served view key has not changed.
-  if (macView) renderDialog(macView);
+  // host. A cold ?macro= URL already has complete escaped server markup: adopt
+  // that exact tree so hydration cannot blank/refill the dialog. Client-only
+  // opens and later draft edits keep using the safe DOM painter below.
+  if (macView && !adoptServedDialog(macView)) renderDialog(macView);
 }
 
 export function rdMacOpen(): boolean {
@@ -742,6 +742,31 @@ function scheduleDialogFocus(
         dlg.querySelector<HTMLElement>('[data-macfocus="close-top"]');
     focusMacroTarget(target, Boolean(target?.matches("[data-maccell]")));
   });
+}
+
+/** Adopt the complete first-paint dialog emitted for a cold `?macro=` URL.
+ * The server and payload were composed together, so this marker is stronger
+ * than re-deriving a client checksum. Only listeners, roving-focus memory and
+ * the initial focus move are client-owned; the visible tree is left intact. */
+function adoptServedDialog(v: RdMacView): boolean {
+  if (!v.open) return false;
+  const holder = holderEl();
+  const dlg = holder?.querySelector<HTMLElement>(".nd-mac");
+  if (!holder || !dlg?.querySelector("[data-rd-mac-ssr]")) return false;
+
+  holder.className = `rd-macdlg ${v.back_cls}`;
+  macDialogWasOpen = true;
+  macDialogIdentity = `${v.slot}\u0000${v.name}`;
+  macGridFocusCell =
+    dlg.querySelector<HTMLElement>('[data-maccell][tabindex="0"]')?.dataset.maccell ??
+    dlg.querySelector<HTMLElement>("[data-maccell]")?.dataset.maccell ??
+    null;
+  const epoch = ++macFocusEpoch;
+  dlg.onkeydown = handleMacDialogKey;
+  dlg.removeEventListener("focusin", handleMacDialogFocus);
+  dlg.addEventListener("focusin", handleMacDialogFocus);
+  scheduleDialogFocus(dlg, null, true, epoch);
+  return true;
 }
 
 function renderDialog(v: RdMacView): void {

@@ -468,13 +468,13 @@ is why the held-keyboard list reads `BoardRow::claimed` off the live scan.
 The placement half of that argument was "on `/start` rather than on the config
 page", and it needs restating now that both pages are gone. The finding is
 unchanged and the rule it implies is stronger: the list belongs wherever a
-person whose keyboard has stopped working will be, which since 2026-08-25 is the
-one product page — `/nocturne` — and specifically NOT `/devices`, which reads
+person whose keyboard has stopped working will be, which is now the core
+product page — `/redesign` — and specifically NOT `/devices`, which reads
 and writes `[[device]]` entries and is therefore about configuration, the one
-thing this paragraph proves cannot answer the question. ⚠ The list is not on
-`/nocturne` today: the read survived the cutover and the face did not
-(`SURFACES.md` §3a). That is a regression against this finding, not a revision
-of it.
+thing this paragraph proves cannot answer the question. The 2026-08-25
+Nocturne cutover briefly lost that stage-independent list; `/redesign` restores
+it with exact served selector, instance and generation guards
+(`SURFACES.md` §3a).
 
 **Shipped contract.** `/devices` and `ksx winusb sweep-certificates` report
 receipt and certificate residue without elevation. The consented sweep invokes

@@ -452,8 +452,30 @@ fn the_devnode_detector_is_not_asleep() {
 fn managed_real_qa_is_an_idle_identity_checked_process_pair() {
     let start = read_repo_file("tools/studio-env/start-real.ps1");
     let probe = read_repo_file("tools/studio-env/runtime-probe.ps1");
+    let seed = read_repo_file("tools/studio-env/seed.ps1");
     let teardown = read_repo_file("tools/studio-env/teardown.ps1");
     let status = read_repo_file("tools/studio-env/status.ps1");
+
+    for (name, script) in [
+        ("real startup", &start),
+        ("fixture seed", &seed),
+        ("status", &status),
+    ] {
+        assert!(
+            script.contains("/api/health") && !script.contains("/api/nocturne"),
+            "{name} must prove its listener through the stable health contract"
+        );
+    }
+    for (name, script) in [
+        ("real startup", &start),
+        ("fixture seed", &seed),
+        ("status", &status),
+    ] {
+        assert!(
+            script.contains("/redesign"),
+            "{name} must direct operators to the redesign product route"
+        );
+    }
 
     assert!(
         start.contains(r#"-ArgumentList @("daemon", "--console")"#),
@@ -665,6 +687,8 @@ fn clean_ci_runs_the_environment_lifecycle_and_the_hardware_gate() {
     assert!(
         ci.contains("studio-environments:")
             && ci.contains("tools/studio-env/build-assets.ps1")
+            && ci.contains("http://127.0.0.1:4476/api/health")
+            && !ci.contains("http://127.0.0.1:4476/api/nocturne")
             && ci.contains("Prove PowerShell 5.1 and 7 hash the same build graph")
             && ci.contains("watch.ps1")
             && ci.contains("-Environment seeded -Once")

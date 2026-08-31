@@ -338,7 +338,7 @@ they are never touched.
 
 The synthetic path above is observer evidence, never a value the user types or
 pastes. A real instance may be serial-derived or topology-derived. Record what
-the survey prints, then identify the same human-named row in `/nocturne` and choose
+the survey prints, then identify the same human-named row in `/redesign` and choose
 it there.
 
 **ABORT if:** count is 1 (Prepare would refuse anyway — fix the spare first);
@@ -414,7 +414,7 @@ untouched — `RECOVERY.md` §2f).
 
 ## Step 5 — prove the guarded staged transition
 
-Return to `/nocturne` without saving. **Expect:** the same human-named device is
+Return to `/redesign` without saving. **Expect:** the same human-named device is
 selected, the capture card is the verified Release branch, and Save/Play
 readiness now treats capture as ready. The observer may export the in-memory
 API payload and confirm `staged.device.backend == "winusb"`; the browser form
@@ -478,7 +478,7 @@ worthy findings, not things to live with.
 
 ## Step 8 — release
 
-On `/nocturne`, tick the distinct Release confirmation and choose **Release
+On `/redesign`, tick the distinct Release confirmation and choose **Release
 selected keyboard**. Approve UAC.
 
 **Expect:** one UAC prompt, no console, then owned copy saying the keyboard was
@@ -751,7 +751,7 @@ substitute for this physical run.
   user; its controller setting starts disabled so the on-screen prerequisite
   and remedy are exercised.
 - Screen-record from before the installer Finish button through the first
-  `/nocturne` paint if possible. A two-second console flash is a failure that a
+  `/redesign` paint if possible. A two-second console flash is a failure that a
   screenshot taken afterward cannot capture.
 - The observer records the pre-run controller list, process list and ksx file
   state. These are observations, not instructions shown to the test user.
@@ -794,15 +794,16 @@ does not pass this release gate.
 
 1. Leave **Launch ksx** ticked on Finish and click Finish. Watch the whole
    handoff. **No console window may appear, even briefly.**
-2. The customer gets one chrome-less ksx app window at `/nocturne`, not a
+2. The customer gets one chrome-less ksx app window at `/redesign`, not a
    terminal and not a normal browser tab. It has no address bar and does not ask
    the user to choose a URL. *(Since the 2026-08-25 cutover there is no second
    page it could land on by mistake — there is one product page. That cutover
    did briefly leave `ksx open` requesting the deleted `/start`, which put the
    customer's first window on a 404 with no way to type a different address;
-   fixed in `ad520b4` on 2026-08-26, and `crates/ksx-backend/src/studio_launch.rs`
-   now returns `/nocturne` in both the URL builder and the `--app=` argument,
-   with a test pinning it. Confirm the address in the window title/history
+   fixed in `ad520b4` on 2026-08-26 by restoring `/nocturne`. The current core
+   cutover advances `crates/ksx-backend/src/studio_launch.rs` to `/redesign` in
+   both the URL builder and the `--app=` argument, with a test pinning it.
+   Confirm the address in the window title/history
    anyway — every phase below starts from this window, and this is the second
    time this exact target has been wrong.)*
 3. In Task Manager's **User name** and **Command line** columns, confirm both
@@ -810,7 +811,7 @@ does not pass this release gate.
    the fresh standard user, not the administrator whose credentials satisfied
    UAC. Confirm the browser profile was created below that user's
    `%LOCALAPPDATA%\ksx`, not the administrator's profile.
-4. With no `[[slot]]` configured, `/nocturne` must report the daemon reachable and
+4. With no `[[slot]]` configured, `/redesign` must report the daemon reachable and
    idle. The process stays alive as the staging control host, while no keyboard
    is captured and no virtual controller exists. The keyboard still types and
    Game Controllers shows zero ksx pads.
@@ -819,7 +820,7 @@ does not pass this release gate.
    either to operate. Neither disabled item may create a window, capture a key
    or plug a pad.
 6. Close the app window, use the desktop shortcut once and the single Start-menu
-   entry once. Each opens `/nocturne` without a console flash; neither creates a
+   entry once. Each opens `/redesign` without a console flash; neither creates a
    second customer-facing product entry or asks for elevation.
 
 **PASS Phase 2:** the elevated installer has handed off to the original
@@ -828,7 +829,7 @@ healthy idle first-run state rather than a daemon startup refusal.
 
 ## Phase 3 — author in memory, Play before Save, then prove Save parity
 
-1. On `/nocturne`, choose Keyboard A by its human-readable name. Because
+1. On `/redesign`, choose Keyboard A by its human-readable name. Because
    Interception is absent, Save/Play must remain blocked by the capture card,
    whose summary reads *"Prepare for play — Windows stops this keyboard's
    ordinary typing until it is released here."* and whose button is **Prepare
@@ -844,7 +845,7 @@ healthy idle first-run state rather than a daemon startup refusal.
    controllers using the in-box two-player keyboard layout. Do not click Save.
 3. Open each staged controller's mapper. Change one ordinary binding and create
    a small, visibly testable macro plus its trigger. Return to the top of
-   `/nocturne` and
+   `/redesign` and
    answer **split or freeze**. Change one choice and change it back once: looking
    and reconsidering must remain free.
 4. The observer compares `config.toml`, the preset directory and backups with
@@ -868,6 +869,13 @@ explicit Save survives a complete stop/relaunch with identical output.
 
 ## Phase 4 — saved-game create, switch, edit, refresh and delete in Studio
 
+> **Deferred Settings/Library regression; not a core `/redesign` cutover
+> phase.** Every step below targets the legacy `/nocturne` Configuration menu.
+> The launcher does not expose that menu, and release readiness for the core
+> workbench must not imply that it does. Run this phase only when maintaining
+> the deferred legacy implementation, or replace it when the redesigned
+> Settings/Library surface lands.
+>
 > **Step 4 cannot currently be performed and this phase cannot pass.** The
 > explicit device-refresh choice has no control on `/nocturne`. The backend
 > capability is intact — `UpdateProfile::rebase_devices` still exists and
@@ -879,7 +887,8 @@ explicit Save survives a complete stop/relaunch with identical output.
 > the step, because step 4 is the only one of the five that proves the refresh
 > semantics rather than the preservation ones.
 
-1. Open the Configuration menu (the **▣** chip in the top bar), find **Saved
+1. Navigate explicitly to `/nocturne`. Open the Configuration menu (the **▣**
+   chip in the top bar), find **Saved
    games**, and use **Add a saved game…** to create one for the known game:
    fill Name, Program to launch, Players = 2 and Controller layout, then **Save
    this game**. Do not open TOML or a terminal. Immediately load it (click its
@@ -889,7 +898,7 @@ explicit Save survives a complete stop/relaunch with identical output.
    controller layout through **Edit &lt;title&gt;…** → **Save changes**. Reopen the
    editor and start it again; the existing Keyboard A selectors must have been
    preserved.
-3. Stop the session. Return to `/nocturne`, confirm **Release selected keyboard**,
+3. Stop the session. On the deferred `/nocturne` settings surface, confirm **Release selected keyboard**,
    approve UAC and prove Keyboard A is HidUsb/typing with its package and exact
    certificate/key artifacts absent. Then use the Configuration menu's **Start
    over…** → **Discard this draft**, select Keyboard
@@ -1003,7 +1012,7 @@ new hash, and restart this gate from Phase 1.
 - Helper/provider/source/ProgramData ACL and read-only-receipt evidence:
 - Start + desktop shortcut targets / extra customer shortcuts:
 - Original-user process + browser-profile evidence / console-flash result:
-- Empty-config idle `/nocturne` / capture state / initial pad count:
+- Empty-config idle `/redesign` / capture state / initial pad count:
 - Keyboard A three consents/UAC/no-console/receipt/package/public-only cert/private-key absence:
 - Keyboard A Release cleanup / Keyboard B Prepare repeat:
 - Staged binding + macro / before-Play disk comparison / Play result:

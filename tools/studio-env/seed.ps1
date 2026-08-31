@@ -271,7 +271,7 @@ try {
                 if ($OwnedListeners.Count -eq 0) {
                     throw "port $Port is not owned by new PID $($Process.Id)"
                 }
-                $Response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api/nocturne" -TimeoutSec 1
+                $Response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api/health" -TimeoutSec 1
                 if ($Response.StatusCode -ne 200) {
                     throw "health endpoint returned HTTP $($Response.StatusCode)"
                 }
@@ -342,7 +342,7 @@ try {
     }
 
     Write-Host "Seeded $Environment ($($Definition.Label))."
-    Write-Host "Open: http://127.0.0.1:$Port/nocturne"
+    Write-Host "Open: http://127.0.0.1:$Port/redesign"
     Write-Host "Banner: fixture provenance is embedded by the server."
     Write-Host "Stop it with: tools/studio-env/teardown.ps1 -Environment $Environment"
 } finally {

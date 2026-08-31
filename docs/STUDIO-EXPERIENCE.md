@@ -13,14 +13,22 @@ source must be validated before it is described as release-proven.
 > or that a person has completed the clean-machine Windows journey. Those are
 > separate gates.
 >
-> **What changed on 2026-08-25.** Studio cut over to a single product page.
-> `/nocturne` now carries the whole set-up-and-play workflow; `/`, `/start`,
+> **Historical 2026-08-25 cutover.** Studio cut over to a single product page.
+> At that point `/nocturne` carried the whole set-up-and-play workflow; `/`, `/start`,
 > `/map`, `/setup`, `/profiles` and `/workspace` were deleted and 404. The
 > tool pages `/check`, `/pads` and `/devices` are unchanged. The four-stage
 > journey below survives as **stages within one page** rather than four
 > destinations, and the sections that described the page BOUNDARY as the
 > mechanism have been rewritten rather than re-pointed — a boundary that no
 > longer exists cannot still be doing the work the old text credited it with.
+>
+> **Current core cutover — 2026-08-30.** `/redesign` is now the launcher-owned
+> product workbench for device choice, controllers, mapping and the staged/live
+> lifecycle. `/check`, `/pads` and `/devices` are discoverable from its Tools
+> menu. Passages below that are explicitly labelled **Nocturne-only** remain
+> implementation evidence for deferred games, layouts, import/export and
+> autostart until those capabilities receive their redesigned Settings/Library
+> surface; they are not the current core navigation contract.
 
 The existing product contracts remain authoritative for safety and backend
 behavior: [FIRST-RUN.md](FIRST-RUN.md), [SURFACES.md](SURFACES.md),
@@ -100,11 +108,11 @@ not be treated as synonyms.
 
 ### Primary rail
 
-All four stages are regions of `/nocturne`. The **Persistence boundary** column
-is the load-bearing one and is unchanged by the cutover — it was always a
-property of the staging contract, never of the URL.
+All four core stages are regions of `/redesign`. The **Persistence boundary**
+column is the load-bearing one and is unchanged by the cutover — it was always
+a property of the staging contract, never of the URL.
 
-| Stage | Where it lives on `/nocturne` | Purpose | Persistence boundary |
+| Stage | Where it lives on `/redesign` | Purpose | Persistence boundary |
 | --- | --- | --- | --- |
 | 1 · Keyboard | Left pane — **Input hardware** → **Keyboards**, plus the prepared-for-play card | Discover, identify, and choose the physical keyboard or panel. | Selection changes the in-memory stage only. |
 | 2 · Controller | Left pane — **Virtual controllers**, and the "Create a virtual controller" form | Add a persona and starting layout for each player. | Controller choices remain staged. No pad is plugged. |
@@ -113,7 +121,7 @@ property of the staging contract, never of the URL.
 
 *Stage 3 lost a column of its own.* It used to read "Saved target writes the
 preset; staged target changes only the daemon-held draft", and `target=stage`
-in the URL is what chose between them. `/nocturne` has one subject, so the
+in the URL is what chose between them. `/redesign` has one subject, so the
 mapper always edits the draft and Save is the only thing that reaches a preset
 file. That is simpler to explain and it removes a whole class of "which one did
 I just edit?" — at the cost of the saved-preset editing path, which now has no
@@ -128,24 +136,27 @@ detailed recovery action rather than duplicating business logic in the rail.
 
 ### Tools
 
-The Tools menu is exactly four entries, and the fourth is the way back to the
-product (`CheckIsland.ts` / `DevicesIsland.ts` build the same list):
+The current `/redesign` Tools disclosure has exactly three operational entries.
+Each focused tool page presents those same tools plus **Set up & play** as the
+way back to the product (`CheckIsland.ts`, `PadsIsland.ts` and
+`DevicesIsland.ts` build that four-destination list):
 
 | Label | Route | Job |
 | --- | --- | --- |
-| Test inputs | /check | Read-only live controller and key feedback. |
-| Hardware | /devices | Read, pick, remove, and recover device identities. |
-| Virtual controllers | /pads | Inspect ViGEm pads, spawn bounded test pads, and prune stale pads with explicit confirmation. |
-| Set up & play | /nocturne | The product: keyboard, controllers, games and configuration. |
+| Input check / Test inputs | /check | Read-only live controller and key feedback. |
+| Device maintenance / Hardware | /devices | Read, pick, remove, and recover device identities. |
+| Virtual pads / Virtual controllers | /pads | Inspect ViGEm pads, spawn bounded test pads, and prune stale pads with explicit confirmation. |
+| Set up & play | /redesign | The current core product: devices, controllers, mapping and staged/live lifecycle. |
 
-Two entries left this table on 2026-08-25 and neither became a tool. **Game
-library** (`/profiles`) is now the **Saved games** section of `/nocturne`'s
-Configuration menu, and **Import & recovery** (`/setup`) is the Export/Import
-pair in that same menu. Moving them INWARD rather than sideways is the point:
-they are things you do to the configuration you are looking at, not separate
-instruments.
+Two entries left this table on 2026-08-25 and neither became a tool. Their
+current implementations are **Nocturne-only and deferred**: **Game library**
+(`/profiles` historically) became Nocturne's **Saved games** section, while
+**Import & recovery** (`/setup` historically) became its Export/Import pair.
+Neither legacy implementation is a return destination from the current core.
+When rebuilt, both belong in the redesigned Settings/Library surface because
+they operate on saved configuration rather than acting as diagnostic tools.
 
-### One page now holds two contracts, and that is the risk it took on
+### Current staged core and deferred Settings/Library are separate contracts
 
 The version of this section written before the cutover described two surfaces:
 
@@ -157,22 +168,20 @@ The version of this section written before the cutover described two surfaces:
 It ended: *"Making the pages visually related is useful. Making their
 persistence rules look interchangeable is a defect."*
 
-**That warning did not expire when the second page did — it got harder to
-obey.** Both contracts now live on `/nocturne`, side by side, with no URL to
-tell them apart. The staged half is everything in the three panes: choosing a
-keyboard, adding a controller, binding a key, answering split-or-freeze. The
-committed half is a short list and it is deliberately gathered in one place,
-the Configuration menu: **Load the saved configuration into this draft**,
-**Discard this draft**, the saved-game create/edit/delete rows, **Export the
-configuration (download)**, **Import a configuration…**, and the sign-in task.
-**Save** in the top bar is the one control that moves work from the first half
-to the second, and it is the only one.
+**That warning did not expire when the second page did.** The current staged
+contract lives on `/redesign`: choosing a device, adding controllers, binding
+keys, Save, Adopt/Discard, Apply, Play and Stop all present their exact draft or
+session consequence there. **Save** is still the only core action that writes
+the draft for later; Play does not imply Save.
 
-So the rule that replaces the page boundary is: *a control that commits is
-either the Save button or lives inside the Configuration menu.* A committing
-control that appears loose among the staging panes is a defect in exactly the
-way the old sentence meant, and there is no longer a URL that would have caught
-it for us.
+The other contract has not been folded into that core. Nocturne's
+saved-game create/edit/delete rows, configuration Export/Import and sign-in
+autostart task are **Nocturne-only implementation evidence for the deferred
+Settings/Library block**. They are not part of `/redesign`'s primary rail or
+Tools menu. When that block is rebuilt, configuration-level writes belong
+inside Settings/Library with their own explicit consequences. A loose saved-
+configuration write among the staging panes remains the same defect the old
+page boundary warned about.
 
 ### Shared shell
 
@@ -282,12 +291,15 @@ discards only the stage, behind **Start over…** → **Discard this draft** in 
 Configuration menu.
 
 The everyday operator surface for saved setups used to be its own route (`/`).
-It is the same page now: gameplay state at cabinet distance, Play or Stop,
-capture/output facts, virtual-pad inventory, saved games and quiet system
-evidence are all readings on `/nocturne`. The cabinet-distance argument for a
-dedicated operator screen did not go away with the route, and it is the strongest
-open objection to the single-page design — a person standing at a machine
-mid-evening wants the operating controls and none of the authoring ones.
+Its current core replacement is `/redesign`: gameplay state at cabinet
+distance, Play or Stop, capture/output facts and virtual-pad inventory are
+readings on that workbench. Saved games and configuration-level system actions
+remain Nocturne-only until the redesigned Settings/Library block exists; they
+must not be described as current core features. The cabinet-distance argument
+for a dedicated operator screen did not go away with the route, and it is the
+strongest open objection to the single-page design — a person standing at a
+machine mid-evening wants the operating controls and none of the authoring
+ones.
 
 ## 5. Screen mental wireframes
 
@@ -333,7 +345,7 @@ only by scrolling past everything you have not finished.
 ┌ shell: workflow rail · Tools · session state ┐
 │ Step 3 · Mapping Studio                      │
 │ Select a control. Press a key. Keep moving.  │
-├ conditional banners: no daemon / Play active / paused / target mismatch       ┤
+├ conditional banners: no daemon / Play active / target mismatch                ┤
 ├ sticky player rail + current persona/preset identity                          ┤
 ├ one-line learn hint + disclosure                                               ┤
 ├ Physical keyboard key shelf                                                    ┤
@@ -395,8 +407,8 @@ technology retain the same reading sequence as the desktop composition.
 
 1. Select a controller zone or its matching Binding inspector row.
 2. The same control highlights in both representations.
-3. If Play owns the learner, use **Pause & edit**; the page must retain a
-   visible **Resume Play** road home.
+3. If Play owns the learner, stop Play before editing; the page keeps a visible
+   **Play** road home after the binding is written.
 4. A labeled modal receives focus after its branch is present.
 5. Press the physical key. During capture, ordinary browser keys are
    intentionally owned by the mapper; Escape or clicking outside cancels.
@@ -441,7 +453,7 @@ Mapping and Test consume the same read-only /api/live SSE feed.
 
 The mapper paints held and hit states only when:
 
-1. a fresh /api/nocturne response identifies the session currently playing;
+1. a fresh `/api/redesign` response identifies the session currently playing;
 2. that session origin matches what is on screen — which, since the cutover, is
    always the staged draft, because there is no saved-setup target left to be
    confused with;
@@ -521,7 +533,7 @@ names are supplied independently.
 
 ## 8. State matrix
 
-The **Surface** column names a REGION of `/nocturne`, not a route. `Start`,
+The **Surface** column names a REGION of `/redesign`, not a route. `Start`,
 `Map` and `Play` were three pages when this table was written and are the
 keyboard/controller area, the mapper, and the top bar now. The conditions and
 the allowed actions are unchanged — what changed is that moving between them is
@@ -715,14 +727,14 @@ dedicated remote flow exist.
 | Area | Current status | What is still required |
 | --- | --- | --- |
 | Four-stage shell and Tools IA | Implemented / source-ready in the Studio islands and shared CSS, with locally regenerated embedded assets. | Clean-runner asset reproduction, manifest/source seam verification, build, and screenshot review. |
-| Staged setup, persona selection, split/freeze, Save/Play separation | Implemented / source-ready across API, backend, renderer, server, and Start island. | Current Rust/browser suite on CI, then physical Gate 4. |
+| Staged setup, persona selection, split/freeze, Save/Play separation | Implemented / source-ready across API, backend, renderer, server, and the redesign island. | Current Rust/browser suite on CI, then physical Gate 4. |
 | Capture consent and recovery surface | Implemented / source-ready, with server-owned stale-action guards. | Exact installed helper transaction on a fresh Windows machine. |
 | Identify by pressing a key | Implemented / source-ready through the daemon learner, exact-generation observation, MachineSource inventory resolution, and ordinary stage writer. | Clean compile/tests, then device-scoped proof with a real held WinUSB panel. |
 | Mapping controller/inspector/key shelf | Implemented / source-ready and present in the locally regenerated embedded bundle. | Independently reproduce, compile, hydrate, interact, and visually inspect the current bundle on CI. |
-| Saved/staged mapping writes, multi-key, turbo, macros, pause/resume, Undo | Implemented / source-ready. | Current seam, HTTP, parity, and browser tests on CI. |
+| Saved/staged mapping writes, multi-key, turbo, macros and Undo | Implemented / source-ready. | Current seam, HTTP, parity, and browser tests on CI. |
 | Direct Mapping live echo | Implemented / source-ready with fail-closed session handshake and key/device filtering. | CI browser observation; later protocol origin token if stronger provenance is required. |
 | Accessibility and responsive rules | Implemented / source-ready; responsive structure has browser assertions. | Interactive accessibility and assistive-technology observation, plus forced-colors, zoom, touch, and visual review. |
-| Browser screenshot job | Implemented / source-ready in the live workflow and Playwright source. | A successful workflow run and review of every uploaded image. |
+| Browser screenshot job | Implemented / source-ready for `/redesign`, its open-macro variant and the three focused tools: 15 current-core images across three contexts. | Observe a successful workflow run and review every uploaded image. |
 | Customer-ready release claim | Not established by source. | Exact CI-built installer, recorded hash, clean standard-user Gate 4, real controller/game, and uninstall/recovery proof. |
 
 ## 13. CI screenshot and visual validation plan
@@ -730,11 +742,11 @@ dedicated remote flow exist.
 ### What the current source-ready job does
 
 The Studio browser job is configured for the pinned Windows 2022 runner, Node
-24.19.0 LTS, Playwright 1.62.1, and pinned Chromium. Its visual smoke source builds
-the Studio fixture and captures every served path in three contexts. Since the
-cutover that is FIVE path variants — `/nocturne`,
-`/nocturne?slot=1&macro=hadouken`, `/check`, `/pads`, `/devices` — not the eight
-routes this section was written for:
+24.19.0 LTS, Playwright 1.62.1, and pinned Chromium. Its visual smoke source
+builds the Studio fixture and captures five current path variants in three
+contexts: `/redesign`, `/redesign?slot=1&macro=hadouken`, `/check`, `/pads` and
+`/devices`. Nocturne is not part of this core screenshot gate; its
+Settings/Library capabilities remain explicitly deferred:
 
 | Context | Viewport | Theme/input |
 | --- | --- | --- |
@@ -742,11 +754,11 @@ routes this section was written for:
 | light-mobile | 390 × 844 | light, mobile touch/coarse pointer, reduced motion |
 | coarse-cabinet | 1280 × 800 | dark, touch/coarse pointer, reduced motion |
 
-That is 15 route-level images: the product page, the product page with a macro
-open on player 1, Test inputs, Virtual controllers and Hardware, in each of the
-three contexts. The macro variant earns its place for the same reason the old
-`/map?slot=1` variant did — it is the only way a dialog-bearing state reaches
-the capture.
+That is 15 route-level images: the default workbench, the redesigned macro
+dialog open on player 1, Test inputs, Virtual controllers and Hardware in each
+context. The macro variant earns its place for the same reason the old
+`/map?slot=1` variant did — a closed macro leaves the dialog state outside the
+screenshot gate.
 
 Before capture, the current test requires successful HTTP, active hydration,
 no page or console error, the intended pointer/theme media state, no global
@@ -775,11 +787,11 @@ old interface.
    on a clean runner. Stale committed assets are a failure, not an alternate
    implementation.
 2. Run the Rust source/seam/HTTP/contrast/touch tests and all Playwright tests.
-3. Require all 24 default screenshots to exist, decode, and have nonzero
+3. Require all 15 core screenshots to exist, decode, and have nonzero
    dimensions.
 4. Verify the emitted machine-readable manifest records commit, workflow run,
    Node/Playwright/Chromium versions, viewport, theme, pointer mode, fixture
-   state, filename, dimensions, byte length, and SHA-256 for all 24 images.
+   state, filename, dimensions, byte length, and SHA-256 for all 15 core images.
 5. Upload screenshots and manifest even when the job fails.
 6. Review every image for hierarchy, clipping, wrapping, empty space, focus
    obstruction, dialog bounds, and accidental technical copy.
@@ -791,16 +803,19 @@ old interface.
 The default fixture cannot represent the whole state matrix. Add deterministic
 named fixtures and capture at least:
 
-The three rows this table used to open with — `/start`, `/map` and `/` — are one
-route now, and its required states are the union of theirs. That is a real
-increase in what one fixture has to express, and it is the argument for named
-fixtures rather than against them: the states did not merge when the pages did.
+The three rows this table used to open with — `/start`, `/map` and `/` — are the
+single `/redesign` core now, and its required states are the union of theirs.
+That is a real increase in what one fixture has to express, and it is the
+argument for named fixtures rather than against them: the states did not merge
+when the pages did. Nocturne's deferred Settings/Library states stay in their
+own explicitly legacy fixture family until that block is redesigned.
 
 | Route | Required states |
 | --- | --- |
-| /nocturne | clean empty stage; identified/chosen keyboard; output blocked; capture prepare; capture release; unreadable capture; complete ready stage; session replacement warning; no controller; no daemon/read-only; Play active; live inactive; different setup; matching live input; learn listening; existing binding; cross-player conflict; multi-select bar; macros open; saved-games list empty; system prerequisite attention |
+| /redesign | clean empty stage; identified/chosen keyboard; output blocked; capture prepare; capture release; unreadable capture; complete ready stage; session replacement warning; no controller; no daemon/read-only; Play active; live inactive; different setup; matching live input; learn listening; existing binding; cross-player conflict; multi-select bar; macros open; system prerequisite attention |
 | /check | live inactive; live fan-out; read unavailable; zero-control roster |
 | Tool routes | readable empty; populated; refused read; destructive confirmation where applicable |
+| /nocturne (legacy evidence only) | saved-games list empty and populated; game/layout maintenance; configuration import/export; autostart/sign-in-task states. These do not count as current core approval. |
 
 Use dark desktop for every state fixture and light mobile for every layout- or
 dialog-distinct state. Use coarse cabinet for gameplay, Test, Mapping, and

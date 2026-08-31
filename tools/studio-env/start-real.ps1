@@ -637,7 +637,7 @@ try {
             if ($OwnedListeners.Count -eq 0) {
                 throw "port $Port is not owned by new Studio PID $($StudioProcess.Id)"
             }
-            $Response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api/nocturne" -TimeoutSec 1
+            $Response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api/health" -TimeoutSec 1
             if ($Response.StatusCode -ne 200) {
                 throw "health endpoint returned HTTP $($Response.StatusCode)"
             }
@@ -661,18 +661,10 @@ try {
                 $IdleDetail = if ($IdleProbe.text) { $IdleProbe.text } else { "no typed daemon response" }
                 throw "managed development replacement did not remain idle: $IdleDetail"
             }
-            # The config root is read from the SAME snapshot as everything
-            # above it. It used to come from /api/status, and when the status
-            # page went away the read was repointed at /api/nocturne -- which
-            # is the same fact from the surviving surface, so what this proves
-            # never changed: that the managed runtime opened the REAL
-            # %APPDATA%\ksx and not a portable or fixture root. What did change
-            # is that the repoint left a second GET against an endpoint this
-            # attempt had already fetched. That cost an extra round trip on
-            # every one of the 160 attempts, and it split the gate across two
-            # snapshots -- staged.reachable proven against request one, the
-            # config root against request two, with a save in between free to
-            # make them disagree. One payload, one verdict.
+            # The stable health response carries provenance, daemon reachability
+            # and the config root in one snapshot. That proves the managed
+            # runtime opened the REAL %APPDATA%\ksx rather than a portable or
+            # fixture root without coupling this gate to a product page payload.
             $ExpectedConfigRoot = [System.IO.Path]::GetFullPath(
                 (Join-Path ([Environment]::GetFolderPath("ApplicationData")) "ksx")
             )
@@ -696,7 +688,7 @@ try {
             }
             $ReportedConfigRoot = [string]$Payload.setup.config_root
             if ([string]::IsNullOrWhiteSpace($ReportedConfigRoot)) {
-                throw "nocturne payload carried no config root to verify"
+                throw "health payload carried no config root to verify"
             }
             $ActualConfigRoot = [System.IO.Path]::GetFullPath($ReportedConfigRoot)
             if (-not $ActualConfigRoot.Equals(
@@ -729,7 +721,7 @@ try {
     Write-Host "Daemon PID $($DaemonProcess.Id) and Studio PID $($StudioProcess.Id) share artifact $($ArtifactHash.Substring(0, 12))."
     Write-Host "Config: $($Record.config_root)"
     Write-Host "Build graph: source $($SourceGraphHash.Substring(0, 12)); assets $($AssetGraphHash.Substring(0, 12)); reason $LaunchReason."
-    Write-Host "Open: http://127.0.0.1:$Port/nocturne"
+    Write-Host "Open: http://127.0.0.1:$Port/redesign"
     Write-Host "Warning: confirmed hardware actions on this instance can affect the selected physical device."
     Write-Host "Stop it with: tools/studio-env/teardown.ps1 -Environment real"
 } catch {

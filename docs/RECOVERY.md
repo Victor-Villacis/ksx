@@ -82,27 +82,22 @@ states this runbook and an elevated shell were the only exit, which
 > `/start`, a page the cutover deleted, so the desktop icon, the Start-menu entry
 > and the tray's *Open ksx* all landed on a 404 in a window with no address bar
 > and nowhere to type a correction — the app was not a recovery route at all,
-> because you could not reach it. `studio_launch.rs` now returns `/nocturne` and
-> tests pin it in both places it is spelled. If your shortcut still opens a blank
+> because you could not reach it. `ad520b4` restored `/nocturne`; the current
+> core cutover now opens `/redesign`, with tests pinning both places it is
+> spelled. If your shortcut still opens a blank
 > or "not found" window, you are on a build older than that commit and §2b is
 > your route.
 >
-> **What is drawn is one board, not the list.** The full **Keyboards ksx is
-> holding** list did not come across to the new page and still has not.
-> `offer_held_release` in `server/nocturne.rs` is the replacement, and it is
-> narrower than the paragraph above in two ways worth knowing while your panel is
-> dead: it surfaces the **first** claimed board it finds, so a machine holding two
-> gives them back one page-load at a time; and it stands down entirely when the
-> selected keyboard is already offering its own prepare/release control, because
-> a machine fact must not silently replace an action you were reading. That
-> second rule is right, and it means the on-page way back is reachable in exactly
-> the state that matters — a fresh install with nothing selected — but is not
-> guaranteed in every state the paragraph above promises.
+> **What is drawn is one board; recovery is the whole list.** `/redesign`
+> renders every row from the stage-independent **Keyboards ksx is holding**
+> provider, including when the draft is empty. Two held keyboards remain two
+> separately identified release rows; selecting another input does not hide
+> either one. A row whose exact Windows identity cannot be proved stays visible
+> but disabled and says why—the page never guesses which interface to release.
 >
-> So: **try the app first.** If the page offers a Release for the board you need,
-> take it. If it does not — because another keyboard's capture control has the
-> slot, or because the board you need is the second one held — §2b is the route,
-> and nothing you can do from the page will change that today.
+> So: **try the app first.** Use the exact board's release row and its explicit
+> confirmation. Use §2b only when ksx itself will not start or the page reports
+> that Windows no longer exposes enough identity to perform a safe release.
 
 The subsections below stay in any case, because they are what you need when ksx
 itself will not start.

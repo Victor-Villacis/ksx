@@ -13,7 +13,7 @@ use forma_ir::slot::{SlotData, SlotValue};
 use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
-use crate::render_nocturne::{device_row, mode_row, named_slot_ids, other_row};
+use crate::render_workbench::{device_row, mode_row, named_slot_ids, other_row};
 use crate::snapshot::{
     compose_board_panel, theme_rows, NocturneChoiceRow, RedesignCaptureState, RedesignControllers,
     RedesignDeviceRows, RedesignJourney, RedesignOperationalState, RedesignPayload,
@@ -168,6 +168,7 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
             format!("{} · {STAGING_UNAVAILABLE}", devices.scan_line)
         };
     }
+    let controllers = RedesignControllers::of(staged, selected_slot, undo_label, macro_selected, q);
     RedesignPayload {
         environment_label: environment.label.clone(),
         environment_cls: if environment.fixture {
@@ -204,7 +205,7 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
         .collect(),
         // The staged controllers and the persona picker, off the SAME staged
         // view the device marking reads — one truth per render.
-        controllers: RedesignControllers::of(staged, selected_slot, undo_label, macro_selected, q),
+        controllers,
         // The keyboard widget, off the ONE shared board composer. The board
         // picture is ALWAYS the standard keyboard on this page (Victor,
         // 2026-08-29): a keyboard looks like a keyboard, and a saved panel
@@ -389,6 +390,10 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         "rdCtrlCountsLine": payload.controllers.counts_line,
         "rdCtrlAddPreset": payload.controllers.add_preset,
         "rdCtrlAddLayout": payload.controllers.add_layout,
+        // The macro dialog is edited client-side after adoption, but an open
+        // cold URL must be complete on first paint. The trusted HTML is built
+        // from the same escaped projection as `controllers.mac`.
+        "rdMacHolderCls": format!("rd-macdlg {}", payload.controllers.mac.back_cls),
         // The removal-undo chip: SSR chrome (a reload keeps the offer while
         // the server-held window lasts — the nocturne chip's contract).
         "rdUndoCls": payload.controllers.undo_cls,
@@ -593,7 +598,8 @@ pub(crate) fn render_redesign(
 ) -> PageOutput {
     let slots = build_slots(&page.module, payload, flash);
     let prefix = body_prefix(payload, "/redesign");
-    with_icon_links(render_page(&PageConfig {
+    let macro_ssr_html = crate::render_workbench::macro_dialog_ssr_html(&payload.controllers.mac);
+    let rendered = render_page(&PageConfig {
         title: "ksx Studio — redesign",
         route_pattern: "/redesign",
         manifest: &page.manifest,
@@ -605,7 +611,80 @@ pub(crate) fn render_redesign(
         render_mode: RenderMode::Phase2SsrReconcile,
         ir_module: Some(&page.module),
         slots: Some(&slots),
-    }))
+    });
+    with_icon_links(with_macro_ssr(rendered, &macro_ssr_html))
+}
+
+/// Fill the macro dialog host that the Forma island deliberately leaves empty.
+/// The fragment is produced by
+/// `render_workbench::macro_dialog_ssr_html`, which escapes every domain value;
+/// this splice exists solely because forma-server 0.2.0 has no trusted-HTML
+/// SSR slot. Client hydration receives the same structured `controllers.mac`
+/// projection, adopts this tree once, and uses safe DOM construction for later
+/// draft repaints.
+///
+/// The qualified host is unique and the compiler emits it empty, so the first
+/// closing `</div>` after it belongs to this element. A missing or duplicated
+/// qualified host is a compiler/source contract break: log it and leave the
+/// otherwise usable page intact, while render and hydration-parity tests fail.
+fn with_macro_ssr(mut out: PageOutput, fragment: &str) -> PageOutput {
+    // Empty custom attributes are serialized as a bare name by the FMIR
+    // walker, while the hydrated DOM serializes them as name="". Key on the
+    // attribute itself so the splice follows both legal HTML spellings.
+    const MARKER: &str = "data-rd-mac-host";
+
+    // A macro name may legally equal MARKER and therefore occur in the JSON
+    // payload or visible text. Only count occurrences that are the attribute
+    // of this exact static host tag; domain text must never participate in
+    // locating a trusted-markup sink.
+    let hosts: Vec<usize> = out
+        .html
+        .match_indices(MARKER)
+        .filter_map(|(marker_at, _)| {
+            let tag_start = out.html[..marker_at].rfind('<')?;
+            let tag_end = marker_at + out.html[marker_at..].find('>')?;
+            let tag = &out.html[tag_start..=tag_end];
+            let before = out.html.as_bytes().get(marker_at.wrapping_sub(1)).copied();
+            let after = out.html.as_bytes().get(marker_at + MARKER.len()).copied();
+            let attribute_boundary = before.is_some_and(|byte| byte.is_ascii_whitespace())
+                && after
+                    .is_some_and(|byte| byte.is_ascii_whitespace() || byte == b'=' || byte == b'>');
+            (attribute_boundary
+                && tag.starts_with("<div")
+                && tag.contains("class=\"nd nd-mac\"")
+                && tag.contains("data-nx=\"dlg-noop\""))
+            .then_some(marker_at)
+        })
+        .collect();
+    let Some(&marker_at) = hosts.first() else {
+        tracing::warn!("rendered redesign has no macro SSR host; dialog fragment not added");
+        return out;
+    };
+    if hosts.len() != 1 {
+        tracing::warn!("rendered redesign has multiple macro SSR hosts; dialog fragment not added");
+        return out;
+    }
+    if fragment.is_empty() {
+        return out;
+    }
+
+    let Some(open_end_rel) = out.html[marker_at..].find('>') else {
+        tracing::warn!("rendered redesign macro SSR host has no opening-tag terminator");
+        return out;
+    };
+    let content_start = marker_at + open_end_rel + 1;
+    let Some(close_rel) = out.html[content_start..].find("</div>") else {
+        tracing::warn!("rendered redesign macro SSR host has no closing tag");
+        return out;
+    };
+    let close_at = content_start + close_rel;
+    if close_at != content_start {
+        tracing::warn!("rendered redesign macro SSR host was not empty; dialog fragment not added");
+        return out;
+    }
+
+    out.html.insert_str(close_at, fragment);
+    out
 }
 
 #[cfg(test)]
@@ -927,6 +1006,64 @@ mod tests {
             html.contains(r#"name="layout""#) && html.contains(r#"name="persona""#),
             "the add form posts persona and the served layout"
         );
+    }
+
+    /// Forma has no trusted-HTML SSR slot. An open macro nevertheless has to
+    /// be a complete first paint: the post-render seam fills exactly one
+    /// marked dialog host with the escaped projection the payload also owns.
+    #[test]
+    fn an_open_macro_is_complete_and_escaped_before_hydration() {
+        let page = EmbeddedPage::load("/redesign").unwrap();
+        let mut payload = fixture_payload();
+        payload.controllers.mac = crate::macro_editor::NocturneMacroEditor {
+            open: true,
+            back_cls: "nd-back".into(),
+            name: "Hadouken <unsafe> & ready".into(),
+            trigger: "H & K".into(),
+            note: "Three steps < one second".into(),
+            grid_cls: "n-macgrid".into(),
+            close_href: "/redesign?slot=1".into(),
+            ..Default::default()
+        };
+        let html = render_redesign(&page, &payload, None).html;
+        let payload_at = html.find("<script id=\"__ksx-payload\"").unwrap();
+        let payload_end = payload_at + html[payload_at..].find("</script>").unwrap() + 9;
+        let rendered_island = &html[payload_end..];
+        assert_eq!(rendered_island.matches("data-rd-mac-host").count(), 1);
+        assert_eq!(rendered_island.matches("data-rd-mac-ssr").count(), 1);
+        let marker_at = rendered_island.find("data-rd-mac-host").unwrap();
+        let holder_class_at = rendered_island[..marker_at].rfind("rd-macdlg").unwrap();
+        let holder_start = rendered_island[..holder_class_at].rfind("<div").unwrap();
+        let holder_end = holder_class_at + rendered_island[holder_class_at..].find('>').unwrap();
+        let holder_tag = &rendered_island[holder_start..=holder_end];
+        assert!(holder_tag.contains("rd-macdlg"), "{holder_tag}");
+        assert!(!holder_tag.contains("none"), "{holder_tag}");
+        assert!(rendered_island.contains("Hadouken &lt;unsafe&gt; &amp; ready"));
+        assert!(rendered_island.contains("H &amp; K"));
+        assert!(rendered_island.contains("Three steps &lt; one second"));
+        assert!(rendered_island.contains("Save this macro"));
+        assert!(!rendered_island.contains("Hadouken <unsafe>"));
+    }
+
+    #[test]
+    fn a_macro_named_like_the_ssr_marker_cannot_shadow_the_real_host() {
+        let page = EmbeddedPage::load("/redesign").unwrap();
+        let mut payload = fixture_payload();
+        payload.controllers.mac = crate::macro_editor::NocturneMacroEditor {
+            open: true,
+            back_cls: "nd-back".into(),
+            name: "data-rd-mac-host".into(),
+            trigger: "K".into(),
+            note: "A legal macro name, not an HTML marker.".into(),
+            grid_cls: "n-macgrid".into(),
+            close_href: "/redesign?slot=1".into(),
+            ..Default::default()
+        };
+
+        let html = render_redesign(&page, &payload, None).html;
+        assert!(html.contains("data-rd-mac-ssr"), "{html}");
+        assert!(html.contains(">data-rd-mac-host</div>"), "{html}");
+        assert!(html.contains("Save this macro"), "{html}");
     }
 
     /// Keyboard geometry contains real controls and inert spacer cells in the

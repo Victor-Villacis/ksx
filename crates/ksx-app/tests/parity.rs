@@ -362,19 +362,10 @@ fn subcommands(help: &str) -> Vec<String> {
 /// stopping earlier would drop every route declared after whatever `.layer()`
 /// happened to come first and report each one as a missing face.
 ///
-/// That was not a hypothetical when this reader was written. The import route
-/// carried its own `DefaultBodyLimit` layer partway down the chain, and cutting
-/// at the first `.layer()` would have hidden the six routes below it.
-///
-/// **That body limit is gone, and this comment is the last place in the tree
-/// that records it existed.** It disappeared with `/setup/import` in the
-/// 2026-08-25 cutover (`git log -S DefaultBodyLimit`); `grep -rn
-/// DefaultBodyLimit crates/` now finds only these lines. The successor route
-/// `/nocturne/import` runs on axum's 2 MB default while its refusal copy still
-/// promises 8 MB — which is exactly the failure the limit was added to prevent,
-/// arriving from the other direction. Restoring it is a Studio change; the cut
-/// point here is correct either way, and is now correct for the reason above
-/// rather than because of one route's layer.
+/// That is not hypothetical. `/nocturne/import` carries its own 8 MB
+/// `DefaultBodyLimit` partway down the chain; cutting at the first `.layer()`
+/// would hide the routes registered below it. The guard is the application
+/// boundary, while a per-route body layer is only one route's input policy.
 fn studio_routes() -> &'static BTreeSet<String> {
     static ROUTES: LazyLock<BTreeSet<String>> = LazyLock::new(|| {
         const SERVER: &str = "crates/ksx-studio/src/server/mod.rs";
@@ -666,15 +657,15 @@ const ANCHORS: &[Anchors] = &[
         // exists for — and a flow that could not map would satisfy both while
         // playing a pad on which nothing works.
         //
-        // These were the `/start/*` routes until that page was deleted and
-        // /nocturne became the product; `/nocturne/controller` is the
-        // add-with-a-layout verb the old `/start/controller/layout` was.
+        // These were the `/start/*` routes, then `/nocturne/*`; the current
+        // launcher-owned workbench carries the same separate acts on
+        // `/redesign`.
         studio: &[
-            "/nocturne",
-            "/nocturne/device/identify",
-            "/nocturne/controller",
-            "/nocturne/save",
-            "/nocturne/play",
+            "/redesign",
+            "/redesign/device/identify",
+            "/redesign/controller",
+            "/redesign/save",
+            "/redesign/play",
         ],
     },
     Anchors {
@@ -690,7 +681,7 @@ const ANCHORS: &[Anchors] = &[
         // The names a cabinet mapper would take. Neither exists, which is what
         // makes the egui cell's "—" honest.
         egui: &["Screen::Mapper", "Ask::Bind"],
-        studio: &["/nocturne", "/nocturne/bind/toggle"],
+        studio: &["/redesign", "/redesign/bind/toggle"],
     },
     Anchors {
         capability: "Rename / delete a controller layout",
@@ -723,7 +714,9 @@ const ANCHORS: &[Anchors] = &[
         // `Ask::Assign` IS the "slot→preset only" cell: the Presets screen
         // builds one, and `assign_destination` decides which file it lands in.
         egui: &["Ask::Assign"],
-        studio: &["/nocturne/save", "/nocturne/import"],
+        // Save is core workbench behavior. Import remains on the explicitly
+        // deferred Settings/Library implementation until that surface lands.
+        studio: &["/redesign/save", "/nocturne/import"],
     },
     Anchors {
         capability: "Create / update / delete profiles",
@@ -759,7 +752,7 @@ const ANCHORS: &[Anchors] = &[
         // Installed Studio gathers explicit device/certificate consent, then
         // crosses the narrow elevated helper boundary. The browser never
         // accepts provider paths, driver bytes, or arbitrary helper arguments.
-        studio: &["/nocturne/capture/prepare", "/nocturne/capture/release"],
+        studio: &["/redesign/capture/prepare", "/redesign/capture/release"],
     },
     Anchors {
         capability: "\"Press a button, see it light\"",
@@ -773,7 +766,7 @@ const ANCHORS: &[Anchors] = &[
         capability: "Is it working: pads, drivers",
         cli: &["doctor", "devices", "session status"],
         egui: &["Screen::Status"],
-        studio: &["/nocturne", "/api/nocturne"],
+        studio: &["/redesign", "/api/redesign"],
     },
     Anchors {
         capability: "Spawn test pads / prune the bus",
@@ -807,7 +800,7 @@ const ANCHORS: &[Anchors] = &[
         // about". The cabinet does not even DISPLAY a slot's policy, so the
         // cell is "—" and not "view".
         egui: &[],
-        studio: &["/nocturne/controller/socd"],
+        studio: &["/redesign/controller/socd"],
     },
     Anchors {
         capability: "Split or freeze, after saving",
@@ -821,7 +814,7 @@ const ANCHORS: &[Anchors] = &[
         // and it is what makes the gap visible if somebody adds the flag later.
         cli: &[],
         egui: &["Ask::Blocking"],
-        studio: &["/nocturne/blocking"],
+        studio: &["/redesign/blocking"],
     },
     Anchors {
         capability: "Studio theme",
@@ -832,7 +825,7 @@ const ANCHORS: &[Anchors] = &[
         // row exists to surface.
         cli: &[],
         egui: &["Ask::Theme"],
-        studio: &["/nocturne/theme"],
+        studio: &["/redesign/theme"],
     },
     Anchors {
         capability: "Start ksx at sign-in",
@@ -876,7 +869,11 @@ const ANCHORS: &[Anchors] = &[
             "session quit",
         ],
         egui: &["Screen::Session", "Ask::Start", "Ask::Stop"],
-        studio: &["/nocturne/play", "/nocturne/stop", "/nocturne/adopt"],
+        // Play and Stop belong to the launcher-owned redesign workbench. Saved
+        // profile switching remains part of the explicitly deferred legacy
+        // Settings/Library surface; redesign's Adopt loads only the saved base
+        // setup and must not be advertised as a profile switch.
+        studio: &["/redesign/play", "/redesign/stop", "/nocturne/adopt"],
     },
     Anchors {
         capability: "Identify an arcade encoder (family, release, whether its chart can be read)",
@@ -941,8 +938,9 @@ const ANCHORS: &[Anchors] = &[
 /// and it is a narrower test than "feels like plumbing". `ksx doctor` looks like
 /// an exemption and is not one: `StatusSnapshot` carries `vigem`,
 /// `interception`, `pads` and `autostart`, the egui's Status screen renders
-/// them and so does `/api/nocturne` (it was `/api/status` until that page was
-/// deleted), which is precisely §3's "Is it working: pads, drivers" row. It is
+/// them and so does `/api/redesign` (after `/api/status`, then
+/// `/api/nocturne`), which is precisely §3's "Is it working: pads, drivers"
+/// row. It is
 /// claimed there, not excused here.
 struct Exempt {
     verb: &'static str,

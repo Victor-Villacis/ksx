@@ -1055,15 +1055,12 @@ enum Command {
     /// serves, so it is what you run when you want the browser you already
     /// have, on the port you chose.
     ///
-    /// `/nocturne` is the product: one page that owns the keyboard choice,
-    /// the controllers, the mapper, macros, saved games and the configuration
-    /// menu (Export, Import) as stages within it rather than as a sequence of
-    /// URLs. `/check`, `/pads` and `/devices` are the tools — the wiring echo,
-    /// the virtual pads the bus is exposing, and the machine's input devices —
-    /// each one deliberate action away. This help described a single
-    /// auto-refreshing status dashboard until 2026-08-25; `/`, `/start`,
-    /// `/map`, `/setup` and `/profiles` were deleted in that cutover and now
-    /// 404 with no redirect, deliberately (docs/SURFACES.md §6).
+    /// `/redesign` is the product workbench: choose exact input devices, add
+    /// controllers, author mappings and macros, and operate the staged/live
+    /// session lifecycle from one canvas. Its Tools menu opens `/check`,
+    /// `/pads` and `/devices` for wiring echo, virtual-bus inspection and the
+    /// machine's input inventory. Saved games, layout libraries, import/export
+    /// and autostart remain outside this core-product cutover for now.
     ///
     /// Session control talks to a running `ksx daemon` over its control pipe —
     /// the same surface as `ksx session` and the tray menu. Play, Stop and

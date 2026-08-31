@@ -49,16 +49,15 @@ const seedRealDeviceWorkbench = (page) => page.addInitScript((selectors) => {
 }, [BENCH_A_SELECTOR, BENCH_B_SELECTOR]);
 
 const ROUTES = [
-  { path: "/nocturne", name: "nocturne" },
+  { path: "/redesign", name: "redesign" },
   // The macro roll only exists when a macro is OPEN: with the dialog closed
   // the payload serves empty lists, so every cell, row body and pill in it sat
   // outside this gate and outside every screenshot — which is how a 390px
   // collapse and fifteen dead custom properties shipped unseen.
-  { path: "/nocturne?slot=1&macro=hadouken", name: "nocturne-macro" },
+  { path: "/redesign?slot=1&macro=hadouken", name: "redesign-macro" },
   { path: "/check", name: "check" },
   { path: "/pads", name: "pads" },
   { path: "/devices", name: "devices" },
-  { path: "/redesign", name: "redesign" },
 ];
 
 const CONTEXTS = [
@@ -106,7 +105,7 @@ const screenshotRecords = [];
 async function waitForServer(deadlineMs = 120_000) {
   const until = Date.now() + deadlineMs;
   for (;;) {
-    const up = await fetch(`${BASE}/api/nocturne`).then(
+    const up = await fetch(`${BASE}/api/redesign`).then(
       (response) => response.ok,
       () => false,
     );
@@ -128,7 +127,7 @@ before(async () => {
   await rm(screenshotDir, { recursive: true, force: true });
   await mkdir(screenshotDir, { recursive: true });
 
-  const squatter = await fetch(`${BASE}/api/nocturne`).then(
+  const squatter = await fetch(`${BASE}/api/redesign`).then(
     () => true,
     () => false,
   );
@@ -307,7 +306,7 @@ for (const config of CONTEXTS) {
                 width: rect.width,
               };
             });
-            // The nocturne canvas can die silently: every other assertion
+            // A canvas can die silently: every other assertion
             // here passes with an unadopted keyboard sitting at auto layout.
             // Adoption's one observable is the engine's geometry write.
             const kbWidget = document.querySelector(
@@ -341,10 +340,6 @@ for (const config of CONTEXTS) {
               documentWidth,
               coarse: matchMedia("(pointer: coarse)").matches,
               light: matchMedia("(prefers-color-scheme: light)").matches,
-              nocturneStage: (() => {
-                const stage = document.querySelector(".nocturne");
-                return stage ? getComputedStyle(stage).backgroundColor : null;
-              })(),
               containers,
               canvasAdoption,
               canvasEngineAlive,
@@ -395,20 +390,6 @@ for (const config of CONTEXTS) {
             config.options.colorScheme === "light",
             `${config.name} did not expose the intended color scheme`,
           );
-          // Under System (the fixture stamps no data-theme) the product frame
-          // itself must follow the OS, not just the body behind it: an
-          // emulated light OS repaints `.nocturne` with the light tokens.
-          // Dark keeps the Nocturne design's own navy — that face IS dark.
-          if (layout.nocturneStage !== null) {
-            assert.equal(
-              layout.nocturneStage,
-              config.options.colorScheme === "light"
-                ? hexToRgb(THEMES.find((t) => t.id === "light").bg)
-                : "rgb(22, 24, 38)",
-              `${route.path} did not paint the System-${config.options.colorScheme} ` +
-                `ground on ${config.name}`,
-            );
-          }
           assert.deepEqual(diagnostics, [], `${route.path} emitted browser errors on ${config.name}`);
         } catch (error) {
           failure = error;
@@ -1395,7 +1376,7 @@ for (const [index, theme] of THEMES.entries()) {
     let context;
 
     before(async () => {
-      const squatter = await fetch(`${base}/api/nocturne`).then(
+      const squatter = await fetch(`${base}/api/redesign`).then(
         () => true,
         () => false,
       );
@@ -1408,7 +1389,7 @@ for (const [index, theme] of THEMES.entries()) {
       themedServer.stderr?.on("data", (chunk) => (themedStderr += chunk.toString()));
       const until = Date.now() + 120_000;
       for (;;) {
-        const up = await fetch(`${base}/api/nocturne`).then(
+        const up = await fetch(`${base}/api/redesign`).then(
           (response) => response.ok,
           () => false,
         );
@@ -1467,10 +1448,6 @@ ${themedStderr.trim() || "(it said nothing)"}`,
         const painted = await page.evaluate(() => ({
           stamp: document.documentElement.dataset.theme ?? null,
           bg: getComputedStyle(document.body).backgroundColor,
-          nocturneStage: (() => {
-            const stage = document.querySelector(".nocturne");
-            return stage ? getComputedStyle(stage).backgroundColor : null;
-          })(),
         }));
         assert.equal(painted.stamp, theme.id, `${route.path} is missing the data-theme stamp`);
         assert.equal(
@@ -1478,24 +1455,6 @@ ${themedStderr.trim() || "(it said nothing)"}`,
           hexToRgb(theme.bg),
           `${route.path} painted the wrong ground for stamped ${theme.id}`,
         );
-        if (painted.nocturneStage !== null) {
-          // The frame learned the themes (2026-08-27). `.nocturne` was the
-          // one surface a stamp could not reach — it hard-coded its palette
-          // over a 100vh frame, so the shipped picker changed nothing a user
-          // could see. Its `--n-*` roles now alias the token values under a
-          // stamped light or matrix theme, so the ground here IS `theme.bg`.
-          // Stamped dark is the one exception, on purpose: the Nocturne
-          // design's own navy (#161826) is the product's dark face, and the
-          // picker's Dark row promises "renders dark", not "renders the
-          // token ramp's dark".
-          const expectedStage =
-            theme.id === "dark" ? "rgb(22, 24, 38)" : hexToRgb(theme.bg);
-          assert.equal(
-            painted.nocturneStage,
-            expectedStage,
-            `${route.path}'s .nocturne frame did not paint the stamped ${theme.id} ground`,
-          );
-        }
         assert.deepEqual(
           diagnostics,
           [],

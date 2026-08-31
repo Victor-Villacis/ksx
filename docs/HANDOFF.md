@@ -94,11 +94,12 @@ source, not another Rust package.
   claimed face against a real anchor in the tree, while the prose beside them is
   checked by nothing. That asymmetry is exactly how this pair drifted apart. The
   product does not require either CLI face (`docs/FIRST-RUN.md`).
-- **Studio** (browser) — the workbench: ONE product page plus three tool pages
-  since 2026-08-25. `/nocturne` carries the whole set-up-and-play flow — device
-  choice, controllers, mapping, saved games, configuration, Save and Play — and
-  `/check`, `/pads` and `/devices` are the tools beside it. Better than
-  immediate-mode GUI at a 25-binding preset, which is why the mapper lives here.
+- **Studio** (browser) — the workbench: `/redesign` carries the current core
+  device, controller, mapping, Save/Apply/Play/Stop and recovery flow. Its Tools
+  menu makes `/check`, `/pads` and `/devices` discoverable. Saved games,
+  layouts, import/export and autostart still depend on the deferred legacy
+  implementation while their Settings/Library replacement is designed. Better
+  than immediate-mode GUI at a 25-binding preset, which is why the mapper lives here.
 - **egui cabinet panel** — the appliance. At a cabinet there is no mouse and no
   keyboard; the arcade panel *is* the input, and no browser UI can be driven by
   an arcade stick. That is why this surface cannot be deleted.
@@ -114,14 +115,15 @@ first-run flow lists devices by human names, stages a controller before anything
 is written or plugged, prepares one exact supported USB keyboard through a
 three-consent UAC flow when clean-machine capture requires it, asks
 split-or-freeze in the user's own words, and can Play without saving. Studio
-includes a separately confirmed Release action, saved games, setup, controls and
-button check; the backend also supports recorded-session replay, a unified
+includes a separately confirmed Release action, compact setup progress,
+controls and button check; the deferred `/nocturne` surface still carries saved
+games until its Settings/Library replacement exists. The backend also supports recorded-session replay, a unified
 USB+Bluetooth device list, and multiple controller personas.
 
 **Current KSX candidate:** every customer shortcut and the
 post-install hand-off target `ksx-launcher.exe`, which starts the sibling
 console-subsystem `ksx.exe open` with `CREATE_NO_WINDOW`. `ksx open` starts and
-waits for a plain daemon, then opens Studio directly at `/nocturne` in ksx's own
+waits for a plain daemon, then opens Studio directly at `/redesign` in ksx's own
 Chromium app profile. An empty default configuration now starts an **idle
 control host** rather than exiting: no session, capture, claim or pad exists,
 but the pipe/tray remain available so first-run staging is possible.
@@ -139,13 +141,13 @@ proved. Both happen in `usUninstall` — after the user has confirmed the remova
 before Inno deletes its first file — so answering No to the confirmation costs
 nothing.
 
-`/nocturne` opens the full existing Forma mapper against an in-memory staged
+`/redesign` opens the full existing Forma mapper against an in-memory staged
 controller for chords, turbo and macros — `?slot=N` picks which one. (It was
 `/map?target=stage&slot=N` until the cutover; with one page there is only ever
 the stage, so the `target` parameter went with the second subject it named.) Refused edits leave
 the stage unchanged; accepted edits touch no disk. Save and Play remain
-separate, including Play-before-Save. Studio's saved games — now the
-Configuration menu on that same page rather than a `/profiles` screen — create,
+separate, including Play-before-Save. The deferred `/nocturne` Configuration
+menu carries Studio's saved games rather than a `/profiles` screen; they create,
 update, delete and switch; creation inherits the working base device
 assignments, updates preserve them, and deletion keeps controller layouts. The
 "unless explicitly refreshed" half of that sentence is a backend capability with
@@ -162,8 +164,8 @@ ksx does not silently change the per-user Windows setting.
 source, `studio-ui/tokens/` (DTCG-flavored JSON compiled by
 `tokens/build-tokens.mjs` inside `node build.mjs` into the hashed sheet, the
 generated `theme_tokens.rs` and the pad-art sheet — the four hand-mirrored
-palette copies are gone). Themes are user-selectable at runtime: `/nocturne`'s
-"How the Studio looks" panel carries the picker (`POST /nocturne/theme`), the
+palette copies are gone). Themes are user-selectable at runtime: `/redesign`'s
+theme picker posts `POST /redesign/theme`, the
 choice persists as `Settings.theme` in config.toml,
 every page stamps `data-theme` on `<html>` (only roster ids; anything else
 renders as System = follow the OS), and the contrast gate enumerates every
@@ -203,13 +205,13 @@ person who has never seen ksx gets from the exact downloaded installer to a
 controller moving in a game, with no terminal, no file editing, and nobody
 telling them what to do next.* The missing staged mapper and wrong landing page
 described by the old handoff are **both closed**. The staged mapper works:
-`/nocturne` routes bindings and macros into `StageEdit::SetBindings`. The
+`/redesign` routes bindings and macros into `StageEdit::SetBindings`. The
 landing page broke a second time when the 2026-08-25 cutover deleted `/start`
 while `studio_launch.rs` still asked for it — `ksx open` put a chrome-less
 window with no address bar on a 404, and a test in that file pinned the wrong
-value, which is why nothing went red. Fixed in `ad520b4` (2026-08-26):
-`studio_launch.rs` returns `/nocturne`, the `--app=` argument agrees, and the
-test now pins the constant instead of a literal.
+value, which is why nothing went red. `ad520b4` fixed that historical incident
+by pointing both spellings at `/nocturne`; the current core-product cutover
+advances both to `/redesign`, and the test pins that exact target.
 
 > That paragraph stood here for a day describing a bug the **same commit** had
 > already fixed, because the audit prose and the repair landed together and the

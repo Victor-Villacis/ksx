@@ -140,28 +140,12 @@ Guide/Home opens Xbox Game Bar only when Game Bar is available and Windows'
 changes that Windows setting silently — and it does not yet offer a shortcut to
 it either, so open **Settings ▸ Gaming ▸ Game Bar** yourself for now.
 
-## 8. Save a game (optional)
+## Saved games and libraries
 
-Open the **▣** menu in the top bar and find **Saved games**, then **Add a saved
-game…**, when ksx should remember a program or launcher link.
-
-1. Enter a name.
-2. Paste the program path or launcher link into **Program to launch**.
-   Surrounding quotation marks are accepted and removed safely.
-3. Choose **Players** and the **Controller layout**.
-4. Select **Save this game**.
-
-Afterwards each saved game is one click in that menu: clicking it loads that
-game's controllers into what you are working on. Play stays a separate step, so
-loading a game never starts one. **Edit &lt;name&gt;…** opens its fields again, and
-removing it takes a tick plus **Remove this saved game**.
-
-Each player inherits the corresponding device choice from the saved
-configuration, so the saved game is runnable rather than an empty controller
-shell. Existing saved games can be loaded, edited or deleted entirely in ksx,
-and controller layouts are kept when a saved game is deleted. (Rebasing a saved
-game onto the device choices you have since saved is a feature the app can
-perform but currently offers no control for; it is being restored.)
+Saved games, reusable layout libraries, import/export, and autostart are not in
+the current `/redesign` workbench yet. They are being rebuilt as a separate
+Settings/Library surface. The launcher does not send new users to the legacy
+Configuration menu, and this quickstart does not require that legacy route.
 
 ## If ksx says the background service is unavailable
 
@@ -175,7 +159,7 @@ the ordinary sentences. Include those details when reporting a problem.
 ## What still requires physical release acceptance
 
 Automated tests prove the installer contracts, no-console launcher, empty-setup
-bootstrap, staged mapper, profile editing, and Guide bindings. They do not
+bootstrap, staged mapper, and Guide bindings. They do not
 prove a clean-machine install, a real controller in a real game, Windows Game
 Bar activation, or the cabinet's long hardware soak. The exact supervised
 release checklist and its unrun status are in [`GATES.md`](GATES.md), Gate 4.

@@ -394,7 +394,7 @@ jobs:
           $seed = Join-Path $PWD 'tools/studio-env/seed.ps1'
           $status = Join-Path $PWD 'tools/studio-env/status.ps1'
           $teardown = Join-Path $PWD 'tools/studio-env/teardown.ps1'
-          $uri = 'http://127.0.0.1:4476/api/nocturne'
+          $uri = 'http://127.0.0.1:4476/api/health'
 
           try {
             & $seed -Environment seeded

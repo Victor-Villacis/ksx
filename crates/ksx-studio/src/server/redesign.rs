@@ -2,10 +2,31 @@
 //!
 //! The same shape as every page module here: one collector on a blocking
 //! worker, one GET that renders it themed, one JSON twin the island polls —
-//! plus the theme and device-staging verbs transplanted from `/nocturne`,
-//! each re-homed with its own 303 target and the same allowlisted `?flash=`
-//! outcome channel.
+//! plus thin route adapters over the shared workbench application layer.
+//! Each form keeps its own 303 target and the same allowlisted `?flash=`
+//! outcome channel without depending on another surface's handlers.
 
+use super::workbench::{
+    self as wb, bind_clear_flash, bind_toggle_flash, bind_turbo_flash, blocking_write_flash,
+    checked, choose_device_preserving_preparation, clear_all_flash, duplicate_slot_flash,
+    identify_and_stage_for_redesign, key_clear_flash, macro_new_flash, macro_write_flash,
+    stash_removed_slot, undo_chip_label, undo_removal_flash, DeviceChoice, StartIdentifyResult,
+    N_ADD_LAYOUT_ERROR, N_ADOPT_BLOCKED, N_ADOPT_OK, N_APPLY_ERROR, N_APPLY_OK, N_APPLY_RESTART,
+    N_BLOCKING_OK, N_CAPTURE_ALREADY_PREPARED, N_CAPTURE_ALREADY_RELEASED, N_CAPTURE_PREPARED_OK,
+    N_CAPTURE_PREPARED_STAGE_CHANGED, N_CAPTURE_PREPARE_CONSENT, N_CAPTURE_PREPARE_ERROR,
+    N_CAPTURE_PREPARE_RECOVERY, N_CAPTURE_RELEASED_OK, N_CAPTURE_RELEASED_STAGE_CHANGED,
+    N_CAPTURE_RELEASE_CONSENT, N_CAPTURE_RELEASE_ERROR, N_CAPTURE_RELEASE_RECOVERY,
+    N_CAPTURE_TARGET_CHANGED, N_CLEAR_ALL_OK, N_DEVICE_ALREADY_OK, N_DEVICE_OK, N_DISCARD_OK,
+    N_DUP_FULL, N_DUP_OK, N_EDIT_ERROR, N_EDIT_OK, N_FORM_UNREADABLE, N_IDENTIFY_ERROR,
+    N_IDENTIFY_OK, N_IDENTIFY_TIMEOUT, N_KEY_CLEAR_NONE, N_KEY_CLEAR_OK, N_MACRO_BADNAME,
+    N_MACRO_DELETED, N_MACRO_NAME, N_MACRO_NEW, N_MACRO_OK, N_MACRO_TAKEN, N_MOVE_AT_END,
+    N_PLAY_BLOCKING, N_PLAY_CAPTURE, N_PLAY_ERROR, N_PLAY_NO_BINDINGS, N_PLAY_NO_DEVICE,
+    N_PLAY_NO_SLOTS, N_PLAY_OK, N_PLAY_OUTPUT_BLOCKED, N_PLAY_OUTPUT_UNKNOWN, N_READ_SCAN_ERROR,
+    N_READ_SETUP_ERROR, N_SAVE_BLOCKING, N_SAVE_CAPTURE, N_SAVE_ERROR, N_SAVE_NO_BINDINGS,
+    N_SAVE_NO_DEVICE, N_SAVE_NO_SLOTS, N_SAVE_OK, N_STOP_ERROR, N_STOP_OK, N_THEME_OK,
+    N_THEME_UNKNOWN, N_TOGGLE_OK, N_TOGGLE_OLD_DAEMON, N_TOGGLE_UNBOUND_ERROR, N_TURBO_INPUT_ERROR,
+    N_TURBO_OK, N_TURBO_UNBOUND_ERROR, N_UNDO_FULL, N_UNDO_GONE, N_UNDO_OK, N_UNKNOWN_FLASH_ERROR,
+};
 use super::*;
 
 const RD_DISCARD_CONFIRM: &str =
@@ -77,8 +98,8 @@ const RD_FLASH_ALLOWLIST: &[&str] = &[
     N_MACRO_TAKEN,
     N_MACRO_BADNAME,
     N_MACRO_DELETED,
-    // The operational shell aliases. These remain nocturne's ONE set of
-    // customer sentences; only the redirect home changes.
+    // The operational shell aliases. These remain the workbench's ONE set of
+    // customer sentences; only each route's redirect home changes.
     N_SAVE_OK,
     N_SAVE_ERROR,
     N_SAVE_BLOCKING,
@@ -245,31 +266,6 @@ pub(super) async fn collect_redesign(
     })
 }
 
-/// Re-home one shared nocturne form core without copying its protocol or
-/// failure mapping. The shared handler performs the mutation and returns its
-/// allowlisted 303; this adapter changes only the page prefix in `Location`.
-/// JSON handlers need no adapter because they carry no page location.
-fn redesign_rehome(mut response: Response) -> Response {
-    let target = response
-        .headers()
-        .get(header::LOCATION)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
-    if let Some(target) = target {
-        let rehomed = if let Some(query) = target.strip_prefix("/nocturne?") {
-            format!("/redesign?{query}")
-        } else if target == "/nocturne" {
-            "/redesign".to_owned()
-        } else {
-            target
-        };
-        if let Ok(value) = HeaderValue::from_str(&rehomed) {
-            response.headers_mut().insert(header::LOCATION, value);
-        }
-    }
-    response
-}
-
 /// The root stamp for one already-collected payload. System is represented by
 /// the absence of `data-theme`, just as it is everywhere else; an unreadable
 /// setup has no chosen row and therefore also renders without a claim.
@@ -331,11 +327,9 @@ pub(super) async fn api_redesign(
 
 // ── Operational-shell aliases ─────────────────────────────────────────────
 //
-// These deliberately call nocturne's complete handlers after redesign's
-// served-revision and fail-closed-capture preflights. Save/Play's stable
-// refusal-code mapping, Play's output preflight, Apply's structured
-// needs-restart answer, and WinUSB's exact-device + consent transaction
-// therefore remain one implementation.
+// These call the route-neutral workbench core after redesign's served-revision
+// and fail-closed-capture preflights. The presentations own redirects; the
+// staged setup capability owns mutations and provider/refusal mapping.
 
 #[derive(Deserialize)]
 pub(super) struct RedesignRevisionForm {
@@ -372,7 +366,7 @@ pub(super) async fn redesign_form_save(
     if !redesign_capture_ready(&state.0).await {
         return redesign_redirect(N_SAVE_CAPTURE);
     }
-    redesign_rehome(nocturne_form_save(state).await)
+    redesign_redirect(wb::stage_save(state.0).await)
 }
 
 pub(super) async fn redesign_form_play(
@@ -388,7 +382,7 @@ pub(super) async fn redesign_form_play(
     if !redesign_capture_ready(&state.0).await {
         return redesign_redirect(N_PLAY_CAPTURE);
     }
-    redesign_rehome(nocturne_form_play(state).await)
+    redesign_redirect(wb::stage_play(state.0).await)
 }
 
 /// The redesign promises that unresolved exact-device state is fail-closed,
@@ -412,7 +406,7 @@ async fn redesign_capture_ready(state: &Arc<AppState>) -> bool {
 }
 
 pub(super) async fn redesign_form_stop(state: State<Arc<AppState>>) -> Response {
-    redesign_rehome(nocturne_form_stop(state).await)
+    redesign_redirect(wb::stage_stop(state.0).await)
 }
 
 pub(super) async fn redesign_form_apply(
@@ -425,7 +419,7 @@ pub(super) async fn redesign_form_apply(
     if !redesign_revision_matches(&state.0, form.expected_revision.as_deref()).await {
         return redesign_redirect(RD_LIFECYCLE_CHANGED);
     }
-    redesign_rehome(nocturne_form_apply(state).await)
+    redesign_redirect(wb::stage_apply_flash(state.0).await)
 }
 
 pub(super) async fn redesign_api_apply(
@@ -448,17 +442,17 @@ pub(super) async fn redesign_api_apply(
         }))
         .into_response();
     }
-    nocturne_api_apply(state).await
+    wb::stage_apply_json(state.0).await
 }
 
 pub(super) async fn redesign_form_adopt(
     state: State<Arc<AppState>>,
-    form: RedesignForm<NocturneAdoptForm>,
+    form: RedesignForm<wb::AdoptForm>,
 ) -> Response {
-    let Ok(form) = form else {
+    let Ok(Form(form)) = form else {
         return redesign_redirect(N_FORM_UNREADABLE);
     };
-    redesign_rehome(nocturne_form_adopt(state, form).await)
+    redesign_redirect(wb::stage_adopt(state.0, form.profile).await)
 }
 
 #[derive(Deserialize)]
@@ -502,27 +496,29 @@ pub(super) async fn redesign_form_discard(
     {
         return redesign_redirect(RD_DISCARD_CHANGED);
     }
-    redesign_rehome(nocturne_form_discard(state).await)
+    redesign_redirect(wb::stage_discard(state.0).await)
 }
 
 pub(super) async fn redesign_form_capture_prepare(
     state: State<Arc<AppState>>,
-    form: RedesignForm<NocturneCapturePrepareForm>,
+    form: RedesignForm<wb::CapturePrepareForm>,
 ) -> Response {
-    let Ok(form) = form else {
+    let Ok(Form(form)) = form else {
         return redesign_redirect(N_FORM_UNREADABLE);
     };
-    redesign_rehome(nocturne_form_capture_prepare(state, form).await)
+    let result = wb::capture_prepare(state.0, form).await;
+    redesign_redirect(wb::capture_flash(wb::CaptureMutation::Prepare, result))
 }
 
 pub(super) async fn redesign_form_capture_release(
     state: State<Arc<AppState>>,
-    form: RedesignForm<NocturneCaptureReleaseForm>,
+    form: RedesignForm<wb::CaptureReleaseForm>,
 ) -> Response {
-    let Ok(form) = form else {
+    let Ok(Form(form)) = form else {
         return redesign_redirect(N_FORM_UNREADABLE);
     };
-    redesign_rehome(nocturne_form_capture_release(state, form).await)
+    let result = wb::capture_release(state.0, form).await;
+    redesign_redirect(wb::capture_flash(wb::CaptureMutation::Release, result))
 }
 
 #[derive(Deserialize)]
@@ -530,9 +526,8 @@ pub(super) struct RedesignThemeForm {
     theme: Option<String>,
 }
 
-/// POST /redesign/theme — `nocturne_form_theme`, re-homed for this page's
-/// menu (the handler body is that verb's, verbatim; only the redirect target
-/// differs). A config write like blocking, but read per page render rather
+/// POST /redesign/theme — update the shared theme and return to this surface.
+/// A config write like blocking, but read per page render rather
 /// than by the daemon, so "saved" IS "in effect" — the router-wide layer
 /// invalidates `machine_cache` around every non-GET, which is what lets the
 /// redirect's own render stamp the new choice.
@@ -583,11 +578,11 @@ pub(super) struct RedesignDeviceForm {
     label: String,
 }
 
-/// POST /redesign/device — `nocturne_form_device`, re-homed for the bench
-/// card's "Stage this board" action. The body is that verb's, through the
-/// SAME [`choose_device_preserving_preparation`] guard — both doors to
-/// staging keep the one preparation-preserving compare, so a WinUSB-prepared
-/// board pressed again never silently drops back to interception.
+/// POST /redesign/device — stage the input selected from the workbench card.
+/// The transaction uses the shared [`choose_device_preserving_preparation`]
+/// guard, so both product surfaces perform the same preparation-preserving
+/// comparison. Selecting a WinUSB-prepared board again never silently drops
+/// back to interception.
 pub(super) async fn redesign_form_device(
     State(state): State<Arc<AppState>>,
     form: RedesignForm<RedesignDeviceForm>,
@@ -735,9 +730,8 @@ pub(super) async fn redesign_form_identify_cancel(
     redesign_redirect(RD_IDENTIFY_CANCELLED)
 }
 
-// ── The controller verbs: the rack's add / reorder / remove, re-homed ───────
-// Each is `nocturne_form_*`'s body with this page's redirect. The daemon owns
-// every consequence — slot numbering, the XInput ceiling, persona
+// ── The controller verbs: the rack's add / reorder / remove ────────────────
+// The daemon owns every consequence — slot numbering, the XInput ceiling, persona
 // availability — and the picker re-reads the whole staged view afterwards, so
 // the workbench can never hold a slot the daemon does not.
 
@@ -754,8 +748,7 @@ pub(super) struct RedesignAddForm {
 }
 
 /// POST /redesign/controller — stage the next slot, dressed in the served
-/// layout (`nocturne_form_add`, minus the create dialog's SOCD answer — the
-/// workbench edits that later, where the slot already exists).
+/// layout. The workbench edits SOCD later, where the slot already exists.
 pub(super) async fn redesign_form_ctrl_add(
     State(state): State<Arc<AppState>>,
     form: RedesignForm<RedesignAddForm>,
@@ -1096,7 +1089,7 @@ pub(super) struct RedesignMoveForm {
     order: String,
 }
 
-/// POST /redesign/controller/move — `nocturne_form_move`, re-homed.
+/// POST /redesign/controller/move — move a staged controller.
 pub(super) async fn redesign_form_ctrl_move(
     State(state): State<Arc<AppState>>,
     form: RedesignForm<RedesignMoveForm>,
@@ -1123,9 +1116,9 @@ pub(super) async fn redesign_form_ctrl_move(
     redesign_redirect(if ok { N_EDIT_OK } else { N_EDIT_ERROR })
 }
 
-// ── The inspector's controller verbs — each a re-homed nocturne verb: the
-// shared core does the work and answers the SAME sentence; only the 303
-// target belongs to this page. ────────────────────────────────────────────
+// ── The inspector's controller verbs ──────────────────────────────────────
+// The shared core does the work and answers the same sentence; only the 303
+// target belongs to this page.
 
 #[derive(Deserialize)]
 pub(super) struct RedesignSocdForm {
@@ -1134,7 +1127,7 @@ pub(super) struct RedesignSocdForm {
 }
 
 /// POST /redesign/controller/socd — the selected slot's opposite-directions
-/// rule, a name off the served roster (`nocturne_form_socd`'s one edit).
+/// rule, using a name from the served roster.
 pub(super) async fn redesign_form_ctrl_socd(
     State(state): State<Arc<AppState>>,
     form: RedesignForm<RedesignSocdForm>,
@@ -1402,7 +1395,7 @@ mod tests {
             N_EDIT_ERROR,
             N_MOVE_AT_END,
             N_ADD_LAYOUT_ERROR,
-            // the inspector's re-homed controller verbs
+            // the inspector's controller verbs
             N_CLEAR_ALL_OK,
             N_UNDO_OK,
             N_UNDO_GONE,

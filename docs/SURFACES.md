@@ -12,6 +12,12 @@ week — the matrix had four cells describing capabilities that do not exist, an
 §1's supporting anecdote was false in both halves. Every correction below names
 the code it was checked against.
 
+> **Current route boundary.** `/redesign` is now the launcher-owned core
+> workbench for devices, controllers, mapping and session lifecycle. Detailed
+> `/nocturne` references below remain intentionally accurate for deferred
+> games/layouts/import-export/autostart handlers and for the historical design
+> evidence that led here; they are not the customer landing route.
+
 > This file is **cited from source**, like every other design doc here. That is
 > not decoration: at its first audit `SURFACES.md` had zero references anywhere
 > in the repository — `.rs`, `.md`, `.toml`, `.ts` — while `INPUT-TRANSFORMS.md`
@@ -161,16 +167,13 @@ silently refused, for the same reason `main.rs`'s `slot_arg` module exists. The
 summary lines, the pill mapping and the row text were duplicated the same way;
 they had not drifted yet.
 
-The shape that fixes it: **one serialized derived block**, and the page to copy
-today is `/nocturne`. `NocturneDerived` (`crates/ksx-studio/src/snapshot.rs`)
-holds every displayed string, every count, every numeric ceiling and every
-`show:` boolean, computed once from the provider data; `render_nocturne.rs`
-injects it into the FMIR slots and `applyNocturne` assigns it to signals.
-Neither composes anything — `render_nocturne.rs`'s own header states the rule
-as "every scalar value is a `NocturneDerived` field except the flash". A new
-page copies this, not the two-halves version. (The original of this pattern was
-`ProfilesDerived` / `render_profiles.rs` / `applyProfiles`; that page was
-deleted on 2026-08-25 and only the type name survives.)
+The shape that fixes it: **one serialized server-derived block**, and the page
+to copy today is `/redesign`. `render_redesign::payload` composes one
+`RedesignPayload` from the named setup, scan, staged, session and output
+authorities; the FMIR slots and `applyRedesign` copy it without inventing a
+second backend rule. The pattern originated in `NocturneDerived`, and before
+that `ProfilesDerived`; those historical names explain the lineage, not the
+current landing route.
 
 ### §1b A refused READ is not an empty result
 
@@ -222,23 +225,23 @@ surface does a human perform this task on*, and that is answered by the matrix.
 | First run: stage a setup, save or play | partial (`ksx stage` view/adopt/reorder/socd/apply; save and play stay surface acts) | — | **primary** |
 | Author presets / key mappings | owns | — | **primary** |
 | Edit configuration | owns | slot→preset only | **primary** |
-| Rename / delete a controller layout | owns | — | **primary** (`/nocturne`) |
-| Create / update / delete profiles | planned | view | **primary** |
+| Rename / delete a controller layout | owns | — | **primary** (deferred Settings/Library; `/nocturne`) |
+| Create / update / delete profiles | planned | view | **primary** (deferred Settings/Library; `/nocturne`) |
 | Device pick / remove | owns | planned | **primary** |
 | Measure simultaneous keyboard / encoder host signals | owns (`ksx input-test start`, `poll`, `cancel`) | — | **primary** (keyboard workbench / Control Surface Builder) |
-| WinUSB claim / release | owns (advanced) | planned | **primary** (installed `/nocturne`; explicit UAC) |
+| WinUSB claim / release | owns (advanced) | planned | **primary** (installed `/redesign`; explicit UAC) |
 | "Press a button, see it light" | input only (`ksx monitor`) | **primary** | view (§8) |
 | Is it working: pads, drivers | owns | **primary** | view |
 | Spawn test pads / prune the bus | owns | — | **primary** |
-| Start / stop / switch profile | owns | **primary** | convenience |
+| Start / stop / switch profile | owns | **primary** | convenience (`/redesign` starts/stops; saved-profile switching remains deferred `/nocturne`) |
 | Record / replay a session | owns | planned (§3b) | planned (§3b) |
-| Start ksx at sign-in | owns (all options) | planned | **primary** (`/nocturne`, one tick box) |
-| Split or freeze, after saving | — | — | **primary** (`/nocturne`) |
-| Studio theme | — | never (the 10-foot surface is dark-only by design) | **primary** (`/nocturne`) |
-| What opposite directions do (SOCD) | owns (`slot assign --socd`) | — | **primary** (`/nocturne`) |
+| Start ksx at sign-in | owns (all options) | planned | **primary** (deferred Settings/Library; `/nocturne`, one tick box) |
+| Split or freeze, after saving | — | — | **primary** (`/redesign`) |
+| Studio theme | — | never (the 10-foot surface is dark-only by design) | **primary** (`/redesign`) |
+| What opposite directions do (SOCD) | owns (`slot assign --socd`) | — | **primary** (`/redesign`) |
 | What ksx left behind (receipts and signing certificates) | owns (`winusb repair`, `winusb sweep-certificates`) | — | **primary** certificate cleanup (`/devices`); receipt view |
 | Identify an arcade encoder (family, release, whether its chart can be read) | owns (`panel status`) | — | planned |
-| Read an encoder's stored chart (what every terminal emits) | owns (`panel chart`, `panel backups`) | — | **primary** read (`/api/panel/chart` on `/nocturne`) |
+| Read an encoder's stored chart (what every terminal emits) | owns (`panel chart`, `panel backups`) | — | **primary** read (`/api/panel/chart` on `/redesign`) |
 | Say what ksx knows about each terminal, and how it knows it | owns (`panel truth`) | — | planned |
 | Record what a person knows about a terminal ksx cannot read | owns (`panel declare`, `panel forget`) | — | planned |
 
@@ -269,7 +272,7 @@ Four cells were corrected, each against the code:
   The cabinet has no device mutation screen, so both remain planned there.
   The old audit also concluded that Studio could never own WinUSB because it
   could not elevate safely. That premise is now superseded: installed
-  `/nocturne` calls typed `MachineSource::winusb_prepare`/`winusb_release`,
+  `/redesign` calls typed `MachineSource::winusb_prepare`/`winusb_release`,
   which elevate a
   fixed GUI helper and return only after exact re-survey. The browser never
   supplies a helper path or backend.
@@ -287,10 +290,10 @@ by a person reading the table — both in the direction that is cheaper to make
 and harder to notice, a face that SHIPPED while the cell still said `planned`:
 
 - **Edit configuration — Studio.** Was "planned primary". A config-writing
-  Studio face has since shipped and the plan is the surface. *Re-pointed
-  2026-08-25 at the routes that carry it now:* `/nocturne/save` writes the whole
-  staged configuration to disk in one act, and `/nocturne/import` replaces the
-  config root from a pasted document. **primary**, which is where the bullet
+  Studio face has since shipped and the plan is the surface. *Re-pointed for
+  the current cutover:* `/redesign/save` writes the whole staged configuration
+  to disk in one act. Whole-root import is a deferred Settings/Library action
+  and remains at `/nocturne/import`. **primary**, which is where the bullet
   above already said it belonged.
 
   Recorded rather than quietly re-pointed, because something was **lost** in the
@@ -298,7 +301,7 @@ and harder to notice, a face that SHIPPED while the cell still said `planned`:
   `ControlSource::assign_slot` — the same verb `ksx slot assign` performs. That
   route is gone and `assign_slot` now has **no Studio caller at all**. The
   capability did not disappear (a slot's preset, persona and SOCD are all edited
-  on `/nocturne`, and Save commits them together), but the one place where a
+  on `/redesign`, and Save commits them together), but the one place where a
   browser button and a CLI verb were literally the same backend call did. §1's
   rule cuts both ways here: the cell is still honest, and the verb is now a
   backend verb with one fewer face than it had.
@@ -306,7 +309,7 @@ and harder to notice, a face that SHIPPED while the cell still said `planned`:
   through typed `MachineSource` verbs and switched through the existing control
   verb. *Re-pointed 2026-08-25:* those four faces were `/profiles*` and are now
   `/nocturne/game`, `/nocturne/game/update`, `/nocturne/game/delete` and
-  `/nocturne/adopt` — the Configuration menu on the product page. The CLI CRUD
+  `/nocturne/adopt` — the deferred Settings/Library implementation. The CLI CRUD
   half is explicitly planned rather than hidden inside a broader "owns" claim;
   the cabinet list remains a view and its operating switch belongs to the
   start/stop row below.
@@ -340,19 +343,17 @@ timed diagnostic and tracing its evidence is close-range setup work, not a
 
 ### §3c The first-run row, and the build order it ran backwards
 
-Row 1 is new on 2026-08-08, and it is the first row in this table whose **CLI
-cell is honestly `planned`**. `docs/FIRST-RUN.md` is a spec for a product
-someone who is not us can use, and its §1 premise is that no step may require a
-shell — so the surface came first and `ksx stage` is owed. That is §2's build
-order run 1 → 3 with 2 skipped, the same way `/nocturne/game` (then
-`/profiles/new`) did it, and it is recorded here rather than quietly for the
-reason that entry gives: the backend half then has no second caller checking its
-shape.
+Row 1 was added on 2026-08-08 with its CLI cell honestly `planned`.
+`docs/FIRST-RUN.md` is a spec for a product someone who is not us can use, and
+its §1 premise is that no step may require a shell — so the surface came first.
+The thin `ksx stage` driver has since shipped for view/adopt/reorder/SOCD/apply;
+Save and Play remain surface acts. That history is recorded because it explains
+why the backend contract existed before its second caller.
 
 What exists: `ksx_core::StagedSetup` (the value, with no path to a file), the
-four `stage*` pipe verbs, and Studio's `/nocturne` performing all of them. What
-does not: any way to stage a setup from a terminal. The four verbs are on the
-control pipe, so the CLI half is a driver over `ControlSource`, not new logic.
+stage pipe verbs, Studio's `/redesign` performing the workbench acts, and
+`ksx stage` as a terminal driver over the same `ControlSource` contract rather
+than a second staging implementation.
 
 **Moment 6 is implemented without a second mapper, and after 2026-08-25 it is
 not even a second page.** A staged controller can start from a served layout,
@@ -361,8 +362,8 @@ authoring UI, reading the slot's optional full `PresetFile` snapshot. The URL
 used to be `/map?target=stage&slot=N`, and `target` existed to say WHICH of two
 subjects the mapper was pointed at — the saved preset on disk, or the draft in
 the daemon. There is now one subject, so there is one parameter:
-`/nocturne?slot=N` selects the controller and the page is always the stage.
-`NocturneQuery` accepts `flash`, `slot`, `q`, `fresh` and `macro`, and nothing
+`/redesign?slot=N` selects the controller and the page is always the stage.
+`RedesignQuery` accepts `flash`, `slot`, `q` and `macro`, and nothing
 else; `target` survives only as a form field on the macro-save verbs, where it
 still distinguishes which draft a step list belongs to. `staged_bind_edit` and `staged_macro_edit` prepare pure
 edits, validate cross-stage conflicts and apply one `StageEdit::SetBindings`
@@ -373,8 +374,8 @@ takes a backup or claims a config reload. Save and Play remain separate.
 The daemon's empty-default startup is part of this row too: it stays alive as
 an idle staging/control host with no session, capture, claim or pads. Explicit
 empty game profiles and other plan failures still refuse. The terminal driver
-`ksx stage` remains planned; it must call this same control contract rather
-than growing a second staging implementation.
+The shipped `ksx stage` commands call this same control contract rather than
+growing a second staging implementation.
 
 **This row is also why the guard's bookkeeping changed.** It used to require
 every CLI anchor to exist in the clap tree, whatever its cell said — which is
@@ -393,7 +394,7 @@ Studio.” That solved the browser problem by leaving a clean-install customer
 with a terminal-only dead end. The shipped design changes the privilege
 boundary, not the safety bar.
 
-Studio owns only the consent and exact stale-action guard. `/nocturne` shows the
+Studio owns only the consent and exact stale-action guard. `/redesign` shows the
 selected human-named keyboard, states the ordinary-typing consequence, and
 requires three independent confirmations: a different tested keyboard, consent
 to rebind this selected keyboard, and consent to a machine-local signing
@@ -435,28 +436,15 @@ have one at all (the binding is Windows's and the receipt is under ProgramData).
 page is where the no-terminal way back lives, because that is where a stuck
 first-run customer is standing.
 
-> 🔴 **REGRESSED 2026-08-25, and this is the same bug the paragraph above was
-> written to close.** The stage-independent list is not on `/nocturne`. The
-> backend read still exists — `snapshot.rs::held_boards`, `StartRows::prepared`,
-> `StartDerived::prepared_heading` / `prepared_line` — but nothing fills or
-> renders any of them: `StartRows` has no consumer outside its own definition,
-> and the only `/nocturne/capture/release` form on the page is inside the
-> SELECTED keyboard's card. `StartCaptureView::from_parts` returns `None` mode
-> when nothing is staged, so on a fresh install with a held board there is no
-> Release control at all. Worse, `StartCaptureMode::Held`'s own doc comment
-> still ends *"the way out is the held-keyboard list above it"* — pointing at a
-> list that is no longer drawn — and the copy for that mode tells the user to
-> "release it from the held-keyboards list on the Start screen", naming a page
-> that 404s. Every one of the three states the 2026-08-11 correction enumerated
-> is unreachable again: a fresh install stages nothing, choosing another
-> keyboard points the control elsewhere, and the held board itself lands in a
-> mode whose only instruction is to go somewhere that does not exist.
->
-> `RECOVERY.md` §2's "there is now a way back that is not a command" depends on
-> this, and `FIRST-RUN.md` §6 lists "the only way out of a mistake is a shell
-> command" as a thing that must never happen. Restoring the banner on
-> `/nocturne` is a Studio change and is not optional. Selecting a keyboard remains looking rather than a
-commitment (§5): release is never a side effect of a choice.
+> ✅ **The 2026-08-25 regression is closed in `/redesign`.** The old Nocturne
+> cutover dropped the stage-independent held-board list, which made Release
+> unreachable when nothing was staged, when another keyboard was selected, and
+> when the selected board could no longer type. The redesign workbench renders
+> the machine-owned held-board recovery row again and posts the exact served
+> selector, instance and generation to `/redesign/capture/release`. Fresh,
+> consumed, expired and stale redirects are pinned by tests. Selecting a
+> keyboard remains looking rather than a commitment (§5): release is never a
+> side effect of a choice.
 
 The identity guards are unchanged for both directions — one board for this
 selector, one interface for this instance, WinUSB-eligible, and, for Release,
@@ -492,7 +480,8 @@ picker contains only implemented personas whose canonical backend is `vigem`.
 DualSense is deliberately absent there because its HIDMaestro endpoint and
 one-instance capacity are proved through the product page's own set-up-and-play
 path, not through a page whose inventory and prune verb both describe the ViGEm
-child bus. `/nocturne` still cannot install ViGEmBus or HIDMaestro: those
+child bus. Neither `/redesign` nor `/nocturne` can install ViGEmBus or
+HIDMaestro: those
 belong to the installer's explicit controller-driver checkboxes. It may only
 report the output backends required by the currently staged supported personas.
 A surface may own one narrowly designed elevated transaction without becoming
@@ -536,12 +525,15 @@ profile. Anything requiring text entry belongs elsewhere.
 ## §5 Studio is the workbench
 
 Studio binds `127.0.0.1` and refuses anything else — `ksx-studio/src/error.rs`
-returns `NonLoopbackBind` rather than serving a LAN address. Since 2026-08-25 it
-has **one product page and three tool pages**: `/nocturne` is the product — the
-whole set-up-and-play workflow — and `/check` (the button check), `/pads` (the
-ViGEm bus and its two verbs) and `/devices` (the picker) are the tools. The shell
-says the same thing: every page carries one **Set up & play** link pointing at
-`/nocturne`, plus a **Tools** menu listing exactly those four destinations.
+returns `NonLoopbackBind` rather than serving a LAN address. It has **one core
+product page and three tool pages**: `/redesign` is the product — the whole
+set-up-and-play workflow — and `/check` (button check), `/pads` (the virtual-pad
+bus and its two verbs) and `/devices` (the device inventory) are the tools. The
+product's Tools menu links those three operational pages; each tool page carries
+an explicit **Set up & play** link back to `/redesign`. `/nocturne` remains
+mounted only for the Settings/Library capabilities explicitly deferred from
+this cutover: saved games, controller-layout management, import/export and
+autostart. It is not the launcher destination or a second core workbench.
 
 ### The two-page split was reversed, and that is worth more than a rename
 
@@ -553,15 +545,15 @@ checklist where a write is a complete backend act, `/start` drove
 rejected: one screen holding both rules is a screen where a user cannot tell
 which controls commit."*
 
-**The rejected alternative is what shipped.** `/nocturne` is one screen holding
-both rules, and the argument against it was not wrong — it was a bill, and the
-page now has to pay it. Recording that honestly matters more than quietly
+**Historical Nocturne cutover.** `/nocturne` shipped as one screen holding both
+rules, and the argument against it was not wrong — it was a bill, and that page
+had to pay it. Recording that honestly matters more than quietly
 re-pointing the sentence, because the confusion the split existed to prevent did
 not go away with the split; it moved from *"which page am I on?"* to *"which
 control on this page commits?"*, where nothing structural answers it and only
 copy and layout can.
 
-What `/nocturne` does instead of a page boundary:
+What the current `/redesign` workbench does instead of a page boundary:
 
 - **The draft is still `StagedSetup`, still daemon-held, still with no path to a
   file** (`FIRST-RUN.md` §2). Nothing about the staging contract changed. Every
@@ -570,34 +562,32 @@ What `/nocturne` does instead of a page boundary:
   bar** — `Save`, beside `▷ Play` and `⏹ Stop`, with a saved/unsaved line
   rendered next to it so the answer to "is this committed?" is on screen rather
   than inferred from which page you navigated to.
-- **The genuinely disk-backed acts are behind the Configuration menu**, not
-  loose among the staging controls: `Load the saved configuration into this
-  draft` (`/nocturne/adopt`), `Discard this draft` under a `Start over…`
-  disclosure, the saved-game rows, `Export the configuration (download)` and
-  `Import a configuration…`. Grouping them is the layout doing the work the
-  URL used to do.
+- **Adopt and Discard are explicit recovery acts**, not implicit side effects:
+  `/redesign/adopt` loads the saved base setup into the draft and
+  `/redesign/discard` clears the draft. Saved games and whole-root
+  import/export remain deferred Settings/Library actions on `/nocturne`; they
+  are not represented as if they already exist in the redesign core.
 - **Play still starts the draft without saving it**, which is the whole reason
   the staging contract exists: a person exploring has not decided anything yet
   and must not be punished for it.
 
-Two things from `/setup` did not survive the move and are not hiding somewhere:
-its board step **linked to `/devices`**, and it printed the **config root in
-small print for a bug report to quote**. Neither is on `/nocturne` (`grep href:`
-over `NocturneIsland.ts` finds no `/devices` link and no root path). The Tools
-menu reaches `/devices` from every page, so the first is a demotion rather than a
-loss; the second is simply gone, and a person filing a bug now has no on-screen
-way to say which config root they were using.
+Two things from `/setup` were explicit migration requirements: discoverable
+device inventory and compact setup progress. `/redesign` now exposes `/devices`
+from its Tools menu and renders the current setup state in its core surface.
+Machine-local diagnostic paths remain operator evidence rather than primary
+customer copy.
 
 ### The rest of the page, and the pages beside it
 
-The mapper is a **region of `/nocturne`**, not a destination: the right pane is
-the Mapping inspector, and `/nocturne?slot=N` selects which controller it is
+The mapper is a **region of `/redesign`**, not a destination: the right pane is
+the Mapping inspector, and `/redesign?slot=N` selects which controller it is
 pointed at. Every staged controller is therefore reachable in the full
 button/chord/turbo/macro authoring UI without leaving the page — §3c's "no second
 mapper" claim is now literally true rather than merely architecturally true.
 
-Saved games keep the customer-facing create/update/delete/switch behaviour
-whole: new games inherit matching saved base devices and controller behaviour;
+On the deferred `/nocturne` Settings/Library implementation, saved games keep
+the customer-facing create/update/delete/switch behaviour whole: new games
+inherit matching saved base devices and controller behaviour;
 updates preserve game-specific devices by default (or explicitly refresh
 keyboard/mouse selectors); the selected layout applies to every resulting
 player; delete removes exactly one game and keeps layouts. Update/delete use
@@ -610,16 +600,18 @@ the panel light a control in a browser at display rate. It is still a VIEW —
 it writes nothing, and it decides nothing, because its whole control roster is
 `MapperSlot::bindings`' key set arriving from the backend (§1).
 
-Four pages, dozens of routes — about forty inside the guard layer alone. The
-rest are the `/api/*` reads, the mutating form endpoints, the service worker,
-the asset handler and three icons. The distinction is not pedantry — it is the
+Four current product/tool pages, plus the deferred Settings/Library
+implementation, expose dozens of routes — about forty inside the guard layer
+alone. The rest are the `/api/*` reads, the mutating form endpoints, the service
+worker, the asset handler and three icons. The distinction is not pedantry — it is the
 whole reason the CSRF guard is one layer over the router rather than a check per
 handler, because "the mapper alone grew eight form endpoints in three
 milestones" and the failure mode being prevented is forgetting one. Collapsing
 five pages into one did not reduce that count; it moved the endpoints under one
 prefix, which makes forgetting one easier to spot and no less fatal.
 
-For the **whole config root**, `/nocturne` has exactly two verbs: Export
+For the **whole config root**, the deferred `/nocturne` Settings/Library surface
+has exactly two verbs: Export
 downloads it as one JSON document (`GET /nocturne/export.json`), and Import
 pastes one back (`POST /nocturne/import`, a dry run unless the write box is
 ticked — `ksx config import`'s consent shape, unchanged). Neither takes a path:
@@ -627,13 +619,10 @@ ticked — `ksx config import`'s consent shape, unchanged). Neither takes a path
 person who asked a page for their configuration should not be handed a directory
 to go and find.
 
-> ⚠ **Import's body ceiling is currently wrong in the copy.** The refusal on
-> `/nocturne/import` still names 8 MB, which was the `DefaultBodyLimit` the old
-> `/setup/import` route carried; that layer did not survive the cutover, so axum's
-> 2 MB default applies and a whole-cabinet export between the two sizes fails with
-> a bare 413 under a message quoting the wrong number. That is a Studio defect,
-> not a documentation one, and it is written here because this is the paragraph
-> that promises whole-cabinet import.
+`/nocturne/import` carries its own explicit 8 MB `DefaultBodyLimit`, matching
+the refusal copy and the old whole-cabinet import contract. The limit is
+attached to that exact route rather than the router globally, so unrelated
+forms retain their smaller default exposure.
 
 The mapper is good enough to stop treating as supplemental tooling. Authoring a
 25-binding preset is a pointer-and-keyboard task and the browser is simply
@@ -650,13 +639,14 @@ appliance than the one that exists now.
 ## §6 Product launch and cabinet-to-Studio navigation
 
 Windows customer launch is `ksx-launcher.exe` → sibling `ksx.exe open` → an
-idle or configured daemon → Studio `/nocturne`. The launcher is a GUI-subsystem
+idle or configured daemon → Studio `/redesign`. The launcher is a GUI-subsystem
 handoff used by the installer and customer shortcuts, not another surface.
 The empty-config daemon owns the control pipe/tray while doing no emulation
 work, which is what makes first-run staging reachable.
 
-> ✅ **The product obeys this sentence as of `ad520b4`, 2026-08-26.**
-> `ksx-backend/src/studio_launch.rs:73` returns `http://127.0.0.1:4460/nocturne`,
+> ✅ **The original 404 regression was repaired in `ad520b4`, 2026-08-26; the
+> current core cutover advances that same authority to `/redesign`.**
+> `ksx-backend/src/studio_launch.rs` returns `http://127.0.0.1:4460/redesign`,
 > and the `--app=` argument the Chromium launcher builds carries the same
 > address; both are pinned by tests in that file. So the installer shortcut, the
 > Start-menu entry, the desktop icon and the tray's "Open ksx" land on the
@@ -774,15 +764,15 @@ an SSE bridge over the daemon's outbound feed pipe (§5). The matrix therefore
 calls Studio a `view`, not `planned`: it renders live backend state and performs
 no decision or write.
 
-What remains is the responsive pass itself: tune `/check` first for the behind-
-the-cabinet phone use case, then `/nocturne`, whose top bar and Configuration
-menu now carry the status reading that used to be its own page. The ordering
+The responsive pass tunes `/check` first for the behind-the-cabinet phone use
+case, then `/redesign`, whose compact top status and Inspector carry the core
+reading that used to be its own page. The ordering
 argument survives the cutover but changes scale: mapping asks you to press the
 key it is capturing, which a phone cannot do for a desk keyboard, so it is still
 the least valuable thing on the smallest screen — except that it is no longer a
 separate page that can simply be tuned last. It is the centre and right pane of
 the page that must work on a phone, which means the responsive pass on
-`/nocturne` is a question of what COLLAPSES rather than what is deferred.
+`/redesign` is a question of what COLLAPSES rather than what is deferred.
 
 ## §9 User flows worth writing down
 
@@ -790,14 +780,14 @@ Five journeys carry nearly all the product's surface area:
 
 1. **First-time setup and later repair** — two related journeys, and since
    2026-08-25 they are two journeys on **one page**. `ksx open` lands on
-   `/nocturne` and so does everyone else; there is no second page to choose, and
+   `/redesign` and so does everyone else; there is no second core page to choose, and
    therefore no history-based fork to get wrong. `/devices` remains
    read/pick/remove only. The journey has the one deliberate exception it always
    had: a separate top-level, three-consent installed WinUSB preparation/release
    card for the exact selected keyboard. Picking a keyboard row itself still
    changes only the in-memory stage.
 
-   **`/nocturne` is the download-to-gaming path** (`docs/FIRST-RUN.md`
+   **`/redesign` is the download-to-gaming path** (`docs/FIRST-RUN.md`
    moments 4–7): pick a keyboard from a list nobody had to ask for, pick what it
    should become, map buttons/chords/turbo/macros in the same mapper, answer
    split-or-freeze, then save or play. It reads the live device/pad state and
@@ -811,21 +801,18 @@ Five journeys carry nearly all the product's surface area:
    shipped on any page** — a spec debt, not a casualty of the cutover.
 
    **The repair journey is the same page entered from a different place.**
-   Someone who already has a configuration opens the Configuration menu and
-   loads it into the draft (`/nocturne/adopt`), or loads one saved game's
-   controllers, and then edits exactly as a first-run visitor does. Because
+   Someone who already has a base configuration loads it into the draft with
+   `/redesign/adopt`, then edits exactly as a first-run visitor does. Loading a
+   saved game's controllers remains a deferred Settings/Library act on
+   `/nocturne`. Because
    there is no multi-step pending wizard transaction, an abandoned run leaves
    the last complete config valid — that property came from the staging
    contract, not from the page count, so it survived the merge intact.
 
-   What did NOT survive is the checklist itself. `ksx-backend::onboard`'s pure
-   `plan_steps` still decides the ordered steps and `SetupView` still carries
-   them, but `SetupRows::of` — the one composer that turned them into rows — is
-   now reachable only from its own unit tests. The backend read outlived its
-   face, which is precisely the half of §1 this file exists to keep visible:
-   *a backend verb with no face is not finished either.* `/nocturne` still
-   consumes the rest of `SetupView` (whether a config exists, the theme rows,
-   the persona roster); it does not draw the numbered rail.
+   The full legacy checklist did not survive, by design. `/redesign` instead
+   renders a compact setup spine from the served setup/staged state and expands
+   the active step into the operational shell. That keeps progress visible
+   without turning the rebuilt workbench back into a wizard.
 2. **Change a mapping** — running cabinet, one binding is wrong.
 3. **"It doesn't work"** — the diagnostic path, which must terminate in a cause
    and not a shrug.
@@ -868,9 +855,9 @@ crossing is a design smell worth a second look.
   - **CLI** — `ksx slot assign --slot N --persona P`, lenient parsing through
     the same `FromStr`. Preset and persona are independently optional: either,
     both, or the preset alone.
-  - **Studio** — the picker is the radio-card grid on `/nocturne`'s "Create a
-    virtual controller" form, which POSTs `/nocturne/controller`; SOCD is its
-    sibling verb `/nocturne/controller/socd`.
+  - **Studio** — the picker is the device/controller pane on `/redesign`, whose
+    controller form POSTs `/redesign/controller`; SOCD is its sibling verb
+    `/redesign/controller/socd`.
 
     *The argument this bullet used to make is now moot by construction, and
     that is worth a sentence rather than a silent deletion.* It read: the picker
@@ -896,11 +883,10 @@ crossing is a design smell worth a second look.
     belongs elsewhere, and re-personaing is a between-sessions authoring act,
     not something done standing at the cabinet mid-evening.
 - **Device pick UI** — Studio, following the existing CLI verb (§3). Also the
-  egui: §3 row 3 no longer claims a view exists there. `/devices` is still the
-  only picker, and the product page still does not grow a second one — but the
-  in-page LINK to it that `/setup`'s first step carried did not survive the
-  cutover. The Tools menu is what reaches `/devices` now, which is a weaker
-  pointer for someone who does not know the tool exists (§5).
+  egui: §3 row 3 no longer claims a view exists there. `/redesign` owns the core
+  add-device workflow in its non-modal left drawer; `/devices` remains the
+  operational inventory/pick/remove tool and is discoverable from the Tools
+  menu (§5).
 - **`ksx games new|update|delete` — the CLI half of saved-game CRUD, owed.**
   `/nocturne`'s Configuration menu calls typed `MachineSource` verbs over pure
   plan/apply pairs in `ksx-backend::profile_edit` (`/nocturne/game`,

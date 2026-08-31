@@ -347,7 +347,7 @@ failed, installer missing, elevation needed), 3 the installer ran and failed.
 #### Built-in Windows USB mode — escape the 2026 driver cliff
 
 The supported customer path is in installed Studio. Pick one exact supported
-USB keyboard on `/nocturne`, then choose **Prepare selected keyboard** on the
+USB keyboard on `/redesign`, then choose **Prepare selected keyboard** on the
 capture card beside it. Where a shared Interception installation is already
 usable the same card offers the built-in path as an option rather than a
 blocker. Before Windows elevation begins, the page requires three separate
@@ -450,12 +450,14 @@ LaunchBox and RetroBat wiring, plus a wrapper that always stops ksx:
 
 ## Status
 
-The current tree is the **KSX 0.4.1 release line**. Studio is now **one product
-page plus three tool pages**: `/nocturne` carries the whole guided Hardware ->
-Controller -> Mapping -> Play workspace, and `/check` (test inputs), `/pads`
-(virtual controllers) and `/devices` (hardware) sit beside it behind one Tools
-menu. Live input feedback, controller-aware readiness, conflict-safe binding
-and a responsive light/dark interface hold across all four. The same release retains saved games,
+The current tree is the **KSX 0.4.1 release line**. Studio's current product
+route is `/redesign`: the guided Hardware -> Controller -> Mapping -> Play
+workbench. Its Tools menu makes `/check` (test inputs), `/pads` (virtual
+controllers) and `/devices` (hardware) directly discoverable. Live input
+feedback, controller-aware readiness, conflict-safe binding and a responsive
+light/dark interface hold across all four. Saved games, layout-library work,
+import/export and autostart are deliberately outside this core cutover while
+their redesigned Settings/Library surface is planned. The release retains
 recovery, packaging, and one installed USB DualSense through the bounded
 HIDMaestro backend. The supervised cabinet and controller checks in
 [`docs/GATES.md`](docs/GATES.md) remain the authority for physical hardware

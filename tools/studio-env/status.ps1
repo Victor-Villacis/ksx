@@ -393,7 +393,7 @@ foreach ($Definition in $Definitions) {
     $DaemonReachable = $false
     if ($Owners.Count -gt 0) {
         try {
-            $Response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api/nocturne" -TimeoutSec 1
+            $Response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api/health" -TimeoutSec 1
             $Payload = $Response.Content | ConvertFrom-Json
             $ActualId = [string]$Payload.environment.id
             $ActualFixture = [bool]$Payload.environment.fixture
@@ -609,7 +609,7 @@ foreach ($Definition in $Definitions) {
         } elseif ($Owners.Count -gt 0) { $Owners -join "," } else { "" }
         Provenance = $Provenance
         Watch = $Watch
-        URL = "http://127.0.0.1:$Port/nocturne"
+        URL = "http://127.0.0.1:$Port/redesign"
     }
 }
 

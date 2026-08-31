@@ -16,10 +16,13 @@ use forma_ir::slot::{SlotData, SlotValue};
 use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 
 use crate::render::{body_prefix, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
+use crate::render_workbench::{device_row, mode_row, named_slot_ids, other_row};
+#[cfg(test)]
+use crate::snapshot::NocturneDeviceRow;
 use crate::snapshot::{
-    NocturneBindRow, NocturneChoiceRow, NocturneCtlChip, NocturneDeviceRow, NocturneEmptyRow,
-    NocturneGameRow, NocturneKeyCell, NocturneKeyRow, NocturneLegendRow, NocturneMacroRow,
-    NocturneOptionRow, NocturneOtherRow, NocturnePayload, NocturnePersonaRow, NocturneRackRow,
+    NocturneBindRow, NocturneCtlChip, NocturneEmptyRow, NocturneGameRow, NocturneKeyCell,
+    NocturneKeyRow, NocturneLegendRow, NocturneMacroRow, NocturneOptionRow, NocturnePayload,
+    NocturnePersonaRow, NocturneRackRow,
 };
 
 /// How many server-injected `createShow` pairs this page has.
@@ -212,53 +215,6 @@ fn show_values(payload: &NocturnePayload) -> [(&'static str, bool); SHOW_COUNT] 
     ]
 }
 
-/// Shared with `render_redesign.rs` (the workbench picker's rows) — same
-/// serializer, so the two pages cannot spell one field two ways.
-pub(crate) fn device_row(row: &NocturneDeviceRow) -> SlotValue {
-    SlotValue::object(vec![
-        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
-        ("name".to_owned(), SlotValue::Text(row.name.clone())),
-        ("meta".to_owned(), SlotValue::Text(row.meta.clone())),
-        ("role".to_owned(), SlotValue::Text(row.role.clone())),
-        (
-            "connection_label".to_owned(),
-            SlotValue::Text(row.connection_label.clone()),
-        ),
-        ("selector".to_owned(), SlotValue::Text(row.selector.clone())),
-        ("alias".to_owned(), SlotValue::Text(row.alias.clone())),
-        ("label".to_owned(), SlotValue::Text(row.label.clone())),
-        (
-            "aria_current".to_owned(),
-            SlotValue::Text(row.aria_current.clone()),
-        ),
-        ("title".to_owned(), SlotValue::Text(row.title.clone())),
-        (
-            "chartReadable".to_owned(),
-            SlotValue::Text(row.chart_readable.clone()),
-        ),
-        (
-            "capture_badge".to_owned(),
-            SlotValue::Text(row.capture_badge.clone()),
-        ),
-        (
-            "capture_state".to_owned(),
-            SlotValue::Text(row.capture_state.clone()),
-        ),
-        (
-            "capture_cls".to_owned(),
-            SlotValue::Text(row.capture_cls.clone()),
-        ),
-    ])
-}
-
-/// Shared with `render_redesign.rs`, like `device_row` above.
-pub(crate) fn other_row(row: &NocturneOtherRow) -> SlotValue {
-    SlotValue::object(vec![
-        ("name".to_owned(), SlotValue::Text(row.name.clone())),
-        ("meta".to_owned(), SlotValue::Text(row.meta.clone())),
-    ])
-}
-
 fn journey_row(row: &crate::snapshot::NocturneJourneyStep) -> SlotValue {
     SlotValue::object(vec![
         ("key".to_owned(), SlotValue::Text(row.key.clone())),
@@ -266,25 +222,6 @@ fn journey_row(row: &crate::snapshot::NocturneJourneyStep) -> SlotValue {
         ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
         ("badge".to_owned(), SlotValue::Text(row.badge.clone())),
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
-    ])
-}
-
-/// Shared with `render_redesign.rs`: the redesign topbar's theme menu serves
-/// the same choice rows, through the same serializer, for the same reason the
-/// composer is shared — one spelling of "chosen", two pages.
-pub(crate) fn mode_row(row: &NocturneChoiceRow) -> SlotValue {
-    SlotValue::object(vec![
-        ("name".to_owned(), SlotValue::Text(row.name.clone())),
-        ("title".to_owned(), SlotValue::Text(row.title.clone())),
-        ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
-        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
-        // `"true"` / `"false"`, not a bool and not an empty string: this is
-        // bound STRAIGHT onto `aria-current`, and the two ARIA values are
-        // exactly these words. An empty string is not "absent" to ARIA.
-        (
-            "chosen".to_owned(),
-            SlotValue::Text(if row.chosen { "true" } else { "false" }.to_owned()),
-        ),
     ])
 }
 
@@ -738,18 +675,6 @@ fn list_values(payload: &NocturnePayload) -> [(&'static str, SlotValue); 47] {
             SlotValue::array(view.game_rows.iter().map(game_row).collect()),
         ),
     ]
-}
-
-/// Slot ids of every slot named `name`, in slot-table (== document) order.
-/// Shared with `render_redesign.rs` (its theme-rows list slot).
-pub(crate) fn named_slot_ids(module: &IrModule, name: &str) -> Vec<u16> {
-    module
-        .slots
-        .entries()
-        .iter()
-        .filter(|e| module.strings.get(e.name_str_idx).is_ok_and(|n| n == name))
-        .map(|e| e.slot_id)
-        .collect()
 }
 
 fn build_slots(module: &IrModule, payload: &NocturnePayload, flash: Option<&str>) -> SlotData {

@@ -128,7 +128,8 @@ Every item moved verbatim. No route changed, no test changed, and the 89 HTTP
 integration tests pass unmodified — which is the evidence that it was a move
 and not a rewrite.
 
-**Where that left the tree after the single-page cutover (measured 2026-08-26).**
+**Historical snapshot after the Nocturne single-page cutover (measured
+2026-08-26).**
 Five of those modules were deleted with their pages and their verbs moved onto
 one:
 
@@ -154,9 +155,16 @@ gone and nothing has replaced it. Whether it needs to be re-cut along some other
 seam — by verb family, say — is an open question, and the honest answer today is
 that nobody has decided.
 
-`server/session.rs` is four lines: a module doc comment reading *"The session
+**Current cutover update (2026-08-30).** That open seam is now explicit:
+`server/workbench.rs` owns the route-neutral device, capture, controller,
+mapping and lifecycle operations used by both pages; `server/redesign.rs` owns
+the launcher-facing core route; and `server/nocturne.rs` retains only the
+deferred Settings/Library implementation plus thin calls into the shared
+workbench layer. The core no longer imports Nocturne handlers.
+
+At the time of the snapshot, `server/session.rs` was four lines: a module doc comment reading *"The session
 JSON verbs: start, stop and resume"* over an empty file. Those verbs are on
-`/nocturne` now (`play`, `stop`) except `resume`, which has no Studio caller at
+`/redesign` now (`play`, `stop`) except `resume`, which has no Studio caller at
 all (`SURFACES.md` §3, the Resume row in `CONTROL-SURFACE.md`).
 
 **The `render_*.rs` mirror no longer holds either, and it is the more

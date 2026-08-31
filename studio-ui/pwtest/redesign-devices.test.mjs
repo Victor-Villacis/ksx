@@ -4087,7 +4087,10 @@ describe("the device workbench", () => {
         () => document.querySelector('.rd-encoder-profile-node [data-rd-encoder-observation]')?.getAttribute("data-state") ===
           "unknown",
       );
-      assert.match(await node.textContent(), /exact Stop action remains available/i);
+      // The state transition is synchronous; its aria-live announcement is
+      // queued on the next animation frame. Assert the durable visible model
+      // copy here so this safety contract does not race that announcement.
+      assert.match(await node.textContent(), /Stop remains bound to its exact generation/i);
       const model = node.locator("[data-rd-encoder-model]");
       const selectionCancel = page.waitForRequest((request) =>
         new URL(request.url()).pathname === "/api/input-test/cancel" &&

@@ -3,11 +3,11 @@
 //! payload for client hydration.
 //!
 //! This module is SHARED INFRASTRUCTURE, not a page. It once rendered the
-//! status page; that page is gone and `/nocturne` is the product, but
+//! status page; that page is gone and `/redesign` is the current product core, but
 //! nineteen files still take [`with_theme`], [`payload_json`], [`art_for`] and
 //! [`assert_island_slot_contract`] from here. What follows describes the seam
-//! every surviving page renders through — `render_nocturne.rs` is the one to
-//! read alongside it.
+//! every surviving page renders through — `render_redesign.rs` is the current
+//! core example to read alongside it.
 //!
 //! # SSR slots for first paint, a payload block for hydration (and why both)
 //!
@@ -286,10 +286,10 @@ pub(crate) struct EmbeddedPage {
 impl EmbeddedPage {
     /// Load the embedded page for one manifest route.
     ///
-    /// The manifest holds exactly four: `"/nocturne"` (the product), and the
-    /// tool pages `"/check"`, `"/pads"` and `"/devices"`. The old examples
-    /// here were `"/"` and `"/map"`, both of which would now panic on the
-    /// `expect` at every call site.
+    /// The manifest holds exactly five: the current `"/redesign"` workbench,
+    /// retained `"/nocturne"`, and the tool pages `"/check"`, `"/pads"` and
+    /// `"/devices"`. The old examples here were `"/"` and `"/map"`, both of
+    /// which would now panic on the `expect` at every call site.
     pub(crate) fn load(route: &str) -> Result<Self, StudioError> {
         let manifest_json = Assets::get("manifest.json")
             .ok_or_else(|| StudioError::Asset("manifest.json missing from embed".into()))?;
@@ -666,7 +666,7 @@ fn payload_block<T: serde::Serialize>(payload: &T) -> String {
 mod tests {
     use super::*;
 
-    /// **The embed ships exactly the four live routes, and every one of them
+    /// **The embed ships exactly the five live routes, and every one of them
     /// parses.**
     ///
     /// REPLACES 2026-08-26 three copies of `embedded_page_loads_and_ir_is_fmir_v2`

@@ -27,6 +27,25 @@ fn no_channel(message: &str) -> Refusal {
 
 struct FixedStatus;
 
+/// A status provider that declares the synthetic machine explicitly. The
+/// server harness adds its per-process generation marker around this provider,
+/// exactly as the managed fixture launcher does.
+struct DeclaredFixtureStatus;
+
+impl StatusSource for DeclaredFixtureStatus {
+    fn snapshot(&self) -> StatusSnapshot {
+        FixedStatus.snapshot()
+    }
+
+    fn environment(&self) -> ksx_api::RuntimeEnvironmentView {
+        ksx_api::RuntimeEnvironmentView::fixture(
+            "fixture-health-contract",
+            "FIXTURE · HEALTH CONTRACT",
+            "Synthetic facts for the Studio health endpoint test.",
+        )
+    }
+}
+
 /// The newest timestamped backup this preset has, as `collect_mapper` reads
 /// it off disk — the label the mapper's third restore button wears.
 const BACKUP_LABEL: &str = "2026-08-05 14:32:07 UTC";
@@ -39,7 +58,7 @@ static SERVER_ADDRS: Mutex<Vec<SocketAddr>> = Mutex::new(Vec::new());
 static SERVER_NONCE: AtomicU64 = AtomicU64::new(1);
 
 /// Decorate the ordinary status provider with a one-use startup marker. The
-/// marker travels through the real `/api/nocturne` handler, so observing it
+/// marker travels through the real `/api/health` handler, so observing it
 /// proves much more than "something accepted TCP": this exact fixture's
 /// provider, router and listener own the address returned to the test.
 struct FixtureStatus {
@@ -54,11 +73,10 @@ impl StatusSource for FixtureStatus {
         snapshot
     }
 
-    /// The nonce's real channel since `/api/status` was deleted with the
-    /// status page. `generation` already means "stable for one fixture
-    /// process, empty for live providers", which is exactly a fixture nonce,
-    /// and `collect_nocturne` calls `environment()` — so the marker still
-    /// travels through the REAL handler rather than a test-only path.
+    /// `generation` already means "stable for one fixture process, empty for
+    /// live providers", which is exactly a fixture nonce, and the independent
+    /// health collector calls `environment()` — so the marker travels through
+    /// the REAL handler rather than a test-only path.
     fn environment(&self) -> ksx_api::RuntimeEnvironmentView {
         let mut environment = self.inner.environment();
         environment.generation.clone_from(&self.marker);
@@ -2320,6 +2338,19 @@ impl ksx_api::MachineSource for ScriptedMachine {
 /// between a test and the server thread it started.
 struct FixedMachine;
 
+/// The setup store refuses with deliberately private diagnostic detail. The
+/// health boundary must reduce that to its stable operational sentence.
+struct RefusingHealthSetup;
+
+impl ksx_api::MachineSource for RefusingHealthSetup {
+    fn setup_state(&self) -> Result<ksx_api::SetupView, Refusal> {
+        Err(Refusal::new(
+            "health-setup-refused",
+            r"could not open C:\secret\config.toml with token DEADBEEF",
+        ))
+    }
+}
+
 /// One count option over the ceiling, so the page's warning has something real
 /// to render. The label is the PROVIDER's — the whole point of task #16's
 /// warning is that the backend writes that sentence, not the page — and it
@@ -2907,7 +2938,7 @@ fn fixture_owns_endpoint(addr: SocketAddr, marker: &str) -> bool {
         return false;
     }
     if stream
-        .write_all(b"GET /api/nocturne HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .write_all(b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
         .is_err()
     {
         return false;
@@ -2951,6 +2982,87 @@ fn fixture_startup_handshake_rejects_a_foreign_listener() {
     foreign.join().unwrap();
 }
 
+#[test]
+fn the_health_endpoint_is_minimal_guarded_and_never_cached() {
+    let addr = start_server_with_sources(
+        Arc::new(ScriptedControl::new(false)),
+        Box::new(DeclaredFixtureStatus),
+        Arc::new(ScriptedMachine::default()),
+    );
+
+    let response = get(addr, "/api/health");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(response.contains("cache-control: no-store"), "{response}");
+
+    let payload: serde_json::Value = serde_json::from_str(body_of(&response)).unwrap();
+    let mut top_level = payload.as_object().unwrap().keys().collect::<Vec<_>>();
+    top_level.sort();
+    assert_eq!(
+        top_level,
+        vec!["environment", "setup", "setup_error", "staged"]
+    );
+
+    let mut staged = payload["staged"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .collect::<Vec<_>>();
+    staged.sort();
+    assert_eq!(staged, vec!["error", "reachable"]);
+
+    let mut setup = payload["setup"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .collect::<Vec<_>>();
+    setup.sort();
+    assert_eq!(setup, vec!["config_root"]);
+
+    assert_eq!(payload["environment"]["id"], "fixture-health-contract");
+    assert_eq!(payload["environment"]["fixture"], true);
+    assert!(payload["environment"]["generation"]
+        .as_str()
+        .is_some_and(|generation| generation.starts_with("ksx-http-fixture-")));
+    assert_eq!(payload["staged"]["reachable"], true);
+    assert!(payload["staged"]["error"].is_null());
+    assert_eq!(payload["setup"]["config_root"], r"C:\cfg");
+    assert_eq!(payload["setup_error"], "");
+
+    let rejected = http(
+        addr,
+        "GET /api/health HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n",
+    );
+    assert!(rejected.starts_with("HTTP/1.1 421"), "{rejected}");
+}
+
+#[test]
+fn health_distinguishes_refusals_without_leaking_private_setup_diagnostics() {
+    let addr = start_server_with_sources(
+        Arc::new(ScriptedControl::dead()),
+        Box::new(DeclaredFixtureStatus),
+        Arc::new(RefusingHealthSetup),
+    );
+
+    let response = get(addr, "/api/health");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(response.contains("cache-control: no-store"), "{response}");
+
+    let payload: serde_json::Value = serde_json::from_str(body_of(&response)).unwrap();
+    assert_eq!(payload["staged"]["reachable"], false);
+    assert_eq!(payload["staged"]["error"], NO_CHANNEL);
+    assert!(payload["setup"].is_null());
+    assert_eq!(
+        payload["setup_error"],
+        "Configuration could not be read. Reopen ksx and try again."
+    );
+    assert!(!body_of(&response).contains(r"C:\secret"), "{response}");
+    assert!(!body_of(&response).contains("DEADBEEF"), "{response}");
+    assert!(
+        !body_of(&response).contains("health-setup-refused"),
+        "{response}"
+    );
+}
+
 fn http(addr: SocketAddr, request: &str) -> String {
     let mut stream = TcpStream::connect(addr).unwrap();
     stream.write_all(request.as_bytes()).unwrap();
@@ -2988,6 +3100,25 @@ fn post_form(addr: SocketAddr, path: &str, body: &str) -> String {
             body.len()
         ),
     )
+}
+
+#[track_caller]
+fn assert_nocturne_flash_round_trip(addr: SocketAddr, response: &str, expected: &str) {
+    assert!(response.starts_with("HTTP/1.1 303"), "{response}");
+    let location = response
+        .lines()
+        .find_map(|line| line.strip_prefix("location: "))
+        .map(str::trim)
+        .expect("a redirect Location carrying the flash");
+    let page = rendered_body(&get(addr, location));
+    assert!(
+        page.contains(expected),
+        "the redirect said one outcome but the allowlist did not render it: {response}\n{page}"
+    );
+    assert!(
+        !page.contains("That request could not be finished"),
+        "a real action outcome fell through to the unknown-flash fallback: {response}\n{page}"
+    );
 }
 
 /// **Prove the path in a guard loop actually ROUTES.**
@@ -8950,15 +9081,16 @@ fn an_unknown_workspace_flash_is_never_reflected() {
 /// FALLBACK works, never that a real outcome avoids it. Nothing checked the
 /// list for completeness, so the next one would ship the same way.
 ///
-/// The list is read out of `server/nocturne.rs` itself rather than restated
-/// here — a hand-copied roster of 96 constants would drift by lunchtime.
+/// The list is read out of the presentation and its neutral workbench core
+/// rather than restated here — a hand-copied roster would drift by lunchtime.
 /// Nine constants are deliberately OFF the allowlist because they are
 /// READ-side sentences that render into the page body and are never a
 /// redirect target. They are named individually: if a tenth appears, that is a
 /// decision to make, not a default to inherit.
 #[test]
 fn every_redirect_flash_is_on_the_allowlist() {
-    const SRC: &str = include_str!("../src/server/nocturne.rs");
+    const PAGE_SRC: &str = include_str!("../src/server/nocturne.rs");
+    const WORKBENCH_SRC: &str = include_str!("../src/server/workbench.rs");
 
     // Sentences that render INTO the page (a refused read), never a redirect.
     const READ_SIDE: [&str; 9] = [
@@ -8988,10 +9120,15 @@ fn every_redirect_flash_is_on_the_allowlist() {
         "N_READ_SETUP_ERROR",
     ];
 
-    let declared: Vec<&str> = SRC
-        .match_indices("pub(super) const N_")
-        .filter_map(|(at, _)| {
-            let rest = &SRC[at + "pub(super) const ".len()..];
+    let declared: Vec<&str> = [PAGE_SRC, WORKBENCH_SRC]
+        .into_iter()
+        .flat_map(|source| {
+            source
+                .match_indices("pub(super) const N_")
+                .map(move |row| (source, row))
+        })
+        .filter_map(|(source, (at, _))| {
+            let rest = &source[at + "pub(super) const ".len()..];
             let name = rest.split(':').next()?.trim();
             // Only the `&str` sentences — not the allowlist array itself.
             rest.split_once(':')
@@ -9002,14 +9139,23 @@ fn every_redirect_flash_is_on_the_allowlist() {
         .collect();
     assert!(
         declared.len() > 80,
-        "the constant scanner stopped seeing server/nocturne.rs: {declared:?}"
+        "the constant scanner stopped seeing the presentation/workbench sources: {declared:?}"
     );
 
-    let start = SRC
+    let mut unique = declared.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        declared.len(),
+        "shared customer copy was redeclared instead of imported: {declared:?}"
+    );
+
+    let start = PAGE_SRC
         .find("pub(super) const N_FLASH_ALLOWLIST")
         .expect("the allowlist");
-    let end = SRC[start..].find("];").expect("the allowlist ends") + start;
-    let body = &SRC[start..end];
+    let end = PAGE_SRC[start..].find("];").expect("the allowlist ends") + start;
+    let body = &PAGE_SRC[start..end];
 
     // Word-boundary match: `N_SAVE_NO_DEVICE` must not be satisfied by a
     // longer name like `N_SAVE_NO_DEVICES` that happens to contain it.
@@ -11615,6 +11761,7 @@ fn nocturne_undoes_a_removal_from_the_server_held_stash() {
     assert_eq!(api["view"]["undo_cls"], "n-undochip none", "{api}");
     let response = post_form(addr, "/nocturne/controller/undo", "");
     assert!(response.contains("no%20longer%20be%20undone"), "{response}");
+    assert_nocturne_flash_round_trip(addr, &response, "no longer be undone");
 
     // Remove P2: the chip appears naming it.
     let bindings_before = control.staged().slots[1].bindings;
@@ -11652,6 +11799,77 @@ fn nocturne_undoes_a_removal_from_the_server_held_stash() {
     assert_eq!(api["view"]["undo_cls"], "n-undochip none", "{api}");
     let response = post_form(addr, "/nocturne/controller/undo", "");
     assert!(response.contains("no%20longer%20be%20undone"), "{response}");
+    assert_nocturne_flash_round_trip(addr, &response, "no longer be undone");
+}
+
+/// The two time/space refusals use the same 303 channel as a successful Undo.
+/// Pin the complete redirect round trip: a sentence present in the first
+/// Location but absent from the allowlist silently degrades to the generic
+/// fallback on the page, which is the drift this test is meant to catch.
+#[test]
+fn nocturne_undo_expired_and_full_refusals_survive_the_flash_allowlist() {
+    let expired = Arc::new(ScriptedControl::new(false));
+    let expired_addr = start_server(Arc::clone(&expired));
+    for edit in [
+        ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        },
+        ksx_api::StageEdit::AddSlot {
+            number: Some(1),
+            persona: "playstation".into(),
+            preset: "Expiring slot".into(),
+            layout: Some("arcade-6button".into()),
+        },
+    ] {
+        assert!(expired.stage_edit(&edit).ok, "{edit:?}");
+    }
+    let removed = post_form(expired_addr, "/nocturne/controller/remove", "number=1");
+    assert!(removed.contains("Draft%20updated"), "{removed}");
+    std::thread::sleep(Duration::from_millis(6_050));
+    let response = post_form(expired_addr, "/nocturne/controller/undo", "");
+    assert_nocturne_flash_round_trip(expired_addr, &response, "no longer be undone");
+
+    let full = Arc::new(ScriptedControl::new(false));
+    let full_addr = start_server(Arc::clone(&full));
+    assert!(
+        full.stage_edit(&ksx_api::StageEdit::ChooseDevice {
+            selector: "usb:d209:0430:00".into(),
+            alias: "panel".into(),
+            label: "I-PAC".into(),
+        })
+        .ok
+    );
+    for number in 1..=2 {
+        assert!(
+            full.stage_edit(&ksx_api::StageEdit::AddSlot {
+                number: Some(number),
+                persona: "playstation".into(),
+                preset: format!("Original {number}"),
+                layout: Some("arcade-6button".into()),
+            })
+            .ok
+        );
+    }
+    let removed = post_form(full_addr, "/nocturne/controller/remove", "number=2");
+    assert!(removed.contains("Draft%20updated"), "{removed}");
+    for number in 2..=ksx_core::MAX_SLOTS {
+        let outcome = full.stage_edit(&ksx_api::StageEdit::AddSlot {
+            number: Some(number),
+            persona: "playstation".into(),
+            preset: format!("Replacement {number}"),
+            layout: None,
+        });
+        assert!(outcome.ok, "could not fill slot {number}: {outcome:?}");
+    }
+    assert!(full.staged().next_slot.is_none(), "the draft is not full");
+    let response = post_form(full_addr, "/nocturne/controller/undo", "");
+    assert_nocturne_flash_round_trip(
+        full_addr,
+        &response,
+        "Every controller slot is staged again",
+    );
 }
 
 /// **Apply-in-place over HTTP** (`stage_apply`, M1b F3's UI): the button is

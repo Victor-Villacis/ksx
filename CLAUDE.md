@@ -25,7 +25,7 @@ performs it on**. There is no "egui first or web first" question.
 
 ### Studio ports are evidence boundaries
 
-Before opening, restarting, or judging a Nocturne page, read
+Before opening, restarting, or judging the Studio redesign workbench, read
 [`docs/STUDIO-ENVIRONMENTS.md`](docs/STUDIO-ENVIRONMENTS.md). Port 4460 is the
 real-machine QA process; 4476 and 4520 are distinct synthetic fixtures.
 The dev/candidate/installed-QA/production promotion contract is

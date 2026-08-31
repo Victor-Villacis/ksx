@@ -6,16 +6,17 @@ into the sheet at build time; TK0, see `docs/research/token-system-design.md`)
 plus `studio-ui/src/studio.css` (the components that consume them); this file
 is the reasoning. If they disagree, the CSS is the bug.
 
-Four Studio routes use it: the product page `/nocturne`, and the three tool
-pages `/check`, `/pads` and `/devices`. The stable product journey is unchanged
+Four current Studio routes use it: the product page `/redesign`, and the three
+tool pages `/check`, `/pads` and `/devices`. The stable product journey is unchanged
 in shape and has stopped being a sequence of URLs — **Keyboard** → **Controller**
-→ **Mapping** → **Play** are now stages *within* `/nocturne`, reached by working
+→ **Mapping** → **Play** are now stages *within* `/redesign`, reached by working
 across its three panes rather than by navigating. (Until 2026-08-25 they were
 `/start#keyboard`, `/start#controller`, `/map` and `/`; that is where the
 anchors in older notes come from.) Test inputs, hardware recovery and ViGEm pad
-diagnostics stay one deliberate Tools action away; the game library and
-import/recovery moved *into* the product page's Configuration menu rather than
-out to a tool. Every route is viewed on a desk monitor *and* on an arcade
+diagnostics stay one deliberate Tools action away. The game library,
+layout management, import/export and autostart remain explicitly deferred on
+the legacy `/nocturne` Settings/Library implementation; they are not a second
+core workbench. Every current route is viewed on a desk monitor *and* on an arcade
 cabinet panel from across a room, in a light and a dark theme, with and without
 JavaScript. Everything below is chosen against those constraints at once.
 
@@ -431,7 +432,7 @@ every `cargo test`:
   that drifts the same way), composites every tint over every ground, and
   checks every pair across every theme the sheet ships — since TK1 the gate
   ENUMERATES themes (three today: dark, light, matrix; a user picks in
-  `/nocturne`'s "How the Studio looks" panel → `POST /nocturne/theme`, with
+  `/redesign`'s theme controls → `POST /redesign/theme`, with
   System = follow-the-OS as the default) and a new theme passes the floors
   or records per-theme pins. It also cross-pins the token consumers
   that had **already drifted** back when they were hand copies: the anti-flash

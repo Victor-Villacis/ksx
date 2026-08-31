@@ -7,8 +7,8 @@
 // spawned via execFileSync without shell:true, ENOENT — was fixed in 0.1.9,
 // so a `tailwind: true` cssEntry would now work if ever wanted.)
 //
-// FOUR routes — "/nocturne" (the product), "/check", "/pads" and
-// "/devices" (the tool pages) — plus the vendored
+// FIVE routes — "/redesign" (the current product core), "/nocturne" (deferred
+// Settings/Library), and "/check", "/pads", "/devices" (focused tools) — plus the vendored
 // controller art copied (cleaned) from art/ into the embed.
 //
 // Adding a route is THREE edits in this file and none of them is optional:

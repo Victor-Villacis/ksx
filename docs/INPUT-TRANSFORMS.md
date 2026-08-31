@@ -634,10 +634,10 @@ surface can still *read* everything. A mapper UI for macros is a later pass.
 
 - ~~**No macro in the Studio mapper UI**~~ — shipped: the mapper's macro tabs
   have the piano-roll editor, and since 2026-08-06 the `repeat` policy and its
-  rate with it. (That was the `/map` page then; since 2026-08-25 the mapper is
-  the centre and right panes of `/nocturne` and the editor came with it —
-  `/nocturne/macro/new`, `/nocturne/macro/delete`, `/nocturne/api/macro/edit`
-  and `/api/macro/save`.)
+  rate with it. That began on `/map`, moved into `/nocturne` on 2026-08-25,
+  and now lives in the current `/redesign` workbench through
+  `/redesign/macro/new`, `/redesign/macro/delete`,
+  `/redesign/api/macro/edit` and the shared `/api/macro/save` verb.
 - **No chord that starts a macro.** `macro.x = { key = "P", when = ["Q"] }`
   is refused rather than half-implemented; the guard would have to compose
   with consumption, and nothing asked for it yet.

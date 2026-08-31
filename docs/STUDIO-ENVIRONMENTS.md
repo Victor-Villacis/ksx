@@ -1,7 +1,7 @@
 # Studio environments
 
 Updated 2026-08-24. This file is the port, provenance, seeding, and teardown
-contract for people and agents working on Nocturne.
+contract for people and agents working on the Studio redesign workbench.
 
 The label in Studio's title bar is authoritative for both artifact and data
 provenance. A fixture banner means every device, chart, session, and saved

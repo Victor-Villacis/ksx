@@ -1,15 +1,13 @@
 //! The blocking axum server around the render seam.
 //!
-//! GET /nocturne renders THE page — one product surface that owns setup,
-//! mapping, saved games and configuration — as SSR plus island props. GET
-//! /api/nocturne serves the same payload as JSON for the island's poller
-//! (same-origin only — the CSP's `connect-src 'self'` is exactly what permits
-//! the fetch). Every mutating route performs one verb and 303-redirects back
-//! to /nocturne, carrying the outcome in a `flash` query parameter that
-//! `nocturne_flash_from_query` resolves against an ALLOWLIST rather than
-//! reflecting. Plain HTML forms remain the baseline (`form-action 'self'`),
-//! which the client optionally upgrades to fetch-submits that read the
-//! redirect's flash without a reload.
+//! GET /redesign renders the current product workbench as SSR plus island
+//! props; GET /api/redesign serves its same-origin poll payload. The legacy
+//! /nocturne surface remains for its deferred settings/library blocks; both
+//! surfaces call the route-neutral workbench application layer for shared
+//! device, mapping, and session operations. GET /api/health is the small, product-
+//! independent contract used by launchers and managed environment gates.
+//! Every mutating route is still same-origin guarded and plain HTML forms
+//! remain the baseline (`form-action 'self'`).
 //!
 //! Three tool pages sit beside it: /check (the button check), /pads (the
 //! ViGEm bus) and /devices (the picker). `/`, `/map`, `/start`, `/setup`,
@@ -47,13 +45,16 @@
 
 mod check;
 mod devices;
+mod health;
 mod nocturne;
 mod pads;
 mod redesign;
 mod session;
+mod workbench;
 
 use check::*;
 use devices::*;
+use health::*;
 use nocturne::*;
 use pads::*;
 use redesign::*;
@@ -86,7 +87,10 @@ use crate::render_devices::render_devices;
 
 use crate::render_redesign::render_redesign;
 
-use crate::snapshot::{CheckPayload, DevicesPayload, PadsPayload, RedesignPayload, StatusSource};
+use crate::snapshot::{
+    CheckPayload, DevicesPayload, PadsPayload, RedesignPayload, StatusSource, StudioHealthPayload,
+    StudioHealthSetup, StudioHealthStaged,
+};
 
 struct AppState {
     /// The static design-proof route (see `render_nocturne.rs`): loaded like
@@ -128,7 +132,7 @@ struct AppState {
     /// The last REMOVED controller, held SERVER-side for the rack's short
     /// undo window — the browser is shown a chip and a verb, never the
     /// authoring table (`server/nocturne.rs`).
-    nocturne_undo: std::sync::Mutex<Option<nocturne::NocturneUndoStash>>,
+    nocturne_undo: std::sync::Mutex<Option<workbench::RemovedSlotUndo>>,
     /// The redesign workbench's PARKED controllers ("No player"), keyed by
     /// the browser's ghost id: each entry is the removed slot's full view —
     /// authoring included — so re-slotting restores its bindings, the same
@@ -142,7 +146,7 @@ struct AppState {
     /// server-held six-second window as `nocturne_undo`, kept SEPARATE so
     /// the two pages' chips cannot consume each other's resurrection
     /// material.
-    redesign_undo: std::sync::Mutex<Option<nocturne::NocturneUndoStash>>,
+    redesign_undo: std::sync::Mutex<Option<workbench::RemovedSlotUndo>>,
     /// The browser attempt and exact learner generation currently owned by
     /// the redesign identify-by-key transaction. Both parts are load-bearing:
     /// the generation qualifies the daemon cancel, while the browser nonce
@@ -434,13 +438,14 @@ pub fn serve(
             .await
             .map_err(|source| StudioError::Bind { bind, source })?;
         let app = Router::new()
-            // ── /workspace — the Nocturne workspace (M2: left-pane verbs) ─
-            // The reads, plus the left pane's form twins — each ONE staging
-            // verb, 303 → /workspace?flash=. The center and right panes'
-            // verbs arrive with M3–M4.
-            // ── /nocturne — the Nocturne front end. The keyboard section
-            // is MIGRATED product surface (reads + verbs in nocturne.rs);
-            // the rest is still the design proof's placeholder.
+            // Stable operational provenance for launchers and managed lanes.
+            // It is deliberately independent of both product payloads.
+            .route("/api/health", get(api_health))
+            // ── /nocturne — deferred Settings/Library plus compatibility ─
+            // Saved games, layouts, import/export and autostart remain here
+            // until their redesigned surface is built. Its staged-workbench
+            // doors call the shared route-neutral operations; `/redesign`
+            // below is the current product core and launcher destination.
             .route("/nocturne", get(nocturne_page_handler))
             .route("/api/nocturne", get(api_nocturne))
             // On-demand hardware context for Control Surface Builder. Kept
@@ -489,9 +494,12 @@ pub fn serve(
             .route("/nocturne/bind/clear", post(nocturne_form_bind_clear))
             .route("/nocturne/bind/clear-all", post(nocturne_form_clear_all))
             .route("/nocturne/key/clear", post(nocturne_form_key_clear))
-            .route("/nocturne/api/bind", post(nocturne_api_bind))
+            .route("/nocturne/api/bind", post(workbench::workbench_api_bind))
             .route("/nocturne/api/board/save", post(nocturne_api_board_save))
-            .route("/nocturne/api/macro/edit", post(nocturne_api_macro_edit))
+            .route(
+                "/nocturne/api/macro/edit",
+                post(workbench::workbench_api_macro_edit_nocturne),
+            )
             .route("/nocturne/bind/turbo", post(nocturne_form_bind_turbo))
             .route("/nocturne/bind/toggle", post(nocturne_form_bind_toggle))
             .route("/nocturne/macro/toggle", post(nocturne_form_macro_toggle))
@@ -508,8 +516,11 @@ pub fn serve(
             // The mapper (v5): page + poll payload + the learn/bind verbs,
             // each a thin wrapper over one ControlSource method (= one pipe
             // verb — no GUI-only code paths).
-            .route("/api/learn", get(api_learn_poll))
-            .route("/api/learn/start", post(api_learn_start))
+            .route("/api/learn", get(workbench::workbench_api_learn_poll))
+            .route(
+                "/api/learn/start",
+                post(workbench::workbench_api_learn_start),
+            )
             // **The one read that DOES wear POST, deliberately.** The rule
             // above holds for reads that only read memory. A chart read takes
             // the machine-wide programming lease and opens the board's
@@ -517,11 +528,26 @@ pub fn serve(
             // transaction with a real exclusion and a real cost, and it must
             // not be reachable by a link, a prefetch, or a page load. The guard
             // policing by method is the point here, not the problem.
-            .route("/api/panel/chart", post(nocturne_api_panel_chart))
-            .route("/api/learn/cancel", post(api_learn_cancel))
-            .route("/api/input-test", get(api_input_test_poll))
-            .route("/api/input-test/start", post(api_input_test_start))
-            .route("/api/input-test/cancel", post(api_input_test_cancel))
+            .route(
+                "/api/panel/chart",
+                post(workbench::workbench_api_panel_chart),
+            )
+            .route(
+                "/api/learn/cancel",
+                post(workbench::workbench_api_learn_cancel),
+            )
+            .route(
+                "/api/input-test",
+                get(workbench::workbench_api_input_test_poll),
+            )
+            .route(
+                "/api/input-test/start",
+                post(workbench::workbench_api_input_test_start),
+            )
+            .route(
+                "/api/input-test/cancel",
+                post(workbench::workbench_api_input_test_cancel),
+            )
             // v10: write a control's WHOLE key list (many keys → one
             // control). The island computes the new set from the payload it
             // is already polling — add = ∪ {k}, per-key ✕ = ∖ {k} — and posts
@@ -533,25 +559,7 @@ pub fn serve(
             // daemon's `map-macro` verb, = the `ksx macro` CLI's writer). No
             // GUI-only path, and no second macro schema: the steps on the wire
             // are the MacroStepView rows the read side already served.
-            .route("/api/macro/save", post(api_macro_save))
-            // The mapper's own session controls (FIX 0): "Pause emulation &
-            // map" and "Resume emulation" are the SAME ControlSource verbs
-            // the status page's forms use — one pipe verb each, no GUI-only
-            // path — served as JSON so the mapper never navigates away and
-            // loses the user's place.
-            // ...and Resume is `ControlSource::resume`, NOT a start with a
-            // remembered profile. This page cannot know whether it paused a
-            // games.toml profile or an unsaved staged setup — a staged session
-            // has no profile at all — and a start is defined as the config on
-            // disk, so resuming that way put back the wrong session (or none).
-            // The daemon knows what it started; this route asks it.
-            // v9 — the NO-JAVASCRIPT write path. Same verbs, same
-            // ControlSource methods as the /api/* routes beside them; the
-            // only difference is the wire shape (form-encoded in, 303 out
-            // instead of JSON in and JSON back). A browser with scripting
-            // switched off can bind, clear, restore and pause with these,
-            // and the island fetch-enhances them on top (map.ts) so a page
-            // WITH scripting never navigates.
+            .route("/api/macro/save", post(workbench::workbench_api_macro_save))
             // v10 — MANY KEYS → ONE CONTROL, without JavaScript. Same row
             // form, same key picker, two more submits: `add` appends the
             // picked key to the control's list, `key/remove` takes just that
@@ -573,8 +581,8 @@ pub fn serve(
             // ── The redesign lane's workbench ────────────────────────────
             .route("/redesign", get(redesign_page))
             .route("/api/redesign", get(api_redesign))
-            // Its verbs: nocturne verbs re-homed (303 → back to /redesign).
-            // In this chain, so the origin guard and the machine-cache
+            // Its verbs use the route-neutral workbench core and return to
+            // /redesign. They stay in this chain so the origin guard and the machine-cache
             // invalidation layer cover them by construction — and
             // tests/http.rs proves both, once, like every new verb.
             .route("/redesign/theme", post(redesign_form_theme))
@@ -618,11 +626,14 @@ pub fn serve(
             // The mapper's JSON verbs, ALIASED — the same page-agnostic
             // handlers /nocturne mounts (body names the slot; nothing in
             // them reads the path), so the two pages cannot drift.
-            .route("/redesign/api/bind", post(nocturne_api_bind))
+            .route("/redesign/api/bind", post(workbench::workbench_api_bind))
             .route("/redesign/macro/toggle", post(redesign_form_macro_toggle))
             .route("/redesign/macro/new", post(redesign_form_macro_new))
             .route("/redesign/macro/delete", post(redesign_form_macro_delete))
-            .route("/redesign/api/macro/edit", post(redesign_api_macro_edit))
+            .route(
+                "/redesign/api/macro/edit",
+                post(workbench::workbench_api_macro_edit_redesign),
+            )
             // Final operational-shell block. Form doors preserve the no-JS
             // 303 contract and land back here; `/api/apply` is the existing
             // structured answer, behind the same revision guard, so a
@@ -667,9 +678,11 @@ pub fn serve(
             // Saved games, controller layouts, the configuration verbs, the
             // theme, the first-run staging flow and the mapper all had their
             // own page and their own route block here. They are one page now
-            // and their handlers live in `nocturne.rs`; what follows is the
-            // rationale that OUTLIVED the pages, because it still constrains
-            // the verbs wherever they live.
+            // and then shared a Nocturne page. The current staged core is
+            // `/redesign`; route-neutral operations live in `workbench.rs`,
+            // while deferred Settings/Library handlers remain in
+            // `nocturne.rs`. What follows is the rationale that OUTLIVED the
+            // pages, because it still constrains the verbs wherever they live.
             //
             // **Staging touches no file until Save.** Every staging verb is
             // one `ControlSource` call reaching nothing outside the daemon's
@@ -678,7 +691,9 @@ pub fn serve(
             // separate page from the configuration editor: one screen holding
             // both rules is a screen where the user cannot tell which controls
             // commit. On one page the rule has to be carried by the VERBS, so
-            // `/nocturne/save` is the only staging route that writes.
+            // only the shared Save operation writes staged state: the current
+            // door is `/redesign/save`; `/nocturne/save` is its retained
+            // deferred-surface alias.
             //
             // **The capture routes are the narrow exception** to the browser
             // claim prohibition: an exact served interface, three explicit

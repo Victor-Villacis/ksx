@@ -54,7 +54,7 @@ only current path for it.
 
 ## Prepare in Studio
 
-1. Open KSX. It lands on `/nocturne`, the one product page.
+1. Open KSX. It lands on `/redesign`, the current product workbench.
 2. Pick the keyboard by its human-readable row in the left pane's **Input
    hardware** list. Picking changes only the in-memory stage and never prepares
    a device.
@@ -150,14 +150,14 @@ exact installer hash and physical results.
 
 ## Release
 
-On `/nocturne`, a freshly verified prepared keyboard shows **Release selected
-keyboard** on its capture card. ⚠ Only the keyboard currently selected shows
-that control: the stage-independent "keyboards ksx is holding" list did not
-survive the 2026-08-25 single-page cutover, so on a fresh install — where
-nothing is selected yet — there is no Release control on the page at all. Until
-that is restored, `docs/RECOVERY.md` §2b is the route back for a held board you
-cannot select. Tick the release confirmation and approve UAC. Release uses the
-ownership receipt; it does not accept a package name from the browser.
+On `/redesign`, a freshly verified prepared keyboard shows **Release selected
+keyboard** on its capture card. The same page also renders the complete,
+stage-independent **Keyboards ksx is holding** recovery list: every exact held
+interface gets its own release row even when the draft is empty or a different
+input is selected. Tick that row's release confirmation and approve UAC.
+Release uses the ownership receipt; it does not accept a package name from the
+browser. `docs/RECOVERY.md` §2b remains the fallback when ksx itself cannot
+start, not the normal way around a missing Studio control.
 
 The helper removes affected WinUSB devnodes, deletes only the receipt's exact
 OEM package, proves that package absent, rescans, proves the selected interface

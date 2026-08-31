@@ -69,12 +69,12 @@ const exe = path.join(
   process.platform === "win32" ? "macro_fixture.exe" : "macro_fixture",
 );
 
-/** Every server-rendered route, plus the canvas's alternate slot view.
- *  `/nocturne` includes the scalar capture preparation branch, whose hidden
- *  exact-target values must survive adoption without a first-paint swap. */
+/** Every server-rendered route, plus the current workbench's open macro view.
+ *  `/nocturne` remains for deferred Settings/Library SSR; the open-editor
+ *  parity contract belongs to the launcher-owned `/redesign` core. */
 const ROUTES = [
   "/nocturne",
-  "/nocturne?slot=1&macro=hadouken",
+  "/redesign?slot=1&macro=hadouken",
   "/check",
   "/pads",
   "/devices",
@@ -88,6 +88,31 @@ const ROUTES = [
 const SESSIONS = ["idle", "running", "down"];
 
 let browser;
+
+/** A URL variant is coverage only if the state it names actually rendered.
+ * In particular, silently ignoring `?macro=` would otherwise let the default
+ * workbench compare equal to itself and report a false-green editor gate. */
+async function assertRouteVariant(page, url, phase) {
+  const parsed = new URL(url);
+  if (parsed.pathname !== "/redesign" || parsed.searchParams.get("macro") !== "hadouken") return;
+  const state = await page.evaluate(() => {
+    const holder = document.querySelector(".rd-macdlg");
+    const host = holder?.querySelector("[data-rd-mac-host]");
+    return {
+      holder: Boolean(holder),
+      visible: Boolean(holder && !holder.classList.contains("none")),
+      host: Boolean(host),
+      served: Boolean(host?.querySelector("[data-rd-mac-ssr]")),
+      title: host?.querySelector("#rd-mac-title")?.textContent?.trim() ?? "",
+      save: host?.textContent?.includes("Save this macro") ?? false,
+    };
+  });
+  assert.deepEqual(
+    state,
+    { holder: true, visible: true, host: true, served: true, title: "hadouken", save: true },
+    `${phase} ${url} did not render the open hadouken editor it claims to test`,
+  );
+}
 
 /** The island subtree, normalized for the differences that are BY DESIGN.
  *  Each removal is a decision, not a convenience — anything left over is a
@@ -215,8 +240,9 @@ async function ssrDom(url) {
       servedClientWidgets,
       0,
       `${url} SERVED ${servedClientWidgets} data-client-widget node(s) — ` +
-        "client-built widgets must not exist in SSR markup (parity rule 3e)",
+      "client-built widgets must not exist in SSR markup (parity rule 3e)",
     );
+    await assertRouteVariant(page, url, "SSR");
     return await page.evaluate(SNAPSHOT);
   } finally {
     await ctx.close();
@@ -266,6 +292,7 @@ async function hydratedDom(url) {
     // One frame past adoption, before the 2 s poller could rewrite anything:
     // the flash this suite hunts happens in that window.
     await page.waitForTimeout(300);
+    await assertRouteVariant(page, url, "hydrated");
     return await page.evaluate(SNAPSHOT);
   } finally {
     await ctx.close();

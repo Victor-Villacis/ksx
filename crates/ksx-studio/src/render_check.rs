@@ -476,7 +476,7 @@ mod tests {
     // version mismatch, so `assert_eq!(header.version, 2)` after a successful
     // load could only ever agree. Replaced by ONE cross-page test that pins
     // something real: `render.rs::the_embed_ships_exactly_the_live_routes`,
-    // which checks the manifest carries the four live routes, none of the six
+    // which checks the manifest carries the five live routes, none of the six
     // deleted ones, and that each IR parses to a non-empty slot table.
 
     #[test]

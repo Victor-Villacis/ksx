@@ -44,6 +44,36 @@ pub struct CheckPayload {
     pub feed_hint: String,
 }
 
+/// Stable automation truth for `GET /api/health`.
+///
+/// Studio's product payloads are presentation contracts and are expected to
+/// evolve with their surfaces.  The managed-lane launchers need a much
+/// smaller, longer-lived answer: which provider owns the listener, whether
+/// the staged daemon channel answered, and which configuration root this
+/// process opened.  Keeping that answer independent prevents a product-route
+/// redesign from silently weakening the real-hardware provenance gate.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StudioHealthPayload {
+    pub environment: ksx_api::RuntimeEnvironmentView,
+    pub staged: StudioHealthStaged,
+    pub setup: Option<StudioHealthSetup>,
+    #[serde(default)]
+    pub setup_error: String,
+}
+
+/// The only staged-setup facts an environment health probe may consume.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StudioHealthStaged {
+    pub reachable: bool,
+    pub error: Option<String>,
+}
+
+/// The only saved-configuration fact needed to prove lane isolation.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StudioHealthSetup {
+    pub config_root: String,
+}
+
 /// What `GET /api/redesign` serves AND what the redesign island's props
 /// carry — the transplant lane's blank workbench. Deliberately minimal: the
 /// machine-provenance chip and nothing else, so the lane can never be

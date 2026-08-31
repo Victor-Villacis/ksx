@@ -65,12 +65,10 @@ pub const PORT: u16 = 4460;
 /// "type this on your phone" is frequently the *useful* outcome, and a UI that
 /// only knows how to launch a local browser cannot offer it.
 pub fn url() -> String {
-    // `/nocturne` IS the product: one page that owns setup, mapping, saved
-    // games and configuration. This used to open `/start` and name `/` as the
-    // returning-user dashboard; both pages were deleted in the cutover, so
-    // this function spent that time handing out a 404 — to the browser it
-    // launches AND to the cabinet user told to type it on their phone.
-    format!("http://127.0.0.1:{PORT}/nocturne")
+    // `/redesign` is the current product workbench. Keep this authority in one
+    // place so the CLI, installer-created shortcut and standalone launcher all
+    // open the same route without changing Studio's established port.
+    format!("http://127.0.0.1:{PORT}/redesign")
 }
 
 // ---------------------------------------------------------------------------
@@ -538,7 +536,7 @@ mod tests {
         assert_eq!(
             argv,
             vec![
-                "--app=http://127.0.0.1:4460/nocturne".to_owned(),
+                "--app=http://127.0.0.1:4460/redesign".to_owned(),
                 r"--user-data-dir=C:\Users\TestUser\AppData\Local\ksx\browser-profile".to_owned(),
                 "--no-first-run".to_owned(),
                 "--no-default-browser-check".to_owned(),

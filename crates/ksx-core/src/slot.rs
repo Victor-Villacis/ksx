@@ -41,16 +41,16 @@ pub const MAX_SLOTS: u8 = 16;
 /// at runtime as [`InvalidationReason::XinputBusFull`].
 pub const MAX_XINPUT_SLOTS: u8 = 4;
 
-/// How many slots may use a HIDMaestro persona at once — the elevated SDK
-/// host's own live-controller ceiling (`controllerLimit` in
-/// `runtime-contract-sdk.json`, mirrored by `SdkHostSession.TotalCap`).
+/// How many slots may use a HIDMaestro persona at once — the source-built
+/// production host's own live-controller ceiling (`controllerLimit` in
+/// `tools/hidmaestro-host/runtime-contract.json`).
 ///
 /// Enforced here, at validate/stage/plan time, for the same reason the
 /// XInput ceiling is: a configuration that looks valid must not die halfway
 /// through startup. The runtime adapter refuses again at plug time as
 /// defense-in-depth — and must, because a host-side Capacity fault poisons
 /// the whole fail-closed session (measured 2026-08-20).
-pub const MAX_HIDMAESTRO_PADS: u8 = 8;
+pub const MAX_HIDMAESTRO_PADS: u8 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("slot number must be 1..={MAX_SLOTS}, got {0}")]

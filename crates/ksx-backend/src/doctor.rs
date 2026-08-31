@@ -634,11 +634,13 @@ mod tests {
             !text.contains("personas available"),
             "doctor must never advertise a persona it cannot plug:\n{text}"
         );
-        // Retro leg flip: nothing is gated, so the unavailable-personas
-        // lines vanish instead of naming an empty set.
-        assert!(ksx_platform::HidMaestroReport::gated_personas().is_empty());
+        assert_eq!(
+            ksx_platform::HidMaestroReport::gated_personas(),
+            vec!["switchpro", "xboxseries", "snes", "genesis"]
+        );
         assert!(
-            !text.contains("profile runtimes are not implemented"),
+            text.contains("switchpro/xboxseries/snes/genesis remain unavailable")
+                && text.contains("profile runtimes are not implemented"),
             "{text}"
         );
         // The install is still reported — it is worth knowing, it just decides

@@ -3,17 +3,17 @@
 > **This is the PLAN. For what is actually true right now, read
 > [`HIDMAESTRO-STATE.md`](HIDMAESTRO-STATE.md) — it wins over this file.**
 >
-> Read "implemented" below as *code-complete and CI-proven*, never as *observed
-> working*. As of 2026-08-20 no HIDMaestro device has ever been created on any
-> machine, DualSense included. Historical section numbers and counts in the
-> S1.x provenance trail describe the checkpoints they were written at, not the
-> current tree — the state doc carries the current figures with the measurement
-> behind each one.
+> Read the S1.x material below as a dated provenance trail, not as the current
+> release surface. Several 2026-08-20 experiments created devices through an
+> official-SDK host that is no longer distributable as a KSX runtime. Historical
+> section numbers, controller counts and measurements describe those checkpoints
+> only; the state document carries the current release decision.
 
 Status: **the installed product path for one plain-USB DualSense is implemented
-and has passed clean-runner build, byte-inspection, packaging, and installer
-acceptance; supervised hardware/API/force-kill acceptance remains. Switch Pro
-and Xbox Series are still gated.**
+and must pass the 0.5.0 clean-runner build, byte-inspection, packaging, and
+installer lifecycle before promotion; supervised hardware/API/force-kill
+acceptance remains. Switch Pro, Xbox Series X|S, SNES and Genesis are still
+gated pending a source-built runtime and exact-candidate hardware acceptance.**
 
 The implementation uses a fixed NativeAOT elevated sibling, authenticated
 one-use IPC, one exact controller slot, creator-owned shared memory, a five-second
@@ -44,13 +44,14 @@ Current source also has a companion-input event for the XUSB path. The obsolete
 output adapter that published the private latch was removed; adding constants
 to it would not have made it safe or compatible.
 
-The supported `HMContext` / `HMController` API is therefore the first
-integration boundary. A native Rust transport is a later optimization decision,
-not the starting assumption.
+The supported `HMContext` / `HMController` API was therefore the first research
+boundary. It remains confined to the explicit setup-time worker. The shipped
+Play path uses the reduced, source-built runtime described below; it does not
+load or redistribute the official SDK assembly.
 
-## Reproducible upstream pin
+## Reproducible upstream setup pin
 
-The production integration uses the official [HIDMaestro v1.6.1 release](https://github.com/hifihedgehog/HIDMaestro/releases/tag/v1.6.1):
+The optional driver-setup operation uses the official [HIDMaestro v1.6.1 release](https://github.com/hifihedgehog/HIDMaestro/releases/tag/v1.6.1):
 
 | Item | Pinned value |
 |---|---|
@@ -65,9 +66,10 @@ binaries. The self-contained installer bootstrap contains only the fixed URL,
 byte lengths, and SHA-256 pins. When the user explicitly selects the setup task,
 it downloads the exact official archive, proves the archive and all three
 required managed assemblies, invokes the one pinned install API from a protected
-temporary directory, unloads it, and removes the downloaded bytes. This avoids
-redistributing the upstream SDK and its embedded WDK tools; an internet
-connection is therefore required for that optional setup task.
+ephemeral worker under Program Files, proves that process tree stopped, and
+removes the downloaded bytes. This avoids redistributing the upstream SDK and
+its embedded WDK tools; an internet connection is therefore required for the
+first optional setup run.
 [Microsoft explicitly documents SignTool as non-redistributable](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/installing-a-catalog-file-by-using-signtool),
 so this boundary is a shipping constraint, not just an installer-size choice.
 
@@ -121,18 +123,26 @@ packages. Current release signing and the supervised clean Windows/hardware
 matrix remain release acceptance work, not
 missing product code.
 
+An exact-installed rerun takes a separate fail-closed path: it verifies the
+recorded manifest and the one matching main/XUSB Driver Store package before it
+constructs `HMContext`. A match returns offline without downloading, starting
+the official worker, sweeping devices, or creating staging residue. The exact
+0.5.0 candidate must prove that path in under 30 seconds on physical Windows;
+source tests and the clean-runner lifecycle deliberately do not stand in for
+that gate.
+
 ## Delivery state
 
 | Product slice | State |
 |---|---|
-| One USB DualSense persona | **Implemented, never observed.** Exact VID/PID/descriptor, full state mapping, output feedback, idle republish and client lease are written and CI-proven; no device has ever been created. |
+| One USB DualSense persona | **Implemented; exact 0.5.0 candidate gate pending.** Exact VID/PID/descriptor, full state mapping, bounded motor feedback, idle republish and client lease are in the source-built runtime. Dated development-hardware observations are retained in the state log, but do not approve a new release artifact. |
 | Privileged host | **Implemented.** Fixed installed NativeAOT executable, UAC launch, authenticated one-use pipe, exact process/session checks and bounded protocol. |
 | Device ownership | **Implemented.** One preinstalled-package proof, one exact root, captured child identities, neutralize-before-remove and no Play-time global sweep. |
 | Capacity and configuration | **Implemented.** The one-controller ceiling is enforced by setup, validation, game profiles, slot mutation, pad testing, routing and host dispatch. |
-| Installer/package | **Implemented.** Checked, internet-disclosed HIDMaestro setup task; runtime hash-pinned official download; protected installed host; cleanup; notices/licenses; and intentional portable omission. |
-| Other rich personas | **Gated.** Switch Pro and Xbox Series remain known configuration vocabulary but cannot be selected as working outputs. |
-| Automated software acceptance | **Passed.** [Main Actions run 31898250940](https://github.com/Victor-Villacis/ksx/actions/runs/31898250940) passed contracts, the isolated A/B build and 1,465-check byte-only artifact inspection, the full test/feature matrix, portable packaging, installer safety checks, and repeated install verification. |
-| Physical release acceptance | **Pending.** Clean Windows 10/11, DirectInput/SDL/Steam/browser/WGI, coexistence, force-kill and residue checks require a supervised controller machine. |
+| Installer/package | **Implemented.** Checked, internet-disclosed HIDMaestro setup task; hash-pinned official SDK used only inside a protected ephemeral setup worker; source-built protected runtime host; cleanup; notices/licenses; and intentional portable omission. |
+| Other rich personas | **Gated.** Switch Pro, Xbox Series X\|S, SNES and Genesis remain known configuration vocabulary but cannot be selected as working outputs until each has a source-built runtime and hardware evidence. |
+| Automated software acceptance | **Required for each candidate.** The release run must pass the source/runtime distribution audit, portable omission, bounded installer-worker self-test, and the general install/run/uninstall/reinstall lifecycle. That lifecycle disables optional driver tasks and does not prove HIDMaestro provisioning. |
+| Physical release acceptance | **Pending for each exact candidate.** In addition to controller/API/force-kill checks, the gate requires a clean consented HIDMaestro setup and an offline exact-installed rerun in under 30 seconds with no download, worker/global sweep or staging residue. |
 
 The earlier S1.x sections below are retained as the provenance trail that led
 to this implementation. Their source-only verdicts describe those historical
@@ -404,8 +414,9 @@ failure or measurement to review instead of another hypothetical design.
 
 ## Go/no-go rule
 
-DualSense is enabled because its S4 implementation and installer boundary now
-exist. Do not enable Switch Pro or Xbox Series until their independent runtime,
-feedback and hardware gates pass. Do not call the DualSense hardware gate
-complete until the clean-machine S2/S5 matrix is recorded against the exact
-installer artifact.
+DualSense is enabled because its S4 implementation and source-built runtime
+boundary exist. Do not enable Switch Pro, Xbox Series X|S, SNES or Genesis until
+their independent source-built runtime, feedback and hardware gates pass. Do
+not call the DualSense hardware gate complete until the clean-machine S2/S5
+matrix and the offline exact-installed setup rerun are recorded against the
+exact installer artifact.

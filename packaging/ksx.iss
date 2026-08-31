@@ -1,7 +1,15 @@
 ; ksx — Inno Setup script.
 ;
-; Build (Inno Setup 6.3 or newer; nothing else is required):
+; The authoritative, release-producing recipe is
+; `.github\workflows\build-installer.yml`. It pins the Rust/.NET toolchains,
+; HIDMaestro source, libwdi toolchain and Inno version, then
+; tests the resulting installer. ISCC is only the final packaging step.
 ;
+; A local diagnostic build needs .NET SDK 10.0.400, Inno Setup 6.3+, and the
+; network access for the pinned HIDMaestro source checkout:
+;
+;     powershell -File tools\hidmaestro-host\publish.ps1 -WorkspaceRoot . -OutputDirectory target\release
+;     powershell -File tools\hidmaestro-driver-installer\publish.ps1 -WorkspaceRoot . -OutputDirectory target\release
 ;     cargo build --release -p ksx-app --features studio,cabinet
 ;     cargo build --release -p ksx-launcher
 ;     cargo build --release -p ksx-winusb-helper
@@ -30,15 +38,12 @@
 ; bottom for why it is that verb and not the .exe, and why a failure there
 ; cannot fail this install.
 ;
-; DOES: offer HIDMaestro as its own checked task for every persona ViGEmBus
-; cannot express. That was one persona when this task was written and is five
-; now: DualSense, Switch Pro, Xbox Series X|S, SNES and Genesis, each arming
-; itself in `PadBackend::supports` (`crates/ksx-core/src/persona.rs`). The
-; checkbox label below has to keep naming ALL of them, because clearing this
-; box is a decision a user makes once, in the wizard, before ksx has ever run:
-; a label that says only "DualSense" tells the person who bought ksx for a
-; Switch or SNES pad that this driver is not for them, and the cost of
-; believing it is a second trip through setup.
+; DOES: offer HIDMaestro as its own checked task for the one rich persona whose
+; source-built, non-provisioning runtime is admitted in this release:
+; DualSense. Switch Pro, Xbox Series X|S, SNES and Genesis remain vocabulary
+; for saved configurations but are gated until that source-built host grows
+; their independently verified lifecycle. The official SDK is never installed
+; as a runtime dependency.
 ;
 ; That task runs the pinned installer-only bootstrap packaged beside the fixed
 ; runtime host. The bootstrap downloads the exact official v1.6.1 archive at
@@ -86,19 +91,20 @@
 ; Inno Setup 6 reads; 6.3 is the floor here for `ArchitecturesAllowed=
 ; x64compatible`.
 ;
-; NOT COMPILE-VERIFIED on the machine this was written on — Inno Setup is not
-; installed there. The first `iscc` run is the check.
+; The authoring machine may not have Inno Setup. Every admitted candidate is
+; compile-verified, installed, booted, uninstalled and reinstalled by the pinned
+; Windows release workflow before its artifacts are uploaded.
 
 #define AppName        "ksx"
-#define AppVersion     "0.4.1"
+#define AppVersion     "0.5.0"
 #define AppPublisher   "Victor Villacis"
 #define AppURL         "https://github.com/Victor-Villacis/ksx"
 #define AppExe         "ksx.exe"
 #define LauncherExe    "ksx-launcher.exe"
 #define WinUsbHelper   "ksx-winusb-helper.exe"
 #define HidMaestroHost "ksx-hidmaestro-host.exe"
-#define HidMaestroSdkHost "ksx-hidmaestro-sdk-host.exe"
 #define HidMaestroInstaller "ksx-hidmaestro-driver-installer.exe"
+#define HidMaestroBootstrapDir "ksx-hidmaestro-bootstrap-" + AppVersion
 #define LibwdiDll      "libwdi.dll"
 #define RepoRoot       ".."
 
@@ -116,6 +122,12 @@ AppUpdatesURL={#AppURL}/releases
 AppCopyright=MIT OR Apache-2.0
 
 DefaultDirName={autopf}\{#AppName}
+; Preserve an older install's location long enough for PrepareToInstall to
+; inspect it. A legacy custom path is refused with an uninstall/reinstall
+; remedy; silently switching paths would orphan the old privileged binaries
+; and replace one registered install with two physical copies.
+UsePreviousAppDir=yes
+DisableDirPage=yes
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 LicenseFile={#RepoRoot}\LICENSE-MIT
@@ -204,7 +216,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; ASCII ONLY: this file has no UTF-8 BOM, so user-visible text is interpreted
 ; in the system code page. Comments may keep their punctuation.
 Name: "vigembus"; Description: "Install the bundled ViGEmBus controller driver (required to create virtual controllers; no download)"; GroupDescription: "Controller drivers:"
-Name: "hidmaestro"; Description: "Download and install the pinned HIDMaestro v1.6.1 controller driver (required for DualSense, Switch Pro, Xbox Series, SNES and Genesis; internet required)"; GroupDescription: "Controller drivers:"
+Name: "hidmaestro"; Description: "Download and install the pinned HIDMaestro v1.6.1 controller driver (required for DualSense; internet required on first install)"; GroupDescription: "Controller drivers:"
 ; CHECKED, deliberately — docs/FIRST-RUN.md §4 bullet 1. It used to carry
 ; `Flags: unchecked`, and the audit's finding was concrete: this installer's
 ; only other hand-off is the "run it now" checkbox at the end, so a user who
@@ -212,6 +224,14 @@ Name: "hidmaestro"; Description: "Download and install the pinned HIDMaestro v1.
 ; through. An icon on the desktop is what "installed" looks like to the person
 ; FIRST-RUN.md is written about.
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+
+[InstallDelete]
+; v0.4.x installed the official-SDK-backed runtime twin. It carried upstream
+; provisioning resources that are intentionally outside the v0.5.0 runtime
+; distribution boundary. Inno does not remove files merely because a newer
+; script stops listing them, so every upgrade deletes this one exact retired
+; sibling before copying the admitted source-built host.
+Type: files; Name: "{app}\ksx-hidmaestro-sdk-host.exe"
 
 [Files]
 ; A second copy of the helper, extracted into {tmp} for the pre-install AUDIT
@@ -237,15 +257,13 @@ Source: "{#RepoRoot}\target\release\{#WinUsbHelper}"; DestDir: "{app}"; Flags: i
 ; Fixed elevated one-controller HIDMaestro host. The daemon will seal and
 ; launch this sibling only from a protected Program Files installation.
 Source: "{#RepoRoot}\target\release\{#HidMaestroHost}"; DestDir: "{app}"; Flags: ignoreversion
-; SDK-lane twin: Switch Pro and Xbox Series through the pinned official SDK,
-; bundled self-contained into this one executable. Same sealed-sibling launch.
-Source: "{#RepoRoot}\target\release\{#HidMaestroSdkHost}"; DestDir: "{app}"; Flags: ignoreversion
-; Installer-only, pinned upstream bootstrap. It downloads the exact official
-; v1.6.1 archive only when the user selects the task, verifies every byte it
-; executes, and removes the temporary SDK afterward. The ordinary daemon and
-; runtime host never call this executable and have no package/certificate or
-; download authority.
-Source: "{#RepoRoot}\target\release\{#HidMaestroInstaller}"; DestDir: "{app}"; Flags: ignoreversion
+; Installer-only, pinned upstream bootstrap. Inno copies it directly from its
+; signed/compressed payload into this versioned Program Files setup boundary,
+; never through the selected application directory or the invoking user's
+; TEMP. It downloads the exact official v1.6.1 archive only when the user
+; selects this task, verifies every byte it executes, and removes its temporary
+; SDK afterward. The ordinary daemon/runtime host cannot call this executable.
+Source: "{#RepoRoot}\target\release\{#HidMaestroInstaller}"; DestDir: "{autopf}\{#HidMaestroBootstrapDir}"; Flags: ignoreversion; Tasks: hidmaestro
 Source: "{#RepoRoot}\target\release\{#LibwdiDll}";    DestDir: "{app}"; Flags: ignoreversion
 ; The bundled ViGEmBus setup. It must land in `<exe dir>\drivers\` for
 ; `ksx install-drivers` to find it — and `<exe dir>` must be under Program
@@ -313,6 +331,14 @@ Filename: "{app}\{#LauncherExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; 
 ; is evidence about a step that already happened, so it outlives the wizard on
 ; purpose — and goes when ksx does.
 Type: files; Name: "{app}\install-drivers.log"
+Type: files; Name: "{app}\ksx-hidmaestro-setup.log"
+; The versioned HIDMaestro bootstrap is deliberately NOT removed here. Exit
+; 12 means its elevated worker tree could not be proved stopped, so recursively
+; deleting this directory during a later uninstall could erase executable
+; bytes underneath a live process. A successful setup removes its own exact
+; bootstrap after the bounded worker has exited; failed setup residue stays
+; protected for the next exact helper run/restart rather than being guessed at
+; by the uninstaller.
 ; The usUninstall gate in [Code] has already stopped the session and waited for
 ; `cleanup-owned`, and aborts the entire uninstall on every nonzero or launch
 ; result. Only after that proof succeeds may Inno remove released/rolled-back
@@ -339,6 +365,83 @@ Type: dirifempty; Name: "{commonappdata}\KSX"
 var
   DriverNote: string;
   HidMaestroNote: string;
+
+function SetProcessEnvironmentVariable(Name: String; Value: String): LongBool;
+  external 'SetEnvironmentVariableW@kernel32.dll stdcall delayload';
+
+procedure GetManagedLaunchEnvironment(var Names: TArrayOfString);
+begin
+  SetArrayLength(Names, 29);
+  Names[0] := 'TEMP';
+  Names[1] := 'TMP';
+  Names[2] := 'DOTNET_BUNDLE_EXTRACT_BASE_DIR';
+  Names[3] := 'CORECLR_ENABLE_PROFILING';
+  Names[4] := 'CORECLR_PROFILER';
+  Names[5] := 'CORECLR_PROFILER_PATH';
+  Names[6] := 'CORECLR_PROFILER_PATH_32';
+  Names[7] := 'CORECLR_PROFILER_PATH_64';
+  Names[8] := 'COR_ENABLE_PROFILING';
+  Names[9] := 'COR_PROFILER';
+  Names[10] := 'COR_PROFILER_PATH';
+  Names[11] := 'DOTNET_STARTUP_HOOKS';
+  Names[12] := 'DOTNET_ADDITIONAL_DEPS';
+  Names[13] := 'DOTNET_SHARED_STORE';
+  Names[14] := 'DOTNET_ROOT';
+  Names[15] := 'DOTNET_ROOT_X64';
+  Names[16] := 'DOTNET_ROOT_X86';
+  Names[17] := 'DOTNET_HOST_PATH';
+  Names[18] := 'DOTNET_DiagnosticPorts';
+  Names[19] := 'DOTNET_DefaultDiagnosticPortSuspend';
+  Names[20] := 'DOTNET_EnableDiagnostics';
+  Names[21] := 'DOTNET_EnableDiagnostics_Profiler';
+  Names[22] := 'DOTNET_EnableDiagnostics_Debugger';
+  Names[23] := 'DOTNET_EnableDiagnostics_IPC';
+  Names[24] := 'COMPlus_EnableDiagnostics';
+  Names[25] := 'COREHOST_TRACE';
+  Names[26] := 'COREHOST_TRACEFILE';
+  Names[27] := 'DOTNET_HOST_TRACE';
+  Names[28] := 'DOTNET_HOST_TRACEFILE';
+end;
+
+function ApplyManagedLaunchEnvironment(const BundleRoot: String;
+  var Names, PreviousValues: TArrayOfString): Boolean;
+var
+  I: Integer;
+  Value: String;
+begin
+  Result := False;
+  GetManagedLaunchEnvironment(Names);
+  SetArrayLength(PreviousValues, GetArrayLength(Names));
+  for I := 0 to GetArrayLength(Names) - 1 do
+    PreviousValues[I] := GetEnv(Names[I]);
+  for I := 0 to GetArrayLength(Names) - 1 do
+  begin
+    if I <= 2 then
+      Value := BundleRoot
+    else if SameText(Names[I], 'CORECLR_ENABLE_PROFILING') or
+            SameText(Names[I], 'COR_ENABLE_PROFILING') or
+            SameText(Names[I], 'DOTNET_EnableDiagnostics') or
+            SameText(Names[I], 'DOTNET_EnableDiagnostics_Profiler') or
+            SameText(Names[I], 'DOTNET_EnableDiagnostics_Debugger') or
+            SameText(Names[I], 'DOTNET_EnableDiagnostics_IPC') or
+            SameText(Names[I], 'COMPlus_EnableDiagnostics') then
+      Value := '0'
+    else
+      Value := '';
+    if not SetProcessEnvironmentVariable(Names[I], Value) then
+      exit;
+  end;
+  Result := True;
+end;
+
+procedure RestoreManagedLaunchEnvironment(var Names, PreviousValues: TArrayOfString);
+var
+  I: Integer;
+begin
+  for I := 0 to GetArrayLength(Names) - 1 do
+    if not SetProcessEnvironmentVariable(Names[I], PreviousValues[I]) then
+      Log('KSX could not restore process environment variable ' + Names[I] + '.');
+end;
 
 // ---------------------------------------------------------------------------
 // The fixed ProgramData WinUSB recovery store
@@ -383,6 +486,15 @@ var
   ResultCode: Integer;
 begin
   Result := '';
+  if not PathSame(WizardDirValue, ExpandConstant('{autopf}\{#AppName}')) then
+  begin
+    Result :=
+      'KSX must be installed in its protected Program Files directory:' + #13#10 +
+      ExpandConstant('{autopf}\{#AppName}') + #13#10#13#10 +
+      'The installer runs exact driver helpers with administrator rights and will not execute them from a custom or user-writable location.' + #13#10#13#10 +
+      'If this is an upgrade from a custom-location older version, uninstall that version first, then run this setup again.';
+    exit;
+  end;
   try
     ExtractTemporaryFile('{#WinUsbHelper}');
     HelperPath := ExpandConstant('{tmp}\{#WinUsbHelper}');
@@ -491,10 +603,10 @@ begin
 
   if Missing <> '' then
   begin
-    MsgBox(
+    SuppressibleMsgBox(
       'KSX cannot prove it is safe to remove, because ' + Missing + ' is missing.' + #13#10#13#10 +
       'Reinstall KSX to restore the recovery components, reopen KSX/recovery, then retry uninstall.',
-      mbError, MB_OK);
+      mbError, MB_OK, IDOK);
     exit;
   end;
 
@@ -515,26 +627,26 @@ begin
     if not Exec(ExpandConstant('{app}\{#AppExe}'), 'uninstall-quiesce',
                 ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
     begin
-      MsgBox(
+      SuppressibleMsgBox(
         'KSX could not start to stop its own session. Nothing was uninstalled.' + #13#10#13#10 +
-        'Close ksx, then retry uninstall.', mbError, MB_OK);
+        'Close ksx, then retry uninstall.', mbError, MB_OK, IDOK);
       exit;
     end;
 
     if ResultCode <> 0 then
     begin
-      MsgBox(
+      SuppressibleMsgBox(
         'KSX could not confirm that its session and autostart task had stopped (quiesce exit code ' +
         IntToStr(ResultCode) + '). Nothing was uninstalled.' + #13#10#13#10 +
-        'Close ksx, then retry uninstall.', mbError, MB_OK);
+        'Close ksx, then retry uninstall.', mbError, MB_OK, IDOK);
       exit;
     end;
 
     Result := True;
   except
-    MsgBox(
+    SuppressibleMsgBox(
       'KSX could not be stopped: ' + GetExceptionMessage + #13#10#13#10 +
-      'Nothing was uninstalled. Close ksx, then retry uninstall.', mbError, MB_OK);
+      'Nothing was uninstalled. Close ksx, then retry uninstall.', mbError, MB_OK, IDOK);
   end;
 end;
 
@@ -549,9 +661,9 @@ begin
     if not Exec(ExpandConstant('{app}\{#WinUsbHelper}'), 'cleanup-owned',
                 ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
     begin
-      MsgBox(
+      SuppressibleMsgBox(
         'KSX could not start its WinUSB recovery helper. Nothing was uninstalled.' + #13#10#13#10 +
-        'Reopen KSX/recovery, then retry uninstall.', mbError, MB_OK);
+        'Reopen KSX/recovery, then retry uninstall.', mbError, MB_OK, IDOK);
       exit;
     end;
 
@@ -562,18 +674,18 @@ begin
     end;
 
     if ResultCode = 4 then
-      MsgBox(
+      SuppressibleMsgBox(
         'Windows needs recovery or a restart before KSX can be removed. Nothing was uninstalled.' + #13#10#13#10 +
-        'Restart if requested, reopen KSX/recovery, then retry uninstall.', mbError, MB_OK)
+        'Restart if requested, reopen KSX/recovery, then retry uninstall.', mbError, MB_OK, IDOK)
     else
-      MsgBox(
+      SuppressibleMsgBox(
         'KSX could not verify that its WinUSB changes were fully released (recovery exit code ' +
         IntToStr(ResultCode) + '). Nothing was uninstalled.' + #13#10#13#10 +
-        'Reopen KSX/recovery, then retry uninstall.', mbError, MB_OK);
+        'Reopen KSX/recovery, then retry uninstall.', mbError, MB_OK, IDOK);
   except
-    MsgBox(
+    SuppressibleMsgBox(
       'KSX recovery could not be verified: ' + GetExceptionMessage + #13#10#13#10 +
-      'Nothing was uninstalled. Reopen KSX/recovery, then retry uninstall.', mbError, MB_OK);
+      'Nothing was uninstalled. Reopen KSX/recovery, then retry uninstall.', mbError, MB_OK, IDOK);
   end;
 end;
 
@@ -604,9 +716,11 @@ begin
 
   if not SessionQuiesced() then
     Abort;
+  Log('KSX uninstall gate: session quiesced');
 
   if not OwnedRecoveryReleased() then
     Abort;
+  Log('KSX uninstall gate: owned recovery released');
 end;
 
 // ---------------------------------------------------------------------------
@@ -741,7 +855,9 @@ end;
 // mismatch; 6/7 are API/install failures; 8 means InstallDriver returned
 // successfully but verified temporary cleanup is still pending; 9 means setup
 // was redirected outside the protected Program Files boundary; 10 means exact
-// residue from an earlier run could not be verified and removed before install.
+// residue from an earlier run could not be verified and removed before install;
+// 11 means the bounded worker timed out and was stopped; 12 means its stop
+// could not be confirmed, so protected staging was deliberately retained.
 function HidMaestroFailureReason(ResultCode: Integer): String;
 begin
   case ResultCode of
@@ -754,6 +870,8 @@ begin
     8: Result := 'the driver installed, but verified temporary SDK cleanup is pending';
     9: Result := 'the helper was not running from protected Program Files';
     10: Result := 'an earlier KSX staging directory could not be safely verified or removed';
+    11: Result := 'the bounded upstream driver worker timed out and was stopped';
+    12: Result := 'the timed-out upstream worker could not be confirmed stopped';
   else
     Result := 'an unexpected installer error occurred';
   end;
@@ -769,6 +887,8 @@ begin
     7: Result := 'Restart Windows, then run this installer again with the HIDMaestro task selected.';
     9: Result := 'Install KSX under protected Program Files, then run the HIDMaestro task again.';
     10: Result := 'Close KSX and Setup, restart Windows, then run this installer again. Nothing unexpected was deleted.';
+    11: Result := 'Restart Windows, then run this installer again with the HIDMaestro task selected. The timed-out process tree was stopped before cleanup.';
+    12: Result := 'Restart Windows before trying again. Protected staging was retained because Setup could not prove the worker had stopped.';
   else
     Result := 'Restart Windows, then run this installer again with the HIDMaestro task selected.';
   end;
@@ -776,10 +896,57 @@ end;
 
 procedure InstallHidMaestroDriver;
 var
+  AppLog: String;
+  BootstrapLog: String;
+  BootstrapRoot: String;
+  BundleRoot: String;
+  EnvironmentReady: Boolean;
+  EnvironmentNames: TArrayOfString;
+  PreviousEnvironment: TArrayOfString;
+  LaunchSucceeded: Boolean;
+  InstallerPath: String;
   ResultCode: Integer;
 begin
-  if not Exec(ExpandConstant('{app}\{#HidMaestroInstaller}'), 'install-v1',
-              ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  BootstrapRoot := ExpandConstant('{autopf}\{#HidMaestroBootstrapDir}');
+  InstallerPath := BootstrapRoot + '\{#HidMaestroInstaller}';
+  BundleRoot := BootstrapRoot + '\.ksx-dotnet-bundle';
+  if not FileExists(InstallerPath) then
+  begin
+    HidMaestroNote :=
+      'The HIDMaestro controller driver was NOT installed because its protected setup helper is missing.' + #13#10 +
+      'Existing DualSense availability did not change. Run this installer again with the HIDMaestro task selected.';
+    exit;
+  end;
+  if not DirExists(BundleRoot) and not CreateDir(BundleRoot) then
+  begin
+    HidMaestroNote :=
+      'The HIDMaestro controller driver was NOT installed because Setup could not create its protected runtime directory.' + #13#10 +
+      'Existing DualSense availability did not change. Restart Windows, then run this installer again with the HIDMaestro task selected.';
+    exit;
+  end;
+
+  // The helper is a self-contained managed executable. Native runtime files
+  // are extracted before its Main method can enforce any policy, so the native
+  // Inno process must establish the protected extraction root first. The same
+  // boundary clears inherited profiler/startup-hook/dependency variables: an
+  // elevated driver helper must never load user-selected CLR code before Main.
+  LaunchSucceeded := False;
+  try
+    EnvironmentReady := ApplyManagedLaunchEnvironment(
+      BundleRoot, EnvironmentNames, PreviousEnvironment);
+    if EnvironmentReady then
+      LaunchSucceeded := Exec(
+        InstallerPath, 'install-v1', BootstrapRoot,
+        SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  finally
+    if GetArrayLength(EnvironmentNames) <> 0 then
+      RestoreManagedLaunchEnvironment(EnvironmentNames, PreviousEnvironment);
+  end;
+  BootstrapLog := BootstrapRoot + '\ksx-hidmaestro-setup.log';
+  AppLog := ExpandConstant('{app}\ksx-hidmaestro-setup.log');
+  if FileExists(BootstrapLog) and not CopyFile(BootstrapLog, AppLog, False) then
+    Log('KSX could not copy the HIDMaestro phase log into the application directory.');
+  if not LaunchSucceeded then
   begin
     HidMaestroNote :=
       'The HIDMaestro controller driver was NOT installed because its installer could not start.' + #13#10 +
@@ -789,6 +956,13 @@ begin
   if ResultCode = 0 then
   begin
     HidMaestroNote := '';
+    // Exec waited for the coordinator, and success is possible only after its
+    // worker Job Object is empty and exact staging cleanup has completed. This
+    // is the sole state in which Setup may remove the versioned bootstrap.
+    // Never move this deletion into [InstallDelete]/[UninstallDelete]: exit 12
+    // deliberately leaves possibly-live protected bytes in place.
+    if not DelTree(BootstrapRoot, True, True, True) then
+      Log('KSX could not remove its completed HIDMaestro setup bootstrap. The protected files were left in place.');
     exit;
   end;
   if ResultCode = 8 then

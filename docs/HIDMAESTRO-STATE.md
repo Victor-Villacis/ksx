@@ -1,9 +1,9 @@
 # HIDMaestro — living state
 
-**This file wins.** Where any other document, code comment, INF comment or
-commit message disagrees with this one, that other text is stale and should be
-corrected or annotated, not believed. `docs/HIDMAESTRO.md` remains the *plan*;
-this is the *state*.
+**The current-release block in this file wins.** Where any other document, code
+comment, INF comment or commit message disagrees with that block, the other text
+is stale and should be corrected or annotated, not believed.
+`docs/HIDMAESTRO.md` remains the *plan*; this is the *state*.
 
 It exists because the HIDMaestro work produced a run of confident, wrong
 statements. Every one had the same shape: a claim asserted from a single source
@@ -29,9 +29,43 @@ Two rules that would have prevented most of the mistakes below:
 2. **A shared number is not a shared identity.** Two quantities being equal is
    a coincidence until a source says one *is* the other.
 
+## Current release state — 2026-08-31
+
+This is the only section in this file that defines the 0.5.0 product surface.
+Everything after the next divider is a dated engineering notebook. Those
+measurements remain useful provenance, but an official-SDK host observed on
+development hardware is not a runtime KSX may redistribute.
+
+| Persona | 0.5.0 state | Runtime boundary |
+|---|---|---|
+| DualSense | **Enabled, one controller maximum; exact-candidate physical gate pending** | Fixed source-built NativeAOT host, authenticated one-use IPC, one exact-owned device lifecycle |
+| Xbox 360 / PlayStation (DS4) | **Enabled** | ViGEmBus; independent of HIDMaestro |
+| Switch Pro | **Gated** | Needs a source-built runtime and exact-candidate hardware evidence |
+| Xbox Series X\|S | **Gated** | Needs a source-built companion runtime and exact-candidate hardware evidence |
+| SNES / Genesis | **Gated** | Need source-built persona runtimes and exact-candidate hardware evidence |
+
+The official HIDMaestro v1.6.1 SDK is permitted only after explicit setup
+consent: the installed bootstrap downloads and hash-verifies it, runs the
+single pinned install API in a protected ephemeral worker, proves that process
+tree stopped, then removes the bytes. Neither the installed runtime host nor a
+portable artifact contains the official SDK or its embedded provisioning
+payload. Normal Play has no download or driver-install authority.
+
+The release gate must start without HIDMaestro staged, select that setup task,
+and then rerun the exact installed candidate offline. The second HIDMaestro step
+must finish in under 30 seconds by recording only `preflight` and
+`already-installed`: no download, SDK worker/global device sweep, temporary
+`.ksx-hidmaestro-install-*` directory, or residue is allowed. The general
+automated installer lifecycle intentionally disables optional driver tasks, so
+only the exact-candidate physical ledger can close this gate.
+
 ---
 
-## Persona state — 2026-08-20
+## Historical persona state — 2026-08-20 (superseded for release)
+
+The table and all sections below record the development session as it happened.
+They do not enable a persona or authorize the retired official-SDK runtime in
+the current product.
 
 | Persona | Encoder | Device lane | Spawns? |
 |---|---|---|---|
@@ -45,7 +79,11 @@ Two rules that would have prevented most of the mistakes below:
 flipped for measurement through the SDK lane (the decision rule stands: a lane
 that fails to produce a working device reverts its flip).
 
-### DualSense has never spawned
+### Historical snapshot: DualSense had not spawned yet
+
+This snapshot was written before the later same-day reruns recorded below. It
+is retained to show why the next measurements were required, not as current
+state.
 
 `[MEASURED 2026-08-20]` Zero devnodes with `HIDMAESTRO` in the instance id have
 ever existed on this machine — present or ghost.
@@ -312,7 +350,10 @@ so the orphan is recognised if ever seen again.
 
 ---
 
-## The multi-controller consolidation — 2026-08-20 (Victor's call)
+## Historical multi-controller consolidation — 2026-08-20 (retired)
+
+This official-SDK runtime experiment was later retired from distribution. Its
+eight-controller and multi-persona measurements remain provenance only.
 
 After the session measured the SDK lane working first-try on both its personas
 (Xbox Series: 205 ms create, XInput slot 0→1, 152 ms teardown, exit 0 — gate
@@ -358,7 +399,7 @@ so ksx's binding vocabulary is unchanged.
 
 ---
 
-## Retro personas — measured scope call, 2026-08-20
+## Historical retro-persona scope call — 2026-08-20
 
 Victor asked for every low-hanging mainstream-console pad. Measured against the
 pinned catalog and SDK source — the answer reversed the earlier assumption:
@@ -454,7 +495,7 @@ Nothing here may be written into a contract as a fact until it is measured.
 
 ---
 
-## Architecture decision — 2026-08-20: the hybrid
+## Historical architecture decision — 2026-08-20: the hybrid (superseded)
 
 Victor's call, made with the tradeoff measured and on the table.
 
@@ -519,7 +560,7 @@ ViGEmBus (same author) is already the working X360/DS4 lane.
 
 ---
 
-## Known-stale, not yet fixed
+## Historical stale-claim sweep
 
 The 2026-08-20 sweep found 54 contradicted claims. All are now fixed:
 the mechanical ones (counts, "live", the XUSB mechanism error) first, and the
@@ -530,12 +571,14 @@ enforces the right one (612 checks). The s1_5e README's 241/12 literals were
 corrected in lockstep with the verifier anchor that pins them, and HANDOFF.md
 no longer denies the production adapter that exists.
 
-Nothing known-stale is currently outstanding. New contradictions go here, each
-with why it cannot be fixed immediately.
+That sweep was complete for its 2026-08-20 branch. It does not override the
+current-release block above; later distribution review retired the official-SDK
+runtime and its five-persona/eight-controller product claims. New current-state
+contradictions belong in the release block rather than being hidden here.
 
 ---
 
-## Commit log — this branch's HIDMaestro work
+## Historical commit log — 2026-08-20 HIDMaestro work
 
 | Date | Commit | What |
 |---|---|---|

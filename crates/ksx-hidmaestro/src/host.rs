@@ -75,12 +75,12 @@ pub const CLIENT_LEASE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 pub const CLIENT_LEASE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Finite upper bounds passed to every transport implementation.
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
-/// Creating a devnode is slow and gets slower with siblings: the 2026-08-20
-/// session measured the FIRST Switch Pro create at 0.8 s and the SECOND at
-/// 7.7 s (the driver re-enumerates with every added pad). 15 s left too
-/// little headroom for the later pads of an eight-pad couch; a genuine bind
-/// failure still answers as a named Fault well inside this bound (the host's
-/// own child-wait is 12 s).
+/// Creating a devnode is slow: the 2026-08-20 SDK session measured 0.8 s for a
+/// first create and 7.7 s when the driver had to re-enumerate another device.
+/// The released source-built host currently permits only one controller, but
+/// the wire bound keeps enough headroom for driver variance; a genuine bind
+/// failure still answers as a named Fault inside it (the host's child-wait is
+/// 12 s).
 pub const CREATE_TIMEOUT: Duration = Duration::from_secs(30);
 pub const SUBMIT_TIMEOUT: Duration = Duration::from_millis(250);
 /// Destroying a virtual controller removes a live devnode, and the OS-side
@@ -98,9 +98,9 @@ pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 /// One of the fixed catalog identities KSX may eventually request.
 ///
 /// This is protocol vocabulary, not a capability gate. Which personas a
-/// build offers is decided independently by [`Persona::can_plug()`] — all
-/// three since the 2026-08-20 session measured them working through the
-/// multi-controller SDK-lane host.
+/// build offers is decided independently by [`Persona::can_plug()`]. The
+/// source-built production host currently offers only DualSense; the other
+/// ids remain protocol vocabulary for fixtures and future runtimes.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum ProfileId {
@@ -2834,14 +2834,18 @@ mod tests {
         }
     }
 
-    /// Every protocol profile is product-enabled (retro leg flip
-    /// 2026-08-20). The CANDIDATE-shaped harness below still refuses Switch
-    /// Pro — the candidate host serves nothing in production and stays the
-    /// conformance reference.
+    /// Protocol vocabulary is broader than the production capability gate.
+    /// The source-built host and its in-memory harness accept DualSense only.
     #[test]
-    fn protocol_profiles_carry_their_measured_gates() {
-        for profile in ProfileId::ALL.iter().copied() {
-            assert!(profile.persona().can_plug(), "{profile:?}");
+    fn protocol_profiles_do_not_bypass_the_production_capability_gate() {
+        assert!(ProfileId::DualSense.persona().can_plug());
+        for profile in [
+            ProfileId::SwitchPro,
+            ProfileId::XboxSeries,
+            ProfileId::Snes,
+            ProfileId::Genesis,
+        ] {
+            assert!(!profile.persona().can_plug(), "{profile:?}");
         }
         let (_harness, transport) = Harness::new();
         let mut client = HostClient::connect(transport, nonce(), expectation()).unwrap();

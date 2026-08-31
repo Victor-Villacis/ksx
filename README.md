@@ -2,9 +2,11 @@
 
 KSX splits one or more keyboards — including arcade encoders like the Ultimarc
 I-PAC that present as keyboards — into as many as **16 virtual game controllers**
-on Windows 11. The first four can be Xbox 360-style controllers; supported
-additional players use PlayStation-style controllers without pretending
-Windows' four-controller XInput limit does not exist.
+on Windows 11. Xbox 360 uses Windows' four XInput seats, while PlayStation/DS4
+can serve additional players through ViGEmBus. The installed HIDMaestro lane
+adds one plain-USB DualSense. Switch Pro, Xbox Series X|S, SNES and Genesis
+remain recognized configuration vocabulary, but are gated and cannot be chosen
+as working outputs in this release.
 
 KSX is a standalone Rust product with its own configuration, engine, Windows
 integration, Studio interface, installer, and release lifecycle. Prior work that
@@ -30,7 +32,9 @@ developer machine — [`docs/RELEASING.md`](docs/RELEASING.md). An advanced
 portable ZIP is attached beside the installer, but it deliberately omits the
 elevated WinUSB helper and prepare provider. It can use Interception or a device
 that an installed KSX already prepared; it cannot perform the supported
-prepare/release flow and is not the file to start with.
+prepare/release flow. It also omits the HIDMaestro runtime hosts and installer,
+so the installed-only DualSense persona is unavailable. It is not the file to
+start with.
 
 **Taking this over?** [`docs/HANDOFF.md`](docs/HANDOFF.md) is the orientation:
 what ksx is, how the crates fit together, what is finished, what is not, and
@@ -57,21 +61,23 @@ explicit recovery model and a virtual-controller stack that games actually see:
 |---|---|---|
 | Keyboard capture | [`kanata-interception`](https://crates.io/crates/kanata-interception) for broad keyboard support, plus a **WinUSB/`nusb` direct-claim backend** | Per-device routing, scoped blocking, explicit recovery, and a path that uses an in-box Windows driver. |
 | Virtual controller output | **ViGEmBus 1.22.0** through a vendored pure-Rust [`vigem-client`](https://github.com/CasualX/vigem-client) | Real XInput slots through Microsoft's `xusb22.sys`, with PlayStation-style targets available beyond the four-controller XInput ceiling. |
-| Rich controller output | **HIDMaestro v1.6.1** through KSX's fixed elevated host | One exact plain-USB DualSense, full-state keepalive and bounded rumble feedback without elevating the daemon. |
+| Rich controller output | **HIDMaestro v1.6.1** through KSX's fixed elevated host | One plain-USB DualSense through a source-built, one-controller NativeAOT runtime with 16 ms keepalive and bounded motor feedback. |
 
 That table is shipped reality. The output roadmap deliberately keeps three
 complementary lanes: ViGEmBus for proven X360/DS4 compatibility, HIDMaestro for
 rich byte-exact Windows controller profiles, and VIIPER for virtual USB,
-network endpoints and Linux reach. The first HIDMaestro persona—DualSense—is a
-shipping installed-only feature; Switch Pro, Xbox Series and VIIPER remain
-independently gated. KSX never silently changes a requested controller identity
-because one backend is unavailable. See [`docs/ENHANCEMENTS.md`](docs/ENHANCEMENTS.md#e1--a-capability-routed-output-stack).
+network endpoints and Linux reach. Only DualSense currently passes the
+source-built HIDMaestro runtime boundary; Switch Pro, Xbox Series X|S, SNES,
+Genesis and VIIPER remain independently gated. KSX never silently changes a
+requested controller identity because one backend is unavailable. See
+[`docs/ENHANCEMENTS.md`](docs/ENHANCEMENTS.md#e1--a-capability-routed-output-stack).
 
-The checked HIDMaestro setup task clearly requires internet: setup downloads
-the exact official v1.6.1 archive, verifies pinned hashes before executing it,
-installs the package in an isolated worker, waits for that worker to exit, and
-then removes the temporary SDK. Normal Play has no driver download or
-package-install authority.
+The checked HIDMaestro setup task clearly requires internet on first install:
+setup downloads the exact official v1.6.1 archive, verifies pinned hashes
+before executing it in a protected ephemeral worker, waits for that worker to
+exit, and removes the temporary SDK. The official SDK is never redistributed
+as a runtime dependency. Normal Play has no driver download or package-install
+authority.
 
 The driver analysis and dated prior-art survey live in [`docs/research/`](docs/research/).
 
@@ -450,7 +456,7 @@ LaunchBox and RetroBat wiring, plus a wrapper that always stops ksx:
 
 ## Status
 
-The current tree is the **KSX 0.4.1 release line**. Studio's current product
+The current tree is the **KSX 0.5.0 release line**. Studio's current product
 route is `/redesign`: the guided Hardware -> Controller -> Mapping -> Play
 workbench. Its Tools menu makes `/check` (test inputs), `/pads` (virtual
 controllers) and `/devices` (hardware) directly discoverable. Live input
@@ -463,8 +469,8 @@ are deferred as well. `/nocturne` has no product UI or write/API surface; an
 old GET bookmark only redirects to `/redesign`. The complete scope and the
 backend/CLI contracts preserved for later are recorded in
 [`docs/DEFERRED-SURFACES.md`](docs/DEFERRED-SURFACES.md). The release retains
-recovery, packaging, and one installed USB DualSense through the bounded
-HIDMaestro backend. The supervised cabinet and controller checks in
+recovery, packaging, and one installed-only DualSense through the bounded,
+source-built HIDMaestro backend. The supervised cabinet and controller checks in
 [`docs/GATES.md`](docs/GATES.md) remain the authority for physical hardware
 evidence. Current implementation state and known limits are in
 [`docs/HANDOFF.md`](docs/HANDOFF.md); future ideas are tracked in
@@ -485,15 +491,16 @@ crates/ksx-core           pure mapping engine (CI-tested, proptest)
 crates/ksx-config         TOML config + presets
 crates/ksx-api            the typed control API every front end consumes (no HTTP, no async)
 crates/ksx-capture        CaptureBackend: interception / winusb / rawinput-identify
-crates/ksx-output         VirtualPadBackend: ViGEmBus + production DualSense HIDMaestro routing
-crates/ksx-hidmaestro     the bounded elevated host behind the plain-USB DualSense persona
+crates/ksx-output         VirtualPadBackend: ViGEmBus + one-DualSense HIDMaestro routing
+crates/ksx-hidmaestro     bounded one-controller client/session protocol for the elevated HIDMaestro host
 crates/ksx-platform       driver health, install, autostart, WinUSB rebind, SendInput
 crates/ksx-games          game launch + exit detection (launcher hand-off)
 crates/ksx-app            the `ksx` binary: clap definitions and verb dispatch, nothing else
 crates/ksx-backend        every verb's body — the daemon, the run supervisor, the writers
 crates/ksx-launcher       GUI-subsystem customer hand-off; no console window
 crates/ksx-winusb-helper  installed-only elevated exact-device transaction boundary
-tools/hidmaestro-host     installed-only elevated one-DualSense runtime host
+tools/hidmaestro-host     installed production source-built one-DualSense runtime host
+tools/hidmaestro-sdk-host retired SDK-lane research/conformance source; never shipped as runtime
 tools/hidmaestro-driver-installer explicit pinned driver install/repair boundary
 crates/ksx-studio         ksx Studio, the optional localhost UI (feature `studio`)
 crates/ksx-cabinet        the operate-only 10-foot egui surface
@@ -555,7 +562,7 @@ portable release both include that material.
 - **[Hifihedgehog](https://github.com/hifihedgehog)** —
   [HIDMaestro](https://github.com/hifihedgehog/HIDMaestro),
   [PadForge](https://github.com/hifihedgehog/PadForge), and direct protocol
-  guidance for the live one-DualSense rich-profile backend
+  guidance for the installed one-DualSense rich-profile backend
 - **Alia5** — VIIPER and SISR, informing the planned virtual-USB/network lane
 - **jtroo** — kanata-interception
 - **Lucide contributors** — the `gamepad-2` silhouette in the ksx mark (ISC)

@@ -254,8 +254,8 @@ pub enum SlotError {
     /// Writing this would put more slots on the HIDMaestro host than it
     /// carries ([`ksx_core::MAX_HIDMAESTRO_PADS`] live pads).
     #[error(
-        "that would make {after} slots in {destination} use a HIDMaestro persona, and the \
-         elevated HIDMaestro host carries at most {} live pads — the extra pads would refuse \
+        "that would make {after} slots in {destination} use a HIDMaestro persona, but the \
+         elevated HIDMaestro host has a live-pad capacity of {} — the extra pads would refuse \
          at startup after the others were already live. Give slot {slot} persona '{}' or '{}' \
          (ViGEmBus, outside that pool), or move another slot off HIDMaestro first",
         ksx_core::MAX_HIDMAESTRO_PADS,
@@ -1252,8 +1252,8 @@ mod tests {
         );
     }
 
-    /// Every shipping persona is writable (retro leg flip 2026-08-20); the
-    /// refusal machinery re-arms with the next gated persona.
+    /// Personas with shipped production runtimes are writable; known gated
+    /// profiles refuse without changing the file.
     ///
     /// Each persona is checked ON DISK, not by `assign` returning `Ok`. A no-op
     /// `Ok` is a real path through this writer — see
@@ -1262,20 +1262,12 @@ mod tests {
     /// original one would satisfy every `unwrap()` below. Only the reload
     /// separates "written" from "accepted and dropped".
     #[test]
-    fn every_shipping_persona_is_writable() {
+    fn supported_personas_write_and_gated_profiles_do_not() {
         let root = TempRoot::new("every-persona");
         let store = root.store();
         assign(&store, &spec(1, "Panel P1")).unwrap();
 
-        for persona in [
-            Persona::XboxSeries,
-            Persona::SwitchPro,
-            Persona::Snes,
-            Persona::Genesis,
-            // The production DualSense path, walked last so the file ends on a
-            // persona no earlier iteration could have left behind.
-            Persona::DualSense,
-        ] {
+        for persona in [Persona::PlayStation, Persona::DualSense, Persona::Xbox360] {
             let applied = assign(&store, &persona_spec(1, persona))
                 .unwrap_or_else(|err| panic!("{persona} must be writable: {err}"));
             assert!(
@@ -1288,28 +1280,32 @@ mod tests {
                 "{persona} was reported written but the file on disk says otherwise"
             );
         }
+        let before = store.load_config().unwrap().value;
+        for persona in [
+            Persona::SwitchPro,
+            Persona::XboxSeries,
+            Persona::Snes,
+            Persona::Genesis,
+        ] {
+            let err = assign(&store, &persona_spec(1, persona)).unwrap_err();
+            assert_eq!(err.code(), "persona-not-implemented", "{persona}");
+            assert_eq!(store.load_config().unwrap().value, before, "{persona}");
+        }
     }
 
-    /// The elevated SDK host carries eight live pads; the writer refuses the
-    /// ninth before the config is written, quoting the pool and a way out.
-    /// Alternating non-XInput personas so the four-seat XInput rule cannot
-    /// fire first.
+    /// The source-built host carries one live pad; the writer refuses the next
+    /// before the config is written, quoting the pool and a way out.
     #[test]
-    fn a_ninth_hidmaestro_pad_is_refused_before_the_config_is_written() {
+    fn a_second_hidmaestro_pad_is_refused_before_the_config_is_written() {
         let root = TempRoot::new("hidmaestro-pool");
         let store = root.store();
-        // The pool size is `ksx_core::MAX_HIDMAESTRO_PADS`, not the 8 this
-        // test used to spell three times over. Spelled, a raised ceiling makes
-        // this test fail on `unwrap_err()` returning `Ok(AppliedSlot { slot: 9,
+        // The pool size is `ksx_core::MAX_HIDMAESTRO_PADS`, not a local
+        // literal. Spelled, a raised ceiling makes this test fail on
+        // `unwrap_err()` returning `Ok(AppliedSlot { slot: N,
         // .. })` — a message that names a slot number and says nothing about
         // the number that moved, in one of four crates failing the same way.
         let pool = ksx_core::MAX_HIDMAESTRO_PADS;
         for slot in 1u8..=pool {
-            let persona = if slot % 2 == 0 {
-                Persona::DualSense
-            } else {
-                Persona::SwitchPro
-            };
             assign(
                 &store,
                 &SlotSpec {
@@ -1318,7 +1314,7 @@ mod tests {
                     // presets on disk, and this test is about the pool.
                     preset: Some("Panel P1".into()),
                     profile: None,
-                    persona: Some(persona),
+                    persona: Some(Persona::DualSense),
                     socd: None,
                 },
             )
@@ -1338,10 +1334,13 @@ mod tests {
         assert_eq!(err.code(), "too-many-hidmaestro-pads");
         let message = err.to_string();
         // From the constant `SlotError::TooManyHidMaestroPads` renders, not the
-        // literal 8. The ceiling belongs to `ksx_core::MAX_HIDMAESTRO_PADS`,
+        // literal. The ceiling belongs to `ksx_core::MAX_HIDMAESTRO_PADS`,
         // which `check_hidmaestro_pool` above already gates on — this line is
         // here to prove the refusal QUOTES the ceiling, not to re-decide it.
-        assert!(message.contains(&format!("at most {pool}")), "{message}");
+        assert!(
+            message.contains(&format!("live-pad capacity of {pool}")),
+            "{message}"
+        );
         let config = store.load_config().unwrap().value;
         assert_eq!(
             config.slots.len(),

@@ -125,6 +125,43 @@ Install that setup file and complete the supervised hardware/product gates.
 Reject the environment deployment on any failure. Approve `production` only
 when the exact candidate's ledgers pass.
 
+For HIDMaestro, the exact-candidate ledger is not optional: start from a machine
+without its packages staged, select the disclosed download task, and prove one
+DualSense through the source-built runtime. Then disconnect the machine from
+the network and rerun that exact installed candidate with the task selected.
+The HIDMaestro step must finish in under 30 seconds with no network request,
+official-SDK worker/global device sweep, `.ksx-hidmaestro-install-*` directory,
+or other residue. The setup phase log must append only `preflight` and
+`already-installed`. After each successful task, require the exact protected
+`%ProgramFiles%\ksx-hidmaestro-bootstrap-0.5.0` directory and every
+`%ProgramFiles%\ksx-hidmaestro-bootstrap-*` versioned sibling to be absent;
+the setup-only bootstrap is not an `{app}` runtime file. A failed or
+unconfirmed worker stop must retain its protected bootstrap/staging evidence,
+which is fail-closed product behavior but a release-gate failure. Preserve that
+evidence rather than deleting it. Record this under Gate 4 before approval.
+
+Before the artifacts are admitted, the clean Windows build runner also installs
+the generated setup file, starts the `ksx.exe` copied into Program Files on the
+production port, requires a non-fixture `live-machine` `/api/health` response,
+and fetches the embedded `/redesign` document. It then runs the installed Inno
+uninstaller over a clean recovery store, proves Program Files and the empty KSX
+ProgramData root were removed, reinstalls, and exercises the existing-receipt
+upgrade path. Those automated lifecycle smokes catch packaging, embedded-asset,
+startup, cleanup, and upgrade regressions. They run setup with
+`/MERGETASKS=!vigembus,!hidmaestro,!desktopicon`, so they deliberately do not
+exercise either optional controller-driver installer. They do not replace the
+downloaded-candidate hardware, HIDMaestro, or launcher-window checks above.
+
+Upload is then tested as its own boundary. The same required build check
+downloads the installer, portable ZIP, and candidate manifest back from the
+current Actions run into separate directories; re-verifies their exact names,
+sizes, hashes, source/run identity, and manifest relationship; and installs
+only the downloaded setup file on a clean Program Files/ProgramData state. That
+installed copy must serve live-machine health, `/redesign`, and its hashed JS
+and CSS before the real uninstaller proves both protected roots are gone. A
+green branch build therefore proves the artifact a contributor can download,
+not only the pre-upload file in `packaging/out`.
+
 GitHub artifact retention is 30 days. The 14-day soak fits inside that window;
 do not approve after artifacts or evidence have expired.
 
@@ -161,16 +198,25 @@ backward.
 
 The portable ZIP remains an advanced, non-installing distribution. It omits
 the protected WinUSB/HIDMaestro helpers and their Program Files/ProgramData
-security boundary; the installer is the supported first-run path.
+security boundary, so it cannot create the installed-only DualSense persona;
+the installer is the supported first-run path.
 
 ## Clean-runner boundaries
 
 The reusable CI covers the same checks as every branch plus the release build:
 format/lint/test feature matrices, browser suites, deterministic Studio assets,
 PowerShell environment lifecycle, compile-only cabinet hardware tests,
-HIDMaestro evidence, installed provider smoke, installer upgrade behavior, and
-artifact packaging. A local hash or build is diagnostic only and can never be
-substituted for the run's candidate.
+HIDMaestro evidence, installed provider smoke, installer upgrade behavior,
+installed Studio `/api/health` + `/redesign` boot smoke, clean uninstall and
+reinstall, and artifact packaging. A local hash or build is diagnostic only and
+can never be substituted for the run's candidate.
+
+The HIDMaestro software checks build and inspect only the source-derived
+one-controller DualSense runtime, reject the official SDK and provisioning
+payloads from runtime artifacts, and exercise the setup coordinator's bounded
+worker supervision. Because the clean-runner lifecycle disables optional
+driver tasks, the clean first install and offline exact-installed fast path are
+still mandatory physical-candidate evidence.
 
 The WinUSB/provider steps deliberately build and test the installed-only
 helper boundary on the Windows runner. They do not make a fixture or loose

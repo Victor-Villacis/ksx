@@ -182,42 +182,6 @@ jobs:
           }
           Write-Host "ksx-hidmaestro-host.exe SHA256 $($parsed.executableSha256)"
 
-      # The SDK-lane host references the pinned official release SDK, which is
-      # 113 MB and never committed. Cache the archive by its content hash so a
-      # cache hit skips the download entirely; the fetch script verifies the
-      # bytes identically either way.
-      - name: Cache pinned HIDMaestro release archive
-        id: sdk-archive-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: sdk-archive/HIDMaestro-v1.6.1.zip
-          key: hidmaestro-release-00145C23D9838BE6089389CE58B3FD2B6766FA9BC0F1F3C60A3C885361B53C34
-
-      - name: Build pinned SDK-lane HIDMaestro host
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Path sdk-archive -Force | Out-Null
-          $archive = Join-Path $PWD 'sdk-archive/HIDMaestro-v1.6.1.zip'
-          if (-not (Test-Path -LiteralPath $archive)) {
-            Invoke-WebRequest `
-              -Uri 'https://github.com/hifihedgehog/HIDMaestro/releases/download/v1.6.1/HIDMaestro-v1.6.1.zip' `
-              -OutFile $archive -UseBasicParsing
-          }
-          $receipt = ./tools/hidmaestro-sdk-host/publish-sdk.ps1 `
-            -WorkspaceRoot $PWD `
-            -OutputDirectory (Join-Path $PWD 'target/release') `
-            -ArchivePath $archive
-          if ($LASTEXITCODE -ne 0) { throw 'SDK-lane host publish failed' }
-          $parsed = $receipt | Select-Object -Last 1 | ConvertFrom-Json
-          if ($parsed.schemaVersion -ne 1 -or
-              $parsed.lane -cne 'pinned-official-sdk' -or
-              $parsed.sdkAssemblySha256 -cne 'ADADD9E2604B7B6B047F386EBDD03879FEEF48009C6290281E4C665E2190F6D5' -or
-              $parsed.runtimeContractSha256 -cne 'EDE64B5F53CB6B8681A66AEFFE4C7C464BC5A37697E8DA160C29B655B60FFE89' -or
-              $parsed.executableSha256 -notmatch '^[A-F0-9]{64}$') {
-            throw 'The SDK-lane host build receipt is not exact.'
-          }
-          Write-Host "ksx-hidmaestro-sdk-host.exe SHA256 $($parsed.executableSha256)"
-
       - name: Build pinned HIDMaestro driver installer
         shell: pwsh
         run: |
@@ -236,6 +200,49 @@ jobs:
             throw 'The HIDMaestro driver installer build receipt is not exact.'
           }
           Write-Host "ksx-hidmaestro-driver-installer.exe SHA256 $($parsed.executableSha256)"
+
+      # The official SDK is allowed only inside the explicit, opt-in setup-time
+      # download worker. It must never become part of the installed runtime.
+      # The v1.6.1 SDK embeds Microsoft WDK tools plus driver/USB-IP payloads;
+      # this gate inspects the artifacts that Inno will consume, not a
+      # synthetic fixture describing what we hoped to build.
+      - name: Enforce the HIDMaestro runtime distribution boundary
+        shell: pwsh
+        run: |
+          $release = Resolve-Path 'target/release'
+          $forbiddenNames = @(
+            'ksx-hidmaestro-sdk-host.exe'
+            'HIDMaestro.Core.dll'
+            'Microsoft.Windows.SDK.NET.dll'
+            'WinRT.Runtime.dll'
+            'signtool.exe'
+            'Inf2Cat.exe'
+            'USBip-0.9.7.7-x64.exe'
+          )
+          $forbidden = Get-ChildItem -LiteralPath $release -Recurse -File |
+            Where-Object Name -In $forbiddenNames
+          if ($forbidden) {
+            throw "forbidden HIDMaestro runtime payload: $($forbidden.FullName -join ', ')"
+          }
+
+          $host = Join-Path $release 'ksx-hidmaestro-host.exe'
+          $bytes = [IO.File]::ReadAllBytes($host)
+          $asciiView = [Text.Encoding]::Latin1.GetString($bytes)
+          $utf16View = [Text.Encoding]::Unicode.GetString($bytes)
+          $tokens = @(
+            'HIDMaestro.Resources.signtool.exe'
+            'HIDMaestro.Resources.Inf2Cat.exe'
+            'HIDMaestro.Resources.USBip-0.9.7.7-x64.exe'
+            'HIDMaestro.Internal.DriverBuilder'
+            'InstallUsbipBackend'
+          )
+          foreach ($token in $tokens) {
+            if (($asciiView.Contains($token, [StringComparison]::Ordinal)) -or
+                ($utf16View.Contains($token, [StringComparison]::Ordinal))) {
+              throw "source-built runtime host contains forbidden provisioning token: $token"
+            }
+          }
+          Write-Host 'Runtime contains only the source-built, non-provisioning HIDMaestro host.'
 
       # Exercise the compiled private-command boundary without downloading the
       # SDK or touching the Driver Store. The copy must run from Program Files
@@ -275,6 +282,16 @@ jobs:
               -WindowStyle Hidden
             if ($worker.ExitCode -ne 5) {
               throw "Invalid private worker path returned $($worker.ExitCode), expected 5."
+            }
+
+            $selfTest = Start-Process `
+              -FilePath $probeExe `
+              -ArgumentList @('self-test-v1') `
+              -Wait `
+              -PassThru `
+              -WindowStyle Hidden
+            if ($selfTest.ExitCode -ne 0) {
+              throw "Compiled HIDMaestro installer self-test returned $($selfTest.ExitCode)."
             }
 
             $unknown = Start-Process `
@@ -429,10 +446,9 @@ jobs:
           $launcher = 'target/release/ksx-launcher.exe'
           $helper = 'target/release/ksx-winusb-helper.exe'
           $hidmaestroHost = 'target/release/ksx-hidmaestro-host.exe'
-          $hidmaestroSdkHost = 'target/release/ksx-hidmaestro-sdk-host.exe'
           $hidmaestroInstaller = 'target/release/ksx-hidmaestro-driver-installer.exe'
           $provider = 'target/release/libwdi.dll'
-          foreach ($required in @($exe, $launcher, $helper, $hidmaestroHost, $hidmaestroSdkHost, $hidmaestroInstaller, $provider)) {
+          foreach ($required in @($exe, $launcher, $helper, $hidmaestroHost, $hidmaestroInstaller, $provider)) {
             if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
               throw "required release binary was not built: $required"
             }
@@ -457,12 +473,6 @@ jobs:
               $hostHeaders -notmatch '(?im)^\s+8664 machine \(x64\)' -or
               $hostHeaders -notmatch '(?im)subsystem \(Windows CUI\)') {
             throw 'ksx-hidmaestro-host.exe must be an x64 console-subsystem PE'
-          }
-          $sdkHostHeaders = (& $dumpbin.FullName /nologo /headers $hidmaestroSdkHost | Out-String)
-          if ($LASTEXITCODE -ne 0 -or
-              $sdkHostHeaders -notmatch '(?im)^\s+8664 machine \(x64\)' -or
-              $sdkHostHeaders -notmatch '(?im)subsystem \(Windows CUI\)') {
-            throw 'ksx-hidmaestro-sdk-host.exe must be an x64 console-subsystem PE'
           }
           $installerHeaders = (& $dumpbin.FullName /nologo /headers $hidmaestroInstaller | Out-String)
           if ($LASTEXITCODE -ne 0 -or
@@ -490,7 +500,6 @@ jobs:
           $launcherKb = [math]::Round((Get-Item $launcher).Length / 1KB, 1)
           $helperHash = (Get-FileHash $helper -Algorithm SHA256).Hash
           $hidmaestroHostHash = (Get-FileHash $hidmaestroHost -Algorithm SHA256).Hash
-          $hidmaestroSdkHostHash = (Get-FileHash $hidmaestroSdkHost -Algorithm SHA256).Hash
           $hidmaestroInstallerHash = (Get-FileHash $hidmaestroInstaller -Algorithm SHA256).Hash
           $providerHash = (Get-FileHash $provider -Algorithm SHA256).Hash
           Write-Host "ksx.exe  $mb MB"
@@ -499,11 +508,10 @@ jobs:
           Write-Host "SHA256            $launcherHash"
           Write-Host "ksx-winusb-helper.exe SHA256 $helperHash"
           Write-Host "ksx-hidmaestro-host.exe SHA256 $hidmaestroHostHash"
-          Write-Host "ksx-hidmaestro-sdk-host.exe SHA256 $hidmaestroSdkHostHash"
           Write-Host "ksx-hidmaestro-driver-installer.exe SHA256 $hidmaestroInstallerHash"
           Write-Host "libwdi.dll SHA256               $providerHash"
           "sha256=$h" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
-          "### ksx executables`n`n- ksx.exe: $mb MB, SHA256 ``$h```n- ksx-launcher.exe: $launcherKb KB, SHA256 ``$launcherHash```n- ksx-winusb-helper.exe: SHA256 ``$helperHash```n- ksx-hidmaestro-host.exe: SHA256 ``$hidmaestroHostHash```n- ksx-hidmaestro-sdk-host.exe: SHA256 ``$hidmaestroSdkHostHash```n- ksx-hidmaestro-driver-installer.exe: SHA256 ``$hidmaestroInstallerHash```n- libwdi.dll: SHA256 ``$providerHash```n- commit: ``$env:GITHUB_SHA``" |
+          "### ksx executables`n`n- ksx.exe: $mb MB, SHA256 ``$h```n- ksx-launcher.exe: $launcherKb KB, SHA256 ``$launcherHash```n- ksx-winusb-helper.exe: SHA256 ``$helperHash```n- ksx-hidmaestro-host.exe: SHA256 ``$hidmaestroHostHash```n- ksx-hidmaestro-driver-installer.exe: SHA256 ``$hidmaestroInstallerHash```n- libwdi.dll: SHA256 ``$providerHash```n- commit: ``$env:GITHUB_SHA``" |
             Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
       # The secondary release download is a PORTABLE DISTRIBUTION, not a bare
@@ -631,7 +639,13 @@ jobs:
           }
 
           $target = Join-Path $env:RUNNER_TEMP 'ksx-hostile-junction-target'
-          $install = Join-Path $env:RUNNER_TEMP 'ksx-hostile-install'
+          # PrepareToInstall refuses every custom executable directory before
+          # it launches an elevated helper. Use the one shipping destination
+          # here so this test reaches the WinUSB audit it is meant to prove.
+          $install = Join-Path $env:ProgramFiles 'ksx'
+          if (Test-Path -LiteralPath $install) {
+            throw "$install exists before this clean-runner smoke; refusing to touch it"
+          }
           New-Item -ItemType Directory -Path $target -ErrorAction Stop | Out-Null
           $marker = Join-Path $target 'do-not-touch.txt'
           Set-Content -LiteralPath $marker -Value 'hostile junction target' -NoNewline
@@ -687,7 +701,6 @@ jobs:
               '/SUPPRESSMSGBOXES'
               '/NORESTART'
               '/MERGETASKS=!vigembus,!hidmaestro,!desktopicon'
-              "/DIR=$install"
               "/LOG=$setupLog"
             )
             $process = Start-Process -FilePath $setup.FullName -ArgumentList $arguments -PassThru
@@ -767,6 +780,18 @@ jobs:
                   -not (Test-Path -LiteralPath $marker)) {
                 throw 'removing the test junction also removed its target'
               }
+              # The path was proven absent above and is this workflow's exact
+              # default Program Files target. Remove only setup residue so the
+              # full install/uninstall/upgrade lifecycle below starts clean.
+              if (Test-Path -LiteralPath $install) {
+                $expectedInstall = [IO.Path]::GetFullPath(
+                  (Join-Path $env:ProgramFiles 'ksx'))
+                $actualInstall = [IO.Path]::GetFullPath($install)
+                if ($actualInstall -cne $expectedInstall) {
+                  throw "refusing to clean unexpected install path $actualInstall"
+                }
+                Remove-Item -LiteralPath $actualInstall -Recurse -Force
+              }
             }
           }
 
@@ -797,7 +822,15 @@ jobs:
           }
           $setup = Get-ChildItem 'packaging\out\*setup.exe' | Select-Object -First 1
           if (-not $setup) { throw 'no setup.exe to install' }
-          $install = Join-Path $env:ProgramFiles 'ksx-ci-upgrade'
+          # The shipping installer deliberately refuses custom executable
+          # locations before launching elevated helpers. Exercise that exact
+          # customer contract, including the space in Program Files.
+          $install = Join-Path $env:ProgramFiles 'ksx'
+          if (Test-Path -LiteralPath $install) {
+            throw "$install exists before this clean-runner lifecycle; refusing to touch it"
+          }
+          $daemon = $null
+          $lifecycleCompleted = $false
 
           function Invoke-Setup([string] $Tag) {
             $log = Join-Path $env:RUNNER_TEMP "ksx-upgrade-$Tag.log"
@@ -832,6 +865,195 @@ jobs:
           try {
             # 1. First install. ksx creates the store, correctly owned.
             Invoke-Setup 'first'
+
+            # 1a. Boot the INSTALLED product, not target/release. A successful
+            # setup exit and the presence of ksx.exe prove only that bytes were
+            # copied. This is the release-cycle handoff users actually need:
+            # the packaged binary binds the production port, declares the live
+            # machine provider, and serves the redesign workbench from its
+            # embedded assets.
+            $studio = $null
+            $studioOut = Join-Path $env:RUNNER_TEMP 'ksx-installed-studio.out.log'
+            $studioErr = Join-Path $env:RUNNER_TEMP 'ksx-installed-studio.err.log'
+            try {
+              $studio = Start-Process -FilePath (Join-Path $install 'ksx.exe') `
+                -ArgumentList @('studio', '--port', '4460') `
+                -WorkingDirectory $install -PassThru -WindowStyle Hidden `
+                -RedirectStandardOutput $studioOut `
+                -RedirectStandardError $studioErr
+              $deadline = [DateTime]::UtcNow.AddSeconds(90)
+              $healthResponse = $null
+              while ([DateTime]::UtcNow -lt $deadline) {
+                if ($studio.HasExited) {
+                  $out = if (Test-Path -LiteralPath $studioOut) { Get-Content -LiteralPath $studioOut -Raw } else { '' }
+                  $err = if (Test-Path -LiteralPath $studioErr) { Get-Content -LiteralPath $studioErr -Raw } else { '' }
+                  throw "installed ksx studio exited $($studio.ExitCode) before health answered`nstdout:`n$out`nstderr:`n$err"
+                }
+                try {
+                  $healthResponse = Invoke-WebRequest -UseBasicParsing `
+                    -Uri 'http://127.0.0.1:4460/api/health' -TimeoutSec 2
+                  if ($healthResponse.StatusCode -eq 200) { break }
+                }
+                catch {
+                  Start-Sleep -Milliseconds 250
+                }
+              }
+              if (-not $healthResponse -or $healthResponse.StatusCode -ne 200) {
+                throw 'installed ksx studio did not answer /api/health on port 4460 within 90 seconds'
+              }
+              if ([string]$healthResponse.Headers['Cache-Control'] -notmatch 'no-store') {
+                throw 'installed /api/health lost its no-store contract'
+              }
+              try {
+                $health = $healthResponse.Content | ConvertFrom-Json
+              }
+              catch {
+                throw "installed /api/health did not return valid JSON: $_"
+              }
+              if ([string]$health.environment.id -cne 'live-machine' -or
+                  [bool]$health.environment.fixture) {
+                throw 'installed Studio did not declare the live-machine provider'
+              }
+
+              $product = Invoke-WebRequest -UseBasicParsing `
+                -Uri 'http://127.0.0.1:4460/redesign' -TimeoutSec 15
+              if ($product.StatusCode -ne 200 -or
+                  [string]$product.Headers['Content-Type'] -notmatch '^text/html' -or
+                  $product.Content -notmatch 'data-forma-island') {
+                throw 'installed Studio did not serve the embedded /redesign product document'
+              }
+
+              # The shell marker alone can stay green while the hashed client
+              # graph is absent. Fetch every referenced immutable Studio asset
+              # from this installed binary and require both script and style.
+              $assetPaths = @(
+                [regex]::Matches(
+                  $product.Content,
+                  '(?i)(?:src|href)=["''](?<path>/_assets/[^"'']+)["'']'
+                ) | ForEach-Object { $_.Groups['path'].Value } | Sort-Object -Unique
+              )
+              if ($assetPaths.Count -lt 2 -or
+                  -not ($assetPaths -match '\.js(?:\?|$)') -or
+                  -not ($assetPaths -match '\.css(?:\?|$)')) {
+                throw 'installed /redesign did not reference both hashed JavaScript and CSS assets'
+              }
+              foreach ($assetPath in $assetPaths) {
+                $assetUri = [Uri]::new(
+                  [Uri]'http://127.0.0.1:4460/',
+                  $assetPath
+                ).AbsoluteUri
+                $asset = Invoke-WebRequest -UseBasicParsing -Uri $assetUri -TimeoutSec 15
+                if ($asset.StatusCode -ne 200 -or $asset.Content.Length -eq 0) {
+                  throw "installed Studio asset did not load: $assetPath"
+                }
+              }
+              Write-Host "installed runtime smoke: live /api/health, /redesign, and $($assetPaths.Count) hashed assets are serving on port 4460"
+            }
+            finally {
+              if ($studio -and -not $studio.HasExited) {
+                Stop-Process -Id $studio.Id -Force
+                Wait-Process -Id $studio.Id -ErrorAction SilentlyContinue
+              }
+            }
+
+            # Start the installed daemon with an open stdin handle and prove its
+            # control pipe answers before uninstall. The uninstaller must drive
+            # this live process to a clean exit through `uninstall-quiesce`.
+            $daemonInfo = [Diagnostics.ProcessStartInfo]::new()
+            $daemonInfo.FileName = Join-Path $install 'ksx.exe'
+            $daemonInfo.WorkingDirectory = $install
+            $daemonInfo.Arguments = 'daemon --headless --console'
+            $daemonInfo.UseShellExecute = $false
+            $daemonInfo.CreateNoWindow = $true
+            $daemonInfo.RedirectStandardInput = $true
+            $daemonInfo.RedirectStandardOutput = $true
+            $daemonInfo.RedirectStandardError = $true
+            $daemonProcess = [Diagnostics.Process]::new()
+            $daemonProcess.StartInfo = $daemonInfo
+            if (-not $daemonProcess.Start()) {
+              throw 'installed daemon process did not start'
+            }
+            $daemon = $daemonProcess
+            $daemonReady = $false
+            $daemonDeadline = [DateTime]::UtcNow.AddSeconds(30)
+            while ([DateTime]::UtcNow -lt $daemonDeadline) {
+              if ($daemon.HasExited) { break }
+              $statusText = & (Join-Path $install 'ksx.exe') session status --json 2>$null
+              if ($LASTEXITCODE -eq 0) {
+                try {
+                  $status = $statusText | ConvertFrom-Json
+                  if ([bool]$status.ok) {
+                    $daemonReady = $true
+                    break
+                  }
+                }
+                catch {}
+              }
+              Start-Sleep -Milliseconds 250
+            }
+            if (-not $daemonReady) {
+              try { $daemon.StandardInput.Close() } catch {}
+              if (-not $daemon.WaitForExit(5000)) {
+                Stop-Process -Id $daemon.Id -Force
+                $daemon.WaitForExit()
+              }
+              $daemonOut = $daemon.StandardOutput.ReadToEnd()
+              $daemonErr = $daemon.StandardError.ReadToEnd()
+              throw "installed daemon did not expose a live control pipe`nstdout:`n$daemonOut`nstderr:`n$daemonErr"
+            }
+
+            # 1b. Exercise the real Inno uninstaller while the recovery store
+            # is clean and the daemon is live. Inno emits explicit gate
+            # sentinels only after `uninstall-quiesce` and `cleanup-owned`
+            # succeed; directory deletion alone cannot make this test pass.
+            # Reinstall afterwards so the existing-receipt upgrade scenario
+            # below remains independent.
+            $uninstallers = @(Get-ChildItem -LiteralPath $install -Filter 'unins*.exe' -File)
+            if ($uninstallers.Count -ne 1) {
+              throw "expected one installed Inno uninstaller, found $($uninstallers.Count)"
+            }
+            $uninstallLog = Join-Path $env:RUNNER_TEMP 'ksx-clean-uninstall.log'
+            $uninstallArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
+                               "/LOG=`"$uninstallLog`"")
+            $uninstall = Start-Process -FilePath $uninstallers[0].FullName `
+              -ArgumentList $uninstallArgs -Wait -PassThru -WindowStyle Hidden
+            $uninstallText = if (Test-Path -LiteralPath $uninstallLog) {
+              Get-Content -LiteralPath $uninstallLog -Raw
+            } else { '' }
+            if ($uninstall.ExitCode -ne 0) {
+              throw "clean uninstall exited $($uninstall.ExitCode)`n$uninstallText"
+            }
+            foreach ($sentinel in @(
+              'KSX uninstall gate: session quiesced',
+              'KSX uninstall gate: owned recovery released'
+            )) {
+              if ($uninstallText -notmatch [regex]::Escape($sentinel)) {
+                throw "clean uninstall log did not prove '$sentinel'`n$uninstallText"
+              }
+            }
+            if (-not $daemon.WaitForExit(30000)) {
+              throw 'clean uninstall did not stop the live installed daemon within 30 seconds'
+            }
+            $daemonOut = $daemon.StandardOutput.ReadToEnd()
+            $daemonErr = $daemon.StandardError.ReadToEnd()
+            if ($daemon.ExitCode -ne 0) {
+              throw "installed daemon exited $($daemon.ExitCode) during uninstall`nstdout:`n$daemonOut`nstderr:`n$daemonErr"
+            }
+            $uninstallDeadline = [DateTime]::UtcNow.AddSeconds(30)
+            while ([DateTime]::UtcNow -lt $uninstallDeadline -and
+                   ((Test-Path -LiteralPath $install) -or (Test-Path -LiteralPath $root))) {
+              Start-Sleep -Milliseconds 250
+            }
+            if (Test-Path -LiteralPath $install) {
+              throw "clean uninstall left its Program Files directory: $install"
+            }
+            if (Test-Path -LiteralPath $root) {
+              throw "clean uninstall left its empty ProgramData root: $root"
+            }
+            Write-Host 'clean uninstall: quiesced, released owned recovery state, and removed installed files'
+
+            Invoke-Setup 'after-uninstall'
+
             $journal = Join-Path $root 'WinUSB\journal'
             $txRoot = Join-Path $root 'WinUSB\transactions'
             if (-not (Test-Path -LiteralPath $journal)) {
@@ -896,16 +1118,97 @@ jobs:
                      "(exit $($ph.ExitCode)): $said")
             }
 
-            # 4. The upgrade. This is the install every customer hit.
+            # 4. Seed the one retired v0.4.x runtime filename. Inno keeps
+            #    unlisted files across upgrades unless [InstallDelete] names
+            #    them exactly; a clean install alone cannot prove this
+            #    distribution boundary.
+            $legacySdkHost = Join-Path $install 'ksx-hidmaestro-sdk-host.exe'
+            Set-Content -LiteralPath $legacySdkHost -Value 'retired-sdk-host-sentinel' -NoNewline
+
+            # 5. The upgrade. This is the install every customer hit.
             Invoke-Setup 'second'
+            if (Test-Path -LiteralPath $legacySdkHost) {
+              throw 'the upgrade retained the retired SDK-backed HIDMaestro runtime host'
+            }
             if (-not (Test-Path -LiteralPath (Join-Path $journal "$id.json"))) {
               throw 'the upgrade removed a receipt it was only asked to verify'
             }
             Write-Host "upgrade over an existing receipt: clean"
+
+            # Leave a genuinely clean machine boundary for the artifact-store
+            # proof below. Deleting only Program Files would leave Inno's
+            # same-AppId registry and Start-menu state behind, silently turning
+            # the downloaded setup into another upgrade instead of a clean
+            # install. This must be the product's real uninstaller too.
+            $upgradeUninstallers = @(
+              Get-ChildItem -LiteralPath $install -Filter 'unins*.exe' -File
+            )
+            if ($upgradeUninstallers.Count -ne 1) {
+              throw "expected one post-upgrade uninstaller, found $($upgradeUninstallers.Count)"
+            }
+            $upgradeUninstallLog = Join-Path $env:RUNNER_TEMP 'ksx-upgrade-uninstall.log'
+            $upgradeUninstallArgs = @(
+              '/VERYSILENT'
+              '/SUPPRESSMSGBOXES'
+              '/NORESTART'
+              "/LOG=`"$upgradeUninstallLog`""
+            )
+            $upgradeUninstall = Start-Process `
+              -FilePath $upgradeUninstallers[0].FullName `
+              -ArgumentList $upgradeUninstallArgs -Wait -PassThru -WindowStyle Hidden
+            $upgradeUninstallText = if (Test-Path -LiteralPath $upgradeUninstallLog) {
+              Get-Content -LiteralPath $upgradeUninstallLog -Raw
+            } else { '' }
+            if ($upgradeUninstall.ExitCode -ne 0) {
+              throw ("post-upgrade uninstall exited $($upgradeUninstall.ExitCode)" +
+                     "`n$upgradeUninstallText")
+            }
+            foreach ($sentinel in @(
+              'KSX uninstall gate: session quiesced',
+              'KSX uninstall gate: owned recovery released'
+            )) {
+              if ($upgradeUninstallText -notmatch [regex]::Escape($sentinel)) {
+                throw "post-upgrade uninstall did not prove '$sentinel'`n$upgradeUninstallText"
+              }
+            }
+
+            $uninstallKey = ('Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\' +
+              'Windows\CurrentVersion\Uninstall\' +
+              '{7B2F5A46-3C1D-4E9A-9F30-2A6C0E8D4B11}_is1')
+            $startMenuGroup = Join-Path $env:ProgramData `
+              'Microsoft\Windows\Start Menu\Programs\ksx'
+            $upgradeUninstallDeadline = [DateTime]::UtcNow.AddSeconds(30)
+            while ([DateTime]::UtcNow -lt $upgradeUninstallDeadline -and
+                   ((Test-Path -LiteralPath $install) -or
+                    (Test-Path -LiteralPath $root) -or
+                    (Test-Path -LiteralPath $uninstallKey) -or
+                    (Test-Path -LiteralPath $startMenuGroup))) {
+              Start-Sleep -Milliseconds 250
+            }
+            foreach ($residue in @($install, $root, $uninstallKey, $startMenuGroup)) {
+              if (Test-Path -LiteralPath $residue) {
+                throw "post-upgrade real uninstall left residue: $residue"
+              }
+            }
+            $lifecycleCompleted = $true
+            Write-Host 'post-upgrade real uninstall left clean filesystem, registry, and shortcut state'
           }
           finally {
-            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath $install -Recurse -Force -ErrorAction SilentlyContinue
+            if ($daemon -and -not $daemon.HasExited) {
+              try { $daemon.StandardInput.Close() } catch {}
+              if (-not $daemon.WaitForExit(5000)) {
+                Stop-Process -Id $daemon.Id -Force
+                $daemon.WaitForExit()
+              }
+            }
+            if ($daemon) { $daemon.Dispose() }
+            # Failure hygiene on this disposable runner only. A successful
+            # lifecycle reaches the real-uninstaller assertions above and must
+            # not be made green by manual deletion here.
+            if (-not $lifecycleCompleted) {
+              Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+              Remove-Item -LiteralPath $install -Recurse -Force -ErrorAction SilentlyContinue
+            }
           }
 
       # One machine-readable identity for the candidate a person installs.
@@ -1014,3 +1317,372 @@ jobs:
           overwrite: true
           if-no-files-found: error
           retention-days: 30
+
+      # Upload success only proves that the artifact service accepted some
+      # bytes. Pull each container back out of THIS run before the job can pass,
+      # then install the returned setup.exe rather than its build-tree source.
+      # Separate directories preserve the artifact-name boundary as well as the
+      # candidate's three file identities.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ksx-windows-installer
+          path: ${{ runner.temp }}\ksx-artifact-roundtrip\installer
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ksx-windows-portable
+          path: ${{ runner.temp }}\ksx-artifact-roundtrip\portable
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ksx-windows-candidate-manifest
+          path: ${{ runner.temp }}\ksx-artifact-roundtrip\manifest
+
+      - name: Prove the downloaded candidate installs, boots, and uninstalls
+        shell: pwsh
+        timeout-minutes: 8
+        env:
+          DOWNLOAD_ROOT: ${{ runner.temp }}\ksx-artifact-roundtrip
+          SETUP_NAME: ${{ steps.installer.outputs.name }}
+          SETUP_SHA256: ${{ steps.installer.outputs.sha256 }}
+          PORTABLE_NAME: ${{ steps.portable.outputs.name }}
+          PORTABLE_SHA256: ${{ steps.portable.outputs.sha256 }}
+          MANIFEST_NAME: ${{ steps.candidate_manifest.outputs.name }}
+          MANIFEST_SHA256: ${{ steps.candidate_manifest.outputs.sha256 }}
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+          EXPECTED_REF: ${{ github.ref }}
+          EXPECTED_RUN_ID: ${{ github.run_id }}
+          EXPECTED_RUN_ATTEMPT: ${{ github.run_attempt }}
+          EXPECTED_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Get-OnlyDownloadedFile(
+            [string] $Directory,
+            [string] $ExpectedName
+          ) {
+            if ([string]::IsNullOrWhiteSpace($ExpectedName) -or
+                [IO.Path]::GetFileName($ExpectedName) -cne $ExpectedName) {
+              throw "unsafe or empty candidate filename: '$ExpectedName'"
+            }
+            if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+              throw "downloaded artifact directory is missing: $Directory"
+            }
+            $entries = @(Get-ChildItem -LiteralPath $Directory -Force)
+            if ($entries.Count -ne 1 -or $entries[0].PSIsContainer) {
+              throw ("downloaded artifact directory must contain exactly one file: " +
+                     "$Directory ($($entries.Name -join ', '))")
+            }
+            if ($entries[0].Name -cne $ExpectedName) {
+              throw "downloaded '$($entries[0].Name)' where '$ExpectedName' was declared"
+            }
+            return $entries[0]
+          }
+
+          foreach ($hash in @(
+            $env:SETUP_SHA256,
+            $env:PORTABLE_SHA256,
+            $env:MANIFEST_SHA256
+          )) {
+            if ($hash -cnotmatch '^[A-F0-9]{64}$') {
+              throw "build output is not an exact SHA-256: '$hash'"
+            }
+          }
+
+          $setup = Get-OnlyDownloadedFile `
+            (Join-Path $env:DOWNLOAD_ROOT 'installer') $env:SETUP_NAME
+          $portable = Get-OnlyDownloadedFile `
+            (Join-Path $env:DOWNLOAD_ROOT 'portable') $env:PORTABLE_NAME
+          $manifestFile = Get-OnlyDownloadedFile `
+            (Join-Path $env:DOWNLOAD_ROOT 'manifest') $env:MANIFEST_NAME
+
+          $manifestHash = (Get-FileHash -LiteralPath $manifestFile.FullName `
+            -Algorithm SHA256).Hash
+          if ($manifestHash -cne $env:MANIFEST_SHA256) {
+            throw ("downloaded manifest hashes $manifestHash but the build reported " +
+                   $env:MANIFEST_SHA256)
+          }
+          try {
+            $manifest = Get-Content -LiteralPath $manifestFile.FullName -Raw |
+              ConvertFrom-Json
+          }
+          catch {
+            throw "downloaded exact-candidate manifest is not valid JSON: $_"
+          }
+
+          $cargo = Get-Content -LiteralPath 'Cargo.toml' -Raw
+          if ($cargo -notmatch '(?s)\[workspace\.package\][^\[]*?version\s*=\s*"([^"]+)"') {
+            throw 'Cargo.toml has no [workspace.package] version'
+          }
+          $expectedVersion = $Matches[1]
+          $toolchainSpec = Get-Content -LiteralPath 'rust-toolchain.toml' -Raw
+          if ($toolchainSpec -notmatch '(?m)^channel\s*=\s*"([^"]+)"') {
+            throw 'rust-toolchain.toml has no pinned channel'
+          }
+          $expectedToolchain = $Matches[1]
+          $activeToolchain = (& rustup show active-toolchain | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or
+              [string]::IsNullOrWhiteSpace($activeToolchain)) {
+            throw 'the active Rust toolchain could not be verified'
+          }
+
+          if ([int]$manifest.schema -ne 1 -or
+              [string]$manifest.source.repository -cne $env:EXPECTED_REPOSITORY -or
+              [string]$manifest.source.commit -cne $env:EXPECTED_COMMIT -or
+              [string]$manifest.source.ref -cne $env:EXPECTED_REF -or
+              [string]$manifest.run.id -cne $env:EXPECTED_RUN_ID -or
+              [int]$manifest.run.attempt -ne [int]$env:EXPECTED_RUN_ATTEMPT -or
+              [string]$manifest.release.tag -cne $env:EXPECTED_RELEASE_TAG -or
+              [string]$manifest.release.version -cne $expectedVersion -or
+              [string]$manifest.toolchain.channel -cne $expectedToolchain -or
+              [string]$manifest.toolchain.active -cne $activeToolchain) {
+            throw 'downloaded manifest does not identify this exact source, run, version, and toolchain'
+          }
+          if ($env:EXPECTED_RELEASE_TAG -and
+              $env:EXPECTED_RELEASE_TAG -cne "v$expectedVersion") {
+            throw 'the downloaded candidate release tag and source version disagree'
+          }
+
+          $setupHash = (Get-FileHash -LiteralPath $setup.FullName -Algorithm SHA256).Hash
+          $portableHash = (Get-FileHash -LiteralPath $portable.FullName -Algorithm SHA256).Hash
+          if ($setupHash -cne $env:SETUP_SHA256 -or
+              $portableHash -cne $env:PORTABLE_SHA256) {
+            throw 'downloaded candidate hash disagrees with its build output'
+          }
+          if ([string]$manifest.artifacts.installer.filename -cne $setup.Name -or
+              [long]$manifest.artifacts.installer.size -ne [long]$setup.Length -or
+              [string]$manifest.artifacts.installer.sha256 -cne $setupHash -or
+              [string]$manifest.artifacts.portable.filename -cne $portable.Name -or
+              [long]$manifest.artifacts.portable.size -ne [long]$portable.Length -or
+              [string]$manifest.artifacts.portable.sha256 -cne $portableHash) {
+            throw 'downloaded filenames, sizes, or hashes disagree with the manifest'
+          }
+          Write-Host "artifact-store round trip verified $($setup.Name) SHA256 $setupHash"
+          Write-Host "artifact-store round trip verified $($portable.Name) SHA256 $portableHash"
+          Write-Host "artifact-store round trip verified $($manifestFile.Name) SHA256 $manifestHash"
+
+          # The earlier lifecycle's real uninstaller proves these locations
+          # absent. Recheck at the artifact boundary; accepting residue would
+          # let this smoke boot or upgrade the preceding copy.
+          $install = [IO.Path]::GetFullPath((Join-Path $env:ProgramFiles 'ksx'))
+          $programData = [IO.Path]::GetFullPath('C:\ProgramData\KSX')
+          $uninstallKey = ('Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\' +
+            'Windows\CurrentVersion\Uninstall\' +
+            '{7B2F5A46-3C1D-4E9A-9F30-2A6C0E8D4B11}_is1')
+          $startMenuGroup = Join-Path $env:ProgramData `
+            'Microsoft\Windows\Start Menu\Programs\ksx'
+          foreach ($path in @(
+            $install,
+            $programData,
+            $uninstallKey,
+            $startMenuGroup
+          )) {
+            if (Test-Path -LiteralPath $path) {
+              throw "artifact roundtrip requires a clean machine path: $path"
+            }
+          }
+          if (Get-NetTCPConnection -LocalPort 4460 -State Listen `
+              -ErrorAction SilentlyContinue) {
+            throw 'port 4460 already has a listener before downloaded ksx starts'
+          }
+
+          $setupLog = Join-Path $env:RUNNER_TEMP 'ksx-roundtrip-setup.log'
+          $disabledTasks = @('!vigembus', '!hidmaestro', '!desktopicon') -join ','
+          $setupArgs = @(
+            '/VERYSILENT'
+            '/SUPPRESSMSGBOXES'
+            '/NORESTART'
+            "/MERGETASKS=$disabledTasks"
+            "/DIR=`"$install`""
+            "/LOG=`"$setupLog`""
+          )
+          $installer = Start-Process -FilePath $setup.FullName `
+            -ArgumentList $setupArgs -Wait -PassThru -WindowStyle Hidden
+          $setupText = if (Test-Path -LiteralPath $setupLog) {
+            Get-Content -LiteralPath $setupLog -Raw
+          } else { '' }
+          if ($installer.ExitCode -ne 0 -or $setupText -match 'initializer exit code') {
+            throw "downloaded installer failed with exit $($installer.ExitCode)`n$setupText"
+          }
+
+          $installedExe = Join-Path $install 'ksx.exe'
+          if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf)) {
+            throw "downloaded setup did not install ksx.exe at fixed path $install"
+          }
+
+          # Start only the Program Files binary and require the live provider,
+          # product document, and content-hashed script and stylesheet graph.
+          $studio = $null
+          $studioOut = Join-Path $env:RUNNER_TEMP 'ksx-roundtrip-studio.out.log'
+          $studioErr = Join-Path $env:RUNNER_TEMP 'ksx-roundtrip-studio.err.log'
+          try {
+            $studio = Start-Process -FilePath $installedExe `
+              -ArgumentList @('studio', '--port', '4460') `
+              -WorkingDirectory $install -PassThru -WindowStyle Hidden `
+              -RedirectStandardOutput $studioOut `
+              -RedirectStandardError $studioErr
+            $deadline = [DateTime]::UtcNow.AddSeconds(90)
+            $healthResponse = $null
+            while ([DateTime]::UtcNow -lt $deadline) {
+              if ($studio.HasExited) {
+                $out = if (Test-Path -LiteralPath $studioOut) {
+                  Get-Content -LiteralPath $studioOut -Raw
+                } else { '' }
+                $err = if (Test-Path -LiteralPath $studioErr) {
+                  Get-Content -LiteralPath $studioErr -Raw
+                } else { '' }
+                throw ("downloaded installed Studio exited $($studio.ExitCode) " +
+                       "before health answered`nstdout:`n$out`nstderr:`n$err")
+              }
+              try {
+                $healthResponse = Invoke-WebRequest -UseBasicParsing `
+                  -Uri 'http://127.0.0.1:4460/api/health' -TimeoutSec 2
+                if ($healthResponse.StatusCode -eq 200) { break }
+              }
+              catch {
+                Start-Sleep -Milliseconds 250
+              }
+            }
+            if (-not $healthResponse -or $healthResponse.StatusCode -ne 200) {
+              throw 'downloaded installed Studio did not answer /api/health on port 4460'
+            }
+            $healthContentType = [string]$healthResponse.Headers['Content-Type']
+            $healthCacheControl = [string]$healthResponse.Headers['Cache-Control']
+            $hasJsonContentType = (
+              $healthContentType.Split(';')[0].Trim() -ieq 'application/json'
+            )
+            $hasNoStore = @(
+              $healthCacheControl.Split(',') | Where-Object {
+                $_.Trim() -ieq 'no-store'
+              }
+            ).Count -gt 0
+            if (-not $hasJsonContentType -or -not $hasNoStore) {
+              throw 'downloaded installed /api/health lost its JSON/no-store contract'
+            }
+            try {
+              $health = $healthResponse.Content | ConvertFrom-Json
+            }
+            catch {
+              throw "downloaded installed /api/health returned invalid JSON: $_"
+            }
+            $environmentIsLive = $true
+            if ([string]$health.environment.id -cne 'live-machine' -or
+                [bool]$health.environment.fixture -or
+                -not [string]::IsNullOrEmpty([string]$health.environment.generation) -or
+                [string]::IsNullOrWhiteSpace([string]$health.environment.label) -or
+                [string]::IsNullOrWhiteSpace([string]$health.environment.detail)) {
+              $environmentIsLive = $false
+            }
+            $stagedIsCoherent = if ([bool]$health.staged.reachable) {
+              $null -eq $health.staged.error
+            } else {
+              -not [string]::IsNullOrWhiteSpace([string]$health.staged.error)
+            }
+            $setupIsCoherent = if ($null -ne $health.setup) {
+              -not [string]::IsNullOrWhiteSpace([string]$health.setup.config_root) -and
+                [string]::IsNullOrEmpty([string]$health.setup_error)
+            } else {
+              -not [string]::IsNullOrWhiteSpace([string]$health.setup_error)
+            }
+            if (-not $environmentIsLive -or
+                -not $stagedIsCoherent -or
+                -not $setupIsCoherent) {
+              throw 'downloaded installed Studio did not satisfy live-machine readiness'
+            }
+
+            $redesign = Invoke-WebRequest -UseBasicParsing `
+              -Uri 'http://127.0.0.1:4460/redesign' -TimeoutSec 15
+            if ($redesign.StatusCode -ne 200 -or
+                [string]$redesign.Headers['Content-Type'] -notmatch '^text/html' -or
+                $redesign.Content -notmatch 'data-forma-island') {
+              throw 'downloaded installed Studio did not serve the /redesign product'
+            }
+            $assetPaths = @(
+              [regex]::Matches(
+                $redesign.Content,
+                '(?i)(?:src|href)=["''](?<path>/_assets/[^"'']+)["'']'
+              ) | ForEach-Object { $_.Groups['path'].Value } | Sort-Object -Unique
+            )
+            $hashedScripts = @($assetPaths | Where-Object {
+              $_ -cmatch '^/_assets/[^/?]+\.[0-9a-f]{8}\.js(?:\?.*)?$'
+            })
+            $hashedStyles = @($assetPaths | Where-Object {
+              $_ -cmatch '^/_assets/[^/?]+\.[0-9a-f]{8}\.css(?:\?.*)?$'
+            })
+            if ($hashedScripts.Count -lt 1 -or $hashedStyles.Count -lt 1) {
+              throw 'downloaded /redesign lacks hashed JavaScript or CSS references'
+            }
+            foreach ($assetPath in $assetPaths) {
+              $assetUri = [Uri]::new(
+                [Uri]'http://127.0.0.1:4460/',
+                $assetPath
+              ).AbsoluteUri
+              $asset = Invoke-WebRequest -UseBasicParsing -Uri $assetUri -TimeoutSec 15
+              if ($asset.StatusCode -ne 200 -or
+                  [string]::IsNullOrEmpty([string]$asset.Content)) {
+                throw "downloaded installed Studio asset did not load: $assetPath"
+              }
+            }
+            Write-Host ("downloaded installed runtime smoke: live /api/health, " +
+                        "/redesign, $($hashedScripts.Count) hashed JS and " +
+                        "$($hashedStyles.Count) hashed CSS asset(s)")
+          }
+          finally {
+            if ($studio -and -not $studio.HasExited) {
+              Stop-Process -Id $studio.Id -Force
+              Wait-Process -Id $studio.Id -ErrorAction SilentlyContinue
+            }
+          }
+
+          # Use Inno's installed uninstaller, including its quiesce and owned-
+          # recovery gates. No manual directory cleanup may satisfy this proof.
+          $uninstallers = @(
+            Get-ChildItem -LiteralPath $install -Filter 'unins*.exe' -File
+          )
+          if ($uninstallers.Count -ne 1) {
+            throw "expected one installed uninstaller, found $($uninstallers.Count)"
+          }
+          $uninstallLog = Join-Path $env:RUNNER_TEMP 'ksx-roundtrip-uninstall.log'
+          $uninstallArgs = @(
+            '/VERYSILENT'
+            '/SUPPRESSMSGBOXES'
+            '/NORESTART'
+            "/LOG=`"$uninstallLog`""
+          )
+          $uninstaller = Start-Process -FilePath $uninstallers[0].FullName `
+            -ArgumentList $uninstallArgs -Wait -PassThru -WindowStyle Hidden
+          $uninstallText = if (Test-Path -LiteralPath $uninstallLog) {
+            Get-Content -LiteralPath $uninstallLog -Raw
+          } else { '' }
+          if ($uninstaller.ExitCode -ne 0) {
+            throw "downloaded candidate uninstall exited $($uninstaller.ExitCode)`n$uninstallText"
+          }
+          foreach ($sentinel in @(
+            'KSX uninstall gate: session quiesced',
+            'KSX uninstall gate: owned recovery released'
+          )) {
+            if ($uninstallText -notmatch [regex]::Escape($sentinel)) {
+              throw "downloaded candidate uninstall did not prove '$sentinel'`n$uninstallText"
+            }
+          }
+
+          $uninstallDeadline = [DateTime]::UtcNow.AddSeconds(30)
+          while ([DateTime]::UtcNow -lt $uninstallDeadline -and
+                 ((Test-Path -LiteralPath $install) -or
+                  (Test-Path -LiteralPath $programData) -or
+                  (Test-Path -LiteralPath $uninstallKey) -or
+                  (Test-Path -LiteralPath $startMenuGroup))) {
+            Start-Sleep -Milliseconds 250
+          }
+          if (Test-Path -LiteralPath $install) {
+            throw "real uninstall left Program Files behind: $install"
+          }
+          if (Test-Path -LiteralPath $programData) {
+            throw "real uninstall left ProgramData behind: $programData"
+          }
+          if (Test-Path -LiteralPath $uninstallKey) {
+            throw "real uninstall left its registration behind: $uninstallKey"
+          }
+          if (Test-Path -LiteralPath $startMenuGroup) {
+            throw "real uninstall left Start-menu shortcuts behind: $startMenuGroup"
+          }
+          Write-Host 'artifact-store candidate passed real install, boot, and uninstall proof'

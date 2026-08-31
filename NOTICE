@@ -134,17 +134,18 @@ disclaimer accompany every installed copy.
     Source revision: 2a0dac0857901a63d365a36dcf99cf50114ca954
     License: MIT
     Full text: THIRD-PARTY-LICENSES/HIDMaestro.txt
-    Used in: ksx-hidmaestro-host.exe
-             optional setup-time official download
+    Used in: source-built ksx-hidmaestro-host.exe
+             optional setup-time official download (not redistributed)
 
 The Windows installer builds a fixed elevated runtime host for one DualSense
-from the exact reviewed v1.6.1 source. Its separate installer-only bootstrap
-contains no upstream binary. After explicit setup consent it downloads the
-official v1.6.1 archive, verifies the archive and all three managed assemblies
-by pinned length and SHA-256, invokes HIDMaestro's package installation in an
-isolated worker, waits for that worker to exit, and deletes the temporary SDK.
-The ordinary ksx daemon and runtime host neither embed driver-install authority
-nor download HIDMaestro.
+from the exact reviewed v1.6.1 source. That host contains neither the official
+SDK assembly nor its embedded provisioning payloads. The separate
+installer-only bootstrap contains no upstream binary. After explicit setup
+consent it downloads the official v1.6.1 archive, verifies the archive and all
+three managed assemblies by pinned length and SHA-256, invokes HIDMaestro's
+package installation in a protected ephemeral worker, waits for that process
+tree to exit, and deletes the temporary SDK. The ordinary ksx daemon and
+runtime host neither embed driver-install authority nor download HIDMaestro.
 
 The official release also contains Microsoft SDK/WDK dependencies governed by
 their own terms. They are fetched from upstream only for the explicit setup
@@ -206,8 +207,8 @@ and corresponding source together because WinUSB preparation is installed-only.
 
     Full reports: THIRD-PARTY-LICENSES/Rust-dependencies.html
                   THIRD-PARTY-LICENSES/Rust-dependencies-winusb-helper.html
-    Graphs: ksx-app 0.2.0, features studio + cabinet
-            ksx-winusb-helper 0.2.0
+    Graphs: ksx-app 0.5.0, features studio + cabinet
+            ksx-winusb-helper 0.5.0
     Target: x86_64-pc-windows-msvc
 
 The reports list every Rust crate compiled into the shipped Windows `ksx.exe`

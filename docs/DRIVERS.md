@@ -21,15 +21,20 @@ Deep dives: [`research/virtual-gamepad-2026.md`](research/virtual-gamepad-2026.m
   one of the two places it is run from.
 - **ViGEmBus remains the compatibility foundation/fallback**, not the only future
   backend. Its shipped X360 and DS4 paths stay supported while they work.
-- **HIDMaestro is the chosen rich-profile Windows backend — implemented, not yet observed.** No HIDMaestro device has ever been created on any machine; see [`HIDMAESTRO-STATE.md`](HIDMAESTRO-STATE.md). The current release
-  packages a fixed NativeAOT privileged host and an explicit v1.6.1
-  installer-only bootstrap. The checked setup task discloses its network use,
-  downloads the exact official archive, verifies pinned lengths and SHA-256
-  identities, invokes only `HMContext.InstallDriver()` in an isolated worker,
-  waits for that worker to exit, and deletes the temporary SDK. Neither KSX nor
-  its installer redistributes the upstream embedded WDK tools. It supports
-  exactly one plain-USB DualSense per session; Switch Pro and Xbox Series remain
-  independently gated.
+- **HIDMaestro is the chosen rich-profile Windows backend; the 0.5.0 runtime is
+  deliberately bounded.** Development sessions on 2026-08-20 created real
+  HIDMaestro-backed controllers through the now-retired official-SDK runtime
+  lane, including DualSense; the measured record is in
+  [`HIDMAESTRO-STATE.md`](HIDMAESTRO-STATE.md). That historical evidence does
+  not close the current artifact's exact-candidate physical gate. The release
+  packages a fixed source-built NativeAOT privileged host and an explicit
+  v1.6.1 installer-only bootstrap. The checked setup task discloses its network
+  use, downloads the exact official archive, verifies pinned lengths and
+  SHA-256 identities, invokes only `HMContext.InstallDriver()` in an isolated
+  worker, proves its process tree stopped, and deletes the temporary SDK.
+  Neither KSX nor its installer redistributes the upstream embedded WDK tools.
+  Runtime supports exactly one plain-USB DualSense per session. Switch Pro,
+  Xbox Series X|S, SNES and Genesis remain recognized but gated.
 - **VIIPER is the complementary virtual-USB/network/Linux lane.** It is for
   software-defined controllers, keyboards and mice, including remote endpoints—not a
   replacement profile catalog. Its GPL core stays across a deliberate process boundary

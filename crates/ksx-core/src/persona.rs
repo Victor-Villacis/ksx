@@ -120,11 +120,11 @@ impl PadBackend {
     /// persona on this stack.
     ///
     /// A fact about the binary, and deliberately **not** a probe of the
-    /// machine. The two disagree in the one case that matters: install
-    /// HIDMaestro and every probe flips to "available" while
-    /// `create_controller` still has nothing to call — so a probe-based gate
-    /// would start offering personas that plug no better than before, and send
-    /// the user back to the driver they had just installed.
+    /// machine. The two disagree in the one case that matters: an installed
+    /// HIDMaestro driver makes a machine probe succeed even when this binary
+    /// has no production runtime for a particular profile. A probe-based gate
+    /// would offer that profile and send the user back to a driver they had
+    /// already installed.
     ///
     /// This is a backend-level diagnostic. Product gates must call
     /// [`PadBackend::supports`] (normally through [`Persona::can_plug`]) so a
@@ -133,11 +133,7 @@ impl PadBackend {
     pub const fn is_implemented(self) -> bool {
         match self {
             PadBackend::Vigem => true,
-            PadBackend::HidMaestro => {
-                self.supports(Persona::DualSense)
-                    || self.supports(Persona::SwitchPro)
-                    || self.supports(Persona::XboxSeries)
-            }
+            PadBackend::HidMaestro => self.supports(Persona::DualSense),
         }
     }
 
@@ -145,11 +141,11 @@ impl PadBackend {
     /// build.
     ///
     /// The HIDMaestro arms are intentionally separate: each flips `true`
-    /// only after ITS device has been observed on real hardware, because a
-    /// persona listed here is a promise the Studio makes to a player. The
-    /// modern trio (DualSense, Switch Pro, Xbox Series) was measured working
-    /// on 2026-08-20; the retro pair (SNES, Genesis) is wired end to end and
-    /// stays `false` until its own supervised hardware leg.
+    /// only when its independently distributable production runtime ships,
+    /// because a persona listed here is a promise the Studio makes to a
+    /// player. The source-built host currently carries one DualSense. The
+    /// other catalog profiles stay known but gated while the retired
+    /// SDK-backed runtime remains excluded from releases.
     ///
     /// `docs/HIDMAESTRO-STATE.md` is the living record of what has actually
     /// been observed versus merely implemented, with the measurement behind
@@ -157,25 +153,11 @@ impl PadBackend {
     pub const fn supports(self, persona: Persona) -> bool {
         match (self, persona) {
             (PadBackend::Vigem, Persona::Xbox360 | Persona::PlayStation) => true,
-            // All three measured working 2026-08-20 through the
-            // multi-controller SDK-lane host (docs/HIDMAESTRO-STATE.md,
-            // session results + consolidation).
             (PadBackend::HidMaestro, Persona::DualSense) => true,
-            (PadBackend::HidMaestro, Persona::SwitchPro) => true,
-            // RETRO HARDWARE LEG 2026-08-20 (Victor supervising): enabled
-            // for the spawn measurement — descriptor-ordered tables through
-            // the same SDK lane; the provisional button-label assignments
-            // are adjudicated in joy.cpl during the leg. If a device fails
-            // to appear, its arm flips back.
-            (PadBackend::HidMaestro, Persona::Snes) => true,
-            (PadBackend::HidMaestro, Persona::Genesis) => true,
-            // HARDWARE SESSION 2026-08-20: enabled for the supervised
-            // measurement — the SDK-lane host already accepts this persona and
-            // the SDK performs its own SWD-companion flow (hmswd ships in its
-            // payload; the XUSB INF is staged as oem207 on the session
-            // machine). If the session fails to produce a working device,
-            // this flips back.
-            (PadBackend::HidMaestro, Persona::XboxSeries) => true,
+            (PadBackend::HidMaestro, Persona::SwitchPro) => false,
+            (PadBackend::HidMaestro, Persona::XboxSeries) => false,
+            (PadBackend::HidMaestro, Persona::Snes) => false,
+            (PadBackend::HidMaestro, Persona::Genesis) => false,
             _ => false,
         }
     }
@@ -257,8 +239,9 @@ impl Persona {
     ///
     /// **The current capability rule, stated as code**
     /// (`docs/ENHANCEMENTS.md` E1/E4): Xbox 360 and PlayStation use the shipped
-    /// ViGEmBus compatibility lane; richer identities use the gated HIDMaestro
-    /// lane. ViGEmBus's X360 target reaches Microsoft's genuine `xusb22.sys`
+    /// ViGEmBus compatibility lane; richer identities route to HIDMaestro,
+    /// where each profile has its own capability gate. ViGEmBus's X360 target
+    /// reaches Microsoft's genuine `xusb22.sys`
     /// stack and is kept as a supported fallback even after HIDMaestro ships.
     /// The historical HIDMaestro WGI double-input issue was fixed upstream and
     /// is no longer an architectural reason for this routing rule.
@@ -337,7 +320,7 @@ impl Persona {
     /// [`PadBackend::supports`], which is a fact about the binary and not
     /// about the machine, and that distinction is the whole point: a gate built
     /// on a driver probe is wrong in exactly the case it is there for. Install
-    /// HIDMaestro, the probe says yes, the picker offers `dualsense`, and the
+    /// HIDMaestro, the probe says yes, the picker offers `switchpro`, and the
     /// plug fails anyway.
     ///
     /// Note what this does NOT do: remove the persona from the vocabulary.
@@ -353,16 +336,10 @@ impl Persona {
     /// Maximum number of this exact persona one ksx session may create.
     ///
     /// `None` means the backend has no persona-specific ceiling beyond ksx's
-    /// normal slot limits. The first production HIDMaestro runtime deliberately
-    /// owns one fixed device and one fixed shared-memory endpoint, so exposing
-    /// a second DualSense would make configuration appear valid and then fail
-    /// halfway through startup. Keep the bound here so setup, config, the slot
-    /// writer, and `ksx pads` all make the same decision.
+    /// normal slot limits. The current source-built HIDMaestro runtime owns one
+    /// fixed device, but that is a backend-wide pool enforced by
+    /// [`crate::MAX_HIDMAESTRO_PADS`], not a separate DualSense rule.
     pub const fn instance_limit(self) -> Option<usize> {
-        // 2026-08-20: the multi-controller SDK host carries up to eight live
-        // pads of any HIDMaestro persona, so DualSense's one-per-session cap
-        // is gone; the ceiling is the host's, surfaced at plug time. The
-        // mechanism stays for the next persona with a real per-persona bound.
         let _ = self;
         None
     }
@@ -533,9 +510,8 @@ mod tests {
     }
 
     /// The M8 personas, each flag justified in the doc comment it mirrors.
-    /// Written to spec (`docs/research/padforge-code-audit.md` §3), NOT yet
-    /// validated through a production SDK-host adapter. Complete that
-    /// physical gate before trusting the device-specific claims.
+    /// Written to spec (`docs/research/padforge-code-audit.md` §3); only the
+    /// DualSense row is currently carried by a released production host.
     #[test]
     fn hidmaestro_persona_flags_are_stated_per_device_not_copied() {
         // Sony HID: no XInput slot, hat d-pad, and motors we CAN decode
@@ -605,20 +581,23 @@ mod tests {
     }
 
     #[test]
-    fn every_shipping_persona_can_plug() {
-        // 2026-08-20: the modern trio measured in the morning session, the
-        // retro pair enabled for its supervised leg the same evening — every
-        // shipping persona plugs.
-        for p in Persona::ALL {
-            assert!(p.can_plug(), "{p} must be offered");
+    fn only_personas_with_shipped_production_runtimes_can_plug() {
+        for persona in [Persona::Xbox360, Persona::PlayStation, Persona::DualSense] {
+            assert!(persona.can_plug(), "{persona} must be offered");
+        }
+        for persona in [
+            Persona::SwitchPro,
+            Persona::XboxSeries,
+            Persona::Snes,
+            Persona::Genesis,
+        ] {
+            assert!(!persona.can_plug(), "{persona} must remain gated");
         }
     }
 
     #[test]
-    fn the_first_hidmaestro_runtime_has_one_explicit_device_slot() {
-        assert_eq!(Persona::DualSense.instance_limit(), None);
-        // Every persona, not a hand-picked list: a new variant with a stray
-        // per-persona ceiling would otherwise slip past this.
+    fn the_source_built_host_uses_the_backend_pool_not_a_duplicate_persona_limit() {
+        assert_eq!(crate::MAX_HIDMAESTRO_PADS, 1);
         for &persona in Persona::ALL {
             assert_eq!(persona.instance_limit(), None, "{persona}");
         }
@@ -630,11 +609,9 @@ mod tests {
         // existing `persona = "snes"` into "unknown persona" — which is
         // false, and points the reader at a typo they did not make.
         //
-        // The retro pair is the subject because it was the LAST pair to be
-        // gated (arms flipped on the 2026-08-20 hardware leg). Nothing here is
-        // gated today — `every_shipping_persona_can_plug` proves it — so what
-        // this pins now is the vocabulary half: every spelling a config may
-        // already contain still resolves, whatever the gate says.
+        // These profiles stay in the vocabulary while their production
+        // runtime is gated, so existing config gets an honest capability
+        // refusal instead of a false "unknown persona" error.
         for (spelling, persona) in [
             ("snes", Persona::Snes),
             ("superfamicom", Persona::Snes),
@@ -647,6 +624,7 @@ mod tests {
                 .parse()
                 .unwrap_or_else(|e| panic!("{spelling}: {e}"));
             assert_eq!(p, persona, "{spelling}");
+            assert!(!p.can_plug(), "{p} must remain capability-gated");
             assert!(Persona::ALL.contains(&p));
         }
     }
@@ -664,28 +642,18 @@ mod tests {
                 assert_eq!(instead, p, "{p} works; nothing to suggest");
             }
         }
-        // The suggestions that carry meaning: every pluggable persona is its
-        // own answer (the fallback arm is dormant while nothing is gated).
-        assert_eq!(Persona::Snes.nearest_pluggable(), Persona::Snes);
-        assert_eq!(Persona::Genesis.nearest_pluggable(), Persona::Genesis);
+        // The source-built DualSense lane remains itself; gated profiles land
+        // on the always-available compatibility pad.
         assert_eq!(Persona::DualSense.nearest_pluggable(), Persona::DualSense);
-        assert_eq!(Persona::SwitchPro.nearest_pluggable(), Persona::SwitchPro);
-        assert_eq!(Persona::XboxSeries.nearest_pluggable(), Persona::XboxSeries);
+        for persona in [
+            Persona::SwitchPro,
+            Persona::XboxSeries,
+            Persona::Snes,
+            Persona::Genesis,
+        ] {
+            assert_eq!(persona.nearest_pluggable(), Persona::Xbox360, "{persona}");
+        }
 
-        // HONEST NOTE ON WHAT THIS TEST CANNOT SEE (2026-08-26 audit): the loop
-        // above is unfalsifiable while every persona plugs — `nearest_pluggable`
-        // returns `self` on its first line, so the fallback `match` never runs
-        // and no production edit outside that first line can make the loop fail.
-        // Reaching it needs a gated persona, which only production code can
-        // create.
-        //
-        // What CAN be checked without one is the landing pad the dormant arm
-        // names: it hands every gated persona `Persona::Xbox360`. That is safe
-        // only because Xbox 360 sits on the ViGEm lane, which is the stack that
-        // is never build-gated (`PadBackend::Vigem.is_implemented()` is a
-        // literal `true`). Gate Xbox 360, or move it to HIDMaestro, and the
-        // fallback becomes a refusal suggesting a refusal — the loop this test
-        // exists to forbid — the moment anything re-arms.
         assert!(
             Persona::Xbox360.can_plug(),
             "the fallback every refusal points at must itself plug"
@@ -700,15 +668,18 @@ mod tests {
 
     #[test]
     fn a_backend_that_cannot_build_a_device_says_what_is_missing() {
-        // Both stacks ship today, so neither has a backend-wide gap. Frozen as
-        // literals: `gap()` deriving itself from `is_implemented()` is the
-        // function body copied into the test and cannot fail.
+        // Both stacks ship at least one production persona, so neither has a
+        // backend-wide gap.
         assert_eq!(PadBackend::Vigem.gap(), None);
         assert_eq!(PadBackend::HidMaestro.gap(), None);
-        // Every persona plugs on its OWN backend, so no per-persona gap remains
-        // — the machinery stays for the next gated persona.
-        for p in Persona::ALL.iter().copied() {
-            assert_eq!(p.backend().gap_for(p), None, "{p}");
+        for persona in [
+            Persona::SwitchPro,
+            Persona::XboxSeries,
+            Persona::Snes,
+            Persona::Genesis,
+        ] {
+            let gap = persona.gap().expect("gated persona needs an explanation");
+            assert!(gap.contains("production runtime"), "{persona}: {gap}");
         }
 
         // What the test's name actually promises, and the only live rendering

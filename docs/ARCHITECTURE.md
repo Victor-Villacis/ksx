@@ -54,7 +54,7 @@ Rules that keep us honest (each maps to a captured failure mode):
 ## Milestones
 
 The status column describes source implementation, not release acceptance. For
-the standalone 0.2.0 candidate, physical **Gates 1–4 are NOT RUN**; only results
+the 0.5.0 candidate, physical **Gates 1–4 are NOT RUN**; only results
 recorded in [`GATES.md`](GATES.md) against the exact candidate artifact count.
 
 | M | Status | Scope | Acceptance target |
@@ -68,7 +68,7 @@ recorded in [`GATES.md`](GATES.md) against the exact candidate artifact count.
 | M6 | 🔨 code done, cabinet gate pending | Installed WinUSB preparation/release: exact-device UAC helper/provider, journaled rollback/uninstall, capture backend and keystroke re-injection | prepare/release round trip, then the same session with Interception uninstalled and a 14-day soak — **GATE 2 and GATE 3 phase 3: NOT RUN** |
 | M6.5 | ✅ done | DS4 spike: a second ViGEm target type | measured in `research/m6.5-ds4-findings.md` — six DS4 targets enumerated alongside four X360 with the XInput count unmoved, which is how players 5+ exist |
 | M7 | ✅ done | UI: controller editing without a text editor | met by Studio's mapper — its own page `/map` when this was written, then a region of `/nocturne` after the 2026-08-25 cutover, now the controller inspector and macro editor in the current `/redesign` workbench — plus full staged first-run reuse and the live button check (`/check`), not by the egui surface the original entry assumed. Remaining work is polish and physical acceptance, not a missing editor |
-| M8 | 🔨 DualSense implementation complete; hardware acceptance pending | HIDMaestro rich-profile Windows backend | Actions proved the deterministic runtime candidate (1465/1465 artifact checks). The product now builds a fixed NativeAOT host, authenticates it over a one-use pipe, maps `PadState`, drains feedback, owns one exact device lifecycle, and packages an explicit v1.6.1 driver installer. Switch Pro/Xbox Series stay gated. Clean-machine hardware/API/force-kill acceptance remains in `docs/HIDMAESTRO.md`. |
+| M8 | 🔨 one-DualSense implementation complete; exact-candidate hardware acceptance pending | HIDMaestro rich-profile Windows backend | The product builds one fixed source-derived NativeAOT host, authenticates it over a one-use pipe, maps `PadState`, drains bounded DualSense motor feedback, owns one exact device lifecycle, and packages an explicit v1.6.1 driver installer. The official SDK is a hash-pinned, opt-in setup-time download inside a protected ephemeral worker; it is not redistributed as a runtime dependency. Switch Pro, Xbox Series, SNES and Genesis stay gated pending their own source-built runtime and hardware evidence. Clean-install, offline-rerun, API and force-kill acceptance remains in `docs/HIDMAESTRO.md` and `docs/GATES.md`. |
 | M8.1 | planned | VIIPER complementary virtual-USB/network/Linux lane | Separate-process prototype creates a virtual keyboard and controller locally and across Windows/Linux; licensing, USB/IP installation, authentication, feedback, reconnect and clean uninstall are acceptance work. It does not replace HIDMaestro or ViGEmBus |
 | M9 | ✅ done, **re-decided** | "ksx is a real Windows application" | Was an egui config UI; cancelled 2026-08-06 because Studio had already shipped the mapper E7 wanted a native UI for (`docs/M9-DECISION.md`). Delivered instead: an owned icon, an installer, a tray "Open ksx", and `ksx open` — daemon up, wait for the port, then a chrome-less window |
 | M10a | ✅ done | `ksx-api`: the typed, transport-free contract every surface consumes | `crates/ksx-api`. Studio and the cabinet depend on it and **not** on the backend crate, which is what makes `SURFACES.md` §1 checkable |
@@ -85,8 +85,8 @@ recorded in [`GATES.md`](GATES.md) against the exact candidate artifact count.
 
 ### What "cabinet gate pending" means, and where it is written down
 
-M4, M5 and M6 are **code-complete and physically unproven for standalone
-0.2.0**. Gates 1 and 2 establish the prerequisites; Gate 3 collects the p99
+M4, M5 and M6 are **code-complete and physically unproven for the 0.5.0
+candidate**. Gates 1 and 2 establish the prerequisites; Gate 3 collects the p99
 measurement, frontend wrap, Interception removal and 14-day soak. Gate 4 then
 proves the packaged fresh-customer journey. Until those ledgers are filled,
 treating prior development observations as release evidence would be the exact

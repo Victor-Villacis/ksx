@@ -120,8 +120,11 @@ split-or-freeze in the user's own words, and can Play without saving. Studio
 includes a separately confirmed Release action, compact setup progress,
 controls and button check. `/nocturne` no longer carries a product surface; an
 old GET bookmark redirects to `/redesign`, while its API and write routes are
-absent. The backend also supports recorded-session replay, a unified
-USB+Bluetooth device list, and multiple controller personas.
+absent. The backend also supports recorded-session replay and a unified
+USB+Bluetooth device list. The 0.5.0 output boundary is narrower than its
+persona catalog: X360 and DS4 remain on ViGEmBus, while HIDMaestro enables
+exactly one plain-USB DualSense. Switch Pro, Xbox Series X|S, SNES and Genesis
+remain recognized but gated.
 
 **Current KSX candidate:** every customer shortcut and the
 post-install hand-off target `ksx-launcher.exe`, which starts the sibling
@@ -179,14 +182,19 @@ prototype palette as a fourth theme vs. deletion at M5, theme fonts):
 `docs/research/token-system-design.md`.
 
 **Milestones:** M0–M3, M6.5, M7, M9, M10a are done. M4, M5, M6 are
-code-complete and **cabinet-gate pending** (§4). M8 now has the production
-adapter (`ksx-output::HidMaestroBackend` through the router), the
-authenticated KSXH transport, a three-persona runtime candidate and the
-installer bootstrap; the incompatible latch adapter was removed. What remains
-is the SUPERVISED HARDWARE LIFECYCLE — no HIDMaestro device has ever been
-observed to exist; see `docs/HIDMAESTRO-STATE.md` for the measured state. M8.1 adds VIIPER later as a
-complementary virtual-USB/network/Linux lane while ViGEmBus remains the shipped
-X360/DS4 fallback. See `docs/HIDMAESTRO.md` and `docs/ENHANCEMENTS.md` E1.
+code-complete and **cabinet-gate pending** (§4). M8 has the production adapter
+(`ksx-output::HidMaestroBackend` through the router), the authenticated KSXH
+transport, the fixed source-built NativeAOT host for exactly one plain-USB
+DualSense and the installer-only bootstrap; the incompatible latch adapter was
+removed. Development sessions on 2026-08-20 did create HIDMaestro-backed
+controllers, including DualSense, but those measurements used the now-retired
+official-SDK runtime lane. They are historical evidence, not acceptance of the
+0.5.0 artifact. The current exact-candidate physical gate remains open; Switch
+Pro, Xbox Series X|S, SNES and Genesis remain recognized but gated. See
+`docs/HIDMAESTRO-STATE.md` for the measured record and current release boundary.
+M8.1 adds VIIPER later as a complementary virtual-USB/network/Linux lane while
+ViGEmBus remains the shipped X360/DS4 fallback. See `docs/HIDMAESTRO.md` and
+`docs/ENHANCEMENTS.md` E1.
 
 ---
 

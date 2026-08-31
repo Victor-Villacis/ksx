@@ -227,10 +227,10 @@ pub enum StageRefusal {
         /// How many staged slots would be on an XInput persona.
         after: usize,
     },
-    /// Staging this would put a ninth slot on the HIDMaestro host.
+    /// Staging this would exceed the HIDMaestro host's controller pool.
     #[error(
-        "that would make {after} staged slots use a HIDMaestro persona, and the elevated \
-         HIDMaestro host carries at most {MAX_HIDMAESTRO_PADS} live pads. Give slot {number} \
+        "that would make {after} staged slots use a HIDMaestro persona, but the elevated \
+         HIDMaestro host has a live-pad capacity of {MAX_HIDMAESTRO_PADS}. Give slot {number} \
          persona '{}' or '{}' (ViGEmBus, outside that pool), or remove one of the other \
          {after}. Nothing has been written, so changing your mind costs nothing",
         Persona::Xbox360,
@@ -748,11 +748,11 @@ impl StagedSetup {
         Ok(())
     }
 
-    /// Refuse a state where a ninth slot would sit on the HIDMaestro host.
+    /// Refuse a state with more controllers than the HIDMaestro host carries.
     ///
-    /// The elevated SDK host carries [`MAX_HIDMAESTRO_PADS`] live pads; a
+    /// The source-built host carries [`MAX_HIDMAESTRO_PADS`] live pads; a
     /// configuration past that would validate, save, and then die at the
-    /// ninth plug of startup — after eight pads were already live.
+    /// next plug of startup — after another pad was already live.
     fn check_hidmaestro_pool(&self, number: u8) -> Result<(), StageRefusal> {
         let after = self
             .slots
@@ -1052,42 +1052,45 @@ mod tests {
         );
     }
 
-    /// Every shipping persona is stageable (2026-08-20 hardware session flip;
-    /// the refusal machinery stays live behind `Persona::gap()` for the next
-    /// gated persona, exercised by the gap unit tests in `persona.rs`).
+    /// Only personas backed by a shipped production runtime are stageable.
     #[test]
-    fn every_shipping_persona_stages() {
-        for persona in Persona::ALL.iter().copied() {
+    fn stage_accepts_shipped_personas_and_refuses_gated_profiles() {
+        for persona in [Persona::Xbox360, Persona::PlayStation, Persona::DualSense] {
             let result = staged().add_slot(2, persona, preset("P2"));
             result.unwrap_or_else(|refused| panic!("{persona} must stage: {refused}"));
         }
+        for persona in [
+            Persona::SwitchPro,
+            Persona::XboxSeries,
+            Persona::Snes,
+            Persona::Genesis,
+        ] {
+            let refused = staged()
+                .add_slot(2, persona, preset("P2"))
+                .expect_err("a gated profile must not stage");
+            assert_eq!(refused.code(), "persona-not-implemented", "{persona}");
+        }
     }
 
-    /// The elevated SDK host carries [`MAX_HIDMAESTRO_PADS`] live pads, and
-    /// the stage refuses the ninth before it can reach the host — where the
-    /// runtime refusal would arrive only after eight pads were already live.
-    /// Non-XInput personas throughout: Xbox Series would trip the four-seat
-    /// XInput ceiling first and this test is about the POOL.
+    /// The source-built host carries [`MAX_HIDMAESTRO_PADS`] live pads, and
+    /// staging refuses the next pad before it can reach that host.
     #[test]
-    fn a_ninth_hidmaestro_pad_is_refused_before_it_can_reach_the_host() {
+    fn a_second_hidmaestro_pad_is_refused_before_it_can_reach_the_host() {
         // Slot 1 is `staged()`'s Xbox360 pad — ViGEmBus, outside the pool — so
         // the pool fills over slots 2..=MAX_HIDMAESTRO_PADS + 1 and the pad
         // that overflows it is the one after that. Derived rather than spelled
-        // 9 and 10 because the panic below already counts "pad N of
+        // concrete values because the panic below already counts "pad N of
         // MAX_HIDMAESTRO_PADS": a loop bound that disagreed with it would stage
         // the wrong number of pads while reporting the right one.
         let last_in_pool = MAX_HIDMAESTRO_PADS + 1;
         let overflow = last_in_pool + 1;
         let mut setup = staged();
         for n in 2u8..=last_in_pool {
-            let persona = if n % 2 == 0 {
-                Persona::DualSense
-            } else {
-                Persona::SwitchPro
-            };
-            setup = setup.add_slot(n, persona, preset("P")).unwrap_or_else(|e| {
-                panic!("pad {} of {MAX_HIDMAESTRO_PADS} must stage: {e}", n - 1)
-            });
+            setup = setup
+                .add_slot(n, Persona::DualSense, preset("P"))
+                .unwrap_or_else(|e| {
+                    panic!("pad {} of {MAX_HIDMAESTRO_PADS} must stage: {e}", n - 1)
+                });
         }
         let refused = setup
             .add_slot(overflow, Persona::DualSense, preset("P-overflow"))
@@ -1096,18 +1099,18 @@ mod tests {
         let message = refused.to_string();
         // The NUMBER comes from the constant that owns it; the words around it
         // are this module's, and this line is the one place that locks them.
-        // Spelled "at most 8" it would be a fifth copy of a number ksx-config,
+        // A literal would be another copy of a number ksx-config,
         // ksx-backend and ksx-output also assert — raise the ceiling and each
         // fails on its own, with nothing in any of the four messages saying
         // they are the same fact.
         assert!(
-            message.contains(&format!("at most {MAX_HIDMAESTRO_PADS} live pads")),
+            message.contains(&format!("live-pad capacity of {MAX_HIDMAESTRO_PADS}")),
             "{message}"
         );
         assert!(message.contains("xbox360"), "{message}");
 
         // The same gate on the other door: repainting a ViGEm slot onto the
-        // full pool is the ninth pad too.
+        // full pool exceeds the host in the same way.
         let with_other = setup
             .add_slot(overflow, Persona::PlayStation, preset("P-overflow"))
             .unwrap();

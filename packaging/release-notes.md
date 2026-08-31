@@ -30,14 +30,14 @@
   resolution, undo, turbo, and macros are all in the one surface, with clear
   Save and Play actions and no hidden capture state.
 
-- **Seven controller personas, five of them through HIDMaestro.** A slot can
-  present itself as an Xbox 360 pad or a PlayStation pad on the bundled
-  ViGEmBus driver, or as a DualSense, Switch Pro, Xbox Series X|S, SNES or
-  Genesis pad on HIDMaestro. A persona changes only the shape of the device
-  Windows sees: your keys, your bindings and your saved layouts do not move
-  with it, so trying one costs nothing and switching back costs nothing.
-  Slots 1-4 stay on Xbox 360 by default, because that is still the one pad
-  every XInput title since 2006 understands.
+- **Three controller identities are ready today.** A slot can present itself as
+  an Xbox 360 pad or PlayStation/DS4 pad on the bundled ViGEmBus driver. An
+  installed KSX can also create one plain-USB DualSense through its fixed,
+  source-built HIDMaestro runtime. Switch Pro, Xbox Series X|S, SNES and Genesis
+  remain visible compatibility vocabulary, but this release refuses them until
+  each has a source-built runtime and its own hardware evidence. It never
+  substitutes a different pad silently. Slots 1-4 stay on Xbox 360 by default,
+  because that is still the one pad every XInput title since 2006 understands.
 
 - **The Studio's appearance is a setting.** Dark, light, and a Matrix theme,
   picked in the Studio's own configuration menu under "How the Studio looks".
@@ -47,10 +47,18 @@
 - **HIDMaestro setup no longer tries to delete a library while it is still
   loaded.** Version 0.4.0 could complete the driver call and then show exit code
   8 because its own process still held the verified temporary SDK open. The
-  driver call now runs in an isolated worker; only after that worker exits does
-  the coordinator remove the pinned temporary files. A repair also removes an
-  exact hash-verified staging directory left by version 0.4.0 and refuses to
-  delete anything unexpected.
+  driver call now runs in a protected, isolated worker with a bounded timeout;
+  only after that process tree is proven stopped does the coordinator remove
+  the pinned temporary files. A repair also removes an exact hash-verified
+  staging directory left by version 0.4.0 and refuses to delete anything
+  unexpected.
+
+- **An exact HIDMaestro reinstall is now an offline fast path.** If the pinned
+  main and XUSB packages and installed manifest already match, setup returns
+  before downloading the official SDK or constructing its context. That avoids
+  the old global device sweep and completes without staging residue. The release
+  gate requires the exact candidate to prove this path offline in under 30
+  seconds.
 
 - **A cleanup result now says what actually happened.** Exit code 8 was not a
   download failure and was not proof that DualSense was unavailable. Setup now
@@ -65,25 +73,31 @@
 
 Download **{{SETUP_NAME}}** from Assets below and double-click it. Click through
 the wizard; at the end it offers to open ksx, and it leaves an icon on your
-desktop either way.
+desktop either way. Version {{VERSION}} installs to its fixed protected Program Files
+directory because its driver helpers cross an administrator boundary. If an
+older version was installed in a custom location, uninstall that version first,
+then run this setup again; the installer will not execute an elevated helper
+from the old path.
 
 The wizard offers two controller-driver tasks. **Install the bundled ViGEmBus
 controller driver** enables Xbox 360 and DS4 outputs. Its installer is bundled,
 nothing is downloaded, and ksx checks its SHA-256 and signature before running
-it. **Download and install the pinned HIDMaestro v1.6.1 controller driver**
-enables the DualSense, Switch Pro, Xbox Series, SNES and Genesis outputs, and
-requires internet access. Its official archive and required assemblies are
-hash-checked before the installer API is called. The install call finishes in
-its own worker before the verified temporary SDK is removed. You can clear
-either task and re-run this installer later.
+  it. **Download and install the pinned HIDMaestro v1.6.1 controller driver**
+  enables the installed-only DualSense output and requires internet access on a
+  clean machine. Its official archive and required assemblies are hash-checked
+  before the installer API is called inside a protected ephemeral worker. The
+  process tree must stop before the verified temporary SDK is removed. The
+  official SDK is never included in the installed runtime. You can clear either
+  task and re-run this installer later.
 
-Those five personas are the whole of what HIDMaestro adds, and clearing that
-box leaves all five unavailable; the ViGEmBus Xbox 360 and PlayStation
-personas are not affected by it either way. A persona this build cannot create
-is refused by name rather than quietly substituted with a different pad, so a
-refusal here always tells you which one and why. ksx never connects a real
-controller over Bluetooth: every pad it creates is a virtual device on this
-machine.
+On a clean machine without HIDMaestro staged, clearing that box leaves
+DualSense unavailable. On a reinstall or upgrade, clearing it performs no
+install or repair and leaves existing availability unchanged. The ViGEmBus Xbox
+360 and PlayStation personas are not affected either way. A persona this build
+cannot create is refused by name rather than quietly substituted with a
+different pad, so a refusal here always tells you which one and why. ksx never
+connects a real controller over Bluetooth: every pad it creates is a virtual
+device on this machine.
 
 On a clean machine, the first-run screen can also prepare one exact supported
 USB keyboard for KSX's built-in Windows USB mode. It is not automatic. Before
@@ -129,8 +143,8 @@ Candidate manifest SHA-256: `{{MANIFEST_SHA256}}`
 
 - **{{SETUP_NAME}}** - the installer. This is the supported first-run file. It
   includes the console-free elevated WinUSB helper, its prepare-only provider,
-  recovery cleanup, the fixed HIDMaestro runtime host and verified setup
-  bootstrap, and the provider's corresponding source.
+  recovery cleanup, the fixed source-built one-DualSense HIDMaestro runtime host
+  and verified setup-only bootstrap, and the provider's corresponding source.
 - **{{PORTABLE_NAME}}** - `ksx.exe`, the console-free launcher, product
   licenses, `NOTICE`, and all third-party license texts, for people who want no
   installer. It has no Start menu entry, desktop icon, bundled ViGEmBus driver,

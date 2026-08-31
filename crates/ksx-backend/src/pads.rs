@@ -50,6 +50,21 @@ const STICK_PERIOD_TICKS: u64 = 20;
 /// Trigger triangle-wave period (1.6 s); RT runs half a period behind LT.
 const TRIGGER_PERIOD_TICKS: u64 = 16;
 
+/// The tightest product limit that applies to a request for one persona.
+///
+/// A persona-specific ceiling and a backend-wide pool are different facts;
+/// taking the smaller one keeps the CLI and Studio planner from bypassing
+/// either when both eventually apply.
+fn persona_capacity(persona: ksx_core::Persona) -> Option<usize> {
+    let backend_pool = (persona.backend() == ksx_core::PadBackend::HidMaestro)
+        .then_some(usize::from(ksx_core::MAX_HIDMAESTRO_PADS));
+    match (persona.instance_limit(), backend_pool) {
+        (Some(persona_limit), Some(pool_limit)) => Some(persona_limit.min(pool_limit)),
+        (Some(limit), None) | (None, Some(limit)) => Some(limit),
+        (None, None) => None,
+    }
+}
+
 /// The state the test pattern shows at `tick` (one tick = [`TICK`]).
 ///
 /// Pure and total: same tick, same state, on any platform.
@@ -247,12 +262,19 @@ pub fn run(
         }
         std::process::exit(EXIT_REFUSED);
     }
-    if let Some(limit) = persona.instance_limit() {
+    if let Some(limit) = persona_capacity(persona) {
         if usize::from(count) > limit {
-            let message = format!(
-                "this release can create at most {limit} {} pad(s); ask for one or choose another supported persona",
-                persona.label()
-            );
+            let message = if limit == 1 {
+                format!(
+                    "this release can create one {} pad, not {count}; ask for one or choose another supported persona",
+                    persona.label()
+                )
+            } else {
+                format!(
+                    "this release can create at most {limit} {} pads, not {count}; ask for fewer or choose another supported persona",
+                    persona.label()
+                )
+            };
             if json {
                 println!("{}", error_json("persona-capacity", &message));
             } else {
@@ -702,7 +724,7 @@ pub fn prune(_yes: bool, _json: bool) -> anyhow::Result<()> {
 pub mod surface {
     use ksx_core::{Persona, MAX_SLOTS, MAX_XINPUT_SLOTS};
 
-    use super::{PruneMode, PrunePlan};
+    use super::{persona_capacity, PruneMode, PrunePlan};
 
     /// The longest hold a surface may ask for. Two minutes is long enough to
     /// walk to joy.cpl and back and short enough that a forgotten tab does not
@@ -787,7 +809,7 @@ pub mod surface {
         if !persona.can_plug() {
             return SpawnPlan::PersonaNotImplemented { persona };
         }
-        if let Some(limit) = persona.instance_limit() {
+        if let Some(limit) = persona_capacity(persona) {
             if usize::from(count) > limit {
                 return SpawnPlan::PersonaCapacity {
                     persona,
@@ -795,19 +817,6 @@ pub mod surface {
                     limit,
                 };
             }
-        }
-        // The elevated HIDMaestro host carries a fixed pool of live pads; a
-        // request past it must be refused before anything is plugged, because
-        // the runtime adapter's own refusal at pad N+1 arrives after N pads
-        // are already live.
-        if persona.backend() == ksx_core::PadBackend::HidMaestro
-            && usize::from(count) > usize::from(ksx_core::MAX_HIDMAESTRO_PADS)
-        {
-            return SpawnPlan::PersonaCapacity {
-                persona,
-                requested: count,
-                limit: usize::from(ksx_core::MAX_HIDMAESTRO_PADS),
-            };
         }
         if on_bus.saturating_add(usize::from(count)) > usize::from(MAX_SLOTS) {
             return SpawnPlan::BusFull {
@@ -874,10 +883,19 @@ pub mod surface {
                     persona,
                     requested,
                     limit,
-                } => format!(
-                    "this release can create at most {limit} {} pad(s), not {requested}",
-                    persona.label()
-                ),
+                } => {
+                    if *limit == 1 {
+                        format!(
+                            "this release can create one {} pad, not {requested}",
+                            persona.label()
+                        )
+                    } else {
+                        format!(
+                            "this release can create at most {limit} {} pads, not {requested}",
+                            persona.label()
+                        )
+                    }
+                }
                 SpawnPlan::BadCount { given } => {
                     format!("pad count must be 1..={MAX_SLOTS}, got {given}")
                 }
@@ -1306,17 +1324,21 @@ pub mod surface {
             assert_eq!(unreadable, Some(0));
         }
 
-        /// Every shipping persona plans (retro leg flip 2026-08-20) — and
-        /// the ViGEm diagnostic page still offers only its own backend's
-        /// personas.
+        /// The ViGEm diagnostic page offers only implemented ViGEm personas,
+        /// while known gated HIDMaestro profiles refuse explicitly.
         #[test]
         fn the_vigem_page_offers_only_implemented_vigem_personas() {
-            for persona in [Persona::XboxSeries, Persona::Snes, Persona::Genesis] {
+            for persona in [
+                Persona::SwitchPro,
+                Persona::XboxSeries,
+                Persona::Snes,
+                Persona::Genesis,
+            ] {
                 let plan = plan_spawn(1, persona, 30, false, IDLE.0, IDLE.1);
-                assert_ne!(
+                assert_eq!(
                     plan.code(),
                     Some("persona-not-implemented"),
-                    "{persona} plans"
+                    "{persona} must remain gated"
                 );
             }
             let offered: Vec<String> = spawn_offer(false, IDLE.0, IDLE.1)
@@ -1369,36 +1391,28 @@ pub mod surface {
             }
         }
 
-        /// The elevated SDK host carries eight live pads: counts 1..=8 plan,
-        /// the ninth refuses BEFORE anything plugs — the runtime adapter's
-        /// own refusal would arrive after eight pads were live.
+        /// The source-built host carries one live pad; the next request
+        /// refuses before anything plugs.
         #[test]
         fn the_plan_enforces_the_hidmaestro_pool_capacity() {
-            // A full pool and the pad past it, both derived. Spelled 8 and 9,
+            // A full pool and the pad past it, both derived. Hard-coded,
             // a raised ceiling fails this at `assert_eq!(refused.code(), ...)`
             // with `left: None, right: Some("persona-capacity")` — a message
             // about an absent refusal code that never mentions the number that
             // changed, in one of four crates failing the same way at once.
             let pool = ksx_core::MAX_HIDMAESTRO_PADS;
-            for count in [1u8, 2, 4, pool] {
-                assert!(
-                    matches!(
-                        plan_spawn(count, Persona::DualSense, 30, false, IDLE.0, IDLE.1),
-                        SpawnPlan::Plug { .. }
-                    ),
-                    "{count} DualSense pads must plan"
-                );
-            }
+            assert!(matches!(
+                plan_spawn(pool, Persona::DualSense, 30, false, IDLE.0, IDLE.1),
+                SpawnPlan::Plug { .. }
+            ));
             let refused = plan_spawn(pool + 1, Persona::DualSense, 30, false, IDLE.0, IDLE.1);
             assert_eq!(refused.code(), Some("persona-capacity"));
-            // From the constant `plan_spawn` puts in `PersonaCapacity.limit`,
-            // not the literal 8. Four crates assert this ceiling; sourcing it
-            // here means a raised ceiling reprices this line instead of failing
-            // it with a number that says nothing about where 8 came from.
-            assert!(
-                refused.message().contains(&format!("at most {pool}")),
-                "{}",
-                refused.message()
+            assert_eq!(
+                refused.message(),
+                format!(
+                    "this release can create one DualSense pad, not {}",
+                    pool + 1
+                )
             );
         }
 

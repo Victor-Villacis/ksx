@@ -715,11 +715,18 @@ The renderer and browser tests pin the `/redesign` link to
 present; it cannot prove Windows opened Settings or that the user enabled the
 controller preference. Phase 5 performs that physical check.
 
+The automated install/run/uninstall/reinstall lifecycle passes
+`/MERGETASKS=!vigembus,!hidmaestro,!desktopicon`. It proves the installed
+application and cleanup path, but intentionally executes neither optional
+controller-driver task. In particular, it cannot prove the HIDMaestro clean
+download/install or the offline exact-installed fast path; Phase 1H does.
+
 Those tests cannot prove that UAC returned to the original user, no console
 flashed, the machine-local certificate/package worked on this Windows machine,
 the selected and spare keyboards behaved correctly, uninstall cleaned the real
 stores/driver package, the bundled controller driver installed, Windows exposed
-a real virtual pad, a game consumed it, or Game Bar opened. This gate proves
+a real virtual pad, the opt-in HIDMaestro package installed or took its bounded
+offline no-op path, a game consumed a pad, or Game Bar opened. This gate proves
 those claims. The provider's disposable clean-runner smoke is also **NOT RUN**
 until Actions records it; even a passing smoke is necessary evidence, never a
 substitute for this physical run.
@@ -732,9 +739,12 @@ substitute for this physical run.
   downloaded file and require an exact match.
 - Use a supported, fully updated Windows 10/11 physical machine or a disposable
   clean Windows image that can expose ViGEmBus controllers to the host gaming
-  stack. ViGEmBus and Interception must both be absent before the run. If either
-  is already installed, this is not the clean built-in-capture test; restore a
-  clean snapshot or use a different safe machine.
+  stack. ViGEmBus, Interception, both pinned HIDMaestro Driver Store packages,
+  and `HKLM\SOFTWARE\HIDMaestro` must all be absent before the run. If any is
+  already present, this is not the clean first-install test; restore a clean
+  snapshot or use a different safe machine. Internet must be available for the
+  first HIDMaestro step and physically disconnectable for its exact-installed
+  rerun.
 - Create a fresh **standard** local Windows user. `%APPDATA%\ksx` and
   `%LOCALAPPDATA%\ksx` must not exist for that user. Have a different
   administrator account available for the installer UAC prompt; using the same
@@ -764,16 +774,31 @@ credentials as the administrator.
 
 1. While signed in as the fresh standard user, double-click the downloaded
    installer. Supply the separate administrator's credentials at UAC.
-2. Confirm **Install the ViGEmBus controller driver** is visible and ticked by
-   default. Leave it ticked. Confirm the desktop-icon task is selected.
+2. Confirm **Install the ViGEmBus controller driver** and **Download and install
+   the pinned HIDMaestro v1.6.1 controller driver** are visible and ticked by
+   default. The second description must disclose that first install requires
+   internet and that the driver enables only DualSense. Leave both ticked.
+   Confirm the desktop-icon task is selected.
 3. Complete setup without launching a shell. The installer may continue if its
    driver child fails by design, but **this gate may not**: inspect the wizard's
-   result and `{app}\install-drivers.log`, and require a successful ViGEmBus
-   install. Record the installed driver version.
+   result, `{app}\install-drivers.log`, and
+   `{app}\ksx-hidmaestro-setup.log`; require both driver operations to succeed.
+   Record the installed ViGEmBus version and the exact HIDMaestro main/XUSB
+   package identities.
 4. Confirm Apps & Features shows the expected ksx product version and the
    install directory contains the release-candidate `ksx.exe`,
-   `ksx-launcher.exe`, `ksx-winusb-helper.exe`, `libwdi.dll`, sealed driver
-   bundle, complete `THIRD-PARTY-SOURCE\libwdi`, and licence material. Confirm
+   `ksx-launcher.exe`, `ksx-winusb-helper.exe`, `libwdi.dll`, the source-built
+   `ksx-hidmaestro-host.exe`, sealed driver bundle, complete
+   `THIRD-PARTY-SOURCE\libwdi`, and licence material. The setup-only
+   HIDMaestro bootstrap is never an `{app}` runtime sibling: it executes from
+   the exact protected `%ProgramFiles%\ksx-hidmaestro-bootstrap-0.5.0`
+   directory. A result of 0 authorizes Setup to remove that whole bootstrap
+   directory. After this successful clean task, enumerate
+   `%ProgramFiles%\ksx-hidmaestro-bootstrap-*` and require no current or older
+   versioned sibling, helper, `.ksx-dotnet-bundle`,
+   `.ksx-hidmaestro-install-*`, or `runtime-temp` residue. Confirm that no
+   official `HIDMaestro.Core.dll`, WDK tool or SDK-host executable was
+   installed. Confirm
    `%ProgramData%\KSX\WinUSB\{journal,transactions}` exists with only SYSTEM and
    Administrators mutation rights.
 5. Confirm there is exactly one **ksx** entry in the Start menu and the default
@@ -781,12 +806,52 @@ credentials as the administrator.
    there must be no customer entries for daemon, Studio, cabinet, doctor or a
    setup wizard.
 
-**PASS Phase 1:** the exact artifact is installed, the bundled ViGEmBus step is
-successful and recorded, the installed-only helper/provider/source/recovery
-tree is complete and protected, and every visible customer shortcut has the
-single launcher target. No keyboard was prepared during install. A successful
-app install with a failed/declined driver is a useful supported state, but it
-does not pass this release gate.
+**PASS Phase 1:** the exact artifact is installed, both selected driver steps
+are successful and recorded, the installed-only helper/provider/source/recovery
+tree is complete and protected, the runtime contains only the source-built
+one-DualSense host, every setup-only HIDMaestro bootstrap sibling is absent
+after its successful use, and every visible customer shortcut has the single
+launcher target. No keyboard was prepared during install. A successful app
+install with a failed or declined driver is a useful supported state, but it
+does not pass this release gate. In particular, an unconfirmed worker stop must
+leave its bootstrap and staging protected rather than deleting bytes beneath a
+possibly live elevated worker. That retained evidence is the correct
+fail-closed product behavior and an immediate release-gate failure: preserve
+it for diagnosis; do not manually delete it to manufacture a pass.
+
+## Phase 1H — HIDMaestro exact-installed rerun is offline and inert
+
+1. Preserve `{app}\ksx-hidmaestro-setup.log` from the clean install and record
+   its ordered `phase=` entries. It must show `preflight`,
+   download/staging/worker work, cleanup and `complete`, with no timeout,
+   unconfirmed-stop or `failed-*` phase. Confirm the successful result removed
+   the exact protected sibling
+   `%ProgramFiles%\ksx-hidmaestro-bootstrap-0.5.0`, then enumerate
+   `%ProgramFiles%\ksx-hidmaestro-bootstrap-*` and require that no versioned
+   bootstrap or `.ksx-hidmaestro-install-*`, `runtime-temp`, or
+   `.ksx-dotnet-bundle` residue remains.
+2. Record a before snapshot of the two exact Driver Store packages, the
+   `HKLM\SOFTWARE\HIDMaestro` installed-manifest value, HIDMaestro PnP devices,
+   SetupAPI log position, installed files and process list. Then physically
+   disconnect the machine from every network.
+3. Rerun the **same installer bytes**, clear ViGEmBus and the desktop shortcut,
+   leave only the HIDMaestro task selected, and time that driver step. It must
+   finish successfully in under 30 seconds while offline. The newly appended
+   setup-log segment must be exactly `preflight` then `already-installed`; it
+   must contain no `residue-cleanup`, `download`, `staging`, `worker`, `cleanup`
+   or failure phase.
+4. Compare the before/after evidence. Require no network attempt, no official
+   SDK process or extraction, no HIDMaestro remove/re-enumerate event or global
+   sweep, byte-identical installed files/package/manifest state, and no exact
+   or older `%ProgramFiles%\ksx-hidmaestro-bootstrap-*` sibling after the
+   successful rerun. A quick failure while offline is not a pass; the task must
+   report success through the exact-match path. If it instead reports a
+   timeout or unconfirmed stop, require the bootstrap/staging evidence to remain
+   protected, reject the candidate, and do not delete that evidence by hand.
+
+**PASS Phase 1H:** the consented clean operation installed the pinned package,
+and the exact-installed rerun proved a successful, sub-30-second offline no-op
+before any SDK context or provisioning worker could run.
 
 ## Phase 2 — Finish hands back to the right user and boots idle
 
@@ -1011,7 +1076,7 @@ at all on a cancel is a failure.
 
 ## GATE 4 PASS criteria
 
-Every runnable phase above (1, 2, 3, 4R, 5 and 6) passes against one recorded
+Every runnable phase above (1, 1H, 2, 3, 4R, 5 and 6) passes against one recorded
 installer SHA and version. Archived Phase 4 is deliberately excluded until a
 new Settings/Library surface receives its own runnable acceptance contract. There
 is no partial pass for “source tests were green,” “the installer compiled,” “one
@@ -1032,6 +1097,9 @@ new hash, and restart this gate from Phase 1.
 - Keyboard A / Keyboard B human names and exported slot device values:
 - Interception absent / USB-only clean path / identical-model precheck:
 - ViGEmBus before / installed version / `{app}\install-drivers.log` result:
+- HIDMaestro absent-before / clean setup-log phases / main+XUSB package identities:
+- Offline exact-installed rerun duration / two-phase log / no-network+sweep / exact+versioned bootstrap-root absence:
+- Runtime distribution check: source-built host present / official SDK+SDK-host absent:
 - Helper/provider/source/ProgramData ACL and read-only-receipt evidence:
 - Start + desktop shortcut targets / extra customer shortcuts:
 - Original-user process + browser-profile evidence / console-flash result:

@@ -100,6 +100,18 @@ fn section(text: &str, want: &str) -> Vec<String> {
     out
 }
 
+fn inno_routine<'a>(iss: &'a str, header: &str) -> &'a str {
+    let start = iss
+        .find(header)
+        .unwrap_or_else(|| panic!("ksx.iss lost `{header}`"));
+    let tail = &iss[start..];
+    let end = tail
+        .find("\nend;")
+        .map(|at| at + "\nend;".len())
+        .unwrap_or(tail.len());
+    &tail[..end]
+}
+
 /// One entry line's `Key: value` fields, split on the semicolons that are not
 /// inside a quoted value.
 fn fields(entry: &str) -> Vec<(String, String)> {
@@ -606,6 +618,157 @@ fn installer_and_ci_package_the_launcher_beside_ksx() {
     );
 }
 
+/// Building and installing are not the end of the customer path. The release
+/// candidate must start the executable that Inno copied into Program Files and
+/// prove that its embedded Studio serves the production health contract and
+/// product route. Running `target/release/ksx.exe` here would test the input to
+/// the installer while leaving a broken installed layout green.
+#[test]
+fn release_candidate_boots_the_installed_redesign_product_before_upload() {
+    let build = workflow("build-installer.yml");
+    let lifecycle = build
+        .split("- name: Install twice, with a receipt in between")
+        .nth(1)
+        .expect("the installer lifecycle step exists")
+        .split("- name: Write exact-candidate manifest")
+        .next()
+        .expect("the lifecycle step has an artifact-admission boundary")
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for contract in [
+        "installed runtime smoke",
+        "Join-Path $install 'ksx.exe'",
+        "@('studio', '--port', '4460')",
+        "-WorkingDirectory $install",
+        "http://127.0.0.1:4460/api/health",
+        "health.environment.id -cne 'live-machine'",
+        "http://127.0.0.1:4460/redesign",
+        "data-forma-island",
+        "(?<path>/_assets/",
+        "assetPaths -match '\\.js",
+        "assetPaths -match '\\.css",
+        "daemon --headless --console",
+        "session status --json",
+        "-Filter 'unins*.exe'",
+        "Start-Process -FilePath $uninstallers[0].FullName",
+        "-ArgumentList $uninstallArgs -Wait -PassThru",
+        "if ($uninstall.ExitCode -ne 0)",
+        "Get-Content -LiteralPath $uninstallLog -Raw",
+        "KSX uninstall gate: session quiesced",
+        "KSX uninstall gate: owned recovery released",
+        "if (-not $daemon.WaitForExit(30000))",
+        "if (Test-Path -LiteralPath $install)",
+        "if (Test-Path -LiteralPath $root)",
+        "clean uninstall: quiesced, released owned recovery state",
+        "Invoke-Setup 'after-uninstall'",
+        "$legacySdkHost = Join-Path $install 'ksx-hidmaestro-sdk-host.exe'",
+        "Set-Content -LiteralPath $legacySdkHost -Value 'retired-sdk-host-sentinel'",
+        "if (Test-Path -LiteralPath $legacySdkHost)",
+        "the upgrade retained the retired SDK-backed HIDMaestro runtime host",
+    ] {
+        assert!(
+            lifecycle.contains(contract),
+            "the installer workflow lost installed-runtime proof `{contract}`"
+        );
+    }
+
+    let installed_at = lifecycle
+        .find("Invoke-Setup 'first'")
+        .expect("the workflow performs its first clean installation");
+    let boot_at = lifecycle
+        .find("installed runtime smoke")
+        .expect("asserted above");
+    let daemon_at = lifecycle
+        .find("daemon --headless --console")
+        .expect("asserted above");
+    let uninstall_at = lifecycle
+        .find("clean uninstall: quiesced, released owned recovery state")
+        .expect("asserted above");
+    let reinstall_at = lifecycle
+        .find("Invoke-Setup 'after-uninstall'")
+        .expect("asserted above");
+    assert!(
+        installed_at < boot_at
+            && boot_at < daemon_at
+            && daemon_at < uninstall_at
+            && uninstall_at < reinstall_at,
+        "the candidate must boot, start a live daemon, cleanly uninstall it, and reinstall before its bytes are admitted"
+    );
+}
+
+/// Upload is a boundary too. A green local `packaging/out` install says
+/// nothing about the bytes a contributor later downloads from Actions, so the
+/// already-required release-binary/build check pulls all three artifacts back
+/// from the current run and installs only that returned setup file.
+#[test]
+fn release_candidate_round_trips_through_the_artifact_store_before_admission() {
+    let build = workflow("build-installer.yml");
+    let roundtrip = build
+        .split("# Upload success only proves that the artifact service accepted some")
+        .nth(1)
+        .expect("the artifact-store admission boundary exists");
+    let download_pin = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093";
+    assert_eq!(
+        roundtrip.matches(download_pin).count(),
+        3,
+        "installer, portable ZIP, and manifest must each cross the pinned artifact-store read boundary"
+    );
+    for contract in [
+        "name: ksx-windows-installer",
+        "name: ksx-windows-portable",
+        "name: ksx-windows-candidate-manifest",
+        "Get-OnlyDownloadedFile",
+        "manifest.source.repository",
+        "manifest.source.commit",
+        "manifest.source.ref",
+        "manifest.run.id",
+        "manifest.run.attempt",
+        "manifest.artifacts.installer.size",
+        "manifest.artifacts.portable.size",
+        "artifact roundtrip requires a clean machine path",
+        "Start-Process -FilePath $setup.FullName",
+        "Join-Path $install 'ksx.exe'",
+        "@('studio', '--port', '4460')",
+        "http://127.0.0.1:4460/api/health",
+        "health.environment.id -cne 'live-machine'",
+        "http://127.0.0.1:4460/redesign",
+        "hashedScripts.Count",
+        "hashedStyles.Count",
+        "KSX uninstall gate: session quiesced",
+        "KSX uninstall gate: owned recovery released",
+        "real uninstall left Program Files behind",
+        "real uninstall left ProgramData behind",
+        "artifact-store candidate passed real install, boot, and uninstall proof",
+    ] {
+        assert!(
+            roundtrip.contains(contract),
+            "artifact-store candidate proof lost `{contract}`"
+        );
+    }
+    assert!(
+        !roundtrip.contains("packaging/out"),
+        "the post-upload install proof must not fall back to workspace packaging output"
+    );
+    let resolved = roundtrip
+        .find("$setup = Get-OnlyDownloadedFile")
+        .expect("downloaded installer is resolved");
+    let installed = roundtrip
+        .find("Start-Process -FilePath $setup.FullName")
+        .expect("downloaded installer is executed");
+    let booted = roundtrip
+        .find("downloaded installed runtime smoke")
+        .expect("installed downloaded product is booted");
+    let removed = roundtrip
+        .find("artifact-store candidate passed real install, boot, and uninstall proof")
+        .expect("downloaded product is really uninstalled");
+    assert!(
+        resolved < installed && installed < booted && booted < removed,
+        "the workflow must resolve, install, boot, and uninstall the downloaded candidate in order"
+    );
+}
+
 /// WinUSB preparation is an installed-only, elevated boundary. The helper and
 /// dynamically replaceable LGPL provider must be siblings, the corresponding
 /// modified source must ship with the installed DLL, and the user-writable
@@ -986,10 +1149,36 @@ fn installer_initializes_state_from_the_installed_helper_and_uninstall_is_cleanu
     let release = step
         .find("if not OwnedRecoveryReleased() then")
         .expect("the usUninstall gate must release what KSX owns");
+    let quiesce_log = step
+        .find("Log('KSX uninstall gate: session quiesced');")
+        .expect("a machine-checkable log must follow successful quiesce");
+    let release_log = step
+        .find("Log('KSX uninstall gate: owned recovery released');")
+        .expect("a machine-checkable log must follow successful recovery release");
     assert!(
-        quiesce < release,
-        "the session must be quiesced before the WinUSB rollback, not after"
+        quiesce < quiesce_log && quiesce_log < release && release < release_log,
+        "the session must be quiesced and logged before the WinUSB rollback, then release must be logged"
     );
+
+    for header in [
+        "function InitializeUninstall(): Boolean;",
+        "function SessionQuiesced(): Boolean;",
+        "function OwnedRecoveryReleased(): Boolean;",
+    ] {
+        let body = routine(&iss, header);
+        assert!(
+            !body
+                .lines()
+                .any(|line| line.trim_start().starts_with("MsgBox(")),
+            "{header} must not open a non-suppressible dialog during unattended uninstall"
+        );
+        if body.contains("mbError") {
+            assert!(
+                body.contains("SuppressibleMsgBox("),
+                "{header} must retain an interactive error while honoring /SUPPRESSMSGBOXES"
+            );
+        }
+    }
 
     // Pascal Script's `except` catches EAbort like any other exception, so an
     // Abort raised inside a handler-wrapped routine is swallowed and the
@@ -1117,11 +1306,15 @@ fn installer_and_portable_zip_carry_complete_license_material() {
         ),
         (
             "THIRD-PARTY-LICENSES/Rust-dependencies.html",
+            "ksx-app 0.5.0",
+        ),
+        (
+            "THIRD-PARTY-LICENSES/Rust-dependencies.html",
             "interception-sys 0.1.3",
         ),
         (
             "THIRD-PARTY-LICENSES/Rust-dependencies-winusb-helper.html",
-            "ksx-winusb-helper 0.2.0",
+            "ksx-winusb-helper 0.5.0",
         ),
         (
             "THIRD-PARTY-LICENSES/libwdi-LGPL-3.0-or-later.txt",
@@ -1353,20 +1546,128 @@ fn both_controller_driver_tasks_are_offered_checked_and_named() {
 
 #[test]
 fn hidmaestro_runtime_and_installer_bootstrap_are_installed_only_and_built_first() {
+    let iss = script();
+    assert!(
+        iss.contains("DisableDirPage=yes"),
+        "Setup must not offer a custom directory for elevated installed helpers"
+    );
+    let preinstall = inno_routine(
+        &iss,
+        "function PrepareToInstall(var NeedsRestart: Boolean): string;",
+    );
+    let protected_path = preinstall
+        .find("PathSame(WizardDirValue, ExpandConstant('{autopf}\\{#AppName}'))")
+        .expect("pre-install enforces the one protected Program Files destination");
+    let extract_auditor = preinstall
+        .find("ExtractTemporaryFile('{#WinUsbHelper}')")
+        .expect("the read-only auditor is extracted after the destination guard");
+    assert!(
+        protected_path < extract_auditor,
+        "Setup must refuse a custom executable location before extracting or executing any helper"
+    );
+    assert!(
+        preinstall.contains("custom-location older version, uninstall that version first"),
+        "an upgrade from a formerly supported custom location needs an actionable migration, \
+         because the hidden directory page cannot correct it"
+    );
+
+    let install_delete = section(&script(), "[InstallDelete]");
+    let retired_sdk_host = install_delete
+        .iter()
+        .filter(|line| {
+            field(line, "Type").as_deref() == Some("files")
+                && field(line, "Name").as_deref() == Some("{app}\\ksx-hidmaestro-sdk-host.exe")
+        })
+        .count();
+    assert_eq!(
+        retired_sdk_host, 1,
+        "upgrades must delete exactly the retired SDK-backed runtime sibling: {install_delete:?}"
+    );
+
     let files = section(&script(), "[Files]");
-    for source in [
-        "{#RepoRoot}\\target\\release\\{#HidMaestroHost}",
-        "{#RepoRoot}\\target\\release\\{#HidMaestroInstaller}",
+    for (source, destination) in [
+        ("{#RepoRoot}\\target\\release\\{#HidMaestroHost}", "{app}"),
+        (
+            "{#RepoRoot}\\target\\release\\{#HidMaestroInstaller}",
+            "{autopf}\\{#HidMaestroBootstrapDir}",
+        ),
     ] {
         let entry = files
             .iter()
             .find(|line| field(line, "Source").as_deref() == Some(source))
             .unwrap_or_else(|| panic!("installer does not package {source}: {files:?}"));
-        assert_eq!(field(entry, "DestDir").as_deref(), Some("{app}"));
+        assert_eq!(field(entry, "DestDir").as_deref(), Some(destination));
+        if source.ends_with("{#HidMaestroInstaller}") {
+            assert_eq!(field(entry, "Tasks").as_deref(), Some("hidmaestro"));
+        }
     }
+    assert!(
+        files.iter().all(|line| {
+            !line.contains("HidMaestroSdkHost")
+                && !line.contains("ksx-hidmaestro-sdk-host.exe")
+                && !line.contains("HIDMaestro.Core.dll")
+        }),
+        "the official SDK and SDK-backed host are setup-time research inputs, not installed runtime payloads: {files:?}"
+    );
 
     let code = section(&script(), "[Code]").join("\n");
     assert!(code.contains("WizardIsTaskSelected('hidmaestro')"));
+    for boundary in [
+        "SetEnvironmentVariableW@kernel32.dll stdcall delayload",
+        "DOTNET_BUNDLE_EXTRACT_BASE_DIR",
+        "CORECLR_ENABLE_PROFILING",
+        "DOTNET_STARTUP_HOOKS",
+        "DOTNET_ADDITIONAL_DEPS",
+        "DOTNET_DiagnosticPorts",
+        "ApplyManagedLaunchEnvironment",
+        "RestoreManagedLaunchEnvironment",
+        "{autopf}\\{#HidMaestroBootstrapDir}",
+    ] {
+        assert!(
+            code.contains(boundary) || iss.contains(boundary),
+            "the native pre-Main managed-helper boundary lost `{boundary}`"
+        );
+    }
+    let managed_launch = inno_routine(&iss, "procedure InstallHidMaestroDriver;");
+    let apply_environment = managed_launch
+        .find("ApplyManagedLaunchEnvironment")
+        .expect("managed launch applies its isolated environment");
+    let exec = managed_launch
+        .find("LaunchSucceeded := Exec(")
+        .expect("managed helper launch exists");
+    let restore_environment = managed_launch
+        .find("RestoreManagedLaunchEnvironment")
+        .expect("managed launch restores Setup's environment");
+    assert!(
+        apply_environment < exec && exec < restore_environment,
+        "managed extraction and CLR injection controls must surround the elevated helper launch"
+    );
+    let success = managed_launch
+        .split_once("if ResultCode = 0 then")
+        .expect("managed helper has an explicit success boundary")
+        .1
+        .split_once("if ResultCode = 8 then")
+        .expect("success cleanup ends before the first retained failure")
+        .0;
+    assert!(
+        success.contains("DelTree(BootstrapRoot, True, True, True)"),
+        "only a completed, stopped worker may authorize recursive bootstrap cleanup"
+    );
+    let failures = managed_launch
+        .split_once("if ResultCode = 8 then")
+        .expect("retained-failure branch exists")
+        .1;
+    assert!(
+        !failures.contains("DelTree(BootstrapRoot"),
+        "a failed helper, especially exit 12, may still own files in the protected bootstrap"
+    );
+    let uninstall_delete = section(&iss, "[UninstallDelete]");
+    assert!(
+        uninstall_delete.iter().all(|line| {
+            field(line, "Name").as_deref() != Some("{autopf}\\{#HidMaestroBootstrapDir}")
+        }),
+        "uninstall cannot recursively erase a bootstrap retained because the elevated worker stop was unconfirmed: {uninstall_delete:?}"
+    );
     let build_workflow = workflow("build-installer.yml");
     assert_eq!(
         build_workflow
@@ -1383,6 +1684,10 @@ fn hidmaestro_runtime_and_installer_bootstrap_are_installed_only_and_built_first
     assert!(
         !bootstrap_project.contains("<Reference"),
         "the shipped bootstrap must not reference or bundle the upstream SDK"
+    );
+    assert!(
+        bootstrap_project.contains("<IncludeNativeLibrariesForSelfExtract>true"),
+        "a self-extracting bootstrap requires the asserted native pre-Main environment boundary"
     );
     let bootstrap = read("tools/hidmaestro-driver-installer/Program.cs");
     for pin in [
@@ -1410,11 +1715,36 @@ fn hidmaestro_runtime_and_installer_bootstrap_are_installed_only_and_built_first
     let driver = build
         .find("Build pinned HIDMaestro driver installer")
         .unwrap();
+    let distribution_boundary = build
+        .find("Enforce the HIDMaestro runtime distribution boundary")
+        .expect("the runtime distribution boundary exists");
     let iscc = build.find("- name: Build installer").unwrap();
-    assert!(host < iscc && driver < iscc);
+    assert!(
+        host < distribution_boundary
+            && driver < distribution_boundary
+            && distribution_boundary < iscc
+    );
     assert!(build.contains("runtime-hash-pinned-download"));
     assert!(build.contains("bundledUpstreamAssemblyCount -ne 0"));
     assert!(build.contains("requiresNetworkAtInstall -ne $true"));
+    for forbidden in [
+        "ksx-hidmaestro-sdk-host.exe",
+        "HIDMaestro.Core.dll",
+        "signtool.exe",
+        "Inf2Cat.exe",
+        "USBip-0.9.7.7-x64.exe",
+        "HIDMaestro.Internal.DriverBuilder",
+        "InstallUsbipBackend",
+    ] {
+        assert!(
+            build.contains(forbidden),
+            "the artifact-byte distribution boundary lost `{forbidden}`"
+        );
+    }
+    assert!(
+        !build.contains("Build pinned SDK-lane HIDMaestro host"),
+        "the non-redistributable SDK lane must not be built into a release candidate"
+    );
 
     let dispatch = build
         .split("- name: Exercise HIDMaestro installer private dispatch without loading SDK")
@@ -1428,6 +1758,8 @@ fn hidmaestro_runtime_and_installer_bootstrap_are_installed_only_and_built_first
         "install-worker-v1",
         "C:\\not-a-ksx-staging-directory",
         "$worker.ExitCode -ne 5",
+        "self-test-v1",
+        "$selfTest.ExitCode -ne 0",
         "unexpected-command",
         "$unknown.ExitCode -ne 2",
         "Refusing reparse-point HIDMaestro dispatch probe cleanup",
@@ -1447,6 +1779,7 @@ fn hidmaestro_runtime_and_installer_bootstrap_are_installed_only_and_built_first
         .expect("portable upload boundary");
     for forbidden in [
         "ksx-hidmaestro-host.exe",
+        "ksx-hidmaestro-sdk-host.exe",
         "ksx-hidmaestro-driver-installer.exe",
     ] {
         assert!(
@@ -1501,26 +1834,55 @@ fn hidmaestro_cleanup_pending_is_not_reported_as_install_failure() {
 
 /// The v0.4.0 cleanup failure was structural: the process deleting the SDK was
 /// also the process that still had `HIDMaestro.Core.dll` loaded. More retries in
-/// that process merely make the same race longer. The coordinator must wait for
-/// a separately validated worker to exit, and only then remove pinned staging.
+/// that process merely make the same race longer. The coordinator must prove an
+/// exact install before going online, isolate the SDK worker beneath protected
+/// Program Files, and prove the complete process tree stopped before cleanup.
 #[test]
 fn hidmaestro_installer_isolates_sdk_loading_before_exact_cleanup() {
     let source = read("tools/hidmaestro-driver-installer/Program.cs");
     for required in [
         "install-worker-v1",
+        "self-test-v1",
         "ProcessStartInfo",
         "startInfo.ArgumentList.Add(WorkerCommand)",
-        "worker.WaitForExit()",
+        "WorkerTimeout = TimeSpan.FromMinutes(5)",
+        "WorkerHandshakeTimeout = TimeSpan.FromSeconds(30)",
+        "worker.WaitForExit(checked((int)timeout.TotalMilliseconds))",
+        "WorkerStopTimeout = TimeSpan.FromSeconds(15)",
+        "EventWaitHandleAcl.Create",
+        "TrustedMutationAuthorities",
+        "CreateJobObjectW",
+        "JobObjectLimitKillOnJobClose",
+        "SetInformationJobObject",
+        "AssignProcessToJobObject",
+        "ready.Set();",
+        "QueryInformationJobObject",
+        "accounting.ActiveProcesses",
+        "job.TerminateAndWait",
+        "return job.TerminateAndWait(stopTimeout) ? 11 : 12;",
+        "return 12;",
+        "IsExactHidMaestroInstalled()",
+        "ExactInstallationPolicy",
+        "DOTNET_BUNDLE_EXTRACT_BASE_DIR",
+        "startInfo.Environment[\"TEMP\"] = workerTemp",
+        "startInfo.Environment[\"TMP\"] = workerTemp",
+        "PrepareProtectedWorkerTemp",
+        "DeleteWorkerTemp",
+        "ksx-hidmaestro-setup.log",
         "IsExactWorkingDirectoryPath",
-        "IsVerifiedWorkingDirectory(workDirectory, requireComplete: true)",
+        "requireComplete: true",
+        "allowWorkerTemp: true",
         "IsStrictWorkingDirectoryName",
         "MaxPriorWorkDirectories",
         "WorkerMutexName",
         "IsWorkerActive()",
+        "SuperviseWorker",
+        "WaitForEmpty",
         "PriorWorkDirectoryMinimumAge",
         "IsPriorWorkingDirectoryOldEnough",
         "DeleteWorkingDirectory(workDirectory, requirePins: stagingComplete)",
         "if (!cleaned && result == 0)",
+        "if (!workerStopped)",
         "return 10;",
     ] {
         assert!(
@@ -1530,12 +1892,25 @@ fn hidmaestro_installer_isolates_sdk_loading_before_exact_cleanup() {
     }
 
     let coordinator = source
-        .split_once("private static int RunCoordinator()")
-        .expect("coordinator exists")
+        .split_once("private static int RunCoordinatorLocked()")
+        .expect("locked coordinator exists")
         .1
         .split_once("private static int RunWorker")
         .expect("worker follows coordinator")
         .0;
+    let exact_preflight = coordinator
+        .find("if (IsExactHidMaestroInstalled())")
+        .expect("coordinator has an offline exact-install fast path");
+    let prior_sweep = coordinator
+        .find("if (!RemovePriorWorkingDirectories())")
+        .expect("coordinator has a bounded prior-staging sweep");
+    let download = coordinator
+        .find("DownloadArchiveAsync()")
+        .expect("coordinator owns the only network path");
+    assert!(
+        exact_preflight < prior_sweep && prior_sweep < download,
+        "an exact installed package must return before residue cleanup, SDK loading, or network access"
+    );
     let invoke = coordinator
         .find("result = InvokePinnedInstallerWorker(workDirectory)")
         .expect("coordinator invokes worker");
@@ -1546,16 +1921,64 @@ fn hidmaestro_installer_isolates_sdk_loading_before_exact_cleanup() {
         invoke < cleanup,
         "coordinator must wait for worker result before staging cleanup"
     );
+    let stop_refusal = coordinator
+        .find("if (!workerStopped)")
+        .expect("coordinator refuses cleanup without confirmed worker exit");
+    assert!(
+        invoke < stop_refusal && stop_refusal < cleanup,
+        "an unconfirmed worker stop must retain protected staging"
+    );
     let worker_probe = coordinator
         .find("if (IsWorkerActive())")
         .expect("coordinator checks for an orphaned worker");
-    let prior_sweep = coordinator
-        .find("if (!RemovePriorWorkingDirectories())")
-        .expect("coordinator has a bounded prior-staging sweep");
     assert!(
         worker_probe < prior_sweep,
         "coordinator must refuse a live orphaned worker before touching staging"
     );
+
+    let supervisor = source
+        .split_once("private static int InvokePinnedInstallerWorker")
+        .expect("coordinator worker launcher exists")
+        .1
+        .split_once("private static string NewWorkerReadyEventName")
+        .expect("ready-event helper follows worker launcher")
+        .0;
+    let start = supervisor
+        .find("Process.Start(startInfo)")
+        .expect("worker process starts");
+    let assign = supervisor
+        .find("job.Assign(worker)")
+        .expect("worker joins its kill-on-close job");
+    let signal = supervisor
+        .find("ready.Set();")
+        .expect("coordinator releases the worker handshake");
+    let supervise = supervisor
+        .find("SuperviseWorker(worker, job, WorkerTimeout, WorkerStopTimeout)")
+        .expect("job-wide supervision follows the handshake");
+    assert!(
+        start < assign && assign < signal && signal < supervise,
+        "the worker must join the kill-on-close job before it is allowed to load the SDK"
+    );
+
+    let self_test = source
+        .split_once("private static int RunSelfTests()")
+        .expect("compiled helper self-test exists")
+        .1
+        .split_once("private static int RunSelfTestSleepWorker")
+        .expect("self-test worker follows the coordinator self-test")
+        .0;
+    for required in [
+        "SuperviseWorker(",
+        "job.WaitForEmpty",
+        "child.WaitForExit",
+        "DeleteWorkerTemp(workerTemp, root)",
+        "Directory.Delete(root, recursive: false)",
+    ] {
+        assert!(
+            self_test.contains(required),
+            "compiled job/cleanup self-test lost `{required}`"
+        );
+    }
 
     let worker = source
         .split_once("private static int RunWorker")
@@ -1565,7 +1988,7 @@ fn hidmaestro_installer_isolates_sdk_loading_before_exact_cleanup() {
         .expect("worker has a bounded source section")
         .0;
     let verify = worker
-        .find("IsVerifiedWorkingDirectory(workDirectory, requireComplete: true)")
+        .find("if (!IsVerifiedWorkingDirectory(")
         .expect("worker verifies its complete pinned input");
     let lease = worker
         .find("TryAcquireMutex(workerLease)")
@@ -1592,7 +2015,7 @@ fn hidmaestro_installer_isolates_sdk_loading_before_exact_cleanup() {
         .find("!IsPriorWorkingDirectoryOldEnough(path)")
         .expect("prior staging is quarantined by age");
     let pinned = sweep
-        .find("!IsVerifiedWorkingDirectory(path, requireComplete: false)")
+        .find("!IsVerifiedWorkingDirectory(")
         .expect("prior staging remains byte-pinned");
     let remove = sweep
         .find("DeleteWorkingDirectory(path, requirePins: true)")
@@ -2046,9 +2469,8 @@ fn the_release_body_carries_the_hash_the_commit_and_the_smartscreen_step() {
 /// - `SetupLogging=yes` -- so the NEXT failure on a customer machine says
 ///   where it failed instead of costing four rounds of guessing.
 ///
-/// Each is one word on one line, ISCC compiles every value happily, and all
-/// three only matter on a machine that already has ksx on it — which is to
-/// say, never in CI and always on a second install.
+/// Each is one word on one line, ISCC compiles every value happily, and these
+/// values matter most on a machine that already has ksx on it.
 #[test]
 fn setup_closes_ksx_without_asking_and_keeps_a_log() {
     let entries = section(&script(), "[Setup]");
@@ -2079,6 +2501,13 @@ fn setup_closes_ksx_without_asking_and_keeps_a_log() {
         "restarting ksx before ssPostInstall finishes races `initialize-store` \
          for the protected WinUSB store, which rolls the whole install back"
     );
+    assert_eq!(
+        value("UsePreviousAppDir"),
+        "yes",
+        "an older custom-path install must reach PrepareToInstall's explicit \
+         uninstall/reinstall refusal; silently switching the registered path would \
+         orphan its privileged binaries"
+    );
 }
 
 /// **What uninstall LEAVES, which is the half nothing covered.**
@@ -2092,20 +2521,25 @@ fn setup_closes_ksx_without_asking_and_keeps_a_log() {
 ///
 /// Two directions, both from the same table:
 ///
-/// 1. **Everything the installer writes must be removable.** Every `[Files]`
-///    entry lands under `{app}`, which Inno removes wholesale — so no installed
-///    path needs (or gets) its own `[UninstallDelete]` line, and an entry that
-///    landed anywhere else would be left behind for ever with nobody to notice.
-/// 2. **Nothing outside KSX's own paths may be named for deletion.** The two
-///    non-`{app}` entries are `{commonappdata}\KSX\WinUSB` and `{commonappdata}\KSX`,
-///    and the parent may only go `dirifempty`: taking it out with
-///    `filesandordirs` would remove receipts belonging to a recovery somebody is
-///    still in the middle of.
+/// 1. **Everything the installer writes must be removable.** Product files land
+///    under `{app}`. The one setup-only exception is the exact protected
+///    HIDMaestro bootstrap directory. A successful setup removes that exact
+///    directory after the worker has stopped. A failed setup may deliberately
+///    retain it, so uninstall must never guess that it is safe to delete.
+/// 2. **Nothing outside KSX's own paths may be named for deletion.** Besides
+///    the setup bootstrap (which is not an uninstall target), the two
+///    non-`{app}` entries are `{commonappdata}\KSX\WinUSB` and
+///    `{commonappdata}\KSX`, and the parent may
+///    only go `dirifempty`: taking it out with `filesandordirs` would remove
+///    receipts belonging to a recovery somebody is still in the middle of.
 #[test]
 fn uninstall_removes_what_the_installer_wrote_and_nothing_outside_ksx() {
     let text = script();
 
-    // (1) Everything installed lands under {app}.
+    // (1) Everything installed lands under {app}, except the one explicitly
+    // setup-only bootstrap. It is removed only by the setup success path;
+    // failure residue remains protected rather than being erased under a
+    // possibly-live elevated worker.
     for entry in section(&text, "[Files]") {
         let Some(dest) = field(&entry, "DestDir") else {
             // The one exception, and it is stated in the .iss: a second copy
@@ -2117,11 +2551,15 @@ fn uninstall_removes_what_the_installer_wrote_and_nothing_outside_ksx() {
             );
             continue;
         };
+        let protected_bootstrap = dest == "{autopf}\\{#HidMaestroBootstrapDir}"
+            && field(&entry, "Source")
+                .is_some_and(|source| source.ends_with("\\{#HidMaestroInstaller}"))
+            && field(&entry, "Tasks").as_deref() == Some("hidmaestro");
         assert!(
-            dest == "{app}" || dest.starts_with("{app}\\"),
+            dest == "{app}" || dest.starts_with("{app}\\") || protected_bootstrap,
             "[Files] installs to {dest:?}, outside {{app}}. Uninstall removes {{app}} and \
-             nothing else by default, so this path would survive the uninstall with \
-             nobody to notice it: {entry}"
+             only the setup success path may remove the one exact protected bootstrap, \
+             so this path has no defined owner: {entry}"
         );
     }
 
@@ -2140,9 +2578,9 @@ fn uninstall_removes_what_the_installer_wrote_and_nothing_outside_ksx() {
         outside += 1;
         assert!(
             name.starts_with(r"{commonappdata}\KSX"),
-            "[UninstallDelete] names {name:?}, which is neither under {{app}} nor under \
-             KSX's own {{commonappdata}} KSX directory. Every other root here belongs to \
-             the user or to Windows: {entry}"
+            "[UninstallDelete] names {name:?}, which is neither under {{app}} nor \
+             KSX's own {{commonappdata}} directory. Every \
+             other root here belongs to the user or to Windows: {entry}"
         );
         if name == r"{commonappdata}\KSX" {
             assert_eq!(

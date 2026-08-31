@@ -207,7 +207,7 @@ before(async () => {
 
 after(async () => {
   try {
-    await context?.close();
+    await closeContext(context);
   } finally {
     try {
       await browser?.close();
@@ -242,6 +242,22 @@ async function openBench({ onRequest } = {}) {
     { timeout: 20_000 },
   );
   return page;
+}
+
+/** Playwright's default route teardown does not wait for an async handler.
+ * Closing a page while a handler is between `route.fetch()` and `fulfill()`
+ * turns an otherwise passing suite into a process-level unhandled rejection.
+ * Every page/context in this route-heavy suite drains those handlers first. */
+async function closePage(page) {
+  if (!page || page.isClosed()) return;
+  await page.unrouteAll({ behavior: "wait" });
+  await page.close();
+}
+
+async function closeContext(browserContext) {
+  if (!browserContext) return;
+  for (const page of browserContext.pages()) await closePage(page);
+  await browserContext.close();
 }
 
 /** Use the canvas's own minimap navigation contract to bring a potentially
@@ -944,7 +960,7 @@ describe("the device workbench", () => {
     assert.equal(radioAudit.secondChecked, 0,
       "the unresolved twin retains no cross-widget native selection");
     assert.deepEqual(page.ksxNoise, [], "the complete product simulation remains error-free");
-    await page.close();
+    await closePage(page);
   });
 
   test("adding a detected encoder creates the product terminal workbench", async () => {
@@ -1512,7 +1528,7 @@ describe("the device workbench", () => {
       }
       assert.deepEqual(noise, [], "the product encoder stays error-free");
     } finally {
-      await productContext.close();
+      await closeContext(productContext);
     }
   });
 
@@ -1643,7 +1659,7 @@ describe("the device workbench", () => {
       assert.deepEqual(noise, []);
     } finally {
       releaseRetryChart?.();
-      await failureContext.close();
+      await closeContext(failureContext);
     }
   });
 
@@ -1780,9 +1796,12 @@ describe("the device workbench", () => {
       );
       assert.deepEqual(noise, []);
     } finally {
-      await page.unroute(`${BASE}/api/redesign`);
-      await page.unroute("**/api/input-test**");
-      await genericContext.close();
+      // A theme mutation can leave the intercepted authority refresh in flight.
+      // Plain `unroute` returns immediately, so closing the page can race the
+      // handler's eventual `fulfill` and surface as an unhandled rejection on
+      // slower CI runners. Drain the handler before this test yields the page.
+      await page.unrouteAll({ behavior: "wait" });
+      await closeContext(genericContext);
     }
   });
 
@@ -1981,7 +2000,7 @@ describe("the device workbench", () => {
       assert.deepEqual(noise, []);
     } finally {
       releaseManualChart?.();
-      await lifecycleContext.close();
+      await closeContext(lifecycleContext);
     }
   });
 
@@ -2107,8 +2126,8 @@ describe("the device workbench", () => {
       assert.deepEqual(noise, []);
     } finally {
       authoritative = true;
-      await page.unroute(`${BASE}/api/redesign`);
-      await authorityContext.close();
+      await page.unrouteAll({ behavior: "wait" });
+      await closeContext(authorityContext);
     }
   });
 
@@ -2492,8 +2511,8 @@ describe("the device workbench", () => {
       assert.deepEqual(noise, []);
     } finally {
       releaseOutstandingChart?.();
-      await page.unroute(`${BASE}/api/redesign`);
-      await leaseContext.close();
+      await page.unrouteAll({ behavior: "wait" });
+      await closeContext(leaseContext);
     }
   });
 
@@ -2675,7 +2694,7 @@ describe("the device workbench", () => {
       "closing the picker restores its opener",
     );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
-    await page.close();
+    await closePage(page);
   });
 
   test("the shared tray slot switches catalogs and returns to the initiating opener", async () => {
@@ -2706,7 +2725,7 @@ describe("the device workbench", () => {
       "Done returns to Controllers, not the stale Devices opener",
     );
     assert.deepEqual(page.ksxNoise, []);
-    await page.close();
+    await closePage(page);
   });
 
   test("a narrow viewport reserves a live canvas above the bottom Add tray", async () => {
@@ -2741,7 +2760,7 @@ describe("the device workbench", () => {
     );
     await page.keyboard.press("Escape");
     assert.deepEqual(page.ksxNoise, []);
-    await page.close();
+    await closePage(page);
   });
 
   test("a phone-width landscape keeps the Add tray below a usable canvas", async () => {
@@ -2779,7 +2798,7 @@ describe("the device workbench", () => {
     );
     await page.keyboard.press("Escape");
     assert.deepEqual(page.ksxNoise, []);
-    await page.close();
+    await closePage(page);
   });
 
   test("reload and authoritative reconnect restore the workbench without passive chart reads", async () => {
@@ -2804,7 +2823,7 @@ describe("the device workbench", () => {
         IPAC_SLUG,
       );
     }
-    await seed.close();
+    await closePage(seed);
 
     const chartCalls = [];
     const page = await openBench({
@@ -2865,10 +2884,12 @@ describe("the device workbench", () => {
         "an encoder returning through an authoritative roster refresh waits for explicit Read",
       );
     } finally {
-      await page.unroute(`${BASE}/api/redesign`);
+      // An intercepted authority request can remain in flight on a slower
+      // runner. Wait for its handler before page teardown races `fulfill`.
+      await page.unrouteAll({ behavior: "wait" });
     }
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
-    await page.close();
+    await closePage(page);
   });
 
   test("selected picker removal clears the Inspector and survives a reload", async () => {
@@ -2899,7 +2920,7 @@ describe("the device workbench", () => {
       0,
       "the removed selection releases the Inspector's canvas inset",
     );
-    await page.close();
+    await closePage(page);
 
     const again = await openBench();
     assert.equal(
@@ -2918,7 +2939,7 @@ describe("the device workbench", () => {
       { timeout: 10_000 },
     );
     assert.deepEqual(again.ksxNoise, [], "the page must stay error-free");
-    await again.close();
+    await closePage(again);
   });
 
   test("staging from the bench card runs the daemon verb; the marking follows the truth", async () => {
@@ -3035,7 +3056,7 @@ describe("the device workbench", () => {
       "exactly one row is the staged one",
     );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
-    await page.close();
+    await closePage(page);
   });
 
   test("Theme and Stage share one lock, including cards added while a request is pending", async () => {
@@ -3133,10 +3154,10 @@ describe("the device workbench", () => {
       );
     } finally {
       releaseRequest();
-      await page.unroute(`${BASE}/redesign/device`);
+      await page.unrouteAll({ behavior: "wait" });
     }
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
-    await page.close();
+    await closePage(page);
   });
 
   test("a Stage refresh that loses its board returns focus to the workbench picker", async () => {
@@ -3200,10 +3221,10 @@ describe("the device workbench", () => {
         `Fit still used a stale Inspector inset (${centerError}px from the full canvas centre)`,
       );
     } finally {
-      await page.unroute(`${BASE}/api/redesign`);
+      await page.unrouteAll({ behavior: "wait" });
     }
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
-    await page.close();
+    await closePage(page);
   });
 
   test("provider unknown is preserved, authoritative absence unmounts, and return restores geometry", async () => {
@@ -3327,10 +3348,10 @@ describe("the device workbench", () => {
         "the returning board reclaims the exact saved geometry",
       );
     } finally {
-      await page.unroute(`${BASE}/api/redesign`);
+      await page.unrouteAll({ behavior: "wait" });
     }
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
-    await page.close();
+    await closePage(page);
   });
 
   test("one dynamic encoder profile lab renders only what its evidence justifies", async () => {
@@ -3670,7 +3691,7 @@ describe("the device workbench", () => {
     assert.equal(await page.locator(".rd-encoder-profile-node").count(), 0);
     assert.equal(await toggle.getAttribute("aria-pressed"), "false");
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
-    await page.close();
+    await closePage(page);
   });
 
   test("the encoder lab reads one exact complete chart only after explicit consent", async () => {
@@ -3819,7 +3840,7 @@ describe("the device workbench", () => {
     await toggleEncoderResearchHarness(page);
     await page.waitForFunction(() => !document.querySelector(".rd-encoder-profile-node"));
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
-    await page.close();
+    await closePage(page);
   });
 
   test("a pending chart locks observation and a stale response cannot repaint another profile", async () => {
@@ -3864,7 +3885,7 @@ describe("the device workbench", () => {
       assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     } finally {
       releaseChart?.();
-      if (!page.isClosed()) await page.close();
+      await closePage(page);
     }
   });
 
@@ -4130,7 +4151,7 @@ describe("the device workbench", () => {
       );
       assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     } finally {
-      if (!page.isClosed()) await page.close();
+      await closePage(page);
     }
   });
 
@@ -4253,7 +4274,7 @@ describe("the device workbench", () => {
       );
       assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     } finally {
-      if (!page.isClosed()) await page.close();
+      await closePage(page);
     }
   });
 
@@ -4393,7 +4414,7 @@ describe("the device workbench", () => {
       assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     } finally {
       releaseStart?.();
-      if (!page.isClosed()) await page.close();
+      await closePage(page);
     }
   });
 
@@ -4522,7 +4543,7 @@ describe("the device workbench", () => {
       assert.equal(await node.locator('[data-rd-encoder-observe="start"]').count(), 0);
       assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     } finally {
-      if (!page.isClosed()) await page.close();
+      await closePage(page);
     }
   });
 
@@ -4582,7 +4603,7 @@ describe("the device workbench", () => {
         "terminal slots retain a forced-colors outline",
       );
     } finally {
-      await accessibleContext.close();
+      await closeContext(accessibleContext);
     }
   });
 
@@ -4766,10 +4787,13 @@ describe("the device workbench", () => {
         "a disconnected selection falls back to the remaining real encoder",
       );
     } finally {
-      await page.unroute(`${BASE}/api/redesign`);
+      // The last theme submission can still be completing its intercepted
+      // authority refresh on a slower runner. Wait for that route handler so
+      // page teardown cannot race its final `fulfill` call.
+      await page.unrouteAll({ behavior: "wait" });
     }
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
-    await page.close();
+    await closePage(page);
   });
 
   test("removing a non-primary board repaints the surviving multi-selection", async () => {
@@ -4821,6 +4845,6 @@ describe("the device workbench", () => {
     await page.click(`.rd-devmodal button[data-selector="${G915}"]`);
     await page.keyboard.press("Escape");
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
-    await page.close();
+    await closePage(page);
   });
 });

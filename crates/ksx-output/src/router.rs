@@ -14,8 +14,10 @@
 //!   It is the shipped compatibility/fallback lane, and its X360 target reaches
 //!   Microsoft's own `xusb22.sys`. The historical HIDMaestro WGI issue was fixed
 //!   upstream; it is not the reason for preserving this explicit routing.
-//! - `dualsense`, `switchpro`, `xboxseries` → **HIDMaestro**, because ViGEmBus
-//!   cannot express them at all and never will (the project is frozen).
+//! - `dualsense`, `switchpro`, `xboxseries`, `snes`, `genesis` →
+//!   **HIDMaestro**, because ViGEmBus cannot express them. Routing does not
+//!   imply availability: this build offers DualSense and capability-gates the
+//!   other four before constructing a backend.
 //!
 //! # Laziness is part of the rule
 //!
@@ -91,14 +93,14 @@ impl RoutedBackend {
     /// for a persona that needs it **and this build can create one**.
     ///
     /// This is the one every entry point should use. It costs nothing on a
-    /// cabinet that uses neither the DualSense, Switch Pro, nor Xbox Series
-    /// persona: [`HidMaestroBackend::connect`](crate::HidMaestroBackend::connect)
+    /// cabinet that uses no DualSense persona:
+    /// [`HidMaestroBackend::connect`](crate::HidMaestroBackend::connect)
     /// is never called, so the driver is never probed for and its absence
     /// cannot fail a run.
     ///
     /// The factory is wired for the one live DualSense path; the per-persona
-    /// build gate still refuses Switch Pro and Xbox Series before this factory
-    /// can touch the machine.
+    /// build gate refuses the other catalog profiles before this factory can
+    /// touch the machine.
     pub fn standard(vigem: Box<dyn VirtualPadBackend>) -> Self {
         Self {
             vigem: Some(vigem),
@@ -485,7 +487,13 @@ mod tests {
             RoutedBackend::backend_for(Persona::PlayStation),
             PadBackend::Vigem
         );
-        for p in [Persona::DualSense, Persona::SwitchPro, Persona::XboxSeries] {
+        for p in [
+            Persona::DualSense,
+            Persona::SwitchPro,
+            Persona::XboxSeries,
+            Persona::Snes,
+            Persona::Genesis,
+        ] {
             assert_eq!(RoutedBackend::backend_for(p), PadBackend::HidMaestro, "{p}");
         }
     }
@@ -536,9 +544,8 @@ mod tests {
 
     #[test]
     fn a_lazy_production_router_opens_nothing_until_a_persona_is_plugged() {
-        // 2026-08-20 flip: with every persona pluggable there is no refusal
-        // to observe, so laziness is pinned directly — construction opens
-        // nothing, and plugging a ViGEm persona opens only ViGEm.
+        // Laziness is pinned directly: construction opens nothing, and
+        // plugging a ViGEm persona opens only ViGEm.
         let vigem_builds = Arc::new(AtomicUsize::new(0));
         let counter = vigem_builds.clone();
         let mut r = RoutedBackend::standard_lazy(Box::new(move || {
@@ -645,30 +652,27 @@ mod tests {
         assert!(r.plug_persona(Persona::PlayStation).is_ok());
     }
 
-    // RETIRED TEST, AND THE REGRESSION IT PINNED (retro leg flip 2026-08-20).
-    //
-    // A production router must refuse the unfinished HIDMaestro personas
-    // WITHOUT CONSULTING THE MACHINE, because the machine's answer is the wrong
-    // one: on a box where HIDMaestro is installed the probe says yes, and the
-    // pad still cannot be created. A gate that flips with an install would
-    // offer a persona that plugs no better than before. The enforcement still
-    // ships — `plug_persona` checks `enforce_build_capability && !can_plug()`
-    // before it reaches any factory — but with every persona pluggable there is
-    // no subject left to observe it with. The test returns verbatim with the
-    // next gated persona; git history holds its shape.
-    //
-    // Demoted from `///` to `//` on 2026-08-26. As a doc comment it had no item
-    // of its own left and rustdoc silently attached it to
-    // `the_cabinet_personas_never_touch_the_hidmaestro_side` below, which tests
-    // nothing of the kind — the same defect as commit 8bab1c3, "a doc block on
-    // the wrong function". A `///` claiming a guard that does not run is worse
-    // than no comment at all.
+    /// A production router refuses gated profiles before it constructs or
+    /// probes HIDMaestro. Installing the driver cannot change this build fact.
+    #[test]
+    fn gated_profiles_never_reach_the_production_hidmaestro_factory() {
+        let mut router = RoutedBackend::standard(Box::new(MockBackend::new()));
+        for persona in [
+            Persona::SwitchPro,
+            Persona::XboxSeries,
+            Persona::Snes,
+            Persona::Genesis,
+        ] {
+            assert!(matches!(
+                router.plug_persona(persona),
+                Err(OutputError::PersonaNotImplemented(actual)) if actual == persona
+            ));
+            assert!(!router.hidmaestro_started(), "{persona}");
+        }
+    }
 
     #[test]
     fn the_cabinet_personas_never_touch_the_hidmaestro_side() {
-        // 2026-08-20 flip: no unbuildable persona remains, so the pinned
-        // property narrows to its second half — the cabinet's own personas
-        // never touch the HIDMaestro side.
         let mut r = RoutedBackend::standard(Box::new(MockBackend::new()));
         assert!(r.plug_persona(Persona::Xbox360).is_ok());
         assert!(r.plug_persona(Persona::PlayStation).is_ok());

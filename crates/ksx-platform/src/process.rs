@@ -188,15 +188,6 @@ pub fn protected_hidmaestro_host() -> Result<ProtectedExecutable, ProtectedInsta
     protected_current_executable_sibling("ksx-hidmaestro-host.exe")
 }
 
-/// The SDK-lane elevated host: Switch Pro and Xbox Series through the pinned
-/// official HIDMaestro SDK. A separate installed sibling from the candidate
-/// host (which is NativeAOT and stays byte-stable); the same Program
-/// Files/DACL proof applies.
-#[cfg(windows)]
-pub fn protected_hidmaestro_sdk_host() -> Result<ProtectedExecutable, ProtectedInstallError> {
-    protected_current_executable_sibling("ksx-hidmaestro-sdk-host.exe")
-}
-
 fn validate_protected_executable_name(
     canonical: &Path,
     expected_name: &'static str,
@@ -317,11 +308,6 @@ pub fn protected_install_sibling(
 
 #[cfg(not(windows))]
 pub fn protected_winusb_helper() -> Result<ProtectedExecutable, ProtectedInstallError> {
-    Err(ProtectedInstallError::Unsupported)
-}
-
-#[cfg(not(windows))]
-pub fn protected_hidmaestro_sdk_host() -> Result<ProtectedExecutable, ProtectedInstallError> {
     Err(ProtectedInstallError::Unsupported)
 }
 
@@ -2162,7 +2148,6 @@ mod tests {
         let fixed_public = ["pub fn ", "protected_winusb_helper()"].concat();
         let generic_public = ["pub fn ", "protected_executable_sibling("].concat();
         let managed_public = ["pub fn ", "protected_hidmaestro_host("].concat();
-        let sdk_public = ["pub fn ", "protected_hidmaestro_sdk_host("].concat();
         let generic_private = ["fn ", "protected_executable_sibling("].concat();
         assert_eq!(
             source.matches(fixed_public.as_str()).count(),
@@ -2172,11 +2157,6 @@ mod tests {
         assert!(!source.contains(generic_public.as_str()));
         assert_eq!(
             source.matches(managed_public.as_str()).count(),
-            2,
-            "one Windows implementation and one non-Windows refusal"
-        );
-        assert_eq!(
-            source.matches(sdk_public.as_str()).count(),
             2,
             "one Windows implementation and one non-Windows refusal"
         );

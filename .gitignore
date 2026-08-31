@@ -3,6 +3,10 @@
 /tools/icongen/target
 **/*.rs.bk
 
+# .NET helper build output
+/tools/hidmaestro-driver-installer/bin/
+/tools/hidmaestro-driver-installer/obj/
+
 # Forma authoring dependencies
 /studio-ui/node_modules
 

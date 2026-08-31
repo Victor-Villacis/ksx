@@ -64,12 +64,10 @@ impl HidMaestroReport {
     /// The personas this build cannot create, canonical names in
     /// [`ksx_core::Persona::ALL`] order.
     ///
-    /// **Derived, never listed.** This used to be a hand-written
-    /// `["dualsense", "switchpro", "xboxseries"]`, which made it a second
-    /// opinion about what ksx can do — one that could not be wrong today (all
-    /// three are unbuildable) and would be wrong the day one of them lands, in
-    /// the direction that keeps promising it. Asking the capability means the
-    /// doctor row and the config validator answer the same question.
+    /// **Derived, never listed.** This used to be a hand-written list, which
+    /// made it a second opinion about what ksx can do and would go stale
+    /// whenever one runtime landed or was withdrawn. Asking the capability
+    /// means the doctor row and the config validator answer the same question.
     ///
     /// Empty when every persona works; callers must say nothing in that case
     /// rather than print an empty list.

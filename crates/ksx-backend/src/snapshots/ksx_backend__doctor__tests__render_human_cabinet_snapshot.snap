@@ -25,6 +25,8 @@ Interception (keyboard/mouse class filters — M3 capture backend)
   [WARN] signature valid via timestamp — Francisco Lopes da Silva; signing cert expired 2012-10-21T15:38:52Z
 
 HIDMaestro (production DualSense backend)
+  [INFO] switchpro/xboxseries/snes/genesis remain unavailable — those profile runtimes are not implemented
+  [INFO]   use persona 'playstation' or 'xbox360' instead
   [INFO] not installed — DualSense needs the HIDMaestro installer task
   [INFO]   looked for C:\Windows\System32\DriverStore\FileRepository\hidmaestro.inf_amd64_*\hidmaestro.inf (SHA256 187D5B06625CEECC0E1B43C0FA8DDA5F6DAB6A9962F79B037BBAD419F1084704)
   [INFO]   looked for C:\Windows\System32\DriverStore\FileRepository\hidmaestro.inf_amd64_*\HIDMaestro.dll (present; bytes are re-signed per install)
@@ -39,4 +41,5 @@ Code integrity (2026 cross-signed-trust removal)
 Advice
   [WARN] interception-borrowed-time: Interception is on borrowed time: its driver is cross-signed with a certificate that expired 2012-10-21, and the 'Microsoft Windows Cross Certificates for Code Integrity Exceptions Audit Policy' CI policy ({784C4414-79F4-4C32-A6A5-F0FB42A51D0D}, id 10.0.0.0) is active on this machine in Audit mode. When Windows flips it to enforcement the driver is blocked from loading. Do NOT take Windows feature updates on the cabinet; the M6 WinUSB backend removes this dependency.
   [INFO] scpvbus-present: ScpVBus (1.21.442.0) is installed but KSX does not use it. Remove it only after confirming that no other app on this PC depends on it.
+  [INFO] personas-not-implemented: The switchpro/xboxseries/snes/genesis personas have not completed their independent production runtimes; use xbox360 for those.
   [INFO] hidmaestro-missing: HIDMaestro is not installed, so the production DualSense persona cannot start. Re-run the KSX installer with the HIDMaestro driver task selected. xbox360/playstation slots continue to run on ViGEmBus.

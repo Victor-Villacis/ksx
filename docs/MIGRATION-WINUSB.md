@@ -1,6 +1,6 @@
 # Migrating a keyboard to KSX's built-in Windows USB mode
 
-This is the supported product migration for KSX 0.2.0: use the **installed**
+This is the supported product migration for KSX 0.5.0: use the **installed**
 Studio first-run page. It needs no WDK, INF editing, self-signing command,
 Zadig, terminal, device-path paste, or TOML edit.
 
@@ -10,10 +10,10 @@ journal. Portable KSX can use a healthy external Interception installation or
 an interface an installed KSX already prepared, but use the installed app to
 prepare or release it.
 
-> **Acceptance status:** the software transaction and packaging contracts are
-> implemented. The clean-runner provider smoke and physical Gates 2–4 are
-> **NOT RUN** for the current 0.2.0 candidate until Actions and
-> [`GATES.md`](GATES.md) record evidence against the exact candidate artifact.
+> **Acceptance rule:** the software transaction and packaging contracts are
+> implemented. CI must record the clean-runner provider smoke, and physical
+> Gates 2–4 remain mandatory against the exact candidate artifact before
+> production approval; [`GATES.md`](GATES.md) is the evidence ledger.
 
 ## What changes
 

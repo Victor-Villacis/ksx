@@ -567,12 +567,15 @@ mod tests {
             hidmaestro: crate::report::HidMaestroReport::absent(vec!["<probe>".into()]),
         };
         let advice = summarize(&r);
-        // Sorted most-severe-first, so the two Info-level notes land last —
+        // Sorted most-severe-first, so the Info-level notes land last —
         // behind anything that is actually broken.
-        // Retro leg flip: no persona is gated, so no gate note appears.
         assert_eq!(
             codes(&advice),
-            vec!["interception-missing", "hidmaestro-missing"]
+            vec![
+                "interception-missing",
+                "personas-not-implemented",
+                "hidmaestro-missing"
+            ]
         );
         assert_eq!(advice[0].severity, Severity::Warning);
     }
@@ -592,16 +595,25 @@ mod tests {
         present.hidmaestro.installed = true;
         present.hidmaestro.service_key = true;
 
-        // Retro leg flip: nothing is gated, so the note stays silent in
-        // BOTH states — the property this test pins: an install must not
-        // change what the build can plug.
-        assert!(crate::report::HidMaestroReport::gated_personas().is_empty());
+        assert_eq!(
+            crate::report::HidMaestroReport::gated_personas(),
+            vec!["switchpro", "xboxseries", "snes", "genesis"]
+        );
         for (label, report) in [("absent", &absent), ("installed", &present)] {
             let advice = summarize(report);
+            let gate = advice
+                .iter()
+                .find(|a| a.code == "personas-not-implemented")
+                .unwrap_or_else(|| panic!("{label}: missing build-capability note"));
             assert!(
-                !advice.iter().any(|a| a.code == "personas-not-implemented"),
-                "{label}: an install must not conjure a gate note: {:?}",
-                codes(&advice)
+                gate.message.contains("switchpro/xboxseries/snes/genesis"),
+                "{label}: {}",
+                gate.message
+            );
+            assert!(
+                !gate.message.contains("install"),
+                "{label}: {}",
+                gate.message
             );
         }
         // ...and the install note itself only appears when it is true.

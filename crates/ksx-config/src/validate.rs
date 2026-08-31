@@ -410,7 +410,7 @@ impl fmt::Display for Issue {
                 write!(
                     f,
                     "{count} slots use a HIDMaestro persona, but the elevated HIDMaestro host \
-                     carries at most {} live pads; give the extra slots persona '{}' or '{}' \
+                     has a live-pad capacity of {}; give the extra slots persona '{}' or '{}' \
                      (ViGEmBus, outside that pool)",
                     ksx_core::MAX_HIDMAESTRO_PADS,
                     Persona::Xbox360,
@@ -763,7 +763,7 @@ impl fmt::Display for Issue {
                 write!(
                     f,
                     "game '{game}': {count} slots use a HIDMaestro persona, but the elevated \
-                     HIDMaestro host carries at most {} live pads; give the extra slots persona \
+                     HIDMaestro host has a live-pad capacity of {}; give the extra slots persona \
                      '{}' or '{}'",
                     ksx_core::MAX_HIDMAESTRO_PADS,
                     Persona::Xbox360,
@@ -1835,19 +1835,10 @@ preset = "default"
         );
     }
 
-    /// Every persona this build ships plugs, so `validate` gates none of them.
-    ///
-    /// Named for what it asserts. It used to be called
-    /// `a_persona_this_build_cannot_plug_is_refused_at_validate_time`, which
-    /// read as proof that the refusal path worked — but every persona plugs
-    /// now (the retro leg flip), so `persona_gap` returns `None` for all of
-    /// `Persona::ALL` and the `PersonaNotImplemented` push is unreachable.
-    /// Deleting both `issues.push(Issue::…NotImplemented { … })` bodies left
-    /// all 185 lib tests green (2026-08-26 audit). The refusal MESSAGE is
-    /// pinned directly instead, by
-    /// [`the_unpluggable_persona_refusal_says_installing_will_not_help`].
+    /// Validation accepts shipped runtimes and reports known-but-gated
+    /// profiles as a build capability gap, never as a spelling error.
     #[test]
-    fn no_shipping_persona_is_gated_by_this_build() {
+    fn config_validation_distinguishes_shipped_and_gated_personas() {
         let slot = |number: u8, persona: Persona| SlotEntry {
             number,
             keyboard: None,
@@ -1857,16 +1848,34 @@ preset = "default"
             socd: Socd::default(),
             macros: Default::default(),
         };
-        for persona in Persona::ALL.iter().copied() {
+        for persona in [Persona::Xbox360, Persona::PlayStation, Persona::DualSense] {
             let cfg = ConfigFile {
                 slots: vec![slot(1, persona)],
                 ..ConfigFile::default()
             };
-            // Stronger than "no PersonaNotImplemented": a lone slot on any
-            // shipping persona is a CLEAN config, full stop.
             assert_eq!(validate(&cfg, &[]), vec![], "{persona}");
-            // The capability this is wired to (never a driver probe).
             assert_eq!(persona_gap(persona), None, "{persona}");
+        }
+        for persona in [
+            Persona::SwitchPro,
+            Persona::XboxSeries,
+            Persona::Snes,
+            Persona::Genesis,
+        ] {
+            let cfg = ConfigFile {
+                slots: vec![slot(1, persona)],
+                ..ConfigFile::default()
+            };
+            let issues = validate(&cfg, &[]);
+            assert!(
+                matches!(
+                    issues.as_slice(),
+                    [Issue::PersonaNotImplemented { slot: 1, persona: actual, .. }]
+                        if actual == persona.as_str()
+                ),
+                "{persona}: {issues:?}"
+            );
+            assert!(persona_gap(persona).is_some(), "{persona}");
         }
     }
 
@@ -1879,11 +1888,8 @@ preset = "default"
     /// message must say the install does not help and name a persona that
     /// does work.
     ///
-    /// The push is unreachable today (see
-    /// [`no_shipping_persona_is_gated_by_this_build`]), so the issue is
-    /// constructed directly. This is the only thing standing between the next
-    /// gated persona and a message that sends the user off to install a
-    /// driver for nothing.
+    /// The issue is constructed directly so the customer-facing wording is
+    /// pinned independently from the traversal tests above.
     #[test]
     fn the_unpluggable_persona_refusal_says_installing_will_not_help() {
         let issue = Issue::PersonaNotImplemented {
@@ -1996,25 +2002,19 @@ preset = "default"
     }
 
     #[test]
-    fn a_ninth_hidmaestro_pad_is_rejected_by_config_and_game_validation() {
-        // Alternating non-XInput HIDMaestro personas: the pool rule must fire
-        // on its own, not hide behind the four-seat XInput rule.
+    fn a_second_hidmaestro_pad_is_rejected_by_config_and_game_validation() {
         let slot = |number: u8| SlotEntry {
             number,
             keyboard: None,
             mouse: None,
             preset: "default".into(),
-            persona: if number % 2 == 0 {
-                Persona::DualSense
-            } else {
-                Persona::SwitchPro
-            },
+            persona: Persona::DualSense,
             socd: Socd::default(),
             macros: Default::default(),
         };
         // A full pool and the pad past it, both derived from the constant that
-        // decides them. Spelled 8 and 9, a raised ceiling fails this at
-        // `left: [], right: [TooManyHidMaestroPads { count: 9 }]` — an empty
+        // decides them. Hard-coded values would make a raised ceiling fail at
+        // `left: [], right: [TooManyHidMaestroPads { .. }]` — an empty
         // issue list against a count, saying nothing about the number that
         // moved, in one of four crates failing the same way at once.
         let pool = ksx_core::MAX_HIDMAESTRO_PADS;
@@ -2035,11 +2035,14 @@ preset = "default"
         );
         let msg = validate(&over, &[])[0].to_string();
         // Built from the constant `Issue::TooManyHidMaestroPads` renders from,
-        // not spelled "at most 8". The ceiling is one fact that ksx-core,
+        // not a hard-coded count. The ceiling is one fact that ksx-core,
         // ksx-backend and ksx-output assert too; a literal here makes this the
         // third or fourth place a raised ceiling fails, each on its own and
         // none of them naming the number's owner.
-        assert!(msg.contains(&format!("at most {pool}")), "{msg}");
+        assert!(
+            msg.contains(&format!("live-pad capacity of {pool}")),
+            "{msg}"
+        );
 
         use crate::games::GameSlotEntry;
         let mut games: GamesFile =
@@ -2051,11 +2054,7 @@ preset = "default"
                 keyboard: None,
                 mouse: None,
                 preset: "default".into(),
-                persona: if number % 2 == 0 {
-                    Persona::DualSense
-                } else {
-                    Persona::SwitchPro
-                },
+                persona: Persona::DualSense,
                 socd: Socd::default(),
                 macros: Default::default(),
             })
@@ -2075,21 +2074,13 @@ preset = "default"
         );
     }
 
-    /// Every shipping persona validates clean PER GAME too.
-    ///
-    /// Replaces `a_games_unbuildable_persona_is_reported_per_game`, whose name
-    /// promised a report that cannot happen: `GamePersonaNotImplemented` is
-    /// unreachable, so the test asserted the ABSENCE of the issue its name
-    /// promised. The per-game report SHAPE is pinned by
-    /// [`the_unpluggable_persona_refusal_says_installing_will_not_help`]; what
-    /// is worth keeping here is that a game slot on any shipping persona is
-    /// clean, across all of `Persona::ALL` rather than a hand-picked three.
+    /// Game validation uses the same binary capability gate as config.
     #[test]
-    fn no_shipping_persona_is_gated_per_game() {
+    fn game_validation_distinguishes_shipped_and_gated_personas() {
         use crate::games::GameSlotEntry;
         let mut games: GamesFile =
             toml::from_str("[[game]]\ntitle = \"Bloodborne\"\npath = \"C:\\\\ps.exe\"\n").unwrap();
-        for persona in Persona::ALL.iter().copied() {
+        for persona in [Persona::Xbox360, Persona::PlayStation, Persona::DualSense] {
             games.games[0].slots = vec![GameSlotEntry {
                 number: 1,
                 user_index: None,
@@ -2101,6 +2092,32 @@ preset = "default"
                 macros: Default::default(),
             }];
             assert_eq!(validate_games(&games, &[]), vec![], "{persona}");
+        }
+        for persona in [
+            Persona::SwitchPro,
+            Persona::XboxSeries,
+            Persona::Snes,
+            Persona::Genesis,
+        ] {
+            games.games[0].slots = vec![GameSlotEntry {
+                number: 1,
+                user_index: None,
+                keyboard: None,
+                mouse: None,
+                preset: "default".into(),
+                persona,
+                socd: Socd::default(),
+                macros: Default::default(),
+            }];
+            let issues = validate_games(&games, &[]);
+            assert!(
+                matches!(
+                    issues.as_slice(),
+                    [Issue::GamePersonaNotImplemented { slot: 1, persona: actual, .. }]
+                        if actual == persona.as_str()
+                ),
+                "{persona}: {issues:?}"
+            );
         }
     }
 

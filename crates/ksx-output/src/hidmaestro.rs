@@ -1,15 +1,12 @@
-//! Production HIDMaestro adapter — one lane, one bounded protocol.
+//! Production HIDMaestro adapter for the source-built DualSense lane.
 //!
 //! The ordinary daemon owns only an authenticated protocol client. All driver
 //! and shared-memory handles live in one fixed elevated sibling process: the
-//! SDK-lane host that loads the hash-pinned official SDK
-//! (`docs/HIDMAESTRO-STATE.md`, "Architecture decision"). Every HIDMaestro
-//! persona rides it — DualSense joined on 2026-08-20 after the hardware
-//! session measured the SDK lane working first-try while the candidate lane
-//! needed three live root-causes; the audited candidate host still ships as
-//! the conformance reference, and its client wiring lives in git history.
-//! The host connects lazily at the first plug, so UAC appears exactly when a
-//! rich persona is requested.
+//! source-built `ksx-hidmaestro-host.exe`. That runtime supports one exact
+//! DualSense controller. Other HIDMaestro catalog profiles remain in the
+//! product vocabulary but capability-gated until a distributable production
+//! runtime exists. The host connects lazily at the first DualSense plug, so
+//! UAC appears only when it is needed.
 
 #[cfg(windows)]
 use std::collections::{BTreeMap, VecDeque};
@@ -30,37 +27,27 @@ const CATALOG_SHA256: [u8; 32] = [
     0x4D, 0x1F, 0x5D, 0xE0, 0x55, 0xA2, 0xC4, 0xCC, 0x04, 0x1C, 0xA1, 0x6C, 0xE7, 0x95, 0x4A, 0x6A,
 ];
 
-/// Canonical SHA-256 of `tools/hidmaestro-sdk-host/runtime-contract-sdk.json`,
-/// the SDK lane's own bounded contract. Pinned identically in
-/// `publish-sdk.ps1`, `SdkHostSession.cs` and `build-installer.yml`.
+/// Canonical LF-normalized SHA-256 of
+/// `tools/hidmaestro-host/runtime-contract.json`, pinned identically in the
+/// source-build publisher and installer workflow.
 #[cfg(windows)]
-const SDK_RUNTIME_CONTRACT_SHA256: [u8; 32] = [
-    0xED, 0xE6, 0x4B, 0x5F, 0x53, 0xCB, 0x6B, 0x86, 0x81, 0xA6, 0x6A, 0xEF, 0xFE, 0x4C, 0x7C, 0x46,
-    0x4B, 0xC5, 0xA3, 0x76, 0x97, 0xE8, 0xDA, 0x16, 0x0C, 0x29, 0xB6, 0x55, 0xB6, 0x0F, 0xFE, 0x89,
+const RUNTIME_CONTRACT_SHA256: [u8; 32] = [
+    0x4F, 0x76, 0xF3, 0x1C, 0x04, 0x93, 0x90, 0xA1, 0x34, 0x23, 0x88, 0xE0, 0x9F, 0x9D, 0x0D, 0x0E,
+    0x35, 0x47, 0x16, 0x2D, 0x08, 0xEA, 0x50, 0x1F, 0xD8, 0x29, 0xAF, 0x3C, 0xF6, 0x4F, 0x67, 0xDA,
 ];
 
-/// The host's live-controller ceiling — ksx's eight-player couch design, and
-/// the `controllerLimit` the SDK contract declares. Enforced HERE, before the
-/// host is asked: any host Fault poisons the whole one-use session by design
-/// (fail-closed), so an over-capacity request must be refused locally rather
-/// than allowed to tear down every live pad. The host's own Capacity fault
-/// stays as defense-in-depth.
+/// The source-built host owns one fixed device and shared-memory endpoint.
+/// Refuse a second pad before asking it because a host Fault poisons the whole
+/// fail-closed session.
 #[cfg(windows)]
-const HOST_CONTROLLER_LIMIT: usize = 8;
-
-/// XInput seats four pads; a fifth Xbox Series companion would come up
-/// slotless (measured 2026-08-20: each Xbox pad claims a real slot).
-#[cfg(windows)]
-const XINPUT_SEAT_LIMIT: usize = 4;
+const HOST_CONTROLLER_LIMIT: usize = 1;
 
 #[cfg(windows)]
 struct LivePad {
     controller: ksx_hidmaestro::host::ControllerId,
-    /// ⚠️ WHICH PERSONA THIS PAD ACTUALLY IS. `persona()` used to answer
-    /// DualSense for any live handle — true only while DualSense was the one
-    /// profile that could exist, and a lie the moment a second one can. The
-    /// answer feeds session reporting and the XInput-slot accounting, so it
-    /// comes from the profile the host confirmed, never from a constant.
+    /// The profile accepted for this handle. Keeping it with the live record
+    /// makes `persona()` truthful if the source-built host later gains another
+    /// independently released profile.
     persona: Persona,
     state: PadState,
     last_submit: Instant,
@@ -71,11 +58,11 @@ struct LivePad {
 type LaneClient =
     ksx_hidmaestro::host::HostClient<ksx_hidmaestro::windows_transport::WindowsHostTransport>;
 
-/// The authenticated connection to the fixed installed elevated SDK host,
-/// established at the first plug of a HIDMaestro persona.
+/// The authenticated connection to the fixed installed source-built host,
+/// established at the first DualSense plug.
 #[cfg(windows)]
 pub struct HidMaestroBackend {
-    sdk: Option<LaneClient>,
+    client: Option<LaneClient>,
     pads: BTreeMap<u32, LivePad>,
     next_handle: u32,
 }
@@ -87,35 +74,34 @@ pub struct HidMaestroBackend {
 
 impl HidMaestroBackend {
     /// Prepare the backend. The host is not launched here: the fixed
-    /// elevated sibling starts at the FIRST plug of a HIDMaestro persona, so
-    /// UAC appears exactly when a rich persona is requested.
+    /// elevated sibling starts at the first DualSense plug, so UAC appears
+    /// exactly when that production persona is requested.
     #[cfg(windows)]
     pub fn connect() -> Result<Self, OutputError> {
         Ok(Self {
-            sdk: None,
+            client: None,
             pads: BTreeMap::new(),
             next_handle: 1,
         })
     }
 
-    /// The host client, launching and authenticating the SDK host on first
-    /// use.
+    /// Launch and authenticate the fixed source-built host on first use.
     #[cfg(windows)]
     fn client(&mut self) -> Result<&mut LaneClient, OutputError> {
-        if self.sdk.is_none() {
+        if self.client.is_none() {
             let expected = ksx_hidmaestro::host::HostExpectation {
-                sdk_sha256: SDK_RUNTIME_CONTRACT_SHA256,
+                sdk_sha256: RUNTIME_CONTRACT_SHA256,
                 catalog_sha256: CATALOG_SHA256,
                 catalog_resource_count: 228,
             };
             let client =
-                ksx_hidmaestro::windows_transport::WindowsHostTransport::connect_production_sdk(
+                ksx_hidmaestro::windows_transport::WindowsHostTransport::connect_production(
                     expected,
                 )
                 .map_err(|error| OutputError::HidMaestroRuntime(error.to_string()))?;
-            self.sdk = Some(client);
+            self.client = Some(client);
         }
-        Ok(self.sdk.as_mut().expect("just connected"))
+        Ok(self.client.as_mut().expect("just connected"))
     }
 
     #[cfg(not(windows))]
@@ -167,7 +153,7 @@ impl VirtualPadBackend for HidMaestroBackend {
 
         // Poll only if the host is already running: servicing must never
         // launch an elevated process.
-        if let Some(client) = self.sdk.as_mut() {
+        if let Some(client) = self.client.as_mut() {
             let mut events = Vec::new();
             while let Some(event) = client.poll_feedback().map_err(Self::runtime)? {
                 events.push(event);
@@ -197,37 +183,22 @@ impl VirtualPadBackend for HidMaestroBackend {
     }
 
     fn plug_persona(&mut self, persona: Persona) -> Result<PadHandle, OutputError> {
-        // The BUILD GATE decides which personas exist, not this adapter.
-        // Asking `can_plug` keeps ksx-core's `PadBackend::supports` in sole
-        // charge of that, so a persona going live is a change there rather
-        // than a second place to remember.
-        if !persona.can_plug() {
+        // Defense in depth: the build capability gate owns the product offer,
+        // while this one-controller host accepts only its exact profile.
+        if persona != Persona::DualSense || !persona.can_plug() {
             return Err(OutputError::PersonaUnsupported(persona));
         }
-        let profile = ksx_hidmaestro::host::ProfileId::try_from(persona)
-            .map_err(|_| OutputError::PersonaUnsupported(persona))?;
-        // Capacity is refused HERE, before the host is asked: a host Fault
-        // poisons the whole one-use session (fail-closed), so letting a 9th
-        // create reach the host would tear down eight live pads. The host
-        // enforces the same limits as defense-in-depth.
+        // Capacity is refused HERE, before the host is asked. The host enforces
+        // the same one-controller limit as defense in depth.
         if self.pads.len() >= HOST_CONTROLLER_LIMIT {
             return Err(OutputError::HidMaestroRuntime(format!(
-                "the HIDMaestro host carries at most {HOST_CONTROLLER_LIMIT} live controllers"
+                "the HIDMaestro host's live-controller capacity is {HOST_CONTROLLER_LIMIT}"
             )));
         }
-        if persona.is_xinput()
-            && self
-                .pads
-                .values()
-                .filter(|pad| pad.persona.is_xinput())
-                .count()
-                >= XINPUT_SEAT_LIMIT
-        {
-            return Err(OutputError::HidMaestroRuntime(format!(
-                "XInput seats {XINPUT_SEAT_LIMIT} pads; another {persona} pad would come up slotless"
-            )));
-        }
-        let ready = self.client()?.create(profile).map_err(Self::runtime)?;
+        let ready = self
+            .client()?
+            .create(ksx_hidmaestro::host::ProfileId::DualSense)
+            .map_err(Self::runtime)?;
         let handle = PadHandle(self.next_handle);
         self.next_handle = self.next_handle.checked_add(1).ok_or_else(|| {
             OutputError::HidMaestroRuntime("pad handle space is exhausted".into())
@@ -279,26 +250,23 @@ impl VirtualPadBackend for HidMaestroBackend {
 #[cfg(windows)]
 impl Drop for HidMaestroBackend {
     fn drop(&mut self) {
-        if let Some(mut client) = self.sdk.take() {
+        if let Some(mut client) = self.client.take() {
             let _ = client.shutdown();
         }
     }
 }
 
-/// The two capacity refusals, and the constants they duplicate.
+/// The one-controller capacity refusal and the constant it duplicates.
 ///
-/// **Why these exist (2026-08-26 audit).** Both refusals sit behind
-/// `connect()`, which opens the real elevated host, so neither had ever been
-/// exercised — and `stage.rs`'s
-/// `a_ninth_hidmaestro_pad_is_refused_before_it_can_reach_the_host` pins the
-/// STAGING half, which makes the runtime half look covered when it is not.
+/// **Why this exists (2026-08-26 audit).** The refusal sits behind a real
+/// elevated host, so it cannot be exercised by plugging in a unit test.
 /// Staging and runtime disagreeing is not a cosmetic bug: staging waves a pad
-/// through and the backend refuses it mid-session, after seven other players
-/// are already live.
+/// through and the backend refuses it mid-session, after another player is
+/// already live.
 ///
-/// The pads are built directly rather than plugged, because plugging is exactly
-/// what would reach the host. Both refusals are pure functions of `self.pads`
-/// and run before `self.client()?`, which is the property the tests confirm.
+/// The pad is built directly rather than plugged, because plugging is exactly
+/// what would reach the host. The refusal is a pure function of `self.pads`
+/// and runs before `self.client()?`, which is the property the test confirms.
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
@@ -321,103 +289,61 @@ mod tests {
             .map(|(i, &p)| (i as u32, live(p, i as u32 + 1)))
             .collect();
         HidMaestroBackend {
-            sdk: None,
+            client: None,
             pads,
             next_handle: personas.len() as u32 + 1,
         }
     }
 
     #[test]
-    fn a_ninth_pad_is_refused_without_the_host_being_asked() {
+    fn a_second_pad_is_refused_without_the_host_being_asked() {
         let mut backend = backend_with(&[Persona::DualSense; HOST_CONTROLLER_LIMIT]);
         let err = backend
             .plug_persona(Persona::DualSense)
-            .expect_err("a 9th pad must be refused");
+            .expect_err("a second pad must be refused");
         let msg = err.to_string();
         // From `HOST_CONTROLLER_LIMIT` — the constant this crate's refusal is
-        // actually built from — rather than the literal 8. The tie back to
+        // actually built from — rather than the literal 1. The tie back to
         // `ksx_core::MAX_HIDMAESTRO_PADS` is its own assertion below
         // (`the_runtime_limits_match_the_ones_staging_validates_against`), so
         // the number lives in exactly one place per layer and the layers are
         // pinned together once, on purpose, where that is the point.
         assert!(
-            msg.contains(&format!("at most {HOST_CONTROLLER_LIMIT}")),
+            msg.contains(&format!(
+                "live-controller capacity is {HOST_CONTROLLER_LIMIT}"
+            )),
             "{msg}"
         );
-        assert!(msg.contains("live controllers"), "{msg}");
         // THE POINT OF REFUSING LOCALLY: a host Fault poisons the whole one-use
-        // session, so a 9th create reaching the host would tear down the eight
-        // pads already in people's hands. `sdk` still being `None` is the proof
-        // that the refusal never got that far.
+        // session, so a second create reaching the host would tear down the
+        // existing pad. `client` still being `None` is the proof that the
+        // refusal never got that far.
         assert!(
-            backend.sdk.is_none(),
+            backend.client.is_none(),
             "the refusal must not open the elevated host",
         );
         assert_eq!(backend.pads.len(), HOST_CONTROLLER_LIMIT, "nothing changed");
     }
 
     #[test]
-    fn a_fifth_xinput_persona_is_refused_by_the_seat_rule_and_names_itself() {
-        // Four Xbox pads seat all four XInput slots; three Sony pads take none,
-        // so the eight-pad pool rule is NOT what fires here.
-        let mut backend = backend_with(&[
+    fn gated_profiles_are_refused_before_capacity_or_host_access() {
+        let mut backend = backend_with(&[Persona::DualSense]);
+        for persona in [
+            Persona::SwitchPro,
             Persona::XboxSeries,
-            Persona::XboxSeries,
-            Persona::XboxSeries,
-            Persona::XboxSeries,
-            Persona::DualSense,
-            Persona::DualSense,
-            Persona::DualSense,
-        ]);
-        let err = backend
-            .plug_persona(Persona::XboxSeries)
-            .expect_err("a 5th XInput persona must be refused");
-        let msg = err.to_string();
-        assert!(msg.contains("XInput seats 4"), "{msg}");
-        assert!(
-            msg.contains("slotless"),
-            "say what would actually go wrong — the pad plugs and no game reads \
-             it: {msg}"
-        );
-        assert!(
-            msg.contains(Persona::XboxSeries.as_str()),
-            "name the persona being refused: {msg}"
-        );
-        assert!(
-            !msg.contains("at most"),
-            "the seat rule must not be reported as the pool rule — different \
-             fix, different ceiling: {msg}"
-        );
-        assert!(backend.sdk.is_none());
-
-        // ...and the same eight-pad session still has room for a plain HID pad:
-        // it is the XInput SEAT that is full, not the host. That plug reaches
-        // the host (there is nothing to refuse), so it is not attempted here —
-        // what is asserted is that it gets past both capacity gates.
-        assert!(!Persona::DualSense.is_xinput());
-        assert!(backend.pads.len() < HOST_CONTROLLER_LIMIT);
+            Persona::Snes,
+            Persona::Genesis,
+        ] {
+            assert!(matches!(
+                backend.plug_persona(persona),
+                Err(OutputError::PersonaUnsupported(actual)) if actual == persona
+            ));
+        }
+        assert!(backend.client.is_none());
+        assert_eq!(backend.pads.len(), 1);
     }
 
-    #[test]
-    fn a_ninth_non_xinput_pad_is_refused_by_the_pool_rule_not_the_seat_rule() {
-        // Eight Sony pads: zero XInput seats used, so only the pool rule can
-        // fire. The two refusals have different ceilings and different fixes
-        // ("use ViGEm for this one" vs "use a HID persona"), and reporting one
-        // as the other sends the user to the wrong change.
-        let mut backend = backend_with(&[Persona::DualSense; HOST_CONTROLLER_LIMIT]);
-        let msg = backend
-            .plug_persona(Persona::SwitchPro)
-            .expect_err("the 9th pad must be refused")
-            .to_string();
-        // Same constant, same reason as the pool refusal above.
-        assert!(
-            msg.contains(&format!("at most {HOST_CONTROLLER_LIMIT}")),
-            "{msg}"
-        );
-        assert!(!msg.contains("slotless"), "{msg}");
-    }
-
-    /// The staging gate and the runtime gate must agree on both numbers.
+    /// The staging gate and the runtime gate must agree on the pool size.
     ///
     /// Added 2026-08-26: each limit is written twice, once here and once in
     /// `ksx-core`, with nothing tying them together. Raise one and staging
@@ -429,12 +355,6 @@ mod tests {
             HOST_CONTROLLER_LIMIT,
             usize::from(ksx_core::MAX_HIDMAESTRO_PADS),
             "the host's pool ceiling and `StageRefusal::TooManyHidMaestroPads` \
-             must be the same number",
-        );
-        assert_eq!(
-            XINPUT_SEAT_LIMIT,
-            usize::from(ksx_core::MAX_XINPUT_SLOTS),
-            "the XInput seat ceiling and `StageRefusal::TooManyXinputSlots` \
              must be the same number",
         );
     }

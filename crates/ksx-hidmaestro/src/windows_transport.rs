@@ -415,8 +415,6 @@ pub const MAX: usize = 4;
             "self.reader_thread.join();",
             "pub fn connect_production(",
             "protected_hidmaestro_host()",
-            "pub fn connect_production_sdk(",
-            "protected_hidmaestro_sdk_host()",
             "launch_elevated(executable, &launch.argv())",
             ".accept_elevated(child, crate::host::HELLO_TIMEOUT)",
         ] {
@@ -459,7 +457,6 @@ pub const MAX: usize = 4;
                 "close_with",
                 "close_and_join",
                 "connect_production",
-                "connect_production_sdk",
                 "setup_error",
                 "round_trip",
                 "try_receive",
@@ -476,8 +473,8 @@ pub const MAX: usize = 4;
                 .lines()
                 .filter(|l| l.trim_start().starts_with("pub fn "))
                 .count(),
-            2,
-            "only connect_production and connect_production_sdk may be public doors"
+            1,
+            "connect_production is the only public production door"
         );
         let create = production.find("OneUsePipeServer::create").unwrap();
         let seal = production.find("protected_hidmaestro_host()").unwrap();

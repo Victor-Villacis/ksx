@@ -244,10 +244,17 @@ impl PersonaOption {
                 }
                 if persona.backend() == ksx_core::PadBackend::HidMaestro && hidmaestro_full {
                     option.available = false;
-                    option.unavailable_reason = Some(format!(
-                        "This setup already stages the HIDMaestro host's {} pads. Remove or change one before adding another.",
-                        ksx_core::MAX_HIDMAESTRO_PADS
-                    ));
+                    option.unavailable_reason = Some(
+                        if ksx_core::MAX_HIDMAESTRO_PADS == 1 {
+                            "This setup already stages the HIDMaestro host's one pad. Remove or change it before adding another."
+                                .to_owned()
+                        } else {
+                            format!(
+                                "This setup already stages the HIDMaestro host's {} pads. Remove or change one before adding another.",
+                                ksx_core::MAX_HIDMAESTRO_PADS
+                            )
+                        },
+                    );
                 }
                 option
             })
@@ -2189,58 +2196,47 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
         assert_eq!(dualsense.gap, None);
         assert_eq!(dualsense.backend, "hidmaestro");
         assert_eq!(dualsense.backend_label, "HIDMaestro");
-        // 2026-08-20: the multi-controller SDK host lifts the per-persona cap.
         assert_eq!(dualsense.instance_limit, None);
     }
 
-    /// A staged DualSense leaves the offer standing (the one-per-session cap
-    /// died with the multi-controller host), and the roster goes unavailable
-    /// only when the HIDMaestro pool itself fills at eight — with the pool
-    /// named as the reason. ViGEm personas are untouched by it.
+    /// The source-built host owns one DualSense, so a staged DualSense closes
+    /// that offer while gated profiles remain unavailable for their own build
+    /// reason. ViGEm personas are untouched by the HIDMaestro pool.
     #[test]
-    fn the_stage_roster_marks_hidmaestro_personas_unavailable_at_the_pool_ceiling() {
-        let mut setup = StagedSetup::new()
+    fn the_stage_roster_tells_capacity_from_gated_profiles() {
+        let setup = StagedSetup::new()
             .add_slot(1, Persona::DualSense, ksx_core::Preset::builtin_empty())
             .expect("the first DualSense stages");
-        {
-            let view = StagedSetupView::of(&setup);
-            let dualsense = view
-                .personas
-                .iter()
-                .find(|option| option.name == "dualsense")
-                .expect("DualSense remains in the served roster");
-            assert!(dualsense.can_plug, "this remains a build capability");
-            assert!(dualsense.available, "a second instance is offered");
-            assert_eq!(dualsense.unavailable_reason, None);
-        }
-
-        // Fill the pool: eight non-XInput HIDMaestro pads.
-        for n in 2u8..=8 {
-            let persona = if n % 2 == 0 {
-                Persona::SwitchPro
-            } else {
-                Persona::DualSense
-            };
-            setup = setup
-                .add_slot(n, persona, ksx_core::Preset::builtin_empty())
-                .unwrap_or_else(|e| panic!("pad {n} of 8 must stage: {e}"));
-        }
         let full = StagedSetupView::of(&setup);
-        for name in ["dualsense", "switchpro", "xboxseries"] {
+        let dualsense = full
+            .personas
+            .iter()
+            .find(|option| option.name == "dualsense")
+            .expect("DualSense remains in the served roster");
+        assert!(dualsense.can_plug, "this remains a build capability");
+        assert!(!dualsense.available, "the source-built host is full");
+        assert!(
+            dualsense
+                .unavailable_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("HIDMaestro host's one pad")),
+            "{:?}",
+            dualsense.unavailable_reason
+        );
+
+        for name in ["switchpro", "xboxseries", "snes", "genesis"] {
             let option = full
                 .personas
                 .iter()
                 .find(|option| option.name == name)
                 .expect("roster keeps every persona");
-            assert!(
-                !option.available,
-                "{name} must be unavailable at the pool ceiling"
-            );
+            assert!(!option.can_plug, "{name} must remain build-gated");
+            assert!(!option.available, "{name} must remain unavailable");
             assert!(
                 option
                     .unavailable_reason
                     .as_deref()
-                    .is_some_and(|reason| reason.contains("HIDMaestro host's 8 pads")),
+                    .is_some_and(|reason| reason.contains("production runtime")),
                 "{name}: {:?}",
                 option.unavailable_reason
             );
@@ -2513,26 +2509,18 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
         assert_eq!(typo.code, codes::BAD_REQUEST);
         assert!(typo.message.contains("playstation"), "{typo}");
 
-        // Every shipping persona is accepted over the wire (retro leg flip);
-        // the persona-not-implemented wire shape re-arms with the next gated
-        // persona.
-        StageEdit::AddSlot {
-            number: None,
-            persona: "snes".into(),
-            preset: "P1".into(),
-            layout: None,
+        for persona in ["snes", "xboxseries"] {
+            let gated = StageEdit::AddSlot {
+                number: None,
+                persona: persona.into(),
+                preset: "P1".into(),
+                layout: None,
+            }
+            .apply(&setup)
+            .expect_err("a known but gated persona must be a domain refusal");
+            assert_eq!(gated.code, "persona-not-implemented", "{persona}");
+            assert!(gated.message.contains("production runtime"), "{gated}");
         }
-        .apply(&setup)
-        .expect("snes is accepted");
-
-        StageEdit::AddSlot {
-            number: None,
-            persona: "xboxseries".into(),
-            preset: "P1".into(),
-            layout: None,
-        }
-        .apply(&setup)
-        .expect("xboxseries is accepted");
 
         let bad_blocking = StageEdit::SetBlocking {
             blocking: "sometimes".into(),

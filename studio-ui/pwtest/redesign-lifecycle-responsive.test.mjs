@@ -157,6 +157,27 @@ function assertBoxInsideViewport(box, viewport, label) {
   );
 }
 
+async function assertPaintedEnvironmentLabel(locator, expected, context) {
+  assert.equal((await locator.textContent())?.trim(), expected, `${context} has the wrong text`);
+  const visual = await locator.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return {
+      color: style.color,
+      fontSize: Number.parseFloat(style.fontSize),
+      height: rect.height,
+      opacity: Number.parseFloat(style.opacity),
+      visibility: style.visibility,
+      width: rect.width,
+    };
+  });
+  assert.ok(visual.width > 0 && visual.height > 0, `${context} has no rendered box`);
+  assert.ok(visual.fontSize > 0, `${context} has zero-size text`);
+  assert.equal(visual.opacity, 1, `${context} is not opaque`);
+  assert.equal(visual.visibility, "visible", `${context} is not visible`);
+  assert.notEqual(visual.color, "rgba(0, 0, 0, 0)", `${context} has transparent text`);
+}
+
 async function lockAdverseRailState(page) {
   await page.evaluate(() => {
     const forceAdverseState = () => {
@@ -166,8 +187,13 @@ async function lockAdverseRailState(page) {
       const detail = status?.querySelector(".rd-live-detail");
       const stats = root?.querySelector("[data-rd-live-stats]");
       const environment = root?.querySelector(".rd-top > .n-environment");
+      const environmentFull = environment?.querySelector(".n-environment-full");
+      const environmentCompact = environment?.querySelector(".n-environment-compact");
       const backs = Array.from(root?.querySelectorAll('[data-nx="rd-back"]') ?? []);
-      if (!root || !status || !short || !detail || !stats || !environment || backs.length === 0) return;
+      if (
+        !root || !status || !short || !detail || !stats || !environment ||
+        !environmentFull || !environmentCompact || backs.length === 0
+      ) return;
       if (root.dataset.rdLiveState !== "offline") root.dataset.rdLiveState = "offline";
       if (status.hidden) status.hidden = false;
       if (short.textContent !== "Offline") short.textContent = "Offline";
@@ -175,9 +201,18 @@ async function lockAdverseRailState(page) {
       if (detail.textContent !== message) detail.textContent = message;
       if (stats.textContent !== "") stats.textContent = "";
       const environmentLabel = "LIVE MACHINE · REAL HARDWARE";
-      if (environment.textContent !== environmentLabel) environment.textContent = environmentLabel;
-      if (environment.getAttribute("title") !== environmentLabel) {
-        environment.setAttribute("title", environmentLabel);
+      if (environmentFull.textContent !== environmentLabel) {
+        environmentFull.textContent = environmentLabel;
+      }
+      if (environmentCompact.textContent !== "LIVE") environmentCompact.textContent = "LIVE";
+      const environmentIdentity = `${environmentLabel} — ` +
+        "Live providers read this computer's devices and saved KSX state; confirmed " +
+        "hardware actions can affect the selected physical device.";
+      if (environment.getAttribute("title") !== environmentIdentity) {
+        environment.setAttribute("title", environmentIdentity);
+      }
+      if (environment.getAttribute("aria-label") !== environmentIdentity) {
+        environment.setAttribute("aria-label", environmentIdentity);
       }
       for (const back of backs) {
         if (back.hidden) back.hidden = false;
@@ -299,16 +334,27 @@ async function assertLifecycleRail(page, width) {
   );
 
   const environment = page.locator(".rd-top > .n-environment");
-  const environmentLabel = (await environment.textContent())?.trim() ?? "";
+  const environmentFull = environment.locator(":scope > .n-environment-full");
+  const environmentCompact = environment.locator(":scope > .n-environment-compact");
+  const environmentLabel = "LIVE MACHINE · REAL HARDWARE";
+  const environmentIdentity = `${environmentLabel} — ` +
+    "Live providers read this computer's devices and saved KSX state; confirmed " +
+    "hardware actions can affect the selected physical device.";
   assert.equal(
+    (await environmentFull.textContent())?.trim(),
     environmentLabel,
-    "LIVE MACHINE · REAL HARDWARE",
     `${width}px loses the longest supported environment identity`,
   );
+  assert.equal((await environmentCompact.textContent())?.trim(), "LIVE");
   assert.equal(
     await environment.getAttribute("title"),
-    environmentLabel,
+    environmentIdentity,
     `${width}px beacon must retain its full accessible tooltip`,
+  );
+  assert.equal(
+    await environment.getAttribute("aria-label"),
+    environmentIdentity,
+    `${width}px beacon must retain its full accessible name`,
   );
   assert.equal(await environment.getAttribute("aria-hidden"), null);
   const environmentVisual = await environment.evaluate((element) => {
@@ -330,11 +376,31 @@ async function assertLifecycleRail(page, width) {
   assertBoxInsideViewport(environmentBox, width, "Environment beacon");
   if (width <= COMPACT_PRIMARY_MAX) {
     assert.ok(
-      environmentBox.width >= 10 && environmentBox.width <= 16 &&
-        environmentBox.height >= 10 && environmentBox.height <= 16,
-      `${width}px environment did not contract to a safety beacon: ${JSON.stringify(environmentBox)}`,
+      environmentBox.width > 16 && environmentBox.height > 0,
+      `${width}px environment collapsed back to an ambiguous dot: ${JSON.stringify(environmentBox)}`,
+    );
+    assert.equal(await environmentFull.isVisible(), false, `${width}px duplicated the full environment label`);
+    assert.equal(await environmentCompact.isVisible(), true, `${width}px hid the compact environment label`);
+    const compactVisual = await environmentCompact.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        color: style.color,
+        fontSize: Number.parseFloat(style.fontSize),
+        opacity: Number.parseFloat(style.opacity),
+        text: element.textContent?.trim() ?? "",
+      };
+    });
+    assert.equal(compactVisual.text, "LIVE");
+    assert.ok(compactVisual.fontSize > 0, `${width}px compact environment text has zero font size`);
+    assert.equal(compactVisual.opacity, 1, `${width}px compact environment text is not opaque`);
+    assert.notEqual(
+      compactVisual.color,
+      "rgba(0, 0, 0, 0)",
+      `${width}px compact environment text has transparent color`,
     );
   } else {
+    assert.equal(await environmentFull.isVisible(), true, `${width}px hid the full environment label`);
+    assert.equal(await environmentCompact.isVisible(), false, `${width}px duplicated the compact environment label`);
     assert.ok(
       environmentBox.width > 16,
       `${width}px environment should retain its full badge: ${JSON.stringify(environmentBox)}`,
@@ -534,6 +600,68 @@ describe("the responsive redesign lifecycle rail", { concurrency: false }, () =>
         await assertLifecycleRail(page, width);
       }
       assert.deepEqual(page.ksxNoise, [], "the responsive page must stay error-free");
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("fixture identity remains explicit in the compact and full environment badges", async () => {
+    const page = await openSurface("/redesign?slot=1", { width: 1280, height: 900 });
+    try {
+      const environment = page.locator(".rd-top > .n-environment");
+      const full = environment.locator(":scope > .n-environment-full");
+      const compact = environment.locator(":scope > .n-environment-compact");
+      assert.equal((await full.textContent())?.trim(), "DEMO DATA · NO HARDWARE");
+      assert.equal((await compact.textContent())?.trim(), "DEMO");
+
+      const title = (await environment.getAttribute("title")) ?? "";
+      const accessibleName = (await environment.getAttribute("aria-label")) ?? "";
+      assert.equal(accessibleName, title, "fixture tooltip and accessible identity diverged");
+      assert.match(accessibleName, /FIXTURE · SEEDED DEMO/i);
+      assert.match(
+        accessibleName,
+        /no physical devices|no hardware/i,
+        "fixture accessible identity lost the no-hardware detail",
+      );
+
+      for (const width of [390, COMPACT_PRIMARY_MAX, COMPACT_PRIMARY_MAX + 1, 1280]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.waitForFunction(
+          (expected) => document.documentElement.clientWidth === expected,
+          width,
+        );
+        const environmentBox = await environment.boundingBox();
+        assertBoxInsideViewport(environmentBox, width, "Fixture environment badge");
+        assert.ok(
+          environmentBox.width > 16,
+          `${width}px fixture identity collapsed to an ambiguous dot: ${JSON.stringify(environmentBox)}`,
+        );
+
+        if (width <= COMPACT_PRIMARY_MAX) {
+          assert.equal(await full.isVisible(), false, `${width}px duplicated the full fixture label`);
+          assert.equal(await compact.isVisible(), true, `${width}px hid the compact fixture label`);
+          await assertPaintedEnvironmentLabel(compact, "DEMO", `${width}px compact fixture label`);
+        } else {
+          assert.equal(await full.isVisible(), true, `${width}px hid the full fixture label`);
+          assert.equal(await compact.isVisible(), false, `${width}px duplicated the compact fixture label`);
+          await assertPaintedEnvironmentLabel(
+            full,
+            "DEMO DATA · NO HARDWARE",
+            `${width}px full fixture label`,
+          );
+        }
+
+        const documentWidth = await page.evaluate(() => ({
+          client: document.documentElement.clientWidth,
+          scroll: document.documentElement.scrollWidth,
+        }));
+        assert.ok(
+          documentWidth.scroll <= documentWidth.client,
+          `${width}px fixture badge introduced page overflow: ${JSON.stringify(documentWidth)}`,
+        );
+        await assertTopRailGeometry(page, width);
+      }
+      assert.deepEqual(page.ksxNoise, [], "fixture environment badge must stay error-free");
     } finally {
       await page.close();
     }

@@ -2029,6 +2029,7 @@ impl ksx_api::MachineSource for NoMachine {
                 ksx_api::BoardRow {
                     name: "AURA LED Controller".into(),
                     transport_label: "USB".into(),
+                    role: ksx_api::BoardRole::Other,
                     backends: "Shared capture driver only".into(),
                     selector: Some("usb:0b05:1939:00".into()),
                     alias_hint: "aura".into(),

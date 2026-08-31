@@ -393,8 +393,10 @@ export interface RdJourneyState {
 
 // ── SERVED signals — copiers, never derivers ────────────────────────────────
 
-const [rdEnvLabel, setRdEnvLabel] = createSignal("");
 const [rdEnvCls, setRdEnvCls] = createSignal("n-environment unknown");
+const [rdEnvFullText, setRdEnvFullText] = createSignal("ENVIRONMENT UNKNOWN");
+const [rdEnvCompactText, setRdEnvCompactText] = createSignal("UNKNOWN");
+const [rdEnvAccessibleText, setRdEnvAccessibleText] = createSignal("Environment unknown");
 const [rdStudioVersion, setRdStudioVersion] = createSignal("");
 const [rdThemeRows, setRdThemeRows] = createSignal<RdRenderedChoiceRow[]>([]);
 const [rdCompactThemeRows, setRdCompactThemeRows] = createSignal<RdRenderedChoiceRow[]>([]);
@@ -403,6 +405,26 @@ const [rdDevEnc, setRdDevEnc] = createSignal<RdDeviceRowView[]>([]);
 const [rdDevExp, setRdDevExp] = createSignal<RdDeviceRowView[]>([]);
 const [rdDevOther, setRdDevOther] = createSignal<RdOtherRowView[]>([]);
 const [rdDevScanLine, setRdDevScanLine] = createSignal("");
+
+/** The compact rail must name demo data instead of collapsing provenance to
+ * an unlabeled dot. The source label remains in the tooltip for diagnostics,
+ * while the visible fixture wording answers the product question directly. */
+function setRdEnvironmentPresentation(label: string, className: string): void {
+  const tokens = className.split(/\s+/);
+  if (tokens.includes("fixture")) {
+    const source = label.trim();
+    setRdEnvFullText("DEMO DATA · NO HARDWARE");
+    setRdEnvCompactText("DEMO");
+    setRdEnvAccessibleText(
+      `${source ? `${source} — ` : ""}synthetic demo data; no physical devices are read or written.`,
+    );
+  } else {
+    const source = label || "Environment unknown";
+    setRdEnvFullText(label || "ENVIRONMENT UNKNOWN");
+    setRdEnvCompactText(tokens.includes("live") ? "LIVE" : "UNKNOWN");
+    setRdEnvAccessibleText(source);
+  }
+}
 const [rdDevKbHead, setRdDevKbHead] = createSignal("");
 const [rdDevKbFoldCls, setRdDevKbFoldCls] = createSignal("n-devfold none");
 const [rdDevEncHead, setRdDevEncHead] = createSignal("");
@@ -1074,8 +1096,8 @@ const [rdFlashCls, setRdFlashCls] = createSignal("n-flash rd-flash none");
 export function applyRedesign(v: RedesignPayload): void {
   if (reconcileRedesignEnvironment(v)) return;
   const deviceFocus = captureDeviceRowFocus();
-  setRdEnvLabel(v.environment_label);
   setRdEnvCls(v.environment_cls);
+  setRdEnvironmentPresentation(v.environment_label, v.environment_cls);
   setRdStudioVersion(v.studio_version || "unknown");
   const operations = v.operations;
   rdOperations = operations ?? null;
@@ -3072,18 +3094,97 @@ function deviceRowFor(selector: string): RdDeviceRowView | undefined {
 
 const DEVICE_ROLE_BADGE: Record<string, string> = {
   "panel-encoder": "Panel encoder",
-  keyboard: "Keyboard",
+  keyboard: "Physical keyboard",
 };
 const STAGED_DEVICE_TITLE =
   "This board is the background helper's input source. Choosing it again changes nothing — " +
   "a keyboard prepared for play keeps its preparation.";
 const DEVICE_CARD_MIN_HEIGHT = 220;
+const KEYBOARD_DEVICE_CARD_WIDTH = 360;
+const KEYBOARD_DEVICE_CARD_MIN_HEIGHT = 320;
 const DEVICE_CARD_ROW_STRIDE = DEVICE_CARD_MIN_HEIGHT + CANVAS_FRESH_PLACEMENT_GAP;
 
 function deviceCardPurpose(row: RdDeviceRowView): string {
+  if (row.role === "keyboard") {
+    return row.aria_current === "true"
+      ? "Selected physical keyboard. Its emitted keys feed the full-size Input mapping keyboard."
+      : "Connected physical keyboard. Use as input source to feed its emitted keys into the full-size Input mapping keyboard.";
+  }
   return row.aria_current === "true"
     ? "This is the input source. Its emitted keys appear on the Input source keyboard."
     : "This card is on the canvas for inspection. Use it as the input source when you want its emitted keys on the Input source keyboard.";
+}
+
+const DEVICE_KEYBOARD_SVG_NS = "http://www.w3.org/2000/svg";
+
+function keyboardVisualRect(
+  svg: SVGSVGElement | SVGGElement,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  className: string,
+  radius = 2,
+): void {
+  const rect = document.createElementNS(DEVICE_KEYBOARD_SVG_NS, "rect");
+  rect.setAttribute("x", String(x));
+  rect.setAttribute("y", String(y));
+  rect.setAttribute("width", String(width));
+  rect.setAttribute("height", String(height));
+  rect.setAttribute("rx", String(radius));
+  rect.setAttribute("class", className);
+  svg.append(rect);
+}
+
+/** A deliberately generic physical-keyboard silhouette. Device enumeration
+ * does not prove ANSI/ISO, TKL/full-size, or the manufacturer's exact deck,
+ * so this card shows hardware presence without inventing a model layout. */
+function physicalKeyboardVisual(): HTMLElement {
+  const figure = document.createElement("figure");
+  figure.className = "rd-device-keyboard-visual";
+  figure.setAttribute("aria-hidden", "true");
+
+  const svg = document.createElementNS(DEVICE_KEYBOARD_SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 284 82");
+  svg.setAttribute("focusable", "false");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("rd-device-keyboard-svg");
+  keyboardVisualRect(svg, 1, 1, 282, 80, "rd-device-keyboard-shell", 11);
+  keyboardVisualRect(svg, 10, 10, 264, 56, "rd-device-keyboard-deck", 7);
+
+  const keys = document.createElementNS(DEVICE_KEYBOARD_SVG_NS, "g");
+  keys.setAttribute("class", "rd-device-keyboard-keys");
+  const rowSpecs = [
+    { y: 17, count: 14, x: 17, width: 14, gap: 4 },
+    { y: 29, count: 13, x: 21, width: 15, gap: 4 },
+    { y: 41, count: 12, x: 25, width: 16, gap: 4 },
+    { y: 53, count: 10, x: 31, width: 18, gap: 4 },
+  ];
+  for (const row of rowSpecs) {
+    for (let index = 0; index < row.count; index += 1) {
+      keyboardVisualRect(
+        keys,
+        row.x + index * (row.width + row.gap),
+        row.y,
+        row.width,
+        7,
+        index === 0 || index === row.count - 1
+          ? "rd-device-keyboard-key rd-device-keyboard-key-edge"
+          : "rd-device-keyboard-key",
+        1.8,
+      );
+    }
+  }
+  svg.append(keys);
+  keyboardVisualRect(svg, 92, 69, 100, 5, "rd-device-keyboard-light", 2.5);
+  const witness = document.createElementNS(DEVICE_KEYBOARD_SVG_NS, "circle");
+  witness.setAttribute("cx", "263");
+  witness.setAttribute("cy", "72");
+  witness.setAttribute("r", "3");
+  witness.setAttribute("class", "rd-device-keyboard-witness");
+  svg.append(witness);
+  figure.append(svg);
+  return figure;
 }
 
 function deviceCardMeta(row: RdDeviceRowView): string {
@@ -3147,6 +3248,7 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   const meta = document.createElement("p");
   meta.className = "rd-devcard-meta";
   meta.textContent = deviceCardMeta(row);
+  const keyboardVisual = row.role === "keyboard" ? physicalKeyboardVisual() : null;
   const states = document.createElement("p");
   states.className = "rd-devcard-states";
   // The daemon chip and the daemon verb. `data-staged` on the ITEM decides
@@ -3185,7 +3287,9 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
     "Make this the board ksx reads as the input source — replaces the daemon's current choice. " +
     "Nothing is saved or started, and a board already prepared keeps its preparation.";
   form.append(submit);
-  body.append(badge, name, meta, states, purpose, staged, form);
+  body.append(badge, name, meta);
+  if (keyboardVisual) body.append(keyboardVisual);
+  body.append(states, purpose, staged, form);
   syncDeviceCardStateBadges(body, row);
   return body;
 }
@@ -3241,11 +3345,19 @@ function mountDeviceWidget(
     content.className = "rd-encoder-device-shell";
     content.append(deviceCardContent(row), encoderSurface.content);
   }
-  const preferredWidth = encoderSurface ? 960 : 300;
+  const preferredWidth = encoderSurface
+    ? 960
+    : row.role === "keyboard"
+      ? KEYBOARD_DEVICE_CARD_WIDTH
+      : 300;
   // Match the canvas engine's effective minimum exactly. Supplying a smaller
   // candidate makes collision allocation reason about geometry it will later
   // clamp, which can leave fresh rows closer than the engine's 40 px gap.
-  const minHeight = encoderSurface ? 900 : DEVICE_CARD_MIN_HEIGHT;
+  const minHeight = encoderSurface
+    ? 900
+    : row.role === "keyboard"
+      ? KEYBOARD_DEVICE_CARD_MIN_HEIGHT
+      : DEVICE_CARD_MIN_HEIGHT;
   const item = createCanvasItem({
     instanceId: slug,
     displayName: row.name,
@@ -3623,7 +3735,13 @@ function syncDeviceRows(): void {
     if (row && meta) meta.textContent = deviceCardMeta(row);
     const word = btn.querySelector<HTMLElement>(".rd-dev-word");
     if (word) {
-      word.textContent = on ? "On canvas — press to remove" : "Show on canvas";
+      word.textContent = row?.role === "keyboard"
+        ? on
+          ? "On canvas — press to remove physical card"
+          : "Show physical device on canvas"
+        : on
+          ? "On canvas — press to remove"
+          : "Show on canvas";
     }
   }
 }
@@ -4899,7 +5017,24 @@ export function RedesignIsland() {
           h("span", { class: "rd-crumb" }, "Workbench"),
           // Which machine answers this lane — the fixture badge, so the
           // redesign workbench can never be mistaken for the cabinet.
-          h("span", { class: () => rdEnvCls(), title: () => rdEnvLabel() }, () => rdEnvLabel()),
+          h(
+            "span",
+            {
+              class: () => rdEnvCls(),
+              title: () => rdEnvAccessibleText(),
+              "aria-label": () => rdEnvAccessibleText(),
+            },
+            h(
+              "span",
+              { class: "n-environment-full", "aria-hidden": "true" },
+              () => rdEnvFullText(),
+            ),
+            h(
+              "span",
+              { class: "n-environment-compact", "aria-hidden": "true" },
+              () => rdEnvCompactText(),
+            ),
+          ),
           // The compact setup spine expands into the operational shell. A
           // native details keeps every recovery and lifecycle form usable on
           // the SSR/no-script path; JavaScript only adds in-place repaint and
@@ -5733,7 +5868,7 @@ export function RedesignIsland() {
             h(
               "p",
               { class: "n-devnote rd-devmodal-purpose" },
-              "Show adds a device card to this canvas for inspection. It does not change mapping. On the card, Use as input source chooses the one device whose emitted keys appear on the Input source keyboard.",
+              "Show adds a device card for a physical device; it does not change mapping. The full-size Input mapping keyboard is the single logical key surface. Use as input source on a device card chooses whose emitted keys feed it.",
             ),
             h(
               "section",

@@ -368,8 +368,35 @@ fn ctrl_persona_row(row: &RedesignPersonaRow) -> SlotValue {
 /// colour class off it. A poll is not an action and never carries one.
 fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::Value {
     serde_json::json!({
-        "rdEnvLabel": payload.environment_label,
         "rdEnvCls": payload.environment_cls,
+        "rdEnvFullText": if payload.environment_fixture {
+            "DEMO DATA · NO HARDWARE".to_owned()
+        } else if payload.environment_label.trim().is_empty() {
+            "ENVIRONMENT UNKNOWN".to_owned()
+        } else {
+            payload.environment_label.clone()
+        },
+        "rdEnvCompactText": if payload.environment_fixture {
+            "DEMO"
+        } else if payload.environment_cls.split_whitespace().any(|token| token == "live") {
+            "LIVE"
+        } else {
+            "UNKNOWN"
+        },
+        "rdEnvAccessibleText": if payload.environment_fixture {
+            format!(
+                "{}synthetic demo data; no physical devices are read or written.",
+                if payload.environment_label.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!("{} — ", payload.environment_label.trim())
+                }
+            )
+        } else if payload.environment_label.trim().is_empty() {
+            "Environment unknown".to_owned()
+        } else {
+            payload.environment_label.clone()
+        },
         "rdStudioVersion": payload.studio_version,
         "rdFlashLine": flash.map(|f| f.trim_start_matches("error: ")).unwrap_or(""),
         "rdFlashCls": match flash {
@@ -744,6 +771,7 @@ mod tests {
                 ksx_api::BoardRow {
                     name: "AURA LED Controller".into(),
                     transport_label: "USB".into(),
+                    role: ksx_api::BoardRole::Other,
                     selector: Some("usb:0b05:1939:00".into()),
                     pickable: true,
                     looks_like_a_keyboard: false,
@@ -1202,6 +1230,7 @@ mod tests {
         assert!(devices.keyboards[0].meta.contains("Ready to use"));
         assert_eq!(devices.experimental.len(), 1);
         assert_eq!(devices.experimental[0].name, "AURA LED Controller");
+        assert_eq!(devices.experimental[0].role, "other");
         assert_eq!(devices.other.len(), 1);
         assert_eq!(devices.other[0].name, "Composite pointing device");
         assert!(devices.scan_authoritative);
@@ -1237,6 +1266,78 @@ mod tests {
         );
     }
 
+    /// The large keyboard is one stable logical mapping surface. A selected
+    /// physical keyboard supplies source context, but never turns that plate
+    /// into purported model-specific hardware artwork.
+    #[test]
+    fn the_mapping_keyboard_names_its_logitech_source_without_impersonating_it() {
+        assert_eq!(
+            fixture_payload().board.kb_title,
+            "Input mapping keyboard · No input source selected"
+        );
+
+        let mut staged = fixture_staged(Vec::new());
+        staged.empty = false;
+        staged.device = Some(ksx_api::StagedDeviceView {
+            label: "Logitech G915 TKL".into(),
+            alias: "g915".into(),
+            selector: "usb:046d:c545:00".into(),
+            ..ksx_api::StagedDeviceView::default()
+        });
+        let payload = payload(PayloadInput {
+            environment: &ksx_api::RuntimeEnvironmentView {
+                fixture: true,
+                id: "seeded-demo".into(),
+                label: "Fixture · Seeded demo".into(),
+                detail: "Synthetic data for the redesign lane.".into(),
+                generation: "test".into(),
+            },
+            setup: Some(ksx_api::SetupView::default()),
+            setup_error: "",
+            scan: Ok(fixture_scan()),
+            staged: &staged,
+            session: &crate::control::SessionView {
+                reachable: true,
+                line: "idle".into(),
+                ..Default::default()
+            },
+            outputs: &ksx_api::ControllerOutputsView::default(),
+            selected_slot: None,
+            undo_label: None,
+            macro_selected: None,
+            q: None,
+        });
+
+        assert_eq!(
+            payload.board.kb_title,
+            "Input mapping keyboard · Logitech G915 TKL · Bluetooth"
+        );
+        assert!(
+            payload
+                .board
+                .board_rows
+                .iter()
+                .any(|row| row.chosen && row.name == "qwerty-104"),
+            "the source model must not replace the canonical keyboard drawing"
+        );
+        assert!(
+            !payload
+                .board
+                .board_rows
+                .iter()
+                .any(|row| row.name == "Logitech G915 TKL"),
+            "a device label is source context, not a physical-artwork choice"
+        );
+
+        let page = EmbeddedPage::load("/redesign").unwrap();
+        let html = render_redesign(&page, &payload, None).html;
+        assert!(html.contains("Input mapping keyboard · Logitech G915 TKL · Bluetooth"));
+        assert!(
+            html.contains(r#"data-instance-id="keyboard""#),
+            "copy changes must preserve the mapping widget's stable canvas identity"
+        );
+    }
+
     #[test]
     fn unreachable_staging_is_disabled_with_authored_copy_not_a_raw_diagnostic() {
         let raw = "named pipe \\.\\pipe\\ksx-control refused with os error 231";
@@ -1261,6 +1362,10 @@ mod tests {
             q: None,
         });
         assert!(!payload.devices.staging_reachable);
+        assert_eq!(
+            payload.board.kb_title,
+            "Input mapping keyboard · Input source unavailable — reopen KSX"
+        );
         assert!(payload.devices.staging_line.contains("background helper"));
         assert!(payload.devices.scan_line.contains("Staging unavailable"));
         assert!(!payload.devices.staging_line.contains(raw));
@@ -1570,8 +1675,10 @@ mod tests {
             "redesign.ts no longer registers RedesignIsland"
         );
         for signal in [
-            "rdEnvLabel",
             "rdEnvCls",
+            "rdEnvFullText",
+            "rdEnvCompactText",
+            "rdEnvAccessibleText",
             "rdFlashLine",
             "rdFlashCls",
             "rdDevScanLine",

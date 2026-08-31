@@ -282,10 +282,11 @@ try {
     // drawer, encoder presentation, persistent exact-device recovery,
     // actionable progress, named live/transport health, fixture-safe state,
     // search, identity colors, Tidy and Rescan make it the largest surviving
-    // entry. The hard-cutover build measures 288,582 Brotli bytes; keep only
-    // 1,418 bytes of headroom so this deliberate 1.2% increase cannot turn
-    // into an open-ended budget.
-    budgetThreshold: 290_000,
+    // entry. Explicit no-hardware provenance and the compact physical-
+    // keyboard card bring this pass to 290,319 Brotli bytes; keep only 681
+    // bytes of headroom so the deliberate clarity work cannot turn into an
+    // open-ended budget.
+    budgetThreshold: 291_000,
     ssr: true,
     ssrEntryPoints: {
       check: "src/check.ts",

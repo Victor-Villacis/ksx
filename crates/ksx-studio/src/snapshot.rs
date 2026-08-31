@@ -4468,13 +4468,19 @@ pub(crate) fn compose_board_panel(
         ),
         _ => String::new(),
     };
+    // This plate is the logical key space controllers bind against, not a
+    // model-specific drawing of the physical board selected as the source.
+    // Name that relationship directly: the device and transport are source
+    // context after the stable mapping-surface title, never the title itself.
     let kb_title = match staged.device.as_ref() {
-        _ if !staged.reachable => "The draft could not be read — reopen ksx".to_owned(),
+        _ if !staged.reachable => {
+            "Input mapping keyboard · Input source unavailable — reopen KSX".to_owned()
+        }
         Some(d) => match transport.filter(|t| !t.trim().is_empty()) {
-            Some(t) => format!("{} · {}", d.label, t),
-            None => d.label.clone(),
+            Some(t) => format!("Input mapping keyboard · {} · {}", d.label, t),
+            None => format!("Input mapping keyboard · {}", d.label),
         },
-        None => "No keyboard selected — pick one on the left".to_owned(),
+        None => "Input mapping keyboard · No input source selected".to_owned(),
     };
     // The ramp digit on the plate: the selected controller's bound-cap tint.
     let kb_cls = match selected_number {

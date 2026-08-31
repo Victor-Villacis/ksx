@@ -2972,7 +2972,27 @@ describe("the device workbench", () => {
     // preparation-preserving guard, the flash speaks, and the marking MOVES
     // — off the encoder, onto the keyboard, on cards and rows alike.
     await page.click('[data-nx="rd-devs-open"]');
-    await page.click(`.rd-devmodal button[data-selector="${G915}"]`);
+    assert.equal(
+      (await page.locator(
+        `.rd-devmodal button[data-selector="${IPAC}"] .rd-dev-word`,
+      ).textContent())?.trim(),
+      "On canvas — press to remove",
+      "encoder membership keeps the established generic canvas wording",
+    );
+    assert.equal(
+      (await page.locator(
+        '.rd-devmodal button[data-role="other"] .rd-dev-word',
+      ).textContent())?.trim(),
+      "Show on canvas",
+      "non-keyboard additions keep the established generic canvas wording",
+    );
+    const g915PickerRow = page.locator(`.rd-devmodal button[data-selector="${G915}"]`);
+    assert.equal(
+      (await g915PickerRow.locator(".rd-dev-word").textContent())?.trim(),
+      "Show physical device on canvas",
+      "an ordinary keyboard row names the physical card it will add",
+    );
+    await g915PickerRow.click();
     await page.keyboard.press("Escape");
     await page.waitForFunction(
       (id) =>
@@ -2992,8 +3012,28 @@ describe("the device workbench", () => {
       await page
         .locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`)
         .getAttribute("data-canvas-height"),
-      "220",
-      "fresh ordinary cards use the canvas engine's real minimum geometry",
+      "320",
+      "fresh physical-keyboard cards have room for their compact visual and source status",
+    );
+    const g915Card = page.locator(
+      `.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`,
+    );
+    assert.equal(
+      (await g915Card.locator(".rd-devcard-badge").textContent())?.trim(),
+      "Physical keyboard",
+      "the card cannot be mistaken for the full-size mapping surface",
+    );
+    assert.equal(
+      await g915Card.locator('.rd-device-keyboard-visual svg[aria-hidden="true"]').count(),
+      1,
+      "the physical card carries one decorative compact keyboard visual",
+    );
+    assert.equal(
+      await page.locator(
+        '.forma-canvas-stage > [data-instance-id="keyboard"] .n-kb',
+      ).count(),
+      1,
+      "adding a physical keyboard never duplicates the canonical interactive mapping keyboard",
     );
     assert.equal(
       (await page
@@ -3006,7 +3046,7 @@ describe("the device workbench", () => {
       (await page
         .locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"] .rd-devcard-purpose`)
         .textContent()) ?? "",
-      /inspection.*input source.*Input source/s,
+      /connected physical keyboard.*full-size Input mapping keyboard/is,
     );
     await page.click(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"] .rd-stagebtn`);
     await page.waitForFunction(
@@ -3045,6 +3085,25 @@ describe("the device workbench", () => {
       IPAC_SLUG,
       { timeout: 10_000 },
     );
+    assert.match(
+      (await page.locator(
+        '.forma-canvas-stage > [data-instance-id="keyboard"] .n-kbhead > .n-kick',
+      ).textContent())?.trim() ?? "",
+      /^Input mapping keyboard · Logitech G915 TKL · Bluetooth/,
+      "the single mapping surface names the selected physical source",
+    );
+    assert.equal(
+      await page.locator(
+        '.forma-canvas-stage > [data-instance-id="keyboard"] .n-kb',
+      ).count(),
+      1,
+      "staging changes the canonical mapping surface instead of creating another keyboard",
+    );
+    assert.match(
+      (await g915Card.locator(".rd-devcard-purpose").textContent()) ?? "",
+      /selected physical keyboard.*full-size Input mapping keyboard/is,
+      "the physical card explains its selected relationship to the mapping surface",
+    );
     await page.click('[data-nx="rd-devs-open"]');
     assert.equal(
       await page
@@ -3057,6 +3116,11 @@ describe("the device workbench", () => {
       await page.locator('.rd-devmodal button[aria-current="true"]').count(),
       1,
       "exactly one row is the staged one",
+    );
+    assert.equal(
+      (await g915PickerRow.locator(".rd-dev-word").textContent())?.trim(),
+      "On canvas — press to remove physical card",
+      "keyboard membership copy describes removing the physical card, not the mapping surface",
     );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await closePage(page);

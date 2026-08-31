@@ -71,7 +71,7 @@ jobs:
       # both said "clippy clean" about different diagnostics on 2026-08-07.
       - name: Toolchain (pinned by rust-toolchain.toml)
         run: rustup show active-toolchain
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           # One production/LTS pin for local authoring, CI and release assets.
           node-version-file: '.node-version'
@@ -246,7 +246,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: studio-browser
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: '.node-version'
           cache: npm
@@ -285,7 +285,7 @@ jobs:
         run: npm test
       - name: Upload Studio browser screenshots
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: studio-browser-screenshots
           path: ${{ runner.temp }}\ksx-studio-browser-screenshots
@@ -306,7 +306,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Toolchain (pinned by rust-toolchain.toml)
         run: rustup show active-toolchain
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: '.node-version'
           cache: npm

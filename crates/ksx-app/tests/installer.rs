@@ -709,7 +709,7 @@ fn release_candidate_round_trips_through_the_artifact_store_before_admission() {
         .split("# Upload success only proves that the artifact service accepted some")
         .nth(1)
         .expect("the artifact-store admission boundary exists");
-    let download_pin = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093";
+    let download_pin = "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131";
     assert_eq!(
         roundtrip.matches(download_pin).count(),
         3,

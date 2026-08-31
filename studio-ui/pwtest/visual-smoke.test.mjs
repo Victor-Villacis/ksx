@@ -920,7 +920,9 @@ describe("redesign canvas interaction chrome", () => {
       assert.equal(await page.locator(".n-zoomval").textContent(), "25%");
       assert.equal(await page.locator(".rd-menu").getAttribute("hidden"), "");
       assert.equal(await zoomMenuTrigger.evaluate((button) => button === document.activeElement), true);
-      await page.locator(".rd-back").click();
+      // Back remains in the Escape ladder when its direct rail affordance is
+      // deferred at this width.
+      await page.keyboard.press("Escape");
       await nextPaint();
       assert.equal(
         await page.locator(".rd-back").getAttribute("hidden"),
@@ -939,7 +941,7 @@ describe("redesign canvas interaction chrome", () => {
           canvas?.append(probe);
         }
       });
-      await page.locator('[data-nx="rd-search"]').click();
+      await page.keyboard.press(process.platform === "darwin" ? "Meta+k" : "Control+k");
       assert.equal(
         await page.locator(".rd-palette-row").count(),
         10,
@@ -966,7 +968,7 @@ describe("redesign canvas interaction chrome", () => {
         document.querySelectorAll(".rd-palette-probe").forEach((probe) => probe.remove());
       });
 
-      await page.locator('[data-nx="rd-search"]').focus();
+      await page.locator(".rd-setupd > .rd-setup-sum").focus();
       await page.keyboard.press("m");
       assert.equal(
         await page.locator(".forma-canvas-navigator").getAttribute("hidden"),
@@ -1006,7 +1008,7 @@ describe("redesign canvas interaction chrome", () => {
         ) < 2,
         "a proximity chip landed its target behind the Inspector",
       );
-      await page.locator(".rd-back").click();
+      await page.keyboard.press("Escape");
       assert.equal(
         await stage.evaluate((node) => node.style.transform),
         beforeChipJump,

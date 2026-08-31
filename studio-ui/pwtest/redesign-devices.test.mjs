@@ -1730,8 +1730,11 @@ describe("the device workbench", () => {
       );
       // Initial HTML carries the fixture's normal roster. A theme mutation
       // performs the live `/api/redesign` repaint this test has overridden.
-      await page.click(".rd-themed > summary");
-      await page.click('.rd-thememenu form:has(input[value="light"]) button');
+      await page.click(".rd-setupd > .rd-setup-sum");
+      await page.click(".rd-theme-compact-home .rd-theme-compact-sum");
+      await page.click(
+        '.rd-thememenu-compact form:has(input[value="light"]) button',
+      );
       await page.waitForFunction(
         (selector) => document.querySelector(
           `.rd-devmodal button[data-selector="${selector}"] .n-dev-name`,

@@ -149,6 +149,73 @@ async function history(page) {
   return page.evaluate(() => structuredClone(window.ksxLiveHistory));
 }
 
+async function assertDegradedLiveRail(page, width) {
+  await page.setViewportSize({ width, height: 900 });
+  await page.waitForFunction(
+    (expected) => document.documentElement.clientWidth === expected &&
+      document.querySelector("[data-forma-island]")?.dataset.rdLiveState === "degraded" &&
+      /frame dropped/i.test(document.querySelector("[data-rd-live-stats]")?.textContent ?? ""),
+    width,
+  );
+  const geometry = await page.evaluate(() => {
+    const top = document.querySelector(".rd-top");
+    const status = document.querySelector(".rd-live-state");
+    const stats = document.querySelector(".rd-live-stats");
+    const rectOf = (element) => {
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, width: rect.width };
+    };
+    const children = Array.from(document.querySelectorAll(".rd-run-actions > *"))
+      .filter((element) => element.checkVisibility() && getComputedStyle(element).position !== "absolute")
+      .map((element) => ({
+        label: element.getAttribute("data-rd-form")
+          ?? (element.hasAttribute("data-rd-live-status") ? "live status" : null)
+          ?? (element.hasAttribute("data-rd-live-stats") ? "live stats" : null)
+          ?? element.textContent?.trim()
+          ?? element.tagName,
+        ...rectOf(element),
+      }))
+      .sort((left, right) => left.left - right.left);
+    return {
+      rail: top ? { client: top.clientWidth, scroll: top.scrollWidth } : null,
+      status: status ? rectOf(status) : null,
+      stats: stats ? {
+        ...rectOf(stats),
+        visible: stats.checkVisibility(),
+        text: stats.textContent?.trim() ?? "",
+      } : null,
+      children,
+    };
+  });
+  assert.ok(geometry.rail, `${width}px live rail is missing`);
+  assert.ok(
+    geometry.rail.scroll <= geometry.rail.client,
+    `${width}px degraded live rail overflows: ${JSON.stringify(geometry)}`,
+  );
+  assert.ok(
+    geometry.status && geometry.status.width >= 64,
+    `${width}px degraded state lost its readable name: ${JSON.stringify(geometry.status)}`,
+  );
+  assert.ok(geometry.stats?.text, `${width}px degraded rail lost its statistics`);
+  if (width <= 1280) {
+    assert.equal(geometry.stats.visible, false, `${width}px should defer detailed live statistics`);
+  } else {
+    assert.equal(geometry.stats.visible, true, `${width}px should show detailed live statistics`);
+    assert.ok(
+      geometry.stats.width >= 64,
+      `${width}px live statistics became unreadable: ${JSON.stringify(geometry.stats)}`,
+    );
+  }
+  for (let index = 1; index < geometry.children.length; index += 1) {
+    const before = geometry.children[index - 1];
+    const current = geometry.children[index];
+    assert.ok(
+      current.left >= before.right - 0.5,
+      `${before.label} overlaps ${current.label} at ${width}px: ${JSON.stringify(geometry.children)}`,
+    );
+  }
+}
+
 function assertInactive(entries) {
   assert.ok(entries.length > 0);
   for (const entry of entries) {
@@ -207,6 +274,16 @@ describe("redesign mutable live lifecycle", { concurrency: false }, () => {
     const played = await history(page);
     const firstActive = played.findIndex(({ state }) => state === "active" || state === "degraded");
     assert.notEqual(firstActive, -1);
+
+    await page.waitForFunction(
+      () => document.querySelector("[data-forma-island]")?.dataset.rdLiveState === "degraded" &&
+        /frame dropped/i.test(document.querySelector("[data-rd-live-stats]")?.textContent ?? ""),
+      null,
+      { timeout: 20_000 },
+    );
+    for (const width of [1141, 1280, 1281, 1439, 1440, 1599, 1600, 1919, 1920]) {
+      await assertDegradedLiveRail(page, width);
+    }
 
     // One complete six-frame choreography is 2.4 seconds. Staying longer
     // proves the fixture does not fabricate an in-band stop or regress to the

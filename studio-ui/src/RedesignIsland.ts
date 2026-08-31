@@ -55,6 +55,7 @@ import {
 } from "./redesign-macro-editor";
 import {
   closeRedesignToolsDisclosure,
+  REDESIGN_RAIL_PREFERENCES_MEDIA,
   redesignCompactToolsDisclosure,
   redesignToolsDisclosure,
   wireRedesignToolsDisclosures,
@@ -2017,10 +2018,13 @@ function syncToolRail(mode: "select" | "hand"): void {
 }
 
 function syncBackView(depth: number, topLabel: string | null): void {
-  const button = rdRoot?.querySelector<HTMLButtonElement>('[data-nx="rd-back"]');
-  if (!button) return;
-  button.hidden = depth === 0;
-  button.title = topLabel ? `Back view — ${topLabel}` : "Back view";
+  const buttons = Array.from(
+    rdRoot?.querySelectorAll<HTMLButtonElement>('[data-nx="rd-back"]') ?? [],
+  );
+  for (const button of buttons) {
+    button.hidden = depth === 0;
+    button.title = topLabel ? `Back view — ${topLabel}` : "Back view";
+  }
 }
 
 function syncMapCount(): void {
@@ -2112,6 +2116,75 @@ function closeThemeMenu(restoreFocus = false): boolean {
     returnMenu.querySelector<HTMLElement>("[data-rd-theme-summary]")?.focus({ preventScroll: true });
   }
   return true;
+}
+
+const themeDisclosureRoots = new WeakSet<HTMLElement>();
+
+/** The rail and Setup copies are one Theme control. Close an outgoing copy
+ * before its breakpoint hides it, then restore focus to the entry point that
+ * is actually rendered in the destination tier. */
+function wireThemeDisclosures(root: HTMLElement): void {
+  if (themeDisclosureRoots.has(root)) return;
+  themeDisclosureRoots.add(root);
+  let lastFocusedDisclosure: HTMLDetailsElement | null = null;
+  root.ownerDocument.addEventListener(
+    "focusin",
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const owner = target.closest<HTMLDetailsElement>("[data-rd-theme-menu]");
+      if (owner) {
+        lastFocusedDisclosure = owner;
+      } else if (target !== root.ownerDocument.body &&
+                 target !== root.ownerDocument.documentElement) {
+        // Hiding a focused disclosure can make Chromium focus <body> before
+        // MediaQueryList dispatches. Preserve that one transient handoff;
+        // ordinary pointer movement was already cleared on pointerdown.
+        lastFocusedDisclosure = null;
+      }
+    },
+    true,
+  );
+  root.ownerDocument.addEventListener(
+    "pointerdown",
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof Element) || !target.closest("[data-rd-theme-menu]")) {
+        lastFocusedDisclosure = null;
+      }
+    },
+    true,
+  );
+  root.addEventListener(
+    "toggle",
+    (event) => {
+      const opened = event.target;
+      if (!(opened instanceof HTMLDetailsElement) ||
+          !opened.matches("[data-rd-theme-menu]") || !opened.open) return;
+      root.querySelectorAll<HTMLDetailsElement>("[data-rd-theme-menu][open]").forEach(
+        (peer) => {
+          if (peer !== opened) peer.open = false;
+        },
+      );
+    },
+    true,
+  );
+  const compact = window.matchMedia(REDESIGN_RAIL_PREFERENCES_MEDIA);
+  compact.addEventListener("change", (event) => {
+    const hadOpenDisclosure = Boolean(root.querySelector("[data-rd-theme-menu][open]"));
+    const active = document.activeElement;
+    const ownedFocus = active instanceof Element && Boolean(active.closest("[data-rd-theme-menu]"));
+    const rememberedFocus = Boolean(lastFocusedDisclosure?.isConnected);
+    lastFocusedDisclosure = null;
+    if (hadOpenDisclosure) closeThemeMenu();
+    if (!ownedFocus && !rememberedFocus) return;
+    const target = event.matches
+      ? root.querySelector<HTMLElement>(".rd-setupd > .rd-setup-sum")
+      : root.querySelector<HTMLElement>(
+        ".rd-theme-rail-home [data-rd-theme-menu] > .rd-theme-sum",
+      );
+    target?.focus({ preventScroll: true });
+  });
 }
 
 function setSheet(open: boolean): void {
@@ -4071,6 +4144,7 @@ function runJourneyAction(action: string, button: HTMLButtonElement | null): voi
 
 export function redesignWire(root: HTMLElement): void {
   rdRoot = root;
+  wireThemeDisclosures(root);
   wireRedesignToolsDisclosures(root);
   // The wire's own "JavaScript is live" marker: scripting-only chrome (the
   // camera buttons) reveals off it, and the parity gate normalizes it.
@@ -4115,6 +4189,24 @@ export function redesignWire(root: HTMLElement): void {
     const toolsMenu = rdRoot?.querySelector<HTMLElement>("[data-rd-tools-menu][open]");
     if (toolsMenu && !target?.closest("[data-rd-tools-menu]")) {
       closeRedesignToolsDisclosure(root);
+    }
+    // Canvas commands duplicated inside Tools are discoverability doors, not
+    // a second overlay layer. Retire the disclosure before the command opens
+    // or moves anything so Escape and modal return-focus never point into
+    // hidden details content. Compact Tools also retires Setup, revealing the
+    // canvas that Back just restored and giving Search/Shortcuts a durable
+    // return target in the rail.
+    const toolsCanvasAction = target?.closest("[data-rd-tools-menu]") &&
+      (hit === "rd-back" || hit === "rd-search" || hit === "rd-keys");
+    if (toolsCanvasAction) {
+      const fromCompactTools = Boolean(target?.closest(".rd-utility-compact-home"));
+      closeRedesignToolsDisclosure(root, !fromCompactTools);
+      if (fromCompactTools) {
+        const setup = root.querySelector<HTMLDetailsElement>(".rd-setupd");
+        setup?.removeAttribute("open");
+        setup?.querySelector<HTMLElement>(":scope > .rd-setup-sum")
+          ?.focus({ preventScroll: true });
+      }
     }
     // The board and While-playing pickers keep the same convention: a
     // click outside a popover puts it away (each one for itself, so

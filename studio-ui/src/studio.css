@@ -17717,8 +17717,11 @@ a.nm-link {
 }
 
 .rd-brand {
+  flex: none;
   font-size: 14px;
   font-weight: 600;
+  line-height: var(--lh-flat);
+  white-space: nowrap;
 }
 
 .rd-crumb {
@@ -18065,6 +18068,15 @@ a.nm-link {
   line-height: 1.4;
 }
 
+.rd-utility-section {
+  margin: var(--sp-1) var(--sp-2);
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .rd-utility-link {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr) auto;
@@ -18078,6 +18090,21 @@ a.nm-link {
 
 .rd-utility-link:hover {
   background: var(--n-accent-tint);
+}
+
+button.rd-utility-action {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  white-space: normal;
+}
+
+/* Canvas commands require the island wire. The diagnostic routes remain
+   honest native links when scripting is unavailable. */
+.nocturne:not(.js) :is(.rd-utility-canvas-section, .rd-utility-action) {
+  display: none;
 }
 
 .rd-utility-link:focus-visible {
@@ -18974,10 +19001,14 @@ a.nm-link {
 .rd-run-actions {
   position: relative;
   display: inline-flex;
-  flex: none;
+  flex: 0 1 auto;
   align-items: center;
   gap: var(--sp-1);
   min-width: 0;
+}
+
+.rd-run-actions > :is(.rd-runform, .rd-live-retry) {
+  flex: none;
 }
 
 .rd-runbtn {
@@ -19031,6 +19062,7 @@ a.nm-link {
 .rd-live-state:not([hidden]),
 .rd-live-stats:not(:empty) {
   display: inline-flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: var(--sp-1);
   min-width: 0;
@@ -19043,6 +19075,18 @@ a.nm-link {
   max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+@media (min-width: 1141px) {
+  .rd-live-state:not([hidden]) {
+    min-width: 64px;
+  }
+}
+
+@media (min-width: 1281px) {
+  .rd-live-stats:not(:empty) {
+    min-width: 64px;
+  }
 }
 
 .rd-live-short {
@@ -19249,12 +19293,35 @@ a.nm-link {
   }
 }
 
-/* The complete 1280 px rail fits exactly. Below that point, secondary view
-   chrome yields before a lifecycle verb can be pushed off-screen. */
-@media (width < 1280px) {
+/* Product-critical verbs own the rail. Theme and operational tools already
+   have complete native copies in Setup; keep those copies primary until a
+   1440 px desktop can carry the direct triggers without clipping a live
+   status or action. */
+@media (width < 1440px) {
+  .rd-theme-rail-home,
+  .rd-utility-rail-home {
+    display: none;
+  }
+
+  .rd-theme-compact-home,
+  .rd-utility-compact-home {
+    display: block;
+  }
+}
+
+/* Camera history is contextual and earns a direct rail target before global
+   search chrome, but neither may displace lifecycle truth. */
+@media (width < 1600px) {
+  .rd-back {
+    display: none;
+  }
+}
+
+/* Search and the shortcut sheet remain keyboard-reachable below the complete
+   1920 px labelled rail (Ctrl+K and ?). */
+@media (width < 1920px) {
   .rd-search,
-  .rd-back,
-  .rd [data-nx="rd-keys"] {
+  .rd .rd-top > [data-nx="rd-keys"] {
     display: none;
   }
 }
@@ -19312,21 +19379,8 @@ a.nm-link {
     font-size: var(--fs-xs);
   }
 
-  .rd-theme-rail-home {
-    display: none;
-  }
-
   .rd-theme-compact-home {
-    display: block;
     width: min(100%, 300px);
-  }
-
-  .rd-utility-rail-home {
-    display: none;
-  }
-
-  .rd-utility-compact-home {
-    display: block;
   }
 
   .rd-utility-compact-home .rd-utilityd {
@@ -19558,7 +19612,14 @@ a.nm-link {
   }
 }
 
-@media (max-width: 520px) {
+@media (max-width: 680px) {
+  /* The compact rail already uses icon-width add controls and short lifecycle
+     verbs. Keep its named live witness intrinsic; wider desktop/tablet
+     pressure is where the witness may absorb spare width. */
+  .rd-run-actions {
+    flex: none;
+  }
+
   .rd-setup-sum {
     max-width: 90px;
   }
@@ -19652,6 +19713,34 @@ a.nm-link {
   .rd-attention-actions,
   .rd-health-alert:not([hidden]) > .rd-panel-action {
     grid-column: 1;
+  }
+}
+
+@media (max-width: 440px) {
+  /* At the narrowest supported workbench width, Setup becomes the same
+     named icon treatment as Add device/controller. Its full progress remains
+     in the summary's accessible text and title, while the rail keeps every
+     lifecycle and recovery target inside its own frame. */
+  .rd-setup-sum {
+    position: relative;
+    width: 36px;
+    min-width: 36px;
+    max-width: 36px;
+    padding: 0;
+    color: transparent;
+  }
+
+  .rd-setup-sum > * {
+    opacity: 0;
+  }
+
+  .rd-setup-sum::after {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--n-text-2);
+    content: "◆";
   }
 }
 

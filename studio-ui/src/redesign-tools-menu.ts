@@ -7,6 +7,30 @@ interface WorkbenchToolLink {
   detail: string;
 }
 
+interface WorkbenchCanvasAction {
+  nx: "rd-back" | "rd-search" | "rd-keys";
+  icon: string;
+  title: string;
+  detail: string;
+}
+
+export const REDESIGN_RAIL_PREFERENCES_MEDIA = "(width < 1440px)";
+
+const WORKBENCH_CANVAS_ACTIONS: readonly WorkbenchCanvasAction[] = [
+  {
+    nx: "rd-search",
+    icon: "⌕",
+    title: "Search workbench",
+    detail: "Find a widget or run a canvas command.",
+  },
+  {
+    nx: "rd-keys",
+    icon: "⌨",
+    title: "Canvas shortcuts",
+    detail: "Review navigation and editing keys.",
+  },
+];
+
 const WORKBENCH_TOOLS: readonly WorkbenchToolLink[] = [
   {
     href: "/check",
@@ -57,8 +81,45 @@ export function redesignToolsDisclosure() {
       h(
         "p",
         { class: "rd-utility-intro" },
-        "Focused checks and machine recovery. Use Back to return to this workbench.",
+        "Canvas commands, focused checks and machine recovery.",
       ),
+      h("p", { class: "rd-utility-section rd-utility-canvas-section" }, "Canvas"),
+      h(
+        "button",
+        {
+          type: "button",
+          class: "rd-utility-link rd-utility-action n-autobtn",
+          "data-nx": "rd-back",
+          hidden: "",
+        },
+        h("span", { class: "rd-utility-link-icon", "aria-hidden": "true" }, "↩"),
+        h(
+          "span",
+          { class: "rd-utility-link-copy" },
+          h("strong", null, "Back view"),
+          h("span", null, "Return to the previous canvas view."),
+        ),
+        h("span", { class: "rd-utility-arrow", "aria-hidden": "true" }, "→"),
+      ),
+      ...WORKBENCH_CANVAS_ACTIONS.map((tool) =>
+        h(
+          "button",
+          {
+            type: "button",
+            class: "rd-utility-link rd-utility-action n-autobtn",
+            "data-nx": tool.nx,
+          },
+          h("span", { class: "rd-utility-link-icon", "aria-hidden": "true" }, tool.icon),
+          h(
+            "span",
+            { class: "rd-utility-link-copy" },
+            h("strong", null, tool.title),
+            h("span", null, tool.detail),
+          ),
+          h("span", { class: "rd-utility-arrow", "aria-hidden": "true" }, "→"),
+        ),
+      ),
+      h("p", { class: "rd-utility-section" }, "Diagnostics"),
       ...WORKBENCH_TOOLS.map((tool) =>
         h(
           "a",
@@ -103,8 +164,45 @@ export function redesignCompactToolsDisclosure() {
       h(
         "p",
         { class: "rd-utility-intro" },
-        "Focused checks and machine recovery. Use Back to return to this workbench.",
+        "Canvas commands, focused checks and machine recovery.",
       ),
+      h("p", { class: "rd-utility-section rd-utility-canvas-section" }, "Canvas"),
+      h(
+        "button",
+        {
+          type: "button",
+          class: "rd-utility-link rd-utility-action n-autobtn",
+          "data-nx": "rd-back",
+          hidden: "",
+        },
+        h("span", { class: "rd-utility-link-icon", "aria-hidden": "true" }, "↩"),
+        h(
+          "span",
+          { class: "rd-utility-link-copy" },
+          h("strong", null, "Back view"),
+          h("span", null, "Return to the previous canvas view."),
+        ),
+        h("span", { class: "rd-utility-arrow", "aria-hidden": "true" }, "→"),
+      ),
+      ...WORKBENCH_CANVAS_ACTIONS.map((tool) =>
+        h(
+          "button",
+          {
+            type: "button",
+            class: "rd-utility-link rd-utility-action n-autobtn",
+            "data-nx": tool.nx,
+          },
+          h("span", { class: "rd-utility-link-icon", "aria-hidden": "true" }, tool.icon),
+          h(
+            "span",
+            { class: "rd-utility-link-copy" },
+            h("strong", null, tool.title),
+            h("span", null, tool.detail),
+          ),
+          h("span", { class: "rd-utility-arrow", "aria-hidden": "true" }, "→"),
+        ),
+      ),
+      h("p", { class: "rd-utility-section" }, "Diagnostics"),
       ...WORKBENCH_TOOLS.map((tool) =>
         h(
           "a",
@@ -156,6 +254,34 @@ const wiredRoots = new WeakSet<HTMLElement>();
 export function wireRedesignToolsDisclosures(root: HTMLElement): void {
   if (wiredRoots.has(root)) return;
   wiredRoots.add(root);
+  let lastFocusedDisclosure: HTMLDetailsElement | null = null;
+  root.ownerDocument.addEventListener(
+    "focusin",
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const owner = target.closest<HTMLDetailsElement>("[data-rd-tools-menu]");
+      if (owner) {
+        lastFocusedDisclosure = owner;
+      } else if (target !== root.ownerDocument.body &&
+                 target !== root.ownerDocument.documentElement) {
+        // CSS can focus <body> just before the responsive change event. Keep
+        // the outgoing owner through that transient state only.
+        lastFocusedDisclosure = null;
+      }
+    },
+    true,
+  );
+  root.ownerDocument.addEventListener(
+    "pointerdown",
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof Element) || !target.closest("[data-rd-tools-menu]")) {
+        lastFocusedDisclosure = null;
+      }
+    },
+    true,
+  );
   root.addEventListener(
     "toggle",
     (event) => {
@@ -170,7 +296,7 @@ export function wireRedesignToolsDisclosures(root: HTMLElement): void {
     },
     true,
   );
-  const compact = window.matchMedia("(max-width: 680px)");
+  const compact = window.matchMedia(REDESIGN_RAIL_PREFERENCES_MEDIA);
   compact.addEventListener("change", (event) => {
     // Chromium moves focus to <body> as soon as CSS hides the outgoing
     // summary, before MediaQueryList dispatches `change`. The still-open
@@ -181,8 +307,10 @@ export function wireRedesignToolsDisclosures(root: HTMLElement): void {
     );
     const active = document.activeElement;
     const ownedFocus = active instanceof Element && Boolean(active.closest("[data-rd-tools-menu]"));
-    closeRedesignToolsDisclosure(root);
-    if (!ownedFocus && !hadOpenDisclosure) return;
+    const rememberedFocus = Boolean(lastFocusedDisclosure?.isConnected);
+    lastFocusedDisclosure = null;
+    if (hadOpenDisclosure) closeRedesignToolsDisclosure(root);
+    if (!ownedFocus && !rememberedFocus) return;
 
     // A media-query change is already observing the destination layout, but
     // `getClientRects()` can still report the outgoing copy for this event's

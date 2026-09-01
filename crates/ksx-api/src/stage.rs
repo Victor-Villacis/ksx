@@ -714,6 +714,17 @@ pub enum StageEdit {
     /// Remove one keyboard and every controller route owned by it. Other
     /// keyboards and their routes remain staged.
     RemoveDevice { selector: String },
+    /// Remove one exact staged keyboard only while the daemon still owns the
+    /// complete draft and device row the surface rendered. `confirmed` is
+    /// part of this same atomic edit: a mapped route cannot appear between a
+    /// presentation-server preflight and an unguarded removal.
+    GuardedRemoveDevice {
+        selector: String,
+        expected_revision: String,
+        expected_source_revision: String,
+        #[serde(default)]
+        confirmed: bool,
+    },
     /// Change only one staged board's capture backend. The
     /// expected selector is mandatory so a completed elevated preparation can
     /// never retarget a keyboard chosen while its UAC prompt was open.
@@ -758,6 +769,28 @@ pub enum StageEdit {
         source: String,
         expected_revision: String,
         expected_source_revision: String,
+    },
+    /// Add one exact keyboard route and seat its new controller at the
+    /// requested player position as one immutable edit. This is the
+    /// daemon-restart counterpart to restoring a held parked snapshot.
+    GuardedAddSourceSlotAt {
+        position: u8,
+        persona: String,
+        preset: String,
+        #[serde(default)]
+        layout: Option<String>,
+        source: String,
+        expected_revision: String,
+        expected_source_revision: String,
+    },
+    /// Restore every route, macro and SOCD choice in a server-held parked
+    /// snapshot, then seat it at `position`, all within one stage edit. Any
+    /// bad route, capacity refusal or reorder refusal returns the original
+    /// setup byte-for-byte.
+    GuardedRestoreParkedSlot {
+        position: u8,
+        slot: Box<StagedSlotView>,
+        expected_revision: String,
     },
     /// Moment 5 again: change their mind. Free, and the whole point.
     SetPersona { number: u8, persona: String },
@@ -815,6 +848,13 @@ pub enum StageEdit {
     /// Delete a staged controller. Free and complete: no file, no backup, no
     /// trace.
     RemoveSlot { number: u8 },
+    /// Delete and compact one exact controller, provided the daemon still owns
+    /// both the whole draft and slot revision the surface rendered.
+    GuardedRemoveSlot {
+        number: u8,
+        expected_revision: String,
+        expected_target_revision: String,
+    },
     /// **Reorder the staged controllers** — `numbers` is the CURRENT slot
     /// numbers in the desired new order, a whole-order write (the same
     /// whole-value rule `SetBindings` and `bind_keys` follow, so a drag that
@@ -822,10 +862,32 @@ pub enum StageEdit {
     /// contiguously 1..=n; each controller keeps its persona, bindings and
     /// SOCD answer.
     ReorderSlots { numbers: Vec<u8> },
+    /// Reorder the complete roster on behalf of one exact rendered card. The
+    /// daemon validates both revisions while holding its staged-state lock.
+    GuardedReorderSlots {
+        number: u8,
+        numbers: Vec<u8>,
+        expected_revision: String,
+        expected_target_revision: String,
+    },
     /// Set one staged controller's simultaneous-opposite-direction policy —
     /// a `ksx_core::Socd` name (`off` | `neutral` | `up-priority` | `last-input` | `first-input`), the same
     /// vocabulary `ksx slot assign --socd` writes onto a saved slot.
     SetSocd { number: u8, socd: String },
+    /// Change SOCD only if this is still the exact rendered controller in the
+    /// exact rendered draft.
+    GuardedSetSocd {
+        number: u8,
+        socd: String,
+        expected_revision: String,
+        expected_target_revision: String,
+    },
+    /// Duplicate one exact rendered controller as one atomic stage edit.
+    GuardedDuplicateSlot {
+        number: u8,
+        expected_revision: String,
+        expected_target_revision: String,
+    },
     /// Moment 6's one question: `whole` (freeze) or `bound-keys` (split).
     SetBlocking { blocking: String },
     /// **Start over.** Always works.
@@ -833,6 +895,76 @@ pub enum StageEdit {
 }
 
 impl StageEdit {
+    /// Whole-draft authority for edits which create/remove structural state
+    /// and therefore must not be split into presentation-server read/write
+    /// sequences. The daemon checks this token while holding its stage lock.
+    pub fn guarded_draft_authority(&self) -> Option<&str> {
+        match self {
+            Self::AddSourceSlot {
+                expected_revision, ..
+            }
+            | Self::GuardedAddSourceSlotAt {
+                expected_revision, ..
+            }
+            | Self::GuardedRestoreParkedSlot {
+                expected_revision, ..
+            }
+            | Self::GuardedRemoveDevice {
+                expected_revision, ..
+            } => Some(expected_revision),
+            _ => None,
+        }
+    }
+
+    /// Exact staged-device authority carried by a destructive roster edit.
+    pub fn guarded_device_remove_authority(&self) -> Option<(&str, &str, bool)> {
+        match self {
+            Self::GuardedRemoveDevice {
+                selector,
+                expected_source_revision,
+                confirmed,
+                ..
+            } => Some((selector, expected_source_revision, *confirmed)),
+            _ => None,
+        }
+    }
+
+    /// Authority carried by structural edits whose visible slot number can be
+    /// retargeted by a concurrent reorder. The daemon consumes this while it
+    /// owns the staged-state lock; presentation servers must not preflight it
+    /// in a separate read/write pair.
+    pub fn guarded_slot_authority(&self) -> Option<(u8, &str, &str)> {
+        match self {
+            Self::GuardedRemoveSlot {
+                number,
+                expected_revision,
+                expected_target_revision,
+            }
+            | Self::GuardedReorderSlots {
+                number,
+                expected_revision,
+                expected_target_revision,
+                ..
+            }
+            | Self::GuardedSetSocd {
+                number,
+                expected_revision,
+                expected_target_revision,
+                ..
+            }
+            | Self::GuardedDuplicateSlot {
+                number,
+                expected_revision,
+                expected_target_revision,
+            } => Some((
+                *number,
+                expected_revision.as_str(),
+                expected_target_revision.as_str(),
+            )),
+            _ => None,
+        }
+    }
+
     /// Apply this edit to `setup`, or refuse.
     ///
     /// Returns a NEW setup — the caller still holds the old one on refusal,
@@ -898,6 +1030,45 @@ impl StageEdit {
             Self::RemoveDevice { selector } => setup
                 .remove_device(&parse_staged_selector(selector)?)
                 .map_err(refuse),
+            Self::GuardedRemoveDevice {
+                selector,
+                expected_revision,
+                expected_source_revision,
+                confirmed,
+            } => {
+                if expected_revision.trim().is_empty() {
+                    return Err(Refusal::new(
+                        codes::BAD_REQUEST,
+                        "Remove Keyboard was not checked against the current draft. Refresh the workbench and try again; nothing changed.",
+                    ));
+                }
+                let selector = parse_staged_selector(selector)?;
+                let view = StagedSetupView::of(setup);
+                let Some(device) = view
+                    .devices
+                    .iter()
+                    .find(|device| device_selectors_equal(&device.selector, &selector.to_string()))
+                else {
+                    return Err(refuse(ksx_core::StageRefusal::NoSuchDevice {
+                        selector: selector.to_string(),
+                    }));
+                };
+                if expected_source_revision.trim().is_empty()
+                    || expected_source_revision.trim() != staged_device_revision(device)
+                {
+                    return Err(Refusal::new(
+                        codes::BAD_REQUEST,
+                        "This keyboard changed while Remove was open. Refresh the workbench and try again; nothing changed.",
+                    ));
+                }
+                if staged_device_has_mappings(&view, &selector.to_string()) && !confirmed {
+                    return Err(Refusal::new(
+                        codes::CONFIRM_REQUIRED,
+                        "This keyboard still owns controller mappings. Confirm removal to remove those routes too; nothing changed.",
+                    ));
+                }
+                setup.remove_device(&selector).map_err(refuse)
+            }
             Self::SetDeviceBackend {
                 expected_selector,
                 backend,
@@ -979,6 +1150,63 @@ impl StageEdit {
                 setup
                     .add_slot_for_source(number, persona, &selector, preset)
                     .map_err(refuse)
+            }
+            Self::GuardedAddSourceSlotAt {
+                position,
+                persona,
+                preset,
+                layout,
+                source,
+                expected_revision,
+                expected_source_revision,
+            } => {
+                if expected_revision.trim().is_empty() {
+                    return Err(Refusal::new(
+                        codes::BAD_REQUEST,
+                        "Re-slot Controller was not checked against the current draft. Refresh the workbench and try again; nothing changed.",
+                    ));
+                }
+                let selector = parse_staged_selector(source)?;
+                let view = StagedSetupView::of(setup);
+                let Some(device) = view
+                    .devices
+                    .iter()
+                    .find(|device| device_selectors_equal(&device.selector, source))
+                else {
+                    return Err(refuse(ksx_core::StageRefusal::NoSuchDevice {
+                        selector: selector.to_string(),
+                    }));
+                };
+                if expected_source_revision.trim().is_empty()
+                    || expected_source_revision.trim() != staged_device_revision(device)
+                {
+                    return Err(Refusal::new(
+                        codes::BAD_REQUEST,
+                        "The selected keyboard changed while Re-slot Controller was open. Refresh the workbench and try again; nothing changed.",
+                    ));
+                }
+                let number = setup
+                    .next_free_slot()
+                    .ok_or_else(|| refuse(ksx_core::StageRefusal::NoFreeSlot))?;
+                let persona = parse_persona(persona)?;
+                let preset = add_slot_preset(layout.as_deref(), preset.trim(), number, true)?;
+                let next = setup
+                    .add_slot_for_source(number, persona, &selector, preset)
+                    .map_err(refuse)?;
+                seat_staged_slot(&next, number, *position)
+            }
+            Self::GuardedRestoreParkedSlot {
+                position,
+                slot,
+                expected_revision,
+            } => {
+                if expected_revision.trim().is_empty() {
+                    return Err(Refusal::new(
+                        codes::BAD_REQUEST,
+                        "Re-slot Controller was not checked against the current draft. Refresh the workbench and try again; nothing changed.",
+                    ));
+                }
+                restore_parked_slot(setup, slot, *position)
             }
             Self::SetPersona { number, persona } => setup
                 .set_persona(*number, parse_persona(persona)?)
@@ -1063,8 +1291,24 @@ impl StageEdit {
                 .remove_source_bindings(*number, &parse_staged_selector(selector)?)
                 .map_err(refuse),
             Self::RemoveSlot { number } => setup.remove_slot(*number).map_err(refuse),
+            Self::GuardedRemoveSlot { number, .. } => {
+                let removed = setup.remove_slot(*number).map_err(refuse)?;
+                let order: Vec<u8> = removed.slots().iter().map(|slot| slot.number).collect();
+                let contiguous = order
+                    .iter()
+                    .enumerate()
+                    .all(|(index, slot)| usize::from(*slot) == index + 1);
+                if order.is_empty() || contiguous {
+                    Ok(removed)
+                } else {
+                    removed.reorder_slots(&order).map_err(refuse)
+                }
+            }
             Self::ReorderSlots { numbers } => setup.reorder_slots(numbers).map_err(refuse),
-            Self::SetSocd { number, socd } => {
+            Self::GuardedReorderSlots { numbers, .. } => {
+                setup.reorder_slots(numbers).map_err(refuse)
+            }
+            Self::SetSocd { number, socd } | Self::GuardedSetSocd { number, socd, .. } => {
                 let socd: ksx_core::Socd =
                     socd.trim().parse().map_err(|err: ksx_core::UnknownSocd| {
                         Refusal::with_remedy(
@@ -1075,6 +1319,9 @@ impl StageEdit {
                         )
                     })?;
                 setup.set_socd(*number, socd).map_err(refuse)
+            }
+            Self::GuardedDuplicateSlot { number, .. } => {
+                setup.duplicate_slot(*number).map_err(refuse)
             }
             Self::SetBlocking { blocking } => {
                 let blocking: Blocking =
@@ -1389,7 +1636,7 @@ fn staged_source_for_request(
         return slot
             .sources
             .iter()
-            .find(|source| source.selector.eq_ignore_ascii_case(expected))
+            .find(|source| device_selectors_equal(&source.selector, expected))
             .cloned();
     }
 
@@ -1434,7 +1681,7 @@ pub fn staged_source_view(
     if let Some(source) = slot
         .sources
         .iter()
-        .find(|source| source.selector.eq_ignore_ascii_case(expected))
+        .find(|source| device_selectors_equal(&source.selector, expected))
     {
         let mut source = source.clone();
         source.routed = true;
@@ -1446,7 +1693,7 @@ pub fn staged_source_view(
     let device = setup
         .devices
         .iter()
-        .find(|device| device.selector.eq_ignore_ascii_case(expected))?;
+        .find(|device| device_selectors_equal(&device.selector, expected))?;
     let name = staged_unrouted_preset_name(setup, slot.number, &device.alias);
     let mut preset = ksx_core::Preset::builtin_empty();
     preset.name = name.clone();
@@ -2346,7 +2593,7 @@ fn staged_cross_conflicts(
                 let Some(source) = slot
                     .sources
                     .iter()
-                    .find(|source| source.selector.eq_ignore_ascii_case(selector))
+                    .find(|source| device_selectors_equal(&source.selector, selector))
                 else {
                     continue;
                 };
@@ -2610,6 +2857,152 @@ fn add_slot_preset(
     }
 }
 
+/// Seat the newly added `number` at the exact one-based player position.
+/// This runs against an immutable intermediate setup, so a bad position or
+/// reorder returns the caller's original setup when used from `StageEdit`.
+fn seat_staged_slot(setup: &StagedSetup, number: u8, position: u8) -> Result<StagedSetup, Refusal> {
+    let count = setup.slots().len();
+    if position == 0 || usize::from(position) > count {
+        return Err(Refusal::new(
+            codes::BAD_REQUEST,
+            format!(
+                "controller position must be 1..={count}, got {position}; refresh the workbench and try again"
+            ),
+        ));
+    }
+    let mut order: Vec<u8> = setup
+        .slots()
+        .iter()
+        .map(|slot| slot.number)
+        .filter(|candidate| *candidate != number)
+        .collect();
+    order.insert(usize::from(position - 1), number);
+    setup.reorder_slots(&order).map_err(refuse)
+}
+
+fn fresh_staged_preset_name(base: &str, used: &mut BTreeSet<String>) -> String {
+    let base = if base.trim().is_empty() {
+        "Controller".to_owned()
+    } else {
+        base.trim().to_owned()
+    };
+    if used.insert(base.to_ascii_lowercase()) {
+        return base;
+    }
+    (2_u32..)
+        .map(|suffix| format!("{base} {suffix}"))
+        .find(|candidate| used.insert(candidate.to_ascii_lowercase()))
+        .expect("the unbounded suffix sequence contains a free preset name")
+}
+
+/// Rebuild one server-held parked view into a local immutable setup, including
+/// every exact source route and macro table, then apply SOCD and seating. No
+/// intermediate value escapes: any refusal leaves the daemon's setup intact.
+fn restore_parked_slot(
+    setup: &StagedSetup,
+    slot: &StagedSlotView,
+    position: u8,
+) -> Result<StagedSetup, Refusal> {
+    let number = setup
+        .next_free_slot()
+        .ok_or_else(|| refuse(ksx_core::StageRefusal::NoFreeSlot))?;
+    let persona = parse_persona(&slot.persona)?;
+    let socd: ksx_core::Socd = if slot.socd.trim().is_empty() {
+        ksx_core::Socd::default()
+    } else {
+        slot.socd
+            .trim()
+            .parse()
+            .map_err(|err: ksx_core::UnknownSocd| {
+                Refusal::with_remedy(
+                    codes::BAD_REQUEST,
+                    err.to_string(),
+                    "refresh the parked controller before re-slotting it",
+                )
+            })?
+    };
+    let mut used: BTreeSet<String> = setup
+        .slots()
+        .iter()
+        .flat_map(|candidate| {
+            if candidate.routes().is_empty() {
+                vec![candidate.preset.name.to_ascii_lowercase()]
+            } else {
+                candidate
+                    .routes()
+                    .iter()
+                    .map(|route| route.preset.name.to_ascii_lowercase())
+                    .collect()
+            }
+        })
+        .collect();
+
+    let primary_base = if used.contains(&slot.preset.trim().to_ascii_lowercase()) {
+        StagedSetupView::of(setup)
+            .next_preset
+            .unwrap_or_else(|| preset_name_for_slot(number))
+    } else {
+        slot.preset.clone()
+    };
+
+    let mut next = if slot.sources.is_empty() {
+        let Some(mut authoring) = slot.authoring.clone() else {
+            return Err(Refusal::new(
+                codes::BAD_REQUEST,
+                "The parked controller has no recoverable mapping snapshot. Keep it parked and refresh before trying again.",
+            ));
+        };
+        authoring.name = fresh_staged_preset_name(&primary_base, &mut used);
+        let preset = authoring.to_core().map_err(|err| {
+            Refusal::new(
+                codes::BAD_REQUEST,
+                format!("The parked controller's mapping snapshot is invalid: {err}"),
+            )
+        })?;
+        setup.add_slot(number, persona, preset).map_err(refuse)?
+    } else {
+        let mut restored: Option<StagedSetup> = None;
+        for (index, source) in slot.sources.iter().enumerate() {
+            let selector = parse_staged_selector(&source.selector)?;
+            let Some(mut authoring) = source.authoring.clone() else {
+                return Err(Refusal::new(
+                    codes::BAD_REQUEST,
+                    format!(
+                        "The parked route from {} has no recoverable mapping snapshot. Keep the controller parked and refresh before trying again.",
+                        source.selector
+                    ),
+                ));
+            };
+            let desired = if index == 0 {
+                primary_base.as_str()
+            } else {
+                source.preset.as_str()
+            };
+            authoring.name = fresh_staged_preset_name(desired, &mut used);
+            let preset = authoring.to_core().map_err(|err| {
+                Refusal::new(
+                    codes::BAD_REQUEST,
+                    format!(
+                        "The parked route from {} has an invalid mapping snapshot: {err}",
+                        source.selector
+                    ),
+                )
+            })?;
+            restored = Some(match restored {
+                None => setup
+                    .add_slot_for_source(number, persona, &selector, preset)
+                    .map_err(refuse)?,
+                Some(current) => current
+                    .set_source_bindings(number, &selector, preset)
+                    .map_err(refuse)?,
+            });
+        }
+        restored.expect("a nonempty source list restores at least one route")
+    };
+    next = next.set_socd(number, socd).map_err(refuse)?;
+    seat_staged_slot(&next, number, position)
+}
+
 /// The layout ids carrying a block for slot `number` — read off the roster, so
 /// a refusal never names a layout this build does not have.
 fn blocks_at_least(number: u8) -> Vec<String> {
@@ -2639,6 +3032,36 @@ fn parse_staged_selector(selector: &str) -> Result<DeviceSelector, Refusal> {
             err.to_string(),
             "send back the exact selector from the staged device",
         )
+    })
+}
+
+/// Compare source identity using the selector grammar rather than folding the
+/// serialized text. USB structural spelling and legacy paths canonicalize in
+/// `DeviceSelector::parse`, while `sn=` values deliberately remain
+/// case-sensitive because firmware serial bytes are part of exact identity.
+pub fn device_selectors_equal(left: &str, right: &str) -> bool {
+    match (
+        DeviceSelector::parse(left.trim()),
+        DeviceSelector::parse(right.trim()),
+    ) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left.trim() == right.trim(),
+    }
+}
+
+/// Whether one exact staged device owns any authored route whose removal
+/// needs explicit confirmation. Missing authoring is treated conservatively:
+/// an older daemon may have omitted the body, but the route still exists.
+pub fn staged_device_has_mappings(staged: &StagedSetupView, selector: &str) -> bool {
+    staged.slots.iter().any(|slot| {
+        slot.sources
+            .iter()
+            .find(|source| device_selectors_equal(&source.selector, selector))
+            .is_some_and(|source| {
+                source.bindings > 0
+                    || source.authoring.is_none()
+                    || !staged_source_macro_snapshot(source).macros.is_empty()
+            })
     })
 }
 
@@ -3847,7 +4270,18 @@ steps = [{{ hold = ["A"], ms = 25 }}]
                 ..StagedBindRequest::default()
             },
         );
-        assert!(accepted.is_ok(), "the exact selector is case-insensitive");
+        assert!(
+            accepted.is_ok(),
+            "USB structural spelling canonicalizes without weakening exact identity"
+        );
+        assert!(device_selectors_equal(
+            "USB:D209:0430:00:port=7&abc",
+            "usb:d209:0430:00:port=7&ABC"
+        ));
+        assert!(
+            !device_selectors_equal("usb:d209:0430:00:sn=BoardA", "usb:d209:0430:00:sn=boarda"),
+            "firmware serial case is exact source identity"
+        );
     }
 
     #[test]

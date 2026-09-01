@@ -50,6 +50,27 @@ async function stage(base, selector, alias, label) {
   assert.equal(response.status, 303, `could not stage ${selector} on ${base}`);
 }
 
+async function removeStagedSource(base, selector) {
+  const response = await fetch(`${base}/redesign/device/remove`, {
+    method: "POST",
+    body: new URLSearchParams({ selector, confirm_remove: "on" }),
+    redirect: "manual",
+  });
+  assert.equal(response.status, 303, `could not remove ${selector} on ${base}`);
+}
+
+async function resetStagedSources(base) {
+  const payload = await fetch(`${base}/api/redesign`).then((response) => response.json());
+  const selectors = new Set([
+    ...payload.devices.keyboards,
+    ...payload.devices.encoders,
+    ...payload.devices.experimental,
+  ].filter((row) => row.aria_current === "true").map((row) => row.selector));
+  for (const selector of selectors) {
+    await removeStagedSource(base, selector);
+  }
+}
+
 async function within(promise, timeoutMs, message) {
   let timer;
   try {
@@ -134,6 +155,7 @@ after(async () => {
 
 describe("redesign identify by key", () => {
   test("an explicit identify resolves the exact connection when product names match", async () => {
+    await resetStagedSources(BASE);
     await stage(BASE, G915, "g915", "Logitech G915 TKL");
     const page = await openRedesign(BASE);
     try {
@@ -176,12 +198,12 @@ describe("redesign identify by key", () => {
         "true twin boards keep distinct connection labels beside the shared name",
       );
       const action = page.getByRole("button", {
-        name: "Identify and use as input source",
+        name: "Identify exact device",
         exact: true,
       });
       assert.match(
         (await page.locator("[data-rd-identify] .rd-identify-copy").textContent()) ?? "",
-        /successful answer becomes the input source.*nothing is captured, saved, or started/is,
+        /successful answer adds that exact connection as an independent source.*nothing is captured, saved, or started/is,
       );
       await action.click();
       const status = page.locator('[data-rd-identify-status][data-state="identified"]');
@@ -192,12 +214,17 @@ describe("redesign identify by key", () => {
       );
       assert.match(
         (await status.locator("[data-rd-identify-detail]").textContent()) ?? "",
-        /USB D209:0430 · connection 00.*exact connection.*input source/i,
+        /USB D209:0430 · connection 00.*exact connection.*independent mapping source/i,
       );
       assert.equal(
         await page.locator(`.rd-devmodal [data-selector="${IPAC}"][aria-current="true"]`).count(),
         1,
         "the daemon-resolved selector, not the duplicated name, owns the staged mark",
+      );
+      assert.equal(
+        await page.locator(`.rd-devmodal [data-selector="${G915}"][aria-current="true"]`).count(),
+        1,
+        "identify adds the exact answer without replacing a peer source",
       );
       assert.equal(
         await status.evaluate((element) => element === document.activeElement),
@@ -211,6 +238,8 @@ describe("redesign identify by key", () => {
   });
 
   test("a request failure re-reads authority and never promises that nothing changed", async () => {
+    await resetStagedSources(BASE);
+    await stage(BASE, G915, "g915", "Logitech G915 TKL");
     const page = await openRedesign(BASE);
     try {
       await page.route(`${BASE}/redesign/device/identify`, (route) =>
@@ -218,7 +247,7 @@ describe("redesign identify by key", () => {
       );
       await page.click('[data-nx="rd-devs-open"]');
       const action = page.getByRole("button", {
-        name: "Identify and use as input source",
+        name: "Identify exact device",
         exact: true,
       });
       await action.click();
@@ -226,7 +255,7 @@ describe("redesign identify by key", () => {
       await status.waitFor();
       assert.match(
         (await status.textContent()) ?? "",
-        /could not confirm.*workbench currently shows.*review.*selected row/is,
+        /could not confirm.*review the mapping-source list.*reload/is,
       );
       assert.doesNotMatch((await status.textContent()) ?? "", /nothing changed/i);
       assert.equal(await page.locator(".rd-devmodal[hidden]").count(), 0);
@@ -241,7 +270,8 @@ describe("redesign identify by key", () => {
     }
   });
 
-  test("a lost response after server commit refreshes authority without attributing the selected row", async () => {
+  test("a lost response refreshes authority without attributing any staged row", async () => {
+    await resetStagedSources(BASE);
     await stage(BASE, G915, "g915", "Logitech G915 TKL");
     const page = await openRedesign(BASE);
     try {
@@ -252,7 +282,7 @@ describe("redesign identify by key", () => {
       });
       await page.click('[data-nx="rd-devs-open"]');
       await page.getByRole("button", {
-        name: "Identify and use as input source",
+        name: "Identify exact device",
         exact: true,
       }).click();
 
@@ -260,11 +290,16 @@ describe("redesign identify by key", () => {
       await status.waitFor({ timeout: 15_000 });
       assert.match(
         (await status.textContent()) ?? "",
-        /Could not confirm.*workbench now shows Ultimarc I-PAC 4.*cannot prove what caused that change/is,
+        /Could not confirm.*review the mapping-source list.*reload/is,
       );
       assert.equal(
         await page.locator(`.rd-devmodal [data-selector="${IPAC}"][aria-current="true"]`).count(),
         1,
+      );
+      assert.equal(
+        await page.locator(`.rd-devmodal [data-selector="${G915}"][aria-current="true"]`).count(),
+        1,
+        "a lost response cannot silently replace the previously focused source",
       );
       assert.doesNotMatch((await status.textContent()) ?? "", /nothing changed/i);
       assert.doesNotMatch((await status.textContent()) ?? "", /Identified Ultimarc/i);
@@ -279,6 +314,7 @@ describe("redesign identify by key", () => {
   });
 
   test("a settled answer retires Cancel before a slow authority refresh", async () => {
+    await resetStagedSources(BASE);
     await stage(BASE, G915, "g915", "Logitech G915 TKL");
     const page = await openRedesign(BASE);
     let releaseRefresh;
@@ -312,7 +348,7 @@ describe("redesign identify by key", () => {
 
       await page.click('[data-nx="rd-devs-open"]');
       await page.getByRole("button", {
-        name: "Identify and use as input source",
+        name: "Identify exact device",
         exact: true,
       }).click();
       await within(
@@ -345,9 +381,14 @@ describe("redesign identify by key", () => {
         timeout: 15_000,
       });
       const payload = await fetch(`${BASE}/api/redesign`).then((response) => response.json());
-      const current = [...payload.devices.keyboards, ...payload.devices.encoders]
-        .find((row) => row.aria_current === "true");
-      assert.equal(current?.selector, IPAC, "the committed answer was rolled back or misreported");
+      const staged = new Set([...payload.devices.keyboards, ...payload.devices.encoders]
+        .filter((row) => row.aria_current === "true")
+        .map((row) => row.selector));
+      assert.deepEqual(
+        staged,
+        new Set([G915, IPAC]),
+        "the committed answer must join, never replace, the peer source",
+      );
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       releaseRefresh?.();
@@ -355,7 +396,8 @@ describe("redesign identify by key", () => {
     }
   });
 
-  test("a concurrent selection cannot be mislabeled as the device that answered", async () => {
+  test("a concurrently removed answer cannot be mislabeled as identified", async () => {
+    await resetStagedSources(BASE);
     await stage(BASE, G915, "g915", "Logitech G915 TKL");
     const page = await openRedesign(BASE);
     let releaseRefresh;
@@ -367,6 +409,7 @@ describe("redesign identify by key", () => {
       reportRefreshStarted = resolve;
     });
     let gateNextRefresh = false;
+    let omitAnsweredSource = false;
     try {
       await page.route(`${BASE}/redesign/device/identify`, (route) => {
         gateNextRefresh = true;
@@ -377,12 +420,20 @@ describe("redesign identify by key", () => {
         gateNextRefresh = false;
         reportRefreshStarted();
         await refreshGate;
-        return route.continue();
+        const response = await route.fetch();
+        const payload = await response.json();
+        if (omitAnsweredSource) {
+          for (const tier of ["keyboards", "encoders", "experimental"]) {
+            payload.devices[tier] = payload.devices[tier]
+              .filter((row) => row.selector !== IPAC);
+          }
+        }
+        return route.fulfill({ response, json: payload });
       });
 
       await page.click('[data-nx="rd-devs-open"]');
       await page.getByRole("button", {
-        name: "Identify and use as input source",
+        name: "Identify exact device",
         exact: true,
       }).click();
       await within(
@@ -391,16 +442,17 @@ describe("redesign identify by key", () => {
         "the identified selector never reached its authority refresh",
       );
 
-      // The Identify attempt has selected IPAC, but another client wins the
-      // authority race before this page can repaint.
-      await stage(BASE, G915, "g915", "Logitech G915 TKL");
+      // The answer additively staged IPAC, but another client removes that
+      // exact source before this page can confirm it. The existing G915 peer
+      // remains staged and must never be mislabeled as the answer.
+      omitAnsweredSource = true;
       releaseRefresh();
 
       const status = page.locator('[data-rd-identify-status][data-state="error"]');
       await status.waitFor({ timeout: 15_000 });
       assert.match(
         (await status.textContent()) ?? "",
-        /Keyboard answered.*input source changed.*Ultimarc I-PAC 4.*answered this attempt.*Logitech G915 TKL.*selected now/is,
+        /Keyboard answered.*source not confirmed.*Ultimarc I-PAC 4.*answered this attempt.*no longer present/is,
       );
       assert.doesNotMatch((await status.textContent()) ?? "", /Identified Logitech/i);
       assert.equal(
@@ -416,6 +468,7 @@ describe("redesign identify by key", () => {
   });
 
   test("the native no-script identify form is reachable and completes the same transaction", async () => {
+    await resetStagedSources(BASE);
     await stage(BASE, G915, "g915", "Logitech G915 TKL");
     const context = await browser.newContext({
       javaScriptEnabled: false,
@@ -429,7 +482,7 @@ describe("redesign identify by key", () => {
       assert.equal(await fallback.isVisible(), true, "the no-script action is not reachable");
       assert.match(
         (await fallback.textContent()) ?? "",
-        /successful answer selects that connection.*nothing is captured, saved, or started/is,
+        /successful answer adds that connection as an independent mapping source.*nothing is captured, saved, or started/is,
       );
       await Promise.all([
         page.waitForURL((url) =>
@@ -437,28 +490,39 @@ describe("redesign identify by key", () => {
             && url.searchParams.get("flash") === "Keyboard identified and selected. Nothing has been captured, saved, or started."
         ),
         fallback.getByRole("button", {
-        name: "Identify and use as input source",
+          name: "Identify exact device",
           exact: true,
         }).click(),
       ]);
 
       const payload = await fetch(`${BASE}/api/redesign`).then((response) => response.json());
-      const current = [...payload.devices.keyboards, ...payload.devices.encoders]
-        .find((row) => row.aria_current === "true");
-      assert.equal(current?.selector, IPAC, "the native form did not stage the exact answer");
+      const staged = new Set([...payload.devices.keyboards, ...payload.devices.encoders]
+        .filter((row) => row.aria_current === "true")
+        .map((row) => row.selector));
+      assert.deepEqual(
+        staged,
+        new Set([G915, IPAC]),
+        "the native form adds the exact answer without replacing its peer",
+      );
+      assert.equal(
+        new URL(page.url()).searchParams.get("identified_selector"),
+        IPAC,
+        "the native redirect discloses the exact connection that answered",
+      );
     } finally {
       await context.close();
     }
   });
 
   test("Escape cancels the exact pending listener, guards browser keys, and preserves the old input", async () => {
+    await resetStagedSources(HOLD_BASE);
     await stage(HOLD_BASE, G915, "g915", "Logitech G915 TKL");
     const page = await openRedesign(HOLD_BASE);
     try {
       await page.emulateMedia({ reducedMotion: "reduce" });
       await page.click('[data-nx="rd-devs-open"]');
       const action = page.getByRole("button", {
-        name: "Identify and use as input source",
+        name: "Identify exact device",
         exact: true,
       });
       await action.click();
@@ -522,6 +586,7 @@ describe("redesign identify by key", () => {
   });
 
   test("the exact cancel result wins when the held start response returns first", async () => {
+    await resetStagedSources(HOLD_BASE);
     await stage(HOLD_BASE, G915, "g915", "Logitech G915 TKL");
     const page = await openRedesign(HOLD_BASE);
     let releaseCancellation;
@@ -553,7 +618,7 @@ describe("redesign identify by key", () => {
 
       await page.click('[data-nx="rd-devs-open"]');
       const action = page.getByRole("button", {
-        name: "Identify and use as input source",
+        name: "Identify exact device",
         exact: true,
       });
       await action.click();
@@ -597,12 +662,13 @@ describe("redesign identify by key", () => {
   });
 
   test("leaving the page cancels its exact listener before another attempt starts", async () => {
+    await resetStagedSources(HOLD_BASE);
     await stage(HOLD_BASE, G915, "g915", "Logitech G915 TKL");
     const page = await openRedesign(HOLD_BASE);
     try {
       await page.click('[data-nx="rd-devs-open"]');
       await page.getByRole("button", {
-        name: "Identify and use as input source",
+        name: "Identify exact device",
         exact: true,
       }).click();
       await page.locator('[data-rd-identify-status][data-state="listening"]').waitFor();
@@ -621,7 +687,7 @@ describe("redesign identify by key", () => {
       );
       await page.click('[data-nx="rd-devs-open"]');
       const retry = page.getByRole("button", {
-        name: "Identify and use as input source",
+        name: "Identify exact device",
         exact: true,
       });
       await retry.click();

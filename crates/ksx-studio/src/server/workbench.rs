@@ -213,11 +213,12 @@ pub(super) fn upsert_device_preserving_preparation(
     alias: String,
     label: String,
 ) -> DeviceChoice {
-    let unchanged = state.control.staged().devices.iter().any(|device| {
-        device.selector.trim().eq_ignore_ascii_case(selector.trim())
-            && device.alias.trim() == alias.trim()
-            && device.label.trim() == label.trim()
-    });
+    let unchanged = state
+        .control
+        .staged()
+        .devices
+        .iter()
+        .any(|device| unchanged_device_choice(device, &selector, &alias, &label));
     if unchanged {
         return DeviceChoice::Unchanged;
     }
@@ -234,6 +235,44 @@ pub(super) fn upsert_device_preserving_preparation(
         DeviceChoice::Chosen
     } else {
         DeviceChoice::Refused
+    }
+}
+
+fn unchanged_device_choice(
+    device: &ksx_api::StagedDeviceView,
+    selector: &str,
+    alias: &str,
+    label: &str,
+) -> bool {
+    ksx_api::device_selectors_equal(&device.selector, selector)
+        && device.alias.trim() == alias.trim()
+        && device.label.trim() == label.trim()
+}
+
+#[cfg(test)]
+mod selector_identity_tests {
+    use super::unchanged_device_choice;
+
+    #[test]
+    fn unchanged_choice_keeps_usb_serial_case_exact() {
+        let staged = ksx_api::StagedDeviceView {
+            selector: "usb:3434:0b10:00:sn=BoardA".into(),
+            alias: "twin".into(),
+            label: "Twin keyboard".into(),
+            ..Default::default()
+        };
+        assert!(unchanged_device_choice(
+            &staged,
+            "USB:3434:0B10:00:SN=BoardA",
+            "twin",
+            "Twin keyboard"
+        ));
+        assert!(!unchanged_device_choice(
+            &staged,
+            "usb:3434:0b10:00:sn=boarda",
+            "twin",
+            "Twin keyboard"
+        ));
     }
 }
 
@@ -865,43 +904,6 @@ pub(super) fn clear_all_flash(state: &AppState, number: u8) -> &'static str {
     }
 }
 
-pub(super) fn duplicate_slot_flash(state: &AppState, number: u8) -> &'static str {
-    let staged = state.control.staged();
-    let Some(source) = staged.slots.iter().find(|slot| slot.number == number) else {
-        return N_EDIT_ERROR;
-    };
-    let (Some(new_number), Some(new_preset)) = (staged.next_slot, staged.next_preset.clone())
-    else {
-        return N_DUP_FULL;
-    };
-    let socd = source.socd.clone();
-    if !state
-        .control
-        .stage_edit(&ksx_api::StageEdit::AddSlot {
-            number: Some(new_number),
-            persona: source.persona.clone(),
-            preset: new_preset.clone(),
-            layout: None,
-        })
-        .ok
-    {
-        return N_EDIT_ERROR;
-    }
-    if !restore_slot_routes(state, new_number, source, Some(&new_preset), true) {
-        let _ = state
-            .control
-            .stage_edit(&ksx_api::StageEdit::RemoveSlot { number: new_number });
-        return N_EDIT_ERROR;
-    }
-    if !socd.is_empty() && socd != "off" {
-        let _ = state.control.stage_edit(&ksx_api::StageEdit::SetSocd {
-            number: new_number,
-            socd,
-        });
-    }
-    N_DUP_OK
-}
-
 #[allow(dead_code)]
 fn current_keys(
     staged: &ksx_api::StagedSetupView,
@@ -991,7 +993,7 @@ fn exact_source_target(
     let (slot, source) = staged_source_target(staged, number, selector)?;
     (!selector.trim().is_empty()
         && !expected_revision.trim().is_empty()
-        && source.selector.eq_ignore_ascii_case(selector.trim())
+        && ksx_api::device_selectors_equal(&source.selector, selector)
         && source.revision == expected_revision.trim())
     .then_some((slot, source))
 }

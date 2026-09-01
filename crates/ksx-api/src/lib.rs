@@ -121,13 +121,13 @@ pub use machine::{
 pub use pipe::{PipeTransport, TransportError, NO_CHANNEL};
 pub use refusal::{codes, Refusal, Refused};
 pub use stage::{
-    preset_name_for_slot, staged_bind_edit, staged_device_revision, staged_macro_edit,
-    staged_macro_edit_for_setup, staged_macro_snapshot, staged_mapper_slot, staged_mapper_snapshot,
-    staged_mapper_source, staged_slot_bind_edit, staged_slot_revision,
-    staged_source_macro_snapshot, staged_source_revision, staged_source_view, BlockingOption,
-    PersonaOption, SocdOption, StageEdit, StageOutcome, StagedBindEdit, StagedBindRequest,
-    StagedDeviceView, StagedMacroEdit, StagedMacroRequest, StagedSetupView, StagedSlotView,
-    StagedSourceView,
+    device_selectors_equal, preset_name_for_slot, staged_bind_edit, staged_device_has_mappings,
+    staged_device_revision, staged_macro_edit, staged_macro_edit_for_setup, staged_macro_snapshot,
+    staged_mapper_slot, staged_mapper_snapshot, staged_mapper_source, staged_slot_bind_edit,
+    staged_slot_revision, staged_source_macro_snapshot, staged_source_revision, staged_source_view,
+    BlockingOption, PersonaOption, SocdOption, StageEdit, StageOutcome, StagedBindEdit,
+    StagedBindRequest, StagedDeviceView, StagedMacroEdit, StagedMacroRequest, StagedSetupView,
+    StagedSlotView, StagedSourceView,
 };
 pub use status::{
     MacroSnapshot, MacroStepView, MacroView, MapperSlot, MapperSnapshot, PadRow, ProfileRow,

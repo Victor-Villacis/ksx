@@ -30,6 +30,10 @@ import {
 } from "./padFinishes";
 import { DS4_PREMIUM_VARIANTS } from "./ds4PremiumGeometry";
 import { composeOrderMoving } from "./redesign-controller-order";
+import {
+  controllerRemoveAccessibleName,
+  parkedControllerDiscardAccessibleName,
+} from "./controller-accessible-names";
 
 /** One staged pad's canvas dressing — `NocturnePadView` on the wire
  *  (snapshot.rs), the same rows /nocturne's widgets clone and dress. Only
@@ -109,6 +113,8 @@ export interface RdPadView {
  *  the assignment chrome. */
 export interface RdControllerCardView {
   number: string;
+  /** Opaque authority for the exact controller currently in this seat. */
+  target_revision?: string;
   persona: string;
   persona_label: string;
   /** Source-neutral virtual-output seat identity. Older payloads omit it;
@@ -142,6 +148,11 @@ export interface ParkedController {
    *  family draws the named placeholder. */
   family: string;
   art: string;
+  /** Exact keyboard this card was authored from. Required only when a daemon
+   * restart has forgotten the server-held parked snapshot. */
+  source?: string;
+  /** Exact staged-device revision captured with `source`. */
+  source_revision?: string;
 }
 
 export interface CardGeometry {
@@ -165,6 +176,8 @@ export interface ControllerBenchIo {
    * historical first-source projection and must not dress another source's
    * card while this value is present. */
   authoringSource: string;
+  /** Whole staged-draft authority returned by every structural form. */
+  draftRevision: string;
   parked: ParkedController[];
   /** The ghost ids the SERVER still holds resurrection material for
    *  (`parked_held`, served) — decides each ghost's honest wording:
@@ -174,6 +187,9 @@ export interface ControllerBenchIo {
    *  name) and the default layout that makes a fresh slot playable. */
   addPreset: string;
   addLayout: string;
+  /** Exact staged source authority for source-qualified controller creation. */
+  addSource: string;
+  addSourceRevision: string;
   savedGeometry(id: string): CardGeometry | undefined;
   /** Assign a collision-free home and current stack position to a widget
    *  that has no saved user geometry. */
@@ -307,8 +323,9 @@ function liveCardFingerprint(
   allNumbers: readonly string[],
   pad: RdPadView | undefined,
   storeKey: string,
+  draftRevision: string,
 ): string {
-  return JSON.stringify(["live", card, allNumbers, pad ?? null, storeKey]);
+  return JSON.stringify(["live", card, allNumbers, pad ?? null, storeKey, draftRevision]);
 }
 
 /** Resolve the controller card's visual/edit vocabulary from the exact same
@@ -364,6 +381,9 @@ function ghostCardFingerprint(
     io.parkedHeld.has(parked.id),
     io.addPreset,
     io.addLayout,
+    io.draftRevision,
+    io.addSource,
+    io.addSourceRevision,
   ]);
 }
 
@@ -570,7 +590,7 @@ function padBody(
   return { art, swatches };
 }
 
-function removeForm(number: string): HTMLElement {
+function removeForm(card: RdControllerCardView, draftRevision: string): HTMLElement {
   const form = document.createElement("form");
   form.className = "rd-ctrlverb-form";
   form.method = "post";
@@ -579,13 +599,25 @@ function removeForm(number: string): HTMLElement {
   const hidden = document.createElement("input");
   hidden.type = "hidden";
   hidden.name = "number";
-  hidden.value = number;
+  hidden.value = card.number;
+  const draft = document.createElement("input");
+  draft.type = "hidden";
+  draft.name = "expected_revision";
+  draft.value = draftRevision;
+  const target = document.createElement("input");
+  target.type = "hidden";
+  target.name = "expected_target_revision";
+  target.value = card.target_revision?.trim() ?? "";
   const button = document.createElement("button");
   button.type = "submit";
   button.className = "rd-ctrlverb rd-ctrlverb-danger";
   button.textContent = "✕";
   button.title = "Remove this controller from the draft. Nothing is saved or started.";
-  form.append(hidden, button);
+  button.setAttribute(
+    "aria-label",
+    controllerRemoveAccessibleName(controllerDisplayName(card)),
+  );
+  form.append(hidden, draft, target, button);
   return form;
 }
 
@@ -600,7 +632,13 @@ function liveCardContent(
 ): HTMLElement {
   const body = document.createElement("div");
   body.className = "rd-ctrlcard";
-  body.dataset.renderFingerprint = liveCardFingerprint(card, allNumbers, pad, storeKey);
+  body.dataset.renderFingerprint = liveCardFingerprint(
+    card,
+    allNumbers,
+    pad,
+    storeKey,
+    io.draftRevision,
+  );
   body.dataset.controllerIdentity = controllerIdentity(card);
   body.dataset.finishStoreKey = storeKey;
   // The ramp digit — every surface speaking for this slot wears np{n}
@@ -628,11 +666,24 @@ function liveCardContent(
   order.type = "hidden";
   order.name = "order";
   moveForm.append(order);
+  for (const [name, value] of [
+    ["number", card.number],
+    ["expected_revision", io.draftRevision],
+    ["expected_target_revision", card.target_revision?.trim() ?? ""],
+  ]) {
+    const authority = document.createElement("input");
+    authority.type = "hidden";
+    authority.name = name;
+    authority.value = value;
+    moveForm.append(authority);
+  }
 
   // The hidden park form: ONE server transaction stashes the slot's
   // resurrection material under this ghost id, removes it, and compacts
   // the survivors. The id is minted at render so the form and the prefs
-  // entry agree.
+  // entry agree. Browser persistence is optimistic: the entry keeps this id
+  // through submission and removes the ghost again unless the redirect
+  // confirms that the daemon accepted the park.
   const ghostId = `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const parkForm = document.createElement("form");
   parkForm.className = "rd-ctrlverb-form";
@@ -642,6 +693,8 @@ function liveCardContent(
   for (const [name, value] of [
     ["number", card.number],
     ["ghost", ghostId],
+    ["expected_revision", io.draftRevision],
+    ["expected_target_revision", card.target_revision?.trim() ?? ""],
   ]) {
     const hidden = document.createElement("input");
     hidden.type = "hidden";
@@ -674,6 +727,9 @@ function liveCardContent(
         identity_key: controllerIdentity(card),
         family: card.family,
         art: card.art,
+        source: io.authoringSource,
+        source_revision:
+          io.addSource === io.authoringSource ? io.addSourceRevision : "",
       });
       return;
     }
@@ -683,7 +739,7 @@ function liveCardContent(
 
   const verbs = document.createElement("div");
   verbs.className = "rd-ctrlcard-verbs";
-  verbs.append(select, moveForm, parkForm, removeForm(card.number));
+  verbs.append(select, moveForm, parkForm, removeForm(card, io.draftRevision));
   body.dataset.family = card.family;
   const { art, swatches } = padBody(
     io,
@@ -746,6 +802,14 @@ function ghostCardContent(
     ["layout", io.addLayout],
     ["ghost", parked.id],
     ["position", ""],
+    ["source", parked.source?.trim() ?? ""],
+    ["expected_revision", io.draftRevision],
+    [
+      "expected_source_revision",
+      io.addSource === parked.source
+        ? io.addSourceRevision
+        : parked.source_revision?.trim() ?? "",
+    ],
   ]) {
     const hidden = document.createElement("input");
     hidden.type = "hidden";
@@ -776,6 +840,10 @@ function ghostCardContent(
   discard.dataset.ghost = parked.id;
   discard.textContent = "✕";
   discard.title = "Discard this parked controller. Nothing on the daemon changes.";
+  discard.setAttribute(
+    "aria-label",
+    parkedControllerDiscardAccessibleName(parkedDisplayName(parked), parked.preset),
+  );
 
   const verbs = document.createElement("div");
   verbs.className = "rd-ctrlcard-verbs";
@@ -917,7 +985,13 @@ export function syncControllerWidgets(
       const current = item.querySelector<HTMLElement>(".rd-ctrlcard");
       const pad = padBySlot.get(live.number);
       const storeKey = storeKeys.get(live.number) ?? `c:${controllerIdentity(live)}`;
-      const fingerprint = liveCardFingerprint(live, allNumbers, pad, storeKey);
+      const fingerprint = liveCardFingerprint(
+        live,
+        allNumbers,
+        pad,
+        storeKey,
+        io.draftRevision,
+      );
       if (current?.dataset.renderFingerprint !== fingerprint) {
         const focusSelector = current ? cardFocusSelector(current) : null;
         const replacement = dress(live);

@@ -422,7 +422,7 @@ fn slot_from_base(
             title: title.to_owned(),
             number,
         })?;
-    if source.keyboard.is_none() && source.mouse.is_none() {
+    if source.keyboard.is_none() && source.mouse.is_none() && source.sources.is_empty() {
         return Err(ProfileError::UnwiredBaseSlot {
             title: title.to_owned(),
             number,
@@ -433,7 +433,7 @@ fn slot_from_base(
     // would otherwise create a saved game that immediately refuses Play.
     base.slot_spec(source)
         .map_err(|err| device_error(title, number, err))?;
-    Ok(GameSlotEntry {
+    let mut slot = GameSlotEntry {
         number,
         user_index: None,
         keyboard: source.keyboard.clone(),
@@ -442,7 +442,28 @@ fn slot_from_base(
         persona: source.persona,
         socd: source.socd,
         macros: source.macros,
-    })
+        sources: source.sources.clone(),
+    };
+    set_slot_preset(&mut slot, preset);
+    Ok(slot)
+}
+
+fn slot_has_sources(slot: &GameSlotEntry) -> bool {
+    slot.keyboard.is_some() || slot.mouse.is_some() || !slot.sources.is_empty()
+}
+
+/// Apply the profile editor's intentionally shared mapping choice without
+/// collapsing a controller's independently identified source rows.
+fn set_slot_preset(slot: &mut GameSlotEntry, preset: &str) {
+    if slot.sources.is_empty() {
+        slot.preset = preset.to_owned();
+        return;
+    }
+
+    slot.preset.clear();
+    for source in &mut slot.sources {
+        source.preset = preset.to_owned();
+    }
 }
 
 fn profile_slot(profile: &GameEntry, number: u8) -> Result<Option<&GameSlotEntry>, ProfileError> {
@@ -526,14 +547,15 @@ pub fn plan_update(
                 let rebased = slot_from_base(base, title, number, &preset)?;
                 slot.keyboard = rebased.keyboard;
                 slot.mouse = rebased.mouse;
-            } else if slot.keyboard.is_none() && slot.mouse.is_none() {
+                slot.sources = rebased.sources;
+            } else if !slot_has_sources(&slot) {
                 return Err(ProfileError::UnwiredProfileSlot {
                     title: original.title.clone(),
                     number,
                 });
             }
             slot.number = number;
-            slot.preset = preset.clone();
+            set_slot_preset(&mut slot, &preset);
             base.game_slot_spec(&slot)
                 .map_err(|err| device_error(title, number, err))?;
             Ok(slot)
@@ -575,21 +597,23 @@ fn validate_program(entry: &GameEntry) -> Result<(), ProfileError> {
 fn validate_layouts(store: &Store, entry: &GameEntry) -> Result<(), ProfileError> {
     let mut checked = Vec::<&str>::new();
     for slot in &entry.slots {
-        if checked
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case(&slot.preset))
-        {
-            continue;
-        }
-        checked.push(&slot.preset);
-        let loaded = store.load_preset(&slot.preset)?;
-        let usable = loaded
-            .as_ref()
-            .is_some_and(|loaded| loaded.value.to_core().is_ok());
-        if !usable {
-            return Err(ProfileError::NoSuchPreset {
-                name: slot.preset.clone(),
-            });
+        let presets = std::iter::once(slot.preset.as_str())
+            .filter(|_| slot.sources.is_empty())
+            .chain(slot.sources.iter().map(|source| source.preset.as_str()));
+        for preset in presets {
+            if checked.iter().any(|name| name.eq_ignore_ascii_case(preset)) {
+                continue;
+            }
+            checked.push(preset);
+            let loaded = store.load_preset(preset)?;
+            let usable = loaded
+                .as_ref()
+                .is_some_and(|loaded| loaded.value.to_core().is_ok());
+            if !usable {
+                return Err(ProfileError::NoSuchPreset {
+                    name: preset.to_owned(),
+                });
+            }
         }
     }
     Ok(())
@@ -722,13 +746,10 @@ impl NewProfileOutcome {
     pub fn message(&self) -> String {
         let plan = &self.plan;
         format!(
-            "created saved game \"{}\" — {} player(s) using controller layout \"{}\"{}",
+            "created saved game \"{}\" — {} player(s) using {}{}",
             plan.entry.title,
             plan.entry.slots.len(),
-            plan.entry
-                .slots
-                .first()
-                .map_or("(none)", |s| s.preset.as_str()),
+            profile_layout_copy(&plan.entry),
             if self.backup.is_some() {
                 " (backup saved first)"
             } else {
@@ -747,7 +768,7 @@ impl UpdateProfileOutcome {
             );
         }
         format!(
-            "updated saved game \"{}\"{} — {} player(s) using controller layout \"{}\"{}",
+            "updated saved game \"{}\"{} — {} player(s) using {}{}",
             self.plan.original.title,
             if self.plan.original.title == self.plan.replacement.title {
                 String::new()
@@ -755,17 +776,54 @@ impl UpdateProfileOutcome {
                 format!(" → \"{}\"", self.plan.replacement.title)
             },
             self.plan.replacement.slots.len(),
-            self.plan
-                .replacement
-                .slots
-                .first()
-                .map_or("(none)", |slot| slot.preset.as_str()),
+            profile_layout_copy(&self.plan.replacement),
             if self.backup.is_some() {
                 " (backup saved first)"
             } else {
                 ""
             },
         )
+    }
+}
+
+/// Describe the layouts the saved source graph actually names. Canonical
+/// source rows deliberately leave `slot.preset` empty, so reading only that
+/// legacy field makes a successful many-source save announce an empty layout.
+fn profile_layout_copy(entry: &GameEntry) -> String {
+    let mut names = Vec::<&str>::new();
+    for slot in &entry.slots {
+        if slot.sources.is_empty() {
+            if !slot.preset.trim().is_empty()
+                && !names
+                    .iter()
+                    .any(|known| known.eq_ignore_ascii_case(&slot.preset))
+            {
+                names.push(&slot.preset);
+            }
+        } else {
+            for source in &slot.sources {
+                if !source.preset.trim().is_empty()
+                    && !names
+                        .iter()
+                        .any(|known| known.eq_ignore_ascii_case(&source.preset))
+                {
+                    names.push(&source.preset);
+                }
+            }
+        }
+    }
+
+    match names.as_slice() {
+        [] => "no controller layout".to_owned(),
+        [name] => format!("controller layout \"{name}\""),
+        names => format!(
+            "controller layouts {}",
+            names
+                .iter()
+                .map(|name| format!("\"{name}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -817,6 +875,7 @@ mod tests {
                 persona: ksx_core::Persona::PlayStation,
                 socd: ksx_core::Socd::UpPriority,
                 macros: ksx_core::MacroSwitch::Off,
+                sources: Vec::new(),
             },
             ksx_config::SlotEntry {
                 number: 2,
@@ -826,6 +885,7 @@ mod tests {
                 persona: Default::default(),
                 socd: Default::default(),
                 macros: Default::default(),
+                sources: Vec::new(),
             },
         ];
         base
@@ -1028,6 +1088,33 @@ mod tests {
     }
 
     #[test]
+    fn outcome_copy_names_distinct_canonical_source_layouts() {
+        let mut entry = playable_profile("Example Game");
+        entry.slots.truncate(1);
+        let slot = &mut entry.slots[0];
+        slot.keyboard = None;
+        slot.mouse = None;
+        slot.preset.clear();
+        slot.sources = vec![
+            ksx_config::SourceEntry::new(
+                r"HID\PANEL\LEFT",
+                ksx_core::SourceKind::Keyboard,
+                "Left map",
+            ),
+            ksx_config::SourceEntry::new(
+                r"HID\PANEL\RIGHT",
+                ksx_core::SourceKind::Keyboard,
+                "Right map",
+            ),
+        ];
+
+        assert_eq!(
+            profile_layout_copy(&entry),
+            "controller layouts \"Left map\", \"Right map\""
+        );
+    }
+
+    #[test]
     fn a_plan_inherits_the_working_setup_but_uses_the_selected_preset() {
         let base = base();
         let before = base.clone();
@@ -1072,6 +1159,91 @@ mod tests {
             crate::run::plan::build_plan(&runnable_config, &games, &[preset], Some("Example Game"))
                 .expect("a newly created profile must be immediately plannable");
         assert_eq!(runnable.slots.len(), 2);
+    }
+
+    #[test]
+    fn create_and_update_preserve_every_independent_source_on_one_controller() {
+        let mut base = base();
+        let first = &mut base.slots[0];
+        first.keyboard = None;
+        first.preset.clear();
+        first.sources = vec![
+            ksx_config::SourceEntry::new("P1 Panel", ksx_core::SourceKind::Keyboard, "Player 1"),
+            ksx_config::SourceEntry::new("P2 Panel", ksx_core::SourceKind::Keyboard, "Player 2"),
+        ];
+
+        let plan = super::plan_new(
+            &base,
+            &GamesFile::default(),
+            &presets(),
+            &spec("Example Game", "steam://rungameid/620"),
+        )
+        .unwrap();
+        let slot = &plan.entry.slots[0];
+        assert!(slot.keyboard.is_none());
+        assert!(slot.mouse.is_none());
+        assert!(slot.preset.is_empty());
+        assert_eq!(
+            slot.sources
+                .iter()
+                .map(|source| source.device.as_str())
+                .collect::<Vec<_>>(),
+            ["P1 Panel", "P2 Panel"]
+        );
+        assert!(slot.sources.iter().all(|source| source.preset == "Arcade"));
+
+        let resolved = base.game_slot_spec(slot).unwrap();
+        assert_eq!(resolved.sources.len(), 2);
+        assert_ne!(resolved.sources[0].device, resolved.sources[1].device);
+
+        let root = TempRoot::new("persist-canonical-sources");
+        let store = root.store(&base, &GamesFile::default());
+        store
+            .save_preset(&ksx_config::PresetFile {
+                name: "default".to_owned(),
+                bindings: Default::default(),
+                macros: Default::default(),
+            })
+            .unwrap();
+        let created = apply_new(&store, &plan).unwrap();
+        assert!(
+            created.message().contains("controller layout \"Arcade\""),
+            "{}",
+            created.message()
+        );
+        let games = store.load_games().unwrap().value;
+        assert_eq!(games.games[0].slots[0].sources.len(), 2);
+
+        let mut edit = update_spec(&games, "Example Game");
+        edit.preset = "default".to_owned();
+        let updated = super::plan_update(&base, &games, &presets(), &edit).unwrap();
+        let updated_slot = &updated.replacement.slots[0];
+        assert_eq!(
+            updated_slot
+                .sources
+                .iter()
+                .map(|source| source.device.as_str())
+                .collect::<Vec<_>>(),
+            ["P1 Panel", "P2 Panel"]
+        );
+        assert!(updated_slot
+            .sources
+            .iter()
+            .all(|source| source.preset == "default"));
+        let updated = apply_update(&store, &updated).unwrap();
+        assert!(
+            updated.message().contains("controller layout \"default\""),
+            "{}",
+            updated.message()
+        );
+        let saved = store.load_games().unwrap().value;
+        let saved_slot = &saved.games[0].slots[0];
+        assert!(saved_slot.preset.is_empty());
+        assert_eq!(saved_slot.sources.len(), 2);
+        assert!(saved_slot
+            .sources
+            .iter()
+            .all(|source| source.preset == "default"));
     }
 
     #[test]
@@ -1315,6 +1487,38 @@ mod tests {
             std::fs::read_dir(&root.0).unwrap().count(),
             files,
             "a refused layout creates no backup"
+        );
+    }
+
+    #[test]
+    fn validation_checks_every_canonical_source_layout() {
+        let root = TempRoot::new("canonical-source-layout");
+        let store = root.store(&base(), &GamesFile::default());
+        let mut entry = playable_profile("Example Game");
+        let slot = &mut entry.slots[0];
+        slot.keyboard = None;
+        slot.mouse = None;
+        slot.preset.clear();
+        slot.sources = vec![
+            ksx_config::SourceEntry::new(
+                r"HID\PANEL\ONE",
+                ksx_core::SourceKind::Keyboard,
+                "Arcade",
+            ),
+            ksx_config::SourceEntry::new(
+                r"HID\PANEL\TWO",
+                ksx_core::SourceKind::Keyboard,
+                "Missing source layout",
+            ),
+        ];
+
+        let err = validate_layouts(&store, &entry).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ProfileError::NoSuchPreset { ref name } if name == "Missing source layout"
+            ),
+            "{err}"
         );
     }
 

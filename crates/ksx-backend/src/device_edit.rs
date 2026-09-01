@@ -635,7 +635,7 @@ pub struct SlotRef {
     pub slot: u8,
     /// `None` = `config.toml`'s `[[slot]]` list; `Some` = a games.toml profile.
     pub profile: Option<String>,
-    /// `keyboard` or `mouse`.
+    /// `keyboard`, `mouse`, `keyboard source`, or `mouse source`.
     pub field: &'static str,
 }
 
@@ -786,24 +786,47 @@ pub fn plan_remove(
 /// (`docs/SURFACES.md` §1). [`crate::device_scan::view`] renders it per entry.
 pub fn references_to(config: &ConfigFile, games: &GamesFile, alias: &str) -> Vec<SlotRef> {
     let mut out = Vec::new();
-    let mut push =
-        |slot: u8, profile: Option<&str>, field: &'static str, value: &Option<String>| {
-            if value.as_deref() == Some(alias) {
-                out.push(SlotRef {
-                    slot,
-                    profile: profile.map(str::to_owned),
-                    field,
-                });
-            }
-        };
+    let mut push = |slot: u8, profile: Option<&str>, field: &'static str, value: Option<&str>| {
+        if value == Some(alias) {
+            out.push(SlotRef {
+                slot,
+                profile: profile.map(str::to_owned),
+                field,
+            });
+        }
+    };
     for slot in &config.slots {
-        push(slot.number, None, "keyboard", &slot.keyboard);
-        push(slot.number, None, "mouse", &slot.mouse);
+        push(slot.number, None, "keyboard", slot.keyboard.as_deref());
+        push(slot.number, None, "mouse", slot.mouse.as_deref());
+        for source in &slot.sources {
+            let field = match source.kind {
+                ksx_core::SourceKind::Keyboard => "keyboard source",
+                ksx_core::SourceKind::Mouse => "mouse source",
+            };
+            push(slot.number, None, field, Some(&source.device));
+        }
     }
     for game in &games.games {
         for slot in &game.slots {
-            push(slot.number, Some(&game.title), "keyboard", &slot.keyboard);
-            push(slot.number, Some(&game.title), "mouse", &slot.mouse);
+            push(
+                slot.number,
+                Some(&game.title),
+                "keyboard",
+                slot.keyboard.as_deref(),
+            );
+            push(
+                slot.number,
+                Some(&game.title),
+                "mouse",
+                slot.mouse.as_deref(),
+            );
+            for source in &slot.sources {
+                let field = match source.kind {
+                    ksx_core::SourceKind::Keyboard => "keyboard source",
+                    ksx_core::SourceKind::Mouse => "mouse source",
+                };
+                push(slot.number, Some(&game.title), field, Some(&source.device));
+            }
         }
     }
     out
@@ -1806,6 +1829,52 @@ mod tests {
             macros: Default::default(),
             sources: Vec::new(),
         }
+    }
+
+    #[test]
+    fn canonical_source_rows_count_as_device_references_in_both_files() {
+        let mut config = config_with(vec![entry(PANEL, "panel", Backend::Interception)]);
+        let mut config_slot = slot(1, None);
+        config_slot.preset.clear();
+        config_slot.sources = vec![ksx_config::SourceEntry::new(
+            "panel",
+            ksx_core::SourceKind::Keyboard,
+            "P1",
+        )];
+        config.slots = vec![config_slot];
+
+        let mut profile_slot = game_slot(2, "unused");
+        profile_slot.keyboard = None;
+        profile_slot.preset.clear();
+        profile_slot.sources = vec![ksx_config::SourceEntry::new(
+            "panel",
+            ksx_core::SourceKind::Mouse,
+            "P1",
+        )];
+        let games = games_with("MAME", vec![profile_slot]);
+
+        let references = references_to(&config, &games, "panel");
+        assert_eq!(references.len(), 2);
+        assert_eq!(references[0].field, "keyboard source");
+        assert_eq!(references[0].profile, None);
+        assert_eq!(references[1].field, "mouse source");
+        assert_eq!(references[1].profile.as_deref(), Some("MAME"));
+
+        let err = plan_remove(
+            &cabinet(),
+            &one_ipac(),
+            &config,
+            &games,
+            &RemoveSpec {
+                alias: "panel".to_owned(),
+                force: false,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "device-in-use");
+        let message = err.to_string();
+        assert!(message.contains("slot 1 (keyboard source)"), "{message}");
+        assert!(message.contains("slot 2 (mouse source)"), "{message}");
     }
 
     /// Deleting a device a slot still names leaves that slot pointing at

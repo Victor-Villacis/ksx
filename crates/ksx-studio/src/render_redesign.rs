@@ -162,7 +162,7 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
             staged
                 .devices
                 .iter()
-                .find(|device| device.selector.eq_ignore_ascii_case(selector))
+                .find(|device| ksx_api::device_selectors_equal(&device.selector, selector))
         })
         .or_else(|| {
             (!exact_source_requested)
@@ -173,7 +173,7 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
         devices
             .encoders
             .iter()
-            .any(|row| row.selector.eq_ignore_ascii_case(&device.selector))
+            .any(|row| ksx_api::device_selectors_equal(&row.selector, &device.selector))
     });
     let (capture_rows, capture_note) =
         crate::snapshot::compose_capture_rows(staged, encoder_staged);
@@ -320,9 +320,9 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
                 scan_boards
                     .iter()
                     .find(|b| {
-                        b.selector
-                            .as_deref()
-                            .is_some_and(|selector| selector.eq_ignore_ascii_case(source_selector))
+                        b.selector.as_deref().is_some_and(|selector| {
+                            ksx_api::device_selectors_equal(selector, source_selector)
+                        })
                     })
                     .map(|b| b.transport_label.as_str())
             });
@@ -1496,6 +1496,61 @@ mod tests {
             .iter()
             .find(|row| row.selector == selector)
             .is_some_and(|row| row.instance_id.is_empty()));
+    }
+
+    #[test]
+    fn selected_source_preserves_case_distinct_usb_serial_identity() {
+        let upper_selector = "usb:3434:0b10:00:sn=BoardA";
+        let lower_selector = "usb:3434:0b10:00:sn=boarda";
+        let upper = ksx_api::StagedDeviceView {
+            selector: upper_selector.into(),
+            alias: "upper".into(),
+            label: "Upper serial encoder".into(),
+            ..Default::default()
+        };
+        let lower = ksx_api::StagedDeviceView {
+            selector: lower_selector.into(),
+            alias: "lower".into(),
+            label: "Lower serial keyboard".into(),
+            ..Default::default()
+        };
+        let mut staged = fixture_staged(Vec::new());
+        staged.empty = false;
+        staged.device = Some(lower.clone());
+        staged.devices = vec![upper, lower];
+        let scan = ksx_api::DeviceScanView {
+            boards: vec![
+                ksx_api::BoardRow {
+                    name: "Upper serial encoder".into(),
+                    role: ksx_api::BoardRole::PanelEncoder,
+                    selector: Some(upper_selector.into()),
+                    transport_label: "Upper transport".into(),
+                    pickable: true,
+                    looks_like_a_keyboard: true,
+                    ..Default::default()
+                },
+                ksx_api::BoardRow {
+                    name: "Lower serial keyboard".into(),
+                    selector: Some(lower_selector.into()),
+                    transport_label: "Lower transport".into(),
+                    pickable: true,
+                    looks_like_a_keyboard: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let payload = selected_source_payload(&staged, scan, lower_selector);
+        assert_eq!(payload.controllers.add_source, lower_selector);
+        assert!(
+            payload.capture_note.is_empty(),
+            "the keyboard must not inherit its case-distinct twin's encoder policy copy"
+        );
+        assert_eq!(
+            payload.board.kb_title,
+            "Lower serial keyboard · Lower transport · Active input"
+        );
     }
 
     /// The key projection stays generic and stable while the selected

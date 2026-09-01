@@ -674,6 +674,41 @@ impl ControlSource for ScriptedControl {
             return ksx_api::StageOutcome::unavailable(NO_CHANNEL);
         }
         let mut setup = self.staged.lock().unwrap();
+        if let Some(expected_revision) = edit.guarded_draft_authority() {
+            if expected_revision.trim().is_empty()
+                || expected_revision.trim() != self.whole_stage_revision()
+            {
+                return ksx_api::StageOutcome::refused(
+                    &setup,
+                    &ksx_api::Refusal::new(
+                        ksx_api::codes::BAD_REQUEST,
+                        "stale whole-draft authority",
+                    ),
+                );
+            }
+        }
+        if let Some((number, expected_revision, expected_target_revision)) =
+            edit.guarded_slot_authority()
+        {
+            let mut view = ksx_api::StagedSetupView::of(&setup);
+            self.stamp_target_revisions(&mut view);
+            let exact = view.slots.iter().find(|slot| slot.number == number);
+            if expected_revision.trim().is_empty()
+                || expected_revision.trim() != view.revision
+                || expected_target_revision.trim().is_empty()
+                || !exact.is_some_and(|slot| {
+                    slot.target_revision.trim() == expected_target_revision.trim()
+                })
+            {
+                return ksx_api::StageOutcome::refused(
+                    &setup,
+                    &ksx_api::Refusal::new(
+                        ksx_api::codes::BAD_REQUEST,
+                        "stale controller structural authority",
+                    ),
+                );
+            }
+        }
         match edit.apply(&setup) {
             Ok(next) => {
                 *setup = next;
@@ -3062,6 +3097,71 @@ fn post_form(addr: SocketAddr, path: &str, body: &str) -> String {
     )
 }
 
+fn controller_structural_body(control: &ScriptedControl, number: u8, fields: &str) -> String {
+    let staged = control.staged();
+    let slot = staged
+        .slots
+        .iter()
+        .find(|slot| slot.number == number)
+        .expect("the exact controller authority exists");
+    let separator = if fields.is_empty() { "" } else { "&" };
+    format!(
+        "number={number}&expected_revision={}&expected_target_revision={}{}{}",
+        staged.revision, slot.target_revision, separator, fields
+    )
+}
+
+fn controller_assign_body(control: &ScriptedControl, fields: &str) -> String {
+    format!("{fields}&expected_revision={}", control.staged().revision)
+}
+
+fn device_remove_body(control: &ScriptedControl, selector: &str, confirmed: bool) -> String {
+    let staged = control.staged();
+    let device = staged
+        .devices
+        .iter()
+        .find(|device| ksx_api::device_selectors_equal(&device.selector, selector))
+        .expect("the exact staged device authority exists");
+    format!(
+        "selector={selector}&expected_revision={}&expected_source_revision={}{}",
+        staged.revision,
+        ksx_api::staged_device_revision(device),
+        if confirmed { "&confirm_remove=yes" } else { "" }
+    )
+}
+
+fn controller_source_body(
+    control: &ScriptedControl,
+    number: u8,
+    number_field: &str,
+    fields: &str,
+) -> String {
+    let staged = control.staged();
+    let slot = staged
+        .slots
+        .iter()
+        .find(|slot| slot.number == number)
+        .expect("the exact controller exists");
+    let selector = slot
+        .sources
+        .first()
+        .map(|source| source.selector.as_str())
+        .or_else(|| {
+            staged
+                .device
+                .as_ref()
+                .map(|device| device.selector.as_str())
+        })
+        .expect("the draft has an exact keyboard");
+    let source = ksx_api::staged_source_view(&staged, slot, selector)
+        .expect("the controller has exact source authority");
+    let separator = if fields.is_empty() { "" } else { "&" };
+    format!(
+        "{number_field}={number}&source={}&expected_target_revision={}{}{}",
+        source.selector, source.revision, separator, fields
+    )
+}
+
 /// **Prove the path in a guard loop actually ROUTES.**
 ///
 /// `guard::same_origin` is installed with `Router::layer`, not
@@ -4953,7 +5053,12 @@ fn the_redesign_controller_verbs_stage_reorder_and_remove() {
         "two adds stage two slots, in order"
     );
 
-    let response = post_form(addr, "/redesign/controller/move", "order=2+1");
+    let stale_remove = controller_structural_body(&control, 1, "");
+    let response = post_form(
+        addr,
+        "/redesign/controller/move",
+        &controller_structural_body(&control, 1, "order=2+1"),
+    );
     assert!(
         response.contains("flash=Draft%20updated."),
         "got: {response}"
@@ -4969,13 +5074,29 @@ fn the_redesign_controller_verbs_stage_reorder_and_remove() {
         "the whole-order reorder took, and the daemon renumbered"
     );
 
-    let response = post_form(addr, "/redesign/controller/move", "order=");
+    let stale = post_form(addr, "/redesign/controller/remove", &stale_remove);
+    assert!(stale.contains("flash=error"), "{stale}");
+    assert_eq!(
+        control.staged().slots.len(),
+        2,
+        "a form rendered before an external reorder cannot remove the replacement now occupying its slot"
+    );
+
+    let response = post_form(
+        addr,
+        "/redesign/controller/move",
+        &controller_structural_body(&control, 1, "order="),
+    );
     assert!(
         response.contains("flash=That%20controller%20is%20already"),
         "an empty order is the at-that-end sentence, never a write: {response}"
     );
 
-    let response = post_form(addr, "/redesign/controller/remove", "number=1");
+    let response = post_form(
+        addr,
+        "/redesign/controller/remove",
+        &controller_structural_body(&control, 1, ""),
+    );
     assert!(
         response.contains("flash=Draft%20updated."),
         "got: {response}"
@@ -4991,6 +5112,132 @@ fn the_redesign_controller_verbs_stage_reorder_and_remove() {
         "the removal closes the gap: the survivor moves UP to slot 1 — a \
          card's number IS its play position on the workbench"
     );
+}
+
+#[test]
+fn redesign_serial_case_twins_keep_remove_and_add_authority_exact() {
+    const UPPER: &str = "usb:3434:0b10:00:sn=BoardA";
+    const LOWER: &str = "usb:3434:0b10:00:sn=boarda";
+
+    let stage_twins = |addr| {
+        for (selector, alias) in [(UPPER, "upper"), (LOWER, "lower")] {
+            let response = post_form(
+                addr,
+                "/redesign/device",
+                &format!("selector={selector}&alias={alias}&label={alias}+keyboard"),
+            );
+            assert!(response.contains("flash=Keyboard%20selected"), "{response}");
+        }
+    };
+    let add_exact = |addr, control: &ScriptedControl, source: &str| {
+        let before = control.staged();
+        let device = before
+            .devices
+            .iter()
+            .find(|device| ksx_api::device_selectors_equal(&device.selector, source))
+            .expect("the exact serial-case twin is staged");
+        let body = format!(
+            "persona=xbox360&preset=Player+1&layout=keyboard-2p&source={source}&expected_revision={}&expected_source_revision={}",
+            before.revision,
+            ksx_api::staged_device_revision(device),
+        );
+        let response = post_form(addr, "/redesign/controller", &body);
+        assert!(response.contains("flash=Draft%20updated"), "{response}");
+    };
+
+    let remove_control = Arc::new(ScriptedControl::new(false));
+    let remove_addr = start_server(remove_control.clone());
+    stage_twins(remove_addr);
+    add_exact(remove_addr, &remove_control, UPPER);
+    let removed = post_form(
+        remove_addr,
+        "/redesign/device/remove",
+        &device_remove_body(&remove_control, LOWER, false),
+    );
+    assert!(removed.contains("Keyboard%20removed"), "{removed}");
+    let after_remove = remove_control.staged();
+    assert!(
+        after_remove
+            .devices
+            .iter()
+            .any(|device| ksx_api::device_selectors_equal(&device.selector, UPPER)),
+        "removing the unmapped lowercase serial twin must retain mapped BoardA"
+    );
+    assert!(
+        !after_remove
+            .devices
+            .iter()
+            .any(|device| ksx_api::device_selectors_equal(&device.selector, LOWER)),
+        "the exact lowercase serial twin is removed without borrowing BoardA's confirmation state"
+    );
+
+    let add_control = Arc::new(ScriptedControl::new(false));
+    let add_addr = start_server(add_control.clone());
+    stage_twins(add_addr);
+    add_exact(add_addr, &add_control, LOWER);
+    let added = add_control.staged();
+    assert_eq!(
+        added.slots[0]
+            .sources
+            .iter()
+            .map(|source| source.selector.as_str())
+            .collect::<Vec<_>>(),
+        vec![LOWER],
+        "Add Controller must validate and route the exact lowercase serial twin, not the first case-folded match"
+    );
+}
+
+#[test]
+fn redesign_device_remove_confirmation_is_bound_to_the_served_draft_and_device() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(control.clone());
+    let selected = post_form(
+        addr,
+        "/redesign/device",
+        "selector=usb%3Ad209%3A0430%3A00&alias=panel&label=Panel+keyboard",
+    );
+    assert!(selected.contains("Keyboard%20selected"), "{selected}");
+    let staged = control.staged();
+    let device = staged.devices.first().unwrap();
+    let added = post_form(
+        addr,
+        "/redesign/controller",
+        &format!(
+            "persona=xbox360&preset=Player+1&layout=keyboard-2p&source={}&expected_revision={}&expected_source_revision={}",
+            device.selector,
+            staged.revision,
+            ksx_api::staged_device_revision(device),
+        ),
+    );
+    assert!(added.contains("Draft%20updated"), "{added}");
+
+    let stale_confirmed = device_remove_body(&control, "usb:d209:0430:00", true);
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::SetBlocking {
+                blocking: "whole".into(),
+            })
+            .ok
+    );
+    let refused = post_form(addr, "/redesign/device/remove", &stale_confirmed);
+    assert!(refused.contains("flash=error"), "{refused}");
+    assert_eq!(control.staged().devices.len(), 1);
+    assert_eq!(control.staged().slots[0].sources.len(), 1);
+
+    let confirmation = post_form(
+        addr,
+        "/redesign/device/remove",
+        &device_remove_body(&control, "usb:d209:0430:00", false),
+    );
+    assert!(confirmation.contains("Confirm%20Remove"), "{confirmation}");
+    let removed = post_form(
+        addr,
+        "/redesign/device/remove",
+        &device_remove_body(&control, "usb:d209:0430:00", true),
+    );
+    assert!(removed.contains("Keyboard%20removed"), "{removed}");
+    assert!(control.staged().devices.is_empty());
+    assert!(control.staged().slots[0].sources.is_empty());
 }
 
 /// Park keeps the slot's resurrection material and re-slotting RESTORES it:
@@ -5013,7 +5260,11 @@ fn park_holds_the_bindings_and_assign_restores_them_without_aliasing() {
         "the layout bound something"
     );
 
-    let response = post_form(addr, "/redesign/controller/park", "number=1&ghost=g1");
+    let response = post_form(
+        addr,
+        "/redesign/controller/park",
+        &controller_structural_body(&control, 1, "ghost=g1"),
+    );
     assert!(
         response.contains("flash=Draft%20updated."),
         "got: {response}"
@@ -5023,7 +5274,10 @@ fn park_holds_the_bindings_and_assign_restores_them_without_aliasing() {
     let response = post_form(
         addr,
         "/redesign/controller/assign",
-        "ghost=g1&position=1&persona=xbox360&preset=Player+9&layout=",
+        &controller_assign_body(
+            &control,
+            "ghost=g1&position=1&persona=xbox360&preset=Player+9&layout=",
+        ),
     );
     assert!(
         response.contains("flash=Draft%20updated."),
@@ -5044,7 +5298,11 @@ fn park_holds_the_bindings_and_assign_restores_them_without_aliasing() {
     // The aliasing rule: park it again, let another slot take the name,
     // then re-slot — the restored preset is renamed to the served fresh
     // name, bindings intact.
-    post_form(addr, "/redesign/controller/park", "number=1&ghost=g2");
+    post_form(
+        addr,
+        "/redesign/controller/park",
+        &controller_structural_body(&control, 1, "ghost=g2"),
+    );
     post_form(
         addr,
         "/redesign/controller",
@@ -5053,7 +5311,10 @@ fn park_holds_the_bindings_and_assign_restores_them_without_aliasing() {
     let response = post_form(
         addr,
         "/redesign/controller/assign",
-        "ghost=g2&position=2&persona=xbox360&preset=Player+9&layout=",
+        &controller_assign_body(
+            &control,
+            "ghost=g2&position=2&persona=xbox360&preset=Player+9&layout=",
+        ),
     );
     assert!(
         response.contains("flash=Draft%20updated."),
@@ -5070,11 +5331,33 @@ fn park_holds_the_bindings_and_assign_restores_them_without_aliasing() {
     assert!(after.slots[1].bindings > 0, "renamed, not stripped");
 
     // A ghost the store no longer holds stages FRESH from the form's facts.
-    let response = post_form(
-        addr,
-        "/redesign/controller/assign",
-        "ghost=never-parked&position=1&persona=playstation&preset=Fresh+One&layout=keyboard-2p",
+    // Two staged keyboards prove restart fallback does not borrow the legacy
+    // compatibility/first device. The exact RIGHT selector is the only source
+    // admitted to the fresh controller.
+    for (selector, alias, label) in [
+        ("usb:1111:0001:00", "left", "Left keyboard"),
+        ("usb:2222:0002:00", "right", "Right keyboard"),
+    ] {
+        let response = post_form(
+            addr,
+            "/redesign/device",
+            &format!("selector={selector}&alias={alias}&label={label}"),
+        );
+        assert!(response.contains("flash=Keyboard%20selected"), "{response}");
+    }
+    let before_fallback = control.staged();
+    let right = before_fallback
+        .devices
+        .iter()
+        .find(|device| device.selector == "usb:2222:0002:00")
+        .expect("right staged keyboard");
+    let fallback_body = format!(
+        "ghost=never-parked&position=1&persona=playstation&preset=Fresh+One&layout=keyboard-2p&source={}&expected_revision={}&expected_source_revision={}",
+        right.selector,
+        before_fallback.revision,
+        ksx_api::staged_device_revision(right),
     );
+    let response = post_form(addr, "/redesign/controller/assign", &fallback_body);
     assert!(
         response.contains("flash=Draft%20updated."),
         "got: {response}"
@@ -5086,6 +5369,142 @@ fn park_holds_the_bindings_and_assign_restores_them_without_aliasing() {
         "fresh-staged at position 1"
     );
     assert!(fresh.slots[0].bindings > 0, "dressed by the posted layout");
+    assert_eq!(
+        fresh.slots[0]
+            .sources
+            .iter()
+            .map(|source| source.selector.as_str())
+            .collect::<Vec<_>>(),
+        vec!["usb:2222:0002:00"],
+        "restart fallback routes only the exact posted keyboard, never the first staged device"
+    );
+}
+
+#[test]
+fn parked_assign_is_atomic_stale_protected_and_retains_ghost_on_refusal() {
+    let control = Arc::new(ScriptedControl::new(false));
+    stage_redesign_device(&control, REDESIGN_LEFT_SOURCE, "left", "Left keyboard");
+    stage_redesign_device(&control, REDESIGN_RIGHT_SOURCE, "right", "Right keyboard");
+    let staged = control.staged();
+    let left = staged
+        .devices
+        .iter()
+        .find(|device| device.selector == REDESIGN_LEFT_SOURCE)
+        .unwrap();
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::AddSourceSlot {
+                number: None,
+                persona: "xbox360".into(),
+                preset: "Left P1".into(),
+                layout: Some("keyboard-2p".into()),
+                source: REDESIGN_LEFT_SOURCE.into(),
+                expected_revision: staged.revision,
+                expected_source_revision: ksx_api::staged_device_revision(left),
+            })
+            .ok
+    );
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::SetSourceLayout {
+                number: 1,
+                selector: REDESIGN_RIGHT_SOURCE.into(),
+                preset: "Right P1".into(),
+                layout: "keyboard-2p".into(),
+                player: Some(1),
+            })
+            .ok
+    );
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::SetSocd {
+                number: 1,
+                socd: "last-input".into(),
+            })
+            .ok
+    );
+    let addr = start_server(control.clone());
+
+    let parked = post_form(
+        addr,
+        "/redesign/controller/park",
+        &controller_structural_body(&control, 1, "ghost=atomic-pad"),
+    );
+    assert!(parked.contains("Draft%20updated"), "{parked}");
+    let stale_assign = controller_assign_body(
+        &control,
+        "ghost=atomic-pad&position=1&persona=xbox360&preset=ignored&layout=",
+    );
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::SetBlocking {
+                blocking: "whole".into(),
+            })
+            .ok
+    );
+    let stale = post_form(addr, "/redesign/controller/assign", &stale_assign);
+    assert!(stale.contains("flash=error"), "{stale}");
+    assert!(control.staged().slots.is_empty());
+
+    let retried = post_form(
+        addr,
+        "/redesign/controller/assign",
+        &controller_assign_body(
+            &control,
+            "ghost=atomic-pad&position=1&persona=xbox360&preset=ignored&layout=",
+        ),
+    );
+    assert!(retried.contains("Draft%20updated"), "{retried}");
+    let restored = control.staged();
+    assert_eq!(restored.slots[0].sources.len(), 2);
+    assert_eq!(restored.slots[0].socd, "last-input");
+
+    let parked_again = post_form(
+        addr,
+        "/redesign/controller/park",
+        &controller_structural_body(&control, 1, "ghost=atomic-pad-2"),
+    );
+    assert!(parked_again.contains("Draft%20updated"), "{parked_again}");
+    let removed_source = post_form(
+        addr,
+        "/redesign/device/remove",
+        &device_remove_body(&control, REDESIGN_RIGHT_SOURCE, false),
+    );
+    assert!(
+        removed_source.contains("Keyboard%20removed"),
+        "{removed_source}"
+    );
+
+    let refused = post_form(
+        addr,
+        "/redesign/controller/assign",
+        &controller_assign_body(
+            &control,
+            "ghost=atomic-pad-2&position=1&persona=xbox360&preset=ignored&layout=",
+        ),
+    );
+    assert!(refused.contains("flash=error"), "{refused}");
+    assert!(
+        control.staged().slots.is_empty(),
+        "a missing second source must not leave a half-restored controller"
+    );
+
+    let readded = post_form(
+        addr,
+        "/redesign/device",
+        &format!("selector={REDESIGN_RIGHT_SOURCE}&alias=right&label=Right+keyboard"),
+    );
+    assert!(readded.contains("Keyboard%20selected"), "{readded}");
+    let recovered = post_form(
+        addr,
+        "/redesign/controller/assign",
+        &controller_assign_body(
+            &control,
+            "ghost=atomic-pad-2&position=1&persona=xbox360&preset=ignored&layout=",
+        ),
+    );
+    assert!(recovered.contains("Draft%20updated"), "{recovered}");
+    assert_eq!(control.staged().slots[0].sources.len(), 2);
 }
 
 /// The inspector's re-homed controller verbs edit the selected slot end to
@@ -5099,9 +5518,19 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
     let addr = start_server(control.clone());
     let response = post_form(
         addr,
-        "/redesign/controller",
-        "persona=xbox360&preset=Player+1&layout=keyboard-2p",
+        "/redesign/device",
+        "selector=usb:d209:0430:00&alias=panel&label=Panel+keyboard",
     );
+    assert!(response.contains("flash=Keyboard%20selected"), "{response}");
+    let staged = control.staged();
+    let device = staged.devices.first().expect("the staged keyboard");
+    let add_body = format!(
+        "persona=xbox360&preset=Player+1&layout=keyboard-2p&source={}&expected_revision={}&expected_source_revision={}",
+        device.selector,
+        staged.revision,
+        ksx_api::staged_device_revision(device),
+    );
+    let response = post_form(addr, "/redesign/controller", &add_body);
     assert!(response.contains("flash=Draft%20updated."), "{response}");
 
     // The layout bound real controls — pick one from the staged mapper, the
@@ -5121,7 +5550,12 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
     let response = post_form(
         addr,
         "/redesign/bind/toggle",
-        &format!("slot=1&function={function}&mode=toggle"),
+        &controller_source_body(
+            &control,
+            1,
+            "slot",
+            &format!("function={function}&mode=toggle"),
+        ),
     );
     assert!(
         response.contains("/redesign?flash=Press%20behaviour%20updated."),
@@ -5138,13 +5572,23 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
     let response = post_form(
         addr,
         "/redesign/bind/turbo",
-        &format!("slot=1&function={function}&turbo_hz=12"),
+        &controller_source_body(
+            &control,
+            1,
+            "slot",
+            &format!("function={function}&turbo_hz=12"),
+        ),
     );
     assert!(response.contains("flash=Auto-fire%20updated"), "{response}");
     let response = post_form(
         addr,
         "/redesign/bind/turbo",
-        &format!("slot=1&function={function}&turbo_hz="),
+        &controller_source_body(
+            &control,
+            1,
+            "slot",
+            &format!("function={function}&turbo_hz="),
+        ),
     );
     assert!(
         response.contains("flash=error%3A%20Type%20a%20number"),
@@ -5155,14 +5599,18 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
     let response = post_form(
         addr,
         "/redesign/controller/socd",
-        "number=1&socd=last-input",
+        &controller_structural_body(&control, 1, "socd=last-input"),
     );
     assert!(response.contains("flash=Draft%20updated."), "{response}");
     assert_eq!(control.staged().slots[0].socd, "last-input");
 
     // Duplicate: same persona and rules in the next free slot, its OWN
     // preset name (one preset file per name — the aliasing rule).
-    let response = post_form(addr, "/redesign/controller/duplicate", "number=1");
+    let response = post_form(
+        addr,
+        "/redesign/controller/duplicate",
+        &controller_structural_body(&control, 1, ""),
+    );
     assert!(
         response.contains("flash=Controller%20duplicated"),
         "{response}"
@@ -5178,7 +5626,7 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
     let response = post_form(
         addr,
         "/redesign/bind/clear",
-        &format!("slot=1&function={function}"),
+        &controller_source_body(&control, 1, "slot", &format!("function={function}")),
     );
     assert!(response.contains("flash=Draft%20updated."), "{response}");
     let cleared = ksx_api::staged_mapper_slot(&control.staged().slots[0], "(none)")
@@ -5190,18 +5638,33 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
         .unwrap_or_default();
     assert!(cleared.is_empty(), "{function} is unbound, got {cleared:?}");
 
-    // Unbind-all empties the whole slot in one write.
-    let response = post_form(addr, "/redesign/bind/clear-all", "number=1");
+    // Unbind-all removes this exact source route in one write. The slot's
+    // compatibility authoring snapshot may remain for old readers, but it is
+    // inert: no physical source can drive it and it cannot be saved or played.
+    let response = post_form(
+        addr,
+        "/redesign/bind/clear-all",
+        &controller_source_body(&control, 1, "number", ""),
+    );
     assert!(
         response.contains("flash=Every%20key%20unbound"),
         "{response}"
     );
-    assert_eq!(control.staged().slots[0].bindings, 0);
+    let cleared_stage = control.staged();
+    assert!(
+        cleared_stage.slots[0].sources.is_empty(),
+        "{cleared_stage:#?}"
+    );
+    assert!(!cleared_stage.ready, "a source-less controller cannot run");
 
     // ✕ remove offers the server-held undo; the payload serves the chip and
     // the restore brings the duplicate's bindings back (appended at the next
     // free number — the compacted workbench re-occupied its old one).
-    let response = post_form(addr, "/redesign/controller/remove", "number=2");
+    let response = post_form(
+        addr,
+        "/redesign/controller/remove",
+        &controller_structural_body(&control, 2, ""),
+    );
     assert!(response.contains("flash=Draft%20updated."), "{response}");
     let api: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("payload");
@@ -5241,7 +5704,7 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
     let response = post_form(
         addr,
         "/redesign/key/clear",
-        &format!("number={}&key={victim}", slot2.number),
+        &controller_source_body(&control, slot2.number, "number", &format!("key={victim}")),
     );
     assert!(
         response.contains("flash=That%20key%20is%20free%20again"),
@@ -5260,7 +5723,7 @@ fn the_inspector_verbs_edit_the_selected_slot_end_to_end() {
     let response = post_form(
         addr,
         "/redesign/key/clear",
-        &format!("number={}&key={victim}", slot2.number),
+        &controller_source_body(&control, slot2.number, "number", &format!("key={victim}")),
     );
     assert!(
         response.contains("flash=error%3A%20That%20key%20was%20not%20driving%20anything"),
@@ -5934,7 +6397,11 @@ fn redesign_controller_resurrection_preserves_all_source_routes_and_macros() {
     let original = source_content(&control.staged().slots[0]);
     assert_eq!(original.len(), 2);
 
-    let duplicated = post_form(addr, "/redesign/controller/duplicate", "number=1");
+    let duplicated = post_form(
+        addr,
+        "/redesign/controller/duplicate",
+        &controller_structural_body(&control, 1, ""),
+    );
     assert!(
         duplicated.contains("Controller%20duplicated"),
         "{duplicated}"
@@ -5948,7 +6415,11 @@ fn redesign_controller_resurrection_preserves_all_source_routes_and_macros() {
     );
 
     let removed_snapshot = source_content(&after_duplicate.slots[1]);
-    let removed = post_form(addr, "/redesign/controller/remove", "number=2");
+    let removed = post_form(
+        addr,
+        "/redesign/controller/remove",
+        &controller_structural_body(&control, 2, ""),
+    );
     assert!(removed.contains("Draft%20updated"), "{removed}");
     let undone = post_form(addr, "/redesign/controller/undo", "");
     assert!(undone.contains("Controller%20restored"), "{undone}");
@@ -5960,14 +6431,17 @@ fn redesign_controller_resurrection_preserves_all_source_routes_and_macros() {
     let parked = post_form(
         addr,
         "/redesign/controller/park",
-        "number=2&ghost=two-source-pad",
+        &controller_structural_body(&control, 2, "ghost=two-source-pad"),
     );
     assert!(parked.contains("Draft%20updated"), "{parked}");
     assert_eq!(control.staged().slots.len(), 1);
     let assigned = post_form(
         addr,
         "/redesign/controller/assign",
-        "ghost=two-source-pad&position=2&persona=xbox360&preset=ignored&layout=",
+        &controller_assign_body(
+            &control,
+            "ghost=two-source-pad&position=2&persona=xbox360&preset=ignored&layout=",
+        ),
     );
     assert!(assigned.contains("Draft%20updated"), "{assigned}");
     let after_assign = control.staged();
@@ -5977,7 +6451,7 @@ fn redesign_controller_resurrection_preserves_all_source_routes_and_macros() {
     let confirmation = post_form(
         addr,
         "/redesign/device/remove",
-        "selector=usb%3A046d%3Ac545%3A00",
+        &device_remove_body(&control, REDESIGN_RIGHT_SOURCE, false),
     );
     assert!(
         confirmation.contains("Confirm%20Remove"),
@@ -5991,7 +6465,7 @@ fn redesign_controller_resurrection_preserves_all_source_routes_and_macros() {
     let removed = post_form(
         addr,
         "/redesign/device/remove",
-        "selector=usb%3A046d%3Ac545%3A00&confirm_remove=yes",
+        &device_remove_body(&control, REDESIGN_RIGHT_SOURCE, true),
     );
     assert!(removed.contains("Keyboard%20removed"), "{removed}");
     let after_remove = control.staged();
@@ -6054,7 +6528,11 @@ fn redesign_resurrection_keeps_a_non_primary_only_route_exact() {
     );
     let addr = start_server(control.clone());
 
-    let duplicated = post_form(addr, "/redesign/controller/duplicate", "number=1");
+    let duplicated = post_form(
+        addr,
+        "/redesign/controller/duplicate",
+        &controller_structural_body(&control, 1, ""),
+    );
     assert!(
         duplicated.contains("Controller%20duplicated"),
         "{duplicated}"
@@ -6063,7 +6541,11 @@ fn redesign_resurrection_keeps_a_non_primary_only_route_exact() {
     assert_eq!(after_duplicate.slots.len(), 2);
     assert_eq!(source_content(&after_duplicate.slots[1]), original);
 
-    let removed = post_form(addr, "/redesign/controller/remove", "number=2");
+    let removed = post_form(
+        addr,
+        "/redesign/controller/remove",
+        &controller_structural_body(&control, 2, ""),
+    );
     assert!(removed.contains("Draft%20updated"), "{removed}");
     let undone = post_form(addr, "/redesign/controller/undo", "");
     assert!(undone.contains("Controller%20restored"), "{undone}");
@@ -6074,13 +6556,16 @@ fn redesign_resurrection_keeps_a_non_primary_only_route_exact() {
     let parked = post_form(
         addr,
         "/redesign/controller/park",
-        "number=2&ghost=right-only-pad",
+        &controller_structural_body(&control, 2, "ghost=right-only-pad"),
     );
     assert!(parked.contains("Draft%20updated"), "{parked}");
     let assigned = post_form(
         addr,
         "/redesign/controller/assign",
-        "ghost=right-only-pad&position=2&persona=xbox360&preset=ignored&layout=",
+        &controller_assign_body(
+            &control,
+            "ghost=right-only-pad&position=2&persona=xbox360&preset=ignored&layout=",
+        ),
     );
     assert!(assigned.contains("Draft%20updated"), "{assigned}");
     let after_assign = control.staged();

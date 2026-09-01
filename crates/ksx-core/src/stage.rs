@@ -828,6 +828,104 @@ impl StagedSetup {
         Ok(next)
     }
 
+    /// Duplicate one staged controller as one immutable stage operation.
+    ///
+    /// Every source-qualified route is cloned, but every cloned preset gets a
+    /// fresh name. One preset name is one saved file, so retaining the source
+    /// names here would make later edits to either controller alias the same
+    /// file. Building the complete result before returning also keeps the
+    /// usual stage guarantee: a failed duplicate changes nothing.
+    pub fn duplicate_slot(&self, number: u8) -> Result<Self, StageRefusal> {
+        check_slot_number(number)?;
+        let source = self
+            .slot(number)
+            .cloned()
+            .ok_or(StageRefusal::NoSuchSlot { number })?;
+        let new_number = self.next_free_slot().ok_or(StageRefusal::NoFreeSlot)?;
+
+        let mut used: std::collections::BTreeSet<String> = self
+            .slots
+            .iter()
+            .flat_map(|slot| {
+                if slot.routes.is_empty() {
+                    vec![slot.preset.name.to_ascii_lowercase()]
+                } else {
+                    slot.routes
+                        .iter()
+                        .map(|route| route.preset.name.to_ascii_lowercase())
+                        .collect()
+                }
+            })
+            .collect();
+        let primary_name = (1..=MAX_SLOTS)
+            .map(|slot| format!("Player {slot}"))
+            .find(|candidate| !used.contains(&candidate.to_ascii_lowercase()))
+            .unwrap_or_else(|| format!("Player {new_number}"));
+        let mut fresh_name = |base: &str| {
+            let base = if base.trim().is_empty() {
+                "Controller".to_owned()
+            } else {
+                base.trim().to_owned()
+            };
+            if used.insert(base.to_ascii_lowercase()) {
+                return base;
+            }
+            (2_u32..)
+                .map(|suffix| format!("{base} {suffix}"))
+                .find(|candidate| used.insert(candidate.to_ascii_lowercase()))
+                .expect("the unbounded suffix sequence contains a free preset name")
+        };
+        let mut primary = source.preset.clone();
+        primary.name = fresh_name(&primary_name);
+        let primary_name = primary.name.clone();
+        let mut next = self.add_slot(new_number, source.persona, primary)?;
+
+        if !source.routes.is_empty() {
+            let desired: Vec<DeviceSelector> = source
+                .routes
+                .iter()
+                .map(|route| route.selector.clone())
+                .collect();
+            for (index, route) in source.routes.iter().enumerate() {
+                let mut preset = route.preset.clone();
+                let desired_name = if index == 0 {
+                    primary_name.clone()
+                } else {
+                    let identity = self
+                        .devices
+                        .iter()
+                        .find(|device| device.selector == route.selector)
+                        .map(|device| {
+                            [device.alias.trim(), device.label.trim()]
+                                .into_iter()
+                                .find(|value| !value.is_empty())
+                                .unwrap_or("keyboard")
+                        })
+                        .unwrap_or("keyboard");
+                    format!("{primary_name} - {identity}")
+                };
+                preset.name = if index == 0 {
+                    primary_name.clone()
+                } else {
+                    fresh_name(&desired_name)
+                };
+                next = next.set_source_bindings(new_number, &route.selector, preset)?;
+            }
+            let extras: Vec<DeviceSelector> = next
+                .slot(new_number)
+                .expect("the duplicate was inserted")
+                .routes
+                .iter()
+                .filter(|route| !desired.contains(&route.selector))
+                .map(|route| route.selector.clone())
+                .collect();
+            for selector in extras {
+                next = next.remove_source_bindings(new_number, &selector)?;
+            }
+        }
+        next.set_socd(new_number, source.socd)
+    }
+
     /// Set what a staged slot does with simultaneous opposing directions —
     /// the same choice `ksx slot assign --socd` writes onto a saved slot,
     /// made while the setup is still free to change.

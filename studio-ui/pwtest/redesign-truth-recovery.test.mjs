@@ -417,7 +417,10 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
         await route.abort().catch(() => {});
       }
     };
-    await page.route("**/api/redesign?slot=1", handler);
+    // Source authoring focus is URL-backed and may be merged after the first
+    // payload (`?slot=1&source=…`). Intercept the endpoint independent of
+    // query ordering so every background refresh exercises stale recovery.
+    await page.route("**/api/redesign*", handler);
     try {
       const health = page.locator("[data-rd-health-alert]");
       await health.waitFor({ state: "visible", timeout: 8_000 });

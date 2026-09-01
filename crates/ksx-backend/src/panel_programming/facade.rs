@@ -2504,7 +2504,7 @@ pub fn routing_guard(
                 "read the complete encoder chart, then teach or assign the key again",
             )
         })?;
-    if !expected_selector.eq_ignore_ascii_case(spec.device.trim()) {
+    if !ksx_api::device_selectors_equal(expected_selector, spec.device.trim()) {
         return Err(bad_request(
             "the encoder selected by the browser is no longer the staged input; nothing was mapped",
             "refresh the canvas, read the selected encoder's complete chart, then try again",
@@ -3435,6 +3435,23 @@ mod tests {
 
     fn test_profile() -> &'static PanelProtocolProfile {
         profile_for(0xD209, 0x0430, IPAC4_BCD_DEVICE).expect("measured I-PAC 4 profile")
+    }
+
+    #[test]
+    fn routing_authority_does_not_fold_usb_serial_identity() {
+        let result = routing_guard(&PanelRoutingAuthoritySpec {
+            device: "usb:3434:0b10:00:sn=boarda".into(),
+            expected_selector: Some("usb:3434:0b10:00:sn=BoardA".into()),
+            ..Default::default()
+        });
+        let refusal = match result {
+            Ok(_) => panic!("case-distinct serials must not share routing authority"),
+            Err(refusal) => refusal,
+        };
+        assert!(
+            refusal.message.contains("no longer the staged input"),
+            "{refusal:?}"
+        );
     }
 
     #[cfg(windows)]

@@ -497,7 +497,7 @@ mod windows_observer {
                     board
                         .selector
                         .as_deref()
-                        .is_some_and(|served| served.eq_ignore_ascii_case(selector))
+                        .is_some_and(|served| ksx_api::device_selectors_equal(served, selector))
                 })
                 .collect();
             let [board] = matched.as_slice() else {
@@ -960,6 +960,23 @@ mod windows_observer {
                 board(Some("usb:d209:0430:00"), Some("USB\\IPAC\\TWO"), true),
             ];
             assert!(Target::from_boards(&ambiguous, "usb:d209:0430:00").is_err());
+
+            let serial_twins = vec![
+                board(
+                    Some("usb:3434:0b10:00:sn=BoardA"),
+                    Some("USB\\TWIN\\UPPER"),
+                    true,
+                ),
+                board(
+                    Some("usb:3434:0b10:00:sn=boarda"),
+                    Some("USB\\TWIN\\LOWER"),
+                    true,
+                ),
+            ];
+            let lower = Target::from_boards(&serial_twins, "USB:3434:0B10:00:SN=boarda").unwrap();
+            assert_eq!(lower.keyboard.as_str(), "USB\\TWIN\\LOWER");
+            let upper = Target::from_boards(&serial_twins, "usb:3434:0b10:00:sn=BoardA").unwrap();
+            assert_eq!(upper.keyboard.as_str(), "USB\\TWIN\\UPPER");
         }
 
         #[test]

@@ -263,7 +263,7 @@ function sourceBoard(pin: SourceAuthorityPin | null): HTMLElement | null {
   const root = host?.root();
   if (!root || !pin?.expectedDevice) return null;
   return Array.from(root.querySelectorAll<HTMLElement>("[data-source-id]")).find((candidate) =>
-    sameIdentity(candidate.dataset.sourceId, pin.expectedDevice)
+    sameSelector(candidate.dataset.sourceId, pin.expectedDevice)
   ) ?? null;
 }
 
@@ -361,7 +361,7 @@ function sourceRevisionSignature(pin: SourceAuthorityPin | null): string {
   return pads
     .map((pad) => {
       const source = pad.sources?.find((candidate) =>
-        sameIdentity(sourceId(candidate), pin.expectedDevice)
+        sameSelector(sourceId(candidate), pin.expectedDevice)
       );
       return `${pad.slot}:${source?.revision.trim() ?? "missing"}:${source?.routed === false ? "new" : "routed"}`;
     })
@@ -384,7 +384,7 @@ function targetAuthority(
   if (!pad) return null;
   if (pad.sources !== undefined) {
     const source = pad.sources.find((candidate) =>
-      sameIdentity(sourceId(candidate), expectedDevice)
+      sameSelector(sourceId(candidate), expectedDevice)
     );
     const revision = source?.revision.trim() ?? "";
     const canonicalDevice = source ? sourceId(source) : "";
@@ -411,14 +411,14 @@ export function mapperPinTarget(
   if (
     followsAuthoringFocus &&
     row.expectedDevice?.trim() &&
-    !sameIdentity(row.expectedDevice, focusPin.expectedDevice)
+    !sameSelector(row.expectedDevice, focusPin.expectedDevice)
   ) {
     return null;
   }
   if (
     followsAuthoringFocus &&
     row.expectedInstance?.trim() &&
-    !sameIdentity(row.expectedInstance, focusPin.expectedInstance)
+    !sameInstance(row.expectedInstance, focusPin.expectedInstance)
   ) {
     return null;
   }
@@ -434,7 +434,7 @@ export function mapperPinTarget(
     return null;
   }
   const expectedInstance = row.expectedInstance?.trim() ||
-    (sameIdentity(authority.canonicalDevice, focusPin.expectedDevice)
+    (sameSelector(authority.canonicalDevice, focusPin.expectedDevice)
       ? focusPin.expectedInstance
       : "");
   return {
@@ -456,17 +456,42 @@ function pinTarget(row: MapperTarget): MapperTarget | null {
   );
 }
 
-function sameIdentity(left: string | undefined, right: string): boolean {
+function selectorIdentity(raw: string | undefined): string | null {
+  const value = (raw ?? "").trim();
+  if (!value) return null;
+  const usb = /^usb:([0-9a-f]{4}):([0-9a-f]{4}):([0-9a-f]{2})(?::(sn|port)=(.+))?$/i.exec(value);
+  if (usb) {
+    const base = `usb:${usb[1].toLowerCase()}:${usb[2].toLowerCase()}:${usb[3].toLowerCase()}`;
+    const qualifier = usb[4]?.toLowerCase();
+    if (!qualifier) return base;
+    // Firmware serial bytes are exact identity; Windows instance tails are
+    // case-insensitive. This mirrors DeviceSelector::parse on the server.
+    const identity = qualifier === "sn" ? usb[5] : usb[5].toUpperCase();
+    return `${base}:${qualifier}=${identity}`;
+  }
+  // Legacy instance/hardware paths are Windows identifiers and canonicalize
+  // case-insensitively. Unknown selector spellings fail closed as exact text.
+  return value.includes("\\") ? value.toUpperCase() : value;
+}
+
+function sameSelector(left: string | undefined, right: string): boolean {
+  const a = selectorIdentity(left);
+  const b = selectorIdentity(right);
+  return a !== null && b !== null && a === b;
+}
+
+function sameInstance(left: string | undefined, right: string): boolean {
   const a = (left ?? "").trim();
-  return a !== "" && a.toLowerCase() === right.trim().toLowerCase();
+  const b = right.trim();
+  return a !== "" && b !== "" && a.toLowerCase() === b.toLowerCase();
 }
 
 export function mapperSourceMatchesTarget(
   row: MapperTarget,
   source: MapperSourcePin,
 ): boolean {
-  if (sameIdentity(row.expectedDevice, source.selector)) return true;
-  if (sameIdentity(row.expectedInstance, source.instance)) return true;
+  if (sameSelector(row.expectedDevice, source.selector)) return true;
+  if (sameInstance(row.expectedInstance, source.instance)) return true;
   return false;
 }
 
@@ -482,8 +507,8 @@ function sourceAuthorityCurrent(row: MapperTarget): boolean {
   if (row.followsAuthoringFocus !== true) return true;
   const now = captureSourcePin();
   return (
-    sameIdentity(row.expectedDevice, now.expectedDevice) &&
-    sameIdentity(row.expectedInstance, now.expectedInstance)
+    sameSelector(row.expectedDevice, now.expectedDevice) &&
+    sameInstance(row.expectedInstance, now.expectedInstance)
   );
 }
 
@@ -493,8 +518,8 @@ function sourcePinAuthorityCurrent(
   if (!pin) return false;
   if (!pin.followsAuthoringFocus) return pin.expectedDevice !== "";
   const now = captureSourcePin();
-  return sameIdentity(pin.expectedDevice, now.expectedDevice) &&
-    sameIdentity(pin.expectedInstance, now.expectedInstance);
+  return sameSelector(pin.expectedDevice, now.expectedDevice) &&
+    sameInstance(pin.expectedInstance, now.expectedInstance);
 }
 
 function targetAuthorityCurrent(row: MapperTarget): boolean {
@@ -544,7 +569,7 @@ export function mapperTargetAdvanced(
   if (!pad) return false;
   if (pad.sources !== undefined) {
     const source = pad.sources.find((candidate) =>
-      sameIdentity(sourceId(candidate), row.expectedDevice?.trim() ?? "")
+      sameSelector(sourceId(candidate), row.expectedDevice?.trim() ?? "")
     );
     if (!source) return false;
     if (

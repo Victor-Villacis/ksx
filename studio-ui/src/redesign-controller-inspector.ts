@@ -53,6 +53,8 @@ export interface RdPanelView {
   source_revision?: string;
   /** Preset owned by that exact route. */
   source_preset?: string;
+  /** Opaque authority for the exact selected controller card. */
+  target_revision?: string;
   slot_val: string;
   pad_badge: string;
   pad_badge_cls: string;
@@ -666,6 +668,7 @@ export function renderControllerPanel(
   mac: RdMacroSection,
   tab: InspectorTab,
   onTab: (next: InspectorTab) => void,
+  draftRevision = "",
 ): HTMLElement[] {
   const rows: HTMLElement[] = [];
   const keyLabels = keyLabelMap(keys);
@@ -690,7 +693,12 @@ export function renderControllerPanel(
   const socdSelectId = `rd-socd-${panel.socd_num || "selected"}`;
   const socdLabel = el("label", "n-socd-lab", panel.socd_lab);
   socdLabel.htmlFor = socdSelectId;
-  socd.append(socdLabel, hidden("number", panel.socd_num));
+  socd.append(
+    socdLabel,
+    hidden("number", panel.socd_num),
+    hidden("expected_revision", draftRevision),
+    hidden("expected_target_revision", panel.target_revision?.trim() ?? ""),
+  );
   const select = document.createElement("select");
   select.id = socdSelectId;
   select.className = "n-socd-sel";
@@ -711,10 +719,16 @@ export function renderControllerPanel(
   const verbs = el("div", "rd-insp-row rd-insp-ctrlverbs");
   const dup = inlineForm("/redesign/controller/duplicate", "controller-duplicate", [
     ["number", panel.slot_val],
+    ["expected_revision", draftRevision],
+    ["expected_target_revision", panel.target_revision?.trim() ?? ""],
   ]);
   const dupBtn = el("button", "n-autobtn", "");
   dupBtn.type = "submit";
   dupBtn.title = "Duplicate — same layout, same rules, next free slot";
+  dupBtn.setAttribute(
+    "aria-label",
+    `Duplicate Player ${panel.slot_val || "selected"} controller`,
+  );
   dupBtn.append(svgIcon(ICON_COPY), document.createTextNode(" Duplicate"));
   dup.append(dupBtn);
   const clearAll = inlineForm("/redesign/bind/clear-all", "bind-clear-all", [

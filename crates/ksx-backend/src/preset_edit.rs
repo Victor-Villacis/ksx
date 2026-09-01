@@ -276,6 +276,50 @@ mod tests {
         assert!(!out.backups.is_empty(), "the rewrite took a backup first");
     }
 
+    #[test]
+    fn renaming_a_preset_rewrites_canonical_source_rows() {
+        let root = TempRoot::new("rename-canonical-sources");
+        let store = root.store();
+
+        let mut config = store.load_config().unwrap().value;
+        config.slots[0].preset.clear();
+        config.slots[0].sources = vec![ksx_config::SourceEntry::new(
+            "panel",
+            ksx_core::SourceKind::Keyboard,
+            "panel p1",
+        )];
+        store.save_config(&config).unwrap();
+
+        let mut games = store.load_games().unwrap().value;
+        games.games[0].slots[0].preset.clear();
+        games.games[0].slots[0].sources = vec![ksx_config::SourceEntry::new(
+            r"HID\PANEL\ONE",
+            ksx_core::SourceKind::Keyboard,
+            "Panel P1",
+        )];
+        store.save_games(&games).unwrap();
+
+        let plan = plan_rename(
+            &store.load_presets().unwrap().value,
+            &config,
+            &games,
+            &RenameSpec {
+                from: "Panel P1".to_owned(),
+                to: "Player One".to_owned(),
+            },
+        )
+        .unwrap();
+        assert_eq!(plan.references.len(), 2, "one reference per slot");
+        apply_rename(&store, &plan).unwrap();
+
+        let config = store.load_config().unwrap().value;
+        assert!(config.slots[0].preset.is_empty());
+        assert_eq!(config.slots[0].sources[0].preset, "Player One");
+        let games = store.load_games().unwrap().value;
+        assert!(games.games[0].slots[0].preset.is_empty());
+        assert_eq!(games.games[0].slots[0].sources[0].preset, "Player One");
+    }
+
     /// Renaming ONTO another preset is refused. A rename is not an overwrite,
     /// and `new --force` is where overwriting lives.
     #[test]
@@ -458,7 +502,12 @@ pub struct PresetRef {
 pub fn preset_references(config: &ConfigFile, games: &GamesFile, name: &str) -> Vec<PresetRef> {
     let mut out = Vec::new();
     for slot in &config.slots {
-        if slot.preset.eq_ignore_ascii_case(name) {
+        if slot.preset.eq_ignore_ascii_case(name)
+            || slot
+                .sources
+                .iter()
+                .any(|source| source.preset.eq_ignore_ascii_case(name))
+        {
             out.push(PresetRef {
                 slot: slot.number,
                 profile: None,
@@ -467,7 +516,12 @@ pub fn preset_references(config: &ConfigFile, games: &GamesFile, name: &str) -> 
     }
     for game in &games.games {
         for slot in &game.slots {
-            if slot.preset.eq_ignore_ascii_case(name) {
+            if slot.preset.eq_ignore_ascii_case(name)
+                || slot
+                    .sources
+                    .iter()
+                    .any(|source| source.preset.eq_ignore_ascii_case(name))
+            {
                 out.push(PresetRef {
                     slot: slot.number,
                     profile: Some(game.title.clone()),
@@ -635,6 +689,12 @@ pub fn apply_rename(store: &Store, plan: &RenamePlan) -> Result<RenameOutcome, P
                 slot.preset = plan.to.clone();
                 touched = true;
             }
+            for source in &mut slot.sources {
+                if source.preset.eq_ignore_ascii_case(&plan.from) {
+                    source.preset = plan.to.clone();
+                    touched = true;
+                }
+            }
         }
         if touched {
             let path = store.root().config_path();
@@ -649,6 +709,12 @@ pub fn apply_rename(store: &Store, plan: &RenamePlan) -> Result<RenameOutcome, P
                 if slot.preset.eq_ignore_ascii_case(&plan.from) {
                     slot.preset = plan.to.clone();
                     touched = true;
+                }
+                for source in &mut slot.sources {
+                    if source.preset.eq_ignore_ascii_case(&plan.from) {
+                        source.preset = plan.to.clone();
+                        touched = true;
+                    }
                 }
             }
         }

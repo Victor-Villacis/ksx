@@ -1397,9 +1397,11 @@ fn handle_stage_edit(request: &serde_json::Value, deps: &PipeDeps) -> serde_json
                 "code": ksx_api::codes::BAD_REQUEST,
                 "error": format!(
                     "stage-edit needs an \"edit\" naming one of choose-device | upsert-device | \
-                     remove-device | add-slot | add-source-slot | set-persona | set-layout | set-source-layout | \
+                     remove-device | guarded-remove-device | add-slot | add-source-slot | guarded-add-source-slot-at | \
+                     guarded-restore-parked-slot | set-persona | set-layout | set-source-layout | \
                      set-bindings | set-source-bindings | remove-source-bindings | remove-slot | \
-                     reorder-slots | set-socd | set-blocking | discard: {err}"
+                     guarded-remove-slot | reorder-slots | guarded-reorder-slots | set-socd | \
+                     guarded-set-socd | guarded-duplicate-slot | set-blocking | discard: {err}"
                 ),
             })
         }
@@ -1416,10 +1418,7 @@ fn handle_stage_edit(request: &serde_json::Value, deps: &PipeDeps) -> serde_json
 /// lock. Keeping this tail separate lets the staged binding/macro transactions
 /// prepare against and apply to the same snapshot without a read/write gap.
 fn apply_stage_edit(edit: &ksx_api::StageEdit, state: &mut DaemonState) -> ksx_api::StageOutcome {
-    if let ksx_api::StageEdit::AddSourceSlot {
-        expected_revision, ..
-    } = edit
-    {
+    if let Some(expected_revision) = edit.guarded_draft_authority() {
         let expected = expected_revision.trim();
         let current = state.stage_meta.revision_token();
         if expected.is_empty() || expected != current {
@@ -1428,7 +1427,70 @@ fn apply_stage_edit(edit: &ksx_api::StageEdit, state: &mut DaemonState) -> ksx_a
                     &state.staged,
                     &ksx_api::Refusal::new(
                         ksx_api::codes::BAD_REQUEST,
-                        "The staged setup changed while Add Controller was open. Refresh the workbench and try again; nothing changed.",
+                        "The staged setup changed while this action was open. Refresh the workbench and try again; nothing changed.",
+                    ),
+                ),
+                &state.stage_meta,
+            );
+        }
+    }
+    if let Some((selector, expected_source_revision, confirmed)) =
+        edit.guarded_device_remove_authority()
+    {
+        let mut view = ksx_api::StagedSetupView::of(&state.staged);
+        stamp_stage_target_revisions(&mut view, &state.stage_meta);
+        let exact_device = view
+            .devices
+            .iter()
+            .find(|device| ksx_api::device_selectors_equal(&device.selector, selector));
+        let authority_matches = !expected_source_revision.trim().is_empty()
+            && exact_device.is_some_and(|device| {
+                ksx_api::staged_device_revision(device) == expected_source_revision.trim()
+            });
+        if !authority_matches {
+            return stamp_stage_meta(
+                ksx_api::StageOutcome::refused(
+                    &state.staged,
+                    &ksx_api::Refusal::new(
+                        ksx_api::codes::BAD_REQUEST,
+                        "This keyboard changed while Remove was open. Refresh the workbench and try again; nothing changed.",
+                    ),
+                ),
+                &state.stage_meta,
+            );
+        }
+        if ksx_api::staged_device_has_mappings(&view, selector) && !confirmed {
+            return stamp_stage_meta(
+                ksx_api::StageOutcome::refused(
+                    &state.staged,
+                    &ksx_api::Refusal::new(
+                        ksx_api::codes::CONFIRM_REQUIRED,
+                        "This keyboard still owns controller mappings. Confirm removal to remove those routes too; nothing changed.",
+                    ),
+                ),
+                &state.stage_meta,
+            );
+        }
+    }
+    if let Some((number, expected_revision, expected_target_revision)) =
+        edit.guarded_slot_authority()
+    {
+        let current_revision = state.stage_meta.revision_token();
+        let mut view = ksx_api::StagedSetupView::of(&state.staged);
+        stamp_stage_target_revisions(&mut view, &state.stage_meta);
+        let exact_slot = view.slots.iter().find(|slot| slot.number == number);
+        let authority_matches = !expected_revision.trim().is_empty()
+            && expected_revision.trim() == current_revision
+            && !expected_target_revision.trim().is_empty()
+            && exact_slot
+                .is_some_and(|slot| slot.target_revision.trim() == expected_target_revision.trim());
+        if !authority_matches {
+            return stamp_stage_meta(
+                ksx_api::StageOutcome::refused(
+                    &state.staged,
+                    &ksx_api::Refusal::new(
+                        ksx_api::codes::BAD_REQUEST,
+                        "This controller or the staged order changed while the action was open. Refresh the workbench and try again; nothing changed.",
                     ),
                 ),
                 &state.stage_meta,
@@ -1569,7 +1631,8 @@ fn describe(edit: &ksx_api::StageEdit) -> String {
         ksx_api::StageEdit::UpsertDevice { label, .. } => format!(
             "Added \"{label}\" to this workbench. It joins Play only after one of its keys is mapped."
         ),
-        ksx_api::StageEdit::RemoveDevice { selector } => format!(
+        ksx_api::StageEdit::RemoveDevice { selector }
+        | ksx_api::StageEdit::GuardedRemoveDevice { selector, .. } => format!(
             "Removed keyboard {selector} and its controller routes from this unsaved setup."
         ),
         ksx_api::StageEdit::SetDeviceBackend { backend, .. } => format!(
@@ -1585,7 +1648,8 @@ fn describe(edit: &ksx_api::StageEdit) -> String {
                      before Play."
                 .to_owned(),
         },
-        ksx_api::StageEdit::AddSourceSlot { source, layout, .. } => match layout {
+        ksx_api::StageEdit::AddSourceSlot { source, layout, .. }
+        | ksx_api::StageEdit::GuardedAddSourceSlotAt { source, layout, .. } => match layout {
             Some(_) => format!(
                 "Controller added from {source} with its layout. It will appear only when you press Play."
             ),
@@ -1593,6 +1657,9 @@ fn describe(edit: &ksx_api::StageEdit) -> String {
                 "Controller added from {source} without controls. Choose a layout or map its controls before Play."
             ),
         },
+        ksx_api::StageEdit::GuardedRestoreParkedSlot { position, .. } => {
+            format!("The parked controller was restored at Player {position} with its mappings and settings.")
+        }
         ksx_api::StageEdit::SetLayout { number, layout, .. } => {
             format!(
                 "Player {number} now uses the \"{layout}\" layout. This change is still on this screen."
@@ -1618,21 +1685,27 @@ fn describe(edit: &ksx_api::StageEdit) -> String {
         ksx_api::StageEdit::RemoveSourceBindings { number, selector } => format!(
             "Removed {selector}'s route to Player {number}; the keyboard remains on the workbench."
         ),
-        ksx_api::StageEdit::RemoveSlot { number } => {
+        ksx_api::StageEdit::RemoveSlot { number }
+        | ksx_api::StageEdit::GuardedRemoveSlot { number, .. } => {
             format!("Player {number} was removed from this setup.")
         }
-        ksx_api::StageEdit::ReorderSlots { numbers } => {
+        ksx_api::StageEdit::ReorderSlots { numbers }
+        | ksx_api::StageEdit::GuardedReorderSlots { numbers, .. } => {
             format!(
                 "Players reordered ({} of them). Each controller kept its layout and settings; \
                  only the numbers changed.",
                 numbers.len()
             )
         }
-        ksx_api::StageEdit::SetSocd { number, .. } => {
+        ksx_api::StageEdit::SetSocd { number, .. }
+        | ksx_api::StageEdit::GuardedSetSocd { number, .. } => {
             format!(
                 "Player {number}'s opposite-directions rule changed. This change is still on \
                  this screen."
             )
+        }
+        ksx_api::StageEdit::GuardedDuplicateSlot { number, .. } => {
+            format!("Player {number} was duplicated into the next free controller slot.")
         }
         ksx_api::StageEdit::SetBlocking { .. } => {
             "Answered. LeftCtrl five times always frees or recaptures the keyboard without ending Play; Stop or Ctrl+Alt+Del ends Play."
@@ -3727,6 +3800,157 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         assert_eq!(missing["ok"], false, "{missing}");
         assert_eq!(missing["code"], "no-such-device");
         assert_eq!(missing["setup"]["slots"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn exact_device_remove_checks_confirmation_identity_and_aba_under_the_stage_lock() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let d = deps(tx, state, no_profiles());
+        for request in [
+            r#"{"verb":"stage-edit","edit":"choose-device","selector":"usb:3434:0b10:00:sn=BoardA","alias":"upper","label":"Upper"}"#,
+            r#"{"verb":"stage-edit","edit":"upsert-device","selector":"usb:3434:0b10:00:sn=boarda","alias":"lower","label":"Lower"}"#,
+            r#"{"verb":"stage-edit","edit":"add-slot","persona":"xbox360","preset":"Player 1","layout":"keyboard-2p"}"#,
+        ] {
+            let outcome = handle_request(request, &d, FAST);
+            assert_eq!(outcome["ok"], true, "{outcome}");
+        }
+        let before = handle_request(r#"{"verb":"stage"}"#, &d, FAST);
+        let draft = before["setup"]["revision"].as_str().unwrap().to_owned();
+        let upper: ksx_api::StagedDeviceView =
+            serde_json::from_value(before["setup"]["devices"][0].clone()).unwrap();
+        let lower: ksx_api::StagedDeviceView =
+            serde_json::from_value(before["setup"]["devices"][1].clone()).unwrap();
+
+        let wrong_twin = handle_request(
+            &serde_json::json!({
+                "verb": "stage-edit",
+                "edit": "guarded-remove-device",
+                "selector": lower.selector,
+                "expected_revision": draft,
+                "expected_source_revision": ksx_api::staged_device_revision(&upper),
+                "confirmed": true,
+            })
+            .to_string(),
+            &d,
+            FAST,
+        );
+        assert_eq!(wrong_twin["ok"], false, "{wrong_twin}");
+        assert_eq!(wrong_twin["setup"]["devices"].as_array().unwrap().len(), 2);
+
+        let needs_confirmation = handle_request(
+            &serde_json::json!({
+                "verb": "stage-edit",
+                "edit": "guarded-remove-device",
+                "selector": upper.selector,
+                "expected_revision": draft,
+                "expected_source_revision": ksx_api::staged_device_revision(&upper),
+                "confirmed": false,
+            })
+            .to_string(),
+            &d,
+            FAST,
+        );
+        assert_eq!(needs_confirmation["ok"], false, "{needs_confirmation}");
+        assert_eq!(needs_confirmation["code"], ksx_api::codes::CONFIRM_REQUIRED);
+        assert_eq!(
+            needs_confirmation["setup"]["slots"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // ABA: remove and recreate the exact same selector/alias/label. Its
+        // content hash is identical, but the whole-draft generation moved.
+        for request in [
+            serde_json::json!({
+                "verb": "stage-edit",
+                "edit": "remove-device",
+                "selector": upper.selector,
+            }),
+            serde_json::json!({
+                "verb": "stage-edit",
+                "edit": "upsert-device",
+                "selector": upper.selector,
+                "alias": upper.alias,
+                "label": upper.label,
+            }),
+        ] {
+            let outcome = handle_request(&request.to_string(), &d, FAST);
+            assert_eq!(outcome["ok"], true, "{outcome}");
+        }
+        let stale_confirmed = handle_request(
+            &serde_json::json!({
+                "verb": "stage-edit",
+                "edit": "guarded-remove-device",
+                "selector": upper.selector,
+                "expected_revision": draft,
+                "expected_source_revision": ksx_api::staged_device_revision(&upper),
+                "confirmed": true,
+            })
+            .to_string(),
+            &d,
+            FAST,
+        );
+        assert_eq!(stale_confirmed["ok"], false, "{stale_confirmed}");
+        assert!(stale_confirmed["setup"]["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|device| device["selector"] == upper.selector));
+    }
+
+    #[test]
+    fn controller_structure_authority_is_checked_under_the_stage_lock() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let d = deps(tx, state, no_profiles());
+        for request in [
+            r#"{"verb":"stage-edit","edit":"add-slot","persona":"xbox360","preset":"Player 1","layout":"keyboard-2p"}"#,
+            r#"{"verb":"stage-edit","edit":"add-slot","persona":"playstation","preset":"Player 2","layout":"keyboard-2p"}"#,
+        ] {
+            let outcome = handle_request(request, &d, FAST);
+            assert_eq!(outcome["ok"], true, "{outcome}");
+        }
+        let before = handle_request(r#"{"verb":"stage"}"#, &d, FAST);
+        let draft = before["setup"]["revision"].as_str().unwrap();
+        let target = before["setup"]["slots"][0]["target_revision"]
+            .as_str()
+            .unwrap();
+        let moved = handle_request(
+            &serde_json::json!({
+                "verb": "stage-edit",
+                "edit": "guarded-reorder-slots",
+                "number": 1,
+                "numbers": [2, 1],
+                "expected_revision": draft,
+                "expected_target_revision": target,
+            })
+            .to_string(),
+            &d,
+            FAST,
+        );
+        assert_eq!(moved["ok"], true, "{moved}");
+
+        let stale = handle_request(
+            &serde_json::json!({
+                "verb": "stage-edit",
+                "edit": "guarded-remove-slot",
+                "number": 1,
+                "expected_revision": draft,
+                "expected_target_revision": target,
+            })
+            .to_string(),
+            &d,
+            FAST,
+        );
+        assert_eq!(stale["ok"], false, "{stale}");
+        assert_eq!(stale["setup"]["slots"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            stale["setup"]["slots"][0]["persona"], "playstation",
+            "the stale Player 1 form cannot remove the replacement now seated there"
+        );
     }
 
     /// **The dirty flag is the daemon's, and it moves with the writes**: an

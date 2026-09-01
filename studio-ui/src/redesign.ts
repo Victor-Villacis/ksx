@@ -24,6 +24,7 @@ import {
   setRedesignRefresh,
   setRedesignDeviceMutation,
   unparkController,
+  type RedesignDeviceMutationOptions,
   type RdDeviceRowView,
   type RedesignPayload,
 } from "./RedesignIsland";
@@ -73,6 +74,8 @@ let captureConfirmationAuthority: string | null = null;
 const IDENTIFY_OK_FLASH =
   "Keyboard identified and selected. Nothing has been captured, saved, or started.";
 const IDENTIFY_CANCELLED_FLASH = "Keyboard identification cancelled. Nothing changed.";
+const DEVICE_REMOVE_CONFIRM_FLASH =
+  "error: This keyboard has controller mappings. Confirm Remove to discard those unsaved routes; nothing was changed.";
 let identifyRequestController: AbortController | null = null;
 let identifyRequestAttempt: string | null = null;
 let identifyCancellationAccepted = false;
@@ -553,14 +556,18 @@ function identifyIsPending(root: HTMLElement): boolean {
   return root.querySelector<HTMLElement>(".rd-devmodal")?.dataset.rdIdentifyPending === "true";
 }
 
-function selectedIdentifyRow(root: HTMLElement): HTMLElement | null {
-  return root.querySelector<HTMLElement>(
+function stagedIdentifyRows(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(
     '.rd-devmodal [data-nx="rd-dev-toggle"][aria-current="true"]',
-  );
+  ));
 }
 
-function selectedIdentifySelector(root: HTMLElement): string {
-  return selectedIdentifyRow(root)?.dataset.selector?.trim() ?? "";
+function stagedIdentifySelectors(root: HTMLElement): Set<string> {
+  return new Set(
+    stagedIdentifyRows(root)
+      .map((row) => row.dataset.selector?.trim() ?? "")
+      .filter(Boolean),
+  );
 }
 
 function identifyRowForSelector(root: HTMLElement, selector: string): HTMLElement | null {
@@ -587,7 +594,7 @@ function settleIdentifyListener(root: HTMLElement, controller: AbortController):
 async function recoverUnconfirmedIdentify(
   root: HTMLElement,
   attempt: string,
-  previousSelector: string,
+  previousSelectors: ReadonlySet<string>,
 ): Promise<boolean> {
   setIdentifyUi(
     root,
@@ -618,24 +625,24 @@ async function recoverUnconfirmedIdentify(
     return false;
   }
 
-  const row = selectedIdentifyRow(root);
-  const name = row?.querySelector<HTMLElement>(".n-dev-name")?.textContent?.trim();
-  const currentSelector = selectedIdentifySelector(root);
-  const selectionChanged = Boolean(
-    currentSelector && currentSelector !== previousSelector,
-  );
+  const currentRows = stagedIdentifyRows(root);
+  const addedRows = currentRows.filter((row) => {
+    const selector = row.dataset.selector?.trim() ?? "";
+    return selector && !previousSelectors.has(selector);
+  });
+  const addedName = addedRows.length === 1
+    ? addedRows[0]?.querySelector<HTMLElement>(".n-dev-name")?.textContent?.trim()
+    : "";
   applyRedesignFlash(
-    "error: the keyboard-listening response was lost — review the current mapping source before retrying.",
+    "error: the keyboard-listening response was lost — review the current mapping sources before retrying.",
   );
   setIdentifyUi(
     root,
     "error",
     "Could not confirm the identification outcome",
-    name
-      ? selectionChanged
-        ? `The workbench now shows ${name}, but this interrupted request cannot prove what caused that change. Review its selected row or reload before trying again.`
-        : `The workbench currently shows ${name}. Review its selected row or reload before trying again.`
-      : "Review the selected mapping-source row or reload before trying again.",
+    addedName
+      ? `The workbench now includes ${addedName} as another source, but this interrupted request cannot prove what caused that change. Review the mapping-source list or reload before trying again.`
+      : "Review the mapping-source list or reload before trying again.",
   );
   return false;
 }
@@ -797,7 +804,7 @@ async function submitIdentifyForm(
   identifyRequestAttempt = attempt;
   identifyCancellationAccepted = false;
   let identified = false;
-  const previousSelector = selectedIdentifySelector(root);
+  const previousSelectors = stagedIdentifySelectors(root);
   setIdentifyModalPending(root, true);
   setIdentifyUi(
     root,
@@ -820,6 +827,11 @@ async function submitIdentifyForm(
     const resultUrl = new URL(response.url);
     const outcome = resultUrl.searchParams.get("flash");
     const answeredSelector = resultUrl.searchParams.get("identified_selector")?.trim() ?? "";
+    const answeredName = answeredSelector
+      ? identifyRowForSelector(root, answeredSelector)
+        ?.querySelector<HTMLElement>(".n-dev-name")
+        ?.textContent?.trim() ?? ""
+      : "";
     if (outcome !== IDENTIFY_OK_FLASH) {
       // Cancellation owns the authoritative outcome for this exact nonce.
       // The held start request is allowed to observe the server-side stop and
@@ -850,7 +862,7 @@ async function submitIdentifyForm(
       root,
       "resolving",
       "Keyboard answered",
-      "Confirming the exact connection now selected by the workbench…",
+      "Confirming the exact connection is now an independent mapping source…",
     );
     if (!(await refresh())) {
       applyRedesignFlash(
@@ -864,27 +876,20 @@ async function submitIdentifyForm(
       );
       return;
     }
-    const currentSelector = selectedIdentifySelector(root);
-    if (!answeredSelector || currentSelector !== answeredSelector) {
-      const answeredRow = answeredSelector
-        ? identifyRowForSelector(root, answeredSelector)
-        : null;
-      const answeredName = answeredRow
-        ?.querySelector<HTMLElement>(".n-dev-name")
-        ?.textContent?.trim();
-      const currentName = selectedIdentifyRow(root)
-        ?.querySelector<HTMLElement>(".n-dev-name")
-        ?.textContent?.trim();
+    const answeredRow = answeredSelector
+      ? identifyRowForSelector(root, answeredSelector)
+      : null;
+    if (!answeredSelector || answeredRow?.getAttribute("aria-current") !== "true") {
       applyRedesignFlash(
-        "error: the keyboard answered, but the mapping source changed before confirmation — review the current selection.",
+        "error: the keyboard answered, but its exact connection is not in the current mapping sources — review the device list.",
       );
       setIdentifyUi(
         root,
         "error",
-        "Keyboard answered — mapping source changed",
+        "Keyboard answered — source not confirmed",
         answeredSelector
-          ? `${answeredName ?? "The exact connection"} answered this attempt. ${currentName ?? "Another connection"} is selected now; review the selected row before mapping.`
-          : "The server did not disclose which exact connection answered. Reload and review the selected row before mapping.",
+          ? `${answeredName || "The exact connection"} answered this attempt, but it is no longer present in the mapping-source list. Rescan before mapping.`
+          : "The server did not disclose which exact connection answered. Reload and review the mapping-source list before mapping.",
       );
       return;
     }
@@ -895,7 +900,7 @@ async function submitIdentifyForm(
     const cancelling = identifyCancellationTask;
     if (cancelling && await cancelling) return;
     settleIdentifyListener(root, controller);
-    identified = await recoverUnconfirmedIdentify(root, attempt, previousSelector);
+    identified = await recoverUnconfirmedIdentify(root, attempt, previousSelectors);
   } finally {
     if (identifyRequestController === controller) {
       identifyRequestController = null;
@@ -1031,13 +1036,22 @@ function selectMutationSource(action: "add" | "remove", selector: string): void 
   window.history.replaceState(null, "", `${url.pathname}${query ? `?${query}` : ""}`);
 }
 
+function pickerDeviceIsOnCanvas(root: HTMLElement, selector: string): boolean {
+  const authorityButton = Array.from(
+    root.querySelectorAll<HTMLElement>(
+      '[data-nx="rd-dev-toggle"][data-selector]',
+    ),
+  ).find((button) => button.dataset.selector === selector);
+  return authorityButton?.getAttribute("aria-current") === "true";
+}
+
 /** Canvas picker membership is a real staged-device verb. It shares the page
  * mutation lock and response-generation coordinator with forms, while the
  * island remains the sole owner of geometry and canvas persistence. */
 async function mutateCanvasDevice(
   action: "add" | "remove",
   row: RdDeviceRowView,
-  confirmRemove: boolean,
+  options: RedesignDeviceMutationOptions,
   root: HTMLElement,
 ): Promise<boolean> {
   const submits = beginMutation(root);
@@ -1048,19 +1062,56 @@ async function mutateCanvasDevice(
     if (action === "add") {
       body.set("alias", row.alias);
       body.set("label", row.label);
-    } else if (confirmRemove) {
-      body.set("confirm_remove", "yes");
+    } else {
+      // The island passes the exact signal snapshot behind the clicked row.
+      // Do not scrape authority tokens from DOM attributes: the SSR compiler
+      // may legitimately omit internal metadata, and an adopted row can be
+      // replaced while focus remains stable. Reuse this byte-for-byte body if
+      // the backend discovers a concurrent route and requests confirmation.
+      body.set("expected_revision", options.expectedRevision?.trim() ?? "");
+      body.set(
+        "expected_source_revision",
+        options.expectedSourceRevision?.trim() ?? "",
+      );
+      if (options.confirmRemove) body.set("confirm_remove", "yes");
     }
-    const res = await fetch(
-      action === "add" ? "/redesign/device" : "/redesign/device/remove",
-      { method: "POST", body, redirect: "follow" },
-    );
+    const endpoint = action === "add" ? "/redesign/device" : "/redesign/device/remove";
+    const send = () => fetch(endpoint, { method: "POST", body, redirect: "follow" });
+    let res = await send();
     if (!res.ok) throw new Error(`device ${action} failed with ${res.status}`);
-    const flash = new URL(res.url).searchParams.get("flash");
-    committed = !flash?.trim().toLowerCase().startsWith("error:");
+    let flash = new URL(res.url).searchParams.get("flash");
+    if (action === "remove" && flash === DEVICE_REMOVE_CONFIRM_FLASH) {
+      const accepted = window.confirm(
+        `Remove ${row.label} from the canvas and mapping draft?\n\n` +
+          "Its controller mappings will be removed. Controllers and other keyboards stay unchanged.",
+      );
+      if (accepted) {
+        // Mutate only the consent bit. Selector and both revision tokens stay
+        // byte-for-byte identical to the original guarded attempt.
+        body.set("confirm_remove", "yes");
+        res = await send();
+        if (!res.ok) throw new Error(`device ${action} failed with ${res.status}`);
+        flash = new URL(res.url).searchParams.get("flash");
+      } else {
+        flash = "Removal cancelled. Nothing changed.";
+      }
+    }
+    const responseClaimsCommit = Boolean(
+      flash?.trim() && !flash.trim().toLowerCase().startsWith("error:"),
+    ) && flash !== "Removal cancelled. Nothing changed.";
     applyRedesignFlash(flash);
+    const refreshed = await refresh();
+    // Production redirects carry an explicit, allowlisted outcome. A proxy,
+    // harness, or future API may instead acknowledge with a plain 2xx. Such a
+    // response is only a provisional success: prove the requested membership
+    // from the refreshed authority before mounting or removing a board.
+    committed = responseClaimsCommit || (
+      !flash?.trim() &&
+      refreshed &&
+      pickerDeviceIsOnCanvas(root, row.selector) === (action === "add")
+    );
     if (committed) selectMutationSource(action, row.selector);
-    if (!(await refresh())) {
+    if (!refreshed && committed) {
       applyRedesignFlash(
         `error: the device was ${action === "add" ? "added" : "removed"}, but the workbench could not refresh — reload to confirm.`,
       );
@@ -1085,14 +1136,37 @@ async function submitControllerForm(
   root: HTMLElement,
   submitter: HTMLElement | null,
 ): Promise<void> {
-  const submits = beginMutation(root);
-  if (!submits) return;
-  const owner = form.closest<HTMLElement>(".rd-ctrlmodal-panel, .rd-ctrl-node") ?? form;
-  // An assign form names the ghost it re-slots; a successful assign retires
-  // that ghost from the arrangement store.
-  const ghost = form.matches('[data-rd-form="controller-assign"]')
-    ? (form.elements.namedItem("ghost") as HTMLInputElement | null)?.value ?? ""
+  const submittedGhost =
+    (form.elements.namedItem("ghost") as HTMLInputElement | null)?.value?.trim() ?? "";
+  const assignGhost = form.matches('[data-rd-form="controller-assign"]')
+    ? submittedGhost
     : "";
+  const parkGhost = form.matches('[data-rd-form="controller-park"]')
+    ? submittedGhost
+    : "";
+  const parkTargetRevision = parkGhost
+    ? (form.elements.namedItem("expected_target_revision") as HTMLInputElement | null)?.value
+        ?.trim() ?? ""
+    : "";
+  let parkConfirmed = false;
+  let parkOutcomeUnknown = false;
+  let parkRollbackScheduled = false;
+  let parkResponseReceived = false;
+  // The controller surface submits before it persists the optimistic ghost:
+  // persisting first replaces and detaches the live card/form. Queueing the
+  // inverse therefore makes every early refusal (including the shared page
+  // mutation lock) run after that same change gesture has finished parking.
+  const rollbackOptimisticPark = (): void => {
+    if (!parkGhost || parkConfirmed || parkRollbackScheduled) return;
+    parkRollbackScheduled = true;
+    window.queueMicrotask(() => unparkController(parkGhost));
+  };
+  const submits = beginMutation(root);
+  if (!submits) {
+    rollbackOptimisticPark();
+    return;
+  }
+  const owner = form.closest<HTMLElement>(".rd-ctrlmodal-panel, .rd-ctrl-node") ?? form;
   try {
     // Forma may reconcile a list row without carrying an <input>'s value
     // property across the repaint. The form's durable row metadata is the
@@ -1121,8 +1195,20 @@ async function submitControllerForm(
       body,
       redirect: "follow",
     });
-    if (!res.ok) throw new Error(`controller request failed with ${res.status}`);
+    parkResponseReceived = true;
+    if (!res.ok) {
+      rollbackOptimisticPark();
+      throw new Error(`controller request failed with ${res.status}`);
+    }
     const outcome = new URL(res.url).searchParams.get("flash");
+    const outcomeSucceeded = Boolean(
+      outcome?.trim() && !outcome.trim().toLowerCase().startsWith("error:"),
+    );
+    // A successful redirect is the park commit boundary. Keep the ghost even
+    // if the subsequent repaint fails: the daemon has already removed the
+    // live slot and is holding its resurrection material under this id.
+    parkConfirmed = Boolean(parkGhost) && outcomeSucceeded;
+    if (parkGhost && !outcomeSucceeded) rollbackOptimisticPark();
     applyRedesignFlash(outcome);
     if (!(await refresh())) {
       applyRedesignFlash(
@@ -1133,12 +1219,50 @@ async function submitControllerForm(
     // entry — the id leaving the refreshed `parked_held` is the structural
     // signal, never a sentence comparison. The error-prefix guard keeps a
     // REFUSED fresh-fallback (which was never held) parked for another try.
-    if (ghost && outcome && !outcome.startsWith("error") && !redesignGhostHeld(ghost)) {
-      unparkController(ghost);
+    if (assignGhost && outcomeSucceeded && !redesignGhostHeld(assignGhost)) {
+      unparkController(assignGhost);
     }
   } catch {
-    applyRedesignFlash("error: request failed — is ksx studio still running?");
+    if (parkGhost && !parkResponseReceived) {
+      // A rejected fetch is ambiguous: the POST may have committed and only
+      // its response may have been lost. Reconcile before deciding whether
+      // the recoverable browser ghost is duplicate state or the sole handle
+      // to a server-held parked snapshot.
+      const reconciled = await refresh();
+      if (reconciled && redesignGhostHeld(parkGhost)) {
+        parkConfirmed = true;
+        applyRedesignFlash(
+          "Controller parked. Its response was interrupted, but refreshed daemon state confirmed it.",
+        );
+      } else {
+        const originalTargetStillLive = Boolean(
+          reconciled && parkTargetRevision &&
+            Array.from(
+              root.querySelectorAll<HTMLInputElement>(
+                'form[data-rd-form="controller-park"] input[name="expected_target_revision"]',
+              ),
+            ).some((input) => input.value.trim() === parkTargetRevision),
+        );
+        if (originalTargetStillLive) {
+          rollbackOptimisticPark();
+          applyRedesignFlash("error: request failed — is ksx studio still running?");
+        } else {
+          // No authoritative repaint, or the exact live target also changed:
+          // preserve recovery material rather than risk silently deleting the
+          // only handle to a park that may have committed.
+          parkOutcomeUnknown = true;
+          applyRedesignFlash(
+            "error: The park response was lost and its outcome could not be confirmed. The parked card was kept for recovery; reload before discarding it.",
+          );
+        }
+      }
+    } else {
+      rollbackOptimisticPark();
+      applyRedesignFlash("error: request failed — is ksx studio still running?");
+    }
   } finally {
+    // Defensive coverage for future non-throwing exit paths added above.
+    if (parkGhost && !parkConfirmed && !parkOutcomeUnknown) rollbackOptimisticPark();
     const restoreFocus = actionStillOwnsFocus(owner, submitter);
     endMutation(root, submits);
     if (restoreFocus) {
@@ -1468,7 +1592,7 @@ activateIslands({
     // ?slot merge → refetch) without ever owning fetch.
     setRedesignRefresh((options) => refresh("foreground", options?.fresh === true));
     setRedesignDeviceMutation((action, row, options) =>
-      mutateCanvasDevice(action, row, options?.confirmRemove === true, el)
+      mutateCanvasDevice(action, row, options ?? {}, el)
     );
     // The mapper (learn/assign/bind) — page truths as ports, the entry's
     // mutation gate shared so a bind commit can never interleave with an

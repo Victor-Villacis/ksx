@@ -96,7 +96,7 @@ function sourceSpec(selector) {
       };
 }
 
-function keyboardRow(prototype, selector, staged) {
+function keyboardRow(prototype, selector, staged, revision) {
   const source = sourceSpec(selector);
   return {
     ...prototype,
@@ -110,6 +110,7 @@ function keyboardRow(prototype, selector, staged) {
     alias: source.alias,
     label: source.label,
     aria_current: staged ? "true" : "false",
+    staged_revision: staged ? `device-revision:${revision}:${selector}` : "",
     title: source.label,
     chart_readable: "false",
     profile_state: "none",
@@ -169,8 +170,8 @@ function selectedSourceFor(url, staged) {
 function projectManyToMany(payload, requestUrl, state) {
   const prototype = payload.devices.keyboards?.[0] ?? {};
   payload.devices.keyboards = [
-    keyboardRow(prototype, LEFT, state.staged.has(LEFT)),
-    keyboardRow(prototype, RIGHT, state.staged.has(RIGHT)),
+    keyboardRow(prototype, LEFT, state.staged.has(LEFT), state.revision),
+    keyboardRow(prototype, RIGHT, state.staged.has(RIGHT), state.revision),
   ];
   payload.devices.keyboards_head = "KEYBOARDS · 2";
   payload.devices.keyboards_fold_cls = "n-devfold";
@@ -284,6 +285,7 @@ function projectManyToMany(payload, requestUrl, state) {
   };
   payload.learn_selector = selectedSource;
   payload.learn_instance = selectedSource ? sourceSpec(selectedSource).instance : "";
+  payload.operations.draft_revision = `draft-revision:${state.revision}`;
   return payload;
 }
 
@@ -725,6 +727,11 @@ describe("redesign multi-keyboard canvas", { concurrency: false }, () => {
       assert.equal(state.removeBodies.length, 1);
       assert.equal(state.removeBodies[0].get("selector"), LEFT);
       assert.equal(state.removeBodies[0].get("confirm_remove"), "yes");
+      assert.equal(state.removeBodies[0].get("expected_revision"), "draft-revision:3");
+      assert.equal(
+        state.removeBodies[0].get("expected_source_revision"),
+        `device-revision:3:${LEFT}`,
+      );
       assert.deepEqual([...state.staged], [RIGHT]);
       assert.equal(await keyboardNode(page, RIGHT_SLUG).count(), 1);
       assert.deepEqual(

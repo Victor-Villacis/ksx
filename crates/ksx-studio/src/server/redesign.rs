@@ -8,25 +8,25 @@
 
 use super::workbench::{
     self as wb, bind_clear_source_flash, bind_toggle_source_flash, bind_turbo_source_flash,
-    blocking_write_flash, checked, clear_all_source_flash, duplicate_slot_flash,
-    identify_and_stage_for_redesign, key_clear_source_flash, macro_new_source_flash,
-    macro_write_source_flash, restore_slot_routes, stash_removed_slot, undo_chip_label,
-    undo_removal_flash, upsert_device_preserving_preparation, DeviceChoice, StartIdentifyResult,
-    N_ADD_LAYOUT_ERROR, N_ADOPT_BLOCKED, N_ADOPT_OK, N_APPLY_ERROR, N_APPLY_OK, N_APPLY_RESTART,
-    N_BLOCKING_OK, N_CAPTURE_ALREADY_PREPARED, N_CAPTURE_ALREADY_RELEASED, N_CAPTURE_PREPARED_OK,
-    N_CAPTURE_PREPARED_STAGE_CHANGED, N_CAPTURE_PREPARE_CONSENT, N_CAPTURE_PREPARE_ERROR,
-    N_CAPTURE_PREPARE_RECOVERY, N_CAPTURE_RELEASED_OK, N_CAPTURE_RELEASED_STAGE_CHANGED,
-    N_CAPTURE_RELEASE_CONSENT, N_CAPTURE_RELEASE_ERROR, N_CAPTURE_RELEASE_RECOVERY,
-    N_CAPTURE_TARGET_CHANGED, N_CLEAR_ALL_OK, N_DEVICE_ALREADY_OK, N_DEVICE_OK, N_DISCARD_OK,
-    N_DUP_FULL, N_DUP_OK, N_EDIT_ERROR, N_EDIT_OK, N_FORM_UNREADABLE, N_IDENTIFY_ERROR,
-    N_IDENTIFY_OK, N_IDENTIFY_TIMEOUT, N_KEY_CLEAR_NONE, N_KEY_CLEAR_OK, N_MACRO_BADNAME,
-    N_MACRO_DELETED, N_MACRO_NAME, N_MACRO_NEW, N_MACRO_OK, N_MACRO_TAKEN, N_MOVE_AT_END,
-    N_PLAY_BLOCKING, N_PLAY_CAPTURE, N_PLAY_ERROR, N_PLAY_NO_BINDINGS, N_PLAY_NO_DEVICE,
-    N_PLAY_NO_SLOTS, N_PLAY_OK, N_PLAY_OUTPUT_BLOCKED, N_PLAY_OUTPUT_UNKNOWN, N_READ_SCAN_ERROR,
-    N_READ_SETUP_ERROR, N_SAVE_BLOCKING, N_SAVE_CAPTURE, N_SAVE_ERROR, N_SAVE_NO_BINDINGS,
-    N_SAVE_NO_DEVICE, N_SAVE_NO_SLOTS, N_SAVE_OK, N_STOP_ERROR, N_STOP_OK, N_THEME_OK,
-    N_THEME_UNKNOWN, N_TOGGLE_OK, N_TOGGLE_OLD_DAEMON, N_TOGGLE_UNBOUND_ERROR, N_TURBO_INPUT_ERROR,
-    N_TURBO_OK, N_TURBO_UNBOUND_ERROR, N_UNDO_FULL, N_UNDO_GONE, N_UNDO_OK, N_UNKNOWN_FLASH_ERROR,
+    blocking_write_flash, checked, clear_all_source_flash, identify_and_stage_for_redesign,
+    key_clear_source_flash, macro_new_source_flash, macro_write_source_flash, stash_removed_slot,
+    undo_chip_label, undo_removal_flash, upsert_device_preserving_preparation, DeviceChoice,
+    StartIdentifyResult, N_ADD_LAYOUT_ERROR, N_ADOPT_BLOCKED, N_ADOPT_OK, N_APPLY_ERROR,
+    N_APPLY_OK, N_APPLY_RESTART, N_BLOCKING_OK, N_CAPTURE_ALREADY_PREPARED,
+    N_CAPTURE_ALREADY_RELEASED, N_CAPTURE_PREPARED_OK, N_CAPTURE_PREPARED_STAGE_CHANGED,
+    N_CAPTURE_PREPARE_CONSENT, N_CAPTURE_PREPARE_ERROR, N_CAPTURE_PREPARE_RECOVERY,
+    N_CAPTURE_RELEASED_OK, N_CAPTURE_RELEASED_STAGE_CHANGED, N_CAPTURE_RELEASE_CONSENT,
+    N_CAPTURE_RELEASE_ERROR, N_CAPTURE_RELEASE_RECOVERY, N_CAPTURE_TARGET_CHANGED, N_CLEAR_ALL_OK,
+    N_DEVICE_ALREADY_OK, N_DEVICE_OK, N_DISCARD_OK, N_DUP_FULL, N_DUP_OK, N_EDIT_ERROR, N_EDIT_OK,
+    N_FORM_UNREADABLE, N_IDENTIFY_ERROR, N_IDENTIFY_OK, N_IDENTIFY_TIMEOUT, N_KEY_CLEAR_NONE,
+    N_KEY_CLEAR_OK, N_MACRO_BADNAME, N_MACRO_DELETED, N_MACRO_NAME, N_MACRO_NEW, N_MACRO_OK,
+    N_MACRO_TAKEN, N_MOVE_AT_END, N_PLAY_BLOCKING, N_PLAY_CAPTURE, N_PLAY_ERROR,
+    N_PLAY_NO_BINDINGS, N_PLAY_NO_DEVICE, N_PLAY_NO_SLOTS, N_PLAY_OK, N_PLAY_OUTPUT_BLOCKED,
+    N_PLAY_OUTPUT_UNKNOWN, N_READ_SCAN_ERROR, N_READ_SETUP_ERROR, N_SAVE_BLOCKING, N_SAVE_CAPTURE,
+    N_SAVE_ERROR, N_SAVE_NO_BINDINGS, N_SAVE_NO_DEVICE, N_SAVE_NO_SLOTS, N_SAVE_OK, N_STOP_ERROR,
+    N_STOP_OK, N_THEME_OK, N_THEME_UNKNOWN, N_TOGGLE_OK, N_TOGGLE_OLD_DAEMON,
+    N_TOGGLE_UNBOUND_ERROR, N_TURBO_INPUT_ERROR, N_TURBO_OK, N_TURBO_UNBOUND_ERROR, N_UNDO_FULL,
+    N_UNDO_GONE, N_UNDO_OK, N_UNKNOWN_FLASH_ERROR,
 };
 use super::*;
 
@@ -737,21 +737,10 @@ pub(super) struct RedesignDeviceRemoveForm {
     selector: String,
     #[serde(default)]
     confirm_remove: Option<String>,
-}
-
-fn device_has_mappings(staged: &ksx_api::StagedSetupView, selector: &str) -> bool {
-    staged.slots.iter().any(|slot| {
-        slot.sources
-            .iter()
-            .find(|source| source.selector.eq_ignore_ascii_case(selector.trim()))
-            .is_some_and(|source| {
-                source.bindings > 0
-                    || source.authoring.is_none()
-                    || !ksx_api::staged_source_macro_snapshot(source)
-                        .macros
-                        .is_empty()
-            })
-    })
+    #[serde(default)]
+    expected_revision: String,
+    #[serde(default)]
+    expected_source_revision: String,
 }
 
 /// POST /redesign/device/remove — remove exactly one keyboard and all of its
@@ -765,27 +754,22 @@ pub(super) async fn redesign_form_device_remove(
         return redesign_redirect(N_FORM_UNREADABLE);
     };
     let flash = tokio::task::spawn_blocking(move || {
-        let staged = state.control.staged();
         let selector = form.selector.trim();
-        if selector.is_empty()
-            || !staged
-                .devices
-                .iter()
-                .any(|device| device.selector.eq_ignore_ascii_case(selector))
-        {
+        if selector.is_empty() {
             return N_EDIT_ERROR;
         }
-        if device_has_mappings(&staged, selector) && !checked(form.confirm_remove.as_deref()) {
-            return RD_DEVICE_REMOVE_CONFIRM;
-        }
-        if state
+        let outcome = state
             .control
-            .stage_edit(&ksx_api::StageEdit::RemoveDevice {
+            .stage_edit(&ksx_api::StageEdit::GuardedRemoveDevice {
                 selector: selector.to_owned(),
-            })
-            .ok
-        {
+                expected_revision: form.expected_revision,
+                expected_source_revision: form.expected_source_revision,
+                confirmed: checked(form.confirm_remove.as_deref()),
+            });
+        if outcome.ok {
             RD_DEVICE_REMOVED
+        } else if outcome.code.as_deref() == Some(ksx_api::codes::CONFIRM_REQUIRED) {
+            RD_DEVICE_REMOVE_CONFIRM
         } else {
             N_EDIT_ERROR
         }
@@ -990,7 +974,7 @@ pub(super) async fn redesign_form_ctrl_add(
             let Some(device) = before
                 .devices
                 .iter()
-                .find(|device| device.selector.eq_ignore_ascii_case(source))
+                .find(|device| ksx_api::device_selectors_equal(&device.selector, source))
             else {
                 return N_EDIT_ERROR;
             };
@@ -1063,6 +1047,8 @@ pub(super) async fn redesign_form_ctrl_add(
 #[derive(Deserialize)]
 pub(super) struct RedesignSlotForm {
     number: u8,
+    expected_revision: String,
+    expected_target_revision: String,
 }
 
 /// POST /redesign/controller/remove — drop one staged slot, then close the
@@ -1087,44 +1073,21 @@ pub(super) async fn redesign_form_ctrl_remove(
         let stash = stash_removed_slot(&state.control.staged(), form.number);
         let removed = state
             .control
-            .stage_edit(&ksx_api::StageEdit::RemoveSlot {
+            .stage_edit(&ksx_api::StageEdit::GuardedRemoveSlot {
                 number: form.number,
+                expected_revision: form.expected_revision,
+                expected_target_revision: form.expected_target_revision,
             })
             .ok;
         if !removed {
             return false;
         }
         *state.redesign_undo.lock().unwrap() = stash;
-        compact_staged_slots(&state);
         true
     })
     .await
     .unwrap_or(false);
     redesign_redirect(if ok { N_EDIT_OK } else { N_EDIT_ERROR })
-}
-
-/// Close any number gap: one `ReorderSlots` over the surviving order
-/// renumbers 1..N. Best-effort past the initiating edit (a daemon too old
-/// to reorder simply keeps the hole, and the flash reports the edit that
-/// DID happen). The workbench's law: a card's number IS its play position.
-fn compact_staged_slots(state: &AppState) {
-    let survivors: Vec<u8> = state
-        .control
-        .staged()
-        .slots
-        .iter()
-        .map(|slot| slot.number)
-        .collect();
-    let contiguous = survivors
-        .iter()
-        .enumerate()
-        .all(|(at, number)| usize::from(*number) == at + 1);
-    if survivors.is_empty() || contiguous {
-        return;
-    }
-    let _ = state
-        .control
-        .stage_edit(&ksx_api::StageEdit::ReorderSlots { numbers: survivors });
 }
 
 /// How many parked controllers the store holds before the OLDEST park is
@@ -1136,6 +1099,8 @@ pub(super) struct RedesignParkForm {
     number: u8,
     /// The browser's ghost id — the key re-slotting hands back.
     ghost: String,
+    expected_revision: String,
+    expected_target_revision: String,
 }
 
 /// POST /redesign/controller/park — "No player": take the slot OFF the
@@ -1168,14 +1133,15 @@ pub(super) async fn redesign_form_ctrl_park(
         };
         if !state
             .control
-            .stage_edit(&ksx_api::StageEdit::RemoveSlot {
+            .stage_edit(&ksx_api::StageEdit::GuardedRemoveSlot {
                 number: form.number,
+                expected_revision: form.expected_revision,
+                expected_target_revision: form.expected_target_revision,
             })
             .ok
         {
             return false;
         }
-        compact_staged_slots(&state);
         let mut parked = state.redesign_parked.lock().unwrap();
         parked.retain(|(id, _)| *id != form.ghost);
         if parked.len() >= REDESIGN_PARKED_CAP {
@@ -1201,15 +1167,19 @@ pub(super) struct RedesignAssignForm {
     preset: String,
     #[serde(default)]
     layout: Option<String>,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    expected_revision: String,
+    #[serde(default)]
+    expected_source_revision: String,
 }
 
-/// POST /redesign/controller/assign — re-slot a parked ghost at `position`
-/// in ONE server transaction: restore (the undo verb's add → bindings →
-/// socd chain, rollback on a failed bind) or fresh-stage when the store
-/// lost it, then seat with one whole-order reorder. Restoring renames ONLY
-/// when the old name is now worn by another slot — the duplicate verb's
-/// aliasing rule: a save writes one preset file per name — and the
-/// authoring's own name field moves with it.
+/// POST /redesign/controller/assign — re-slot a parked ghost at `position`.
+/// Both paths are one daemon edit under whole-draft authority: restore every
+/// held route/macro/SOCD choice and seat it, or (after a daemon restart lost
+/// the stash) add the exact posted source and seat it. The stash is consumed
+/// only after that complete edit succeeds.
 pub(super) async fn redesign_form_ctrl_assign(
     State(state): State<Arc<AppState>>,
     form: RedesignForm<RedesignAssignForm>,
@@ -1218,122 +1188,40 @@ pub(super) async fn redesign_form_ctrl_assign(
         return redesign_redirect(N_FORM_UNREADABLE);
     };
     let flash = tokio::task::spawn_blocking(move || {
-        let held = {
-            let parked = state.redesign_parked.lock().unwrap();
-            parked
-                .iter()
-                .find(|(id, _)| *id == form.ghost)
-                .map(|(_, slot)| slot.clone())
-        };
-        let staged = state.control.staged();
-        let number = match held {
-            Some(slot) => {
-                let name_taken = staged.slots.iter().any(|candidate| {
-                    std::iter::once(candidate.preset.as_str())
-                        .chain(
-                            candidate
-                                .sources
-                                .iter()
-                                .map(|source| source.preset.as_str()),
-                        )
-                        .any(|name| name.eq_ignore_ascii_case(&slot.preset))
-                });
-                let name = if name_taken {
-                    match staged.next_preset.clone() {
-                        Some(fresh) => fresh,
-                        None => return N_EDIT_ERROR,
-                    }
-                } else {
-                    slot.preset.clone()
-                };
-                let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
-                    number: None,
-                    persona: slot.persona.clone(),
-                    preset: name.clone(),
-                    layout: None,
-                });
-                if !added.ok {
-                    return N_EDIT_ERROR;
-                }
-                let Some(number) = added.setup.slots.iter().map(|s| s.number).max() else {
-                    return N_EDIT_ERROR;
-                };
-                let primary_override = name_taken.then_some(name.as_str());
-                if !restore_slot_routes(&state, number, &slot, primary_override, false) {
-                    let _ = state
-                        .control
-                        .stage_edit(&ksx_api::StageEdit::RemoveSlot { number });
-                    return N_EDIT_ERROR;
-                }
-                if !slot.socd.is_empty() && slot.socd != "off" {
-                    let _ = state.control.stage_edit(&ksx_api::StageEdit::SetSocd {
-                        number,
-                        socd: slot.socd.clone(),
-                    });
-                }
-                number
-            }
+        if form.expected_revision.trim().is_empty() {
+            return N_EDIT_ERROR;
+        }
+        let mut parked = state.redesign_parked.lock().unwrap();
+        let held = parked
+            .iter()
+            .find(|(id, _)| *id == form.ghost)
+            .map(|(_, slot)| slot.clone());
+        let edit = match held {
+            Some(slot) => ksx_api::StageEdit::GuardedRestoreParkedSlot {
+                position: form.position,
+                slot: Box::new(slot),
+                expected_revision: form.expected_revision,
+            },
             None => {
-                let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
-                    number: None,
+                if form.source.trim().is_empty() || form.expected_source_revision.trim().is_empty()
+                {
+                    return N_EDIT_ERROR;
+                }
+                ksx_api::StageEdit::GuardedAddSourceSlotAt {
+                    position: form.position,
                     persona: form.persona,
                     preset: form.preset,
-                    layout: None,
-                });
-                if !added.ok {
-                    return N_EDIT_ERROR;
+                    layout: form.layout.filter(|layout| !layout.trim().is_empty()),
+                    source: form.source,
+                    expected_revision: form.expected_revision,
+                    expected_source_revision: form.expected_source_revision,
                 }
-                let Some(number) = added.setup.slots.iter().map(|s| s.number).max() else {
-                    return N_EDIT_ERROR;
-                };
-                if let Some(layout) = form.layout.filter(|l| !l.trim().is_empty()) {
-                    let dressed = state.control.stage_edit(&ksx_api::StageEdit::SetLayout {
-                        number,
-                        layout: layout.clone(),
-                        player: None,
-                    });
-                    if !dressed.ok {
-                        let redressed = state.control.stage_edit(&ksx_api::StageEdit::SetLayout {
-                            number,
-                            layout,
-                            player: Some(1),
-                        });
-                        if !redressed.ok {
-                            let _ = state
-                                .control
-                                .stage_edit(&ksx_api::StageEdit::RemoveSlot { number });
-                            return N_ADD_LAYOUT_ERROR;
-                        }
-                    }
-                }
-                number
             }
         };
-        // Seat it: the whole order with the fresh number at `position`.
-        let mut order: Vec<u8> = state
-            .control
-            .staged()
-            .slots
-            .iter()
-            .map(|slot| slot.number)
-            .filter(|n| *n != number)
-            .collect();
-        let at = usize::from(form.position.max(1) - 1).min(order.len());
-        order.insert(at, number);
-        let seated = order
-            .iter()
-            .enumerate()
-            .all(|(idx, n)| usize::from(*n) == idx + 1);
-        if !seated {
-            let _ = state
-                .control
-                .stage_edit(&ksx_api::StageEdit::ReorderSlots { numbers: order });
+        if !state.control.stage_edit(&edit).ok {
+            return N_EDIT_ERROR;
         }
-        state
-            .redesign_parked
-            .lock()
-            .unwrap()
-            .retain(|(id, _)| *id != form.ghost);
+        parked.retain(|(id, _)| *id != form.ghost);
         N_EDIT_OK
     })
     .await
@@ -1348,6 +1236,9 @@ pub(super) struct RedesignMoveForm {
     /// per click; the renumbering is the daemon's. Empty means the card is
     /// already at that end: not an error and not a write.
     order: String,
+    number: u8,
+    expected_revision: String,
+    expected_target_revision: String,
 }
 
 /// POST /redesign/controller/move — move a staged controller.
@@ -1369,7 +1260,12 @@ pub(super) async fn redesign_form_ctrl_move(
     let ok = tokio::task::spawn_blocking(move || {
         state
             .control
-            .stage_edit(&ksx_api::StageEdit::ReorderSlots { numbers })
+            .stage_edit(&ksx_api::StageEdit::GuardedReorderSlots {
+                number: form.number,
+                numbers,
+                expected_revision: form.expected_revision,
+                expected_target_revision: form.expected_target_revision,
+            })
             .ok
     })
     .await
@@ -1385,6 +1281,8 @@ pub(super) async fn redesign_form_ctrl_move(
 pub(super) struct RedesignSocdForm {
     number: u8,
     socd: String,
+    expected_revision: String,
+    expected_target_revision: String,
 }
 
 /// POST /redesign/controller/socd — the selected slot's opposite-directions
@@ -1399,9 +1297,11 @@ pub(super) async fn redesign_form_ctrl_socd(
     let ok = tokio::task::spawn_blocking(move || {
         state
             .control
-            .stage_edit(&ksx_api::StageEdit::SetSocd {
+            .stage_edit(&ksx_api::StageEdit::GuardedSetSocd {
                 number: form.number,
                 socd: form.socd,
+                expected_revision: form.expected_revision,
+                expected_target_revision: form.expected_target_revision,
             })
             .ok
     })
@@ -1419,9 +1319,24 @@ pub(super) async fn redesign_form_ctrl_duplicate(
     let Ok(Form(form)) = form else {
         return redesign_redirect(N_FORM_UNREADABLE);
     };
-    let flash = tokio::task::spawn_blocking(move || duplicate_slot_flash(&state, form.number))
-        .await
-        .unwrap_or(N_EDIT_ERROR);
+    let flash = tokio::task::spawn_blocking(move || {
+        let outcome = state
+            .control
+            .stage_edit(&ksx_api::StageEdit::GuardedDuplicateSlot {
+                number: form.number,
+                expected_revision: form.expected_revision,
+                expected_target_revision: form.expected_target_revision,
+            });
+        if outcome.ok {
+            N_DUP_OK
+        } else if outcome.code.as_deref() == Some("no-free-slot") {
+            N_DUP_FULL
+        } else {
+            N_EDIT_ERROR
+        }
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
     redesign_redirect(flash)
 }
 
@@ -1954,12 +1869,12 @@ mod tests {
             }],
             ..ksx_api::StagedSetupView::default()
         };
-        assert!(!device_has_mappings(&staged, selector));
-        assert!(!device_has_mappings(&staged, other));
+        assert!(!ksx_api::staged_device_has_mappings(&staged, selector));
+        assert!(!ksx_api::staged_device_has_mappings(&staged, other));
 
         staged.slots[0].sources[0].bindings = 1;
-        assert!(device_has_mappings(&staged, selector));
-        assert!(!device_has_mappings(&staged, other));
+        assert!(ksx_api::staged_device_has_mappings(&staged, selector));
+        assert!(!ksx_api::staged_device_has_mappings(&staged, other));
 
         staged.slots[0].sources[0].bindings = 0;
         staged.slots[0].sources[0]
@@ -1968,6 +1883,6 @@ mod tests {
             .unwrap()
             .macros
             .insert("kept-body".to_owned(), ksx_config::MacroFile::default());
-        assert!(device_has_mappings(&staged, selector));
+        assert!(ksx_api::staged_device_has_mappings(&staged, selector));
     }
 }

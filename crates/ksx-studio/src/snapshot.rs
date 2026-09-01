@@ -523,12 +523,10 @@ fn staged_mapping_blocker_line(
     };
     match blocker {
         StagedMappingBlocker::Exact { slot, source } => {
-            let source_device = staged.devices.iter().find(|device| {
-                device
-                    .selector
-                    .trim()
-                    .eq_ignore_ascii_case(source.selector.trim())
-            });
+            let source_device = staged
+                .devices
+                .iter()
+                .find(|device| same_device_selector(&device.selector, &source.selector));
             let label = [
                 source.label.trim(),
                 source.alias.trim(),
@@ -605,9 +603,13 @@ pub struct RedesignHeldCaptureRow {
 /// the canvas before anyone routes it, and that must not block Save/Play for
 /// an otherwise complete source graph.
 fn routed_stage_selectors(staged: &ksx_api::StagedSetupView) -> Vec<String> {
-    let mut selectors = Vec::new();
+    let mut selectors: Vec<String> = Vec::new();
     for source in staged.slots.iter().flat_map(|slot| slot.sources.iter()) {
-        if !source.selector.trim().is_empty() && !selectors.contains(&source.selector) {
+        if !source.selector.trim().is_empty()
+            && !selectors
+                .iter()
+                .any(|selector| same_device_selector(selector, &source.selector))
+        {
             selectors.push(source.selector.clone());
         }
     }
@@ -636,13 +638,20 @@ fn staged_device_for_selector<'a>(
     staged
         .devices
         .iter()
-        .find(|device| device.selector == selector)
+        .find(|device| same_device_selector(&device.selector, selector))
         .or_else(|| {
             staged
                 .device
                 .as_ref()
-                .filter(|device| device.selector == selector)
+                .filter(|device| same_device_selector(&device.selector, selector))
         })
+}
+
+/// Selector equality is semantic, not a case-fold of its serialized text.
+/// Parsing canonicalizes the case-insensitive structural fields and legacy
+/// paths while preserving the deliberately case-sensitive USB serial value.
+fn same_device_selector(left: &str, right: &str) -> bool {
+    ksx_api::device_selectors_equal(left, right)
 }
 
 /// Exact-device preparation and recovery state for the redesign shell.
@@ -956,7 +965,7 @@ impl RedesignCaptureState {
             .collect::<Vec<_>>();
 
         let exact_held = held.iter().find(|row| {
-            row.selector == resolved.expected_selector
+            same_device_selector(&row.selector, &resolved.expected_selector)
                 && row.instance.eq_ignore_ascii_case(&resolved.instance_id)
         });
         let (mut mode, mut heading, mut line, mut recovery_line, mut selector, mut instance, can_prepare, mut can_release) =
@@ -1096,7 +1105,8 @@ impl RedesignCaptureState {
         } else if mode == "release-held" {
             held.iter()
                 .find(|row| {
-                    row.selector == selector && row.instance.eq_ignore_ascii_case(&instance)
+                    same_device_selector(&row.selector, &selector)
+                        && row.instance.eq_ignore_ascii_case(&instance)
                 })
                 .map(|row| row.name.clone())
                 .unwrap_or_else(|| "Held keyboard".to_owned())
@@ -1521,6 +1531,11 @@ fn redesign_journey_step(
 pub struct RedesignControllerCard {
     /// The daemon's slot number, as text (a list body is bare member reads).
     pub number: String,
+    /// Opaque revision for the exact controller currently occupying this
+    /// positional seat. Structural forms return it with the draft revision so
+    /// a stale slot number cannot retarget a replacement card.
+    #[serde(default)]
+    pub target_revision: String,
     /// The persona code (`xbox360` | `playstation` | …) for family styling —
     /// presentation routes on this, never on the label's words.
     pub persona: String,
@@ -1685,7 +1700,7 @@ impl RedesignControllers {
             staged
                 .devices
                 .iter()
-                .find(|device| device.selector.eq_ignore_ascii_case(selector))
+                .find(|device| same_device_selector(&device.selector, selector))
         } else {
             staged.devices.first()
         };
@@ -1779,6 +1794,7 @@ impl RedesignControllers {
                 let presentation = pad_presentation(&slot.persona);
                 RedesignControllerCard {
                     number: slot.number.to_string(),
+                    target_revision: slot.target_revision.clone(),
                     persona: slot.persona.clone(),
                     persona_label: slot.persona_label.clone(),
                     identity_key: format!("slot:{}:{}", slot.number, slot.persona),
@@ -1940,7 +1956,7 @@ impl RedesignDeviceRows {
             unavailable,
             |selector| {
                 staged.is_some_and(|staged| {
-                    !staged.trim().is_empty() && staged.trim().eq_ignore_ascii_case(selector.trim())
+                    !staged.trim().is_empty() && same_device_selector(staged, selector)
                 })
             },
             |_, alias_hint| alias_hint.to_owned(),
@@ -1960,25 +1976,112 @@ impl RedesignDeviceRows {
             .map(|device| device.alias.trim().to_ascii_lowercase())
             .filter(|alias| !alias.is_empty())
             .collect();
-        Self::of_matching(
+        let mut rows = Self::of_matching(
             scan,
             unavailable,
             |selector| {
                 staged.iter().any(|device| {
                     !device.selector.trim().is_empty()
-                        && device.selector.trim().eq_ignore_ascii_case(selector.trim())
+                        && same_device_selector(&device.selector, selector)
                 })
             },
             |selector, alias_hint| {
                 if let Some(device) = staged.iter().find(|device| {
                     !device.selector.trim().is_empty()
-                        && device.selector.trim().eq_ignore_ascii_case(selector.trim())
+                        && same_device_selector(&device.selector, selector)
                 }) {
                     return device.alias.clone();
                 }
                 fresh_device_alias(alias_hint, &mut used_aliases)
             },
-        )
+        );
+        for row in rows
+            .keyboards
+            .iter_mut()
+            .chain(rows.encoders.iter_mut())
+            .chain(rows.experimental.iter_mut())
+        {
+            if let Some(device) = staged
+                .iter()
+                .find(|device| same_device_selector(&device.selector, &row.selector))
+            {
+                row.staged_revision = ksx_api::staged_device_revision(device);
+            }
+        }
+
+        // A staged source is durable authoring truth, while the scan is only
+        // connection truth. If a routed keyboard is unplugged, dropping its
+        // row here makes it impossible to select, diagnose, or remove without
+        // reconnecting the hardware. Keep one deliberately role-neutral row:
+        // the persisted draft does not record enough information to claim
+        // that an absent HID endpoint is a keyboard or an encoder.
+        for device in staged.iter().filter(|_| scan.is_some()) {
+            let already_projected = rows
+                .keyboards
+                .iter()
+                .chain(&rows.encoders)
+                .chain(&rows.experimental)
+                .any(|row| same_device_selector(&row.selector, &device.selector));
+            if already_projected || device.selector.trim().is_empty() {
+                continue;
+            }
+            let name = if device.label.trim().is_empty() {
+                if device.alias.trim().is_empty() {
+                    "Disconnected mapping source".to_owned()
+                } else {
+                    device.alias.clone()
+                }
+            } else {
+                device.label.clone()
+            };
+            rows.experimental.push(NocturneDeviceRow {
+                cls: "n-dev".to_owned(),
+                name: name.clone(),
+                meta: "Connection unavailable · still in the mapping draft".to_owned(),
+                role: "offline-source".to_owned(),
+                selector: device.selector.clone(),
+                staged_revision: ksx_api::staged_device_revision(device),
+                instance_id: String::new(),
+                connection_label: device_connection_label(&device.selector),
+                alias: device.alias.clone(),
+                label: name,
+                aria_current: "true".to_owned(),
+                title: "This exact source is still in the mapping draft but is not connected. Reconnect it to resume input, or remove it without affecting peer sources.".to_owned(),
+                chart_readable: "false".to_owned(),
+                family_id: None,
+                protocol_profile: None,
+                profile_state: String::new(),
+                terminal_count: None,
+                capture_badge: "Disconnected".to_owned(),
+                capture_state: "attention".to_owned(),
+                capture_cls: "rd-dev-capture attention".to_owned(),
+            });
+        }
+        rows.exp_head = if !rows.experimental.is_empty()
+            && rows
+                .experimental
+                .iter()
+                .all(|row| row.role == "offline-source")
+        {
+            format!("Disconnected mapping sources · {}", rows.experimental.len())
+        } else if rows
+            .experimental
+            .iter()
+            .any(|row| row.role == "offline-source")
+        {
+            format!(
+                "Experimental and disconnected · {}",
+                rows.experimental.len()
+            )
+        } else {
+            format!("Not keyboards — experimental · {}", rows.experimental.len())
+        };
+        rows.exp_fold_cls = if rows.experimental.is_empty() {
+            "n-devfold none".to_owned()
+        } else {
+            "n-devfold".to_owned()
+        };
+        rows
     }
 
     fn of_matching(
@@ -2065,6 +2168,7 @@ impl RedesignDeviceRows {
                     instance_id: proven_device_instance(scan, b).unwrap_or_default(),
                     alias: alias_for(&selector, &b.alias_hint),
                     selector,
+                    staged_revision: String::new(),
                     label: b.name.clone(),
                     capture_badge: String::new(),
                     capture_state: String::new(),
@@ -2134,7 +2238,7 @@ fn proven_device_instance(
             candidate
                 .selector
                 .as_deref()
-                .is_some_and(|other| other.eq_ignore_ascii_case(selector))
+                .is_some_and(|other| same_device_selector(other, selector))
         })
         .count()
         != 1
@@ -2821,12 +2925,15 @@ pub(crate) fn staged_device_capture_mode(
     selector: &str,
 ) -> Option<&'static str> {
     let routed = routed_stage_selectors(staged);
-    if (!routed.is_empty() && !routed.iter().any(|candidate| candidate == selector))
+    if (!routed.is_empty()
+        && !routed
+            .iter()
+            .any(|candidate| same_device_selector(candidate, selector)))
         || (routed.is_empty()
             && !staged
                 .device
                 .as_ref()
-                .is_some_and(|device| device.selector == selector))
+                .is_some_and(|device| same_device_selector(&device.selector, selector)))
     {
         return None;
     }
@@ -3152,6 +3259,10 @@ pub struct NocturneDeviceRow {
     #[serde(default)]
     pub instance_id: String,
     pub selector: String,
+    /// Opaque authority for this exact staged roster row. Empty for a scanned
+    /// board that has not joined the draft yet.
+    #[serde(default)]
+    pub staged_revision: String,
     pub alias: String,
     pub label: String,
     /// `"true"` on the staged board, `"false"` on every other row — the
@@ -4024,6 +4135,10 @@ pub struct ControllerPanel {
     pub source_revision: String,
     #[serde(default)]
     pub source_preset: String,
+    /// Exact selected-controller authority for source-neutral structural
+    /// actions such as SOCD and Duplicate.
+    #[serde(default)]
+    pub target_revision: String,
     pub slot_val: String,
     pub pad_badge: String,
     pub pad_badge_cls: String,
@@ -4332,6 +4447,9 @@ pub(crate) fn compose_controller_panel_for_source(
             .unwrap_or_default(),
         source_preset: source
             .map(|source| source.preset.clone())
+            .unwrap_or_default(),
+        target_revision: selected
+            .map(|slot| slot.target_revision.clone())
             .unwrap_or_default(),
         slot_val,
         pad_badge,
@@ -6917,6 +7035,14 @@ mod tests {
         let rows = RedesignDeviceRows::of_devices(Some(&scan), "", &[left, right]);
         assert_eq!(rows.keyboards.len(), 2);
         assert!(rows.keyboards.iter().all(|row| row.aria_current == "true"));
+        assert!(rows
+            .keyboards
+            .iter()
+            .all(|row| !row.staged_revision.is_empty()));
+        assert_ne!(
+            rows.keyboards[0].staged_revision,
+            rows.keyboards[1].staged_revision
+        );
         assert_eq!(
             rows.keyboards
                 .iter()
@@ -6924,6 +7050,120 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["HID\\LEFT\\0001", "HID\\RIGHT\\0002"]
         );
+    }
+
+    #[test]
+    fn redesign_never_collapses_case_distinct_usb_serial_sources() {
+        let upper = staged_device(
+            "usb:3434:0b10:00:sn=BoardA",
+            "upper",
+            "Upper serial keyboard",
+        );
+        let lower = staged_device(
+            "usb:3434:0b10:00:sn=boarda",
+            "lower",
+            "Lower serial keyboard",
+        );
+        let scan = ksx_api::DeviceScanView {
+            boards: [&upper, &lower]
+                .into_iter()
+                .map(|device| ksx_api::BoardRow {
+                    name: device.label.clone(),
+                    selector: Some(device.selector.clone()),
+                    alias_hint: device.alias.clone(),
+                    pickable: true,
+                    looks_like_a_keyboard: true,
+                    ..ksx_api::BoardRow::default()
+                })
+                .collect(),
+            ..ksx_api::DeviceScanView::default()
+        };
+
+        let rows = RedesignDeviceRows::of_devices(Some(&scan), "", std::slice::from_ref(&upper));
+        assert_eq!(rows.keyboards.len(), 2);
+        assert_eq!(
+            rows.keyboards
+                .iter()
+                .filter(|row| row.aria_current == "true")
+                .map(|row| row.selector.as_str())
+                .collect::<Vec<_>>(),
+            [upper.selector.as_str()]
+        );
+        assert_eq!(
+            rows.keyboards
+                .iter()
+                .find(|row| row.selector == lower.selector)
+                .map(|row| row.aria_current.as_str()),
+            Some("false")
+        );
+        assert_eq!(
+            rows.keyboards
+                .iter()
+                .find(|row| row.selector == upper.selector)
+                .map(|row| row.staged_revision.as_str()),
+            Some(ksx_api::staged_device_revision(&upper).as_str())
+        );
+        assert_eq!(
+            rows.keyboards
+                .iter()
+                .find(|row| row.selector == lower.selector)
+                .map(|row| row.staged_revision.as_str()),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn redesign_keeps_an_authoritatively_disconnected_staged_source_actionable() {
+        let left = staged_device("usb:1111:0001:00", "left", "Left keyboard");
+        let right = staged_device("usb:2222:0002:00", "right", "Right keyboard");
+        let scan = ksx_api::DeviceScanView {
+            boards: vec![ksx_api::BoardRow {
+                name: left.label.clone(),
+                keyboard: Some("HID\\LEFT\\0001".to_owned()),
+                interfaces: vec![ksx_api::UsbRow {
+                    instance_id: "HID\\LEFT\\0001".to_owned(),
+                    ..ksx_api::UsbRow::default()
+                }],
+                selector: Some(left.selector.clone()),
+                alias_hint: left.alias.clone(),
+                pickable: true,
+                looks_like_a_keyboard: true,
+                ..ksx_api::BoardRow::default()
+            }],
+            ..ksx_api::DeviceScanView::default()
+        };
+
+        let rows = RedesignDeviceRows::of_devices(Some(&scan), "", &[left, right.clone()]);
+        assert_eq!(rows.keyboards.len(), 1);
+        assert_eq!(rows.experimental.len(), 1);
+        let offline = &rows.experimental[0];
+        assert_eq!(offline.selector, right.selector);
+        assert_eq!(offline.alias, right.alias);
+        assert_eq!(offline.role, "offline-source");
+        assert_eq!(offline.aria_current, "true");
+        assert_eq!(
+            offline.staged_revision,
+            ksx_api::staged_device_revision(&right)
+        );
+        assert!(offline.meta.contains("Connection unavailable"));
+        assert!(offline.title.contains("remove it"));
+        assert_eq!(rows.exp_head, "Disconnected mapping sources · 1");
+        assert_eq!(rows.exp_fold_cls, "n-devfold");
+    }
+
+    #[test]
+    fn redesign_scan_refusal_does_not_reclassify_remembered_sources() {
+        let device = staged_device("usb:1111:0001:00", "left", "Left keyboard");
+        let rows = RedesignDeviceRows::of_devices(
+            None,
+            "the device scan did not answer",
+            std::slice::from_ref(&device),
+        );
+        assert!(rows.keyboards.is_empty());
+        assert!(rows.encoders.is_empty());
+        assert!(rows.experimental.is_empty());
+        assert_eq!(rows.exp_head, "Not keyboards — experimental · 0");
+        assert!(!rows.scan_authoritative);
     }
 
     #[test]

@@ -141,7 +141,7 @@ fn daemon_sink(
             // The refusal is a real ConfigError rather than a silent success,
             // so a screen that ever grew a Save button would fail loudly on
             // the first press instead of appearing to work.
-            stage_commit: Box::new(|_spec| {
+            stage_commit: Box::new(|_spec, _scope| {
                 Err(ksx_config::ConfigError::UnknownDeviceAlias(
                     "the cabinet cannot save a setup — open ksx (Studio) on a desk, or run \
                      `ksx setup`"

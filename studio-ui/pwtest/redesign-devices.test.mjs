@@ -2145,7 +2145,9 @@ describe("the device workbench", () => {
     const noise = [];
     const chartBodies = [];
     const inputCalls = [];
-    const stagedEncoders = new Set([IPAC]);
+    // Keep this browser-only hardware-lease fixture independent from whatever
+    // staged roster an earlier test left in the shared daemon.
+    const stagedEncoders = new Set();
     page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
     page.on("console", (message) => {
       if (message.type() === "error") noise.push(`console: ${message.text()}`);
@@ -2155,6 +2157,7 @@ describe("the device workbench", () => {
       const payload = await response.json();
       const original = payload.devices.encoders.find((row) => row.selector === IPAC);
       assert.ok(original, "the fixture must serve the primary I-PAC");
+      original.aria_current = stagedEncoders.has(IPAC) ? "true" : "false";
       const twin = {
         ...original,
         selector: IPAC_TWIN,
@@ -2170,11 +2173,12 @@ describe("the device workbench", () => {
     });
     await page.route(`${BASE}/redesign/device`, async (route) => {
       const body = new URLSearchParams(route.request().postData() ?? "");
-      if (body.get("selector") !== IPAC_TWIN) {
+      const selector = body.get("selector");
+      if (selector !== IPAC && selector !== IPAC_TWIN) {
         await route.continue();
         return;
       }
-      stagedEncoders.add(IPAC_TWIN);
+      stagedEncoders.add(selector);
       await route.fulfill({ status: 204 });
     });
     let laterChartGate = null;
@@ -2287,11 +2291,17 @@ describe("the device workbench", () => {
         IPAC_TWIN,
       );
       await page.click('[data-nx="rd-devs-open"]');
+      const primary = page.locator(
+        `.rd-encoder-device-node[data-instance-id="${IPAC_SLUG}"]`,
+      );
+      const twin = page.locator(
+        `.rd-encoder-device-node[data-instance-id="${IPAC_TWIN_SLUG}"]`,
+      );
       await page.click(`.rd-devmodal button[data-selector="${IPAC}"]`);
+      await primary.waitFor({ state: "attached", timeout: 20_000 });
       await page.click(`.rd-devmodal button[data-selector="${IPAC_TWIN}"]`);
+      await twin.waitFor({ state: "attached", timeout: 20_000 });
       await page.keyboard.press("Escape");
-      const primary = page.locator(`.rd-encoder-device-node[data-instance-id="${IPAC_SLUG}"]`);
-      const twin = page.locator(`.rd-encoder-device-node[data-instance-id="${IPAC_TWIN_SLUG}"]`);
       assert.equal(await primary.count(), 1);
       assert.equal(await twin.count(), 1);
       await page.waitForFunction(
@@ -3216,11 +3226,21 @@ describe("the device workbench", () => {
       );
       assert.equal(await page.locator(".rd-keyboard-device-node").count(), 2);
       assert.notEqual(G915_SLUG, G915_TWIN_SLUG, "raw selectors own distinct canvas ids");
+      const twinTitles = await page.locator(
+        ".rd-keyboard-device-node .n-kbhead > .n-kick",
+      ).allTextContents();
       assert.equal(
-        new Set(await page.locator(".rd-keyboard-device-node .n-kbhead > .n-kick").allTextContents())
-          .size,
-        1,
-        "duplicate display names never collapse physical connection identity",
+        new Set(twinTitles).size,
+        2,
+        "same-model boards expose two distinct exact-connection titles",
+      );
+      assert.ok(
+        twinTitles.some((title) => /Logitech G915 TKL.*connection 00/i.test(title)),
+        "the first board title names connection 00",
+      );
+      assert.ok(
+        twinTitles.some((title) => /Logitech G915 TKL.*connection 01/i.test(title)),
+        "the twin board title names connection 01",
       );
       assert.deepEqual(
         await page.locator(".rd-keyboard-device-node").evaluateAll((items) =>
@@ -3370,6 +3390,310 @@ describe("the device workbench", () => {
     } finally {
       await page.unrouteAll({ behavior: "wait" });
       await closeContext(twinContext);
+    }
+  });
+
+  test("a routed keyboard stays selectable and removable while disconnected", async () => {
+    const recoveryContext = await browser.newContext({
+      viewport: { width: 2200, height: 1100 },
+      colorScheme: "dark",
+    });
+    const page = await recoveryContext.newPage();
+    const noise = [];
+    page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
+    page.on("console", (message) => {
+      if (message.type() === "error") noise.push(`console: ${message.text()}`);
+    });
+    let connected = true;
+    let twinStaged = true;
+    let removedSelector = "";
+    let removedAuthority = null;
+    let servedDraftRevision = "";
+
+    await page.route("**/api/redesign*", async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      const original = payload.devices.keyboards.find((row) => row.selector === G915);
+      assert.ok(original, "the fixture must serve its keyboard template row");
+      const primary = {
+        ...original,
+        aria_current: "true",
+        staged_revision: "device-primary-r7",
+      };
+      const twin = {
+        ...original,
+        selector: G915_TWIN,
+        connection_label: "USB 046D:C545 · connection 01",
+        alias: "recovery keyboard",
+        label: "Logitech G915 TKL · recovery connection",
+        meta: "Bluetooth · Ready to use · recovery connection",
+        aria_current: "true",
+        staged_revision: "device-recovery-r7",
+      };
+      payload.devices.keyboards = [
+        ...payload.devices.keyboards.filter(
+          (row) => row.selector !== G915 && row.selector !== G915_TWIN,
+        ),
+        primary,
+        ...(connected && twinStaged ? [twin] : []),
+      ];
+      payload.devices.keyboards_head = `Keyboards · ${payload.devices.keyboards.length}`;
+      payload.devices.experimental = [
+        ...payload.devices.experimental.filter((row) => row.selector !== G915_TWIN),
+        ...(!connected && twinStaged
+          ? [{
+              ...twin,
+              role: "offline-source",
+              instance_id: "",
+              meta: "Connection unavailable · still in the mapping draft",
+              capture_badge: "Disconnected",
+              capture_state: "attention",
+              capture_cls: "rd-dev-capturechip",
+              title: "This exact source is still in the mapping draft but is not connected. Reconnect it to resume input, or remove it without affecting peer sources.",
+            }]
+          : []),
+      ];
+      payload.devices.exp_head = !connected && twinStaged
+        ? `Experimental and disconnected · ${payload.devices.experimental.length}`
+        : `Not keyboards — experimental · ${payload.devices.experimental.length}`;
+      payload.devices.exp_fold_cls = payload.devices.experimental.length
+        ? "n-devfold"
+        : "n-devfold none";
+      payload.devices.scan_authoritative = true;
+      payload.devices.staging_reachable = true;
+
+      const pad = payload.controllers.pads[0];
+      assert.ok(pad, "the fixture must serve one controller");
+      const seed = pad.sources?.[0] ?? {
+        source_id: G915,
+        source_alias: primary.alias,
+        source_label: primary.label,
+        routed: true,
+        revision: "source-a-r1",
+        preset: "Player 1 · keyboard A",
+        fn_keys: {},
+        controls: [],
+        mapping_available: true,
+        mapping_reason: "",
+        macros: [],
+        macro_available: true,
+        macro_reason: "",
+      };
+      const sourceA = {
+        ...seed,
+        source_id: G915,
+        source_alias: primary.alias,
+        source_label: primary.label,
+        routed: true,
+        revision: "source-a-r1",
+        controls: [],
+        macros: [],
+        mapping_available: true,
+        mapping_reason: "",
+      };
+      const sourceB = {
+        ...seed,
+        source_id: G915_TWIN,
+        source_alias: twin.alias,
+        source_label: twin.label,
+        routed: true,
+        revision: "source-b-r1",
+        controls: [],
+        macros: [],
+        mapping_available: connected,
+        mapping_reason: connected ? "" : "Reconnect this exact keyboard before Save or Play.",
+      };
+      pad.sources = [sourceA, ...(twinStaged ? [sourceB] : [])];
+      payload.source = twinStaged ? G915_TWIN : G915;
+      payload.controllers.source = payload.source;
+      if (payload.operations) {
+        servedDraftRevision = payload.operations.draft_revision;
+        payload.operations.save.allowed = connected || !twinStaged;
+        payload.operations.play.allowed = connected || !twinStaged;
+        payload.operations.save.reason = !connected && twinStaged
+          ? "Reconnect Logitech G915 TKL · recovery connection, or remove that exact source."
+          : payload.operations.save.reason;
+        payload.operations.play.reason = !connected && twinStaged
+          ? "Reconnect Logitech G915 TKL · recovery connection, or remove that exact source."
+          : payload.operations.play.reason;
+      }
+      await route.fulfill({ response, json: payload });
+    });
+    await page.route(`${BASE}/redesign/device/remove`, async (route) => {
+      const body = new URLSearchParams(route.request().postData() ?? "");
+      removedSelector = body.get("selector") ?? "";
+      removedAuthority = {
+        draft: body.get("expected_revision"),
+        source: body.get("expected_source_revision"),
+      };
+      twinStaged = false;
+      await route.fulfill({ status: 204 });
+    });
+
+    try {
+      await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await page.waitForFunction(
+        () => Boolean(document.querySelector(".forma-canvas-stage")?.style.transform),
+      );
+      await page.waitForFunction(
+        (selector) => Boolean(document.querySelector(
+          `.rd-devmodal button[data-selector="${selector}"]`,
+        )),
+        G915_TWIN,
+        { timeout: 20_000 },
+      );
+      await page.click('[data-nx="rd-devs-open"]');
+      for (const selector of [G915, G915_TWIN]) {
+        const row = page.locator(`.rd-devmodal button[data-selector="${selector}"]`);
+        if ((await row.getAttribute("aria-pressed")) !== "true") await row.click();
+      }
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(
+        ([left, right]) => [left, right].every((id) =>
+          document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)
+        ),
+        [G915_SLUG, G915_TWIN_SLUG],
+      );
+      const primary = page.locator(
+        `.forma-canvas-stage > [data-instance-id="${G915_SLUG}"]`,
+      );
+      const twin = page.locator(
+        `.forma-canvas-stage > [data-instance-id="${G915_TWIN_SLUG}"]`,
+      );
+      const twinGeometry = await twin.evaluate((item) => ({
+        x: item.dataset.canvasX,
+        y: item.dataset.canvasY,
+        width: item.dataset.canvasWidth,
+        height: item.dataset.canvasHeight,
+      }));
+      assert.equal(await page.locator(".rd-keyboard-device-node").count(), 2);
+
+      await revealCanvasItem(page, G915_SLUG);
+      const focusedTwinKey = twin.locator('[data-key="A"]').first();
+      await focusedTwinKey.evaluate((key) => key.focus());
+      assert.equal(await primary.getAttribute("aria-current"), "true");
+      assert.equal(await twin.getAttribute("aria-current"), null);
+      assert.equal(
+        await twin.evaluate((item) => item.contains(document.activeElement)),
+        true,
+        "native focus inside an unselected peer is independent from canvas selection",
+      );
+
+      connected = false;
+      await page.waitForFunction(
+        (id) => document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)
+          ?.dataset.deviceRole === "offline-source",
+        G915_TWIN_SLUG,
+        { timeout: 15_000 },
+      );
+      assert.equal(await primary.locator("[data-rd-keyboard-surface]").count(), 1);
+      assert.equal(await twin.locator("[data-rd-keyboard-surface]").count(), 0);
+      assert.equal(await twin.getAttribute("data-source-enabled"), "unknown");
+      assert.equal(await twin.getAttribute("data-mapping-available"), "false");
+      assert.equal(
+        await twin.evaluate((item) => document.activeElement === item),
+        true,
+        "a selected board's recovery presentation retains keyboard focus",
+      );
+      assert.equal(
+        await twin.getAttribute("aria-current"),
+        null,
+        "disconnect does not promote the focused peer into the selection",
+      );
+      assert.equal(await primary.getAttribute("aria-current"), "true");
+      assert.match((await twin.textContent()) ?? "", /Disconnected source/i);
+      assert.match(
+        (await page.locator("#rd-save-reason").textContent()) ?? "",
+        /Reconnect Logitech G915 TKL/i,
+        "the exact unavailable source blocker stays visible beside Save",
+      );
+      assert.equal(
+        new URL(page.url()).searchParams.get("source"),
+        G915_TWIN,
+        "connection loss never erases canonical authoring focus",
+      );
+      assert.deepEqual(
+        await twin.evaluate((item) => ({
+          x: item.dataset.canvasX,
+          y: item.dataset.canvasY,
+          width: item.dataset.canvasWidth,
+          height: item.dataset.canvasHeight,
+        })),
+        twinGeometry,
+        "the recovery card retains the physical board's geometry",
+      );
+      await page.click('[data-nx="rd-devs-open"]');
+      const offlineRow = page.locator(
+        `.rd-devmodal button[data-selector="${G915_TWIN}"][data-role="offline-source"]`,
+      );
+      assert.equal(await offlineRow.count(), 1);
+      assert.match((await offlineRow.textContent()) ?? "", /Disconnected|Still in mapping draft/i);
+      await page.keyboard.press("Escape");
+
+      await revealCanvasItem(page, G915_TWIN_SLUG);
+      await twin.focus();
+      connected = true;
+      await page.waitForFunction(
+        (id) => document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)
+          ?.classList.contains("rd-keyboard-device-node"),
+        G915_TWIN_SLUG,
+        { timeout: 15_000 },
+      );
+      assert.equal(await twin.locator("[data-rd-keyboard-surface]").count(), 1);
+      assert.equal(
+        await twin.evaluate((item) => document.activeElement === item),
+        true,
+        "reconnecting returns focus to the restored full keyboard board",
+      );
+      assert.equal(await twin.getAttribute("aria-current"), "true");
+      assert.deepEqual(
+        await twin.evaluate((item) => ({
+          x: item.dataset.canvasX,
+          y: item.dataset.canvasY,
+          width: item.dataset.canvasWidth,
+          height: item.dataset.canvasHeight,
+        })),
+        twinGeometry,
+      );
+
+      await twin.focus();
+      connected = false;
+      await page.waitForFunction(
+        (id) => document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)
+          ?.dataset.deviceRole === "offline-source",
+        G915_TWIN_SLUG,
+        { timeout: 15_000 },
+      );
+      assert.equal(await twin.evaluate((item) => document.activeElement === item), true);
+      assert.equal(await twin.getAttribute("aria-current"), "true");
+      const removeDisconnected = twin.getByRole("button", {
+        name: "Remove disconnected source",
+      });
+      await revealCanvasItem(page, G915_TWIN_SLUG);
+      await twin.focus();
+      await twin.press("F2");
+      await removeDisconnected.waitFor({ state: "visible", timeout: 15_000 });
+      await removeDisconnected.click();
+      await page.waitForFunction(
+        (id) => !document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`),
+        G915_TWIN_SLUG,
+      );
+      assert.equal(removedSelector, G915_TWIN);
+      assert.deepEqual(removedAuthority, {
+        draft: servedDraftRevision,
+        source: "device-recovery-r7",
+      });
+      assert.equal(await primary.locator("[data-rd-keyboard-surface]").count(), 1);
+      assert.equal(new URL(page.url()).searchParams.get("source"), G915);
+      assert.deepEqual(noise, []);
+    } finally {
+      await page.unrouteAll({ behavior: "wait" });
+      await closeContext(recoveryContext);
     }
   });
 

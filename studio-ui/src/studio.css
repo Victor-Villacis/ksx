@@ -22986,6 +22986,13 @@ button.rd-encoder-product-read-inline:disabled {
   display: none;
 }
 
+/* A disconnected source is still staged, but its exact-source recovery card
+   must keep the removal escape hatch available. Removing it retires only that
+   board and its routes; peers remain staged. */
+.rd-dev-node[data-device-role="offline-source"][data-staged="true"] .rd-stageform {
+  display: block;
+}
+
 /* Unknown is not unstaged. If either provider read refused, keep the last
    known card in place, show the truthful status beside the disabled action,
    and wait for an authoritative repaint. */

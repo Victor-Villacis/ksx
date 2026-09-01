@@ -40,6 +40,10 @@ pub mod codes {
     pub const MACRO_INVALID: &str = "macro-invalid";
     /// A restore mode / verb argument this build does not know.
     pub const BAD_REQUEST: &str = "bad-request";
+    /// The requested destructive edit is valid, but the exact staged target
+    /// still owns authored mappings and the caller has not explicitly
+    /// confirmed that those mappings should be removed.
+    pub const CONFIRM_REQUIRED: &str = "confirm-required";
     /// A persistent hardware transaction may have started, but KSX could not
     /// return a fully verified recovery outcome. Callers must not classify
     /// this by matching human-readable prose.

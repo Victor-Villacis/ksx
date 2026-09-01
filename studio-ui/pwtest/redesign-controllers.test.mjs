@@ -436,6 +436,133 @@ describe("the controller workbench", () => {
     await page.close();
   });
 
+  test("a failed park rolls back its optimistic ghost instead of duplicating the live card", async () => {
+    const page = await openBench();
+    const ghost = '.forma-canvas-stage [data-instance-id^="ctrl-parked-"]';
+    let releaseParkRequest;
+    const parkRequestGate = new Promise((resolve) => {
+      releaseParkRequest = resolve;
+    });
+    let observeParkRequest;
+    const parkRequestSeen = new Promise((resolve) => {
+      observeParkRequest = resolve;
+    });
+    const failPark = async (route) => {
+      observeParkRequest();
+      await parkRequestGate;
+      await route.abort("failed");
+    };
+    await page.route("**/redesign/controller/park", failPark);
+    try {
+      await revealCanvasItem(page, "ctrl-slot-1");
+      await page.selectOption(`${cardSel(1)} select.rd-ctrlplayer`, "");
+      await parkRequestSeen;
+      await page.waitForFunction(
+        (selector) => document.querySelectorAll(selector).length === 1,
+        ghost,
+      );
+      assert.equal(
+        await page.locator('.forma-canvas-stage [data-instance-id^="ctrl-slot-"]').count(),
+        3,
+        "the optimistic ghost temporarily coexists with the still-authoritative live rack",
+      );
+
+      releaseParkRequest();
+      await page.waitForFunction(
+        (selector) => document.querySelectorAll(selector).length === 0,
+        ghost,
+        { timeout: 10_000 },
+      );
+      assert.equal(
+        await page.locator('.forma-canvas-stage [data-instance-id^="ctrl-slot-"]').count(),
+        3,
+        "transport refusal restores one live card without a duplicate ghost",
+      );
+      assert.equal(
+        (await api()).controllers.cards.length,
+        3,
+        "the interrupted park never changed daemon truth",
+      );
+      assert.match(
+        (await page.locator(".rd-flash").textContent()) ?? "",
+        /request failed/i,
+        "the operator is told that the park was not committed",
+      );
+      assert.equal(
+        page.ksxNoise.some((line) => line.startsWith("pageerror:")),
+        false,
+        "the handled transport failure must not escape as a page exception",
+      );
+    } finally {
+      releaseParkRequest();
+      await page.unroute("**/redesign/controller/park", failPark);
+      await page.close();
+    }
+  });
+
+  test("a committed park survives a lost response when daemon reconciliation confirms it", async () => {
+    const page = await openBench();
+    const ghost = '.forma-canvas-stage [data-instance-id^="ctrl-parked-"]';
+    let forwardedStatus = 0;
+    const loseParkResponse = async (route) => {
+      const forwarded = await route.fetch({ maxRedirects: 0 });
+      forwardedStatus = forwarded.status();
+      await route.abort("connectionclosed");
+    };
+    await page.route("**/redesign/controller/park", loseParkResponse);
+    try {
+      await revealCanvasItem(page, "ctrl-slot-1");
+      await page.selectOption(`${cardSel(1)} select.rd-ctrlplayer`, "");
+      await page.waitForFunction(
+        (selector) =>
+          document.querySelectorAll(selector).length === 1 &&
+          /response was interrupted.*confirmed/i.test(
+            document.querySelector(".rd-flash")?.textContent ?? "",
+          ),
+        ghost,
+        { timeout: 15_000 },
+      );
+      assert.equal(forwardedStatus, 303, "the proxied park committed before response loss");
+      const heldGhostId = await page.locator(ghost).getAttribute("data-instance-id");
+      assert.ok(heldGhostId);
+      const ghostId = heldGhostId.replace(/^ctrl-parked-/, "");
+      const parked = await api();
+      assert.equal(parked.controllers.cards.length, 2, "daemon truth contains the committed park");
+      assert.ok(
+        parked.controllers.parked_held.includes(ghostId),
+        "the browser retained the ghost whose snapshot the daemon still holds",
+      );
+      assert.equal(
+        await page.locator(ghost).count(),
+        1,
+        "response loss cannot silently discard the sole recovery control",
+      );
+      assert.equal(
+        page.ksxNoise.some((line) => line.startsWith("pageerror:")),
+        false,
+        "the recovered transport interruption must not escape as a page exception",
+      );
+
+      // Restore the suite's three-controller baseline through the same public
+      // recovery verb. The response-loss route is removed before re-slotting.
+      await page.unroute("**/redesign/controller/park", loseParkResponse);
+      await revealCanvasItem(page, heldGhostId);
+      await page.selectOption(`${ghost} select.rd-ctrlplayer`, "1");
+      await page.waitForFunction(
+        (selector) =>
+          document.querySelectorAll(selector).length === 0 &&
+          document.querySelectorAll(
+            '.forma-canvas-stage [data-instance-id^="ctrl-slot-"]',
+          ).length === 3,
+        ghost,
+        { timeout: 15_000 },
+      );
+    } finally {
+      await page.unroute("**/redesign/controller/park", loseParkResponse);
+      await page.close();
+    }
+  });
+
   test("direct assignment reorders; No player parks and compacts; re-slotting bumps down", async () => {
     const page = await openBench();
     await revealCanvasItem(page, "ctrl-slot-3");
@@ -1151,12 +1278,30 @@ describe("the mapper on the workbench", () => {
   before(async () => {
     let payload = await api();
     if (payload.controllers.pads.length < 2) {
-      await fetch(`${BASE}/redesign/controller`, {
+      assert.equal(
+        payload.controllers.add_source,
+        IPAC,
+        "the mapper fixture must author its second seat for the exact I-PAC source",
+      );
+      assert.ok(payload.operations.draft_revision, "controller add needs current draft authority");
+      assert.ok(
+        payload.controllers.add_source_revision,
+        "controller add needs current exact-device authority",
+      );
+      const response = await fetch(`${BASE}/redesign/controller`, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: "persona=xbox360&preset=Mapper+P2&layout=keyboard-2p",
+        body: new URLSearchParams({
+          persona: "xbox360",
+          preset: "Mapper P2",
+          layout: "keyboard-2p",
+          source: payload.controllers.add_source,
+          expected_revision: payload.operations.draft_revision,
+          expected_source_revision: payload.controllers.add_source_revision,
+        }),
         redirect: "manual",
       });
+      assert.equal(response.status, 303, "could not add the exact-source mapper seat");
       payload = await api();
     }
     const pads = payload.controllers.pads;

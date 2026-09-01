@@ -127,6 +127,8 @@ export interface RdDeviceRowView {
   meta: string;
   role: string;
   selector: string;
+  /** Exact staged-device authority; empty until this board joins the draft. */
+  staged_revision?: string;
   /** Exact runtime HID instance from the authoritative scan. Empty when the
    * provider cannot prove one; live paint then fails closed by selector/alias. */
   instance_id?: string;
@@ -1333,12 +1335,23 @@ export function applyRedesign(v: RedesignPayload): void {
     ...(d?.encoders ?? []),
     ...(d?.experimental ?? []),
   ].filter((row) => row.aria_current === "true");
+  // Connection rows are not source authority. A routed source remains a
+  // valid authoring target while unplugged so the operator can inspect its
+  // routes and remove it without reconnecting hardware. The device roster's
+  // offline placeholder covers an unrouted staged source; nested pad sources
+  // cover the canonical routed graph (including older payload producers).
+  const canonicalStagedSelectors = new Set([
+    ...stagedSources.map((row) => row.selector),
+    ...(v.controllers?.pads ?? []).flatMap((pad) =>
+      (pad.sources ?? []).map((source) => source.source_id)
+    ),
+  ].filter(Boolean));
   const currentSource = currentAuthoringSource();
   const servedSource = v.source?.trim() || v.controllers?.source?.trim() || "";
-  if (servedSource && stagedSources.some((row) => row.selector === servedSource)) {
+  if (servedSource && canonicalStagedSelectors.has(servedSource)) {
     mergeSourceIntoUrl(servedSource, false);
-  } else if (!stagedSources.some((row) => row.selector === currentSource)) {
-    const fallback = stagedSources[0]?.selector ?? "";
+  } else if (!canonicalStagedSelectors.has(currentSource)) {
+    const fallback = canonicalStagedSelectors.values().next().value ?? "";
     if (fallback) mergeSourceIntoUrl(fallback, false);
     else if (currentSource) {
       const url = new URL(window.location.href);
@@ -1440,10 +1453,13 @@ function syncCtrlBench(): void {
     root,
     pads: rdCtrlPads,
     authoringSource: currentAuthoringSource(),
+    draftRevision: rdDraftRevision(),
     parked: canvasPrefs.parked ?? [],
     parkedHeld: new Set(rdCtrlParkedHeld),
     addPreset: rdCtrlAddPreset(),
     addLayout: rdCtrlAddLayout(),
+    addSource: rdCtrlAddSource(),
+    addSourceRevision: rdCtrlAddSourceRevision(),
     savedGeometry: (id) => canvasPrefs.widgets[id],
     allocateFreshGeometry: allocateFreshCanvasGeometry,
     park: parkController,
@@ -2680,6 +2696,8 @@ export function setRedesignRefresh(
 export type RedesignDeviceMutationAction = "add" | "remove";
 export interface RedesignDeviceMutationOptions {
   confirmRemove?: boolean;
+  expectedRevision?: string;
+  expectedSourceRevision?: string;
 }
 
 /** Device membership is daemon-owned even though canvas geometry is browser
@@ -3010,6 +3028,7 @@ function renderInspector(): void {
           { head: rdCtrlMacrosHead, rows: rdCtrlMacroRows, note: rdCtrlMacrosNote },
           inspTab,
           setInspTab,
+          rdDraftRevision(),
         );
         const controllerTools = [controllerIdentityColorEditor(Number(ctrlSlot))];
         const sourceEditor = controllerSourceEditor(Number(ctrlSlot));
@@ -3317,6 +3336,10 @@ function deviceRowFor(selector: string): RdDeviceRowView | undefined {
   return [...rdDevKb(), ...rdDevEnc(), ...rdDevExp()].find((r) => r.selector === selector);
 }
 
+function deviceRowConnected(row: RdDeviceRowView | undefined): boolean {
+  return rdDeviceScanAuthoritative && Boolean(row) && row?.role !== "offline-source";
+}
+
 /** Canvas chrome names a physical endpoint, not merely its product model.
  * A unique model name stays compact; twins gain the server-authored
  * connection identity that distinguishes their exact selectors. This is
@@ -3364,6 +3387,7 @@ function controllerSourceLabel(
 const DEVICE_ROLE_BADGE: Record<string, string> = {
   "panel-encoder": "Panel encoder",
   keyboard: "Physical keyboard",
+  "offline-source": "Disconnected source",
 };
 const STAGED_DEVICE_TITLE =
   "This exact board is one independent source in the mapping draft. Peer keyboards and routes remain enabled.";
@@ -3377,6 +3401,9 @@ const KEYBOARD_DEVICE_MIN_HEIGHT = 480;
 const DEVICE_CARD_ROW_STRIDE = DEVICE_CARD_MIN_HEIGHT + CANVAS_FRESH_PLACEMENT_GAP;
 
 function deviceCardPurpose(row: RdDeviceRowView): string {
+  if (row.role === "offline-source") {
+    return "This exact source is still in the mapping draft. Reconnect it to resume input, or remove it here; peer sources and controllers remain unchanged.";
+  }
   const authorityUnknown = !rdDeviceScanAuthoritative || !rdStagingReachable;
   if (authorityUnknown) {
     const kind = row.role === "keyboard" ? "physical keyboard" : "encoder";
@@ -3417,6 +3444,12 @@ interface RdDeviceStateBadge {
  * so these are badges rather than one lossy status sentence. */
 function deviceStateBadges(row: RdDeviceRowView): RdDeviceStateBadge[] {
   const badges: RdDeviceStateBadge[] = [];
+  if (row.role === "offline-source") {
+    badges.push({ label: "Disconnected", state: "attention" });
+    badges.push({ label: "On canvas", state: "canvas" });
+    badges.push({ label: "Independent source", state: "source" });
+    return badges;
+  }
   if (rdDeviceScanAuthoritative) badges.push({ label: "Connected", state: "connected" });
   badges.push({ label: "On canvas", state: "canvas" });
   if (row.role === "keyboard") {
@@ -3502,11 +3535,15 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
     form.append(input);
   }
   const submit = document.createElement("button");
-  submit.type = "submit";
+  const offline = row.role === "offline-source";
+  submit.type = offline ? "button" : "submit";
   submit.className = "rd-stagebtn";
-  submit.textContent = "Add to mapping draft";
-  submit.title = "Add this exact device as an independent mapping source. Existing keyboards and routes stay unchanged.";
-  submit.hidden = row.aria_current === "true";
+  submit.textContent = offline ? "Remove disconnected source" : "Add to mapping draft";
+  submit.title = offline
+    ? "Remove this exact disconnected source and its routes. Peer sources and controllers stay unchanged."
+    : "Add this exact device as an independent mapping source. Existing keyboards and routes stay unchanged.";
+  if (offline) submit.dataset.nx = "rd-offline-remove";
+  submit.hidden = row.aria_current === "true" && !offline;
   form.append(submit);
   body.append(badge, name, meta);
   body.append(states, purpose, staged, form);
@@ -3579,6 +3616,7 @@ function mountDeviceWidget(
     new Set(Object.keys(canvasPrefs.widgets)),
     legacyGeometryOwners,
   );
+  const selectorGeometry = savedGeometryKey ? canvasPrefs.widgets[savedGeometryKey] : undefined;
   const encoderSurface = row.role === "panel-encoder"
     ? createEncoderWorkbenchSurface(document, encoderDeviceFromRow(row), {
       readStoredAssignmentsOnMount,
@@ -3601,7 +3639,9 @@ function mountDeviceWidget(
     ? 960
     : row.role === "keyboard"
       ? KEYBOARD_DEVICE_WIDTH
-      : 300;
+      : row.role === "offline-source" && isGeometry(selectorGeometry)
+        ? selectorGeometry.width
+        : 300;
   // Match the canvas engine's effective minimum exactly. Supplying a smaller
   // candidate makes collision allocation reason about geometry it will later
   // clamp, which can leave fresh rows closer than the engine's 40 px gap.
@@ -3625,11 +3665,12 @@ function mountDeviceWidget(
   item.dataset.sourceId = row.selector;
   item.dataset.sourceAlias = row.alias;
   item.dataset.sourceInstance = row.instance_id ?? "";
-  item.dataset.sourceEnabled = rdDeviceScanAuthoritative ? "true" : "unknown";
-  item.dataset.mappingAvailable = row.aria_current === "true" && rdStagingReachable
+  item.dataset.sourceEnabled = deviceRowConnected(row) ? "true" : "unknown";
+  item.dataset.mappingAvailable = deviceRowConnected(row) &&
+      row.aria_current === "true" && rdStagingReachable
     ? "true"
     : "false";
-  item.dataset.sourceState = rdDeviceScanAuthoritative ? "enabled" : "unknown";
+  item.dataset.sourceState = deviceRowConnected(row) ? "enabled" : "unknown";
   item.classList.add("rd-dev-node");
   if (row.role === "keyboard") {
     item.classList.add("rd-keyboard-device-node", "n-widget", "n-widget-kb");
@@ -3651,7 +3692,6 @@ function mountDeviceWidget(
     manualScale: 1,
   };
   try {
-    const selectorGeometry = savedGeometryKey ? canvasPrefs.widgets[savedGeometryKey] : undefined;
     const legacyKeyboardGeometry = row.role === "keyboard" && !selectorGeometry &&
         row.aria_current === "true" && isGeometry(canvasPrefs.widgets.keyboard)
       ? canvasPrefs.widgets.keyboard
@@ -3787,7 +3827,11 @@ async function toggleBenchDevice(selector: string): Promise<void> {
     }
     if (
       row.aria_current === "true" &&
-      !(await redesignDeviceMutationFn("remove", row, { confirmRemove: hasMappings }))
+      !(await redesignDeviceMutationFn("remove", row, {
+        confirmRemove: hasMappings,
+        expectedRevision: rdDraftRevision(),
+        expectedSourceRevision: row.staged_revision ?? "",
+      }))
     ) return;
     const item = benchItemEl(selector);
     if (item) {
@@ -3953,8 +3997,10 @@ function toggleEncoderProfileLab(): void {
 }
 
 /** Reconcile browser-owned bench membership against current served truth.
- * Missing devices unmount but stay in `canvasPrefs.bench`; their exact
- * geometry is retained. Reappearing devices remount at that same geometry. */
+ * An authoritative disconnect remounts a staged source as an honest neutral
+ * recovery card; reconnecting remounts its real keyboard/encoder surface at
+ * the same geometry. A scan refusal preserves the existing presentation
+ * because absence is not proven in that state. */
 function reconcileBenchWithRoster(): void {
   const canvas = nCanvas;
   if (!canvas) {
@@ -3963,6 +4009,13 @@ function reconcileBenchWithRoster(): void {
   }
 
   const bench = new Set(benchSelectors());
+  const selectedIds = canvas.selectedItems()
+    .map((item) => item.dataset.instanceId ?? "")
+    .filter(Boolean);
+  const activeId = canvas.activeItem()?.dataset.instanceId ?? "";
+  const focusedBefore = document.activeElement;
+  let selectedPresentationChanged = false;
+  let focusedPresentationId = "";
   let changed = false;
   for (const item of Array.from(
     rdRoot?.querySelectorAll<HTMLElement>(".rd-dev-node[data-selector]") ?? [],
@@ -3979,6 +4032,12 @@ function reconcileBenchWithRoster(): void {
       bench.has(selector) &&
       ((row && presentationMatches) || (!row && !rdDeviceScanAuthoritative))
     ) continue;
+    const instanceId = item.dataset.instanceId ?? "";
+    if (selectedIds.includes(instanceId)) selectedPresentationChanged = true;
+    if (
+      focusedBefore instanceof Node &&
+      (focusedBefore === item || item.contains(focusedBefore))
+    ) focusedPresentationId = instanceId;
     rememberDeviceGeometry(item);
     disposeEncoderWorkbenchItem(item);
     canvas.removeItem(item, { selectFallback: false });
@@ -3992,6 +4051,36 @@ function reconcileBenchWithRoster(): void {
       changed = true;
     }
   });
+
+  // A connection transition swaps presentation, not identity. Reapply the
+  // exact pre-swap selection after every replacement is registered; keeping
+  // the former primary last preserves multi-selection semantics. If keyboard
+  // focus lived anywhere inside the replaced board, land it on the new shell
+  // because its former child may not exist in the recovery presentation.
+  if (selectedPresentationChanged || focusedPresentationId) {
+    const mounted = new Map(
+      Array.from(
+        rdRoot?.querySelectorAll<HTMLElement>(
+          ".forma-canvas-stage > [data-instance-id]",
+        ) ?? [],
+      ).map((item) => [item.dataset.instanceId ?? "", item] as const),
+    );
+    if (selectedPresentationChanged) {
+      const restored = selectedIds
+        .map((id) => mounted.get(id))
+        .filter((item): item is HTMLElement => Boolean(item));
+      const primary = activeId ? mounted.get(activeId) : undefined;
+      if (primary && restored.includes(primary)) {
+        canvas.setSelection([...restored.filter((item) => item !== primary), primary]);
+      } else if (restored.length > 0) {
+        canvas.setSelection(restored);
+      }
+    }
+    const focusReplacement = focusedPresentationId
+      ? mounted.get(focusedPresentationId)
+      : undefined;
+    focusReplacement?.focus({ preventScroll: true });
+  }
 
   syncDeviceRows();
   syncBenchCards();
@@ -4143,7 +4232,7 @@ function syncKeyboardDevicePresentation(): void {
   )) {
     const selector = item.dataset.selector ?? "";
     const row = deviceRowFor(selector);
-    const sourceEnabled = rdDeviceScanAuthoritative && Boolean(row);
+    const sourceEnabled = deviceRowConnected(row);
     const mappingAvailable = sourceEnabled && rdStagingReachable &&
       row?.aria_current === "true";
     item.dataset.sourceId = selector;
@@ -4237,22 +4326,27 @@ function syncBenchCards(): void {
     const purpose = item.querySelector<HTMLElement>(".rd-devcard-purpose");
     const stageButton = item.querySelector<HTMLButtonElement>(".rd-stagebtn");
     const actionAvailable = rdDeviceScanAuthoritative && rdStagingReachable && Boolean(row);
+    const sourceConnected = deviceRowConnected(row);
     item.dataset.scanAuthoritative = rdDeviceScanAuthoritative ? "true" : "false";
     item.dataset.stagingReachable = rdStagingReachable ? "true" : "false";
     item.dataset.staged = actionAvailable
       ? (row!.aria_current === "true" ? "true" : "false")
       : "unknown";
     if (item.classList.contains("rd-keyboard-device-node")) {
-      item.dataset.sourceEnabled = rdDeviceScanAuthoritative && Boolean(row) ? "true" : "unknown";
-      item.dataset.mappingAvailable = actionAvailable && row!.aria_current === "true"
+      item.dataset.sourceEnabled = sourceConnected ? "true" : "unknown";
+      item.dataset.mappingAvailable = sourceConnected && rdStagingReachable &&
+          row!.aria_current === "true"
         ? "true"
         : "false";
     }
     if (stageButton) {
       const alreadyStaged = row?.aria_current === "true";
-      stageButton.hidden = alreadyStaged;
-      stageButton.dataset.rdProductDisabled = actionAvailable && !alreadyStaged ? "false" : "true";
-      stageButton.disabled = !actionAvailable || alreadyStaged ||
+      const offlineRemove = row?.role === "offline-source";
+      stageButton.hidden = alreadyStaged && !offlineRemove;
+      stageButton.dataset.rdProductDisabled = actionAvailable && (!alreadyStaged || offlineRemove)
+        ? "false"
+        : "true";
+      stageButton.disabled = !actionAvailable || (alreadyStaged && !offlineRemove) ||
         rdRoot?.dataset.rdMutationPending === "true";
     }
 
@@ -4289,9 +4383,11 @@ function syncBenchCards(): void {
         status.title = rdStagingLine || "Staging unavailable";
       }
     } else if (status) {
-      status.textContent = row.aria_current === "true"
-        ? "Independent mapping source"
-        : "On-canvas preview";
+      status.textContent = row.role === "offline-source"
+        ? "Disconnected · still in mapping draft"
+        : row.aria_current === "true"
+          ? "Independent mapping source"
+          : "On-canvas preview";
       status.title = row.role === "keyboard" ? KEYBOARD_MAPPING_READY_TITLE : STAGED_DEVICE_TITLE;
     }
     const displayName = deviceCanvasLabel(row);
@@ -4345,11 +4441,20 @@ function syncDeviceRows(): void {
     btn.setAttribute("aria-pressed", on ? "true" : "false");
     btn.classList.toggle("on", on);
     const row = deviceRowFor(selector);
+    const connection = btn.querySelector<HTMLElement>(".rd-dev-connectedchip");
+    if (connection) {
+      connection.textContent = row?.role === "offline-source" ? "Disconnected" : "Connected";
+      connection.dataset.state = row?.role === "offline-source" ? "attention" : "connected";
+    }
     const meta = btn.querySelector<HTMLElement>(".n-dev-meta:not(.rd-dev-word)");
     if (row && meta) meta.textContent = deviceCardMeta(row);
     const word = btn.querySelector<HTMLElement>(".rd-dev-word");
     if (word) {
-      word.textContent = row?.role === "keyboard"
+      word.textContent = row?.role === "offline-source"
+        ? on
+          ? "On canvas — press to remove source"
+          : "Show recovery card on canvas"
+        : row?.role === "keyboard"
         ? on
           ? "On canvas — press to remove board"
           : "Add keyboard board to canvas"
@@ -5313,6 +5418,11 @@ export function redesignWire(root: HTMLElement): void {
       return;
     } else if (hit === "rd-dev-toggle") {
       const selector = target?.closest<HTMLElement>('[data-nx="rd-dev-toggle"]')?.dataset
+        .selector;
+      if (selector) void toggleBenchDevice(selector);
+      return;
+    } else if (hit === "rd-offline-remove") {
+      const selector = target?.closest<HTMLElement>(".rd-dev-node[data-selector]")?.dataset
         .selector;
       if (selector) void toggleBenchDevice(selector);
       return;
@@ -6643,7 +6753,7 @@ export function RedesignIsland() {
                 () => rdDevKb(),
                 (r) =>
                   r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title +
-                  "|" + r.aria_current,
+                  "|" + r.aria_current + "|" + (r.staged_revision ?? ""),
                 (r) =>
                   h(
                     "button",
@@ -6698,7 +6808,7 @@ export function RedesignIsland() {
                 () => rdDevEnc(),
                 (r) =>
                   r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title +
-                  "|" + r.aria_current,
+                  "|" + r.aria_current + "|" + (r.staged_revision ?? ""),
                 (r) =>
                   h(
                     "button",
@@ -6723,8 +6833,16 @@ export function RedesignIsland() {
                       // above — the compiler drops an element that shares a
                       // parent with a dynamic text, and the parity gate is
                       // what caught the chip existing only after hydration.
-                      h("span", { class: "rd-dev-connectedchip" }, "Connected"),
-                      h("span", { class: "rd-dev-stagedchip" }, "Mapping source"),
+                      h(
+                        "span",
+                        { class: "rd-dev-connectedchip" },
+                        "Connected",
+                      ),
+                      h(
+                        "span",
+                        { class: "rd-dev-stagedchip" },
+                        "Mapping source",
+                      ),
                       h(
                         "span",
                         {
@@ -6740,7 +6858,11 @@ export function RedesignIsland() {
                       // contract, so hydration may reword it.
                       h("span", { class: "n-dev-meta", "data-live-chatter": "" }, r.meta),
                       h("span", { class: "n-dev-meta rd-dev-identity" }, r.connection_label),
-                      h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
+                      h(
+                        "span",
+                        { class: "n-dev-meta rd-dev-word" },
+                        "Show on canvas",
+                      ),
                     ),
                     h("span", { class: "n-dev-dot" }),
                   ),
@@ -6754,7 +6876,7 @@ export function RedesignIsland() {
                 () => rdDevExp(),
                 (r) =>
                   r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title +
-                  "|" + r.aria_current,
+                  "|" + r.aria_current + "|" + (r.staged_revision ?? ""),
                 (r) =>
                   h(
                     "button",
@@ -6779,8 +6901,16 @@ export function RedesignIsland() {
                       // above — the compiler drops an element that shares a
                       // parent with a dynamic text, and the parity gate is
                       // what caught the chip existing only after hydration.
-                      h("span", { class: "rd-dev-connectedchip" }, "Connected"),
-                      h("span", { class: "rd-dev-stagedchip" }, "Mapping source"),
+                      h(
+                        "span",
+                        { class: "rd-dev-connectedchip" },
+                        "Device status",
+                      ),
+                      h(
+                        "span",
+                        { class: "rd-dev-stagedchip" },
+                        "Mapping source",
+                      ),
                       h(
                         "span",
                         {
@@ -6791,7 +6921,11 @@ export function RedesignIsland() {
                       ),
                       h("span", { class: "n-dev-meta" }, r.meta),
                       h("span", { class: "n-dev-meta rd-dev-identity" }, r.connection_label),
-                      h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
+                      h(
+                        "span",
+                        { class: "n-dev-meta rd-dev-word" },
+                        "Show on canvas",
+                      ),
                     ),
                     h("span", { class: "n-dev-dot" }),
                   ),

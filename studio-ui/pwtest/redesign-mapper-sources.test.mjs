@@ -29,6 +29,14 @@ const right = {
   selector: "usb:2222:0002:00",
   instance: "HID\\VID_2222&PID_0002\\RIGHT",
 };
+const serialUpper = {
+  selector: "usb:3333:0003:00:sn=BoardA",
+  instance: "HID\\VID_3333&PID_0003\\UPPER",
+};
+const serialLower = {
+  selector: "usb:3333:0003:00:sn=boarda",
+  instance: "HID\\VID_3333&PID_0003\\LOWER",
+};
 
 function source(sourceId, revision, routed = true) {
   return {
@@ -228,6 +236,28 @@ describe("redesign mapper exact-source protocol", () => {
     assert.equal(mapperSourceMatchesTarget(pinned, right), false);
     assert.equal(mapperSourceMatchesTarget(pinned, { selector: "", instance: "" }), false);
   });
+
+  test("case-distinct firmware serials never share source authority", () => {
+    const twinPads = [{
+      slot: 1,
+      preset: "compatibility-only",
+      sources: [
+        source(serialUpper.selector, "upper-r1"),
+        source(serialLower.selector, "lower-r1"),
+      ],
+    }];
+    const lowerTarget = mapperPinTarget(twinPads, target({
+      expectedDevice: serialLower.selector,
+      expectedInstance: serialLower.instance,
+      followsAuthoringFocus: false,
+    }), serialUpper);
+
+    assert.ok(lowerTarget);
+    assert.equal(lowerTarget.expectedDevice, serialLower.selector);
+    assert.equal(lowerTarget.expectedTargetRevision, "lower-r1");
+    assert.equal(mapperSourceMatchesTarget(lowerTarget, serialUpper), false);
+    assert.equal(mapperSourceMatchesTarget(lowerTarget, serialLower), true);
+  });
 });
 
 let browser;
@@ -392,24 +422,24 @@ describe("redesign mapper exact board marks", { concurrency: false }, () => {
             <span class="rd-learn-line"></span><span class="rd-learn-sub"></span>
             <label class="rd-chain"><input class="rd-chain-box" type="checkbox"></label>
           </div>
-          <section data-source-id="${left.selector}">
+          <section data-source-id="${serialUpper.selector}">
             <div class="n-kb"><button data-key="K">K</button></div>
           </section>
-          <section data-source-id="${right.selector}">
+          <section data-source-id="${serialLower.selector}">
             <div class="n-kb"><button data-key="K">K</button></div>
           </section>
         </main>
       `);
       await page.addScriptTag({ content: mapperBundle });
-      await page.evaluate(({ left, right }) => {
+      await page.evaluate(({ serialUpper, serialLower }) => {
         window.__mapperPosts = [];
         window.__mapperFlashes = [];
         window.__mapperRows = [{
           slot: 1,
           preset: "p1",
-          sources: [
-            { source_id: left.selector, revision: "left-r1", preset: "left", routed: true },
-            { source_id: right.selector, revision: "right-r1", preset: "right", routed: true },
+            sources: [
+              { source_id: serialUpper.selector, revision: "upper-r1", preset: "upper", routed: true },
+              { source_id: serialLower.selector, revision: "lower-r1", preset: "lower", routed: true },
           ],
         }];
         window.fetch = async (_input, init) => {
@@ -437,22 +467,22 @@ describe("redesign mapper exact board marks", { concurrency: false }, () => {
             return true;
           },
           announce: () => {},
-          learnSource: () => left,
+          learnSource: () => serialUpper,
           pads: () => window.__mapperRows,
           selectedSlot: () => "1",
           controlsFor: () => [],
           beginMutation: () => ({}),
           endMutation: () => {},
         });
-        KSXMapper.armAssign("K", "replace", left);
+        KSXMapper.armAssign("K", "replace", serialUpper);
         KSXMapper.resolveAssignWithControl("1", "a", "A", false);
-      }, { left, right });
+      }, { serialUpper, serialLower });
       await page.waitForFunction(() => window.__mapperPosts.length === 1);
 
-      await page.evaluate((right) => {
-        KSXMapper.armAssign("K", "replace", right);
+      await page.evaluate((serialLower) => {
+        KSXMapper.armAssign("K", "replace", serialLower);
         KSXMapper.resolveAssignWithControl("1", "a", "A", false);
-      }, right);
+      }, serialLower);
       await page.waitForFunction(() => window.__mapperPosts.length === 2);
 
       const posts = await page.evaluate(() => window.__mapperPosts);
@@ -461,8 +491,8 @@ describe("redesign mapper exact board marks", { concurrency: false }, () => {
         expected_device: post.expected_device,
         expected_target_revision: post.expected_target_revision,
       })), [
-        { key: "K", expected_device: left.selector, expected_target_revision: "left-r1" },
-        { key: "K", expected_device: right.selector, expected_target_revision: "right-r1" },
+        { key: "K", expected_device: serialUpper.selector, expected_target_revision: "upper-r1" },
+        { key: "K", expected_device: serialLower.selector, expected_target_revision: "lower-r1" },
       ]);
       const errors = await page.evaluate(() =>
         window.__mapperFlashes.filter((line) => line.startsWith("error:"))

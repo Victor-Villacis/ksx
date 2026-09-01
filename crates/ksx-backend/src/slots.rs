@@ -491,8 +491,29 @@ fn assign_in_config(
         Some(entry) => {
             // `None` means "not asked about" here too: the slot keeps the
             // preset it has, which is what makes a persona-only write possible.
-            let preset = preset.unwrap_or(&entry.preset).to_owned();
-            let same_preset = entry.preset.eq_ignore_ascii_case(&preset);
+            let current_preset = entry
+                .sources
+                .first()
+                .map_or(entry.preset.as_str(), |source| source.preset.as_str())
+                .to_owned();
+            let same_preset = match preset {
+                None => true,
+                Some(wanted) if entry.sources.is_empty() => {
+                    entry.preset.eq_ignore_ascii_case(wanted)
+                }
+                // This verb is deliberately slot-wide. A source-qualified
+                // edit belongs to the mapper; assigning one preset here means
+                // every route into this controller adopts that preset.
+                Some(wanted) => entry
+                    .sources
+                    .iter()
+                    .all(|source| source.preset.eq_ignore_ascii_case(wanted)),
+            };
+            let preset = if same_preset {
+                current_preset.clone()
+            } else {
+                preset.unwrap_or(&current_preset).to_owned()
+            };
             // `None` means "not asked about", so it can never make a write
             // necessary — the slot's own persona is the answer.
             let wanted = persona.unwrap_or(entry.persona);
@@ -503,8 +524,8 @@ fn assign_in_config(
                 return Ok(AppliedSlot {
                     path: store.root().config_path(),
                     slot,
-                    preset: entry.preset.clone(),
-                    previous: Some(entry.preset.clone()),
+                    preset: current_preset.clone(),
+                    previous: Some(current_preset),
                     persona: entry.persona,
                     previous_persona: None,
                     profile: None,
@@ -513,7 +534,16 @@ fn assign_in_config(
                     backup: None,
                 });
             }
-            let previous = std::mem::replace(&mut entry.preset, preset.clone());
+            let previous = current_preset;
+            if !same_preset {
+                if entry.sources.is_empty() {
+                    entry.preset = preset.clone();
+                } else {
+                    for source in &mut entry.sources {
+                        source.preset = preset.clone();
+                    }
+                }
+            }
             let was = std::mem::replace(&mut entry.persona, wanted);
             entry.socd = wanted_socd;
             (
@@ -663,8 +693,29 @@ fn assign_in_profile(
     let existing = game.slots.iter_mut().find(|s| s.number == slot);
     let (previous, previous_persona, preset, now, created) = match existing {
         Some(entry) => {
-            let preset = preset.unwrap_or(&entry.preset).to_owned();
-            let same_preset = entry.preset.eq_ignore_ascii_case(&preset);
+            let current_preset = entry
+                .sources
+                .first()
+                .map_or(entry.preset.as_str(), |source| source.preset.as_str())
+                .to_owned();
+            let same_preset = match preset {
+                None => true,
+                Some(wanted) if entry.sources.is_empty() => {
+                    entry.preset.eq_ignore_ascii_case(wanted)
+                }
+                // Keep the profile half identical to config.toml: a slot-wide
+                // preset assignment updates every independently identified
+                // route, while a persona/SOCD-only edit changes none of them.
+                Some(wanted) => entry
+                    .sources
+                    .iter()
+                    .all(|source| source.preset.eq_ignore_ascii_case(wanted)),
+            };
+            let preset = if same_preset {
+                current_preset.clone()
+            } else {
+                preset.unwrap_or(&current_preset).to_owned()
+            };
             let wanted = persona.unwrap_or(entry.persona);
             // Same three-state rule: unasked SOCD is the slot's own SOCD, so
             // it can never be the thing that makes a write necessary.
@@ -673,8 +724,8 @@ fn assign_in_profile(
                 return Ok(AppliedSlot {
                     path: store.root().games_path(),
                     slot,
-                    preset: entry.preset.clone(),
-                    previous: Some(entry.preset.clone()),
+                    preset: current_preset.clone(),
+                    previous: Some(current_preset),
                     persona: entry.persona,
                     previous_persona: None,
                     profile: Some(title),
@@ -683,7 +734,16 @@ fn assign_in_profile(
                     backup: None,
                 });
             }
-            let previous = std::mem::replace(&mut entry.preset, preset.clone());
+            let previous = current_preset;
+            if !same_preset {
+                if entry.sources.is_empty() {
+                    entry.preset = preset.clone();
+                } else {
+                    for source in &mut entry.sources {
+                        source.preset = preset.clone();
+                    }
+                }
+            }
             let was = std::mem::replace(&mut entry.persona, wanted);
             entry.socd = wanted_socd;
             (
@@ -1031,6 +1091,112 @@ mod tests {
         assert!(!moved.created);
         assert!(moved.backup.is_some(), "a whole-file write backs up first");
         assert!(moved.message().contains("\"Panel P1\" → \"Panel P2\""));
+    }
+
+    #[test]
+    fn assigning_a_canonical_config_slot_updates_every_source_without_mixing_fields() {
+        let root = TempRoot::new("canonical-config");
+        let store = root.store();
+        let mut config = store.load_config().unwrap().value;
+        config.slots.push(SlotEntry {
+            number: 1,
+            keyboard: None,
+            mouse: None,
+            preset: String::new(),
+            persona: Default::default(),
+            socd: Default::default(),
+            macros: Default::default(),
+            sources: vec![
+                ksx_config::SourceEntry::new(
+                    r"HID\PANEL\ONE",
+                    ksx_core::SourceKind::Keyboard,
+                    "Panel P1",
+                ),
+                ksx_config::SourceEntry::new(
+                    r"HID\PANEL\TWO",
+                    ksx_core::SourceKind::Keyboard,
+                    "Panel P2",
+                ),
+            ],
+        });
+        store.save_config(&config).unwrap();
+
+        let applied = assign(&store, &spec(1, "Panel P2")).unwrap();
+        assert_eq!(applied.previous.as_deref(), Some("Panel P1"));
+        let config = store.load_config().unwrap().value;
+        let slot = &config.slots[0];
+        assert!(slot.keyboard.is_none());
+        assert!(slot.mouse.is_none());
+        assert!(slot.preset.is_empty());
+        assert!(slot
+            .sources
+            .iter()
+            .all(|source| source.preset == "Panel P2"));
+        config
+            .slot_spec(slot)
+            .expect("the saved slot remains canonical");
+    }
+
+    #[test]
+    fn a_profile_persona_edit_preserves_distinct_canonical_source_layouts() {
+        let root = TempRoot::new("canonical-profile");
+        let store = root.store();
+        let mut games = GamesFile {
+            games: vec![toml::from_str::<ksx_config::GameEntry>(
+                "title = \"Example Launcher\"\npath = 'C:\\steam.exe'\n",
+            )
+            .unwrap()],
+        };
+        games.games[0].slots.push(GameSlotEntry {
+            number: 1,
+            user_index: Some(1),
+            keyboard: None,
+            mouse: None,
+            preset: String::new(),
+            persona: Default::default(),
+            socd: Default::default(),
+            macros: Default::default(),
+            sources: vec![
+                ksx_config::SourceEntry::new(
+                    r"HID\PANEL\ONE",
+                    ksx_core::SourceKind::Keyboard,
+                    "Panel P1",
+                ),
+                ksx_config::SourceEntry::new(
+                    r"HID\PANEL\TWO",
+                    ksx_core::SourceKind::Keyboard,
+                    "Panel P2",
+                ),
+            ],
+        });
+        store.save_games(&games).unwrap();
+
+        let mut asked = persona_spec(1, Persona::PlayStation);
+        asked.profile = Some("Example Launcher".to_owned());
+        assign(&store, &asked).unwrap();
+
+        let games = store.load_games().unwrap().value;
+        let slot = &games.games[0].slots[0];
+        assert!(slot.preset.is_empty());
+        assert_eq!(slot.sources[0].preset, "Panel P1");
+        assert_eq!(slot.sources[1].preset, "Panel P2");
+        assert_eq!(slot.persona, Persona::PlayStation);
+        slot.to_spec()
+            .expect("the saved profile slot remains canonical");
+
+        let mut repoint = spec(1, "Panel P2");
+        repoint.profile = Some("Example Launcher".to_owned());
+        assign(&store, &repoint).unwrap();
+        let games = store.load_games().unwrap().value;
+        let slot = &games.games[0].slots[0];
+        assert!(slot.preset.is_empty());
+        assert!(slot
+            .sources
+            .iter()
+            .all(|source| source.preset == "Panel P2"));
+        assert_eq!(slot.persona, Persona::PlayStation);
+        slot.to_spec()
+            .expect("the repointed profile slot remains canonical");
     }
 
     /// Re-asserting the state a slot is already in is success and a NO-OP —

@@ -420,7 +420,7 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
     );
     assert.match(await page.locator(".rd-flash").textContent(), /released|ordinary typing/i);
 
-    // Polling can advance hidden form identities. Checked destructive/device
+    // Polling can advance hidden draft identities. Checked destructive
     // consent must be revoked before the newly served authority can be used.
     await openSetup(page);
     await startOver.locator("summary").click();
@@ -442,23 +442,34 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
       null,
       { timeout: 10_000 },
     );
-
-    await prepare.locator('input[type="checkbox"]').evaluateAll((checks) => {
-      checks.forEach((check) => check.click());
-    });
+    // Adding and removing another full keyboard is now one picker transaction;
+    // it does not reuse the removed singleton input-source card flow.
     await authorityPeer.click('[data-nx="rd-devs-open"]');
-    await authorityPeer.getByRole("button", { name: /Logitech G915 TKL/ }).click();
-    await authorityPeer.click('.rd-devmodal-head button[data-nx="rd-devs-close"]');
-    const logitechCard = authorityPeer.locator('.rd-devcard', { hasText: "Logitech G915 TKL" });
-    await logitechCard.locator('[data-rd-form="device"] button').click();
-    await page.waitForFunction(
-      () => Array.from(document.querySelectorAll(
-        'input[name="confirm_spare_keyboard"], input[name="confirm_rebind"], ' +
-          'input[name="confirm_machine_certificate"]',
-      )).every((input) => !input.checked),
-      null,
-      { timeout: 10_000 },
+    const logitechRow = authorityPeer.locator(".rd-devmodal").getByRole(
+      "button",
+      { name: /Logitech G915 TKL/ },
     );
+    const logitechSelector = await logitechRow.getAttribute("data-selector");
+    assert.ok(logitechSelector, "the picker row must preserve exact device identity");
+    await logitechRow.click();
+    await authorityPeer.waitForFunction(
+      (selector) => Boolean(document.querySelector(
+        `.rd-keyboard-device-node[data-selector="${selector}"]`,
+      )),
+      logitechSelector,
+    );
+    // Device selection is now the complete additive transaction: the picker
+    // adds that physical board and source together. Pressing the selected row
+    // removes that exact full board; there is no legacy card-stage step and
+    // this roster-only edit does not claim or retarget keyboard capture.
+    await logitechRow.click();
+    await authorityPeer.waitForFunction(
+      (selector) => !document.querySelector(
+        `.rd-keyboard-device-node[data-selector="${selector}"]`,
+      ),
+      logitechSelector,
+    );
+    await authorityPeer.click('.rd-devmodal-head button[data-nx="rd-devs-close"]');
 
     assert.deepEqual(page.ksxNoise, []);
     assert.deepEqual(authorityPeer.ksxNoise, []);

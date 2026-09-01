@@ -58,7 +58,9 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use ksx_config::{ConfigRoot, DeviceEntry, GameSlotEntry, PresetFile, SlotEntry, Store};
+use ksx_config::{
+    ConfigRoot, DeviceEntry, GameSlotEntry, PresetFile, SlotEntry, SourceEntry, Store,
+};
 use ksx_core::{
     Axis, Binding, DpadDirection, Key, Preset, Trigger, XButton, AXIS_MAX, AXIS_MIN, MAX_SLOTS,
 };
@@ -881,8 +883,26 @@ fn upsert_device(
 
 fn upsert_slot(slots: &mut Vec<SlotEntry>, plan: &Plan, alias: &str) {
     if let Some(existing) = slots.iter_mut().find(|s| s.number == plan.slot) {
-        existing.keyboard = Some(alias.to_owned());
-        existing.preset = plan.preset_name.clone();
+        // An explicit source list is a graph, not a second spelling of the
+        // legacy singleton. Update the exact route on a rerun and append a new
+        // independently identified route otherwise; never populate both
+        // representations or erase peer sources as a side effect.
+        if existing.sources.is_empty() {
+            existing.keyboard = Some(alias.to_owned());
+            existing.preset = plan.preset_name.clone();
+        } else if let Some(source) = existing
+            .sources
+            .iter_mut()
+            .find(|source| source.kind == ksx_core::SourceKind::Keyboard && source.device == alias)
+        {
+            source.preset = plan.preset_name.clone();
+        } else {
+            existing.sources.push(SourceEntry::new(
+                alias,
+                ksx_core::SourceKind::Keyboard,
+                &plan.preset_name,
+            ));
+        }
         return;
     }
     slots.push(SlotEntry {
@@ -900,8 +920,22 @@ fn upsert_slot(slots: &mut Vec<SlotEntry>, plan: &Plan, alias: &str) {
 
 fn upsert_game_slot(slots: &mut Vec<GameSlotEntry>, plan: &Plan) {
     if let Some(existing) = slots.iter_mut().find(|s| s.number == plan.slot) {
-        existing.keyboard = Some(plan.device_id.clone());
-        existing.preset = plan.preset_name.clone();
+        // games.toml persists the exact path instead of a config alias, but
+        // its canonical source graph follows the same additive upsert rule.
+        if existing.sources.is_empty() {
+            existing.keyboard = Some(plan.device_id.clone());
+            existing.preset = plan.preset_name.clone();
+        } else if let Some(source) = existing.sources.iter_mut().find(|source| {
+            source.kind == ksx_core::SourceKind::Keyboard && source.device == plan.device_id
+        }) {
+            source.preset = plan.preset_name.clone();
+        } else {
+            existing.sources.push(SourceEntry::new(
+                &plan.device_id,
+                ksx_core::SourceKind::Keyboard,
+                &plan.preset_name,
+            ));
+        }
         return;
     }
     slots.push(GameSlotEntry {
@@ -1857,6 +1891,60 @@ mod tests {
         assert_eq!(slots[0].user_index, Some(1));
         upsert_game_slot(&mut slots, &plan);
         assert_eq!(slots.len(), 1, "re-running a slot repoints it");
+    }
+
+    #[test]
+    fn setup_extends_canonical_source_lists_without_writing_legacy_fields() {
+        let wizard = walk(&[Key::Up]);
+        let plan = plan_for(&wizard, Wiring::Config);
+        let mut config_slots = vec![SlotEntry {
+            number: plan.slot,
+            keyboard: None,
+            mouse: None,
+            preset: String::new(),
+            persona: Default::default(),
+            socd: Default::default(),
+            macros: Default::default(),
+            sources: vec![SourceEntry::new(
+                "desk",
+                ksx_core::SourceKind::Keyboard,
+                "Desk map",
+            )],
+        }];
+        upsert_slot(&mut config_slots, &plan, "P1 panel");
+        let mut revised = plan.clone();
+        revised.preset_name = "Updated panel map".to_owned();
+        upsert_slot(&mut config_slots, &revised, "P1 panel");
+        assert!(config_slots[0].keyboard.is_none());
+        assert!(config_slots[0].preset.is_empty());
+        assert_eq!(config_slots[0].sources.len(), 2, "reruns do not duplicate");
+        assert_eq!(config_slots[0].sources[0].device, "desk");
+        assert_eq!(config_slots[0].sources[1].device, "P1 panel");
+        assert_eq!(config_slots[0].sources[1].preset, "Updated panel map");
+
+        let mut game_slots = vec![GameSlotEntry {
+            number: plan.slot,
+            user_index: Some(plan.slot),
+            keyboard: None,
+            mouse: None,
+            preset: String::new(),
+            persona: Default::default(),
+            socd: Default::default(),
+            macros: Default::default(),
+            sources: vec![SourceEntry::new(
+                r"HID\DESK\ONE",
+                ksx_core::SourceKind::Keyboard,
+                "Desk map",
+            )],
+        }];
+        upsert_game_slot(&mut game_slots, &plan);
+        upsert_game_slot(&mut game_slots, &revised);
+        assert!(game_slots[0].keyboard.is_none());
+        assert!(game_slots[0].preset.is_empty());
+        assert_eq!(game_slots[0].sources.len(), 2, "reruns do not duplicate");
+        assert_eq!(game_slots[0].sources[0].device, r"HID\DESK\ONE");
+        assert_eq!(game_slots[0].sources[1].device, PANEL);
+        assert_eq!(game_slots[0].sources[1].preset, "Updated panel map");
     }
 
     #[test]

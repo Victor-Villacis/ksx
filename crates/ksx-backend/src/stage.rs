@@ -68,34 +68,41 @@ use crate::run::plan::{build_plan, PlanError, PlanSource, RunPlan};
 /// change after the page was rendered, so Save and Play call this again.
 #[cfg(windows)]
 pub fn preflight_capture(spec: &CommitSpec) -> Result<(), ksx_api::Refusal> {
-    let backend = match spec.device.backend {
-        StageCaptureBackend::Interception => ksx_config::Backend::Interception,
-        StageCaptureBackend::Winusb => ksx_config::Backend::Winusb,
-    };
-    let require_usb = matches!(
-        spec.device.selector,
-        ksx_core::DeviceSelector::Usb { .. } | ksx_core::DeviceSelector::InstancePath(_)
-    );
-    let inventory = crate::identity::LiveInventory::collect(
-        require_usb,
-        backend == ksx_config::Backend::Interception,
-    )
-    .map_err(identity_refusal)?;
-    let resolved = inventory
-        .resolve(&spec.device.selector, backend)
+    let devices = commit_devices(spec);
+    let require_usb = devices.iter().any(|device| {
+        matches!(
+            &device.selector,
+            ksx_core::DeviceSelector::Usb { .. } | ksx_core::DeviceSelector::InstancePath(_)
+        )
+    });
+    let require_interception = devices
+        .iter()
+        .any(|device| device.backend == StageCaptureBackend::Interception);
+    let inventory = crate::identity::LiveInventory::collect(require_usb, require_interception)
         .map_err(identity_refusal)?;
 
-    if backend == ksx_config::Backend::Winusb
-        && !resolved
-            .binding
-            .as_ref()
-            .is_some_and(ksx_capture::Binding::is_winusb)
-    {
-        return Err(ksx_api::Refusal::with_remedy(
-            "winusb-not-prepared",
-            "the exact staged keyboard is not currently bound to winusb.sys",
-            "prepare this exact keyboard for WinUSB, then Save or Play again",
-        ));
+    for device in devices {
+        let backend = capture_backend(device.backend);
+        let resolved = inventory
+            .resolve(&device.selector, backend)
+            .map_err(identity_refusal)?;
+
+        if backend == ksx_config::Backend::Winusb
+            && !resolved
+                .binding
+                .as_ref()
+                .is_some_and(ksx_capture::Binding::is_winusb)
+        {
+            return Err(ksx_api::Refusal::with_remedy(
+                "winusb-not-prepared",
+                format!(
+                    "staged keyboard \"{}\" ({}) is not currently bound to winusb.sys",
+                    device.alias, device.selector
+                ),
+                "prepare this exact keyboard for WinUSB, then Save or Play again; the other \
+                 staged keyboards are unchanged",
+            ));
+        }
     }
     Ok(())
 }
@@ -150,7 +157,7 @@ pub struct Committed {
     /// The timestamped copy taken before the config write; `None` when there
     /// was no config file yet.
     pub backup: Option<PathBuf>,
-    /// The preset files written, in slot order (deduplicated: two slots may
+    /// The preset files written, in slot/source order (deduplicated: routes may
     /// deliberately share one preset).
     pub presets: Vec<PathBuf>,
     /// The timestamped copies taken of preset files that ALREADY EXISTED.
@@ -159,7 +166,7 @@ pub struct Committed {
     /// when a staged preset name collided with one on disk — see [`apply`] for
     /// why that is a backup and not a refusal.
     pub preset_backups: Vec<PathBuf>,
-    /// The `[[device]]` alias every saved slot now names.
+    /// The compatibility/primary `[[device]]` alias.
     pub alias: String,
     pub slots: Vec<u8>,
 }
@@ -198,43 +205,40 @@ impl Committed {
 /// never reads one). Its `[[device]]` and `[[slot]]` tables are *replaced* for
 /// the entries this stage names and left alone otherwise:
 ///
-/// - the staged device upserts by ALIAS, so re-picking the same board keeps one
-///   entry rather than growing a second one;
+/// - every staged device upserts by ALIAS, so re-picking the same boards keeps
+///   one entry per board rather than growing duplicates;
 /// - a staged slot replaces the `[[slot]]` of that number, because that is what
 ///   the screen showed for it;
 /// - a `[[slot]]` the stage does not mention is untouched. A first-run visit
 ///   has none, but a returning user's other players must not vanish because
 ///   somebody re-staged player 1.
 ///
-/// `backend` is the staged, explicitly prepared capture choice.  Save and Play
-/// perform a fresh authoritative machine preflight before reaching this pure
-/// translation, so persisting it cannot turn a menu intention into a claim.
+/// Each `backend` is that exact staged board's explicitly prepared capture
+/// choice. Save and Play perform a fresh authoritative machine preflight before
+/// reaching this pure translation, so persisting it cannot turn a menu
+/// intention into a claim or alter an unstaged peer.
 pub fn to_config(base: &ConfigFile, spec: &CommitSpec) -> ConfigFile {
     let mut config = base.clone();
 
-    // `from_selector`, not `parse`: this is an id ksx is writing for the first
-    // time, so the canonical spelling IS the written one.
-    let id = DeviceRef::from_selector(spec.device.selector.clone());
-    match config
-        .devices
-        .iter_mut()
-        .find(|d| d.alias.eq_ignore_ascii_case(&spec.device.alias))
-    {
-        Some(existing) => {
-            existing.id = id.clone();
-            existing.backend = match spec.device.backend {
-                StageCaptureBackend::Interception => ksx_config::Backend::Interception,
-                StageCaptureBackend::Winusb => ksx_config::Backend::Winusb,
-            };
+    for staged in commit_devices(spec) {
+        // `from_selector`, not `parse`: this is an id ksx is writing for the
+        // first time, so the canonical spelling IS the written one.
+        let id = DeviceRef::from_selector(staged.selector.clone());
+        match config
+            .devices
+            .iter_mut()
+            .find(|device| device.alias.eq_ignore_ascii_case(&staged.alias))
+        {
+            Some(existing) => {
+                existing.id = id.clone();
+                existing.backend = capture_backend(staged.backend);
+            }
+            None => config.devices.push(DeviceEntry {
+                id,
+                alias: staged.alias.clone(),
+                backend: capture_backend(staged.backend),
+            }),
         }
-        None => config.devices.push(DeviceEntry {
-            id: id.clone(),
-            alias: spec.device.alias.clone(),
-            backend: match spec.device.backend {
-                StageCaptureBackend::Interception => ksx_config::Backend::Interception,
-                StageCaptureBackend::Winusb => ksx_config::Backend::Winusb,
-            },
-        }),
     }
 
     for staged in &spec.slots {
@@ -255,22 +259,42 @@ pub fn to_config(base: &ConfigFile, spec: &CommitSpec) -> ConfigFile {
 
 /// The preset files a staged setup would write, deduplicated by name.
 ///
-/// Two slots may deliberately share one preset (two players, one key map);
-/// `StagedSetup::commit` has already refused the case where two slots hold
+/// Slots and source routes may deliberately share one preset;
+/// `StagedSetup::commit` has already refused the case where two routes hold
 /// DIFFERENT bindings under one name, so a duplicate here is genuinely the same
 /// preset and writing it twice would be the same bytes.
 fn preset_files(spec: &CommitSpec) -> Vec<PresetFile> {
-    let mut out: Vec<PresetFile> = Vec::with_capacity(spec.slots.len());
+    let mut out: Vec<PresetFile> = Vec::new();
     for slot in &spec.slots {
-        if out
-            .iter()
-            .any(|p| p.name.eq_ignore_ascii_case(&slot.preset.name))
-        {
-            continue;
+        for preset in std::iter::once(&slot.preset).chain(&slot.additional_presets) {
+            if out
+                .iter()
+                .any(|file| file.name.eq_ignore_ascii_case(&preset.name))
+            {
+                continue;
+            }
+            out.push(PresetFile::from_core(preset));
         }
-        out.push(PresetFile::from_core(&slot.preset));
     }
     out
+}
+
+fn commit_devices(spec: &CommitSpec) -> Vec<&ksx_core::stage::StagedDevice> {
+    if spec.devices.is_empty() {
+        // Compatibility for a hand-built CommitSpec from the brief period in
+        // which only `device` existed. Core-generated specs always carry this
+        // same value as `devices[0]`.
+        vec![&spec.device]
+    } else {
+        spec.devices.iter().collect()
+    }
+}
+
+const fn capture_backend(backend: StageCaptureBackend) -> ksx_config::Backend {
+    match backend {
+        StageCaptureBackend::Interception => ksx_config::Backend::Interception,
+        StageCaptureBackend::Winusb => ksx_config::Backend::Winusb,
+    }
 }
 
 /// **Play without saving.** The runnable plan this staged setup means, built
@@ -387,17 +411,11 @@ pub fn apply(store: &Store, spec: &CommitSpec) -> Result<Committed, ksx_config::
 ///
 /// `StagedSetup`'s fields are private and its doctrine is that every mutation
 /// revalidates (`ksx-core/src/stage.rs`). Adoption goes through
-/// `choose_device` + `add_slot` + `set_socd` + `set_blocking`, so a saved
-/// file that breaks a staging rule (a persona this build cannot plug, a
-/// sixth XInput slot someone hand-wrote) is REFUSED in the same words a hand
-/// edit would be — never smuggled past the rules because it came off disk.
-///
-/// # One keyboard, and honestly refused otherwise
-///
-/// The stage models a single-device draft (`FIRST-RUN.md` §2). A saved setup
-/// whose slots span several keyboards is real and legal on disk, and it
-/// cannot become a draft — the refusal says so and names the surfaces that
-/// can edit it instead, rather than silently adopting half the setup.
+/// `upsert_device` + `add_slot_for_source` + `set_source_bindings` +
+/// `set_socd` + `set_blocking`, so a saved file that breaks a staging rule (a
+/// persona this build cannot plug, a sixth XInput slot someone hand-wrote) is
+/// REFUSED in the same words a hand edit would be — never smuggled past the
+/// rules because it came off disk.
 pub fn adopt(
     store: &Store,
     profile: Option<&str>,
@@ -463,53 +481,45 @@ pub fn adopt(
         ));
     }
 
-    // ONE keyboard. Every slot must resolve to the same [[device]] entry —
-    // the entry is what carries the durable selector and the capture backend.
-    let mut device: Option<&DeviceEntry> = None;
-    for spec in &specs {
-        let Some(keyboard) = spec.keyboard() else {
-            continue;
-        };
-        let entry = config
-            .devices
+    // Every keyboard source must have exactly one durable [[device]] entry.
+    // Literal devnodes are legal to run, but adoption cannot turn one into the
+    // stable selector a draft promises without inventing identity.
+    if let Some((slot, source)) = specs.iter().find_map(|spec| {
+        spec.sources
             .iter()
-            .find(|entry| entry.id.raw().eq_ignore_ascii_case(keyboard.as_str()))
-            .ok_or_else(|| {
-                ksx_api::Refusal::with_remedy(
-                    codes::REFUSED,
-                    format!(
-                        "slot {} names a keyboard no [[device]] entry describes, so there is no \
-                         durable identity to adopt",
-                        spec.number
-                    ),
-                    "re-pick the keyboard (Setup, or `ksx device pick`) so it gains an entry, \
-                     then adopt again",
-                )
-            })?;
-        match device {
-            None => device = Some(entry),
-            Some(chosen) if std::ptr::eq(chosen, entry) => {}
-            Some(chosen) => {
-                return Err(ksx_api::Refusal::with_remedy(
-                    codes::REFUSED,
-                    format!(
-                        "{origin} uses more than one keyboard (\"{}\" and \"{}\"), and a draft \
-                         holds exactly one",
-                        chosen.alias, entry.alias
-                    ),
-                    "edit that setup in Setup or with `ksx slot assign`; the draft screen \
-                     adopts single-keyboard setups",
-                ));
+            .find(|source| source.kind != ksx_core::SourceKind::Keyboard)
+            .map(|source| (spec.number, source))
+    }) {
+        return Err(ksx_api::Refusal::with_remedy(
+            codes::REFUSED,
+            format!(
+                "slot {slot} includes a {:?} source ({}) that keyboard setup cannot represent",
+                source.kind, source.device
+            ),
+            "remove that source from this keyboard draft or edit it in the surface that owns \
+             that input kind",
+        ));
+    }
+
+    let mut devices: Vec<&DeviceEntry> = Vec::new();
+    for spec in &specs {
+        for source in &spec.sources {
+            let entry = adopted_device_entry(&config, spec.number, &source.device)?;
+            if !devices.iter().any(|known| std::ptr::eq(*known, entry)) {
+                devices.push(entry);
             }
         }
     }
-    let device = match device {
-        Some(entry) => entry,
-        // Legal older configs may omit per-slot keyboards; unambiguous only
-        // when the config names exactly one device.
-        None => match config.devices.as_slice() {
-            [only] => only,
-            [] => {
+
+    // Very old source-less slots are recoverable only when there is exactly one
+    // defensible keyboard: the sole one explicitly used elsewhere in this
+    // adopted setup, or (when none is used) the sole [[device]] in config.
+    let needs_fallback = specs.iter().any(|spec| spec.sources.is_empty());
+    let fallback = if needs_fallback {
+        match (devices.as_slice(), config.devices.as_slice()) {
+            ([only], _) => Some(*only),
+            ([], [only]) => Some(only),
+            ([], []) => {
                 return Err(ksx_api::Refusal::with_remedy(
                     codes::REFUSED,
                     format!("{origin} names no keyboard at all"),
@@ -520,59 +530,136 @@ pub fn adopt(
                 return Err(ksx_api::Refusal::with_remedy(
                     codes::REFUSED,
                     format!(
-                        "{origin}'s slots name no keyboard and config.toml describes several, \
-                         so ksx cannot guess which one the draft should hold"
+                        "{origin} contains a source-less legacy slot and more than one keyboard \
+                         could own it, so ksx cannot guess which route to create"
                     ),
-                    "assign the slots a keyboard (`ksx slot assign`), then adopt again",
+                    "assign that slot an exact keyboard source, then adopt again",
                 ))
             }
-        },
+        }
+    } else {
+        None
     };
+    if let Some(entry) = fallback {
+        if !devices.iter().any(|known| std::ptr::eq(*known, entry)) {
+            devices.push(entry);
+        }
+    }
 
     let stage_refusal = |refusal: ksx_core::stage::StageRefusal| {
         ksx_api::Refusal::new(refusal.code(), refusal.to_string())
     };
 
-    let mut setup = ksx_core::StagedSetup::new()
-        .choose_device(ksx_core::stage::StagedDevice {
-            selector: device.id.selector().clone(),
-            alias: device.alias.clone(),
-            // The alias is the one human name the saved file carries; the
-            // live scan's richer label can replace it on screen when a scan
-            // has actually seen the board.
-            label: device.alias.clone(),
-            backend: match device.backend {
-                ksx_config::Backend::Interception => StageCaptureBackend::Interception,
-                ksx_config::Backend::Winusb => StageCaptureBackend::Winusb,
-            },
-        })
-        .map_err(stage_refusal)?;
+    let mut setup = ksx_core::StagedSetup::new();
+    for device in &devices {
+        setup = setup
+            .upsert_device(ksx_core::stage::StagedDevice {
+                selector: device.id.selector().clone(),
+                alias: device.alias.clone(),
+                // The alias is the one human name the saved file carries; the
+                // live scan's richer label can replace it on screen when a
+                // scan has actually seen the board.
+                label: device.alias.clone(),
+                backend: match device.backend {
+                    ksx_config::Backend::Interception => StageCaptureBackend::Interception,
+                    ksx_config::Backend::Winusb => StageCaptureBackend::Winusb,
+                },
+            })
+            .map_err(stage_refusal)?;
+    }
 
     for spec in &specs {
-        let preset = presets
-            .iter()
-            .find(|preset| preset.name.eq_ignore_ascii_case(spec.preset()))
-            .ok_or_else(|| {
-                ksx_api::Refusal::with_remedy(
-                    codes::REFUSED,
-                    format!(
-                        "slot {} points at preset \"{}\" and no preset of that name is on disk",
-                        spec.number,
-                        spec.preset()
-                    ),
-                    "restore or re-create the preset (`ksx preset new`), then adopt again",
-                )
-            })?
-            .to_core()
-            .map_err(|err| load_refusal("the presets folder", &err))?;
+        let routes: Vec<(&DeviceEntry, &str)> = if spec.sources.is_empty() {
+            vec![(
+                fallback.expect("source-less specs established one fallback"),
+                spec.primary_preset(),
+            )]
+        } else {
+            spec.sources
+                .iter()
+                .map(|source| {
+                    adopted_device_entry(&config, spec.number, &source.device)
+                        .map(|device| (device, source.preset.as_str()))
+                })
+                .collect::<Result<_, _>>()?
+        };
+        let (first_device, first_name) = routes[0];
         setup = setup
-            .add_slot(spec.number, spec.persona, preset)
-            .map_err(stage_refusal)?
+            .add_slot_for_source(
+                spec.number,
+                spec.persona,
+                first_device.id.selector(),
+                adopted_preset(&presets, spec.number, first_name)?,
+            )
+            .map_err(stage_refusal)?;
+        for (device, name) in routes.iter().skip(1) {
+            setup = setup
+                .set_source_bindings(
+                    spec.number,
+                    device.id.selector(),
+                    adopted_preset(&presets, spec.number, name)?,
+                )
+                .map_err(stage_refusal)?;
+        }
+        setup = setup
             .set_socd(spec.number, spec.socd)
             .map_err(stage_refusal)?;
     }
     // A saved answer IS an answer: adopting never re-asks §3's question.
     Ok(setup.set_blocking(blocking))
+}
+
+fn adopted_device_entry<'a>(
+    config: &'a ConfigFile,
+    slot: u8,
+    id: &ksx_core::DeviceId,
+) -> Result<&'a DeviceEntry, ksx_api::Refusal> {
+    let matches: Vec<_> = config
+        .devices
+        .iter()
+        .filter(|entry| entry.id.raw().eq_ignore_ascii_case(id.as_str()))
+        .collect();
+    match matches.as_slice() {
+        [entry] => Ok(*entry),
+        [] => Err(ksx_api::Refusal::with_remedy(
+            ksx_api::codes::REFUSED,
+            format!(
+                "slot {slot} names keyboard source {id}, but no [[device]] entry describes it, \
+                 so there is no durable selector or capture backend to adopt"
+            ),
+            "re-pick that exact keyboard so it gains a [[device]] entry, then adopt again",
+        )),
+        _ => Err(ksx_api::Refusal::with_remedy(
+            ksx_api::codes::REFUSED,
+            format!(
+                "slot {slot} names keyboard source {id}, but several [[device]] entries describe \
+                 it, so its alias and capture backend are ambiguous"
+            ),
+            "keep one [[device]] entry for that exact keyboard, then adopt again",
+        )),
+    }
+}
+
+fn adopted_preset(
+    presets: &[PresetFile],
+    slot: u8,
+    name: &str,
+) -> Result<ksx_core::Preset, ksx_api::Refusal> {
+    presets
+        .iter()
+        .find(|preset| preset.name.eq_ignore_ascii_case(name))
+        .ok_or_else(|| {
+            ksx_api::Refusal::with_remedy(
+                ksx_api::codes::REFUSED,
+                format!(
+                    "slot {slot} points at source preset \"{name}\" and no preset of that name \
+                     is on disk"
+                ),
+                "restore or re-create that preset (`ksx preset new`), then adopt again",
+            )
+        })?
+        .to_core()
+        .map_err(|err| load_refusal("the presets folder", &err))
 }
 
 /// A failed read is not an absence (`SURFACES.md` §1b): adoption of a file
@@ -673,6 +760,184 @@ mod tests {
         adopted.commit().expect("an adopted setup is complete");
     }
 
+    #[test]
+    fn two_keyboards_into_one_controller_save_and_adopt_without_collapsing_routes() {
+        let root = TempRoot::new("adopt-fan-in");
+        let store = root.store();
+        let staged = fan_in();
+        let spec = staged.commit().expect("both source routes are complete");
+
+        let committed = apply(&store, &spec).expect("fan-in saves");
+        assert_eq!(committed.presets.len(), 2);
+        assert_eq!(
+            committed.alias, "panel",
+            "the legacy field remains the primary alias"
+        );
+
+        let saved = store.load_config().unwrap().value;
+        assert_eq!(saved.devices.len(), 2);
+        assert_eq!(saved.devices[0].backend, ksx_config::Backend::Interception);
+        assert_eq!(saved.devices[1].backend, ksx_config::Backend::Winusb);
+        assert_eq!(saved.slots.len(), 1);
+        assert!(saved.slots[0].keyboard.is_none());
+        assert!(saved.slots[0].preset.is_empty());
+        assert_eq!(saved.slots[0].sources.len(), 2);
+        assert_eq!(saved.slots[0].sources[0].device, "panel");
+        assert_eq!(saved.slots[0].sources[0].preset, "Left map");
+        assert_eq!(saved.slots[0].sources[1].device, "desk");
+        assert_eq!(saved.slots[0].sources[1].preset, "Right map");
+
+        let live_plan = plan(&spec).expect("the staged source graph plans");
+        let saved_plan = build_plan(
+            &saved,
+            &GamesFile::default(),
+            &store.load_presets().unwrap().value,
+            None,
+        )
+        .expect("the persisted source graph plans");
+        assert_eq!(
+            fingerprint(&live_plan),
+            fingerprint(&saved_plan),
+            "fan-in must mean the same thing before and after Save"
+        );
+
+        let adopted = adopt(&store, None).expect("both physical sources adopt");
+        assert_eq!(adopted.devices().len(), 2);
+        assert_eq!(
+            adopted.devices()[1].backend,
+            StageCaptureBackend::Winusb,
+            "each source keeps its own capture backend"
+        );
+        let routes = adopted.slots()[0].routes();
+        assert_eq!(routes.len(), 2);
+        assert_eq!(routes[0].preset.name, "Left map");
+        assert_eq!(routes[1].preset.name, "Right map");
+        assert_eq!(routes[0].preset.entries[0].0, Key::A);
+        assert_eq!(routes[1].preset.entries[0].0, Key::L);
+
+        let again = adopted
+            .commit()
+            .expect("the adopted graph is immediately playable");
+        assert_eq!(again.slots[0].spec.sources.len(), 2);
+        assert_eq!(again.slots[0].additional_presets.len(), 1);
+        assert_eq!(again.slots[0].additional_presets[0].name, "Right map");
+    }
+
+    #[test]
+    fn two_keyboards_into_two_controllers_keep_independent_legacy_rows() {
+        let left = device();
+        let right = desk_device(StageCaptureBackend::Winusb);
+        let staged = StagedSetup::new()
+            .choose_device(left.clone())
+            .unwrap()
+            .add_device(right.clone())
+            .unwrap()
+            .add_slot_for_source(
+                1,
+                Persona::Xbox360,
+                &left.selector,
+                preset("Left pad", Key::A, XButton::A),
+            )
+            .unwrap()
+            .add_slot_for_source(
+                2,
+                Persona::PlayStation,
+                &right.selector,
+                preset("Right pad", Key::L, XButton::B),
+            )
+            .unwrap()
+            .set_blocking(Blocking::BoundKeys);
+        let root = TempRoot::new("adopt-two-two");
+        let store = root.store();
+        let spec = staged.commit().unwrap();
+        apply(&store, &spec).unwrap();
+
+        let saved = store.load_config().unwrap().value;
+        assert!(saved.slots.iter().all(|slot| slot.sources.is_empty()));
+        assert_eq!(saved.slots[0].keyboard.as_deref(), Some("panel"));
+        assert_eq!(saved.slots[1].keyboard.as_deref(), Some("desk"));
+
+        let adopted = adopt(&store, None).expect("two independent boards adopt");
+        assert_eq!(adopted.devices().len(), 2);
+        assert_eq!(adopted.slots().len(), 2);
+        assert_eq!(adopted.slots()[0].routes()[0].selector, left.selector);
+        assert_eq!(adopted.slots()[1].routes()[0].selector, right.selector);
+    }
+
+    #[test]
+    fn adoption_refuses_a_missing_secondary_preset_and_an_unowned_source() {
+        let root = TempRoot::new("adopt-missing-route-preset");
+        let store = root.store();
+        let spec = fan_in().commit().unwrap();
+        apply(&store, &spec).unwrap();
+        std::fs::remove_file(store.preset_path("Right map").unwrap()).unwrap();
+        let missing_preset = adopt(&store, None).unwrap_err();
+        assert!(
+            missing_preset.message.contains("slot 1"),
+            "{missing_preset:?}"
+        );
+        assert!(
+            missing_preset.message.contains("Right map"),
+            "{missing_preset:?}"
+        );
+
+        let root = TempRoot::new("adopt-missing-route-device");
+        let store = root.store();
+        apply(&store, &spec).unwrap();
+        let mut config = store.load_config().unwrap().value;
+        config.devices.retain(|device| device.alias != "desk");
+        config.slots[0].sources[1].device = r"HID\ORPHAN\INSTANCE".to_owned();
+        store.save_config(&config).unwrap();
+        let missing_source = adopt(&store, None).unwrap_err();
+        assert!(
+            missing_source.message.contains("slot 1"),
+            "{missing_source:?}"
+        );
+        assert!(
+            missing_source.message.contains(r"HID\ORPHAN\INSTANCE"),
+            "{missing_source:?}"
+        );
+        assert!(
+            missing_source.message.contains("durable selector"),
+            "{missing_source:?}"
+        );
+    }
+
+    #[test]
+    fn one_keyboard_still_emits_the_exact_legacy_slot_shape() {
+        let spec = staged().commit().unwrap();
+        let config = to_config(&ConfigFile::default(), &spec);
+        assert_eq!(config.devices.len(), 1);
+        assert_eq!(config.slots.len(), 2);
+        for (index, slot) in config.slots.iter().enumerate() {
+            assert_eq!(slot.keyboard.as_deref(), Some("panel"));
+            assert!(slot.mouse.is_none());
+            assert!(slot.sources.is_empty());
+            assert_eq!(slot.preset, format!("Player {}", index + 1));
+        }
+        let text = toml::to_string_pretty(&config).unwrap();
+        assert!(text.contains("keyboard = \"panel\""), "{text}");
+        assert!(!text.contains("[[slot.source]]"), "{text}");
+    }
+
+    #[test]
+    fn persisting_mixed_backends_never_changes_an_unstaged_peer() {
+        let mut base = ConfigFile::default();
+        base.devices.push(DeviceEntry {
+            id: DeviceRef::from_selector(DeviceSelector::parse("usb:9999:0001:00").unwrap()),
+            alias: "peer".to_owned(),
+            backend: ksx_config::Backend::Winusb,
+        });
+        let peer = base.devices[0].clone();
+
+        let config = to_config(&base, &fan_in().commit().unwrap());
+        assert_eq!(config.devices[0], peer, "an unstaged board is immutable");
+        assert_eq!(config.devices[1].alias, "panel");
+        assert_eq!(config.devices[1].backend, ksx_config::Backend::Interception);
+        assert_eq!(config.devices[2].alias, "desk");
+        assert_eq!(config.devices[2].backend, ksx_config::Backend::Winusb);
+    }
+
     /// Adopting a saved GAME takes the game's own slots and the game's own
     /// blocking answer — the per-game overrides are the whole reason profiles
     /// exist, and adoption must not flatten them into config.toml's.
@@ -747,7 +1012,8 @@ socd = "neutral"
         let missing = adopt(&store, None).unwrap_err();
         assert!(missing.message.contains("Player 1"), "{missing:?}");
 
-        // Two keyboards. Legal on disk, not representable as a draft.
+        // A source-less legacy slot with two possible keyboards. Multi-source
+        // rows are representable; guessing which board owns no row is not.
         let root = TempRoot::new("adopt-two-boards");
         let store = root.store();
         let staged = StagedSetup::new()
@@ -763,19 +1029,11 @@ socd = "neutral"
             alias: "desk".to_owned(),
             backend: ksx_config::Backend::Interception,
         });
-        config.slots.push(SlotEntry {
-            number: 2,
-            keyboard: Some("desk".to_owned()),
-            mouse: None,
-            preset: "Player 1".to_owned(),
-            persona: ksx_core::Persona::PlayStation,
-            socd: ksx_core::Socd::Off,
-            macros: Default::default(),
-            sources: Vec::new(),
-        });
+        config.slots[0].keyboard = None;
         store.save_config(&config).unwrap();
         let two = adopt(&store, None).unwrap_err();
-        assert!(two.message.contains("more than one keyboard"), "{two:?}");
+        assert!(two.message.contains("source-less legacy slot"), "{two:?}");
+        assert!(two.message.contains("cannot guess"), "{two:?}");
         assert!(two.remedy.is_some(), "a refusal carries its way forward");
     }
 
@@ -786,6 +1044,35 @@ socd = "neutral"
             label: "Ultimarc I-PAC 4".to_owned(),
             backend: StageCaptureBackend::Interception,
         }
+    }
+
+    fn desk_device(backend: StageCaptureBackend) -> StagedDevice {
+        StagedDevice {
+            selector: DeviceSelector::parse("usb:04d9:0169:00").unwrap(),
+            alias: "desk".to_owned(),
+            label: "Desk keyboard".to_owned(),
+            backend,
+        }
+    }
+
+    fn fan_in() -> StagedSetup {
+        let left = device();
+        let right = desk_device(StageCaptureBackend::Winusb);
+        StagedSetup::new()
+            .choose_device(left.clone())
+            .unwrap()
+            .add_device(right.clone())
+            .unwrap()
+            .add_slot_for_source(
+                1,
+                Persona::Xbox360,
+                &left.selector,
+                preset("Left map", Key::A, XButton::A),
+            )
+            .unwrap()
+            .set_source_bindings(1, &right.selector, preset("Right map", Key::L, XButton::B))
+            .unwrap()
+            .set_blocking(Blocking::BoundKeys)
     }
 
     fn preset(name: &str, key: Key, button: XButton) -> Preset {
@@ -838,15 +1125,22 @@ socd = "neutral"
         for slot in &plan.slots {
             let _ = writeln!(
                 out,
-                "slot {} persona={} preset={} keyboard={:?} socd={} macros={} entries={:?}",
+                "slot {} persona={} socd={} macros={}",
                 slot.spec.number,
                 slot.spec.persona,
-                slot.spec.preset(),
-                slot.spec.keyboard().map(|k| k.as_str()),
                 slot.spec.socd.as_str(),
                 slot.spec.macros.is_on(),
-                slot.preset.entries,
             );
+            for source in &slot.spec.sources {
+                let preset = slot
+                    .preset_for(source)
+                    .expect("every staged source preset resolves");
+                let _ = writeln!(
+                    out,
+                    "  source {:?} {} preset={} entries={:?}",
+                    source.kind, source.device, preset.name, preset.entries,
+                );
+            }
         }
         out
     }

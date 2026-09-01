@@ -30,3 +30,11 @@ pub const INTERFACE_SUBCLASS_BOOT: u8 = 0x01;
 
 /// HID boot-interface protocol 1 = keyboard.
 pub const INTERFACE_PROTOCOL_KEYBOARD: u8 = 0x01;
+
+/// HID boot-interface protocol 2 = mouse.
+///
+/// Unlike protocol 0, which deliberately says nothing about the reports an
+/// interface carries, this is an explicit device declaration.  A boot-mouse
+/// interface is therefore safe to exclude from keyboard candidacy without
+/// excluding protocol-0 NKRO keyboards.
+pub const INTERFACE_PROTOCOL_MOUSE: u8 = 0x02;

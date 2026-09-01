@@ -505,11 +505,12 @@ pub fn to_view(report: &DevicesReport) -> ksx_api::DevicesView {
             // `ksx_core::Reach`, never here. `claimed` is the binding, and a
             // claimed interface is off the Windows keyboard stack by
             // construction, so it cannot type either.
+            let keyboard = c.is_keyboard_candidate();
             let reach = ksx_core::Reach {
                 transport: ksx_core::Transport::Usb,
-                keyboard: c.is_keyboard_candidate(),
+                keyboard,
                 claimed: c.binding.is_winusb(),
-                can_type: !c.binding.is_winusb(),
+                can_type: keyboard && !c.binding.is_winusb(),
             };
             let eligibility = reach.eligibility();
             ksx_api::UsbRow {
@@ -545,6 +546,8 @@ pub fn to_view(report: &DevicesReport) -> ksx_api::DevicesView {
                 can_type: reach.can_type,
                 cannot_type_reason: if reach.can_type {
                     String::new()
+                } else if !keyboard {
+                    ksx_core::transport::WINUSB_NEEDS_A_KEYBOARD.to_owned()
                 } else {
                     ksx_core::transport::INTERCEPTION_NEEDS_THE_STACK.to_owned()
                 },
@@ -1813,11 +1816,12 @@ mod tests {
             Binding::HidUsb,
         );
         ipac_mouse.interface_number = 1;
-        // Vendor-specific class, not HID. `is_keyboard_candidate` is
-        // deliberately just `is_hid()` — a rebound interface stops describing
-        // itself as a keyboard, and NKRO firmware often reports protocol 0, so
-        // guessing harder there would only produce confident wrong answers.
-        // The real proof is the report descriptor at claim time.
+        // Vendor-specific class, not HID. `is_keyboard_candidate` remains
+        // deliberately generous about HID protocol 0 — a rebound interface
+        // stops describing itself as a keyboard, and NKRO firmware often
+        // reports protocol 0. The only descriptor-level negative is an
+        // explicitly declared boot mouse; the real positive proof is the
+        // report descriptor at claim time.
         ipac_mouse.interface_class = 0xFF;
         ipac_mouse.interface_protocol = 0;
         let mut spintrak = usb(r"USB\VID_D209&PID_15A2\6", Binding::HidUsb);
@@ -1877,5 +1881,67 @@ mod tests {
             "{:?}",
             view.notes
         );
+    }
+
+    /// A real device observed on the development machine: the USB descriptor
+    /// says HID boot protocol 2, its Windows child is `mouhid` / Mouse, and the
+    /// public USB id table identifies 1241:1111 as a mouse. Protocol 2 is an
+    /// explicit fact, unlike protocol 0 on an NKRO keyboard, so every typed
+    /// surface must keep this row out of the keyboard picker.
+    #[test]
+    #[cfg(windows)]
+    fn a_declared_boot_mouse_is_not_a_keyboard_candidate_or_pickable_board() {
+        let cfg = ConfiguredDevices::default();
+        let mut candidate = usb(r"USB\VID_1241&PID_1111\6&EBEBD3B&0&2", Binding::HidUsb);
+        candidate.parent_id = candidate.id.as_str().to_owned();
+        candidate.vendor_id = 0x1241;
+        candidate.product_id = 0x1111;
+        candidate.bcd_device = 0x0440;
+        candidate.interface_subclass = ksx_capture::hid::INTERFACE_SUBCLASS_BOOT;
+        candidate.interface_protocol = ksx_capture::hid::INTERFACE_PROTOCOL_MOUSE;
+        candidate.product = Some("USB Input Device".to_owned());
+        candidate.device_desc = Some("USB Input Device".to_owned());
+        let facts = candidate.facts();
+
+        let report = usb_only_report(
+            Vec::new(),
+            true,
+            vec![UsbRow {
+                candidate,
+                alias: None,
+                selected: false,
+            }],
+            true,
+            cfg,
+        );
+        assert_eq!(
+            report.hid_rows().count(),
+            0,
+            "an explicit boot mouse is HID, but it is not a keyboard candidate"
+        );
+
+        let view = to_view(&report);
+        let row = &view.usb[0];
+        assert_eq!(row.state, "not-a-keyboard");
+        assert!(!row.boot_keyboard);
+        assert!(!row.interception_eligible);
+        assert!(!row.winusb_eligible);
+        assert!(!row.can_type);
+        assert_eq!(
+            row.cannot_type_reason,
+            ksx_core::transport::WINUSB_NEEDS_A_KEYBOARD
+        );
+
+        let scan = crate::device_scan::view(
+            &view,
+            &[facts],
+            &ksx_config::ConfigFile::default(),
+            &ksx_config::GamesFile::default(),
+        );
+        let board = &scan.boards[0];
+        assert_eq!(board.keyboard, None);
+        assert!(!board.looks_like_a_keyboard);
+        assert_eq!(board.role, ksx_api::BoardRole::Other);
+        assert!(!board.pickable);
     }
 }

@@ -158,6 +158,18 @@ impl UsbCandidate {
             && self.interface_protocol == crate::hid::INTERFACE_PROTOCOL_KEYBOARD
     }
 
+    /// Declares itself a boot mouse (`subclass 1, protocol 2`).
+    ///
+    /// This is a stronger negative fact than a generic HID interface is a
+    /// positive one.  In particular, it lets discovery reject an ordinary
+    /// mouse while continuing to admit protocol-0 NKRO keyboards whose real
+    /// keyboard proof lives in the report descriptor.
+    pub fn is_boot_mouse(&self) -> bool {
+        self.is_hid()
+            && self.interface_subclass == crate::hid::INTERFACE_SUBCLASS_BOOT
+            && self.interface_protocol == crate::hid::INTERFACE_PROTOCOL_MOUSE
+    }
+
     /// An Ultimarc board.
     ///
     /// **Cosmetic only** — this decorates a row with a familiar word and
@@ -203,14 +215,17 @@ impl UsbCandidate {
 
     /// Would this interface plausibly deliver keyboard reports?
     ///
-    /// Deliberately generous: once an interface is rebound to `winusb.sys` its
-    /// `DeviceDesc` stops saying "Keyboard", and `bInterfaceProtocol` is 0 on
-    /// plenty of NKRO firmware (the boot protocol is optional). So the answer
-    /// is "it is HID", and the actual proof is the report descriptor the
-    /// backend pulls at claim time. Guessing harder here would only produce
-    /// confident wrong answers.
+    /// Deliberately generous about protocol 0: once an interface is rebound to
+    /// `winusb.sys` its `DeviceDesc` stops saying "Keyboard", and
+    /// `bInterfaceProtocol` is 0 on plenty of NKRO firmware (the boot protocol
+    /// is optional). The actual positive proof remains the report descriptor
+    /// the backend pulls at claim time.
+    ///
+    /// The one safe descriptor-level rejection is an interface that explicitly
+    /// declares the boot-mouse protocol. Treating that as a keyboard candidate
+    /// made an ordinary mouse pickable and advertised that it could type.
     pub fn is_keyboard_candidate(&self) -> bool {
-        self.is_hid()
+        self.is_hid() && !self.is_boot_mouse()
     }
 }
 
@@ -446,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_candidacy_is_hid_class_not_a_guess_about_protocol() {
+    fn keyboard_candidacy_keeps_unknown_hid_but_rejects_declared_boot_mice() {
         let boot = candidate(
             "USB\\VID_D209&PID_0430&MI_00\\7&1&0&0000",
             0x03,
@@ -469,12 +484,23 @@ mod tests {
             0xD209,
         );
         assert!(!nkro.is_boot_keyboard());
+        assert!(!nkro.is_boot_mouse());
         assert!(nkro.is_keyboard_candidate());
+
+        // HID 1.11 assigns boot protocol 2 to mice. This is not the same as
+        // protocol 0 (unknown until the report descriptor is read): it is an
+        // explicit negative keyboard fact and must not enter a device picker.
+        let mouse = candidate("USB\\VID_1241&PID_1111\\6&EBEBD3B&0&2", 0x03, 1, 2, 0x1241);
+        assert!(mouse.is_hid());
+        assert!(!mouse.is_boot_keyboard());
+        assert!(mouse.is_boot_mouse());
+        assert!(!mouse.is_keyboard_candidate());
 
         // A vendor-class interface is not.
         let vendor = candidate("USB\\VID_1234&PID_5678&MI_00\\x", 0xFF, 1, 1, 0x1234);
         assert!(!vendor.is_hid());
         assert!(!vendor.is_boot_keyboard());
+        assert!(!vendor.is_boot_mouse());
         assert!(!vendor.is_keyboard_candidate());
         assert!(!vendor.is_ultimarc());
     }

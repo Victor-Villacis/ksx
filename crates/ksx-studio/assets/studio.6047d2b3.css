@@ -7076,6 +7076,10 @@ a.wsrow-title:hover {
   white-space: nowrap;
 }
 
+.n-environment-compact {
+  display: none;
+}
+
 .n-environment.fixture {
   border-color: rgba(255, 190, 90, 0.48);
   background: rgba(139, 85, 25, 0.2);
@@ -20419,24 +20423,32 @@ button.rd-utility-action {
 }
 
 /* At compact desktop/tablet widths, primary workbench verbs use their short
-   visual forms. The environment badge contracts to a colored safety beacon
-   while retaining its text and tooltip; live truth keeps a short named state
-   beside its witness dot. Full sentences remain available to assistive
-   technology. */
+   visual forms. Provenance remains a named pill — DEMO can never become an
+   ambiguous colored dot — while the full machine identity remains in the
+   tooltip/accessibility label. */
 @media (max-width: 1140px) {
   .rd .rd-top > .n-environment {
-    display: block;
+    display: inline-flex;
     flex: none;
-    width: 12px;
-    min-width: 12px;
-    max-width: 12px;
-    height: 12px;
-    min-height: 12px;
-    padding: 0;
-    overflow: hidden;
-    border-radius: 50%;
-    color: transparent;
-    font-size: 0;
+    width: auto;
+    min-width: 18px;
+    max-width: 58px;
+    height: 22px;
+    min-height: 22px;
+    padding: 2px 1px;
+    overflow: visible;
+    border-radius: 999px;
+    color: inherit;
+    font-size: 8px;
+    letter-spacing: 0.08em;
+  }
+
+  .rd .rd-top > .n-environment .n-environment-full {
+    display: none;
+  }
+
+  .rd .rd-top > .n-environment .n-environment-compact {
+    display: inline;
   }
 
   .rd-setup-sum {
@@ -20625,6 +20637,12 @@ button.rd-utility-action {
   .rd-attention-actions,
   .rd-health-alert:not([hidden]) > .rd-panel-action {
     grid-column: 1;
+  }
+}
+
+@media (max-width: 520px) {
+  .rd .rd-top {
+    gap: 1px;
   }
 }
 
@@ -21073,6 +21091,70 @@ button.rd-utility-action {
   font-size: var(--fs-xs);
   line-height: var(--lh-snug);
   color: var(--n-text-2);
+}
+
+.rd-device-keyboard-visual {
+  position: relative;
+  box-sizing: border-box;
+  margin: 10px 0 2px;
+  padding: 7px 9px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--n-accent-line) 76%, var(--n-line));
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 82% 12%, color-mix(in srgb, var(--n-accent) 14%, transparent), transparent 42%),
+    linear-gradient(145deg, color-mix(in srgb, var(--n-panel-2) 88%, #000 12%), var(--n-panel));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--n-text) 7%, transparent),
+    0 10px 26px color-mix(in srgb, #000 18%, transparent);
+}
+
+.rd-device-keyboard-visual::after {
+  position: absolute;
+  inset: auto 12px 4px;
+  height: 1px;
+  content: "";
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--n-accent) 46%, transparent), transparent);
+}
+
+.rd-device-keyboard-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  color: var(--n-accent);
+  filter: drop-shadow(0 5px 7px color-mix(in srgb, #000 30%, transparent));
+}
+
+.rd-device-keyboard-shell {
+  fill: color-mix(in srgb, var(--n-panel) 78%, #05070b 22%);
+  stroke: color-mix(in srgb, var(--n-text-3) 38%, transparent);
+  stroke-width: 1;
+}
+
+.rd-device-keyboard-deck {
+  fill: color-mix(in srgb, var(--n-bg) 86%, #000 14%);
+  stroke: color-mix(in srgb, var(--n-accent) 20%, var(--n-line));
+  stroke-width: 0.8;
+}
+
+.rd-device-keyboard-key {
+  fill: color-mix(in srgb, var(--n-text-3) 32%, var(--n-panel-2));
+  stroke: color-mix(in srgb, var(--n-text-2) 22%, transparent);
+  stroke-width: 0.45;
+}
+
+.rd-device-keyboard-key-edge {
+  fill: color-mix(in srgb, var(--n-accent) 22%, var(--n-panel-2));
+}
+
+.rd-device-keyboard-light {
+  fill: color-mix(in srgb, var(--n-accent) 62%, transparent);
+  opacity: 0.8;
+}
+
+.rd-device-keyboard-witness {
+  fill: var(--n-accent);
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--n-accent) 74%, transparent));
 }
 
 .rd-devcard-states {

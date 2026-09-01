@@ -319,7 +319,7 @@ const fn default_true() -> bool {
 pub struct BlockingOption {
     /// `whole` | `bound-keys` | `off` — what a [`StageEdit`] sends back.
     pub name: String,
-    /// The question in the user's words: "Freeze this keyboard".
+    /// The question in the user's words: "Freeze mapped keyboards".
     pub title: String,
     /// What it means for them, not for the config file.
     pub detail: String,
@@ -337,10 +337,11 @@ pub const ESCAPE_HATCH_LINE: &str =
      gives every keyboard back without ending Play. It is handled in the capture thread itself, so \
      no screen, no browser and no crashed UI can take it away; Stop or Ctrl+Alt+Del ends Play.";
 
-/// **Freezing is not permanent and not global.** §3's second must-say.
+/// **Freezing is session-scoped and route-scoped.** §3's second must-say.
 pub const BLOCKING_SCOPE_LINE: &str =
-    "This applies to the keyboard you picked, for this session only. Stopping the session ends it, \
-     and no other keyboard on this PC is affected either way.";
+    "This applies to every keyboard routed into this draft, for this session only. Keyboards that \
+     are not mapping sources are never captured. Stopping the session gives every routed keyboard \
+     back.";
 
 /// One SOCD policy, in the words a player would use.
 ///
@@ -413,25 +414,25 @@ impl BlockingOption {
         vec![
             Self {
                 name: Blocking::Whole.as_str().to_owned(),
-                title: "Freeze this keyboard".to_owned(),
-                detail: "Every key on it drives the pad and nothing else. No typos into the \
-                         game, no accidental Windows shortcuts. This is what most people want \
-                         for a dedicated arcade panel."
+                title: "Freeze mapped keyboards".to_owned(),
+                detail: "Every keystroke on each routed keyboard is reserved for ksx. Mapped keys \
+                         drive its controller routes; unmapped keys do not type into Windows. This \
+                         is best for dedicated panels."
                     .to_owned(),
             },
             Self {
                 name: Blocking::BoundKeys.as_str().to_owned(),
-                title: "Split this keyboard".to_owned(),
-                detail: "Mapped keys drive the pad; everything else still types. This is what \
-                         lets one keyboard serve player 1 and player 2, and what lets someone \
-                         keep using their only keyboard."
-                    .to_owned(),
+                title: "Split mapped keyboards".to_owned(),
+                detail:
+                    "On every routed keyboard, mapped keys drive controllers while everything \
+                         else still types. Each physical keyboard keeps its own independent routes."
+                        .to_owned(),
             },
             Self {
                 name: Blocking::Off.as_str().to_owned(),
-                title: "Take nothing".to_owned(),
-                detail: "The pads are driven and the keyboard keeps typing as well. Every \
-                         mapped key does both at once."
+                title: "Keep all keyboards typing".to_owned(),
+                detail: "Mapped keys drive controllers and continue typing into Windows. Nothing \
+                         is captured."
                     .to_owned(),
             },
         ]
@@ -2988,7 +2989,7 @@ steps = [{{ hold = ["A"], ms = 25 }}]
     /// **§3's two must-says travel with the question.**
     ///
     /// Breaks against a view that served only the three options: the escape
-    /// hatch and the "this is per-keyboard, per-session" scope would then be
+    /// hatch and the routed-keyboards, per-session scope would then be
     /// composed on whichever screen asked, in whatever words that screen chose,
     /// and the browser's copy would be a second description of what the capture
     /// thread does. The first one is not reassurance — it is the only thing
@@ -3005,6 +3006,12 @@ steps = [{{ hold = ["A"], ms = 25 }}]
              for one would be worse than none"
         );
         assert!(view.blocking_scope.contains("this session only"));
+        assert!(view.blocking_scope.contains("every keyboard routed"));
+        assert!(view
+            .blocking_scope
+            .contains("not mapping sources are never captured"));
+        assert_eq!(view.blocking_options[0].title, "Freeze mapped keyboards");
+        assert_eq!(view.blocking_options[1].title, "Split mapped keyboards");
         // A screen with no daemon still has to be able to say them — that
         // screen is exactly where somebody is reading about how to get out.
         let down = StagedSetupView::unreachable("no daemon answered");

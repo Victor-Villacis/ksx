@@ -1268,9 +1268,22 @@ fn stamp_stage_meta(
 /// remains useful for diagnostics, but the prefix is what makes an exact
 /// remove/recreate an ABA-safe new target.
 fn stamp_stage_target_revisions(setup: &mut ksx_api::StagedSetupView, meta: &super::StageMeta) {
+    setup.revision = meta.revision_token();
     for slot in &mut setup.slots {
-        let content = ksx_api::staged_slot_revision(slot);
-        slot.target_revision = format!("d1-{}-{:016x}-{content}", meta.incarnation, meta.revision);
+        let contents = slot
+            .sources
+            .iter()
+            .map(|source| ksx_api::staged_source_revision(slot, source))
+            .collect::<Vec<_>>();
+        for (source, content) in slot.sources.iter_mut().zip(contents) {
+            source.revision = format!("{}-{content}", setup.revision);
+        }
+        slot.target_revision = if let Some(source) = slot.sources.first() {
+            source.revision.clone()
+        } else {
+            let content = ksx_api::staged_slot_revision(slot);
+            format!("{}-{content}", setup.revision)
+        };
     }
 }
 
@@ -1370,9 +1383,10 @@ fn handle_stage_edit(request: &serde_json::Value, deps: &PipeDeps) -> serde_json
                 "ok": false,
                 "code": ksx_api::codes::BAD_REQUEST,
                 "error": format!(
-                    "stage-edit needs an \"edit\" naming one of choose-device | add-slot | \
-                     set-persona | set-layout | set-bindings | remove-slot | reorder-slots | \
-                     set-socd | set-blocking | discard: {err}"
+                    "stage-edit needs an \"edit\" naming one of choose-device | upsert-device | \
+                     remove-device | add-slot | set-persona | set-layout | set-source-layout | \
+                     set-bindings | set-source-bindings | remove-source-bindings | remove-slot | \
+                     reorder-slots | set-socd | set-blocking | discard: {err}"
                 ),
             })
         }
@@ -1488,7 +1502,8 @@ fn stage_macro(
             "the daemon's state lock is poisoned, so the staged macro could not be edited",
         );
     };
-    let setup = ksx_api::StagedSetupView::of(&state.staged);
+    let mut setup = ksx_api::StagedSetupView::of(&state.staged);
+    stamp_stage_target_revisions(&mut setup, &state.stage_meta);
     let prepared = match ksx_api::staged_macro_edit_for_setup(&setup, request) {
         Ok(prepared) => prepared,
         Err(outcome) => return outcome,
@@ -1519,6 +1534,12 @@ fn describe(edit: &ksx_api::StageEdit) -> String {
         ksx_api::StageEdit::ChooseDevice { label, .. } => {
             format!("Using \"{label}\". This choice stays on this screen until Save or Play.")
         }
+        ksx_api::StageEdit::UpsertDevice { label, .. } => format!(
+            "Added \"{label}\" to this workbench. It joins Play only after one of its keys is mapped."
+        ),
+        ksx_api::StageEdit::RemoveDevice { selector } => format!(
+            "Removed keyboard {selector} and its controller routes from this unsaved setup."
+        ),
         ksx_api::StageEdit::SetDeviceBackend { backend, .. } => format!(
             "This keyboard will use {backend}. Save and Play will check the live driver again before doing anything."
         ),
@@ -1537,12 +1558,26 @@ fn describe(edit: &ksx_api::StageEdit) -> String {
                 "Player {number} now uses the \"{layout}\" layout. This change is still on this screen."
             )
         }
+        ksx_api::StageEdit::SetSourceLayout {
+            number,
+            selector,
+            layout,
+            ..
+        } => format!(
+            "Player {number}'s route from {selector} now uses the \"{layout}\" layout. This change is still on this screen."
+        ),
         ksx_api::StageEdit::SetPersona { number, .. } => {
             format!("Player {number}'s controller changed. This change is still on this screen.")
         }
         ksx_api::StageEdit::SetBindings { number, .. } => {
             format!("Player {number}'s controls were updated.")
         }
+        ksx_api::StageEdit::SetSourceBindings {
+            number, selector, ..
+        } => format!("Player {number}'s controls from {selector} were updated."),
+        ksx_api::StageEdit::RemoveSourceBindings { number, selector } => format!(
+            "Removed {selector}'s route to Player {number}; the keyboard remains on the workbench."
+        ),
         ksx_api::StageEdit::RemoveSlot { number } => {
             format!("Player {number} was removed from this setup.")
         }
@@ -2900,6 +2935,8 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
             })),
             Request::StageMacro(Box::new(ksx_api::StagedMacroRequest {
                 number: 1,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
                 write: ksx_api::MacroWrite {
                     preset: "Panel P1".into(),
                     name: "coin-pulse".into(),
@@ -3887,6 +3924,61 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         );
         assert_eq!(stale["ok"], false, "{stale}");
         assert_eq!(stale["code"], ksx_api::codes::BAD_SLOT, "{stale}");
+    }
+
+    #[test]
+    fn daemon_stamps_and_accepts_exact_source_revisions_for_first_fan_in_bind() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let deps = deps(tx, state, no_profiles());
+        stage_blank_slots(&deps, 1);
+        let added = handle_request(
+            r#"{"verb":"stage-edit","edit":"upsert-device",
+                "selector":"usb:046d:c31c:00","alias":"desk","label":"Desk keyboard"}"#,
+            &deps,
+            FAST,
+        );
+        assert_eq!(added["ok"], true, "{added}");
+
+        let served = handle_request(r#"{"verb":"stage"}"#, &deps, FAST);
+        let setup: ksx_api::StagedSetupView =
+            serde_json::from_value(served["setup"].clone()).expect("served stage view");
+        assert!(setup.revision.starts_with("d1-"), "{served}");
+        assert_eq!(setup.slots[0].sources.len(), 1, "second source is not routed yet");
+        assert!(
+            setup.slots[0].sources[0].revision.starts_with(&setup.revision),
+            "routed source revision must carry the daemon incarnation: {served}"
+        );
+        let desk = ksx_api::staged_source_view(&setup, &setup.slots[0], "usb:046d:c31c:00")
+            .expect("the staged but unrouted desk keyboard is bindable");
+        assert!(!desk.routed);
+        assert!(desk.revision.starts_with(&setup.revision));
+
+        let bound = handle_request(
+            &serde_json::json!({
+                "verb": "stage-bind",
+                "number": 1,
+                "expected_device": desk.selector,
+                "expected_target_revision": desk.revision,
+                "preset": desk.preset,
+                "function": "B",
+                "keys": ["G"],
+            })
+            .to_string(),
+            &deps,
+            FAST,
+        );
+        assert_eq!(bound["ok"], true, "{bound}");
+        let served = handle_request(r#"{"verb":"stage"}"#, &deps, FAST);
+        let sources = served["setup"]["slots"][0]["sources"]
+            .as_array()
+            .expect("source-qualified slot");
+        assert_eq!(sources.len(), 2, "{served}");
+        assert!(sources.iter().all(|source| source["revision"]
+            .as_str()
+            .is_some_and(|revision| revision.starts_with("d1-"))));
+        assert_eq!(sources[1]["selector"], "usb:046d:c31c:00");
+        assert_eq!(sources[1]["bindings"], 1);
     }
 
     #[test]

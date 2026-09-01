@@ -182,15 +182,6 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
         Err(error) => (None, error.as_str()),
     };
     let capture = RedesignCaptureState::of(staged, scan_read, scan_error);
-    let capture_badge = match capture.mode.as_str() {
-        "prepare" => Some(("Preparation required", "attention")),
-        "release" => Some(("Prepared", "ready")),
-        "ready" | "prepare-optional" => Some(("Ready", "ready")),
-        "held" | "blocked" | "unavailable" | "release-held" => {
-            Some(("Needs attention", "attention"))
-        }
-        _ => None,
-    };
     for row in devices
         .keyboards
         .iter_mut()
@@ -198,12 +189,20 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
         .chain(devices.experimental.iter_mut())
     {
         row.capture_cls = "rd-dev-capturechip none".to_owned();
-        if row.aria_current == "true" {
-            if let Some((label, state)) = capture_badge {
-                row.capture_badge = label.to_owned();
-                row.capture_state = state.to_owned();
-                row.capture_cls = "rd-dev-capturechip".to_owned();
-            }
+        let capture_badge =
+            crate::snapshot::staged_device_capture_mode(staged, scan_read, &row.selector).and_then(
+                |mode| match mode {
+                    "prepare" => Some(("Preparation required", "attention")),
+                    "release" => Some(("Prepared", "ready")),
+                    "ready" | "prepare-optional" => Some(("Ready", "ready")),
+                    "held" | "blocked" => Some(("Needs attention", "attention")),
+                    _ => None,
+                },
+            );
+        if let Some((label, state)) = capture_badge {
+            row.capture_badge = label.to_owned();
+            row.capture_state = state.to_owned();
+            row.capture_cls = "rd-dev-capturechip".to_owned();
         }
     }
     let operations = RedesignOperationalState::of(

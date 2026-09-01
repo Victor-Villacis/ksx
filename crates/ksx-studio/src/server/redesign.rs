@@ -521,7 +521,7 @@ async fn redesign_capture_ready(state: &Arc<AppState>) -> bool {
     let inspect = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
         let staged = inspect.control.staged();
-        if !staged.reachable || staged.device.is_none() {
+        if !staged.reachable || !crate::snapshot::staged_has_routed_devices(&staged) {
             return true;
         }
         let Ok(scan) = inspect.machine.device_scan() else {

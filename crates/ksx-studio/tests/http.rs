@@ -6507,6 +6507,93 @@ fn the_redesign_capture_shell_recovers_held_devices_and_preserves_exact_identity
     }
 }
 
+/// Capture preparation follows the live source graph, not the compatibility
+/// first device. An unrouted primary may be absent without blocking a pad
+/// routed from a secondary keyboard; prepare/release target and restamp that
+/// exact secondary selector.
+#[test]
+fn redesign_capture_prepares_and_releases_a_routed_secondary_device() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    machine.winusb_claimed.store(false, Ordering::SeqCst);
+    stage_redesign_device(
+        &control,
+        REDESIGN_RIGHT_SOURCE,
+        "unused-primary",
+        "Unrouted primary",
+    );
+    stage_redesign_device(&control, REDESIGN_LEFT_SOURCE, "panel", "Routed secondary");
+    for edit in [
+        ksx_api::StageEdit::AddSlot {
+            number: Some(1),
+            persona: "xbox360".into(),
+            preset: "Implicit primary".into(),
+            layout: None,
+        },
+        ksx_api::StageEdit::SetSourceBindings {
+            number: 1,
+            selector: REDESIGN_LEFT_SOURCE.into(),
+            preset: Box::new(routed_preset(
+                "Secondary P1",
+                "A",
+                "G",
+                "secondary-combo",
+                "P",
+            )),
+        },
+        ksx_api::StageEdit::RemoveSourceBindings {
+            number: 1,
+            selector: REDESIGN_RIGHT_SOURCE.into(),
+        },
+        ksx_api::StageEdit::SetDeviceBackend {
+            expected_selector: REDESIGN_LEFT_SOURCE.into(),
+            backend: "winusb".into(),
+        },
+        ksx_api::StageEdit::SetBlocking {
+            blocking: "whole".into(),
+        },
+    ] {
+        assert!(control.stage_edit(&edit).ok, "{edit:?}");
+    }
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+
+    let blocked: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("blocked payload");
+    assert_eq!(blocked["capture"]["mode"], "prepare", "{blocked}");
+    assert_eq!(
+        blocked["capture"]["selector"], REDESIGN_LEFT_SOURCE,
+        "the secondary route owns the blocker: {blocked}"
+    );
+    assert_eq!(blocked["capture"]["instance"], IPAC_KB, "{blocked}");
+    assert_eq!(blocked["operations"]["save"]["allowed"], false);
+
+    let prepared = post_form(addr, "/redesign/capture/prepare", PREPARE_IPAC_FORM);
+    assert!(prepared.contains("Keyboard%20prepared"), "{prepared}");
+    let after_prepare = control.staged();
+    assert_eq!(after_prepare.devices[0].backend, "interception");
+    assert_eq!(after_prepare.devices[1].backend, "winusb");
+    assert_eq!(machine.prepared_with.lock().unwrap().len(), 1);
+
+    let ready: serde_json::Value =
+        serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("ready payload");
+    assert_eq!(ready["capture"]["mode"], "release", "{ready}");
+    assert_eq!(ready["capture"]["selector"], REDESIGN_LEFT_SOURCE);
+    assert_eq!(
+        ready["operations"]["save"]["allowed"], true,
+        "the absent unrouted primary is not a capture prerequisite: {ready}"
+    );
+
+    let released = post_form(addr, "/redesign/capture/release", RELEASE_IPAC_FORM);
+    assert!(released.contains("Keyboard%20released"), "{released}");
+    let after_release = control.staged();
+    assert_eq!(after_release.devices[0].backend, "interception");
+    assert_eq!(
+        after_release.devices[1].backend, "interception",
+        "release restamps the exact routed secondary"
+    );
+    assert_eq!(machine.released_with.lock().unwrap().len(), 1);
+}
+
 /// The redesign's fail-closed exact-input promise is mutation authority, not
 /// decoration on a disabled button. A refused or incomplete live scan cannot
 /// be bypassed with a direct Save/Play POST, while the shared domain cores

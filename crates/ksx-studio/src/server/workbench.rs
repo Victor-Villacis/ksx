@@ -295,9 +295,16 @@ fn capture_target(
     if action == CaptureMutation::Prepare {
         let staged = state.control.staged();
         let device = staged
-            .device
-            .as_ref()
-            .filter(|device| staged.reachable && device.selector == expected_selector)
+            .devices
+            .iter()
+            .find(|device| device.selector == expected_selector)
+            .or_else(|| {
+                staged
+                    .device
+                    .as_ref()
+                    .filter(|device| device.selector == expected_selector)
+            })
+            .filter(|_| staged.reachable)
             .ok_or(CaptureResult::TargetChanged)?;
         if device.backend != "interception" && device.backend != "winusb" {
             return Err(CaptureResult::TargetChanged);
@@ -457,12 +464,12 @@ pub(super) async fn capture_release(
         {
             return Err(CaptureResult::MutationFailed);
         }
-        if state
-            .control
-            .staged()
-            .device
-            .as_ref()
-            .is_some_and(|device| device.selector == expected_selector)
+        let staged = state.control.staged();
+        if staged
+            .devices
+            .iter()
+            .chain(staged.device.iter())
+            .any(|device| device.selector == expected_selector)
             && !state
                 .control
                 .stage_edit(&ksx_api::StageEdit::SetDeviceBackend {

@@ -310,7 +310,7 @@ impl RedesignOperationalState {
         let save_allowed = stage_ready && needs_save;
         let save_reason = if !staged.reachable {
             "The draft cannot be read while the background helper is unavailable.".to_owned()
-        } else if !capture.ready_for_commit() && staged.device.is_some() {
+        } else if !capture.ready_for_commit() && !routed_stage_selectors(staged).is_empty() {
             capture.commit_blocker()
         } else if !staged.ready {
             staged_readiness_reason(staged, "save")
@@ -337,7 +337,7 @@ impl RedesignOperationalState {
         } else if !session.reachable {
             "The running-session state cannot be reached. Reopen ksx before starting controllers."
                 .to_owned()
-        } else if !capture.ready_for_commit() && staged.device.is_some() {
+        } else if !capture.ready_for_commit() && !routed_stage_selectors(staged).is_empty() {
             capture.commit_blocker()
         } else if !staged.ready {
             staged_readiness_reason(staged, "play")
@@ -512,6 +512,51 @@ pub struct RedesignHeldCaptureRow {
     pub note: String,
 }
 
+/// Exact staged selectors that currently feed at least one controller. Device
+/// roster membership alone is intentionally excluded: a keyboard may sit on
+/// the canvas before anyone routes it, and that must not block Save/Play for
+/// an otherwise complete source graph.
+fn routed_stage_selectors(staged: &ksx_api::StagedSetupView) -> Vec<String> {
+    let mut selectors = Vec::new();
+    for source in staged.slots.iter().flat_map(|slot| slot.sources.iter()) {
+        if !source.selector.trim().is_empty() && !selectors.contains(&source.selector) {
+            selectors.push(source.selector.clone());
+        }
+    }
+    // Compatibility with pre-multi-source daemons: they serve the singular
+    // device and slot authoring but no canonical `devices`/`sources` arrays.
+    if selectors.is_empty() && staged.devices.is_empty() && !staged.slots.is_empty() {
+        if let Some(device) = staged
+            .device
+            .as_ref()
+            .filter(|device| !device.selector.trim().is_empty())
+        {
+            selectors.push(device.selector.clone());
+        }
+    }
+    selectors
+}
+
+pub(crate) fn staged_has_routed_devices(staged: &ksx_api::StagedSetupView) -> bool {
+    !routed_stage_selectors(staged).is_empty()
+}
+
+fn staged_device_for_selector<'a>(
+    staged: &'a ksx_api::StagedSetupView,
+    selector: &str,
+) -> Option<&'a ksx_api::StagedDeviceView> {
+    staged
+        .devices
+        .iter()
+        .find(|device| device.selector == selector)
+        .or_else(|| {
+            staged
+                .device
+                .as_ref()
+                .filter(|device| device.selector == selector)
+        })
+}
+
 /// Exact-device preparation and recovery state for the redesign shell.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RedesignCaptureState {
@@ -549,6 +594,10 @@ pub struct RedesignCaptureState {
     pub attention_review_label: String,
     #[serde(default)]
     pub attention_retry_cls: String,
+    /// Aggregated readiness of every routed device. `None` keeps handwritten
+    /// test/legacy values on the historical mode-derived behavior.
+    #[serde(skip)]
+    routed_ready: Option<bool>,
 }
 
 /// Machine-stable list identity for a held board, without exposing a Windows
@@ -659,7 +708,80 @@ impl RedesignCaptureState {
     ) -> Self {
         let empty_scan = ksx_api::DeviceScanView::default();
         let scan_view = scan.unwrap_or(&empty_scan);
-        let resolved = StartCaptureView::from_parts(staged, scan_view, scan.is_some());
+        let mut captures = routed_stage_selectors(staged)
+            .into_iter()
+            .map(|selector| {
+                let device = staged_device_for_selector(staged, &selector);
+                let label = device
+                    .map(|device| device.label.trim())
+                    .filter(|label| !label.is_empty())
+                    .unwrap_or("Selected input")
+                    .to_owned();
+                let resolved = device.map_or_else(
+                    || StartCaptureView::blocked(selector),
+                    |device| {
+                        StartCaptureView::from_device(
+                            staged.reachable,
+                            device,
+                            scan_view,
+                            scan.is_some(),
+                        )
+                    },
+                );
+                (label, resolved)
+            })
+            .collect::<Vec<_>>();
+        let routed_ready = captures.iter().all(|(_, capture)| {
+            matches!(
+                capture.mode_word(),
+                "ready" | "prepare-optional" | "release"
+            )
+        });
+        // A roster-only first device remains inspectable/preparable for old
+        // callers and for a user working ahead of their first route. It does
+        // not participate in `routed_ready`, so its state cannot gate a live
+        // graph that does not use it.
+        if captures.is_empty() {
+            if let Some(device) = staged.device.as_ref() {
+                let label = device.label.trim();
+                captures.push((
+                    if label.is_empty() {
+                        "Selected input".to_owned()
+                    } else {
+                        label.to_owned()
+                    },
+                    StartCaptureView::from_device(
+                        staged.reachable,
+                        device,
+                        scan_view,
+                        scan.is_some(),
+                    ),
+                ));
+            }
+        }
+        // Any blocker wins. Once every routed source is ready, prefer an
+        // actionable prepared/optional row over a plain ready row so the one
+        // capture card still offers an exact-device action.
+        let priority = |mode: &str| match mode {
+            "prepare" | "held" | "blocked" => 0,
+            "release" => 1,
+            "prepare-optional" => 2,
+            "ready" => 3,
+            _ => 4,
+        };
+        let selected_capture = captures
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, (_, capture))| priority(capture.mode_word()))
+            .map(|(index, _)| index);
+        let resolved_label = selected_capture
+            .and_then(|index| captures.get(index))
+            .map(|(label, _)| label.clone())
+            .unwrap_or_default();
+        let resolved = selected_capture
+            .and_then(|index| captures.get(index))
+            .map(|(_, capture)| capture.clone())
+            .unwrap_or_default();
         let base_mode = resolved.mode_word();
 
         let mut held_key_counts = std::collections::BTreeMap::<String, usize>::new();
@@ -881,13 +1003,8 @@ impl RedesignCaptureState {
             }
         }
 
-        let device_label = if let Some(device) = staged.device.as_ref() {
-            let label = device.label.trim();
-            if label.is_empty() {
-                "Selected input".to_owned()
-            } else {
-                label.to_owned()
-            }
+        let device_label = if !resolved_label.is_empty() {
+            resolved_label
         } else if mode == "release-held" {
             held.iter()
                 .find(|row| {
@@ -1019,11 +1136,15 @@ impl RedesignCaptureState {
             attention_detail,
             attention_review_label: attention_review_label.to_owned(),
             attention_retry_cls: attention_retry_cls.to_owned(),
+            routed_ready: Some(routed_ready),
         }
     }
 
     pub(crate) fn ready_for_commit(&self) -> bool {
-        matches!(self.mode.as_str(), "ready" | "prepare-optional" | "release")
+        self.routed_ready.unwrap_or(matches!(
+            self.mode.as_str(),
+            "ready" | "prepare-optional" | "release"
+        ))
     }
 
     fn commit_blocker(&self) -> String {
@@ -1110,12 +1231,16 @@ impl RedesignJourney {
 
         let facts = [input_done, controllers_done, mapping_done, running];
         let next = facts.iter().position(|done| !done);
-        let input_label = staged
-            .device
-            .as_ref()
-            .map(|device| device.label.trim())
-            .filter(|label| !label.is_empty())
-            .unwrap_or("The selected input");
+        let input_label = if capture.device_label.trim().is_empty() {
+            staged
+                .device
+                .as_ref()
+                .map(|device| device.label.trim())
+                .filter(|label| !label.is_empty())
+                .unwrap_or("The selected input")
+        } else {
+            capture.device_label.trim()
+        };
         let recovery_without_input =
             !input_selected && matches!(capture.mode.as_str(), "held" | "release-held");
         let input_title = if input_done {
@@ -2441,7 +2566,19 @@ impl StartCaptureView {
         let Some(device) = staged.device.as_ref() else {
             return Self::default();
         };
-        if !staged.reachable {
+        Self::from_device(staged.reachable, device, scan, scan_read)
+    }
+
+    /// Resolve one exact staged keyboard. The legacy [`Self::from_parts`]
+    /// remains the first-device projection; redesign calls this once per
+    /// routed source and aggregates the results fail-closed.
+    pub(crate) fn from_device(
+        staged_reachable: bool,
+        device: &ksx_api::StagedDeviceView,
+        scan: &ksx_api::DeviceScanView,
+        scan_read: bool,
+    ) -> Self {
+        if !staged_reachable {
             return Self::default();
         }
         if !scan_read {
@@ -2534,6 +2671,37 @@ impl StartCaptureView {
             StartCaptureMode::Blocked => "blocked",
         }
     }
+}
+
+/// Per-row capture truth for the redesign device roster. Once a controller
+/// graph exists, unrouted canvas devices intentionally return `None`; before
+/// the first route, the legacy primary device remains inspectable/preparable.
+pub(crate) fn staged_device_capture_mode(
+    staged: &ksx_api::StagedSetupView,
+    scan: Option<&ksx_api::DeviceScanView>,
+    selector: &str,
+) -> Option<&'static str> {
+    let routed = routed_stage_selectors(staged);
+    if (!routed.is_empty() && !routed.iter().any(|candidate| candidate == selector))
+        || (routed.is_empty()
+            && !staged
+                .device
+                .as_ref()
+                .is_some_and(|device| device.selector == selector))
+    {
+        return None;
+    }
+    let device = staged_device_for_selector(staged, selector)?;
+    let empty_scan = ksx_api::DeviceScanView::default();
+    Some(
+        StartCaptureView::from_device(
+            staged.reachable,
+            device,
+            scan.unwrap_or(&empty_scan),
+            scan.is_some(),
+        )
+        .mode_word(),
+    )
 }
 
 /// A persona picker says both the public identity and the immutable output
@@ -6547,6 +6715,85 @@ mod tests {
             .expect("both projected twin rows can be added independently");
         }
         assert_eq!(setup.devices().len(), 2);
+    }
+
+    #[test]
+    fn redesign_capture_targets_secondary_blockers_and_ignores_unrouted_devices() {
+        let mut primary = staged_device("usb:1111:0001:00", "primary", "Primary keyboard");
+        primary.backend = "interception".to_owned();
+        let mut secondary = staged_device("usb:2222:0002:00", "secondary", "Secondary keyboard");
+        secondary.backend = "winusb".to_owned();
+        let mut unused = staged_device("usb:3333:0003:00", "unused", "Unused keyboard");
+        unused.backend = "winusb".to_owned();
+        let setup = staged_multi_source(
+            vec![primary.clone(), secondary.clone(), unused.clone()],
+            vec![staged_slot_with_sources(
+                1,
+                vec![
+                    staged_route(&primary, "Primary P1", "A", "G", "primary-r1"),
+                    staged_route(&secondary, "Secondary P1", "B", "H", "secondary-r1"),
+                ],
+            )],
+        );
+        let board = |device: &ksx_api::StagedDeviceView,
+                     instance: &str,
+                     interception: bool,
+                     winusb: bool,
+                     claimed: bool| ksx_api::BoardRow {
+            name: device.label.clone(),
+            selector: Some(device.selector.clone()),
+            keyboard: Some(instance.to_owned()),
+            interfaces: vec![ksx_api::UsbRow {
+                instance_id: instance.to_owned(),
+                ..ksx_api::UsbRow::default()
+            }],
+            interception_eligible: interception,
+            winusb_eligible: winusb,
+            can_type: !claimed,
+            claimed,
+            ..ksx_api::BoardRow::default()
+        };
+        let mut scan = ksx_api::DeviceScanView {
+            interception_available: true,
+            boards: vec![
+                board(&primary, "HID\\PRIMARY", true, false, false),
+                board(&secondary, "HID\\SECONDARY", false, true, false),
+            ],
+            ..ksx_api::DeviceScanView::default()
+        };
+
+        let blocked = RedesignCaptureState::of(&setup, Some(&scan), "");
+        assert_eq!(
+            blocked.mode,
+            "prepare",
+            "primary={}, secondary={}",
+            StartCaptureView::from_device(true, &primary, &scan, true).mode_word(),
+            StartCaptureView::from_device(true, &secondary, &scan, true).mode_word()
+        );
+        assert_eq!(blocked.selector, secondary.selector);
+        assert_eq!(blocked.instance, "HID\\SECONDARY");
+        assert_eq!(blocked.device_label, secondary.label);
+        assert!(!blocked.ready_for_commit());
+        assert_eq!(
+            staged_device_capture_mode(&setup, Some(&scan), &primary.selector),
+            Some("ready")
+        );
+        assert_eq!(
+            staged_device_capture_mode(&setup, Some(&scan), &secondary.selector),
+            Some("prepare")
+        );
+        assert_eq!(
+            staged_device_capture_mode(&setup, Some(&scan), &unused.selector),
+            None,
+            "a roster-only keyboard is not a capture prerequisite"
+        );
+
+        scan.boards[1].claimed = true;
+        scan.boards[1].can_type = false;
+        let ready = RedesignCaptureState::of(&setup, Some(&scan), "");
+        assert_eq!(ready.mode, "release");
+        assert_eq!(ready.selector, secondary.selector);
+        assert!(ready.ready_for_commit());
     }
 
     #[test]

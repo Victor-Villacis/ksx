@@ -1671,11 +1671,16 @@ impl RedesignDeviceRows {
         unavailable: &str,
         staged: Option<&str>,
     ) -> Self {
-        Self::of_matching(scan, unavailable, |selector| {
-            staged.is_some_and(|staged| {
-                !staged.trim().is_empty() && staged.trim().eq_ignore_ascii_case(selector.trim())
-            })
-        })
+        Self::of_matching(
+            scan,
+            unavailable,
+            |selector| {
+                staged.is_some_and(|staged| {
+                    !staged.trim().is_empty() && staged.trim().eq_ignore_ascii_case(selector.trim())
+                })
+            },
+            |_, alias_hint| alias_hint.to_owned(),
+        )
     }
 
     /// Canonical redesign roster: every staged keyboard is marked. The
@@ -1686,18 +1691,37 @@ impl RedesignDeviceRows {
         unavailable: &str,
         staged: &[ksx_api::StagedDeviceView],
     ) -> Self {
-        Self::of_matching(scan, unavailable, |selector| {
-            staged.iter().any(|device| {
-                !device.selector.trim().is_empty()
-                    && device.selector.trim().eq_ignore_ascii_case(selector.trim())
-            })
-        })
+        let mut used_aliases: std::collections::BTreeSet<String> = staged
+            .iter()
+            .map(|device| device.alias.trim().to_ascii_lowercase())
+            .filter(|alias| !alias.is_empty())
+            .collect();
+        Self::of_matching(
+            scan,
+            unavailable,
+            |selector| {
+                staged.iter().any(|device| {
+                    !device.selector.trim().is_empty()
+                        && device.selector.trim().eq_ignore_ascii_case(selector.trim())
+                })
+            },
+            |selector, alias_hint| {
+                if let Some(device) = staged.iter().find(|device| {
+                    !device.selector.trim().is_empty()
+                        && device.selector.trim().eq_ignore_ascii_case(selector.trim())
+                }) {
+                    return device.alias.clone();
+                }
+                fresh_device_alias(alias_hint, &mut used_aliases)
+            },
+        )
     }
 
     fn of_matching(
         scan: Option<&ksx_api::DeviceScanView>,
         unavailable: &str,
         is_staged: impl Fn(&str) -> bool,
+        mut alias_for: impl FnMut(&str, &str) -> String,
     ) -> Self {
         let scan_authoritative = scan.is_some();
         let fold = |n: usize| {
@@ -1775,8 +1799,8 @@ impl RedesignDeviceRows {
                     role: b.role.code().to_owned(),
                     connection_label: device_connection_label(&selector),
                     instance_id: proven_device_instance(scan, b).unwrap_or_default(),
+                    alias: alias_for(&selector, &b.alias_hint),
                     selector,
-                    alias: b.alias_hint.clone(),
                     label: b.name.clone(),
                     capture_badge: String::new(),
                     capture_state: String::new(),
@@ -1816,6 +1840,18 @@ impl RedesignDeviceRows {
             other,
         }
     }
+}
+
+fn fresh_device_alias(alias_hint: &str, used: &mut std::collections::BTreeSet<String>) -> String {
+    let base = alias_hint.trim();
+    let base = if base.is_empty() { "Keyboard" } else { base };
+    if used.insert(base.to_ascii_lowercase()) {
+        return base.to_owned();
+    }
+    (2_u32..)
+        .map(|suffix| format!("{base} {suffix}"))
+        .find(|candidate| used.insert(candidate.to_ascii_lowercase()))
+        .expect("the unbounded suffix sequence contains a free device alias")
 }
 
 /// Return a machine path only when this scan proves that both the selector's
@@ -6469,6 +6505,48 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["HID\\LEFT\\0001", "HID\\RIGHT\\0002"]
         );
+    }
+
+    #[test]
+    fn redesign_gives_unstaged_twin_boards_distinct_additive_aliases() {
+        let first = staged_device("usb:1111:0001:00", "Twin Keyboard", "Twin Keyboard");
+        let scan = ksx_api::DeviceScanView {
+            boards: ["usb:1111:0001:00", "usb:1111:0001:01"]
+                .into_iter()
+                .map(|selector| ksx_api::BoardRow {
+                    name: "Twin Keyboard".to_owned(),
+                    selector: Some(selector.to_owned()),
+                    alias_hint: "Twin Keyboard".to_owned(),
+                    pickable: true,
+                    looks_like_a_keyboard: true,
+                    ..ksx_api::BoardRow::default()
+                })
+                .collect(),
+            ..ksx_api::DeviceScanView::default()
+        };
+
+        let rows = RedesignDeviceRows::of_devices(Some(&scan), "", std::slice::from_ref(&first));
+        assert_eq!(
+            rows.keyboards
+                .iter()
+                .map(|row| row.alias.as_str())
+                .collect::<Vec<_>>(),
+            ["Twin Keyboard", "Twin Keyboard 2"],
+            "the staged selector keeps its alias and its unstaged twin gets a stable free one"
+        );
+
+        let mut setup = ksx_core::StagedSetup::new();
+        for row in &rows.keyboards {
+            setup = ksx_api::StageEdit::UpsertDevice {
+                selector: row.selector.clone(),
+                alias: row.alias.clone(),
+                label: row.label.clone(),
+                backend: None,
+            }
+            .apply(&setup)
+            .expect("both projected twin rows can be added independently");
+        }
+        assert_eq!(setup.devices().len(), 2);
     }
 
     #[test]

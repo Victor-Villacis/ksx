@@ -915,6 +915,39 @@ impl Drop for CaptureGuard {
     }
 }
 
+/// Hotplug truth is source-qualified internally. The public outcome is still
+/// slot-qualified for compatibility, but a returning A must not clear the
+/// same slot's outstanding failure for B when A+B both feed that controller.
+type MissingSourceRoute = (DeviceId, u8, InvalidationReason);
+
+fn update_missing_source_routes(
+    missing: &mut Vec<MissingSourceRoute>,
+    device: &DeviceId,
+    slots: &[u8],
+    present: bool,
+) {
+    if present {
+        missing.retain(|(candidate, _, _)| candidate != device);
+        return;
+    }
+    for slot in slots {
+        if !missing
+            .iter()
+            .any(|(candidate, candidate_slot, _)| candidate == device && candidate_slot == slot)
+        {
+            missing.push((device.clone(), *slot, InvalidationReason::KeyboardUnplugged));
+        }
+    }
+}
+
+fn project_missing_slots(missing: &[MissingSourceRoute]) -> Vec<(u8, InvalidationReason)> {
+    let mut seen = BTreeSet::new();
+    missing
+        .iter()
+        .filter_map(|(_, slot, reason)| seen.insert(*slot).then_some((*slot, *reason)))
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Supervisor
 // ---------------------------------------------------------------------------
@@ -1234,7 +1267,7 @@ pub fn supervise(
     // ---- supervisor loop ---------------------------------------------------
     let mut stop: Option<StopReason> = None;
     let mut toggles = 0u32;
-    let mut invalidated: Vec<(u8, InvalidationReason)> = Vec::new();
+    let mut missing_source_routes: Vec<MissingSourceRoute> = Vec::new();
     // Seeded from the baseline, NOT from zero. `mirror_escapes` replays every
     // gesture between `seen` and the live counter, and on a daemon-lifetime
     // handle "zero" means "every gesture since the daemon started" — an old
@@ -1310,7 +1343,7 @@ pub fn supervise(
                 let slots = plan.slots_using(device);
                 if now {
                     present.insert(device.clone());
-                    invalidated.retain(|(slot, _)| !slots.contains(slot));
+                    update_missing_source_routes(&mut missing_source_routes, device, &slots, true);
                     tracing::warn!(%device, ?slots, "bound device is back");
                     let _ = writeln!(out, "[OK]   device back: {device} -> slot(s) {slots:?}");
                 } else {
@@ -1318,9 +1351,7 @@ pub fn supervise(
                     // Stuck-key invariant: whatever it was holding must be
                     // released on every pad it fed.
                     let _ = ectl_tx.send(EngineCtl::ReleaseDevice(device.clone()));
-                    for slot in &slots {
-                        invalidated.push((*slot, InvalidationReason::KeyboardUnplugged));
-                    }
+                    update_missing_source_routes(&mut missing_source_routes, device, &slots, false);
                     tracing::error!(
                         %device, ?slots,
                         "bound device unplugged — slots invalidated; emulation continues"
@@ -1424,6 +1455,7 @@ pub fn supervise(
     let output = output_handle.join().unwrap_or_default();
     record(&opts.trace, Step::PadsUnplugged);
 
+    let invalidated = project_missing_slots(&missing_source_routes);
     Ok(Outcome {
         stop: stop.unwrap_or(StopReason::CtrlC),
         pads: pad_infos,
@@ -2692,6 +2724,41 @@ mod tests {
             CaptureCtl::SetCaptured(ids) => assert_eq!(ids, vec![DeviceId::from("A")]),
             other => panic!("expected SetCaptured, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_returning_fan_in_source_does_not_clear_its_missing_peer() {
+        let left = DeviceId::from("left-keyboard");
+        let right = DeviceId::from("right-keyboard");
+        let mut missing = Vec::new();
+
+        // Left feeds P1+P2; right also feeds P1. Both disappear.
+        update_missing_source_routes(&mut missing, &left, &[1, 2], false);
+        update_missing_source_routes(&mut missing, &right, &[1], false);
+        assert_eq!(
+            project_missing_slots(&missing),
+            vec![
+                (1, InvalidationReason::KeyboardUnplugged),
+                (2, InvalidationReason::KeyboardUnplugged),
+            ]
+        );
+
+        // Only left returns. P2 recovers, but P1 remains invalid because its
+        // independent right-hand source is still absent.
+        update_missing_source_routes(&mut missing, &left, &[1, 2], true);
+        assert_eq!(
+            project_missing_slots(&missing),
+            vec![(1, InvalidationReason::KeyboardUnplugged)]
+        );
+
+        // Repeated absence reports are idempotent in the public projection.
+        update_missing_source_routes(&mut missing, &right, &[1], false);
+        assert_eq!(
+            project_missing_slots(&missing),
+            vec![(1, InvalidationReason::KeyboardUnplugged)]
+        );
+        update_missing_source_routes(&mut missing, &right, &[1], true);
+        assert!(project_missing_slots(&missing).is_empty());
     }
 
     /// **The message that makes the feature exist.** A plan in bound-keys mode

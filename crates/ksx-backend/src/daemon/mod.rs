@@ -2643,11 +2643,11 @@ mod tests {
         crate::run::plan::RunPlan {
             source: crate::run::plan::PlanSource::Config,
             config_path: std::path::PathBuf::from("test"),
-            slots: vec![ksx_core::ResolvedSlot {
-                spec: ksx_core::SlotSpec::new(1, Some(device.clone()), None, preset.name.clone())
+            slots: vec![ksx_core::ResolvedSlot::new(
+                ksx_core::SlotSpec::new(1, Some(device.clone()), None, preset.name.clone())
                     .expect("valid slot"),
                 preset,
-            }],
+            )],
             block_keyboards: ksx_core::Blocking::BoundKeys,
             block_mice: false,
             captureable: vec![device],
@@ -2939,8 +2939,8 @@ mod tests {
         crate::run::plan::RunPlan {
             source: crate::run::plan::PlanSource::Config,
             config_path: std::path::PathBuf::from("test"),
-            slots: vec![ksx_core::ResolvedSlot {
-                spec: ksx_core::SlotSpec::new(
+            slots: vec![ksx_core::ResolvedSlot::new(
+                ksx_core::SlotSpec::new(
                     slot,
                     Some(ksx_core::DeviceId::from("BOARD")),
                     None,
@@ -2949,7 +2949,7 @@ mod tests {
                 .expect("valid slot")
                 .with_persona(persona),
                 preset,
-            }],
+            )],
             block_keyboards: ksx_core::Blocking::Whole,
             block_mice: false,
             captureable: vec![ksx_core::DeviceId::from("BOARD")],

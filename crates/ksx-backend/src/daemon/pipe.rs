@@ -4136,7 +4136,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         assert_eq!(spec.slots.len(), 1);
         assert_eq!(spec.slots[0].spec.persona, ksx_core::Persona::PlayStation);
         assert_eq!(
-            spec.slots[0].spec.keyboard.as_ref().map(|k| k.as_str()),
+            spec.slots[0].spec.keyboard().map(|k| k.as_str()),
             Some("usb:d209:0430:00"),
             "the staged slot names the staged board, by selector"
         );

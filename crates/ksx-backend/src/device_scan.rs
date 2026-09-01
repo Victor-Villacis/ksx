@@ -1663,6 +1663,7 @@ mod tests {
             persona: Default::default(),
             socd: Default::default(),
             macros: Default::default(),
+            sources: Vec::new(),
         });
         let games = GamesFile {
             games: vec![GameEntry {
@@ -1683,6 +1684,7 @@ mod tests {
                     persona: Default::default(),
                     socd: Default::default(),
                     macros: Default::default(),
+                    sources: Vec::new(),
                 }],
             }],
         };

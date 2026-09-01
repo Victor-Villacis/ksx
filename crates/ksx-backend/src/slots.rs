@@ -546,6 +546,7 @@ fn assign_in_config(
                 persona: wanted,
                 socd: socd.unwrap_or_default(),
                 macros: Default::default(),
+                sources: Vec::new(),
             });
             config.slots.sort_by_key(|s| s.number);
             // No `previous_persona`: a slot that did not exist did not present
@@ -712,6 +713,7 @@ fn assign_in_profile(
                 persona: wanted,
                 socd: socd.unwrap_or_default(),
                 macros: Default::default(),
+                sources: Vec::new(),
             });
             game.slots.sort_by_key(|s| s.number);
             (None, None, preset.to_owned(), wanted, true)
@@ -1435,6 +1437,7 @@ mod tests {
                 persona: Persona::Xbox360,
                 socd: Default::default(),
                 macros: Default::default(),
+                sources: Vec::new(),
             });
         }
         store.save_config(&config).unwrap();

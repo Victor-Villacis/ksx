@@ -1214,6 +1214,7 @@ mod tests {
             persona: Default::default(),
             socd: Default::default(),
             macros: Default::default(),
+            sources: Vec::new(),
         }
     }
 
@@ -1803,6 +1804,7 @@ mod tests {
             persona: Default::default(),
             socd: Default::default(),
             macros: Default::default(),
+            sources: Vec::new(),
         }
     }
 

@@ -467,7 +467,7 @@ pub fn adopt(
     // the entry is what carries the durable selector and the capture backend.
     let mut device: Option<&DeviceEntry> = None;
     for spec in &specs {
-        let Some(keyboard) = &spec.keyboard else {
+        let Some(keyboard) = spec.keyboard() else {
             continue;
         };
         let entry = config
@@ -551,13 +551,14 @@ pub fn adopt(
     for spec in &specs {
         let preset = presets
             .iter()
-            .find(|preset| preset.name.eq_ignore_ascii_case(&spec.preset))
+            .find(|preset| preset.name.eq_ignore_ascii_case(spec.preset()))
             .ok_or_else(|| {
                 ksx_api::Refusal::with_remedy(
                     codes::REFUSED,
                     format!(
                         "slot {} points at preset \"{}\" and no preset of that name is on disk",
-                        spec.number, spec.preset
+                        spec.number,
+                        spec.preset()
                     ),
                     "restore or re-create the preset (`ksx preset new`), then adopt again",
                 )
@@ -770,6 +771,7 @@ socd = "neutral"
             persona: ksx_core::Persona::PlayStation,
             socd: ksx_core::Socd::Off,
             macros: Default::default(),
+            sources: Vec::new(),
         });
         store.save_config(&config).unwrap();
         let two = adopt(&store, None).unwrap_err();
@@ -839,8 +841,8 @@ socd = "neutral"
                 "slot {} persona={} preset={} keyboard={:?} socd={} macros={} entries={:?}",
                 slot.spec.number,
                 slot.spec.persona,
-                slot.spec.preset,
-                slot.spec.keyboard.as_ref().map(|k| k.as_str()),
+                slot.spec.preset(),
+                slot.spec.keyboard().map(|k| k.as_str()),
                 slot.spec.socd.as_str(),
                 slot.spec.macros.is_on(),
                 slot.preset.entries,
@@ -986,6 +988,7 @@ socd = "neutral"
             persona: Persona::PlayStation,
             socd: Default::default(),
             macros: Default::default(),
+            sources: Vec::new(),
         });
         store.save_config(&base).unwrap();
 

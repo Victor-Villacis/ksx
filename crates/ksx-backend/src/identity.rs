@@ -446,7 +446,7 @@ mod tests {
 
         let hid = DeviceId::new(HID_MI_HWID);
         assert_eq!(plan.captureable, vec![hid.clone()]);
-        assert_eq!(plan.slots[0].spec.keyboard, Some(hid.clone()));
+        assert_eq!(plan.slots[0].spec.keyboard(), Some(&hid));
         assert!(plan.winusb.is_empty());
         assert!(!plan.captureable.contains(&DeviceId::new(USB_MI)));
 

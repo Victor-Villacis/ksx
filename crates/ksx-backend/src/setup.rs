@@ -893,6 +893,7 @@ fn upsert_slot(slots: &mut Vec<SlotEntry>, plan: &Plan, alias: &str) {
         persona: Default::default(),
         socd: Default::default(),
         macros: Default::default(),
+        sources: Vec::new(),
     });
     slots.sort_by_key(|s| s.number);
 }
@@ -912,6 +913,7 @@ fn upsert_game_slot(slots: &mut Vec<GameSlotEntry>, plan: &Plan) {
         persona: Default::default(),
         socd: Default::default(),
         macros: Default::default(),
+        sources: Vec::new(),
     });
     slots.sort_by_key(|s| s.number);
 }

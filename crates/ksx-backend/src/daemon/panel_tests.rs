@@ -206,11 +206,11 @@ fn panel_plan() -> RunPlan {
     RunPlan {
         source: PlanSource::Config,
         config_path: PathBuf::from("test"),
-        slots: vec![ResolvedSlot {
-            spec: SlotSpec::new(1, Some(DeviceId::from(PANEL)), None, preset.name.clone())
+        slots: vec![ResolvedSlot::new(
+            SlotSpec::new(1, Some(DeviceId::from(PANEL)), None, preset.name.clone())
                 .expect("valid slot"),
             preset,
-        }],
+        )],
         block_keyboards: ksx_core::Blocking::Whole,
         block_mice: false,
         captureable: vec![DeviceId::from(PANEL)],
@@ -1375,11 +1375,11 @@ fn split_panel_plan() -> RunPlan {
         .push((Key::G, ksx_core::Binding::Button(ksx_core::XButton::A)));
     let mut plan = panel_plan();
     plan.block_keyboards = ksx_core::Blocking::BoundKeys;
-    plan.slots = vec![ResolvedSlot {
-        spec: SlotSpec::new(1, Some(DeviceId::from(PANEL)), None, preset.name.clone())
+    plan.slots = vec![ResolvedSlot::new(
+        SlotSpec::new(1, Some(DeviceId::from(PANEL)), None, preset.name.clone())
             .expect("valid slot"),
         preset,
-    }];
+    )];
     plan
 }
 

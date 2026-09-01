@@ -354,7 +354,7 @@ fn load(options: &Options) -> anyhow::Result<Loaded> {
     let spec =
         SlotSpec::new(1, Some(device), None, preset.name.clone())?.with_persona(options.persona);
     Ok(Loaded {
-        slot: ResolvedSlot { spec, preset },
+        slot: ResolvedSlot::new(spec, preset),
         mac,
         trigger,
         root: root.dir().to_path_buf(),

@@ -218,7 +218,9 @@ impl BtRow {
 }
 
 /// The `[[device]] id` `ksx device pick` would write for each row, index-aligned
-/// with `rows`.
+/// with `rows`. `None` means no selector proves that it names this exact row
+/// and only this row, so a surface must show the board as unavailable rather
+/// than offer an action the writer will refuse.
 ///
 /// **One function, so no two surfaces can answer differently.** `ksx devices`,
 /// `ksx device scan` and the typed [`ksx_api::DevicesView`] all read this, and
@@ -231,15 +233,32 @@ impl BtRow {
 ///
 /// The whole enumeration is the second argument on purpose: the rung depends on
 /// what else is plugged in. One board of a model gets `usb:d209:0430:00`; while
-/// its twin is connected the same board gets a `port=` pin, which is both the
-/// honest answer and the ambiguity marker a picker needs.
-pub fn suggested_selectors(rows: &[UsbRow]) -> Vec<String> {
+/// its twin is connected the same board gets a `port=` pin. A pathological
+/// pair can still share that tail; `strongest_for` has no stronger rung after
+/// `port=`, so every suggestion is resolved back against the same room before
+/// it is admitted. This is the same fail-closed check `device pick` performs.
+pub fn suggested_selectors(rows: &[UsbRow]) -> Vec<Option<String>> {
     let connected: Vec<DeviceFacts> = rows.iter().map(|r| r.candidate.facts()).collect();
     connected
         .iter()
-        .map(|facts| ksx_core::DeviceSelector::strongest_for(facts, &connected).to_string())
+        .map(|facts| {
+            let selector = ksx_core::DeviceSelector::strongest_for(facts, &connected);
+            matches!(
+                selector.match_against(&connected),
+                ksx_core::Match::One(hit) if hit.id == facts.id
+            )
+            .then(|| selector.to_string())
+        })
         .collect()
 }
+
+/// User-facing reason a keyboard row has no safe selector.
+///
+/// Kept beside [`suggested_selectors`] so CLI and typed surfaces cannot invent
+/// different explanations for the same refusal.
+pub const AMBIGUOUS_SELECTOR_VERDICT: &str =
+    "Unavailable to add: ksx cannot distinguish this keyboard from an identical connected board. \
+     Unplug one twin, then rescan; ksx will not guess which board you meant.";
 
 impl UsbRow {
     /// Is this row ready to be captured — configured for WinUSB *and* rebound?
@@ -474,13 +493,17 @@ pub fn to_view(report: &DevicesReport) -> ksx_api::DevicesView {
         .enumerate()
         .map(|(i, row)| {
             let c = &row.candidate;
+            let keyboard = c.is_keyboard_candidate();
+            let selector = selectors.get(i).cloned().flatten();
             // The vocabulary the CLI already prints, so a screen and a terminal
             // describe the same interface with the same words.
-            let (state, verdict) = if !c.is_keyboard_candidate() {
+            let (state, verdict) = if !keyboard {
                 (
                     "not-a-keyboard",
                     "not a keyboard interface; ksx leaves it alone".to_owned(),
                 )
+            } else if selector.is_none() {
+                ("identity-ambiguous", AMBIGUOUS_SELECTOR_VERDICT.to_owned())
             } else {
                 match &c.binding {
                     Binding::WinUsb => (
@@ -505,7 +528,6 @@ pub fn to_view(report: &DevicesReport) -> ksx_api::DevicesView {
             // `ksx_core::Reach`, never here. `claimed` is the binding, and a
             // claimed interface is off the Windows keyboard stack by
             // construction, so it cannot type either.
-            let keyboard = c.is_keyboard_candidate();
             let reach = ksx_core::Reach {
                 transport: ksx_core::Transport::Usb,
                 keyboard,
@@ -539,7 +561,7 @@ pub fn to_view(report: &DevicesReport) -> ksx_api::DevicesView {
                     && c.interface_protocol == 1,
                 // Computed once, in the backend, by the same call the writer
                 // makes — see `suggested_selectors`.
-                selector: selectors.get(i).cloned(),
+                selector,
                 interception_eligible: eligibility.interception,
                 winusb_eligible: eligibility.winusb,
                 backends: eligibility.line,
@@ -883,11 +905,12 @@ pub fn render_human(report: &DevicesReport) -> String {
         // the rung depends on what ELSE is plugged in, including the rows this
         // filter drops.
         let selectors = suggested_selectors(&report.usb);
-        let rows: Vec<(&UsbRow, &String)> = report
+        let rows: Vec<(&UsbRow, Option<&String>)> = report
             .usb
             .iter()
             .zip(&selectors)
             .filter(|(row, _)| row.candidate.is_keyboard_candidate())
+            .map(|(row, selector)| (row, selector.as_ref()))
             .collect();
         if rows.is_empty() {
             let _ = writeln!(out, "no HID USB interfaces found");
@@ -914,8 +937,7 @@ pub fn render_human(report: &DevicesReport) -> String {
                 let _ = writeln!(
                     out,
                     "  {}  \"{friendly}\"{tag}\n      bound to {} | interface MI_{:02X} | \
-                     backend {}{state}\n      id = '{selector}'   <- what `ksx device pick` \
-                     would write",
+                     backend {}{state}",
                     c.id.as_str(),
                     c.binding.label(),
                     c.interface_number,
@@ -925,6 +947,14 @@ pub fn render_human(report: &DevicesReport) -> String {
                         "interception"
                     },
                 );
+                if let Some(selector) = selector {
+                    let _ = writeln!(
+                        out,
+                        "      id = '{selector}'   <- what `ksx device pick` would write"
+                    );
+                } else {
+                    let _ = writeln!(out, "      {AMBIGUOUS_SELECTOR_VERDICT}");
+                }
             }
         }
     }
@@ -1286,7 +1316,10 @@ mod tests {
 
         // One board of a model: the weakest rung, which survives a replug.
         let alone = vec![row(IPAC_USB, Binding::HidUsb, &none)];
-        assert_eq!(suggested_selectors(&alone), vec!["usb:d209:0430:00"]);
+        assert_eq!(
+            suggested_selectors(&alone),
+            vec![Some("usb:d209:0430:00".to_owned())]
+        );
 
         // Its twin arrives, and neither reports a serial (the cheap-HID case):
         // the port pin is the only thing left, and BOTH boards get one.
@@ -1297,8 +1330,8 @@ mod tests {
         assert_eq!(
             suggested_selectors(&twins),
             vec![
-                "usb:d209:0430:00:port=7&1A2B3C4D&0&0000",
-                "usb:d209:0430:00:port=7&5E6F7A8B&0&0000",
+                Some("usb:d209:0430:00:port=7&1A2B3C4D&0&0000".to_owned()),
+                Some("usb:d209:0430:00:port=7&5E6F7A8B&0&0000".to_owned()),
             ],
             "the rung depends on what else is plugged in, so the whole \
              enumeration has to be the input"
@@ -1312,10 +1345,64 @@ mod tests {
         b.candidate.serial = Some("B".into());
         assert_eq!(
             suggested_selectors(&[a, b]),
-            vec!["usb:d209:0430:00:sn=A", "usb:d209:0430:00:sn=B"],
+            vec![
+                Some("usb:d209:0430:00:sn=A".to_owned()),
+                Some("usb:d209:0430:00:sn=B".to_owned()),
+            ],
             "a serial read from the descriptor is invisible in the instance \
              path, and this is where a path-derived re-derivation goes wrong"
         );
+    }
+
+    /// `strongest_for` exhausts its ladder at the port rung. Two malformed or
+    /// pathological twins can still expose the same instance tail, so that
+    /// rung names both even though their full devnode ids differ. The writer
+    /// already refuses this shape; inventory suggestions must not advertise an
+    /// action the writer will reject.
+    #[test]
+    fn a_same_tail_twin_is_not_advertised_as_a_selectable_suggestion() {
+        let none = ConfiguredDevices::default();
+        let twin_a = row(
+            r"USB\VID_D209&PID_0430&MI_00\7&SAME-TAIL&0&0000",
+            Binding::HidUsb,
+            &none,
+        );
+        let twin_b = row(
+            r"USB\VID_D209&PID_0430&REV_0056&MI_00\7&SAME-TAIL&0&0000",
+            Binding::HidUsb,
+            &none,
+        );
+        let rows = vec![twin_a, twin_b];
+
+        assert_eq!(
+            suggested_selectors(&rows),
+            vec![None, None],
+            "neither row has a selector that resolves uniquely back to itself"
+        );
+
+        #[cfg(windows)]
+        {
+            let report =
+                usb_only_report(Vec::new(), false, rows, true, ConfiguredDevices::default());
+            let view = to_view(&report);
+            assert!(view.usb.iter().all(|row| row.selector.is_none()));
+            assert!(view.usb.iter().all(|row| row.state == "identity-ambiguous"));
+            assert!(view
+                .usb
+                .iter()
+                .all(|row| row.verdict == AMBIGUOUS_SELECTOR_VERDICT));
+
+            let human = render_human(&report);
+            assert_eq!(
+                human.matches(AMBIGUOUS_SELECTOR_VERDICT).count(),
+                2,
+                "both visible rows explain why no addable id is offered:\n{human}"
+            );
+            assert!(
+                !human.contains("id = 'usb:d209:0430:00:port=7&SAME-TAIL&0&0000'"),
+                "an ambiguous selector must never be presented as writable:\n{human}"
+            );
+        }
     }
 
     /// The refusal a user reads names this command: *"`ksx devices` prints the

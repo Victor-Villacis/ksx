@@ -1865,14 +1865,14 @@ impl RedesignDeviceRows {
                 if !b.pickable {
                     other.push(NocturneOtherRow {
                         name: b.name.clone(),
-                        meta: format!("{} · {}{}", b.transport_label, b.backends, identity_meta(b)),
+                        meta: unavailable_device_meta(b),
                     });
                     continue;
                 }
                 let Some(selector) = b.selector.clone() else {
                     other.push(NocturneOtherRow {
                         name: b.name.clone(),
-                        meta: format!("{}{}", b.backends, identity_meta(b)),
+                        meta: unavailable_device_meta(b),
                     });
                     continue;
                 };
@@ -5462,6 +5462,27 @@ fn identity_meta(board: &ksx_api::BoardRow) -> String {
     out
 }
 
+/// Metadata for a board the Add-device picker deliberately cannot offer.
+///
+/// The backend's keyboard verdict carries the precise reason (no keyboard
+/// interface versus an identity collision). Omitting it made both conditions
+/// look like a generic backend limitation and left an ambiguous twin visible
+/// but unexplained.
+fn unavailable_device_meta(board: &ksx_api::BoardRow) -> String {
+    let mut out = format!(
+        "{} · {}{}",
+        board.transport_label,
+        board.backends,
+        identity_meta(board)
+    );
+    let reason = board.keyboard_verdict.trim();
+    if !reason.is_empty() {
+        out.push_str(" · ");
+        out.push_str(reason);
+    }
+    out
+}
+
 fn device_connection_label(selector: &str) -> String {
     let trimmed = selector.trim();
     let usb: Vec<_> = trimmed.splitn(4, ':').collect();
@@ -6715,6 +6736,54 @@ mod tests {
             .expect("both projected twin rows can be added independently");
         }
         assert_eq!(setup.devices().len(), 2);
+    }
+
+    #[test]
+    fn redesign_keeps_same_tail_twins_visible_but_offers_no_add_action() {
+        let reason = "Unavailable to add: ksx cannot distinguish this keyboard from an identical connected board. Unplug one twin, then rescan; ksx will not guess which board you meant.";
+        let board = |instance: &str| ksx_api::BoardRow {
+            name: "Twin Keyboard".to_owned(),
+            keyboard: Some(instance.to_owned()),
+            keyboard_verdict: reason.to_owned(),
+            looks_like_a_keyboard: true,
+            interfaces: vec![ksx_api::UsbRow {
+                instance_id: instance.to_owned(),
+                transport: "usb".to_owned(),
+                backends: "Interception or WinUSB".to_owned(),
+                // The backend deliberately withholds the unsafe `port=`
+                // selector after proving it still names both twins.
+                selector: None,
+                ..ksx_api::UsbRow::default()
+            }],
+            ..ksx_api::BoardRow::default()
+        };
+        let scan = ksx_api::DeviceScanView::read(
+            "t".to_owned(),
+            true,
+            true,
+            true,
+            vec![
+                board(r"USB\VID_1234&PID_5678&MI_00\7&SAME-TAIL&0&0000"),
+                board(r"USB\VID_1234&PID_5678&REV_0001&MI_00\7&SAME-TAIL&0&0000"),
+            ],
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let rows = RedesignDeviceRows::of_devices(Some(&scan), "", &[]);
+        assert!(
+            rows.keyboards.is_empty(),
+            "neither twin may become an Add row"
+        );
+        assert_eq!(rows.other.len(), 2, "both physical rows remain visible");
+        assert!(rows
+            .other
+            .iter()
+            .all(|row| row.meta.contains("cannot distinguish this keyboard")));
+        assert!(rows
+            .other
+            .iter()
+            .all(|row| row.meta.contains("Unplug one twin")));
     }
 
     #[test]

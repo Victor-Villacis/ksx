@@ -147,7 +147,7 @@ fn groups(report: &DevicesReport) -> Vec<BoardGroup<'_>> {
         group
             .search_terms
             .push(row.candidate.id.as_str().to_owned());
-        if let Some(selector) = selectors.get(index) {
+        if let Some(selector) = selectors.get(index).and_then(Option::as_ref) {
             group.search_terms.push(selector.clone());
         }
         if let Some(alias) = &row.alias {

@@ -1943,7 +1943,9 @@ pub struct DeviceScanView {
     /// ([`BoardRow::pickable`]).
     #[serde(default)]
     pub pickable_boards: usize,
-    /// How many of [`Self::boards`] have no keyboard interface.
+    /// How many of [`Self::boards`] cannot be selected, either because they
+    /// have no keyboard interface or because no selector uniquely identifies
+    /// that interface.
     #[serde(default)]
     pub other_boards: usize,
     /// The line above the configured list.
@@ -1957,8 +1959,10 @@ pub struct DeviceScanView {
     /// none.
     #[serde(default)]
     pub other_summary: String,
-    /// **Is [`Self::boards`] empty *because this machine has no keyboard-capable
-    /// board*?**
+    /// **Is the pickable list empty because this machine has no
+    /// keyboard-capable board at all?** `false` when a keyboard is present but
+    /// its identity is too ambiguous to offer safely; that is an unavailable
+    /// row, not an empty machine.
     ///
     /// The single flag that licenses a surface to say "there is nothing here".
     /// `false` whenever the list is empty because nothing could be READ — a
@@ -2006,7 +2010,6 @@ impl DeviceScanView {
         notes: Vec<String>,
     ) -> Self {
         for board in &mut boards {
-            board.pickable = board.keyboard.is_some();
             board.caveat = if board.looks_like_a_keyboard {
                 String::new()
             } else {
@@ -2034,6 +2037,10 @@ impl DeviceScanView {
                         .find(|i| i.instance_id.eq_ignore_ascii_case(kb))
                 })
                 .or_else(|| board.interfaces.first());
+            // This is derived state. Clear any value a caller handed us before
+            // consulting the authoritative interface row, including the
+            // no-interface shape where the block below has nothing to copy.
+            board.selector = None;
             if let Some(row) = source {
                 board.transport = row.transport.clone();
                 board.interception_eligible = row.interception_eligible;
@@ -2049,6 +2056,11 @@ impl DeviceScanView {
                 // choice the backend then refuses.
                 board.selector = board.keyboard.as_ref().and(row.selector.clone());
             }
+            // A keyboard interface is necessary but not sufficient: the
+            // backend withholds its selector when that selector does not
+            // resolve uniquely back to this exact physical board. Such a row
+            // remains visible for diagnosis but must not become an Add form.
+            board.pickable = board.keyboard.is_some() && board.selector.is_some();
             board.alias_hint = board
                 .alias
                 .clone()
@@ -2080,6 +2092,10 @@ impl DeviceScanView {
             device.command = command;
         }
         let pickable_boards = boards.iter().filter(|b| b.pickable).count();
+        let unavailable_keyboard_boards = boards
+            .iter()
+            .filter(|b| !b.pickable && b.keyboard.is_some())
+            .count();
         let other_boards = boards.len() - pickable_boards;
         Self {
             configured_summary: configured_summary_line(configured.len()),
@@ -2087,6 +2103,7 @@ impl DeviceScanView {
                 pickable_boards,
                 usb_available,
                 bluetooth_available,
+                unavailable_keyboard_boards,
             ),
             other_summary: other_summary_line(other_boards),
             // The two conclusions, drawn once. BOTH enumerations gate the
@@ -2094,7 +2111,10 @@ impl DeviceScanView {
             // read, so "no keyboard-capable board found" would be an assertion
             // about half a machine. The second is unconditional here because
             // reaching `read` at all means the config WAS read.
-            no_pickable_board_found: usb_available && bluetooth_available && pickable_boards == 0,
+            no_pickable_board_found: usb_available
+                && bluetooth_available
+                && pickable_boards == 0
+                && unavailable_keyboard_boards == 0,
             no_configured_device: configured.is_empty(),
             pickable_boards,
             other_boards,
@@ -2222,12 +2242,21 @@ fn configured_summary_line(count: usize) -> String {
 /// it is true of the half that answered — and the missing half is named beside
 /// it, because "no Bluetooth device here" and "ksx could not look at Bluetooth"
 /// send a user to two different places.
-fn boards_summary_line(count: usize, usb_available: bool, bluetooth_available: bool) -> String {
+fn boards_summary_line(
+    count: usize,
+    usb_available: bool,
+    bluetooth_available: bool,
+    unavailable_keyboard_boards: usize,
+) -> String {
     match (usb_available, bluetooth_available) {
         (false, false) => return UNREAD_BOARDS_LINE.to_owned(),
         (true, false) => return format!("{} — {UNREAD_BLUETOOTH_LINE}", found_line(count)),
         (false, true) => return format!("{} — {UNREAD_USB_LINE}", found_line(count)),
         (true, true) => {}
+    }
+    if count == 0 && unavailable_keyboard_boards > 0 {
+        return "keyboard identity is ambiguous — no board can be selected safely; see unavailable devices below"
+            .to_owned();
     }
     match count {
         0 => NO_BOARDS_LINE.to_owned(),
@@ -2263,8 +2292,8 @@ fn transport_label(code: &str) -> String {
 fn other_summary_line(count: usize) -> String {
     match count {
         0 => String::new(),
-        1 => "1 board has no keyboard interface — ksx cannot capture it:".to_owned(),
-        n => format!("{n} boards have no keyboard interface — ksx cannot capture them:"),
+        1 => "1 board is unavailable to select — see its reason:".to_owned(),
+        n => format!("{n} boards are unavailable to select — see each reason:"),
     }
 }
 
@@ -2393,7 +2422,8 @@ pub struct BoardRow {
     /// `ksx winusb release <ID> --yes` — present only while it is claimed.
     pub release_command: Option<String>,
     /// Can this board be picked at all — i.e. does it have a keyboard
-    /// interface ([`Self::keyboard`] is `Some`)?
+    /// interface ([`Self::keyboard`] is `Some`) **and** a selector that the
+    /// backend proved resolves uniquely to it ([`Self::selector`] is `Some`)?
     ///
     /// The partition every picker needs, taken once by
     /// [`DeviceScanView::read`] rather than re-derived per surface. A pick form
@@ -2452,7 +2482,9 @@ pub struct BoardRow {
     pub cannot_type_line: String,
     /// The [`ksx_core::DeviceSelector`] spelling of the interface a pick would
     /// name — `usb:d209:0430:00`. `None` on a board with no keyboard interface,
-    /// and on one whose devnode the enumerator could not describe.
+    /// on one whose devnode the enumerator could not describe, and on an
+    /// otherwise keyboard-capable board whose strongest selector still names
+    /// more than one connected physical instance.
     ///
     /// **This is what a surface sends back when a user picks a board**, and it
     /// exists so that no surface has to derive it from
@@ -4800,9 +4832,15 @@ mod tests {
     }
 
     fn keyboard_board() -> BoardRow {
+        let keyboard = "USB\\VID_D209&PID_0430&MI_00\\X";
         BoardRow {
             name: "Ultimarc I-PAC 4X".to_owned(),
-            keyboard: Some("USB\\VID_D209&PID_0430&MI_00\\X".to_owned()),
+            keyboard: Some(keyboard.to_owned()),
+            interfaces: vec![UsbRow {
+                instance_id: keyboard.to_owned(),
+                selector: Some("usb:d209:0430:00".to_owned()),
+                ..UsbRow::default()
+            }],
             ..BoardRow::default()
         }
     }
@@ -4883,6 +4921,50 @@ mod tests {
             }],
         );
         assert_eq!(configured.boards[0].alias_hint, "panel");
+    }
+
+    /// A keyboard-looking interface is still not an actionable device when
+    /// the inventory could not prove a selector uniquely names it. The row
+    /// remains in the scan with the backend's explanation, but it belongs to
+    /// the unavailable partition and cannot reach an Add form.
+    #[test]
+    fn a_keyboard_with_an_ambiguous_selector_is_visible_but_not_pickable() {
+        let reason = "Unavailable to add: ksx cannot distinguish this keyboard from an identical connected board.";
+        let keyboard = "USB\\VID_1234&PID_5678&MI_00\\7&SAME&0&0000";
+        let view = scan(
+            true,
+            vec![BoardRow {
+                name: "Twin Keyboard".to_owned(),
+                keyboard: Some(keyboard.to_owned()),
+                keyboard_verdict: reason.to_owned(),
+                looks_like_a_keyboard: true,
+                // `None` is the backend's fail-closed verdict: its proposed
+                // selector matched more than this exact DeviceFacts row.
+                interfaces: vec![UsbRow {
+                    instance_id: keyboard.to_owned(),
+                    selector: None,
+                    ..UsbRow::default()
+                }],
+                // Derived inputs are deliberately lies; `read` must replace
+                // them from the interface row above.
+                selector: Some("usb:1234:5678:00".to_owned()),
+                pickable: true,
+                ..BoardRow::default()
+            }],
+        );
+
+        assert_eq!(view.boards.len(), 1, "the ambiguous board stays visible");
+        assert!(!view.boards[0].pickable);
+        assert_eq!(view.boards[0].selector, None);
+        assert_eq!(view.boards[0].keyboard_verdict, reason);
+        assert_eq!(view.pickable_boards, 0);
+        assert_eq!(view.other_boards, 1);
+        assert!(view.other_summary.contains("unavailable to select"));
+        assert!(
+            !view.no_pickable_board_found,
+            "the board is present; an identity refusal must not impersonate an empty machine"
+        );
+        assert!(view.boards_summary.contains("identity is ambiguous"));
     }
 
     /// **A refused read must not render as an assertion of absence.**
@@ -5124,7 +5206,7 @@ mod tests {
         assert!(view.boards[0].pickable);
         assert!(!view.boards[1].pickable);
         assert!(view.boards_summary.starts_with("1 keyboard-capable board"));
-        assert!(view.other_summary.starts_with("1 board has no keyboard"));
+        assert!(view.other_summary.starts_with("1 board is unavailable"));
         assert!(!view.no_pickable_board_found);
     }
 

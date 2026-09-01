@@ -487,6 +487,24 @@ fn managed_real_qa_is_an_idle_identity_checked_process_pair() {
         "opening real QA must not start an emulation session"
     );
     assert!(
+        start.contains("Get-CargoInterceptionRuntimeSource")
+            && start.contains(r#"-Filter "interception-sys-*""#)
+            && start.contains("CandidateHashes.Count -ne 1")
+            && start.contains("InterceptionSourceHash"),
+        "real QA must discover Cargo's current Interception runtime without accepting ambiguous or stale bytes"
+    );
+    assert!(
+        start
+            .find("$CargoInterceptionSource = Get-CargoInterceptionRuntimeSource")
+            .unwrap()
+            < start
+                .find(
+                    r#"& (Join-Path $PSScriptRoot "teardown.ps1") -Environment real -AllowMissing"#,
+                )
+                .unwrap(),
+        "Interception runtime ambiguity must fail before a healthy real lane is torn down"
+    );
+    assert!(
         start.contains("$Payload.staged.reachable"),
         "the real-QA health gate must require Studio's draft channel to reach the daemon"
     );

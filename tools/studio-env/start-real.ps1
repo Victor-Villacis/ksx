@@ -290,6 +290,43 @@ function Invoke-RealHardwarePreBuildPreflight {
     }
 }
 
+function Get-CargoInterceptionRuntimeSource {
+    param([Parameter(Mandatory = $true)][string]$TargetRoot)
+
+    # interception-sys emits its runtime DLL into Cargo's package-specific
+    # OUT_DIR. The hash suffix is intentionally opaque, so discover only the
+    # exact package output inside this launcher's isolated target root.
+    $BuildOutputRoot = Join-Path $TargetRoot "debug\build"
+    if (-not (Test-Path -LiteralPath $BuildOutputRoot -PathType Container)) {
+        return $null
+    }
+
+    $Candidates = @(
+        Get-ChildItem -LiteralPath $BuildOutputRoot `
+            -Directory `
+            -Filter "interception-sys-*" `
+            -ErrorAction Stop |
+            ForEach-Object { Join-Path $_.FullName "out\interception.dll" } |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+            ForEach-Object { [System.IO.Path]::GetFullPath($_) } |
+            Sort-Object -Unique
+    )
+    if ($Candidates.Count -eq 0) {
+        return $null
+    }
+
+    $CandidateHashes = @(
+        $Candidates |
+            ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash } |
+            Sort-Object -Unique
+    )
+    if ($CandidateHashes.Count -ne 1) {
+        throw "Cargo produced conflicting interception.dll candidates under '$BuildOutputRoot': $($Candidates -join '; '). Refusing to guess which runtime belongs beside ksx.exe."
+    }
+
+    return [string]$Candidates[0]
+}
+
 $TransitionMutex = $null
 try {
     # The daemon pipes and managed record are machine-wide. The transition
@@ -390,6 +427,25 @@ try {
         throw "Studio-enabled ksx.exe is missing at $BuiltExe."
     }
 
+    # Resolve and hash every runtime input before the destructive half of this
+    # replacement. A stale target with conflicting package outputs must leave a
+    # currently healthy 4460 process untouched.
+    $CargoInterceptionSource = Get-CargoInterceptionRuntimeSource -TargetRoot $BuildRoot
+    $InterceptionSources = @(
+        $CargoInterceptionSource,
+        (Join-Path (Split-Path -Parent $BuiltExe) "interception.dll"),
+        (Join-Path $RepoRoot "target\debug\interception.dll"),
+        (Join-Path $env:ProgramFiles "ksx\interception.dll"),
+        (Join-Path $env:SystemRoot "System32\interception.dll")
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+    $InterceptionSource = $InterceptionSources | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    $InterceptionSourceHash = if ($InterceptionSource) {
+        (Get-FileHash -LiteralPath $InterceptionSource -Algorithm SHA256).Hash
+    } else {
+        ""
+    }
+    $RuntimeInterception = Join-Path $BinRoot "interception.dll"
+
     # ConfigRoot::discover uses a ksx.toml beside the running executable as
     # its portable-mode authority. Copying across that marker would silently
     # switch roots, so this managed launcher is deliberately installed-mode
@@ -435,25 +491,26 @@ try {
     # reads "the Interception driver/DLL is not installed on this machine",
     # which sends someone to reinstall a driver that is already working.
     #
-    # It is not tracked in this repository and cargo does not emit it, so this
-    # searches the places a working machine actually has one. Copied, never
-    # linked: the managed copy must stay disposable, and a symlink would make
-    # teardown's exact-file checks ambiguous.
-    $InterceptionSources = @(
-        (Join-Path (Split-Path -Parent $BuiltExe) "interception.dll"),
-        (Join-Path $RepoRoot "target\debug\interception.dll"),
-        (Join-Path $env:ProgramFiles "ksx\interception.dll"),
-        (Join-Path $env:SystemRoot "System32\interception.dll")
-    )
-    $InterceptionSource = $InterceptionSources | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
-    $RuntimeInterception = Join-Path $BinRoot "interception.dll"
+    # It is not tracked in this repository. interception-sys normally emits it
+    # into Cargo's package-specific OUT_DIR rather than beside ksx.exe, so use
+    # the byte-consistent output from THIS isolated target first. Installed
+    # locations remain fallbacks for an unusual package/build layout. Copied,
+    # never linked: the managed copy must stay disposable, and a symlink would
+    # make teardown's exact-file checks ambiguous.
     if ($InterceptionSource) {
         try {
             Copy-Item -LiteralPath $InterceptionSource -Destination $RuntimeInterception -Force -ErrorAction Stop
         } catch [System.IO.IOException] {
             # A previous managed daemon may still hold it. The bytes are the
-            # same file every time, so an in-use copy is already correct.
-            if (-not (Test-Path -LiteralPath $RuntimeInterception -PathType Leaf)) { throw }
+            # same only when their hashes prove it; never bless stale runtime
+            # bytes merely because Windows refused to replace an open file.
+            if (-not (Test-Path -LiteralPath $RuntimeInterception -PathType Leaf) -or
+                (Get-FileHash -LiteralPath $RuntimeInterception -Algorithm SHA256).Hash -cne $InterceptionSourceHash) {
+                throw
+            }
+        }
+        if ((Get-FileHash -LiteralPath $RuntimeInterception -Algorithm SHA256).Hash -cne $InterceptionSourceHash) {
+            throw "The managed interception.dll copy is not byte-identical to '$InterceptionSource'."
         }
     } elseif (-not (Test-Path -LiteralPath $RuntimeInterception -PathType Leaf)) {
         # Say it here, once, rather than leaving the daemon's refusal to be

@@ -1397,7 +1397,7 @@ fn handle_stage_edit(request: &serde_json::Value, deps: &PipeDeps) -> serde_json
                 "code": ksx_api::codes::BAD_REQUEST,
                 "error": format!(
                     "stage-edit needs an \"edit\" naming one of choose-device | upsert-device | \
-                     remove-device | add-slot | set-persona | set-layout | set-source-layout | \
+                     remove-device | add-slot | add-source-slot | set-persona | set-layout | set-source-layout | \
                      set-bindings | set-source-bindings | remove-source-bindings | remove-slot | \
                      reorder-slots | set-socd | set-blocking | discard: {err}"
                 ),
@@ -1416,6 +1416,25 @@ fn handle_stage_edit(request: &serde_json::Value, deps: &PipeDeps) -> serde_json
 /// lock. Keeping this tail separate lets the staged binding/macro transactions
 /// prepare against and apply to the same snapshot without a read/write gap.
 fn apply_stage_edit(edit: &ksx_api::StageEdit, state: &mut DaemonState) -> ksx_api::StageOutcome {
+    if let ksx_api::StageEdit::AddSourceSlot {
+        expected_revision, ..
+    } = edit
+    {
+        let expected = expected_revision.trim();
+        let current = state.stage_meta.revision_token();
+        if expected.is_empty() || expected != current {
+            return stamp_stage_meta(
+                ksx_api::StageOutcome::refused(
+                    &state.staged,
+                    &ksx_api::Refusal::new(
+                        ksx_api::codes::BAD_REQUEST,
+                        "The staged setup changed while Add Controller was open. Refresh the workbench and try again; nothing changed.",
+                    ),
+                ),
+                &state.stage_meta,
+            );
+        }
+    }
     match edit.apply(&state.staged) {
         Ok(next) => {
             state.staged = next;
@@ -1565,6 +1584,14 @@ fn describe(edit: &ksx_api::StageEdit) -> String {
             None => "Controller added without controls. Choose a layout or map its controls \
                      before Play."
                 .to_owned(),
+        },
+        ksx_api::StageEdit::AddSourceSlot { source, layout, .. } => match layout {
+            Some(_) => format!(
+                "Controller added from {source} with its layout. It will appear only when you press Play."
+            ),
+            None => format!(
+                "Controller added from {source} without controls. Choose a layout or map its controls before Play."
+            ),
         },
         ksx_api::StageEdit::SetLayout { number, layout, .. } => {
             format!(
@@ -3617,6 +3644,91 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         );
     }
 
+    #[test]
+    fn exact_source_add_is_atomic_and_stale_protected_under_the_stage_lock() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let d = deps(tx, state.clone(), no_profiles());
+        for request in [
+            r#"{"verb":"stage-edit","edit":"choose-device","selector":"usb:d209:0430:00","alias":"left","label":"Left"}"#,
+            r#"{"verb":"stage-edit","edit":"upsert-device","selector":"usb:046d:c545:00","alias":"right","label":"Right"}"#,
+        ] {
+            let outcome = handle_request(request, &d, FAST);
+            assert_eq!(outcome["ok"], true, "{outcome}");
+        }
+        let before = handle_request(r#"{"verb":"stage"}"#, &d, FAST);
+        let draft_revision = before["setup"]["revision"].as_str().unwrap();
+        let right: ksx_api::StagedDeviceView =
+            serde_json::from_value(before["setup"]["devices"][1].clone()).unwrap();
+        let source_revision = ksx_api::staged_device_revision(&right);
+        let added = handle_request(
+            &serde_json::json!({
+                "verb": "stage-edit",
+                "edit": "add-source-slot",
+                "persona": "xbox360",
+                "preset": "Right Player 1",
+                "layout": "keyboard-2p",
+                "source": "usb:046d:c545:00",
+                "expected_revision": draft_revision,
+                "expected_source_revision": source_revision,
+            })
+            .to_string(),
+            &d,
+            FAST,
+        );
+        assert_eq!(added["ok"], true, "{added}");
+        assert_eq!(
+            added["setup"]["slots"][0]["sources"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            added["setup"]["slots"][0]["sources"][0]["selector"],
+            "usb:046d:c545:00"
+        );
+        assert!(added["setup"]["slots"][0]["bindings"].as_u64().unwrap() > 0);
+
+        let stale = handle_request(
+            &serde_json::json!({
+                "verb": "stage-edit",
+                "edit": "add-source-slot",
+                "persona": "playstation",
+                "preset": "Right Player 2",
+                "layout": "keyboard-2p",
+                "source": "usb:046d:c545:00",
+                "expected_revision": draft_revision,
+                "expected_source_revision": ksx_api::staged_device_revision(&right),
+            })
+            .to_string(),
+            &d,
+            FAST,
+        );
+        assert_eq!(stale["ok"], false, "{stale}");
+        assert_eq!(stale["setup"]["slots"].as_array().unwrap().len(), 1);
+
+        let current = handle_request(r#"{"verb":"stage"}"#, &d, FAST);
+        let missing = handle_request(
+            &serde_json::json!({
+                "verb": "stage-edit",
+                "edit": "add-source-slot",
+                "persona": "playstation",
+                "preset": "Missing Player 2",
+                "layout": "keyboard-2p",
+                "source": "usb:ffff:ffff:00",
+                "expected_revision": current["setup"]["revision"],
+                "expected_source_revision": "k1-missing",
+            })
+            .to_string(),
+            &d,
+            FAST,
+        );
+        assert_eq!(missing["ok"], false, "{missing}");
+        assert_eq!(missing["code"], "no-such-device");
+        assert_eq!(missing["setup"]["slots"].as_array().unwrap().len(), 1);
+    }
+
     /// **The dirty flag is the daemon's, and it moves with the writes**: an
     /// edit marks the draft dirty, Start over resets it, and a successful
     /// Save cleans it with the origin becoming the file the draft just
@@ -4039,9 +4151,15 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         let setup: ksx_api::StagedSetupView =
             serde_json::from_value(served["setup"].clone()).expect("served stage view");
         assert!(setup.revision.starts_with("d1-"), "{served}");
-        assert_eq!(setup.slots[0].sources.len(), 1, "second source is not routed yet");
+        assert_eq!(
+            setup.slots[0].sources.len(),
+            1,
+            "second source is not routed yet"
+        );
         assert!(
-            setup.slots[0].sources[0].revision.starts_with(&setup.revision),
+            setup.slots[0].sources[0]
+                .revision
+                .starts_with(&setup.revision),
             "routed source revision must carry the daemon incarnation: {served}"
         );
         let desk = ksx_api::staged_source_view(&setup, &setup.slots[0], "usb:046d:c31c:00")

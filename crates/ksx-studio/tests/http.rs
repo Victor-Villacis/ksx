@@ -5772,6 +5772,66 @@ fn redesign_two_keyboards_lazy_bind_and_inspector_are_source_exact() {
     }));
 }
 
+#[test]
+fn redesign_add_controller_routes_only_the_selected_secondary_keyboard() {
+    let control = Arc::new(ScriptedControl::new(false));
+    stage_redesign_device(&control, REDESIGN_LEFT_SOURCE, "left", "Left keyboard");
+    stage_redesign_device(&control, REDESIGN_RIGHT_SOURCE, "right", "Right keyboard");
+    let addr = start_server(control.clone());
+
+    let before: serde_json::Value = serde_json::from_str(body_of(&get(
+        addr,
+        "/api/redesign?source=usb%3A046d%3Ac545%3A00",
+    )))
+    .expect("selected secondary source payload");
+    assert_eq!(
+        before["controllers"]["add_source"], REDESIGN_RIGHT_SOURCE,
+        "Add Controller must retain the selected source before a slot exists: {before}"
+    );
+    let draft_revision = before["operations"]["draft_revision"]
+        .as_str()
+        .expect("whole draft authority");
+    let source_revision = before["controllers"]["add_source_revision"]
+        .as_str()
+        .expect("selected device authority");
+    assert!(!draft_revision.is_empty() && !source_revision.is_empty());
+
+    let body = format!(
+        "persona=xbox360&preset=Right+Player+1&layout=keyboard-2p&source=usb%3A046d%3Ac545%3A00&expected_revision={draft_revision}&expected_source_revision={source_revision}"
+    );
+    let response = post_form(addr, "/redesign/controller", &body);
+    assert!(response.contains("flash=Draft%20updated."), "{response}");
+
+    let staged = control.staged();
+    assert_eq!(
+        staged.devices.len(),
+        2,
+        "both roster keyboards remain staged"
+    );
+    assert_eq!(staged.slots.len(), 1);
+    assert_eq!(staged.slots[0].sources.len(), 1);
+    assert_eq!(staged.slots[0].sources[0].selector, REDESIGN_RIGHT_SOURCE);
+    assert!(
+        staged.slots[0].bindings > 0,
+        "the layout was atomic with Add"
+    );
+    assert!(
+        staged.slots[0]
+            .sources
+            .iter()
+            .all(|source| source.selector != REDESIGN_LEFT_SOURCE),
+        "the legacy first-roster route must not leak into the new controller"
+    );
+
+    let stale = post_form(addr, "/redesign/controller", &body);
+    assert!(stale.contains("flash=error"), "{stale}");
+    assert_eq!(
+        control.staged().slots.len(),
+        1,
+        "replaying stale Add authority changes nothing"
+    );
+}
+
 /// Duplicate, short-window undo and park/re-seat are resurrection paths, so
 /// they must carry every source preset as a whole value. That includes macro
 /// bodies and trigger bindings; preserving only the compatibility first route

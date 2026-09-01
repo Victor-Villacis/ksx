@@ -1099,9 +1099,17 @@ async function submitControllerForm(
     // submission source of truth, so a second rapid Add can never post blank
     // persona/default fields after the first Add refreshed the catalog.
     if (form.matches('[data-rd-form="controller-add"]')) {
-      for (const name of ["persona", "preset", "layout"] as const) {
+      const fields = [
+        ["persona", "persona"],
+        ["preset", "preset"],
+        ["layout", "layout"],
+        ["source", "source"],
+        ["expected_revision", "expectedRevision"],
+        ["expected_source_revision", "expectedSourceRevision"],
+      ] as const;
+      for (const [name, dataName] of fields) {
         const input = form.elements.namedItem(name) as HTMLInputElement | null;
-        if (input) input.value = form.dataset[name] ?? input.value;
+        if (input) input.value = form.dataset[dataName] ?? input.value;
       }
     }
     const body = new URLSearchParams();

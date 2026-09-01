@@ -249,7 +249,11 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
         macro_selected,
         q,
     );
-    let resolved_source = controllers.source.clone();
+    let resolved_source = if controllers.source.is_empty() {
+        controllers.add_source.clone()
+    } else {
+        controllers.source.clone()
+    };
     RedesignPayload {
         environment_id: environment.id.clone(),
         environment_generation: environment.generation.clone(),
@@ -519,6 +523,8 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         "rdCtrlCountsLine": payload.controllers.counts_line,
         "rdCtrlAddPreset": payload.controllers.add_preset,
         "rdCtrlAddLayout": payload.controllers.add_layout,
+        "rdCtrlAddSource": payload.controllers.add_source,
+        "rdCtrlAddSourceRevision": payload.controllers.add_source_revision,
         // The macro dialog is edited client-side after adoption, but an open
         // cold URL must be complete on first paint. The trusted HTML is built
         // from the same escaped projection as `controllers.mac`.
@@ -1159,7 +1165,11 @@ mod tests {
     #[test]
     fn the_controller_picker_is_served() {
         let page = EmbeddedPage::load("/redesign").unwrap();
-        let html = render_redesign(&page, &fixture_payload(), None).html;
+        let mut payload = fixture_payload();
+        payload.controllers.add_source = "usb:secondary-board".into();
+        payload.controllers.add_source_revision = "k1-secondary-board".into();
+        payload.operations.draft_revision = "d1-whole-draft".into();
+        let html = render_redesign(&page, &payload, None).html;
         assert!(
             html.contains(r#"data-nx="rd-ctrls-open""#),
             "the topbar button is served"
@@ -1183,6 +1193,19 @@ mod tests {
             html.contains(r#"name="layout""#) && html.contains(r#"name="persona""#),
             "the add form posts persona and the served layout"
         );
+        for authority in [
+            r#"name="source""#,
+            r#"name="expected_revision""#,
+            r#"name="expected_source_revision""#,
+            "usb:secondary-board",
+            "k1-secondary-board",
+            "d1-whole-draft",
+        ] {
+            assert!(
+                html.contains(authority),
+                "the add form must carry exact source authority: {authority}"
+            );
+        }
     }
 
     /// Forma has no trusted-HTML SSR slot. An open macro nevertheless has to

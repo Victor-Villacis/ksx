@@ -936,6 +936,14 @@ pub(super) struct RedesignAddForm {
     /// without a mapper. Optional like nocturne's — an empty value adds bare.
     #[serde(default)]
     layout: Option<String>,
+    /// Canonical multi-keyboard authority. Older one-device callers omit
+    /// these fields and keep the legacy AddSlot path.
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    expected_revision: Option<String>,
+    #[serde(default)]
+    expected_source_revision: Option<String>,
 }
 
 /// POST /redesign/controller — stage the next slot, dressed in the served
@@ -948,6 +956,66 @@ pub(super) async fn redesign_form_ctrl_add(
         return redesign_redirect(N_FORM_UNREADABLE);
     };
     let flash = tokio::task::spawn_blocking(move || {
+        let before = state.control.staged();
+        let source = form
+            .source
+            .as_deref()
+            .map(str::trim)
+            .filter(|source| !source.is_empty())
+            .map(str::to_owned);
+        let expected_revision = form
+            .expected_revision
+            .as_deref()
+            .map(str::trim)
+            .filter(|revision| !revision.is_empty())
+            .map(str::to_owned);
+        let expected_source_revision = form
+            .expected_source_revision
+            .as_deref()
+            .map(str::trim)
+            .filter(|revision| !revision.is_empty())
+            .map(str::to_owned);
+        let exact_requested = source.is_some()
+            || expected_revision.is_some()
+            || expected_source_revision.is_some()
+            || before.devices.len() > 1;
+        if exact_requested {
+            let (Some(source), Some(expected_revision), Some(expected_source_revision)) = (
+                source.as_deref(),
+                expected_revision.as_deref(),
+                expected_source_revision.as_deref(),
+            ) else {
+                return N_EDIT_ERROR;
+            };
+            let Some(device) = before
+                .devices
+                .iter()
+                .find(|device| device.selector.eq_ignore_ascii_case(source))
+            else {
+                return N_EDIT_ERROR;
+            };
+            if before.revision.trim() != expected_revision
+                || ksx_api::staged_device_revision(device) != expected_source_revision
+            {
+                return N_EDIT_ERROR;
+            }
+            let added = state
+                .control
+                .stage_edit(&ksx_api::StageEdit::AddSourceSlot {
+                    number: None,
+                    persona: form.persona,
+                    preset: form.preset,
+                    layout: form.layout,
+                    source: source.to_owned(),
+                    expected_revision: expected_revision.to_owned(),
+                    expected_source_revision: expected_source_revision.to_owned(),
+                });
+            return if added.ok { N_EDIT_OK } else { N_EDIT_ERROR };
+        }
+
+        // Compatibility for older zero/one-device forms. New redesign markup
+        // always posts the exact-source arm above; a multi-device draft can
+        // never reach this legacy first-roster-keyboard mutation.
         let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
             number: None,
             persona: form.persona,

@@ -193,6 +193,8 @@ export interface RdControllers {
   source?: string;
   source_revision?: string;
   source_preset?: string;
+  add_source?: string;
+  add_source_revision?: string;
   cards: RdControllerCardView[];
   personas: RdPersonaRowView[];
   add_preset: string;
@@ -541,6 +543,8 @@ const [rdCtrlAddNote, setRdCtrlAddNote] = createSignal("");
 const [rdCtrlCountsLine, setRdCtrlCountsLine] = createSignal("");
 const [rdCtrlAddPreset, setRdCtrlAddPreset] = createSignal("");
 const [rdCtrlAddLayout, setRdCtrlAddLayout] = createSignal("");
+const [rdCtrlAddSource, setRdCtrlAddSource] = createSignal("");
+const [rdCtrlAddSourceRevision, setRdCtrlAddSourceRevision] = createSignal("");
 // The macro editor remains client-managed after adoption, but an open ?macro=
 // URL must paint the SAME dialog before hydration. The renderer inserts the
 // escaped children into the marked empty host; this island serves its class,
@@ -1358,6 +1362,8 @@ export function applyRedesign(v: RedesignPayload): void {
   setRdCtrlCountsLine(c?.counts_line ?? "");
   setRdCtrlAddPreset(c?.add_preset ?? "");
   setRdCtrlAddLayout(c?.add_layout ?? "");
+  setRdCtrlAddSource(c?.add_source ?? "");
+  setRdCtrlAddSourceRevision(c?.add_source_revision ?? "");
   rdCtrlCards = c?.cards ?? [];
   rdCtrlParkedHeld = c?.parked_held ?? [];
   rdCtrlPads = c?.pads ?? [];
@@ -6878,10 +6884,24 @@ export function RedesignIsland() {
                     "data-persona": r.name,
                     "data-preset": () => rdCtrlAddPreset(),
                     "data-layout": () => rdCtrlAddLayout(),
+                    "data-source": () => rdCtrlAddSource(),
+                    "data-expected-revision": () => rdDraftRevision(),
+                    "data-expected-source-revision": () => rdCtrlAddSourceRevision(),
                   },
                   h("input", { type: "hidden", name: "persona", value: r.name }),
                   h("input", { type: "hidden", name: "preset", value: () => rdCtrlAddPreset() }),
                   h("input", { type: "hidden", name: "layout", value: () => rdCtrlAddLayout() }),
+                  h("input", { type: "hidden", name: "source", value: () => rdCtrlAddSource() }),
+                  h("input", {
+                    type: "hidden",
+                    name: "expected_revision",
+                    value: () => rdDraftRevision(),
+                  }),
+                  h("input", {
+                    type: "hidden",
+                    name: "expected_source_revision",
+                    value: () => rdCtrlAddSourceRevision(),
+                  }),
                   h(
                     "button",
                     { type: "submit", class: r.cls, title: r.note },

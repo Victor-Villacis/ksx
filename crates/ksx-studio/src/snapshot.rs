@@ -1586,6 +1586,13 @@ pub struct RedesignControllers {
     pub source_revision: String,
     #[serde(default)]
     pub source_preset: String,
+    /// Exact staged keyboard and roster authority carried by Add Controller.
+    /// Kept separate from `source_revision`, which is the selected existing
+    /// controller route's authority for inspector writes.
+    #[serde(default)]
+    pub add_source: String,
+    #[serde(default)]
+    pub add_source_revision: String,
     pub cards: Vec<RedesignControllerCard>,
     pub personas: Vec<RedesignPersonaRow>,
     /// `next_preset`, served because it becomes a FILE NAME (stage.rs's
@@ -1671,6 +1678,17 @@ impl RedesignControllers {
         let selected = selected_slot
             .and_then(|number| staged.slots.iter().find(|slot| slot.number == number))
             .or_else(|| staged.slots.first());
+        let exact_add_source = selected_source
+            .map(str::trim)
+            .filter(|source| !source.is_empty());
+        let add_device = if let Some(selector) = exact_add_source {
+            staged
+                .devices
+                .iter()
+                .find(|device| device.selector.eq_ignore_ascii_case(selector))
+        } else {
+            staged.devices.first()
+        };
         let source = selected.and_then(|slot| selected_source_view(staged, slot, selected_source));
         let panel = compose_controller_panel_for_source(staged, selected, source.as_ref(), q);
         // The macro lifecycle rows + the step editor, exactly nocturne's
@@ -1823,6 +1841,12 @@ impl RedesignControllers {
             source_preset: source
                 .as_ref()
                 .map(|source| source.preset.clone())
+                .unwrap_or_default(),
+            add_source: add_device
+                .map(|device| device.selector.clone())
+                .unwrap_or_default(),
+            add_source_revision: add_device
+                .map(ksx_api::staged_device_revision)
                 .unwrap_or_default(),
             counts_line: format!(
                 "{} of {} slots staged · {} of {} Xbox (XInput)",

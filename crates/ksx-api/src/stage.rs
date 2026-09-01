@@ -741,6 +741,24 @@ pub enum StageEdit {
         #[serde(default)]
         layout: Option<String>,
     },
+    /// Add and dress one controller for an exact staged keyboard source.
+    ///
+    /// This is the canonical multi-keyboard Add Controller mutation. The
+    /// daemon verifies `expected_revision` while holding the staged-state
+    /// lock; [`Self::apply`] independently verifies that `source` still names
+    /// the staged device described by `expected_source_revision`. Legacy
+    /// callers keep using [`Self::AddSlot`].
+    AddSourceSlot {
+        #[serde(default)]
+        number: Option<u8>,
+        persona: String,
+        preset: String,
+        #[serde(default)]
+        layout: Option<String>,
+        source: String,
+        expected_revision: String,
+        expected_source_revision: String,
+    },
     /// Moment 5 again: change their mind. Free, and the whole point.
     SetPersona { number: u8, persona: String },
     /// **Moment 6, the menu half: dress a staged controller in an in-box
@@ -911,22 +929,56 @@ impl StageEdit {
                         .next_free_slot()
                         .ok_or_else(|| refuse(ksx_core::StageRefusal::NoFreeSlot))?,
                 };
-                let preset = match layout.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
-                    Some(layout) => instantiate(layout, name, number, None)?,
-                    // No layout named: a controller that binds nothing, which
-                    // `commit()` refuses by name. Kept reachable on purpose —
-                    // see the variant's docs.
-                    None => ksx_core::Preset {
-                        name: name.to_owned(),
-                        entries: Vec::new(),
-                        chords: Vec::new(),
-                        macros: Default::default(),
-                        turbo: Vec::new(),
-                        toggle: Vec::new(),
-                        protected: false,
-                    },
-                };
+                let preset = add_slot_preset(layout.as_deref(), name, number, false)?;
                 setup.add_slot(number, persona, preset).map_err(refuse)
+            }
+            Self::AddSourceSlot {
+                number,
+                persona,
+                preset,
+                layout,
+                source,
+                expected_revision,
+                expected_source_revision,
+            } => {
+                if expected_revision.trim().is_empty() {
+                    return Err(Refusal::new(
+                        codes::BAD_REQUEST,
+                        "Add Controller was not checked against the current draft. Refresh the workbench and try again; nothing changed.",
+                    ));
+                }
+                let selector = parse_staged_selector(source)?;
+                let Some(device) = setup
+                    .devices()
+                    .iter()
+                    .find(|device| device.selector == selector)
+                else {
+                    return Err(refuse(ksx_core::StageRefusal::NoSuchDevice {
+                        selector: selector.to_string(),
+                    }));
+                };
+                let actual_source_revision =
+                    staged_device_revision(&StagedDeviceView::from(device));
+                if expected_source_revision.trim().is_empty()
+                    || expected_source_revision.trim() != actual_source_revision
+                {
+                    return Err(Refusal::new(
+                        codes::BAD_REQUEST,
+                        "The selected keyboard changed while Add Controller was open. Refresh the workbench and try again; nothing changed.",
+                    ));
+                }
+                let persona = parse_persona(persona)?;
+                let name = preset.trim();
+                let number = match number {
+                    Some(number) => *number,
+                    None => setup
+                        .next_free_slot()
+                        .ok_or_else(|| refuse(ksx_core::StageRefusal::NoFreeSlot))?,
+                };
+                let preset = add_slot_preset(layout.as_deref(), name, number, true)?;
+                setup
+                    .add_slot_for_source(number, persona, &selector, preset)
+                    .map_err(refuse)
             }
             Self::SetPersona { number, persona } => setup
                 .set_persona(*number, parse_persona(persona)?)
@@ -1301,6 +1353,17 @@ pub fn staged_source_revision(slot: &StagedSlotView, source: &StagedSourceView) 
         socd: &slot.socd,
         source,
     })
+}
+
+/// Deterministic authority for one staged keyboard roster entry.
+///
+/// Add Controller carries this beside the whole-draft revision. The draft
+/// token prevents any intervening mutation; this token additionally proves
+/// which selector/alias/label/backend row the action selected without asking a
+/// surface to hash or parse identity fields itself.
+pub fn staged_device_revision(device: &StagedDeviceView) -> String {
+    let revision = staged_revision_hash(device);
+    format!("k1-{}", revision.strip_prefix("s1-").unwrap_or(&revision))
 }
 
 fn staged_revision_hash<T>(canonical: &T) -> String
@@ -2515,6 +2578,36 @@ fn instantiate(
         };
         Refusal::with_remedy(codes::BAD_REQUEST, err.to_string(), remedy)
     })
+}
+
+/// Build the complete preset before a slot mutation is attempted. Exact-source
+/// Add Controller uses the same player-1 fallback the redesign formerly
+/// performed as a second write, but does it here so a failed layout leaves no
+/// bare controller behind.
+fn add_slot_preset(
+    layout: Option<&str>,
+    name: &str,
+    number: u8,
+    fallback_to_player_one: bool,
+) -> Result<ksx_core::Preset, Refusal> {
+    match layout.map(str::trim).filter(|layout| !layout.is_empty()) {
+        Some(layout) => match instantiate(layout, name, number, None) {
+            Ok(preset) => Ok(preset),
+            Err(_) if fallback_to_player_one => instantiate(layout, name, number, Some(1)),
+            Err(refusal) => Err(refusal),
+        },
+        // No layout named: a controller that binds nothing, which commit()
+        // refuses by name. Kept reachable for map-from-scratch callers.
+        None => Ok(ksx_core::Preset {
+            name: name.to_owned(),
+            entries: Vec::new(),
+            chords: Vec::new(),
+            macros: Default::default(),
+            turbo: Vec::new(),
+            toggle: Vec::new(),
+            protected: false,
+        }),
+    }
 }
 
 /// The layout ids carrying a block for slot `number` — read off the roster, so
@@ -4336,6 +4429,68 @@ steps = [{{ hold = ["A"], ms = 25 }}]
         assert_eq!(view.slots[1].sources[0].selector, DESK_SELECTOR);
         assert_eq!(view.slots[1].preset, "Desk Player 2");
         assert_eq!(view.slots[1].authoring, view.slots[1].sources[0].authoring);
+    }
+
+    #[test]
+    fn exact_source_add_dresses_only_the_selected_keyboard_and_refuses_stale_identity() {
+        let setup = with_second_device(&staged());
+        let before = StagedSetupView::of(&setup);
+        let desk = before
+            .devices
+            .iter()
+            .find(|device| device.selector == DESK_SELECTOR)
+            .unwrap();
+        let add = StageEdit::AddSourceSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Desk Player 1".into(),
+            layout: Some(default_layout()),
+            source: DESK_SELECTOR.into(),
+            expected_revision: "daemon-draft-1".into(),
+            expected_source_revision: staged_device_revision(desk),
+        };
+        let encoded = serde_json::to_value(&add).unwrap();
+        assert_eq!(encoded["edit"], "add-source-slot");
+        assert_eq!(encoded["source"], DESK_SELECTOR);
+
+        let added = add.apply(&setup).unwrap();
+        let slot = added.slot(1).unwrap();
+        assert_eq!(slot.routes().len(), 1);
+        assert_eq!(slot.routes()[0].selector.to_string(), DESK_SELECTOR);
+        assert!(slot.routes()[0].preset.live_bindings() > 0);
+        assert!(
+            slot.route(&DeviceSelector::parse(PANEL_SELECTOR).unwrap())
+                .is_none(),
+            "legacy add_slot must not auto-route the first roster keyboard"
+        );
+
+        let stale = StageEdit::AddSourceSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Desk Player 1".into(),
+            layout: Some(default_layout()),
+            source: DESK_SELECTOR.into(),
+            expected_revision: "daemon-draft-1".into(),
+            expected_source_revision: staged_device_revision(&before.devices[0]),
+        }
+        .apply(&setup)
+        .unwrap_err();
+        assert_eq!(stale.code, codes::BAD_REQUEST);
+        assert!(stale.message.contains("selected keyboard changed"));
+
+        let missing = StageEdit::AddSourceSlot {
+            number: None,
+            persona: "xbox360".into(),
+            preset: "Missing Player 1".into(),
+            layout: Some(default_layout()),
+            source: "usb:ffff:ffff:00".into(),
+            expected_revision: "daemon-draft-1".into(),
+            expected_source_revision: "k1-stale".into(),
+        }
+        .apply(&setup)
+        .unwrap_err();
+        assert_eq!(missing.code, "no-such-device");
+        assert!(setup.slots().is_empty());
     }
 
     #[test]

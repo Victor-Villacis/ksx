@@ -162,19 +162,7 @@ impl SessionRunner for LiveRunner {
     }
 
     fn facts(&self) -> Option<ActiveSessionFacts> {
-        let keyboards = u32::try_from(self.plan.captureable.len()).unwrap_or(u32::MAX);
-        let route = match (self.plan.winusb.len(), self.plan.captureable.len()) {
-            (_, 0) => "no keyboard capture backend",
-            (0, _) => "Interception",
-            (claimed, total) if claimed == total => "WinUSB",
-            _ => "WinUSB + Interception",
-        };
-        let policy = match self.plan.block_keyboards {
-            ksx_core::Blocking::Whole => "whole selected keyboard captured",
-            ksx_core::Blocking::BoundKeys => "mapped keys captured; all other keys keep typing",
-            ksx_core::Blocking::Off => "passthrough; no keys suppressed",
-        };
-        let capture = format!("{policy} · {route}");
+        let (keyboards, capture) = active_capture_facts(&self.plan);
         let controllers = self
             .plan
             .slots
@@ -275,6 +263,26 @@ impl SessionRunner for LiveRunner {
     }
 }
 
+/// Presentation-safe input facts for a running plan. Policy wording is
+/// deliberately count-neutral: [`ActiveSessionView`](ksx_api::ActiveSessionView)
+/// already prefixes the exact keyboard count, so saying "the selected
+/// keyboard" here becomes false as soon as two routed sources share a pad.
+fn active_capture_facts(plan: &crate::run::plan::RunPlan) -> (u32, String) {
+    let keyboards = u32::try_from(plan.captureable.len()).unwrap_or(u32::MAX);
+    let route = match (plan.winusb.len(), plan.captureable.len()) {
+        (_, 0) => "no keyboard capture backend",
+        (0, _) => "Interception",
+        (claimed, total) if claimed == total => "WinUSB",
+        _ => "WinUSB + Interception",
+    };
+    let policy = match plan.block_keyboards {
+        ksx_core::Blocking::Whole => "all routed keyboards captured",
+        ksx_core::Blocking::BoundKeys => "mapped keys captured; all other keys keep typing",
+        ksx_core::Blocking::Off => "passthrough; no keys suppressed",
+    };
+    (keyboards, format!("{policy} · {route}"))
+}
+
 impl LiveRunner {
     /// Everything `supervise` needs that is neither the plan nor the wiring.
     ///
@@ -321,6 +329,39 @@ impl LiveRunner {
             hot_swap: swap.clone(),
             ..RunOptions::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod capture_facts_tests {
+    use super::*;
+
+    #[test]
+    fn two_routed_keyboards_never_get_a_singular_live_policy() {
+        let plan = crate::run::plan::RunPlan {
+            source: crate::run::plan::PlanSource::Config,
+            config_path: std::path::PathBuf::new(),
+            slots: Vec::new(),
+            block_keyboards: ksx_core::Blocking::Whole,
+            block_mice: false,
+            captureable: vec![
+                ksx_core::DeviceId::from("HID\\LEFT"),
+                ksx_core::DeviceId::from("HID\\RIGHT"),
+            ],
+            winusb: vec![ksx_core::DeviceId::from("HID\\RIGHT")],
+            notes: Vec::new(),
+        };
+
+        let (keyboards, capture) = active_capture_facts(&plan);
+        assert_eq!(keyboards, 2);
+        assert_eq!(
+            capture,
+            "all routed keyboards captured · WinUSB + Interception"
+        );
+        assert!(
+            !capture.contains("selected keyboard"),
+            "the API prefixes this with `2 selected keyboards`: {capture}"
+        );
     }
 }
 

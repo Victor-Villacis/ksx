@@ -151,6 +151,11 @@ export interface ControllerBenchIo {
   root: HTMLElement;
   /** The served pad dressing rows, keyed to the cards by slot number. */
   pads: RdPadView[];
+  /** Exact keyboard whose mappings the controller art is currently editing.
+   * Nested `pad.sources` is canonical; the pad-level fields are only the
+   * historical first-source projection and must not dress another source's
+   * card while this value is present. */
+  authoringSource: string;
   parked: ParkedController[];
   /** The ghost ids the SERVER still holds resurrection material for
    *  (`parked_held`, served) — decides each ghost's honest wording:
@@ -267,6 +272,47 @@ function liveCardFingerprint(
   storeKey: string,
 ): string {
   return JSON.stringify(["live", card, allNumbers, pad ?? null, storeKey]);
+}
+
+/** Resolve the controller card's visual/edit vocabulary from the exact same
+ * physical source as the inspector. `pad.sources` is the canonical
+ * many-keyboard projection; the top-level fields remain a compatibility seam
+ * only for older payloads that do not serve that array.
+ *
+ * A nonempty source that is absent from a canonical array fails closed. A
+ * stale URL or provider mismatch must show no borrowed callouts and an honest
+ * refusal, never silently repaint the first keyboard's mappings. */
+function padForAuthoringSource(pad: RdPadView, requestedSource: string): RdPadView {
+  if (pad.sources === undefined) return pad;
+  const requested = requestedSource.trim();
+  const source = requested
+    ? pad.sources.find((candidate) => candidate.source_id === requested)
+    : pad.sources[0];
+  if (!source) {
+    return {
+      ...pad,
+      fn_keys: {},
+      controls: [],
+      macros: [],
+      mapping_available: false,
+      mapping_reason: requested
+        ? "The selected input is no longer available for this controller. Refresh the workbench or choose another exact source."
+        : "Choose an input source before editing this controller.",
+      macro_available: false,
+      macro_reason: "Choose an available input source before editing macros.",
+    };
+  }
+  return {
+    ...pad,
+    fn_keys: source.fn_keys ?? {},
+    fn_names: source.fn_names ?? pad.fn_names,
+    controls: source.controls,
+    macros: source.macros,
+    mapping_available: source.mapping_available,
+    mapping_reason: source.mapping_reason,
+    macro_available: source.macro_available,
+    macro_reason: source.macro_reason,
+  };
 }
 
 function ghostCardFingerprint(
@@ -760,7 +806,12 @@ export function syncControllerWidgets(
 ): void {
   const allNumbers = cards.map((card) => card.number);
   const storeKeys = finishStoreKeys(cards);
-  const padBySlot = new Map(io.pads.map((pad) => [String(pad.slot), pad]));
+  const padBySlot = new Map(
+    io.pads.map((pad) => [
+      String(pad.slot),
+      padForAuthoringSource(pad, io.authoringSource),
+    ]),
+  );
   const dress = (card: RdControllerCardView): HTMLElement =>
     liveCardContent(
       card,

@@ -194,9 +194,17 @@ function projectManyToMany(payload, requestUrl, state) {
     toggle: false,
     turbo_hz: null,
   }]).map((control) => ({ ...control, keys: [] }));
-  const mappedFunction =
+  const leftMappedFunction =
     baseControls.find((control) => control.function.toLowerCase() === "a")?.function ??
     baseControls[0].function;
+  const rightMappedFunction =
+    baseControls.find((control) => control.function.toLowerCase() === "b")?.function ??
+    baseControls.find((control) => control.function !== leftMappedFunction)?.function ??
+    leftMappedFunction;
+  state.mappedFunctions = {
+    [LEFT]: leftMappedFunction,
+    [RIGHT]: rightMappedFunction,
+  };
 
   payload.controllers.cards = [1, 2].map((slot) => ({
     ...baseCard,
@@ -207,19 +215,28 @@ function projectManyToMany(payload, requestUrl, state) {
     const sources = [LEFT, RIGHT]
       .filter((selector) => state.staged.has(selector))
       .map((selector) =>
-        sourceRow(selector, slot, baseControls, mappedFunction, state.revision)
+        sourceRow(
+          selector,
+          slot,
+          baseControls,
+          state.mappedFunctions[selector],
+          state.revision,
+        )
       );
-    const selectedSource = selectedSourceFor(requestUrl, state.staged);
-    const selected = sources.find((source) => source.source_id === selectedSource);
+    // Mirror the production compatibility seam: pad-level fields always
+    // project the first source. The current authoring source is canonical only
+    // in `sources`, so a RIGHT-source card test cannot pass by accident from a
+    // fixture that helpfully rewrites this legacy projection.
+    const compatibility = sources[0];
     return {
       ...basePad,
       slot,
       preset: `multi-controller-p${slot}`,
       title: `Player ${slot}`,
       target_revision: `controller-revision:${state.revision}:p${slot}`,
-      fn_keys: selected?.fn_keys ?? {},
-      fn_names: selected?.fn_names ?? basePad.fn_names,
-      controls: selected?.controls ?? cloneControls(baseControls, mappedFunction, false),
+      fn_keys: compatibility?.fn_keys ?? {},
+      fn_names: compatibility?.fn_names ?? basePad.fn_names,
+      controls: compatibility?.controls ?? cloneControls(baseControls, leftMappedFunction, false),
       macros: [],
       mapping_available: true,
       mapping_reason: "",
@@ -393,6 +410,16 @@ async function chooseAuthoringSource(page, selector) {
   );
 }
 
+async function controllerCalloutTexts(page, slot, functionName) {
+  return page.locator(
+    `.forma-canvas-stage > [data-instance-id="ctrl-slot-${slot}"] text.n-fnkey`,
+  ).evaluateAll((nodes, expected) => nodes
+    .filter((node) => (node.getAttribute("data-fn") ?? "")
+      .split(/\s+/)
+      .some((name) => name.toLowerCase() === expected.toLowerCase()))
+    .map((node) => node.textContent?.trim() ?? ""), functionName);
+}
+
 describe("redesign multi-keyboard canvas", { concurrency: false }, () => {
   test("the keyboard canvas is empty until Add and each exact source owns one full board", async () => {
     const scenario = await openScenario();
@@ -554,6 +581,22 @@ describe("redesign multi-keyboard canvas", { concurrency: false }, () => {
       );
 
       await chooseAuthoringSource(page, LEFT);
+      const leftFunction = scenario.state.mappedFunctions[LEFT];
+      const rightFunction = scenario.state.mappedFunctions[RIGHT];
+      assert.notEqual(
+        leftFunction,
+        rightFunction,
+        "the two exact sources deliberately map the same physical key to different controls",
+      );
+      assert.ok(
+        (await controllerCalloutTexts(page, 1, leftFunction)).includes("A"),
+        "the card paints LEFT's nested same-key route",
+      );
+      assert.equal(
+        (await controllerCalloutTexts(page, 1, rightFunction)).some(Boolean),
+        false,
+        "the card does not cross-paint RIGHT while LEFT is authoring",
+      );
       assert.deepEqual(
         await page.locator('.rd-inspector [data-nx="rd-source-authoring"]')
           .allTextContents(),
@@ -564,6 +607,29 @@ describe("redesign multi-keyboard canvas", { concurrency: false }, () => {
         "same-model source tabs expose their exact connection identities",
       );
       await chooseAuthoringSource(page, RIGHT);
+      assert.ok(
+        (await controllerCalloutTexts(page, 1, rightFunction)).includes("A"),
+        "switching authoring focus immediately repaints from RIGHT's nested route",
+      );
+      assert.equal(
+        (await controllerCalloutTexts(page, 1, leftFunction)).some(Boolean),
+        false,
+        "the compatibility first-source callout is not left behind on RIGHT",
+      );
+      const rightServed = await page.evaluate(async () =>
+        (await fetch("/api/redesign?slot=1&source=usb%3Afeed%3A1001%3A01")).json()
+      );
+      const rightPad = rightServed.controllers.pads.find((pad) => pad.slot === 1);
+      assert.deepEqual(
+        rightPad.fn_keys,
+        rightPad.sources[0].fn_keys,
+        "the regression retains the production first-source compatibility projection",
+      );
+      assert.notDeepEqual(
+        rightPad.fn_keys,
+        rightPad.sources.find((source) => source.source_id === RIGHT).fn_keys,
+        "only the canonical nested RIGHT row contains RIGHT's controller target",
+      );
       assert.equal(await page.locator('[data-mapping-source="true"]').count(), 0);
       assert.equal(await keyboardNode(page, RIGHT_SLUG).getAttribute("data-authoring-source"), "");
       for (const slug of [LEFT_SLUG, RIGHT_SLUG]) {

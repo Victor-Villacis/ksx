@@ -1433,6 +1433,7 @@ function syncCtrlBench(): void {
     canvas,
     root,
     pads: rdCtrlPads,
+    authoringSource: currentAuthoringSource(),
     parked: canvasPrefs.parked ?? [],
     parkedHeld: new Set(rdCtrlParkedHeld),
     addPreset: rdCtrlAddPreset(),
@@ -5197,6 +5198,11 @@ export function redesignWire(root: HTMLElement): void {
       const selector = button?.dataset.selector ?? "";
       if (selector && mergeSourceIntoUrl(selector)) {
         mapperOnSlotChange();
+        // The canonical nested source rows are already in memory. Repaint the
+        // controller art immediately from the newly selected source instead
+        // of leaving the previous keyboard's callouts visible until the
+        // confirming network refresh returns.
+        syncCtrlBench();
         const owner = button;
         button?.closest(".rd-controller-source-tabs")
           ?.querySelectorAll<HTMLButtonElement>('[data-nx="rd-source-authoring"]')

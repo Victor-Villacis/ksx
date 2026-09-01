@@ -77,6 +77,13 @@ import {
   type EncoderProfileLabDevice,
   type EncoderWorkbenchSurface,
 } from "./encoderConceptArt";
+import {
+  createKeyboardSurfaceHost,
+  KEYBOARD_SURFACE_DEPOT_SELECTOR,
+  KEYBOARD_SURFACE_SELECTOR,
+  moveElementPreservingFocus,
+  reconcileKeyboardDeviceSurface,
+} from "./redesign-keyboard-device";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /redesign — the sole product workbench after hard cutover.
@@ -1019,10 +1026,15 @@ function controllerIdentityColorEditor(slot: number): HTMLElement {
  *  its color back (nothing is hidden, so a key never looks unbound). */
 function syncKbLens(): void {
   const root = rdRoot;
-  const widget = root?.querySelector<HTMLElement>('[data-instance-id="keyboard"]');
-  if (!root || !widget) return;
-  widget.setAttribute("data-keyboard-theme", kbTheme);
-  const kb = widget.querySelector<HTMLElement>(".n-kb");
+  if (!root) return;
+  for (const item of Array.from(
+    root.querySelectorAll<HTMLElement>(".rd-keyboard-device-node"),
+  )) {
+    item.setAttribute("data-keyboard-theme", kbTheme);
+  }
+  const surface = root.querySelector<HTMLElement>(KEYBOARD_SURFACE_SELECTOR);
+  if (!surface) return;
+  const kb = surface.querySelector<HTMLElement>(".n-kb");
   if (kb) {
     const selectedSlot = Number(rdCtrlPanel?.slot_val || "0");
     for (let n = 1; n <= 16; n += 1) {
@@ -1036,7 +1048,7 @@ function syncKbLens(): void {
   }
   // The chips speak their own state (nocturne's syncLegend wording).
   for (const chip of Array.from(
-    widget.querySelectorAll<HTMLElement>('[data-nx="legend-mute"]'),
+    surface.querySelectorAll<HTMLElement>('[data-nx="legend-mute"]'),
   )) {
     const preset = presetOfSlotRd(Number(chip.getAttribute("data-slot") ?? ""));
     const byHand = preset !== undefined && kbHiddenStrips.has(preset);
@@ -1047,11 +1059,11 @@ function syncKbLens(): void {
       ? "Show this controller's color on the keys"
       : "Hide this controller's color on the keys";
   }
-  widget
+  surface
     .querySelector(".n-kbcolors")
     ?.setAttribute("aria-pressed", kbSolo ? "true" : "false");
   for (const button of Array.from(
-    widget.querySelectorAll<HTMLElement>('[data-nx="kb-theme"]'),
+    surface.querySelectorAll<HTMLElement>('[data-nx="kb-theme"]'),
   )) {
     button.setAttribute(
       "aria-pressed",
@@ -1516,7 +1528,7 @@ function canvasRectsOverlap(left: CanvasVisualRect, right: CanvasVisualRect): bo
   );
 }
 
-function mountedCanvasGeometries(): CanvasItemGeometry[] {
+function mountedCanvasGeometries(ignore: HTMLElement | null = null): CanvasItemGeometry[] {
   const canvas = nCanvas;
   const root = rdRoot;
   if (!canvas || !root) return [];
@@ -1524,8 +1536,9 @@ function mountedCanvasGeometries(): CanvasItemGeometry[] {
     root.querySelectorAll<HTMLElement>(
       ".forma-canvas-stage > [data-instance-id][data-canvas-x]",
     ),
-    (item) => canvas.getItemState(item),
-  );
+  )
+    .filter((item) => item !== ignore)
+    .map((item) => canvas.getItemState(item));
 }
 
 function nextCanvasZ(minimum = 1): number {
@@ -1535,8 +1548,11 @@ function nextCanvasZ(minimum = 1): number {
   );
 }
 
-function allocateFreshCanvasGeometry(preferred: CanvasItemGeometry): CanvasItemGeometry {
-  const occupied = mountedCanvasGeometries().map(canvasVisualRect);
+function allocateFreshCanvasGeometry(
+  preferred: CanvasItemGeometry,
+  ignore: HTMLElement | null = null,
+): CanvasItemGeometry {
+  const occupied = mountedCanvasGeometries(ignore).map(canvasVisualRect);
   const withFreshZ = { ...preferred, z: nextCanvasZ(preferred.z) };
   const isOpen = (candidate: CanvasItemGeometry) => {
     const visual = canvasVisualRect(candidate);
@@ -1614,6 +1630,10 @@ let encoderLabReturnCamera: { panX: number; panY: number; zoom: number } | null 
 let refreshEncoderProfileLab: ((devices: readonly EncoderProfileLabDevice[]) => void) | null = null;
 let disposeEncoderProfileLab: (() => void) | null = null;
 const encoderWorkbenchSurfaces = new WeakMap<HTMLElement, EncoderWorkbenchSurface>();
+let sourceSurfaceFingerprint = "";
+let keyboardMappingSurface: HTMLElement | null = null;
+let keyboardSurfaceDepot: HTMLElement | null = null;
+let sourceControlsSurface: HTMLElement | null = null;
 
 const REDESIGN_BROWSER_STORES = [
   RD_UI_STORE,
@@ -1872,8 +1892,19 @@ function tidyCanvas(): void {
     (left.dataset.widgetName ?? left.dataset.instanceId ?? "").localeCompare(
       right.dataset.widgetName ?? right.dataset.instanceId ?? "",
     );
-  const keyboard = items.filter((item) => item.dataset.instanceId === "keyboard");
-  const devices = items.filter((item) => item.classList.contains("rd-dev-node")).sort(byName);
+  const keyboard = items
+    .filter((item) => item.classList.contains("rd-keyboard-device-node"))
+    .sort((left, right) => {
+      const activeDelta = Number(right.dataset.mappingSource === "true") -
+        Number(left.dataset.mappingSource === "true");
+      return activeDelta || byName(left, right);
+    });
+  const devices = items
+    .filter(
+      (item) => item.classList.contains("rd-dev-node") &&
+        !item.classList.contains("rd-keyboard-device-node"),
+    )
+    .sort(byName);
   const controllers = items
     .filter((item) => /^ctrl-slot-\d+$/.test(item.dataset.instanceId ?? ""))
     .sort((left, right) => {
@@ -1967,6 +1998,14 @@ const TIER_COPY: Record<string, string> = {
 // silhouette, but its controls are inert rather than undersized targets.
 const ENCODER_MIN_EFFECTIVE_EDIT_SCALE = 0.9;
 const ENCODER_EDIT_SCALE_SAFETY = 0.001;
+const KEYBOARD_MIN_EFFECTIVE_EDIT_SCALE = 0.9;
+const KEYBOARD_MIN_COARSE_EDIT_SCALE = 1.25;
+
+function keyboardMinEffectiveEditScale(): number {
+  return window.matchMedia?.("(pointer: coarse)").matches
+    ? KEYBOARD_MIN_COARSE_EDIT_SCALE
+    : KEYBOARD_MIN_EFFECTIVE_EDIT_SCALE;
+}
 
 /** Camera zoom that preserves the encoder's 44px terminal targets after the
  * item's own manual scale is applied. Fresh Add and keyboard entry share this
@@ -1979,6 +2018,18 @@ function encoderEditingZoom(manualScale: number): number {
     Math.max(
       0.94,
       (ENCODER_MIN_EFFECTIVE_EDIT_SCALE + ENCODER_EDIT_SCALE_SAFETY) / itemScale,
+    ),
+  );
+}
+
+function keyboardEditingZoom(manualScale: number): number {
+  const itemScale = Number.isFinite(manualScale) && manualScale > 0 ? manualScale : 1;
+  const minimum = keyboardMinEffectiveEditScale();
+  return Math.min(
+    3,
+    Math.max(
+      0.94,
+      (minimum + ENCODER_EDIT_SCALE_SAFETY) / itemScale,
     ),
   );
 }
@@ -2016,9 +2067,63 @@ function syncEncoderEditingAccess(
       '.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host',
     );
     if (!host) continue;
+    const active = host.ownerDocument.activeElement;
+    if (!editable && active instanceof HTMLElement && host.contains(active)) {
+      item.focus({ preventScroll: true });
+    }
     host.inert = !editable;
     if (editable) host.removeAttribute("aria-hidden");
     else host.setAttribute("aria-hidden", "true");
+    const sourceControls = item.querySelector<HTMLElement>("[data-rd-source-controls]");
+    if (sourceControls) {
+      const focused = sourceControls.ownerDocument.activeElement;
+      if (!editable && focused instanceof HTMLElement && sourceControls.contains(focused)) {
+        item.focus({ preventScroll: true });
+      }
+      sourceControls.inert = !editable;
+      sourceControls.hidden = !editable;
+      if (editable) sourceControls.removeAttribute("aria-hidden");
+      else sourceControls.setAttribute("aria-hidden", "true");
+    }
+  }
+}
+
+/** The full keyboard remains a recognizable board at every distance, but its
+ * native keys, finish controls, and capture policy are only operable when the
+ * camera makes them honest targets. The device identity/source verb remains
+ * outside this surface and therefore stays available at structure distance. */
+function syncKeyboardEditingAccess(
+  tier: string,
+  zoom = canvasZoomFromViewport(),
+): void {
+  const root = rdRoot;
+  if (!root) return;
+  for (const item of root.querySelectorAll<HTMLElement>(".rd-keyboard-device-node")) {
+    const manualScale = Number(item.dataset.canvasManualScale);
+    const attentionScale = Number(item.dataset.attentionScale);
+    const renderedItemScale = Number.isFinite(attentionScale) && attentionScale > 0
+      ? attentionScale
+      : Number.isFinite(manualScale) && manualScale > 0 ? manualScale : 1;
+    const effectiveScale = zoom * renderedItemScale;
+    const editable = item.dataset.mappingSource === "true" &&
+      tier === "editing" && effectiveScale >= keyboardMinEffectiveEditScale();
+    item.dataset.keyboardEditable = editable ? "true" : "false";
+    const surface = item.querySelector<HTMLElement>(KEYBOARD_SURFACE_SELECTOR);
+    if (!surface) continue;
+    const active = surface.ownerDocument.activeElement;
+    if (!editable && active instanceof HTMLElement && surface.contains(active)) {
+      item.focus({ preventScroll: true });
+    }
+    surface.inert = !editable;
+    if (editable) surface.removeAttribute("aria-hidden");
+    else surface.setAttribute("aria-hidden", "true");
+    const sourceControls = surface.querySelector<HTMLElement>("[data-rd-source-controls]");
+    if (sourceControls) {
+      sourceControls.hidden = !editable;
+      sourceControls.inert = !editable;
+      if (editable) sourceControls.removeAttribute("aria-hidden");
+      else sourceControls.setAttribute("aria-hidden", "true");
+    }
   }
 }
 
@@ -2026,6 +2131,7 @@ function applyZoomTier(tier: string, zoom = canvasZoomFromViewport()): void {
   const el = rdRoot?.querySelector<HTMLElement>(".rd-tier");
   if (el) el.textContent = TIER_COPY[tier] ?? tier;
   syncEncoderEditingAccess(tier, zoom);
+  syncKeyboardEditingAccess(tier, zoom);
 }
 
 // ── Chrome state the engine reports back ────────────────────────────────────
@@ -3100,19 +3206,29 @@ const STAGED_DEVICE_TITLE =
   "This board is the background helper's input source. Choosing it again changes nothing — " +
   "a keyboard prepared for play keeps its preparation.";
 const DEVICE_CARD_MIN_HEIGHT = 220;
-const KEYBOARD_DEVICE_CARD_WIDTH = 360;
-const KEYBOARD_DEVICE_CARD_MIN_HEIGHT = 320;
+const KEYBOARD_DEVICE_WIDTH = 980;
+// Identity fascia + source policy + the served 320px key deck. Reserving the
+// complete footprint up front keeps a board from jumping in size when it
+// becomes authoritative and receives the interactive singleton.
+const KEYBOARD_DEVICE_MIN_HEIGHT = 560;
 const DEVICE_CARD_ROW_STRIDE = DEVICE_CARD_MIN_HEIGHT + CANVAS_FRESH_PLACEMENT_GAP;
 
 function deviceCardPurpose(row: RdDeviceRowView): string {
+  const authorityUnknown = !rdDeviceScanAuthoritative || !rdStagingReachable;
+  if (authorityUnknown) {
+    const kind = row.role === "keyboard" ? "physical keyboard" : "encoder";
+    return row.aria_current === "true"
+      ? `This ${kind} was the last known input source. Status is unavailable, so mapping controls stay paused until KSX confirms it.`
+      : `This ${kind} remains on the canvas while device status is unavailable. Mapping controls stay paused until KSX confirms an input source.`;
+  }
   if (row.role === "keyboard") {
     return row.aria_current === "true"
-      ? "Selected physical keyboard. Its emitted keys feed the full-size Input mapping keyboard."
-      : "Connected physical keyboard. Use as input source to feed its emitted keys into the full-size Input mapping keyboard.";
+      ? "This physical keyboard is the active input source. Use its board below to inspect and map emitted keys."
+      : "This physical keyboard is on the canvas. Make it the input source to activate its interactive key board.";
   }
   return row.aria_current === "true"
-    ? "This is the input source. Its emitted keys appear on the Input source keyboard."
-    : "This card is on the canvas for inspection. Use it as the input source when you want its emitted keys on the Input source keyboard.";
+    ? "This encoder is the active input source. Its configured terminal emissions are the mapping anchors."
+    : "This board is on the canvas for inspection. Make it the input source when you want to map its emitted keys.";
 }
 
 const DEVICE_KEYBOARD_SVG_NS = "http://www.w3.org/2000/svg";
@@ -3136,9 +3252,10 @@ function keyboardVisualRect(
   svg.append(rect);
 }
 
-/** A deliberately generic physical-keyboard silhouette. Device enumeration
- * does not prove ANSI/ISO, TKL/full-size, or the manufacturer's exact deck,
- * so this card shows hardware presence without inventing a model layout. */
+/** A deliberately generic full-board keyboard silhouette. Device enumeration
+ * proves the keyboard interface, but not ANSI/ISO, TKL/full-size, or the
+ * manufacturer's exact physical deck. The active device receives the served
+ * interactive key surface; inactive devices keep this honest board view. */
 function physicalKeyboardVisual(): HTMLElement {
   const figure = document.createElement("figure");
   figure.className = "rd-device-keyboard-visual";
@@ -3211,6 +3328,11 @@ function deviceStateBadges(row: RdDeviceRowView): RdDeviceStateBadge[] {
   badges.push({ label: "On canvas", state: "canvas" });
   if (row.aria_current !== "true") return badges;
 
+  if (!rdDeviceScanAuthoritative || !rdStagingReachable) {
+    badges.push({ label: "Source status unavailable", state: "attention" });
+    return badges;
+  }
+
   badges.push({ label: "Input source", state: "source" });
   if (row.capture_badge) {
     badges.push({
@@ -3248,7 +3370,6 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   const meta = document.createElement("p");
   meta.className = "rd-devcard-meta";
   meta.textContent = deviceCardMeta(row);
-  const keyboardVisual = row.role === "keyboard" ? physicalKeyboardVisual() : null;
   const states = document.createElement("p");
   states.className = "rd-devcard-states";
   // The daemon chip and the daemon verb. `data-staged` on the ITEM decides
@@ -3287,11 +3408,36 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
     "Make this the board ksx reads as the input source — replaces the daemon's current choice. " +
     "Nothing is saved or started, and a board already prepared keeps its preparation.";
   form.append(submit);
+  const sourceControlsHost = document.createElement("div");
+  sourceControlsHost.className = "rd-source-controls-host";
+  sourceControlsHost.dataset.rdSourceControlsHost = "";
   body.append(badge, name, meta);
-  if (keyboardVisual) body.append(keyboardVisual);
-  body.append(states, purpose, staged, form);
+  body.append(states, purpose, staged, form, sourceControlsHost);
   syncDeviceCardStateBadges(body, row);
   return body;
+}
+
+/** A physical keyboard is one canvas object: identity/source controls and a
+ * full board. The singleton served mapping surface moves into `host` only for
+ * the authoritative source; other keyboard items show a large, honest generic
+ * board instead of masquerading as a second interactive mapping surface. */
+function keyboardDeviceContent(row: RdDeviceRowView): HTMLElement {
+  const shell = document.createElement("section");
+  shell.className = "rd-keyboard-device-shell";
+  const identity = deviceCardContent(row);
+  identity.classList.add("rd-keyboard-device-identity");
+  const preview = document.createElement("div");
+  preview.className = "rd-keyboard-device-preview";
+  preview.dataset.rdKeyboardPreview = "";
+  preview.append(physicalKeyboardVisual());
+  const previewNote = document.createElement("p");
+  previewNote.className = "rd-keyboard-device-preview-note";
+  previewNote.textContent = "Available on the canvas · make this the input source to interact with its keys";
+  preview.append(previewNote);
+  const host = createKeyboardSurfaceHost(document);
+  host.hidden = true;
+  shell.append(identity, preview, host);
+  return shell;
 }
 
 function encoderDeviceFromRow(row: RdDeviceRowView): EncoderProfileLabDevice {
@@ -3338,9 +3484,17 @@ function mountDeviceWidget(
   const encoderSurface = row.role === "panel-encoder"
     ? createEncoderWorkbenchSurface(document, encoderDeviceFromRow(row), {
       readStoredAssignmentsOnMount,
+      onFlowAnchorsChange: () => {
+        syncMappingCords();
+        rdRoot?.dispatchEvent(new CustomEvent("ksx:redesign-flow-anchors-change"));
+      },
     })
     : null;
-  const content = encoderSurface ? document.createElement("div") : deviceCardContent(row);
+  const content = encoderSurface
+    ? document.createElement("div")
+    : row.role === "keyboard"
+      ? keyboardDeviceContent(row)
+      : deviceCardContent(row);
   if (encoderSurface) {
     content.className = "rd-encoder-device-shell";
     content.append(deviceCardContent(row), encoderSurface.content);
@@ -3348,7 +3502,7 @@ function mountDeviceWidget(
   const preferredWidth = encoderSurface
     ? 960
     : row.role === "keyboard"
-      ? KEYBOARD_DEVICE_CARD_WIDTH
+      ? KEYBOARD_DEVICE_WIDTH
       : 300;
   // Match the canvas engine's effective minimum exactly. Supplying a smaller
   // candidate makes collision allocation reason about geometry it will later
@@ -3356,7 +3510,7 @@ function mountDeviceWidget(
   const minHeight = encoderSurface
     ? 900
     : row.role === "keyboard"
-      ? KEYBOARD_DEVICE_CARD_MIN_HEIGHT
+      ? KEYBOARD_DEVICE_MIN_HEIGHT
       : DEVICE_CARD_MIN_HEIGHT;
   const item = createCanvasItem({
     instanceId: slug,
@@ -3368,14 +3522,20 @@ function mountDeviceWidget(
   });
   item.dataset.clientWidget = "";
   item.dataset.selector = row.selector;
+  item.dataset.deviceRole = row.role;
   item.dataset.staged = row.aria_current === "true" ? "true" : "false";
   item.classList.add("rd-dev-node");
+  if (row.role === "keyboard") {
+    item.classList.add("rd-keyboard-device-node", "n-widget", "n-widget-kb");
+    item.dataset.sourceState = row.aria_current === "true" ? "active" : "inactive";
+    item.dataset.keyboardTheme = kbTheme;
+  }
   if (encoderSurface) {
     item.classList.add("rd-encoder-device-node");
     encoderWorkbenchSurfaces.set(item, encoderSurface);
   }
   const home: CanvasItemGeometry = {
-    x: 140 + (index % 3) * 340,
+    x: 140 + (index % 3) * (preferredWidth + CANVAS_FRESH_PLACEMENT_GAP),
     y: 160 + Math.floor(index / 3) * Math.max(
       DEVICE_CARD_ROW_STRIDE,
       minHeight + CANVAS_FRESH_PLACEMENT_GAP,
@@ -3386,12 +3546,56 @@ function mountDeviceWidget(
     manualScale: 1,
   };
   try {
-    const savedGeometry = savedGeometryKey ? canvasPrefs.widgets[savedGeometryKey] : undefined;
+    const selectorGeometry = savedGeometryKey ? canvasPrefs.widgets[savedGeometryKey] : undefined;
+    const legacyKeyboardGeometry = row.role === "keyboard" && !selectorGeometry &&
+        row.aria_current === "true" && isGeometry(canvasPrefs.widgets.keyboard)
+      ? canvasPrefs.widgets.keyboard
+      : undefined;
+    const retireLegacyKeyboardGeometry = row.role === "keyboard" &&
+      row.aria_current === "true" && isGeometry(canvasPrefs.widgets.keyboard);
+    if (
+      row.role === "keyboard" &&
+      !selectorGeometry &&
+      row.aria_current !== "true" &&
+      isGeometry(canvasPrefs.widgets.keyboard)
+    ) {
+      item.dataset.legacyKeyboardGeometryPending = "true";
+    }
+    const savedGeometry = selectorGeometry ?? legacyKeyboardGeometry;
+    const normalizedSavedGeometry = savedGeometry && row.role === "keyboard"
+      ? {
+          ...savedGeometry,
+          width: Math.max(KEYBOARD_DEVICE_WIDTH, savedGeometry.width),
+          height: Math.max(KEYBOARD_DEVICE_MIN_HEIGHT, savedGeometry.height),
+        }
+      : savedGeometry;
+    const keyboardGeometryExpanded = Boolean(
+      savedGeometry && row.role === "keyboard" &&
+        (savedGeometry.width < KEYBOARD_DEVICE_WIDTH ||
+          savedGeometry.height < KEYBOARD_DEVICE_MIN_HEIGHT),
+    );
     canvas.mountItem(
       item,
-      savedGeometry ?? allocateFreshCanvasGeometry(home),
+      normalizedSavedGeometry
+        ? keyboardGeometryExpanded
+          ? allocateFreshCanvasGeometry(normalizedSavedGeometry)
+          : normalizedSavedGeometry
+        : allocateFreshCanvasGeometry(home),
       { focus: focusOnMount },
     );
+    if (item.dataset.legacyKeyboardGeometryPending === "true") {
+      const spawn = canvas.getItemState(item);
+      item.dataset.legacyKeyboardSpawnX = String(spawn.x);
+      item.dataset.legacyKeyboardSpawnY = String(spawn.y);
+      item.dataset.legacyKeyboardSpawnScale = String(spawn.manualScale);
+    }
+    if (retireLegacyKeyboardGeometry) {
+      const nextWidgets = { ...canvasPrefs.widgets };
+      delete nextWidgets.keyboard;
+      nextWidgets[slug] = canvas.getItemState(item);
+      canvasPrefs.widgets = nextWidgets;
+      saveCanvasPrefs();
+    }
     if (encoderSurface) {
       const viewport = (rdRoot ?? document).querySelector<HTMLElement>(".forma-canvas-viewport");
       if (focusOnMount) {
@@ -3606,8 +3810,10 @@ function reconcileBenchWithRoster(): void {
   )) {
     const selector = item.dataset.selector ?? "";
     const row = deviceRowFor(selector);
-    const presentationMatches = !row ||
-      item.classList.contains("rd-encoder-device-node") === (row.role === "panel-encoder");
+    const presentationMatches = !row || (
+      item.classList.contains("rd-encoder-device-node") === (row.role === "panel-encoder") &&
+      item.classList.contains("rd-keyboard-device-node") === (row.role === "keyboard")
+    );
     // A refused scan is UNKNOWN, not an authoritative empty roster. Keep the
     // remembered card mounted and let syncBenchCards mark its status unknown.
     if (
@@ -3638,6 +3844,184 @@ function reconcileBenchWithRoster(): void {
     saveCanvasPrefs();
     syncMapCount();
   }
+}
+
+/** Resolve the ONE device which may emit mapping keys. This fails closed:
+ * an unreachable scan/staging provider or contradictory staged rows produces
+ * no active source marker, so an inactive board can never win by DOM order. */
+function authoritativeSourceItem(): HTMLElement | null {
+  if (!rdDeviceScanAuthoritative || !rdStagingReachable) return null;
+  const selected = [...rdDevKb(), ...rdDevEnc(), ...rdDevExp()].filter(
+    (row) => row.aria_current === "true",
+  );
+  if (selected.length !== 1) return null;
+  return benchItemEl(selected[0].selector);
+}
+
+/** A pre-device build stored the mapping board under the synthetic
+ * `keyboard` id. If that source device was added while inactive, defer the
+ * one-time claim until it actually becomes authoritative; browser persistence
+ * in the meantime must not turn its temporary spawn point into a competing
+ * selector-specific preference. */
+function claimPendingLegacyKeyboardGeometry(item: HTMLElement | null): void {
+  const canvas = nCanvas;
+  if (!item || !canvas) return;
+  const instanceId = item.dataset.instanceId;
+  if (!instanceId) return;
+  const legacy = canvasPrefs.widgets.keyboard;
+  if (!isGeometry(legacy)) {
+    delete item.dataset.legacyKeyboardGeometryPending;
+    delete item.dataset.legacyKeyboardSpawnX;
+    delete item.dataset.legacyKeyboardSpawnY;
+    delete item.dataset.legacyKeyboardSpawnScale;
+    return;
+  }
+  // Selector-specific geometry is authoritative unless this live item still
+  // carries the one-session marker proving it was spawned solely to await the
+  // old synthetic board. In every other case the old key is stale migration
+  // residue and must be retired now, or an unrelated keyboard added later can
+  // inherit it. This also closes reload/remove-before-select paths, where the
+  // transient marker is correctly gone but persisted selector geometry exists.
+  if (item.dataset.legacyKeyboardGeometryPending !== "true") {
+    const nextWidgets = { ...canvasPrefs.widgets };
+    delete nextWidgets.keyboard;
+    nextWidgets[instanceId] = canvas.getItemState(item);
+    canvasPrefs.widgets = nextWidgets;
+    saveCanvasPrefs();
+    return;
+  }
+  const normalized = {
+    ...legacy,
+    width: Math.max(KEYBOARD_DEVICE_WIDTH, legacy.width),
+    height: Math.max(KEYBOARD_DEVICE_MIN_HEIGHT, legacy.height),
+  };
+  const expanded = legacy.width < KEYBOARD_DEVICE_WIDTH ||
+    legacy.height < KEYBOARD_DEVICE_MIN_HEIGHT;
+  const current = canvas.getItemState(item);
+  const spawnX = Number(item.dataset.legacyKeyboardSpawnX);
+  const spawnY = Number(item.dataset.legacyKeyboardSpawnY);
+  const spawnScale = Number(item.dataset.legacyKeyboardSpawnScale);
+  const userArranged = Number.isFinite(spawnX) && Number.isFinite(spawnY) &&
+    Number.isFinite(spawnScale) &&
+    (current.x !== spawnX || current.y !== spawnY || current.manualScale !== spawnScale);
+  const restored = userArranged
+    ? current
+    : canvas.restoreItemState(
+      item,
+      expanded ? allocateFreshCanvasGeometry(normalized, item) : normalized,
+    );
+  if (!restored) return;
+  const nextWidgets = { ...canvasPrefs.widgets };
+  delete nextWidgets.keyboard;
+  nextWidgets[instanceId] = restored;
+  canvasPrefs.widgets = nextWidgets;
+  delete item.dataset.legacyKeyboardGeometryPending;
+  delete item.dataset.legacyKeyboardSpawnX;
+  delete item.dataset.legacyKeyboardSpawnY;
+  delete item.dataset.legacyKeyboardSpawnScale;
+  saveCanvasPrefs();
+}
+
+/** Join browser-owned canvas membership to served source truth. Every added
+ * keyboard remains a board; only the authoritative source owns the singleton
+ * interactive key surface. All other keyboard boards are honest previews with
+ * no key anchors. */
+function syncKeyboardDevicePresentation(): void {
+  const root = rdRoot;
+  if (!root) return;
+  const sourceItem = authoritativeSourceItem();
+  const keyboardOwner = sourceItem?.classList.contains("rd-keyboard-device-node")
+    ? sourceItem
+    : null;
+  claimPendingLegacyKeyboardGeometry(keyboardOwner);
+
+  const surface = keyboardMappingSurface ??
+    root.querySelector<HTMLElement>(KEYBOARD_SURFACE_SELECTOR);
+  const depot = keyboardSurfaceDepot ??
+    root.querySelector<HTMLElement>(KEYBOARD_SURFACE_DEPOT_SELECTOR);
+  const controls = sourceControlsSurface ??
+    root.querySelector<HTMLElement>("[data-rd-source-controls]");
+  // When authority leaves the keyboard family, extract the independently
+  // owned source policy before parking the keyboard surface. Otherwise the
+  // atomic board move would carry the focused policy control into the hidden
+  // depot and correctly repair focus away from it just before we move that
+  // same control back onto a visible encoder.
+  if (controls && depot && !keyboardOwner) {
+    const deviceHost = sourceItem?.querySelector<HTMLElement>(
+      ".rd-devcard > [data-rd-source-controls-host]",
+    );
+    const controlsTarget = deviceHost ?? depot;
+    const previousDevice = controls.closest<HTMLElement>(".rd-dev-node");
+    moveElementPreservingFocus(
+      controls,
+      controlsTarget,
+      sourceItem ?? previousDevice ?? root.querySelector<HTMLElement>('[data-nx="rd-devs-open"]'),
+    );
+  }
+  // Make the destination available before the atomic move. Hiding the old
+  // host first would blur a focused key before the helper could preserve it.
+  const keyboardDestination = keyboardOwner?.querySelector<HTMLElement>(
+    "[data-rd-keyboard-surface-host]",
+  );
+  if (keyboardDestination) keyboardDestination.hidden = false;
+  if (surface && depot) {
+    reconcileKeyboardDeviceSurface({
+      surface,
+      depot,
+      owner: keyboardOwner,
+      scope: root,
+    });
+  }
+
+  for (const item of Array.from(
+    root.querySelectorAll<HTMLElement>(".rd-dev-node[data-selector]"),
+  )) {
+    if (item === sourceItem) item.dataset.mappingSource = "true";
+    else item.removeAttribute("data-mapping-source");
+    if (!item.classList.contains("rd-keyboard-device-node")) continue;
+    const unknown = !rdDeviceScanAuthoritative || !rdStagingReachable;
+    item.dataset.sourceState = unknown
+      ? "unknown"
+      : item === keyboardOwner
+        ? "active"
+        : "inactive";
+    const preview = item.querySelector<HTMLElement>("[data-rd-keyboard-preview]");
+    const host = item.querySelector<HTMLElement>("[data-rd-keyboard-surface-host]");
+    if (preview) preview.hidden = item === keyboardOwner;
+    if (host) host.hidden = item !== keyboardOwner;
+  }
+
+  if (controls && depot && keyboardOwner) {
+    const keyboardHost = keyboardOwner?.querySelector<HTMLElement>(
+      "[data-rd-keyboard-surface] [data-rd-source-controls-host]",
+    );
+    const controlsTarget = keyboardHost ?? depot;
+    const previousDevice = controls.closest<HTMLElement>(".rd-dev-node");
+    moveElementPreservingFocus(
+      controls,
+      controlsTarget,
+      sourceItem ?? previousDevice ?? root.querySelector<HTMLElement>('[data-nx="rd-devs-open"]'),
+    );
+  }
+  const nextFingerprint = Array.from(
+    root.querySelectorAll<HTMLElement>(".rd-dev-node[data-selector]"),
+  )
+    .map((item) =>
+      `${item.dataset.instanceId ?? ""}:${item.dataset.mappingSource === "true" ? "source" : "idle"}`
+    )
+    .sort()
+    .join("|");
+  if (nextFingerprint !== sourceSurfaceFingerprint) {
+    sourceSurfaceFingerprint = nextFingerprint;
+    root.dispatchEvent(new CustomEvent("ksx:redesign-source-surface-change"));
+  }
+  syncKbLens();
+  const viewport = root.querySelector<HTMLElement>(".forma-canvas-viewport");
+  const tier = viewport?.dataset.canvasZoomTier ?? "editing";
+  const zoom = canvasZoomFromViewport(viewport);
+  syncEncoderEditingAccess(tier, zoom);
+  syncKeyboardEditingAccess(tier, zoom);
+  syncMappingCords();
 }
 
 /** Repaint every served fact on mounted cards, including the daemon's staged
@@ -3671,6 +4055,15 @@ function syncBenchCards(): void {
         status.textContent = "Device status unavailable — latest scan did not answer";
         status.title = rdDevScanLine();
       }
+      if (purpose) {
+        purpose.textContent =
+          "Device status is unavailable. " +
+          "Mapping controls pause until KSX confirms an input source.";
+      }
+      syncDeviceCardStateBadges(
+        item,
+        { aria_current: "true" } as RdDeviceRowView,
+      );
       continue;
     }
     if (!row) continue;
@@ -3715,6 +4108,7 @@ function syncBenchCards(): void {
     marker?.setAttribute("aria-label", `Focus ${row.name}`);
     if (marker) marker.title = row.name;
   }
+  syncKeyboardDevicePresentation();
 }
 
 /** Decorate the picker rows with CLIENT truth — membership — after any
@@ -3737,8 +4131,8 @@ function syncDeviceRows(): void {
     if (word) {
       word.textContent = row?.role === "keyboard"
         ? on
-          ? "On canvas — press to remove physical card"
-          : "Show physical device on canvas"
+          ? "On canvas — press to remove board"
+          : "Add keyboard board to canvas"
         : on
           ? "On canvas — press to remove"
           : "Show on canvas";
@@ -3973,16 +4367,18 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
       onSelectionChange: syncInspectorToSelection,
       onActiveItemStateChange: () => {
         renderInspector();
-        syncEncoderEditingAccess(
-          viewport.dataset.canvasZoomTier ?? "editing",
-          canvasZoomFromViewport(viewport),
-        );
+        const tier = viewport.dataset.canvasZoomTier ?? "editing";
+        const zoom = canvasZoomFromViewport(viewport);
+        syncEncoderEditingAccess(tier, zoom);
+        syncKeyboardEditingAccess(tier, zoom);
       },
       // Native controls inside client-authored widgets are not Forma runtime
       // components. Enter on the move handle / Ctrl+Enter on the item still
       // needs a deterministic way into them.
       onOpenActiveControls: (item) => {
         const isEncoder = item.classList.contains("rd-encoder-device-node");
+        const isKeyboard = item.classList.contains("rd-keyboard-device-node") &&
+          item.dataset.mappingSource === "true";
         if (isEncoder) {
           const state = nCanvas?.getItemState(item);
           const manualScale = state?.manualScale ?? 1;
@@ -3995,6 +4391,17 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
             // now so the synchronous F2 contract can focus its roving entry;
             // the render callback will restamp the authoritative tier.
             syncEncoderEditingAccess("editing", requiredZoom);
+          }
+        }
+        if (isKeyboard) {
+          const state = nCanvas?.getItemState(item);
+          const manualScale = state?.manualScale ?? 1;
+          const zoom = canvasZoomFromViewport(viewport);
+          const requiredZoom = keyboardEditingZoom(manualScale);
+          if (viewport.dataset.canvasZoomTier !== "editing" ||
+              zoom * manualScale < keyboardMinEffectiveEditScale()) {
+            nCanvas?.setZoomTo(requiredZoom, "before opening keyboard controls");
+            syncKeyboardEditingAccess("editing", requiredZoom);
           }
         }
         const runtime = item.querySelector<HTMLElement>("[data-forma-runtime-host]");
@@ -4010,7 +4417,7 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
         // Semantic overview intentionally hides editing chrome. F2 is an
         // explicit request to enter it, so cross the editing threshold before
         // focusing rather than claiming success on a display:none control.
-        if (!isEncoder && control.getClientRects().length === 0) {
+        if (!isEncoder && !isKeyboard && control.getClientRects().length === 0) {
           nCanvas?.setZoomTo(0.94, "before opening widget controls");
         }
         control.focus({ preventScroll: true });
@@ -4029,12 +4436,15 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
   encoderAttentionObserver = new MutationObserver((records) => {
     if (!records.some((record) =>
       record.target instanceof HTMLElement &&
-      record.target.classList.contains("rd-encoder-device-node")
+      (
+        record.target.classList.contains("rd-encoder-device-node") ||
+        record.target.classList.contains("rd-keyboard-device-node")
+      )
     )) return;
-    syncEncoderEditingAccess(
-      viewport.dataset.canvasZoomTier ?? "editing",
-      canvasZoomFromViewport(viewport),
-    );
+    const tier = viewport.dataset.canvasZoomTier ?? "editing";
+    const zoom = canvasZoomFromViewport(viewport);
+    syncEncoderEditingAccess(tier, zoom);
+    syncKeyboardEditingAccess(tier, zoom);
   });
   encoderAttentionObserver.observe(stage, {
     subtree: true,
@@ -4042,22 +4452,9 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
     attributeFilter: ["data-attention-scale", "data-canvas-manual-scale"],
   });
   setCanvasMap(canvasPrefs.mapHidden === true);
-  // The served keyboard widget: mountItem on the CONNECTED article adopts
-  // it with its remembered spot (nocturne's own mechanism), the plate on
-  // top of the workbench and the controller rows beneath.
-  const kbItem = stage.querySelector<HTMLElement>('[data-instance-id="keyboard"]');
-  if (kbItem) {
-    // ⚠️ The remembered spot lives under the INSTANCE ID: persistCanvas
-    // stores every item by data-instance-id, so restoring from any other
-    // key silently snaps the keyboard home on each reload.
-    nCanvas.mountItem(
-      kbItem,
-      canvasPrefs.widgets["keyboard"] ??
-        { x: 140, y: 24, width: 980, height: 360, z: 1, manualScale: 1 },
-      { focus: false },
-    );
-  }
-  syncKbLens();
+  // No device is implicit. Browser-owned bench membership decides which
+  // physical boards mount; the served keyboard projection waits in its depot
+  // until the authoritative source device is explicitly on the canvas.
   restoreBench();
   syncCtrlBench();
   syncEncoderProfileLabButton();
@@ -4262,6 +4659,10 @@ function runJourneyAction(action: string, button: HTMLButtonElement | null): voi
 
 export function redesignWire(root: HTMLElement): void {
   rdRoot = root;
+  sourceSurfaceFingerprint = "";
+  keyboardMappingSurface = root.querySelector<HTMLElement>(KEYBOARD_SURFACE_SELECTOR);
+  keyboardSurfaceDepot = root.querySelector<HTMLElement>(KEYBOARD_SURFACE_DEPOT_SELECTOR);
+  sourceControlsSurface = root.querySelector<HTMLElement>("[data-rd-source-controls]");
   wireThemeDisclosures(root);
   wireRedesignToolsDisclosures(root);
   // The wire's own "JavaScript is live" marker: scripting-only chrome (the
@@ -4364,16 +4765,19 @@ export function redesignWire(root: HTMLElement): void {
     // While a LEARN is armed the plate is the other way to answer it:
     // clicking a key resolves the capture exactly like pressing it.
     const cell = target?.closest<HTMLElement>(
-      '[data-instance-id="keyboard"] .n-kb [data-key], [data-instance-id="keyboard"] .n-kbtray-row [data-key]',
+      '.rd-keyboard-device-node[data-mapping-source="true"] .n-kb [data-key], ' +
+        '.rd-keyboard-device-node[data-mapping-source="true"] .n-kbtray-row [data-key]',
     );
-    if (cell && resolveLearnWithKey(cell.getAttribute("data-key") ?? "", ev.shiftKey)) {
-      return;
-    }
+    const learned = cell
+      ? resolveLearnWithKey(cell.getAttribute("data-key") ?? "", ev.shiftKey)
+      : false;
     if (cell) {
-      pendingLocateKey = cell.getAttribute("data-key") ?? "";
-      if (inspTab !== "keys") {
-        inspTab = "keys";
-        saveKbUi();
+      if (!learned) {
+        pendingLocateKey = cell.getAttribute("data-key") ?? "";
+        if (inspTab !== "keys") {
+          inspTab = "keys";
+          saveKbUi();
+        }
       }
       // The Keys view is the SELECTED CONTROLLER's — but the click itself
       // just selected the KEYBOARD widget through the engine. Hand the
@@ -4385,6 +4789,13 @@ export function redesignWire(root: HTMLElement): void {
         `.forma-canvas-stage > [data-instance-id="ctrl-slot-${slot}"]`,
       );
       if (canvas && item) canvas.setSelection([item]);
+      // A learn answer belongs to the controller being edited, not the
+      // physical keyboard item selected by the same click. The key remains
+      // the conflict dialog's durable return target.
+      if (learned) {
+        cell.focus({ preventScroll: true });
+        return;
+      }
       // A selection CHANGE opened the inspector and located the key through
       // its own callback chain; any further repaint here would wipe that
       // pulse. Only when the card was already selected (no callback ran —
@@ -5868,7 +6279,7 @@ export function RedesignIsland() {
             h(
               "p",
               { class: "n-devnote rd-devmodal-purpose" },
-              "Show adds a device card for a physical device; it does not change mapping. The full-size Input mapping keyboard is the single logical key surface. Use as input source on a device card chooses whose emitted keys feed it.",
+              "Add places that physical device's board on the canvas without changing the input source. A keyboard becomes interactive when it is the selected input source; other added keyboards remain visible for inspection and can be activated from their board.",
             ),
             h(
               "section",
@@ -5979,7 +6390,11 @@ export function RedesignIsland() {
                       ),
                       h("span", { class: "n-dev-meta" }, r.meta),
                       h("span", { class: "n-dev-meta rd-dev-identity" }, r.connection_label),
-                      h("span", { class: "n-dev-meta rd-dev-word" }, "Show on canvas"),
+                      h(
+                        "span",
+                        { class: "n-dev-meta rd-dev-word" },
+                        "Add keyboard board to canvas",
+                      ),
                     ),
                     h("span", { class: "n-dev-dot" }),
                   ),
@@ -6359,61 +6774,25 @@ export function RedesignIsland() {
                 "data-client-canvas": "",
                 role: "list",
               },
-              // ── The KEYBOARD, as a served canvas widget ────────────────
-              // The nocturne plate's article shell, adapted: the engine
-              // adopts it on init (exactly like 4460's), the six rows +
-              // tray + legend are the SAME served cells, and the finish
-              // rides data-keyboard-theme (client-repainted from the shared
-              // preference). The workbench deck, capture card and learn cue
-              // stay on 4460 until their own migrations.
+              // ── The ONE served keyboard projection, parked by default ──
+              // Physical-device membership is browser-owned, so this reactive
+              // subtree begins in a hidden depot instead of impersonating a
+              // canvas item. Reconciliation moves the exact same nodes into
+              // the authoritative keyboard device — never a clone.
               h(
-                "article",
+                "div",
                 {
-                  class: "widget-instance n-widget n-widget-kb",
-                  id: "keyboard-source-widget",
-                  role: "listitem",
-                  "aria-label": "Input source",
-                  tabindex: "-1",
-                  "data-client-canvas": "",
-                  "data-instance-id": "keyboard",
-                  "data-widget-name": "Input source",
-                  "data-widget-navigation-item": "",
-                  "data-canvas-preferred-width": "980",
-                  "data-canvas-min-height": "320",
-                  "data-canvas-resizable": "false",
-                  // The engine writes this on mount; carrying it in the
-                  // shell keeps adoption byte-neutral (the nocturne rule).
-                  "aria-keyshortcuts":
-                    "ArrowLeft ArrowRight ArrowUp ArrowDown Home End Enter F2 M Meta+Enter Control+Enter",
-                  "data-keyboard-theme": "carbon-forge",
+                  class: "rd-keyboard-surface-depot",
+                  hidden: true,
+                  inert: "",
+                  "aria-hidden": "true",
+                  "data-rd-keyboard-surface-depot": "",
                 },
-                h(
-                  "header",
-                  { class: "widget-chrome" },
-                  h(
-                    "div",
-                    { class: "widget-command-region", "data-widget-command-region": "" },
-                    h(
-                      "button",
-                      {
-                        type: "button",
-                        class: "widget-drag-handle",
-                        "aria-label": "Move input source",
-                        title:
-                          "Drag input source to move · Arrow keys nudge · Enter opens the widget",
-                      },
-                      h("span", {
-                        class: "widget-drag-rail",
-                        "data-widget-command-rail": "",
-                        "aria-hidden": "true",
-                      }),
-                    ),
-                  ),
-                ),
                 h(
                   "div",
                   {
                     class: "n-widget-body",
+                    "data-rd-keyboard-surface": "",
                     "data-forma-runtime-host": "",
                     "aria-hidden": "false",
                   },
@@ -6470,56 +6849,10 @@ export function RedesignIsland() {
                     // a keyboard looks like a keyboard on this page. Choosing
                     // a different picture (a saved panel, a drawn board) is a
                     // 4460 affair until an "advanced" home earns its place.
-                    // While playing: how this input's keys behave during a
-                    // session — freeze (drive pads only), split (mapped
-                    // keys drive, the rest still type), or take nothing.
-                    // The staged input's OWN behaviour, so it lives on the
-                    // input's widget; the composer rewords the rows for an
-                    // encoder (wired buttons, not typing). One staged edit
-                    // per row through the re-homed blocking verb.
-                    h(
-                      "details",
-                      { class: "rd-boardpick rd-capture" },
-                      h(
-                        "summary",
-                        { class: "n-autobtn rd-boardpick-sum" },
-                        "While playing",
-                      ),
-                      h(
-                        "div",
-                        { class: "rd-boardpick-pop" },
-                        h("p", { class: "n-devnote" }, () => rdCaptureNote()),
-                        createList(
-                          () => rdCaptureRows(),
-                          (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
-                          (r) =>
-                            h(
-                              "form",
-                              {
-                                class: "n-modeform",
-                                method: "post",
-                                action: "/redesign/blocking",
-                                "data-rd-form": "blocking",
-                              },
-                              h("input", { type: "hidden", name: "blocking", value: r.name }),
-                              h(
-                                "button",
-                                // Bound as a PLAIN property (the theme rows'
-                                // rule): the compiler drops a bare `||` form
-                                // from the server render.
-                                { type: "submit", class: r.cls, "aria-current": r.chosen },
-                                h("span", { class: "n-radio-dot" }),
-                                h(
-                                  "span",
-                                  { class: "n-radio-txt" },
-                                  h("span", { class: "n-radio-title" }, r.title),
-                                  h("span", { class: "n-radio-detail" }, r.detail),
-                                ),
-                              ),
-                            ),
-                        ),
-                      ),
-                    ),
+                    // The singleton source controls move independently so an
+                    // encoder can own the same served While-playing policy
+                    // without drawing a synthetic QWERTY board.
+                    h("div", { "data-rd-source-controls-host": "" }),
                     // Material belongs to the keyboard, never to a seat:
                     // six app-owned paints over one semantic geometry.
                     h(
@@ -6789,6 +7122,53 @@ export function RedesignIsland() {
                     ),
                   ),
                   h("p", { class: "n-devnote" }, () => rdKbNote()),
+                ),
+                // Source policy is one served control, just like the mapping
+                // surface. It parks here and moves to whichever authoritative
+                // physical device is actually on the canvas.
+                h(
+                  "details",
+                  {
+                    class: "rd-boardpick rd-capture",
+                    "data-rd-source-controls": "",
+                  },
+                  h(
+                    "summary",
+                    { class: "n-autobtn rd-boardpick-sum" },
+                    "While playing",
+                  ),
+                  h(
+                    "div",
+                    { class: "rd-boardpick-pop" },
+                    h("p", { class: "n-devnote" }, () => rdCaptureNote()),
+                    createList(
+                      () => rdCaptureRows(),
+                      (r) =>
+                        r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
+                      (r) =>
+                        h(
+                          "form",
+                          {
+                            class: "n-modeform",
+                            method: "post",
+                            action: "/redesign/blocking",
+                            "data-rd-form": "blocking",
+                          },
+                          h("input", { type: "hidden", name: "blocking", value: r.name }),
+                          h(
+                            "button",
+                            { type: "submit", class: r.cls, "aria-current": r.chosen },
+                            h("span", { class: "n-radio-dot" }),
+                            h(
+                              "span",
+                              { class: "n-radio-txt" },
+                              h("span", { class: "n-radio-title" }, r.title),
+                              h("span", { class: "n-radio-detail" }, r.detail),
+                            ),
+                          ),
+                        ),
+                    ),
+                  ),
                 ),
               ),
             ),

@@ -1120,10 +1120,9 @@ mod tests {
     }
 
     /// Keyboard geometry contains real controls and inert spacer cells in the
-    /// same served list. Their interaction state must cross BOTH seams: the
-    /// Rust list-slot object and the SSR attributes Forma paints from it. A
-    /// hydration-only promotion makes the scripted page look correct while a
-    /// no-JS reader receives a board made entirely of disabled buttons.
+    /// same served list. The browser-owned canvas starts without a device, but
+    /// its hidden singleton projection still crosses both seams with truthful
+    /// attributes so Add can move it without rebuilding or promoting cells.
     #[test]
     fn the_served_keyboard_distinguishes_keys_from_spacers_before_hydration() {
         let payload = fixture_payload();
@@ -1157,6 +1156,8 @@ mod tests {
 
         let page = EmbeddedPage::load("/redesign").unwrap();
         let html = render_redesign(&page, &payload, None).html;
+        assert!(html.contains("data-rd-keyboard-surface-depot"), "{html}");
+        assert!(!html.contains(r#"data-instance-id="keyboard""#), "{html}");
         let button_tags: Vec<&str> = html
             .match_indices("<button")
             .filter_map(|(start, _)| {
@@ -1266,15 +1267,12 @@ mod tests {
         );
     }
 
-    /// The large keyboard is one stable logical mapping surface. A selected
-    /// physical keyboard supplies source context, but never turns that plate
-    /// into purported model-specific hardware artwork.
+    /// The key projection stays generic and stable, but it is not a permanent
+    /// canvas item. A selected physical keyboard supplies source context and
+    /// becomes the device-owned host only after browser hydration/Add.
     #[test]
     fn the_mapping_keyboard_names_its_logitech_source_without_impersonating_it() {
-        assert_eq!(
-            fixture_payload().board.kb_title,
-            "Input mapping keyboard · No input source selected"
-        );
+        assert_eq!(fixture_payload().board.kb_title, "No input source selected");
 
         let mut staged = fixture_staged(Vec::new());
         staged.empty = false;
@@ -1310,7 +1308,7 @@ mod tests {
 
         assert_eq!(
             payload.board.kb_title,
-            "Input mapping keyboard · Logitech G915 TKL · Bluetooth"
+            "Logitech G915 TKL · Bluetooth · Active input"
         );
         assert!(
             payload
@@ -1331,10 +1329,11 @@ mod tests {
 
         let page = EmbeddedPage::load("/redesign").unwrap();
         let html = render_redesign(&page, &payload, None).html;
-        assert!(html.contains("Input mapping keyboard · Logitech G915 TKL · Bluetooth"));
+        assert!(html.contains("Logitech G915 TKL · Bluetooth · Active input"));
         assert!(
-            html.contains(r#"data-instance-id="keyboard""#),
-            "copy changes must preserve the mapping widget's stable canvas identity"
+            !html.contains(r#"data-instance-id="keyboard""#)
+                && html.contains("data-rd-keyboard-surface-depot"),
+            "source truth must not create a canvas device without browser-owned membership"
         );
     }
 
@@ -1364,7 +1363,7 @@ mod tests {
         assert!(!payload.devices.staging_reachable);
         assert_eq!(
             payload.board.kb_title,
-            "Input mapping keyboard · Input source unavailable — reopen KSX"
+            "Input source unavailable — reopen KSX"
         );
         assert!(payload.devices.staging_line.contains("background helper"));
         assert!(payload.devices.scan_line.contains("Staging unavailable"));

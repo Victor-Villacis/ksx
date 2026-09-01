@@ -4473,14 +4473,12 @@ pub(crate) fn compose_board_panel(
     // Name that relationship directly: the device and transport are source
     // context after the stable mapping-surface title, never the title itself.
     let kb_title = match staged.device.as_ref() {
-        _ if !staged.reachable => {
-            "Input mapping keyboard · Input source unavailable — reopen KSX".to_owned()
-        }
+        _ if !staged.reachable => "Input source unavailable — reopen KSX".to_owned(),
         Some(d) => match transport.filter(|t| !t.trim().is_empty()) {
-            Some(t) => format!("Input mapping keyboard · {} · {}", d.label, t),
-            None => format!("Input mapping keyboard · {}", d.label),
+            Some(t) => format!("{} · {} · Active input", d.label, t),
+            None => format!("{} · Active input", d.label),
         },
-        None => "Input mapping keyboard · No input source selected".to_owned(),
+        None => "No input source selected".to_owned(),
     };
     // The ramp digit on the plate: the selected controller's bound-cap tint.
     let kb_cls = match selected_number {

@@ -23,6 +23,8 @@ import { cargoExecutable, stopFixtureProcess } from "./fixture-process.mjs";
 /** OUR port: never 4460 (a real `ksx studio`), and never another suite's. */
 const PORT = Number(process.env.KSX_PWTEST_REDESIGN_THEME_PORT ?? 4530);
 const BASE = `http://127.0.0.1:${PORT}`;
+const G915 = "usb:046d:c545:00";
+const G915_ID = deviceInstanceId(G915);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const targetDir = process.env.CARGO_TARGET_DIR
   ? path.resolve(process.env.CARGO_TARGET_DIR)
@@ -99,6 +101,71 @@ async function openRedesign(options = {}, route = "/redesign") {
     { timeout: 20_000 },
   );
   return page;
+}
+
+async function revealCanvasItem(page, instanceId) {
+  await page.waitForSelector(
+    `.forma-canvas-stage > [data-instance-id="${instanceId}"][data-canvas-x]`,
+    { timeout: 20_000 },
+  );
+  await page.locator(`.navigator-item[data-instance-id="${instanceId}"]`)
+    .evaluate((marker) => marker.click());
+  await page.waitForFunction(
+    (id) =>
+      document
+        .querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)
+        ?.getAttribute("aria-current") === "true" &&
+      !document.querySelector(".is-camera-animating"),
+    instanceId,
+    { timeout: 20_000 },
+  );
+}
+
+async function ensureActiveKeyboard(page) {
+  const board = page.locator(
+    `.forma-canvas-stage > [data-instance-id="${G915_ID}"][data-selector="${G915}"]`,
+  );
+  if ((await board.count()) === 0) {
+    await page.click('[data-nx="rd-devs-open"]');
+    await page.locator(`.rd-devmodal button[data-selector="${G915}"]`).click();
+    await page.keyboard.press("Escape");
+  }
+  await revealCanvasItem(page, G915_ID);
+  if ((await board.getAttribute("data-mapping-source")) !== "true") {
+    await board.locator(".rd-stagebtn").click();
+    await page.waitForFunction(
+      (id) =>
+        document.querySelector(
+          `.forma-canvas-stage > [data-instance-id="${id}"][data-mapping-source="true"]`,
+        ) !== null,
+      G915_ID,
+      { timeout: 20_000 },
+    );
+  }
+  return board;
+}
+
+async function currentInputSource() {
+  const payload = await fetch(`${BASE}/api/redesign`).then((response) => response.json());
+  return [
+    ...payload.devices.keyboards,
+    ...payload.devices.encoders,
+    ...payload.devices.experimental,
+  ].find((row) => row.aria_current === "true");
+}
+
+async function chooseInputSource(row) {
+  const response = await fetch(`${BASE}/redesign/device`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      selector: row.selector,
+      alias: row.alias,
+      label: row.label,
+    }),
+    redirect: "manual",
+  });
+  assert.equal(response.status, 303, "fixture input-source restore redirects successfully");
 }
 
 describe("the redesign theme menu", () => {
@@ -205,19 +272,11 @@ describe("the redesign theme menu", () => {
 
   test("Theme owns Escape and layers above an open Inspector", async () => {
     const page = await openRedesign();
-    const selector = "usb:046d:c545:00";
-    const instanceId = deviceInstanceId(selector);
-    await page.click('[data-nx="rd-devs-open"]');
-    await page.click(`.rd-devmodal button[data-selector="${selector}"]`);
-    await page.keyboard.press("Escape");
-    await page.waitForFunction(
-      (id) =>
-        document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)?.dataset
-          .canvasX !== undefined,
-      instanceId,
-      { timeout: 20_000 },
-    );
-    await page.locator(`.forma-canvas-stage > [data-instance-id="${instanceId}"]`).click();
+    const previousSource = await currentInputSource();
+    const board = await ensureActiveKeyboard(page);
+    // Select through the identity chrome. Clicking the board's centre now
+    // lands on an interactive key and correctly belongs to mapping instead.
+    await board.locator(".rd-keyboard-device-identity .rd-devcard-badge").click();
     await page.waitForFunction(() => !document.querySelector(".rd-inspector")?.hidden);
     const summary = page.locator(".rd-themed > summary");
     await summary.click();
@@ -240,6 +299,9 @@ describe("the redesign theme menu", () => {
       "Escape restores focus to the Theme summary",
     );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    if (previousSource && previousSource.selector !== G915) {
+      await chooseInputSource(previousSource);
+    }
     await page.close();
   });
 

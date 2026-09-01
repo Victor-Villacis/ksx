@@ -102,6 +102,10 @@ export interface EncoderWorkbenchSurfaceOptions {
    * read-only chart transaction. Restores, reconnects, and passive roster
    * refreshes must leave this false so page lifecycle never starts hardware. */
   readStoredAssignmentsOnMount?: boolean;
+  /** Product chart/observation repaints replace the terminal-anchor DOM. The
+   * host uses this to invalidate cached live targets and re-layout cords in
+   * the same task instead of waiting for the background payload poll. */
+  onFlowAnchorsChange?: () => void;
 }
 
 interface ObservedSignal {
@@ -1058,6 +1062,7 @@ function renderProductProfileSvg(
         tabindex: terminal.id === activeTerminalId ? 0 : -1,
         role: "button",
         "aria-pressed": selected ? "true" : "false",
+        "data-selected": selected ? "true" : "false",
         "aria-label": `${ariaBase}${held ? " Matching key held now." : seen
           ? " Matching key seen during this test." : ""}`,
         "data-terminal-id": terminal.id,
@@ -1069,12 +1074,12 @@ function renderProductProfileSvg(
         "data-connection": terminal.connection,
         "data-capabilities": terminal.capabilities.join(" "),
         "data-presence": terminal.presence,
+        ...(terminal.player ? { "data-physical-player": terminal.player } : {}),
         ...(configured ? {
           "data-configured-emission": encoderEmissionLabel(configured.normal),
           "data-configured-code": configured.normal.code,
           "data-configured-key": normalKey,
           "data-configured-shift-key": shiftedKey,
-          ...(normalKey && configured.normal.supported ? { "data-key": normalKey } : {}),
           ...(shiftedKey && configured.shifted.supported ? { "data-shift-key": shiftedKey } : {}),
           ...(sharedKeyCount > 1 ? { "data-shared-key-count": sharedKeyCount } : {}),
         } : {}),
@@ -1125,6 +1130,40 @@ function renderProductProfileSvg(
           class: "rd-encoder-product-terminal-body",
         }),
       );
+      const flowEmissions = [
+        normalKey && configured?.normal.supported
+          ? { key: normalKey, plane: "normal" }
+          : null,
+        shiftedKey && configured?.shifted.supported
+          ? { key: shiftedKey, plane: "shifted" }
+          : null,
+      ].filter(
+        (value): value is { key: string; plane: string } => value !== null,
+      ).filter((value, position, values) =>
+        values.findIndex((candidate) => candidate.key === value.key) === position
+      );
+      for (const emission of flowEmissions) {
+        const emissionHeld = interaction.heldSignals.has(emission.key);
+        const emissionSeen = interaction.observedSignals.has(emission.key);
+        terminalNode.append(svgElement(document_, "rect", {
+          x: 0,
+          y: 0,
+          width: layout.width,
+          height: 48,
+          class: "rd-encoder-product-flow-anchor n-surface-channel-anchor",
+          "data-key": emission.key,
+          "data-flow-key": emission.key,
+          "data-flow-plane": emission.plane,
+          "data-flow-terminal-id": terminal.id,
+          "data-selected": selected ? "true" : "false",
+          "data-flow-authority": emissionHeld
+            ? "matched"
+            : emissionSeen ? "observed" : "configured",
+          "aria-hidden": "true",
+          focusable: "false",
+          "pointer-events": "none",
+        }));
+      }
       appendProductTerminalFace(document_, terminalNode, terminal, layout.width);
       if (terminal.capabilities.includes("optical-axis")) {
         terminalNode.append(svgElement(document_, "circle", {
@@ -2719,6 +2758,7 @@ function createProfileLabContent(
   document_: Document,
   options: EncoderProfileLabOptions,
   readStoredAssignmentsOnMount = false,
+  onFlowAnchorsChange: (() => void) | undefined = undefined,
 ): ProfileLabContentController {
   const presentation = options.presentation ?? "research";
   const candidateRadioGroupName = `rd-encoder-profile-candidate-${++encoderSurfaceSequence}`;
@@ -3058,6 +3098,7 @@ function createProfileLabContent(
         candidateRadioGroupName,
       );
     dynamicHost.replaceChildren(nextDynamicContent);
+    if (presentation === "product") onFlowAnchorsChange?.();
     if (openProductDisclosures.size > 0) {
       for (const details of dynamicHost.querySelectorAll<HTMLDetailsElement>(
         "details[data-rd-encoder-disclosure]",
@@ -3106,6 +3147,17 @@ function createProfileLabContent(
       const isHeld = Boolean((normal && held.has(normal)) || (shifted && held.has(shifted)));
       terminal.classList.toggle("is-seen", isSeen);
       terminal.classList.toggle("is-held", isHeld);
+      for (const anchor of terminal.querySelectorAll<SVGElement>(
+        ".rd-encoder-product-flow-anchor[data-flow-key]",
+      )) {
+        const key = anchor.dataset.flowKey ?? "";
+        const authority = key && held.has(key)
+          ? "matched"
+          : key && seen.has(key) ? "observed" : "configured";
+        if (anchor.dataset.flowAuthority !== authority) {
+          anchor.dataset.flowAuthority = authority;
+        }
+      }
       const ariaBase = terminal.dataset.terminalAriaBase ?? terminal.dataset.terminalLabel ?? "Terminal";
       const nextAriaLabel = `${ariaBase}${isHeld
         ? " Matching key held now."
@@ -3696,7 +3748,7 @@ function createProfileLabContent(
   });
   const footer = html(document_, "footer", "rd-encoder-profile-foot");
   footer.textContent = presentation === "product"
-    ? "Reads and tests this encoder. Controller mapping is the next canvas block."
+    ? "Reads and tests this encoder. Its confirmed key emissions are the source anchors for controller mapping."
     : "Read-only inspection. KSX control assignment comes later; this surface stops at terminal identity, stored configuration, and device-scoped host signals.";
   if (presentation === "product") footer.classList.add("rd-encoder-product-next");
   if (presentation === "product") content.append(header, dynamicHost, footer, liveStatus);
@@ -3822,7 +3874,7 @@ export function createEncoderWorkbenchSurface(
   const surface = createProfileLabContent(document_, {
     connectedEncoders: [device],
     presentation: "product",
-  }, options.readStoredAssignmentsOnMount === true);
+  }, options.readStoredAssignmentsOnMount === true, options.onFlowAnchorsChange);
   return {
     content: surface.content,
     updateDevice: (next) => surface.updateConnectedEncoders([next]),

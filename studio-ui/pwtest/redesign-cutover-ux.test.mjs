@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { chromium } from "playwright";
+import { deviceInstanceId } from "../src/device-instance-id.ts";
 import { cargoExecutable, stopFixtureProcess } from "./fixture-process.mjs";
 
 const PORT = Number(process.env.KSX_PWTEST_REDESIGN_CUTOVER_UX_PORT ?? 4551);
@@ -26,6 +27,9 @@ const fixtureExe = path.join(
 let server;
 let browser;
 let context;
+
+const G915 = "usb:046d:c545:00";
+const G915_ID = deviceInstanceId(G915);
 
 async function waitForServer(deadlineMs = 120_000) {
   const until = Date.now() + deadlineMs;
@@ -99,6 +103,48 @@ async function openControllerInspector(page, slot) {
     await page.locator(".rd-insp-vseg .vc").click();
   }
   await page.waitForSelector(".rd-binding-filter-input", { timeout: 20_000 });
+}
+
+async function revealCanvasItem(page, instanceId) {
+  await page.waitForSelector(
+    `.forma-canvas-stage > [data-instance-id="${instanceId}"][data-canvas-x]`,
+    { timeout: 20_000 },
+  );
+  await page.locator(`.navigator-item[data-instance-id="${instanceId}"]`)
+    .evaluate((marker) => marker.click());
+  await page.waitForFunction(
+    (id) =>
+      document
+        .querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)
+        ?.getAttribute("aria-current") === "true" &&
+      !document.querySelector(".is-camera-animating"),
+    instanceId,
+    { timeout: 20_000 },
+  );
+}
+
+async function ensureActiveKeyboard(page) {
+  const board = page.locator(
+    `.forma-canvas-stage > [data-instance-id="${G915_ID}"][data-selector="${G915}"]`,
+  );
+  if ((await board.count()) === 0) {
+    await page.click('[data-nx="rd-devs-open"]');
+    await page.locator(`.rd-devmodal button[data-selector="${G915}"]`).click();
+    await page.keyboard.press("Escape");
+  }
+  await revealCanvasItem(page, G915_ID);
+  if ((await board.getAttribute("data-mapping-source")) !== "true") {
+    await board.locator(".rd-stagebtn").click();
+    await page.waitForFunction(
+      (id) =>
+        document.querySelector(
+          `.forma-canvas-stage > [data-instance-id="${id}"][data-mapping-source="true"]`,
+        ) !== null,
+      G915_ID,
+      { timeout: 20_000 },
+    );
+  }
+  return board;
 }
 
 before(async () => {
@@ -251,11 +297,11 @@ describe("redesign cutover utility contracts", () => {
 
   test("Tidy places the physical input above controllers and restores 100 percent", async () => {
     const { page } = await openWorkbench();
-    await page.waitForSelector('[data-instance-id="keyboard"][data-canvas-x]');
+    await ensureActiveKeyboard(page);
     await page.waitForSelector('[data-instance-id="ctrl-slot-1"][data-canvas-x]');
-    await page.evaluate(() => {
+    await page.evaluate((keyboardId) => {
       for (const [id, x, y, scale] of [
-        ["keyboard", 3200, 2600, 0.65],
+        [keyboardId, 3200, 2600, 0.65],
         ["ctrl-slot-1", -1200, -900, 1.35],
       ]) {
         const item = document.querySelector(`[data-instance-id="${id}"]`);
@@ -263,11 +309,11 @@ describe("redesign cutover utility contracts", () => {
         item.dataset.canvasY = String(y);
         item.dataset.canvasManualScale = String(scale);
       }
-    });
+    }, G915_ID);
     await page.locator('[data-nx="rd-zoom-menu"]').click();
     await page.getByRole("menuitem", { name: "Tidy workbench" }).click();
-    const state = await page.evaluate(() => Object.fromEntries(
-      ["keyboard", "ctrl-slot-1"].map((id) => {
+    const state = await page.evaluate((keyboardId) => Object.fromEntries(
+      [keyboardId, "ctrl-slot-1"].map((id) => {
         const item = document.querySelector(`[data-instance-id="${id}"]`);
         return [id, {
           x: Number(item.dataset.canvasX),
@@ -275,9 +321,9 @@ describe("redesign cutover utility contracts", () => {
           scale: Number(item.dataset.canvasManualScale),
         }];
       }),
-    ));
-    assert.ok(state.keyboard.y < state["ctrl-slot-1"].y, "input reads before virtual output");
-    assert.equal(state.keyboard.scale, 1);
+    ), G915_ID);
+    assert.ok(state[G915_ID].y < state["ctrl-slot-1"].y, "input reads before virtual output");
+    assert.equal(state[G915_ID].scale, 1);
     assert.equal(state["ctrl-slot-1"].scale, 1);
     assert.deepEqual(page.ksxNoise, []);
     await page.close();

@@ -179,11 +179,11 @@ const SNAPSHOT = `(() => {
   });
   // 3e. CLIENT WIDGETS, by contract. Elements marked data-client-widget are
   //    canvas widgets the island BUILDS from the payload roster after
-  //    adoption (the controller cards — the old pad grid's clones, made
-  //    contractual): their SSR absence is the point, exactly like the grid
-  //    they replace, so they are removed before comparing. The keyboard
-  //    widget deliberately carries NO such marker — it is served markup the
-  //    engine adopts, and its content stays fully asserted.
+  //    adoption (controller cards and device boards alike): their SSR
+  //    absence is the point, exactly like the grid they replace, so they are
+  //    removed before comparing. There is no permanent server-owned keyboard
+  //    item. Its one reactive subtree is served in an inert depot, whose
+  //    markup stays fully asserted until a selected device owns it.
   clone.querySelectorAll("[data-client-widget]").forEach((el) => el.remove());
   // 3f. CLIENT-POPULATED SUBTREE, by contract. A node marked
   //    data-client-subtree is a served, asserted CONTAINER whose CHILDREN
@@ -239,6 +239,11 @@ async function ssrDom(url) {
       `${url} SERVED ${servedClientWidgets} data-client-widget node(s) — ` +
       "client-built widgets must not exist in SSR markup (parity rule 3e)",
     );
+    assert.equal(
+      await page.locator('[data-instance-id="keyboard"]').count(),
+      0,
+      `${url} served the retired permanent keyboard canvas item`,
+    );
     await assertRouteVariant(page, url, "SSR");
     return await page.evaluate(SNAPSHOT);
   } finally {
@@ -267,14 +272,10 @@ async function hydratedDom(url) {
       () => {
         const canvas = document.querySelector(".n-canvas");
         if (!canvas) return true;
-        const kb = canvas.querySelector('[data-instance-id="keyboard"]');
-        if (kb) return kb.dataset.canvasX !== undefined;
         // The redesign workbench starts EMPTY — boards arrive through the
-        // picker — so, like every widget-less canvas, its adoption mark is
-        // the engine's first camera transform below. The mock-era special
-        // case retired with the mock nodes.
-        // Any other widget-less canvas uses the stage transform as its
-        // adoption mark.
+        // picker under collision-safe device ids. There is deliberately no
+        // permanent `keyboard` item, so the stage transform is the canvas
+        // engine's adoption mark.
         const stage = canvas.querySelector(".forma-canvas-stage");
         return Boolean(stage && stage.style.transform);
       },
@@ -289,6 +290,19 @@ async function hydratedDom(url) {
     // One frame past adoption, before the 2 s poller could rewrite anything:
     // the flash this suite hunts happens in that window.
     await page.waitForTimeout(300);
+    if (new URL(url).pathname === "/redesign") {
+      const keyboardContract = await page.evaluate(() => ({
+        legacy: document.querySelectorAll('[data-instance-id="keyboard"]').length,
+        devices: document.querySelectorAll(
+          ".forma-canvas-stage > .rd-dev-node",
+        ).length,
+      }));
+      assert.deepEqual(
+        keyboardContract,
+        { legacy: 0, devices: 0 },
+        `${url} did not preserve the empty-until-added device canvas contract`,
+      );
+    }
     await assertRouteVariant(page, url, "hydrated");
     return await page.evaluate(SNAPSHOT);
   } finally {

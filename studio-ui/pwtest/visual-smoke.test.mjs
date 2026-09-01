@@ -48,6 +48,40 @@ const seedRealDeviceWorkbench = (page) => page.addInitScript((selectors) => {
   );
 }, [BENCH_A_SELECTOR, BENCH_B_SELECTOR]);
 
+const seedKeyboardWorkbench = (page) => page.addInitScript((selector) => {
+  localStorage.setItem(
+    "ksx-redesign-canvas",
+    JSON.stringify({ widgets: {}, bench: [selector] }),
+  );
+}, BENCH_A_SELECTOR);
+
+async function activateKeyboardSurface(page) {
+  const boardSelector =
+    `.forma-canvas-stage > [data-instance-id="${BENCH_A}"][data-selector="${BENCH_A_SELECTOR}"]`;
+  await page.waitForFunction(
+    (selector) => document.querySelector(selector)?.dataset.canvasX !== undefined,
+    boardSelector,
+    { timeout: 20_000 },
+  );
+  const board = page.locator(boardSelector);
+  if ((await board.getAttribute("data-mapping-source")) !== "true") {
+    await page.locator(`.navigator-item[data-instance-id="${BENCH_A}"]`)
+      .evaluate((marker) => marker.click());
+    await page.waitForFunction(
+      () => !document.querySelector(".is-camera-animating"),
+      null,
+      { timeout: 20_000 },
+    );
+    await board.locator(".rd-stagebtn").click();
+    await page.waitForFunction(
+      (selector) => document.querySelector(selector)?.dataset.mappingSource === "true",
+      boardSelector,
+      { timeout: 20_000 },
+    );
+  }
+  return board;
+}
+
 const ROUTES = [
   { path: "/redesign", name: "redesign" },
   // The macro roll only exists when a macro is OPEN: with the dialog closed
@@ -264,14 +298,10 @@ for (const config of CONTEXTS) {
             () => {
               const canvas = document.querySelector(".n-canvas");
               if (!canvas) return true;
-              const kb = canvas.querySelector('[data-instance-id="keyboard"]');
-              if (kb) return kb.dataset.canvasX !== undefined;
               // The redesign workbench starts EMPTY — boards arrive through
-              // the picker — so, like every widget-less canvas, its adoption
-              // mark is the engine's first camera transform below. The
-              // mock-era special case retired with the mock nodes.
-              // Any other widget-less canvas uses the engine's first camera
-              // transform as its alive mark.
+              // the picker and use their collision-safe device instance id.
+              // There is deliberately no permanent `keyboard` canvas item,
+              // so the engine's first camera transform is the adoption mark.
               const stage = canvas.querySelector(".forma-canvas-stage");
               return Boolean(stage && stage.style.transform);
             },
@@ -320,29 +350,7 @@ for (const config of CONTEXTS) {
               })
               .filter((box) => box.width > 0 && (box.left < -1 || box.right > viewportWidth + 1))
               .slice(0, 12);
-            // A canvas can die silently: every other assertion
-            // here passes with an unadopted keyboard sitting at auto layout.
-            // Adoption's one observable is the engine's geometry write.
-            const kbWidget = document.querySelector(
-              '.n-canvas [data-instance-id="keyboard"]',
-            );
             const canvas = document.querySelector(".n-canvas");
-            let canvasAdoption = null;
-            if (canvas && kbWidget) {
-              const kbRect = kbWidget?.getBoundingClientRect();
-              const canvasRect = canvas.getBoundingClientRect();
-              canvasAdoption = {
-                kbPositioned: kbWidget?.dataset.canvasX !== undefined,
-                kbIntersectsCanvas: Boolean(
-                  kbRect &&
-                    kbRect.width > 0 &&
-                    kbRect.right > canvasRect.left &&
-                    kbRect.left < canvasRect.right &&
-                    kbRect.bottom > canvasRect.top &&
-                    kbRect.top < canvasRect.bottom,
-                ),
-              };
-            }
             // The engine-alive mark for ANY canvas, keyboard or not: its
             // first camera render writes the stage transform inline.
             const canvasEngineAlive = canvas
@@ -356,7 +364,10 @@ for (const config of CONTEXTS) {
               light: matchMedia("(prefers-color-scheme: light)").matches,
               containers,
               overflowers,
-              canvasAdoption,
+              legacyKeyboardNodes: canvas?.querySelectorAll('[data-instance-id="keyboard"]')
+                .length ?? 0,
+              freshDeviceNodes: canvas
+                ?.querySelectorAll(".forma-canvas-stage > .rd-dev-node").length ?? 0,
               canvasEngineAlive,
               escaped: containers.filter(
                 (box) => box.width > 0 && (box.left < -1 || box.right > viewportWidth + 1),
@@ -372,16 +383,16 @@ for (const config of CONTEXTS) {
               `escaped ${JSON.stringify(layout.overflowers)}`,
           );
           assert.ok(layout.containers.length > 0, `${route.path} exposed no responsive root`);
-          if (layout.canvasAdoption) {
-            assert.ok(
-              layout.canvasAdoption.kbPositioned,
-              `${route.path}: the canvas engine never adopted the keyboard ` +
-                "widget (no data-canvas-x) — a dead canvas passes every other check",
-            );
-            assert.ok(
-              layout.canvasAdoption.kbIntersectsCanvas,
-              `${route.path}: the keyboard widget does not intersect the ` +
-                "visible canvas — the camera or the stored geometry lost it",
+          assert.equal(
+            layout.legacyKeyboardNodes,
+            0,
+            `${route.path} resurrected the retired permanent keyboard canvas item`,
+          );
+          if (route.path.startsWith("/redesign")) {
+            assert.equal(
+              layout.freshDeviceNodes,
+              0,
+              `${route.path} populated a fresh device canvas before the user added anything`,
             );
           }
           assert.notEqual(
@@ -518,6 +529,21 @@ describe("redesign canvas interaction chrome", () => {
 
       const stageItem = (id) =>
         page.locator(`.forma-canvas-stage > [data-instance-id="${id}"]`);
+      // A mapped keyboard's centre is product content (a real key), not
+      // generic canvas chrome. Select at the item edge so this canvas test
+      // cannot accidentally invoke the mapping interaction it is hosting.
+      const selectStageItem = async (id) => {
+        await stageItem(id).evaluate((item) => {
+          const rect = item.getBoundingClientRect();
+          item.dispatchEvent(new PointerEvent("pointerdown", {
+            bubbles: true,
+            button: 0,
+            buttons: 1,
+            clientX: rect.left + 4,
+            clientY: rect.top + 4,
+          }));
+        });
+      };
       const nextPaint = async () => page.evaluate(() => new Promise((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(resolve));
       }));
@@ -577,7 +603,7 @@ describe("redesign canvas interaction chrome", () => {
         });
         return { width: bounds.width, height: bounds.height, outside };
       });
-      await stageItem(BENCH_A).click();
+      await selectStageItem(BENCH_A);
       await page.waitForFunction(() => document.querySelector(".rd-inspector")?.hidden === false);
       await page.locator('[data-nx="rd-insp-close"]').click();
       assert.deepEqual(
@@ -586,14 +612,14 @@ describe("redesign canvas interaction chrome", () => {
         "Inspector X must remove the panel from layout, not only set an attribute",
       );
 
-      await stageItem(BENCH_A).click();
+      await selectStageItem(BENCH_A);
       await page.waitForFunction(
         (name) =>
           document.querySelector(".rd-inspector")?.hidden === false &&
           document.querySelector(".rd-insp-name")?.textContent === name,
         BENCH_A_NAME,
       );
-      await stageItem(BENCH_B).click();
+      await selectStageItem(BENCH_B);
       await page.waitForFunction(
         (name) =>
           document.querySelector(".rd-inspector")?.hidden === false &&
@@ -636,8 +662,8 @@ describe("redesign canvas interaction chrome", () => {
       // Resizing is a camera translation, not an implicit Fit. Focus's
       // private restore snapshot must receive the same translation, or
       // Escape returns to a view centred for the old window.
-      await stageItem(BENCH_A).click();
-      await stageItem(BENCH_B).click();
+      await selectStageItem(BENCH_A);
+      await selectStageItem(BENCH_B);
       const beforeFocusResize = await cameraState();
       await page.locator('.rd-inspector [data-nx="rd-focus-sel"]').click();
       await page.setViewportSize({ width: 1160, height: 720 });
@@ -669,7 +695,7 @@ describe("redesign canvas interaction chrome", () => {
         `plain resize moved world Y: ${JSON.stringify({ afterFocusResize, afterPlainResize })}`,
       );
 
-      await stageItem(BENCH_A).click();
+      await selectStageItem(BENCH_A);
       const beforePosition = await stageItem(BENCH_A).evaluate((item) => ({
         x: Number(item.dataset.canvasX),
         y: Number(item.dataset.canvasY),
@@ -976,13 +1002,13 @@ describe("redesign canvas interaction chrome", () => {
         "an unmodified canvas shortcut fired while title-bar focus was outside the canvas",
       );
 
-      await stageItem(BENCH_B).click();
+      await selectStageItem(BENCH_B);
       const beforeChipTargetX = await stageItem(BENCH_B).evaluate(
         (item) => Number(item.dataset.canvasX),
       );
       await page.getByRole("spinbutton", { name: "X", exact: true }).fill("2200");
       await page.locator(".rd-insp-head .rd-map-title").click();
-      await stageItem(BENCH_A).click();
+      await selectStageItem(BENCH_A);
       await zoomMenuTrigger.click();
       await page.locator('[data-nx="rd-z-50"]').click();
       await page.locator('.rd-inspector [data-nx="rd-center-sel"]').click();
@@ -1017,7 +1043,7 @@ describe("redesign canvas interaction chrome", () => {
       await page.getByRole("spinbutton", { name: "X", exact: true }).fill(String(beforeChipTargetX));
       await page.locator(".rd-insp-head .rd-map-title").click();
 
-      await stageItem(BENCH_A).click();
+      await selectStageItem(BENCH_A);
       const beforeKeys = await stageItem(BENCH_A).evaluate((item) => ({
         x: Number(item.dataset.canvasX),
         y: Number(item.dataset.canvasY),
@@ -1207,7 +1233,7 @@ describe("redesign canvas interaction chrome", () => {
       const item = page.locator(
         `.forma-canvas-stage > [data-instance-id="${BENCH_A}"]`,
       );
-      await item.click();
+      await item.click({ position: { x: 4, y: 4 }, force: true });
       const originalHeight = await item.evaluate((node) => Number(node.dataset.canvasHeight));
       await page.evaluate((id) => {
         const button = document.querySelector('.rd-inspector [data-nx="rd-focus-sel"]');
@@ -1323,7 +1349,16 @@ describe("redesign canvas interaction chrome", () => {
       await page.locator(".rd-insp-head .rd-map-title").click();
       await page.locator(
         `.forma-canvas-stage > [data-instance-id="${BENCH_A}"]`,
-      ).click();
+      ).evaluate((item) => {
+        const rect = item.getBoundingClientRect();
+        item.dispatchEvent(new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          clientX: rect.left + 4,
+          clientY: rect.top + 4,
+        }));
+      });
       await page.locator('[data-nx="rd-zoom-menu"]').click();
       await page.locator('[data-nx="rd-z-50"]').click();
       await page.waitForFunction(() => !document.querySelector(".is-camera-animating"));
@@ -1519,6 +1554,7 @@ describe("the plate lays out", () => {
   test("no two caps on the board overlap", async () => {
     const page = await context.newPage();
     try {
+      await seedKeyboardWorkbench(page);
       const response = await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
       assert.ok(response?.ok(), `/redesign returned HTTP ${response?.status() ?? "none"}`);
       await page.waitForFunction(
@@ -1526,9 +1562,12 @@ describe("the plate lays out", () => {
         null,
         { timeout: 20_000 },
       );
+      await activateKeyboardSurface(page);
 
       const boxes = await page.evaluate(() =>
-        Array.from(document.querySelectorAll(".n-kbcase .n-key")).map((el) => {
+        Array.from(document.querySelectorAll(
+          '[data-mapping-source="true"] .n-kbcase .n-key',
+        )).map((el) => {
           const r = el.getBoundingClientRect();
           return {
             key: el.getAttribute("data-key") ?? "",
@@ -1584,14 +1623,16 @@ describe("the plate lays out", () => {
   test("the board fits inside its card", async () => {
     const page = await context.newPage();
     try {
+      await seedKeyboardWorkbench(page);
       await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(
         () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
         null,
         { timeout: 20_000 },
       );
+      await activateKeyboardSurface(page);
       const fit = await page.evaluate(() => {
-        const plate = document.querySelector(".n-kbcase");
+        const plate = document.querySelector('[data-mapping-source="true"] .n-kbcase');
         if (!plate) return null;
         const p = plate.getBoundingClientRect();
         const card = plate.closest(".rd-w-kb") ?? plate.parentElement;

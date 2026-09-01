@@ -9,10 +9,13 @@ import path from "node:path";
 
 import { chromium } from "playwright";
 import { cargoExecutable, stopFixtureProcess } from "./fixture-process.mjs";
+import { deviceInstanceId } from "../src/device-instance-id.ts";
 
 const PORT = Number(process.env.KSX_PWTEST_REDESIGN_HARDENING_PORT ?? 4543);
 const BASE = `http://127.0.0.1:${PORT}`;
 const LEARN_ROUTES = /\/api\/learn(?:\/.*)?$/;
+const G915 = "usb:046d:c545:00";
+const G915_ID = deviceInstanceId(G915);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const targetDir = process.env.CARGO_TARGET_DIR
   ? path.resolve(process.env.CARGO_TARGET_DIR)
@@ -171,7 +174,241 @@ async function openPanel(page, slot) {
   );
 }
 
+async function revealCanvasItem(page, instanceId) {
+  await page.waitForFunction(
+    (id) => document.querySelector(
+      `.forma-canvas-stage > [data-instance-id="${id}"][data-canvas-x]`,
+    ),
+    instanceId,
+    { timeout: 20_000 },
+  );
+  await page.locator(`.navigator-item[data-instance-id="${instanceId}"]`)
+    .evaluate((marker) => marker.click());
+  await page.waitForFunction(
+    (id) =>
+      document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)
+        ?.getAttribute("aria-current") === "true" &&
+      !document.querySelector(".is-camera-animating"),
+    instanceId,
+    { timeout: 20_000 },
+  );
+}
+
+async function ensureActiveKeyboard(page) {
+  const board = page.locator(
+    `.forma-canvas-stage > [data-instance-id="${G915_ID}"][data-selector="${G915}"]`,
+  );
+  if ((await board.count()) === 0) {
+    await page.click('[data-nx="rd-devs-open"]');
+    await page.locator(`.rd-devmodal button[data-selector="${G915}"]`).click();
+    await page.keyboard.press("Escape");
+  }
+  await page.waitForFunction(
+    (id) =>
+      document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)
+        ?.dataset.canvasX !== undefined,
+    G915_ID,
+    { timeout: 20_000 },
+  );
+  if ((await board.getAttribute("data-mapping-source")) !== "true") {
+    await revealCanvasItem(page, G915_ID);
+    await board.locator(".rd-stagebtn").click();
+  }
+  await page.waitForFunction(
+    (id) =>
+      document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)
+        ?.dataset.mappingSource === "true",
+    G915_ID,
+    { timeout: 20_000 },
+  );
+  return board;
+}
+
 describe("redesign migration hardening", { concurrency: false }, () => {
+  test("later keyboard authority retires stale synthetic geometry without replacing selector geometry", async () => {
+    const payload = await api();
+    const previousSource = [
+      ...payload.devices.keyboards,
+      ...payload.devices.encoders,
+      ...payload.devices.experimental,
+    ].find((row) => row.aria_current === "true");
+    const selectorGeometry = {
+      x: 2280,
+      y: 1640,
+      width: 1040,
+      height: 520,
+      z: 71,
+      manualScale: 0.85,
+    };
+    const staleLegacyGeometry = {
+      x: -2460,
+      y: -1320,
+      width: 980,
+      height: 460,
+      z: 4,
+      manualScale: 1,
+    };
+    const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+    const noise = [];
+    page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
+    page.on("console", (message) => {
+      if (message.type() === "error") noise.push(`console: ${message.text()}`);
+    });
+    await page.addInitScript(
+      ({ selector, instanceId, selectorGeometry, staleLegacyGeometry, provenance }) => {
+        // Run once for this tab. A reload is part of the regression: it must
+        // consume the app's persisted selector geometry, not silently reseed
+        // the pre-migration store from the test harness.
+        if (sessionStorage.getItem("ksx-legacy-keyboard-geometry-seeded") === "true") return;
+        localStorage.setItem(
+          "ksx-redesign-canvas",
+          JSON.stringify({
+            widgets: {
+              keyboard: staleLegacyGeometry,
+              [instanceId]: selectorGeometry,
+            },
+            bench: [selector],
+          }),
+        );
+        localStorage.setItem(
+          "ksx-redesign-state-provenance1",
+          JSON.stringify({ "ksx-redesign-canvas": provenance }),
+        );
+        sessionStorage.setItem("ksx-legacy-keyboard-geometry-seeded", "true");
+      },
+      {
+        selector: G915,
+        instanceId: G915_ID,
+        selectorGeometry,
+        staleLegacyGeometry,
+        provenance: {
+          environmentId: payload.environment_id,
+          generation: payload.environment_generation,
+          fixture: true,
+        },
+      },
+    );
+
+    const mountedGeometry = () => page.locator(
+      `.forma-canvas-stage > [data-instance-id="${G915_ID}"]`,
+    ).evaluate((item) => ({
+      x: Number(item.dataset.canvasX),
+      y: Number(item.dataset.canvasY),
+      width: Number(item.dataset.canvasWidth),
+      height: Number(item.dataset.canvasHeight),
+      manualScale: Number(item.dataset.canvasManualScale),
+    }));
+    const expectedGeometry = {
+      x: selectorGeometry.x,
+      y: selectorGeometry.y,
+      // Keyboard boards are not resizable: their exact selector slot owns
+      // position/scale, while the current product footprint owns dimensions.
+      width: 980,
+      height: 560,
+      manualScale: selectorGeometry.manualScale,
+    };
+
+    try {
+      await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `.forma-canvas-stage > [data-instance-id="${id}"][data-canvas-x]`,
+        ),
+        G915_ID,
+        { timeout: 20_000 },
+      );
+      assert.equal(
+        await page.locator(
+          `.forma-canvas-stage > [data-instance-id="${G915_ID}"]`,
+        ).getAttribute("data-mapping-source"),
+        null,
+        "the selector-specific board begins inactive while the fixture encoder owns authority",
+      );
+      assert.deepEqual(await mountedGeometry(), expectedGeometry);
+      assert.deepEqual(
+        await page.evaluate(() =>
+          JSON.parse(localStorage.getItem("ksx-redesign-canvas") ?? "{}").widgets?.keyboard
+        ),
+        staleLegacyGeometry,
+        "inactive selector geometry does not let an unrelated board claim the synthetic slot",
+      );
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `.forma-canvas-stage > [data-instance-id="${id}"][data-canvas-x]`,
+        ),
+        G915_ID,
+        { timeout: 20_000 },
+      );
+      assert.deepEqual(
+        await mountedGeometry(),
+        expectedGeometry,
+        "reload restores the collision-safe selector slot exactly",
+      );
+
+      await revealCanvasItem(page, G915_ID);
+      await page.locator(
+        `.forma-canvas-stage > [data-instance-id="${G915_ID}"] .rd-stagebtn`,
+      ).click();
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `.forma-canvas-stage > [data-instance-id="${id}"][data-mapping-source="true"]`,
+        ),
+        G915_ID,
+        { timeout: 20_000 },
+      );
+      await page.waitForFunction(
+        (id) => {
+          const widgets = JSON.parse(
+            localStorage.getItem("ksx-redesign-canvas") ?? "{}",
+          ).widgets ?? {};
+          return widgets.keyboard === undefined && widgets[id] !== undefined;
+        },
+        G915_ID,
+        { timeout: 20_000 },
+      );
+      assert.deepEqual(
+        await mountedGeometry(),
+        expectedGeometry,
+        "later authority keeps the selector-specific placement instead of reviving stale synthetic geometry",
+      );
+      assert.equal(
+        await page.evaluate(() =>
+          JSON.parse(localStorage.getItem("ksx-redesign-canvas") ?? "{}").widgets?.keyboard
+        ),
+        undefined,
+        "the stale synthetic key is retired once the exact keyboard becomes authoritative",
+      );
+      assert.deepEqual(noise, [], "the migration remains browser-error free");
+    } finally {
+      await page.close();
+      if (previousSource && previousSource.selector !== G915) {
+        const restore = await fetch(`${BASE}/redesign/device`, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            selector: previousSource.selector,
+            alias: previousSource.alias,
+            label: previousSource.label,
+          }),
+          redirect: "manual",
+        });
+        assert.equal(restore.status, 303, "the fixture input source restores after migration QA");
+      }
+    }
+  });
+
   test("a pre-write background payload cannot arrive after the action repaint", async () => {
     const page = await openBench();
     const original = await page.locator('.rd-thememenu button[aria-current="true"]')
@@ -316,6 +553,7 @@ describe("redesign migration hardening", { concurrency: false }, () => {
 
   test("accepted conflict does not steal focus moved during its delayed write", async () => {
     const page = await openBench();
+    const keyboard = await ensureActiveKeyboard(page);
     await openPanel(page, slotOne);
     let generation = 17_000;
     await page.route(LEARN_ROUTES, async (route) => {
@@ -345,9 +583,7 @@ describe("redesign migration hardening", { concurrency: false }, () => {
       null,
       { timeout: 10_000 },
     );
-    await page.locator(
-      '[data-instance-id="keyboard"] button.n-key[data-key="G"]',
-    ).first().evaluate((cell) => {
+    await keyboard.locator('button.n-key[data-key="G"]').first().evaluate((cell) => {
       cell.focus();
       cell.click();
     });
@@ -597,6 +833,7 @@ describe("redesign migration hardening", { concurrency: false }, () => {
 
   test("a keyboard-cell conflict returns to the replacement key after confirm", async () => {
     const page = await openBench();
+    const keyboard = await ensureActiveKeyboard(page);
     await openPanel(page, slotOne);
     let generation = 15_000;
     await page.route(LEARN_ROUTES, async (route) => {
@@ -626,13 +863,15 @@ describe("redesign migration hardening", { concurrency: false }, () => {
       null,
       { timeout: 10_000 },
     );
-    const keyCell = page.locator(
-      '[data-instance-id="keyboard"] button.n-key[data-key="G"]',
-    ).first();
-    await keyCell.evaluate((cell) => {
-      cell.focus();
-      cell.click();
-    });
+    await revealCanvasItem(page, G915_ID);
+    await page.waitForFunction(
+      (id) => document.querySelector(
+        `.forma-canvas-stage > [data-instance-id="${id}"]`,
+      )?.dataset.keyboardEditable === "true",
+      G915_ID,
+    );
+    const keyCell = keyboard.locator('button.n-key[data-key="G"]').first();
+    await keyCell.click();
     await page.waitForFunction(
       () => getComputedStyle(document.querySelector(".rd-confdlg")).display !== "none",
       null,
@@ -640,12 +879,12 @@ describe("redesign migration hardening", { concurrency: false }, () => {
     );
     await page.getByRole("button", { name: "Use here too" }).click();
     await page.waitForFunction(
-      () =>
+      (id) =>
         getComputedStyle(document.querySelector(".rd-confdlg")).display === "none" &&
         document.activeElement?.matches(
-          '[data-instance-id="keyboard"] button.n-key[data-key="G"]',
+          `[data-instance-id="${id}"][data-mapping-source="true"] button.n-key[data-key="G"]`,
         ),
-      null,
+      G915_ID,
       { timeout: 20_000 },
     );
     assert.equal(await keyCell.evaluate((cell) => cell === document.activeElement), true);

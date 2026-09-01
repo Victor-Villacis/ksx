@@ -891,6 +891,11 @@ export class MappingFlowLayer {
   }
 
   #relationSummaries(): MappingFlowRelationSummary[] {
+    const sourceItem = this.#root.querySelector<HTMLElement>('[data-mapping-source="true"]');
+    const sourceLabel = sourceItem
+      ? sourceItem.dataset.widgetName?.trim() ||
+        (sourceItem.classList.contains("rd-encoder-device-node") ? "Encoder" : "Keyboard")
+      : "No input source";
     const byChain = new Map<string, MappingFlowSegment[]>();
     for (const route of this.#routes) {
       const group = byChain.get(route.chainId) ?? [];
@@ -907,7 +912,7 @@ export class MappingFlowLayer {
         summaries.push({
           chainId: route.chainId,
           slot: route.slot,
-          description: `Keyboard · ${route.source.key} → P${route.slot} ${route.target.label}`,
+          description: `${sourceLabel} · ${route.source.key} → P${route.slot} ${route.target.label}`,
           routeCount: 1,
         });
         continue;
@@ -921,7 +926,7 @@ export class MappingFlowLayer {
       )));
       const triggerLabel = triggers.length === 0
         ? "No host trigger"
-        : triggers.map((key) => `Keyboard · ${key}`).join(" or ");
+        : triggers.map((key) => `${sourceLabel} · ${key}`).join(" or ");
       const targetLabel = targets.length === 0 ? "no virtual output" : targets.join(", ");
       summaries.push({
         chainId: route.chainId,
@@ -988,7 +993,10 @@ export class MappingFlowLayer {
     const subject = inspection.chainId && summaries.length === 1
       ? summaries[0].description
       : inspection.key
-      ? `Keyboard · ${inspection.key}`
+      ? `${
+          this.#root.querySelector<HTMLElement>('[data-mapping-source="true"]')
+            ?.dataset.widgetName?.trim() || "Input source"
+        } · ${inspection.key}`
       : inspection.functionName
       ? (() => {
           const endpoint = this.#routes.find((route) =>
@@ -2680,26 +2688,29 @@ export class MappingFlowLayer {
   #resolveKey(keyName: string, slotNumber: number): Element | null {
     const key = CSS.escape(keyName);
     const slot = String(slotNumber);
+    const source = '[data-mapping-source="true"]';
     const observedAuthority = ':is([data-flow-authority="matched"], [data-flow-authority="mismatch"], [data-flow-authority="observed"])';
     const provisionalAuthority = ':is([data-flow-authority="configured"], [data-flow-authority="expected"], [data-flow-authority="planned"])';
     const selectors = [
-      `.n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"][data-player-slot="${slot}"]${observedAuthority}`,
-      `.n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]${observedAuthority}`,
-      `.n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"]:not([data-player-slot])${observedAuthority}`,
-      `.n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])${observedAuthority}`,
-      `.n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"][data-player-slot="${slot}"]${provisionalAuthority}`,
-      `.n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]${provisionalAuthority}`,
-      `.n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"]:not([data-player-slot])${provisionalAuthority}`,
-      `.n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])${provisionalAuthority}`,
-      `.n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]`,
-      `.n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])`,
-      `.n-surface-channel-anchor:not([data-flow-key])[data-key="${key}"][data-player-slot="${slot}"]`,
-      `.n-surface-channel-anchor:not([data-flow-key])[data-key="${key}"]:not([data-player-slot])`,
-      `.n-deck-key[data-keylab-key="${key}"][data-player-slot="${slot}"]`,
-      `.n-deck-key[data-keylab-key="${key}"]:not([data-player-slot])`,
-      `.n-widget-kb:not([data-source-hidden="true"]) .n-ipac-signal[data-key="${key}"][data-player-slot="${slot}"]`,
-      `.n-widget-kb:not([data-source-hidden="true"]) .n-ipac-signal[data-key="${key}"]`,
-      `.n-widget-kb:not([data-source-hidden="true"]) [data-key="${key}"]:not(.ghost):not(.extracted)`,
+      `${source} .n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"][data-player-slot="${slot}"]${observedAuthority}`,
+      `${source} .n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]${observedAuthority}`,
+      `${source} .n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"]:not([data-player-slot])${observedAuthority}`,
+      `${source} .n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])${observedAuthority}`,
+      `${source} .n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"][data-player-slot="${slot}"]${provisionalAuthority}`,
+      `${source} .n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]${provisionalAuthority}`,
+      `${source} .n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"]:not([data-player-slot])${provisionalAuthority}`,
+      `${source} .n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])${provisionalAuthority}`,
+      `${source} .n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]`,
+      `${source} .n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])`,
+      `${source} .n-surface-channel-anchor:not([data-flow-key])[data-key="${key}"][data-player-slot="${slot}"]`,
+      `${source} .n-surface-channel-anchor:not([data-flow-key])[data-key="${key}"]:not([data-player-slot])`,
+      `${source} .rd-encoder-product-terminal[data-key="${key}"][data-player-slot="${slot}"]`,
+      `${source} .rd-encoder-product-terminal[data-key="${key}"]`,
+      `${source} .n-deck-key[data-keylab-key="${key}"][data-player-slot="${slot}"]`,
+      `${source} .n-deck-key[data-keylab-key="${key}"]:not([data-player-slot])`,
+      `${source}.n-widget-kb .n-ipac-signal[data-key="${key}"][data-player-slot="${slot}"]`,
+      `${source}.n-widget-kb .n-ipac-signal[data-key="${key}"]`,
+      `${source}.n-widget-kb [data-key="${key}"]:not(.ghost):not(.extracted)`,
     ];
     for (const selector of selectors) {
       const candidate = this.#root.querySelector(selector);
@@ -2775,12 +2786,21 @@ export class MappingFlowLayer {
         slot: Number(macro.dataset.flowSlot ?? this.#selectedSlot),
       };
     }
+    const physicalDevice = target.closest<HTMLElement>(".rd-dev-node[data-selector]");
+    if (physicalDevice && physicalDevice.dataset.mappingSource !== "true") return null;
     const pointedSignalRow = target.closest<HTMLElement>(
       ".n-surface-signal-chain[data-surface-channel-id]",
+    );
+    const pointedEncoderTerminal = target.closest<HTMLElement>(
+      ".rd-encoder-product-terminal[data-terminal-id]",
     );
     const pointedSurfaceAnchor = target.closest<HTMLElement>(
       ".n-surface-channel-anchor[data-flow-key]",
     ) ?? pointedSignalRow?.querySelector<HTMLElement>(
+      ".n-surface-channel-anchor[data-flow-key]",
+    ) ?? pointedEncoderTerminal?.querySelector<HTMLElement>(
+      '.n-surface-channel-anchor[data-flow-key][data-flow-plane="normal"]',
+    ) ?? pointedEncoderTerminal?.querySelector<HTMLElement>(
       ".n-surface-channel-anchor[data-flow-key]",
     ) ?? null;
     // A multi-channel control is not one interchangeable input. Hovering an

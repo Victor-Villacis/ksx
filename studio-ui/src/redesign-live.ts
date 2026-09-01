@@ -360,7 +360,11 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
 
   function ensureTargets(scope: HTMLElement): void {
     if (keyTargets === null) {
-      keyTargets = Array.from(scope.querySelectorAll<HTMLElement>("[data-key]"));
+      keyTargets = Array.from(
+        scope.querySelectorAll<HTMLElement>(
+          '[data-mapping-source="true"] [data-key], .rd-insp-krows [data-key]',
+        ),
+      );
     }
     if (functionTargets === null) {
       functionTargets = Array.from(scope.querySelectorAll<HTMLElement>("[data-fn]")).map(

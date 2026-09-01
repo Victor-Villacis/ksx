@@ -45,8 +45,10 @@ beforeEach(async () => {
     <main id="root">
       <p data-rd-live-status hidden></p>
       <div class="n-canvas">
-        <button id="key-g" data-key="G">G</button>
-        <button id="key-j" data-key="J">J</button>
+        <div id="input-source" data-mapping-source="true">
+          <button id="key-g" data-key="G">G</button>
+          <button id="key-j" data-key="J">J</button>
+        </div>
         <article data-pad-slot="1">
           <svg><path id="slot-1-a" data-fn="a" /></svg>
         </article>
@@ -472,10 +474,15 @@ describe("redesign live feedback", { concurrency: false }, () => {
 
     await page.evaluate((session) => {
       window.ksxLive.reconcileSession(session);
+      document.querySelector("#input-source")?.removeAttribute("data-mapping-source");
+      const nextSource = document.createElement("div");
+      nextSource.id = "replacement-source";
+      nextSource.dataset.mappingSource = "true";
       const replacement = document.createElement("button");
       replacement.id = "late-key";
       replacement.dataset.key = "L";
-      document.querySelector(".n-canvas").append(replacement);
+      nextSource.append(replacement);
+      document.querySelector(".n-canvas").append(nextSource);
       window.ksxLive.invalidateTargets();
     }, matchingSession);
     await emit("frame", frame({ keys: [["L", true]] }));

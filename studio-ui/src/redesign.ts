@@ -1390,6 +1390,12 @@ activateIslands({
       setPathLive: redesignSetLivePaths,
       announce: rdAnnounce,
     });
+    el.addEventListener("ksx:redesign-source-surface-change", () => {
+      liveFeedback?.invalidateTargets();
+    });
+    el.addEventListener("ksx:redesign-flow-anchors-change", () => {
+      liveFeedback?.invalidateTargets();
+    });
     const seed = embeddedPayload<RedesignPayload>();
     if (seed) applyPayload(seed);
     seedRenderedFlash(el);

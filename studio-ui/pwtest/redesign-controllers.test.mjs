@@ -18,6 +18,7 @@ import path from "node:path";
 import { chromium } from "playwright";
 import { cargoExecutable, stopFixtureProcess } from "./fixture-process.mjs";
 import { composeOrderMoving } from "../src/redesign-controller-order.ts";
+import { deviceInstanceId } from "../src/device-instance-id.ts";
 
 /** OUR port: never 4460 (a real `ksx studio`), and never another suite's. */
 const PORT = Number(process.env.KSX_PWTEST_REDESIGN_CONTROLLERS_PORT ?? 4532);
@@ -86,6 +87,10 @@ after(async () => {
 });
 
 const cardSel = (slot) => `.forma-canvas-stage [data-instance-id="ctrl-slot-${slot}"]`;
+const G915 = "usb:046d:c545:00";
+const G915_ID = deviceInstanceId(G915);
+const IPAC = "usb:d209:0430:00";
+const IPAC_ID = deviceInstanceId(IPAC);
 
 async function openBench() {
   const page = await context.newPage();
@@ -127,6 +132,64 @@ async function revealCanvasItem(page, instanceId) {
       !document.querySelector(".is-camera-animating"),
     instanceId,
   );
+}
+
+async function ensureActiveKeyboard(page) {
+  const board = page.locator(
+    `.forma-canvas-stage > [data-instance-id="${G915_ID}"][data-selector="${G915}"]`,
+  );
+  if ((await board.count()) === 0) {
+    await page.click('[data-nx="rd-devs-open"]');
+    await page.locator(`.rd-devmodal button[data-selector="${G915}"]`).click();
+    await page.keyboard.press("Escape");
+  }
+  await page.waitForFunction(
+    (id) => document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)?.dataset.canvasX !== undefined,
+    G915_ID,
+  );
+  if ((await board.getAttribute("data-staged")) !== "true") {
+    await revealCanvasItem(page, G915_ID);
+    await board.locator(".rd-stagebtn").click();
+    await page.waitForFunction(
+      (id) => document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)?.dataset.mappingSource === "true",
+      G915_ID,
+      { timeout: 20_000 },
+    );
+  }
+  return board;
+}
+
+async function ensureActiveEncoder(page) {
+  const board = page.locator(
+    `.forma-canvas-stage > [data-instance-id="${IPAC_ID}"][data-selector="${IPAC}"]`,
+  );
+  if ((await board.count()) === 0) {
+    await page.click('[data-nx="rd-devs-open"]');
+    await page.locator(`.rd-devmodal button[data-selector="${IPAC}"]`).click();
+    await page.keyboard.press("Escape");
+  }
+  await page.waitForFunction(
+    (id) => document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)?.dataset.canvasX !== undefined,
+    IPAC_ID,
+  );
+  if ((await board.getAttribute("data-staged")) !== "true") {
+    await revealCanvasItem(page, IPAC_ID);
+    const stage = board.locator(".rd-stagebtn");
+    if (!(await stage.isVisible())) {
+      await board.focus();
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(
+        () => document.querySelector(".forma-canvas-viewport")?.dataset.canvasZoomTier === "editing",
+      );
+    }
+    await stage.click();
+  }
+  await page.waitForFunction(
+    (id) => document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)?.dataset.mappingSource === "true",
+    IPAC_ID,
+    { timeout: 20_000 },
+  );
+  return board;
 }
 
 describe("the controller workbench", () => {
@@ -451,7 +514,7 @@ describe("the controller workbench", () => {
     await page.close();
   });
 
-  test("the server-rendered keyboard keeps real keys interactive and spacer geometry inert", async () => {
+  test("the parked server projection keeps real keys truthful without inventing canvas membership", async () => {
     const ssrContext = await browser.newContext({
       viewport: { width: 1600, height: 1000 },
       colorScheme: "dark",
@@ -461,11 +524,13 @@ describe("the controller workbench", () => {
       const page = await ssrContext.newPage();
       await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
       const real = page.locator(
-        '[data-instance-id="keyboard"] button.n-key:not(.ghost)[data-key]:not([data-key=""])',
+        '[data-rd-keyboard-surface] button.n-key:not(.ghost)[data-key]:not([data-key=""])',
       );
       const spacers = page.locator(
-        '[data-instance-id="keyboard"] button.n-key.ghost[data-key=""]',
+        '[data-rd-keyboard-surface] button.n-key.ghost[data-key=""]',
       );
+      assert.equal(await page.locator('[data-instance-id="keyboard"]').count(), 0);
+      assert.equal(await page.locator('[data-rd-keyboard-surface-depot][hidden]').count(), 1);
       assert.ok((await real.count()) > 0, "SSR serves native buttons for physical keys");
       assert.ok((await spacers.count()) > 0, "SSR keeps authored spacer geometry");
       assert.equal(await real.first().isDisabled(), false);
@@ -481,39 +546,44 @@ describe("the controller workbench", () => {
 
   test("the keyboard stands on the canvas: served plate, finish, lens, and the key→Keys door", async () => {
     const page = await openBench();
+    const keyboard = await ensureActiveKeyboard(page);
     const flashKb = (want) =>
       page.waitForFunction(
         (text) => document.querySelector(".rd-flash")?.textContent?.startsWith(text),
         want,
         { timeout: 20_000 },
       );
-    await page.waitForFunction(
-      () => document.querySelector('[data-instance-id="keyboard"]')?.dataset.canvasX !== undefined,
-      null,
-      { timeout: 20_000 },
-    );
     await page.click('[data-nx="canvas-fit"]');
     await page.waitForTimeout(600);
     // The SERVED plate: six rows of real cells, bound caps wearing their
     // control shorts and ownership bands, the legend naming every player.
-    assert.equal(await page.locator('.forma-canvas-stage > [data-instance-id="keyboard"] .n-kbrow').count(), 6);
-    const bound = page.locator('.forma-canvas-stage > [data-instance-id="keyboard"] .n-kb .n-key.bound');
+    assert.equal(await keyboard.locator(".n-kbrow").count(), 6);
+    const bound = keyboard.locator(".n-kb .n-key.bound");
     assert.ok((await bound.count()) > 0, "the fixture bindings tint their caps");
     assert.ok(
       ((await bound.first().locator(".n-key-short").textContent()) ?? "").length > 0,
       "a bound cap says WHICH control drives it",
     );
     assert.ok(
-      (await page.locator('.forma-canvas-stage > [data-instance-id="keyboard"] .n-legend .n-lgd').count()) > 0,
+      (await keyboard.locator(".n-legend .n-lgd").count()) > 0,
       "the legend chips name the players",
+    );
+    // Fit is deliberately a reading distance. At that scale the detailed
+    // board remains legible but cannot pretend its tiny controls are honest
+    // click targets; focusing the device returns to editing distance.
+    assert.equal(await keyboard.getAttribute("data-keyboard-editable"), "false");
+    await revealCanvasItem(page, G915_ID);
+    await page.waitForFunction(
+      (id) => document.querySelector(
+        `.forma-canvas-stage > [data-instance-id="${id}"]`,
+      )?.dataset.keyboardEditable === "true",
+      G915_ID,
     );
     // The finish is the keyboard's own material — a click restamps the
     // widget and the preference survives in this browser.
     await page.click('[data-nx="kb-theme"][data-keyboard-theme="retro-terminal"]');
     assert.equal(
-      await page
-        .locator('.forma-canvas-stage > [data-instance-id="keyboard"]')
-        .getAttribute("data-keyboard-theme"),
+      await keyboard.getAttribute("data-keyboard-theme"),
       "retro-terminal",
     );
     await page.click('[data-nx="kb-theme"][data-keyboard-theme="carbon-forge"]');
@@ -521,20 +591,20 @@ describe("the controller workbench", () => {
     // property the nocturne sheet drives, written on the plate.
     await page.click('.n-legend [data-nx="legend-mute"][data-slot="1"]');
     assert.equal(
-      await page.evaluate(() =>
+      await page.evaluate((id) =>
         document
-          .querySelector('[data-instance-id="keyboard"] .n-kb')
+          .querySelector(`[data-instance-id="${id}"] .n-kb`)
           ?.style.getPropertyValue("--kb1"),
-      ),
+        G915_ID),
       "var(--band-mute)",
     );
     await page.click('.n-legend [data-nx="legend-mute"][data-slot="1"]');
     assert.equal(
-      await page.evaluate(() =>
+      await page.evaluate((id) =>
         document
-          .querySelector('[data-instance-id="keyboard"] .n-kb')
+          .querySelector(`[data-instance-id="${id}"] .n-kb`)
           ?.style.getPropertyValue("--kb1"),
-      ),
+        G915_ID),
       "",
     );
     // A plate key is the Keys tab's own door: clicking a bound cap opens
@@ -554,7 +624,7 @@ describe("the controller workbench", () => {
       "every clickable plate key is a native keyboard control",
     );
     const ghostKeys = page.locator(
-      '[data-instance-id="keyboard"] button.n-key.ghost[data-key=""]',
+      `[data-instance-id="${G915_ID}"] button.n-key.ghost[data-key=""]`,
     );
     assert.ok((await ghostKeys.count()) > 0, "the served plate includes spacer cells");
     assert.equal(await ghostKeys.first().isDisabled(), true);
@@ -609,6 +679,7 @@ describe("the controller workbench", () => {
 
   test("controller art is keyboard-operable and changing inspector tabs preserves keyboard UI state", async () => {
     const page = await openBench();
+    await ensureActiveKeyboard(page);
     await page.waitForFunction(
       (sel) => document.querySelector(sel)?.dataset.canvasX !== undefined,
       cardSel(1),
@@ -643,14 +714,19 @@ describe("the controller workbench", () => {
     // Non-pointer activation must perform the selection work that a real
     // pointerdown normally performs. Start from the Input source so this test
     // cannot pass merely because the controller was already selected.
-    await revealCanvasItem(page, "keyboard");
+    await revealCanvasItem(page, G915_ID);
     assert.equal(
       await page
-        .locator('.forma-canvas-stage > [data-instance-id="keyboard"]')
+        .locator(`.forma-canvas-stage > [data-instance-id="${G915_ID}"]`)
         .getAttribute("aria-current"),
       "true",
     );
-    assert.equal((await page.locator(".rd-insp-name").textContent())?.trim(), "Input source");
+    assert.equal((await page.locator(".rd-insp-name").textContent())?.trim(), "Logitech G915 TKL");
+    // The device-owned keyboard is a full board now. Frame the whole bench so
+    // the controller runtime remains materialized while selection still rests
+    // on the input source.
+    await page.click('[data-nx="canvas-fit"]');
+    await page.waitForFunction(() => !document.querySelector(".is-camera-animating"));
     await zone.focus();
     // An unchanged background repaint must not replace the focused SVG node.
     await page.waitForTimeout(2300);
@@ -1058,6 +1134,7 @@ describe("the mapper on the workbench", () => {
 
   test("learn: the chip arms, the hit raises the cross-slot question, Esc declines, Use-here-too shares", async () => {
     const page = await openBench();
+    await ensureActiveEncoder(page);
     await openPanel(page, s1);
     const chipSel = '.rd-insp-body details.n-bind[data-fn="A"] [data-nx="chip-learn"]';
     const before = (await page.locator(chipSel).textContent())?.trim();
@@ -1106,6 +1183,7 @@ describe("the mapper on the workbench", () => {
 
   test("clicking the control being recorded cancels the gesture (the PadForge toggle)", async () => {
     const page = await openBench();
+    await ensureActiveEncoder(page);
     await openPanel(page, s1);
     // Two clicks inside ONE task: the second lands while the first's arm is
     // still in flight — the toggle branch must retire it silently, and the
@@ -1131,6 +1209,7 @@ describe("the mapper on the workbench", () => {
 
   test("assign: a free key goes in hand and the pad art is the picker", async () => {
     const page = await openBench();
+    await ensureActiveEncoder(page);
     await openPanel(page, s1);
     await page.click(".rd-insp-vseg .vk");
     await page.waitForFunction(
@@ -1172,6 +1251,7 @@ describe("the mapper on the workbench", () => {
 
   test("the cords: Paths scopes the flow layer and prices what it drew", async () => {
     const page = await openBench();
+    await ensureActiveKeyboard(page);
     await page.waitForFunction(
       (sel) => document.querySelector(sel)?.dataset.canvasX !== undefined,
       cardSel(Number(s1)),
@@ -1276,6 +1356,7 @@ describe("the mapper on the workbench", () => {
     assert.deepEqual(unbound, ["rx.min", "rx.max"], "the walk's steps are known ground");
 
     const page = await openBench();
+    await ensureActiveEncoder(page);
     await openPanel(page, s1);
     await page.click('[data-nx="rd-automap"]');
     // Step 1 instant-hits G → the cross-slot question. Confirm: it binds.
@@ -1476,6 +1557,7 @@ describe("the mapper on the workbench", () => {
 
   test("a macro trigger key binds through the SAME learn flow as any control", async () => {
     const page = await openBench();
+    await ensureActiveEncoder(page);
     await openPanel(page, s1);
     await page.waitForFunction(
       () => Boolean(document.querySelector('.n-macrosec details[data-fn^="macro."] [data-nx="chip-learn"]')),

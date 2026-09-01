@@ -20245,6 +20245,141 @@ button.rd-utility-action {
   filter: drop-shadow(0 0 4px color-mix(in srgb, var(--n-accent) 74%, transparent));
 }
 
+/* A keyboard is the board, not a summary card beside a second synthetic
+   keyboard. Identity/source controls form one compact fascia above either the
+   authoritative interactive plate or an honest, full-size inactive preview. */
+.rd-keyboard-surface-depot {
+  display: none !important;
+}
+
+.rd-keyboard-device-node .rd-keyboard-device-shell {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rd-keyboard-device-node .rd-keyboard-device-identity {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) auto;
+  grid-template-areas:
+    "badge name states"
+    "badge meta source"
+    ". purpose source";
+  align-items: center;
+  gap: 3px 12px;
+  padding: 10px 14px 9px;
+  border: 1px solid var(--n-line);
+  border-radius: 12px;
+  background:
+    linear-gradient(110deg, color-mix(in srgb, var(--n-accent) 7%, transparent), transparent 34%),
+    color-mix(in srgb, var(--n-panel) 92%, var(--n-bg));
+}
+
+.rd-keyboard-device-identity .rd-devcard-badge {
+  grid-area: badge;
+  margin: 0;
+}
+
+.rd-keyboard-device-identity .rd-devcard-name {
+  grid-area: name;
+  margin: 0;
+}
+
+.rd-keyboard-device-identity .rd-devcard-meta {
+  grid-area: meta;
+}
+
+.rd-keyboard-device-identity .rd-devcard-states {
+  grid-area: states;
+  justify-self: end;
+  margin: 0;
+}
+
+.rd-keyboard-device-identity .rd-devcard-purpose {
+  grid-area: purpose;
+  margin: 2px 0 0;
+}
+
+.rd-keyboard-device-identity :is(.rd-devcard-staged, .rd-stageform) {
+  grid-area: source;
+  justify-self: end;
+  align-self: center;
+  margin: 0;
+}
+
+.rd-keyboard-device-preview {
+  padding: 8px 12px 10px;
+  border: 1px solid var(--n-line);
+  border-radius: 14px;
+  background: var(--n-bg);
+}
+
+.rd-keyboard-device-preview[hidden],
+.rd-keyboard-device-surface-host[hidden] {
+  display: none !important;
+}
+
+.rd-keyboard-device-preview .rd-device-keyboard-visual {
+  margin: 0;
+  padding: 12px 16px;
+  border-radius: 12px;
+}
+
+.rd-keyboard-device-preview-note {
+  margin: 7px 4px 0;
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  text-align: center;
+}
+
+.rd-keyboard-device-node[data-source-state="active"] .rd-keyboard-device-identity {
+  border-color: color-mix(in srgb, var(--n-accent) 54%, var(--n-line));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--n-accent) 9%, transparent);
+}
+
+.rd-keyboard-device-node[data-source-state="unknown"] .rd-keyboard-device-preview {
+  border-color: color-mix(in srgb, var(--n-warn) 32%, var(--n-line));
+}
+
+[data-forma-canvas]
+  .rd-keyboard-device-node
+  .rd-keyboard-device-surface-host
+  > .n-widget-body[data-forma-runtime-host] {
+  min-width: 0;
+  /* The canvas item's minimum already includes the identity fascia. The
+     generic runtime-host minimum would add that height a second time when
+     the singleton moves in, making an active board jump by the fascia size. */
+  min-height: 0;
+}
+
+.rd-source-controls-host:empty {
+  display: none;
+}
+
+.rd-devcard > .rd-source-controls-host:not(:empty) {
+  margin-top: 10px;
+}
+
+.rd-devcard > .rd-source-controls-host .rd-capture {
+  width: fit-content;
+}
+
+@media (max-width: 760px) {
+  .rd-keyboard-device-node .rd-keyboard-device-identity {
+    grid-template-columns: auto 1fr;
+    grid-template-areas:
+      "badge states"
+      "name name"
+      "meta meta"
+      "purpose purpose"
+      "source source";
+  }
+
+  .rd-keyboard-device-identity :is(.rd-devcard-staged, .rd-stageform) {
+    justify-self: start;
+  }
+}
+
 .rd-devcard-states {
   margin-top: 7px;
 }
@@ -21816,6 +21951,24 @@ button.rd-utility-action {
   pointer-events: all;
 }
 
+/* One physical terminal may emit a normal and a shifted key. These transparent
+   geometry anchors let cords/live feedback address each emission separately
+   without inventing a second terminal or another interactive control. */
+.rd-encoder-product-flow-anchor {
+  fill: transparent;
+  pointer-events: none;
+}
+
+.rd-encoder-product-terminal:has(.rd-encoder-product-flow-anchor.live)
+  .rd-encoder-product-terminal-body {
+  stroke: var(--n-live, var(--n-ok));
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--n-live, var(--n-ok)) 68%, transparent));
+}
+
+.rd-keyboard-device-node[data-keyboard-editable="false"] [data-rd-keyboard-surface] {
+  pointer-events: none;
+}
+
 .rd-encoder-product-terminal-body {
   fill: color-mix(in srgb, var(--n-panel-3) 88%, var(--n-bg));
   stroke: color-mix(in srgb, var(--rd-encoder-terminal-accent) 48%, var(--n-line-2));
@@ -22542,11 +22695,11 @@ button.rd-encoder-product-read-inline:disabled {
 }
 
 /* A transformed 960px board only meets its 44px terminal-target contract near
-   editing scale. Keep the full schematic as the structure/overview landmark,
-   but remove tiny native controls and verbose command chrome from routing and
-   layout until the host stamps this exact item as editable. */
+   editing scale. Keep the full schematic and its primary source-authority verb
+   as the structure landmark, but remove the tiny terminal controls and verbose
+   command chrome until the host stamps this exact item as editable. */
 .rd-encoder-device-node[data-encoder-editable="false"]
-  :is(.rd-stageform, .rd-encoder-profile-foot),
+  .rd-encoder-profile-foot,
 .rd-encoder-device-node[data-encoder-editable="false"]
   .rd-encoder-profile[data-presentation="product"]
   :is(
@@ -22970,15 +23123,14 @@ button.rd-encoder-product-read-inline:disabled {
   color: var(--n-warn);
 }
 
-/* State decides whether the chip or verb exists; semantic zoom remains the
-   final presentation authority and hides either outside editing distance. */
+/* State decides whether the chip or verb exists. Source authority is a
+   primary device action, so it remains discoverable at structure distance;
+   only overview hides it with the rest of the operational chrome. */
 .rd [data-canvas-zoom-tier="overview"] .rd-devcard-meta,
 .rd [data-canvas-zoom-tier="overview"] .rd-devcard-purpose,
 .rd [data-canvas-zoom-tier="overview"] .rd-devcard-staged,
 .rd [data-canvas-zoom-tier="overview"] .rd-stageform,
-.rd [data-canvas-zoom-tier="structure"] .rd-devcard-purpose,
-.rd [data-canvas-zoom-tier="structure"] .rd-devcard-staged,
-.rd [data-canvas-zoom-tier="structure"] .rd-stageform {
+.rd [data-canvas-zoom-tier="structure"] .rd-devcard-purpose {
   display: none;
 }
 

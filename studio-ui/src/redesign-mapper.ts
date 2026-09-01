@@ -203,7 +203,9 @@ function hideBanner(): void {
 }
 
 function setKeyCue(text: string | null): void {
-  const cue = host?.root()?.querySelector<HTMLElement>(".rd-keycue");
+  const cue = host?.root()?.querySelector<HTMLElement>(
+    '[data-mapping-source="true"] .rd-keycue',
+  );
   if (!cue) return;
   cue.classList.toggle("none", text === null);
   const span = cue.querySelector<HTMLElement>(".rd-keycue-text");
@@ -262,7 +264,8 @@ function markAssignTargets(key: string | null): void {
   if (key) {
     for (const el of Array.from(
       root.querySelectorAll<HTMLElement>(
-        `.n-kb [data-key="${CSS.escape(key)}"], .rd-insp-krows [data-key="${CSS.escape(key)}"]`,
+        `[data-mapping-source="true"] .n-kb [data-key="${CSS.escape(key)}"], ` +
+          `.rd-insp-krows [data-key="${CSS.escape(key)}"]`,
       ),
     )) {
       el.classList.add("assign");
@@ -331,6 +334,15 @@ function sourceAuthorityCurrent(row: MapperTarget): boolean {
   );
 }
 
+function sourcePinAuthorityCurrent(
+  pin: { expectedDevice: string; expectedInstance: string } | null,
+): boolean {
+  if (!pin) return false;
+  const now = captureSourcePin();
+  return sameIdentity(pin.expectedDevice, now.expectedDevice) &&
+    sameIdentity(pin.expectedInstance, now.expectedInstance);
+}
+
 function targetAuthorityCurrent(row: MapperTarget): boolean {
   const pad = (host?.pads() ?? []).find((p) => String(p.slot) === row.slot);
   const revision = pad?.target_revision?.trim() ?? "";
@@ -349,11 +361,18 @@ export function mapperReconcile(): void {
     void cancelLearn();
     retired = true;
   }
-  if (assignKey && assignDraftRevision !== stagedRevisionSignature()) {
+  if (
+    assignKey &&
+    (!sourcePinAuthorityCurrent(assignSourcePin) ||
+      assignDraftRevision !== stagedRevisionSignature())
+  ) {
     cancelAssign();
     retired = true;
   }
-  if (pendingConflict && !targetAuthorityCurrent(pendingConflict.row)) {
+  if (
+    pendingConflict &&
+    !(sourceAuthorityCurrent(pendingConflict.row) && targetAuthorityCurrent(pendingConflict.row))
+  ) {
     autoMap = null;
     dismissConflict();
     retired = true;
@@ -617,6 +636,18 @@ async function writeLearnedKey(row: MapperTarget, key: string, force: boolean): 
   if (gate === null) {
     autoMap = null;
     host?.flash("error: The page is busy with another change — try again.");
+    return false;
+  }
+  // The page may have waited behind another mutation. Revalidate both halves
+  // of the authority pin immediately before the write; a source switch or
+  // controller revision change during that wait must never commit stale work.
+  if (!(sourceAuthorityCurrent(row) && targetAuthorityCurrent(row))) {
+    host?.endMutation(gate);
+    autoMap = null;
+    dismissConflict();
+    host?.flash(
+      "error: The input source or controller changed before this mapping could be saved. Nothing changed.",
+    );
     return false;
   }
   let outcome: RdBindOutcome;

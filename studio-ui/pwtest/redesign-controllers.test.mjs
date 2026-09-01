@@ -92,6 +92,60 @@ const G915_ID = deviceInstanceId(G915);
 const IPAC = "usb:d209:0430:00";
 const IPAC_ID = deviceInstanceId(IPAC);
 
+const api = async () => (await fetch(`${BASE}/api/redesign`)).json();
+
+function exactSource(pad, selector) {
+  const source = pad?.sources?.find(
+    (candidate) => (candidate.source_id ?? candidate.sourceId) === selector,
+  );
+  assert.ok(source, `Player ${pad?.slot ?? "?"} must expose exact source ${selector}`);
+  assert.ok(source.revision, `exact source ${selector} must carry its own revision`);
+  return source;
+}
+
+async function sourceAuthority(slot, selector) {
+  const pad = (await api()).controllers.pads.find(
+    (candidate) => String(candidate.slot) === String(slot),
+  );
+  assert.ok(pad, `Player ${slot} must exist`);
+  return exactSource(pad, selector);
+}
+
+async function bindExact(slot, fn, key, selector, force = true) {
+  const source = await sourceAuthority(slot, selector);
+  const response = await fetch(`${BASE}/redesign/api/bind`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      slot: Number(slot),
+      expected_device: selector,
+      expected_target_revision: source.revision,
+      function: fn,
+      key,
+      mode: null,
+      force,
+    }),
+  });
+  return response.json();
+}
+
+async function clearExact(slot, fn, selector) {
+  const source = await sourceAuthority(slot, selector);
+  const response = await fetch(`${BASE}/redesign/bind/clear`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      slot: String(slot),
+      source: selector,
+      expected_target_revision: source.revision,
+      function: fn,
+    }),
+    redirect: "manual",
+  });
+  assert.equal(response.status, 303, `could not clear ${fn} for exact source ${selector}`);
+  return response;
+}
+
 async function openBench() {
   const page = await context.newPage();
   const noise = [];
@@ -550,6 +604,11 @@ describe("the controller workbench", () => {
   test("the keyboard stands on the canvas: served plate, finish, lens, and the key→Keys door", async () => {
     const page = await openBench();
     const keyboard = await ensureActiveKeyboard(page);
+    assert.equal(
+      (await bindExact(1, "A", "H", G915)).ok,
+      true,
+      "the keyboard plate is dressed only by this exact physical source",
+    );
     const flashKb = (want) =>
       page.waitForFunction(
         (text) => document.querySelector(".rd-flash")?.textContent?.startsWith(text),
@@ -562,7 +621,8 @@ describe("the controller workbench", () => {
     // control shorts and ownership bands, the legend naming every player.
     assert.equal(await keyboard.locator(".n-kbrow").count(), 6);
     const bound = keyboard.locator(".n-kb .n-key.bound");
-    assert.ok((await bound.count()) > 0, "the fixture bindings tint their caps");
+    await bound.first().waitFor({ state: "visible", timeout: 20_000 });
+    assert.ok((await bound.count()) > 0, "the exact keyboard's bindings tint its caps");
     assert.ok(
       ((await bound.first().locator(".n-key-short").textContent()) ?? "").length > 0,
       "a bound cap says WHICH control drives it",
@@ -1062,22 +1122,7 @@ describe("the mapper on the workbench", () => {
   // every learned hit raises the conflict QUESTION — the protocol's whole
   // point. State is built through the same doors the page uses, so these
   // tests hold whatever the earlier suites left behind.
-  const api = async () => (await fetch(`${BASE}/api/redesign`)).json();
-  const apiBind = async (slot, fn, key, revision, force) => {
-    const res = await fetch(`${BASE}/redesign/api/bind`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        slot: Number(slot),
-        expected_target_revision: revision,
-        function: fn,
-        key,
-        mode: null,
-        force,
-      }),
-    });
-    return res.json();
-  };
+  const apiBind = (slot, fn, key, force) => bindExact(slot, fn, key, IPAC, force);
   let s1;
   let s2;
 
@@ -1098,9 +1143,8 @@ describe("the mapper on the workbench", () => {
     s2 = String(pads[1].slot);
     // Known ground: A on seat one wears H, and G lives on the OTHER seat —
     // the learner's scripted G is then always a cross-slot question here.
-    assert.equal((await apiBind(s1, "A", "H", pads[0].target_revision, true)).ok, true);
-    const again = (await api()).controllers.pads;
-    assert.equal((await apiBind(s2, "B", "G", again[1].target_revision, true)).ok, true);
+    assert.equal((await apiBind(s1, "A", "H", true)).ok, true);
+    assert.equal((await apiBind(s2, "B", "G", true)).ok, true);
   });
 
   async function openPanel(page, slot) {
@@ -1181,7 +1225,7 @@ describe("the mapper on the workbench", () => {
     );
     const other = (await api()).controllers.pads.find((p) => String(p.slot) === s2);
     assert.ok(
-      other.controls.find((c) => c.function === "B").keys.includes("G"),
+      exactSource(other, IPAC).controls.find((c) => c.function === "B").keys.includes("G"),
       "the other seat KEPT its key — share, never steal",
     );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
@@ -1339,27 +1383,24 @@ describe("the mapper on the workbench", () => {
     // control (same-slot key sharing is allowed — H all round) and clears
     // the two the walk should visit.
     for (const fn of ["rx.min", "rx.max"]) {
-      await fetch(`${BASE}/redesign/bind/clear`, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: `slot=${s1}&function=${encodeURIComponent(fn)}`,
-        redirect: "manual",
-      });
+      await clearExact(s1, fn, IPAC);
     }
     for (;;) {
       const pad = (await api()).controllers.pads.find((p) => String(p.slot) === s1);
-      const hole = pad.controls.find(
+      const hole = exactSource(pad, IPAC).controls.find(
         (c) => c.keys.length === 0 && c.function !== "rx.min" && c.function !== "rx.max",
       );
       if (!hole) break;
       assert.equal(
-        (await apiBind(s1, hole.function, "H", pad.target_revision, true)).ok,
+        (await apiBind(s1, hole.function, "H", true)).ok,
         true,
         `dressing ${hole.function}`,
       );
     }
     const fresh = (await api()).controllers.pads.find((p) => String(p.slot) === s1);
-    const unbound = fresh.controls.filter((c) => c.keys.length === 0).map((c) => c.function);
+    const unbound = exactSource(fresh, IPAC).controls
+      .filter((c) => c.keys.length === 0)
+      .map((c) => c.function);
     assert.deepEqual(unbound, ["rx.min", "rx.max"], "the walk's steps are known ground");
 
     const page = await openBench();
@@ -1391,13 +1432,14 @@ describe("the mapper on the workbench", () => {
       { timeout: 20_000 },
     );
     const end = (await api()).controllers.pads.find((p) => String(p.slot) === s1);
+    const endSource = exactSource(end, IPAC);
     assert.deepEqual(
-      end.controls.find((c) => c.function === "rx.min").keys,
+      endSource.controls.find((c) => c.function === "rx.min").keys,
       ["G"],
       "the confirmed step wears the shared key",
     );
     assert.deepEqual(
-      end.controls.find((c) => c.function === "rx.max").keys,
+      endSource.controls.find((c) => c.function === "rx.max").keys,
       [],
       "the declined step stays unbound",
     );
@@ -1473,6 +1515,7 @@ describe("the mapper on the workbench", () => {
 
   test("the step editor: acts are the server's answer, the draft wins, Save writes", async () => {
     // A macro of known shape, through the same verb the CLI uses.
+    const source = await sourceAuthority(s1, IPAC);
     const seeded = await (
       await fetch(`${BASE}/api/macro/save`, {
         method: "POST",
@@ -1480,7 +1523,9 @@ describe("the mapper on the workbench", () => {
         body: JSON.stringify({
           target: "stage",
           slot: Number(s1),
-          preset: (await api()).controllers.pads.find((p) => String(p.slot) === s1).preset,
+          expected_device: IPAC,
+          expected_target_revision: source.revision,
+          preset: source.preset,
           name: "probe-roll",
           steps: [{ hold: ["A"], ms: 50 }],
         }),
@@ -1551,7 +1596,9 @@ describe("the mapper on the workbench", () => {
       { timeout: 20_000 },
     );
     const truth = await (
-      await fetch(`${BASE}/api/redesign?slot=${s1}&macro=probe-roll`)
+      await fetch(
+        `${BASE}/api/redesign?slot=${s1}&source=${encodeURIComponent(IPAC)}&macro=probe-roll`,
+      )
     ).json();
     assert.deepEqual(
       truth.controllers.mac.table.steps[0].hold,

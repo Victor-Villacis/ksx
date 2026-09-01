@@ -16,6 +16,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const LEARN_ROUTES = /\/api\/learn(?:\/.*)?$/;
 const G915 = "usb:046d:c545:00";
 const G915_ID = deviceInstanceId(G915);
+const IPAC = "usb:d209:0430:00";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const targetDir = process.env.CARGO_TARGET_DIR
   ? path.resolve(process.env.CARGO_TARGET_DIR)
@@ -42,13 +43,32 @@ async function waitForServer(deadlineMs = 120_000) {
 
 const api = async () => (await fetch(`${BASE}/api/redesign`)).json();
 
-async function bind(slot, fn, key, revision, force = true) {
+function exactSource(pad, selector) {
+  const source = pad?.sources?.find(
+    (candidate) => (candidate.source_id ?? candidate.sourceId) === selector,
+  );
+  assert.ok(source, `Player ${pad?.slot ?? "?"} must expose exact source ${selector}`);
+  assert.ok(source.revision, `exact source ${selector} must carry its own revision`);
+  return source;
+}
+
+async function sourceAuthority(slot, selector) {
+  const pad = (await api()).controllers.pads.find(
+    (candidate) => String(candidate.slot) === String(slot),
+  );
+  assert.ok(pad, `Player ${slot} must exist`);
+  return exactSource(pad, selector);
+}
+
+async function bind(slot, fn, key, selector = IPAC, force = true) {
+  const source = await sourceAuthority(slot, selector);
   const response = await fetch(`${BASE}/redesign/api/bind`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       slot: Number(slot),
-      expected_target_revision: revision,
+      expected_device: selector,
+      expected_target_revision: source.revision,
       function: fn,
       key,
       mode: null,
@@ -56,6 +76,46 @@ async function bind(slot, fn, key, revision, force = true) {
     }),
   });
   return response.json();
+}
+
+async function clearBind(slot, fn, selector = IPAC) {
+  const source = await sourceAuthority(slot, selector);
+  const response = await fetch(`${BASE}/redesign/bind/clear`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      slot: String(slot),
+      source: selector,
+      expected_target_revision: source.revision,
+      function: fn,
+    }),
+    redirect: "manual",
+  });
+  assert.equal(response.status, 303, `could not clear ${fn} for exact source ${selector}`);
+  return response;
+}
+
+async function ensureStagedKeyboard(selector) {
+  const payload = await api();
+  const row = payload.devices.keyboards.find((candidate) => candidate.selector === selector);
+  assert.ok(row, `fixture keyboard ${selector} must be discoverable`);
+  if (row.aria_current === "true") return;
+  const response = await fetch(`${BASE}/redesign/device`, {
+    method: "POST",
+    body: new URLSearchParams({
+      selector,
+      alias: row.alias,
+      label: row.label,
+    }),
+    redirect: "manual",
+  });
+  assert.equal(response.status, 303, `could not stage exact keyboard ${selector}`);
+}
+
+async function seedConflict(selector) {
+  await ensureStagedKeyboard(selector);
+  assert.equal((await bind(slotOne, "A", "H", selector)).ok, true);
+  assert.equal((await bind(slotTwo, "B", "G", selector)).ok, true);
 }
 
 before(async () => {
@@ -94,15 +154,8 @@ before(async () => {
   assert.ok(payload.controllers.pads.length >= 2, "two seats are required for a conflict");
   slotOne = String(payload.controllers.pads[0].slot);
   slotTwo = String(payload.controllers.pads[1].slot);
-  assert.equal(
-    (await bind(slotOne, "A", "H", payload.controllers.pads[0].target_revision)).ok,
-    true,
-  );
-  payload = await api();
-  assert.equal(
-    (await bind(slotTwo, "B", "G", payload.controllers.pads[1].target_revision)).ok,
-    true,
-  );
+  assert.equal((await bind(slotOne, "A", "H")).ok, true);
+  assert.equal((await bind(slotTwo, "B", "G")).ok, true);
 });
 
 after(async () => {
@@ -300,9 +353,11 @@ describe("redesign migration hardening", { concurrency: false }, () => {
       x: selectorGeometry.x,
       y: selectorGeometry.y,
       // Keyboard boards are not resizable: their exact selector slot owns
-      // position/scale, while the current product footprint owns dimensions.
+      // position/scale, while the current one-surface board owns dimensions.
+      // Removing the obsolete identity-card fascia lets the served key deck
+      // settle to its intrinsic 529px footprint instead of reserving 560px.
       width: 980,
-      height: 560,
+      height: 529,
       manualScale: selectorGeometry.manualScale,
     };
 
@@ -539,17 +594,16 @@ describe("redesign migration hardening", { concurrency: false }, () => {
     );
 
     // Restore the shared fixture's baseline mapping for later tests.
-    const current = (await api()).controllers.pads.find(
-      (pad) => String(pad.slot) === slotOne,
-    );
-    assert.equal((await bind(slotOne, "A", "H", current.target_revision)).ok, true);
+    assert.equal((await bind(slotOne, "A", "H")).ok, true);
     assert.deepEqual(page.ksxNoise, []);
     await page.close();
   });
 
   test("accepted conflict does not steal focus moved during its delayed write", async () => {
+    await seedConflict(G915);
     const page = await openBench();
     const keyboard = await ensureActiveKeyboard(page);
+    await revealCanvasItem(page, G915_ID);
     await openPanel(page, slotOne);
     let generation = 17_000;
     await page.route(LEARN_ROUTES, async (route) => {
@@ -638,10 +692,7 @@ describe("redesign migration hardening", { concurrency: false }, () => {
       "accepted-conflict completion must not take focus from a new live control",
     );
 
-    const current = (await api()).controllers.pads.find(
-      (pad) => String(pad.slot) === slotOne,
-    );
-    assert.equal((await bind(slotOne, "A", "H", current.target_revision)).ok, true);
+    assert.equal((await bind(slotOne, "A", "H", G915)).ok, true);
     await page.unroute("**/redesign/api/bind");
     await page.unroute(LEARN_ROUTES);
     assert.deepEqual(page.ksxNoise, []);
@@ -651,12 +702,7 @@ describe("redesign migration hardening", { concurrency: false }, () => {
   test("a terminal learn-start refusal retires the auto-map walk", async () => {
     // Keep this test independent of the fixture mutations made by earlier
     // cases: auto-map needs at least one concrete unbound destination.
-    await fetch(`${BASE}/redesign/bind/clear`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: `slot=${slotOne}&function=${encodeURIComponent("rx.max")}`,
-      redirect: "manual",
-    });
+    await clearBind(slotOne, "rx.max");
     const page = await openBench();
     await openPanel(page, slotOne);
     let failStart = true;
@@ -720,7 +766,7 @@ describe("redesign migration hardening", { concurrency: false }, () => {
         browserState,
         learnSelector: payload.learn_selector,
         learnInstance: payload.learn_instance,
-        unbound: pad?.controls?.filter((control) => control.keys.length === 0).length,
+        unbound: exactSource(pad, IPAC).controls.filter((control) => control.keys.length === 0).length,
       })}`);
     }
     await page.waitForFunction(
@@ -753,12 +799,7 @@ describe("redesign migration hardening", { concurrency: false }, () => {
   });
 
   test("toggling the armed row cancels the whole auto-map walk", async () => {
-    await fetch(`${BASE}/redesign/bind/clear`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: `slot=${slotOne}&function=${encodeURIComponent("rx.max")}`,
-      redirect: "manual",
-    });
+    await clearBind(slotOne, "rx.max");
     const page = await openBench();
     await openPanel(page, slotOne);
     let generation = 20_000;
@@ -828,8 +869,10 @@ describe("redesign migration hardening", { concurrency: false }, () => {
   });
 
   test("a keyboard-cell conflict returns to the replacement key after confirm", async () => {
+    await seedConflict(G915);
     const page = await openBench();
     const keyboard = await ensureActiveKeyboard(page);
+    await revealCanvasItem(page, G915_ID);
     await openPanel(page, slotOne);
     let generation = 15_000;
     await page.route(LEARN_ROUTES, async (route) => {
@@ -885,22 +928,14 @@ describe("redesign migration hardening", { concurrency: false }, () => {
     );
     assert.equal(await keyCell.evaluate((cell) => cell === document.activeElement), true);
 
-    const current = (await api()).controllers.pads.find(
-      (pad) => String(pad.slot) === slotOne,
-    );
-    assert.equal((await bind(slotOne, "A", "H", current.target_revision)).ok, true);
+    assert.equal((await bind(slotOne, "A", "H", G915)).ok, true);
     await page.unroute(LEARN_ROUTES);
     assert.deepEqual(page.ksxNoise, []);
     await page.close();
   });
 
   test("an external revision retires the whole auto-map walk", async () => {
-    await fetch(`${BASE}/redesign/bind/clear`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: `slot=${slotOne}&function=${encodeURIComponent("rx.max")}`,
-      redirect: "manual",
-    });
+    await clearBind(slotOne, "rx.max");
     const page = await openBench();
     await openPanel(page, slotOne);
 
@@ -931,10 +966,7 @@ describe("redesign migration hardening", { concurrency: false }, () => {
       null,
       { timeout: 10_000 },
     );
-    const before = (await api()).controllers.pads.find(
-      (pad) => String(pad.slot) === slotOne,
-    );
-    assert.equal((await bind(slotOne, "A", "J", before.target_revision)).ok, true);
+    assert.equal((await bind(slotOne, "A", "J")).ok, true);
     await page.waitForFunction(
       () => getComputedStyle(document.querySelector(".rd-learnbar")).display === "none",
       null,

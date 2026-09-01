@@ -3318,11 +3318,13 @@ function wireSpotlight(stage: HTMLElement, viewport: HTMLElement): void {
 
 // ── The device workbench (the lane's thesis made real) ──────────────────────
 // The canvas is a WORKBENCH: the picker adds boards to it — several at once —
-// and each lands as a widget. Membership is the browser's arrangement state
-// (canvasPrefs, beside the camera and the widget geometry), never a daemon
-// claim; every fact ON a widget is served. Widgets are client-created
-// (`data-client-widget` — parity rule 3e); they are the real product surface
-// that replaced the disposable mock nodes.
+// and each lands as a widget. Canvas Add owns explicit placement; the daemon's
+// staged roster authorizes that remembered membership when the exact board is
+// present. That distinction matters after Start over or a daemon restart:
+// stale browser placement must not resurrect an unstaged input, while a
+// temporarily absent board can still reclaim its geometry. Widgets are
+// client-created (`data-client-widget` — parity rule 3e); they are the real
+// product surface that replaced the disposable mock nodes.
 
 function benchSelectors(): string[] {
   return canvasPrefs.bench ?? [];
@@ -3853,7 +3855,10 @@ async function toggleBenchDevice(selector: string): Promise<void> {
     // user's membership choice without mounting hardware that is no longer
     // known to be both present and staged. Reconciliation restores it at the
     // saved place when an authoritative scan offers the exact source again.
-    if (currentRow?.aria_current === "true" && rdStagingReachable) {
+    if (
+      currentRow?.aria_current === "true" && rdStagingReachable &&
+      !benchItemEl(selector)
+    ) {
       // The visible picker Add gesture authorizes one immediate, read-only
       // chart transaction. Passive restore/reconnect mounts use false.
       mountDeviceWidget(currentRow, bench.length, true, true);
@@ -4008,7 +4013,27 @@ function reconcileBenchWithRoster(): void {
     return;
   }
 
-  const bench = new Set(benchSelectors());
+  let benchOrder = benchSelectors();
+  let membershipChanged = false;
+  if (rdStagingReachable && rdDeviceScanAuthoritative) {
+    const rows = [...rdDevKb(), ...rdDevEnc(), ...rdDevExp()];
+    const visible = new Map(rows.map((row) => [row.selector, row] as const));
+    // A missing row may be a temporarily disconnected board; retain its
+    // latent reconnect intent. A PRESENT row marked unstaged is conclusive:
+    // Start over, daemon restart, or an external Remove must clear the node.
+    const next = benchOrder.filter((selector) => {
+      const row = visible.get(selector);
+      return !row || row.aria_current === "true";
+    });
+    membershipChanged = next.length !== benchOrder.length ||
+      next.some((selector, index) => selector !== benchOrder[index]);
+    if (membershipChanged) {
+      canvasPrefs.bench = next;
+      benchOrder = next;
+    }
+  }
+
+  const bench = new Set(benchOrder);
   const selectedIds = canvas.selectedItems()
     .map((item) => item.dataset.instanceId ?? "")
     .filter(Boolean);
@@ -4016,7 +4041,7 @@ function reconcileBenchWithRoster(): void {
   const focusedBefore = document.activeElement;
   let selectedPresentationChanged = false;
   let focusedPresentationId = "";
-  let changed = false;
+  let changed = membershipChanged;
   for (const item of Array.from(
     rdRoot?.querySelectorAll<HTMLElement>(".rd-dev-node[data-selector]") ?? [],
   )) {
@@ -4044,7 +4069,7 @@ function reconcileBenchWithRoster(): void {
     changed = true;
   }
 
-  benchSelectors().forEach((selector, index) => {
+  benchOrder.forEach((selector, index) => {
     const row = deviceRowFor(selector);
     if (row && !benchItemEl(selector)) {
       mountDeviceWidget(row, index);

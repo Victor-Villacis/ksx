@@ -3108,6 +3108,66 @@ describe("the device workbench", () => {
     await closePage(page);
   });
 
+  test("an authoritative empty draft clears stale canvas membership but keeps geometry", async () => {
+    const page = await openBench();
+    await page.click('[data-nx="rd-devs-open"]');
+    const row = page.locator(`.rd-devmodal button[data-selector="${G915}"]`);
+    if ((await row.getAttribute("aria-current")) !== "true") await row.click();
+    await page.keyboard.press("Escape");
+    const board = page.locator(
+      `.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`,
+    );
+    await board.waitFor({ state: "visible" });
+    const before = await board.evaluate((node) => ({
+      x: Number(node.dataset.canvasX),
+      y: Number(node.dataset.canvasY),
+      width: Number(node.dataset.canvasWidth),
+      height: Number(node.dataset.canvasHeight),
+    }));
+
+    await page.route("**/api/redesign*", async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      for (const tier of ["keyboards", "encoders", "experimental"]) {
+        for (const device of payload.devices[tier] ?? []) {
+          device.aria_current = "false";
+          device.staged_revision = "";
+        }
+      }
+      payload.operations.draft_empty = true;
+      payload.operations.draft_revision = `${payload.operations.draft_revision}-empty`;
+      await route.fulfill({ response, json: payload });
+    });
+    try {
+      await page.click(".rd-themed > summary");
+      await page.click('.rd-thememenu form:has(input[value="matrix"]) button');
+      await board.waitFor({ state: "detached", timeout: 10_000 });
+      assert.deepEqual(
+        await page.evaluate(({ selector, instanceId }) => {
+          const saved = JSON.parse(localStorage.getItem("ksx-redesign-canvas") ?? "{}");
+          const geometry = saved.widgets?.[instanceId];
+          return {
+            onBench: saved.bench?.includes(selector) === true,
+            geometry: geometry
+              ? {
+                x: Number(geometry.x),
+                y: Number(geometry.y),
+                width: Number(geometry.width),
+                height: Number(geometry.height),
+              }
+              : null,
+          };
+        }, { selector: G915, instanceId: G915_SLUG }),
+        { onBench: false, geometry: before },
+        "an empty authoritative draft removes the board without losing its return position",
+      );
+    } finally {
+      await page.unrouteAll({ behavior: "wait" });
+    }
+    assert.deepEqual(page.ksxNoise, [], "draft reconciliation stays error-free");
+    await closePage(page);
+  });
+
   test("two same-name keyboards own independent full surfaces across refresh and peer removal", async () => {
     const twinContext = await browser.newContext({
       // Keep both full boards materially on screen so source-focus changes
@@ -3701,7 +3761,28 @@ describe("the device workbench", () => {
     const page = await openBench();
     await page.click('[data-nx="rd-devs-open"]');
     const g915PickerRow = page.locator(`.rd-devmodal button[data-selector="${G915}"]`);
-    if ((await g915PickerRow.getAttribute("aria-pressed")) === "true") {
+    // The shared daemon may still stage this source even when another test's
+    // authoritative empty-draft repaint cleared only its browser placement.
+    // Normalize both halves: place an already-staged source first when needed,
+    // then remove it so the delayed gesture below must issue a real Add POST.
+    if ((await g915PickerRow.getAttribute("aria-current")) === "true") {
+      if ((await g915PickerRow.getAttribute("aria-pressed")) !== "true") {
+        await g915PickerRow.click();
+        await page.waitForFunction(
+          (selector) => document.querySelector(
+            `.rd-devmodal button[data-selector="${selector}"]`,
+          )?.getAttribute("aria-pressed") === "true",
+          G915,
+        );
+      }
+      await g915PickerRow.click();
+      await page.waitForFunction(
+        (selector) => document.querySelector(
+          `.rd-devmodal button[data-selector="${selector}"]`,
+        )?.getAttribute("aria-current") === "false",
+        G915,
+      );
+    } else if ((await g915PickerRow.getAttribute("aria-pressed")) === "true") {
       await g915PickerRow.click();
     }
     await page.waitForFunction(

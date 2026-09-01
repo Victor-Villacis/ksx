@@ -353,11 +353,10 @@ describe("redesign migration hardening", { concurrency: false }, () => {
       x: selectorGeometry.x,
       y: selectorGeometry.y,
       // Keyboard boards are not resizable: their exact selector slot owns
-      // position/scale, while the current one-surface board owns dimensions.
-      // Removing the obsolete identity-card fascia lets the served key deck
-      // settle to its intrinsic 529px footprint instead of reserving 560px.
+      // position/scale and any still-valid saved height, while the current
+      // one-surface board owns its fixed width.
       width: 980,
-      height: 529,
+      height: selectorGeometry.height,
       manualScale: selectorGeometry.manualScale,
     };
 
@@ -369,26 +368,29 @@ describe("redesign migration hardening", { concurrency: false }, () => {
         { timeout: 20_000 },
       );
       await page.waitForFunction(
-        (id) => document.querySelector(
-          `.forma-canvas-stage > [data-instance-id="${id}"][data-canvas-x]`,
-        ),
-        G915_ID,
+        (selector) => {
+          const saved = JSON.parse(localStorage.getItem("ksx-redesign-canvas") ?? "{}");
+          return saved.bench?.includes(selector) !== true;
+        },
+        G915,
         { timeout: 20_000 },
       );
       assert.equal(
         await page.locator(
           `.forma-canvas-stage > [data-instance-id="${G915_ID}"]`,
-        ).getAttribute("data-mapping-available"),
-        "false",
-        "the pre-coupling canvas membership begins read-only until the exact keyboard is added to the draft",
+        ).count(),
+        0,
+        "an unstaged source cannot be resurrected by pre-coupling canvas membership",
       );
-      assert.deepEqual(await mountedGeometry(), expectedGeometry);
       assert.deepEqual(
-        await page.evaluate(() =>
-          JSON.parse(localStorage.getItem("ksx-redesign-canvas") ?? "{}").widgets?.keyboard
-        ),
-        staleLegacyGeometry,
-        "inactive selector geometry does not let an unrelated board claim the synthetic slot",
+        await page.evaluate((id) => {
+          const widgets = JSON.parse(
+            localStorage.getItem("ksx-redesign-canvas") ?? "{}",
+          ).widgets ?? {};
+          return { selector: widgets[id], legacy: widgets.keyboard };
+        }, G915_ID),
+        { selector: selectorGeometry, legacy: staleLegacyGeometry },
+        "clearing stale membership preserves both geometry candidates until a real Add chooses the exact board",
       );
 
       await page.reload({ waitUntil: "domcontentloaded" });
@@ -397,33 +399,18 @@ describe("redesign migration hardening", { concurrency: false }, () => {
         null,
         { timeout: 20_000 },
       );
-      await page.waitForFunction(
-        (id) => document.querySelector(
-          `.forma-canvas-stage > [data-instance-id="${id}"][data-canvas-x]`,
-        ),
-        G915_ID,
-        { timeout: 20_000 },
-      );
-      assert.deepEqual(
-        await mountedGeometry(),
-        expectedGeometry,
-        "reload restores the collision-safe selector slot exactly",
+      assert.equal(
+        await page.locator(
+          `.forma-canvas-stage > [data-instance-id="${G915_ID}"]`,
+        ).count(),
+        0,
+        "reload cannot revive the retired unstaged membership",
       );
 
-      // A pre-coupling browser store can still remember a canvas-only board.
-      // The current product has no keyboard-card staging verb: remove and
-      // re-add through the picker couples canvas membership to one additive
-      // staged source while preserving that board's saved geometry.
+      // One current picker Add couples canvas membership to one additive
+      // staged source while preserving that exact board's saved geometry.
       await page.click('[data-nx="rd-devs-open"]');
       const pickerRow = page.locator(`.rd-devmodal button[data-selector="${G915}"]`);
-      await pickerRow.click();
-      await page.waitForFunction(
-        (id) => !document.querySelector(
-          `.forma-canvas-stage > [data-instance-id="${id}"]`,
-        ),
-        G915_ID,
-        { timeout: 20_000 },
-      );
       await pickerRow.click();
       await page.waitForFunction(
         (id) => document.querySelector(

@@ -1245,8 +1245,8 @@ mod tests {
 
     /// Keyboard geometry contains real controls and inert spacer cells in the
     /// same served list. The browser-owned canvas starts without a device, but
-    /// its hidden singleton projection still crosses both seams with truthful
-    /// attributes so Add can move it without rebuilding or promoting cells.
+    /// its hidden reactive template still crosses both seams with truthful
+    /// attributes so each exact keyboard can clone one independent surface.
     #[test]
     fn the_served_keyboard_distinguishes_keys_from_spacers_before_hydration() {
         let payload = fixture_payload();
@@ -1280,7 +1280,11 @@ mod tests {
 
         let page = EmbeddedPage::load("/redesign").unwrap();
         let html = render_redesign(&page, &payload, None).html;
-        assert!(html.contains("data-rd-keyboard-surface-depot"), "{html}");
+        assert!(html.contains("data-rd-keyboard-surface-template"), "{html}");
+        assert!(
+            html.contains("data-rd-keyboard-surface-template-body"),
+            "{html}"
+        );
         assert!(!html.contains(r#"data-instance-id="keyboard""#), "{html}");
         let button_tags: Vec<&str> = html
             .match_indices("<button")
@@ -1863,7 +1867,11 @@ mod tests {
             .expect("a close tag");
         let parsed: RedesignPayload =
             serde_json::from_str(body).expect("the embedded block IS a RedesignPayload");
-        assert_eq!(parsed, fixture_payload());
+        assert_eq!(
+            serde_json::to_value(parsed).expect("parsed payload serializes"),
+            serde_json::to_value(fixture_payload()).expect("fixture payload serializes"),
+            "wire-visible payload fields round-trip exactly"
+        );
     }
 
     /// The cross-language guards: the entry registers exactly this island,

@@ -45,6 +45,18 @@ pub enum ConfigError {
     ToggleOnMacroTrigger(String),
     #[error("unknown device alias '{0}' (no [[device]] entry has this alias)")]
     UnknownDeviceAlias(String),
+    #[error(
+        "slot {0} mixes legacy keyboard/mouse/preset fields with [[slot.source]] rows; use exactly one representation"
+    )]
+    MixedSlotSourceRepresentations(u8),
+    #[error(
+        "slot {slot} lists the same {kind} source '{device}' more than once; one physical event stream may feed a slot only once"
+    )]
+    DuplicateSlotSource {
+        slot: u8,
+        device: String,
+        kind: String,
+    },
     #[error(transparent)]
     InvalidSlotNumber(#[from] InvalidSlotNumber),
     #[error("cannot access {path}: {source}")]

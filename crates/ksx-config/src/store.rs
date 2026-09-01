@@ -737,6 +737,7 @@ mod tests {
                 persona: ksx_core::Persona::default(),
                 socd: ksx_core::Socd::default(),
                 macros: Default::default(),
+                sources: Vec::new(),
             }],
         }
     }
@@ -791,6 +792,7 @@ mod tests {
                     persona: ksx_core::Persona::default(),
                     socd: ksx_core::Socd::default(),
                     macros: Default::default(),
+                    sources: Vec::new(),
                 }],
             }],
         };

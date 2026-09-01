@@ -461,6 +461,7 @@ mod tests {
                     persona: Persona::Xbox360,
                     socd: Socd::default(),
                     macros: Default::default(),
+                    sources: Vec::new(),
                 },
                 SlotEntry {
                     number: 5,
@@ -470,6 +471,7 @@ mod tests {
                     persona: Persona::PlayStation,
                     socd: Socd::Neutral,
                     macros: ksx_core::MacroSwitch::Off,
+                    sources: Vec::new(),
                 },
             ],
         }
@@ -498,6 +500,7 @@ mod tests {
                         persona: Persona::PlayStation,
                         socd: Socd::UpPriority,
                         macros: ksx_core::MacroSwitch::Off,
+                        sources: Vec::new(),
                     }],
                 },
                 // The minimal shape: every optional field absent.

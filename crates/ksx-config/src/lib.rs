@@ -47,7 +47,9 @@ pub mod validate;
 #[cfg(test)]
 pub(crate) mod test_util;
 
-pub use config::{Backend, ConfigFile, DeviceEntry, Settings, SlotEntry, SCHEMA_VERSION};
+pub use config::{
+    Backend, ConfigFile, DeviceEntry, Settings, SlotEntry, SourceEntry, SCHEMA_VERSION,
+};
 pub use error::ConfigError;
 pub use function::{
     function_name, macro_function_name, macro_name, parse_function, CONSUME, MACRO_PREFIX,

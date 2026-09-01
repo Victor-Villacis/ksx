@@ -9,7 +9,7 @@ use std::fmt;
 
 use serde::Serialize;
 
-use crate::config::ConfigFile;
+use crate::config::{source_kind_name, ConfigFile};
 use crate::error::ConfigError;
 use crate::function::{macro_name, parse_function, CONSUME, MACRO_PREFIX};
 use crate::games::GamesFile;
@@ -97,6 +97,14 @@ pub enum Issue {
     /// Slot keyboard/mouse is neither a `[[device]]` alias nor an instance
     /// path (paths are recognized by containing `\`).
     UnknownDeviceRef { slot: u8, reference: String },
+    /// A slot uses both the legacy source fields and `[[slot.source]]` rows.
+    MixedSlotSourceRepresentations { slot: u8 },
+    /// The same resolved physical event stream is routed into one slot twice.
+    DuplicatePhysicalSource {
+        slot: u8,
+        reference: String,
+        source_kind: String,
+    },
     /// Preset binding key that is not a function name.
     UnknownFunction { preset: String, function: String },
     /// Axis function with a value that is not `min`/`max`/i16.
@@ -329,6 +337,15 @@ pub enum Issue {
         slot: u8,
         preset: String,
     },
+    /// A game slot uses both legacy source fields and source rows.
+    GameMixedSourceRepresentations { game: String, slot: u8 },
+    /// The same physical event stream is repeated within one game slot.
+    GameDuplicatePhysicalSource {
+        game: String,
+        slot: u8,
+        reference: String,
+        source_kind: String,
+    },
     /// Advisory `user_index` outside 1..=4.
     GameUserIndexOutOfRange { game: String, slot: u8, value: u8 },
 }
@@ -462,6 +479,18 @@ impl fmt::Display for Issue {
             Issue::UnknownDeviceRef { slot, reference } => {
                 write!(f, "slot {slot} references device '{reference}', which is neither a [[device]] alias nor an instance path")
             }
+            Issue::MixedSlotSourceRepresentations { slot } => write!(
+                f,
+                "slot {slot} mixes keyboard/mouse/preset fields with [[slot.source]] rows; use exactly one source representation"
+            ),
+            Issue::DuplicatePhysicalSource {
+                slot,
+                reference,
+                source_kind,
+            } => write!(
+                f,
+                "slot {slot} lists {source_kind} source '{reference}' more than once; one physical event stream may feed a slot only once"
+            ),
             Issue::UnknownFunction { preset, function } => {
                 write!(f, "preset '{preset}': '{function}' is not a function name")
             }
@@ -797,6 +826,19 @@ impl fmt::Display for Issue {
                     "game '{game}': slot {slot} references unknown preset '{preset}'"
                 )
             }
+            Issue::GameMixedSourceRepresentations { game, slot } => write!(
+                f,
+                "game '{game}': slot {slot} mixes keyboard/mouse/preset fields with source rows; use exactly one source representation"
+            ),
+            Issue::GameDuplicatePhysicalSource {
+                game,
+                slot,
+                reference,
+                source_kind,
+            } => write!(
+                f,
+                "game '{game}': slot {slot} lists {source_kind} source '{reference}' more than once; one physical event stream may feed a slot only once"
+            ),
             Issue::GameUserIndexOutOfRange { game, slot, value } => {
                 write!(
                     f,
@@ -853,11 +895,16 @@ pub fn validate(config: &ConfigFile, presets: &[PresetFile]) -> Vec<Issue> {
                 number: slot.number,
             });
         }
-        if !known_presets.contains(slot.preset.as_str()) {
-            issues.push(Issue::UnknownPresetRef {
-                slot: slot.number,
-                preset: slot.preset.clone(),
-            });
+        if !slot.sources.is_empty() && slot.has_legacy_sources() {
+            issues.push(Issue::MixedSlotSourceRepresentations { slot: slot.number });
+        }
+        for preset in slot.preset_refs() {
+            if !known_presets.contains(preset) {
+                issues.push(Issue::UnknownPresetRef {
+                    slot: slot.number,
+                    preset: preset.to_owned(),
+                });
+            }
         }
         if let Some((reason, instead)) = persona_gap(slot.persona) {
             issues.push(Issue::PersonaNotImplemented {
@@ -874,6 +921,27 @@ pub fn validate(config: &ConfigFile, presets: &[PresetFile]) -> Vec<Issue> {
                 issues.push(Issue::UnknownDeviceRef {
                     slot: slot.number,
                     reference: reference.clone(),
+                });
+            }
+        }
+        let mut physical_sources = BTreeSet::new();
+        for source in &slot.sources {
+            let resolved = config
+                .resolve_device(&source.device)
+                .map(|device| device.as_str().to_owned());
+            if resolved.is_err() {
+                issues.push(Issue::UnknownDeviceRef {
+                    slot: slot.number,
+                    reference: source.device.clone(),
+                });
+            }
+            let identity = resolved.unwrap_or_else(|_| source.device.clone());
+            let kind = source_kind_name(source.kind);
+            if !physical_sources.insert((kind, identity)) {
+                issues.push(Issue::DuplicatePhysicalSource {
+                    slot: slot.number,
+                    reference: source.device.clone(),
+                    source_kind: kind.to_owned(),
                 });
             }
         }
@@ -923,8 +991,10 @@ pub fn validate(config: &ConfigFile, presets: &[PresetFile]) -> Vec<Issue> {
 
     let cores = core_presets(presets);
     for slot in &config.slots {
-        socd_issues(&cores, slot.number, &slot.preset, slot.socd, &mut issues);
-        macros_off_issue(&cores, slot.number, &slot.preset, slot.macros, &mut issues);
+        for preset in slot.preset_refs() {
+            socd_issues(&cores, slot.number, preset, slot.socd, &mut issues);
+            macros_off_issue(&cores, slot.number, preset, slot.macros, &mut issues);
+        }
     }
     issues
 }
@@ -954,12 +1024,20 @@ pub fn validate_games(games: &GamesFile, presets: &[PresetFile]) -> Vec<Issue> {
                     number: slot.number,
                 });
             }
-            if !known_presets.contains(slot.preset.as_str()) {
-                issues.push(Issue::GameUnknownPresetRef {
+            if !slot.sources.is_empty() && slot.has_legacy_sources() {
+                issues.push(Issue::GameMixedSourceRepresentations {
                     game: game.title.clone(),
                     slot: slot.number,
-                    preset: slot.preset.clone(),
                 });
+            }
+            for preset in slot.preset_refs() {
+                if !known_presets.contains(preset) {
+                    issues.push(Issue::GameUnknownPresetRef {
+                        game: game.title.clone(),
+                        slot: slot.number,
+                        preset: preset.to_owned(),
+                    });
+                }
             }
             if let Some((reason, instead)) = persona_gap(slot.persona) {
                 issues.push(Issue::GamePersonaNotImplemented {
@@ -970,8 +1048,22 @@ pub fn validate_games(games: &GamesFile, presets: &[PresetFile]) -> Vec<Issue> {
                     instead,
                 });
             }
-            socd_issues(&cores, slot.number, &slot.preset, slot.socd, &mut issues);
-            macros_off_issue(&cores, slot.number, &slot.preset, slot.macros, &mut issues);
+            for preset in slot.preset_refs() {
+                socd_issues(&cores, slot.number, preset, slot.socd, &mut issues);
+                macros_off_issue(&cores, slot.number, preset, slot.macros, &mut issues);
+            }
+            let mut physical_sources = BTreeSet::new();
+            for source in &slot.sources {
+                let kind = source_kind_name(source.kind);
+                if !physical_sources.insert((kind, source.device.as_str())) {
+                    issues.push(Issue::GameDuplicatePhysicalSource {
+                        game: game.title.clone(),
+                        slot: slot.number,
+                        reference: source.device.clone(),
+                        source_kind: kind.to_owned(),
+                    });
+                }
+            }
             if let Some(value) = slot.user_index {
                 if !(1..=4).contains(&value) {
                     issues.push(Issue::GameUserIndexOutOfRange {
@@ -1726,6 +1818,7 @@ preset = "default"
                     persona: Persona::default(),
                     socd: Socd::default(),
                     macros: Default::default(),
+                    sources: Vec::new(),
                 },
                 SlotEntry {
                     number: 1,
@@ -1735,6 +1828,7 @@ preset = "default"
                     persona: Persona::default(),
                     socd: Socd::default(),
                     macros: Default::default(),
+                    sources: Vec::new(),
                 },
                 SlotEntry {
                     number: MAX_SLOTS + 1,
@@ -1744,6 +1838,7 @@ preset = "default"
                     persona: Persona::default(),
                     socd: Socd::default(),
                     macros: Default::default(),
+                    sources: Vec::new(),
                 },
             ],
             ..ConfigFile::default()
@@ -1765,6 +1860,66 @@ preset = "default"
     }
 
     #[test]
+    fn source_rows_validate_mixing_aliases_presets_and_duplicate_identity() {
+        let cfg = config(
+            r#"
+schema_version = 1
+
+[[device]]
+id = 'HID\VID_1111&PID_0001\SAME'
+alias = "first alias"
+
+[[device]]
+id = 'HID\VID_1111&PID_0001\SAME'
+alias = "second alias"
+
+[[slot]]
+number = 1
+keyboard = "first alias"
+preset = "default"
+[[slot.source]]
+device = "first alias"
+kind = "keyboard"
+preset = "default"
+
+[[slot]]
+number = 2
+[[slot.source]]
+device = "ghost"
+kind = "keyboard"
+preset = "missing"
+
+[[slot]]
+number = 3
+[[slot.source]]
+device = "first alias"
+kind = "keyboard"
+preset = "default"
+[[slot.source]]
+device = "second alias"
+kind = "keyboard"
+preset = "default"
+"#,
+        );
+        let issues = validate(&cfg, &[]);
+        assert!(issues.contains(&Issue::MixedSlotSourceRepresentations { slot: 1 }));
+        assert!(issues.contains(&Issue::UnknownDeviceRef {
+            slot: 2,
+            reference: "ghost".into(),
+        }));
+        assert!(issues.contains(&Issue::UnknownPresetRef {
+            slot: 2,
+            preset: "missing".into(),
+        }));
+        assert!(issues.contains(&Issue::DuplicatePhysicalSource {
+            slot: 3,
+            reference: "second alias".into(),
+            source_kind: "keyboard".into(),
+        }));
+        assert_eq!(issues.len(), 4, "{issues:#?}");
+    }
+
+    #[test]
     fn a_fifth_xinput_slot_is_reported_with_the_fix_named() {
         let slot = |number: u8, persona: Persona| SlotEntry {
             number,
@@ -1774,6 +1929,7 @@ preset = "default"
             persona,
             socd: Socd::default(),
             macros: Default::default(),
+            sources: Vec::new(),
         };
         // 5 Xbox slots: one more than Windows can ever show to a game.
         let cfg = ConfigFile {
@@ -1820,6 +1976,7 @@ preset = "default"
             persona: Persona::Xbox360,
             socd: Socd::default(),
             macros: Default::default(),
+            sources: Vec::new(),
         };
         let mut games: GamesFile =
             toml::from_str("[[game]]\ntitle = \"MAME 8P\"\npath = \"C:\\\\mame\\\\mame.exe\"\n")
@@ -1847,6 +2004,7 @@ preset = "default"
             persona,
             socd: Socd::default(),
             macros: Default::default(),
+            sources: Vec::new(),
         };
         for persona in [Persona::Xbox360, Persona::PlayStation, Persona::DualSense] {
             let cfg = ConfigFile {
@@ -1989,6 +2147,7 @@ preset = "default"
             persona,
             socd: Socd::default(),
             macros: Default::default(),
+            sources: Vec::new(),
         };
         let cfg = ConfigFile {
             slots: vec![
@@ -2011,6 +2170,7 @@ preset = "default"
             persona: Persona::DualSense,
             socd: Socd::default(),
             macros: Default::default(),
+            sources: Vec::new(),
         };
         // A full pool and the pad past it, both derived from the constant that
         // decides them. Hard-coded values would make a raised ceiling fail at
@@ -2057,6 +2217,7 @@ preset = "default"
                 persona: Persona::DualSense,
                 socd: Socd::default(),
                 macros: Default::default(),
+                sources: Vec::new(),
             })
             .collect();
         assert_eq!(
@@ -2090,6 +2251,7 @@ preset = "default"
                 persona,
                 socd: Socd::default(),
                 macros: Default::default(),
+                sources: Vec::new(),
             }];
             assert_eq!(validate_games(&games, &[]), vec![], "{persona}");
         }
@@ -2108,6 +2270,7 @@ preset = "default"
                 persona,
                 socd: Socd::default(),
                 macros: Default::default(),
+                sources: Vec::new(),
             }];
             let issues = validate_games(&games, &[]);
             assert!(
@@ -2511,6 +2674,7 @@ preset = "default"
             persona: Persona::default(),
             socd: Socd::default(),
             macros,
+            sources: Vec::new(),
         };
 
         let cfg = ConfigFile {
@@ -2783,6 +2947,55 @@ preset = "empty"
     }
 
     #[test]
+    fn game_source_rows_validate_mixing_presets_and_duplicates() {
+        let games: GamesFile = toml::from_str(
+            r#"
+[[game]]
+title = "Fan-in"
+path = 'C:\fan-in.exe'
+
+[[game.slot]]
+number = 1
+keyboard = 'HID\LEGACY'
+preset = "default"
+[[game.slot.source]]
+device = 'HID\SOURCE'
+kind = "keyboard"
+preset = "default"
+
+[[game.slot]]
+number = 2
+[[game.slot.source]]
+device = 'HID\SAME'
+kind = "keyboard"
+preset = "missing"
+[[game.slot.source]]
+device = 'HID\SAME'
+kind = "keyboard"
+preset = "default"
+"#,
+        )
+        .unwrap();
+        let issues = validate_games(&games, &[]);
+        assert!(issues.contains(&Issue::GameMixedSourceRepresentations {
+            game: "Fan-in".into(),
+            slot: 1,
+        }));
+        assert!(issues.contains(&Issue::GameUnknownPresetRef {
+            game: "Fan-in".into(),
+            slot: 2,
+            preset: "missing".into(),
+        }));
+        assert!(issues.contains(&Issue::GameDuplicatePhysicalSource {
+            game: "Fan-in".into(),
+            slot: 2,
+            reference: r"HID\SAME".into(),
+            source_kind: "keyboard".into(),
+        }));
+        assert_eq!(issues.len(), 3, "{issues:#?}");
+    }
+
+    #[test]
     fn issues_display_and_serialize() {
         let issue = Issue::UnknownPresetRef {
             slot: 2,
@@ -2799,7 +3012,7 @@ preset = "empty"
     /// How many `Issue` variants there are. Bump it when you add one, and add
     /// a representative to [`one_of_every_issue_variant`] — the exhaustive
     /// `match` in [`expected_tag`] will already have refused to compile.
-    const ISSUE_VARIANTS: usize = 51;
+    const ISSUE_VARIANTS: usize = 55;
 
     /// The snake_case `kind` tag each variant serializes as, written out by
     /// hand so this pins the wire word rather than re-deriving it.
@@ -2823,6 +3036,8 @@ preset = "empty"
             Issue::GamePersonaCapacity { .. } => "game_persona_capacity",
             Issue::UnknownPresetRef { .. } => "unknown_preset_ref",
             Issue::UnknownDeviceRef { .. } => "unknown_device_ref",
+            Issue::MixedSlotSourceRepresentations { .. } => "mixed_slot_source_representations",
+            Issue::DuplicatePhysicalSource { .. } => "duplicate_physical_source",
             Issue::UnknownFunction { .. } => "unknown_function",
             Issue::InvalidAxisValue { .. } => "invalid_axis_value",
             Issue::UnknownKeyName { .. } => "unknown_key_name",
@@ -2860,6 +3075,8 @@ preset = "empty"
             Issue::GameTooManyHidMaestroPads { .. } => "game_too_many_hid_maestro_pads",
             Issue::GameDuplicateSlotNumber { .. } => "game_duplicate_slot_number",
             Issue::GameUnknownPresetRef { .. } => "game_unknown_preset_ref",
+            Issue::GameMixedSourceRepresentations { .. } => "game_mixed_source_representations",
+            Issue::GameDuplicatePhysicalSource { .. } => "game_duplicate_physical_source",
             Issue::GameUserIndexOutOfRange { .. } => "game_user_index_out_of_range",
         }
     }
@@ -2913,6 +3130,12 @@ preset = "empty"
             Issue::UnknownDeviceRef {
                 slot: 3,
                 reference: "SENTINEL_DEVICE".into(),
+            },
+            Issue::MixedSlotSourceRepresentations { slot: 3 },
+            Issue::DuplicatePhysicalSource {
+                slot: 3,
+                reference: "SENTINEL_DEVICE".into(),
+                source_kind: "SENTINEL_SOURCE_KIND".into(),
             },
             Issue::UnknownFunction {
                 preset: p(),
@@ -3099,6 +3322,13 @@ preset = "empty"
                 slot: 3,
                 preset: p(),
             },
+            Issue::GameMixedSourceRepresentations { game: g(), slot: 3 },
+            Issue::GameDuplicatePhysicalSource {
+                game: g(),
+                slot: 3,
+                reference: "SENTINEL_DEVICE".into(),
+                source_kind: "SENTINEL_SOURCE_KIND".into(),
+            },
             Issue::GameUserIndexOutOfRange {
                 game: g(),
                 slot: 3,
@@ -3209,6 +3439,8 @@ preset = "empty"
             | Issue::GamePersonaCapacity { .. }
             | Issue::UnknownPresetRef { .. }
             | Issue::UnknownDeviceRef { .. }
+            | Issue::MixedSlotSourceRepresentations { .. }
+            | Issue::DuplicatePhysicalSource { .. }
             | Issue::UnknownFunction { .. }
             | Issue::InvalidAxisValue { .. }
             | Issue::UnknownKeyName { .. }
@@ -3231,6 +3463,8 @@ preset = "empty"
             | Issue::GameTooManyHidMaestroPads { .. }
             | Issue::GameDuplicateSlotNumber { .. }
             | Issue::GameUnknownPresetRef { .. }
+            | Issue::GameMixedSourceRepresentations { .. }
+            | Issue::GameDuplicatePhysicalSource { .. }
             | Issue::GameUserIndexOutOfRange { .. } => false,
         }
     }

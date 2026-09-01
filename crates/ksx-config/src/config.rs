@@ -1,6 +1,10 @@
 //! Main config file schema: `%APPDATA%\ksx\config.toml`.
 
-use ksx_core::{Blocking, DeviceId, DeviceRef, MacroSwitch, Persona, SlotSpec, Socd};
+use std::collections::HashSet;
+
+use ksx_core::{
+    Blocking, DeviceId, DeviceRef, MacroSwitch, Persona, SlotSpec, Socd, SourceKind, SourceSpec,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ConfigError;
@@ -139,6 +143,105 @@ pub enum Backend {
     Winusb,
 }
 
+/// One physical input route into a controller slot.
+///
+/// A route owns its preset because fan-in is useful only when each physical
+/// source can describe its own keys. Two keyboards may therefore feed one
+/// virtual controller without pretending to be one device or sharing a
+/// mapping file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceEntry {
+    /// A `[[device]]` alias or a literal device instance path.
+    pub device: String,
+    /// Which event stream this device contributes.
+    #[serde(with = "source_kind_serde")]
+    pub kind: SourceKind,
+    /// The preset applied only to this source's events.
+    pub preset: String,
+}
+
+impl SourceEntry {
+    pub fn new(device: impl Into<String>, kind: SourceKind, preset: impl Into<String>) -> Self {
+        Self {
+            device: device.into(),
+            kind,
+            preset: preset.into(),
+        }
+    }
+}
+
+pub(crate) const fn source_kind_name(kind: SourceKind) -> &'static str {
+    match kind {
+        SourceKind::Keyboard => "keyboard",
+        SourceKind::Mouse => "mouse",
+    }
+}
+
+/// Encode a canonical source list with the smallest lossless on-disk shape.
+///
+/// The legacy fields can express at most one keyboard, at most one mouse and
+/// one shared preset. Anything richer stays as explicit source rows.
+pub(crate) fn source_fields<F>(
+    spec: &SlotSpec,
+    display: F,
+) -> (Option<String>, Option<String>, String, Vec<SourceEntry>)
+where
+    F: Fn(&DeviceId) -> String,
+{
+    if spec.sources.is_empty() {
+        return (None, None, spec.primary_preset().to_owned(), Vec::new());
+    }
+
+    let shared_preset = spec.sources[0].preset.as_str();
+    let one_keyboard = spec.sources_of_kind(SourceKind::Keyboard).nth(1).is_none();
+    let one_mouse = spec.sources_of_kind(SourceKind::Mouse).nth(1).is_none();
+    let one_preset = spec
+        .sources
+        .iter()
+        .all(|source| source.preset == shared_preset);
+
+    if one_keyboard && one_mouse && one_preset {
+        return (
+            spec.source(SourceKind::Keyboard)
+                .map(|source| display(&source.device)),
+            spec.source(SourceKind::Mouse)
+                .map(|source| display(&source.device)),
+            shared_preset.to_owned(),
+            Vec::new(),
+        );
+    }
+
+    let sources = spec
+        .sources
+        .iter()
+        .map(|source| SourceEntry::new(display(&source.device), source.kind, &source.preset))
+        .collect();
+    (None, None, String::new(), sources)
+}
+
+mod source_kind_serde {
+    use ksx_core::SourceKind;
+    use serde::{de, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &SourceKind, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(super::source_kind_name(*value))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<SourceKind, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match String::deserialize(deserializer)?.as_str() {
+            "keyboard" => Ok(SourceKind::Keyboard),
+            "mouse" => Ok(SourceKind::Mouse),
+            other => Err(de::Error::unknown_variant(other, &["keyboard", "mouse"])),
+        }
+    }
+}
+
 /// One `[[slot]]` entry. `keyboard`/`mouse` refer to a `[[device]]` alias, or
 /// hold a literal instance path.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +251,7 @@ pub struct SlotEntry {
     pub keyboard: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mouse: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub preset: String,
     /// Which controller this slot presents itself as. Absent means
     /// [`Persona::Xbox360`], which is why every pre-persona config still loads
@@ -182,6 +286,39 @@ pub struct SlotEntry {
         skip_serializing_if = "crate::macro_serde::switch::is_default"
     )]
     pub macros: MacroSwitch,
+    /// Canonical fan-in spelling. Serializes as `[[slot.source]]` rows.
+    ///
+    /// Empty means the legacy `keyboard` / `mouse` / shared `preset` fields
+    /// above are authoritative. The two representations may never be mixed.
+    #[serde(default, rename = "source", skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<SourceEntry>,
+}
+
+impl SlotEntry {
+    pub(crate) fn has_legacy_sources(&self) -> bool {
+        self.keyboard.is_some() || self.mouse.is_some() || !self.preset.is_empty()
+    }
+
+    pub(crate) fn preset_refs(&self) -> Vec<&str> {
+        let refs: Vec<_> = if self.sources.is_empty() {
+            vec![self.preset.as_str()]
+        } else if self.has_legacy_sources() {
+            std::iter::once(self.preset.as_str())
+                .chain(self.sources.iter().map(|source| source.preset.as_str()))
+                .collect()
+        } else {
+            self.sources
+                .iter()
+                .map(|source| source.preset.as_str())
+                .collect()
+        };
+        refs.into_iter().fold(Vec::new(), |mut unique, preset| {
+            if !unique.contains(&preset) {
+                unique.push(preset);
+            }
+            unique
+        })
+    }
 }
 
 impl ConfigFile {
@@ -207,6 +344,32 @@ impl ConfigFile {
 
     /// Resolve one slot entry into a core [`SlotSpec`].
     pub fn slot_spec(&self, slot: &SlotEntry) -> Result<SlotSpec, ConfigError> {
+        if !slot.sources.is_empty() {
+            if slot.has_legacy_sources() {
+                return Err(ConfigError::MixedSlotSourceRepresentations(slot.number));
+            }
+            let mut seen = HashSet::new();
+            let mut sources = Vec::with_capacity(slot.sources.len());
+            for source in &slot.sources {
+                let device = self.resolve_device(&source.device)?;
+                if !seen.insert((source.kind, device.clone())) {
+                    return Err(ConfigError::DuplicateSlotSource {
+                        slot: slot.number,
+                        device: source.device.clone(),
+                        kind: source_kind_name(source.kind).to_owned(),
+                    });
+                }
+                sources.push(SourceSpec::new(source.kind, device, source.preset.clone()));
+            }
+            return SlotSpec::from_sources(slot.number, sources, String::new())
+                .map(|spec| {
+                    spec.with_persona(slot.persona)
+                        .with_socd(slot.socd)
+                        .with_macros(slot.macros)
+                })
+                .map_err(Into::into);
+        }
+
         let keyboard = slot
             .keyboard
             .as_deref()
@@ -246,6 +409,32 @@ impl ConfigFile {
         &self,
         slot: &crate::games::GameSlotEntry,
     ) -> Result<SlotSpec, ConfigError> {
+        if !slot.sources.is_empty() {
+            if slot.has_legacy_sources() {
+                return Err(ConfigError::MixedSlotSourceRepresentations(slot.number));
+            }
+            let mut seen = HashSet::new();
+            let mut sources = Vec::with_capacity(slot.sources.len());
+            for source in &slot.sources {
+                let device = self.resolve_device(&source.device)?;
+                if !seen.insert((source.kind, device.clone())) {
+                    return Err(ConfigError::DuplicateSlotSource {
+                        slot: slot.number,
+                        device: source.device.clone(),
+                        kind: source_kind_name(source.kind).to_owned(),
+                    });
+                }
+                sources.push(SourceSpec::new(source.kind, device, source.preset.clone()));
+            }
+            return SlotSpec::from_sources(slot.number, sources, String::new())
+                .map(|spec| {
+                    spec.with_persona(slot.persona)
+                        .with_socd(slot.socd)
+                        .with_macros(slot.macros)
+                })
+                .map_err(Into::into);
+        }
+
         let keyboard = slot
             .keyboard
             .as_deref()
@@ -275,14 +464,16 @@ impl ConfigFile {
                 .map(|d| d.alias.clone())
                 .unwrap_or_else(|| id.as_str().to_owned())
         };
+        let (keyboard, mouse, preset, sources) = source_fields(spec, display);
         SlotEntry {
             number: spec.number,
-            keyboard: spec.keyboard.as_ref().map(display),
-            mouse: spec.mouse.as_ref().map(display),
-            preset: spec.preset.clone(),
+            keyboard,
+            mouse,
+            preset,
             persona: spec.persona,
             socd: spec.socd,
             macros: spec.macros,
+            sources,
         }
     }
 }
@@ -514,17 +705,27 @@ preset = "street-fighter-p1"
         let spec = cfg.slot_spec(&cfg.slots[0]).unwrap();
         assert_eq!(spec.number, 1);
         assert_eq!(
-            spec.keyboard,
-            Some(ksx_core::DeviceId::new(
+            spec.keyboard(),
+            Some(&ksx_core::DeviceId::new(
                 r"HID\VID_D209&PID_0430&MI_00\8&A1B2C3D4&0&0000"
             ))
         );
-        assert_eq!(spec.mouse, None);
-        assert_eq!(spec.preset, "street-fighter-p1");
+        assert_eq!(spec.mouse(), None);
+        assert_eq!(spec.preset(), "street-fighter-p1");
 
         // And back: the id folds to its alias.
         let entry = cfg.slot_entry(&spec);
         assert_eq!(entry, cfg.slots[0]);
+    }
+
+    #[test]
+    fn legacy_slot_bytes_survive_canonical_normalization() {
+        let mut cfg: ConfigFile = toml::from_str(DOC_EXAMPLE).unwrap();
+        let before = toml::to_string(&cfg).unwrap();
+        let spec = cfg.slot_spec(&cfg.slots[0]).unwrap();
+        cfg.slots[0] = cfg.slot_entry(&spec);
+        assert_eq!(toml::to_string(&cfg).unwrap(), before);
+        assert!(!before.contains("[[slot.source]]"), "{before}");
     }
 
     /// A `[[game.slot]]` and a `[[slot]]` naming the same alias must produce
@@ -546,6 +747,124 @@ preset = "street-fighter-p1"
         assert!(matches!(
             cfg.game_slot_spec(&ghost),
             Err(ConfigError::UnknownDeviceAlias(_))
+        ));
+    }
+
+    #[test]
+    fn two_keyboards_round_trip_as_independent_source_rows() {
+        const FAN_IN: &str = r#"schema_version = 1
+
+[[device]]
+id = 'HID\VID_1111&PID_0001\LEFT'
+alias = "left keyboard"
+
+[[device]]
+id = 'HID\VID_2222&PID_0002\RIGHT'
+alias = "right keyboard"
+
+[[slot]]
+number = 1
+
+[[slot.source]]
+device = "left keyboard"
+kind = "keyboard"
+preset = "left-side"
+
+[[slot.source]]
+device = "right keyboard"
+kind = "keyboard"
+preset = "right-side"
+"#;
+
+        let cfg: ConfigFile = toml::from_str(FAN_IN).unwrap();
+        let spec = cfg.slot_spec(&cfg.slots[0]).unwrap();
+        assert_eq!(spec.sources.len(), 2);
+        assert_eq!(spec.sources[0].kind, SourceKind::Keyboard);
+        assert_eq!(
+            spec.sources[0].device.as_str(),
+            r"HID\VID_1111&PID_0001\LEFT"
+        );
+        assert_eq!(spec.sources[0].preset, "left-side");
+        assert_eq!(
+            spec.sources[1].device.as_str(),
+            r"HID\VID_2222&PID_0002\RIGHT"
+        );
+        assert_eq!(spec.sources[1].preset, "right-side");
+
+        let entry = cfg.slot_entry(&spec);
+        assert_eq!(entry, cfg.slots[0]);
+        let text = toml::to_string(&cfg).unwrap();
+        assert_eq!(text.matches("[[slot.source]]").count(), 2, "{text}");
+        assert!(!text.contains("keyboard ="), "{text}");
+        assert_eq!(toml::from_str::<ConfigFile>(&text).unwrap(), cfg);
+    }
+
+    #[test]
+    fn mixed_and_duplicate_source_representations_are_refused() {
+        let mixed: ConfigFile = toml::from_str(
+            r#"schema_version = 1
+[[device]]
+id = 'HID\VID_1111&PID_0001\LEFT'
+alias = "left"
+[[slot]]
+number = 1
+keyboard = "left"
+preset = "default"
+[[slot.source]]
+device = "left"
+kind = "keyboard"
+preset = "default"
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            mixed.slot_spec(&mixed.slots[0]),
+            Err(ConfigError::MixedSlotSourceRepresentations(1))
+        ));
+
+        let duplicate: ConfigFile = toml::from_str(
+            r#"schema_version = 1
+[[device]]
+id = 'HID\VID_1111&PID_0001\LEFT'
+alias = "left"
+[[device]]
+id = 'HID\VID_1111&PID_0001\LEFT'
+alias = "same board"
+[[slot]]
+number = 1
+[[slot.source]]
+device = "left"
+kind = "keyboard"
+preset = "left-side"
+[[slot.source]]
+device = "same board"
+kind = "keyboard"
+preset = "right-side"
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            duplicate.slot_spec(&duplicate.slots[0]),
+            Err(ConfigError::DuplicateSlotSource { slot: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn source_rows_still_refuse_unknown_aliases() {
+        let cfg: ConfigFile = toml::from_str(
+            r#"schema_version = 1
+[[slot]]
+number = 1
+[[slot.source]]
+device = "ghost"
+kind = "keyboard"
+preset = "missing"
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            cfg.slot_spec(&cfg.slots[0]),
+            Err(ConfigError::UnknownDeviceAlias(alias)) if alias == "ghost"
         ));
     }
 
@@ -576,6 +895,7 @@ preset = "street-fighter-p1"
             persona: Persona::default(),
             socd: Socd::default(),
             macros: MacroSwitch::default(),
+            sources: Vec::new(),
         };
         assert!(matches!(
             cfg.slot_spec(&slot),

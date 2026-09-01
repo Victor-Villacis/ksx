@@ -1,9 +1,12 @@
 //! Native games file schema: `%APPDATA%\ksx\games.toml` (title, path, args,
 //! block flags, per-slot device-by-id + preset-by-name).
 
-use ksx_core::{Blocking, DeviceId, MacroSwitch, Persona, SlotSpec, Socd};
+use std::collections::HashSet;
+
+use ksx_core::{Blocking, DeviceId, MacroSwitch, Persona, SlotSpec, Socd, SourceSpec};
 use serde::{Deserialize, Serialize};
 
+use crate::config::{source_fields, source_kind_name, SourceEntry};
 use crate::error::ConfigError;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,6 +78,7 @@ pub struct GameSlotEntry {
     pub keyboard: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mouse: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub preset: String,
     /// See [`crate::config::SlotEntry::persona`]. A per-game override: the same
     /// panel can be four Xbox pads for a Steam title and four PlayStation pads
@@ -104,10 +108,64 @@ pub struct GameSlotEntry {
         skip_serializing_if = "crate::macro_serde::switch::is_default"
     )]
     pub macros: MacroSwitch,
+    /// Canonical fan-in spelling. Serializes as `[[game.slot.source]]` rows.
+    #[serde(default, rename = "source", skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<SourceEntry>,
 }
 
 impl GameSlotEntry {
+    pub(crate) fn has_legacy_sources(&self) -> bool {
+        self.keyboard.is_some() || self.mouse.is_some() || !self.preset.is_empty()
+    }
+
+    pub(crate) fn preset_refs(&self) -> Vec<&str> {
+        let refs: Vec<_> = if self.sources.is_empty() {
+            vec![self.preset.as_str()]
+        } else if self.has_legacy_sources() {
+            std::iter::once(self.preset.as_str())
+                .chain(self.sources.iter().map(|source| source.preset.as_str()))
+                .collect()
+        } else {
+            self.sources
+                .iter()
+                .map(|source| source.preset.as_str())
+                .collect()
+        };
+        refs.into_iter().fold(Vec::new(), |mut unique, preset| {
+            if !unique.contains(&preset) {
+                unique.push(preset);
+            }
+            unique
+        })
+    }
+
     pub fn to_spec(&self) -> Result<SlotSpec, ConfigError> {
+        if !self.sources.is_empty() {
+            if self.has_legacy_sources() {
+                return Err(ConfigError::MixedSlotSourceRepresentations(self.number));
+            }
+            let mut seen = HashSet::new();
+            let mut sources = Vec::with_capacity(self.sources.len());
+            for source in &self.sources {
+                let device = DeviceId::new(&source.device);
+                if !seen.insert((source.kind, device.clone())) {
+                    return Err(ConfigError::DuplicateSlotSource {
+                        slot: self.number,
+                        device: source.device.clone(),
+                        kind: source_kind_name(source.kind).to_owned(),
+                    });
+                }
+                sources.push(SourceSpec::new(source.kind, device, source.preset.clone()));
+            }
+            return SlotSpec::from_sources(self.number, sources, String::new())
+                .map(|spec| {
+                    spec.with_persona(self.persona)
+                        .with_socd(self.socd)
+                        .with_macros(self.macros)
+                })
+                .map_err(Into::into);
+        }
+
         SlotSpec::new(
             self.number,
             self.keyboard.as_deref().map(DeviceId::new),
@@ -124,15 +182,18 @@ impl GameSlotEntry {
 
     /// `user_index` is runtime-discovered and comes back as `None`.
     pub fn from_spec(spec: &SlotSpec) -> Self {
+        let (keyboard, mouse, preset, sources) =
+            source_fields(spec, |device| device.as_str().to_owned());
         Self {
             number: spec.number,
             user_index: None,
             persona: spec.persona,
             socd: spec.socd,
             macros: spec.macros,
-            keyboard: spec.keyboard.as_ref().map(|d| d.as_str().to_owned()),
-            mouse: spec.mouse.as_ref().map(|d| d.as_str().to_owned()),
-            preset: spec.preset.clone(),
+            keyboard,
+            mouse,
+            preset,
+            sources,
         }
     }
 }
@@ -268,13 +329,13 @@ preset = "Panel P2"
         let spec = entry.to_spec().unwrap();
         assert_eq!(spec.number, 1);
         assert_eq!(
-            spec.keyboard,
-            Some(ksx_core::DeviceId::new(
+            spec.keyboard(),
+            Some(&ksx_core::DeviceId::new(
                 r"HID\VID_D209&PID_0430&REV_0001&MI_00"
             ))
         );
-        assert_eq!(spec.mouse, None);
-        assert_eq!(spec.preset, "Panel P1");
+        assert_eq!(spec.mouse(), None);
+        assert_eq!(spec.preset(), "Panel P1");
 
         let back = GameSlotEntry::from_spec(&spec);
         assert_eq!(back.number, entry.number);
@@ -283,6 +344,46 @@ preset = "Panel P2"
         assert_eq!(back.preset, entry.preset);
         // user_index is runtime-discovered; it does not survive.
         assert_eq!(back.user_index, None);
+    }
+
+    #[test]
+    fn game_slot_fan_in_round_trips_as_nested_source_rows() {
+        let entry: GameSlotEntry = toml::from_str(
+            r#"number = 1
+[[source]]
+device = 'HID\VID_1111&PID_0001\LEFT'
+kind = "keyboard"
+preset = "left-side"
+[[source]]
+device = 'HID\VID_2222&PID_0002\RIGHT'
+kind = "keyboard"
+preset = "right-side"
+"#,
+        )
+        .unwrap();
+        let spec = entry.to_spec().unwrap();
+        assert_eq!(spec.sources.len(), 2);
+        assert_eq!(spec.sources[0].preset, "left-side");
+        assert_eq!(spec.sources[1].preset, "right-side");
+
+        let back = GameSlotEntry::from_spec(&spec);
+        assert_eq!(back, entry);
+        let text = toml::to_string(&back).unwrap();
+        assert_eq!(text.matches("[[source]]").count(), 2, "{text}");
+        assert!(!text.contains("keyboard ="), "{text}");
+        assert_eq!(toml::from_str::<GameSlotEntry>(&text).unwrap(), entry);
+    }
+
+    #[test]
+    fn legacy_game_slot_bytes_survive_canonical_normalization() {
+        let mut entry = toml::from_str::<GamesFile>(EXAMPLE).unwrap().games[0].slots[0].clone();
+        // `user_index` has always been runtime-only and intentionally does not
+        // survive `from_spec`; isolate the persisted source representation.
+        entry.user_index = None;
+        let before = toml::to_string(&entry).unwrap();
+        let back = GameSlotEntry::from_spec(&entry.to_spec().unwrap());
+        assert_eq!(toml::to_string(&back).unwrap(), before);
+        assert!(back.sources.is_empty());
     }
 
     #[test]
@@ -296,6 +397,7 @@ preset = "Panel P2"
             persona: Persona::default(),
             socd: Socd::default(),
             macros: Default::default(),
+            sources: Vec::new(),
         };
         assert!(matches!(
             entry.to_spec(),

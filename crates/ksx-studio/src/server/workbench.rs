@@ -722,7 +722,32 @@ pub(super) fn restore_slot_routes(
             return false;
         }
     }
-    true
+
+    // `AddSlot` preserves the legacy one-device contract by creating a route
+    // from the first staged keyboard. A resurrected multi-source snapshot may
+    // deliberately omit that keyboard, so reconcile the newly added slot to
+    // the snapshot's exact route set after restoring its authored routes.
+    let desired: std::collections::BTreeSet<&str> = slot
+        .sources
+        .iter()
+        .map(|source| source.selector.as_str())
+        .collect();
+    let restored = state.control.staged();
+    let Some(restored_slot) = restored.slots.iter().find(|slot| slot.number == number) else {
+        return false;
+    };
+    let extras: Vec<String> = restored_slot
+        .sources
+        .iter()
+        .filter(|source| !desired.contains(source.selector.as_str()))
+        .map(|source| source.selector.clone())
+        .collect();
+    extras.into_iter().all(|selector| {
+        state
+            .control
+            .stage_edit(&ksx_api::StageEdit::RemoveSourceBindings { number, selector })
+            .ok
+    })
 }
 
 const UNDO_WINDOW: std::time::Duration = std::time::Duration::from_secs(6);

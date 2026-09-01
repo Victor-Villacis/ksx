@@ -5944,6 +5944,90 @@ fn redesign_controller_resurrection_preserves_all_source_routes_and_macros() {
     }));
 }
 
+/// `AddSlot` creates the primary keyboard's legacy route. Resurrection must
+/// discard that implicit route when the saved controller was routed only from
+/// a later keyboard, or an inert primary route would silently change topology
+/// and make Save/Play refuse the otherwise-live controller.
+#[test]
+fn redesign_resurrection_keeps_a_non_primary_only_route_exact() {
+    let control = Arc::new(ScriptedControl::new(false));
+    stage_redesign_device(&control, REDESIGN_LEFT_SOURCE, "left", "Left keyboard");
+    stage_redesign_device(&control, REDESIGN_RIGHT_SOURCE, "right", "Right keyboard");
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::AddSlot {
+                number: Some(1),
+                persona: "xbox360".into(),
+                preset: "Implicit left".into(),
+                layout: None,
+            })
+            .ok
+    );
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::SetSourceBindings {
+                number: 1,
+                selector: REDESIGN_RIGHT_SOURCE.into(),
+                preset: Box::new(routed_preset(
+                    "Right only",
+                    "B",
+                    "H",
+                    "right-only-combo",
+                    "O",
+                )),
+            })
+            .ok
+    );
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::RemoveSourceBindings {
+                number: 1,
+                selector: REDESIGN_LEFT_SOURCE.into(),
+            })
+            .ok
+    );
+
+    let original = source_content(&control.staged().slots[0]);
+    assert_eq!(
+        original.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![REDESIGN_RIGHT_SOURCE]
+    );
+    let addr = start_server(control.clone());
+
+    let duplicated = post_form(addr, "/redesign/controller/duplicate", "number=1");
+    assert!(
+        duplicated.contains("Controller%20duplicated"),
+        "{duplicated}"
+    );
+    let after_duplicate = control.staged();
+    assert_eq!(after_duplicate.slots.len(), 2);
+    assert_eq!(source_content(&after_duplicate.slots[1]), original);
+
+    let removed = post_form(addr, "/redesign/controller/remove", "number=2");
+    assert!(removed.contains("Draft%20updated"), "{removed}");
+    let undone = post_form(addr, "/redesign/controller/undo", "");
+    assert!(undone.contains("Controller%20restored"), "{undone}");
+    let after_undo = control.staged();
+    assert_eq!(after_undo.slots.len(), 2);
+    assert_eq!(source_content(&after_undo.slots[1]), original);
+
+    let parked = post_form(
+        addr,
+        "/redesign/controller/park",
+        "number=2&ghost=right-only-pad",
+    );
+    assert!(parked.contains("Draft%20updated"), "{parked}");
+    let assigned = post_form(
+        addr,
+        "/redesign/controller/assign",
+        "ghost=right-only-pad&position=2&persona=xbox360&preset=ignored&layout=",
+    );
+    assert!(assigned.contains("Draft%20updated"), "{assigned}");
+    let after_assign = control.staged();
+    assert_eq!(after_assign.slots.len(), 2);
+    assert_eq!(source_content(&after_assign.slots[1]), original);
+}
+
 /// The cutover-critical lifecycle is one operational contract and the same
 /// daemon lifecycle verbs: state is served before the click,
 /// every form comes home to `/redesign`, Apply keeps its structured

@@ -465,6 +465,7 @@ pub fn serve(
             // tests/http.rs proves both, once, like every new verb.
             .route("/redesign/theme", post(redesign_form_theme))
             .route("/redesign/device", post(redesign_form_device))
+            .route("/redesign/device/remove", post(redesign_form_device_remove))
             .route("/redesign/device/identify", post(redesign_form_identify))
             .route(
                 "/redesign/device/identify/cancel",

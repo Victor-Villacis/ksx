@@ -15,9 +15,9 @@ use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 use crate::render::{body_prefix_no_refresh, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
 use crate::render_workbench::{device_row, mode_row, named_slot_ids, other_row};
 use crate::snapshot::{
-    compose_board_panel, theme_rows, NocturneChoiceRow, RedesignCaptureState, RedesignControllers,
-    RedesignDeviceRows, RedesignJourney, RedesignOperationalState, RedesignPayload,
-    RedesignPersonaRow, SetupSnapshot, StartCaptureView,
+    compose_board_panel_for_source, selected_source_view, theme_rows, NocturneChoiceRow,
+    RedesignCaptureState, RedesignControllers, RedesignDeviceRows, RedesignJourney,
+    RedesignOperationalState, RedesignPayload, RedesignPersonaRow, SetupSnapshot, StartCaptureView,
 };
 
 /// The island table this page compiles to: exactly one island — the whole
@@ -55,9 +55,49 @@ pub(crate) struct PayloadInput<'a> {
     pub(crate) session: &'a crate::control::SessionView,
     pub(crate) outputs: &'a ksx_api::ControllerOutputsView,
     pub(crate) selected_slot: Option<u8>,
+    pub(crate) selected_source: Option<&'a str>,
     pub(crate) undo_label: Option<&'a str>,
     pub(crate) macro_selected: Option<&'a str>,
     pub(crate) q: Option<&'a str>,
+}
+
+/// Resolve a source-qualified learn target only when the inventory proves a
+/// one-to-one selector → board → Windows keyboard instance relationship.
+/// Identical-board ambiguity removes the action; taking the first match could
+/// arm capture against a different physical keyboard than the selected row.
+fn exact_learn_identity(
+    staged: &ksx_api::StagedSetupView,
+    scan: &ksx_api::DeviceScanView,
+    device: &ksx_api::StagedDeviceView,
+) -> Option<StartCaptureView> {
+    if !staged.reachable {
+        return None;
+    }
+    let mut matches = scan.boards.iter().filter(|board| {
+        board
+            .selector
+            .as_deref()
+            .is_some_and(|selector| selector == device.selector)
+    });
+    let board = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    let instance_id = board.keyboard.as_ref()?;
+    if scan
+        .boards
+        .iter()
+        .flat_map(|candidate| candidate.interfaces.iter())
+        .filter(|row| row.instance_id.eq_ignore_ascii_case(instance_id))
+        .count()
+        != 1
+    {
+        return None;
+    }
+    let mut view = StartCaptureView::default();
+    view.expected_selector.clone_from(&device.selector);
+    view.instance_id.clone_from(instance_id);
+    Some(view)
 }
 
 /// Compose the payload from the environment the source reports — the same
@@ -75,6 +115,7 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
         session,
         outputs,
         selected_slot,
+        selected_source,
         undo_label,
         macro_selected,
         q,
@@ -85,24 +126,50 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
         Ok(scan) => scan.boards.as_slice(),
         Err(_) => &[],
     };
-    let staged_selector = staged
-        .reachable
-        .then(|| {
+    let mut devices = match &scan {
+        Ok(scan) if !staged.devices.is_empty() => {
+            RedesignDeviceRows::of_devices(Some(scan), "", &staged.devices)
+        }
+        Ok(scan) => RedesignDeviceRows::of(
+            Some(scan),
+            "",
             staged
                 .device
                 .as_ref()
-                .map(|device| device.selector.as_str())
-        })
-        .flatten();
-    let mut devices = match &scan {
-        Ok(scan) => RedesignDeviceRows::of(Some(scan), "", staged_selector),
-        Err(unavailable) => RedesignDeviceRows::of(None, unavailable, staged_selector),
+                .map(|device| device.selector.as_str()),
+        ),
+        Err(unavailable) if !staged.devices.is_empty() => {
+            RedesignDeviceRows::of_devices(None, unavailable, &staged.devices)
+        }
+        Err(unavailable) => RedesignDeviceRows::of(
+            None,
+            unavailable,
+            staged
+                .device
+                .as_ref()
+                .map(|device| device.selector.as_str()),
+        ),
     };
     // Is the staged input an arcade encoder? The nocturne rule: the staged
     // selector sits in the picker's ENCODER tier. It reword's the capture
     // rows (wired buttons, not typing) and lets the board resolution offer
     // the panel fallbacks.
-    let encoder_staged = staged.device.as_ref().is_some_and(|device| {
+    let exact_source_requested = selected_source.is_some_and(|source| !source.trim().is_empty());
+    let selected_device = selected_source
+        .map(str::trim)
+        .filter(|selector| !selector.is_empty())
+        .and_then(|selector| {
+            staged
+                .devices
+                .iter()
+                .find(|device| device.selector.eq_ignore_ascii_case(selector))
+        })
+        .or_else(|| {
+            (!exact_source_requested)
+                .then_some(staged.device.as_ref())
+                .flatten()
+        });
+    let encoder_staged = selected_device.is_some_and(|device| {
         devices
             .encoders
             .iter()
@@ -151,9 +218,16 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
     // The staged input's verified identity, off the SAME capture composition
     // nocturne pins its learn flow to (selector + Windows instance path).
     // Refused scan → empty pair → the mapper refuses to arm, like 4460.
-    let learn_cap = match &scan {
-        Ok(scan_view) => StartCaptureView::from_parts(staged, scan_view, true),
-        Err(_) => StartCaptureView::from_parts(staged, &ksx_api::DeviceScanView::default(), false),
+    let learn_cap = match (&scan, selected_device) {
+        (Ok(scan_view), Some(device)) => {
+            let exact = exact_learn_identity(staged, scan_view, device);
+            match exact {
+                Some(view) => view,
+                None if exact_source_requested => StartCaptureView::default(),
+                None => StartCaptureView::from_parts(staged, scan_view, true),
+            }
+        }
+        _ => StartCaptureView::from_parts(staged, &ksx_api::DeviceScanView::default(), false),
     };
     devices.staging_reachable = staged.reachable;
     devices.staging_line = if staged.reachable {
@@ -168,7 +242,15 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
             format!("{} · {STAGING_UNAVAILABLE}", devices.scan_line)
         };
     }
-    let controllers = RedesignControllers::of(staged, selected_slot, undo_label, macro_selected, q);
+    let controllers = RedesignControllers::of_source(
+        staged,
+        selected_slot,
+        selected_source,
+        undo_label,
+        macro_selected,
+        q,
+    );
+    let resolved_source = controllers.source.clone();
     RedesignPayload {
         environment_id: environment.id.clone(),
         environment_generation: environment.generation.clone(),
@@ -183,6 +265,7 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
         }
         .to_owned(),
         studio_version: env!("CARGO_PKG_VERSION").to_owned(),
+        source: resolved_source,
         // The picker's truth. `Err` carries the refusal's sentence (with its
         // remedy — the `/devices` composition), so a refused read renders as
         // one line over an empty picker, never as an empty machine.
@@ -218,16 +301,32 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
             let selected = selected_slot
                 .and_then(|number| staged.slots.iter().find(|slot| slot.number == number))
                 .or_else(|| staged.slots.first());
+            let source =
+                selected.and_then(|slot| selected_source_view(staged, slot, selected_source));
             let resolved = crate::board::Board::resolve("", &[], &[], false);
-            let transport = staged.device.as_ref().and_then(|d| {
+            let transport_selector = source
+                .as_ref()
+                .map(|source| source.selector.as_str())
+                .or_else(|| {
+                    staged
+                        .device
+                        .as_ref()
+                        .map(|device| device.selector.as_str())
+                });
+            let transport = transport_selector.and_then(|source_selector| {
                 scan_boards
                     .iter()
-                    .find(|b| b.selector.as_deref() == Some(d.selector.as_str()))
+                    .find(|b| {
+                        b.selector
+                            .as_deref()
+                            .is_some_and(|selector| selector.eq_ignore_ascii_case(source_selector))
+                    })
                     .map(|b| b.transport_label.as_str())
             });
-            compose_board_panel(
+            compose_board_panel_for_source(
                 staged,
                 selected,
+                source.as_ref(),
                 &resolved,
                 "",
                 &[],
@@ -812,6 +911,7 @@ mod tests {
             },
             outputs: &ksx_api::ControllerOutputsView::from_required(Vec::new()),
             selected_slot: None,
+            selected_source: None,
             undo_label: None,
             macro_selected: None,
             q: None,
@@ -863,6 +963,31 @@ mod tests {
             slots,
             ..Default::default()
         }
+    }
+
+    fn selected_source_payload(
+        staged: &ksx_api::StagedSetupView,
+        scan: ksx_api::DeviceScanView,
+        source: &str,
+    ) -> RedesignPayload {
+        payload(PayloadInput {
+            environment: &ksx_api::RuntimeEnvironmentView::default(),
+            setup: Some(ksx_api::SetupView::default()),
+            setup_error: "",
+            scan: Ok(scan),
+            staged,
+            session: &crate::control::SessionView {
+                reachable: true,
+                line: "idle".into(),
+                ..Default::default()
+            },
+            outputs: &ksx_api::ControllerOutputsView::default(),
+            selected_slot: None,
+            selected_source: Some(source),
+            undo_label: None,
+            macro_selected: None,
+            q: None,
+        })
     }
 
     fn fixture_slot(
@@ -1267,9 +1392,89 @@ mod tests {
         );
     }
 
-    /// The key projection stays generic and stable, but it is not a permanent
-    /// canvas item. A selected physical keyboard supplies source context and
-    /// becomes the device-owned host only after browser hydration/Add.
+    /// A source-qualified learner is an authority boundary, not a display
+    /// lookup. A unique selector is insufficient when the selected keyboard
+    /// instance appears twice in the inventory, and a unique instance is
+    /// insufficient when two board rows claim the selector. Both ambiguous
+    /// inventories must remove the learn target instead of choosing first.
+    #[test]
+    fn selected_source_learn_identity_requires_unique_board_and_instance() {
+        let selector = "usb:046d:c545:00";
+        let instance = r"HID\VID_046D&PID_C545\ONE";
+        let mut staged = fixture_staged(Vec::new());
+        let device = ksx_api::StagedDeviceView {
+            label: "Logitech G915 TKL".into(),
+            alias: "g915".into(),
+            selector: selector.into(),
+            ..Default::default()
+        };
+        staged.empty = false;
+        staged.device = Some(device.clone());
+        staged.devices = vec![device];
+
+        let mut unique = fixture_scan();
+        let selected = unique
+            .boards
+            .iter_mut()
+            .find(|board| board.selector.as_deref() == Some(selector))
+            .expect("selected scan board");
+        selected.keyboard = Some(instance.into());
+        selected.interfaces = vec![ksx_api::UsbRow {
+            instance_id: instance.into(),
+            ..Default::default()
+        }];
+        let proven = selected_source_payload(&staged, unique.clone(), selector);
+        assert_eq!(proven.learn_selector, selector);
+        assert_eq!(proven.learn_instance, instance);
+
+        let mut duplicate_selector = unique.clone();
+        let mut second = duplicate_selector
+            .boards
+            .iter()
+            .find(|board| board.selector.as_deref() == Some(selector))
+            .unwrap()
+            .clone();
+        let other_instance = r"HID\VID_046D&PID_C545\TWO";
+        second.keyboard = Some(other_instance.into());
+        second.interfaces = vec![ksx_api::UsbRow {
+            instance_id: other_instance.into(),
+            ..Default::default()
+        }];
+        duplicate_selector.boards.push(second);
+        let ambiguous_board = selected_source_payload(&staged, duplicate_selector, selector);
+        assert_eq!(ambiguous_board.learn_selector, "");
+        assert_eq!(ambiguous_board.learn_instance, "");
+        assert!(ambiguous_board
+            .devices
+            .keyboards
+            .iter()
+            .filter(|row| row.selector == selector)
+            .all(|row| row.instance_id.is_empty()));
+
+        let mut duplicate_instance = unique;
+        let other = duplicate_instance
+            .boards
+            .iter_mut()
+            .find(|board| board.selector.as_deref() == Some("usb:0b05:1939:00"))
+            .expect("other scan board");
+        other.interfaces.push(ksx_api::UsbRow {
+            instance_id: instance.into(),
+            ..Default::default()
+        });
+        let ambiguous_instance = selected_source_payload(&staged, duplicate_instance, selector);
+        assert_eq!(ambiguous_instance.learn_selector, "");
+        assert_eq!(ambiguous_instance.learn_instance, "");
+        assert!(ambiguous_instance
+            .devices
+            .keyboards
+            .iter()
+            .find(|row| row.selector == selector)
+            .is_some_and(|row| row.instance_id.is_empty()));
+    }
+
+    /// The key projection stays generic and stable while the selected
+    /// physical keyboard owns its canvas host. Device identity changes the
+    /// mapping source, never the canonical keyboard artwork.
     #[test]
     fn the_mapping_keyboard_names_its_logitech_source_without_impersonating_it() {
         assert_eq!(fixture_payload().board.kb_title, "No input source selected");
@@ -1301,6 +1506,7 @@ mod tests {
             },
             outputs: &ksx_api::ControllerOutputsView::default(),
             selected_slot: None,
+            selected_source: None,
             undo_label: None,
             macro_selected: None,
             q: None,
@@ -1330,11 +1536,6 @@ mod tests {
         let page = EmbeddedPage::load("/redesign").unwrap();
         let html = render_redesign(&page, &payload, None).html;
         assert!(html.contains("Logitech G915 TKL · Bluetooth · Active input"));
-        assert!(
-            !html.contains(r#"data-instance-id="keyboard""#)
-                && html.contains("data-rd-keyboard-surface-depot"),
-            "source truth must not create a canvas device without browser-owned membership"
-        );
     }
 
     #[test]
@@ -1356,6 +1557,7 @@ mod tests {
             session: &crate::control::SessionView::unreachable("test"),
             outputs: &ksx_api::ControllerOutputsView::default(),
             selected_slot: None,
+            selected_source: None,
             undo_label: None,
             macro_selected: None,
             q: None,

@@ -176,6 +176,7 @@ pub(super) enum DeviceChoice {
     Refused,
 }
 
+#[allow(dead_code)]
 pub(super) fn choose_device_preserving_preparation(
     state: &AppState,
     selector: String,
@@ -193,6 +194,40 @@ pub(super) fn choose_device_preserving_preparation(
             selector,
             alias,
             label,
+        })
+        .ok
+    {
+        DeviceChoice::Chosen
+    } else {
+        DeviceChoice::Refused
+    }
+}
+
+/// Add or refresh one redesign keyboard without replacing the staged roster.
+/// `backend: None` tells the staged domain to retain an existing selector's
+/// prepared capture backend; a genuinely new board receives the compatible
+/// interception default.
+pub(super) fn upsert_device_preserving_preparation(
+    state: &AppState,
+    selector: String,
+    alias: String,
+    label: String,
+) -> DeviceChoice {
+    let unchanged = state.control.staged().devices.iter().any(|device| {
+        device.selector.trim().eq_ignore_ascii_case(selector.trim())
+            && device.alias.trim() == alias.trim()
+            && device.label.trim() == label.trim()
+    });
+    if unchanged {
+        return DeviceChoice::Unchanged;
+    }
+    if state
+        .control
+        .stage_edit(&ksx_api::StageEdit::UpsertDevice {
+            selector,
+            alias,
+            label,
+            backend: None,
         })
         .ok
     {
@@ -604,6 +639,92 @@ pub(super) struct RemovedSlotUndo {
     pub(super) at: std::time::Instant,
 }
 
+fn fresh_preset_name(base: &str, used: &mut std::collections::BTreeSet<String>) -> String {
+    let base = base.trim();
+    let base = if base.is_empty() { "Controller" } else { base };
+    if used.insert(base.to_ascii_lowercase()) {
+        return base.to_owned();
+    }
+    (2_u32..)
+        .map(|suffix| format!("{base} {suffix}"))
+        .find(|candidate| used.insert(candidate.to_ascii_lowercase()))
+        .expect("the unbounded suffix sequence contains a free preset name")
+}
+
+/// Restore every source-qualified preset (macro bodies included) onto a newly
+/// added controller. `primary_override` gives a duplicate (or a colliding
+/// parked primary) its fresh first name; `duplicate_all` derives fresh names
+/// for every route. Otherwise parked/undo names survive unless another live
+/// route claimed one while the controller was absent.
+pub(super) fn restore_slot_routes(
+    state: &AppState,
+    number: u8,
+    slot: &ksx_api::StagedSlotView,
+    primary_override: Option<&str>,
+    duplicate_all: bool,
+) -> bool {
+    let current = state.control.staged();
+    let mut used: std::collections::BTreeSet<String> = current
+        .slots
+        .iter()
+        .filter(|candidate| candidate.number != number)
+        .flat_map(|candidate| {
+            std::iter::once(candidate.preset.as_str()).chain(
+                candidate
+                    .sources
+                    .iter()
+                    .map(|source| source.preset.as_str()),
+            )
+        })
+        .map(str::to_ascii_lowercase)
+        .collect();
+
+    if slot.sources.is_empty() {
+        let Some(mut authoring) = slot.authoring.clone() else {
+            return false;
+        };
+        let base = primary_override.unwrap_or(&slot.preset);
+        authoring.name = fresh_preset_name(base, &mut used);
+        return state
+            .control
+            .stage_edit(&ksx_api::StageEdit::SetBindings {
+                number,
+                preset: Box::new(authoring),
+            })
+            .ok;
+    }
+
+    for (index, source) in slot.sources.iter().enumerate() {
+        let Some(mut authoring) = source.authoring.clone() else {
+            return false;
+        };
+        let desired = match (primary_override, duplicate_all, index) {
+            (Some(primary), _, 0) => primary.to_owned(),
+            (Some(primary), true, _) => {
+                let identity = [source.alias.trim(), source.label.trim()]
+                    .into_iter()
+                    .find(|value| !value.is_empty())
+                    .unwrap_or("keyboard");
+                format!("{primary} - {identity}")
+            }
+            _ => source.preset.clone(),
+        };
+        authoring.name = fresh_preset_name(&desired, &mut used);
+        if !state
+            .control
+            .stage_edit(&ksx_api::StageEdit::SetSourceBindings {
+                number,
+                selector: source.selector.clone(),
+                preset: Box::new(authoring),
+            })
+            .ok
+        {
+            return false;
+        }
+    }
+    true
+}
+
 const UNDO_WINDOW: std::time::Duration = std::time::Duration::from_secs(6);
 
 pub(super) fn stash_removed_slot(
@@ -613,7 +734,11 @@ pub(super) fn stash_removed_slot(
     staged
         .slots
         .iter()
-        .find(|slot| slot.number == number && slot.authoring.is_some())
+        .find(|slot| {
+            slot.number == number
+                && (slot.authoring.is_some()
+                    || slot.sources.iter().any(|source| source.authoring.is_some()))
+        })
         .map(|slot| RemovedSlotUndo {
             slot: slot.clone(),
             at: std::time::Instant::now(),
@@ -646,50 +771,45 @@ pub(super) fn undo_removal_flash(
     if stash.at.elapsed() > UNDO_WINDOW {
         return N_UNDO_GONE;
     }
-    let Some(authoring) = stash.slot.authoring else {
-        return N_UNDO_GONE;
-    };
+    let slot = stash.slot;
     let staged = state.control.staged();
     let number = if staged
         .slots
         .iter()
-        .any(|slot| slot.number == stash.slot.number)
+        .any(|candidate| candidate.number == slot.number)
     {
         match staged.next_slot {
             Some(next) => next,
             None => return N_UNDO_FULL,
         }
     } else {
-        stash.slot.number
+        slot.number
     };
     let added = state.control.stage_edit(&ksx_api::StageEdit::AddSlot {
         number: Some(number),
-        persona: stash.slot.persona,
-        preset: stash.slot.preset,
+        persona: slot.persona.clone(),
+        preset: slot.preset.clone(),
         layout: None,
     });
     if !added.ok {
         return N_EDIT_ERROR;
     }
-    let bound = state.control.stage_edit(&ksx_api::StageEdit::SetBindings {
-        number,
-        preset: Box::new(authoring),
-    });
-    if !bound.ok {
+    if !restore_slot_routes(state, number, &slot, None, false) {
         let _ = state
             .control
             .stage_edit(&ksx_api::StageEdit::RemoveSlot { number });
         return N_EDIT_ERROR;
     }
-    if !stash.slot.socd.is_empty() && stash.slot.socd != "off" {
+    if !slot.socd.is_empty() && slot.socd != "off" {
         let _ = state.control.stage_edit(&ksx_api::StageEdit::SetSocd {
             number,
-            socd: stash.slot.socd,
+            socd: slot.socd,
         });
     }
     N_UNDO_OK
 }
 
+#[allow(dead_code)]
 pub(super) fn clear_all_flash(state: &AppState, number: u8) -> &'static str {
     let staged = state.control.staged();
     let Some(slot) = staged.slots.iter().find(|slot| slot.number == number) else {
@@ -722,9 +842,6 @@ pub(super) fn duplicate_slot_flash(state: &AppState, number: u8) -> &'static str
     else {
         return N_DUP_FULL;
     };
-    let Some(mut authoring) = source.authoring.clone() else {
-        return N_EDIT_ERROR;
-    };
     let socd = source.socd.clone();
     if !state
         .control
@@ -738,15 +855,7 @@ pub(super) fn duplicate_slot_flash(state: &AppState, number: u8) -> &'static str
     {
         return N_EDIT_ERROR;
     }
-    authoring.name = new_preset;
-    if !state
-        .control
-        .stage_edit(&ksx_api::StageEdit::SetBindings {
-            number: new_number,
-            preset: Box::new(authoring),
-        })
-        .ok
-    {
+    if !restore_slot_routes(state, new_number, source, Some(&new_preset), true) {
         let _ = state
             .control
             .stage_edit(&ksx_api::StageEdit::RemoveSlot { number: new_number });
@@ -761,6 +870,7 @@ pub(super) fn duplicate_slot_flash(state: &AppState, number: u8) -> &'static str
     N_DUP_OK
 }
 
+#[allow(dead_code)]
 fn current_keys(
     staged: &ksx_api::StagedSetupView,
     slot: &ksx_api::StagedSlotView,
@@ -793,6 +903,127 @@ fn current_keys(
         .unwrap_or_default()
 }
 
+pub(super) fn clear_all_source_flash(
+    state: &AppState,
+    number: u8,
+    source: &str,
+    expected_revision: &str,
+) -> &'static str {
+    let staged = state.control.staged();
+    let Some((_slot, route)) = exact_source_target(&staged, number, source, expected_revision)
+    else {
+        return N_EDIT_ERROR;
+    };
+    let Some(mut authoring) = route.authoring.clone() else {
+        return N_EDIT_ERROR;
+    };
+    authoring.bindings.clear();
+    let edit = if authoring.macros.is_empty() {
+        ksx_api::StageEdit::RemoveSourceBindings {
+            number,
+            selector: route.selector,
+        }
+    } else {
+        ksx_api::StageEdit::SetSourceBindings {
+            number,
+            selector: route.selector,
+            preset: Box::new(authoring),
+        }
+    };
+    if state.control.stage_edit(&edit).ok {
+        N_CLEAR_ALL_OK
+    } else {
+        N_EDIT_ERROR
+    }
+}
+
+fn staged_source_target(
+    staged: &ksx_api::StagedSetupView,
+    number: u8,
+    selector: &str,
+) -> Option<(ksx_api::StagedSlotView, ksx_api::StagedSourceView)> {
+    let slot = staged
+        .slots
+        .iter()
+        .find(|candidate| candidate.number == number)?;
+    let source = ksx_api::staged_source_view(staged, slot, selector)?;
+    Some((slot.clone(), source))
+}
+
+fn exact_source_target(
+    staged: &ksx_api::StagedSetupView,
+    number: u8,
+    selector: &str,
+    expected_revision: &str,
+) -> Option<(ksx_api::StagedSlotView, ksx_api::StagedSourceView)> {
+    let (slot, source) = staged_source_target(staged, number, selector)?;
+    (!selector.trim().is_empty()
+        && !expected_revision.trim().is_empty()
+        && source.selector.eq_ignore_ascii_case(selector.trim())
+        && source.revision == expected_revision.trim())
+    .then_some((slot, source))
+}
+
+fn current_source_keys(
+    slot: &ksx_api::StagedSlotView,
+    source: &ksx_api::StagedSourceView,
+    function: &str,
+) -> Vec<String> {
+    if let Some(name) = function.strip_prefix("macro.") {
+        return ksx_api::staged_source_macro_snapshot(source)
+            .macros
+            .into_iter()
+            .find(|mac| mac.name.eq_ignore_ascii_case(name))
+            .map(|mac| mac.triggers)
+            .unwrap_or_default();
+    }
+    ksx_api::staged_mapper_source(slot, source)
+        .ok()
+        .and_then(|mapper| {
+            mapper.bindings.get(function).cloned().or_else(|| {
+                mapper
+                    .bindings
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(function))
+                    .map(|(_, keys)| keys.clone())
+            })
+        })
+        .unwrap_or_default()
+}
+
+pub(super) fn bind_clear_source_flash(
+    state: &AppState,
+    slot: u8,
+    source: &str,
+    expected_revision: &str,
+    function: String,
+) -> &'static str {
+    let staged = state.control.staged();
+    let Some((row, route)) = exact_source_target(&staged, slot, source, expected_revision) else {
+        return N_EDIT_ERROR;
+    };
+    if state
+        .control
+        .stage_bind(&ksx_api::StagedBindRequest {
+            number: row.number,
+            expected_device: route.selector,
+            expected_target_revision: route.revision,
+            preset: route.preset,
+            function,
+            keys: vec!["none".to_owned()],
+            force: false,
+            turbo_hz: None,
+            toggle: None,
+        })
+        .ok
+    {
+        N_EDIT_OK
+    } else {
+        N_EDIT_ERROR
+    }
+}
+
+#[allow(dead_code)]
 pub(super) fn bind_clear_flash(state: &AppState, slot: u8, function: String) -> &'static str {
     let staged = state.control.staged();
     let Some(row) = staged
@@ -827,6 +1058,7 @@ pub(super) fn bind_clear_flash(state: &AppState, slot: u8, function: String) -> 
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn key_clear_flash(state: &AppState, number: u8, key: String) -> &'static str {
     let staged = state.control.staged();
     let Some(slot) = staged
@@ -908,6 +1140,88 @@ pub(super) fn key_clear_flash(state: &AppState, number: u8, key: String) -> &'st
     N_KEY_CLEAR_OK
 }
 
+pub(super) fn key_clear_source_flash(
+    state: &AppState,
+    number: u8,
+    source: &str,
+    expected_revision: &str,
+    key: String,
+) -> &'static str {
+    let staged = state.control.staged();
+    let Some((slot, route)) = exact_source_target(&staged, number, source, expected_revision)
+    else {
+        return N_EDIT_ERROR;
+    };
+    let key = key.trim().to_owned();
+    if key.is_empty() {
+        return N_EDIT_ERROR;
+    }
+    let Ok(mapper) = ksx_api::staged_mapper_source(&slot, &route) else {
+        return N_EDIT_ERROR;
+    };
+    let without = |keys: &[String]| -> Vec<String> {
+        keys.iter()
+            .filter(|candidate| !candidate.eq_ignore_ascii_case(&key))
+            .cloned()
+            .collect()
+    };
+    let mut driven: Vec<(String, Vec<String>)> = mapper
+        .bindings
+        .iter()
+        .filter(|(_, keys)| {
+            keys.iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(&key))
+        })
+        .map(|(function, keys)| (function.clone(), without(keys)))
+        .collect();
+    driven.extend(
+        ksx_api::staged_source_macro_snapshot(&route)
+            .macros
+            .into_iter()
+            .filter(|mac| {
+                mac.triggers
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(&key))
+            })
+            .map(|mac| (format!("macro.{}", mac.name), without(&mac.triggers))),
+    );
+    if driven.is_empty() {
+        return N_KEY_CLEAR_NONE;
+    }
+    for (function, rest) in driven {
+        // Every successful whole-route write changes its revision. Resolve
+        // the next exact token before continuing the multi-function clear.
+        let refreshed = state.control.staged();
+        let Some((_slot, route)) = staged_source_target(&refreshed, number, source) else {
+            return N_EDIT_ERROR;
+        };
+        let keys = if rest.is_empty() {
+            vec!["none".to_owned()]
+        } else {
+            rest
+        };
+        if !state
+            .control
+            .stage_bind(&ksx_api::StagedBindRequest {
+                number,
+                expected_device: route.selector,
+                expected_target_revision: route.revision,
+                preset: route.preset,
+                function,
+                keys,
+                force: true,
+                turbo_hz: None,
+                toggle: None,
+            })
+            .ok
+        {
+            return N_EDIT_ERROR;
+        }
+    }
+    N_KEY_CLEAR_OK
+}
+
+#[allow(dead_code)]
 pub(super) fn bind_turbo_flash(
     state: &AppState,
     slot: u8,
@@ -955,6 +1269,48 @@ pub(super) fn bind_turbo_flash(
     }
 }
 
+pub(super) fn bind_turbo_source_flash(
+    state: &AppState,
+    slot: u8,
+    source: &str,
+    expected_revision: &str,
+    function: String,
+    turbo_hz: Option<&str>,
+) -> &'static str {
+    let raw = turbo_hz.map(str::trim).unwrap_or("");
+    let Ok(hz) = raw.parse::<u32>() else {
+        return N_TURBO_INPUT_ERROR;
+    };
+    let staged = state.control.staged();
+    let Some((row, route)) = exact_source_target(&staged, slot, source, expected_revision) else {
+        return N_EDIT_ERROR;
+    };
+    let current = current_source_keys(&row, &route, &function);
+    if current.is_empty() {
+        return N_TURBO_UNBOUND_ERROR;
+    }
+    if state
+        .control
+        .stage_bind(&ksx_api::StagedBindRequest {
+            number: row.number,
+            expected_device: route.selector,
+            expected_target_revision: route.revision,
+            preset: route.preset,
+            function,
+            keys: current,
+            force: true,
+            turbo_hz: Some(hz),
+            toggle: None,
+        })
+        .ok
+    {
+        N_TURBO_OK
+    } else {
+        N_EDIT_ERROR
+    }
+}
+
+#[allow(dead_code)]
 pub(super) fn bind_toggle_flash(
     state: &AppState,
     slot: u8,
@@ -1017,6 +1373,68 @@ pub(super) fn bind_toggle_flash(
     }
 }
 
+pub(super) fn bind_toggle_source_flash(
+    state: &AppState,
+    slot: u8,
+    source: &str,
+    expected_revision: &str,
+    function: String,
+    mode: &str,
+) -> &'static str {
+    let latch = match mode {
+        "toggle" => true,
+        "hold" => false,
+        _ => return N_EDIT_ERROR,
+    };
+    let staged = state.control.staged();
+    let Some((row, route)) = exact_source_target(&staged, slot, source, expected_revision) else {
+        return N_EDIT_ERROR;
+    };
+    let current = current_source_keys(&row, &route, &function);
+    if current.is_empty() {
+        return N_TOGGLE_UNBOUND_ERROR;
+    }
+    let function_name = function.clone();
+    if !state
+        .control
+        .stage_bind(&ksx_api::StagedBindRequest {
+            number: row.number,
+            expected_device: route.selector.clone(),
+            expected_target_revision: route.revision,
+            preset: route.preset,
+            function,
+            keys: current,
+            force: true,
+            turbo_hz: None,
+            toggle: Some(latch),
+        })
+        .ok
+    {
+        return N_EDIT_ERROR;
+    }
+    let refreshed = state.control.staged();
+    let took = refreshed
+        .slots
+        .iter()
+        .find(|candidate| candidate.number == slot)
+        .and_then(|candidate| {
+            ksx_api::staged_source_view(&refreshed, candidate, &route.selector)
+                .and_then(|source| ksx_api::staged_mapper_source(candidate, &source).ok())
+        })
+        .map(|mapper| {
+            mapper
+                .toggle
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(&function_name))
+        })
+        .unwrap_or(false);
+    if took == latch {
+        N_TOGGLE_OK
+    } else {
+        N_TOGGLE_OLD_DAEMON
+    }
+}
+
 pub(super) async fn blocking_write_flash(state: &Arc<AppState>, blocking: String) -> &'static str {
     let state = Arc::clone(state);
     if tokio::task::spawn_blocking(move || {
@@ -1034,6 +1452,7 @@ pub(super) async fn blocking_write_flash(state: &Arc<AppState>, blocking: String
     }
 }
 
+#[allow(dead_code)]
 pub(super) async fn macro_write_flash(
     state: Arc<AppState>,
     slot: u8,
@@ -1057,6 +1476,8 @@ pub(super) async fn macro_write_flash(
             .control
             .stage_macro(&ksx_api::StagedMacroRequest {
                 number: slot,
+                expected_device: String::new(),
+                expected_target_revision: String::new(),
                 write,
             })
             .ok
@@ -1070,6 +1491,44 @@ pub(super) async fn macro_write_flash(
     .unwrap_or(N_EDIT_ERROR)
 }
 
+pub(super) async fn macro_write_source_flash(
+    state: Arc<AppState>,
+    slot: u8,
+    source: String,
+    expected_revision: String,
+    write: crate::control::MacroWrite,
+    ok_flash: &'static str,
+) -> &'static str {
+    tokio::task::spawn_blocking(move || {
+        let staged = state.control.staged();
+        let Some((_found, route)) = exact_source_target(&staged, slot, &source, &expected_revision)
+        else {
+            return N_EDIT_ERROR;
+        };
+        let write = crate::control::MacroWrite {
+            preset: route.preset.clone(),
+            ..write
+        };
+        if state
+            .control
+            .stage_macro(&ksx_api::StagedMacroRequest {
+                number: slot,
+                expected_device: route.selector,
+                expected_target_revision: route.revision,
+                write,
+            })
+            .ok
+        {
+            ok_flash
+        } else {
+            N_EDIT_ERROR
+        }
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR)
+}
+
+#[allow(dead_code)]
 pub(super) async fn macro_new_flash(
     state: Arc<AppState>,
     slot: u8,
@@ -1116,6 +1575,70 @@ pub(super) async fn macro_new_flash(
     macro_write_flash(
         state,
         slot,
+        crate::control::MacroWrite {
+            name,
+            steps: vec![ksx_api::MacroStepView {
+                hold: Vec::new(),
+                ms: Some(50),
+                frames: None,
+                allow_short: false,
+            }],
+            ..crate::control::MacroWrite::default()
+        },
+        N_MACRO_NEW,
+    )
+    .await
+}
+
+pub(super) async fn macro_new_source_flash(
+    state: Arc<AppState>,
+    slot: u8,
+    source: String,
+    expected_revision: String,
+    raw_name: &str,
+) -> &'static str {
+    let name = raw_name.trim().to_owned();
+    if name.is_empty() {
+        return N_MACRO_NAME;
+    }
+    if name.len() > 64
+        || !name
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_alphanumeric())
+        || !name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
+    {
+        return N_MACRO_BADNAME;
+    }
+    let taken = {
+        let inspect = Arc::clone(&state);
+        let wanted = name.clone();
+        let source = source.clone();
+        let expected_revision = expected_revision.clone();
+        tokio::task::spawn_blocking(move || {
+            let staged = inspect.control.staged();
+            exact_source_target(&staged, slot, &source, &expected_revision)
+                .map(|(_, route)| {
+                    ksx_api::staged_source_macro_snapshot(&route)
+                        .macros
+                        .iter()
+                        .any(|mac| mac.name.eq_ignore_ascii_case(&wanted))
+                })
+                .unwrap_or(false)
+        })
+        .await
+        .unwrap_or(false)
+    };
+    if taken {
+        return N_MACRO_TAKEN;
+    }
+    macro_write_source_flash(
+        state,
+        slot,
+        source,
+        expected_revision,
         crate::control::MacroWrite {
             name,
             steps: vec![ksx_api::MacroStepView {
@@ -1325,6 +1848,10 @@ pub(super) async fn workbench_api_panel_chart(
 #[derive(Deserialize)]
 pub(super) struct WorkbenchBindBody {
     slot: u8,
+    /// Exact staged keyboard route. `source` is accepted as the redesign
+    /// payload spelling; `expected_device` remains the API/domain name.
+    #[serde(default, alias = "source")]
+    expected_device: String,
     #[serde(default)]
     expected_target_revision: String,
     function: String,
@@ -1370,9 +1897,19 @@ pub(super) async fn workbench_api_bind(
                 ..BindOutcome::default()
             };
         };
+        let expected_device = body.expected_device.trim().to_owned();
+        let Some(source) = ksx_api::staged_source_view(&staged, slot, &expected_device) else {
+            return BindOutcome {
+                ok: false,
+                error: Some("That keyboard is no longer staged for this mapping action. Nothing changed. Refresh the canvas and try again.".to_owned()),
+                code: Some(ksx_api::codes::BAD_SLOT.to_owned()),
+                ..BindOutcome::default()
+            };
+        };
         let expected_target_revision = body.expected_target_revision.trim().to_owned();
-        if expected_target_revision.is_empty()
-            || expected_target_revision != slot.target_revision
+        if expected_device.is_empty()
+            || expected_target_revision.is_empty()
+            || expected_target_revision != source.revision
         {
             return BindOutcome {
                 ok: false,
@@ -1393,13 +1930,8 @@ pub(super) async fn workbench_api_bind(
                 ..BindOutcome::default()
             };
         }
-        let expected_device = staged
-            .device
-            .as_ref()
-            .map(|device| device.selector.clone())
-            .unwrap_or_default();
         let (keys, force) = if body.mode.as_deref() == Some("add") {
-            let mut current = current_keys(&staged, slot, &body.function);
+            let mut current = current_source_keys(slot, &source, &body.function);
             if current
                 .iter()
                 .any(|candidate| candidate.eq_ignore_ascii_case(key))
@@ -1414,7 +1946,7 @@ pub(super) async fn workbench_api_bind(
             current.push(key.to_owned());
             (current, true)
         } else if body.mode.as_deref() == Some("remove") {
-            let current = current_keys(&staged, slot, &body.function);
+            let current = current_source_keys(slot, &source, &body.function);
             if !current
                 .iter()
                 .any(|candidate| candidate.eq_ignore_ascii_case(key))
@@ -1443,9 +1975,9 @@ pub(super) async fn workbench_api_bind(
         };
         consumerize_bind(state.control.stage_bind(&ksx_api::StagedBindRequest {
             number: slot.number,
-            expected_device,
+            expected_device: source.selector,
             expected_target_revision,
-            preset: slot.preset.clone(),
+            preset: source.preset,
             function: body.function,
             keys,
             force,
@@ -1493,6 +2025,8 @@ fn macro_for_target(
     control: &dyn ControlSource,
     target: Option<&str>,
     slot: Option<u8>,
+    expected_device: &str,
+    expected_target_revision: &str,
     write: &crate::control::MacroWrite,
 ) -> crate::control::MacroOutcome {
     if target != Some("stage") {
@@ -1508,6 +2042,8 @@ fn macro_for_target(
     };
     control.stage_macro(&ksx_api::StagedMacroRequest {
         number,
+        expected_device: expected_device.trim().to_owned(),
+        expected_target_revision: expected_target_revision.trim().to_owned(),
         write: write.clone(),
     })
 }
@@ -1520,6 +2056,13 @@ pub(super) struct TargetedMacroWrite {
     target: Option<String>,
     #[serde(default)]
     slot: Option<u8>,
+    /// Exact staged keyboard route. `source` is accepted as the redesign
+    /// payload spelling; legacy callers may omit it for first-source behavior.
+    #[serde(default, alias = "source")]
+    expected_device: String,
+    /// Opaque revision served with that exact source route.
+    #[serde(default)]
+    expected_target_revision: String,
 }
 
 pub(super) async fn workbench_api_macro_save(
@@ -1535,6 +2078,8 @@ pub(super) async fn workbench_api_macro_save(
             control,
             request.target.as_deref(),
             request.slot,
+            &request.expected_device,
+            &request.expected_target_revision,
             &write,
         ))
     })
@@ -1544,6 +2089,10 @@ pub(super) async fn workbench_api_macro_save(
 #[derive(Deserialize)]
 pub(super) struct WorkbenchMacroEditBody {
     slot: u8,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    expected_target_revision: String,
     act: String,
     draft: ksx_api::MacroView,
 }
@@ -1568,19 +2117,61 @@ async fn macro_edit_on(
             .iter()
             .find(|candidate| candidate.number == body.slot);
         let persona = slot.map_or("xbox360", |candidate| candidate.persona.as_str());
-        let keyboard = staged
-            .device
-            .as_ref()
-            .map(|device| device.alias.as_str())
-            .unwrap_or("");
-        let mapper =
-            slot.and_then(|candidate| ksx_api::staged_mapper_slot(candidate, keyboard).ok());
-        let mut draft = body.draft;
-        let (ok, said) = match crate::macro_draft::apply(&mut draft, &body.act, mapper.as_ref()) {
-            Ok(said) => (true, said.unwrap_or_default()),
-            Err(reason) => (false, reason),
+        let requested_source = body.source.trim();
+        let source = if requested_source.is_empty() {
+            None
+        } else {
+            slot.and_then(|candidate| {
+                ksx_api::staged_source_view(&staged, candidate, requested_source)
+            })
         };
-        let view = crate::macro_editor::NocturneMacroEditor::compose(
+        let authority_error = if requested_source.is_empty() {
+            None
+        } else if slot.is_none() {
+            Some(format!(
+                "Player {} is no longer in this unsaved setup. Nothing changed.",
+                body.slot
+            ))
+        } else if source.is_none() {
+            Some(
+                "That keyboard is no longer staged for this macro. Nothing changed. Refresh the canvas and try again."
+                    .to_owned(),
+            )
+        } else if body.expected_target_revision.trim().is_empty()
+            || source.as_ref().is_some_and(|source| {
+                body.expected_target_revision.trim() != source.revision
+            })
+        {
+            Some(format!(
+                "Player {}'s selected input route changed while this macro was being edited. Nothing changed. Refresh the canvas and try again.",
+                body.slot
+            ))
+        } else {
+            None
+        };
+        let mapper = slot.and_then(|candidate| {
+            if requested_source.is_empty() {
+                let keyboard = staged
+                    .device
+                    .as_ref()
+                    .map(|device| device.alias.as_str())
+                    .unwrap_or("");
+                ksx_api::staged_mapper_slot(candidate, keyboard).ok()
+            } else {
+                source
+                    .as_ref()
+                    .and_then(|source| ksx_api::staged_mapper_source(candidate, source).ok())
+            }
+        });
+        let mut draft = body.draft;
+        let (ok, said) = match authority_error.as_ref() {
+            Some(reason) => (false, reason.clone()),
+            None => match crate::macro_draft::apply(&mut draft, &body.act, mapper.as_ref()) {
+                Ok(said) => (true, said.unwrap_or_default()),
+                Err(reason) => (false, reason),
+            },
+        };
+        let mut view = crate::macro_editor::NocturneMacroEditor::compose(
             &draft,
             persona,
             mapper.as_ref(),
@@ -1588,6 +2179,30 @@ async fn macro_edit_on(
             None,
             page,
         );
+        if let Some(source) = source.as_ref() {
+            view.source.clone_from(&source.selector);
+            if authority_error.is_none() {
+                view.source_revision.clone_from(&source.revision);
+            } else {
+                view.source_revision = body.expected_target_revision.trim().to_owned();
+            }
+            view.source_preset.clone_from(&source.preset);
+            let encoded_source = crate::render_map::urlencode_value(&source.selector);
+            view.close_href = format!("{page}?slot={}&source={encoded_source}", body.slot);
+            if !view.name.is_empty() {
+                view.map_href = format!(
+                    "{page}?slot={}&source={encoded_source}&macro={}",
+                    body.slot,
+                    crate::render_map::urlencode_value(&view.name)
+                );
+            }
+        } else if !requested_source.is_empty() {
+            // Keep the rejected authority rejected. Dropping these fields (or
+            // replacing the submitted token with a current one) would let a
+            // client resubmit the stale draft as though it had been refreshed.
+            view.source = requested_source.to_owned();
+            view.source_revision = body.expected_target_revision.trim().to_owned();
+        }
         WorkbenchMacroEditOutcome {
             ok,
             said,
@@ -1768,7 +2383,7 @@ pub(super) async fn identify_and_stage_for_redesign(
                     };
                     let selector = identified.selector;
                     return finish(
-                        match choose_device_preserving_preparation(
+                        match upsert_device_preserving_preparation(
                             &state,
                             selector.clone(),
                             identified.alias,

@@ -100,6 +100,11 @@ pub struct RedesignPayload {
     /// driver version.
     #[serde(default)]
     pub studio_version: String,
+    /// Exact staged keyboard selected for the controller inspector. Empty is
+    /// the legacy first-source view; nonempty is always a served selector,
+    /// never an alias reconstructed in the browser.
+    #[serde(default)]
+    pub source: String,
     /// The Studio theme roster for the topbar menu — the first transplanted
     /// content. Composed by the ONE shared [`theme_rows`] composer and
     /// re-dressed through the same [`NocturneChoiceRow`] shape `/nocturne`
@@ -1334,6 +1339,15 @@ pub struct RedesignPersonaRow {
 /// flag is the daemon's, served, never re-derived here.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RedesignControllers {
+    /// Exact source projected into `panel`, `keys`, `macro_rows`, and `mac`.
+    /// Kept beside those views so every redesign action can post the same
+    /// selector without reading it out of presentation copy.
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub source_revision: String,
+    #[serde(default)]
+    pub source_preset: String,
     pub cards: Vec<RedesignControllerCard>,
     pub personas: Vec<RedesignPersonaRow>,
     /// `next_preset`, served because it becomes a FILE NAME (stage.rs's
@@ -1395,9 +1409,21 @@ pub struct RedesignControllers {
 }
 
 impl RedesignControllers {
+    #[allow(dead_code)]
     pub fn of(
         staged: &ksx_api::StagedSetupView,
         selected_slot: Option<u8>,
+        undo_label: Option<&str>,
+        macro_selected: Option<&str>,
+        q: Option<&str>,
+    ) -> Self {
+        Self::of_source(staged, selected_slot, None, undo_label, macro_selected, q)
+    }
+
+    pub fn of_source(
+        staged: &ksx_api::StagedSetupView,
+        selected_slot: Option<u8>,
+        selected_source: Option<&str>,
         undo_label: Option<&str>,
         macro_selected: Option<&str>,
         q: Option<&str>,
@@ -1407,32 +1433,43 @@ impl RedesignControllers {
         let selected = selected_slot
             .and_then(|number| staged.slots.iter().find(|slot| slot.number == number))
             .or_else(|| staged.slots.first());
-        let panel = compose_controller_panel(staged, selected, q);
+        let source = selected.and_then(|slot| selected_source_view(staged, slot, selected_source));
+        let panel = compose_controller_panel_for_source(staged, selected, source.as_ref(), q);
         // The macro lifecycle rows + the step editor, exactly nocturne's
         // composition: the editor opens only on a name `?macro=` carries AND
         // the selected slot actually has.
-        let (macros_head, macro_rows, macros_note) = compose_macro_rows(selected, "/redesign");
-        let keyboard_name = staged
-            .device
-            .as_ref()
-            .map(|device| device.label.as_str())
-            .unwrap_or("(none)");
-        let mac = match (selected, macro_selected) {
+        let (macros_head, macro_rows, macros_note) =
+            compose_macro_rows_for_source(selected, source.as_ref(), "/redesign");
+        let mut mac = match (selected, macro_selected) {
             (Some(slot), Some(name)) if !name.is_empty() => {
-                let snap = ksx_api::staged_macro_snapshot(slot);
-                let mapper = ksx_api::staged_mapper_slot(slot, keyboard_name).ok();
+                let snap = source
+                    .as_ref()
+                    .map(ksx_api::staged_source_macro_snapshot)
+                    .unwrap_or_else(|| ksx_api::staged_macro_snapshot(slot));
+                let mapper = match source.as_ref() {
+                    Some(source) => ksx_api::staged_mapper_source(slot, source).ok(),
+                    None => {
+                        let keyboard_name = staged
+                            .device
+                            .as_ref()
+                            .map(|device| device.label.as_str())
+                            .unwrap_or("(none)");
+                        ksx_api::staged_mapper_slot(slot, keyboard_name).ok()
+                    }
+                };
                 snap.macros
                     .iter()
                     .find(|m| m.name == name)
                     .map(|m| {
-                        crate::macro_editor::NocturneMacroEditor::compose(
+                        let editor = crate::macro_editor::NocturneMacroEditor::compose(
                             m,
                             &slot.persona,
                             mapper.as_ref(),
                             slot.number,
                             q,
                             "/redesign",
-                        )
+                        );
+                        editor
                     })
                     .unwrap_or_else(|| {
                         crate::macro_editor::NocturneMacroEditor::closed_on("/redesign")
@@ -1440,13 +1477,38 @@ impl RedesignControllers {
             }
             _ => crate::macro_editor::NocturneMacroEditor::closed_on("/redesign"),
         };
+        if let Some(source) = source.as_ref() {
+            mac.source.clone_from(&source.selector);
+            mac.source_revision.clone_from(&source.revision);
+            mac.source_preset.clone_from(&source.preset);
+            let encoded_source = crate::render_map::urlencode_value(&source.selector);
+            mac.close_href = match q.filter(|query| !query.is_empty()) {
+                Some(query) => format!(
+                    "/redesign?slot={}&source={encoded_source}&q={}",
+                    selected.map_or(0, |slot| slot.number),
+                    crate::render_map::urlencode_value(query)
+                ),
+                None => format!(
+                    "/redesign?slot={}&source={encoded_source}",
+                    selected.map_or(0, |slot| slot.number)
+                ),
+            };
+            if !mac.name.is_empty() {
+                mac.map_href = format!(
+                    "/redesign?slot={}&source={encoded_source}&macro={}",
+                    selected.map_or(0, |slot| slot.number),
+                    crate::render_map::urlencode_value(&mac.name)
+                );
+            }
+        }
         // The Keys tab over the STANDARD board (no saved choice, no panel
         // stores, no encoder staged): the same fallback nocturne draws when
         // nothing is chosen. The board picker arrives with the keyboard
         // migration.
-        let keys = compose_key_panel(
+        let keys = compose_key_panel_for_source(
             staged,
             selected,
+            source.as_ref(),
             &crate::board::Board::resolve("", &[], &[], false),
         );
         let pads = compose_pad_views(staged, "/redesign");
@@ -1510,6 +1572,18 @@ impl RedesignControllers {
             "Adding stages the next slot — nothing is saved or started until Play.".to_owned()
         };
         Self {
+            source: source
+                .as_ref()
+                .map(|source| source.selector.clone())
+                .unwrap_or_default(),
+            source_revision: source
+                .as_ref()
+                .map(|source| source.revision.clone())
+                .unwrap_or_default(),
+            source_preset: source
+                .as_ref()
+                .map(|source| source.preset.clone())
+                .unwrap_or_default(),
             counts_line: format!(
                 "{} of {} slots staged · {} of {} Xbox (XInput)",
                 staged.slots.len(),
@@ -1547,11 +1621,10 @@ impl RedesignControllers {
 /// exactly where a recognised encoder with no keyboard collection ends up,
 /// so the family name has to ride in the meta or it is not said anywhere).
 ///
-/// The rules and the verdict sentences are copied from that loop rather than
-/// extracted because the two pages disagree ONLY in the verb: `/nocturne`'s
-/// canvas holds one staged board ("replaces the current one"), the workbench
-/// holds several at once — so the row copy differs while the tiering and the
-/// verdicts stay word-for-word. Drift between the two loops is a defect;
+/// The rules and verdict sentences are copied from the legacy roster loop
+/// rather than extracted because the redesign verb is additive: every staged
+/// keyboard remains marked and several may share the workbench. The tiering
+/// and verdicts stay word-for-word. Drift between the two loops is a defect;
 /// they sit in this one file so a change to either is a diff on both.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RedesignDeviceRows {
@@ -1590,13 +1663,41 @@ impl RedesignDeviceRows {
     /// `scan: None` means the read REFUSED (`unavailable` carries its
     /// sentence); an empty board list inside `Some` is a real answer on a
     /// machine with nothing plugged in. `staged` is the daemon's staged
-    /// device selector — the ONE board ksx splits — marked onto its row as
-    /// `aria_current: "true"` (a served daemon fact, distinct from the
-    /// browser's own workbench membership, which the client decorates).
+    /// compatibility device selector — the first board in the staged roster —
+    /// marked onto its row as `aria_current: "true"`. Canonical redesign
+    /// callers use [`Self::of_devices`] so every staged board is marked.
     pub fn of(
         scan: Option<&ksx_api::DeviceScanView>,
         unavailable: &str,
         staged: Option<&str>,
+    ) -> Self {
+        Self::of_matching(scan, unavailable, |selector| {
+            staged.is_some_and(|staged| {
+                !staged.trim().is_empty() && staged.trim().eq_ignore_ascii_case(selector.trim())
+            })
+        })
+    }
+
+    /// Canonical redesign roster: every staged keyboard is marked. The
+    /// singular [`Self::of`] remains for older projection tests and the
+    /// legacy one-device vocabulary.
+    pub fn of_devices(
+        scan: Option<&ksx_api::DeviceScanView>,
+        unavailable: &str,
+        staged: &[ksx_api::StagedDeviceView],
+    ) -> Self {
+        Self::of_matching(scan, unavailable, |selector| {
+            staged.iter().any(|device| {
+                !device.selector.trim().is_empty()
+                    && device.selector.trim().eq_ignore_ascii_case(selector.trim())
+            })
+        })
+    }
+
+    fn of_matching(
+        scan: Option<&ksx_api::DeviceScanView>,
+        unavailable: &str,
+        is_staged: impl Fn(&str) -> bool,
     ) -> Self {
         let scan_authoritative = scan.is_some();
         let fold = |n: usize| {
@@ -1646,8 +1747,7 @@ impl RedesignDeviceRows {
                 // The staged compare, exactly the preparation-preserving
                 // guard's (`choose_device_preserving_preparation`): selector
                 // alone, trimmed, never empty-equals-empty.
-                let is_staged =
-                    staged.is_some_and(|s| !s.trim().is_empty() && s.trim() == selector.trim());
+                let is_staged = is_staged(&selector);
                 let row = NocturneDeviceRow {
                     cls: "n-dev".to_owned(),
                     name: b.name.clone(),
@@ -1674,6 +1774,7 @@ impl RedesignDeviceRows {
                     terminal_count: b.terminal_count,
                     role: b.role.code().to_owned(),
                     connection_label: device_connection_label(&selector),
+                    instance_id: proven_device_instance(scan, b).unwrap_or_default(),
                     selector,
                     alias: b.alias_hint.clone(),
                     label: b.name.clone(),
@@ -1715,6 +1816,40 @@ impl RedesignDeviceRows {
             other,
         }
     }
+}
+
+/// Return a machine path only when this scan proves that both the selector's
+/// board row and its keyboard interface are unique. The browser sends this
+/// value back to the learner unchanged, so an ambiguous identical-board scan
+/// must produce no authority rather than whichever row happened to sort first.
+fn proven_device_instance(
+    scan: &ksx_api::DeviceScanView,
+    board: &ksx_api::BoardRow,
+) -> Option<String> {
+    let selector = board.selector.as_deref()?;
+    if scan
+        .boards
+        .iter()
+        .filter(|candidate| {
+            candidate
+                .selector
+                .as_deref()
+                .is_some_and(|other| other.eq_ignore_ascii_case(selector))
+        })
+        .count()
+        != 1
+    {
+        return None;
+    }
+    let instance = board.keyboard.as_ref()?;
+    (scan
+        .boards
+        .iter()
+        .flat_map(|candidate| candidate.interfaces.iter())
+        .filter(|row| row.instance_id.eq_ignore_ascii_case(instance))
+        .count()
+        == 1)
+        .then(|| instance.clone())
 }
 
 /// What `GET /api/pads` serves AND what the pads island's props carry — the
@@ -2426,11 +2561,40 @@ pub struct WorkspaceBindRow {
     pub toggle: bool,
 }
 
+/// Resolve the source an inspector may edit. A nonempty requested selector is
+/// exact and never falls back; an empty request preserves the historical
+/// first-device projection. The API helper also supplies the deterministic
+/// synthetic row used to stale-protect the first binding on an unrouted
+/// keyboard.
+pub(crate) fn selected_source_view(
+    staged: &ksx_api::StagedSetupView,
+    slot: &ksx_api::StagedSlotView,
+    requested: Option<&str>,
+) -> Option<ksx_api::StagedSourceView> {
+    if let Some(selector) = requested.map(str::trim).filter(|value| !value.is_empty()) {
+        return ksx_api::staged_source_view(staged, slot, selector);
+    }
+    staged
+        .devices
+        .first()
+        .and_then(|device| ksx_api::staged_source_view(staged, slot, &device.selector))
+        .or_else(|| slot.sources.first().cloned())
+}
+
 // The binding-row composer the Nocturne right pane uses. It was written for
 // the /workspace shell and outlived it: /nocturne re-dresses these rows.
+#[allow(dead_code)]
 fn workspace_bind_rows(
     staged: &ksx_api::StagedSetupView,
     selected: Option<&ksx_api::StagedSlotView>,
+) -> WorkspaceBinds {
+    workspace_bind_rows_for_source(staged, selected, None)
+}
+
+fn workspace_bind_rows_for_source(
+    staged: &ksx_api::StagedSetupView,
+    selected: Option<&ksx_api::StagedSlotView>,
+    source: Option<&ksx_api::StagedSourceView>,
 ) -> WorkspaceBinds {
     let empty = |title: &str| WorkspaceBinds {
         title: title.to_owned(),
@@ -2443,12 +2607,18 @@ fn workspace_bind_rows(
     let Some(slot) = selected else {
         return empty("No controller staged yet.");
     };
-    let keyboard = staged
-        .device
-        .as_ref()
-        .map(|device| device.label.as_str())
-        .unwrap_or("(none)");
-    let Ok(mapper) = ksx_api::staged_mapper_slot(slot, keyboard) else {
+    let mapper = match source {
+        Some(source) => ksx_api::staged_mapper_source(slot, source),
+        None => {
+            let keyboard = staged
+                .device
+                .as_ref()
+                .map(|device| device.label.as_str())
+                .unwrap_or("(none)");
+            ksx_api::staged_mapper_slot(slot, keyboard)
+        }
+    };
+    let Ok(mapper) = mapper else {
         // An older daemon serves no authoring table; the mapper page carries
         // the full explanation, so point there rather than paraphrasing.
         return WorkspaceBinds {
@@ -2607,7 +2777,7 @@ fn workspace_bind_rows(
     WorkspaceBinds {
         title: format!(
             "P{} · {} — \"{}\"",
-            slot.number, slot.persona_label, slot.preset
+            slot.number, slot.persona_label, mapper.preset
         ),
         rows,
         foot,
@@ -2633,6 +2803,11 @@ pub struct NocturneDeviceRow {
     /// derive served copy (and is therefore present in SSR HTML).
     #[serde(default)]
     pub connection_label: String,
+    /// Exact Windows instance id from the scan row. Mapping/capture actions
+    /// return this unchanged; a selector is deliberately not parsed back into
+    /// a machine path.
+    #[serde(default)]
+    pub instance_id: String,
     pub selector: String,
     pub alias: String,
     pub label: String,
@@ -2648,9 +2823,8 @@ pub struct NocturneDeviceRow {
     #[serde(default)]
     pub aria_current: String,
     /// What pressing this row does, in the server's words — the `title` the
-    /// row carries. The chosen row explains why pressing it changes nothing;
-    /// the others say what choosing them costs (a replacement, and nothing
-    /// else).
+    /// row carries. Redesign rows describe an additive upsert; the legacy
+    /// picker may still describe its singleton choice.
     ///
     /// `docs/SURFACES.md` §1a: rendered copy is logic too. The browser has no
     /// business composing "replaces the current one" out of a class name.
@@ -2786,6 +2960,13 @@ pub struct NocturneMacroRow {
     pub meta: String,
     pub cls: String,
     pub slot: String,
+    /// Exact redesign route identity. Empty on legacy Nocturne rows.
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub source_revision: String,
+    #[serde(default)]
+    pub preset: String,
     /// The Controls editor, opened at exactly this macro.
     pub edit_href: String,
     /// The lifecycle pair, precomposed: what the submit does and the wire
@@ -2885,6 +3066,41 @@ pub struct NocturnePadView {
     /// `false` means the provider could not answer the macro read. It must not
     /// collapse into an empty macro list: "unknown" and "defines none" are
     /// different authoring facts.
+    #[serde(default)]
+    pub macro_available: bool,
+    #[serde(default)]
+    pub macro_reason: String,
+    /// Every staged keyboard projected against this one controller. An
+    /// unrouted keyboard still has a deterministic blank authoring row so its
+    /// first bind can carry the same stale-target token the server validates.
+    #[serde(default)]
+    pub sources: Vec<RedesignPadSourceView>,
+}
+
+/// One keyboard-to-controller route nested under a single pad. Controller
+/// semantics stay on [`NocturnePadView`]; only source-owned authoring and
+/// availability repeat here.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignPadSourceView {
+    pub source_id: String,
+    pub source_alias: String,
+    pub source_label: String,
+    pub routed: bool,
+    pub revision: String,
+    pub preset: String,
+    pub bindings: usize,
+    #[serde(default)]
+    pub fn_keys: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub fn_names: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub controls: Vec<NocturneControlAuthoring>,
+    #[serde(default)]
+    pub macros: Vec<NocturneMacroFlow>,
+    #[serde(default)]
+    pub mapping_available: bool,
+    #[serde(default)]
+    pub mapping_reason: String,
     #[serde(default)]
     pub macro_available: bool,
     #[serde(default)]
@@ -3459,6 +3675,12 @@ fn nocturne_bind_group(function: &str) -> usize {
 /// so the two pages cannot disagree about a row, a count, or a class.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControllerPanel {
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub source_revision: String,
+    #[serde(default)]
+    pub source_preset: String,
     pub slot_val: String,
     pub pad_badge: String,
     pub pad_badge_cls: String,
@@ -3502,9 +3724,19 @@ pub struct ControllerPanel {
     pub socd_edit_opts: Vec<NocturneOptionRow>,
 }
 
+#[allow(dead_code)]
 pub(crate) fn compose_controller_panel(
     staged: &ksx_api::StagedSetupView,
     selected: Option<&ksx_api::StagedSlotView>,
+    q: Option<&str>,
+) -> ControllerPanel {
+    compose_controller_panel_for_source(staged, selected, None, q)
+}
+
+pub(crate) fn compose_controller_panel_for_source(
+    staged: &ksx_api::StagedSetupView,
+    selected: Option<&ksx_api::StagedSlotView>,
+    source: Option<&ksx_api::StagedSourceView>,
     q: Option<&str>,
 ) -> ControllerPanel {
     let selected_number = selected.map(|slot| slot.number);
@@ -3565,11 +3797,15 @@ pub(crate) fn compose_controller_panel(
         Some(slot) => (
             format!("P{}", slot.number),
             slot.persona_label.clone(),
-            format!("\"{}\" preset · SOCD {}", slot.preset, slot.socd_label),
+            format!(
+                "\"{}\" preset · SOCD {}",
+                source.map_or(slot.preset.as_str(), |source| source.preset.as_str()),
+                slot.socd_label
+            ),
         ),
         None => (String::new(), String::new(), String::new()),
     };
-    let binds = workspace_bind_rows(staged, selected);
+    let binds = workspace_bind_rows_for_source(staged, selected, source);
     // The pane groups its rows the way the physical controller is
     // organised — face cluster, D-pad, shoulders & triggers, each
     // stick, system — so a row is found where a hand would find the
@@ -3745,6 +3981,15 @@ pub(crate) fn compose_controller_panel(
     let [bind_face_n, bind_dpad_n, bind_shoulders_n, bind_lstick_n, bind_rstick_n, bind_system_n]: [String; 6] =
         bind_heads.try_into().expect("six groups");
     ControllerPanel {
+        source: source
+            .map(|source| source.selector.clone())
+            .unwrap_or_default(),
+        source_revision: source
+            .map(|source| source.revision.clone())
+            .unwrap_or_default(),
+        source_preset: source
+            .map(|source| source.preset.clone())
+            .unwrap_or_default(),
         slot_val,
         pad_badge,
         pad_badge_cls,
@@ -3857,6 +4102,21 @@ pub(crate) fn compose_pad_views(
                     ),
                 })
                 .collect();
+            let sources = if staged.devices.is_empty() {
+                slot.sources
+                    .iter()
+                    .map(|source| compose_pad_source_view(slot, source, page))
+                    .collect()
+            } else {
+                staged
+                    .devices
+                    .iter()
+                    .filter_map(|device| {
+                        ksx_api::staged_source_view(staged, slot, &device.selector)
+                    })
+                    .map(|source| compose_pad_source_view(slot, &source, page))
+                    .collect()
+            };
             NocturnePadView {
                 slot: slot.number,
                 target_revision: slot.target_revision.clone(),
@@ -3871,9 +4131,89 @@ pub(crate) fn compose_pad_views(
                 macros,
                 macro_available: macro_snapshot.available,
                 macro_reason: macro_snapshot.reason,
+                sources,
             }
         })
         .collect()
+}
+
+fn compose_pad_source_view(
+    slot: &ksx_api::StagedSlotView,
+    source: &ksx_api::StagedSourceView,
+    page: &str,
+) -> RedesignPadSourceView {
+    let (mapper, mapping_available, mapping_reason) =
+        match ksx_api::staged_mapper_source(slot, source) {
+            Ok(mapper) => (Some(mapper), true, String::new()),
+            Err(refusal) => (None, false, refusal.message),
+        };
+    let mut fn_keys = std::collections::BTreeMap::new();
+    if let Some(mapper) = mapper.as_ref() {
+        for (function, keys) in &mapper.bindings {
+            if !keys.is_empty() {
+                fn_keys.insert(function.clone(), keys.join(" · "));
+            }
+        }
+    }
+    let controls = mapper
+        .as_ref()
+        .map(|mapper| nocturne_control_authoring(&slot.persona, mapper))
+        .unwrap_or_default();
+    let fn_names = crate::render_map::zones_for(&slot.persona)
+        .iter()
+        .map(|zone| {
+            (
+                zone.fn_name.to_owned(),
+                crate::render_map::legend_label_for_persona(&slot.persona, zone),
+            )
+        })
+        .collect();
+    let macro_snapshot = ksx_api::staged_source_macro_snapshot(source);
+    let macro_available = source.routed && macro_snapshot.available;
+    let macro_reason = if !source.routed {
+        "Map at least one control from this keyboard before adding a macro.".to_owned()
+    } else {
+        macro_snapshot.reason.clone()
+    };
+    let macros = macro_snapshot
+        .macros
+        .iter()
+        .map(|mac| NocturneMacroFlow {
+            name: mac.name.clone(),
+            triggers: mac.triggers.clone(),
+            outputs: nocturne_macro_outputs(mac),
+            timeline: mac
+                .steps
+                .iter()
+                .map(|step| crate::render_map::hold_text_for_persona(&slot.persona, &step.hold))
+                .collect(),
+            meta: nocturne_macro_meta(mac),
+            disabled: mac.disabled,
+            edit_href: format!(
+                "{page}?slot={}&source={}&macro={}",
+                slot.number,
+                crate::render_map::urlencode_value(&source.selector),
+                crate::render_map::urlencode_value(&mac.name)
+            ),
+        })
+        .collect();
+    RedesignPadSourceView {
+        source_id: source.selector.clone(),
+        source_alias: source.alias.clone(),
+        source_label: source.label.clone(),
+        routed: source.routed,
+        revision: source.revision.clone(),
+        preset: source.preset.clone(),
+        bindings: source.bindings,
+        fn_keys,
+        fn_names,
+        controls,
+        macros,
+        mapping_available,
+        mapping_reason,
+        macro_available,
+        macro_reason,
+    }
 }
 
 /// The BY-KEY reading of the selected controller — each bound key with its
@@ -3883,6 +4223,12 @@ pub(crate) fn compose_pad_views(
 /// the standard one.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyPanel {
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub source_revision: String,
+    #[serde(default)]
+    pub source_preset: String,
     pub key_rows: Vec<NocturneKeyRow>,
     pub keys_note: String,
     pub avail_main: Vec<NocturneKeyRow>,
@@ -3896,28 +4242,45 @@ pub struct KeyPanel {
     pub avail_num_cls: String,
 }
 
+#[allow(dead_code)]
 pub(crate) fn compose_key_panel(
     staged: &ksx_api::StagedSetupView,
     selected: Option<&ksx_api::StagedSlotView>,
     board: &crate::board::Board,
 ) -> KeyPanel {
+    compose_key_panel_for_source(staged, selected, None, board)
+}
+
+pub(crate) fn compose_key_panel_for_source(
+    staged: &ksx_api::StagedSetupView,
+    selected: Option<&ksx_api::StagedSlotView>,
+    source: Option<&ksx_api::StagedSourceView>,
+    board: &crate::board::Board,
+) -> KeyPanel {
     let selected_number = selected.map(|slot| slot.number);
-    let keyboard_name = staged
-        .device
-        .as_ref()
-        .map(|device| device.label.as_str())
-        .unwrap_or("(none)");
-    let mapper = selected.and_then(|slot| ksx_api::staged_mapper_slot(slot, keyboard_name).ok());
-    let trigger_keys = |slot: &ksx_api::StagedSlotView| -> Vec<(String, Vec<String>)> {
-        ksx_api::staged_macro_snapshot(slot)
-            .macros
-            .into_iter()
-            .filter(|m| !m.triggers.is_empty())
-            .map(|m| (format!("macro.{}", m.name), m.triggers))
-            .collect()
-    };
-    let selected_triggers: Vec<(String, Vec<String>)> =
-        selected.map(trigger_keys).unwrap_or_default();
+    let mapper = selected.and_then(|slot| match source {
+        Some(source) => ksx_api::staged_mapper_source(slot, source).ok(),
+        None => {
+            let keyboard_name = staged
+                .device
+                .as_ref()
+                .map(|device| device.label.as_str())
+                .unwrap_or("(none)");
+            ksx_api::staged_mapper_slot(slot, keyboard_name).ok()
+        }
+    });
+    let selected_triggers: Vec<(String, Vec<String>)> = selected
+        .map(|slot| {
+            source
+                .map(ksx_api::staged_source_macro_snapshot)
+                .unwrap_or_else(|| ksx_api::staged_macro_snapshot(slot))
+                .macros
+                .into_iter()
+                .filter(|m| !m.triggers.is_empty())
+                .map(|m| (format!("macro.{}", m.name), m.triggers))
+                .collect()
+        })
+        .unwrap_or_default();
     // The same inversion the board reads: key → every function it drives,
     // alphabetical (BTreeMap order), macro triggers included.
     let mut key_fns: std::collections::BTreeMap<&str, Vec<&str>> =
@@ -4082,6 +4445,15 @@ pub(crate) fn compose_key_panel(
         None => String::new(),
     };
     KeyPanel {
+        source: source
+            .map(|source| source.selector.clone())
+            .unwrap_or_default(),
+        source_revision: source
+            .map(|source| source.revision.clone())
+            .unwrap_or_default(),
+        source_preset: source
+            .map(|source| source.preset.clone())
+            .unwrap_or_default(),
         key_rows,
         keys_note,
         avail_main,
@@ -4104,6 +4476,12 @@ pub(crate) fn compose_key_panel(
 /// band, or a sentence.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BoardPanel {
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub source_revision: String,
+    #[serde(default)]
+    pub source_preset: String,
     pub kb_title: String,
     pub kb_cls: String,
     pub board_case_style: String,
@@ -4126,9 +4504,39 @@ pub struct BoardPanel {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 pub(crate) fn compose_board_panel(
     staged: &ksx_api::StagedSetupView,
     selected: Option<&ksx_api::StagedSlotView>,
+    board: &crate::board::Board,
+    chosen_board: &str,
+    panel_profiles: &[ksx_api::PanelHardwareProfile],
+    drawn_boards: &[ksx_api::BoardDocument],
+    encoder_staged: bool,
+    transport: Option<&str>,
+    drawn_error: &str,
+    panels_error: &str,
+) -> BoardPanel {
+    compose_board_panel_for_source(
+        staged,
+        selected,
+        None,
+        board,
+        chosen_board,
+        panel_profiles,
+        drawn_boards,
+        encoder_staged,
+        transport,
+        drawn_error,
+        panels_error,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compose_board_panel_for_source(
+    staged: &ksx_api::StagedSetupView,
+    selected: Option<&ksx_api::StagedSlotView>,
+    source: Option<&ksx_api::StagedSourceView>,
     board: &crate::board::Board,
     chosen_board: &str,
     panel_profiles: &[ksx_api::PanelHardwareProfile],
@@ -4144,23 +4552,31 @@ pub(crate) fn compose_board_panel(
         .as_ref()
         .map(|device| device.label.as_str())
         .unwrap_or("(none)");
-    let mapper = selected.and_then(|slot| ksx_api::staged_mapper_slot(slot, keyboard_name).ok());
+    let mapper = selected.and_then(|slot| match source {
+        Some(source) => ksx_api::staged_mapper_source(slot, source).ok(),
+        None => ksx_api::staged_mapper_slot(slot, keyboard_name).ok(),
+    });
     // ⚠️ A MACRO TRIGGER IS A BINDING TOO. `MapperSlot.bindings` is built
     // from the preset's CONTROL entries only — a macro trigger lives in a
     // separate table with no `Binding` variant — so every inversion built
     // on it alone was blind to them: the key that starts a macro painted
     // UNBOUND on the board, and "add another trigger key" appended to a
     // list it could not see, which is a replace.
-    let trigger_keys = |slot: &ksx_api::StagedSlotView| -> Vec<(String, Vec<String>)> {
-        ksx_api::staged_macro_snapshot(slot)
+    let trigger_keys = |slot: &ksx_api::StagedSlotView,
+                        source: Option<&ksx_api::StagedSourceView>|
+     -> Vec<(String, Vec<String>)> {
+        source
+            .map(ksx_api::staged_source_macro_snapshot)
+            .unwrap_or_else(|| ksx_api::staged_macro_snapshot(slot))
             .macros
             .into_iter()
             .filter(|m| !m.triggers.is_empty())
             .map(|m| (format!("macro.{}", m.name), m.triggers))
             .collect()
     };
-    let selected_triggers: Vec<(String, Vec<String>)> =
-        selected.map(trigger_keys).unwrap_or_default();
+    let selected_triggers: Vec<(String, Vec<String>)> = selected
+        .map(|slot| trigger_keys(slot, source))
+        .unwrap_or_default();
     let mut key_fns: std::collections::BTreeMap<&str, Vec<&str>> =
         std::collections::BTreeMap::new();
     if let Some(mapper) = mapper.as_ref() {
@@ -4192,7 +4608,15 @@ pub(crate) fn compose_board_panel(
                 owners.push(slot.number);
             }
         };
-        if let Ok(m) = ksx_api::staged_mapper_slot(slot, keyboard_name) {
+        let routed_source = source.and_then(|selected_source| {
+            ksx_api::staged_source_view(staged, slot, &selected_source.selector)
+        });
+        let routed_mapper = match routed_source.as_ref() {
+            Some(source) => ksx_api::staged_mapper_source(slot, source),
+            None if source.is_none() => ksx_api::staged_mapper_slot(slot, keyboard_name),
+            None => continue,
+        };
+        if let Ok(m) = routed_mapper {
             for keys in m.bindings.values() {
                 for key in keys {
                     own(key);
@@ -4200,7 +4624,7 @@ pub(crate) fn compose_board_panel(
             }
         }
         // …and the keys that START a macro on this controller.
-        for (_, keys) in trigger_keys(slot) {
+        for (_, keys) in trigger_keys(slot, routed_source.as_ref()) {
             for key in &keys {
                 own(key);
             }
@@ -4520,6 +4944,15 @@ pub(crate) fn compose_board_panel(
             .to_owned()
     };
     BoardPanel {
+        source: source
+            .map(|source| source.selector.clone())
+            .unwrap_or_default(),
+        source_revision: source
+            .map(|source| source.revision.clone())
+            .unwrap_or_default(),
+        source_preset: source
+            .map(|source| source.preset.clone())
+            .unwrap_or_default(),
         kb_title,
         kb_cls,
         board_case_style,
@@ -4609,14 +5042,25 @@ pub(crate) fn compose_capture_rows(
 /// enable/disable, delete, and the edit door into the step editor on the
 /// CONSUMING page (`page` = "/nocturne" or "/redesign"). Composed once for
 /// both inspectors.
+#[allow(dead_code)]
 pub(crate) fn compose_macro_rows(
     selected: Option<&ksx_api::StagedSlotView>,
+    page: &str,
+) -> (String, Vec<NocturneMacroRow>, String) {
+    compose_macro_rows_for_source(selected, None, page)
+}
+
+pub(crate) fn compose_macro_rows_for_source(
+    selected: Option<&ksx_api::StagedSlotView>,
+    source: Option<&ksx_api::StagedSourceView>,
     page: &str,
 ) -> (String, Vec<NocturneMacroRow>, String) {
     match selected {
         None => ("Macros".to_owned(), Vec::new(), String::new()),
         Some(slot) => {
-            let snap = ksx_api::staged_macro_snapshot(slot);
+            let snap = source
+                .map(ksx_api::staged_source_macro_snapshot)
+                .unwrap_or_else(|| ksx_api::staged_macro_snapshot(slot));
             if !snap.available {
                 ("Macros".to_owned(), Vec::new(), snap.reason.clone())
             } else {
@@ -4658,11 +5102,28 @@ pub(crate) fn compose_macro_rows(
                                 "n-bind".to_owned()
                             },
                             slot: slot.number.to_string(),
-                            edit_href: format!(
-                                "{page}?slot={}&macro={}",
-                                slot.number,
-                                crate::render_map::urlencode_value(&mac.name)
-                            ),
+                            source: source
+                                .map(|source| source.selector.clone())
+                                .unwrap_or_default(),
+                            source_revision: source
+                                .map(|source| source.revision.clone())
+                                .unwrap_or_default(),
+                            preset: source
+                                .map(|source| source.preset.clone())
+                                .unwrap_or_else(|| slot.preset.clone()),
+                            edit_href: match source {
+                                Some(source) => format!(
+                                    "{page}?slot={}&source={}&macro={}",
+                                    slot.number,
+                                    crate::render_map::urlencode_value(&source.selector),
+                                    crate::render_map::urlencode_value(&mac.name)
+                                ),
+                                None => format!(
+                                    "{page}?slot={}&macro={}",
+                                    slot.number,
+                                    crate::render_map::urlencode_value(&mac.name)
+                                ),
+                            },
                             toggle_label: if mac.disabled {
                                 "Enable".to_owned()
                             } else {
@@ -5886,6 +6347,289 @@ mod tests {
         // Even with nothing marked, all four stay clickable and painted —
         // this is the state where the picker is the ONLY way out.
         renderable(&rows);
+    }
+
+    fn staged_device(selector: &str, alias: &str, label: &str) -> ksx_api::StagedDeviceView {
+        ksx_api::StagedDeviceView {
+            selector: selector.to_owned(),
+            alias: alias.to_owned(),
+            label: label.to_owned(),
+            ..ksx_api::StagedDeviceView::default()
+        }
+    }
+
+    fn staged_route(
+        device: &ksx_api::StagedDeviceView,
+        preset: &str,
+        function: &str,
+        key: &str,
+        revision: &str,
+    ) -> ksx_api::StagedSourceView {
+        let bindings = if function.is_empty() {
+            Default::default()
+        } else {
+            std::iter::once((
+                function.to_owned(),
+                ksx_config::BindingEntry::Key(key.to_owned()),
+            ))
+            .collect()
+        };
+        ksx_api::StagedSourceView {
+            selector: device.selector.clone(),
+            alias: device.alias.clone(),
+            label: device.label.clone(),
+            preset: preset.to_owned(),
+            authoring: Some(ksx_config::PresetFile {
+                name: preset.to_owned(),
+                bindings,
+                macros: Default::default(),
+            }),
+            bindings: usize::from(!function.is_empty()),
+            routed: true,
+            revision: revision.to_owned(),
+        }
+    }
+
+    fn staged_slot_with_sources(
+        number: u8,
+        sources: Vec<ksx_api::StagedSourceView>,
+    ) -> ksx_api::StagedSlotView {
+        let first = sources.first().cloned().unwrap_or_default();
+        ksx_api::StagedSlotView {
+            number,
+            target_revision: first.revision.clone(),
+            persona: "xbox360".to_owned(),
+            persona_label: "Xbox 360".to_owned(),
+            is_xinput: true,
+            preset: first.preset.clone(),
+            authoring: first.authoring.clone(),
+            sources,
+            bindings: first.bindings,
+            ..ksx_api::StagedSlotView::default()
+        }
+    }
+
+    fn staged_multi_source(
+        devices: Vec<ksx_api::StagedDeviceView>,
+        slots: Vec<ksx_api::StagedSlotView>,
+    ) -> ksx_api::StagedSetupView {
+        ksx_api::StagedSetupView {
+            reachable: true,
+            empty: false,
+            device: devices.first().cloned(),
+            devices,
+            slots,
+            revision: "draft-7".to_owned(),
+            ..ksx_api::StagedSetupView::default()
+        }
+    }
+
+    #[test]
+    fn redesign_marks_every_staged_device_and_keeps_exact_scan_instances() {
+        let left = staged_device("usb:1111:0001:00", "left", "Left keyboard");
+        let right = staged_device("usb:2222:0002:00", "right", "Right keyboard");
+        let scan = ksx_api::DeviceScanView {
+            boards: vec![
+                ksx_api::BoardRow {
+                    name: left.label.clone(),
+                    keyboard: Some("HID\\LEFT\\0001".to_owned()),
+                    interfaces: vec![ksx_api::UsbRow {
+                        instance_id: "HID\\LEFT\\0001".to_owned(),
+                        ..ksx_api::UsbRow::default()
+                    }],
+                    selector: Some(left.selector.clone()),
+                    alias_hint: left.alias.clone(),
+                    pickable: true,
+                    looks_like_a_keyboard: true,
+                    ..ksx_api::BoardRow::default()
+                },
+                ksx_api::BoardRow {
+                    name: right.label.clone(),
+                    keyboard: Some("HID\\RIGHT\\0002".to_owned()),
+                    interfaces: vec![ksx_api::UsbRow {
+                        instance_id: "HID\\RIGHT\\0002".to_owned(),
+                        ..ksx_api::UsbRow::default()
+                    }],
+                    selector: Some(right.selector.clone()),
+                    alias_hint: right.alias.clone(),
+                    pickable: true,
+                    looks_like_a_keyboard: true,
+                    ..ksx_api::BoardRow::default()
+                },
+            ],
+            ..ksx_api::DeviceScanView::default()
+        };
+        let rows = RedesignDeviceRows::of_devices(Some(&scan), "", &[left, right]);
+        assert_eq!(rows.keyboards.len(), 2);
+        assert!(rows.keyboards.iter().all(|row| row.aria_current == "true"));
+        assert_eq!(
+            rows.keyboards
+                .iter()
+                .map(|row| row.instance_id.as_str())
+                .collect::<Vec<_>>(),
+            ["HID\\LEFT\\0001", "HID\\RIGHT\\0002"]
+        );
+    }
+
+    #[test]
+    fn one_controller_nests_two_independent_keyboard_routes() {
+        let left = staged_device("usb:1111:0001:00", "left", "Left keyboard");
+        let right = staged_device("usb:2222:0002:00", "right", "Right keyboard");
+        let setup = staged_multi_source(
+            vec![left.clone(), right.clone()],
+            vec![staged_slot_with_sources(
+                1,
+                vec![
+                    staged_route(&left, "Left P1", "A", "G", "left-r1"),
+                    staged_route(&right, "Right P1", "B", "G", "right-r1"),
+                ],
+            )],
+        );
+        let pads = compose_pad_views(&setup, "/redesign");
+        assert_eq!(pads.len(), 1, "controller semantics stay singular");
+        assert_eq!(pads[0].sources.len(), 2);
+        assert_eq!(pads[0].sources[0].source_id, left.selector);
+        assert_eq!(pads[0].sources[1].source_id, right.selector);
+        assert_eq!(pads[0].sources[0].fn_keys.get("A"), Some(&"G".to_owned()));
+        assert_eq!(pads[0].sources[1].fn_keys.get("B"), Some(&"G".to_owned()));
+    }
+
+    #[test]
+    fn two_controllers_project_every_device_with_synthetic_first_bind_rows() {
+        let left = staged_device("usb:1111:0001:00", "left", "Left keyboard");
+        let right = staged_device("usb:2222:0002:00", "right", "Right keyboard");
+        let setup = staged_multi_source(
+            vec![left.clone(), right.clone()],
+            vec![
+                staged_slot_with_sources(
+                    1,
+                    vec![staged_route(&left, "Left P1", "A", "G", "left-r1")],
+                ),
+                staged_slot_with_sources(
+                    2,
+                    vec![staged_route(&right, "Right P2", "B", "G", "right-r2")],
+                ),
+            ],
+        );
+        let pads = compose_pad_views(&setup, "/redesign");
+        assert_eq!(pads.len(), 2);
+        assert!(pads.iter().all(|pad| pad.sources.len() == 2));
+        let synthetic = pads[0]
+            .sources
+            .iter()
+            .find(|source| source.source_id == right.selector)
+            .expect("the unrouted second keyboard is still authorable");
+        assert!(!synthetic.routed);
+        assert!(!synthetic.revision.is_empty());
+        assert!(synthetic.preset.contains("right"));
+        assert!(synthetic.mapping_available);
+        assert!(synthetic
+            .controls
+            .iter()
+            .all(|control| control.keys.is_empty()));
+        assert!(pads[1]
+            .sources
+            .iter()
+            .any(|source| source.source_id == left.selector && !source.routed));
+    }
+
+    #[test]
+    fn exact_inspector_keeps_the_same_key_independent_between_sources() {
+        let left = staged_device("usb:1111:0001:00", "left", "Left keyboard");
+        let right = staged_device("usb:2222:0002:00", "right", "Right keyboard");
+        let setup = staged_multi_source(
+            vec![left.clone(), right.clone()],
+            vec![staged_slot_with_sources(
+                1,
+                vec![
+                    staged_route(&left, "Left P1", "A", "G", "left-r1"),
+                    staged_route(&right, "Right P1", "B", "G", "right-r1"),
+                ],
+            )],
+        );
+        let left_view =
+            RedesignControllers::of_source(&setup, Some(1), Some(&left.selector), None, None, None);
+        let right_view = RedesignControllers::of_source(
+            &setup,
+            Some(1),
+            Some(&right.selector),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(left_view.source_revision, "left-r1");
+        assert_eq!(right_view.source_revision, "right-r1");
+        assert!(left_view
+            .panel
+            .bind_face
+            .iter()
+            .any(|row| row.function == "A" && row.chip == "G"));
+        assert!(!left_view
+            .panel
+            .bind_face
+            .iter()
+            .any(|row| row.function == "B" && row.chip == "G"));
+        assert!(right_view
+            .panel
+            .bind_face
+            .iter()
+            .any(|row| row.function == "B" && row.chip == "G"));
+        assert!(!right_view
+            .panel
+            .bind_face
+            .iter()
+            .any(|row| row.function == "A" && row.chip == "G"));
+    }
+
+    #[test]
+    fn exact_source_macro_inspector_never_falls_back_to_the_first_route() {
+        let left = staged_device("usb:1111:0001:00", "left", "Left keyboard");
+        let right = staged_device("usb:2222:0002:00", "right", "Right keyboard");
+        let macro_route =
+            |device: &ksx_api::StagedDeviceView, preset: &str, name: &str, revision: &str| {
+                let mut source =
+                    staged_route(device, preset, &format!("macro.{name}"), "P", revision);
+                source.authoring.as_mut().unwrap().macros.insert(
+                    name.to_owned(),
+                    ksx_config::MacroFile {
+                        steps: vec![ksx_config::MacroStepFile {
+                            hold: vec!["A".to_owned()],
+                            ms: Some(50),
+                            ..ksx_config::MacroStepFile::default()
+                        }],
+                        ..ksx_config::MacroFile::default()
+                    },
+                );
+                source
+            };
+        let setup = staged_multi_source(
+            vec![left.clone(), right.clone()],
+            vec![staged_slot_with_sources(
+                1,
+                vec![
+                    macro_route(&left, "Left P1", "left-macro", "left-r1"),
+                    macro_route(&right, "Right P1", "right-macro", "right-r1"),
+                ],
+            )],
+        );
+        let view = RedesignControllers::of_source(
+            &setup,
+            Some(1),
+            Some(&right.selector),
+            None,
+            Some("right-macro"),
+            None,
+        );
+        assert_eq!(
+            view.macro_rows
+                .iter()
+                .map(|row| row.name.as_str())
+                .collect::<Vec<_>>(),
+            ["right-macro"]
+        );
+        assert!(view.mac.open);
+        assert_eq!(view.mac.name, "right-macro");
+        assert!(view.macro_rows[0].edit_href.contains("source=usb%3A2222"));
     }
 
     // DELETED 2026-08-26: `the_setup_rows_are_composed_once_from_the_view`

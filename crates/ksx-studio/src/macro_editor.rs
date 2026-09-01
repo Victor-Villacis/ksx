@@ -142,6 +142,15 @@ pub struct NocturneMacroEditor {
     /// The worksheet the table is written into — `save_macro`'s own
     /// identity for it.
     pub preset: String,
+    /// Exact staged keyboard route authority for redesign writes. Legacy
+    /// editors leave these empty and retain their historical first-source
+    /// behavior.
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub source_revision: String,
+    #[serde(default)]
+    pub source_preset: String,
     /// The table ITSELF, so the browser has something to edit and post
     /// back. Payload data only — it mints no slot, exactly like the pad
     /// grid's rows.
@@ -580,6 +589,9 @@ impl NocturneMacroEditor {
             name: mac.name.clone(),
             slot: number.to_string(),
             preset: slot.map(|s| s.preset.clone()).unwrap_or_default(),
+            source: String::new(),
+            source_revision: String::new(),
+            source_preset: String::new(),
             table: Some(mac.clone()),
             head: format!("{steps} · {} ms", macro_total_ms(mac)),
             trigger: macro_trigger_line(Some(mac)),

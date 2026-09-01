@@ -7,10 +7,11 @@
 //! outcome channel without depending on another surface's handlers.
 
 use super::workbench::{
-    self as wb, bind_clear_flash, bind_toggle_flash, bind_turbo_flash, blocking_write_flash,
-    checked, choose_device_preserving_preparation, clear_all_flash, duplicate_slot_flash,
-    identify_and_stage_for_redesign, key_clear_flash, macro_new_flash, macro_write_flash,
-    stash_removed_slot, undo_chip_label, undo_removal_flash, DeviceChoice, StartIdentifyResult,
+    self as wb, bind_clear_source_flash, bind_toggle_source_flash, bind_turbo_source_flash,
+    blocking_write_flash, checked, clear_all_source_flash, duplicate_slot_flash,
+    identify_and_stage_for_redesign, key_clear_source_flash, macro_new_source_flash,
+    macro_write_source_flash, restore_slot_routes, stash_removed_slot, undo_chip_label,
+    undo_removal_flash, upsert_device_preserving_preparation, DeviceChoice, StartIdentifyResult,
     N_ADD_LAYOUT_ERROR, N_ADOPT_BLOCKED, N_ADOPT_OK, N_APPLY_ERROR, N_APPLY_OK, N_APPLY_RESTART,
     N_BLOCKING_OK, N_CAPTURE_ALREADY_PREPARED, N_CAPTURE_ALREADY_RELEASED, N_CAPTURE_PREPARED_OK,
     N_CAPTURE_PREPARED_STAGE_CHANGED, N_CAPTURE_PREPARE_CONSENT, N_CAPTURE_PREPARE_ERROR,
@@ -40,6 +41,10 @@ const RD_IDENTIFY_ALREADY_ANSWERED: &str =
     "error: That keyboard identification has already answered. Check the current input source before trying again.";
 const RD_IDENTIFY_BUSY: &str =
     "error: Another keyboard identification is already listening. Finish or cancel it there; nothing changed.";
+const RD_DEVICE_REMOVED: &str =
+    "Keyboard removed from the workbench. Its controller routes were removed with it; saved files were not changed.";
+const RD_DEVICE_REMOVE_CONFIRM: &str =
+    "error: This keyboard has controller mappings. Confirm Remove to discard those unsaved routes; nothing was changed.";
 
 #[derive(Deserialize)]
 pub(super) struct RedesignQuery {
@@ -48,6 +53,8 @@ pub(super) struct RedesignQuery {
     /// explicit `?slot=` wins, otherwise the first staged controller speaks
     /// for the inspector panel.
     slot: Option<u8>,
+    /// Exact staged keyboard route selected beneath that controller.
+    source: Option<String>,
     /// The macro the step editor opens on (the nocturne door: ?slot&macro).
     #[serde(rename = "macro")]
     macro_selected: Option<String>,
@@ -85,6 +92,8 @@ const RD_FLASH_ALLOWLIST: &[&str] = &[
     RD_IDENTIFY_CANCELLED,
     RD_IDENTIFY_ALREADY_ANSWERED,
     RD_IDENTIFY_BUSY,
+    RD_DEVICE_REMOVED,
+    RD_DEVICE_REMOVE_CONFIRM,
     N_FORM_UNREADABLE,
     N_EDIT_OK,
     N_EDIT_ERROR,
@@ -212,7 +221,11 @@ fn redesign_return_context(request: &axum::extract::Request) -> Option<String> {
     {
         context.push(format!("slot={slot}"));
     }
-    for (name, value) in [("macro", query.macro_selected), ("q", query.q)] {
+    for (name, value) in [
+        ("source", query.source),
+        ("macro", query.macro_selected),
+        ("q", query.q),
+    ] {
         if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
             context.push(format!("{name}={}", urlencode(&value)));
         }
@@ -273,6 +286,7 @@ fn redesign_identify_redirect(flash: &str, selector: Option<&str>) -> Response {
 pub(super) async fn collect_redesign(
     state: &Arc<AppState>,
     selected_slot: Option<u8>,
+    selected_source: Option<String>,
     macro_selected: Option<String>,
     q: Option<String>,
 ) -> RedesignPayload {
@@ -325,6 +339,7 @@ pub(super) async fn collect_redesign(
             session: &session,
             outputs: &outputs,
             selected_slot,
+            selected_source: selected_source.as_deref(),
             undo_label: undo_label.as_deref(),
             macro_selected: macro_selected.as_deref(),
             q: q.as_deref(),
@@ -355,6 +370,7 @@ pub(super) async fn collect_redesign(
             session: &session,
             outputs: &ksx_api::ControllerOutputsView::default(),
             selected_slot: None,
+            selected_source: None,
             undo_label: None,
             macro_selected: None,
             q: None,
@@ -384,7 +400,14 @@ pub(super) async fn redesign_page(
     Query(query): Query<RedesignQuery>,
 ) -> Response {
     invalidate_redesign_cache_for_fresh(&state, query.fresh.as_deref());
-    let payload = collect_redesign(&state, query.slot, query.macro_selected, query.q).await;
+    let payload = collect_redesign(
+        &state,
+        query.slot,
+        query.source,
+        query.macro_selected,
+        query.q,
+    )
+    .await;
     let flash = redesign_flash_from_query(query.flash.as_deref());
     let out = crate::render::with_theme(
         render_redesign(&state.redesign_page.get(), &payload, flash.as_deref()),
@@ -415,7 +438,14 @@ pub(super) async fn api_redesign(
     Query(query): Query<RedesignQuery>,
 ) -> Response {
     invalidate_redesign_cache_for_fresh(&state, query.fresh.as_deref());
-    let payload = collect_redesign(&state, query.slot, query.macro_selected, query.q).await;
+    let payload = collect_redesign(
+        &state,
+        query.slot,
+        query.source,
+        query.macro_selected,
+        query.q,
+    )
+    .await;
     (
         [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
         axum::Json(payload),
@@ -677,10 +707,9 @@ pub(super) struct RedesignDeviceForm {
 }
 
 /// POST /redesign/device — stage the input selected from the workbench card.
-/// The transaction uses the shared [`choose_device_preserving_preparation`]
-/// guard, so both product surfaces perform the same preparation-preserving
-/// comparison. Selecting a WinUSB-prepared board again never silently drops
-/// back to interception.
+/// Unlike the legacy Nocturne chooser this is additive: another keyboard
+/// joins the staged roster. Re-adding an existing selector updates its
+/// metadata while the domain preserves its prepared capture backend.
 pub(super) async fn redesign_form_device(
     State(state): State<Arc<AppState>>,
     form: RedesignForm<RedesignDeviceForm>,
@@ -689,7 +718,7 @@ pub(super) async fn redesign_form_device(
         return redesign_redirect(N_FORM_UNREADABLE);
     };
     let outcome = tokio::task::spawn_blocking(move || {
-        choose_device_preserving_preparation(&state, form.selector, form.alias, form.label)
+        upsert_device_preserving_preparation(&state, form.selector, form.alias, form.label)
     })
     .await
     .unwrap_or(DeviceChoice::Refused);
@@ -703,10 +732,74 @@ pub(super) async fn redesign_form_device(
     })
 }
 
-/// POST /redesign/device/identify — the legacy transaction, with a redesign
-/// redirect and an exact-generation cancellation handle. The action's label
-/// says that a successful answer becomes the mapping input; there is no
-/// identify-only preview that could stage a device without consent.
+#[derive(Deserialize)]
+pub(super) struct RedesignDeviceRemoveForm {
+    selector: String,
+    #[serde(default)]
+    confirm_remove: Option<String>,
+}
+
+fn device_has_mappings(staged: &ksx_api::StagedSetupView, selector: &str) -> bool {
+    staged.slots.iter().any(|slot| {
+        slot.sources
+            .iter()
+            .find(|source| source.selector.eq_ignore_ascii_case(selector.trim()))
+            .is_some_and(|source| {
+                source.bindings > 0
+                    || source.authoring.is_none()
+                    || !ksx_api::staged_source_macro_snapshot(source)
+                        .macros
+                        .is_empty()
+            })
+    })
+}
+
+/// POST /redesign/device/remove — remove exactly one keyboard and all of its
+/// source routes. A roster-only keyboard removes immediately; a keyboard with
+/// authored routes needs an explicit confirmation from this exact form.
+pub(super) async fn redesign_form_device_remove(
+    State(state): State<Arc<AppState>>,
+    form: RedesignForm<RedesignDeviceRemoveForm>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return redesign_redirect(N_FORM_UNREADABLE);
+    };
+    let flash = tokio::task::spawn_blocking(move || {
+        let staged = state.control.staged();
+        let selector = form.selector.trim();
+        if selector.is_empty()
+            || !staged
+                .devices
+                .iter()
+                .any(|device| device.selector.eq_ignore_ascii_case(selector))
+        {
+            return N_EDIT_ERROR;
+        }
+        if device_has_mappings(&staged, selector) && !checked(form.confirm_remove.as_deref()) {
+            return RD_DEVICE_REMOVE_CONFIRM;
+        }
+        if state
+            .control
+            .stage_edit(&ksx_api::StageEdit::RemoveDevice {
+                selector: selector.to_owned(),
+            })
+            .ok
+        {
+            RD_DEVICE_REMOVED
+        } else {
+            N_EDIT_ERROR
+        }
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
+    redesign_redirect(flash)
+}
+
+/// POST /redesign/device/identify — the existing exact-device transaction,
+/// with a redesign redirect and an exact-generation cancellation handle. A
+/// successful answer additively upserts that board into the mapping-source
+/// roster; there is no identify-only preview that could stage it without
+/// consent.
 #[derive(Deserialize)]
 pub(super) struct RedesignIdentifyForm {
     #[serde(default)]
@@ -1067,10 +1160,16 @@ pub(super) async fn redesign_form_ctrl_assign(
         let staged = state.control.staged();
         let number = match held {
             Some(slot) => {
-                let Some(mut authoring) = slot.authoring else {
-                    return N_EDIT_ERROR;
-                };
-                let name_taken = staged.slots.iter().any(|s| s.preset == slot.preset);
+                let name_taken = staged.slots.iter().any(|candidate| {
+                    std::iter::once(candidate.preset.as_str())
+                        .chain(
+                            candidate
+                                .sources
+                                .iter()
+                                .map(|source| source.preset.as_str()),
+                        )
+                        .any(|name| name.eq_ignore_ascii_case(&slot.preset))
+                });
                 let name = if name_taken {
                     match staged.next_preset.clone() {
                         Some(fresh) => fresh,
@@ -1091,12 +1190,8 @@ pub(super) async fn redesign_form_ctrl_assign(
                 let Some(number) = added.setup.slots.iter().map(|s| s.number).max() else {
                     return N_EDIT_ERROR;
                 };
-                authoring.name = name;
-                let bound = state.control.stage_edit(&ksx_api::StageEdit::SetBindings {
-                    number,
-                    preset: Box::new(authoring),
-                });
-                if !bound.ok {
+                let primary_override = name_taken.then_some(name.as_str());
+                if !restore_slot_routes(&state, number, &slot, primary_override, false) {
                     let _ = state
                         .control
                         .stage_edit(&ksx_api::StageEdit::RemoveSlot { number });
@@ -1277,6 +1372,10 @@ pub(super) async fn redesign_form_ctrl_undo(State(state): State<Arc<AppState>>) 
 #[derive(Deserialize)]
 pub(super) struct RedesignBindForm {
     slot: u8,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    expected_target_revision: String,
     function: String,
 }
 
@@ -1288,24 +1387,47 @@ pub(super) async fn redesign_form_bind_clear(
     let Ok(Form(form)) = form else {
         return redesign_redirect(N_FORM_UNREADABLE);
     };
-    let flash =
-        tokio::task::spawn_blocking(move || bind_clear_flash(&state, form.slot, form.function))
-            .await
-            .unwrap_or(N_EDIT_ERROR);
+    let flash = tokio::task::spawn_blocking(move || {
+        bind_clear_source_flash(
+            &state,
+            form.slot,
+            &form.source,
+            &form.expected_target_revision,
+            form.function,
+        )
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
     redesign_redirect(flash)
+}
+
+#[derive(Deserialize)]
+pub(super) struct RedesignSourceSlotForm {
+    number: u8,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    expected_target_revision: String,
 }
 
 /// POST /redesign/bind/clear-all — every key unbound on one slot's draft.
 pub(super) async fn redesign_form_clear_all(
     State(state): State<Arc<AppState>>,
-    form: RedesignForm<RedesignSlotForm>,
+    form: RedesignForm<RedesignSourceSlotForm>,
 ) -> Response {
     let Ok(Form(form)) = form else {
         return redesign_redirect(N_FORM_UNREADABLE);
     };
-    let flash = tokio::task::spawn_blocking(move || clear_all_flash(&state, form.number))
-        .await
-        .unwrap_or(N_EDIT_ERROR);
+    let flash = tokio::task::spawn_blocking(move || {
+        clear_all_source_flash(
+            &state,
+            form.number,
+            &form.source,
+            &form.expected_target_revision,
+        )
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
     redesign_redirect(flash)
 }
 
@@ -1335,6 +1457,10 @@ pub(super) async fn redesign_form_blocking(
 #[derive(Deserialize)]
 pub(super) struct RedesignMacroForm {
     slot: u8,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    expected_target_revision: String,
     name: String,
     #[serde(default)]
     enable: Option<String>,
@@ -1351,9 +1477,11 @@ pub(super) async fn redesign_form_macro_toggle(
     };
     let enable = checked(form.enable.as_deref());
     redesign_redirect(
-        macro_write_flash(
+        macro_write_source_flash(
             state,
             form.slot,
+            form.source,
+            form.expected_target_revision,
             crate::control::MacroWrite {
                 name: form.name,
                 enabled: Some(enable),
@@ -1375,7 +1503,16 @@ pub(super) async fn redesign_form_macro_new(
     let Ok(Form(form)) = form else {
         return redesign_redirect(N_FORM_UNREADABLE);
     };
-    redesign_redirect(macro_new_flash(state, form.slot, &form.name).await)
+    redesign_redirect(
+        macro_new_source_flash(
+            state,
+            form.slot,
+            form.source,
+            form.expected_target_revision,
+            &form.name,
+        )
+        .await,
+    )
 }
 
 /// POST /redesign/macro/delete — remove one macro table (and the trigger
@@ -1388,9 +1525,11 @@ pub(super) async fn redesign_form_macro_delete(
         return redesign_redirect(N_FORM_UNREADABLE);
     };
     redesign_redirect(
-        macro_write_flash(
+        macro_write_source_flash(
             state,
             form.slot,
+            form.source,
+            form.expected_target_revision,
             crate::control::MacroWrite {
                 name: form.name,
                 delete: true,
@@ -1405,6 +1544,10 @@ pub(super) async fn redesign_form_macro_delete(
 #[derive(Deserialize)]
 pub(super) struct RedesignKeyClearForm {
     number: u8,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    expected_target_revision: String,
     key: String,
 }
 
@@ -1417,15 +1560,27 @@ pub(super) async fn redesign_form_key_clear(
     let Ok(Form(form)) = form else {
         return redesign_redirect(N_FORM_UNREADABLE);
     };
-    let flash = tokio::task::spawn_blocking(move || key_clear_flash(&state, form.number, form.key))
-        .await
-        .unwrap_or(N_EDIT_ERROR);
+    let flash = tokio::task::spawn_blocking(move || {
+        key_clear_source_flash(
+            &state,
+            form.number,
+            &form.source,
+            &form.expected_target_revision,
+            form.key,
+        )
+    })
+    .await
+    .unwrap_or(N_EDIT_ERROR);
     redesign_redirect(flash)
 }
 
 #[derive(Deserialize)]
 pub(super) struct RedesignTurboForm {
     slot: u8,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    expected_target_revision: String,
     function: String,
     #[serde(default)]
     turbo_hz: Option<String>,
@@ -1440,7 +1595,14 @@ pub(super) async fn redesign_form_bind_turbo(
         return redesign_redirect(N_FORM_UNREADABLE);
     };
     let flash = tokio::task::spawn_blocking(move || {
-        bind_turbo_flash(&state, form.slot, form.function, form.turbo_hz.as_deref())
+        bind_turbo_source_flash(
+            &state,
+            form.slot,
+            &form.source,
+            &form.expected_target_revision,
+            form.function,
+            form.turbo_hz.as_deref(),
+        )
     })
     .await
     .unwrap_or(N_EDIT_ERROR);
@@ -1450,6 +1612,10 @@ pub(super) async fn redesign_form_bind_turbo(
 #[derive(Deserialize)]
 pub(super) struct RedesignToggleForm {
     slot: u8,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    expected_target_revision: String,
     function: String,
     mode: String,
 }
@@ -1463,7 +1629,14 @@ pub(super) async fn redesign_form_bind_toggle(
         return redesign_redirect(N_FORM_UNREADABLE);
     };
     let flash = tokio::task::spawn_blocking(move || {
-        bind_toggle_flash(&state, form.slot, form.function, &form.mode)
+        bind_toggle_source_flash(
+            &state,
+            form.slot,
+            &form.source,
+            &form.expected_target_revision,
+            form.function,
+            &form.mode,
+        )
     })
     .await
     .unwrap_or(N_EDIT_ERROR);
@@ -1487,6 +1660,8 @@ mod tests {
             N_THEME_UNKNOWN,
             N_DEVICE_OK,
             N_DEVICE_ALREADY_OK,
+            RD_DEVICE_REMOVED,
+            RD_DEVICE_REMOVE_CONFIRM,
             // the staging verbs' shared answers
             N_FORM_UNREADABLE,
             N_EDIT_OK,
@@ -1631,12 +1806,12 @@ mod tests {
         let request = native_request(
             axum::http::Method::POST,
             "127.0.0.1:4460",
-            "http://127.0.0.1:4460/redesign?slot=2&macro=dash+loop&q=face%20buttons\
+            "http://127.0.0.1:4460/redesign?slot=2&source=usb%3A1111%3A2222%3A00&macro=dash+loop&q=face%20buttons\
              &flash=hostile&fresh=1&identified_selector=private",
         );
         assert_eq!(
             redesign_return_context(&request).as_deref(),
-            Some("slot=2&macro=dash%20loop&q=face%20buttons"),
+            Some("slot=2&source=usb%3A1111%3A2222%3A00&macro=dash%20loop&q=face%20buttons"),
             "only durable navigation state crosses the native POST"
         );
 
@@ -1682,5 +1857,49 @@ mod tests {
                 "must reject {referer}"
             );
         }
+    }
+
+    #[test]
+    fn device_removal_confirmation_is_exact_and_only_for_authored_routes() {
+        let selector = "usb:1111:2222:00";
+        let other = "usb:3333:4444:00";
+        let mut staged = ksx_api::StagedSetupView {
+            reachable: true,
+            devices: vec![ksx_api::StagedDeviceView {
+                selector: selector.to_owned(),
+                ..ksx_api::StagedDeviceView::default()
+            }],
+            slots: vec![ksx_api::StagedSlotView {
+                number: 1,
+                sources: vec![ksx_api::StagedSourceView {
+                    selector: selector.to_owned(),
+                    preset: "Player 1".to_owned(),
+                    authoring: Some(ksx_config::PresetFile {
+                        name: "Player 1".to_owned(),
+                        bindings: Default::default(),
+                        macros: Default::default(),
+                    }),
+                    routed: true,
+                    ..ksx_api::StagedSourceView::default()
+                }],
+                ..ksx_api::StagedSlotView::default()
+            }],
+            ..ksx_api::StagedSetupView::default()
+        };
+        assert!(!device_has_mappings(&staged, selector));
+        assert!(!device_has_mappings(&staged, other));
+
+        staged.slots[0].sources[0].bindings = 1;
+        assert!(device_has_mappings(&staged, selector));
+        assert!(!device_has_mappings(&staged, other));
+
+        staged.slots[0].sources[0].bindings = 0;
+        staged.slots[0].sources[0]
+            .authoring
+            .as_mut()
+            .unwrap()
+            .macros
+            .insert("kept-body".to_owned(), ksx_config::MacroFile::default());
+        assert!(device_has_mappings(&staged, selector));
     }
 }

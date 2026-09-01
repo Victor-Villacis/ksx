@@ -3111,18 +3111,9 @@ fn post_json(addr: SocketAddr, path: &str, body: &str) -> String {
     )
 }
 
-fn staged_target_revision(control: &ScriptedControl, slot: u8) -> String {
-    control
-        .staged()
-        .slots
-        .into_iter()
-        .find(|candidate| candidate.number == slot)
-        .unwrap_or_else(|| panic!("no staged Player {slot}"))
-        .target_revision
-}
-
 fn redesign_bind_body_with_revision(
     slot: u8,
+    expected_device: &str,
     target_revision: &str,
     function: &str,
     key: &str,
@@ -3131,6 +3122,7 @@ fn redesign_bind_body_with_revision(
 ) -> String {
     serde_json::json!({
         "slot": slot,
+        "expected_device": expected_device,
         "expected_target_revision": target_revision,
         "function": function,
         "key": key,
@@ -3148,14 +3140,107 @@ fn redesign_bind_body(
     mode: Option<&str>,
     force: bool,
 ) -> String {
+    let staged = control.staged();
+    let slot_view = staged
+        .slots
+        .iter()
+        .find(|candidate| candidate.number == slot)
+        .unwrap_or_else(|| panic!("no staged Player {slot}"));
+    let device = staged.device.as_ref().expect("a staged keyboard");
+    let source = ksx_api::staged_source_view(&staged, slot_view, &device.selector)
+        .expect("the staged keyboard's source route");
     redesign_bind_body_with_revision(
         slot,
-        &staged_target_revision(control, slot),
+        &source.selector,
+        &source.revision,
         function,
         key,
         mode,
         force,
     )
+}
+
+fn staged_source_revision(control: &ScriptedControl, slot: u8, selector: &str) -> String {
+    let staged = control.staged();
+    let slot = staged
+        .slots
+        .iter()
+        .find(|candidate| candidate.number == slot)
+        .expect("the staged controller");
+    ksx_api::staged_source_view(&staged, slot, selector)
+        .expect("the exact staged source")
+        .revision
+}
+
+const REDESIGN_LEFT_SOURCE: &str = "usb:d209:0430:00";
+const REDESIGN_RIGHT_SOURCE: &str = "usb:046d:c545:00";
+
+fn stage_redesign_device(control: &ScriptedControl, selector: &str, alias: &str, label: &str) {
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::UpsertDevice {
+                selector: selector.to_owned(),
+                alias: alias.to_owned(),
+                label: label.to_owned(),
+                backend: None,
+            })
+            .ok,
+        "stage {selector}"
+    );
+}
+
+fn routed_preset(
+    name: &str,
+    function: &str,
+    key: &str,
+    macro_name: &str,
+    trigger: &str,
+) -> ksx_config::PresetFile {
+    ksx_config::PresetFile {
+        name: name.to_owned(),
+        bindings: std::collections::BTreeMap::from([
+            (
+                function.to_owned(),
+                ksx_config::BindingEntry::Key(key.to_owned()),
+            ),
+            (
+                format!("macro.{macro_name}"),
+                ksx_config::BindingEntry::Key(trigger.to_owned()),
+            ),
+        ]),
+        macros: std::collections::BTreeMap::from([(
+            macro_name.to_owned(),
+            ksx_config::MacroFile {
+                steps: vec![ksx_config::MacroStepFile {
+                    hold: vec![function.to_owned()],
+                    ms: Some(50),
+                    ..ksx_config::MacroStepFile::default()
+                }],
+                ..ksx_config::MacroFile::default()
+            },
+        )]),
+    }
+}
+
+type SourceContent = std::collections::BTreeMap<
+    String,
+    (
+        std::collections::BTreeMap<String, ksx_config::BindingEntry>,
+        std::collections::BTreeMap<String, ksx_config::MacroFile>,
+    ),
+>;
+
+fn source_content(slot: &ksx_api::StagedSlotView) -> SourceContent {
+    slot.sources
+        .iter()
+        .map(|source| {
+            let authoring = source.authoring.as_ref().expect("source authoring");
+            (
+                source.selector.clone(),
+                (authoring.bindings.clone(), authoring.macros.clone()),
+            )
+        })
+        .collect()
 }
 
 /// The response body (everything after the blank line).
@@ -4260,8 +4345,8 @@ fn no_js_device_selection_forms_are_served_on_redesign_and_devices() {
 
 /// Identify is a real no-JS form, and its label states the staging
 /// consequence before the listen begins. "Identify" alone would sound like a
-/// passive flashlight while the shared transaction deliberately selects the
-/// board that answers.
+/// passive flashlight while the shared transaction deliberately adds the
+/// board that answers to the staged source roster.
 #[test]
 fn the_redesign_identify_form_serves_its_explicit_consequence() {
     let addr = start_server(Arc::new(ScriptedControl::new(true)));
@@ -4272,8 +4357,12 @@ fn the_redesign_identify_form_serves_its_explicit_consequence() {
         "the redesign has no no-JS identify form: {body}"
     );
     assert!(
-        body.contains("Identify and use as input source"),
-        "the action does not disclose that a successful answer selects the input: {body}"
+        body.contains("Identify exact device"),
+        "the action does not disclose that it resolves one exact device: {body}"
+    );
+    assert!(
+        body.contains("adds that connection as an independent mapping source"),
+        "the action does not disclose its additive staging consequence: {body}"
     );
     assert!(
         body.contains("nothing is captured, saved, or started"),
@@ -5308,7 +5397,15 @@ fn the_redesign_mapping_wire_serves_the_pin_and_the_aliased_verbs() {
     let stale: serde_json::Value = serde_json::from_str(body_of(&post_json(
         addr,
         "/redesign/api/bind",
-        &redesign_bind_body_with_revision(1, "not-the-revision", &function, "O", None, false),
+        &redesign_bind_body_with_revision(
+            1,
+            "usb:d209:0430:00",
+            "not-the-revision",
+            &function,
+            "O",
+            None,
+            false,
+        ),
     )))
     .expect("stale outcome");
     assert_eq!(stale["ok"], false, "{stale}");
@@ -5319,7 +5416,7 @@ fn the_redesign_mapping_wire_serves_the_pin_and_the_aliased_verbs() {
     let name = rows[0]["name"].as_str().expect("macro name").to_owned();
     let opened: serde_json::Value = serde_json::from_str(body_of(&get(
         addr,
-        &format!("/api/redesign?slot=1&macro={name}"),
+        &format!("/api/redesign?slot=1&source=usb%3Ad209%3A0430%3A00&macro={name}"),
     )))
     .expect("payload with editor");
     let draft = opened["controllers"]["mac"]["table"].clone();
@@ -5327,10 +5424,25 @@ fn the_redesign_mapping_wire_serves_the_pin_and_the_aliased_verbs() {
         !draft.is_null(),
         "the ?macro= door composes the editor: {opened}"
     );
+    assert_eq!(
+        opened["controllers"]["mac"]["source"], "usb:d209:0430:00",
+        "the isolated editor must carry exact source authority: {opened}"
+    );
+    assert_eq!(
+        opened["controllers"]["mac"]["source_revision"], opened["controllers"]["source_revision"],
+        "editor and inspector must post the same route revision: {opened}"
+    );
     let edited: serde_json::Value = serde_json::from_str(body_of(&post_json(
         addr,
         "/redesign/api/macro/edit",
-        &format!("{{\"slot\":1,\"act\":\"cell|0|diag:dpad:dr\",\"draft\":{draft}}}"),
+        &serde_json::json!({
+            "slot": 1,
+            "source": "usb:d209:0430:00",
+            "expected_target_revision": opened["controllers"]["source_revision"],
+            "act": "cell|0|diag:dpad:dr",
+            "draft": draft,
+        })
+        .to_string(),
     )))
     .expect("edit");
     assert_eq!(edited["ok"], true, "{edited}");
@@ -5346,23 +5458,119 @@ fn the_redesign_mapping_wire_serves_the_pin_and_the_aliased_verbs() {
             .is_some_and(|href| href.starts_with("/redesign")),
         "{edited}"
     );
+    assert_eq!(edited["view"]["source"], "usb:d209:0430:00");
+    assert_eq!(
+        edited["view"]["source_revision"], opened["controllers"]["source_revision"],
+        "a pure draft edit returns the same exact route authority"
+    );
+
+    // Change the live route after the dialog opened. A refusal may describe
+    // the current route, but it must NEVER stamp that current revision onto
+    // the submitted old draft or the next click would silently re-authorize
+    // stale content.
+    let opened_revision = opened["controllers"]["source_revision"]
+        .as_str()
+        .expect("opened source revision")
+        .to_owned();
+    let changed: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/redesign/api/bind",
+        &redesign_bind_body_with_revision(
+            1,
+            REDESIGN_LEFT_SOURCE,
+            &opened_revision,
+            &function,
+            "F12",
+            None,
+            true,
+        ),
+    )))
+    .expect("route-changing bind");
+    assert_eq!(changed["ok"], true, "{changed}");
+    let current_revision = staged_source_revision(&control, 1, REDESIGN_LEFT_SOURCE);
+    assert_ne!(current_revision, opened_revision);
+
+    let stale_edit: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/redesign/api/macro/edit",
+        &serde_json::json!({
+            "slot": 1,
+            "source": "usb:d209:0430:00",
+            "expected_target_revision": opened_revision,
+            "act": "cell|0|dpad.up",
+            "draft": opened["controllers"]["mac"]["table"],
+        })
+        .to_string(),
+    )))
+    .expect("stale macro draft edit");
+    assert_eq!(stale_edit["ok"], false, "{stale_edit}");
+    assert_eq!(
+        stale_edit["view"]["source_revision"], opened_revision,
+        "the stale draft keeps its stale token instead of receiving current authority"
+    );
+    assert_ne!(stale_edit["view"]["source_revision"], current_revision);
+
+    let stale_again: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/redesign/api/macro/edit",
+        &serde_json::json!({
+            "slot": 1,
+            "source": stale_edit["view"]["source"],
+            "expected_target_revision": stale_edit["view"]["source_revision"],
+            "act": "cell|0|dpad.up",
+            "draft": stale_edit["draft"],
+        })
+        .to_string(),
+    )))
+    .expect("replayed stale macro edit");
+    assert_eq!(stale_again["ok"], false, "{stale_again}");
+
+    let wrong_source_edit: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/redesign/api/macro/edit",
+        &serde_json::json!({
+            "slot": 1,
+            "source": REDESIGN_RIGHT_SOURCE,
+            "expected_target_revision": opened["controllers"]["source_revision"],
+            "act": "cell|0|dpad.up",
+            "draft": opened["controllers"]["mac"]["table"],
+        })
+        .to_string(),
+    )))
+    .expect("wrong-source macro draft edit");
+    assert_eq!(wrong_source_edit["ok"], false, "{wrong_source_edit}");
 
     // The lifecycle forms ride this page's redirect with the shared domain
     // sentences (the shared verb cores, proven per verb).
-    let response = post_form(addr, "/redesign/macro/new", "slot=1&name=combo2");
+    let revision = staged_source_revision(&control, 1, "usb:d209:0430:00");
+    let response = post_form(
+        addr,
+        "/redesign/macro/new",
+        &format!(
+            "slot=1&source=usb%3Ad209%3A0430%3A00&expected_target_revision={revision}&name=combo2"
+        ),
+    );
     assert!(
         response.contains("/redesign?")
             && response.contains("Macro%20created%20with%20one%20empty%20step"),
         "{response}"
     );
+    let revision = staged_source_revision(&control, 1, "usb:d209:0430:00");
     let response = post_form(
         addr,
         "/redesign/macro/toggle",
-        "slot=1&name=combo2&enable=false",
+        &format!("slot=1&source=usb%3Ad209%3A0430%3A00&expected_target_revision={revision}&name=combo2&enable=false"),
     );
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(response.contains("/redesign?"), "{response}");
-    let response = post_form(addr, "/redesign/macro/delete", "slot=1&name=combo2");
+    let revision = staged_source_revision(&control, 1, "usb:d209:0430:00");
+    let response = post_form(
+        addr,
+        "/redesign/macro/delete",
+        &format!(
+            "slot=1&source=usb%3Ad209%3A0430%3A00&expected_target_revision={revision}&name=combo2"
+        ),
+    );
     assert!(
         response.contains("/redesign?")
             && response.contains("Macro%20removed%20from%20this%20draft"),
@@ -5377,6 +5585,363 @@ fn the_redesign_mapping_wire_serves_the_pin_and_the_aliased_verbs() {
             .all(|m| m.name != "combo2"),
         "the deleted macro is gone from the stage"
     );
+}
+
+/// Two keyboards remain independent authoring targets even when they feed the
+/// same controller. The second keyboard begins as the server-owned synthetic
+/// row, its first bind creates only that route, and the same physical key may
+/// drive a different control on the first route. Every later inspector write
+/// carries that source's revision; clearing its last live binding removes the
+/// inert route without disturbing the other keyboard.
+#[test]
+fn redesign_two_keyboards_lazy_bind_and_inspector_are_source_exact() {
+    let control = Arc::new(ScriptedControl::new(false));
+    stage_redesign_device(&control, REDESIGN_LEFT_SOURCE, "left", "Left keyboard");
+    stage_redesign_device(&control, REDESIGN_RIGHT_SOURCE, "right", "Right keyboard");
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::AddSlot {
+                number: Some(1),
+                persona: "xbox360".into(),
+                preset: "Left P1".into(),
+                layout: None,
+            })
+            .ok
+    );
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::SetSourceBindings {
+                number: 1,
+                selector: REDESIGN_LEFT_SOURCE.into(),
+                preset: Box::new(ksx_config::PresetFile {
+                    name: "Left P1".into(),
+                    bindings: std::collections::BTreeMap::from([(
+                        "A".into(),
+                        ksx_config::BindingEntry::Key("G".into()),
+                    )]),
+                    macros: Default::default(),
+                }),
+            })
+            .ok
+    );
+    let addr = start_server(control.clone());
+
+    let before: serde_json::Value = serde_json::from_str(body_of(&get(
+        addr,
+        "/api/redesign?slot=1&source=usb%3A046d%3Ac545%3A00",
+    )))
+    .expect("two-source payload");
+    let sources = before["controllers"]["pads"][0]["sources"]
+        .as_array()
+        .expect("nested source rows");
+    assert_eq!(sources.len(), 2, "one pad, two keyboards: {before}");
+    let right = sources
+        .iter()
+        .find(|source| source["source_id"] == REDESIGN_RIGHT_SOURCE)
+        .expect("right source row");
+    assert_eq!(right["source_alias"], "right");
+    assert_eq!(right["source_label"], "Right keyboard");
+    assert_eq!(right["routed"], false, "first bind is synthetic: {right}");
+    assert_eq!(right["mapping_available"], true);
+    assert_eq!(
+        right["macro_available"], false,
+        "an unrouted source cannot accept an exact macro write yet"
+    );
+    let synthetic_revision = right["revision"]
+        .as_str()
+        .expect("synthetic route revision")
+        .to_owned();
+    assert!(!synthetic_revision.is_empty());
+    assert_eq!(
+        before["controllers"]["source_revision"], synthetic_revision,
+        "the selected inspector and nested row share one authority token"
+    );
+
+    let bound: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/redesign/api/bind",
+        &redesign_bind_body_with_revision(
+            1,
+            REDESIGN_RIGHT_SOURCE,
+            &synthetic_revision,
+            "B",
+            "G",
+            None,
+            false,
+        ),
+    )))
+    .expect("lazy bind outcome");
+    assert_eq!(
+        bound["ok"], true,
+        "same key on another source is legal: {bound}"
+    );
+
+    let stale: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/redesign/api/bind",
+        &redesign_bind_body_with_revision(
+            1,
+            REDESIGN_RIGHT_SOURCE,
+            &synthetic_revision,
+            "X",
+            "H",
+            None,
+            false,
+        ),
+    )))
+    .expect("stale bind outcome");
+    assert_eq!(
+        stale["ok"], false,
+        "the synthetic token is one-use: {stale}"
+    );
+
+    let staged = control.staged();
+    let slot = &staged.slots[0];
+    let left =
+        ksx_api::staged_source_view(&staged, slot, REDESIGN_LEFT_SOURCE).expect("left source");
+    let right =
+        ksx_api::staged_source_view(&staged, slot, REDESIGN_RIGHT_SOURCE).expect("right source");
+    assert!(left.routed && right.routed);
+    let left_mapper = ksx_api::staged_mapper_source(slot, &left).expect("left mapper");
+    let right_mapper = ksx_api::staged_mapper_source(slot, &right).expect("right mapper");
+    assert_eq!(left_mapper.bindings.get("A"), Some(&vec!["G".to_owned()]));
+    assert_eq!(right_mapper.bindings.get("B"), Some(&vec!["G".to_owned()]));
+
+    let revision = right.revision.clone();
+    let turbo = post_form(
+        addr,
+        "/redesign/bind/turbo",
+        &format!(
+            "slot=1&source=usb%3A046d%3Ac545%3A00&expected_target_revision={revision}&function=B&turbo_hz=12"
+        ),
+    );
+    assert!(turbo.contains("Auto-fire%20updated"), "{turbo}");
+    let staged = control.staged();
+    let slot = &staged.slots[0];
+    let left = ksx_api::staged_source_view(&staged, slot, REDESIGN_LEFT_SOURCE).unwrap();
+    let right = ksx_api::staged_source_view(&staged, slot, REDESIGN_RIGHT_SOURCE).unwrap();
+    assert!(
+        ksx_api::staged_mapper_source(slot, &left)
+            .unwrap()
+            .turbo
+            .is_empty(),
+        "right-source turbo did not leak left"
+    );
+    assert_eq!(
+        ksx_api::staged_mapper_source(slot, &right)
+            .unwrap()
+            .turbo
+            .get("B"),
+        Some(&12)
+    );
+
+    let cleared = post_form(
+        addr,
+        "/redesign/bind/clear",
+        &format!(
+            "slot=1&source=usb%3A046d%3Ac545%3A00&expected_target_revision={}&function=B",
+            right.revision
+        ),
+    );
+    assert!(cleared.contains("Draft%20updated"), "{cleared}");
+    let staged = control.staged();
+    assert_eq!(staged.slots[0].sources.len(), 1, "inert route removed");
+    assert_eq!(staged.slots[0].sources[0].selector, REDESIGN_LEFT_SOURCE);
+
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::AddSlot {
+                number: Some(2),
+                persona: "playstation".into(),
+                preset: "Left P2".into(),
+                layout: Some("keyboard-2p".into()),
+            })
+            .ok
+    );
+    let two_by_two: serde_json::Value = serde_json::from_str(body_of(&get(
+        addr,
+        "/api/redesign?slot=2&source=usb%3A046d%3Ac545%3A00",
+    )))
+    .expect("two-by-two payload");
+    let pads = two_by_two["controllers"]["pads"].as_array().expect("pads");
+    assert_eq!(pads.len(), 2);
+    assert!(pads.iter().all(|pad| {
+        pad["sources"]
+            .as_array()
+            .is_some_and(|sources| sources.len() == 2)
+    }));
+}
+
+/// Duplicate, short-window undo and park/re-seat are resurrection paths, so
+/// they must carry every source preset as a whole value. That includes macro
+/// bodies and trigger bindings; preserving only the compatibility first route
+/// would make the second keyboard silently disappear after an ordinary canvas
+/// gesture.
+#[test]
+fn redesign_controller_resurrection_preserves_all_source_routes_and_macros() {
+    let control = Arc::new(ScriptedControl::new(false));
+    stage_redesign_device(&control, REDESIGN_LEFT_SOURCE, "left", "Left keyboard");
+    stage_redesign_device(&control, REDESIGN_RIGHT_SOURCE, "right", "Right keyboard");
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::AddSlot {
+                number: Some(1),
+                persona: "xbox360".into(),
+                preset: "Left P1".into(),
+                layout: None,
+            })
+            .ok
+    );
+    for (selector, preset) in [
+        (
+            REDESIGN_LEFT_SOURCE,
+            routed_preset("Left P1", "A", "G", "left-combo", "P"),
+        ),
+        (
+            REDESIGN_RIGHT_SOURCE,
+            routed_preset("Right P1", "B", "H", "right-combo", "O"),
+        ),
+    ] {
+        assert!(
+            control
+                .stage_edit(&ksx_api::StageEdit::SetSourceBindings {
+                    number: 1,
+                    selector: selector.into(),
+                    preset: Box::new(preset),
+                })
+                .ok
+        );
+    }
+    let addr = start_server(control.clone());
+
+    let right_revision = staged_source_revision(&control, 1, REDESIGN_RIGHT_SOURCE);
+    let saved: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        &serde_json::json!({
+            "target": "stage",
+            "slot": 1,
+            "expected_device": REDESIGN_RIGHT_SOURCE,
+            "expected_target_revision": right_revision,
+            "preset": "Right P1",
+            "name": "right-combo",
+            "steps": [{"hold": ["B"], "ms": 75}],
+        })
+        .to_string(),
+    )))
+    .expect("exact-source macro save");
+    assert_eq!(saved["ok"], true, "{saved}");
+
+    let stale_save: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        &serde_json::json!({
+            "target": "stage",
+            "slot": 1,
+            "expected_device": REDESIGN_RIGHT_SOURCE,
+            "expected_target_revision": right_revision,
+            "preset": "Right P1",
+            "name": "right-combo",
+            "steps": [{"hold": ["B"], "ms": 90}],
+        })
+        .to_string(),
+    )))
+    .expect("stale exact-source macro save");
+    assert_eq!(stale_save["ok"], false, "{stale_save}");
+
+    let staged = control.staged();
+    let left_revision =
+        ksx_api::staged_source_view(&staged, &staged.slots[0], REDESIGN_LEFT_SOURCE)
+            .unwrap()
+            .revision;
+    let wrong_source: serde_json::Value = serde_json::from_str(body_of(&post_json(
+        addr,
+        "/api/macro/save",
+        &serde_json::json!({
+            "target": "stage",
+            "slot": 1,
+            "expected_device": REDESIGN_LEFT_SOURCE,
+            "expected_target_revision": left_revision,
+            "preset": "Right P1",
+            "name": "right-combo",
+            "steps": [{"hold": ["B"], "ms": 90}],
+        })
+        .to_string(),
+    )))
+    .expect("wrong-source macro save");
+    assert_eq!(wrong_source["ok"], false, "{wrong_source}");
+
+    let original = source_content(&control.staged().slots[0]);
+    assert_eq!(original.len(), 2);
+
+    let duplicated = post_form(addr, "/redesign/controller/duplicate", "number=1");
+    assert!(
+        duplicated.contains("Controller%20duplicated"),
+        "{duplicated}"
+    );
+    let after_duplicate = control.staged();
+    assert_eq!(after_duplicate.slots.len(), 2);
+    assert_eq!(
+        source_content(&after_duplicate.slots[1]),
+        original,
+        "duplicate preserves both source graphs (names may be reissued)"
+    );
+
+    let removed_snapshot = source_content(&after_duplicate.slots[1]);
+    let removed = post_form(addr, "/redesign/controller/remove", "number=2");
+    assert!(removed.contains("Draft%20updated"), "{removed}");
+    let undone = post_form(addr, "/redesign/controller/undo", "");
+    assert!(undone.contains("Controller%20restored"), "{undone}");
+    let after_undo = control.staged();
+    assert_eq!(after_undo.slots.len(), 2);
+    assert_eq!(source_content(&after_undo.slots[1]), removed_snapshot);
+
+    let parked_snapshot = source_content(&after_undo.slots[1]);
+    let parked = post_form(
+        addr,
+        "/redesign/controller/park",
+        "number=2&ghost=two-source-pad",
+    );
+    assert!(parked.contains("Draft%20updated"), "{parked}");
+    assert_eq!(control.staged().slots.len(), 1);
+    let assigned = post_form(
+        addr,
+        "/redesign/controller/assign",
+        "ghost=two-source-pad&position=2&persona=xbox360&preset=ignored&layout=",
+    );
+    assert!(assigned.contains("Draft%20updated"), "{assigned}");
+    let after_assign = control.staged();
+    assert_eq!(after_assign.slots.len(), 2);
+    assert_eq!(source_content(&after_assign.slots[1]), parked_snapshot);
+
+    let confirmation = post_form(
+        addr,
+        "/redesign/device/remove",
+        "selector=usb%3A046d%3Ac545%3A00",
+    );
+    assert!(
+        confirmation.contains("Confirm%20Remove"),
+        "mapped device removal needs confirmation: {confirmation}"
+    );
+    assert!(control
+        .staged()
+        .devices
+        .iter()
+        .any(|device| device.selector == REDESIGN_RIGHT_SOURCE));
+    let removed = post_form(
+        addr,
+        "/redesign/device/remove",
+        "selector=usb%3A046d%3Ac545%3A00&confirm_remove=yes",
+    );
+    assert!(removed.contains("Keyboard%20removed"), "{removed}");
+    let after_remove = control.staged();
+    assert_eq!(after_remove.devices.len(), 1);
+    assert_eq!(after_remove.devices[0].selector, REDESIGN_LEFT_SOURCE);
+    assert!(after_remove.slots.iter().all(|slot| {
+        slot.sources
+            .iter()
+            .all(|source| source.selector == REDESIGN_LEFT_SOURCE)
+    }));
 }
 
 /// The cutover-critical lifecycle is one operational contract and the same

@@ -78,11 +78,11 @@ import {
   type EncoderWorkbenchSurface,
 } from "./encoderConceptArt";
 import {
+  createKeyboardSurfaceInstance,
   createKeyboardSurfaceHost,
-  KEYBOARD_SURFACE_DEPOT_SELECTOR,
   KEYBOARD_SURFACE_SELECTOR,
-  moveElementPreservingFocus,
-  reconcileKeyboardDeviceSurface,
+  KEYBOARD_SURFACE_TEMPLATE_BODY_SELECTOR,
+  syncKeyboardSurfaceInstance,
 } from "./redesign-keyboard-device";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1032,43 +1032,45 @@ function syncKbLens(): void {
   )) {
     item.setAttribute("data-keyboard-theme", kbTheme);
   }
-  const surface = root.querySelector<HTMLElement>(KEYBOARD_SURFACE_SELECTOR);
-  if (!surface) return;
-  const kb = surface.querySelector<HTMLElement>(".n-kb");
-  if (kb) {
-    const selectedSlot = Number(rdCtrlPanel?.slot_val || "0");
-    for (let n = 1; n <= 16; n += 1) {
-      const preset = presetOfSlotRd(n);
-      const muted = kbSolo
-        ? n !== selectedSlot
-        : preset !== undefined && kbHiddenStrips.has(preset);
-      if (muted) kb.style.setProperty(`--kb${n}`, "var(--band-mute)");
-      else kb.style.removeProperty(`--kb${n}`);
+  for (const surface of Array.from(
+    root.querySelectorAll<HTMLElement>(KEYBOARD_SURFACE_SELECTOR),
+  )) {
+    const kb = surface.querySelector<HTMLElement>(".n-kb");
+    if (kb) {
+      const selectedSlot = Number(rdCtrlPanel?.slot_val || "0");
+      for (let n = 1; n <= 16; n += 1) {
+        const preset = presetOfSlotRd(n);
+        const muted = kbSolo
+          ? n !== selectedSlot
+          : preset !== undefined && kbHiddenStrips.has(preset);
+        if (muted) kb.style.setProperty(`--kb${n}`, "var(--band-mute)");
+        else kb.style.removeProperty(`--kb${n}`);
+      }
     }
-  }
-  // The chips speak their own state (nocturne's syncLegend wording).
-  for (const chip of Array.from(
-    surface.querySelectorAll<HTMLElement>('[data-nx="legend-mute"]'),
-  )) {
-    const preset = presetOfSlotRd(Number(chip.getAttribute("data-slot") ?? ""));
-    const byHand = preset !== undefined && kbHiddenStrips.has(preset);
-    const off = kbSolo ? !chip.classList.contains("on") : byHand;
-    chip.setAttribute("aria-pressed", off ? "false" : "true");
-    chip.classList.toggle("muted", !kbSolo && byHand);
-    chip.title = off
-      ? "Show this controller's color on the keys"
-      : "Hide this controller's color on the keys";
-  }
-  surface
-    .querySelector(".n-kbcolors")
-    ?.setAttribute("aria-pressed", kbSolo ? "true" : "false");
-  for (const button of Array.from(
-    surface.querySelectorAll<HTMLElement>('[data-nx="kb-theme"]'),
-  )) {
-    button.setAttribute(
-      "aria-pressed",
-      String(button.getAttribute("data-keyboard-theme") === kbTheme),
-    );
+    // The chips speak their own state (nocturne's syncLegend wording).
+    for (const chip of Array.from(
+      surface.querySelectorAll<HTMLElement>('[data-nx="legend-mute"]'),
+    )) {
+      const preset = presetOfSlotRd(Number(chip.getAttribute("data-slot") ?? ""));
+      const byHand = preset !== undefined && kbHiddenStrips.has(preset);
+      const off = kbSolo ? !chip.classList.contains("on") : byHand;
+      chip.setAttribute("aria-pressed", off ? "false" : "true");
+      chip.classList.toggle("muted", !kbSolo && byHand);
+      chip.title = off
+        ? "Show this controller's color on the keys"
+        : "Hide this controller's color on the keys";
+    }
+    surface
+      .querySelector(".n-kbcolors")
+      ?.setAttribute("aria-pressed", kbSolo ? "true" : "false");
+    for (const button of Array.from(
+      surface.querySelectorAll<HTMLElement>('[data-nx="kb-theme"]'),
+    )) {
+      button.setAttribute(
+        "aria-pressed",
+        String(button.getAttribute("data-keyboard-theme") === kbTheme),
+      );
+    }
   }
 }
 
@@ -1631,8 +1633,7 @@ let refreshEncoderProfileLab: ((devices: readonly EncoderProfileLabDevice[]) => 
 let disposeEncoderProfileLab: (() => void) | null = null;
 const encoderWorkbenchSurfaces = new WeakMap<HTMLElement, EncoderWorkbenchSurface>();
 let sourceSurfaceFingerprint = "";
-let keyboardMappingSurface: HTMLElement | null = null;
-let keyboardSurfaceDepot: HTMLElement | null = null;
+let keyboardSurfaceTemplate: HTMLElement | null = null;
 let sourceControlsSurface: HTMLElement | null = null;
 
 const REDESIGN_BROWSER_STORES = [
@@ -1894,11 +1895,7 @@ function tidyCanvas(): void {
     );
   const keyboard = items
     .filter((item) => item.classList.contains("rd-keyboard-device-node"))
-    .sort((left, right) => {
-      const activeDelta = Number(right.dataset.mappingSource === "true") -
-        Number(left.dataset.mappingSource === "true");
-      return activeDelta || byName(left, right);
-    });
+    .sort(byName);
   const devices = items
     .filter(
       (item) => item.classList.contains("rd-dev-node") &&
@@ -2074,24 +2071,14 @@ function syncEncoderEditingAccess(
     host.inert = !editable;
     if (editable) host.removeAttribute("aria-hidden");
     else host.setAttribute("aria-hidden", "true");
-    const sourceControls = item.querySelector<HTMLElement>("[data-rd-source-controls]");
-    if (sourceControls) {
-      const focused = sourceControls.ownerDocument.activeElement;
-      if (!editable && focused instanceof HTMLElement && sourceControls.contains(focused)) {
-        item.focus({ preventScroll: true });
-      }
-      sourceControls.inert = !editable;
-      sourceControls.hidden = !editable;
-      if (editable) sourceControls.removeAttribute("aria-hidden");
-      else sourceControls.setAttribute("aria-hidden", "true");
-    }
   }
 }
 
 /** The full keyboard remains a recognizable board at every distance, but its
- * native keys, finish controls, and capture policy are only operable when the
- * camera makes them honest targets. The device identity/source verb remains
- * outside this surface and therefore stays available at structure distance. */
+ * native keys and finish controls are only operable when the camera makes
+ * them honest targets. Every connected on-canvas keyboard is independently
+ * eligible; mapping availability is a separate, temporary compatibility
+ * fact while bindings still lack device identity. */
 function syncKeyboardEditingAccess(
   tier: string,
   zoom = canvasZoomFromViewport(),
@@ -2105,7 +2092,7 @@ function syncKeyboardEditingAccess(
       ? attentionScale
       : Number.isFinite(manualScale) && manualScale > 0 ? manualScale : 1;
     const effectiveScale = zoom * renderedItemScale;
-    const editable = item.dataset.mappingSource === "true" &&
+    const editable = item.dataset.sourceEnabled === "true" &&
       tier === "editing" && effectiveScale >= keyboardMinEffectiveEditScale();
     item.dataset.keyboardEditable = editable ? "true" : "false";
     const surface = item.querySelector<HTMLElement>(KEYBOARD_SURFACE_SELECTOR);
@@ -2117,13 +2104,6 @@ function syncKeyboardEditingAccess(
     surface.inert = !editable;
     if (editable) surface.removeAttribute("aria-hidden");
     else surface.setAttribute("aria-hidden", "true");
-    const sourceControls = surface.querySelector<HTMLElement>("[data-rd-source-controls]");
-    if (sourceControls) {
-      sourceControls.hidden = !editable;
-      sourceControls.inert = !editable;
-      if (editable) sourceControls.removeAttribute("aria-hidden");
-      else sourceControls.setAttribute("aria-hidden", "true");
-    }
   }
 }
 
@@ -3205,11 +3185,13 @@ const DEVICE_ROLE_BADGE: Record<string, string> = {
 const STAGED_DEVICE_TITLE =
   "This board is the background helper's input source. Choosing it again changes nothing — " +
   "a keyboard prepared for play keeps its preparation.";
+const KEYBOARD_MAPPING_READY_TITLE =
+  "Existing key-only bindings can be edited on this exact keyboard. Other added keyboards remain enabled sources, but their mapping controls stay read-only until bindings carry device identity.";
 const DEVICE_CARD_MIN_HEIGHT = 220;
 const KEYBOARD_DEVICE_WIDTH = 980;
 // Identity fascia + source policy + the served 320px key deck. Reserving the
-// complete footprint up front keeps a board from jumping in size when it
-// becomes authoritative and receives the interactive singleton.
+// complete footprint up front keeps a board from jumping in size when its
+// persistent full surface is mounted.
 const KEYBOARD_DEVICE_MIN_HEIGHT = 560;
 const DEVICE_CARD_ROW_STRIDE = DEVICE_CARD_MIN_HEIGHT + CANVAS_FRESH_PLACEMENT_GAP;
 
@@ -3217,91 +3199,21 @@ function deviceCardPurpose(row: RdDeviceRowView): string {
   const authorityUnknown = !rdDeviceScanAuthoritative || !rdStagingReachable;
   if (authorityUnknown) {
     const kind = row.role === "keyboard" ? "physical keyboard" : "encoder";
+    if (row.role === "keyboard") {
+      return `This ${kind} remains on the canvas. Device status is unavailable, so its mapping controls stay read-only until KSX confirms the exact connection.`;
+    }
     return row.aria_current === "true"
       ? `This ${kind} was the last known input source. Status is unavailable, so mapping controls stay paused until KSX confirms it.`
       : `This ${kind} remains on the canvas while device status is unavailable. Mapping controls stay paused until KSX confirms an input source.`;
   }
   if (row.role === "keyboard") {
     return row.aria_current === "true"
-      ? "This physical keyboard is the active input source. Use its board below to inspect and map emitted keys."
-      : "This physical keyboard is on the canvas. Make it the input source to activate its interactive key board.";
+      ? "This physical keyboard is an enabled source. Existing key-only bindings can be inspected and edited on its board."
+      : "This physical keyboard is an enabled source with its own board. Mapping stays read-only here until bindings can name this exact device.";
   }
   return row.aria_current === "true"
     ? "This encoder is the active input source. Its configured terminal emissions are the mapping anchors."
     : "This board is on the canvas for inspection. Make it the input source when you want to map its emitted keys.";
-}
-
-const DEVICE_KEYBOARD_SVG_NS = "http://www.w3.org/2000/svg";
-
-function keyboardVisualRect(
-  svg: SVGSVGElement | SVGGElement,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  className: string,
-  radius = 2,
-): void {
-  const rect = document.createElementNS(DEVICE_KEYBOARD_SVG_NS, "rect");
-  rect.setAttribute("x", String(x));
-  rect.setAttribute("y", String(y));
-  rect.setAttribute("width", String(width));
-  rect.setAttribute("height", String(height));
-  rect.setAttribute("rx", String(radius));
-  rect.setAttribute("class", className);
-  svg.append(rect);
-}
-
-/** A deliberately generic full-board keyboard silhouette. Device enumeration
- * proves the keyboard interface, but not ANSI/ISO, TKL/full-size, or the
- * manufacturer's exact physical deck. The active device receives the served
- * interactive key surface; inactive devices keep this honest board view. */
-function physicalKeyboardVisual(): HTMLElement {
-  const figure = document.createElement("figure");
-  figure.className = "rd-device-keyboard-visual";
-  figure.setAttribute("aria-hidden", "true");
-
-  const svg = document.createElementNS(DEVICE_KEYBOARD_SVG_NS, "svg");
-  svg.setAttribute("viewBox", "0 0 284 82");
-  svg.setAttribute("focusable", "false");
-  svg.setAttribute("aria-hidden", "true");
-  svg.classList.add("rd-device-keyboard-svg");
-  keyboardVisualRect(svg, 1, 1, 282, 80, "rd-device-keyboard-shell", 11);
-  keyboardVisualRect(svg, 10, 10, 264, 56, "rd-device-keyboard-deck", 7);
-
-  const keys = document.createElementNS(DEVICE_KEYBOARD_SVG_NS, "g");
-  keys.setAttribute("class", "rd-device-keyboard-keys");
-  const rowSpecs = [
-    { y: 17, count: 14, x: 17, width: 14, gap: 4 },
-    { y: 29, count: 13, x: 21, width: 15, gap: 4 },
-    { y: 41, count: 12, x: 25, width: 16, gap: 4 },
-    { y: 53, count: 10, x: 31, width: 18, gap: 4 },
-  ];
-  for (const row of rowSpecs) {
-    for (let index = 0; index < row.count; index += 1) {
-      keyboardVisualRect(
-        keys,
-        row.x + index * (row.width + row.gap),
-        row.y,
-        row.width,
-        7,
-        index === 0 || index === row.count - 1
-          ? "rd-device-keyboard-key rd-device-keyboard-key-edge"
-          : "rd-device-keyboard-key",
-        1.8,
-      );
-    }
-  }
-  svg.append(keys);
-  keyboardVisualRect(svg, 92, 69, 100, 5, "rd-device-keyboard-light", 2.5);
-  const witness = document.createElementNS(DEVICE_KEYBOARD_SVG_NS, "circle");
-  witness.setAttribute("cx", "263");
-  witness.setAttribute("cy", "72");
-  witness.setAttribute("r", "3");
-  witness.setAttribute("class", "rd-device-keyboard-witness");
-  svg.append(witness);
-  figure.append(svg);
-  return figure;
 }
 
 function deviceCardMeta(row: RdDeviceRowView): string {
@@ -3326,6 +3238,18 @@ function deviceStateBadges(row: RdDeviceRowView): RdDeviceStateBadge[] {
   const badges: RdDeviceStateBadge[] = [];
   if (rdDeviceScanAuthoritative) badges.push({ label: "Connected", state: "connected" });
   badges.push({ label: "On canvas", state: "canvas" });
+  if (row.role === "keyboard") {
+    if (!rdDeviceScanAuthoritative || !rdStagingReachable) {
+      badges.push({ label: "Source status unavailable", state: "attention" });
+      return badges;
+    }
+    badges.push({ label: "Source enabled", state: "source" });
+    badges.push({
+      label: row.aria_current === "true" ? "Mapping ready" : "Mapping read-only",
+      state: row.aria_current === "true" ? "ready" : "attention",
+    });
+    return badges;
+  }
   if (row.aria_current !== "true") return badges;
 
   if (!rdDeviceScanAuthoritative || !rdStagingReachable) {
@@ -3372,15 +3296,15 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   meta.textContent = deviceCardMeta(row);
   const states = document.createElement("p");
   states.className = "rd-devcard-states";
-  // The daemon chip and the daemon verb. `data-staged` on the ITEM decides
-  // which shows (syncBenchCards keeps it true to the served rows): a staged
-  // board wears the chip; every other pickable board offers the act. The
-  // form is a REAL POST — the entry's fetch-submit layer carries it, the
-  // flash speaks, and the refresh moves the marking wherever it now belongs.
+  // The legacy daemon still exposes one device-qualified compatibility pin.
+  // Keyboard copy names that narrow mapping capability, never an exclusive
+  // source: every connected keyboard intentionally added to the canvas is an
+  // enabled source. The form remains a real POST while source-qualified
+  // binding storage lands behind this frontend seam.
   const staged = document.createElement("p");
   staged.className = "rd-devcard-staged";
-  staged.textContent = "Input source";
-  staged.title = STAGED_DEVICE_TITLE;
+  staged.textContent = row.role === "keyboard" ? "Mapping controls ready" : "Input source";
+  staged.title = row.role === "keyboard" ? KEYBOARD_MAPPING_READY_TITLE : STAGED_DEVICE_TITLE;
   const purpose = document.createElement("p");
   purpose.className = "rd-devcard-purpose";
   purpose.textContent = deviceCardPurpose(row);
@@ -3403,40 +3327,41 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   const submit = document.createElement("button");
   submit.type = "submit";
   submit.className = "rd-stagebtn";
-  submit.textContent = "Use as input source";
-  submit.title =
-    "Make this the board ksx reads as the input source — replaces the daemon's current choice. " +
-    "Nothing is saved or started, and a board already prepared keeps its preparation.";
+  submit.textContent = row.role === "keyboard" ? "Enable mapping controls" : "Use as input source";
+  submit.title = row.role === "keyboard"
+    ? "Temporarily direct existing key-only mapping controls to this exact keyboard. Other on-canvas keyboards remain enabled sources; nothing is saved or started."
+    : "Make this the board ksx reads as the input source — replaces the daemon's current choice. " +
+      "Nothing is saved or started, and a board already prepared keeps its preparation.";
   form.append(submit);
-  const sourceControlsHost = document.createElement("div");
-  sourceControlsHost.className = "rd-source-controls-host";
-  sourceControlsHost.dataset.rdSourceControlsHost = "";
   body.append(badge, name, meta);
-  body.append(states, purpose, staged, form, sourceControlsHost);
+  body.append(states, purpose, staged, form);
   syncDeviceCardStateBadges(body, row);
   return body;
 }
 
-/** A physical keyboard is one canvas object: identity/source controls and a
- * full board. The singleton served mapping surface moves into `host` only for
- * the authoritative source; other keyboard items show a large, honest generic
- * board instead of masquerading as a second interactive mapping surface. */
-function keyboardDeviceContent(row: RdDeviceRowView): HTMLElement {
+/** A physical keyboard is one canvas object: its identity and one persistent
+ * full keyboard surface. The hidden reactive blueprint is cloned exactly once
+ * per intentionally added device; no peer ever borrows this subtree. */
+function keyboardDeviceContent(row: RdDeviceRowView, instanceId: string): HTMLElement {
   const shell = document.createElement("section");
   shell.className = "rd-keyboard-device-shell";
   const identity = deviceCardContent(row);
   identity.classList.add("rd-keyboard-device-identity");
-  const preview = document.createElement("div");
-  preview.className = "rd-keyboard-device-preview";
-  preview.dataset.rdKeyboardPreview = "";
-  preview.append(physicalKeyboardVisual());
-  const previewNote = document.createElement("p");
-  previewNote.className = "rd-keyboard-device-preview-note";
-  previewNote.textContent = "Available on the canvas · make this the input source to interact with its keys";
-  preview.append(previewNote);
   const host = createKeyboardSurfaceHost(document);
-  host.hidden = true;
-  shell.append(identity, preview, host);
+  const template = keyboardSurfaceTemplate;
+  if (template) {
+    host.append(createKeyboardSurfaceInstance(template, {
+      sourceId: row.selector,
+      instanceId,
+      sourceLabel: row.name,
+      mappingAvailable: row.aria_current === "true" &&
+        rdDeviceScanAuthoritative && rdStagingReachable,
+    }));
+  }
+  const mappingStatus = document.createElement("p");
+  mappingStatus.className = "rd-keyboard-mapping-status";
+  mappingStatus.dataset.rdKeyboardMappingStatus = "";
+  shell.append(identity, host, mappingStatus);
   return shell;
 }
 
@@ -3493,7 +3418,7 @@ function mountDeviceWidget(
   const content = encoderSurface
     ? document.createElement("div")
     : row.role === "keyboard"
-      ? keyboardDeviceContent(row)
+      ? keyboardDeviceContent(row, slug)
       : deviceCardContent(row);
   if (encoderSurface) {
     content.className = "rd-encoder-device-shell";
@@ -3527,7 +3452,12 @@ function mountDeviceWidget(
   item.classList.add("rd-dev-node");
   if (row.role === "keyboard") {
     item.classList.add("rd-keyboard-device-node", "n-widget", "n-widget-kb");
-    item.dataset.sourceState = row.aria_current === "true" ? "active" : "inactive";
+    item.dataset.sourceId = row.selector;
+    item.dataset.sourceEnabled = rdDeviceScanAuthoritative ? "true" : "unknown";
+    item.dataset.mappingAvailable = row.aria_current === "true" && rdStagingReachable
+      ? "true"
+      : "false";
+    item.dataset.sourceState = rdDeviceScanAuthoritative ? "enabled" : "unknown";
     item.dataset.keyboardTheme = kbTheme;
   }
   if (encoderSurface) {
@@ -3846,10 +3776,10 @@ function reconcileBenchWithRoster(): void {
   }
 }
 
-/** Resolve the ONE device which may emit mapping keys. This fails closed:
- * an unreachable scan/staging provider or contradictory staged rows produces
- * no active source marker, so an inactive board can never win by DOM order. */
-function authoritativeSourceItem(): HTMLElement | null {
+/** Temporary bridge for the legacy key-only mapper. Every connected keyboard
+ * on the canvas is an enabled source, but until bindings carry source identity
+ * only the daemon's exact compatibility pin may expose authoring anchors. */
+function compatibilityMappingItem(): HTMLElement | null {
   if (!rdDeviceScanAuthoritative || !rdStagingReachable) return null;
   const selected = [...rdDevKb(), ...rdDevEnc(), ...rdDevExp()].filter(
     (row) => row.aria_current === "true",
@@ -3922,92 +3852,87 @@ function claimPendingLegacyKeyboardGeometry(item: HTMLElement | null): void {
   saveCanvasPrefs();
 }
 
-/** Join browser-owned canvas membership to served source truth. Every added
- * keyboard remains a board; only the authoritative source owns the singleton
- * interactive key surface. All other keyboard boards are honest previews with
- * no key anchors. */
+/** Join browser-owned canvas membership to served device truth. Every added,
+ * connected keyboard is an enabled source and owns one persistent full board.
+ * The legacy mapping marker is deliberately narrower and fail-closed until
+ * bindings can distinguish the same key emitted by different devices. */
 function syncKeyboardDevicePresentation(): void {
   const root = rdRoot;
   if (!root) return;
-  const sourceItem = authoritativeSourceItem();
-  const keyboardOwner = sourceItem?.classList.contains("rd-keyboard-device-node")
-    ? sourceItem
+  const compatibilityItem = compatibilityMappingItem();
+  const compatibilityKeyboard = compatibilityItem?.classList.contains(
+      "rd-keyboard-device-node",
+    )
+    ? compatibilityItem
     : null;
-  claimPendingLegacyKeyboardGeometry(keyboardOwner);
+  claimPendingLegacyKeyboardGeometry(compatibilityKeyboard);
 
-  const surface = keyboardMappingSurface ??
-    root.querySelector<HTMLElement>(KEYBOARD_SURFACE_SELECTOR);
-  const depot = keyboardSurfaceDepot ??
-    root.querySelector<HTMLElement>(KEYBOARD_SURFACE_DEPOT_SELECTOR);
   const controls = sourceControlsSurface ??
     root.querySelector<HTMLElement>("[data-rd-source-controls]");
-  // When authority leaves the keyboard family, extract the independently
-  // owned source policy before parking the keyboard surface. Otherwise the
-  // atomic board move would carry the focused policy control into the hidden
-  // depot and correctly repair focus away from it just before we move that
-  // same control back onto a visible encoder.
-  if (controls && depot && !keyboardOwner) {
-    const deviceHost = sourceItem?.querySelector<HTMLElement>(
-      ".rd-devcard > [data-rd-source-controls-host]",
-    );
-    const controlsTarget = deviceHost ?? depot;
-    const previousDevice = controls.closest<HTMLElement>(".rd-dev-node");
-    moveElementPreservingFocus(
-      controls,
-      controlsTarget,
-      sourceItem ?? previousDevice ?? root.querySelector<HTMLElement>('[data-nx="rd-devs-open"]'),
-    );
-  }
-  // Make the destination available before the atomic move. Hiding the old
-  // host first would blur a focused key before the helper could preserve it.
-  const keyboardDestination = keyboardOwner?.querySelector<HTMLElement>(
-    "[data-rd-keyboard-surface-host]",
+  const globalControlsHost = root.querySelector<HTMLElement>(
+    "[data-rd-global-source-controls-host]",
   );
-  if (keyboardDestination) keyboardDestination.hidden = false;
-  if (surface && depot) {
-    reconcileKeyboardDeviceSurface({
-      surface,
-      depot,
-      owner: keyboardOwner,
-      scope: root,
-    });
+  if (controls && globalControlsHost) {
+    if (controls.parentElement !== globalControlsHost) globalControlsHost.append(controls);
+    controls.hidden = false;
+    controls.inert = false;
+    controls.removeAttribute("aria-hidden");
   }
 
   for (const item of Array.from(
     root.querySelectorAll<HTMLElement>(".rd-dev-node[data-selector]"),
   )) {
-    if (item === sourceItem) item.dataset.mappingSource = "true";
+    if (item === compatibilityItem) item.dataset.mappingSource = "true";
     else item.removeAttribute("data-mapping-source");
     if (!item.classList.contains("rd-keyboard-device-node")) continue;
-    const unknown = !rdDeviceScanAuthoritative || !rdStagingReachable;
-    item.dataset.sourceState = unknown
-      ? "unknown"
-      : item === keyboardOwner
-        ? "active"
-        : "inactive";
-    const preview = item.querySelector<HTMLElement>("[data-rd-keyboard-preview]");
+    const selector = item.dataset.selector ?? "";
+    const row = deviceRowFor(selector);
+    const sourceEnabled = rdDeviceScanAuthoritative && Boolean(row);
+    const mappingAvailable = sourceEnabled && rdStagingReachable &&
+      item === compatibilityKeyboard;
+    item.dataset.sourceId = selector;
+    item.dataset.sourceEnabled = sourceEnabled ? "true" : "unknown";
+    item.dataset.mappingAvailable = mappingAvailable ? "true" : "false";
+    item.dataset.sourceState = sourceEnabled ? "enabled" : "unknown";
     const host = item.querySelector<HTMLElement>("[data-rd-keyboard-surface-host]");
-    if (preview) preview.hidden = item === keyboardOwner;
-    if (host) host.hidden = item !== keyboardOwner;
-  }
-
-  if (controls && depot && keyboardOwner) {
-    const keyboardHost = keyboardOwner?.querySelector<HTMLElement>(
-      "[data-rd-keyboard-surface] [data-rd-source-controls-host]",
-    );
-    const controlsTarget = keyboardHost ?? depot;
-    const previousDevice = controls.closest<HTMLElement>(".rd-dev-node");
-    moveElementPreservingFocus(
-      controls,
-      controlsTarget,
-      sourceItem ?? previousDevice ?? root.querySelector<HTMLElement>('[data-nx="rd-devs-open"]'),
-    );
+    let surface = host?.querySelector<HTMLElement>(KEYBOARD_SURFACE_SELECTOR) ?? null;
+    const template = keyboardSurfaceTemplate;
+    if (!surface && host && template && row) {
+      const instanceId = item.dataset.instanceId ?? deviceInstanceId(selector);
+      surface = createKeyboardSurfaceInstance(template, {
+        sourceId: selector,
+        instanceId,
+        sourceLabel: row.name,
+        mappingAvailable,
+      });
+      host.append(surface);
+    } else if (surface && template) {
+      syncKeyboardSurfaceInstance(surface, template, {
+        sourceId: selector,
+        instanceId: item.dataset.instanceId ?? deviceInstanceId(selector),
+        sourceLabel: row?.name ?? item.dataset.widgetName ?? "Physical keyboard",
+        mappingAvailable,
+      });
+    }
+    const status = item.querySelector<HTMLElement>("[data-rd-keyboard-mapping-status]");
+    if (status) {
+      status.dataset.state = !sourceEnabled
+        ? "unavailable"
+        : mappingAvailable
+          ? "ready"
+          : "readonly";
+      status.textContent = !sourceEnabled
+        ? "Connection status unavailable · this board remains on the canvas, but input and mapping are paused."
+        : mappingAvailable
+          ? "Source enabled · existing key-only mapping controls are ready on this board."
+          : "Source enabled · mapping is read-only here until bindings can name this exact device.";
+    }
   }
   const nextFingerprint = Array.from(
     root.querySelectorAll<HTMLElement>(".rd-dev-node[data-selector]"),
   )
     .map((item) =>
-      `${item.dataset.instanceId ?? ""}:${item.dataset.mappingSource === "true" ? "source" : "idle"}`
+      `${item.dataset.instanceId ?? ""}:${item.dataset.sourceEnabled ?? "false"}:${item.dataset.mappingAvailable ?? "false"}`
     )
     .sort()
     .join("|");
@@ -4041,6 +3966,12 @@ function syncBenchCards(): void {
     item.dataset.staged = actionAvailable
       ? (row!.aria_current === "true" ? "true" : "false")
       : "unknown";
+    if (item.classList.contains("rd-keyboard-device-node")) {
+      item.dataset.sourceEnabled = rdDeviceScanAuthoritative && Boolean(row) ? "true" : "unknown";
+      item.dataset.mappingAvailable = actionAvailable && row!.aria_current === "true"
+        ? "true"
+        : "false";
+    }
     if (stageButton) {
       stageButton.dataset.rdProductDisabled = actionAvailable ? "false" : "true";
       stageButton.disabled = !actionAvailable || rdRoot?.dataset.rdMutationPending === "true";
@@ -4056,14 +3987,18 @@ function syncBenchCards(): void {
         status.title = rdDevScanLine();
       }
       if (purpose) {
-        purpose.textContent =
-          "Device status is unavailable. " +
-          "Mapping controls pause until KSX confirms an input source.";
+        purpose.textContent = item.classList.contains("rd-keyboard-device-node")
+          ? "This keyboard remains on the canvas. Input and mapping controls pause until KSX confirms the exact connection."
+          : "Device status is unavailable. Mapping controls pause until KSX confirms an input source.";
       }
-      syncDeviceCardStateBadges(
-        item,
-        { aria_current: "true" } as RdDeviceRowView,
-      );
+      if (item.classList.contains("rd-keyboard-device-node")) {
+        syncDeviceCardStateBadges(item, {
+          role: "keyboard",
+          aria_current: "false",
+        } as RdDeviceRowView);
+      } else {
+        syncDeviceCardStateBadges(item, { aria_current: "true" } as RdDeviceRowView);
+      }
       continue;
     }
     if (!row) continue;
@@ -4075,8 +4010,8 @@ function syncBenchCards(): void {
         status.title = rdStagingLine || "Staging unavailable";
       }
     } else if (status) {
-      status.textContent = "Input source";
-      status.title = STAGED_DEVICE_TITLE;
+      status.textContent = row.role === "keyboard" ? "Mapping controls ready" : "Input source";
+      status.title = row.role === "keyboard" ? KEYBOARD_MAPPING_READY_TITLE : STAGED_DEVICE_TITLE;
     }
     item.dataset.widgetName = row.name;
     item.setAttribute("aria-label", row.name);
@@ -4378,7 +4313,7 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
       onOpenActiveControls: (item) => {
         const isEncoder = item.classList.contains("rd-encoder-device-node");
         const isKeyboard = item.classList.contains("rd-keyboard-device-node") &&
-          item.dataset.mappingSource === "true";
+          item.dataset.sourceEnabled === "true";
         if (isEncoder) {
           const state = nCanvas?.getItemState(item);
           const manualScale = state?.manualScale ?? 1;
@@ -4660,8 +4595,9 @@ function runJourneyAction(action: string, button: HTMLButtonElement | null): voi
 export function redesignWire(root: HTMLElement): void {
   rdRoot = root;
   sourceSurfaceFingerprint = "";
-  keyboardMappingSurface = root.querySelector<HTMLElement>(KEYBOARD_SURFACE_SELECTOR);
-  keyboardSurfaceDepot = root.querySelector<HTMLElement>(KEYBOARD_SURFACE_DEPOT_SELECTOR);
+  keyboardSurfaceTemplate = root.querySelector<HTMLElement>(
+    KEYBOARD_SURFACE_TEMPLATE_BODY_SELECTOR,
+  );
   sourceControlsSurface = root.querySelector<HTMLElement>("[data-rd-source-controls]");
   wireThemeDisclosures(root);
   wireRedesignToolsDisclosures(root);
@@ -4758,6 +4694,22 @@ export function redesignWire(root: HTMLElement): void {
     if (hit === "mac-close") {
       ev.preventDefault();
       rdMacClose();
+      return;
+    }
+    // A secondary keyboard is a real enabled source and a real full board,
+    // but the legacy binding table still has no device column. Refuse the
+    // gesture before the key-only handler can collapse it onto another
+    // keyboard; the status below the board gives the same persistent reason.
+    const unavailableKeyboardKey = target?.closest<HTMLElement>(
+      '.rd-keyboard-device-node[data-mapping-available="false"] [data-rd-keyboard-surface] [data-key]',
+    );
+    if (unavailableKeyboardKey) {
+      ev.preventDefault();
+      const item = unavailableKeyboardKey.closest<HTMLElement>(".rd-keyboard-device-node");
+      const name = item?.dataset.widgetName?.trim() || "This keyboard";
+      rdAnnounce(
+        `${name} is enabled, but mapping is read-only until bindings can name this exact device.`,
+      );
       return;
     }
     // Plate cell → Keys row: the board is the Keys tab's own picture, so
@@ -6140,11 +6092,11 @@ export function RedesignIsland() {
           h(
             "div",
             { class: "rd-identify-copy" },
-            h("h2", { id: "rd-identify-native-title" }, "Identify an input source"),
+            h("h2", { id: "rd-identify-native-title" }, "Identify an exact device"),
             h(
               "p",
               null,
-              "Press the action, then press one key on the exact keyboard or encoder to use. A successful answer selects that connection; nothing is captured, saved, or started.",
+              "Press the action, then press one key on the exact keyboard or encoder. A successful answer identifies that connection for compatibility mapping; nothing is captured, saved, or started.",
             ),
           ),
           h(
@@ -6153,7 +6105,7 @@ export function RedesignIsland() {
             h(
               "button",
               { type: "submit", class: "rd-panel-action rd-identify-start" },
-              "Identify and use as input source",
+              "Identify exact device",
             ),
           ),
         ),
@@ -6279,7 +6231,7 @@ export function RedesignIsland() {
             h(
               "p",
               { class: "n-devnote rd-devmodal-purpose" },
-              "Add places that physical device's board on the canvas without changing the input source. A keyboard becomes interactive when it is the selected input source; other added keyboards remain visible for inspection and can be activated from their board.",
+              "Add places that physical device's own board on the canvas. Every added connected keyboard is an enabled source. Existing key-only mappings are editable on one compatibility board until bindings can name each device; other boards stay safely read-only.",
             ),
             h(
               "section",
@@ -6295,7 +6247,7 @@ export function RedesignIsland() {
                 h(
                   "p",
                   null,
-                  "Start listening, then press one key on the exact keyboard or encoder you want. A successful answer becomes the input source; nothing is captured, saved, or started.",
+                  "Start listening, then press one key on the exact keyboard or encoder you want to identify. A successful answer prepares compatibility mapping for that connection; nothing is captured, saved, or started.",
                 ),
               ),
               h(
@@ -6309,7 +6261,7 @@ export function RedesignIsland() {
                 h(
                   "button",
                   { type: "submit", class: "rd-panel-action rd-identify-start" },
-                  "Identify and use as input source",
+                  "Identify exact device",
                 ),
               ),
               h(
@@ -6379,7 +6331,7 @@ export function RedesignIsland() {
                       // parent with a dynamic text, and the parity gate is
                       // what caught the chip existing only after hydration.
                       h("span", { class: "rd-dev-connectedchip" }, "Connected"),
-                      h("span", { class: "rd-dev-stagedchip" }, "Input source"),
+                      h("span", { class: "rd-dev-stagedchip" }, "Mapping controls ready"),
                       h(
                         "span",
                         {
@@ -6756,6 +6708,11 @@ export function RedesignIsland() {
               "✋",
             ),
           ),
+          h("div", {
+            class: "rd-global-source-controls-host",
+            "data-rd-global-source-controls-host": "",
+            "data-client-canvas": "",
+          }),
           h(
             "div",
             {
@@ -6774,25 +6731,25 @@ export function RedesignIsland() {
                 "data-client-canvas": "",
                 role: "list",
               },
-              // ── The ONE served keyboard projection, parked by default ──
-              // Physical-device membership is browser-owned, so this reactive
-              // subtree begins in a hidden depot instead of impersonating a
-              // canvas item. Reconciliation moves the exact same nodes into
-              // the authoritative keyboard device — never a clone.
+              // ── Reactive keyboard blueprint ────────────────────────────
+              // Physical-device membership is browser-owned. Each added
+              // keyboard clones this hidden blueprint once, namespaces any
+              // ids, and then reconciles served facts onto its own persistent
+              // nodes. The blueprint never becomes a canvas surface.
               h(
                 "div",
                 {
-                  class: "rd-keyboard-surface-depot",
+                  class: "rd-keyboard-surface-template",
                   hidden: true,
                   inert: "",
                   "aria-hidden": "true",
-                  "data-rd-keyboard-surface-depot": "",
+                  "data-rd-keyboard-surface-template": "",
                 },
                 h(
                   "div",
                   {
                     class: "n-widget-body",
-                    "data-rd-keyboard-surface": "",
+                    "data-rd-keyboard-surface-template-body": "",
                     "data-forma-runtime-host": "",
                     "aria-hidden": "false",
                   },
@@ -6849,10 +6806,8 @@ export function RedesignIsland() {
                     // a keyboard looks like a keyboard on this page. Choosing
                     // a different picture (a saved panel, a drawn board) is a
                     // 4460 affair until an "advanced" home earns its place.
-                    // The singleton source controls move independently so an
-                    // encoder can own the same served While-playing policy
-                    // without drawing a synthetic QWERTY board.
-                    h("div", { "data-rd-source-controls-host": "" }),
+                    // The one session-wide While-playing policy is mounted in
+                    // global canvas chrome, never assigned to one source.
                     // Material belongs to the keyboard, never to a seat:
                     // six app-owned paints over one semantic geometry.
                     h(
@@ -7123,9 +7078,10 @@ export function RedesignIsland() {
                   ),
                   h("p", { class: "n-devnote" }, () => rdKbNote()),
                 ),
-                // Source policy is one served control, just like the mapping
-                // surface. It parks here and moves to whichever authoritative
-                // physical device is actually on the canvas.
+                // Source policy is session-wide. It begins beside the hidden
+                // reactive blueprint for SSR parity, then moves once into the
+                // global canvas-policy host; it never implies one exclusive
+                // physical source.
                 h(
                   "details",
                   {

@@ -20181,74 +20181,10 @@ button.rd-utility-action {
   color: var(--n-text-2);
 }
 
-.rd-device-keyboard-visual {
-  position: relative;
-  box-sizing: border-box;
-  margin: 10px 0 2px;
-  padding: 7px 9px;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--n-accent-line) 76%, var(--n-line));
-  border-radius: 10px;
-  background:
-    radial-gradient(circle at 82% 12%, color-mix(in srgb, var(--n-accent) 14%, transparent), transparent 42%),
-    linear-gradient(145deg, color-mix(in srgb, var(--n-panel-2) 88%, #000 12%), var(--n-panel));
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--n-text) 7%, transparent),
-    0 10px 26px color-mix(in srgb, #000 18%, transparent);
-}
-
-.rd-device-keyboard-visual::after {
-  position: absolute;
-  inset: auto 12px 4px;
-  height: 1px;
-  content: "";
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--n-accent) 46%, transparent), transparent);
-}
-
-.rd-device-keyboard-svg {
-  display: block;
-  width: 100%;
-  height: auto;
-  color: var(--n-accent);
-  filter: drop-shadow(0 5px 7px color-mix(in srgb, #000 30%, transparent));
-}
-
-.rd-device-keyboard-shell {
-  fill: color-mix(in srgb, var(--n-panel) 78%, #05070b 22%);
-  stroke: color-mix(in srgb, var(--n-text-3) 38%, transparent);
-  stroke-width: 1;
-}
-
-.rd-device-keyboard-deck {
-  fill: color-mix(in srgb, var(--n-bg) 86%, #000 14%);
-  stroke: color-mix(in srgb, var(--n-accent) 20%, var(--n-line));
-  stroke-width: 0.8;
-}
-
-.rd-device-keyboard-key {
-  fill: color-mix(in srgb, var(--n-text-3) 32%, var(--n-panel-2));
-  stroke: color-mix(in srgb, var(--n-text-2) 22%, transparent);
-  stroke-width: 0.45;
-}
-
-.rd-device-keyboard-key-edge {
-  fill: color-mix(in srgb, var(--n-accent) 22%, var(--n-panel-2));
-}
-
-.rd-device-keyboard-light {
-  fill: color-mix(in srgb, var(--n-accent) 62%, transparent);
-  opacity: 0.8;
-}
-
-.rd-device-keyboard-witness {
-  fill: var(--n-accent);
-  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--n-accent) 74%, transparent));
-}
-
-/* A keyboard is the board, not a summary card beside a second synthetic
-   keyboard. Identity/source controls form one compact fascia above either the
-   authoritative interactive plate or an honest, full-size inactive preview. */
-.rd-keyboard-surface-depot {
+/* A keyboard is the board, not a summary card beside a synthetic keyboard.
+   The reactive blueprint never appears on the canvas; every intentionally
+   added physical device owns one persistent full surface cloned from it. */
+.rd-keyboard-surface-template {
   display: none !important;
 }
 
@@ -20307,38 +20243,40 @@ button.rd-utility-action {
   margin: 0;
 }
 
-.rd-keyboard-device-preview {
-  padding: 8px 12px 10px;
-  border: 1px solid var(--n-line);
-  border-radius: 14px;
-  background: var(--n-bg);
-}
-
-.rd-keyboard-device-preview[hidden],
-.rd-keyboard-device-surface-host[hidden] {
-  display: none !important;
-}
-
-.rd-keyboard-device-preview .rd-device-keyboard-visual {
-  margin: 0;
-  padding: 12px 16px;
-  border-radius: 12px;
-}
-
-.rd-keyboard-device-preview-note {
-  margin: 7px 4px 0;
-  color: var(--n-text-3);
-  font-size: var(--fs-micro);
-  text-align: center;
-}
-
-.rd-keyboard-device-node[data-source-state="active"] .rd-keyboard-device-identity {
+.rd-keyboard-device-node[data-source-state="enabled"] .rd-keyboard-device-identity {
   border-color: color-mix(in srgb, var(--n-accent) 54%, var(--n-line));
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--n-accent) 9%, transparent);
 }
 
-.rd-keyboard-device-node[data-source-state="unknown"] .rd-keyboard-device-preview {
+.rd-keyboard-device-node[data-source-state="unknown"] .rd-keyboard-device-surface-host {
   border-color: color-mix(in srgb, var(--n-warn) 32%, var(--n-line));
+}
+
+.rd-keyboard-device-surface-host {
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 14px;
+}
+
+.rd-keyboard-device-node[data-mapping-available="false"]
+  [data-rd-keyboard-surface] .n-k {
+  --mine: color-mix(in srgb, var(--n-text-3) 46%, transparent);
+}
+
+.rd-keyboard-mapping-status {
+  margin: 0 12px 2px;
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+  text-align: center;
+}
+
+.rd-keyboard-mapping-status[data-state="ready"] {
+  color: var(--n-ok);
+}
+
+.rd-keyboard-mapping-status[data-state="unavailable"] {
+  color: var(--n-warn);
 }
 
 [data-forma-canvas]
@@ -20348,20 +20286,26 @@ button.rd-utility-action {
   min-width: 0;
   /* The canvas item's minimum already includes the identity fascia. The
      generic runtime-host minimum would add that height a second time when
-     the singleton moves in, making an active board jump by the fascia size. */
+     each device-owned board mounts, making it jump by the fascia size. */
   min-height: 0;
 }
 
-.rd-source-controls-host:empty {
+.rd-global-source-controls-host {
+  position: absolute;
+  z-index: 18;
+  top: 14px;
+  left: 60px;
+  max-width: min(360px, calc(100% - 112px));
+  pointer-events: auto;
+}
+
+.rd-global-source-controls-host:empty {
   display: none;
 }
 
-.rd-devcard > .rd-source-controls-host:not(:empty) {
-  margin-top: 10px;
-}
-
-.rd-devcard > .rd-source-controls-host .rd-capture {
+.rd-global-source-controls-host .rd-capture {
   width: fit-content;
+  margin-left: auto;
 }
 
 @media (max-width: 760px) {

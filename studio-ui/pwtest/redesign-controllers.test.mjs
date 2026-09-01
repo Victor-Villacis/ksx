@@ -514,7 +514,7 @@ describe("the controller workbench", () => {
     await page.close();
   });
 
-  test("the parked server projection keeps real keys truthful without inventing canvas membership", async () => {
+  test("the server blueprint keeps real keys truthful without inventing canvas membership", async () => {
     const ssrContext = await browser.newContext({
       viewport: { width: 1600, height: 1000 },
       colorScheme: "dark",
@@ -524,14 +524,15 @@ describe("the controller workbench", () => {
       const page = await ssrContext.newPage();
       await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
       const real = page.locator(
-        '[data-rd-keyboard-surface] button.n-key:not(.ghost)[data-key]:not([data-key=""])',
+        '[data-rd-keyboard-surface-template-body] button.n-key:not(.ghost)[data-key]:not([data-key=""])',
       );
       const spacers = page.locator(
-        '[data-rd-keyboard-surface] button.n-key.ghost[data-key=""]',
+        '[data-rd-keyboard-surface-template-body] button.n-key.ghost[data-key=""]',
       );
       assert.equal(await page.locator('[data-instance-id="keyboard"]').count(), 0);
-      assert.equal(await page.locator('[data-rd-keyboard-surface-depot][hidden]').count(), 1);
-      assert.ok((await real.count()) > 0, "SSR serves native buttons for physical keys");
+      assert.equal(await page.locator('[data-rd-keyboard-surface-template][hidden]').count(), 1);
+      assert.equal(await page.locator("[data-rd-keyboard-surface]").count(), 0);
+      assert.ok((await real.count()) > 0, "SSR blueprint serves native buttons for physical keys");
       assert.ok((await spacers.count()) > 0, "SSR keeps authored spacer geometry");
       assert.equal(await real.first().isDisabled(), false);
       assert.equal(await real.first().getAttribute("tabindex"), "0");
@@ -581,15 +582,19 @@ describe("the controller workbench", () => {
     );
     // The finish is the keyboard's own material — a click restamps the
     // widget and the preference survives in this browser.
-    await page.click('[data-nx="kb-theme"][data-keyboard-theme="retro-terminal"]');
+    await keyboard.locator(
+      '[data-nx="kb-theme"][data-keyboard-theme="retro-terminal"]',
+    ).click();
     assert.equal(
       await keyboard.getAttribute("data-keyboard-theme"),
       "retro-terminal",
     );
-    await page.click('[data-nx="kb-theme"][data-keyboard-theme="carbon-forge"]');
+    await keyboard.locator(
+      '[data-nx="kb-theme"][data-keyboard-theme="carbon-forge"]',
+    ).click();
     // The mute lens: one chip, one player's color — the same custom
     // property the nocturne sheet drives, written on the plate.
-    await page.click('.n-legend [data-nx="legend-mute"][data-slot="1"]');
+    await keyboard.locator('.n-legend [data-nx="legend-mute"][data-slot="1"]').click();
     assert.equal(
       await page.evaluate((id) =>
         document
@@ -598,7 +603,7 @@ describe("the controller workbench", () => {
         G915_ID),
       "var(--band-mute)",
     );
-    await page.click('.n-legend [data-nx="legend-mute"][data-slot="1"]');
+    await keyboard.locator('.n-legend [data-nx="legend-mute"][data-slot="1"]').click();
     assert.equal(
       await page.evaluate((id) =>
         document

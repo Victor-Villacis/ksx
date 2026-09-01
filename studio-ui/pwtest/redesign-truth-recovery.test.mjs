@@ -271,13 +271,17 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
     await page.locator('.rd-ctrlmodal-head [data-nx="rd-ctrls-close"]').click();
 
     // The picker and device cards share one product vocabulary. Bench
-    // membership is not called staging, and choosing the mapping input is the
-    // explicit "Use as input source" verb.
+    // membership is not staging, and a physical keyboard remains an enabled
+    // source even while its legacy key-only mapping controls are read-only.
     await page.locator('[data-nx="rd-devs-open"]').click();
     const ipacRow = page.locator(`.rd-devmodal button[data-selector="${IPAC}"]`);
     const g915Row = page.locator(`.rd-devmodal button[data-selector="${G915}"]`);
     assert.equal((await ipacRow.locator(".rd-dev-connectedchip").textContent())?.trim(), "Connected");
     assert.equal((await ipacRow.locator(".rd-dev-stagedchip").textContent())?.trim(), "Input source");
+    assert.equal(
+      (await g915Row.locator(".rd-dev-stagedchip").textContent())?.trim(),
+      "Mapping controls ready",
+    );
     assert.doesNotMatch((await ipacRow.textContent()) ?? "", /staged|mapping input/i);
     await ipacRow.click();
     await g915Row.click();
@@ -299,9 +303,9 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
     );
     assert.deepEqual(
       await g915Card.locator(".rd-device-state").allTextContents(),
-      ["Connected", "On canvas"],
+      ["Connected", "On canvas", "Source enabled", "Mapping read-only"],
     );
-    assert.equal((await g915Card.locator(".rd-stagebtn").textContent())?.trim(), "Use as input source");
+    assert.equal((await g915Card.locator(".rd-stagebtn").textContent())?.trim(), "Enable mapping controls");
     assert.doesNotMatch((await ipacCard.locator(".rd-devcard").textContent()) ?? "", /staged|mapping input/i);
     assert.doesNotMatch((await g915Card.locator(".rd-devcard").textContent()) ?? "", /staged|mapping input/i);
 

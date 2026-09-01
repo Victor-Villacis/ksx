@@ -2609,8 +2609,8 @@ describe("the device workbench", () => {
     );
     assert.match(
       (await page.locator(".rd-devmodal-purpose").textContent()) ?? "",
-      /Add places that physical device's board.*without changing the input source.*becomes interactive.*selected input source/s,
-      "the picker explains canvas membership versus source authority",
+      /Add places that physical device's own board.*Every added connected keyboard is an enabled source.*one compatibility board.*safely read-only/s,
+      "the picker explains independent source membership and the temporary mapping seam",
     );
     // The unavailable tier is visible but NEVER a control.
     assert.equal(
@@ -3008,7 +3008,7 @@ describe("the device workbench", () => {
         .locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`)
         .getAttribute("data-staged"),
       "false",
-      "an unstaged keyboard board offers the source verb",
+      "a keyboard without compatibility mapping offers the explicit mapping verb",
     );
     assert.equal(
       Number(await page
@@ -3025,16 +3025,13 @@ describe("the device workbench", () => {
       "Physical keyboard",
       "the board retains its physical-device identity",
     );
-    assert.equal(
-      await g915Board.locator('.rd-keyboard-device-preview .rd-device-keyboard-svg').count(),
-      1,
-      "an inactive keyboard is still represented by one full-board SVG",
+    assert.equal(await g915Board.locator("[data-rd-keyboard-surface] .n-kb").count(), 1);
+    assert.ok(
+      await g915Board.locator("[data-rd-keyboard-surface] .n-kb [data-key]").count() > 80,
+      "every intentionally added keyboard owns a full key surface",
     );
-    assert.equal(
-      await g915Board.locator(".n-kb").count(),
-      0,
-      "an inactive keyboard has no second interactive key surface",
-    );
+    assert.equal(await g915Board.getAttribute("data-source-enabled"), "true");
+    assert.equal(await g915Board.getAttribute("data-mapping-available"), "false");
     assert.equal(
       await page.locator('[data-instance-id="keyboard"]').count(),
       0,
@@ -3044,14 +3041,14 @@ describe("the device workbench", () => {
       (await page
         .locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"] .rd-stagebtn`)
         .textContent())?.trim(),
-      "Use as input source",
-      "the product verb names the relationship to the Input source instead of backend staging",
+      "Enable mapping controls",
+      "the compatibility verb never claims exclusive input-source ownership",
     );
     assert.match(
       (await page
         .locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"] .rd-devcard-purpose`)
         .textContent()) ?? "",
-      /physical keyboard is on the canvas.*activate its interactive key board/is,
+      /enabled source.*own board.*read-only.*exact device/is,
     );
     await page.click(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"] .rd-stagebtn`);
     await page.waitForFunction(
@@ -3093,27 +3090,27 @@ describe("the device workbench", () => {
     assert.equal(
       await g915Board.getAttribute("data-mapping-source"),
       "true",
-      "the selected physical board becomes the sole mapping source",
+      "the temporary key-only mapper is pinned to this exact compatibility board",
     );
-    assert.match(
-      (await g915Board.locator(".n-kbhead > .n-kick").textContent())?.trim() ?? "",
-      /^Logitech G915 TKL · Bluetooth · Active input/,
-      "the interactive surface lives inside and names the selected physical board",
+    assert.equal(
+      (await g915Board.locator(".n-kbhead > .n-kick").textContent())?.trim(),
+      "Logitech G915 TKL",
+      "the independent surface names its exact physical board",
     );
     assert.match(
       (await g915Board.locator(".rd-devcard-purpose").textContent()) ?? "",
-      /active input source.*board below.*map emitted keys/is,
-      "the physical board explains its active mapping role",
+      /enabled source.*key-only bindings.*inspected and edited/is,
+      "the physical board explains enabled-source and compatibility facts separately",
     );
     assert.equal(
       await g915Board.locator('.n-kb button.n-key[data-key="A"]').count(),
       1,
-      "the active device owns the one interactive key board",
+      "the device retains its own interactive key board",
     );
     assert.equal(
-      await g915Board.locator("[data-rd-source-controls]").count(),
+      await page.locator("[data-rd-global-source-controls-host] [data-rd-source-controls]").count(),
       1,
-      "While playing follows the active source into the same device",
+      "While playing is session-wide global chrome, not owned by one device",
     );
     await page.click('[data-nx="rd-devs-open"]');
     assert.equal(
@@ -3137,7 +3134,7 @@ describe("the device workbench", () => {
     await closePage(page);
   });
 
-  test("two same-name keyboards share one movable surface and park it when the active board is removed", async () => {
+  test("two same-name keyboards own independent full surfaces across refresh and peer removal", async () => {
     const twinContext = await browser.newContext({
       // Keep both 980px boards materially on screen so the authority handoff
       // tests DOM/focus ownership rather than canvas virtualization.
@@ -3221,6 +3218,16 @@ describe("the device workbench", () => {
         { timeout: 20_000 },
       );
 
+      // Exercise the future-proof id namespace seam even though today's
+      // standard keyboard blueprint has no native ids of its own.
+      await page.evaluate(() => {
+        const template = document.querySelector("[data-rd-keyboard-surface-template-body]");
+        const heading = template?.querySelector(".n-kbhead > .n-kick");
+        if (!template || !heading) throw new Error("keyboard blueprint is missing");
+        heading.id = "keyboard-surface-title";
+        template.setAttribute("aria-labelledby", heading.id);
+      });
+
       await page.click('[data-nx="rd-devs-open"]');
       for (const selector of [G915, G915_TWIN]) {
         await page.locator(`.rd-devmodal button[data-selector="${selector}"]`).click();
@@ -3255,32 +3262,70 @@ describe("the device workbench", () => {
         [G915_SLUG, G915_TWIN_SLUG].sort(),
         "same-name keyboards remain two stable board nodes",
       );
-      assert.equal(await page.locator("[data-rd-keyboard-surface]").count(), 1);
+      assert.equal(await page.locator("[data-rd-keyboard-surface]").count(), 2);
+      assert.equal(await page.locator("[data-rd-keyboard-surface-depot]").count(), 0);
+      assert.equal(await page.locator("[data-rd-keyboard-surface-active]").count(), 0);
       assert.equal(await page.locator('[data-mapping-source="true"]').count(), 1);
-      assert.equal(
-        await page.locator('[data-rd-keyboard-surface-active="true"]').count(),
-        1,
-      );
+      assert.equal(await page.locator('[data-source-enabled="true"]').count(), 2);
       assert.equal(await primary.getAttribute("data-mapping-source"), "true");
       assert.equal(await primary.locator("[data-rd-keyboard-surface]").count(), 1);
-      assert.equal(await primary.locator("[data-rd-source-controls]").count(), 1);
-      assert.equal(await primary.locator("[data-rd-keyboard-preview]:not([hidden])").count(), 0);
-      assert.equal(await twin.locator("[data-rd-keyboard-surface]").count(), 0);
-      assert.equal(await twin.locator("[data-rd-source-controls]").count(), 0);
-      assert.equal(await twin.locator("[data-rd-keyboard-preview]:not([hidden])").count(), 1);
-      assert.equal(await twin.locator("[data-key]").count(), 0, "the inactive board has no key stops");
+      assert.equal(await twin.locator("[data-rd-keyboard-surface]").count(), 1);
+      assert.equal(await primary.getAttribute("data-source-id"), G915);
+      assert.equal(await twin.getAttribute("data-source-id"), G915_TWIN);
       assert.equal(
-        await twin.locator(".rd-device-keyboard-svg").getAttribute("aria-hidden"),
-        "true",
+        await primary.locator("[data-rd-keyboard-surface]").getAttribute("data-source-id"),
+        G915,
       );
+      assert.equal(
+        await twin.locator("[data-rd-keyboard-surface]").getAttribute("data-source-id"),
+        G915_TWIN,
+      );
+      assert.equal(await primary.getAttribute("data-mapping-available"), "true");
+      assert.equal(await twin.getAttribute("data-mapping-available"), "false");
+      assert.ok(await primary.locator(".n-kb [data-key]").count() > 80);
+      assert.ok(await twin.locator(".n-kb [data-key]").count() > 80);
+      assert.equal(await twin.locator(".n-kb .n-key.bound").count(), 0);
+      assert.match(
+        (await twin.locator("[data-rd-keyboard-mapping-status]").textContent()) ?? "",
+        /source enabled.+read-only.+exact device/i,
+      );
+      assert.doesNotMatch(
+        (await twin.locator(".rd-keyboard-device-identity").textContent()) ?? "",
+        /the input source|use as input source/i,
+      );
+      const idAudit = await page.locator("[data-rd-keyboard-surface]").evaluateAll((surfaces) =>
+        surfaces.map((surface) => ({
+          ids: [surface, ...surface.querySelectorAll("[id]")]
+            .map((element) => element.id)
+            .filter(Boolean),
+          labelledby: surface.getAttribute("aria-labelledby"),
+        }))
+      );
+      assert.equal(new Set(idAudit.flatMap((surface) => surface.ids)).size, 2);
+      assert.notEqual(idAudit[0].ids[0], idAudit[1].ids[0]);
+      for (const surface of idAudit) assert.equal(surface.labelledby, surface.ids[0]);
 
       await page.locator('[data-nx="rd-z-100"]').evaluate((button) => button.click());
       await page.waitForFunction(
         () => document.querySelector(".forma-canvas-viewport")?.dataset.canvasZoomTier ===
             "editing" && !document.querySelector(".is-camera-animating"),
       );
+      const readOnlyTwinKey = twin.locator('.n-kb button.n-key[data-key="A"]');
+      await readOnlyTwinKey.evaluate((key) => key.click());
+      assert.match(
+        (await page.locator(".n-live-sr").textContent()) ?? "",
+        /enabled.+mapping is read-only.+exact device/i,
+        "a secondary board refuses key-only mapping before the legacy handler can collapse device identity",
+      );
+      assert.equal(await twin.getAttribute("data-mapping-source"), null);
       await revealCanvasItem(page, G915_SLUG);
       const focusedKey = primary.locator('.n-kb button.n-key[data-key="A"]');
+      const primaryGeometry = await primary.evaluate((item) => ({
+        x: item.dataset.canvasX,
+        y: item.dataset.canvasY,
+        width: item.dataset.canvasWidth,
+        height: item.dataset.canvasHeight,
+      }));
       await focusedKey.evaluate((key) => {
         key.dataset.twinFocusWitness = "true";
         key.focus({ preventScroll: true });
@@ -3288,7 +3333,7 @@ describe("the device workbench", () => {
       assert.equal(
         await focusedKey.evaluate((key) => document.activeElement === key),
         true,
-        "the authority handoff starts with focus inside the singleton board",
+        "refresh starts with focus inside keyboard A's own board",
       );
 
       await page.evaluate(async ({ selector, alias, label }) => {
@@ -3309,71 +3354,77 @@ describe("the device workbench", () => {
           );
           return owner?.dataset.mappingSource === "true" &&
             document.activeElement?.getAttribute("data-twin-focus-witness") === "true" &&
-            document.activeElement.closest("[data-instance-id]") === owner;
+            document.activeElement.closest("[data-instance-id]")?.getAttribute("data-instance-id") !== id;
         },
         G915_TWIN_SLUG,
         { timeout: 12_000 },
       );
       assert.equal(await page.locator('[data-mapping-source="true"]').count(), 1);
-      assert.equal(
-        await page.locator('[data-rd-keyboard-surface-active="true"]').count(),
-        1,
-      );
-      assert.equal(await primary.locator("[data-rd-keyboard-surface]").count(), 0);
-      assert.equal(await primary.locator("[data-rd-source-controls]").count(), 0);
-      assert.equal(await primary.locator("[data-rd-keyboard-preview]:not([hidden])").count(), 1);
+      assert.equal(await primary.locator("[data-rd-keyboard-surface]").count(), 1);
       assert.equal(await twin.locator("[data-rd-keyboard-surface]").count(), 1);
-      assert.equal(await twin.locator("[data-rd-source-controls]").count(), 1);
-      assert.equal(await twin.locator("[data-rd-keyboard-preview]:not([hidden])").count(), 0);
+      assert.equal(await primary.getAttribute("data-mapping-available"), "false");
+      assert.equal(await twin.getAttribute("data-mapping-available"), "true");
+      assert.deepEqual(
+        await primary.evaluate((item) => ({
+          x: item.dataset.canvasX,
+          y: item.dataset.canvasY,
+          width: item.dataset.canvasWidth,
+          height: item.dataset.canvasHeight,
+        })),
+        primaryGeometry,
+        "compatibility refresh never changes keyboard A's geometry",
+      );
       assert.equal(
         await page.evaluate(
           (selector) =>
             document.activeElement?.getAttribute("data-key") === "A" &&
             document.activeElement?.closest("[data-selector]")?.getAttribute("data-selector") ===
               selector,
-          G915_TWIN,
+          G915,
         ),
         true,
-        "the exact focused key node moves from keyboard A to keyboard B",
+        "keyboard A keeps its exact focused key node when compatibility moves to B",
       );
 
       await revealCanvasItem(page, G915_TWIN_SLUG);
-      await twin.locator('[data-twin-focus-witness="true"]').focus();
-      assert.equal(await twin.getAttribute("aria-current"), "true");
-      await page.locator(`.rd-devmodal button[data-selector="${G915_TWIN}"]`)
+      const twinKey = twin.locator('.n-kb button.n-key[data-key="A"]');
+      await twinKey.focus();
+      assert.equal(await twinKey.evaluate((key) => document.activeElement === key), true);
+      const twinGeometry = await twin.evaluate((item) => ({
+        x: item.dataset.canvasX,
+        y: item.dataset.canvasY,
+        width: item.dataset.canvasWidth,
+        height: item.dataset.canvasHeight,
+      }));
+      await page.locator(`.rd-devmodal button[data-selector="${G915}"]`)
         .evaluate((button) => button.click());
       await page.waitForFunction(
         (id) => !document.querySelector(
           `.forma-canvas-stage > [data-instance-id="${id}"]`,
         ),
-        G915_TWIN_SLUG,
+        G915_SLUG,
       );
-
-      const depot = page.locator("[data-rd-keyboard-surface-depot]");
-      assert.equal(await page.locator('[data-mapping-source="true"]').count(), 0);
-      assert.equal(
-        await page.locator('[data-rd-keyboard-surface-active="true"]').count(),
-        0,
-      );
-      assert.equal(await primary.locator("[data-rd-keyboard-surface]").count(), 0);
-      assert.equal(await primary.locator("[data-rd-keyboard-preview]:not([hidden])").count(), 1);
-      assert.equal(await depot.locator(":scope > [data-rd-keyboard-surface]").count(), 1);
-      assert.equal(await depot.locator(":scope > [data-rd-source-controls]").count(), 1);
       assert.deepEqual(
-        await depot.evaluate((node) => ({ hidden: node.hidden, inert: node.inert })),
-        { hidden: true, inert: true },
-        "no-source state parks both singleton subtrees in the hidden inert depot",
+        await twin.evaluate((item) => ({
+          x: item.dataset.canvasX,
+          y: item.dataset.canvasY,
+          width: item.dataset.canvasWidth,
+          height: item.dataset.canvasHeight,
+        })),
+        twinGeometry,
+        "removing keyboard A leaves keyboard B's geometry untouched",
       );
       assert.equal(
-        await page.locator(".forma-canvas-viewport").evaluate((viewport) =>
-          document.activeElement === viewport &&
-          !document.querySelector("[data-rd-keyboard-surface-depot]")
-            ?.contains(document.activeElement)
-        ),
+        await twinKey.evaluate((key) => document.activeElement === key),
         true,
-        "active-board removal returns focus to the durable canvas, never hidden controls",
+        "removing a peer leaves focus inside keyboard B's persistent board",
       );
-      assert.deepEqual(noise, [], "the twin-keyboard handoff stays error-free");
+      assert.equal(await page.locator("[data-rd-keyboard-surface]").count(), 1);
+      assert.equal(
+        await page.locator("[data-rd-global-source-controls-host] [data-rd-source-controls]").count(),
+        1,
+      );
+      assert.deepEqual(noise, [], "independent keyboard surfaces stay error-free");
     } finally {
       await page.unrouteAll({ behavior: "wait" });
       await closeContext(twinContext);
@@ -3639,7 +3690,7 @@ describe("the device workbench", () => {
       assert.match(await item.locator(".rd-devcard-meta").textContent(), /Status unavailable/);
       assert.match(
         await item.locator(".rd-devcard-purpose").textContent(),
-        /Device status is unavailable.*controls pause/is,
+        /keyboard remains on the canvas.*controls pause.*exact connection/is,
       );
       assert.equal(
         await item.locator('.rd-device-state:text-is("Input source")').count(),
@@ -3656,18 +3707,18 @@ describe("the device workbench", () => {
         "no device owns mapping authority while the scan is unknown",
       );
       assert.equal(
-        await page.locator(
-          "[data-rd-keyboard-surface-depot] > [data-rd-keyboard-surface]",
-        ).count(),
+        await item.locator("[data-rd-keyboard-surface]").count(),
         1,
-        "the singleton keyboard is safely parked",
+        "unknown connection truth does not remove or reparent its full surface",
       );
+      assert.equal(await item.getAttribute("data-source-enabled"), "unknown");
+      assert.equal(await item.getAttribute("data-mapping-available"), "false");
       assert.equal(
         await page.locator(
-          "[data-rd-keyboard-surface-depot] [data-rd-source-controls]",
+          "[data-rd-global-source-controls-host] [data-rd-source-controls]",
         ).count(),
         1,
-        "source policy controls park with unknown authority",
+        "session-wide source policy remains global while connection truth is unknown",
       );
       const beforeRemoval = await item.evaluate((node) => ({
         x: Number(node.dataset.canvasX),

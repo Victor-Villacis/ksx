@@ -205,8 +205,9 @@ impl Committed {
 /// never reads one). Its `[[device]]` and `[[slot]]` tables are *replaced* for
 /// the entries this stage names and left alone otherwise:
 ///
-/// - every staged device upserts by ALIAS, so re-picking the same boards keeps
-///   one entry per board rather than growing duplicates;
+/// - every staged device upserts by exact ALIAS spelling, matching config's
+///   resolver, so re-picking the same boards keeps one entry per board without
+///   collapsing independently valid case-distinct aliases;
 /// - a staged slot replaces the `[[slot]]` of that number, because that is what
 ///   the screen showed for it;
 /// - a `[[slot]]` the stage does not mention is untouched. A first-run visit
@@ -227,7 +228,7 @@ pub fn to_config(base: &ConfigFile, spec: &CommitSpec) -> ConfigFile {
         match config
             .devices
             .iter_mut()
-            .find(|device| device.alias.eq_ignore_ascii_case(&staged.alias))
+            .find(|device| device.alias == staged.alias)
         {
             Some(existing) => {
                 existing.id = id.clone();
@@ -821,6 +822,54 @@ mod tests {
         assert_eq!(again.slots[0].spec.sources.len(), 2);
         assert_eq!(again.slots[0].additional_presets.len(), 1);
         assert_eq!(again.slots[0].additional_presets[0].name, "Right map");
+    }
+
+    #[test]
+    fn case_distinct_device_aliases_survive_persistence_with_both_routes() {
+        let lower = device();
+        let upper = StagedDevice {
+            alias: "Panel".to_owned(),
+            ..desk_device(StageCaptureBackend::Winusb)
+        };
+        let staged = StagedSetup::new()
+            .choose_device(lower.clone())
+            .unwrap()
+            .add_device(upper.clone())
+            .unwrap()
+            .add_slot_for_source(
+                1,
+                Persona::Xbox360,
+                &lower.selector,
+                preset("Lower map", Key::A, XButton::A),
+            )
+            .unwrap()
+            .set_source_bindings(1, &upper.selector, preset("Upper map", Key::L, XButton::B))
+            .unwrap()
+            .set_blocking(Blocking::BoundKeys);
+
+        let config = to_config(&ConfigFile::default(), &staged.commit().unwrap());
+        assert_eq!(
+            config
+                .devices
+                .iter()
+                .map(|device| device.alias.as_str())
+                .collect::<Vec<_>>(),
+            ["panel", "Panel"],
+            "config aliases resolve by exact spelling, so case-distinct devices stay distinct"
+        );
+        assert_eq!(config.slots[0].sources.len(), 2);
+        assert_eq!(config.slots[0].sources[0].device, "panel");
+        assert_eq!(config.slots[0].sources[1].device, "Panel");
+
+        let round_trip = config.slot_spec(&config.slots[0]).unwrap();
+        assert_eq!(
+            round_trip.sources[0].device.as_str(),
+            lower.selector.to_string()
+        );
+        assert_eq!(
+            round_trip.sources[1].device.as_str(),
+            upper.selector.to_string()
+        );
     }
 
     #[test]

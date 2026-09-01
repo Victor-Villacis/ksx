@@ -466,6 +466,93 @@ impl RedesignOperationalState {
     }
 }
 
+/// One routed input-to-controller path that still has no live binding.
+///
+/// `StagedSlotView::bindings` is only the first-source compatibility
+/// projection once a daemon serves canonical `sources`.  Read it solely for
+/// an older payload with no source rows; otherwise every routed row owns its
+/// own readiness fact.
+enum StagedMappingBlocker<'a> {
+    Exact {
+        slot: &'a ksx_api::StagedSlotView,
+        source: &'a ksx_api::StagedSourceView,
+    },
+    NoRoute(&'a ksx_api::StagedSlotView),
+    Legacy(&'a ksx_api::StagedSlotView),
+}
+
+fn first_staged_mapping_blocker(
+    staged: &ksx_api::StagedSetupView,
+) -> Option<StagedMappingBlocker<'_>> {
+    for slot in &staged.slots {
+        if slot.sources.is_empty() {
+            if slot.bindings == 0 {
+                return Some(StagedMappingBlocker::Legacy(slot));
+            }
+            continue;
+        }
+
+        let mut routed = slot.sources.iter().filter(|source| source.routed);
+        let Some(first) = routed.next() else {
+            return Some(StagedMappingBlocker::NoRoute(slot));
+        };
+        if first.bindings == 0 {
+            return Some(StagedMappingBlocker::Exact {
+                slot,
+                source: first,
+            });
+        }
+        if let Some(source) = routed.find(|source| source.bindings == 0) {
+            return Some(StagedMappingBlocker::Exact { slot, source });
+        }
+    }
+    None
+}
+
+fn staged_mapping_blocker_line(
+    staged: &ksx_api::StagedSetupView,
+    blocker: &StagedMappingBlocker<'_>,
+) -> String {
+    let controller = |slot: &ksx_api::StagedSlotView| {
+        let persona = slot.persona_label.trim();
+        if persona.is_empty() {
+            format!("Player {}", slot.number)
+        } else {
+            format!("Player {} ({persona})", slot.number)
+        }
+    };
+    match blocker {
+        StagedMappingBlocker::Exact { slot, source } => {
+            let source_device = staged.devices.iter().find(|device| {
+                device
+                    .selector
+                    .trim()
+                    .eq_ignore_ascii_case(source.selector.trim())
+            });
+            let label = [
+                source.label.trim(),
+                source.alias.trim(),
+                source_device.map_or("", |device| device.label.trim()),
+                source_device.map_or("", |device| device.alias.trim()),
+            ]
+            .into_iter()
+            .find(|value| !value.is_empty())
+            .unwrap_or("This input source");
+            let connection = device_connection_label(&source.selector);
+            format!(
+                "{label} ({connection}) has no mapped key for {}.",
+                controller(slot)
+            )
+        }
+        StagedMappingBlocker::NoRoute(slot) => {
+            format!("{} has no routed input source.", controller(slot))
+        }
+        StagedMappingBlocker::Legacy(slot) => {
+            format!("{} has no mapped key.", controller(slot))
+        }
+    }
+}
+
 fn staged_readiness_reason(staged: &ksx_api::StagedSetupView, verb: &str) -> String {
     let consequence = if verb == "save" {
         "Nothing will be written."
@@ -478,9 +565,10 @@ fn staged_readiness_reason(staged: &ksx_api::StagedSetupView, verb: &str) -> Str
     if staged.slots.is_empty() {
         return format!("Add a controller before {verb}. {consequence}");
     }
-    if staged.slots.iter().any(|slot| slot.bindings == 0) {
+    if let Some(blocker) = first_staged_mapping_blocker(staged) {
         return format!(
-            "Every controller needs at least one mapped key before {verb}. {consequence}"
+            "{} Map at least one key on that route before {verb}. {consequence}",
+            staged_mapping_blocker_line(staged, &blocker)
         );
     }
     if staged.blocking.is_none() {
@@ -1222,11 +1310,12 @@ impl RedesignJourney {
         let input_selected = staged.device.is_some();
         let input_done = input_selected && capture.ready_for_commit();
         let controllers_done = !staged.slots.is_empty();
-        // Every slot, not merely ANY slot.  The old rail's `any` made a
-        // two-player setup look mapped while player two would plug dead.
-        let mapping_done = controllers_done
-            && staged.slots.iter().all(|slot| slot.bindings > 0)
-            && staged.blocking.is_some();
+        // Every routed source on every slot, not merely every first-source
+        // compatibility row. A secondary keyboard with an empty route would
+        // otherwise leave Play blocked while this rail called mapping Done.
+        let mapping_blocker = first_staged_mapping_blocker(staged);
+        let mapping_done =
+            controllers_done && mapping_blocker.is_none() && staged.blocking.is_some();
         let running = session.reachable && session.running;
 
         let facts = [input_done, controllers_done, mapping_done, running];
@@ -1244,20 +1333,20 @@ impl RedesignJourney {
         let recovery_without_input =
             !input_selected && matches!(capture.mode.as_str(), "held" | "release-held");
         let input_title = if input_done {
-            "Input ready"
+            "Input sources ready"
         } else if capture.mode == "release-held" {
             "Release the held input"
         } else if capture.mode == "held" {
             "Recover the held input"
         } else if !input_selected {
-            "Pick the input"
+            "Pick input sources"
         } else if capture.mode == "prepare" {
-            "Prepare the input"
+            "Prepare the input source"
         } else {
-            "Resolve the input"
+            "Resolve the input source"
         };
         let input_done_detail =
-            format!("{input_label} is selected and its exact capture path is ready.");
+            "Every routed input source has an exact capture path ready.".to_owned();
         let input_todo_detail = if recovery_without_input {
             let state = capture.line.trim();
             if state.is_empty() {
@@ -1267,17 +1356,27 @@ impl RedesignJourney {
                 state.to_owned()
             }
         } else if !input_selected {
-            "Choose the keyboard or encoder this setup listens to.".to_owned()
+            "Choose one or more keyboards or encoders as independent input sources.".to_owned()
         } else {
             let state = capture.line.trim();
             if state.is_empty() {
-                format!(
-                    "{input_label} is selected, but its exact capture path still needs attention."
-                )
+                format!("{input_label}'s exact capture path still needs attention.")
             } else {
-                format!("{input_label} is selected. {state}")
+                format!("{input_label}: {state}")
             }
         };
+        let mapping_todo_detail = mapping_blocker.as_ref().map_or_else(
+            || {
+                "Give every routed input-to-controller path at least one live key binding and choose what happens to keyboard input."
+                    .to_owned()
+            },
+            |blocker| {
+                format!(
+                    "{} Map at least one key on that route, then choose what happens to keyboard input.",
+                    staged_mapping_blocker_line(staged, blocker)
+                )
+            },
+        );
         let mut rows = Vec::with_capacity(4);
         for (index, (key, title, done_detail, todo_detail)) in [
             (
@@ -1290,13 +1389,13 @@ impl RedesignJourney {
                 "controller",
                 "Add controllers",
                 "At least one virtual controller is staged.",
-                "Add the virtual controllers this input will drive.",
+                "Add the virtual controllers your input sources will drive.",
             ),
             (
                 "mapping",
                 "Map the controls",
-                "Every staged controller has live bindings and input behaviour is chosen.",
-                "Give every controller at least one live key binding and choose what happens to keyboard input.",
+                "Every routed input-to-controller path has a live binding and input behaviour is chosen.",
+                mapping_todo_detail.as_str(),
             ),
             (
                 "play",
@@ -5588,10 +5687,10 @@ mod tests {
         };
         let journey = RedesignJourney::of(&selected, &idle, &preparation, &blocked_play);
         assert_eq!(journey.compact, "2/4 complete · Preparation required");
-        assert_eq!(journey.rows[0].title, "Prepare the input");
+        assert_eq!(journey.rows[0].title, "Prepare the input source");
         assert_eq!(journey.rows[0].badge, "Prepare");
         assert_eq!(journey.rows[0].action, "capture");
-        assert!(journey.rows[0].detail.contains("I-PAC 4 is selected"));
+        assert!(journey.rows[0].detail.contains("I-PAC 4:"));
         assert_eq!(journey.rows[1].action, "controllers");
         assert_eq!(journey.rows[2].action, "mapping");
         assert_eq!(journey.rows[3].action, "play");
@@ -5607,9 +5706,13 @@ mod tests {
         };
         let ready = RedesignJourney::of(&selected, &idle, &ready_capture, &allowed_play);
         assert_eq!(ready.compact, "3/4 complete · Ready to play");
-        assert_eq!(ready.rows[0].title, "Input ready");
+        assert_eq!(ready.rows[0].title, "Input sources ready");
         assert_eq!(ready.rows[0].badge, "Done");
         assert_eq!(ready.rows[0].action, "devices");
+        assert_eq!(
+            ready.rows[0].detail,
+            "Every routed input source has an exact capture path ready."
+        );
 
         let capture_unavailable = RedesignCaptureState {
             mode: "unavailable".to_owned(),
@@ -5637,6 +5740,93 @@ mod tests {
             &blocked_play,
         );
         assert!(unavailable.rows.iter().all(|row| row.action == "retry"));
+    }
+
+    #[test]
+    fn redesign_journey_names_the_exact_unmapped_secondary_source() {
+        let left = ksx_api::StagedDeviceView {
+            selector: "usb:1111:0001:00".to_owned(),
+            alias: "left".to_owned(),
+            label: "Twin USB Keyboard".to_owned(),
+            ..ksx_api::StagedDeviceView::default()
+        };
+        let right = ksx_api::StagedDeviceView {
+            selector: "usb:2222:0002:01".to_owned(),
+            alias: "right".to_owned(),
+            label: "Twin USB Keyboard".to_owned(),
+            ..ksx_api::StagedDeviceView::default()
+        };
+        let route =
+            |device: &ksx_api::StagedDeviceView, bindings: usize| ksx_api::StagedSourceView {
+                selector: device.selector.clone(),
+                alias: device.alias.clone(),
+                label: device.label.clone(),
+                preset: format!("{} P1", device.alias),
+                bindings,
+                routed: true,
+                revision: format!("{}-r1", device.alias),
+                ..ksx_api::StagedSourceView::default()
+            };
+        let mut staged = ksx_api::StagedSetupView {
+            reachable: true,
+            device: Some(left.clone()),
+            devices: vec![left.clone(), right.clone()],
+            slots: vec![ksx_api::StagedSlotView {
+                number: 1,
+                persona_label: "Xbox 360".to_owned(),
+                sources: vec![route(&left, 1), route(&right, 0)],
+                // Deliberately green: this compatibility count describes only
+                // the first route and is the regression this fixture guards.
+                bindings: 1,
+                ..ksx_api::StagedSlotView::default()
+            }],
+            blocking: Some("split".to_owned()),
+            ..ksx_api::StagedSetupView::default()
+        };
+        let idle = crate::control::SessionView {
+            reachable: true,
+            ..crate::control::SessionView::default()
+        };
+        let capture = RedesignCaptureState {
+            mode: "ready".to_owned(),
+            ..RedesignCaptureState::default()
+        };
+        let play = RedesignActionState {
+            reason: "Finish setup before Play.".to_owned(),
+            ..RedesignActionState::default()
+        };
+
+        let journey = RedesignJourney::of(&staged, &idle, &capture, &play);
+        let mapping = journey
+            .rows
+            .iter()
+            .find(|row| row.key == "mapping")
+            .expect("mapping journey row");
+        assert_eq!(mapping.badge, "Now");
+        assert!(mapping.detail.contains("Twin USB Keyboard"));
+        assert!(mapping.detail.contains("USB 2222:0002 · connection 01"));
+        assert!(mapping.detail.contains("Player 1 (Xbox 360)"));
+        assert_eq!(journey.compact, "2/4 complete · Map controls");
+
+        let play_reason = staged_readiness_reason(&staged, "play");
+        assert!(play_reason.contains("Twin USB Keyboard"));
+        assert!(play_reason.contains("USB 2222:0002 · connection 01"));
+        assert!(play_reason.contains("Player 1 (Xbox 360)"));
+        assert!(!play_reason.contains("Finish the setup steps"));
+
+        staged.slots[0].sources[1].bindings = 1;
+        let ready = RedesignJourney::of(&staged, &idle, &capture, &play);
+        let mapping = ready
+            .rows
+            .iter()
+            .find(|row| row.key == "mapping")
+            .expect("mapping journey row");
+        assert_eq!(mapping.badge, "Done");
+        assert_eq!(
+            ready.rows[0].detail,
+            "Every routed input source has an exact capture path ready."
+        );
+        assert!(!ready.rows[0].detail.contains("Twin USB Keyboard"));
     }
 
     #[test]

@@ -392,6 +392,10 @@ pub struct StageMeta {
     /// Monotonic mutation generation inside one incarnation. This is bumped
     /// under the same daemon lock as every successful staged edit.
     pub(crate) revision: u64,
+    /// Saved config rows this draft previously read or successfully wrote.
+    /// Only these rows may be deleted by a later Save; a fresh/profile draft
+    /// starts empty so it cannot erase unrelated config state.
+    pub(crate) save_scope: crate::stage::StageSaveScope,
 }
 
 static NEXT_STAGE_INCARNATION: AtomicU64 = AtomicU64::new(1);
@@ -411,6 +415,7 @@ impl Default for StageMeta {
             origin: String::new(),
             incarnation: format!("{nanos:032x}-{:08x}-{sequence:016x}", std::process::id()),
             revision: 0,
+            save_scope: crate::stage::StageSaveScope::default(),
         }
     }
 }
@@ -431,9 +436,11 @@ impl StageMeta {
         if self.revision == u64::MAX {
             let dirty = self.dirty;
             let origin = self.origin.clone();
+            let save_scope = self.save_scope.clone();
             *self = Self::default();
             self.dirty = dirty;
             self.origin = origin;
+            self.save_scope = save_scope;
         } else {
             self.revision += 1;
         }

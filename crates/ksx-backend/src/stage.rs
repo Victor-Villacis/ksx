@@ -258,6 +258,114 @@ pub fn to_config(base: &ConfigFile, spec: &CommitSpec) -> ConfigFile {
     config
 }
 
+/// The saved rows an in-memory draft is allowed to remove on its next Save.
+///
+/// A config adoption owns the rows it read. A fresh or profile-derived draft
+/// starts with an empty scope, so its first Save remains the partial merge
+/// [`to_config`] has always promised. After any successful Save the daemon
+/// refreshes this scope from the spec that actually reached disk.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StageSaveScope {
+    slot_numbers: Vec<u8>,
+    device_aliases: Vec<String>,
+}
+
+impl StageSaveScope {
+    /// Capture the durable rows represented by one adopted setup.
+    pub fn from_setup(setup: &ksx_core::StagedSetup) -> Self {
+        Self {
+            slot_numbers: setup.slots().iter().map(|slot| slot.number).collect(),
+            device_aliases: setup
+                .devices()
+                .iter()
+                .map(|device| device.alias.clone())
+                .collect(),
+        }
+    }
+
+    /// Capture the durable rows represented by one successful commit.
+    pub fn from_spec(spec: &CommitSpec) -> Self {
+        Self {
+            slot_numbers: spec.slots.iter().map(|slot| slot.spec.number).collect(),
+            device_aliases: commit_devices(spec)
+                .into_iter()
+                .map(|device| device.alias.clone())
+                .collect(),
+        }
+    }
+
+    pub fn slot_numbers(&self) -> &[u8] {
+        &self.slot_numbers
+    }
+
+    pub fn device_aliases(&self) -> &[String] {
+        &self.device_aliases
+    }
+}
+
+/// Compose a staged draft over disk while deleting only rows the draft owns.
+fn to_config_with_scope(
+    base: &ConfigFile,
+    spec: &CommitSpec,
+    scope: &StageSaveScope,
+) -> ConfigFile {
+    let current = StageSaveScope::from_spec(spec);
+    let mut retained = base.clone();
+
+    retained.slots.retain(|slot| {
+        !scope.slot_numbers.contains(&slot.number) || current.slot_numbers.contains(&slot.number)
+    });
+
+    let removed_aliases = scope
+        .device_aliases
+        .iter()
+        .filter(|alias| !current.device_aliases.contains(alias))
+        .collect::<Vec<_>>();
+    let protected_devices = retained
+        .devices
+        .iter()
+        .enumerate()
+        .filter(|(_, device)| {
+            removed_aliases.contains(&&device.alias)
+                && retained
+                    .slots
+                    .iter()
+                    .filter(|slot| !current.slot_numbers.contains(&slot.number))
+                    .any(|slot| {
+                        slot.keyboard.as_deref() == Some(device.alias.as_str())
+                            || slot.mouse.as_deref() == Some(device.alias.as_str())
+                            || slot
+                                .sources
+                                .iter()
+                                .any(|source| source.device == device.alias)
+                    })
+        })
+        .map(|(index, device)| (index, device.clone()))
+        .collect::<Vec<_>>();
+
+    // Remove stale owned aliases before `slot_entry` resolves staged selectors
+    // back to aliases. Otherwise a renamed board with the same device id would
+    // resolve to its old, first matching entry. External references are put
+    // back afterwards, once they can no longer influence that translation.
+    retained
+        .devices
+        .retain(|device| !removed_aliases.contains(&&device.alias));
+    let mut config = to_config(&retained, spec);
+    for (index, device) in protected_devices {
+        if !config
+            .devices
+            .iter()
+            .any(|entry| entry.alias == device.alias)
+        {
+            config
+                .devices
+                .insert(index.min(config.devices.len()), device);
+        }
+    }
+
+    config
+}
+
 /// The preset files a staged setup would write, deduplicated by name.
 ///
 /// Slots and source routes may deliberately share one preset;
@@ -368,6 +476,18 @@ pub fn resolve(spec: &CommitSpec) -> Result<RunPlan, PlanError> {
 /// mistake is never a shell command", satisfied by a button that already
 /// exists.
 pub fn apply(store: &Store, spec: &CommitSpec) -> Result<Committed, ksx_config::ConfigError> {
+    apply_with_scope(store, spec, &StageSaveScope::default())
+}
+
+/// Save a staged draft with explicit authority over rows it previously read.
+///
+/// Only scope-owned slots and now-unreferenced devices omitted from `spec` are
+/// removed. Rows outside `scope` retain [`to_config`]'s partial-merge behavior.
+pub fn apply_with_scope(
+    store: &Store,
+    spec: &CommitSpec,
+    scope: &StageSaveScope,
+) -> Result<Committed, ksx_config::ConfigError> {
     let mut preset_backups = Vec::new();
     let mut presets = Vec::with_capacity(spec.slots.len());
     for preset in preset_files(spec) {
@@ -385,7 +505,7 @@ pub fn apply(store: &Store, spec: &CommitSpec) -> Result<Committed, ksx_config::
     }
 
     let base = store.load_config()?.value;
-    let config = to_config(&base, spec);
+    let config = to_config_with_scope(&base, spec, scope);
     let path = store.root().config_path();
     let backup = store.backup(&path)?;
     let config_path = store.save_config(&config)?;
@@ -681,7 +801,9 @@ mod tests {
     use ksx_core::pad::XButton;
     use ksx_core::preset::Binding;
     use ksx_core::stage::{StagedDevice, StagedSetup};
-    use ksx_core::{Blocking, DeviceSelector, Persona, Preset};
+    use ksx_core::{
+        Blocking, DeviceSelector, Macro, MacroStep, MacroTrigger, Macros, Persona, Preset,
+    };
 
     struct TempRoot(PathBuf);
 
@@ -1136,6 +1258,18 @@ socd = "neutral"
         }
     }
 
+    fn preset_with_macro(name: &str, key: Key, button: XButton) -> Preset {
+        let mut preset = preset(name, key, button);
+        preset.macros = Macros {
+            defs: vec![Macro::new(
+                "coin",
+                vec![MacroStep::new(vec![Binding::Button(XButton::Start)], 50)],
+            )],
+            triggers: vec![MacroTrigger::new(Key::Q, 0)],
+        };
+        preset
+    }
+
     /// Two players on one board: an Xbox pad and a PlayStation pad, split
     /// keyboard, which is the shape §3's second answer exists for.
     fn staged() -> StagedSetup {
@@ -1348,6 +1482,134 @@ socd = "neutral"
         let numbers: Vec<u8> = after.slots.iter().map(|s| s.number).collect();
         assert_eq!(numbers, vec![1, 2, 4], "player 4 is still there");
         assert_eq!(after.slots[2].preset, "Player 4");
+    }
+
+    #[test]
+    fn owned_scope_deletes_only_an_omitted_owned_slot() {
+        let initial = staged().commit().unwrap();
+        let scope = StageSaveScope::from_spec(&initial);
+        assert_eq!(scope.slot_numbers(), &[1, 2]);
+
+        let current = StagedSetup::new()
+            .choose_device(device())
+            .unwrap()
+            .add_slot(1, Persona::Xbox360, preset("Player 1", Key::A, XButton::A))
+            .unwrap()
+            .set_blocking(Blocking::BoundKeys)
+            .commit()
+            .unwrap();
+        let base = to_config(&ConfigFile::default(), &initial);
+        let saved = to_config_with_scope(&base, &current, &scope);
+
+        assert_eq!(
+            saved
+                .slots
+                .iter()
+                .map(|slot| slot.number)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn owned_alias_cleanup_uses_final_slots_and_preserves_external_references() {
+        let initial = StagedSetup::new()
+            .choose_device(device())
+            .unwrap()
+            .add_slot(1, Persona::Xbox360, preset("Player 1", Key::A, XButton::A))
+            .unwrap()
+            .set_blocking(Blocking::BoundKeys)
+            .commit()
+            .unwrap();
+        let scope = StageSaveScope::from_spec(&initial);
+        let base = to_config(&ConfigFile::default(), &initial);
+
+        let renamed_device = StagedDevice {
+            alias: "cabinet".to_owned(),
+            ..device()
+        };
+        let renamed = StagedSetup::new()
+            .choose_device(renamed_device)
+            .unwrap()
+            .add_slot(1, Persona::Xbox360, preset("Player 1", Key::A, XButton::A))
+            .unwrap()
+            .set_blocking(Blocking::BoundKeys)
+            .commit()
+            .unwrap();
+
+        let saved = to_config_with_scope(&base, &renamed, &scope);
+        assert_eq!(
+            saved
+                .devices
+                .iter()
+                .map(|device| device.alias.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cabinet"],
+            "the replaced owned route must not keep its stale alias alive"
+        );
+
+        let mut shared_base = base;
+        shared_base.slots.push(SlotEntry {
+            number: 4,
+            keyboard: Some("panel".to_owned()),
+            mouse: None,
+            preset: "External P4".to_owned(),
+            persona: Persona::PlayStation,
+            socd: Default::default(),
+            macros: Default::default(),
+            sources: Vec::new(),
+        });
+        let shared = to_config_with_scope(&shared_base, &renamed, &scope);
+        assert_eq!(
+            shared
+                .devices
+                .iter()
+                .map(|device| device.alias.as_str())
+                .collect::<Vec<_>>(),
+            vec!["panel", "cabinet"],
+            "an untouched external slot still owns its old alias reference"
+        );
+    }
+
+    #[test]
+    fn config_adopt_remove_compact_save_and_readopt_preserves_survivor_routes_and_macros() {
+        let root = TempRoot::new("replace-removed-slot");
+        let store = root.store();
+        let initial = staged()
+            .set_bindings(2, preset_with_macro("Player 2", Key::L, XButton::B))
+            .unwrap();
+        apply(&store, &initial.commit().unwrap()).unwrap();
+        assert_eq!(store.load_config().unwrap().value.slots.len(), 2);
+
+        let adopted = adopt(&store, None).unwrap();
+        let scope = StageSaveScope::from_setup(&adopted);
+        // This is the redesign removal contract: P1 leaves, then the survivor
+        // moves up so its displayed number remains its play position.
+        let compacted = adopted.remove_slot(1).unwrap().reorder_slots(&[2]).unwrap();
+        apply_with_scope(&store, &compacted.commit().unwrap(), &scope).unwrap();
+
+        let saved = store.load_config().unwrap().value;
+        assert_eq!(saved.slots.len(), 1, "the omitted controller stays deleted");
+        assert_eq!(saved.slots[0].number, 1, "the survivor stays compacted");
+        assert_eq!(saved.slots[0].preset, "Player 2");
+        assert_eq!(saved.slots[0].persona, Persona::PlayStation);
+
+        let reloaded = adopt(&store, None).expect("the replaced config adopts");
+        assert_eq!(reloaded.slots().len(), 1);
+        assert_eq!(reloaded.slots()[0].number, 1);
+        assert_eq!(reloaded.slots()[0].preset.name, "Player 2");
+        assert_eq!(reloaded.slots()[0].persona, Persona::PlayStation);
+        assert_eq!(reloaded.slots()[0].routes().len(), 1);
+        assert_eq!(reloaded.slots()[0].routes()[0].selector, device().selector);
+        assert_eq!(reloaded.slots()[0].routes()[0].preset.macros.defs.len(), 1);
+        assert_eq!(
+            reloaded.slots()[0].routes()[0].preset.macros.defs[0].name,
+            "coin"
+        );
+        assert_eq!(
+            reloaded.slots()[0].routes()[0].preset.macros.triggers,
+            vec![MacroTrigger::new(Key::Q, 0)]
+        );
     }
 
     /// **A returning user's split-or-freeze answer is never overwritten by a

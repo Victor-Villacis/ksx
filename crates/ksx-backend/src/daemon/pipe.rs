@@ -185,15 +185,19 @@ pub type SlotAssignFn = Box<
         + Send,
 >;
 
-/// The `stage-commit` verb's writer — [`crate::stage::apply`], same injection
-/// rule as [`MapFn`].
+/// The `stage-commit` verb's writer — [`crate::stage::apply_with_scope`], same
+/// injection rule as [`MapFn`]. The scope names only saved rows this draft
+/// previously read or wrote, so fresh/profile drafts stay partial merges.
 ///
 /// It is a `Fn` over the whole [`ksx_core::CommitSpec`] rather than a config
 /// root, so the protocol tests exercise every refusal above it with no disk at
 /// all — and so the ONE act that turns a staged setup into files is visible in
 /// this list beside the other writers, instead of hidden inside a handler.
 pub type StageCommitFn = Box<
-    dyn Fn(&ksx_core::CommitSpec) -> Result<crate::stage::Committed, ksx_config::ConfigError>
+    dyn Fn(
+            &ksx_core::CommitSpec,
+            &crate::stage::StageSaveScope,
+        ) -> Result<crate::stage::Committed, ksx_config::ConfigError>
         + Send,
 >;
 
@@ -321,10 +325,13 @@ pub fn slot_assign_fn(root: ksx_config::ConfigRoot) -> SlotAssignFn {
     Box::new(move |spec| crate::slots::assign(&ksx_config::Store::new(root.clone()), spec))
 }
 
-/// The real [`StageCommitFn`]: [`crate::stage::apply`] against `root`'s store —
-/// presets first, then one config write behind one timestamped backup.
+/// The real [`StageCommitFn`]: [`crate::stage::apply_with_scope`] against
+/// `root`'s store — presets first, then one config write behind one timestamped
+/// backup, with deletion limited to rows owned by the adopted/saved draft.
 pub fn stage_commit_fn(root: ksx_config::ConfigRoot) -> StageCommitFn {
-    Box::new(move |spec| crate::stage::apply(&ksx_config::Store::new(root.clone()), spec))
+    Box::new(move |spec, scope| {
+        crate::stage::apply_with_scope(&ksx_config::Store::new(root.clone()), spec, scope)
+    })
 }
 
 /// The real [`StageAdoptFn`]: [`crate::stage::adopt`] against `root`'s store.
@@ -1340,8 +1347,14 @@ fn handle_stage_adopt(request: &serde_json::Value, deps: &PipeDeps) -> serde_jso
     }
     match (deps.stage_adopt)(profile.as_deref()) {
         Ok(setup) => {
+            let save_scope = if profile.is_none() {
+                crate::stage::StageSaveScope::from_setup(&setup)
+            } else {
+                crate::stage::StageSaveScope::default()
+            };
             s.staged = setup;
             s.stage_meta = super::StageMeta::default();
+            s.stage_meta.save_scope = save_scope;
             s.stage_meta.origin = profile
                 .as_deref()
                 .map_or_else(|| "config".to_owned(), |title| format!("profile:{title}"));
@@ -1629,7 +1642,7 @@ fn handle_stage_commit(deps: &PipeDeps) -> serde_json::Value {
     if let Err(refusal) = (deps.stage_capture_preflight)(&spec) {
         return stage_json(&ksx_api::StageOutcome::refused(&s.staged, &refusal));
     }
-    match (deps.stage_commit)(&spec) {
+    match (deps.stage_commit)(&spec, &s.stage_meta.save_scope) {
         Ok(written) => {
             // The operate-only cabinet and the tray's saved-setup Start action
             // become meaningful at this exact boundary: before it, the setup
@@ -1641,6 +1654,7 @@ fn handle_stage_commit(deps: &PipeDeps) -> serde_json::Value {
             // file it just became.
             s.stage_meta.dirty = false;
             s.stage_meta.origin = "config".to_owned();
+            s.stage_meta.save_scope = crate::stage::StageSaveScope::from_spec(&spec);
             let mut outcome = ksx_api::StageOutcome::ok(&s.staged, written.message());
             outcome.saved = Some(written.config.display().to_string());
             outcome.backup = written.backup.map(|path| path.display().to_string());
@@ -3213,7 +3227,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
     /// A `stage-commit` writer that always refuses, so a test that reaches it
     /// says so loudly instead of touching a real config root.
     fn no_stage_commit() -> StageCommitFn {
-        Box::new(|_spec| {
+        Box::new(|_spec, _scope| {
             Err(ksx_config::ConfigError::UnknownDeviceAlias(
                 "this test daemon has no config root".to_owned(),
             ))
@@ -3522,6 +3536,87 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         );
     }
 
+    #[test]
+    fn config_adopt_seeds_save_scope_and_successful_save_refreshes_it() {
+        let state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut d = deps(tx, state.clone(), fixed_profiles());
+        d.stage_adopt = Box::new(|profile| match profile {
+            None | Some("Fight Night") => Ok(adopted_setup()),
+            other => Err(ksx_api::Refusal::new(
+                ksx_api::codes::REFUSED,
+                format!("unexpected profile {other:?}"),
+            )),
+        });
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let written = observed.clone();
+        d.stage_commit = Box::new(move |spec, scope| {
+            written.lock().unwrap().push(scope.clone());
+            Ok(crate::stage::Committed {
+                config: std::path::PathBuf::from("C:/cfg/config.toml"),
+                backup: None,
+                presets: Vec::new(),
+                preset_backups: Vec::new(),
+                alias: spec.device.alias.clone(),
+                slots: spec.slots.iter().map(|slot| slot.spec.number).collect(),
+            })
+        });
+
+        let adopted = handle_request(r#"{"verb":"stage-adopt"}"#, &d, FAST);
+        assert_eq!(adopted["ok"], true, "{adopted}");
+        {
+            let state = state.lock().unwrap();
+            assert_eq!(state.stage_meta.save_scope.slot_numbers(), &[1]);
+            assert_eq!(
+                state.stage_meta.save_scope.device_aliases(),
+                &["panel".to_owned()]
+            );
+        }
+
+        let added = handle_request(
+            r#"{"verb":"stage-edit","edit":"add-slot","persona":"xbox360",
+                "preset":"Player 2","layout":"arcade-6button"}"#,
+            &d,
+            FAST,
+        );
+        assert_eq!(added["ok"], true, "{added}");
+        let saved = handle_request(r#"{"verb":"stage-commit"}"#, &d, FAST);
+        assert_eq!(saved["ok"], true, "{saved}");
+        assert_eq!(observed.lock().unwrap()[0].slot_numbers(), &[1]);
+        assert_eq!(
+            state.lock().unwrap().stage_meta.save_scope.slot_numbers(),
+            &[1, 2],
+            "the next Save owns exactly what this successful Save wrote"
+        );
+
+        let profile_state = shared(RunState::Stopped);
+        let (tx, _rx) = unbounded();
+        let mut profile = deps(tx, profile_state.clone(), fixed_profiles());
+        profile.stage_adopt = Box::new(|name| match name {
+            Some("Fight Night") => Ok(adopted_setup()),
+            other => Err(ksx_api::Refusal::new(
+                ksx_api::codes::REFUSED,
+                format!("unexpected profile {other:?}"),
+            )),
+        });
+        let adopted = handle_request(
+            r#"{"verb":"stage-adopt","profile":"Fight Night"}"#,
+            &profile,
+            FAST,
+        );
+        assert_eq!(adopted["ok"], true, "{adopted}");
+        assert!(
+            profile_state
+                .lock()
+                .unwrap()
+                .stage_meta
+                .save_scope
+                .slot_numbers()
+                .is_empty(),
+            "a profile did not read config slot ownership"
+        );
+    }
+
     /// **The dirty flag is the daemon's, and it moves with the writes**: an
     /// edit marks the draft dirty, Start over resets it, and a successful
     /// Save cleans it with the origin becoming the file the draft just
@@ -3532,7 +3627,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         let state = shared(RunState::Stopped);
         let (tx, _rx) = unbounded();
         let mut d = deps(tx, state.clone(), fixed_profiles());
-        d.stage_commit = Box::new(|spec| {
+        d.stage_commit = Box::new(|spec, _scope| {
             Ok(crate::stage::Committed {
                 config: std::path::PathBuf::from("C:/cfg/config.toml"),
                 backup: None,
@@ -4160,7 +4255,7 @@ steps = [{ hold = ["dpad.down"], ms = 50 }, { hold = ["A"], frames = 2 }]
         let state = shared(RunState::Stopped);
         let (tx, _rx) = unbounded();
         let mut deps = deps(tx, state.clone(), no_profiles());
-        deps.stage_commit = Box::new(|_| {
+        deps.stage_commit = Box::new(|_, _| {
             Ok(crate::stage::Committed {
                 config: std::path::PathBuf::from(r"C:\cfg\config.toml"),
                 backup: None,

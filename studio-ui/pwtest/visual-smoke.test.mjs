@@ -64,21 +64,21 @@ async function activateKeyboardSurface(page) {
     { timeout: 20_000 },
   );
   const board = page.locator(boardSelector);
-  if ((await board.getAttribute("data-mapping-source")) !== "true") {
-    await page.locator(`.navigator-item[data-instance-id="${BENCH_A}"]`)
-      .evaluate((marker) => marker.click());
-    await page.waitForFunction(
-      () => !document.querySelector(".is-camera-animating"),
-      null,
-      { timeout: 20_000 },
+  if ((await board.getAttribute("data-mapping-available")) !== "true") {
+    await page.click('[data-nx="rd-devs-open"]');
+    const row = page.locator(
+      `.rd-devmodal button[data-selector="${BENCH_A_SELECTOR}"]`,
     );
-    await board.locator(".rd-stagebtn").click();
-    await page.waitForFunction(
-      (selector) => document.querySelector(selector)?.dataset.mappingSource === "true",
-      boardSelector,
-      { timeout: 20_000 },
-    );
+    await row.click();
+    await board.waitFor({ state: "detached" });
+    await row.click();
+    await page.keyboard.press("Escape");
   }
+  await page.waitForFunction(
+    (selector) => document.querySelector(selector)?.dataset.mappingAvailable === "true",
+    boardSelector,
+    { timeout: 20_000 },
+  );
   return board;
 }
 
@@ -182,6 +182,27 @@ before(async () => {
   server.stderr?.on("data", (chunk) => (serverStderr += chunk.toString()));
   server.on("exit", (code, signal) => (serverExit = { code, signal }));
   await waitForServer();
+  const payload = await fetch(`${BASE}/api/redesign`).then((response) => response.json());
+  const available = [
+    ...payload.devices.keyboards,
+    ...payload.devices.encoders,
+    ...payload.devices.experimental,
+  ];
+  for (const selector of [BENCH_A_SELECTOR, BENCH_B_SELECTOR]) {
+    const row = available.find((candidate) => candidate.selector === selector);
+    assert.ok(row, `visual fixture is missing ${selector}`);
+    const response = await fetch(`${BASE}/redesign/device`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        selector: row.selector,
+        alias: row.alias,
+        label: row.label,
+      }),
+      redirect: "manual",
+    });
+    assert.equal(response.status, 303, `could not stage visual source ${selector}`);
+  }
   browser = await chromium.launch();
 });
 
@@ -1566,7 +1587,7 @@ describe("the plate lays out", () => {
 
       const boxes = await page.evaluate(() =>
         Array.from(document.querySelectorAll(
-          '[data-mapping-source="true"] .n-kbcase .n-key',
+          '[data-mapping-available="true"] .n-kbcase .n-key',
         )).map((el) => {
           const r = el.getBoundingClientRect();
           return {
@@ -1632,7 +1653,7 @@ describe("the plate lays out", () => {
       );
       await activateKeyboardSurface(page);
       const fit = await page.evaluate(() => {
-        const plate = document.querySelector('[data-mapping-source="true"] .n-kbcase');
+        const plate = document.querySelector('[data-mapping-available="true"] .n-kbcase');
         if (!plate) return null;
         const p = plate.getBoundingClientRect();
         const card = plate.closest(".rd-w-kb") ?? plate.parentElement;

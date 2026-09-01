@@ -131,19 +131,23 @@ async function ensureActiveKeyboard(page) {
     await page.click('[data-nx="rd-devs-open"]');
     await page.locator(`.rd-devmodal button[data-selector="${G915}"]`).click();
     await page.keyboard.press("Escape");
+  } else if ((await board.getAttribute("data-mapping-available")) !== "true") {
+    await page.click('[data-nx="rd-devs-open"]');
+    const row = page.locator(`.rd-devmodal button[data-selector="${G915}"]`);
+    await row.click();
+    await board.waitFor({ state: "detached" });
+    await row.click();
+    await page.keyboard.press("Escape");
   }
   await revealCanvasItem(page, G915_ID);
-  if ((await board.getAttribute("data-mapping-source")) !== "true") {
-    await board.locator(".rd-stagebtn").click();
-    await page.waitForFunction(
-      (id) =>
-        document.querySelector(
-          `.forma-canvas-stage > [data-instance-id="${id}"][data-mapping-source="true"]`,
-        ) !== null,
-      G915_ID,
-      { timeout: 20_000 },
-    );
-  }
+  await page.waitForFunction(
+    (id) =>
+      document.querySelector(
+        `.forma-canvas-stage > [data-instance-id="${id}"]`,
+      )?.getAttribute("data-mapping-available") === "true",
+    G915_ID,
+    { timeout: 20_000 },
+  );
   return board;
 }
 

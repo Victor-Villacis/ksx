@@ -431,8 +431,23 @@ describe("redesign multi-keyboard canvas", { concurrency: false }, () => {
       );
       for (const [selector, slug] of [[LEFT, LEFT_SLUG], [RIGHT, RIGHT_SLUG]]) {
         const board = keyboardNode(page, slug);
+        const expectedLabel = `Twin USB Keyboard · ${sourceSpec(selector).connection}`;
         assert.equal(await board.count(), 1, `${selector} has one canvas object`);
         assert.equal(await board.getAttribute("data-source-id"), selector);
+        assert.equal(await board.getAttribute("aria-label"), expectedLabel);
+        assert.equal(
+          await board.locator("[data-rd-keyboard-surface]").getAttribute("aria-label"),
+          `${expectedLabel} keyboard`,
+        );
+        assert.equal(await board.locator(".n-kbhead > .n-kick").textContent(), expectedLabel);
+        assert.equal(
+          await board.locator(".widget-drag-handle").getAttribute("aria-label"),
+          `Move ${expectedLabel}`,
+        );
+        assert.equal(
+          await page.locator(`.navigator-item[data-instance-id="${slug}"]`).getAttribute("aria-label"),
+          `Focus ${expectedLabel}`,
+        );
         assert.equal(await board.locator("[data-rd-keyboard-surface]").count(), 1);
         assert.ok(
           await board.locator('.n-kb button.n-key[data-key="A"]').count() === 1 &&
@@ -539,6 +554,15 @@ describe("redesign multi-keyboard canvas", { concurrency: false }, () => {
       );
 
       await chooseAuthoringSource(page, LEFT);
+      assert.deepEqual(
+        await page.locator('.rd-inspector [data-nx="rd-source-authoring"]')
+          .allTextContents(),
+        [
+          "Twin USB Keyboard · USB FEED:1001 · connection 00",
+          "Twin USB Keyboard · USB FEED:1001 · connection 01",
+        ],
+        "same-model source tabs expose their exact connection identities",
+      );
       await chooseAuthoringSource(page, RIGHT);
       assert.equal(await page.locator('[data-mapping-source="true"]').count(), 0);
       assert.equal(await keyboardNode(page, RIGHT_SLUG).getAttribute("data-authoring-source"), "");

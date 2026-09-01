@@ -137,12 +137,16 @@ describe("redesign mapper exact-source protocol", () => {
     routeRemoved[0].sources = routeRemoved[0].sources.filter(
       (candidate) => (candidate.source_id ?? candidate.sourceId) !== left.selector,
     );
-    assert.equal(mapperTargetAdvanced(routeRemoved, pinned), true);
-    assert.equal(mapperTargetAdvanced([], pinned), true);
+    assert.equal(mapperTargetAdvanced(routeRemoved, pinned), false);
+    assert.equal(mapperTargetAdvanced([], pinned), false);
 
     const routeUnrouted = pads();
     routeUnrouted[0].sources[0].routed = false;
-    assert.equal(mapperTargetAdvanced(routeUnrouted, pinned), true);
+    assert.equal(mapperTargetAdvanced(routeUnrouted, pinned), false);
+    assert.equal(
+      mapperTargetAdvanced(routeUnrouted, { ...pinned, mode: "remove" }),
+      true,
+    );
   });
 
   test("a routed:false synthetic row authorizes the first exact bind", () => {
@@ -261,7 +265,7 @@ describe("redesign mapper exact board marks", { concurrency: false }, () => {
           <section id="left" data-source-id="${left.selector}">
             <div class="rd-keycue none"><span class="rd-keycue-text"></span></div>
           </section>
-          <section id="right" data-source-id="${right.selector}" data-mapping-source="true">
+          <section id="right" data-source-id="${right.selector}">
             <div class="rd-keycue none"><span class="rd-keycue-text"></span></div>
           </section>
         </main>

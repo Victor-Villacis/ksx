@@ -202,6 +202,13 @@ async function ensureActiveKeyboard(page) {
     await page.click('[data-nx="rd-devs-open"]');
     await page.locator(`.rd-devmodal button[data-selector="${G915}"]`).click();
     await page.keyboard.press("Escape");
+  } else if ((await board.getAttribute("data-mapping-available")) !== "true") {
+    await page.click('[data-nx="rd-devs-open"]');
+    const row = page.locator(`.rd-devmodal button[data-selector="${G915}"]`);
+    await row.click();
+    await board.waitFor({ state: "detached" });
+    await row.click();
+    await page.keyboard.press("Escape");
   }
   await page.waitForFunction(
     (id) =>
@@ -210,14 +217,10 @@ async function ensureActiveKeyboard(page) {
     G915_ID,
     { timeout: 20_000 },
   );
-  if ((await board.getAttribute("data-mapping-source")) !== "true") {
-    await revealCanvasItem(page, G915_ID);
-    await board.locator(".rd-stagebtn").click();
-  }
   await page.waitForFunction(
     (id) =>
       document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)
-        ?.dataset.mappingSource === "true",
+        ?.dataset.mappingAvailable === "true",
     G915_ID,
     { timeout: 20_000 },
   );
@@ -227,11 +230,6 @@ async function ensureActiveKeyboard(page) {
 describe("redesign migration hardening", { concurrency: false }, () => {
   test("later keyboard authority retires stale synthetic geometry without replacing selector geometry", async () => {
     const payload = await api();
-    const previousSource = [
-      ...payload.devices.keyboards,
-      ...payload.devices.encoders,
-      ...payload.devices.experimental,
-    ].find((row) => row.aria_current === "true");
     const selectorGeometry = {
       x: 2280,
       y: 1640,
@@ -325,9 +323,9 @@ describe("redesign migration hardening", { concurrency: false }, () => {
       assert.equal(
         await page.locator(
           `.forma-canvas-stage > [data-instance-id="${G915_ID}"]`,
-        ).getAttribute("data-mapping-source"),
-        null,
-        "the selector-specific board begins inactive while the fixture encoder owns authority",
+        ).getAttribute("data-mapping-available"),
+        "false",
+        "the pre-coupling canvas membership begins read-only until the exact keyboard is added to the draft",
       );
       assert.deepEqual(await mountedGeometry(), expectedGeometry);
       assert.deepEqual(
@@ -357,13 +355,24 @@ describe("redesign migration hardening", { concurrency: false }, () => {
         "reload restores the collision-safe selector slot exactly",
       );
 
-      await revealCanvasItem(page, G915_ID);
-      await page.locator(
-        `.forma-canvas-stage > [data-instance-id="${G915_ID}"] .rd-stagebtn`,
-      ).click();
+      // A pre-coupling browser store can still remember a canvas-only board.
+      // The current product has no keyboard-card staging verb: remove and
+      // re-add through the picker couples canvas membership to one additive
+      // staged source while preserving that board's saved geometry.
+      await page.click('[data-nx="rd-devs-open"]');
+      const pickerRow = page.locator(`.rd-devmodal button[data-selector="${G915}"]`);
+      await pickerRow.click();
+      await page.waitForFunction(
+        (id) => !document.querySelector(
+          `.forma-canvas-stage > [data-instance-id="${id}"]`,
+        ),
+        G915_ID,
+        { timeout: 20_000 },
+      );
+      await pickerRow.click();
       await page.waitForFunction(
         (id) => document.querySelector(
-          `.forma-canvas-stage > [data-instance-id="${id}"][data-mapping-source="true"]`,
+          `.forma-canvas-stage > [data-instance-id="${id}"][data-mapping-available="true"]`,
         ),
         G915_ID,
         { timeout: 20_000 },
@@ -393,19 +402,6 @@ describe("redesign migration hardening", { concurrency: false }, () => {
       assert.deepEqual(noise, [], "the migration remains browser-error free");
     } finally {
       await page.close();
-      if (previousSource && previousSource.selector !== G915) {
-        const restore = await fetch(`${BASE}/redesign/device`, {
-          method: "POST",
-          headers: { "content-type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({
-            selector: previousSource.selector,
-            alias: previousSource.alias,
-            label: previousSource.label,
-          }),
-          redirect: "manual",
-        });
-        assert.equal(restore.status, 303, "the fixture input source restores after migration QA");
-      }
     }
   });
 
@@ -882,7 +878,7 @@ describe("redesign migration hardening", { concurrency: false }, () => {
       (id) =>
         getComputedStyle(document.querySelector(".rd-confdlg")).display === "none" &&
         document.activeElement?.matches(
-          `[data-instance-id="${id}"][data-mapping-source="true"] button.n-key[data-key="G"]`,
+          `[data-instance-id="${id}"][data-mapping-available="true"] button.n-key[data-key="G"]`,
         ),
       G915_ID,
       { timeout: 20_000 },

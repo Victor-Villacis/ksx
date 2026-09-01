@@ -129,43 +129,24 @@ async function ensureActiveKeyboard(page) {
     await page.click('[data-nx="rd-devs-open"]');
     await page.locator(`.rd-devmodal button[data-selector="${G915}"]`).click();
     await page.keyboard.press("Escape");
+  } else if ((await board.getAttribute("data-mapping-available")) !== "true") {
+    await page.click('[data-nx="rd-devs-open"]');
+    const row = page.locator(`.rd-devmodal button[data-selector="${G915}"]`);
+    await row.click();
+    await board.waitFor({ state: "detached" });
+    await row.click();
+    await page.keyboard.press("Escape");
   }
   await revealCanvasItem(page, G915_ID);
-  if ((await board.getAttribute("data-mapping-source")) !== "true") {
-    await board.locator(".rd-stagebtn").click();
-    await page.waitForFunction(
-      (id) =>
-        document.querySelector(
-          `.forma-canvas-stage > [data-instance-id="${id}"][data-mapping-source="true"]`,
-        ) !== null,
-      G915_ID,
-      { timeout: 20_000 },
-    );
-  }
+  await page.waitForFunction(
+    (id) =>
+      document.querySelector(
+        `.forma-canvas-stage > [data-instance-id="${id}"]`,
+      )?.getAttribute("data-mapping-available") === "true",
+    G915_ID,
+    { timeout: 20_000 },
+  );
   return board;
-}
-
-async function currentInputSource() {
-  const payload = await fetch(`${BASE}/api/redesign`).then((response) => response.json());
-  return [
-    ...payload.devices.keyboards,
-    ...payload.devices.encoders,
-    ...payload.devices.experimental,
-  ].find((row) => row.aria_current === "true");
-}
-
-async function chooseInputSource(row) {
-  const response = await fetch(`${BASE}/redesign/device`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      selector: row.selector,
-      alias: row.alias,
-      label: row.label,
-    }),
-    redirect: "manual",
-  });
-  assert.equal(response.status, 303, "fixture input-source restore redirects successfully");
 }
 
 describe("the redesign theme menu", () => {
@@ -272,11 +253,11 @@ describe("the redesign theme menu", () => {
 
   test("Theme owns Escape and layers above an open Inspector", async () => {
     const page = await openRedesign();
-    const previousSource = await currentInputSource();
     const board = await ensureActiveKeyboard(page);
-    // Select through the identity chrome. Clicking the board's centre now
-    // lands on an interactive key and correctly belongs to mapping instead.
-    await board.locator(".rd-keyboard-device-identity .rd-devcard-badge").click();
+    // The full physical board is the interaction surface. Its exact key opens
+    // the controller Inspector while retaining that keyboard as authoring
+    // focus; there is no separate identity card to target.
+    await board.locator('.n-kb button.n-key[data-key="A"]').click();
     await page.waitForFunction(() => !document.querySelector(".rd-inspector")?.hidden);
     const summary = page.locator(".rd-themed > summary");
     await summary.click();
@@ -299,9 +280,6 @@ describe("the redesign theme menu", () => {
       "Escape restores focus to the Theme summary",
     );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
-    if (previousSource && previousSource.selector !== G915) {
-      await chooseInputSource(previousSource);
-    }
     await page.close();
   });
 
@@ -351,7 +329,7 @@ describe("the redesign theme menu", () => {
 
   test("a failed repaint keeps the picker open and reports the uncertain state", async () => {
     const page = await openRedesign();
-    await page.route(`${BASE}/api/redesign`, async (route) => {
+    await page.route("**/api/redesign*", async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",

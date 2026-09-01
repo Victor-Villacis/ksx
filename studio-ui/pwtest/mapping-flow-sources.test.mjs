@@ -226,7 +226,6 @@ describe("mapping flow physical-source identity", { concurrency: false }, () => 
   });
 
   test("an old unqualified route stays unresolved when two source nodes exist", async () => {
-    await page.locator("#left").evaluate((node) => { node.dataset.mappingSource = "true"; });
     const legacy = {
       ...sourcePad,
       sources: undefined,

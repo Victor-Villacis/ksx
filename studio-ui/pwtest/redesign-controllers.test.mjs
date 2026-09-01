@@ -142,20 +142,25 @@ async function ensureActiveKeyboard(page) {
     await page.click('[data-nx="rd-devs-open"]');
     await page.locator(`.rd-devmodal button[data-selector="${G915}"]`).click();
     await page.keyboard.press("Escape");
+  } else if ((await board.getAttribute("data-mapping-available")) !== "true") {
+    await page.click('[data-nx="rd-devs-open"]');
+    const row = page.locator(`.rd-devmodal button[data-selector="${G915}"]`);
+    await row.click();
+    await board.waitFor({ state: "detached" });
+    await row.click();
+    await page.keyboard.press("Escape");
   }
   await page.waitForFunction(
     (id) => document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)?.dataset.canvasX !== undefined,
     G915_ID,
   );
-  if ((await board.getAttribute("data-staged")) !== "true") {
-    await revealCanvasItem(page, G915_ID);
-    await board.locator(".rd-stagebtn").click();
-    await page.waitForFunction(
-      (id) => document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)?.dataset.mappingSource === "true",
-      G915_ID,
-      { timeout: 20_000 },
-    );
-  }
+  await page.waitForFunction(
+    (id) => document.querySelector(
+      `.forma-canvas-stage > [data-instance-id="${id}"]`,
+    )?.dataset.mappingAvailable === "true",
+    G915_ID,
+    { timeout: 20_000 },
+  );
   return board;
 }
 
@@ -167,25 +172,22 @@ async function ensureActiveEncoder(page) {
     await page.click('[data-nx="rd-devs-open"]');
     await page.locator(`.rd-devmodal button[data-selector="${IPAC}"]`).click();
     await page.keyboard.press("Escape");
+  } else if ((await board.getAttribute("data-mapping-available")) !== "true") {
+    await page.click('[data-nx="rd-devs-open"]');
+    const row = page.locator(`.rd-devmodal button[data-selector="${IPAC}"]`);
+    await row.click();
+    await board.waitFor({ state: "detached" });
+    await row.click();
+    await page.keyboard.press("Escape");
   }
   await page.waitForFunction(
     (id) => document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)?.dataset.canvasX !== undefined,
     IPAC_ID,
   );
-  if ((await board.getAttribute("data-staged")) !== "true") {
-    await revealCanvasItem(page, IPAC_ID);
-    const stage = board.locator(".rd-stagebtn");
-    if (!(await stage.isVisible())) {
-      await board.focus();
-      await page.keyboard.press("Enter");
-      await page.waitForFunction(
-        () => document.querySelector(".forma-canvas-viewport")?.dataset.canvasZoomTier === "editing",
-      );
-    }
-    await stage.click();
-  }
   await page.waitForFunction(
-    (id) => document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)?.dataset.mappingSource === "true",
+    (id) => document.querySelector(
+      `.forma-canvas-stage > [data-instance-id="${id}"]`,
+    )?.dataset.mappingAvailable === "true",
     IPAC_ID,
     { timeout: 20_000 },
   );
@@ -717,7 +719,7 @@ describe("the controller workbench", () => {
     assert.match((await zone.getAttribute("aria-label")) ?? "", /controller control$/);
 
     // Non-pointer activation must perform the selection work that a real
-    // pointerdown normally performs. Start from the Input source so this test
+    // pointerdown normally performs. Start from the keyboard board so this test
     // cannot pass merely because the controller was already selected.
     await revealCanvasItem(page, G915_ID);
     assert.equal(
@@ -729,7 +731,7 @@ describe("the controller workbench", () => {
     assert.equal((await page.locator(".rd-insp-name").textContent())?.trim(), "Logitech G915 TKL");
     // The device-owned keyboard is a full board now. Frame the whole bench so
     // the controller runtime remains materialized while selection still rests
-    // on the input source.
+    // on that independent source board.
     await page.click('[data-nx="canvas-fit"]');
     await page.waitForFunction(() => !document.querySelector(".is-camera-animating"));
     await zone.focus();
@@ -876,7 +878,7 @@ describe("the controller workbench", () => {
     );
     assert.equal(
       (await clearAllDisclosure.locator('button[type="submit"]').textContent())?.trim(),
-      "Unbind every key",
+      "Unbind this keyboard’s keys",
     );
     await clearAllDisclosure.locator("summary").focus();
     await page.waitForTimeout(2300);

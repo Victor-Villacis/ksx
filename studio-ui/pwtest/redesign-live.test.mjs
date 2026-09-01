@@ -45,7 +45,7 @@ beforeEach(async () => {
     <main id="root">
       <p data-rd-live-status hidden></p>
       <div class="n-canvas">
-        <div id="input-source" data-mapping-source="true">
+        <div id="input-source" class="rd-dev-node rd-keyboard-device-node" data-source-id="fixture">
           <button id="key-g" data-key="G">G</button>
           <button id="key-j" data-key="J">J</button>
         </div>
@@ -383,7 +383,7 @@ describe("redesign live feedback", { concurrency: false }, () => {
       const board = ({ id, selector, instance, alias }) => {
         const root = document.createElement("section");
         root.id = id;
-        root.className = "rd-keyboard-device-node";
+        root.className = "rd-dev-node rd-keyboard-device-node";
         root.dataset.sourceId = selector;
         root.dataset.sourceInstance = instance;
         const form = document.createElement("form");
@@ -414,6 +414,14 @@ describe("redesign live feedback", { concurrency: false }, () => {
           alias: "right",
         }),
       );
+      const inspector = document.createElement("div");
+      inspector.className = "rd-insp-krows";
+      inspector.dataset.sourceId = "usb:2222:0002:00";
+      const inspectorKey = document.createElement("button");
+      inspectorKey.id = "right-inspector-a";
+      inspectorKey.dataset.key = "A";
+      inspector.append(inspectorKey);
+      canvas.append(inspector);
       window.ksxLive.invalidateTargets();
       window.ksxLive.connect();
       window.ksxLive.reconcileSession(session);
@@ -426,6 +434,11 @@ describe("redesign live feedback", { concurrency: false }, () => {
     }));
     assert.equal(await page.locator("#left-board-a").evaluate((node) => node.classList.contains("live")), false);
     assert.equal(await page.locator("#right-board-a").evaluate((node) => node.classList.contains("live")), true);
+    assert.equal(
+      await page.locator("#right-inspector-a").evaluate((node) => node.classList.contains("live")),
+      true,
+      "the inspector follows its selected exact source",
+    );
     let identities = (await snapshot()).pathIdentityCalls.at(-1);
     assert.deepEqual(identities.keysDown, [{
       sourceId: "hid\\vid_2222&pid_0002\\right",
@@ -449,6 +462,11 @@ describe("redesign live feedback", { concurrency: false }, () => {
     }));
     assert.equal(await page.locator("#left-board-a").evaluate((node) => node.classList.contains("live")), true);
     assert.equal(await page.locator("#right-board-a").evaluate((node) => node.classList.contains("live")), false);
+    assert.equal(
+      await page.locator("#right-inspector-a").evaluate((node) => node.classList.contains("live")),
+      false,
+      "a peer keyboard may not light the selected source's By-key row",
+    );
   });
 
   test("an undisclosed running revision fails closed until a lifecycle action confirms it", async () => {
@@ -570,10 +588,11 @@ describe("redesign live feedback", { concurrency: false }, () => {
 
     await page.evaluate((session) => {
       window.ksxLive.reconcileSession(session);
-      document.querySelector("#input-source")?.removeAttribute("data-mapping-source");
+      document.querySelector("#input-source")?.removeAttribute("data-source-id");
       const nextSource = document.createElement("div");
       nextSource.id = "replacement-source";
-      nextSource.dataset.mappingSource = "true";
+      nextSource.className = "rd-dev-node rd-keyboard-device-node";
+      nextSource.dataset.sourceId = "fixture";
       const replacement = document.createElement("button");
       replacement.id = "late-key";
       replacement.dataset.key = "L";

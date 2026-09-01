@@ -1393,13 +1393,19 @@ describe("the canvas macro processor", () => {
         1,
         "the processor's aria-controls target must exist",
       );
-      assert.match(
-        await page.locator(anchor).getAttribute("href"),
-        /^\/redesign\?slot=\d+&macro=hadouken$/,
-      );
+      const editUrl = new URL(await page.locator(anchor).getAttribute("href"), BASE);
+      assert.equal(editUrl.pathname, "/redesign");
+      assert.match(editUrl.searchParams.get("slot") ?? "", /^\d+$/);
+      assert.equal(editUrl.searchParams.get("macro"), "hadouken");
+      assert.equal(editUrl.searchParams.get("source"), "usb:d209:0430:00");
 
       await page.locator(anchor).click();
-      await page.waitForURL(/\/redesign\?slot=\d+&macro=hadouken$/);
+      await page.waitForURL((url) =>
+        url.pathname === "/redesign" &&
+        /^\d+$/.test(url.searchParams.get("slot") ?? "") &&
+        url.searchParams.get("macro") === "hadouken" &&
+        url.searchParams.get("source") === "usb:d209:0430:00"
+      );
       await page.locator("#n-macro-dialog").waitFor({ state: "visible" });
       await page.waitForFunction(
         () => document.querySelector("#n-macro-dialog")?.contains(document.activeElement),

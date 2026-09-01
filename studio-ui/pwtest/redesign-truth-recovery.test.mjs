@@ -270,21 +270,31 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
     );
     await page.locator('.rd-ctrlmodal-head [data-nx="rd-ctrls-close"]').click();
 
-    // The picker and device cards share one product vocabulary. Bench
-    // membership is not staging, and a physical keyboard remains an enabled
-    // source even while its legacy key-only mapping controls are read-only.
+    // Adding from the picker couples canvas membership to an additive staged
+    // source. Keyboard identity lives on its full board; encoder status keeps
+    // the richer card vocabulary beside its terminal surface.
     await page.locator('[data-nx="rd-devs-open"]').click();
     const ipacRow = page.locator(`.rd-devmodal button[data-selector="${IPAC}"]`);
     const g915Row = page.locator(`.rd-devmodal button[data-selector="${G915}"]`);
     assert.equal((await ipacRow.locator(".rd-dev-connectedchip").textContent())?.trim(), "Connected");
-    assert.equal((await ipacRow.locator(".rd-dev-stagedchip").textContent())?.trim(), "Input source");
+    assert.equal((await ipacRow.locator(".rd-dev-stagedchip").textContent())?.trim(), "Mapping source");
     assert.equal(
       (await g915Row.locator(".rd-dev-stagedchip").textContent())?.trim(),
       "Mapping controls ready",
     );
     assert.doesNotMatch((await ipacRow.textContent()) ?? "", /staged|mapping input/i);
-    await ipacRow.click();
-    await g915Row.click();
+    for (const [row, selector] of [[ipacRow, IPAC], [g915Row, G915]]) {
+      if ((await row.getAttribute("aria-pressed")) !== "true") {
+        await row.click();
+        await page.waitForFunction(
+          (wanted) => document.querySelector(
+            `.rd-devmodal button[data-selector="${wanted}"]`,
+          )?.getAttribute("aria-pressed") === "true",
+          selector,
+          { timeout: 10_000 },
+        );
+      }
+    }
     assert.match((await ipacRow.locator(".rd-dev-word").textContent()) ?? "", /On canvas/);
     assert.match((await g915Row.locator(".rd-dev-word").textContent()) ?? "", /On canvas/);
     await page.locator('.rd-devmodal-head [data-nx="rd-devs-close"]').click();
@@ -299,15 +309,18 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
     await ipacCard.waitFor({ state: "visible" });
     assert.deepEqual(
       await ipacCard.locator(".rd-device-state").allTextContents(),
-      ["Connected", "On canvas", "Input source", "Preparation required"],
+      ["Connected", "On canvas", "Independent source", "Preparation required"],
     );
-    assert.deepEqual(
-      await g915Card.locator(".rd-device-state").allTextContents(),
-      ["Connected", "On canvas", "Source enabled", "Mapping read-only"],
+    assert.equal(await g915Card.locator(".rd-device-state").count(), 0);
+    assert.equal(await g915Card.getAttribute("data-mapping-available"), "true");
+    assert.equal(await g915Card.locator("[data-rd-keyboard-surface]").count(), 1);
+    assert.match(
+      (await g915Card.locator("[data-rd-keyboard-mapping-status]").textContent()) ?? "",
+      /Independent source/i,
     );
-    assert.equal((await g915Card.locator(".rd-stagebtn").textContent())?.trim(), "Enable mapping controls");
+    assert.equal(await g915Card.locator(".rd-stagebtn").count(), 0);
     assert.doesNotMatch((await ipacCard.locator(".rd-devcard").textContent()) ?? "", /staged|mapping input/i);
-    assert.doesNotMatch((await g915Card.locator(".rd-devcard").textContent()) ?? "", /staged|mapping input/i);
+    assert.equal(await g915Card.locator(".rd-devcard").count(), 0);
 
     // Prepare is gated on purpose so the browser has time to prove the
     // initiating label, aria-busy state, and whole-island transaction lock.

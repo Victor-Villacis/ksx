@@ -322,6 +322,9 @@ fn terminal_from_pipe(error: PipeIoError) -> Terminal {
 }
 
 #[cfg(feature = "hidmaestro-fake-host-tests")]
+// The feature also compiles the library target during `--all-targets`; this
+// private constructor is consumed only by the test target immediately below.
+#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 enum FakeHostConnectError {
     #[error("could not create the fixed HIDMaestro fake-host rendezvous: {0}")]
@@ -331,6 +334,7 @@ enum FakeHostConnectError {
 }
 
 #[cfg(feature = "hidmaestro-fake-host-tests")]
+#[allow(dead_code)]
 fn connect_fixed_fake_host(
     expected: crate::host::HostExpectation,
 ) -> Result<crate::host::HostClient<WindowsHostTransport>, FakeHostConnectError> {

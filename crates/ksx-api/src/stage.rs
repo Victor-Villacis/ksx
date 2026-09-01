@@ -85,13 +85,39 @@ impl From<&StagedDevice> for StagedDeviceView {
     }
 }
 
+/// One physical keyboard route feeding a staged controller.
+///
+/// This is the canonical authoring target. The parent [`StagedSlotView`]'s
+/// `preset`/`authoring`/`bindings` fields remain a compatibility view of the
+/// first source for older JSON callers.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StagedSourceView {
+    /// Durable source identity; send this back as `expected_device`.
+    pub selector: String,
+    pub alias: String,
+    pub label: String,
+    pub preset: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authoring: Option<ksx_config::PresetFile>,
+    pub bindings: usize,
+    /// Whether this row already claims a route to the controller. `false`
+    /// identifies the deterministic blank projection returned for a staged
+    /// device that is eligible for its first binding.
+    #[serde(default)]
+    pub routed: bool,
+    /// Opaque revision of this route and its controller identity. Edits to a
+    /// different source do not change it.
+    #[serde(default)]
+    pub revision: String,
+}
+
 /// One staged controller, as a surface shows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StagedSlotView {
     pub number: u8,
-    /// Opaque identity-and-content revision for actions opened on this exact
-    /// controller row. A surface sends it back unchanged; it must never infer
-    /// or recompute it from the visible labels.
+    /// Compatibility revision of [`Self::sources`]'s first route. Canonical
+    /// source-row actions send that source's own `revision`; a surface must
+    /// never infer or recompute either token from visible labels.
     ///
     /// Older daemons omit the field. Such a row remains readable, but a newer
     /// mutation surface must refresh before it can safely bind through a route
@@ -117,6 +143,10 @@ pub struct StagedSlotView {
     /// mapper edit until it is refreshed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authoring: Option<ksx_config::PresetFile>,
+    /// Canonical independently mapped input routes. Empty only when reading an
+    /// older daemon or when every route was removed from this controller.
+    #[serde(default)]
+    pub sources: Vec<StagedSourceView>,
     /// This slot's simultaneous-opposite-direction policy — a
     /// [`ksx_core::Socd`] name (`off` | `neutral` | `up-priority` | `last-input` | `first-input`). Older
     /// daemons did not serve the field; absence reads as the default, which
@@ -422,7 +452,11 @@ pub struct StagedSetupView {
     pub error: Option<String>,
     /// Nothing staged at all — a fresh visit, or just after "Start over".
     pub empty: bool,
+    /// Compatibility view of [`Self::devices`]'s first entry.
     pub device: Option<StagedDeviceView>,
+    /// Canonical staged keyboards in authored order.
+    #[serde(default)]
+    pub devices: Vec<StagedDeviceView>,
     /// Slot order.
     pub slots: Vec<StagedSlotView>,
     /// The split-or-freeze answer, or `None` when the question has not been
@@ -534,10 +568,33 @@ impl StagedSetupView {
             error: None,
             empty: setup.is_empty(),
             device: setup.device().map(StagedDeviceView::from),
+            devices: setup.devices().iter().map(StagedDeviceView::from).collect(),
             slots: setup
                 .slots()
                 .iter()
                 .map(|slot| {
+                    let sources = slot
+                        .routes()
+                        .iter()
+                        .map(|route| {
+                            let device = setup
+                                .devices()
+                                .iter()
+                                .find(|device| device.selector == route.selector);
+                            StagedSourceView {
+                                selector: route.selector.to_string(),
+                                alias: device
+                                    .map_or_else(String::new, |device| device.alias.clone()),
+                                label: device
+                                    .map_or_else(String::new, |device| device.label.clone()),
+                                preset: route.preset.name.clone(),
+                                authoring: Some(ksx_config::PresetFile::from_core(&route.preset)),
+                                bindings: route.preset.live_bindings(),
+                                routed: true,
+                                revision: String::new(),
+                            }
+                        })
+                        .collect();
                     let mut view = StagedSlotView {
                         number: slot.number,
                         target_revision: String::new(),
@@ -546,10 +603,19 @@ impl StagedSetupView {
                         is_xinput: slot.persona.is_xinput(),
                         preset: slot.preset.name.clone(),
                         authoring: Some(ksx_config::PresetFile::from_core(&slot.preset)),
+                        sources,
                         bindings: slot.preset.live_bindings(),
                         socd: slot.socd.as_str().to_owned(),
                         socd_label: socd_title(slot.socd),
                     };
+                    let revisions = view
+                        .sources
+                        .iter()
+                        .map(|source| staged_source_revision(&view, source))
+                        .collect::<Vec<_>>();
+                    for (source, revision) in view.sources.iter_mut().zip(revisions) {
+                        source.revision = revision;
+                    }
                     view.target_revision = staged_slot_revision(&view);
                     view
                 })
@@ -567,11 +633,14 @@ impl StagedSetupView {
             // CUSTOM name (an adopted config), which the scan below simply
             // treats as taken.
             next_preset: setup.next_free_slot().map(|_| {
-                let used: std::collections::HashSet<&str> = setup
-                    .slots()
-                    .iter()
-                    .map(|slot| slot.preset.name.as_str())
-                    .collect();
+                let mut used = std::collections::HashSet::new();
+                for slot in setup.slots() {
+                    if slot.routes().is_empty() {
+                        used.insert(slot.preset.name.as_str());
+                    } else {
+                        used.extend(slot.routes().iter().map(|route| route.preset.name.as_str()));
+                    }
+                }
                 (1..=MAX_SLOTS)
                     .map(preset_name_for_slot)
                     .find(|name| !used.contains(name.as_str()))
@@ -630,7 +699,21 @@ pub enum StageEdit {
         alias: String,
         label: String,
     },
-    /// Change only the currently staged board's capture backend.  The
+    /// Add a keyboard without replacing the current roster, or update the
+    /// metadata of an already-staged selector in place. `backend` may be
+    /// omitted to retain an existing route's backend (or choose the legacy
+    /// Interception default for a new keyboard).
+    UpsertDevice {
+        selector: String,
+        alias: String,
+        label: String,
+        #[serde(default)]
+        backend: Option<String>,
+    },
+    /// Remove one keyboard and every controller route owned by it. Other
+    /// keyboards and their routes remain staged.
+    RemoveDevice { selector: String },
+    /// Change only one staged board's capture backend. The
     /// expected selector is mandatory so a completed elevated preparation can
     /// never retarget a keyboard chosen while its UAC prompt was open.
     SetDeviceBackend {
@@ -682,6 +765,17 @@ pub enum StageEdit {
         #[serde(default)]
         player: Option<u8>,
     },
+    /// Instantiate an in-box layout for one exact keyboard-to-controller
+    /// route. A nonempty `preset` names or renames that route; an empty value
+    /// preserves an existing route name and is refused when adding a route.
+    SetSourceLayout {
+        number: u8,
+        selector: String,
+        preset: String,
+        layout: String,
+        #[serde(default)]
+        player: Option<u8>,
+    },
     /// Moment 6: the bindings so far, as a whole preset table — the same
     /// whole-value rule `ControlSource::bind_keys` and `MacroWrite` follow.
     SetBindings {
@@ -690,6 +784,15 @@ pub enum StageEdit {
         /// and an enum is as big as its widest arm.
         preset: Box<ksx_config::PresetFile>,
     },
+    /// Replace or add the bindings for one exact physical source route.
+    SetSourceBindings {
+        number: u8,
+        selector: String,
+        preset: Box<ksx_config::PresetFile>,
+    },
+    /// Remove one source route while retaining both its keyboard and the
+    /// controller's routes from other keyboards.
+    RemoveSourceBindings { number: u8, selector: String },
     /// Delete a staged controller. Free and complete: no file, no backup, no
     /// trace.
     RemoveSlot { number: u8 },
@@ -745,6 +848,37 @@ impl StageEdit {
                     })
                     .map_err(refuse)
             }
+            Self::UpsertDevice {
+                selector,
+                alias,
+                label,
+                backend,
+            } => {
+                let selector = parse_staged_selector(selector)?;
+                let backend = match backend
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|backend| !backend.is_empty())
+                {
+                    Some(backend) => parse_stage_backend(backend)?,
+                    None => setup
+                        .devices()
+                        .iter()
+                        .find(|device| device.selector == selector)
+                        .map_or(StageCaptureBackend::Interception, |device| device.backend),
+                };
+                setup
+                    .upsert_device(StagedDevice {
+                        selector,
+                        alias: alias.trim().to_owned(),
+                        label: label.trim().to_owned(),
+                        backend,
+                    })
+                    .map_err(refuse)
+            }
+            Self::RemoveDevice { selector } => setup
+                .remove_device(&parse_staged_selector(selector)?)
+                .map_err(refuse),
             Self::SetDeviceBackend {
                 expected_selector,
                 backend,
@@ -812,6 +946,36 @@ impl StageEdit {
                 let preset = instantiate(layout, &name, *number, *player)?;
                 setup.set_bindings(*number, preset).map_err(refuse)
             }
+            Self::SetSourceLayout {
+                number,
+                selector,
+                preset,
+                layout,
+                player,
+            } => {
+                let selector = parse_staged_selector(selector)?;
+                let existing = setup
+                    .slot(*number)
+                    .ok_or_else(|| refuse(ksx_core::StageRefusal::NoSuchSlot { number: *number }))?
+                    .route(&selector);
+                let name = if preset.trim().is_empty() {
+                    existing.map(|route| route.preset.name.as_str()).ok_or_else(|| {
+                        Refusal::with_remedy(
+                            codes::BAD_REQUEST,
+                            format!(
+                                "slot {number} has no route from keyboard selector '{selector}', so a new route needs a preset name"
+                            ),
+                            "send a nonempty preset name for the new source route",
+                        )
+                    })?
+                } else {
+                    preset.trim()
+                };
+                let preset = instantiate(layout, name, *number, *player)?;
+                setup
+                    .set_source_bindings(*number, &selector, preset)
+                    .map_err(refuse)
+            }
             Self::SetBindings { number, preset } => {
                 // Through the preset file's OWN serde types, so a binding that
                 // would be refused on disk is refused here in the identical
@@ -825,6 +989,26 @@ impl StageEdit {
                 })?;
                 setup.set_bindings(*number, core).map_err(refuse)
             }
+            Self::SetSourceBindings {
+                number,
+                selector,
+                preset,
+            } => {
+                let selector = parse_staged_selector(selector)?;
+                let core = preset.to_core().map_err(|err| {
+                    Refusal::with_remedy(
+                        codes::BAD_REQUEST,
+                        err.to_string(),
+                        "fix the binding and send the table again",
+                    )
+                })?;
+                setup
+                    .set_source_bindings(*number, &selector, core)
+                    .map_err(refuse)
+            }
+            Self::RemoveSourceBindings { number, selector } => setup
+                .remove_source_bindings(*number, &parse_staged_selector(selector)?)
+                .map_err(refuse),
             Self::RemoveSlot { number } => setup.remove_slot(*number).map_err(refuse),
             Self::ReorderSlots { numbers } => setup.reorder_slots(numbers).map_err(refuse),
             Self::SetSocd { number, socd } => {
@@ -871,15 +1055,16 @@ pub struct StagedBindRequest {
     /// omit it; the empty value preserves their existing behavior.
     #[serde(default)]
     pub expected_device: String,
-    /// Opaque identity-and-content revision of the exact staged controller
-    /// observed when the binding action began.
+    /// Opaque identity-and-content revision of the exact source route observed
+    /// when the binding action began.
     ///
     /// Studio captures this from the served [`StagedSlotView`] before it
     /// performs any slow machine check. The daemon compares it while holding
     /// the staged-state lock, so removing and recreating the same player
     /// number cannot receive the stale write — even if the replacement's
-    /// visible content is identical. Older callers may omit it; the empty
-    /// value preserves their existing behavior.
+    /// visible content is identical. Older callers editing an existing route
+    /// may omit it; a first binding on an unrouted device must send the
+    /// synthetic revision from [`staged_source_view`].
     #[serde(default)]
     pub expected_target_revision: String,
     /// Controller-layout name observed with `number` when the action began.
@@ -900,7 +1085,7 @@ pub struct StagedBindRequest {
     pub toggle: Option<bool>,
 }
 
-/// One whole macro edit aimed at an exact in-memory staged controller.
+/// One whole macro edit aimed at an exact in-memory staged source route.
 ///
 /// The slot number is deliberately part of the request instead of being
 /// inferred from the preset name. Two staged controllers may legitimately
@@ -909,6 +1094,13 @@ pub struct StagedBindRequest {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StagedMacroRequest {
     pub number: u8,
+    /// Exact keyboard route to edit. Empty is the backward-compatible
+    /// first-source fallback; new callers must send the served selector.
+    #[serde(default)]
+    pub expected_device: String,
+    /// Opaque revision served on that source route.
+    #[serde(default)]
+    pub expected_target_revision: String,
     #[serde(flatten)]
     pub write: MacroWrite,
 }
@@ -987,8 +1179,9 @@ impl StagedMacroEdit {
 /// Prepare a staged binding edit from the complete setup view.
 ///
 /// This is the convenient server entry point: it locates `request.number`,
-/// checks every other staged slot for duplicate keys, and returns either one
-/// atomic [`StageEdit::SetBindings`] or the ordinary mapper refusal.
+/// checks every other staged route from the same physical keyboard for
+/// duplicate keys, and returns one atomic source-qualified edit (or the
+/// legacy first-source edit when `expected_device` is empty).
 #[allow(clippy::result_large_err)] // the refusal intentionally is the existing complete outcome
 pub fn staged_bind_edit(
     setup: &StagedSetupView,
@@ -1001,19 +1194,6 @@ pub fn staged_bind_edit(
                 .error
                 .clone()
                 .unwrap_or_else(|| "this unsaved setup is unavailable".to_owned()),
-            Vec::new(),
-        ));
-    }
-    if !request.expected_device.trim().is_empty()
-        && !setup.device.as_ref().is_some_and(|device| {
-            device
-                .selector
-                .eq_ignore_ascii_case(request.expected_device.trim())
-        })
-    {
-        return Err(bind_refusal(
-            codes::BAD_REQUEST,
-            "The selected input changed while this binding was being checked. Nothing changed. Refresh the canvas and try again.",
             Vec::new(),
         ));
     }
@@ -1031,43 +1211,249 @@ pub fn staged_bind_edit(
             Vec::new(),
         ));
     };
-    if !request.expected_target_revision.trim().is_empty()
-        && request.expected_target_revision.trim() != slot.target_revision
-    {
-        return Err(bind_refusal(
-            codes::BAD_SLOT,
-            format!(
-                "Player {} changed while this binding was being checked. Nothing changed. Refresh the canvas and try again.",
-                request.number
-            ),
-            Vec::new(),
-        ));
-    }
-    staged_slot_bind_edit(slot, &setup.slots, request)
+    let source_qualified = !request.expected_device.trim().is_empty();
+    let (source, created) = match staged_source_for_request(slot, &request.expected_device) {
+        Some(source) => (source, false),
+        None if source_qualified => {
+            let Some(source) = staged_source_view(setup, slot, &request.expected_device) else {
+                return Err(bind_refusal(
+                    codes::BAD_REQUEST,
+                    "The selected input changed while this binding was being checked. Nothing changed. Refresh the canvas and try again.",
+                    Vec::new(),
+                ));
+            };
+            let keys = canonical_keys(&request.keys)
+                .map_err(|message| bind_refusal(codes::BAD_REQUEST, message, Vec::new()))?;
+            if keys.is_empty() {
+                return Err(bind_refusal(
+                    codes::BAD_REQUEST,
+                    format!(
+                        "Player {} has no route from this keyboard, so there is no binding to clear. Nothing changed.",
+                        request.number
+                    ),
+                    Vec::new(),
+                ));
+            }
+            if request.expected_target_revision.trim().is_empty() {
+                return Err(bind_refusal(
+                    codes::BAD_SLOT,
+                    format!(
+                        "Player {}'s new input route was not revision-checked. Nothing changed. Refresh the canvas and try again.",
+                        request.number
+                    ),
+                    Vec::new(),
+                ));
+            }
+            (source, true)
+        }
+        None => unreachable!("the legacy first-source projection always exists"),
+    };
+    validate_staged_bind_revision(request, &source, source_qualified)?;
+    staged_source_bind_edit(
+        slot,
+        &setup.slots,
+        request,
+        &source,
+        source_qualified,
+        created,
+    )
 }
 
-/// Deterministic, opaque revision for one staged binding target.
+/// Deterministic, opaque revision for the compatibility/first source.
 ///
-/// The complete serialized slot participates, including the persona, SOCD
-/// policy, macro bodies and every binding in the authoring table. This is the
-/// deterministic fallback used outside the daemon. The daemon prefixes it
-/// with a draft incarnation and mutation generation before serving it, which
-/// is what also detects an exact-content remove/recreate. `PresetFile` uses
-/// ordered maps, making its JSON bytes stable.
+/// Canonical multi-source callers use [`staged_source_revision`]. For a new
+/// view this function returns the first route's revision, so an unrelated
+/// keyboard route cannot stale a legacy first-source action. For an older
+/// source-less view it retains the original whole-slot hash behavior.
 pub fn staged_slot_revision(slot: &StagedSlotView) -> String {
-    const OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
-    const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
+    if let Some(source) = slot.sources.first() {
+        return staged_source_revision(slot, source);
+    }
+
     // The served revision is an output of this function, never one of its
     // inputs. Clear it before serialization so a row recomputes identically
     // after crossing JSON and so the token cannot hash itself.
     let mut canonical = slot.clone();
     canonical.target_revision.clear();
+    staged_revision_hash(&canonical)
+}
+
+/// Deterministic, opaque revision for one exact keyboard route.
+///
+/// Controller identity (number, persona and SOCD) and this source's complete
+/// authoring state participate. Other source routes deliberately do not, so
+/// two keyboards feeding one controller can be edited independently.
+pub fn staged_source_revision(slot: &StagedSlotView, source: &StagedSourceView) -> String {
+    #[derive(Debug, Serialize)]
+    struct CanonicalSource<'a> {
+        number: u8,
+        persona: &'a str,
+        socd: &'a str,
+        source: StagedSourceView,
+    }
+
+    let mut source = source.clone();
+    source.revision.clear();
+    staged_revision_hash(&CanonicalSource {
+        number: slot.number,
+        persona: &slot.persona,
+        socd: &slot.socd,
+        source,
+    })
+}
+
+fn staged_revision_hash<T>(canonical: &T) -> String
+where
+    T: Serialize + std::fmt::Debug,
+{
+    const OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+    const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
     let bytes =
         serde_json::to_vec(&canonical).unwrap_or_else(|_| format!("{canonical:?}").into_bytes());
     let hash = bytes.iter().fold(OFFSET, |hash, byte| {
         (hash ^ u128::from(*byte)).wrapping_mul(PRIME)
     });
     format!("s1-{hash:032x}")
+}
+
+fn staged_source_for_request(
+    slot: &StagedSlotView,
+    expected_device: &str,
+) -> Option<StagedSourceView> {
+    let expected = expected_device.trim();
+    if !expected.is_empty() {
+        return slot
+            .sources
+            .iter()
+            .find(|source| source.selector.eq_ignore_ascii_case(expected))
+            .cloned();
+    }
+
+    if let Some(source) = slot.sources.first() {
+        let mut source = source.clone();
+        if source.revision.is_empty() {
+            source.revision.clone_from(&slot.target_revision);
+        }
+        return Some(source);
+    }
+
+    Some(StagedSourceView {
+        selector: String::new(),
+        alias: String::new(),
+        label: String::new(),
+        preset: slot.preset.clone(),
+        authoring: slot.authoring.clone(),
+        bindings: slot.bindings,
+        routed: false,
+        revision: slot.target_revision.clone(),
+    })
+}
+
+/// Return the exact routed or eligible-first-bind source row for one staged
+/// device/controller pair.
+///
+/// An unrouted device receives the same deterministic collision-free blank
+/// preset and revision [`staged_bind_edit`] will validate. The setup's served
+/// draft revision prefixes that synthetic token when available, preventing an
+/// exact-content remove/recreate from becoming the same target. Studio can
+/// project every staged device under every controller and stale-protect the
+/// very first binding without inventing a preset name or hashing JSON itself.
+pub fn staged_source_view(
+    setup: &StagedSetupView,
+    slot: &StagedSlotView,
+    expected_device: &str,
+) -> Option<StagedSourceView> {
+    let expected = expected_device.trim();
+    if expected.is_empty() {
+        return None;
+    }
+    if let Some(source) = slot
+        .sources
+        .iter()
+        .find(|source| source.selector.eq_ignore_ascii_case(expected))
+    {
+        let mut source = source.clone();
+        source.routed = true;
+        if source.revision.is_empty() {
+            source.revision = staged_source_revision(slot, &source);
+        }
+        return Some(source);
+    }
+    let device = setup
+        .devices
+        .iter()
+        .find(|device| device.selector.eq_ignore_ascii_case(expected))?;
+    let name = staged_unrouted_preset_name(setup, slot.number, &device.alias);
+    let mut preset = ksx_core::Preset::builtin_empty();
+    preset.name = name.clone();
+    preset.protected = false;
+    let mut source = StagedSourceView {
+        selector: device.selector.clone(),
+        alias: device.alias.clone(),
+        label: device.label.clone(),
+        preset: name,
+        authoring: Some(ksx_config::PresetFile::from_core(&preset)),
+        bindings: 0,
+        routed: false,
+        revision: String::new(),
+    };
+    let content_revision = staged_source_revision(slot, &source);
+    source.revision = if setup.revision.trim().is_empty() {
+        content_revision
+    } else {
+        format!("{}-{content_revision}", setup.revision)
+    };
+    Some(source)
+}
+
+fn staged_unrouted_preset_name(setup: &StagedSetupView, number: u8, alias: &str) -> String {
+    let alias = alias.trim();
+    let base = if alias.is_empty() {
+        format!("Player {number} - keyboard")
+    } else {
+        format!("Player {number} - {alias}")
+    };
+    let used = setup
+        .slots
+        .iter()
+        .flat_map(|slot| {
+            std::iter::once(slot.preset.as_str())
+                .chain(slot.sources.iter().map(|source| source.preset.as_str()))
+        })
+        .map(str::to_ascii_lowercase)
+        .collect::<BTreeSet<_>>();
+    if !used.contains(&base.to_ascii_lowercase()) {
+        return base;
+    }
+    (2_u32..)
+        .map(|suffix| format!("{base} {suffix}"))
+        .find(|candidate| !used.contains(&candidate.to_ascii_lowercase()))
+        .expect("the unbounded suffix sequence contains a free preset name")
+}
+
+#[allow(clippy::result_large_err)]
+fn validate_staged_bind_revision(
+    request: &StagedBindRequest,
+    source: &StagedSourceView,
+    source_qualified: bool,
+) -> Result<(), BindOutcome> {
+    if request.expected_target_revision.trim().is_empty()
+        || request.expected_target_revision.trim() == source.revision
+    {
+        return Ok(());
+    }
+    let changed = if source_qualified {
+        format!("Player {}'s selected input route changed", request.number)
+    } else {
+        format!("Player {} changed", request.number)
+    };
+    Err(bind_refusal(
+        codes::BAD_SLOT,
+        format!(
+            "{changed} while this binding was being checked. Nothing changed. Refresh the canvas and try again."
+        ),
+        Vec::new(),
+    ))
 }
 
 /// Prepare a binding edit when the caller already selected the target slot.
@@ -1089,7 +1475,28 @@ pub fn staged_slot_bind_edit(
             Vec::new(),
         ));
     }
-    let Some(file) = slot.authoring.as_ref() else {
+    let source_qualified = !request.expected_device.trim().is_empty();
+    let Some(source) = staged_source_for_request(slot, &request.expected_device) else {
+        return Err(bind_refusal(
+            codes::BAD_REQUEST,
+            "The selected input changed while this binding was being checked. Nothing changed. Refresh the canvas and try again.",
+            Vec::new(),
+        ));
+    };
+    validate_staged_bind_revision(request, &source, source_qualified)?;
+    staged_source_bind_edit(slot, slots, request, &source, source_qualified, false)
+}
+
+#[allow(clippy::result_large_err)]
+fn staged_source_bind_edit(
+    slot: &StagedSlotView,
+    slots: &[StagedSlotView],
+    request: &StagedBindRequest,
+    source: &StagedSourceView,
+    source_qualified: bool,
+    created: bool,
+) -> Result<StagedBindEdit, BindOutcome> {
+    let Some(file) = source.authoring.as_ref() else {
         return Err(bind_refusal(
             codes::NOT_HERE,
             format!(
@@ -1099,7 +1506,9 @@ pub fn staged_slot_bind_edit(
             Vec::new(),
         ));
     };
-    if !request.preset.trim().is_empty() && !request.preset.trim().eq_ignore_ascii_case(&file.name)
+    if !created
+        && !request.preset.trim().is_empty()
+        && !request.preset.trim().eq_ignore_ascii_case(&file.name)
     {
         return Err(bind_refusal(
             codes::BAD_SLOT,
@@ -1178,7 +1587,8 @@ pub fn staged_slot_bind_edit(
         }
     };
 
-    let mut found = staged_cross_conflicts(slots, slot.number, &keys)
+    let source_selector = (!source.selector.is_empty()).then_some(source.selector.as_str());
+    let mut found = staged_cross_conflicts(slots, slot.number, source_selector, &keys)
         .map_err(|message| bind_refusal(codes::BAD_REQUEST, message, Vec::new()))?;
     if let Target::Macro { index, .. } = &target {
         for key in &keys {
@@ -1310,7 +1720,7 @@ pub fn staged_slot_bind_edit(
     // The conversion is expected to be valid by construction. Keep the check
     // at the API edge so a future core field cannot produce a stage edit the
     // daemon alone would reject.
-    rewritten.to_core().map_err(|err| {
+    let rewritten_core = rewritten.to_core().map_err(|err| {
         bind_refusal(
             codes::BAD_REQUEST,
             format!(
@@ -1332,11 +1742,26 @@ pub fn staged_slot_bind_edit(
                 .join(" · ")
         )
     };
-    Ok(StagedBindEdit {
-        edit: StageEdit::SetBindings {
+    let edit = if source_qualified && rewritten_core.binds_nothing() && rewritten.macros.is_empty()
+    {
+        StageEdit::RemoveSourceBindings {
+            number: slot.number,
+            selector: source.selector.clone(),
+        }
+    } else if source_qualified {
+        StageEdit::SetSourceBindings {
+            number: slot.number,
+            selector: source.selector.clone(),
+            preset: Box::new(rewritten),
+        }
+    } else {
+        StageEdit::SetBindings {
             number: slot.number,
             preset: Box::new(rewritten),
-        },
+        }
+    };
+    Ok(StagedBindEdit {
+        edit,
         outcome: BindOutcome {
             ok: true,
             message: Some(message),
@@ -1363,7 +1788,19 @@ pub fn staged_macro_edit(
     slot: &StagedSlotView,
     write: &MacroWrite,
 ) -> Result<StagedMacroEdit, MacroOutcome> {
-    let Some(file) = slot.authoring.as_ref() else {
+    let source = staged_source_for_request(slot, "")
+        .expect("the legacy first-source projection always exists");
+    staged_source_macro_edit(slot, &source, write, false)
+}
+
+#[allow(clippy::result_large_err)]
+fn staged_source_macro_edit(
+    slot: &StagedSlotView,
+    source: &StagedSourceView,
+    write: &MacroWrite,
+    source_qualified: bool,
+) -> Result<StagedMacroEdit, MacroOutcome> {
+    let Some(file) = source.authoring.as_ref() else {
         return Err(macro_refusal(
             codes::NOT_HERE,
             format!(
@@ -1492,11 +1929,33 @@ pub fn staged_macro_edit(
         }
     }
 
-    Ok(StagedMacroEdit {
-        edit: StageEdit::SetBindings {
+    let remove_inert_route = source_qualified
+        && next.macros.is_empty()
+        && next
+            .to_core()
+            .map_err(|err| {
+                macro_refusal(codes::MACRO_INVALID, err.to_string(), vec![err.to_string()])
+            })?
+            .binds_nothing();
+    let edit = if remove_inert_route {
+        StageEdit::RemoveSourceBindings {
+            number: slot.number,
+            selector: source.selector.clone(),
+        }
+    } else if source_qualified {
+        StageEdit::SetSourceBindings {
+            number: slot.number,
+            selector: source.selector.clone(),
+            preset: Box::new(next),
+        }
+    } else {
+        StageEdit::SetBindings {
             number: slot.number,
             preset: Box::new(next),
-        },
+        }
+    };
+    Ok(StagedMacroEdit {
+        edit,
         outcome: MacroOutcome {
             ok: true,
             message: Some(message),
@@ -1513,7 +1972,7 @@ pub fn staged_macro_edit(
 }
 
 /// Prepare a staged macro edit from the complete setup view, selecting only
-/// the exact slot named by the request.
+/// the exact slot and keyboard route named by the request.
 ///
 /// This setup-scoped entry point is the macro counterpart of
 /// [`staged_bind_edit`]. It exists so a daemon can perform selection,
@@ -1548,7 +2007,27 @@ pub fn staged_macro_edit_for_setup(
             Vec::new(),
         ));
     };
-    staged_macro_edit(slot, &request.write)
+    let source_qualified = !request.expected_device.trim().is_empty();
+    let Some(source) = staged_source_for_request(slot, &request.expected_device) else {
+        return Err(macro_refusal(
+            codes::BAD_REQUEST,
+            "The selected input changed while this macro was being edited. Nothing changed. Refresh the canvas and try again.",
+            Vec::new(),
+        ));
+    };
+    if !request.expected_target_revision.trim().is_empty()
+        && request.expected_target_revision.trim() != source.revision
+    {
+        return Err(macro_refusal(
+            codes::BAD_SLOT,
+            format!(
+                "Player {}'s selected input route changed while this macro was being edited. Nothing changed. Refresh the canvas and try again.",
+                request.number
+            ),
+            Vec::new(),
+        ));
+    }
+    staged_source_macro_edit(slot, &source, &request.write, source_qualified)
 }
 
 /// Convert one staged slot to the saved mapper's existing slot shape.
@@ -1562,6 +2041,43 @@ pub fn staged_mapper_slot(slot: &StagedSlotView, keyboard: &str) -> Result<Mappe
             ),
         )
     })?;
+    staged_mapper_authoring(slot, file, keyboard)
+}
+
+/// Project one exact keyboard route into the existing mapper editor shape.
+///
+/// The controller number/persona stay singular while the preset, authoring
+/// table and keyboard label all come from `source`. Studio can therefore open
+/// a nested source row without reconstructing it from legacy first-source
+/// fields or duplicating a controller.
+pub fn staged_mapper_source(
+    slot: &StagedSlotView,
+    source: &StagedSourceView,
+) -> Result<MapperSlot, Refusal> {
+    let file = source.authoring.as_ref().ok_or_else(|| {
+        Refusal::new(
+            codes::NOT_HERE,
+            format!(
+                "Player {}'s route from keyboard selector '{}' is not available. Refresh the unsaved setup.",
+                slot.number, source.selector
+            ),
+        )
+    })?;
+    let keyboard = match (source.label.trim(), source.alias.trim()) {
+        ("", "") => source.selector.clone(),
+        ("", alias) => alias.to_owned(),
+        (label, "") => label.to_owned(),
+        (label, alias) if label.eq_ignore_ascii_case(alias) => alias.to_owned(),
+        (label, alias) => format!("{label} ({alias})"),
+    };
+    staged_mapper_authoring(slot, file, &keyboard)
+}
+
+fn staged_mapper_authoring(
+    slot: &StagedSlotView,
+    file: &ksx_config::PresetFile,
+    keyboard: &str,
+) -> Result<MapperSlot, Refusal> {
     let core = file.to_core().map_err(|err| {
         Refusal::new(
             codes::BAD_REQUEST,
@@ -1614,14 +2130,10 @@ pub fn staged_mapper_snapshot(setup: &StagedSetupView) -> MapperSnapshot {
                 .unwrap_or("the staged setup is unavailable"),
         );
     }
-    let keyboard = setup
-        .device
-        .as_ref()
-        .map(|device| device.alias.as_str())
-        .unwrap_or("(any)");
     let mut slots = Vec::with_capacity(setup.slots.len());
     for slot in &setup.slots {
-        match staged_mapper_slot(slot, keyboard) {
+        let keyboard = staged_mapper_source_identity(setup, slot);
+        match staged_mapper_slot(slot, &keyboard) {
             Ok(slot) => slots.push(slot),
             Err(refusal) => return MapperSnapshot::unavailable(&refusal.message),
         }
@@ -1635,14 +2147,51 @@ pub fn staged_mapper_snapshot(setup: &StagedSetupView) -> MapperSnapshot {
     }
 }
 
+fn staged_mapper_source_identity(setup: &StagedSetupView, slot: &StagedSlotView) -> String {
+    match slot.sources.as_slice() {
+        [] => setup
+            .device
+            .as_ref()
+            .map(|device| device.alias.clone())
+            .unwrap_or_else(|| "(any)".to_owned()),
+        [source] => {
+            // Preserve the exact one-keyboard mapper spelling older surfaces
+            // show. The canonical selector remains available on `sources`.
+            if source.alias.is_empty() {
+                source.selector.clone()
+            } else {
+                source.alias.clone()
+            }
+        }
+        sources => sources
+            .iter()
+            .map(|source| {
+                if source.alias.is_empty() {
+                    source.selector.clone()
+                } else {
+                    format!("{} [{}]", source.alias, source.selector)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" + "),
+    }
+}
+
 /// Convert one staged preset to the macro editor's existing snapshot.
 pub fn staged_macro_snapshot(slot: &StagedSlotView) -> MacroSnapshot {
-    match &slot.authoring {
+    let source = staged_source_for_request(slot, "")
+        .expect("the legacy first-source projection always exists");
+    staged_source_macro_snapshot(&source)
+}
+
+/// Convert one exact staged source preset to the macro editor's existing
+/// snapshot shape.
+pub fn staged_source_macro_snapshot(source: &StagedSourceView) -> MacroSnapshot {
+    match &source.authoring {
         Some(file) => MacroSnapshot::from_preset(file),
-        None => MacroSnapshot::unavailable(&format!(
-            "Player {}'s controller layout is not available. Refresh the unsaved setup.",
-            slot.number
-        )),
+        None => MacroSnapshot::unavailable(
+            "This keyboard route's controller layout is not available. Refresh the unsaved setup.",
+        ),
     }
 }
 
@@ -1723,14 +2272,31 @@ fn canonical_keys(words: &[String]) -> Result<Vec<Key>, String> {
 fn staged_cross_conflicts(
     slots: &[StagedSlotView],
     target: u8,
+    selector: Option<&str>,
     keys: &[Key],
 ) -> Result<Vec<(String, BindConflict)>, String> {
     let mut found = Vec::new();
     for slot in slots.iter().filter(|slot| slot.number != target) {
-        let file = slot.authoring.as_ref().ok_or_else(|| {
+        let file = match selector {
+            Some(selector) => {
+                let Some(source) = slot
+                    .sources
+                    .iter()
+                    .find(|source| source.selector.eq_ignore_ascii_case(selector))
+                else {
+                    continue;
+                };
+                source.authoring.as_ref()
+            }
+            None => slot.authoring.as_ref(),
+        }
+        .ok_or_else(|| {
             format!(
-                "staged slot {} has no authoring snapshot; refresh before checking duplicate keys",
-                slot.number
+                "staged slot {}{} has no authoring snapshot; refresh before checking duplicate keys",
+                slot.number,
+                selector.map_or_else(String::new, |selector| format!(
+                    "'s route from {selector}"
+                ))
             )
         })?;
         let core = file.to_core().map_err(|err| {
@@ -1972,6 +2538,16 @@ fn parse_stage_backend(name: &str) -> Result<StageCaptureBackend, Refusal> {
     }
 }
 
+fn parse_staged_selector(selector: &str) -> Result<DeviceSelector, Refusal> {
+    DeviceSelector::parse(selector.trim()).map_err(|err| {
+        Refusal::with_remedy(
+            codes::BAD_REQUEST,
+            err.to_string(),
+            "send back the exact selector from the staged device",
+        )
+    })
+}
+
 fn parse_persona(name: &str) -> Result<Persona, Refusal> {
     name.trim()
         .parse()
@@ -2094,9 +2670,12 @@ impl StageOutcome {
 mod tests {
     use super::*;
 
+    const PANEL_SELECTOR: &str = "usb:d209:0430:00";
+    const DESK_SELECTOR: &str = "usb:046d:c31c:00";
+
     fn staged() -> StagedSetup {
         StageEdit::ChooseDevice {
-            selector: "usb:d209:0430:00".into(),
+            selector: PANEL_SELECTOR.into(),
             alias: "panel".into(),
             label: "Ultimarc I-PAC 4".into(),
         }
@@ -2130,6 +2709,88 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
                 file.to_core().expect("the authoring fixture loads"),
             )
             .expect("slot 1 stages")
+    }
+
+    fn named_authored_preset(name: &str) -> ksx_config::PresetFile {
+        let mut file = authored_preset();
+        file.name = name.to_owned();
+        file
+    }
+
+    fn single_binding_preset(name: &str, function: &str, key: &str) -> ksx_config::PresetFile {
+        toml::from_str(&format!(
+            "name = {name:?}\n\n[bindings]\n{function} = {key:?}\n"
+        ))
+        .expect("the small routed preset fixture loads")
+    }
+
+    fn macro_only_preset(name: &str) -> ksx_config::PresetFile {
+        toml::from_str(&format!(
+            r#"name = {name:?}
+
+[bindings]
+"macro.tap" = "P"
+
+[macros.tap]
+steps = [{{ hold = ["A"], ms = 25 }}]
+"#
+        ))
+        .expect("the macro-only routed preset fixture loads")
+    }
+
+    fn with_second_device(setup: &StagedSetup) -> StagedSetup {
+        StageEdit::UpsertDevice {
+            selector: DESK_SELECTOR.into(),
+            alias: "desk".into(),
+            label: "Desk keyboard".into(),
+            backend: None,
+        }
+        .apply(setup)
+        .expect("the second keyboard stages additively")
+    }
+
+    fn two_sources_one_controller() -> StagedSetup {
+        let setup = with_second_device(&staged_with_preset(&authored_preset()));
+        StageEdit::SetSourceBindings {
+            number: 1,
+            selector: DESK_SELECTOR.into(),
+            preset: Box::new(named_authored_preset("Desk Player 1")),
+        }
+        .apply(&setup)
+        .expect("the second keyboard routes to player 1")
+    }
+
+    fn two_sources_two_controllers() -> StagedSetup {
+        let setup = with_second_device(&staged());
+        let setup = StageEdit::AddSlot {
+            number: Some(1),
+            persona: "xbox360".into(),
+            preset: "Panel Player 1".into(),
+            layout: Some("keyboard-wasd".into()),
+        }
+        .apply(&setup)
+        .expect("the panel routes to player 1");
+        let setup = StageEdit::AddSlot {
+            number: Some(2),
+            persona: "playstation".into(),
+            preset: "Pending Player 2".into(),
+            layout: Some("keyboard-2p".into()),
+        }
+        .apply(&setup)
+        .expect("player 2 stages on the legacy source first");
+        let setup = StageEdit::SetSourceBindings {
+            number: 2,
+            selector: DESK_SELECTOR.into(),
+            preset: Box::new(single_binding_preset("Desk Player 2", "A", "W")),
+        }
+        .apply(&setup)
+        .expect("the desk keyboard routes to player 2");
+        StageEdit::RemoveSourceBindings {
+            number: 2,
+            selector: PANEL_SELECTOR.into(),
+        }
+        .apply(&setup)
+        .expect("player 2 retains only its desk route")
     }
 
     /// **Every number a surface would otherwise hardcode is served.**
@@ -2830,6 +3491,15 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
                 alias: "panel".into(),
                 label: "I-PAC".into(),
             },
+            StageEdit::UpsertDevice {
+                selector: DESK_SELECTOR.into(),
+                alias: "desk".into(),
+                label: "Desk keyboard".into(),
+                backend: Some("winusb".into()),
+            },
+            StageEdit::RemoveDevice {
+                selector: DESK_SELECTOR.into(),
+            },
             StageEdit::AddSlot {
                 number: None,
                 persona: "xbox360".into(),
@@ -2840,6 +3510,22 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
                 number: 1,
                 layout: "keyboard-wasd".into(),
                 player: None,
+            },
+            StageEdit::SetSourceLayout {
+                number: 1,
+                selector: DESK_SELECTOR.into(),
+                preset: "Desk Player 1".into(),
+                layout: "keyboard-wasd".into(),
+                player: Some(1),
+            },
+            StageEdit::SetSourceBindings {
+                number: 1,
+                selector: DESK_SELECTOR.into(),
+                preset: Box::new(single_binding_preset("Desk Player 1", "A", "W")),
+            },
+            StageEdit::RemoveSourceBindings {
+                number: 1,
+                selector: DESK_SELECTOR.into(),
             },
             StageEdit::SetPersona {
                 number: 1,
@@ -3534,6 +4220,454 @@ steps = [{ hold = ["dpad.down", "A"], frames = 3, allow_short = true }]
             Some("daemon rejected the stage edit")
         );
         assert!(!outcome.reloaded);
+    }
+
+    #[test]
+    fn legacy_one_device_view_is_the_exact_first_source_projection() {
+        let view = StagedSetupView::of(&staged_with_preset(&authored_preset()));
+        assert_eq!(view.devices.len(), 1);
+        assert_eq!(view.device.as_ref(), view.devices.first());
+        let slot = &view.slots[0];
+        assert_eq!(slot.sources.len(), 1);
+        let source = &slot.sources[0];
+        assert_eq!(source.selector, PANEL_SELECTOR);
+        assert_eq!(source.alias, "panel");
+        assert_eq!(source.label, "Ultimarc I-PAC 4");
+        assert_eq!(slot.preset, source.preset);
+        assert_eq!(slot.authoring, source.authoring);
+        assert_eq!(slot.bindings, source.bindings);
+        assert_eq!(slot.target_revision, source.revision);
+
+        let mut old_wire = serde_json::to_value(&view).unwrap();
+        let object = old_wire.as_object_mut().expect("the setup is an object");
+        object.remove("devices");
+        object["slots"][0]
+            .as_object_mut()
+            .expect("the slot is an object")
+            .remove("sources");
+        let old: StagedSetupView = serde_json::from_value(old_wire).unwrap();
+        assert!(old.devices.is_empty());
+        assert!(old.slots[0].sources.is_empty());
+        assert_eq!(
+            old.device.as_ref().map(|device| device.alias.as_str()),
+            Some("panel")
+        );
+
+        let old_macro: StagedMacroRequest = serde_json::from_value(serde_json::json!({
+            "number": 1,
+            "preset": "Player 1",
+            "name": "hadouken",
+            "enabled": true
+        }))
+        .unwrap();
+        assert!(old_macro.expected_device.is_empty());
+        assert!(old_macro.expected_target_revision.is_empty());
+    }
+
+    #[test]
+    fn two_keyboards_feed_one_controller_as_two_source_rows() {
+        let view = StagedSetupView::of(&two_sources_one_controller());
+        assert_eq!(view.devices.len(), 2);
+        assert_eq!(view.device.as_ref(), view.devices.first());
+        assert_eq!(view.slots.len(), 1, "controller semantics stay singular");
+        let slot = &view.slots[0];
+        assert_eq!(
+            slot.sources
+                .iter()
+                .map(|source| source.selector.as_str())
+                .collect::<Vec<_>>(),
+            vec![PANEL_SELECTOR, DESK_SELECTOR]
+        );
+        assert_eq!(slot.sources[1].alias, "desk");
+        assert_eq!(slot.sources[1].label, "Desk keyboard");
+        assert_eq!(slot.sources[1].preset, "Desk Player 1");
+        assert_eq!(
+            slot.sources[1]
+                .authoring
+                .as_ref()
+                .map(|file| file.name.as_str()),
+            Some("Desk Player 1")
+        );
+        assert!(slot
+            .sources
+            .iter()
+            .all(|source| !source.revision.is_empty()));
+        assert_eq!(slot.target_revision, slot.sources[0].revision);
+
+        let mapper = staged_mapper_snapshot(&view);
+        assert_eq!(mapper.slots.len(), 1, "fan-in must not duplicate the pad");
+        let keyboard = &mapper.slots[0].keyboard;
+        assert!(keyboard.contains("panel") && keyboard.contains(PANEL_SELECTOR));
+        assert!(keyboard.contains("desk") && keyboard.contains(DESK_SELECTOR));
+        let desk_mapper = staged_mapper_source(slot, &slot.sources[1]).unwrap();
+        assert_eq!(desk_mapper.number, 1);
+        assert_eq!(desk_mapper.persona, slot.persona);
+        assert_eq!(desk_mapper.preset, "Desk Player 1");
+        assert_eq!(desk_mapper.keyboard, "Desk keyboard (desk)");
+        assert_eq!(desk_mapper.bindings.get("A"), Some(&vec!["S".to_owned()]));
+        let desk_macros = staged_source_macro_snapshot(&slot.sources[1]);
+        assert!(desk_macros.available);
+        assert_eq!(desk_macros.preset, "Desk Player 1");
+
+        let json = serde_json::to_value(&view).unwrap();
+        assert_eq!(json["devices"].as_array().unwrap().len(), 2);
+        assert_eq!(json["slots"][0]["sources"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            serde_json::from_value::<StagedSetupView>(json).unwrap(),
+            view
+        );
+    }
+
+    #[test]
+    fn two_keyboards_can_drive_two_distinct_controllers() {
+        let view = StagedSetupView::of(&two_sources_two_controllers());
+        assert_eq!(view.devices.len(), 2);
+        assert_eq!(view.slots.len(), 2);
+        assert_eq!(view.slots[0].sources.len(), 1);
+        assert_eq!(view.slots[0].sources[0].selector, PANEL_SELECTOR);
+        assert_eq!(view.slots[1].sources.len(), 1);
+        assert_eq!(view.slots[1].sources[0].selector, DESK_SELECTOR);
+        assert_eq!(view.slots[1].preset, "Desk Player 2");
+        assert_eq!(view.slots[1].authoring, view.slots[1].sources[0].authoring);
+    }
+
+    #[test]
+    fn device_upsert_source_layout_and_independent_removal_reach_the_core_domain() {
+        let updated = StageEdit::UpsertDevice {
+            selector: PANEL_SELECTOR.into(),
+            alias: "cabinet".into(),
+            label: "Renamed panel".into(),
+            backend: Some("winusb".into()),
+        }
+        .apply(&staged())
+        .unwrap();
+        let view = StagedSetupView::of(&updated);
+        assert_eq!(view.devices.len(), 1, "a selector is an upsert key");
+        assert_eq!(view.devices[0].alias, "cabinet");
+        assert_eq!(view.devices[0].backend, "winusb");
+
+        let duplicate = StageEdit::UpsertDevice {
+            selector: DESK_SELECTOR.into(),
+            alias: "cabinet".into(),
+            label: "Desk".into(),
+            backend: None,
+        }
+        .apply(&updated)
+        .unwrap_err();
+        assert_eq!(duplicate.code, "duplicate-alias");
+
+        let setup = with_second_device(&staged_with_preset(&authored_preset()));
+        let routed = StageEdit::SetSourceLayout {
+            number: 1,
+            selector: DESK_SELECTOR.into(),
+            preset: "Desk layout".into(),
+            layout: "keyboard-wasd".into(),
+            player: Some(1),
+        }
+        .apply(&setup)
+        .unwrap();
+        assert_eq!(
+            routed
+                .slot(1)
+                .unwrap()
+                .route(&DeviceSelector::parse(DESK_SELECTOR).unwrap())
+                .unwrap()
+                .preset
+                .name,
+            "Desk layout"
+        );
+
+        let removed = StageEdit::RemoveDevice {
+            selector: PANEL_SELECTOR.into(),
+        }
+        .apply(&routed)
+        .unwrap();
+        let view = StagedSetupView::of(&removed);
+        assert_eq!(view.devices.len(), 1);
+        assert_eq!(view.device.as_ref().unwrap().selector, DESK_SELECTOR);
+        assert_eq!(view.slots[0].sources.len(), 1);
+        assert_eq!(view.slots[0].sources[0].selector, DESK_SELECTOR);
+        assert_eq!(view.slots[0].preset, "Desk layout");
+    }
+
+    #[test]
+    fn same_key_on_distinct_sources_is_not_a_cross_controller_conflict() {
+        let setup = two_sources_two_controllers();
+        let setup = StageEdit::SetSourceBindings {
+            number: 1,
+            selector: PANEL_SELECTOR.into(),
+            preset: Box::new(single_binding_preset("Panel Player 1", "A", "W")),
+        }
+        .apply(&setup)
+        .unwrap();
+        let view = StagedSetupView::of(&setup);
+        let source = &view.slots[1].sources[0];
+        let prepared = staged_bind_edit(
+            &view,
+            &StagedBindRequest {
+                number: 2,
+                expected_device: DESK_SELECTOR.into(),
+                expected_target_revision: source.revision.clone(),
+                preset: source.preset.clone(),
+                function: "B".into(),
+                keys: vec!["W".into()],
+                ..StagedBindRequest::default()
+            },
+        )
+        .expect("the same physical key belongs to independent keyboards");
+        assert!(prepared.outcome.conflicts.is_empty());
+        let StageEdit::SetSourceBindings { selector, .. } = prepared.edit else {
+            panic!("an exact source request must stay source-qualified")
+        };
+        assert_eq!(selector, DESK_SELECTOR);
+    }
+
+    #[test]
+    fn first_bind_lazily_creates_and_final_clear_removes_a_source_route() {
+        let setup = with_second_device(&staged_with_preset(&named_authored_preset(
+            "Player 1 - desk",
+        )));
+        let before = StagedSetupView::of(&setup);
+        assert_eq!(before.devices.len(), 2);
+        assert_eq!(before.slots[0].sources.len(), 1, "roster is not a route");
+        let eligible = staged_source_view(&before, &before.slots[0], DESK_SELECTOR)
+            .expect("every staged device projects under the controller");
+        assert!(!eligible.routed);
+        assert_eq!(eligible.preset, "Player 1 - desk 2");
+        assert!(!eligible.revision.is_empty());
+        let mut next_draft = before.clone();
+        next_draft.revision = "draft-2".into();
+        assert_ne!(
+            staged_source_view(&next_draft, &next_draft.slots[0], DESK_SELECTOR)
+                .unwrap()
+                .revision,
+            eligible.revision,
+            "a recreated draft cannot reuse the first-bind target token"
+        );
+
+        let unchecked = staged_bind_edit(
+            &before,
+            &StagedBindRequest {
+                number: 1,
+                expected_device: DESK_SELECTOR.into(),
+                function: "A".into(),
+                keys: vec!["H".into()],
+                ..StagedBindRequest::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(unchecked.code.as_deref(), Some(codes::BAD_SLOT));
+
+        let first = staged_bind_edit(
+            &before,
+            &StagedBindRequest {
+                number: 1,
+                expected_device: DESK_SELECTOR.into(),
+                expected_target_revision: eligible.revision.clone(),
+                // There was no route/preset for the browser to name. The API
+                // owns the new name and ignores this legacy compatibility
+                // value only on lazy creation.
+                preset: before.slots[0].preset.clone(),
+                function: "A".into(),
+                keys: vec!["H".into()],
+                ..StagedBindRequest::default()
+            },
+        )
+        .expect("the first exact-source binding creates its route");
+        let StageEdit::SetSourceBindings {
+            selector, preset, ..
+        } = &first.edit
+        else {
+            panic!("lazy creation must be one atomic source binding edit")
+        };
+        assert_eq!(selector, DESK_SELECTOR);
+        assert_eq!(
+            preset.name, "Player 1 - desk 2",
+            "the server-owned name deterministically avoids the existing file"
+        );
+
+        let routed = first.edit.apply(&setup).unwrap();
+        let routed_view = StagedSetupView::of(&routed);
+        let desk = routed_view.slots[0]
+            .sources
+            .iter()
+            .find(|source| source.selector == DESK_SELECTOR)
+            .unwrap();
+        assert_eq!(desk.bindings, 1);
+
+        let clear = staged_bind_edit(
+            &routed_view,
+            &StagedBindRequest {
+                number: 1,
+                expected_device: DESK_SELECTOR.into(),
+                expected_target_revision: desk.revision.clone(),
+                preset: desk.preset.clone(),
+                function: "A".into(),
+                keys: Vec::new(),
+                ..StagedBindRequest::default()
+            },
+        )
+        .expect("clearing the final simple mapping removes the inert route");
+        assert!(matches!(clear.edit, StageEdit::RemoveSourceBindings { .. }));
+        let without_route = clear.edit.apply(&routed).unwrap();
+        assert_eq!(without_route.slot(1).unwrap().routes().len(), 1);
+
+        let absent_clear = staged_bind_edit(
+            &StagedSetupView::of(&without_route),
+            &StagedBindRequest {
+                number: 1,
+                expected_device: DESK_SELECTOR.into(),
+                function: "A".into(),
+                keys: Vec::new(),
+                ..StagedBindRequest::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(absent_clear.code.as_deref(), Some(codes::BAD_REQUEST));
+        assert!(absent_clear
+            .error
+            .as_deref()
+            .is_some_and(|message| message.contains("no route")));
+    }
+
+    #[test]
+    fn deleting_the_final_live_macro_removes_its_inert_source_route() {
+        let setup = with_second_device(&staged_with_preset(&authored_preset()));
+        let setup = StageEdit::SetSourceBindings {
+            number: 1,
+            selector: DESK_SELECTOR.into(),
+            preset: Box::new(macro_only_preset("Desk macros")),
+        }
+        .apply(&setup)
+        .unwrap();
+        let view = StagedSetupView::of(&setup);
+        let desk = &view.slots[0].sources[1];
+        let deleted = staged_macro_edit_for_setup(
+            &view,
+            &StagedMacroRequest {
+                number: 1,
+                expected_device: DESK_SELECTOR.into(),
+                expected_target_revision: desk.revision.clone(),
+                write: MacroWrite {
+                    preset: desk.preset.clone(),
+                    name: "tap".into(),
+                    delete: true,
+                    ..MacroWrite::default()
+                },
+            },
+        )
+        .expect("deleting the only macro succeeds");
+        assert!(matches!(
+            deleted.edit,
+            StageEdit::RemoveSourceBindings { .. }
+        ));
+        let after = deleted.edit.apply(&setup).unwrap();
+        assert_eq!(after.slot(1).unwrap().routes().len(), 1);
+        assert!(after
+            .slot(1)
+            .unwrap()
+            .routes()
+            .iter()
+            .all(|route| route.selector.to_string() != DESK_SELECTOR));
+    }
+
+    #[test]
+    fn source_revisions_bind_and_macro_only_the_exact_route() {
+        let setup = two_sources_one_controller();
+        let before = StagedSetupView::of(&setup);
+        let panel_revision = before.slots[0].sources[0].revision.clone();
+        let desk_revision = before.slots[0].sources[1].revision.clone();
+
+        let changed_panel = StageEdit::SetSourceBindings {
+            number: 1,
+            selector: PANEL_SELECTOR.into(),
+            preset: Box::new(single_binding_preset("Player 1", "A", "G")),
+        }
+        .apply(&setup)
+        .unwrap();
+        let changed = StagedSetupView::of(&changed_panel);
+        assert_ne!(changed.slots[0].sources[0].revision, panel_revision);
+        assert_eq!(changed.slots[0].sources[1].revision, desk_revision);
+
+        let desk = &changed.slots[0].sources[1];
+        let bind = staged_bind_edit(
+            &changed,
+            &StagedBindRequest {
+                number: 1,
+                expected_device: DESK_SELECTOR.into(),
+                expected_target_revision: desk_revision.clone(),
+                preset: desk.preset.clone(),
+                function: "B".into(),
+                keys: vec!["G".into()],
+                ..StagedBindRequest::default()
+            },
+        )
+        .expect("an unrelated source edit cannot stale this route");
+        assert!(matches!(bind.edit, StageEdit::SetSourceBindings { .. }));
+
+        let mac = staged_macro_edit_for_setup(
+            &changed,
+            &StagedMacroRequest {
+                number: 1,
+                expected_device: DESK_SELECTOR.into(),
+                expected_target_revision: desk_revision.clone(),
+                write: MacroWrite {
+                    preset: "Desk Player 1".into(),
+                    name: "hadouken".into(),
+                    enabled: Some(false),
+                    ..MacroWrite::default()
+                },
+            },
+        )
+        .expect("the macro editor selects the same exact route");
+        let StageEdit::SetSourceBindings { selector, .. } = mac.edit else {
+            panic!("an exact macro request must stay source-qualified")
+        };
+        assert_eq!(selector, DESK_SELECTOR);
+
+        let changed_desk = StageEdit::SetSourceBindings {
+            number: 1,
+            selector: DESK_SELECTOR.into(),
+            preset: Box::new(single_binding_preset("Desk Player 1", "A", "H")),
+        }
+        .apply(&changed_panel)
+        .unwrap();
+        let stale = staged_bind_edit(
+            &StagedSetupView::of(&changed_desk),
+            &StagedBindRequest {
+                number: 1,
+                expected_device: DESK_SELECTOR.into(),
+                expected_target_revision: desk_revision,
+                preset: "Desk Player 1".into(),
+                function: "B".into(),
+                keys: vec!["J".into()],
+                ..StagedBindRequest::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(stale.code.as_deref(), Some(codes::BAD_SLOT));
+
+        let removed = StageEdit::RemoveDevice {
+            selector: DESK_SELECTOR.into(),
+        }
+        .apply(&changed_desk)
+        .unwrap();
+        let stale_source = staged_macro_edit_for_setup(
+            &StagedSetupView::of(&removed),
+            &StagedMacroRequest {
+                number: 1,
+                expected_device: DESK_SELECTOR.into(),
+                write: MacroWrite {
+                    preset: "Desk Player 1".into(),
+                    name: "hadouken".into(),
+                    enabled: Some(true),
+                    ..MacroWrite::default()
+                },
+                ..StagedMacroRequest::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(stale_source.code.as_deref(), Some(codes::BAD_REQUEST));
     }
 
     /// **FIRST-RUN.md moment 7, and the reason `DEFAULT_LAYOUT` is a name.**

@@ -703,6 +703,7 @@ mod tests {
                 }],
                 ..MacroWrite::default()
             },
+            ..StagedMacroRequest::default()
         };
         let macro_client = Client::new(Fake::answering(Response::Macro(MacroResponse {
             ok: true,

@@ -64,6 +64,7 @@ import {
   syncControllerWidgets,
   type ParkedController,
   type RdControllerCardView,
+  type RdPadSourceView,
   type RdPadView,
 } from "./redesign-controllers";
 import { SwitchProPremiumArt } from "./switchProPremiumArt";
@@ -1066,7 +1067,7 @@ function controllerSourceEditor(slot: number): HTMLElement | null {
     const selected = source.source_id === current;
     button.setAttribute("aria-pressed", String(selected));
     if (selected) button.classList.add("on");
-    const label = source.source_label?.trim() || source.source_alias?.trim() || source.source_id;
+    const label = controllerSourceLabel(source, sources);
     button.textContent = `${label}${source.routed ? "" : " · not routed"}`;
     button.title = source.routed
       ? `Edit ${label}'s independent mappings to Player ${slot}`
@@ -2904,6 +2905,7 @@ function renderInspector(): void {
   );
   const renderFingerprint = JSON.stringify([
     inspTab,
+    currentAuthoringSource(),
     currentBindingQuery(),
     Object.entries(controllerColors).sort(([left], [right]) => left.localeCompare(right)),
     selected.map((item) => [
@@ -3052,6 +3054,9 @@ function renderInspector(): void {
     rows.push(title, kind, origin, verbs);
   }
   body.replaceChildren(...rows.filter((row): row is HTMLElement => Boolean(row)));
+  const inspectorKeys = body.querySelector<HTMLElement>(".rd-insp-krows");
+  const inspectorSource = currentAuthoringSource();
+  if (inspectorKeys && inspectorSource) inspectorKeys.dataset.sourceId = inspectorSource;
   inspectorRenderFingerprints.set(body, renderFingerprint);
   // Restore the reader's place: rows they had open stay open, and the
   // panel does not jump back to its top on every repaint.
@@ -3305,6 +3310,50 @@ function deviceRowFor(selector: string): RdDeviceRowView | undefined {
   return [...rdDevKb(), ...rdDevEnc(), ...rdDevExp()].find((r) => r.selector === selector);
 }
 
+/** Canvas chrome names a physical endpoint, not merely its product model.
+ * A unique model name stays compact; twins gain the server-authored
+ * connection identity that distinguishes their exact selectors. This is
+ * presentation only -- actions still carry the untouched selector. */
+function deviceCanvasLabel(row: RdDeviceRowView): string {
+  const name = row.name.trim() || row.label.trim() || row.alias.trim() || "Physical device";
+  const peers = [...rdDevKb(), ...rdDevEnc(), ...rdDevExp()];
+  const isTwin = peers.some((candidate) =>
+    candidate.selector !== row.selector &&
+    candidate.role === row.role &&
+    candidate.name.trim().toLocaleLowerCase() === row.name.trim().toLocaleLowerCase()
+  );
+  if (!isTwin) return name;
+  const connection = row.connection_label.trim();
+  const alias = row.alias.trim();
+  const identity = connection ||
+    (alias.toLocaleLowerCase() !== name.toLocaleLowerCase() ? alias : "") ||
+    row.selector;
+  return `${name} · ${identity}`;
+}
+
+/** Staged sources can outlive a scan row. Prefer the same collision-aware
+ * board label while connected, then fall back to the staged alias/selector
+ * so two identical disconnected sources remain distinguishable. */
+function controllerSourceLabel(
+  source: RdPadSourceView,
+  peers: RdPadSourceView[],
+): string {
+  const row = deviceRowFor(source.source_id);
+  if (row) return deviceCanvasLabel(row);
+  const label = source.source_label?.trim() || source.source_alias?.trim() || source.source_id;
+  const twin = peers.some((candidate) =>
+    candidate.source_id !== source.source_id &&
+    (candidate.source_label?.trim() || candidate.source_alias?.trim() || candidate.source_id)
+      .toLocaleLowerCase() === label.toLocaleLowerCase()
+  );
+  if (!twin) return label;
+  const alias = source.source_alias?.trim() ?? "";
+  const identity = alias && alias.toLocaleLowerCase() !== label.toLocaleLowerCase()
+    ? alias
+    : source.source_id;
+  return `${label} · ${identity}`;
+}
+
 const DEVICE_ROLE_BADGE: Record<string, string> = {
   "panel-encoder": "Panel encoder",
   keyboard: "Physical keyboard",
@@ -3470,7 +3519,7 @@ function keyboardDeviceContent(row: RdDeviceRowView, instanceId: string): HTMLEl
     host.append(createKeyboardSurfaceInstance(template, {
       sourceId: row.selector,
       instanceId,
-      sourceLabel: row.name,
+      sourceLabel: deviceCanvasLabel(row),
       mappingAvailable: row.aria_current === "true" &&
         rdDeviceScanAuthoritative && rdStagingReachable,
     }));
@@ -3556,7 +3605,7 @@ function mountDeviceWidget(
       : DEVICE_CARD_MIN_HEIGHT;
   const item = createCanvasItem({
     instanceId: slug,
-    displayName: row.name,
+    displayName: deviceCanvasLabel(row),
     preferredWidth,
     minHeight,
     content,
@@ -3724,7 +3773,7 @@ async function toggleBenchDevice(selector: string): Promise<void> {
     if (hasMappings) {
       const destinations = usage.slots.map((slot) => `P${slot}`).join(", ");
       const accepted = window.confirm(
-        `Remove ${row.name} from the canvas and mapping draft?\n\n` +
+        `Remove ${deviceCanvasLabel(row)} from the canvas and mapping draft?\n\n` +
           `Its routes to ${destinations} will be removed. Controllers and other keyboards stay unchanged.`,
       );
       if (!accepted) return;
@@ -4103,23 +4152,27 @@ function syncKeyboardDevicePresentation(): void {
     const template = keyboardSurfaceTemplate;
     if (!surface && host && template && row) {
       const instanceId = item.dataset.instanceId ?? deviceInstanceId(selector);
+      const sourceLabel = deviceCanvasLabel(row);
       surface = createKeyboardSurfaceInstance(template, {
         sourceId: selector,
         instanceId,
-        sourceLabel: row.name,
+        sourceLabel,
         mappingAvailable,
       });
       host.append(surface);
     } else if (surface && template) {
+      const sourceLabel = row
+        ? deviceCanvasLabel(row)
+        : item.dataset.widgetName ?? "Physical keyboard";
       syncKeyboardSurfaceInstance(surface, template, {
         sourceId: selector,
         instanceId: item.dataset.instanceId ?? deviceInstanceId(selector),
-        sourceLabel: row?.name ?? item.dataset.widgetName ?? "Physical keyboard",
+        sourceLabel,
         mappingAvailable,
       });
     }
     if (surface && row && mappingAvailable) {
-      syncKeyboardSourceBindings(surface, selector, row.name);
+      syncKeyboardSourceBindings(surface, selector, deviceCanvasLabel(row));
     }
     const status = item.querySelector<HTMLElement>("[data-rd-keyboard-mapping-status]");
     if (status) {
@@ -4234,8 +4287,9 @@ function syncBenchCards(): void {
         : "On-canvas preview";
       status.title = row.role === "keyboard" ? KEYBOARD_MAPPING_READY_TITLE : STAGED_DEVICE_TITLE;
     }
-    item.dataset.widgetName = row.name;
-    item.setAttribute("aria-label", row.name);
+    const displayName = deviceCanvasLabel(row);
+    item.dataset.widgetName = displayName;
+    item.setAttribute("aria-label", displayName);
     const badge = item.querySelector<HTMLElement>(".rd-devcard-badge");
     if (badge) {
       badge.dataset.role = row.role;
@@ -4248,7 +4302,7 @@ function syncBenchCards(): void {
     syncDeviceCardStateBadges(item, row);
     item.querySelector<HTMLElement>(".widget-drag-handle")?.setAttribute(
       "aria-label",
-      `Move ${row.name}`,
+      `Move ${displayName}`,
     );
     for (const [fieldName, value] of [
       ["selector", row.selector],
@@ -4264,8 +4318,8 @@ function syncBenchCards(): void {
     const marker = id
       ? rdRoot?.querySelector<HTMLElement>(`.navigator-item[data-instance-id="${id}"]`)
       : null;
-    marker?.setAttribute("aria-label", `Focus ${row.name}`);
-    if (marker) marker.title = row.name;
+    marker?.setAttribute("aria-label", `Focus ${displayName}`);
+    if (marker) marker.title = displayName;
   }
   syncKeyboardDevicePresentation();
 }

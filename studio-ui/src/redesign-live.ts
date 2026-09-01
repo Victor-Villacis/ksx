@@ -137,6 +137,10 @@ interface FunctionTarget {
 interface KeyTarget {
   element: HTMLElement;
   sourceRoot: HTMLElement | null;
+  /** Exact source selected by an inspector projection. Canvas keys derive it
+   * from their board root; legacy unqualified keys deliberately leave it
+   * empty and retain the single-source fallback. */
+  sourceId: string;
 }
 
 const EMPTY_SET: ReadonlySet<string> = new Set<string>();
@@ -380,12 +384,20 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
     if (keyTargets === null) {
       keyTargets = Array.from(new Set(scope.querySelectorAll<HTMLElement>(
         '.rd-dev-node[data-source-id] [data-key], .rd-insp-krows [data-key]',
-      ))).map((element) => ({
-        element,
-        sourceRoot: element.closest<HTMLElement>(
+      ))).map((element) => {
+        const sourceRoot = element.closest<HTMLElement>(
           ".rd-dev-node[data-source-id]",
-        ),
-      }));
+        );
+        const inspectorRoot = element.closest<HTMLElement>(
+          ".rd-insp-krows[data-source-id]",
+        );
+        return {
+          element,
+          sourceRoot,
+          sourceId: trimmed(sourceRoot?.dataset.sourceId) ||
+            trimmed(inspectorRoot?.dataset.sourceId),
+        };
+      });
     }
     if (functionTargets === null) {
       functionTargets = Array.from(scope.querySelectorAll<HTMLElement>("[data-fn]")).map(
@@ -507,11 +519,11 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
     for (const target of keyTargets ?? []) {
       const key = target.element.dataset.key ?? "";
       target.element.classList.toggle("live", liveKeys.some((identity) =>
-        identity.key === key &&
-        (
-          target.sourceRoot === null ||
-          resolvedRoots.get(identity) !== null && resolvedRoots.get(identity) === target.sourceRoot
-        )
+        identity.key === key && (() => {
+          const resolved = resolvedRoots.get(identity);
+          if (target.sourceId) return resolved?.dataset.sourceId === target.sourceId;
+          return target.sourceRoot === null || resolved !== null && resolved === target.sourceRoot;
+        })()
       ));
     }
     for (const target of functionTargets ?? []) {

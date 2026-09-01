@@ -82,6 +82,7 @@ import {
   createKeyboardSurfaceHost,
   KEYBOARD_SURFACE_SELECTOR,
   KEYBOARD_SURFACE_TEMPLATE_BODY_SELECTOR,
+  syncKeyboardSourceMapping,
   syncKeyboardSurfaceInstance,
 } from "./redesign-keyboard-device";
 
@@ -125,6 +126,9 @@ export interface RdDeviceRowView {
   meta: string;
   role: string;
   selector: string;
+  /** Exact runtime HID instance from the authoritative scan. Empty when the
+   * provider cannot prove one; live paint then fails closed by selector/alias. */
+  instance_id?: string;
   /** Server-authored short identity for disambiguating same-name boards. */
   connection_label: string;
   alias: string;
@@ -184,6 +188,10 @@ export interface RdPersonaRowView {
  *  CARDS are daemon truth (the staged rack), reconciled onto the canvas by
  *  redesign-controllers.ts; the roster and every ceiling are served. */
 export interface RdControllers {
+  /** Exact source used to compose the selected controller's authoring views. */
+  source?: string;
+  source_revision?: string;
+  source_preset?: string;
   cards: RdControllerCardView[];
   personas: RdPersonaRowView[];
   add_preset: string;
@@ -244,6 +252,9 @@ export interface RdLegendRowView {
 /** The keyboard widget's serving — `BoardPanel` on the wire, the same
  *  struct /nocturne's plate destructures. */
 export interface RdBoardPanel {
+  source?: string;
+  source_revision?: string;
+  source_preset?: string;
   kb_title: string;
   kb_cls: string;
   board_case_style: string;
@@ -277,6 +288,8 @@ export interface RedesignPayload {
   environment_cls: string;
   /** The Studio build serving this document, for support screenshots. */
   studio_version: string;
+  /** Server-resolved exact authoring source. It is inspector context only. */
+  source?: string;
   theme_rows: RdChoiceRowView[];
   devices: RdDeviceRows;
   controllers: RdControllers;
@@ -593,7 +606,14 @@ export function redesignFormProductDisabled(form: HTMLFormElement): boolean | un
   return undefined;
 }
 export function redesignLearnSource(): { selector: string; instance: string } {
-  return rdLearnSource;
+  const selector = currentAuthoringSource();
+  const row = selector ? deviceRowFor(selector) : null;
+  if (row?.aria_current === "true") {
+    return { selector: row.selector, instance: row.instance_id?.trim() ?? "" };
+  }
+  // Older payloads expose only the compatibility source pair. Preserve that
+  // narrow fallback when no source-qualified context exists at all.
+  return selector ? { selector: "", instance: "" } : rdLearnSource;
 }
 /** The mapper's ports onto the served truth (always the CURRENT arrays —
  *  re-read after every refresh, never captured). */
@@ -607,7 +627,10 @@ export function redesignControlsFor(
   slot: string,
 ): { function: string; label: string; keys: string[] }[] {
   const pad = rdCtrlPads.find((candidate) => String(candidate.slot) === slot);
-  return (pad?.controls ?? []).map((control) => ({
+  const source = pad?.sources?.find(
+    (candidate) => candidate.source_id === currentAuthoringSource(),
+  );
+  return (source?.controls ?? pad?.controls ?? []).map((control) => ({
     function: control.function,
     label: control.label,
     keys: control.keys,
@@ -1019,6 +1042,41 @@ function controllerIdentityColorEditor(slot: number): HTMLElement {
   return section;
 }
 
+function controllerSourceEditor(slot: number): HTMLElement | null {
+  const pad = rdCtrlPads.find((candidate) => candidate.slot === slot);
+  const sources = pad?.sources ?? [];
+  if (sources.length === 0) return null;
+  const section = document.createElement("section");
+  section.className = "rd-controller-sources";
+  const title = document.createElement("h3");
+  title.textContent = "Input mappings";
+  const note = document.createElement("p");
+  note.textContent = "Choose the exact device whose routes you are editing. Every source remains independent and available.";
+  const tabs = document.createElement("div");
+  tabs.className = "rd-controller-source-tabs";
+  tabs.setAttribute("role", "group");
+  tabs.setAttribute("aria-label", `Input mappings for Player ${slot}`);
+  const current = currentAuthoringSource();
+  for (const source of sources) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "n-autobtn rd-controller-source";
+    button.dataset.nx = "rd-source-authoring";
+    button.dataset.selector = source.source_id;
+    const selected = source.source_id === current;
+    button.setAttribute("aria-pressed", String(selected));
+    if (selected) button.classList.add("on");
+    const label = source.source_label?.trim() || source.source_alias?.trim() || source.source_id;
+    button.textContent = `${label}${source.routed ? "" : " · not routed"}`;
+    button.title = source.routed
+      ? `Edit ${label}'s independent mappings to Player ${slot}`
+      : `Start ${label}'s first mapping to Player ${slot}`;
+    tabs.append(button);
+  }
+  section.append(title, note, tabs);
+  return section;
+}
+
 /** Paint the mute/solo lens and the finish. The nocturne CSS drives the
  *  same effect through `.n-center.muteN` classes; here the identical
  *  custom properties are written inline on the plate — one mechanism, no
@@ -1265,6 +1323,25 @@ export function applyRedesign(v: RedesignPayload): void {
   refreshEncoderProfileLab?.(encoderProfileLabDevices());
   setRdDevExp(d?.experimental ?? []);
   setRdDevOther(d?.other ?? []);
+  const stagedSources = [
+    ...(d?.keyboards ?? []),
+    ...(d?.encoders ?? []),
+    ...(d?.experimental ?? []),
+  ].filter((row) => row.aria_current === "true");
+  const currentSource = currentAuthoringSource();
+  const servedSource = v.source?.trim() || v.controllers?.source?.trim() || "";
+  if (servedSource && stagedSources.some((row) => row.selector === servedSource)) {
+    mergeSourceIntoUrl(servedSource, false);
+  } else if (!stagedSources.some((row) => row.selector === currentSource)) {
+    const fallback = stagedSources[0]?.selector ?? "";
+    if (fallback) mergeSourceIntoUrl(fallback, false);
+    else if (currentSource) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("source");
+      const query = url.searchParams.toString();
+      window.history.replaceState(null, "", `${url.pathname}${query ? `?${query}` : ""}`);
+    }
+  }
   setRdDevScanLine(d?.scan_line ?? "");
   setRdDevKbHead(d?.keyboards_head ?? "");
   setRdDevKbFoldCls(d?.keyboards_fold_cls ?? "n-devfold none");
@@ -2077,8 +2154,7 @@ function syncEncoderEditingAccess(
 /** The full keyboard remains a recognizable board at every distance, but its
  * native keys and finish controls are only operable when the camera makes
  * them honest targets. Every connected on-canvas keyboard is independently
- * eligible; mapping availability is a separate, temporary compatibility
- * fact while bindings still lack device identity. */
+ * eligible; authoring focus never disables its peers. */
 function syncKeyboardEditingAccess(
   tier: string,
   zoom = canvasZoomFromViewport(),
@@ -2593,6 +2669,26 @@ export function setRedesignRefresh(
   redesignRefreshFn = fn;
 }
 
+export type RedesignDeviceMutationAction = "add" | "remove";
+export interface RedesignDeviceMutationOptions {
+  confirmRemove?: boolean;
+}
+
+/** Device membership is daemon-owned even though canvas geometry is browser
+ * owned. The entry injects the shared mutation/refresh coordinator so picker
+ * clicks cannot race a poll or another form action. */
+let redesignDeviceMutationFn: (
+  action: RedesignDeviceMutationAction,
+  row: RdDeviceRowView,
+  options?: RedesignDeviceMutationOptions,
+) => Promise<boolean> = async () => false;
+
+export function setRedesignDeviceMutation(
+  fn: typeof redesignDeviceMutationFn,
+): void {
+  redesignDeviceMutationFn = fn;
+}
+
 /** Merge `?slot=N` into the URL — the nocturne selection door's rule:
  *  MERGE, never replace, so other params survive, and a reload keeps the
  *  selection. Returns whether the URL actually changed (the guard that
@@ -2602,6 +2698,25 @@ function mergeSlotIntoUrl(slot: string): boolean {
   if (url.searchParams.get("slot") === slot) return false;
   url.searchParams.set("slot", slot);
   window.history.replaceState(null, "", `${url.pathname}?${url.searchParams.toString()}`);
+  return true;
+}
+
+function currentAuthoringSource(): string {
+  return new URLSearchParams(window.location.search).get("source")?.trim() ?? "";
+}
+
+/** Select one keyboard as the inspector/listen context. This does not enable,
+ * disable, or reroute any peer: all staged keyboard graphs remain live. */
+function mergeSourceIntoUrl(selector: string, resetMacro = true): boolean {
+  const source = selector.trim();
+  if (!source) return false;
+  const url = new URL(window.location.href);
+  if (url.searchParams.get("source") === source) return false;
+  url.searchParams.set("source", source);
+  if (resetMacro) url.searchParams.delete("macro");
+  url.searchParams.delete("flash");
+  const query = url.searchParams.toString();
+  window.history.replaceState(null, "", `${url.pathname}${query ? `?${query}` : ""}`);
   return true;
 }
 
@@ -2888,6 +3003,8 @@ function renderInspector(): void {
           setInspTab,
         );
         const controllerTools = [controllerIdentityColorEditor(Number(ctrlSlot))];
+        const sourceEditor = controllerSourceEditor(Number(ctrlSlot));
+        if (sourceEditor) controllerTools.unshift(sourceEditor);
         if (inspTab === "controls") controllerTools.push(bindingFilter(ctrlSlot));
         panelRows.splice(1, 0, ...controllerTools);
         rows.push(...panelRows);
@@ -3014,6 +3131,16 @@ function syncInspectorToSelection(items: HTMLElement[]): void {
   if (items.length === 0) {
     setInspector(false);
     return;
+  }
+  if (items.length === 1 && items[0].classList.contains("rd-keyboard-device-node")) {
+    const selector = items[0].dataset.sourceId ?? items[0].dataset.selector ?? "";
+    if (mergeSourceIntoUrl(selector)) {
+      // Source focus is an editing context, never an exclusivity switch. An
+      // armed gesture still belongs to the old context and must retire before
+      // the exact-source panel is fetched.
+      mapperOnSlotChange();
+      void redesignRefreshFn();
+    }
   }
   // Composition gating lives in setInspector so direct widget actions obey
   // the same rule as ordinary selection changes.
@@ -3183,16 +3310,14 @@ const DEVICE_ROLE_BADGE: Record<string, string> = {
   keyboard: "Physical keyboard",
 };
 const STAGED_DEVICE_TITLE =
-  "This board is the background helper's input source. Choosing it again changes nothing — " +
-  "a keyboard prepared for play keeps its preparation.";
+  "This exact board is one independent source in the mapping draft. Peer keyboards and routes remain enabled.";
 const KEYBOARD_MAPPING_READY_TITLE =
-  "Existing key-only bindings can be edited on this exact keyboard. Other added keyboards remain enabled sources, but their mapping controls stay read-only until bindings carry device identity.";
+  "Bindings on this exact keyboard can be edited independently; the same key on another keyboard is a different signal.";
 const DEVICE_CARD_MIN_HEIGHT = 220;
 const KEYBOARD_DEVICE_WIDTH = 980;
-// Identity fascia + source policy + the served 320px key deck. Reserving the
-// complete footprint up front keeps a board from jumping in size when its
-// persistent full surface is mounted.
-const KEYBOARD_DEVICE_MIN_HEIGHT = 560;
+// One physical keyboard is the full interactive board itself. The identity is
+// carried by its board header and canvas chrome, not a second summary card.
+const KEYBOARD_DEVICE_MIN_HEIGHT = 480;
 const DEVICE_CARD_ROW_STRIDE = DEVICE_CARD_MIN_HEIGHT + CANVAS_FRESH_PLACEMENT_GAP;
 
 function deviceCardPurpose(row: RdDeviceRowView): string {
@@ -3203,17 +3328,17 @@ function deviceCardPurpose(row: RdDeviceRowView): string {
       return `This ${kind} remains on the canvas. Device status is unavailable, so its mapping controls stay read-only until KSX confirms the exact connection.`;
     }
     return row.aria_current === "true"
-      ? `This ${kind} was the last known input source. Status is unavailable, so mapping controls stay paused until KSX confirms it.`
-      : `This ${kind} remains on the canvas while device status is unavailable. Mapping controls stay paused until KSX confirms an input source.`;
+      ? `This ${kind} was part of the mapping draft. Status is unavailable, so its controls stay paused until KSX confirms it.`
+      : `This ${kind} remains on the canvas while device status is unavailable.`;
   }
   if (row.role === "keyboard") {
     return row.aria_current === "true"
-      ? "This physical keyboard is an enabled source. Existing key-only bindings can be inspected and edited on its board."
-      : "This physical keyboard is an enabled source with its own board. Mapping stays read-only here until bindings can name this exact device.";
+      ? "This physical keyboard is an independent source. Its keys and controller routes are edited separately from every peer."
+      : "This physical keyboard has its own board but is not in the mapping draft yet.";
   }
   return row.aria_current === "true"
-    ? "This encoder is the active input source. Its configured terminal emissions are the mapping anchors."
-    : "This board is on the canvas for inspection. Make it the input source when you want to map its emitted keys.";
+    ? "This encoder is an independent source. Its configured terminal emissions are mapping anchors."
+    : "This board is on the canvas for inspection. Add it to the draft to map its emitted keys.";
 }
 
 function deviceCardMeta(row: RdDeviceRowView): string {
@@ -3232,7 +3357,7 @@ interface RdDeviceStateBadge {
 }
 
 /** One vocabulary for device state everywhere it appears. A board can hold
- * several independent facts at once (connected + on canvas + input source),
+ * several independent facts at once (connected + on canvas + mapping source),
  * so these are badges rather than one lossy status sentence. */
 function deviceStateBadges(row: RdDeviceRowView): RdDeviceStateBadge[] {
   const badges: RdDeviceStateBadge[] = [];
@@ -3243,11 +3368,10 @@ function deviceStateBadges(row: RdDeviceRowView): RdDeviceStateBadge[] {
       badges.push({ label: "Source status unavailable", state: "attention" });
       return badges;
     }
-    badges.push({ label: "Source enabled", state: "source" });
-    badges.push({
-      label: row.aria_current === "true" ? "Mapping ready" : "Mapping read-only",
-      state: row.aria_current === "true" ? "ready" : "attention",
-    });
+    if (row.aria_current === "true") {
+      badges.push({ label: "Independent source", state: "source" });
+      badges.push({ label: "Mapping ready", state: "ready" });
+    } else badges.push({ label: "Not in draft", state: "attention" });
     return badges;
   }
   if (row.aria_current !== "true") return badges;
@@ -3257,7 +3381,7 @@ function deviceStateBadges(row: RdDeviceRowView): RdDeviceStateBadge[] {
     return badges;
   }
 
-  badges.push({ label: "Input source", state: "source" });
+  badges.push({ label: "Independent source", state: "source" });
   if (row.capture_badge) {
     badges.push({
       label: row.capture_badge,
@@ -3296,14 +3420,11 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   meta.textContent = deviceCardMeta(row);
   const states = document.createElement("p");
   states.className = "rd-devcard-states";
-  // The legacy daemon still exposes one device-qualified compatibility pin.
-  // Keyboard copy names that narrow mapping capability, never an exclusive
-  // source: every connected keyboard intentionally added to the canvas is an
-  // enabled source. The form remains a real POST while source-qualified
-  // binding storage lands behind this frontend seam.
   const staged = document.createElement("p");
   staged.className = "rd-devcard-staged";
-  staged.textContent = row.role === "keyboard" ? "Mapping controls ready" : "Input source";
+  staged.textContent = row.aria_current === "true"
+    ? "Independent mapping source"
+    : "On-canvas preview";
   staged.title = row.role === "keyboard" ? KEYBOARD_MAPPING_READY_TITLE : STAGED_DEVICE_TITLE;
   const purpose = document.createElement("p");
   purpose.className = "rd-devcard-purpose";
@@ -3327,11 +3448,9 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   const submit = document.createElement("button");
   submit.type = "submit";
   submit.className = "rd-stagebtn";
-  submit.textContent = row.role === "keyboard" ? "Enable mapping controls" : "Use as input source";
-  submit.title = row.role === "keyboard"
-    ? "Temporarily direct existing key-only mapping controls to this exact keyboard. Other on-canvas keyboards remain enabled sources; nothing is saved or started."
-    : "Make this the board ksx reads as the input source — replaces the daemon's current choice. " +
-      "Nothing is saved or started, and a board already prepared keeps its preparation.";
+  submit.textContent = "Add to mapping draft";
+  submit.title = "Add this exact device as an independent mapping source. Existing keyboards and routes stay unchanged.";
+  submit.hidden = row.aria_current === "true";
   form.append(submit);
   body.append(badge, name, meta);
   body.append(states, purpose, staged, form);
@@ -3345,8 +3464,6 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
 function keyboardDeviceContent(row: RdDeviceRowView, instanceId: string): HTMLElement {
   const shell = document.createElement("section");
   shell.className = "rd-keyboard-device-shell";
-  const identity = deviceCardContent(row);
-  identity.classList.add("rd-keyboard-device-identity");
   const host = createKeyboardSurfaceHost(document);
   const template = keyboardSurfaceTemplate;
   if (template) {
@@ -3361,7 +3478,7 @@ function keyboardDeviceContent(row: RdDeviceRowView, instanceId: string): HTMLEl
   const mappingStatus = document.createElement("p");
   mappingStatus.className = "rd-keyboard-mapping-status";
   mappingStatus.dataset.rdKeyboardMappingStatus = "";
-  shell.append(identity, host, mappingStatus);
+  shell.append(host, mappingStatus);
   return shell;
 }
 
@@ -3449,15 +3566,17 @@ function mountDeviceWidget(
   item.dataset.selector = row.selector;
   item.dataset.deviceRole = row.role;
   item.dataset.staged = row.aria_current === "true" ? "true" : "false";
+  item.dataset.sourceId = row.selector;
+  item.dataset.sourceAlias = row.alias;
+  item.dataset.sourceInstance = row.instance_id ?? "";
+  item.dataset.sourceEnabled = rdDeviceScanAuthoritative ? "true" : "unknown";
+  item.dataset.mappingAvailable = row.aria_current === "true" && rdStagingReachable
+    ? "true"
+    : "false";
+  item.dataset.sourceState = rdDeviceScanAuthoritative ? "enabled" : "unknown";
   item.classList.add("rd-dev-node");
   if (row.role === "keyboard") {
     item.classList.add("rd-keyboard-device-node", "n-widget", "n-widget-kb");
-    item.dataset.sourceId = row.selector;
-    item.dataset.sourceEnabled = rdDeviceScanAuthoritative ? "true" : "unknown";
-    item.dataset.mappingAvailable = row.aria_current === "true" && rdStagingReachable
-      ? "true"
-      : "false";
-    item.dataset.sourceState = rdDeviceScanAuthoritative ? "enabled" : "unknown";
     item.dataset.keyboardTheme = kbTheme;
   }
   if (encoderSurface) {
@@ -3566,11 +3685,54 @@ function rememberDeviceGeometry(item: HTMLElement): void {
   };
 }
 
-/** Add or remove one board. Removal keeps the saved geometry, so a board
- *  that returns lands where it lived. */
-function toggleBenchDevice(selector: string): void {
+interface DeviceRouteUsage {
+  slots: number[];
+  bindings: number;
+  macros: number;
+}
+
+function deviceRouteUsage(selector: string): DeviceRouteUsage {
+  const usage: DeviceRouteUsage = { slots: [], bindings: 0, macros: 0 };
+  for (const pad of rdCtrlPads) {
+    const source = pad.sources?.find((candidate) => candidate.source_id === selector);
+    if (!source?.routed) continue;
+    const bindings = (source.controls ?? []).reduce(
+      (count, control) => count + control.keys.length,
+      0,
+    );
+    // Any authored macro makes removal destructive, including a disabled or
+    // temporarily triggerless draft; the backend enforces the same rule.
+    const macros = source.macros?.length ?? 0;
+    if (bindings > 0 || macros > 0) usage.slots.push(pad.slot);
+    usage.bindings += bindings;
+    usage.macros += macros;
+  }
+  return usage;
+}
+
+/** Add or remove one exact board. Canvas membership and source membership are
+ * one user decision: Add creates an independent staged source; Remove retires
+ * that source after warning about any routes it owns. Geometry remains saved
+ * locally so a later re-add returns to the same place. */
+async function toggleBenchDevice(selector: string): Promise<void> {
   const bench = benchSelectors();
+  const row = deviceRowFor(selector);
+  if (!row) return;
   if (bench.includes(selector)) {
+    const usage = deviceRouteUsage(selector);
+    const hasMappings = usage.bindings > 0 || usage.macros > 0;
+    if (hasMappings) {
+      const destinations = usage.slots.map((slot) => `P${slot}`).join(", ");
+      const accepted = window.confirm(
+        `Remove ${row.name} from the canvas and mapping draft?\n\n` +
+          `Its routes to ${destinations} will be removed. Controllers and other keyboards stay unchanged.`,
+      );
+      if (!accepted) return;
+    }
+    if (
+      row.aria_current === "true" &&
+      !(await redesignDeviceMutationFn("remove", row, { confirmRemove: hasMappings }))
+    ) return;
     const item = benchItemEl(selector);
     if (item) {
       rememberDeviceGeometry(item);
@@ -3579,12 +3741,23 @@ function toggleBenchDevice(selector: string): void {
     }
     canvasPrefs.bench = bench.filter((s) => s !== selector);
   } else {
-    const row = deviceRowFor(selector);
-    if (!row) return;
-    // The visible picker Add gesture authorizes one immediate, read-only chart
-    // transaction. Passive restore/reconnect mounts use the default false.
-    mountDeviceWidget(row, bench.length, true, true);
+    if (
+      row.aria_current !== "true" &&
+      !(await redesignDeviceMutationFn("add", row))
+    ) return;
     canvasPrefs.bench = [...bench, selector];
+    const currentRow = deviceRowFor(selector);
+    // Only refreshed served truth may create the canvas object. The board can
+    // disconnect while its additive stage request is in flight, and a failed
+    // refresh leaves the clicked row stale; either case must remember the
+    // user's membership choice without mounting hardware that is no longer
+    // known to be both present and staged. Reconciliation restores it at the
+    // saved place when an authoritative scan offers the exact source again.
+    if (currentRow?.aria_current === "true" && rdStagingReachable) {
+      // The visible picker Add gesture authorizes one immediate, read-only
+      // chart transaction. Passive restore/reconnect mounts use false.
+      mountDeviceWidget(currentRow, bench.length, true, true);
+    }
   }
   saveCanvasPrefs();
   syncMapCount();
@@ -3776,16 +3949,16 @@ function reconcileBenchWithRoster(): void {
   }
 }
 
-/** Temporary bridge for the legacy key-only mapper. Every connected keyboard
- * on the canvas is an enabled source, but until bindings carry source identity
- * only the daemon's exact compatibility pin may expose authoring anchors. */
+/** One deterministic recipient for the pre-device synthetic keyboard geometry.
+ * This is migration bookkeeping only; it grants no mapping exclusivity. */
 function compatibilityMappingItem(): HTMLElement | null {
   if (!rdDeviceScanAuthoritative || !rdStagingReachable) return null;
-  const selected = [...rdDevKb(), ...rdDevEnc(), ...rdDevExp()].filter(
+  const staged = [...rdDevKb(), ...rdDevEnc(), ...rdDevExp()].filter(
     (row) => row.aria_current === "true",
   );
-  if (selected.length !== 1) return null;
-  return benchItemEl(selected[0].selector);
+  const current = currentAuthoringSource();
+  const selected = staged.find((row) => row.selector === current) ?? staged[0];
+  return selected ? benchItemEl(selected.selector) : null;
 }
 
 /** A pre-device build stored the mapping board under the synthetic
@@ -3852,10 +4025,40 @@ function claimPendingLegacyKeyboardGeometry(item: HTMLElement | null): void {
   saveCanvasPrefs();
 }
 
-/** Join browser-owned canvas membership to served device truth. Every added,
- * connected keyboard is an enabled source and owns one persistent full board.
- * The legacy mapping marker is deliberately narrower and fail-closed until
- * bindings can distinguish the same key emitted by different devices. */
+/** Paint a physical keyboard from only its own source rows. Controller focus
+ * chooses the readable short label on each cap; it never filters the owner
+ * bands or disables another keyboard/controller route. */
+function syncKeyboardSourceBindings(
+  surface: HTMLElement,
+  selector: string,
+  sourceLabel: string,
+): void {
+  const routes = rdCtrlPads.flatMap((pad) => {
+    const source = pad.sources?.find((candidate) => candidate.source_id === selector);
+    if (!source || source.mapping_available === false) return [];
+    return [{
+      slot: pad.slot,
+      controls: (source.controls ?? []).map((control) => ({
+        function: control.function,
+        label: control.label,
+        keys: [...control.keys],
+      })),
+      macros: (source.macros ?? []).map((macro) => ({
+        name: macro.name,
+        triggers: [...macro.triggers],
+      })),
+    }];
+  });
+  syncKeyboardSourceMapping(surface, {
+    sourceLabel,
+    selectedSlot: Number(rdCtrlPanel?.slot_val ?? "0"),
+    routes,
+  });
+}
+
+/** Join browser-owned canvas membership to served device truth. Every staged,
+ * connected keyboard is an independent editable source and owns one full
+ * board. `source` in the URL chooses only the inspector/listen context. */
 function syncKeyboardDevicePresentation(): void {
   const root = rdRoot;
   if (!root) return;
@@ -3882,18 +4085,19 @@ function syncKeyboardDevicePresentation(): void {
   for (const item of Array.from(
     root.querySelectorAll<HTMLElement>(".rd-dev-node[data-selector]"),
   )) {
-    if (item === compatibilityItem) item.dataset.mappingSource = "true";
-    else item.removeAttribute("data-mapping-source");
-    if (!item.classList.contains("rd-keyboard-device-node")) continue;
     const selector = item.dataset.selector ?? "";
     const row = deviceRowFor(selector);
     const sourceEnabled = rdDeviceScanAuthoritative && Boolean(row);
     const mappingAvailable = sourceEnabled && rdStagingReachable &&
-      item === compatibilityKeyboard;
+      row?.aria_current === "true";
     item.dataset.sourceId = selector;
+    item.dataset.sourceAlias = row?.alias ?? "";
+    item.dataset.sourceInstance = row?.instance_id ?? "";
     item.dataset.sourceEnabled = sourceEnabled ? "true" : "unknown";
     item.dataset.mappingAvailable = mappingAvailable ? "true" : "false";
     item.dataset.sourceState = sourceEnabled ? "enabled" : "unknown";
+    item.toggleAttribute("data-authoring-source", selector === currentAuthoringSource());
+    if (!item.classList.contains("rd-keyboard-device-node")) continue;
     const host = item.querySelector<HTMLElement>("[data-rd-keyboard-surface-host]");
     let surface = host?.querySelector<HTMLElement>(KEYBOARD_SURFACE_SELECTOR) ?? null;
     const template = keyboardSurfaceTemplate;
@@ -3914,6 +4118,9 @@ function syncKeyboardDevicePresentation(): void {
         mappingAvailable,
       });
     }
+    if (surface && row && mappingAvailable) {
+      syncKeyboardSourceBindings(surface, selector, row.name);
+    }
     const status = item.querySelector<HTMLElement>("[data-rd-keyboard-mapping-status]");
     if (status) {
       status.dataset.state = !sourceEnabled
@@ -3924,16 +4131,25 @@ function syncKeyboardDevicePresentation(): void {
       status.textContent = !sourceEnabled
         ? "Connection status unavailable · this board remains on the canvas, but input and mapping are paused."
         : mappingAvailable
-          ? "Source enabled · existing key-only mapping controls are ready on this board."
-          : "Source enabled · mapping is read-only here until bindings can name this exact device.";
+          ? selector === currentAuthoringSource()
+            ? "Independent source · selected for mapping edits."
+            : "Independent source · click this keyboard to edit its mappings."
+          : "On canvas · add this keyboard to the draft before mapping it.";
     }
   }
   const nextFingerprint = Array.from(
     root.querySelectorAll<HTMLElement>(".rd-dev-node[data-selector]"),
   )
-    .map((item) =>
-      `${item.dataset.instanceId ?? ""}:${item.dataset.sourceEnabled ?? "false"}:${item.dataset.mappingAvailable ?? "false"}`
-    )
+    .map((item) => {
+      const selector = item.dataset.sourceId ?? "";
+      const routeRevisions = selector
+        ? rdCtrlPads.map((pad) => {
+            const source = pad.sources?.find((candidate) => candidate.source_id === selector);
+            return `${pad.slot}:${source?.revision ?? "missing"}:${source?.routed === true ? "r" : "n"}`;
+          }).join(",")
+        : "";
+      return `${item.dataset.instanceId ?? ""}:${item.dataset.sourceEnabled ?? "false"}:${item.dataset.mappingAvailable ?? "false"}:${routeRevisions}`;
+    })
     .sort()
     .join("|");
   if (nextFingerprint !== sourceSurfaceFingerprint) {
@@ -3973,8 +4189,11 @@ function syncBenchCards(): void {
         : "false";
     }
     if (stageButton) {
-      stageButton.dataset.rdProductDisabled = actionAvailable ? "false" : "true";
-      stageButton.disabled = !actionAvailable || rdRoot?.dataset.rdMutationPending === "true";
+      const alreadyStaged = row?.aria_current === "true";
+      stageButton.hidden = alreadyStaged;
+      stageButton.dataset.rdProductDisabled = actionAvailable && !alreadyStaged ? "false" : "true";
+      stageButton.disabled = !actionAvailable || alreadyStaged ||
+        rdRoot?.dataset.rdMutationPending === "true";
     }
 
     const encoderSurface = encoderWorkbenchSurfaces.get(item);
@@ -3989,7 +4208,7 @@ function syncBenchCards(): void {
       if (purpose) {
         purpose.textContent = item.classList.contains("rd-keyboard-device-node")
           ? "This keyboard remains on the canvas. Input and mapping controls pause until KSX confirms the exact connection."
-          : "Device status is unavailable. Mapping controls pause until KSX confirms an input source.";
+          : "Device status is unavailable. Mapping controls pause until KSX confirms this exact source.";
       }
       if (item.classList.contains("rd-keyboard-device-node")) {
         syncDeviceCardStateBadges(item, {
@@ -4010,15 +4229,20 @@ function syncBenchCards(): void {
         status.title = rdStagingLine || "Staging unavailable";
       }
     } else if (status) {
-      status.textContent = row.role === "keyboard" ? "Mapping controls ready" : "Input source";
+      status.textContent = row.aria_current === "true"
+        ? "Independent mapping source"
+        : "On-canvas preview";
       status.title = row.role === "keyboard" ? KEYBOARD_MAPPING_READY_TITLE : STAGED_DEVICE_TITLE;
     }
     item.dataset.widgetName = row.name;
     item.setAttribute("aria-label", row.name);
-    item.querySelector<HTMLElement>(".rd-devcard-badge")!.dataset.role = row.role;
-    item.querySelector<HTMLElement>(".rd-devcard-badge")!.textContent =
-      DEVICE_ROLE_BADGE[row.role] ?? "Experimental";
-    item.querySelector<HTMLElement>(".rd-devcard-name")!.textContent = row.name;
+    const badge = item.querySelector<HTMLElement>(".rd-devcard-badge");
+    if (badge) {
+      badge.dataset.role = row.role;
+      badge.textContent = DEVICE_ROLE_BADGE[row.role] ?? "Experimental";
+    }
+    const name = item.querySelector<HTMLElement>(".rd-devcard-name");
+    if (name) name.textContent = row.name;
     if (meta) meta.textContent = deviceCardMeta(row);
     if (purpose) purpose.textContent = deviceCardPurpose(row);
     syncDeviceCardStateBadges(item, row);
@@ -4696,10 +4920,9 @@ export function redesignWire(root: HTMLElement): void {
       rdMacClose();
       return;
     }
-    // A secondary keyboard is a real enabled source and a real full board,
-    // but the legacy binding table still has no device column. Refuse the
-    // gesture before the key-only handler can collapse it onto another
-    // keyboard; the status below the board gives the same persistent reason.
+    // A canvas-only preview has no route authority yet. Refuse its key before
+    // the exact-source mapper can arm a write; adding the board to the draft is
+    // the one deliberate transition that makes it editable.
     const unavailableKeyboardKey = target?.closest<HTMLElement>(
       '.rd-keyboard-device-node[data-mapping-available="false"] [data-rd-keyboard-surface] [data-key]',
     );
@@ -4708,7 +4931,7 @@ export function redesignWire(root: HTMLElement): void {
       const item = unavailableKeyboardKey.closest<HTMLElement>(".rd-keyboard-device-node");
       const name = item?.dataset.widgetName?.trim() || "This keyboard";
       rdAnnounce(
-        `${name} is enabled, but mapping is read-only until bindings can name this exact device.`,
+        `${name} is on the canvas but not in the mapping draft. Add it before editing its keys.`,
       );
       return;
     }
@@ -4717,30 +4940,46 @@ export function redesignWire(root: HTMLElement): void {
     // While a LEARN is armed the plate is the other way to answer it:
     // clicking a key resolves the capture exactly like pressing it.
     const cell = target?.closest<HTMLElement>(
-      '.rd-keyboard-device-node[data-mapping-source="true"] .n-kb [data-key], ' +
-        '.rd-keyboard-device-node[data-mapping-source="true"] .n-kbtray-row [data-key]',
+      '.rd-keyboard-device-node[data-mapping-available="true"] .n-kb [data-key], ' +
+        '.rd-keyboard-device-node[data-mapping-available="true"] .n-kbtray-row [data-key]',
     );
+    const sourceItem = cell?.closest<HTMLElement>(".rd-keyboard-device-node");
+    const sourcePin = sourceItem
+      ? {
+          selector: sourceItem.dataset.sourceId ?? "",
+          instance: sourceItem.dataset.sourceInstance ?? "",
+        }
+      : undefined;
     const learned = cell
-      ? resolveLearnWithKey(cell.getAttribute("data-key") ?? "", ev.shiftKey)
+      ? resolveLearnWithKey(cell.getAttribute("data-key") ?? "", ev.shiftKey, sourcePin)
       : false;
     if (cell) {
+      let sourceChanged = false;
       if (!learned) {
+        sourceChanged = sourcePin?.selector
+          ? mergeSourceIntoUrl(sourcePin.selector)
+          : false;
         pendingLocateKey = cell.getAttribute("data-key") ?? "";
         if (inspTab !== "keys") {
           inspTab = "keys";
           saveKbUi();
         }
       }
-      // The Keys view is the SELECTED CONTROLLER's — but the click itself
-      // just selected the KEYBOARD widget through the engine. Hand the
-      // selection to the card the served panel speaks for, so the panel
-      // (not the keyboard's generic geometry) is what opens.
-      const canvas = nCanvas;
-      const slot = rdCtrlPanel?.slot_val ?? "";
-      const item = rdRoot?.querySelector<HTMLElement>(
-        `.forma-canvas-stage > [data-instance-id="ctrl-slot-${slot}"]`,
-      );
-      if (canvas && item) canvas.setSelection([item]);
+      const revealExactKey = (): void => {
+        // The Keys view is the SELECTED CONTROLLER's — but the click itself
+        // selected the KEYBOARD widget. Hand selection to the card the served
+        // exact-source panel speaks for.
+        const canvas = nCanvas;
+        const slot = rdCtrlPanel?.slot_val ?? "";
+        const item = rdRoot?.querySelector<HTMLElement>(
+          `.forma-canvas-stage > [data-instance-id="ctrl-slot-${slot}"]`,
+        );
+        if (canvas && item) canvas.setSelection([item]);
+        if (pendingLocateKey) {
+          setInspector(true);
+          renderInspector();
+        }
+      };
       // A learn answer belongs to the controller being edited, not the
       // physical keyboard item selected by the same click. The key remains
       // the conflict dialog's durable return target.
@@ -4748,14 +4987,17 @@ export function redesignWire(root: HTMLElement): void {
         cell.focus({ preventScroll: true });
         return;
       }
-      // A selection CHANGE opened the inspector and located the key through
-      // its own callback chain; any further repaint here would wipe that
-      // pulse. Only when the card was already selected (no callback ran —
-      // the pending key survives) does this branch open and paint itself.
-      if (pendingLocateKey) {
-        setInspector(true);
-        renderInspector();
+      if (sourceChanged) {
+        // Do not briefly expose another board's by-key rows. The exact-source
+        // payload must arrive before the inspector opens on this key.
+        mapperOnSlotChange();
+        void redesignRefreshFn().then((refreshed) => {
+          if (refreshed) revealExactKey();
+          else pendingLocateKey = null;
+        });
+        return;
       }
+      revealExactKey();
       return;
     }
     // Pad art → binding row: every control on a card's silhouette carries
@@ -4783,9 +5025,12 @@ export function redesignWire(root: HTMLElement): void {
         rdCtrlPanel?.slot_val ??
         "";
       const pad = rdCtrlPads.find((candidate) => String(candidate.slot) === padSlot);
+      const source = pad?.sources?.find(
+        (candidate) => candidate.source_id === currentAuthoringSource(),
+      );
       // Canonical spelling and readable label from the SERVED pad tables —
       // the row DOM is never an implicit data store (nocturne's rule).
-      const control = (pad?.controls ?? []).find(
+      const control = (source?.controls ?? pad?.controls ?? []).find(
         (candidate) => candidate.function.toLowerCase() === fnName.toLowerCase(),
       );
       const canonical = control?.function ?? fnName;
@@ -4893,6 +5138,34 @@ export function redesignWire(root: HTMLElement): void {
       if (key) armAssign(key, "replace");
       return;
     }
+    if (hit === "rd-source-authoring") {
+      const button = target?.closest<HTMLButtonElement>('[data-nx="rd-source-authoring"]');
+      const selector = button?.dataset.selector ?? "";
+      if (selector && mergeSourceIntoUrl(selector)) {
+        mapperOnSlotChange();
+        const owner = button;
+        button?.closest(".rd-controller-source-tabs")
+          ?.querySelectorAll<HTMLButtonElement>('[data-nx="rd-source-authoring"]')
+          .forEach((candidate) => {
+            const selected = candidate.dataset.selector === selector;
+            candidate.setAttribute("aria-pressed", String(selected));
+            candidate.classList.toggle("on", selected);
+          });
+        void redesignRefreshFn().then(() => {
+          if (
+            document.activeElement !== document.body &&
+            document.activeElement !== owner
+          ) return;
+          Array.from(
+            rdRoot?.querySelectorAll<HTMLButtonElement>('[data-nx="rd-source-authoring"]') ?? [],
+          ).find((candidate) => candidate.dataset.selector === selector)?.focus({
+            preventScroll: true,
+          });
+        });
+        rdAnnounce(`${button?.textContent?.replace(/ · not routed$/, "") ?? "Keyboard"} selected for mapping edits.`);
+      }
+      return;
+    }
     if (hit === "rd-controller-color") {
       const button = target?.closest<HTMLButtonElement>('[data-nx="rd-controller-color"]');
       const slot = Number(button?.dataset.slot ?? "");
@@ -4975,7 +5248,7 @@ export function redesignWire(root: HTMLElement): void {
     } else if (hit === "rd-dev-toggle") {
       const selector = target?.closest<HTMLElement>('[data-nx="rd-dev-toggle"]')?.dataset
         .selector;
-      if (selector) toggleBenchDevice(selector);
+      if (selector) void toggleBenchDevice(selector);
       return;
     } else if (hit === "rd-ctrls-open") {
       setCtrlModal(!ctrlModalIsOpen());
@@ -6096,7 +6369,7 @@ export function RedesignIsland() {
             h(
               "p",
               null,
-              "Press the action, then press one key on the exact keyboard or encoder. A successful answer identifies that connection for compatibility mapping; nothing is captured, saved, or started.",
+              "Press the action, then press one key on the exact keyboard or encoder. A successful answer adds that connection as an independent mapping source; nothing is captured, saved, or started.",
             ),
           ),
           h(
@@ -6179,10 +6452,9 @@ export function RedesignIsland() {
         // SERVED — shell, scan line, all four tiers, every row — and hidden
         // until opened. Membership decoration (aria-pressed, the `.on`
         // marking, the verb word) is client state painted by syncDeviceRows.
-        // Device rows do not post: adding to the workbench arranges the
-        // browser and stages nothing. Identify is the one explicit server
-        // verb in this surface; its label says that an answer becomes the
-        // mapping input before the user starts listening.
+        // A device row is one coupled product gesture: it adds/removes the
+        // exact canvas board and its independent staged source. Geometry stays
+        // browser-owned; routes and source authority stay daemon-owned.
         h(
           "aside",
           {
@@ -6231,7 +6503,7 @@ export function RedesignIsland() {
             h(
               "p",
               { class: "n-devnote rd-devmodal-purpose" },
-              "Add places that physical device's own board on the canvas. Every added connected keyboard is an enabled source. Existing key-only mappings are editable on one compatibility board until bindings can name each device; other boards stay safely read-only.",
+              "Add places that physical device's own board on the canvas. Every added connected keyboard is an independent source and can map to any controller, including one already shared with another keyboard.",
             ),
             h(
               "section",
@@ -6247,7 +6519,7 @@ export function RedesignIsland() {
                 h(
                   "p",
                   null,
-                  "Start listening, then press one key on the exact keyboard or encoder you want to identify. A successful answer prepares compatibility mapping for that connection; nothing is captured, saved, or started.",
+                  "Start listening, then press one key on the exact keyboard or encoder you want to identify. A successful answer adds that exact connection as an independent source; nothing is captured, saved, or started.",
                 ),
               ),
               h(
@@ -6386,7 +6658,7 @@ export function RedesignIsland() {
                       // parent with a dynamic text, and the parity gate is
                       // what caught the chip existing only after hydration.
                       h("span", { class: "rd-dev-connectedchip" }, "Connected"),
-                      h("span", { class: "rd-dev-stagedchip" }, "Input source"),
+                      h("span", { class: "rd-dev-stagedchip" }, "Mapping source"),
                       h(
                         "span",
                         {
@@ -6442,7 +6714,7 @@ export function RedesignIsland() {
                       // parent with a dynamic text, and the parity gate is
                       // what caught the chip existing only after hydration.
                       h("span", { class: "rd-dev-connectedchip" }, "Connected"),
-                      h("span", { class: "rd-dev-stagedchip" }, "Input source"),
+                      h("span", { class: "rd-dev-stagedchip" }, "Mapping source"),
                       h(
                         "span",
                         {

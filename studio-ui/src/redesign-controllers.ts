@@ -33,6 +33,45 @@ import { composeOrderMoving } from "./redesign-controller-order";
 /** One staged pad's canvas dressing — `NocturnePadView` on the wire
  *  (snapshot.rs), the same rows /nocturne's widgets clone and dress. Only
  *  the fields this workbench draws are named; the rest ride along. */
+export interface RdPadControlView {
+  function: string;
+  label: string;
+  group: string;
+  order: number;
+  keys: string[];
+  toggle: boolean;
+  turbo_hz: number | null;
+}
+
+export interface RdPadMacroView {
+  name: string;
+  triggers: string[];
+  outputs: { function: string; steps: number[] }[];
+  timeline: string[];
+  meta: string;
+  disabled: boolean;
+  edit_href: string;
+}
+
+/** One exact physical keyboard's route into this controller. Routed and
+ * synthetic (eligible first-bind) rows share the same revision contract. */
+export interface RdPadSourceView {
+  source_id: string;
+  source_alias: string;
+  source_label?: string;
+  routed: boolean;
+  revision: string;
+  preset: string;
+  fn_keys: Record<string, string>;
+  fn_names?: Record<string, string>;
+  controls?: RdPadControlView[];
+  mapping_available: boolean;
+  mapping_reason: string;
+  macros?: RdPadMacroView[];
+  macro_available?: boolean;
+  macro_reason?: string;
+}
+
 export interface RdPadView {
   slot: number;
   family: string;
@@ -49,32 +88,19 @@ export interface RdPadView {
   fn_names: Record<string, string>;
   /** Every controller control in one stable authoring order, exact key
    *  vectors included — the auto-map walk's queue and the cords' graph. */
-  controls?: {
-    function: string;
-    label: string;
-    group: string;
-    order: number;
-    keys: string[];
-    toggle: boolean;
-    turbo_hz: number | null;
-  }[];
+  controls?: RdPadControlView[];
   /** Timed processors owned by this preset — the cords draw these as real
    *  key → macro → control chains. */
-  macros?: {
-    name: string;
-    triggers: string[];
-    outputs: string[];
-    timeline: string[];
-    meta: string;
-    disabled: boolean;
-    edit_href: string;
-  }[];
+  macros?: RdPadMacroView[];
   /** `false` means the provider could not project this slot's mapper table
    *  — an empty `fn_keys` is otherwise the valid fact "nothing is bound". */
   mapping_available: boolean;
   mapping_reason: string;
   macro_available?: boolean;
   macro_reason?: string;
+  /** Canonical multi-keyboard projection. Present (including empty) replaces
+   * the compatibility table above for source-qualified authoring and cords. */
+  sources?: RdPadSourceView[];
 }
 
 /** One staged controller — `RedesignControllerCard` on the wire

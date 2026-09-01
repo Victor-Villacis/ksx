@@ -532,21 +532,24 @@ export function mapperBindPayload(
   };
 }
 
-/** A successful source edit is confirmed only by that source's new revision,
- * or by the exact route disappearing. An unrelated source or top-level slot
- * revision is deliberately irrelevant. */
+/** A successful source edit is confirmed only by that source's new revision.
+ * Removing the final key may turn its served source row back into the
+ * deterministic routed:false projection; a missing controller/source is an
+ * unrelated destructive change and fails closed. */
 export function mapperTargetAdvanced(
   pads: readonly MapperPad[],
   row: MapperTarget,
 ): boolean {
   const pad = pads.find((candidate) => String(candidate.slot) === row.slot);
-  if (!pad) return true;
+  if (!pad) return false;
   if (pad.sources !== undefined) {
     const source = pad.sources.find((candidate) =>
       sameIdentity(sourceId(candidate), row.expectedDevice?.trim() ?? "")
     );
-    if (!source) return true;
-    if (row.expectedSourceRouted === true && source.routed === false) return true;
+    if (!source) return false;
+    if (
+      row.mode === "remove" && row.expectedSourceRouted === true && source.routed === false
+    ) return true;
     const revision = source.revision.trim();
     return revision !== "" && revision !== row.expectedTargetRevision?.trim();
   }

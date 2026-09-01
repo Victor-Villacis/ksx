@@ -22,7 +22,9 @@ import {
   redesignWire,
   setRedesignRefreshHealth,
   setRedesignRefresh,
+  setRedesignDeviceMutation,
   unparkController,
+  type RdDeviceRowView,
   type RedesignPayload,
 } from "./RedesignIsland";
 import { mapperWire } from "./redesign-mapper";
@@ -194,7 +196,7 @@ async function performRefresh(
     // is looking at.
     const current = new URLSearchParams(window.location.search);
     const params = new URLSearchParams();
-    for (const name of ["slot", "macro", "q"]) {
+    for (const name of ["slot", "source", "macro", "q"]) {
       const value = current.get(name);
       if (value) params.set(name, value);
     }
@@ -590,7 +592,7 @@ async function recoverUnconfirmedIdentify(
   setIdentifyUi(
     root,
     "resolving",
-    "Checking the current input source",
+    "Checking the current mapping source",
     "The listening response was interrupted. Confirming the server's current selection…",
   );
   try {
@@ -611,7 +613,7 @@ async function recoverUnconfirmedIdentify(
       root,
       "error",
       "Identification outcome unknown",
-      "Reload the workbench to confirm the current input source before trying again.",
+      "Reload the workbench to confirm the current mapping source before trying again.",
     );
     return false;
   }
@@ -623,7 +625,7 @@ async function recoverUnconfirmedIdentify(
     currentSelector && currentSelector !== previousSelector,
   );
   applyRedesignFlash(
-    "error: the keyboard-listening response was lost — review the current input source before retrying.",
+    "error: the keyboard-listening response was lost — review the current mapping source before retrying.",
   );
   setIdentifyUi(
     root,
@@ -633,7 +635,7 @@ async function recoverUnconfirmedIdentify(
       ? selectionChanged
         ? `The workbench now shows ${name}, but this interrupted request cannot prove what caused that change. Review its selected row or reload before trying again.`
         : `The workbench currently shows ${name}. Review its selected row or reload before trying again.`
-      : "Review the selected input-source row or reload before trying again.",
+      : "Review the selected mapping-source row or reload before trying again.",
   );
   return false;
 }
@@ -690,8 +692,8 @@ function showIdentifiedDevice(root: HTMLElement, selector: string): void {
     "identified",
     name ? `Identified ${name}` : "Keyboard identified",
     identity
-      ? `${identity}. This exact connection is now the input source.`
-      : "The exact connection that answered is now the input source.",
+      ? `${identity}. This exact connection is now an independent mapping source.`
+      : "The exact connection that answered is now an independent mapping source.",
   );
   if (row) {
     row.classList.add("rd-row-pulse");
@@ -801,7 +803,7 @@ async function submitIdentifyForm(
     root,
     "listening",
     "Listening for one key",
-    "Press one key on the exact keyboard or encoder to use as the input source. Esc cancels.",
+    "Press one key on the exact keyboard or encoder to add it as an independent mapping source. Esc cancels.",
     true,
   );
   root.querySelector<HTMLElement>("[data-rd-identify-status]")?.focus({
@@ -852,13 +854,13 @@ async function submitIdentifyForm(
     );
     if (!(await refresh())) {
       applyRedesignFlash(
-        "error: the keyboard answered, but the workbench could not refresh — reload to confirm the input source.",
+        "error: the keyboard answered, but the workbench could not refresh — reload to confirm the mapping source.",
       );
       setIdentifyUi(
         root,
         "error",
         "Keyboard answered — refresh needed",
-        "Reload the workbench to confirm which exact connection became the input source.",
+        "Reload the workbench to confirm which exact connection became a mapping source.",
       );
       return;
     }
@@ -874,12 +876,12 @@ async function submitIdentifyForm(
         ?.querySelector<HTMLElement>(".n-dev-name")
         ?.textContent?.trim();
       applyRedesignFlash(
-        "error: the keyboard answered, but the input source changed before confirmation — review the current selection.",
+        "error: the keyboard answered, but the mapping source changed before confirmation — review the current selection.",
       );
       setIdentifyUi(
         root,
         "error",
-        "Keyboard answered — input source changed",
+        "Keyboard answered — mapping source changed",
         answeredSelector
           ? `${answeredName ?? "The exact connection"} answered this attempt. ${currentName ?? "Another connection"} is selected now; review the selected row before mapping.`
           : "The server did not disclose which exact connection answered. Reload and review the selected row before mapping.",
@@ -1014,6 +1016,61 @@ async function submitDeviceForm(
       submitter?.focus({ preventScroll: true });
     }
   }
+}
+
+function selectMutationSource(action: "add" | "remove", selector: string): void {
+  const url = new URL(window.location.href);
+  if (action === "add") {
+    url.searchParams.set("source", selector);
+    url.searchParams.delete("macro");
+  } else if (url.searchParams.get("source") === selector) {
+    url.searchParams.delete("source");
+    url.searchParams.delete("macro");
+  }
+  const query = url.searchParams.toString();
+  window.history.replaceState(null, "", `${url.pathname}${query ? `?${query}` : ""}`);
+}
+
+/** Canvas picker membership is a real staged-device verb. It shares the page
+ * mutation lock and response-generation coordinator with forms, while the
+ * island remains the sole owner of geometry and canvas persistence. */
+async function mutateCanvasDevice(
+  action: "add" | "remove",
+  row: RdDeviceRowView,
+  confirmRemove: boolean,
+  root: HTMLElement,
+): Promise<boolean> {
+  const submits = beginMutation(root);
+  if (!submits) return false;
+  let committed = false;
+  try {
+    const body = new URLSearchParams({ selector: row.selector });
+    if (action === "add") {
+      body.set("alias", row.alias);
+      body.set("label", row.label);
+    } else if (confirmRemove) {
+      body.set("confirm_remove", "yes");
+    }
+    const res = await fetch(
+      action === "add" ? "/redesign/device" : "/redesign/device/remove",
+      { method: "POST", body, redirect: "follow" },
+    );
+    if (!res.ok) throw new Error(`device ${action} failed with ${res.status}`);
+    const flash = new URL(res.url).searchParams.get("flash");
+    committed = !flash?.trim().toLowerCase().startsWith("error:");
+    applyRedesignFlash(flash);
+    if (committed) selectMutationSource(action, row.selector);
+    if (!(await refresh())) {
+      applyRedesignFlash(
+        `error: the device was ${action === "add" ? "added" : "removed"}, but the workbench could not refresh — reload to confirm.`,
+      );
+    }
+  } catch {
+    applyRedesignFlash("error: request failed — is ksx studio still running?");
+  } finally {
+    endMutation(root, submits);
+  }
+  return committed;
 }
 
 /** One handler for the three controller verbs (add / move / remove): the
@@ -1402,6 +1459,9 @@ activateIslands({
     // The island asks for another slot's panel through this (selection →
     // ?slot merge → refetch) without ever owning fetch.
     setRedesignRefresh((options) => refresh("foreground", options?.fresh === true));
+    setRedesignDeviceMutation((action, row, options) =>
+      mutateCanvasDevice(action, row, options?.confirmRemove === true, el)
+    );
     // The mapper (learn/assign/bind) — page truths as ports, the entry's
     // mutation gate shared so a bind commit can never interleave with an
     // in-flight form verb.

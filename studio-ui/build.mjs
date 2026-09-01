@@ -282,11 +282,11 @@ try {
     // drawer, encoder presentation, persistent exact-device recovery,
     // actionable progress, named live/transport health, fixture-safe state,
     // search, identity colors, Tidy and Rescan make it the largest surviving
-    // entry. Replacing the permanent synthetic keyboard plus its compact
-    // physical card with one device-owned, source-safe board brings this pass
-    // to 292,034 Brotli bytes; keep only 966 bytes of headroom so the deliberate
-    // interaction fix cannot turn into an open-ended budget.
-    budgetThreshold: 293_000,
+    // entry. Independent keyboard boards, exact-source authoring, and the
+    // many-to-many mapping graph bring the measured pass to 296,820 Brotli
+    // bytes. Keep just 1,180 bytes of headroom so this deliberate identity
+    // work cannot turn into an open-ended budget.
+    budgetThreshold: 298_000,
     ssr: true,
     ssrEntryPoints: {
       check: "src/check.ts",

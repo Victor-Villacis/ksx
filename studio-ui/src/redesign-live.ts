@@ -379,12 +379,11 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
   function ensureTargets(scope: HTMLElement): void {
     if (keyTargets === null) {
       keyTargets = Array.from(new Set(scope.querySelectorAll<HTMLElement>(
-        '.rd-keyboard-device-node[data-source-id] [data-key], ' +
-          '[data-mapping-source="true"] [data-key], .rd-insp-krows [data-key]',
+        '.rd-dev-node[data-source-id] [data-key], .rd-insp-krows [data-key]',
       ))).map((element) => ({
         element,
         sourceRoot: element.closest<HTMLElement>(
-          '.rd-keyboard-device-node[data-source-id], [data-mapping-source="true"]',
+          ".rd-dev-node[data-source-id]",
         ),
       }));
     }

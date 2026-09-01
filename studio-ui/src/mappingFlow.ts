@@ -209,7 +209,7 @@ type MappingSourceIdentity = Pick<MappingLiveKeyIdentity, "sourceId" | "sourceAl
  * paint so both layers make the same exact/ambiguous decision. */
 export function mappingSourceRoots(scope: HTMLElement): HTMLElement[] {
   return Array.from(new Set(scope.querySelectorAll<HTMLElement>(
-    ".rd-keyboard-device-node[data-source-id], [data-mapping-source=\"true\"]",
+    ".rd-dev-node[data-source-id]",
   )));
 }
 
@@ -3067,12 +3067,8 @@ export class MappingFlowLayer {
       };
     }
     const physicalDevice = target.closest<HTMLElement>(".rd-dev-node[data-selector]");
-    const physicalSourceId = physicalDevice?.classList.contains("rd-keyboard-device-node")
-      ? mappingRootSourceId(physicalDevice)
-      : "";
-    if (
-      physicalDevice && !physicalSourceId && physicalDevice.dataset.mappingSource !== "true"
-    ) return null;
+    const physicalSourceId = physicalDevice ? mappingRootSourceId(physicalDevice) : "";
+    if (physicalDevice && !physicalSourceId) return null;
     const pointedSignalRow = target.closest<HTMLElement>(
       ".n-surface-signal-chain[data-surface-channel-id]",
     );

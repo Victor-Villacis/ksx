@@ -20190,62 +20190,8 @@ button.rd-utility-action {
 
 .rd-keyboard-device-node .rd-keyboard-device-shell {
   display: grid;
-  gap: 10px;
+  gap: 4px;
   min-width: 0;
-}
-
-.rd-keyboard-device-node .rd-keyboard-device-identity {
-  display: grid;
-  grid-template-columns: auto minmax(180px, 1fr) auto;
-  grid-template-areas:
-    "badge name states"
-    "badge meta source"
-    ". purpose source";
-  align-items: center;
-  gap: 3px 12px;
-  padding: 10px 14px 9px;
-  border: 1px solid var(--n-line);
-  border-radius: 12px;
-  background:
-    linear-gradient(110deg, color-mix(in srgb, var(--n-accent) 7%, transparent), transparent 34%),
-    color-mix(in srgb, var(--n-panel) 92%, var(--n-bg));
-}
-
-.rd-keyboard-device-identity .rd-devcard-badge {
-  grid-area: badge;
-  margin: 0;
-}
-
-.rd-keyboard-device-identity .rd-devcard-name {
-  grid-area: name;
-  margin: 0;
-}
-
-.rd-keyboard-device-identity .rd-devcard-meta {
-  grid-area: meta;
-}
-
-.rd-keyboard-device-identity .rd-devcard-states {
-  grid-area: states;
-  justify-self: end;
-  margin: 0;
-}
-
-.rd-keyboard-device-identity .rd-devcard-purpose {
-  grid-area: purpose;
-  margin: 2px 0 0;
-}
-
-.rd-keyboard-device-identity :is(.rd-devcard-staged, .rd-stageform) {
-  grid-area: source;
-  justify-self: end;
-  align-self: center;
-  margin: 0;
-}
-
-.rd-keyboard-device-node[data-source-state="enabled"] .rd-keyboard-device-identity {
-  border-color: color-mix(in srgb, var(--n-accent) 54%, var(--n-line));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--n-accent) 9%, transparent);
 }
 
 .rd-keyboard-device-node[data-source-state="unknown"] .rd-keyboard-device-surface-host {
@@ -20284,9 +20230,7 @@ button.rd-utility-action {
   .rd-keyboard-device-surface-host
   > .n-widget-body[data-forma-runtime-host] {
   min-width: 0;
-  /* The canvas item's minimum already includes the identity fascia. The
-     generic runtime-host minimum would add that height a second time when
-     each device-owned board mounts, making it jump by the fascia size. */
+  /* The canvas item already reserves the full board footprint. */
   min-height: 0;
 }
 
@@ -20306,22 +20250,6 @@ button.rd-utility-action {
 .rd-global-source-controls-host .rd-capture {
   width: fit-content;
   margin-left: auto;
-}
-
-@media (max-width: 760px) {
-  .rd-keyboard-device-node .rd-keyboard-device-identity {
-    grid-template-columns: auto 1fr;
-    grid-template-areas:
-      "badge states"
-      "name name"
-      "meta meta"
-      "purpose purpose"
-      "source source";
-  }
-
-  .rd-keyboard-device-identity :is(.rd-devcard-staged, .rd-stageform) {
-    justify-self: start;
-  }
 }
 
 .rd-devcard-states {
@@ -23731,6 +23659,7 @@ form.rd-undochip .n-undo-btn {
 }
 
 .rd-controller-color,
+.rd-controller-sources,
 .rd-binding-filter {
   display: grid;
   gap: 8px;
@@ -23738,6 +23667,41 @@ form.rd-undochip .n-undo-btn {
   border: 1px solid var(--n-line);
   border-radius: 10px;
   background: color-mix(in srgb, var(--n-panel-2) 58%, transparent);
+}
+
+.rd-controller-sources h3,
+.rd-controller-sources p {
+  margin: 0;
+}
+
+.rd-controller-sources h3 {
+  font-size: var(--fs-small);
+}
+
+.rd-controller-sources p {
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd-controller-source-tabs {
+  display: grid;
+  gap: 6px;
+}
+
+.rd-controller-source {
+  width: 100%;
+  justify-content: flex-start;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-controller-source[aria-pressed="true"] {
+  border-color: var(--n-accent-line);
+  background: var(--n-accent-tint);
+  color: var(--n-accent-2);
 }
 
 .rd-controller-color-head h3,

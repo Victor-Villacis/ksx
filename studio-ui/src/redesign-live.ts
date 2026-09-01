@@ -7,6 +7,16 @@
 // /api/redesign. This module only borrows that state as a short-lived license
 // to decorate the current DOM.
 
+import {
+  mappingSourceRoots,
+  mappingLiveKeyToken,
+  parseMappingLiveKeyToken,
+  resolveMappingLiveSourceRoot,
+  type MappingLiveKeyIdentity,
+} from "./mappingFlow";
+
+export { parseMappingLiveKeyToken } from "./mappingFlow";
+
 export interface RedesignLiveSlotFrame {
   slot: number;
   down: string[];
@@ -124,6 +134,11 @@ interface FunctionTarget {
   slot: number;
 }
 
+interface KeyTarget {
+  element: HTMLElement;
+  sourceRoot: HTMLElement | null;
+}
+
 const EMPTY_SET: ReadonlySet<string> = new Set<string>();
 const EMPTY_MAP: ReadonlyMap<number, ReadonlySet<string>> =
   new Map<number, ReadonlySet<string>>();
@@ -212,9 +227,12 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
   let events = 0;
   let dropped = 0;
   let offPanel = 0;
-  let keyTargets: HTMLElement[] | null = null;
+  let keyTargets: KeyTarget[] | null = null;
   let functionTargets: FunctionTarget[] | null = null;
-  const keysDown = new Set<string>();
+  // The wire's runtime device id is stable across a press/release; an alias
+  // is correlation metadata and may be renamed while a key is held. Keep the
+  // ledger keyed by device+key so a release cannot strand an old alias token.
+  const keysDown = new Map<string, string>();
   const selectedFunctions = new Set<string>();
   const slotFunctionsDown = new Map<number, ReadonlySet<string>>();
   const slotFunctionHits = new Map<number, ReadonlySet<string>>();
@@ -360,11 +378,15 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
 
   function ensureTargets(scope: HTMLElement): void {
     if (keyTargets === null) {
-      keyTargets = Array.from(
-        scope.querySelectorAll<HTMLElement>(
+      keyTargets = Array.from(new Set(scope.querySelectorAll<HTMLElement>(
+        '.rd-keyboard-device-node[data-source-id] [data-key], ' +
           '[data-mapping-source="true"] [data-key], .rd-insp-krows [data-key]',
+      ))).map((element) => ({
+        element,
+        sourceRoot: element.closest<HTMLElement>(
+          '.rd-keyboard-device-node[data-source-id], [data-mapping-source="true"]',
         ),
-      );
+      }));
     }
     if (functionTargets === null) {
       functionTargets = Array.from(scope.querySelectorAll<HTMLElement>("[data-fn]")).map(
@@ -458,11 +480,15 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
     for (const keyFrame of Array.isArray(envelope.frame.keys) ? envelope.frame.keys : []) {
       const key = trimmed(keyFrame.key);
       if (!key) continue;
+      const device = trimmed(keyFrame.device);
+      const alias = trimmed(keyFrame.alias);
+      const token = mappingLiveKeyToken(key, device, alias);
+      const ledgerId = JSON.stringify([device || `alias:${alias}`, key]);
       if (keyFrame.down === true) {
-        keysDown.add(key);
-        keyHits.add(key);
+        keysDown.set(ledgerId, token);
+        keyHits.add(token);
       } else {
-        keysDown.delete(key);
+        keysDown.delete(ledgerId);
       }
       events += 1;
       ticker.push(`${key}${keyFrame.down === true ? "↓" : "↑"}`);
@@ -472,9 +498,22 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
     offPanel += finiteCounter(envelope.frame.off_panel);
 
     ensureTargets(scope);
-    for (const element of keyTargets ?? []) {
-      const key = element.dataset.key ?? "";
-      element.classList.toggle("live", keysDown.has(key) || keyHits.has(key));
+    const downTokens = new Set(keysDown.values());
+    const liveKeys = [...downTokens, ...keyHits].map(parseMappingLiveKeyToken);
+    const resolvedRoots = new Map<MappingLiveKeyIdentity, HTMLElement | null>();
+    const roots = mappingSourceRoots(scope);
+    for (const identity of liveKeys) {
+      resolvedRoots.set(identity, resolveMappingLiveSourceRoot(roots, identity));
+    }
+    for (const target of keyTargets ?? []) {
+      const key = target.element.dataset.key ?? "";
+      target.element.classList.toggle("live", liveKeys.some((identity) =>
+        identity.key === key &&
+        (
+          target.sourceRoot === null ||
+          resolvedRoots.get(identity) !== null && resolvedRoots.get(identity) === target.sourceRoot
+        )
+      ));
     }
     for (const target of functionTargets ?? []) {
       const controls = target.slot > 0
@@ -485,7 +524,7 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
         target.functions.some((control) => controls.has(control)),
       );
     }
-    host.setPathLive(keysDown, keyHits, slotFunctionsDown, slotFunctionHits);
+    host.setPathLive(downTokens, keyHits, slotFunctionsDown, slotFunctionHits);
 
     const stats = statsElement(scope);
     if (stats) {

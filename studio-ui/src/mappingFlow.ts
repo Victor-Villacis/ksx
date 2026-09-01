@@ -30,6 +30,27 @@ export interface MappingFlowControl {
   turbo_hz: number | null;
 }
 
+/** One physical source's mapping table for a controller slot. New payloads
+ * carry these rows so two keyboards may bind the same key independently;
+ * older payloads keep their single table on MappingFlowPad itself. */
+export interface MappingFlowSource {
+  sourceId?: string;
+  sourceAlias?: string;
+  /** Read-only aliases accepted while the Rust wire spelling remains
+   * snake_case. Routes normalize both spellings immediately. */
+  source_id?: string;
+  source_alias?: string;
+  preset?: string;
+  fn_keys?: Record<string, string>;
+  fn_names?: Record<string, string>;
+  controls?: readonly MappingFlowControl[];
+  mapping_available?: boolean;
+  mapping_reason?: string;
+  macros?: readonly MappingFlowMacro[];
+  macro_available?: boolean;
+  macro_reason?: string;
+}
+
 export interface MappingFlowPad {
   slot: number;
   preset: string;
@@ -42,6 +63,9 @@ export interface MappingFlowPad {
   macros?: readonly MappingFlowMacro[];
   macro_available?: boolean;
   macro_reason?: string;
+  /** Absent means the legacy top-level table. Present (including empty)
+   * authoritatively replaces that table with source-qualified rows. */
+  sources?: readonly MappingFlowSource[];
 }
 
 export interface MappingFlowMacro {
@@ -58,6 +82,8 @@ interface KeyFlowEndpoint {
   kind: "key";
   id: string;
   key: string;
+  sourceId: string;
+  sourceAlias: string;
 }
 
 interface ControlFlowEndpoint {
@@ -112,6 +138,8 @@ export interface MacroProcessorFlow {
   kind: "macro";
   slot: number;
   preset: string;
+  sourceId: string;
+  sourceAlias: string;
   name: string;
   triggers: string[];
   outputs: { functionName: string; steps: number[] }[];
@@ -131,6 +159,125 @@ export interface MappingFlowGraph {
 export interface MappingFlowUnavailable {
   slot: number;
   reason: string;
+  sourceId?: string;
+  sourceAlias?: string;
+}
+
+export interface MappingLiveKeyIdentity {
+  key: string;
+  sourceId: string;
+  sourceAlias: string;
+}
+
+const QUALIFIED_LIVE_KEY_PREFIX = "\u0001";
+
+/** Sets remain the narrow live-feedback port shared with RedesignIsland.
+ * Qualified entries use a collision-proof JSON tuple; raw key strings remain
+ * valid for old callers and old frames. */
+export function mappingLiveKeyToken(
+  key: string,
+  sourceId = "",
+  sourceAlias = "",
+): string {
+  return sourceId || sourceAlias
+    ? `${QUALIFIED_LIVE_KEY_PREFIX}${JSON.stringify([sourceId, sourceAlias, key])}`
+    : key;
+}
+
+export function parseMappingLiveKeyToken(token: string): MappingLiveKeyIdentity {
+  if (token.startsWith(QUALIFIED_LIVE_KEY_PREFIX)) {
+    try {
+      const tuple = JSON.parse(token.slice(1)) as unknown;
+      if (
+        Array.isArray(tuple) && tuple.length === 3 &&
+        tuple.every((part) => typeof part === "string")
+      ) {
+        return { sourceId: tuple[0], sourceAlias: tuple[1], key: tuple[2] };
+      }
+    } catch {
+      // A malformed forward-compatible token is not allowed to impersonate
+      // an unqualified key. It remains unmatched through the empty key.
+    }
+    return { sourceId: "", sourceAlias: "", key: "" };
+  }
+  return { sourceId: "", sourceAlias: "", key: token };
+}
+
+type MappingSourceIdentity = Pick<MappingLiveKeyIdentity, "sourceId" | "sourceAlias">;
+
+/** Physical-source discovery is shared by static cord layout and 60 Hz live
+ * paint so both layers make the same exact/ambiguous decision. */
+export function mappingSourceRoots(scope: HTMLElement): HTMLElement[] {
+  return Array.from(new Set(scope.querySelectorAll<HTMLElement>(
+    ".rd-keyboard-device-node[data-source-id], [data-mapping-source=\"true\"]",
+  )));
+}
+
+export function mappingRootSourceId(root: HTMLElement): string {
+  return root.dataset.sourceId?.trim() || root.dataset.selector?.trim() || "";
+}
+
+export function mappingRootSourceAlias(root: HTMLElement): string {
+  return root.dataset.sourceAlias?.trim() ||
+    root.querySelector<HTMLInputElement>('.rd-stageform input[name="alias"]')?.value.trim() ||
+    "";
+}
+
+function mappingRootSourceInstances(root: HTMLElement): string[] {
+  return Array.from(new Set([
+    root.dataset.sourceInstance,
+    root.dataset.instanceId,
+    root.querySelector<HTMLInputElement>('.rd-stageform input[name="instance_id"]')?.value,
+  ].map((value) => value?.trim() ?? "").filter(Boolean)));
+}
+
+function uniqueMappingSource(roots: readonly HTMLElement[]): HTMLElement | null {
+  return roots.length === 1 ? roots[0] : null;
+}
+
+export function resolveMappingSourceRoot(
+  roots: readonly HTMLElement[],
+  source: MappingSourceIdentity,
+): HTMLElement | null {
+  if (source.sourceId) {
+    const exact = roots.filter((root) => mappingRootSourceId(root) === source.sourceId);
+    if (exact.length > 0) return uniqueMappingSource(exact);
+  }
+  if (source.sourceAlias) {
+    const aliases = roots.filter((root) => mappingRootSourceAlias(root) === source.sourceAlias);
+    if (aliases.length > 0) return uniqueMappingSource(aliases);
+  }
+  // An old unqualified route is safe only with one possible physical node.
+  if (source.sourceId || source.sourceAlias || roots.length !== 1) return null;
+  return roots[0];
+}
+
+export function resolveMappingLiveSourceRoot(
+  roots: readonly HTMLElement[],
+  identity: MappingSourceIdentity,
+): HTMLElement | null {
+  if (identity.sourceId) {
+    const exact = roots.filter((root) => mappingRootSourceId(root) === identity.sourceId);
+    if (exact.length > 0) return uniqueMappingSource(exact);
+    const folded = identity.sourceId.toUpperCase();
+    const instances = roots.filter((root) =>
+      mappingRootSourceInstances(root).some((candidate) => candidate.toUpperCase() === folded)
+    );
+    if (instances.length > 0) return uniqueMappingSource(instances);
+  }
+  if (identity.sourceAlias) {
+    const aliases = roots.filter((root) =>
+      mappingRootSourceAlias(root) === identity.sourceAlias
+    );
+    if (aliases.length > 0) return uniqueMappingSource(aliases);
+  }
+  if (!identity.sourceId && !identity.sourceAlias && roots.length === 1) return roots[0];
+  // A qualified event may fall back only to one truly legacy, identity-free
+  // root. It never guesses between modern boards.
+  const legacy = roots.filter((root) =>
+    !mappingRootSourceId(root) && !mappingRootSourceAlias(root)
+  );
+  return roots.length === 1 ? uniqueMappingSource(legacy) : null;
 }
 
 export interface MappingFlowLayoutSummary {
@@ -226,6 +373,7 @@ interface MappingAnchorCache {
 
 interface MappingInspection {
   key?: string;
+  sourceId?: string;
   slot?: number;
   functionName?: string;
   macroId?: string;
@@ -291,17 +439,72 @@ function routePart(value: string): string {
   return encodeURIComponent(value);
 }
 
-function functionLabel(pad: MappingFlowPad, canonicalFunction: string): string {
+interface MappingFlowSourceProjection {
+  sourceId: string;
+  sourceAlias: string;
+  preset: string;
+  fnKeys: Record<string, string>;
+  fnNames: Record<string, string>;
+  controls?: readonly MappingFlowControl[];
+  mappingAvailable: boolean;
+  mappingReason: string;
+  macros: readonly MappingFlowMacro[];
+  macroAvailable: boolean;
+  macroReason: string;
+}
+
+function padSourceRows(pad: MappingFlowPad): MappingFlowSourceProjection[] {
+  const rows: readonly (MappingFlowSource | null)[] = pad.sources === undefined
+    ? [null]
+    : pad.sources;
+  return rows.map((source) => ({
+    sourceId: (source?.sourceId ?? source?.source_id ?? "").trim(),
+    sourceAlias: (source?.sourceAlias ?? source?.source_alias ?? "").trim(),
+    preset: source?.preset?.trim() || pad.preset,
+    fnKeys: source === null ? pad.fn_keys : source.fn_keys ?? {},
+    fnNames: source?.fn_names ?? pad.fn_names,
+    controls: source === null ? pad.controls : source.controls,
+    mappingAvailable: (source?.mapping_available ?? pad.mapping_available) !== false,
+    mappingReason: source?.mapping_reason?.trim() || pad.mapping_reason?.trim() ||
+      "Direct mapping information is unavailable.",
+    macros: source === null ? pad.macros ?? [] : source.macros ?? [],
+    macroAvailable: (source?.macro_available ?? pad.macro_available) !== false,
+    macroReason: source?.macro_reason?.trim() || pad.macro_reason?.trim() ||
+      "Macro information is unavailable.",
+  }));
+}
+
+function sourceIdentity(source: MappingFlowSourceProjection): string {
+  return source.sourceId || source.sourceAlias;
+}
+
+function qualifiedRoutePart(source: MappingFlowSourceProjection): string {
+  const identity = sourceIdentity(source);
+  return identity ? `:source:${routePart(identity)}` : "";
+}
+
+function keyEndpoint(source: MappingFlowSourceProjection, key: string): KeyFlowEndpoint {
+  const identity = sourceIdentity(source);
+  return {
+    kind: "key",
+    id: identity ? `key:${routePart(identity)}:${routePart(key)}` : `key:${key}`,
+    key,
+    sourceId: source.sourceId,
+    sourceAlias: source.sourceAlias,
+  };
+}
+
+function functionLabel(source: MappingFlowSourceProjection, canonicalFunction: string): string {
   const functionName = normalizedFunctionName(canonicalFunction);
   const direction = directionalAnchorFunction(functionName);
-  const control = pad.controls?.find(
+  const control = source.controls?.find(
     (candidate) =>
       normalizedFunctionName(candidate.function) === functionName ||
       (direction !== null && normalizedFunctionName(candidate.function) === direction),
   );
   const normalizedLabel = control?.label.trim();
   if (normalizedLabel) return normalizedLabel;
-  const labelEntry = Object.entries(pad.fn_names).find(
+  const labelEntry = Object.entries(source.fnNames).find(
     ([candidate]) =>
       normalizedFunctionName(candidate) === functionName ||
       (direction !== null && normalizedFunctionName(candidate) === direction),
@@ -318,7 +521,9 @@ export function deriveDirectMappingFlow(
   const routes: DirectMappingFlow[] = [];
   const seen = new Set<string>();
   for (const pad of [...pads].sort((left, right) => left.slot - right.slot)) {
-    const controls = [...(pad.controls ?? [])]
+    for (const source of padSourceRows(pad)) {
+      if (!source.mappingAvailable) continue;
+      const controls = [...(source.controls ?? [])]
         .sort((left, right) =>
           left.order - right.order ||
           normalizedFunctionName(left.function).localeCompare(
@@ -326,58 +531,59 @@ export function deriveDirectMappingFlow(
           )
         )
         .map<[string, readonly string[]]>((control) => [control.function, control.keys]);
-    const projectedFunctions = new Set(
-      controls.map(([canonicalFunction]) => normalizedFunctionName(canonicalFunction)),
-    );
-    const legacyEntries = Object.entries(pad.fn_keys)
-      // The ordered zone projection intentionally covers visible controls only.
-      // Preserve non-zone mapper truth such as partial axes (`ly.-16384`) from
-      // the compatibility map while preferring exact key arrays for projected
-      // controls. These raw functions retain their route identity and merely
-      // borrow the matching directional zone as their DOM anchor.
-      .filter(([canonicalFunction]) =>
-        !projectedFunctions.has(normalizedFunctionName(canonicalFunction))
-      )
-      .sort(([left], [right]) =>
-        normalizedFunctionName(left).localeCompare(normalizedFunctionName(right))
-      )
-      .map<[string, readonly string[]]>(([canonicalFunction, joinedKeys]) => [
-        canonicalFunction,
-        joinedKeys.split(/\s*·\s*/u),
-      ]);
-    const entries: [string, readonly string[]][] = pad.controls === undefined
-      ? legacyEntries
-      : [...controls, ...legacyEntries];
-    for (const [canonicalFunction, keys] of entries) {
-      const functionName = normalizedFunctionName(canonicalFunction);
-      if (!functionName) continue;
-      const label = functionLabel(pad, canonicalFunction);
-      for (const candidate of keys) {
-        const key = candidate.trim();
-        if (!key) continue;
-        const signature = `${pad.slot}\u0000${key}\u0000${functionName}`;
-        if (seen.has(signature)) continue;
-        seen.add(signature);
-        const id =
-          `binding:${pad.slot}:${routePart(pad.preset)}:${routePart(key)}:${routePart(functionName)}`;
-        routes.push({
-          id,
-          kind: "binding",
-          chainId: id,
-          slot: pad.slot,
-          source: {
-            kind: "key",
-            id: `key:${key}`,
-            key,
-          },
-          target: {
-            kind: "control",
-            id: `control:${pad.preset}:${functionName}`,
+      const projectedFunctions = new Set(
+        controls.map(([canonicalFunction]) => normalizedFunctionName(canonicalFunction)),
+      );
+      const legacyEntries = Object.entries(source.fnKeys)
+        // The ordered zone projection intentionally covers visible controls only.
+        // Preserve non-zone mapper truth such as partial axes (`ly.-16384`) from
+        // the compatibility map while preferring exact key arrays for projected
+        // controls. These raw functions retain their route identity and merely
+        // borrow the matching directional zone as their DOM anchor.
+        .filter(([canonicalFunction]) =>
+          !projectedFunctions.has(normalizedFunctionName(canonicalFunction))
+        )
+        .sort(([left], [right]) =>
+          normalizedFunctionName(left).localeCompare(normalizedFunctionName(right))
+        )
+        .map<[string, readonly string[]]>(([canonicalFunction, joinedKeys]) => [
+          canonicalFunction,
+          joinedKeys.split(/\s*·\s*/u),
+        ]);
+      const entries: [string, readonly string[]][] = source.controls === undefined
+        ? legacyEntries
+        : [...controls, ...legacyEntries];
+      for (const [canonicalFunction, keys] of entries) {
+        const functionName = normalizedFunctionName(canonicalFunction);
+        if (!functionName) continue;
+        const label = functionLabel(source, canonicalFunction);
+        for (const candidate of keys) {
+          const key = candidate.trim();
+          if (!key) continue;
+          // Identity and DOM id must use the same source fact. An alias is
+          // presentation metadata once an exact selector exists; allowing it
+          // into only the dedupe key could emit two routes with one id.
+          const signature =
+            `${sourceIdentity(source)}\u0000${pad.slot}\u0000${key}\u0000${functionName}`;
+          if (seen.has(signature)) continue;
+          seen.add(signature);
+          const id =
+            `binding:${pad.slot}:${routePart(source.preset)}${qualifiedRoutePart(source)}:${routePart(key)}:${routePart(functionName)}`;
+          routes.push({
+            id,
+            kind: "binding",
+            chainId: id,
             slot: pad.slot,
-            functionName,
-            label,
-          },
-        });
+            source: keyEndpoint(source, key),
+            target: {
+              kind: "control",
+              id: `control:${source.preset}:${functionName}`,
+              slot: pad.slot,
+              functionName,
+              label,
+            },
+          });
+        }
       }
     }
   }
@@ -392,95 +598,103 @@ export function deriveMappingFlow(pads: readonly MappingFlowPad[]): MappingFlowG
   // Availability is authoritative. A compatibility payload can carry stale
   // cached rows beside a failed fresh read; drawing them would turn "unknown"
   // into an apparently current mapping.
-  const routes: MappingFlowSegment[] = [
-    ...deriveDirectMappingFlow(pads.filter((pad) => pad.mapping_available !== false)),
-  ];
+  const routes: MappingFlowSegment[] = [...deriveDirectMappingFlow(pads)];
   const processors: MacroProcessorFlow[] = [];
   const unavailableMappings: MappingFlowUnavailable[] = [];
   const unavailableMacros: MappingFlowUnavailable[] = [];
   for (const pad of [...pads].sort((left, right) => left.slot - right.slot)) {
-    if (pad.mapping_available === false) {
-      unavailableMappings.push({
-        slot: pad.slot,
-        reason: pad.mapping_reason?.trim() || "Direct mapping information is unavailable.",
-      });
-    }
-    if (pad.macro_available === false) {
-      unavailableMacros.push({
-        slot: pad.slot,
-        reason: pad.macro_reason?.trim() || "Macro information is unavailable.",
-      });
-      continue;
-    }
-    const macros = [...(pad.macros ?? [])].sort((left, right) =>
-      left.name.localeCompare(right.name)
-    );
-    for (const macro of macros) {
-      const triggers = Array.from(new Set(macro.triggers.map((key) => key.trim()).filter(Boolean)));
-      const seenOutputs = new Set<string>();
-      const outputs: { functionName: string; steps: number[] }[] = [];
-      for (const candidate of macro.outputs) {
-        const output = normalizedFunctionName(candidate.function);
-        if (!output || seenOutputs.has(output)) continue;
-        seenOutputs.add(output);
-        outputs.push({
-          functionName: output,
-          steps: Array.from(new Set(candidate.steps.filter((step) => step > 0))).sort(
-            (left, right) => left - right,
-          ),
+    for (const source of padSourceRows(pad)) {
+      if (!source.mappingAvailable) {
+        unavailableMappings.push({
+          slot: pad.slot,
+          reason: source.mappingReason,
+          sourceId: source.sourceId || undefined,
+          sourceAlias: source.sourceAlias || undefined,
         });
       }
-      const processorId =
-        `macro:${pad.slot}:${routePart(pad.preset)}:${routePart(macro.name)}`;
-      const processor: MacroProcessorFlow = {
-        id: processorId,
-        kind: "macro",
-        slot: pad.slot,
-        preset: pad.preset,
-        name: macro.name,
-        triggers,
-        outputs,
-        timeline: [...macro.timeline],
-        meta: macro.meta,
-        disabled: macro.disabled,
-        editHref: macro.edit_href,
-      };
-      processors.push(processor);
-      const macroEndpoint: MacroFlowEndpoint = {
-        kind: "macro",
-        id: processorId,
-        slot: pad.slot,
-        name: macro.name,
-      };
-      for (const key of triggers) {
-        routes.push({
-          id: `${processorId}:trigger:${routePart(key)}`,
-          kind: "macro-trigger",
-          chainId: processorId,
+      if (!source.macroAvailable) {
+        unavailableMacros.push({
           slot: pad.slot,
-          processorId,
-          source: { kind: "key", id: `key:${key}`, key },
-          target: macroEndpoint,
+          reason: source.macroReason,
+          sourceId: source.sourceId || undefined,
+          sourceAlias: source.sourceAlias || undefined,
         });
+        continue;
       }
-      for (const output of outputs) {
-        const { functionName, steps } = output;
-        routes.push({
-          id: `${processorId}:output:${routePart(functionName)}`,
-          kind: "macro-output",
-          chainId: processorId,
+      const macros = [...source.macros].sort((left, right) =>
+        left.name.localeCompare(right.name)
+      );
+      for (const macro of macros) {
+        const triggers = Array.from(
+          new Set(macro.triggers.map((key) => key.trim()).filter(Boolean)),
+        );
+        const seenOutputs = new Set<string>();
+        const outputs: { functionName: string; steps: number[] }[] = [];
+        for (const candidate of macro.outputs) {
+          const output = normalizedFunctionName(candidate.function);
+          if (!output || seenOutputs.has(output)) continue;
+          seenOutputs.add(output);
+          outputs.push({
+            functionName: output,
+            steps: Array.from(new Set(candidate.steps.filter((step) => step > 0))).sort(
+              (left, right) => left - right,
+            ),
+          });
+        }
+        const processorId =
+          `macro:${pad.slot}:${routePart(source.preset)}${qualifiedRoutePart(source)}:${routePart(macro.name)}`;
+        const processor: MacroProcessorFlow = {
+          id: processorId,
+          kind: "macro",
           slot: pad.slot,
-          processorId,
-          steps,
-          source: macroEndpoint,
-          target: {
-            kind: "control",
-            id: `control:${pad.preset}:${functionName}`,
+          preset: source.preset,
+          sourceId: source.sourceId,
+          sourceAlias: source.sourceAlias,
+          name: macro.name,
+          triggers,
+          outputs,
+          timeline: [...macro.timeline],
+          meta: macro.meta,
+          disabled: macro.disabled,
+          editHref: macro.edit_href,
+        };
+        processors.push(processor);
+        const macroEndpoint: MacroFlowEndpoint = {
+          kind: "macro",
+          id: processorId,
+          slot: pad.slot,
+          name: macro.name,
+        };
+        for (const key of triggers) {
+          routes.push({
+            id: `${processorId}:trigger:${routePart(key)}`,
+            kind: "macro-trigger",
+            chainId: processorId,
             slot: pad.slot,
-            functionName,
-            label: functionLabel(pad, functionName),
-          },
-        });
+            processorId,
+            source: keyEndpoint(source, key),
+            target: macroEndpoint,
+          });
+        }
+        for (const output of outputs) {
+          const { functionName, steps } = output;
+          routes.push({
+            id: `${processorId}:output:${routePart(functionName)}`,
+            kind: "macro-output",
+            chainId: processorId,
+            slot: pad.slot,
+            processorId,
+            steps,
+            source: macroEndpoint,
+            target: {
+              kind: "control",
+              id: `control:${source.preset}:${functionName}`,
+              slot: pad.slot,
+              functionName,
+              label: functionLabel(source, functionName),
+            },
+          });
+        }
       }
     }
   }
@@ -588,6 +802,7 @@ function elementPerimeterPoint(
 
 function inspectionEqual(left: MappingInspection | null, right: MappingInspection | null): boolean {
   return left?.key === right?.key &&
+    left?.sourceId === right?.sourceId &&
     left?.slot === right?.slot &&
     left?.functionName === right?.functionName &&
     left?.macroId === right?.macroId &&
@@ -623,8 +838,8 @@ export class MappingFlowLayer {
   readonly #abort = new AbortController();
   readonly #relatedAnchors = new Set<Element>();
   readonly #observedAnchors = new Set<Element>();
-  #liveKeysDown: ReadonlySet<string> = new Set();
-  #liveKeyHits: ReadonlySet<string> = new Set();
+  #liveKeysDown: readonly MappingLiveKeyIdentity[] = [];
+  #liveKeyHits: readonly MappingLiveKeyIdentity[] = [];
   #liveSlotFunctionsDown: ReadonlyMap<number, ReadonlySet<string>> = new Map();
   #liveSlotFunctionHits: ReadonlyMap<number, ReadonlySet<string>> = new Map();
   #routes: MappingFlowSegment[] = [];
@@ -890,12 +1105,21 @@ export class MappingFlowLayer {
     return this.#routes.length;
   }
 
+  #resolveSourceRoot(source: Pick<KeyFlowEndpoint, "sourceId" | "sourceAlias">): HTMLElement | null {
+    return resolveMappingSourceRoot(mappingSourceRoots(this.#root), source);
+  }
+
+  #sourceLabel(source: KeyFlowEndpoint): string {
+    const root = this.#resolveSourceRoot(source);
+    return source.sourceAlias || root?.dataset.widgetName?.trim() ||
+      (root?.classList.contains("rd-encoder-device-node") ? "Encoder" : "Keyboard");
+  }
+
+  #sourceRootMatchesId(source: KeyFlowEndpoint, sourceId: string | undefined): boolean {
+    return !sourceId || source.sourceId === sourceId;
+  }
+
   #relationSummaries(): MappingFlowRelationSummary[] {
-    const sourceItem = this.#root.querySelector<HTMLElement>('[data-mapping-source="true"]');
-    const sourceLabel = sourceItem
-      ? sourceItem.dataset.widgetName?.trim() ||
-        (sourceItem.classList.contains("rd-encoder-device-node") ? "Encoder" : "Keyboard")
-      : "No input source";
     const byChain = new Map<string, MappingFlowSegment[]>();
     for (const route of this.#routes) {
       const group = byChain.get(route.chainId) ?? [];
@@ -909,6 +1133,7 @@ export class MappingFlowLayer {
       emitted.add(route.chainId);
       const chain = byChain.get(route.chainId) ?? [route];
       if (route.kind === "binding") {
+        const sourceLabel = this.#sourceLabel(route.source);
         summaries.push({
           chainId: route.chainId,
           slot: route.slot,
@@ -921,12 +1146,16 @@ export class MappingFlowLayer {
       const triggers = Array.from(new Set(chain.flatMap((segment) =>
         segment.kind === "macro-trigger" ? [segment.source.key] : []
       )));
+      const triggerSource = chain.find((segment) => segment.kind === "macro-trigger");
+      const triggerSourceLabel = triggerSource?.source.kind === "key"
+        ? this.#sourceLabel(triggerSource.source)
+        : "Keyboard";
       const targets = Array.from(new Set(chain.flatMap((segment) =>
         segment.kind === "macro-output" ? [`P${segment.slot} ${segment.target.label}`] : []
       )));
       const triggerLabel = triggers.length === 0
         ? "No host trigger"
-        : triggers.map((key) => `${sourceLabel} · ${key}`).join(" or ");
+        : triggers.map((key) => `${triggerSourceLabel} · ${key}`).join(" or ");
       const targetLabel = targets.length === 0 ? "no virtual output" : targets.join(", ");
       summaries.push({
         chainId: route.chainId,
@@ -993,10 +1222,13 @@ export class MappingFlowLayer {
     const subject = inspection.chainId && summaries.length === 1
       ? summaries[0].description
       : inspection.key
-      ? `${
-          this.#root.querySelector<HTMLElement>('[data-mapping-source="true"]')
-            ?.dataset.widgetName?.trim() || "Input source"
-        } · ${inspection.key}`
+      ? (() => {
+          const route = this.#routes.find((candidate) =>
+            candidate.source.kind === "key" && candidate.source.key === inspection.key &&
+            (!inspection.sourceId || candidate.source.sourceId === inspection.sourceId)
+          );
+          return `${route?.source.kind === "key" ? this.#sourceLabel(route.source) : "Keyboard"} · ${inspection.key}`;
+        })()
       : inspection.functionName
       ? (() => {
           const endpoint = this.#routes.find((route) =>
@@ -1050,14 +1282,41 @@ export class MappingFlowLayer {
     slotFunctionsDown: ReadonlyMap<number, ReadonlySet<string>>,
     slotFunctionHits: ReadonlyMap<number, ReadonlySet<string>>,
   ): void {
-    this.#liveKeysDown = keysDown;
-    this.#liveKeyHits = keyHits;
+    this.#liveKeysDown = Array.from(keysDown, parseMappingLiveKeyToken);
+    this.#liveKeyHits = Array.from(keyHits, parseMappingLiveKeyToken);
     this.#liveSlotFunctionsDown = slotFunctionsDown;
     this.#liveSlotFunctionHits = slotFunctionHits;
     this.#applyLive();
   }
 
   #applyLive(): void {
+    // Source resolution queries the physical DOM. Resolve each distinct route
+    // and live identity once per paint instead of once per route x live key at
+    // the stream's 60 Hz cadence.
+    const roots = mappingSourceRoots(this.#root);
+    const routeRoots = new Map<string, HTMLElement | null>();
+    const liveRoots = new Map<MappingLiveKeyIdentity, HTMLElement | null>();
+    const routeRoot = (source: KeyFlowEndpoint): HTMLElement | null => {
+      const id = `${source.sourceId}\u0000${source.sourceAlias}`;
+      if (!routeRoots.has(id)) {
+        routeRoots.set(id, resolveMappingSourceRoot(roots, source));
+      }
+      return routeRoots.get(id) ?? null;
+    };
+    const liveRoot = (identity: MappingLiveKeyIdentity): HTMLElement | null => {
+      if (!liveRoots.has(identity)) {
+        liveRoots.set(identity, resolveMappingLiveSourceRoot(roots, identity));
+      }
+      return liveRoots.get(identity) ?? null;
+    };
+    const liveKeyMatches = (
+      source: KeyFlowEndpoint,
+      identity: MappingLiveKeyIdentity,
+    ): boolean => {
+      const root = routeRoot(source);
+      return Boolean(identity.key) && identity.key === source.key &&
+        root !== null && root === liveRoot(identity);
+    };
     for (const entry of this.#entries.values()) {
       // Runtime frames carry aggregate controller state, not macro execution
       // provenance. Only a direct relation can truthfully light from these two
@@ -1065,9 +1324,13 @@ export class MappingFlowLayer {
       // macro/step identity.
       const live = entry.route.kind === "binding" &&
         (
-          this.#liveKeysDown.has(entry.route.source.key) &&
+          this.#liveKeysDown.some((identity) =>
+            liveKeyMatches(entry.route.source, identity)
+          ) &&
             (this.#liveSlotFunctionsDown.get(entry.route.target.slot)?.has(entry.route.target.functionName) ?? false) ||
-          this.#liveKeyHits.has(entry.route.source.key) &&
+          this.#liveKeyHits.some((identity) =>
+            liveKeyMatches(entry.route.source, identity)
+          ) &&
             (this.#liveSlotFunctionHits.get(entry.route.target.slot)?.has(entry.route.target.functionName) ?? false)
         );
       entry.lineGroup.classList.toggle("is-live", live);
@@ -1917,8 +2180,17 @@ export class MappingFlowLayer {
     group.dataset.flowKind = route.kind;
     group.dataset.flowChain = route.chainId;
     group.dataset.flowSlot = String(route.slot);
-    if (route.source.kind === "key") group.dataset.flowKey = route.source.key;
-    else delete group.dataset.flowKey;
+    if (route.source.kind === "key") {
+      group.dataset.flowKey = route.source.key;
+      if (route.source.sourceId) group.dataset.flowSourceId = route.source.sourceId;
+      else delete group.dataset.flowSourceId;
+      if (route.source.sourceAlias) group.dataset.flowSourceAlias = route.source.sourceAlias;
+      else delete group.dataset.flowSourceAlias;
+    } else {
+      delete group.dataset.flowKey;
+      delete group.dataset.flowSourceId;
+      delete group.dataset.flowSourceAlias;
+    }
     if (route.target.kind === "control") group.dataset.flowFn = route.target.functionName;
     else delete group.dataset.flowFn;
     group.classList.toggle("is-processing", route.kind !== "binding");
@@ -2269,7 +2541,13 @@ export class MappingFlowLayer {
       element.hidden = false;
       if (refreshAnchors && anchors) {
         entry.sourceElements = processor.triggers
-          .map((key) => this.#resolveKeyCached(anchors, key, processor.slot))
+          .map((key) => this.#resolveKeyCached(anchors, {
+            kind: "key",
+            id: `key:${routePart(processor.sourceId || processor.sourceAlias)}:${routePart(key)}`,
+            key,
+            sourceId: processor.sourceId,
+            sourceAlias: processor.sourceAlias,
+          }, processor.slot))
           .filter((candidate): candidate is Element => candidate !== null);
         entry.targetElements = processor.outputs
           .map((output) => this.#resolveControlCached(anchors, processor.slot, output.functionName))
@@ -2665,7 +2943,7 @@ export class MappingFlowLayer {
     slot: number,
     anchors: MappingAnchorCache,
   ): Element | null {
-    if (endpoint.kind === "key") return this.#resolveKeyCached(anchors, endpoint.key, slot);
+    if (endpoint.kind === "key") return this.#resolveKeyCached(anchors, endpoint, slot);
     if (endpoint.kind === "control") {
       return this.#resolveControlCached(anchors, endpoint.slot, endpoint.functionName);
     }
@@ -2675,45 +2953,47 @@ export class MappingFlowLayer {
 
   #resolveKeyCached(
     anchors: MappingAnchorCache,
-    keyName: string,
+    endpoint: KeyFlowEndpoint,
     slot: number,
   ): Element | null {
-    const id = `${slot}\u0000${keyName}`;
+    const id =
+      `${slot}\u0000${endpoint.sourceId}\u0000${endpoint.sourceAlias}\u0000${endpoint.key}`;
     if (anchors.keys.has(id)) return anchors.keys.get(id) ?? null;
-    const resolved = this.#resolveKey(keyName, slot);
+    const resolved = this.#resolveKey(endpoint, slot);
     anchors.keys.set(id, resolved);
     return resolved;
   }
 
-  #resolveKey(keyName: string, slotNumber: number): Element | null {
-    const key = CSS.escape(keyName);
+  #resolveKey(endpoint: KeyFlowEndpoint, slotNumber: number): Element | null {
+    const source = this.#resolveSourceRoot(endpoint);
+    if (!source) return null;
+    const key = CSS.escape(endpoint.key);
     const slot = String(slotNumber);
-    const source = '[data-mapping-source="true"]';
     const observedAuthority = ':is([data-flow-authority="matched"], [data-flow-authority="mismatch"], [data-flow-authority="observed"])';
     const provisionalAuthority = ':is([data-flow-authority="configured"], [data-flow-authority="expected"], [data-flow-authority="planned"])';
     const selectors = [
-      `${source} .n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"][data-player-slot="${slot}"]${observedAuthority}`,
-      `${source} .n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]${observedAuthority}`,
-      `${source} .n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"]:not([data-player-slot])${observedAuthority}`,
-      `${source} .n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])${observedAuthority}`,
-      `${source} .n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"][data-player-slot="${slot}"]${provisionalAuthority}`,
-      `${source} .n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]${provisionalAuthority}`,
-      `${source} .n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"]:not([data-player-slot])${provisionalAuthority}`,
-      `${source} .n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])${provisionalAuthority}`,
-      `${source} .n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]`,
-      `${source} .n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])`,
-      `${source} .n-surface-channel-anchor:not([data-flow-key])[data-key="${key}"][data-player-slot="${slot}"]`,
-      `${source} .n-surface-channel-anchor:not([data-flow-key])[data-key="${key}"]:not([data-player-slot])`,
-      `${source} .rd-encoder-product-terminal[data-key="${key}"][data-player-slot="${slot}"]`,
-      `${source} .rd-encoder-product-terminal[data-key="${key}"]`,
-      `${source} .n-deck-key[data-keylab-key="${key}"][data-player-slot="${slot}"]`,
-      `${source} .n-deck-key[data-keylab-key="${key}"]:not([data-player-slot])`,
-      `${source}.n-widget-kb .n-ipac-signal[data-key="${key}"][data-player-slot="${slot}"]`,
-      `${source}.n-widget-kb .n-ipac-signal[data-key="${key}"]`,
-      `${source}.n-widget-kb [data-key="${key}"]:not(.ghost):not(.extracted)`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"][data-player-slot="${slot}"]${observedAuthority}`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]${observedAuthority}`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"]:not([data-player-slot])${observedAuthority}`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])${observedAuthority}`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"][data-player-slot="${slot}"]${provisionalAuthority}`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]${provisionalAuthority}`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"][data-selected="true"]:not([data-player-slot])${provisionalAuthority}`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])${provisionalAuthority}`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"][data-player-slot="${slot}"]`,
+      `.n-surface-channel-anchor[data-flow-key="${key}"]:not([data-player-slot])`,
+      `.n-surface-channel-anchor:not([data-flow-key])[data-key="${key}"][data-player-slot="${slot}"]`,
+      `.n-surface-channel-anchor:not([data-flow-key])[data-key="${key}"]:not([data-player-slot])`,
+      `.rd-encoder-product-terminal[data-key="${key}"][data-player-slot="${slot}"]`,
+      `.rd-encoder-product-terminal[data-key="${key}"]`,
+      `.n-deck-key[data-keylab-key="${key}"][data-player-slot="${slot}"]`,
+      `.n-deck-key[data-keylab-key="${key}"]:not([data-player-slot])`,
+      `.n-ipac-signal[data-key="${key}"][data-player-slot="${slot}"]`,
+      `.n-ipac-signal[data-key="${key}"]`,
+      `[data-key="${key}"]:not(.ghost):not(.extracted)`,
     ];
     for (const selector of selectors) {
-      const candidate = this.#root.querySelector(selector);
+      const candidate = source.querySelector(selector);
       if (candidate && endpointVisible(candidate)) return candidate;
     }
     return null;
@@ -2787,7 +3067,12 @@ export class MappingFlowLayer {
       };
     }
     const physicalDevice = target.closest<HTMLElement>(".rd-dev-node[data-selector]");
-    if (physicalDevice && physicalDevice.dataset.mappingSource !== "true") return null;
+    const physicalSourceId = physicalDevice?.classList.contains("rd-keyboard-device-node")
+      ? mappingRootSourceId(physicalDevice)
+      : "";
+    if (
+      physicalDevice && !physicalSourceId && physicalDevice.dataset.mappingSource !== "true"
+    ) return null;
     const pointedSignalRow = target.closest<HTMLElement>(
       ".n-surface-signal-chain[data-surface-channel-id]",
     );
@@ -2815,9 +3100,9 @@ export class MappingFlowLayer {
         '.n-surface-channel-anchor[data-key][data-selected="true"]',
       ) ?? surface?.querySelector<HTMLElement>(".n-surface-channel-anchor[data-key]");
     const surfaceKey = surfaceAnchor?.dataset.flowKey?.trim() ?? surfaceAnchor?.dataset.key?.trim();
-    if (surfaceKey) return { key: surfaceKey };
+    if (surfaceKey) return { key: surfaceKey, sourceId: physicalSourceId || undefined };
     const key = target.closest<HTMLElement>("[data-key]")?.dataset.key?.trim();
-    if (key) return { key };
+    if (key) return { key, sourceId: physicalSourceId || undefined };
     const control = target.closest<HTMLElement>("[data-fn]");
     const functionName = normalizedFunctionName(
       (control?.dataset.fn ?? "").split(/\s+/)[0] ?? "",
@@ -2887,7 +3172,11 @@ export class MappingFlowLayer {
     if (inspection.chainId) chains.add(inspection.chainId);
     if (inspection.macroId) chains.add(inspection.macroId);
     for (const route of this.#routes) {
-      if (inspection.key && route.source.kind === "key" && route.source.key === inspection.key) {
+      if (
+        inspection.key && route.source.kind === "key" &&
+        route.source.key === inspection.key &&
+        this.#sourceRootMatchesId(route.source, inspection.sourceId)
+      ) {
         chains.add(route.chainId);
       }
       if (

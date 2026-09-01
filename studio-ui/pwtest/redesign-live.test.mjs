@@ -93,20 +93,34 @@ beforeEach(async () => {
     window.ksxSources = [];
     window.ksxAnnouncements = [];
     window.ksxPathCalls = [];
+    window.ksxPathIdentityCalls = [];
     window.ksxSelectedSlot = 1;
     window.ksxLive = KSXRedesignLive.createRedesignLiveFeedback({
       root: () => document.querySelector("#root"),
       selectedSlot: () => window.ksxSelectedSlot,
       announce: (message) => window.ksxAnnouncements.push(message),
       setPathLive: (keysDown, keyHits, slotDown, slotHits) => {
+        const identities = (values) => [...values]
+          .map(KSXRedesignLive.parseMappingLiveKeyToken)
+          .sort((left, right) =>
+            left.sourceId.localeCompare(right.sourceId) ||
+            left.sourceAlias.localeCompare(right.sourceAlias) ||
+            left.key.localeCompare(right.key)
+          );
         const slots = (map) => Object.fromEntries(
           [...map.entries()].map(([slot, values]) => [String(slot), [...values].sort()]),
         );
+        const downIdentities = identities(keysDown);
+        const hitIdentities = identities(keyHits);
         window.ksxPathCalls.push({
-          keysDown: [...keysDown].sort(),
-          keyHits: [...keyHits].sort(),
+          keysDown: downIdentities.map(({ key }) => key),
+          keyHits: hitIdentities.map(({ key }) => key),
           slotDown: slots(slotDown),
           slotHits: slots(slotHits),
+        });
+        window.ksxPathIdentityCalls.push({
+          keysDown: downIdentities,
+          keyHits: hitIdentities,
         });
       },
       eventSource: (url) => {
@@ -142,7 +156,12 @@ function frame({
         rx: 0,
         ry: 0,
       })),
-      keys: keys.map(([key, down]) => ({ key, down, alias: "panel", device: "fixture" })),
+      keys: keys.map(([key, down, device = "fixture", alias = "panel"]) => ({
+        key,
+        down,
+        alias,
+        device,
+      })),
       dropped,
       off_panel: offPanel,
     },
@@ -187,6 +206,7 @@ async function snapshot() {
     canvasLive: document.querySelector(".n-canvas")?.classList.contains("live"),
     announcements: [...window.ksxAnnouncements],
     pathCalls: structuredClone(window.ksxPathCalls),
+    pathIdentityCalls: structuredClone(window.ksxPathIdentityCalls),
   }));
 }
 
@@ -353,6 +373,82 @@ describe("redesign live feedback", { concurrency: false }, () => {
       await page.locator("#key-j").evaluate((element) => element.style.animation),
       "",
     );
+  });
+
+  test("same-key feedback follows the exact physical source and release ignores alias churn", async () => {
+    await page.evaluate((session) => {
+      const source = document.querySelector("#input-source");
+      source?.remove();
+      const canvas = document.querySelector(".n-canvas");
+      const board = ({ id, selector, instance, alias }) => {
+        const root = document.createElement("section");
+        root.id = id;
+        root.className = "rd-keyboard-device-node";
+        root.dataset.sourceId = selector;
+        root.dataset.sourceInstance = instance;
+        const form = document.createElement("form");
+        form.className = "rd-stageform";
+        for (const [name, value] of [["selector", selector], ["alias", alias]]) {
+          const input = document.createElement("input");
+          input.name = name;
+          input.value = value;
+          form.append(input);
+        }
+        const key = document.createElement("button");
+        key.id = `${id}-a`;
+        key.dataset.key = "A";
+        root.append(form, key);
+        return root;
+      };
+      canvas.append(
+        board({
+          id: "left-board",
+          selector: "usb:1111:0001:00",
+          instance: "HID\\VID_1111&PID_0001\\LEFT",
+          alias: "left",
+        }),
+        board({
+          id: "right-board",
+          selector: "usb:2222:0002:00",
+          instance: "HID\\VID_2222&PID_0002\\RIGHT",
+          alias: "right",
+        }),
+      );
+      window.ksxLive.invalidateTargets();
+      window.ksxLive.connect();
+      window.ksxLive.reconcileSession(session);
+    }, matchingSession);
+
+    // Real frames carry the runtime HID instance, not the configured selector.
+    // Match it case-insensitively even when no alias is available.
+    await emit("frame", frame({
+      keys: [["A", true, "hid\\vid_2222&pid_0002\\right", ""]],
+    }));
+    assert.equal(await page.locator("#left-board-a").evaluate((node) => node.classList.contains("live")), false);
+    assert.equal(await page.locator("#right-board-a").evaluate((node) => node.classList.contains("live")), true);
+    let identities = (await snapshot()).pathIdentityCalls.at(-1);
+    assert.deepEqual(identities.keysDown, [{
+      sourceId: "hid\\vid_2222&pid_0002\\right",
+      sourceAlias: "",
+      key: "A",
+    }]);
+
+    // Alias is descriptive correlation data. A rename between transition
+    // frames must not strand a held key in the device+key ledger.
+    await emit("frame", frame({
+      keys: [["A", false, "hid\\vid_2222&pid_0002\\right", "renamed-right"]],
+    }));
+    assert.equal(await page.locator("#right-board-a").evaluate((node) => node.classList.contains("live")), false);
+    identities = (await snapshot()).pathIdentityCalls.at(-1);
+    assert.deepEqual(identities.keysDown, []);
+
+    // The same symbol emitted by the peer resolves through its unique alias;
+    // it may never paint both physical surfaces.
+    await emit("frame", frame({
+      keys: [["A", true, "unmatched-runtime-id", "left"]],
+    }));
+    assert.equal(await page.locator("#left-board-a").evaluate((node) => node.classList.contains("live")), true);
+    assert.equal(await page.locator("#right-board-a").evaluate((node) => node.classList.contains("live")), false);
   });
 
   test("an undisclosed running revision fails closed until a lifecycle action confirms it", async () => {

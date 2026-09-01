@@ -23,7 +23,7 @@ use ksx_capture::{KeySet, Take};
 use ksx_config::{
     validate, validate_games, ConfigFile, ConfigRoot, GamesFile, Issue, PresetFile, Store,
 };
-use ksx_core::{Blocking, DeviceId, InvalidationReason, Preset, ResolvedSlot};
+use ksx_core::{Blocking, DeviceId, InvalidationReason, Preset, ResolvedSlot, SourceKind};
 
 /// Where the slot layout came from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,8 +86,11 @@ impl RunPlan {
     pub fn slots_using(&self, device: &DeviceId) -> Vec<u8> {
         self.slots
             .iter()
-            .filter(|s| {
-                s.spec.keyboard.as_ref() == Some(device) || s.spec.mouse.as_ref() == Some(device)
+            .filter(|slot| {
+                slot.spec
+                    .sources
+                    .iter()
+                    .any(|source| &source.device == device)
             })
             .map(|s| s.spec.number)
             .collect()
@@ -101,16 +104,20 @@ impl RunPlan {
     /// would let player 1's `W` type into the chat window at the same moment it
     /// was moving player 2's stick.
     ///
-    /// Built through [`Self::slots_using`] rather than re-deriving the filter,
-    /// so "which slots does this device feed" has exactly one definition here.
-    /// If the suppression set and the unplug-invalidation set could disagree
-    /// about that, one of them would be wrong about a live panel.
+    /// Resolved per source, not merely per slot: when two keyboards feed one
+    /// controller with different presets, each physical board suppresses only
+    /// the keys from its own route. Using the slot's primary preset for both
+    /// would make one keyboard swallow the other's controls.
     pub fn bound_keys(&self, device: &DeviceId) -> KeySet {
-        let numbers = self.slots_using(device);
         self.slots
             .iter()
-            .filter(|s| numbers.contains(&s.spec.number))
-            .flat_map(|s| s.preset.bound_keys())
+            .flat_map(|slot| {
+                slot.spec
+                    .sources_of_kind(SourceKind::Keyboard)
+                    .filter(move |source| &source.device == device)
+                    .filter_map(|source| slot.preset_for(source))
+                    .flat_map(Preset::bound_keys)
+            })
             .collect()
     }
 
@@ -176,6 +183,33 @@ pub enum PlanError {
     },
     /// A slot names a preset that is neither a file nor a built-in.
     UnknownPreset { slot: u8, preset: String },
+    /// Two physical sources feeding one destination slot give the same output
+    /// endpoint different turbo clocks. Turbo is destination-scoped in the
+    /// engine, so there is no honest per-source winner; refuse before engine
+    /// construction rather than reaching its invariant assertion.
+    ConflictingSourceTurbo {
+        slot: u8,
+        binding: ksx_core::Binding,
+        first_source: DeviceId,
+        first_preset: String,
+        first_hz: Option<u32>,
+        second_source: DeviceId,
+        second_preset: String,
+        second_hz: Option<u32>,
+    },
+    /// Two physical sources drive the same destination with different latch
+    /// semantics. Toggle is also destination-scoped, so letting one source win
+    /// would silently turn the other source's momentary mapping into a latch.
+    ConflictingSourceToggle {
+        slot: u8,
+        binding: ksx_core::Binding,
+        first_source: DeviceId,
+        first_preset: String,
+        first_toggled: bool,
+        second_source: DeviceId,
+        second_preset: String,
+        second_toggled: bool,
+    },
     /// A slot's `keyboard`/`mouse` is neither a `[[device]]` alias nor an
     /// instance path.
     ///
@@ -236,6 +270,44 @@ impl std::fmt::Display for PlanError {
                 f,
                 "slot {slot} references preset '{preset}', which is neither a preset file \
                  nor a built-in"
+            ),
+            PlanError::ConflictingSourceTurbo {
+                slot,
+                binding,
+                first_source,
+                first_preset,
+                first_hz,
+                second_source,
+                second_preset,
+                second_hz,
+            } => write!(
+                f,
+                "slot {slot} gives {binding:?} conflicting turbo policies across physical \
+                 sources: {first_source} / preset '{first_preset}' is {}, while \
+                 {second_source} / preset '{second_preset}' is {}. Turbo belongs to the \
+                 destination control, so use one policy and rate for that control in every \
+                 source preset",
+                turbo_policy_label(*first_hz),
+                turbo_policy_label(*second_hz),
+            ),
+            PlanError::ConflictingSourceToggle {
+                slot,
+                binding,
+                first_source,
+                first_preset,
+                first_toggled,
+                second_source,
+                second_preset,
+                second_toggled,
+            } => write!(
+                f,
+                "slot {slot} gives {binding:?} conflicting hold policies across physical \
+                 sources: {first_source} / preset '{first_preset}' is {}, while \
+                 {second_source} / preset '{second_preset}' is {}. Toggle belongs to the \
+                 destination control, so make that control toggle or momentary in every source \
+                 preset",
+                toggle_policy_label(*first_toggled),
+                toggle_policy_label(*second_toggled),
             ),
             PlanError::UnknownDevice {
                 slot,
@@ -525,7 +597,7 @@ pub fn build_plan(
         .collect();
     let mut slots = Vec::new();
     for spec in specs {
-        if spec.keyboard.is_none() && spec.mouse.is_none() {
+        if spec.sources.is_empty() {
             notes.push(format!(
                 "[WARN] slot {} skipped: {}",
                 spec.number,
@@ -533,20 +605,36 @@ pub fn build_plan(
             ));
             continue;
         }
-        if spec.keyboard.is_none() {
+        if spec.sources_of_kind(SourceKind::Keyboard).next().is_none() {
             notes.push(format!(
                 "[WARN] slot {} has only a mouse; M4 never sets the mouse class filter, so \
                  that device is routed but never blocked",
                 spec.number
             ));
         }
-        let mut preset = resolve_preset(presets, spec.number, &spec.preset)?;
+        let mut preset = resolve_preset(presets, spec.number, spec.primary_preset())?;
         // SOCD cleaning is generated HERE, once, onto the resolved preset —
         // it is chords, not an engine rule (docs/INPUT-TRANSFORMS.md §2.6).
         // `socd = "off"` (the default) generates nothing, so this line is a
         // no-op for every configuration that predates the feature.
         preset.apply_socd(spec.socd);
-        slots.push(ResolvedSlot { spec, preset });
+        let mut resolved_names = vec![preset.name.clone()];
+        let mut additional_presets = Vec::new();
+        for source in spec.sources.iter().skip(1) {
+            if resolved_names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&source.preset))
+            {
+                continue;
+            }
+            resolved_names.push(source.preset.clone());
+            let mut additional = resolve_preset(presets, spec.number, &source.preset)?;
+            additional.apply_socd(spec.socd);
+            additional_presets.push(additional);
+        }
+        let slot = ResolvedSlot::new(spec, preset).with_additional_presets(additional_presets);
+        refuse_conflicting_source_policies(&slot)?;
+        slots.push(slot);
     }
     slots.sort_by_key(|s| s.spec.number);
 
@@ -589,7 +677,11 @@ pub fn build_plan(
     let mut seen = BTreeSet::new();
     let captureable: Vec<DeviceId> = slots
         .iter()
-        .filter_map(|s| s.spec.keyboard.clone())
+        .flat_map(|slot| {
+            slot.spec
+                .sources_of_kind(SourceKind::Keyboard)
+                .map(|source| source.device.clone())
+        })
         .filter(|id| seen.insert(id.clone()))
         .collect();
 
@@ -621,6 +713,102 @@ pub fn build_plan(
         winusb,
         notes,
     })
+}
+
+/// Enforce destination-policy invariants at the plan seam.
+///
+/// A source preset remains the owner of its keys, chords and macros, but turbo
+/// and toggle rewire the *destination* endpoint after all physical sources are
+/// combined. Silently choosing one source's policy would change what another
+/// source's key does and make file order observable; differing turbo rates also
+/// reach an engine invariant assertion. A live run and `--dry-run` instead get
+/// the same actionable refusal here, before any pad or capture backend is
+/// touched.
+fn refuse_conflicting_source_policies(slot: &ResolvedSlot) -> Result<(), PlanError> {
+    let mut seen: Vec<(ksx_core::Binding, Option<u32>, bool, DeviceId, String)> = Vec::new();
+    for source in &slot.spec.sources {
+        let preset = slot
+            .preset_for(source)
+            .expect("build_plan resolved every source preset");
+        let mut destinations = Vec::new();
+        for binding in preset
+            .entries
+            .iter()
+            .filter(|(key, binding)| {
+                *key != ksx_core::Key::None && *binding != ksx_core::Binding::Consume
+            })
+            .map(|(_, binding)| *binding)
+            .chain(
+                preset
+                    .chords
+                    .iter()
+                    .filter(|chord| {
+                        chord.key != ksx_core::Key::None
+                            && chord.binding != ksx_core::Binding::Consume
+                    })
+                    .map(|chord| chord.binding),
+            )
+        {
+            if !destinations.contains(&binding) {
+                destinations.push(binding);
+            }
+        }
+
+        for binding in destinations {
+            let hz = preset.turbo_hz(binding);
+            let toggled = preset.toggled(binding);
+            let Some((_, first_hz, first_toggled, first_source, first_preset)) = seen
+                .iter()
+                .find(|(candidate, _, _, _, _)| *candidate == binding)
+            else {
+                seen.push((
+                    binding,
+                    hz,
+                    toggled,
+                    source.device.clone(),
+                    preset.name.clone(),
+                ));
+                continue;
+            };
+            if *first_hz != hz {
+                return Err(PlanError::ConflictingSourceTurbo {
+                    slot: slot.spec.number,
+                    binding,
+                    first_source: first_source.clone(),
+                    first_preset: first_preset.clone(),
+                    first_hz: *first_hz,
+                    second_source: source.device.clone(),
+                    second_preset: preset.name.clone(),
+                    second_hz: hz,
+                });
+            }
+            if *first_toggled != toggled {
+                return Err(PlanError::ConflictingSourceToggle {
+                    slot: slot.spec.number,
+                    binding,
+                    first_source: first_source.clone(),
+                    first_preset: first_preset.clone(),
+                    first_toggled: *first_toggled,
+                    second_source: source.device.clone(),
+                    second_preset: preset.name.clone(),
+                    second_toggled: toggled,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn turbo_policy_label(hz: Option<u32>) -> String {
+    hz.map_or_else(|| "turbo off".to_owned(), |hz| format!("turbo at {hz} Hz"))
+}
+
+const fn toggle_policy_label(toggled: bool) -> &'static str {
+    if toggled {
+        "toggle"
+    } else {
+        "momentary"
+    }
 }
 
 /// Turn a bare `UnknownDeviceAlias` into a refusal that names the slot and
@@ -673,6 +861,8 @@ fn game_title_of(issue: &Issue) -> Option<&str> {
         | Issue::GameTooManyXinputSlots { game, .. }
         | Issue::GamePersonaNotImplemented { game, .. }
         | Issue::GamePersonaCapacity { game, .. }
+        | Issue::GameMixedSourceRepresentations { game, .. }
+        | Issue::GameDuplicatePhysicalSource { game, .. }
         | Issue::GameUserIndexOutOfRange { game, .. } => Some(game),
         _ => None,
     }
@@ -712,76 +902,90 @@ pub fn render_human(plan: &RunPlan) -> String {
         }
     );
     for slot in &plan.slots {
-        let keyboard = slot
-            .spec
-            .keyboard
-            .as_ref()
-            .map_or("-", |d| d.as_str())
-            .to_owned();
+        let primary_source = &slot.spec.sources[0];
         let _ = writeln!(
             out,
-            "  slot {}  preset \"{}\" ({} binding(s))  keyboard {keyboard}",
+            "  slot {}  preset \"{}\" ({} binding(s))  {} {}{}",
             slot.spec.number,
             slot.preset.name,
             // Chords are bindings too: a preset made only of chords must not
             // print "0 binding(s)".
-            slot.preset.entries.len() + slot.preset.chords.len()
+            slot.preset.entries.len() + slot.preset.chords.len(),
+            source_kind_label(primary_source.kind),
+            primary_source.device,
+            if primary_source.kind == SourceKind::Mouse {
+                " (routed, never blocked)"
+            } else {
+                ""
+            }
         );
-        if let Some(mouse) = &slot.spec.mouse {
-            let _ = writeln!(out, "           mouse {} (routed, never blocked)", mouse);
+        for source in slot.spec.sources.iter().skip(1) {
+            let preset = slot
+                .preset_for(source)
+                .expect("build_plan resolves every source preset");
+            let _ = writeln!(
+                out,
+                "           + {} {}  preset \"{}\" ({} binding(s)){}",
+                source_kind_label(source.kind),
+                source.device,
+                preset.name,
+                preset.entries.len() + preset.chords.len(),
+                if source.kind == SourceKind::Mouse {
+                    " (routed, never blocked)"
+                } else {
+                    ""
+                }
+            );
         }
         // Macros are the one binding kind you cannot read off a key→function
         // list: what matters is the sequence, how long it takes, and what
         // happens when the player lets go (docs/INPUT-TRANSFORMS.md §1c).
-        for (i, mac) in slot.preset.macros.defs.iter().enumerate() {
-            let keys: Vec<&str> = slot
-                .preset
-                .macros
-                .keys_for(i as u16)
-                .map(|k| k.name())
-                .collect();
-            // A repeating macro prints the rate it will ACTUALLY deliver, not
-            // the one the file asked for: the sampling ceiling is arithmetic
-            // and a preset should never learn about it from the game
-            // (docs/INPUT-TRANSFORMS.md §1c, "Repeating").
-            let repeat = match mac.repeat {
-                ksx_core::Repeat::Once => "once".to_owned(),
-                ksx_core::Repeat::WhileHeld => "while-held".to_owned(),
-                ksx_core::Repeat::Turbo => format!(
-                    "turbo (~{} Hz, {} ms gap)",
-                    mac.effective_turbo_hz(),
-                    mac.turbo_gap_ms()
-                ),
-            };
-            // OFF is printed on the macro's own line, before anything that
-            // describes what it would do: the validation advisory below says
-            // it too, but a reader scanning the slot's macros must not have to
-            // reach the warnings to learn that this one is silent. The slot's
-            // master switch beats the flag, so `macros = "off"` reads as off
-            // whatever each macro says.
-            let state = if !slot.spec.macros.is_on() {
-                " [OFF — slot macros = \"off\"]"
-            } else if !mac.enabled {
-                " [OFF — enabled = false]"
-            } else {
-                ""
-            };
-            let _ = writeln!(
-                out,
-                "           macro \"{}\"{state} {} step(s), {} ms  on_release={} retrigger={} interrupt={} repeat={}  key(s) {}",
-                mac.name,
-                mac.steps.len(),
-                mac.total_ms(),
-                mac.on_release,
-                mac.retrigger,
-                mac.interrupt,
-                repeat,
-                if keys.is_empty() {
-                    "-  (defined but nothing starts it)".to_owned()
+        for preset in std::iter::once(&slot.preset).chain(&slot.additional_presets) {
+            for (i, mac) in preset.macros.defs.iter().enumerate() {
+                let keys: Vec<&str> = preset.macros.keys_for(i as u16).map(|k| k.name()).collect();
+                // A repeating macro prints the rate it will ACTUALLY deliver, not
+                // the one the file asked for: the sampling ceiling is arithmetic
+                // and a preset should never learn about it from the game
+                // (docs/INPUT-TRANSFORMS.md §1c, "Repeating").
+                let repeat = match mac.repeat {
+                    ksx_core::Repeat::Once => "once".to_owned(),
+                    ksx_core::Repeat::WhileHeld => "while-held".to_owned(),
+                    ksx_core::Repeat::Turbo => format!(
+                        "turbo (~{} Hz, {} ms gap)",
+                        mac.effective_turbo_hz(),
+                        mac.turbo_gap_ms()
+                    ),
+                };
+                // OFF is printed on the macro's own line, before anything that
+                // describes what it would do: the validation advisory below says
+                // it too, but a reader scanning the slot's macros must not have to
+                // reach the warnings to learn that this one is silent. The slot's
+                // master switch beats the flag, so `macros = "off"` reads as off
+                // whatever each macro says.
+                let state = if !slot.spec.macros.is_on() {
+                    " [OFF — slot macros = \"off\"]"
+                } else if !mac.enabled {
+                    " [OFF — enabled = false]"
                 } else {
-                    keys.join(", ")
-                }
-            );
+                    ""
+                };
+                let _ = writeln!(
+                    out,
+                    "           macro \"{}\"{state} {} step(s), {} ms  on_release={} retrigger={} interrupt={} repeat={}  key(s) {}",
+                    mac.name,
+                    mac.steps.len(),
+                    mac.total_ms(),
+                    mac.on_release,
+                    mac.retrigger,
+                    mac.interrupt,
+                    repeat,
+                    if keys.is_empty() {
+                        "-  (defined but nothing starts it)".to_owned()
+                    } else {
+                        keys.join(", ")
+                    }
+                );
+            }
         }
     }
     let _ = writeln!(
@@ -822,8 +1026,22 @@ pub fn plan_json(plan: &RunPlan) -> serde_json::Value {
                 "preset": s.preset.name,
                 "bindings": s.preset.entries.len() + s.preset.chords.len(),
                 "chords": s.preset.chords.len(),
-                "keyboard": s.spec.keyboard.as_ref().map(|d| d.as_str()),
-                "mouse": s.spec.mouse.as_ref().map(|d| d.as_str()),
+                // Compatibility views for existing dry-run consumers.
+                "keyboard": s.spec.keyboard().map(|d| d.as_str()),
+                "mouse": s.spec.mouse().map(|d| d.as_str()),
+                // Canonical source graph. Every physical route carries the
+                // preset and binding count that actually apply to its events.
+                "sources": s.spec.sources.iter().map(|source| {
+                    let preset = s.preset_for(source)
+                        .expect("build_plan resolves every source preset");
+                    serde_json::json!({
+                        "kind": source_kind_label(source.kind),
+                        "device": source.device.as_str(),
+                        "preset": preset.name,
+                        "bindings": preset.entries.len() + preset.chords.len(),
+                        "chords": preset.chords.len(),
+                    })
+                }).collect::<Vec<_>>(),
                 // The slot's macro MASTER switch. "off" silences every macro
                 // below whatever its own `enabled` says, so a reader that only
                 // looks at the per-macro flags would be reading the wrong one.
@@ -894,6 +1112,13 @@ fn yes_no(b: bool) -> &'static str {
         "yes"
     } else {
         "no"
+    }
+}
+
+const fn source_kind_label(kind: SourceKind) -> &'static str {
+    match kind {
+        SourceKind::Keyboard => "keyboard",
+        SourceKind::Mouse => "mouse",
     }
 }
 
@@ -985,6 +1210,265 @@ preset = "Panel P1"
         assert_eq!(plan.slots_using(&DeviceId::from(IPAC)), vec![1, 2]);
         assert_eq!(plan.block_keyboards, Blocking::Whole);
         assert!(!plan.block_mice);
+    }
+
+    #[test]
+    fn two_keyboards_feed_one_slot_with_independent_presets_and_capture_takes() {
+        const LEFT: &str = r"HID\VID_1111&PID_0001\LEFT";
+        const RIGHT: &str = r"HID\VID_2222&PID_0002\RIGHT";
+        let files: Vec<PresetFile> = [
+            "name = \"Left\"\n[bindings]\nA = \"S\"\n",
+            "name = \"Right\"\n[bindings]\nB = \"D\"\n",
+        ]
+        .into_iter()
+        .map(|text| toml::from_str(text).unwrap())
+        .collect();
+        let cfg = config(
+            r#"
+schema_version = 1
+
+[settings]
+block_keyboards = "bound-keys"
+
+[[device]]
+id = 'HID\VID_1111&PID_0001\LEFT'
+alias = "left"
+
+[[device]]
+id = 'HID\VID_2222&PID_0002\RIGHT'
+alias = "right"
+backend = "winusb"
+
+[[slot]]
+number = 1
+
+[[slot.source]]
+device = "left"
+kind = "keyboard"
+preset = "Left"
+
+[[slot.source]]
+device = "right"
+kind = "keyboard"
+preset = "Right"
+"#,
+        );
+        let plan = build_plan(&cfg, &GamesFile::default(), &files, None).unwrap();
+        assert_eq!(plan.slots.len(), 1);
+        assert_eq!(plan.slots[0].preset.name, "Left");
+        assert_eq!(plan.slots[0].additional_presets.len(), 1);
+        assert_eq!(plan.slots[0].additional_presets[0].name, "Right");
+        assert_eq!(
+            plan.captureable,
+            vec![DeviceId::from(LEFT), DeviceId::from(RIGHT)]
+        );
+        assert_eq!(plan.winusb, vec![DeviceId::from(RIGHT)]);
+        assert_eq!(plan.slots_using(&DeviceId::from(LEFT)), vec![1]);
+        assert_eq!(plan.slots_using(&DeviceId::from(RIGHT)), vec![1]);
+
+        let Take::BoundKeys(left) = plan.take_for(&DeviceId::from(LEFT)) else {
+            panic!("left keyboard must get a per-key take");
+        };
+        assert!(left.contains(Key::S));
+        assert!(!left.contains(Key::D));
+        let Take::BoundKeys(right) = plan.take_for(&DeviceId::from(RIGHT)) else {
+            panic!("right keyboard must get a per-key take");
+        };
+        assert!(right.contains(Key::D));
+        assert!(!right.contains(Key::S));
+
+        let human = render_human(&plan);
+        for needle in [LEFT, RIGHT, "Left", "Right"] {
+            assert!(human.contains(needle), "missing {needle}: {human}");
+        }
+        let json = plan_json(&plan);
+        assert_eq!(json["slots"][0]["sources"].as_array().unwrap().len(), 2);
+        assert_eq!(json["slots"][0]["sources"][1]["preset"], "Right");
+    }
+
+    #[test]
+    fn conflicting_cross_source_turbo_is_refused_before_engine_build() {
+        const LEFT: &str = r"HID\VID_1111&PID_0001\LEFT";
+        const RIGHT: &str = r"HID\VID_2222&PID_0002\RIGHT";
+        let files: Vec<PresetFile> = [
+            "name = \"Left Rapid\"\n[bindings]\nA = { key = \"S\", turbo_hz = 8 }\n",
+            "name = \"Right Rapid\"\n[bindings]\nA = { key = \"D\", turbo_hz = 12 }\n",
+        ]
+        .into_iter()
+        .map(|text| toml::from_str(text).unwrap())
+        .collect();
+        let cfg = config(&format!(
+            r#"
+schema_version = 1
+
+[[slot]]
+number = 1
+
+[[slot.source]]
+device = '{LEFT}'
+kind = "keyboard"
+preset = "Left Rapid"
+
+[[slot.source]]
+device = '{RIGHT}'
+kind = "keyboard"
+preset = "Right Rapid"
+"#
+        ));
+
+        let err = build_plan(&cfg, &GamesFile::default(), &files, None).unwrap_err();
+        let PlanError::ConflictingSourceTurbo {
+            slot,
+            first_hz,
+            second_hz,
+            ..
+        } = &err
+        else {
+            panic!("expected a cross-source turbo refusal, got {err:?}");
+        };
+        assert_eq!(*slot, 1);
+        assert_eq!((*first_hz, *second_hz), (Some(8), Some(12)));
+        let text = err.to_string();
+        for needle in [
+            LEFT,
+            RIGHT,
+            "Left Rapid",
+            "Right Rapid",
+            "turbo at 8 Hz",
+            "turbo at 12 Hz",
+        ] {
+            assert!(text.contains(needle), "missing {needle}: {text}");
+        }
+    }
+
+    #[test]
+    fn turbo_vs_momentary_on_the_same_destination_is_refused() {
+        let files: Vec<PresetFile> = [
+            "name = \"Rapid\"\n[bindings]\nA = { key = \"S\", turbo_hz = 8 }\n",
+            "name = \"Plain\"\n[bindings]\nA = \"D\"\n",
+        ]
+        .into_iter()
+        .map(|text| toml::from_str(text).unwrap())
+        .collect();
+        let cfg = config(
+            r#"
+schema_version = 1
+[[slot]]
+number = 1
+[[slot.source]]
+device = 'HID\LEFT'
+kind = "keyboard"
+preset = "Rapid"
+[[slot.source]]
+device = 'HID\RIGHT'
+kind = "keyboard"
+preset = "Plain"
+"#,
+        );
+
+        let err = build_plan(&cfg, &GamesFile::default(), &files, None).unwrap_err();
+        let PlanError::ConflictingSourceTurbo {
+            first_hz,
+            second_hz,
+            ..
+        } = &err
+        else {
+            panic!("expected a turbo-vs-off refusal, got {err:?}");
+        };
+        assert_eq!((*first_hz, *second_hz), (Some(8), None));
+        let text = err.to_string();
+        for needle in [
+            "HID\\LEFT",
+            "Rapid",
+            "turbo at 8 Hz",
+            "HID\\RIGHT",
+            "Plain",
+            "turbo off",
+        ] {
+            assert!(text.contains(needle), "missing {needle}: {text}");
+        }
+    }
+
+    #[test]
+    fn toggle_vs_momentary_on_the_same_destination_is_refused() {
+        let files: Vec<PresetFile> = [
+            "name = \"Latched\"\n[bindings]\nA = { key = \"S\", toggle = true }\n",
+            "name = \"Momentary\"\n[bindings]\nA = \"D\"\n",
+        ]
+        .into_iter()
+        .map(|text| toml::from_str(text).unwrap())
+        .collect();
+        let cfg = config(
+            r#"
+schema_version = 1
+[[slot]]
+number = 1
+[[slot.source]]
+device = 'HID\LEFT'
+kind = "keyboard"
+preset = "Latched"
+[[slot.source]]
+device = 'HID\RIGHT'
+kind = "keyboard"
+preset = "Momentary"
+"#,
+        );
+
+        let err = build_plan(&cfg, &GamesFile::default(), &files, None).unwrap_err();
+        let PlanError::ConflictingSourceToggle {
+            first_toggled,
+            second_toggled,
+            ..
+        } = &err
+        else {
+            panic!("expected a toggle-vs-momentary refusal, got {err:?}");
+        };
+        assert!(*first_toggled);
+        assert!(!*second_toggled);
+        let text = err.to_string();
+        for needle in [
+            "HID\\LEFT",
+            "Latched",
+            "toggle",
+            "HID\\RIGHT",
+            "Momentary",
+            "momentary",
+        ] {
+            assert!(text.contains(needle), "missing {needle}: {text}");
+        }
+    }
+
+    #[test]
+    fn equal_cross_source_turbo_rates_share_the_destination_clock() {
+        let files: Vec<PresetFile> = [
+            "name = \"Left Rapid\"\n[bindings]\nA = { key = \"S\", turbo_hz = 8 }\n",
+            "name = \"Right Rapid\"\n[bindings]\nA = { key = \"D\", turbo_hz = 8 }\n",
+        ]
+        .into_iter()
+        .map(|text| toml::from_str(text).unwrap())
+        .collect();
+        let cfg = config(
+            r#"
+schema_version = 1
+
+[[slot]]
+number = 1
+
+[[slot.source]]
+device = 'HID\LEFT'
+kind = "keyboard"
+preset = "Left Rapid"
+
+[[slot.source]]
+device = 'HID\RIGHT'
+kind = "keyboard"
+preset = "Right Rapid"
+"#,
+        );
+
+        let plan = build_plan(&cfg, &GamesFile::default(), &files, None)
+            .expect("equal rates represent one unambiguous destination clock");
+        assert_eq!(plan.slots[0].additional_presets.len(), 1);
     }
 
     #[test]

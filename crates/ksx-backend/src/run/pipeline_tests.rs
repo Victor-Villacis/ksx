@@ -224,6 +224,7 @@ fn escape_plan() -> RunPlan {
             spec: SlotSpec::new(1, Some(DeviceId::from(IPAC)), None, preset.name.clone())
                 .expect("valid slot"),
             preset,
+            additional_presets: Vec::new(),
         }],
         block_keyboards: ksx_core::Blocking::Whole,
         block_mice: false,
@@ -287,6 +288,7 @@ pub(super) fn cabinet_slots() -> Vec<ResolvedSlot> {
                 )
                 .expect("valid synthetic slot"),
                 preset,
+                additional_presets: Vec::new(),
             }
         })
         .collect()
@@ -1822,11 +1824,13 @@ fn a_shared_desk_keyboard_swallows_both_slots_keys_and_still_types_the_rest() {
                 spec: SlotSpec::new(1, Some(DeviceId::from(DESK)), None, p1.name.clone())
                     .expect("valid slot"),
                 preset: p1,
+                additional_presets: Vec::new(),
             },
             ResolvedSlot {
                 spec: SlotSpec::new(2, Some(DeviceId::from(DESK)), None, p2.name.clone())
                     .expect("valid slot"),
                 preset: p2,
+                additional_presets: Vec::new(),
             },
         ],
         block_keyboards: ksx_core::Blocking::BoundKeys,

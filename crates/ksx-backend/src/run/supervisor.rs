@@ -82,7 +82,7 @@ use ksx_capture::{
 };
 use ksx_core::{
     Blocking, DeviceId, Engine, EngineTables, InvalidationReason, KeyEvent, PadState, Persona,
-    ResolvedSlot,
+    ResolvedSlot, SourceKind,
 };
 use ksx_output::{PadHandle, VirtualPadBackend};
 
@@ -219,15 +219,19 @@ impl SessionHook for NoHook {}
 /// Deliberately NOT in the shape:
 ///
 /// - **preset contents** — the whole point;
-/// - **which preset a slot names** (`SlotSpec::preset`). Pointing slot 2 at a
-///   different preset file changes the binding table and nothing else: same
-///   pad, same persona, same keyboard. It is the one "structural-looking"
+/// - **which preset each source names**. Repointing either keyboard at a
+///   different preset changes the binding table and nothing else: same pad,
+///   same persona, same source graph. It is the one "structural-looking"
 ///   change that is genuinely hot;
 /// - **plan notes / config path** — reporting, not wiring.
+type SourceGraph = Vec<(SourceKind, DeviceId)>;
+type SlotShape = (u8, Persona, SourceGraph);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionShape {
-    /// `(slot number, persona, keyboard, mouse)` per slot, in plan order.
-    slots: Vec<(u8, Persona, Option<DeviceId>, Option<DeviceId>)>,
+    /// `(slot number, persona, source graph)` per slot, in plan order.
+    /// Preset names are deliberately absent: mapping-only edits hot-swap.
+    slots: Vec<SlotShape>,
     block_keyboards: Blocking,
     /// Exactly the `SetCaptured` set.
     captureable: Vec<DeviceId>,
@@ -237,22 +241,37 @@ pub struct SessionShape {
 
 impl SessionShape {
     pub fn of(plan: &RunPlan) -> Self {
+        let mut captureable = plan.captureable.clone();
+        captureable.sort();
+        captureable.dedup();
+        let mut winusb = plan.winusb.clone();
+        winusb.sort();
+        winusb.dedup();
         Self {
             slots: plan
                 .slots
                 .iter()
                 .map(|s| {
-                    (
-                        s.spec.number,
-                        s.spec.persona,
-                        s.spec.keyboard.clone(),
-                        s.spec.mouse.clone(),
-                    )
+                    let mut sources: Vec<_> = s
+                        .spec
+                        .sources
+                        .iter()
+                        .map(|source| (source.kind, source.device.clone()))
+                        .collect();
+                    // Authored row order is not wiring. Sorting makes the
+                    // shape a graph comparison: reordering two unchanged
+                    // routes stays hot, adding/removing/retargeting one bounces.
+                    sources.sort_by(|a, b| {
+                        source_kind_rank(a.0)
+                            .cmp(&source_kind_rank(b.0))
+                            .then_with(|| a.1.cmp(&b.1))
+                    });
+                    (s.spec.number, s.spec.persona, sources)
                 })
                 .collect(),
             block_keyboards: plan.block_keyboards,
-            captureable: plan.captureable.clone(),
-            winusb: plan.winusb.clone(),
+            captureable,
+            winusb,
         }
     }
 
@@ -279,8 +298,8 @@ impl SessionShape {
                     after.1.label()
                 ));
             }
-            if before.2 != after.2 || before.3 != after.3 {
-                return Some(format!("slot {}'s input device changed", before.0));
+            if before.2 != after.2 {
+                return Some(format!("slot {}'s input source graph changed", before.0));
             }
         }
         if self.block_keyboards != next.block_keyboards {
@@ -299,6 +318,13 @@ impl SessionShape {
             return Some("a device's capture backend changed".to_owned());
         }
         None
+    }
+}
+
+const fn source_kind_rank(kind: SourceKind) -> u8 {
+    match kind {
+        SourceKind::Keyboard => 0,
+        SourceKind::Mouse => 1,
     }
 }
 
@@ -2409,8 +2435,13 @@ mod tests {
         let captureable: Vec<DeviceId> = {
             let mut ids: Vec<DeviceId> = slots
                 .iter()
-                .filter_map(|s| s.spec.keyboard.clone())
+                .flat_map(|slot| {
+                    slot.spec
+                        .sources_of_kind(SourceKind::Keyboard)
+                        .map(|source| source.device.clone())
+                })
                 .collect();
+            ids.sort();
             ids.dedup();
             ids
         };
@@ -2427,8 +2458,8 @@ mod tests {
     }
 
     fn shape_slot(number: u8, device: &str, preset: ksx_core::Preset) -> ResolvedSlot {
-        ResolvedSlot {
-            spec: ksx_core::SlotSpec::new(
+        ResolvedSlot::new(
+            ksx_core::SlotSpec::new(
                 number,
                 Some(DeviceId::from(device)),
                 None,
@@ -2436,7 +2467,7 @@ mod tests {
             )
             .expect("valid slot"),
             preset,
-        }
+        )
     }
 
     const BOARD: &str = r"HID\VID_D209&PID_0430&REV_0001&MI_00";
@@ -2473,6 +2504,60 @@ mod tests {
             None,
             "pointing a slot at a different preset is still just a table swap"
         );
+    }
+
+    #[test]
+    fn source_graph_changes_bounce_but_per_source_mapping_edits_stay_hot() {
+        let make = |sources: Vec<(&str, &str)>| {
+            let named_preset = |name: &str| {
+                let mut preset = ksx_core::Preset::builtin_empty();
+                preset.name = name.to_owned();
+                preset
+            };
+            let specs: Vec<_> = sources
+                .iter()
+                .map(|(device, preset)| {
+                    ksx_core::SourceSpec::keyboard(DeviceId::from(*device), *preset)
+                })
+                .collect();
+            let primary = named_preset(sources[0].1);
+            let additional = sources
+                .iter()
+                .skip(1)
+                .map(|(_, name)| named_preset(name))
+                .collect();
+            ResolvedSlot::new(
+                ksx_core::SlotSpec::from_sources(1, specs, "").unwrap(),
+                primary,
+            )
+            .with_additional_presets(additional)
+        };
+
+        let base = shape_plan(vec![make(vec![(BOARD, "left"), (OTHER, "right")])]);
+        let repointed = shape_plan(vec![make(vec![(BOARD, "new-left"), (OTHER, "new-right")])]);
+        assert_eq!(
+            SessionShape::of(&base).bounce_reason(&SessionShape::of(&repointed)),
+            None,
+            "preset names and contents are tables, not source wiring"
+        );
+
+        let reordered = shape_plan(vec![make(vec![(OTHER, "right"), (BOARD, "left")])]);
+        assert_eq!(
+            SessionShape::of(&base).bounce_reason(&SessionShape::of(&reordered)),
+            None,
+            "row order alone does not change the source graph"
+        );
+
+        let removed = shape_plan(vec![make(vec![(BOARD, "left")])]);
+        let reason = SessionShape::of(&base)
+            .bounce_reason(&SessionShape::of(&removed))
+            .expect("removing one physical source changes capture wiring");
+        assert!(reason.contains("source graph"), "{reason}");
+
+        let retargeted = shape_plan(vec![make(vec![(BOARD, "left"), ("HID\\THIRD", "right")])]);
+        assert!(SessionShape::of(&base)
+            .bounce_reason(&SessionShape::of(&retargeted))
+            .is_some_and(|reason| reason.contains("source graph")));
     }
 
     /// …and everything a driver can see bounces, each with a reason a user can
@@ -2513,7 +2598,7 @@ mod tests {
         ]);
         assert!(shape
             .bounce_reason(&SessionShape::of(&moved))
-            .is_some_and(|r| r.contains("input device")));
+            .is_some_and(|r| r.contains("source graph")));
 
         let mut passthrough = shape_plan(base.slots.clone());
         passthrough.block_keyboards = Blocking::Off;

@@ -45,7 +45,7 @@
 use std::collections::BTreeSet;
 
 use ksx_config::DeviceEntry;
-use ksx_core::{DeviceFacts, DeviceId, DeviceSelector, Match, Qualifier};
+use ksx_core::{DeviceFacts, DeviceId, DeviceSelector, Match, Qualifier, ResolvedSlot, SourceKind};
 
 use crate::run::plan::RunPlan;
 
@@ -303,8 +303,10 @@ fn rewrite_resolved(plan: &mut RunPlan, resolved: &[(&DeviceEntry, DeviceId)]) {
         }
     };
     for slot in &mut plan.slots {
-        slot.spec.keyboard.iter_mut().for_each(swap);
-        slot.spec.mouse.iter_mut().for_each(swap);
+        slot.spec
+            .sources
+            .iter_mut()
+            .for_each(|source| swap(&mut source.device));
     }
     plan.captureable.iter_mut().for_each(swap);
     plan.winusb.iter_mut().for_each(swap);
@@ -434,8 +436,10 @@ pub fn apply(
         }
     };
     for slot in &mut plan.slots {
-        slot.spec.keyboard.iter_mut().for_each(swap);
-        slot.spec.mouse.iter_mut().for_each(swap);
+        slot.spec
+            .sources
+            .iter_mut()
+            .for_each(|source| swap(&mut source.device));
     }
     plan.captureable.iter_mut().for_each(swap);
     plan.winusb.iter_mut().for_each(swap);
@@ -558,21 +562,45 @@ fn drop_missing(plan: &mut RunPlan, missing: &[&DeviceEntry]) -> Result<(), Reso
     let gone: BTreeSet<DeviceId> = missing.iter().map(|d| d.id.as_device_id()).collect();
 
     let mut lost_mice: Vec<u8> = Vec::new();
+    let mut partial_keyboards: Vec<u8> = Vec::new();
+    let mut lost_slots: Vec<u8> = Vec::new();
     for slot in &mut plan.slots {
-        if slot.spec.mouse.as_ref().is_some_and(|m| gone.contains(m)) {
-            slot.spec.mouse = None;
+        let missing_mouse = slot
+            .spec
+            .sources
+            .iter()
+            .any(|source| source.kind == SourceKind::Mouse && gone.contains(&source.device));
+        let missing_keyboard = slot
+            .spec
+            .sources
+            .iter()
+            .any(|source| source.kind == SourceKind::Keyboard && gone.contains(&source.device));
+        let surviving_keyboard =
+            slot.spec.sources.iter().any(|source| {
+                source.kind == SourceKind::Keyboard && !gone.contains(&source.device)
+            });
+
+        if missing_mouse {
             lost_mice.push(slot.spec.number);
         }
+        if missing_keyboard && !surviving_keyboard {
+            lost_slots.push(slot.spec.number);
+            continue;
+        }
+        if missing_keyboard {
+            partial_keyboards.push(slot.spec.number);
+        }
+        slot.spec
+            .sources
+            .retain(|source| !gone.contains(&source.device));
+        if slot.spec.sources.is_empty() {
+            lost_slots.push(slot.spec.number);
+            continue;
+        }
+        realign_presets(slot);
     }
-
-    let lost_slots: Vec<u8> = plan
-        .slots
-        .iter()
-        .filter(|s| s.spec.keyboard.as_ref().is_some_and(|k| gone.contains(k)))
-        .map(|s| s.spec.number)
-        .collect();
     plan.slots
-        .retain(|s| !s.spec.keyboard.as_ref().is_some_and(|k| gone.contains(k)));
+        .retain(|slot| !lost_slots.contains(&slot.spec.number));
 
     plan.captureable.retain(|id| !gone.contains(id));
     plan.winusb.retain(|id| !gone.contains(id));
@@ -613,8 +641,14 @@ fn drop_missing(plan: &mut RunPlan, missing: &[&DeviceEntry]) -> Result<(), Reso
     }
     if !lost_slots.is_empty() {
         plan.notes.push(format!(
-            "[WARN] slot(s) {lost_slots:?} have no keyboard and will NOT play this session; \
-             the remaining slots start normally"
+            "[WARN] slot(s) {lost_slots:?} have no usable input source and will NOT play this \
+             session; the remaining slots start normally"
+        ));
+    }
+    if !partial_keyboards.is_empty() {
+        plan.notes.push(format!(
+            "[WARN] slot(s) {partial_keyboards:?} lost one keyboard source; their remaining \
+             keyboard sources stay active"
         ));
     }
     if !lost_mice.is_empty() {
@@ -624,6 +658,47 @@ fn drop_missing(plan: &mut RunPlan, missing: &[&DeviceEntry]) -> Result<(), Reso
         ));
     }
     Ok(())
+}
+
+/// Keep [`ResolvedSlot`]'s primary/additional preset layout aligned after a
+/// missing source is removed. The core treats the first source as primary, so
+/// deleting that source without promoting its successor would apply the old
+/// device's mapping to the remaining keyboard.
+fn realign_presets(slot: &mut ResolvedSlot) {
+    let Some(primary_name) = slot
+        .spec
+        .sources
+        .first()
+        .map(|source| source.preset.clone())
+    else {
+        slot.additional_presets.clear();
+        return;
+    };
+
+    let mut resolved = Vec::with_capacity(slot.additional_presets.len() + 1);
+    resolved.push(slot.preset.clone());
+    resolved.append(&mut slot.additional_presets);
+    let primary = resolved
+        .iter()
+        .position(|preset| preset.name.eq_ignore_ascii_case(&primary_name))
+        .expect("build_plan resolved the surviving source's preset");
+    slot.preset = resolved.remove(primary);
+
+    let mut seen = vec![primary_name];
+    for source in slot.spec.sources.iter().skip(1) {
+        if seen
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(&source.preset))
+        {
+            continue;
+        }
+        seen.push(source.preset.clone());
+        let index = resolved
+            .iter()
+            .position(|preset| preset.name.eq_ignore_ascii_case(&source.preset))
+            .expect("build_plan resolved every surviving source preset");
+        slot.additional_presets.push(resolved.remove(index));
+    }
 }
 
 /// A hardware id is passed through **verbatim**: it names a devnode on the
@@ -644,8 +719,7 @@ fn used_ids(plan: &RunPlan) -> BTreeSet<DeviceId> {
         .cloned()
         .collect();
     for slot in &plan.slots {
-        used.extend(slot.spec.keyboard.iter().cloned());
-        used.extend(slot.spec.mouse.iter().cloned());
+        used.extend(slot.spec.sources.iter().map(|source| source.device.clone()));
     }
     used
 }
@@ -794,6 +868,84 @@ mod tests {
         );
     }
 
+    #[test]
+    fn every_source_resolves_and_a_missing_primary_promotes_the_survivor() {
+        const RIGHT_PATH: &str = r"USB\VID_1234&PID_5678&MI_00\8&RIGHT&0&0000";
+        let config: ConfigFile = toml::from_str(
+            r#"
+schema_version = 1
+
+[[device]]
+id = "usb:d209:0430:00"
+alias = "left"
+
+[[device]]
+id = "usb:1234:5678:00"
+alias = "right"
+
+[[slot]]
+number = 1
+[[slot.source]]
+device = "left"
+kind = "keyboard"
+preset = "P1"
+[[slot.source]]
+device = "right"
+kind = "keyboard"
+preset = "P2"
+"#,
+        )
+        .unwrap();
+        let files = vec![
+            toml::from_str("name = \"P1\"\n[bindings]\nA = \"S\"\n").unwrap(),
+            toml::from_str("name = \"P2\"\n[bindings]\nB = \"D\"\n").unwrap(),
+        ];
+        let mut plan =
+            crate::run::plan::build_plan(&config, &GamesFile::default(), &files, None).unwrap();
+        let right = DeviceFacts {
+            id: DeviceId::from(RIGHT_PATH),
+            vendor_id: 0x1234,
+            product_id: 0x5678,
+            interface_number: 0,
+            serial: Some("right".into()),
+            instance: "8&RIGHT&0&0000".into(),
+        };
+
+        let mut full = plan.clone();
+        apply(
+            &mut full,
+            &config.devices,
+            &[ipac("7&1A2B3C4D&0&0000"), right.clone()],
+        )
+        .unwrap();
+        assert_eq!(full.slots[0].spec.sources.len(), 2);
+        assert_eq!(full.slots[0].spec.sources[0].device.as_str(), LIVE_PATH);
+        assert_eq!(full.slots[0].spec.sources[1].device.as_str(), RIGHT_PATH);
+        assert_eq!(
+            full.captureable,
+            vec![DeviceId::from(LIVE_PATH), DeviceId::from(RIGHT_PATH)]
+        );
+
+        // The first source is absent, but the second keyboard still drives the
+        // controller. Its mapping must become the core primary alongside it.
+        apply(&mut plan, &config.devices, &[right]).unwrap();
+        assert_eq!(plan.slots.len(), 1);
+        assert_eq!(plan.slots[0].spec.sources.len(), 1);
+        assert_eq!(plan.slots[0].spec.sources[0].device.as_str(), RIGHT_PATH);
+        assert_eq!(plan.slots[0].spec.sources[0].preset, "P2");
+        assert_eq!(plan.slots[0].preset.name, "P2");
+        assert!(plan.slots[0].additional_presets.is_empty());
+        assert_eq!(plan.captureable, vec![DeviceId::from(RIGHT_PATH)]);
+        assert_eq!(plan.slots_using(&DeviceId::from(RIGHT_PATH)), vec![1]);
+        assert!(
+            plan.notes
+                .iter()
+                .any(|note| note.contains("lost one keyboard source")),
+            "{:?}",
+            plan.notes
+        );
+    }
+
     /// **The sentence that was refused once and survived thirty lines below.**
     ///
     /// `ResolveError::Missing`'s `Display` was corrected after the 2026-08-07
@@ -931,9 +1083,12 @@ mod tests {
 
         assert_eq!(plan.slots.len(), 1, "the player keeps playing");
         assert_eq!(plan.slots[0].spec.number, 1);
-        assert!(plan.slots[0].spec.mouse.is_none(), "the dead mouse is gone");
+        assert!(
+            plan.slots[0].spec.mouse().is_none(),
+            "the dead mouse is gone"
+        );
         assert_eq!(
-            plan.slots[0].spec.keyboard.as_ref().map(|k| k.as_str()),
+            plan.slots[0].spec.keyboard().map(|k| k.as_str()),
             Some(LIVE_PATH),
             "their keyboard is untouched"
         );
@@ -1013,7 +1168,10 @@ mod tests {
         let plan = resolve(LIVE_PATH, &[ipac("7&1A2B3C4D&0&0000")]).expect("still connected");
         assert_eq!(plan.captureable, vec![DeviceId::from(LIVE_PATH)]);
         assert_eq!(plan.winusb, vec![DeviceId::from(LIVE_PATH)]);
-        assert_eq!(plan.slots[0].spec.keyboard, Some(DeviceId::from(LIVE_PATH)));
+        assert_eq!(
+            plan.slots[0].spec.keyboard(),
+            Some(&DeviceId::from(LIVE_PATH))
+        );
         assert!(
             !plan.notes.iter().any(|n| n.contains("resolved to")),
             "nothing changed, so nothing is reported: {:?}",
@@ -1033,7 +1191,10 @@ mod tests {
             vec![DeviceId::from(LIVE_PATH)],
             "the backend choice has to follow the id it was made for"
         );
-        assert_eq!(plan.slots[0].spec.keyboard, Some(DeviceId::from(LIVE_PATH)));
+        assert_eq!(
+            plan.slots[0].spec.keyboard(),
+            Some(&DeviceId::from(LIVE_PATH))
+        );
         assert!(
             plan.notes
                 .iter()
@@ -1121,8 +1282,8 @@ mod tests {
 
     /// **A refusal, not a dedupe** (`docs/DEVICE-IDENTITY.md` §8). Two
     /// `[[device]]` entries landing on one interface means one board silently
-    /// driving two slots' worth of capture — with two WinUSB claims on one
-    /// handle behind it.
+    /// impersonating two independently configured source routes — with two
+    /// WinUSB claims on one handle behind it.
     #[test]
     fn two_entries_resolving_to_one_interface_is_refused_naming_both_aliases() {
         let config: ConfigFile = toml::from_str(&format!(
@@ -1137,11 +1298,13 @@ mod tests {
              backend = \"winusb\"\n\n\
              [[slot]]\n\
              number = 1\n\
-             keyboard = \"panel\"\n\
-             preset = \"P1\"\n\n\
-             [[slot]]\n\
-             number = 2\n\
-             keyboard = \"spare\"\n\
+             [[slot.source]]\n\
+             device = \"panel\"\n\
+             kind = \"keyboard\"\n\
+             preset = \"P1\"\n\
+             [[slot.source]]\n\
+             device = \"spare\"\n\
+             kind = \"keyboard\"\n\
              preset = \"P1\"\n"
         ))
         .unwrap();
